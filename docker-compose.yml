@@ -1,0 +1,412 @@
+version: '3.9'
+
+# Real-time Market Data Platform - Infrastructure Stack
+#
+# Architecture: Event-driven streaming platform with lakehouse storage
+# - Kafka: Message broker for real-time market tick ingestion
+# - Schema Registry: Centralized schema management for data governance
+# - MinIO: S3-compatible object storage for Iceberg data lake
+# - PostgreSQL: Metadata catalog for Iceberg tables
+# - Iceberg REST Catalog: Table management and ACID guarantees
+# - Prometheus + Grafana: Observability stack
+#
+# Scaling Considerations:
+# - Kafka partitions can scale horizontally (add brokers to cluster)
+# - MinIO supports distributed mode for petabyte-scale storage
+# - Iceberg enables efficient partition pruning for large datasets
+# - Resource limits prevent runaway consumption in local dev
+
+services:
+  # ============================================================================
+  # KAFKA - Event Streaming Platform (KRaft mode, no Zookeeper)
+  # ============================================================================
+  # Why KRaft? Modern Kafka architecture removes Zookeeper dependency,
+  # reducing operational complexity and improving metadata scalability.
+  # In production: Would run 3+ brokers for fault tolerance
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: k2-kafka
+    hostname: kafka
+    ports:
+      - "9092:9092"       # External clients
+      - "9093:9093"       # Internal broker communication
+      - "9997:9997"       # JMX metrics for monitoring
+    environment:
+      # KRaft Configuration (Kafka Raft consensus)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+
+      # Listener Configuration
+      # PLAINTEXT_HOST: External access for producers/consumers
+      # PLAINTEXT: Internal Docker network communication
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092'
+      KAFKA_LISTENERS: 'PLAINTEXT://kafka:29092,CONTROLLER://kafka:9093,PLAINTEXT_HOST://0.0.0.0:9092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+
+      # Cluster Configuration
+      CLUSTER_ID: 'k2-market-data-cluster'
+
+      # Performance Tuning for Market Data
+      # Market ticks are small, high-frequency messages - optimize for throughput
+      KAFKA_NUM_PARTITIONS: 6                    # Default partitions for parallelism
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1        # Single broker in dev, 3+ in prod
+      KAFKA_MIN_INSYNC_REPLICAS: 1               # Write durability guarantee
+      KAFKA_LOG_RETENTION_HOURS: 168             # 7 days retention
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824        # 1GB segments for efficient compaction
+      KAFKA_COMPRESSION_TYPE: 'lz4'              # Fast compression for market data
+
+      # Resource Management
+      KAFKA_HEAP_OPTS: "-Xmx2G -Xms2G"           # Fixed heap prevents GC pauses
+
+      # Monitoring
+      KAFKA_JMX_PORT: 9997
+      KAFKA_JMX_HOSTNAME: localhost
+
+      # Log directories
+      KAFKA_LOG_DIRS: '/var/lib/kafka/data'
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+      - ./config/kafka:/etc/kafka/conf
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 3G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+
+  # ============================================================================
+  # SCHEMA REGISTRY - Schema Evolution & Data Governance
+  # ============================================================================
+  # Central schema management ensures:
+  # - Producer/consumer compatibility
+  # - Schema evolution without breaking changes
+  # - Data governance and documentation
+  # In production: Deploy 3+ instances behind load balancer
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    container_name: k2-schema-registry
+    hostname: schema-registry
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
+      SCHEMA_REGISTRY_LISTENERS: 'http://0.0.0.0:8081'
+
+      # Schema Compatibility
+      # BACKWARD: New schema can read old data (safe for consumers)
+      # Critical for market data: Can't break downstream analytics
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: 'BACKWARD'
+
+      # Performance
+      SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx512M -Xms512M"
+
+      # Leader election for HA
+      SCHEMA_REGISTRY_LEADER_ELIGIBILITY: 'true'
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 768M
+
+  # ============================================================================
+  # MINIO - S3-Compatible Object Storage for Iceberg
+  # ============================================================================
+  # Why MinIO?
+  # - S3 API compatibility (easy cloud migration)
+  # - High performance for analytical workloads
+  # - Distributed mode supports petabyte-scale
+  # - Perfect for Iceberg parquet files
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    container_name: k2-minio
+    hostname: minio
+    ports:
+      - "9000:9000"       # API
+      - "9001:9001"       # Console UI
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-password}
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+      MINIO_UPDATE: off
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+
+  # MinIO Client - Initialize buckets
+  # Creates necessary buckets on startup for Iceberg warehouse
+  minio-init:
+    image: minio/mc:RELEASE.2024-01-16T16-06-34Z
+    container_name: k2-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-password}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set k2minio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+      mc mb --ignore-existing k2minio/warehouse;
+      mc mb --ignore-existing k2minio/data;
+      mc mb --ignore-existing k2minio/backups;
+      mc policy set download k2minio/warehouse;
+      echo 'MinIO initialized successfully';
+      "
+    networks:
+      - k2-network
+
+  # ============================================================================
+  # POSTGRESQL - Iceberg Catalog Metadata Store
+  # ============================================================================
+  # Stores Iceberg table metadata:
+  # - Table schemas and partitioning schemes
+  # - Snapshot history for time-travel queries
+  # - File manifests and statistics
+  # Why Postgres? ACID guarantees critical for catalog consistency
+  postgres:
+    image: postgres:16-alpine
+    container_name: k2-postgres
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-iceberg}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iceberg}
+      POSTGRES_DB: ${POSTGRES_DB:-iceberg_catalog}
+      # Performance tuning for metadata workload
+      POSTGRES_SHARED_BUFFERS: 256MB
+      POSTGRES_MAX_CONNECTIONS: 200
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/iceberg/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-iceberg}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+  # ============================================================================
+  # ICEBERG REST CATALOG - Table Management & ACID Operations
+  # ============================================================================
+  # Provides:
+  # - ACID transactions across multiple files
+  # - Schema evolution
+  # - Time-travel queries
+  # - Partition evolution without data rewrites
+  # Critical for financial data: Ensures consistency and auditability
+  iceberg-rest:
+    image: tabulario/iceberg-rest:0.8.0
+    container_name: k2-iceberg-rest
+    hostname: iceberg-rest
+    ports:
+      - "8181:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_ACCESS__KEY__ID: ${MINIO_ROOT_USER:-admin}
+      CATALOG_S3_SECRET__ACCESS__KEY: ${MINIO_ROOT_PASSWORD:-password}
+      CATALOG_S3_PATH__STYLE__ACCESS: true
+      CATALOG_URI: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-iceberg_catalog}
+      CATALOG_JDBC_USER: ${POSTGRES_USER:-iceberg}
+      CATALOG_JDBC_PASSWORD: ${POSTGRES_PASSWORD:-iceberg}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8181/v1/config"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+  # ============================================================================
+  # PROMETHEUS - Metrics Collection
+  # ============================================================================
+  # Scrapes metrics from:
+  # - Kafka (JMX exporter)
+  # - MinIO (built-in metrics)
+  # - Application services (custom metrics)
+  # Essential for production: Latency, throughput, error rates
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    container_name: k2-prometheus
+    hostname: prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # ============================================================================
+  # GRAFANA - Observability Dashboard
+  # ============================================================================
+  # Pre-configured dashboards for:
+  # - Kafka lag and throughput
+  # - Storage I/O patterns
+  # - Query latency distributions
+  # - System health metrics
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: k2-grafana
+    hostname: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: false
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - ./config/grafana/datasources:/etc/grafana/provisioning/datasources
+      - ./config/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # ============================================================================
+  # KAFKA UI - Development & Debugging Tool
+  # ============================================================================
+  # Provides web interface for:
+  # - Topic inspection
+  # - Consumer group monitoring
+  # - Message browsing
+  # - Schema Registry integration
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: k2-kafka-ui
+    hostname: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: k2-market-data
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+      KAFKA_CLUSTERS_0_METRICS_PORT: 9997
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+# ==============================================================================
+# NETWORKS
+# ==============================================================================
+# Isolated network for service communication
+# In production: Would use overlay networks for multi-host deployment
+networks:
+  k2-network:
+    driver: bridge
+    name: k2-network
+
+# ==============================================================================
+# VOLUMES - Persistent Data Storage
+# ==============================================================================
+# Named volumes for data persistence across container restarts
+# In production: Would use remote storage (EBS, NFS, etc.)
+volumes:
+  kafka-data:
+    driver: local
+  minio-data:
+    driver: local
+  postgres-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local

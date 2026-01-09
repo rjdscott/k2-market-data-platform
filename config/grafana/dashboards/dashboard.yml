@@ -1,0 +1,16 @@
+# Grafana Dashboard Provisioning Configuration
+# This file tells Grafana to automatically load dashboards from this directory
+
+apiVersion: 1
+
+providers:
+  - name: 'K2 Platform Dashboards'
+    orgId: 1
+    folder: 'K2 Market Data'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true
