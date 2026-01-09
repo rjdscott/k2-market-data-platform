@@ -51,7 +51,7 @@ Partition Key: f"{exchange}.{symbol}"  # e.g., "ASX.BHP"
 - Different symbols can be processed in parallel (BHP and CBA on different partitions)
 
 **Partition Count Considerations**:
-- ASX has ~8,000 symbols → 100 partitions = ~80 symbols per partition
+- ASX has ~2,000 symbols → 100 partitions = ~20 symbols per partition
 - At 1000x scale: 500+ partitions for better parallelism
 - Partition count must remain static (repartitioning breaks ordering)
 
