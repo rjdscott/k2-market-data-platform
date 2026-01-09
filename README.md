@@ -508,6 +508,7 @@ Before deploying to production, validate these requirements:
 - [x] Sequence tracking and gap detection
 - [ ] DuckDB query engine implementation
 - [ ] Replay engine (cold start, catch-up, rewind)
+- [ ] Observability Dashboards
 
 ### Phase 2: Advanced Processing
 - [ ] Real-time aggregations (OHLCV windows)
