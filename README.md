@@ -362,11 +362,11 @@ from k2_platform.query import QueryEngine
 
 engine = QueryEngine()
 
-# Query last 1 hour of AAPL ticks
+# Query last 1 hour of BHP ticks
 df = engine.query("""
     SELECT timestamp, symbol, price, volume
     FROM market_data.ticks
-    WHERE symbol = 'AAPL'
+    WHERE symbol = 'BHP'
       AND timestamp >= NOW() - INTERVAL '1 hour'
     ORDER BY timestamp DESC
     LIMIT 1000

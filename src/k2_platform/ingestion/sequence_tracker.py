@@ -81,8 +81,8 @@ class SequenceTracker:
         Validate sequence number and detect anomalies.
 
         Args:
-            exchange: Exchange identifier (e.g., "NASDAQ", "NYSE")
-            symbol: Trading symbol (e.g., "AAPL")
+            exchange: Exchange identifier (e.g., "ASX", "Chi-X")
+            symbol: Trading symbol (e.g., "BHP")
             sequence: Exchange-provided sequence number
             timestamp: Exchange timestamp
 

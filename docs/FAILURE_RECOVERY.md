@@ -39,7 +39,7 @@ docker exec kafka-broker-2 kafka-broker-api-versions.sh \
 
 # Check which partitions were on failed broker
 kafka-topics.sh --bootstrap-server localhost:9092 \
-  --describe --topic market.ticks.nasdaq
+  --describe --topic market.ticks.asx
 ```
 
 ---
@@ -68,7 +68,7 @@ kafka-topics.sh --bootstrap-server localhost:9092 \
    ```bash
    # Check if data is replicated
    kafka-topics.sh --bootstrap-server localhost:9092 \
-     --describe --topic market.ticks.nasdaq \
+     --describe --topic market.ticks.asx \
      | grep "Leader: -1"  # -1 = no leader (bad)
    ```
 
@@ -149,16 +149,16 @@ kafka-replica-verification.sh \
 1. **Increase replication factor to 3**:
    ```bash
    kafka-configs.sh --bootstrap-server localhost:9092 \
-     --alter --entity-type topics --entity-name market.ticks.nasdaq \
+     --alter --entity-type topics --entity-name market.ticks.asx \
      --add-config min.insync.replicas=2
    ```
 
 2. **Set up rack awareness** (distribute replicas across availability zones):
    ```properties
    # broker config
-   broker.rack=us-east-1a  # Broker 1
-   broker.rack=us-east-1b  # Broker 2
-   broker.rack=us-east-1c  # Broker 3
+   broker.rack=ap-southeast-2a  # Broker 1
+   broker.rack=ap-southeast-2b  # Broker 2
+   broker.rack=ap-southeast-2c  # Broker 3
    ```
 
 3. **Add broker health checks**:
@@ -196,7 +196,7 @@ kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
 
 # Output example:
 # TOPIC                PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG
-# market.ticks.nasdaq  0          1847291         5847291         4000000  <-- 4M lag
+# market.ticks.asx  0          1847291         5847291         4000000  <-- 4M lag
 ```
 
 ---
@@ -274,7 +274,7 @@ if consumer_lag > 1_000_000:
 
 #### Case B: Partition Skew (One Partition Overloaded)
 
-**Root Cause**: One symbol (e.g., AAPL) generates 10x more messages than others
+**Root Cause**: One symbol (e.g., BHP) generates 10x more messages than others
 
 **Diagnosis**:
 ```bash
@@ -292,7 +292,7 @@ kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
 **Fix**: Repartition topic with better key distribution
 
 ```python
-# OLD: Partition by symbol (AAPL gets one partition)
+# OLD: Partition by symbol (BHP gets one partition)
 partition_key = symbol
 
 # NEW: Partition by symbol + random salt
@@ -380,10 +380,10 @@ spill_threshold_lag = 1_000_000
 **Triage**:
 ```bash
 # Check latest schema versions
-curl http://localhost:8081/subjects/market.ticks.nasdaq-value/versions
+curl http://localhost:8081/subjects/market.ticks.asx-value/versions
 
 # Get schema details
-curl http://localhost:8081/subjects/market.ticks.nasdaq-value/versions/5 | jq
+curl http://localhost:8081/subjects/market.ticks.asx-value/versions/5 | jq
 ```
 
 ---
@@ -410,7 +410,7 @@ curl http://localhost:8081/subjects/market.ticks.nasdaq-value/versions/5 | jq
 1. **Assess compatibility direction**:
    ```bash
    # Check compatibility mode
-   curl http://localhost:8081/config/market.ticks.nasdaq-value
+   curl http://localhost:8081/config/market.ticks.asx-value
    # Expected: {"compatibilityLevel": "BACKWARD"}
    ```
 
@@ -468,7 +468,7 @@ curl http://localhost:8081/subjects/market.ticks.nasdaq-value/versions/5 | jq
 **Deployment**:
 ```bash
 # 1. Register corrected schema
-curl -X POST http://localhost:8081/subjects/market.ticks.nasdaq-value/versions \
+curl -X POST http://localhost:8081/subjects/market.ticks.asx-value/versions \
   -H "Content-Type: application/json" \
   -d @corrected_schema.json
 
@@ -490,7 +490,7 @@ kubectl rollout status deployment/market-data-producer
 
 ```bash
 # Check if subject exists
-curl http://localhost:8081/subjects/market.ticks.nasdaq-value/versions
+curl http://localhost:8081/subjects/market.ticks.asx-value/versions
 # {"error_code": 40401, "message": "Subject not found"}
 ```
 
@@ -499,12 +499,12 @@ curl http://localhost:8081/subjects/market.ticks.nasdaq-value/versions
 ```bash
 # 1. Retrieve schema from git (schemas are version-controlled)
 cd schemas/
-git log --oneline market_ticks_nasdaq.avsc
+git log --oneline market_ticks_asx.avsc
 
 # 2. Re-register schema
-curl -X POST http://localhost:8081/subjects/market.ticks.nasdaq-value/versions \
+curl -X POST http://localhost:8081/subjects/market.ticks.asx-value/versions \
   -H "Content-Type: application/json" \
-  -d @schemas/market_ticks_nasdaq.avsc
+  -d @schemas/market_ticks_asx.avsc
 
 # 3. Restart producers (will re-register on startup)
 kubectl rollout restart deployment/market-data-producer
@@ -521,7 +521,7 @@ kubectl rollout restart deployment/market-data-producer
    # .github/workflows/schema-validation.yml
    - name: Validate schema compatibility
      run: |
-       curl -X POST http://schema-registry:8081/compatibility/subjects/market.ticks.nasdaq-value/versions/latest \
+       curl -X POST http://schema-registry:8081/compatibility/subjects/market.ticks.asx-value/versions/latest \
          -H "Content-Type: application/json" \
          -d @new_schema.json \
        | jq -e '.is_compatible == true'

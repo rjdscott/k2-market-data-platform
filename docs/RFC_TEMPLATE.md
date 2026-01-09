@@ -13,7 +13,7 @@
 _One-paragraph summary of the proposal. What are we changing and why?_
 
 **Example**:
-> This RFC proposes migrating from Kafka topic-per-exchange (3 topics) to topic-per-symbol (8000+ topics) to improve consumer isolation and reduce partition skew. Current design has AAPL dominating partition 42, causing lag for all consumers on that partition. New design allows per-symbol scaling and failure isolation.
+> This RFC proposes migrating from Kafka topic-per-exchange (3 topics) to topic-per-symbol (8000+ topics) to improve consumer isolation and reduce partition skew. Current design has BHP dominating partition 42, causing lag for all consumers on that partition. New design allows per-symbol scaling and failure isolation.
 
 ---
 
@@ -23,13 +23,13 @@ _What problem are we solving? Why does it matter? Include data if possible._
 
 **Example**:
 > Current partition assignment:
-> - Partition 42: AAPL (500K msg/sec), MSFT (200K msg/sec) = 700K msg/sec
+> - Partition 42: BHP (500K msg/sec), CBA (200K msg/sec) = 700K msg/sec
 > - Partition 43: Low-volume symbols (5K msg/sec total)
 >
 > This causes:
 > 1. Consumer lag on partition 42 (consistently >1M messages)
 > 2. Wasted resources on partition 43 (idle most of the time)
-> 3. All-or-nothing failure (if AAPL consumer fails, MSFT also stops)
+> 3. All-or-nothing failure (if BHP consumer fails, CBA also stops)
 
 ---
 
@@ -39,8 +39,8 @@ _What does success look like? Be specific and measurable._
 
 **Example**:
 - Reduce p99 consumer lag from 5M messages to <100K messages
-- Enable per-symbol autoscaling (scale AAPL consumers independently)
-- Isolate failures (AAPL consumer crash doesn't affect MSFT)
+- Enable per-symbol autoscaling (scale BHP consumers independently)
+- Isolate failures (BHP consumer crash doesn't affect CBA)
 
 ---
 
@@ -63,16 +63,16 @@ _Detailed design. Include architecture diagrams, API changes, data models._
 
 **Current State**:
 ```
-market.ticks.nasdaq (100 partitions)
+market.ticks.asx (100 partitions)
   - Partition key: hash(symbol)
-  - AAPL, MSFT, GOOGL → all mixed in partitions
+  - BHP, CBA, CSL → all mixed in partitions
 ```
 
 **Proposed State**:
 ```
-market.ticks.AAPL (10 partitions)
-market.ticks.MSFT (10 partitions)
-market.ticks.GOOGL (10 partitions)
+market.ticks.BHP (10 partitions)
+market.ticks.CBA (10 partitions)
+market.ticks.CSL (10 partitions)
 ...
   - Partition key: hash(timestamp)  # Spread load within symbol
   - One topic per symbol (8000+ topics)
@@ -111,7 +111,7 @@ If p99 lag increases >2x:
 **Pros**: Simpler (just add partitions), no topic proliferation
 
 **Cons**:
-- Doesn't solve partition skew (AAPL still dominates one partition)
+- Doesn't solve partition skew (BHP still dominates one partition)
 - Partition count is immutable (can't change without data migration)
 
 **Decision**: Rejected because it doesn't address root cause

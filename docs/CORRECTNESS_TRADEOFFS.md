@@ -141,11 +141,11 @@ for message in stream:
 ```python
 # Message structure
 {
-    "message_id": "NASDAQ.AAPL.184847291",  # Unique per exchange
-    "exchange": "NASDAQ",
-    "symbol": "AAPL",
+    "message_id": "ASX.BHP.184847291",  # Unique per exchange
+    "exchange": "ASX",
+    "symbol": "BHP",
     "sequence_number": 184847291,
-    "timestamp": "2026-01-09T09:30:00.127483",
+    "timestamp": "2026-01-09T10:00:00.127483",
     "price": 150.23,
     "volume": 100
 }
@@ -183,7 +183,7 @@ CREATE TABLE latest_quotes (
 
 -- Upsert logic (idempotent)
 INSERT INTO latest_quotes (symbol, bid, ask, timestamp)
-VALUES ('AAPL', 150.22, 150.24, '2026-01-09 09:30:00')
+VALUES ('BHP', 150.22, 150.24, '2026-01-09 10:00:00')
 ON CONFLICT (symbol)
 DO UPDATE SET
     bid = EXCLUDED.bid,
@@ -341,7 +341,7 @@ table.append(new_ticks_df)
 # Iceberg automatically handles duplicates during read
 # via PRIMARY KEY constraint on message_id
 query_result = table.scan(
-    row_filter="symbol = 'AAPL'",
+    row_filter="symbol = 'BHP'",
 ).to_arrow()
 
 # Result: Deduplicated automatically (latest version per message_id)
@@ -378,7 +378,7 @@ producer.commit_transaction()  # Never executes
 **Scenario**: Redis cache evicts message IDs early (memory pressure)
 
 ```python
-dedup.is_duplicate('AAPL.12345')  # Returns False (should be True)
+dedup.is_duplicate('BHP.12345')  # Returns False (should be True)
 ```
 
 **Impact**: Duplicate message processed, Iceberg table gets duplicate row
@@ -400,14 +400,14 @@ All consumers must pass these tests:
 ```python
 def test_duplicate_handling():
     """Verify duplicates are handled idempotently."""
-    message = create_market_tick(symbol='AAPL', seq=1000)
+    message = create_market_tick(symbol='BHP', seq=1000)
 
     # Process same message twice
     consumer.process(message)
     consumer.process(message)
 
     # Query result
-    result = iceberg_table.query("SELECT * FROM ticks WHERE symbol = 'AAPL'")
+    result = iceberg_table.query("SELECT * FROM ticks WHERE symbol = 'BHP'")
 
     # Assert: Only one row exists
     assert len(result) == 1
@@ -434,9 +434,9 @@ def test_transaction_failure():
 ```python
 def test_out_of_order_dedup():
     """Verify duplicates detected even if out-of-order."""
-    msg1 = create_tick(seq=1000, timestamp='09:30:00.100')
-    msg2 = create_tick(seq=1001, timestamp='09:30:00.200')
-    msg1_dup = create_tick(seq=1000, timestamp='09:30:00.100')
+    msg1 = create_tick(seq=1000, timestamp='10:00:00.100')
+    msg2 = create_tick(seq=1001, timestamp='10:00:00.200')
+    msg1_dup = create_tick(seq=1000, timestamp='10:00:00.100')
 
     # Process out-of-order: 1000, 1001, 1000
     consumer.process(msg1)

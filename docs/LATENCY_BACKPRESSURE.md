@@ -106,7 +106,7 @@ Under load, components degrade in this order:
 def apply_degraded_mode():
     """Reduce processing overhead under extreme load."""
     # 1. Filter symbols
-    critical_symbols = ['AAPL', 'MSFT', 'GOOGL', ...]  # Top 500
+    critical_symbols = ['BHP', 'CBA', 'CSL', ...]  # Top 500
     if message.symbol not in critical_symbols:
         metrics.increment('dropped_low_priority_symbol')
         return  # Drop message

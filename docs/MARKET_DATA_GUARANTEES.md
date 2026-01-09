@@ -21,12 +21,12 @@ Every major exchange provides:
 - **Timestamps**: Exchange-assigned timestamps (NOT wall-clock time from our systems)
 - **Ordering Invariant**: For a given symbol, sequence number N+1 is always newer than N
 
-**Example** (NASDAQ ITCH):
+**Example** (ASX ITCH):
 ```
-Symbol: AAPL
-SeqNum: 184847291, Timestamp: 09:30:00.127483, Type: TRADE, Price: 150.23
-SeqNum: 184847292, Timestamp: 09:30:00.127519, Type: QUOTE, Bid: 150.22
-SeqNum: 184847293, Timestamp: 09:30:00.127601, Type: TRADE, Price: 150.24
+Symbol: BHP
+SeqNum: 184847291, Timestamp: 10:00:00.127483, Type: TRADE, Price: 43.23
+SeqNum: 184847292, Timestamp: 10:00:00.127519, Type: QUOTE, Bid: 43.22
+SeqNum: 184847293, Timestamp: 10:00:00.127601, Type: TRADE, Price: 43.24
 ```
 
 If we receive 184847293 before 184847292, we have a bug.
@@ -40,18 +40,18 @@ If we receive 184847293 before 184847292, we have a bug.
 **Design Decision**: Partition by `exchange.symbol`
 
 ```
-Topic: market.ticks.nasdaq
+Topic: market.ticks.asx
 Partitions: 100
-Partition Key: f"{exchange}.{symbol}"  # e.g., "NASDAQ.AAPL"
+Partition Key: f"{exchange}.{symbol}"  # e.g., "ASX.BHP"
 ```
 
 **Rationale**:
 - Kafka guarantees ordering within a partition
-- All ticks for AAPL go to the same partition → preserved ordering
-- Different symbols can be processed in parallel (AAPL and MSFT on different partitions)
+- All ticks for BHP go to the same partition → preserved ordering
+- Different symbols can be processed in parallel (BHP and CBA on different partitions)
 
 **Partition Count Considerations**:
-- NASDAQ has ~8,000 symbols → 100 partitions = ~80 symbols per partition
+- ASX has ~8,000 symbols → 100 partitions = ~80 symbols per partition
 - At 1000x scale: 500+ partitions for better parallelism
 - Partition count must remain static (repartitioning breaks ordering)
 
@@ -71,8 +71,8 @@ CREATE TABLE market_data.ticks (
     PRIMARY KEY (message_id)
 ) PARTITIONED BY (
     days(exchange_timestamp),  -- Time partitioning for query pruning
-    exchange,                  -- Isolate NASDAQ vs NYSE
-    truncate(symbol, 4)        -- AAPL → AAPL bucket
+    exchange,                  -- Isolate ASX vs Chi-X
+    truncate(symbol, 4)        -- BHP → BHP bucket
 );
 ```
 
@@ -83,10 +83,10 @@ CREATE TABLE market_data.ticks (
 
 **Query Behavior**:
 ```sql
--- This query returns AAPL ticks in exchange order (guaranteed)
+-- This query returns BHP ticks in exchange order (guaranteed)
 SELECT * FROM market_data.ticks
-WHERE symbol = 'AAPL'
-  AND exchange_timestamp BETWEEN '2026-01-09 09:30:00' AND '2026-01-09 16:00:00'
+WHERE symbol = 'BHP'
+  AND exchange_timestamp BETWEEN '2026-01-09 10:00:00' AND '2026-01-09 16:00:00'
 ORDER BY exchange_sequence_number;
 ```
 
@@ -147,7 +147,7 @@ class SequenceTracker:
 **Example**:
 ```
 2026-01-09 16:00:00 → SeqNum: 89472918 (market close)
-2026-01-10 09:30:00 → SeqNum: 1        (market open, reset)
+2026-01-10 10:00:00 → SeqNum: 1        (market open, reset)
 ```
 
 **Handling**:
@@ -189,7 +189,7 @@ from k2_platform.query import ReplayEngine
 
 replay = ReplayEngine(
     table='market_data.ticks',
-    symbols=['AAPL', 'MSFT', 'GOOGL'],
+    symbols=['BHP', 'CBA', 'CSL'],
     start_time='2025-07-01 00:00:00',
     end_time='2026-01-01 00:00:00',
     playback_speed=1000.0  # 1000x faster than real-time
@@ -202,7 +202,7 @@ for tick in replay.stream():
 
 **Guarantees**:
 - Ticks delivered in exchange timestamp order per symbol
-- Cross-symbol ordering NOT guaranteed (AAPL tick at 09:30:00.001 may arrive after MSFT tick at 09:30:00.000)
+- Cross-symbol ordering NOT guaranteed (BHP tick at 10:00:00.001 may arrive after CBA tick at 10:00:00.000)
 - Playback speed configurable (1.0 = real-time, 1000.0 = 1000x faster)
 
 **Performance**:
@@ -223,7 +223,7 @@ for tick in replay.stream():
 from k2_platform.ingestion import CatchUpConsumer
 
 consumer = CatchUpConsumer(
-    topic='market.ticks.nasdaq',
+    topic='market.ticks.asx',
     group_id='strategy_alpha',
     catch_up_strategy='HYBRID'  # Read from Iceberg, then switch to Kafka
 )
@@ -257,7 +257,7 @@ for message in consumer:
 
 **Definition**: Query data as of a specific snapshot, ignoring later updates
 
-**Use Case**: "Show me what AAPL ticks looked like at 2PM yesterday before the late corrections arrived"
+**Use Case**: "Show me what BHP ticks looked like at 2PM yesterday before the late corrections arrived"
 
 **Implementation**:
 ```python
@@ -269,7 +269,7 @@ engine = QueryEngine()
 df = engine.query("""
     SELECT * FROM market_data.ticks
     FOR SYSTEM_TIME AS OF '2026-01-08 14:00:00'
-    WHERE symbol = 'AAPL'
+    WHERE symbol = 'BHP'
 """)
 ```
 
@@ -290,9 +290,9 @@ df = engine.query("""
 
 ### 1. **Cross-Symbol Arbitrage Strategies**
 
-**Problem**: Strategy needs synchronized timestamps across AAPL and MSFT
+**Problem**: Strategy needs synchronized timestamps across BHP and CBA
 
-**Limitation**: Kafka partitioning means AAPL and MSFT are on different partitions → no cross-symbol ordering guarantee
+**Limitation**: Kafka partitioning means BHP and CBA are on different partitions → no cross-symbol ordering guarantee
 
 **Mitigation**:
 - Consumer reads from multiple partitions
@@ -330,8 +330,8 @@ class SynchronizedConsumer:
 
 **Example**:
 ```
-09:30:00.123 → Trade at $150.25 (SeqNum: 1000)
-09:35:12.456 → Correction: Trade at $150.23 (SeqNum: 5000, CorrectedSeqNum: 1000)
+10:00:00.123 → Trade at $43.25 (SeqNum: 1000)
+10:35:12.456 → Correction: Trade at $43.23 (SeqNum: 5000, CorrectedSeqNum: 1000)
 ```
 
 **Handling**:
