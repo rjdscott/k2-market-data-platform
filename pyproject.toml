@@ -151,15 +151,15 @@ Issues = "https://github.com/rjdscott/k2-market-data-platform/issues"
 
 [project.scripts]
 # CLI entry points
-k2 = "k2_platform.cli:main"
-k2-ingest = "k2_platform.ingestion.cli:main"
-k2-query = "k2_platform.query.cli:main"
+k2 = "k2.cli:main"
+k2-ingest = "k2.ingestion.cli:main"
+k2-query = "k2.query.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-k2_platform = ["py.typed"]
+k2 = ["py.typed"]
 
 # ==============================================================================
 # Development Tools Configuration
@@ -294,7 +294,7 @@ addopts = [
     "--strict-config",
     "--showlocals",
     "--tb=short",
-    "--cov=src/k2_platform",
+    "--cov=src/k2",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
@@ -312,7 +312,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["src/k2_platform"]
+source = ["src/k2"]
 omit = [
     "*/tests/*",
     "*/test_*.py",

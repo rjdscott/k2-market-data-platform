@@ -174,7 +174,7 @@ test-watch: ## Run tests in watch mode
 
 coverage: ## Run tests with coverage report
 	@echo "$(BLUE)Running tests with coverage...$(NC)"
-	@$(PYTEST) tests/ --cov=src/k2_platform --cov-report=term-missing --cov-report=html
+	@$(PYTEST) tests/ --cov=src/k2 --cov-report=term-missing --cov-report=html
 	@echo "$(GREEN)✓ Coverage report generated in htmlcov/index.html$(NC)"
 
 coverage-report: ## Open coverage report in browser
@@ -228,7 +228,7 @@ simulate: docker-up ## Start market data simulation
 	@$(VENV)/bin/python scripts/simulate_market_data.py
 
 shell: ## Open Python shell with platform modules loaded
-	@$(VENV)/bin/ipython -i -c "from k2_platform import *; print('K2 Platform modules loaded')"
+	@$(VENV)/bin/ipython -i -c "from k2 import *; print('K2 Platform modules loaded')"
 
 kafka-topics: ## List Kafka topics
 	@docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list

@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
 
-from k2_platform.common.metrics import metrics
-from k2_platform.common.logging import get_logger
+from k2.common.metrics import metrics
+from k2.common.logging import get_logger
 
 logger = get_logger(__name__)
 

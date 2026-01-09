@@ -46,7 +46,7 @@ Testing distributed systems requires a multi-layered approach: fast unit tests f
 ```python
 # tests/unit/test_sequence_tracker.py
 import pytest
-from k2_platform.ingestion.sequence_tracker import SequenceTracker
+from k2.ingestion.sequence_tracker import SequenceTracker
 
 class TestSequenceTracker:
     """Unit tests for sequence number tracking."""
@@ -113,7 +113,7 @@ class TestSequenceTracker:
 # tests/unit/test_iceberg_writer.py
 import pytest
 from unittest.mock import Mock, patch
-from k2_platform.storage.iceberg_writer import IcebergWriter
+from k2.storage.iceberg_writer import IcebergWriter
 
 class TestIcebergWriter:
     """Unit tests for Iceberg writer."""
@@ -165,7 +165,7 @@ class TestIcebergWriter:
 ```python
 # tests/unit/test_business_rules.py
 from hypothesis import given, strategies as st
-from k2_platform.validation.business_rules import BusinessRuleValidator
+from k2.validation.business_rules import BusinessRuleValidator
 
 class TestBusinessRuleValidator:
     """Property-based tests for business rule validation."""
@@ -209,7 +209,7 @@ class TestBusinessRuleValidator:
 pytest tests/unit/ -v
 
 # Run with coverage
-pytest tests/unit/ --cov=src/k2_platform --cov-report=html
+pytest tests/unit/ --cov=src/k2 --cov-report=html
 
 # Run specific test class
 pytest tests/unit/test_sequence_tracker.py::TestSequenceTracker

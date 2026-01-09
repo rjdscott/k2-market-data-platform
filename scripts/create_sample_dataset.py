@@ -234,7 +234,7 @@ python scripts/simulate_market_data.py \\
 ### Querying with DuckDB
 
 ```python
-from k2_platform.query import QueryEngine
+from k2.query import QueryEngine
 
 engine = QueryEngine()
 
@@ -250,7 +250,7 @@ df = engine.query(\"\"\"
 ### Replay from Iceberg
 
 ```python
-from k2_platform.query import ReplayEngine
+from k2.query import ReplayEngine
 
 replay = ReplayEngine(
     table='market_data.ticks',

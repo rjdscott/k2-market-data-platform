@@ -118,7 +118,7 @@ Financial data has unique ordering and replay requirements. See [**Market Data G
 - Iceberg tables sorted by `(exchange_timestamp, exchange_sequence_number)`
 - Sequence gap detection with configurable alert thresholds
 
-**Code Reference**: [`src/k2_platform/ingestion/sequence_tracker.py`](./src/k2_platform/ingestion/sequence_tracker.py)
+**Code Reference**: [`src/k2/ingestion/sequence_tracker.py`](./src/k2/ingestion/sequence_tracker.py)
 
 ### Sequence Number Tracking
 
@@ -358,7 +358,7 @@ python scripts/simulate_market_data.py
 ### 3. Query Data
 
 ```python
-from k2_platform.query import QueryEngine
+from k2.query import QueryEngine
 
 engine = QueryEngine()
 
@@ -381,7 +381,7 @@ df = engine.query("""
 
 ```
 k2-market-data-platform/
-├── src/k2_platform/
+├── src/k2/
 │   ├── ingestion/           # Kafka producers, sequence tracking
 │   │   └── sequence_tracker.py  # Gap detection, deduplication
 │   ├── storage/             # Iceberg catalog, writers

@@ -185,7 +185,7 @@ def detect_reset(exchange: str, symbol: str, seq: int, timestamp: datetime) -> b
 
 **Implementation**:
 ```python
-from k2_platform.query import ReplayEngine
+from k2.query import ReplayEngine
 
 replay = ReplayEngine(
     table='market_data.ticks',
@@ -220,7 +220,7 @@ for tick in replay.stream():
 
 **Implementation**:
 ```python
-from k2_platform.ingestion import CatchUpConsumer
+from k2.ingestion import CatchUpConsumer
 
 consumer = CatchUpConsumer(
     topic='market.ticks.asx',
@@ -261,7 +261,7 @@ for message in consumer:
 
 **Implementation**:
 ```python
-from k2_platform.query import QueryEngine
+from k2.query import QueryEngine
 
 engine = QueryEngine()
 
