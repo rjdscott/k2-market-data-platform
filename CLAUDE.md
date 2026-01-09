@@ -12,14 +12,14 @@ After each change, update relevant documentation (`@README.MD` and `@docs/`) to 
    - Refactor code while keeping all tests passing.
    - Ensure test coverage is sufficient to verify core logic and edge cases.
 
-2**Documentation**
+2. **Documentation**
    - After completing each code change, update documentation to reflect:
      - New functionality or components
      - Updated usage instructions
      - Architecture changes or decisions
    - Keep documentation clear, concise, and consistent with TDD methodology.
 
-3**Best Practices**
+3. **Best Practices**
    - Maintain clean code and proper separation of concerns.
    - Follow Staff/Principal Data Engineer standards in readability, structure, and maintainability.
    - Use Docker and `docker-compose` for all local testing and demonstration setups.
