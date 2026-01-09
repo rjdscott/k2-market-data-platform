@@ -390,10 +390,20 @@ k2-market-data-platform/
 │   └── common/              # Metrics, logging, config
 ├── docs/
 │   ├── PLATFORM_PRINCIPLES.md      # Core design philosophy
+│   ├── QUERY_ARCHITECTURE.md       # Query routing, caching, optimization
 │   ├── MARKET_DATA_GUARANTEES.md   # Ordering, replay semantics
+│   ├── DATA_CONSISTENCY.md         # End-to-end consistency model
+│   ├── DATA_QUALITY.md             # Validation, anomaly detection
+│   ├── DATA_SOURCE_ASSUMPTIONS.md  # Exchange feed characteristics
 │   ├── LATENCY_BACKPRESSURE.md     # Performance budgets
 │   ├── CORRECTNESS_TRADEOFFS.md    # Exactly-once vs idempotency
 │   ├── FAILURE_RECOVERY.md         # Operational runbooks
+│   ├── DISASTER_RECOVERY.md        # Backup, multi-region, DR drills
+│   ├── OBSERVABILITY_DASHBOARDS.md # Grafana dashboards, alerts
+│   ├── STORAGE_OPTIMIZATION.md     # Compaction, lifecycle, cost
+│   ├── TESTING_STRATEGY.md         # Unit, integration, chaos tests
+│   ├── VERSIONING_POLICY.md        # SemVer, deprecation, releases
+│   ├── ALTERNATIVE_ARCHITECTURES.md # Lambda, Kappa comparison
 │   └── RFC_TEMPLATE.md             # Platform evolution process
 ├── tests/
 │   ├── unit/                # Fast, isolated tests
@@ -489,13 +499,40 @@ Before deploying to production, validate these requirements:
 
 ## Documentation Index
 
+### Core Architecture Documents
+
 | Document | Purpose | Audience |
 |----------|---------|----------|
 | [Platform Principles](./docs/PLATFORM_PRINCIPLES.md) | Core design philosophy, guardrails | All engineers, new hires |
-| [Market Data Guarantees](./docs/MARKET_DATA_GUARANTEES.md) | Ordering, sequencing, replay | Stream processing engineers |
-| [Latency & Backpressure](./docs/LATENCY_BACKPRESSURE.md) | Performance budgets, degradation | SRE, platform team |
-| [Correctness Trade-offs](./docs/CORRECTNESS_TRADEOFFS.md) | Exactly-once vs idempotency | All engineers |
-| [Failure & Recovery](./docs/FAILURE_RECOVERY.md) | Incident response procedures | On-call engineers, SRE |
+| [Query Architecture](./docs/QUERY_ARCHITECTURE.md) | Query routing, caching, performance optimization | Platform engineers, data engineers |
+| [Market Data Guarantees](./docs/MARKET_DATA_GUARANTEES.md) | Ordering, sequencing, replay semantics | Stream processing engineers |
+| [Data Consistency](./docs/DATA_CONSISTENCY.md) | End-to-end consistency model, cross-layer guarantees | All engineers |
+| [Alternative Architectures](./docs/ALTERNATIVE_ARCHITECTURES.md) | Comparison of Lambda, Kappa, and other patterns | Architecture team, tech leads |
+
+### Operational Excellence
+
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [Latency & Backpressure](./docs/LATENCY_BACKPRESSURE.md) | Performance budgets, degradation cascade | SRE, platform team |
+| [Failure & Recovery](./docs/FAILURE_RECOVERY.md) | Incident response runbooks | On-call engineers, SRE |
+| [Disaster Recovery](./docs/DISASTER_RECOVERY.md) | Backup strategy, multi-region failover, DR drills | SRE, platform lead |
+| [Observability Dashboards](./docs/OBSERVABILITY_DASHBOARDS.md) | Grafana dashboards, Prometheus alerts | SRE, on-call engineers |
+
+### Data Quality & Governance
+
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [Data Quality](./docs/DATA_QUALITY.md) | Validation framework, anomaly detection, quarantine | Data engineers, platform team |
+| [Data Source Assumptions](./docs/DATA_SOURCE_ASSUMPTIONS.md) | Exchange feed characteristics, vendor adaptations | Integration engineers |
+| [Correctness Trade-offs](./docs/CORRECTNESS_TRADEOFFS.md) | Exactly-once vs at-least-once delivery | All engineers |
+
+### Development & Operations
+
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [Testing Strategy](./docs/TESTING_STRATEGY.md) | Unit, integration, performance, chaos tests | All engineers, QA |
+| [Storage Optimization](./docs/STORAGE_OPTIMIZATION.md) | Compaction, lifecycle policies, cost optimization | Data engineers, FinOps |
+| [Versioning Policy](./docs/VERSIONING_POLICY.md) | SemVer, deprecation process, upgrade procedures | All engineers |
 | [RFC Template](./docs/RFC_TEMPLATE.md) | Platform change proposals | Platform lead, staff engineers |
 
 ---
