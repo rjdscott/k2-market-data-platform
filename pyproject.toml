@@ -144,10 +144,10 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/k2-ingestion"
+Homepage = "https://github.com/yourusername/k2-market-data-platform"
 Documentation = "https://k2-platform.readthedocs.io"
-Repository = "https://github.com/yourusername/k2-ingestion"
-Issues = "https://github.com/yourusername/k2-ingestion/issues"
+Repository = "https://github.com/yourusername/k2-market-data-platform"
+Issues = "https://github.com/yourusername/k2-market-data-platform/issues"
 
 [project.scripts]
 # CLI entry points

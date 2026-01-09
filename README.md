@@ -16,42 +16,42 @@ This platform showcases senior data engineering capabilities through:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Data Producers                               │
-│  Market Data Feeds, Trading Venues, Simulation Generators            │
+│                         Data Producers                              │
+│  Market Data Feeds, Trading Venues, Simulation Generators           │
 └────────────────────────────┬────────────────────────────────────────┘
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      Ingestion Layer                                 │
-│  ┌──────────────┐    ┌─────────────────┐                           │
+│                      Ingestion Layer                                │
+│  ┌──────────────┐    ┌─────────────────┐                            │
 │  │    Kafka     │◄───│ Schema Registry │  (Schema Evolution)        │
-│  │   (KRaft)    │    │   (Avro/JSON)   │                           │
-│  └──────┬───────┘    └─────────────────┘                           │
+│  │   (KRaft)    │    │   (Avro/JSON)   │                            │
+│  └──────┬───────┘    └─────────────────┘                            │
 │         │ Topics: market.ticks, market.trades, market.quotes        │
 └─────────┼───────────────────────────────────────────────────────────┘
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      Processing Layer                                │
-│  ┌────────────────────────────────────────────────────────────┐    │
-│  │  Stream Processors (Kafka Consumers)                       │    │
-│  │  • Real-time aggregation                                   │    │
-│  │  • Validation & enrichment                                 │    │
-│  │  • Deduplication                                           │    │
-│  └────────────────────────────────────────────────────────────┘    │
+│                      Processing Layer                               │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │  Stream Processors (Kafka Consumers)                       │     │
+│  │  • Real-time aggregation                                   │     │
+│  │  • Validation & enrichment                                 │     │
+│  │  • Deduplication                                           │     │
+│  └────────────────────────────────────────────────────────────┘     │
 └─────────┼───────────────────────────────────────────────────────────┘
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                       Storage Layer                                  │
-│  ┌──────────────────┐        ┌────────────────┐                    │
-│  │  Apache Iceberg  │◄───────│   PostgreSQL   │  (Catalog Metadata)│
-│  │  (Table Format)  │        │   (ACID Store) │                    │
-│  └────────┬─────────┘        └────────────────┘                    │
-│           │                                                          │
-│           ▼                                                          │
+│                       Storage Layer                                 │
+│  ┌──────────────────┐        ┌────────────────┐                     │
+│  │  Apache Iceberg  │◄───────│   PostgreSQL   │  (Catalog Metadata) │
+│  │  (Table Format)  │        │   (ACID Store) │                     │
+│  └────────┬─────────┘        └────────────────┘                     │
+│           │                                                         │
+│           ▼                                                         │
 │  ┌──────────────────┐                                               │
-│  │  MinIO (S3 API)  │  (Parquet files, partition metadata)         │
+│  │  MinIO (S3 API)  │  (Parquet files, partition metadata)          │
 │  │  Object Storage  │                                               │
 │  └──────────────────┘                                               │
 │  • Time-partitioned (day/hour)                                      │
@@ -61,28 +61,28 @@ This platform showcases senior data engineering capabilities through:
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Query Layer                                   │
-│  ┌────────────────────────────────────────────────────────────┐    │
-│  │  Query API (FastAPI/GraphQL)                               │    │
-│  │  • Real-time: Direct Kafka consumer                        │    │
-│  │  • Historical: DuckDB + Iceberg connector                  │    │
-│  │  • Hybrid: Merge real-time + historical views              │    │
-│  └────────────────────────────────────────────────────────────┘    │
-│  ┌────────────────────────────────────────────────────────────┐    │
-│  │  Governance Layer                                          │    │
-│  │  • RBAC (Role-Based Access Control)                        │    │
-│  │  • Row-level security                                      │    │
-│  │  • Audit logging                                           │    │
-│  └────────────────────────────────────────────────────────────┘    │
+│                        Query Layer                                  │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │  Query API (FastAPI/GraphQL)                               │     │
+│  │  • Real-time: Direct Kafka consumer                        │     │
+│  │  • Historical: DuckDB + Iceberg connector                  │     │
+│  │  • Hybrid: Merge real-time + historical views              │     │
+│  └────────────────────────────────────────────────────────────┘     │
+│  ┌────────────────────────────────────────────────────────────┐     │
+│  │  Governance Layer                                          │     │
+│  │  • RBAC (Role-Based Access Control)                        │     │
+│  │  • Row-level security                                      │     │
+│  │  • Audit logging                                           │     │
+│  └────────────────────────────────────────────────────────────┘     │
 └─────────┼───────────────────────────────────────────────────────────┘
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Observability Layer                               │
-│  ┌───────────┐  ┌─────────┐  ┌──────────────────────┐             │
-│  │Prometheus │──│ Grafana │  │ Structured Logging   │             │
-│  │ (Metrics) │  │  (Viz)  │  │ (JSON w/ correlation)│             │
-│  └───────────┘  └─────────┘  └──────────────────────┘             │
+│                    Observability Layer                              │
+│  ┌───────────┐  ┌─────────┐  ┌──────────────────────┐               │
+│  │Prometheus │──│ Grafana │  │ Structured Logging   │               │
+│  │ (Metrics) │  │  (Viz)  │  │ (JSON w/ correlation)│               │
+│  └───────────┘  └─────────┘  └──────────────────────┘               │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -90,6 +90,7 @@ This platform showcases senior data engineering capabilities through:
 
 ### 1. Kafka with KRaft Mode
 **Decision**: Use Kafka in KRaft mode (no Zookeeper)
+
 **Rationale**:
 - Simplified operational complexity
 - Improved metadata scalability (critical for 1000s of partitions)
@@ -100,6 +101,7 @@ This platform showcases senior data engineering capabilities through:
 
 ### 2. Apache Iceberg for Storage
 **Decision**: Iceberg table format instead of raw Parquet or Delta Lake
+
 **Rationale**:
 - **ACID guarantees**: Critical for financial data consistency
 - **Schema evolution**: Add/remove fields without breaking queries
@@ -108,13 +110,16 @@ This platform showcases senior data engineering capabilities through:
 - **Hidden partitioning**: Consumers don't need to know partition layout
 - **Snapshot isolation**: Concurrent reads/writes without locking
 
-**Scaling**: Iceberg metadata layer scales independently from data. At 1000x scale:
+**Scaling**: Iceberg metadata layer scales independently from data. 
+
+At 1000x scale:
 - Supports petabyte+ datasets
 - Partition pruning keeps query latency low (scan only relevant files)
 - Metadata caching prevents thundering herd on catalog
 
 ### 3. DuckDB for Query Engine
 **Decision**: DuckDB instead of Spark/Presto for historical queries
+
 **Rationale**:
 - **Columnar execution**: Vectorized processing for analytical queries
 - **Zero-copy S3 reads**: Direct parquet scanning without staging
@@ -128,6 +133,7 @@ This platform showcases senior data engineering capabilities through:
 
 ### 4. MinIO vs Cloud Object Storage
 **Decision**: MinIO for local development, S3-compatible API for cloud
+
 **Rationale**:
 - **API compatibility**: Same code works with S3, GCS, Azure
 - **Local development**: No cloud costs during development
@@ -140,6 +146,7 @@ This platform showcases senior data engineering capabilities through:
 
 ### 5. Backward Compatibility for Schemas
 **Decision**: Enforce BACKWARD compatibility in Schema Registry
+
 **Rationale**:
 - **Consumer safety**: Downstream analytics never break on schema changes
 - **Additive changes**: Can add optional fields without redeploying consumers
@@ -218,7 +225,7 @@ This platform showcases senior data engineering capabilities through:
 ### 1. Clone and Setup
 ```bash
 git clone <repository-url>
-cd k2-ingestion
+cd k2-market-data-platform
 
 # Copy environment file
 cp .env.example .env
@@ -293,7 +300,7 @@ print(df.head())
 
 ### Project Structure
 ```
-k2-ingestion/
+k2-market-data-platform/
 ├── src/k2_platform/
 │   ├── ingestion/          # Kafka producers, stream processing
 │   │   ├── producer.py     # Market data producer
