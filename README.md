@@ -1,4 +1,4 @@
-# K2 Market Data Platform
+# K2 - Market Data Platform
 
 **Status**: Production-Ready Design | Demo Implementation
 **Version**: 0.1.0
@@ -34,7 +34,7 @@ This platform is built on six non-negotiable principles. See [**Platform Princip
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         Data Producers                              │
-│  Market Data Feeds, Trading Venues, Simulation Generators           │
+│  Market Data Feeds, Trading Venues, Vendor Data, Quant Research     │
 └────────────────────────────┬────────────────────────────────────────┘
                              │
                              ▼
@@ -45,7 +45,7 @@ This platform is built on six non-negotiable principles. See [**Platform Princip
 │  │   (KRaft)    │    │   (Avro/JSON)   │                            │
 │  └──────┬───────┘    └─────────────────┘                            │
 │         │ Partitioning: hash(exchange.symbol)                       │
-│         │ Topics: market.ticks.{exchange}                           │
+│         │ Topics: market.ticks, market.trades                       │
 └─────────┼───────────────────────────────────────────────────────────┘
           │
           ▼
@@ -540,9 +540,9 @@ Before deploying to production, validate these requirements:
 ## Roadmap
 
 ### Phase 1: Core Platform (Current)
-- [x] Kafka + Schema Registry setup
-- [x] Iceberg lakehouse with ACID
-- [x] Sequence tracking and gap detection
+- [ ] Kafka + Schema Registry setup
+- [ ] Iceberg lakehouse with ACID
+- [ ] Sequence tracking and gap detection
 - [ ] DuckDB query engine implementation
 - [ ] Replay engine (cold start, catch-up, rewind)
 - [ ] Observability Dashboards
@@ -562,12 +562,9 @@ Before deploying to production, validate these requirements:
 
 ## Contact & Contribution
 
-**Author**: [Your Name]
+**Author**: Rob Scott
 **Role**: Platform Lead / Senior Data Engineer
-**LinkedIn**: [Your LinkedIn]
-**Email**: [Your Email]
-
-**Contribution**: This is a demonstration project showcasing platform engineering capabilities for high-frequency trading environments. Feedback on architecture, scaling considerations, or operational practices is welcome via GitHub issues.
+**LinkedIn**: https://www.linkedin.com/in/rjdscott/
 
 ---
 
@@ -577,4 +574,4 @@ MIT License - see LICENSE file for details.
 
 ---
 
-**Built to demonstrate**: Senior/staff platform engineering capabilities including distributed systems design, streaming data architecture, operational reliability, and technical leadership.
+**Built to demonstrate**: distributed systems design, streaming data architecture, and operational reliability
