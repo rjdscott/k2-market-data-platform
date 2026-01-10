@@ -3,7 +3,7 @@
 This file tracks all significant architectural and implementation decisions for the K2 Market Data Platform.
 
 **Last Updated**: 2026-01-10
-**Total Decisions**: 11
+**Total Decisions**: 16
 
 ---
 
@@ -66,6 +66,11 @@ When adding new decisions, use this template:
 | #009 | Partition by Symbol for Kafka Topics | 2026-01-10 | Accepted | 6, 8 |
 | #010 | At-Least-Once with Idempotent Producers | 2026-01-10 | Accepted | 6 |
 | #011 | Per-Symbol Sequence Tracking with LRU Cache | 2026-01-10 | Accepted | 8 |
+| #012 | Consumer Group Naming Strategy | 2026-01-10 | Accepted | 8 |
+| #013 | Single-Topic Subscription with Pattern Support | 2026-01-10 | Accepted | 8 |
+| #014 | Sequence Gap Logging with Metrics Tracking | 2026-01-10 | Accepted | 8, 11 |
+| #015 | Batch Size 1000 with Configurable Override | 2026-01-10 | Accepted | 8, 4 |
+| #016 | Daemon Mode with Graceful Shutdown | 2026-01-10 | Accepted | 8 |
 
 ---
 
@@ -1057,13 +1062,602 @@ class SequenceTracker:
 
 ---
 
+## Decision #012: Consumer Group Naming Strategy
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 08 (Kafka Consumer)
+
+#### Context
+
+Consumer groups determine offset management, parallel processing capability, and operational clarity. Naming strategies:
+- **Purpose-based**: `k2-iceberg-writer` (generic)
+- **Data-type-based**: `k2-iceberg-writer-trades`, `k2-iceberg-writer-quotes`
+- **Application-based**: `k2-consumer-prod-001`
+
+Requirements:
+- Clear ownership (who manages this consumer?)
+- Independent scaling per data type
+- Easy operational debugging ("which consumer group is lagging?")
+
+#### Decision
+
+Use **data-type-based naming**: `k2-iceberg-writer-{data_type}`
+
+Examples:
+- `k2-iceberg-writer-trades`
+- `k2-iceberg-writer-quotes`
+- `k2-iceberg-writer-reference_data`
+
+#### Consequences
+
+**Positive**:
+- **Independent scaling**: Trades high-volume → scale trades consumer without affecting quotes
+- **Clear ownership**: Consumer group name immediately tells you what it processes
+- **Operational clarity**: `kafka-consumer-groups --describe --group k2-iceberg-writer-trades` shows trade lag
+- **Resource isolation**: Slow quote processing doesn't block trade processing
+- **Simplified monitoring**: Alert per data type (trade lag > 10s = critical, quote lag > 60s = warning)
+
+**Negative**:
+- **More consumer groups**: 3 data types = 3 consumer groups vs 1 generic group
+- **Coordination overhead**: Must manage multiple consumer instances
+
+**Neutral**:
+- **Standard pattern**: Most streaming platforms use data-type or purpose-based naming
+- **Easy refactoring**: Can consolidate later if needed
+
+#### Alternatives Considered
+
+1. **Single generic consumer group (`k2-iceberg-writer`)**
+   - **Rejected**: All data types share same offsets and lag metrics
+   - Can't scale trades independently from quotes
+   - Slow reference data processing blocks trades
+
+2. **Application-based naming (`k2-consumer-prod-001`)**
+   - **Rejected**: Unclear what data this processes
+   - Operational overhead (must document mapping)
+
+#### Implementation Notes
+
+```python
+# Consumer instantiation
+consumer = MarketDataConsumer(
+    consumer_group=f"k2-iceberg-writer-{data_type}",  # e.g., k2-iceberg-writer-trades
+    topics=[f"market.{asset_class}.{data_type}.{exchange}"],
+)
+```
+
+**Operational commands**:
+```bash
+# Check lag for trades
+kafka-consumer-groups --bootstrap-server localhost:9092 \
+    --group k2-iceberg-writer-trades \
+    --describe
+
+# Reset offsets for quotes
+kafka-consumer-groups --bootstrap-server localhost:9092 \
+    --group k2-iceberg-writer-quotes \
+    --reset-offsets --to-earliest \
+    --topic market.equities.quotes.asx \
+    --execute
+```
+
+#### Verification
+
+- [ ] Consumer group created: `k2-iceberg-writer-trades`
+- [ ] Lag metrics separate per data type
+- [ ] Multiple consumers in same group parallelize processing
+- [ ] Documentation explains naming pattern
+
+---
+
+## Decision #013: Single-Topic Subscription with Pattern Support
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 08 (Kafka Consumer)
+
+#### Context
+
+Consumers can subscribe to topics via:
+- **Explicit list**: `['market.equities.trades.asx', 'market.equities.trades.nasdaq']`
+- **Pattern matching**: `'market\\.equities\\.trades\\..*'` (all equity trade topics)
+- **Single topic**: `'market.equities.trades.asx'` (one at a time)
+
+Considerations:
+- **Simplicity vs flexibility**: Single topic is simple, pattern is powerful
+- **Operational safety**: Pattern can accidentally consume wrong topics
+- **Offset management**: Patterns mix offsets across topics
+- **Testing**: Single topic easier to test and debug
+
+Staff data engineer principle: **Start simple, add complexity only when proven necessary**.
+
+#### Decision
+
+Implement **single-topic subscription** with optional pattern support via configuration.
+
+Default mode:
+```python
+consumer.subscribe(['market.equities.trades.asx'])  # Single topic
+```
+
+Optional pattern mode (via config):
+```python
+consumer.subscribe_pattern('market\\.equities\\.trades\\..*')  # Pattern
+```
+
+#### Consequences
+
+**Positive**:
+- **Predictable behavior**: Clear what data is being processed
+- **Easier debugging**: Offset tracking is straightforward
+- **Safer operations**: No accidental cross-topic consumption
+- **Better testing**: Can test with specific topic without pattern complexity
+- **Clear logs**: "Consuming from market.equities.trades.asx" vs "Consuming from pattern"
+
+**Negative**:
+- **More consumer instances**: Need separate consumer per topic (acceptable for demo)
+- **Configuration overhead**: Must specify topics explicitly
+
+**Neutral**:
+- **Production upgrade path**: Pattern support ready when needed
+- **Standard pattern**: Single-topic is common for data pipelines
+
+#### Alternatives Considered
+
+1. **Pattern-based subscription by default**
+   - **Rejected**: Too much magic, harder to debug
+   - Risk: Accidentally consume from wrong topics if pattern too broad
+   - Example: `market\\..*\\..*\\..*` could consume quotes when expecting trades
+
+2. **Multi-topic explicit list**
+   - **Rejected**: Adds complexity without clear benefit for Phase 1
+   - Can add later if multiple topics per consumer needed
+
+#### Implementation Notes
+
+```python
+class MarketDataConsumer:
+    def __init__(
+        self,
+        topics: Optional[List[str]] = None,
+        topic_pattern: Optional[str] = None,
+    ):
+        if topics and topic_pattern:
+            raise ValueError("Specify either topics or topic_pattern, not both")
+
+        if topics:
+            self.consumer.subscribe(topics)  # Explicit
+        elif topic_pattern:
+            self.consumer.subscribe(pattern=topic_pattern)  # Pattern
+        else:
+            raise ValueError("Must specify either topics or topic_pattern")
+```
+
+**CLI usage**:
+```bash
+# Single topic (default)
+k2-ingest consume --topic market.equities.trades.asx
+
+# Pattern (advanced)
+k2-ingest consume --topic-pattern "market\\.equities\\.trades\\..*"
+```
+
+#### Verification
+
+- [ ] Consumer subscribes to single topic successfully
+- [ ] Pattern support available but not default
+- [ ] Error raised if both topics and pattern specified
+- [ ] Documentation shows both modes with clear recommendations
+
+---
+
+## Decision #014: Sequence Gap Logging with Metrics Tracking
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 08 (Kafka Consumer), Step 11 (Sequence Tracker)
+
+#### Context
+
+Sequence gaps occur when:
+- Message reordering during network partitions
+- Producer failure between messages
+- Topic compaction (for compacted topics)
+- Deliberate message skipping (e.g., market closed)
+
+Gap handling options:
+- **Option A**: Log warning only (non-blocking)
+- **Option B**: Pause consumption and wait (blocking, risky)
+- **Option C**: Log + track in metrics (observable)
+- **Option D**: Log + write to separate "gaps" table (auditable)
+
+Staff data engineer principles:
+- **Observability over blocking**: Don't block production on expected anomalies
+- **Audit trail**: Track gaps for post-hoc analysis
+- **SLA-based alerting**: Define thresholds for acceptable gap rates
+
+Market data characteristics:
+- Gaps expected during market open/close transitions
+- Reordering rare but possible
+- Missing data must be detectable for compliance
+
+#### Decision
+
+Implement **Option C + D**: Log warnings, track in Prometheus metrics, and optionally write to DuckDB gaps table for audit.
+
+Behavior:
+1. **Detect gap**: Expected seq=102, received seq=105 → gap of 2
+2. **Log warning**: `sequence_gap_detected` with symbol, expected, received
+3. **Increment metric**: `k2_sequence_gaps_detected_total{symbol="BHP",exchange="asx"}`
+4. **Continue processing**: Don't block (at-least-once guarantees eventual consistency)
+5. **Optional gap table**: Write to `market_data.sequence_gaps` for audit
+
+#### Consequences
+
+**Positive**:
+- **Non-blocking**: Processing continues, no production impact
+- **Observable**: Prometheus metrics → Grafana dashboards → alerts
+- **Auditable**: DuckDB gaps table for compliance and investigation
+- **Actionable**: Can investigate gaps post-hoc without affecting real-time processing
+- **Standard pattern**: Industry best practice for streaming pipelines
+
+**Negative**:
+- **No automatic recovery**: Missing messages not automatically requested
+- **Requires monitoring**: Must set up alerts on gap metrics
+- **Storage overhead**: Gaps table grows (mitigated by periodic cleanup)
+
+**Neutral**:
+- **Acceptable for market data**: Historical data, not real-time trading decisions
+- **Can add backfill later**: Gaps table enables targeted data recovery
+
+#### Alternatives Considered
+
+1. **Block consumption until gap filled**
+   - **Rejected**: Too risky, single missing message blocks entire pipeline
+   - Timeout handling complex (how long to wait?)
+   - Can deadlock if message truly lost
+
+2. **Ignore gaps completely**
+   - **Rejected**: No visibility into data quality
+   - Compliance risk (can't prove data completeness)
+
+3. **Request missing messages from producer**
+   - **Rejected**: Adds complexity, requires producer to buffer messages
+   - Not applicable (producer doesn't store historical messages)
+
+#### Implementation Notes
+
+**SequenceTracker enhancement**:
+```python
+class SequenceTracker:
+    def check_sequence(self, symbol: str, seq_num: int) -> Optional[int]:
+        """Check sequence and return gap size if detected."""
+        expected = self.last_seen.get(symbol, seq_num - 1) + 1
+
+        if seq_num > expected:
+            gap = seq_num - expected
+            logger.warning(
+                "Sequence gap detected",
+                symbol=symbol,
+                expected=expected,
+                received=seq_num,
+                gap=gap,
+            )
+            metrics.increment(
+                "sequence_gaps_detected_total",
+                labels={"symbol": symbol, "exchange": "asx", "gap_size": str(gap)}
+            )
+            return gap
+
+        self.last_seen[symbol] = seq_num
+        return None
+```
+
+**Gaps table schema** (DuckDB):
+```sql
+CREATE TABLE IF NOT EXISTS market_data.sequence_gaps (
+    detected_at TIMESTAMP,
+    symbol VARCHAR,
+    exchange VARCHAR,
+    asset_class VARCHAR,
+    data_type VARCHAR,
+    expected_sequence BIGINT,
+    received_sequence BIGINT,
+    gap_size INTEGER,
+    PRIMARY KEY (detected_at, symbol, data_type)
+);
+```
+
+**Grafana alert**:
+```yaml
+# Alert if gap rate > 1% of messages
+expr: rate(k2_sequence_gaps_detected_total[5m]) / rate(k2_kafka_messages_consumed_total[5m]) > 0.01
+severity: warning
+summary: "High sequence gap rate detected"
+```
+
+#### Verification
+
+- [ ] Gap detected: seq 1, 2, 5 → logs gap=2
+- [ ] Metric incremented: `k2_sequence_gaps_detected_total`
+- [ ] Gaps table populated: 1 row for gap
+- [ ] Processing continues: Message 5 written to Iceberg
+- [ ] Grafana dashboard shows gap rate
+
+---
+
+## Decision #015: Batch Size 1000 with Configurable Override
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 08 (Kafka Consumer), Step 04 (Iceberg Writer)
+
+#### Context
+
+Iceberg write performance depends heavily on batch size:
+- **Small batches (1-100)**: Low latency, high transaction overhead (metadata writes)
+- **Medium batches (100-1000)**: Balanced latency and throughput
+- **Large batches (1000-10000)**: High throughput, high latency
+
+Target SLA: <500ms p99 latency from Kafka → Iceberg
+
+Factors:
+- **Metadata overhead**: Each Iceberg transaction writes manifest files (~10-50ms)
+- **Parquet file creation**: Larger batches = fewer, larger Parquet files (better for queries)
+- **Memory usage**: Larger batches = more memory (records buffered before write)
+- **Failure impact**: Larger batches = more reprocessing on failure
+
+Staff data engineer trade-off: **Optimize for throughput while meeting latency SLA**.
+
+#### Decision
+
+Default batch size: **1000 records**, configurable via environment variable.
+
+Rationale:
+- 1000 records ≈ 200KB (trades) ≈ 300KB (quotes)
+- Iceberg write: 100-200ms (includes metadata)
+- Kafka poll: 50-100ms (100 messages/poll at 10 polls)
+- Total latency: 150-300ms (well under 500ms p99 target)
+
+#### Consequences
+
+**Positive**:
+- **Meets latency SLA**: 300ms typical << 500ms p99 target
+- **Good throughput**: ~3000-5000 records/sec with single consumer
+- **Efficient Parquet files**: 1000-record files good for DuckDB queries
+- **Reasonable memory**: 200-300KB buffer per consumer
+- **Balanced failure impact**: 1000 records worst-case reprocessing
+
+**Negative**:
+- **Not optimal for all scenarios**: High-volume (trades) might benefit from 5000, low-volume (reference data) could use 100
+- **Requires tuning**: Production may need per-data-type configuration
+
+**Neutral**:
+- **Configurable**: `K2_CONSUMER_BATCH_SIZE=5000` for overrides
+- **Standard size**: 1000 is common default in streaming systems
+
+#### Alternatives Considered
+
+1. **Small batch size (100)**
+   - **Rejected**: 10x more Iceberg transactions = 10x metadata overhead
+   - Lower throughput (~500-1000 records/sec)
+   - But: Lower latency (50-100ms)
+
+2. **Large batch size (10000)**
+   - **Rejected**: Risk of exceeding 500ms p99 target
+   - Memory: 2-3MB buffer (acceptable but larger)
+   - Failure impact: 10K records reprocessed
+
+3. **Adaptive batch size**
+   - **Rejected**: Too complex for Phase 1
+   - Can add later with metrics-driven tuning
+
+#### Implementation Notes
+
+```python
+class MarketDataConsumer:
+    def __init__(self, batch_size: Optional[int] = None):
+        self.batch_size = batch_size or int(os.getenv('K2_CONSUMER_BATCH_SIZE', '1000'))
+
+    def consume_batch(self):
+        """Consume up to batch_size records."""
+        batch = []
+        while len(batch) < self.batch_size:
+            msg = self.consumer.poll(timeout=0.1)
+            if msg is None:
+                break  # No more messages available
+            batch.append(msg)
+
+        if batch:
+            self._write_to_iceberg(batch)
+            self.consumer.commit()  # Commit after successful write
+```
+
+**Configuration**:
+```bash
+# Default (1000)
+k2-ingest consume --topic market.equities.trades.asx
+
+# Override
+K2_CONSUMER_BATCH_SIZE=5000 k2-ingest consume --topic market.equities.trades.asx
+```
+
+#### Verification
+
+- [ ] Batch size defaults to 1000
+- [ ] Environment variable override works
+- [ ] P99 latency < 500ms with 1000 batch size
+- [ ] Throughput: 3000+ records/sec
+- [ ] Memory usage stable at 200-300KB per consumer
+
+---
+
+## Decision #016: Daemon Mode with Graceful Shutdown
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 08 (Kafka Consumer)
+
+#### Context
+
+Consumer execution modes:
+- **Daemon mode**: Run indefinitely until stopped (production)
+- **Batch mode**: Consume N messages then exit (testing/backfills)
+- **Time-based**: Consume for N seconds then exit
+
+Requirements:
+- **Production**: Long-running daemon for continuous processing
+- **Testing**: Batch mode for integration tests
+- **Graceful shutdown**: Handle SIGTERM/SIGINT cleanly
+
+Staff data engineer principles:
+- **Support both modes**: Production and testing have different needs
+- **No data loss on shutdown**: Flush + commit before exit
+- **Observable shutdown**: Log final statistics
+
+#### Decision
+
+Implement **daemon mode by default** with optional batch mode and graceful shutdown handling.
+
+Modes:
+1. **Daemon** (default): `k2-ingest consume --topic X`
+2. **Batch**: `k2-ingest consume --topic X --max-messages 1000`
+
+Graceful shutdown:
+- Catch SIGTERM/SIGINT
+- Finish processing current batch
+- Flush Iceberg writer
+- Commit Kafka offsets
+- Log final statistics
+- Exit cleanly
+
+#### Consequences
+
+**Positive**:
+- **Production-ready**: Daemon mode for continuous processing
+- **Testing-friendly**: Batch mode for integration tests
+- **No data loss**: Graceful shutdown guarantees offset commit
+- **Observable**: Log shutdown statistics (records processed, duration)
+- **Standard pattern**: Industry best practice for streaming consumers
+
+**Negative**:
+- **Complexity**: Signal handling adds code
+- **Shutdown latency**: May take seconds to finish current batch
+
+**Neutral**:
+- **Orchestration-ready**: Works with Kubernetes, systemd, Docker
+- **Backfill-capable**: Batch mode enables controlled backfills
+
+#### Alternatives Considered
+
+1. **Daemon only**
+   - **Rejected**: Testing requires manual stopping
+   - Integration tests harder to write
+
+2. **Batch only**
+   - **Rejected**: Production requires restarts
+   - No continuous processing
+
+#### Implementation Notes
+
+```python
+import signal
+import sys
+
+class MarketDataConsumer:
+    def __init__(self, max_messages: Optional[int] = None):
+        self.max_messages = max_messages
+        self.running = True
+        self.messages_processed = 0
+
+        # Register signal handlers
+        signal.signal(signal.SIGTERM, self._shutdown_handler)
+        signal.signal(signal.SIGINT, self._shutdown_handler)
+
+    def _shutdown_handler(self, signum, frame):
+        """Handle graceful shutdown."""
+        logger.info("Shutdown signal received", signal=signum)
+        self.running = False
+
+    def run(self):
+        """Main consumer loop."""
+        logger.info(
+            "Consumer starting",
+            mode="daemon" if self.max_messages is None else "batch",
+            max_messages=self.max_messages,
+        )
+
+        try:
+            while self.running:
+                # Check message limit (batch mode)
+                if self.max_messages and self.messages_processed >= self.max_messages:
+                    logger.info("Max messages reached", count=self.messages_processed)
+                    break
+
+                # Consume batch
+                batch = self._consume_batch()
+                if batch:
+                    self._write_to_iceberg(batch)
+                    self.consumer.commit()
+                    self.messages_processed += len(batch)
+
+        finally:
+            # Graceful shutdown
+            self._shutdown()
+
+    def _shutdown(self):
+        """Clean shutdown: flush, commit, log stats."""
+        logger.info("Consumer shutting down")
+
+        # Flush Iceberg writer
+        self.iceberg_writer.flush()
+
+        # Final commit
+        self.consumer.commit()
+
+        # Close consumer
+        self.consumer.close()
+
+        # Log statistics
+        logger.info(
+            "Consumer stopped",
+            messages_processed=self.messages_processed,
+            duration_seconds=time.time() - self.start_time,
+        )
+```
+
+**CLI usage**:
+```bash
+# Daemon mode (runs until stopped)
+k2-ingest consume --topic market.equities.trades.asx
+
+# Batch mode (stops after 1000 messages)
+k2-ingest consume --topic market.equities.trades.asx --max-messages 1000
+
+# Graceful stop (SIGTERM)
+kill -TERM <pid>
+```
+
+#### Verification
+
+- [ ] Daemon mode runs indefinitely
+- [ ] Batch mode stops after N messages
+- [ ] SIGTERM triggers graceful shutdown
+- [ ] SIGINT (Ctrl-C) triggers graceful shutdown
+- [ ] No data loss on shutdown (offsets committed)
+- [ ] Statistics logged on exit
+
+---
+
 ## Pending Decisions
 
 These decisions will be made during implementation:
-
-### PD-001: Consumer Group Naming Strategy
-**Step**: 8
-**Options**: Application-based vs purpose-based naming
 
 ### PD-002: API Authentication Method
 **Step**: 12
@@ -1072,10 +1666,6 @@ These decisions will be made during implementation:
 ### PD-003: Log Aggregation Approach
 **Step**: 14
 **Options**: Structured logs to stdout (CloudWatch/DataDog ready), ELK stack, Loki
-
-### PD-004: Sequence Tracker State Store
-**Step**: 8
-**Options**: In-memory (simple), Redis (persistent), PostgreSQL (normalized)
 
 ---
 
