@@ -46,7 +46,7 @@ from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
 from confluent_kafka.serialization import MessageField, SerializationContext
 
-from k2.common.config import get_config
+from k2.common.config import config
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
 from k2.ingestion.sequence_tracker import SequenceTracker
@@ -127,14 +127,13 @@ class MarketDataConsumer:
             raise ValueError("Specify either topics or topic_pattern, not both")
 
         # Load configuration
-        config = get_config()
         self.topics = topics
         self.topic_pattern = topic_pattern
         self.consumer_group = consumer_group or os.getenv(
             'K2_CONSUMER_GROUP', 'k2-iceberg-writer'
         )
-        self.bootstrap_servers = bootstrap_servers or config.kafka_bootstrap_servers
-        self.schema_registry_url = schema_registry_url or config.schema_registry_url
+        self.bootstrap_servers = bootstrap_servers or config.kafka.bootstrap_servers
+        self.schema_registry_url = schema_registry_url or config.kafka.schema_registry_url
         self.batch_size = batch_size or int(os.getenv('K2_CONSUMER_BATCH_SIZE', '1000'))
         self.max_messages = max_messages
 
@@ -161,12 +160,6 @@ class MarketDataConsumer:
             batch_size=self.batch_size,
             mode="daemon" if self.max_messages is None else "batch",
             max_messages=self.max_messages,
-        )
-
-        # Increment initialization metric
-        metrics.increment(
-            "consumer_initialized_total",
-            labels={"consumer_group": self.consumer_group}
         )
 
     def _init_schema_registry(self):
