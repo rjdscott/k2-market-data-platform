@@ -1,9 +1,9 @@
 # K2 Platform - Current Status
 
 **Date**: 2026-01-10
-**Phase**: Steps 1-5 Complete + Infrastructure Upgraded (Kafka 8.1.1, Schema Registry 8.1.1)
-**Status**: ✅ **SCHEMA REGISTRY OPERATIONAL** - All infrastructure services healthy
-**Blocker**: None - Schema Registry issue RESOLVED
+**Phase**: Steps 1-5 Complete + Infrastructure Upgraded (Latest Stable Versions)
+**Status**: ✅ **ALL SERVICES UPGRADED** - Observability stack modernized, Schema Registry operational
+**Blocker**: None - All critical services healthy with latest stable versions
 
 ---
 
@@ -47,7 +47,22 @@ Documentation:
   docs/implementation/STATUS.md                  This file
 ```
 
-### ✅ Blockers Resolved (2026-01-10)
+### ✅ Infrastructure Upgraded (2026-01-10)
+
+**Observability Stack Modernization** - ✅ COMPLETE
+- **Prometheus**: v2.49.1 → v3.9.1 (major version upgrade, latest stable)
+- **Grafana**: 10.2.3 → v12.3.1 (two major versions, deprecated plugin removed)
+- **Kafka-UI**: provectus:latest → kafbat:v1.4.2 (migrated to active fork)
+- **Iceberg REST**: Kept tabulario:0.8.0 (apache image missing PostgreSQL JDBC driver)
+
+**All Services Healthy**:
+- ✅ Kafka 8.1.1, Schema Registry 8.1.1 (2 instances)
+- ✅ Prometheus v3.9.1, Grafana v12.3.1
+- ✅ Kafka-UI kafbat v1.4.2
+- ✅ MinIO, PostgreSQL, Iceberg REST
+- ✅ All 9 containers healthy and operational
+
+### ✅ Former Blockers Resolved (2026-01-10)
 
 **Former Blocker 1: Python Version** - ✅ RESOLVED
 - System has Python 3.13.5 installed (exceeds requirement of 3.11+)
@@ -57,6 +72,10 @@ Documentation:
 - All Docker services now healthy (Kafka, MinIO, PostgreSQL, Iceberg REST, Prometheus, Grafana)
 - Iceberg REST health check fixed (replaced curl-based check with TCP check)
 - Resolution: Updated docker-compose.yml health check configuration
+
+**Former Blocker 3: Schema Registry** - ✅ RESOLVED
+- Schema Registry 8.1.1 fully operational with Kafka consumer group coordinator fix
+- Resolution: Added missing Kafka broker settings for KRaft mode
 
 ---
 

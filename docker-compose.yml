@@ -307,7 +307,7 @@ services:
   # - Partition evolution without data rewrites
   # Critical for financial data: Ensures consistency and auditability
   iceberg-rest:
-    image: tabulario/iceberg-rest:0.8.0
+    image: tabulario/iceberg-rest:0.8.0  # apache/iceberg-rest-fixture:1.10.1 missing PostgreSQL JDBC driver - needs investigation
     container_name: k2-iceberg-rest
     hostname: iceberg-rest
     ports:
@@ -350,7 +350,7 @@ services:
   # - Application services (custom metrics)
   # Essential for production: Latency, throughput, error rates
   prometheus:
-    image: prom/prometheus:v2.49.1
+    image: prom/prometheus:v3.9.1  # Upgraded from v2.49.1 (2026-01-10)
     container_name: k2-prometheus
     hostname: prometheus
     ports:
@@ -387,7 +387,7 @@ services:
   # - Query latency distributions
   # - System health metrics
   grafana:
-    image: grafana/grafana:10.2.3
+    image: grafana/grafana:12.3.1  # Upgraded from 10.2.3 (skipped v11.x) - 2026-01-10
     container_name: k2-grafana
     hostname: grafana
     ports:
@@ -396,7 +396,7 @@ services:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: false
-      GF_INSTALL_PLUGINS: grafana-piechart-panel
+      # GF_INSTALL_PLUGINS removed - grafana-piechart-panel deprecated in v11+, use native pie chart
     volumes:
       - ./config/grafana/datasources:/etc/grafana/provisioning/datasources
       - ./config/grafana/dashboards:/etc/grafana/provisioning/dashboards
@@ -426,7 +426,7 @@ services:
   # - Message browsing
   # - Schema Registry integration
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    image: kafbat/kafka-ui:v1.4.2  # Migrated from provectus (abandoned) to kafbat (active fork) - 2026-01-10
     container_name: k2-kafka-ui
     hostname: kafka-ui
     ports:

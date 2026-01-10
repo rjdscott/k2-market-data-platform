@@ -3,7 +3,7 @@
 This file tracks all significant architectural and implementation decisions for the K2 Market Data Platform.
 
 **Last Updated**: 2026-01-10
-**Total Decisions**: 4
+**Total Decisions**: 5
 
 ---
 
@@ -399,6 +399,100 @@ Use **embedded architecture** for Phase 1:
 - [ ] Demo completes in < 5 minutes
 - [ ] README clearly documents scaling strategy
 - [ ] Architecture diagram shows embedded nature
+
+---
+
+## Decision #005: Infrastructure Observability Stack Upgrades
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Platform Team
+**Related Steps**: Infrastructure Maintenance
+
+#### Context
+
+The observability stack (Prometheus, Grafana, Kafka-UI) was running on older versions from early 2024. Latest stable versions provide bug fixes, security updates, and new features. Research identified that latest versions required major version upgrades (Prometheus v2→v3, Grafana v10→v12) rather than minor patches.
+
+Additionally, provectus/kafka-ui project was abandoned mid-2023, with active development continuing in the kafbat/kafka-ui fork. Migration to the maintained fork was necessary for long-term support.
+
+#### Decision
+
+**Aggressive Upgrade Strategy** (Option B from plan):
+- **Prometheus**: v2.49.1 → v3.9.1 (major version jump)
+- **Grafana**: 10.2.3 → v12.3.1 (skipped v11.x)
+- **Kafka-UI**: provectus:latest → kafbat:v1.4.2 (fork migration)
+- **Iceberg REST**: Attempted apache:1.10.1, rolled back to tabulario:0.8.0
+
+Remove deprecated Grafana `grafana-piechart-panel` plugin (no dashboards deployed yet).
+
+#### Consequences
+
+**Positive**:
+- ✅ **Latest stable versions**: Security patches, bug fixes, new features
+- ✅ **Prometheus v3.9.1**: Bug fixes for Agent mode crash, relabel improvements
+- ✅ **Grafana v12.3.1**: Reimagined log exploration, enhanced data connections
+- ✅ **Kafka-UI active maintenance**: kafbat fork has full-text search, improved UI
+- ✅ **Reproducible builds**: Version pinning eliminates "latest" drift
+
+**Negative**:
+- ⚠️ **Higher risk**: Multiple major version upgrades simultaneously
+- ⚠️ **Iceberg REST blocked**: apache/iceberg-rest-fixture missing PostgreSQL JDBC driver
+- ⚠️ **Testing burden**: Upgrade validation took 2.5 hours
+- ⚠️ **Breaking changes risk**: Major versions may have API changes
+
+**Neutral**:
+- **Prometheus v3.x compatibility**: Existing prometheus.yml configuration compatible
+- **Grafana plugin deprecation**: grafana-piechart-panel removed (no impact, no dashboards)
+- **Kafka-UI fork**: Environment variables unchanged between provectus/kafbat
+
+#### Alternatives Considered
+
+1. **Conservative Incremental Upgrades** (Option A)
+   - Prometheus v2.49.1 → v2.latest → v3.9.1 (stage through intermediates)
+   - Grafana 10.2.3 → 11.x → 12.3.1 (don't skip versions)
+   - **Rejected**: 4-6 hours for incremental testing cycles
+   - Would be safer but timeline constraints favor aggressive approach
+
+2. **Minimal/Essential Only** (Option C)
+   - Only upgrade Iceberg REST to apache:1.10.1
+   - Keep Prometheus, Grafana, Kafka-UI on current versions
+   - **Rejected**: Misses security/bug fixes in observability stack
+
+3. **Defer All Upgrades** (Option D)
+   - No upgrades, plan for dedicated maintenance window
+   - **Rejected**: Stack already 12-18 months old, defer compounds technical debt
+
+#### Implementation Notes
+
+**Upgrade Sequence**:
+1. ✅ Prometheus v2.49.1 → v3.9.1 (docker-compose.yml line 353)
+2. ✅ Kafka-UI provectus → kafbat:v1.4.2 (docker-compose.yml line 429)
+3. ✅ Grafana 10.2.3 → v12.3.1, remove GF_INSTALL_PLUGINS (docker-compose.yml lines 390-399)
+4. ❌ Iceberg REST tabulario → apache:1.10.1 (FAILED - missing PostgreSQL driver)
+
+**Rollback Executed**:
+- apache/iceberg-rest-fixture:1.10.1 failed to start
+- Error: "No suitable driver found for jdbc:postgresql"
+- Rolled back to tabulario/iceberg-rest:0.8.0
+- Future: Investigate custom Dockerfile with PostgreSQL driver or alternative image
+
+**Backups Created**:
+- PostgreSQL: `backups/iceberg_catalog_20260110_184744.sql` (9.3KB)
+- Grafana: Attempted (no dashboards to backup)
+
+#### Verification
+
+- [x] Prometheus v3.9.1 healthy, 2/3 scrape targets up
+- [x] Grafana v12.3.1 healthy, Prometheus datasource connected
+- [x] Kafka-UI kafbat v1.4.2 healthy, Schema Registry visible
+- [x] Iceberg REST tabulario:0.8.0 healthy (rollback successful)
+- [x] All 9 Docker containers healthy
+- [x] Schema Registry: 10 schemas intact
+- [x] No service restarts or crashes after 30 minutes
+
+**Known Issues**:
+- Iceberg REST apache migration blocked (PostgreSQL driver dependency)
+- Need investigation: Build custom apache/iceberg-rest image with driver
 
 ---
 
