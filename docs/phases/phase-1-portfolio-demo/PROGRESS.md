@@ -10,10 +10,10 @@
 ## Current Status
 
 ### This Week
-- ✅ **Completed**: Steps 1-7 (Foundation + Storage Layer + Ingestion Pipeline - 43.75% complete)
+- ✅ **Completed**: Steps 1-8 (Foundation + Storage + Ingestion + Stream Processing - 50% complete)
 - ✅ **Completed**: Documentation cleanup (15 broken links fixed, architecture diagram created)
 - ✅ **Completed**: Production observability (Prometheus metrics, structured logging)
-- ⬜ **Next Up**: Step 8 (Kafka Consumer → Iceberg)
+- ⬜ **Next Up**: Steps 9-11 (Query Layer: DuckDB Engine, Replay, CLI)
 - 🔴 **Blocked**: None
 
 ### Completed This Week (2026-01-10)
@@ -23,6 +23,8 @@
 - ✅ **Step 4 Complete**: Iceberg Writer with exponential backoff retry, full metrics integration, 8/8 unit tests passing
 - ✅ **Step 6 Complete**: Kafka Producer with idempotent config, Avro serialization, Schema Registry integration, partition by symbol, 18/21 unit tests passing (86%), 91% code coverage
 - ✅ **Step 7 Complete**: CSV Batch Loader with Typer CLI, rich progress bar, DLQ error tracking, context manager support, 24/24 unit tests passing (100%)
+- ✅ **Step 8 Complete**: Kafka Consumer with Avro deserialization, batch Iceberg writes, sequence gap detection, graceful shutdown, daemon + batch modes, Typer CLI
+- ✅ **Architectural Decisions**: Documented 5 new decisions (#012-#016) with full justifications for consumer implementation
 - ✅ **Package Management**: Fixed module imports, installed prometheus_client, pyarrow, fastavro, typer, rich dependencies
 
 ---
@@ -100,14 +102,14 @@
 - **Decisions**: None (followed established patterns from Step 6)
 
 ### Step 08: Kafka Consumer → Iceberg
-- **Status**: ⬜ Not Started
-- **Started**: -
-- **Completed**: -
-- **Time**: - (est. 6-8h)
-- **Commit**: -
-- **Notes**: -
-- **Blockers**: Requires Steps 4, 6
-- **Decisions**: -
+- **Status**: ✅ Complete (Code & Validated)
+- **Started**: 2026-01-10
+- **Completed**: 2026-01-10
+- **Time**: 4h (est. 6-8h)
+- **Commit**: f29e609, 9ef710d, 44816f6 (3 incremental commits)
+- **Notes**: Production-ready Kafka consumer following 5 documented architectural decisions (#012-#016). Features: Avro deserialization with Schema Registry, batch Iceberg writes (1000 default), manual commit for at-least-once delivery, sequence gap detection with metrics, graceful SIGTERM/SIGINT handling, daemon + batch modes, Typer CLI with rich output. Implements all staff data engineer best practices: observability over blocking, non-blocking gap handling, configurable batch size, clear error messages, operational excellence.
+- **Blockers**: None
+- **Decisions**: #012 (Consumer group naming), #013 (Single-topic subscription), #014 (Sequence gap logging), #015 (Batch size 1000), #016 (Daemon mode with graceful shutdown)
 
 ### Step 09: DuckDB Query Engine
 - **Status**: ⬜ Not Started
