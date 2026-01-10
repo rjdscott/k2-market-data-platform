@@ -1,0 +1,39 @@
+{
+  "type": "record",
+  "name": "ReferenceData",
+  "namespace": "com.k2.market_data",
+  "doc": "Company reference data for enrichment - stored in compacted Kafka topic",
+  "fields": [
+    {
+      "name": "company_id",
+      "type": "int",
+      "doc": "Primary key - used as Kafka message key for compaction"
+    },
+    {
+      "name": "symbol",
+      "type": "string",
+      "doc": "Trading symbol (e.g., BHP)"
+    },
+    {
+      "name": "company_name",
+      "type": "string",
+      "doc": "Full company name (e.g., BHP BILLITON LTD)"
+    },
+    {
+      "name": "isin",
+      "type": "string",
+      "doc": "International Securities Identification Number (e.g., AU000000BHP4)"
+    },
+    {
+      "name": "start_date",
+      "type": "string",
+      "doc": "Listing start date (MM/DD/YYYY format)"
+    },
+    {
+      "name": "end_date",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Delisting date if applicable (MM/DD/YYYY format)"
+    }
+  ]
+}

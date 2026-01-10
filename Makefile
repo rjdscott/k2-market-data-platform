@@ -220,7 +220,7 @@ quality: format lint type-check ## Run all code quality checks
 
 init-infra: ## Initialize infrastructure (create topics, tables, etc.)
 	@echo "$(BLUE)Initializing infrastructure...$(NC)"
-	@$(VENV)/bin/python scripts/init_tables.py
+	@$(VENV)/bin/python scripts/init_infra.py
 	@echo "$(GREEN)✓ Infrastructure initialized$(NC)"
 
 simulate: docker-up ## Start market data simulation
