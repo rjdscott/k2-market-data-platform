@@ -1,0 +1,13 @@
+# K2 Platform - Development Dependencies
+# Fast installation without full dependency resolution
+# Install: pip install -r requirements-dev.txt
+
+# Core Dependencies (already installed)
+prometheus-client==0.23.1
+pyarrow==22.0.0
+structlog==25.5.0
+
+# Additional dependencies needed for Week 2
+rich==14.2.0  # Progress bars for CSV loader
+typer==0.21.1  # CLI framework
+fastavro==1.12.1  # Avro serialization for confluent-kafka

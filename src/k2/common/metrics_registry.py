@@ -87,6 +87,37 @@ KAFKA_PRODUCE_DURATION_SECONDS = Histogram(
     buckets=LATENCY_BUCKETS,
 )
 
+KAFKA_PRODUCE_RETRIES_TOTAL = Counter(
+    "k2_kafka_produce_retries_total",
+    "Total number of produce retries",
+    EXCHANGE_LABELS + ["topic", "error_type"],
+)
+
+KAFKA_PRODUCE_MAX_RETRIES_EXCEEDED_TOTAL = Counter(
+    "k2_kafka_produce_max_retries_exceeded_total",
+    "Total messages that exceeded max retry attempts",
+    EXCHANGE_LABELS + ["topic", "error_type"],
+)
+
+# Producer Lifecycle
+PRODUCER_INITIALIZED_TOTAL = Counter(
+    "k2_producer_initialized_total",
+    "Total number of producer instances initialized",
+    STANDARD_LABELS + ["component_type"],  # component_type for specific component identification
+)
+
+PRODUCER_INIT_ERRORS_TOTAL = Counter(
+    "k2_producer_init_errors_total",
+    "Total producer initialization errors",
+    STANDARD_LABELS + ["component_type", "error"],
+)
+
+SERIALIZER_ERRORS_TOTAL = Counter(
+    "k2_serializer_errors_total",
+    "Total Avro serializer errors",
+    STANDARD_LABELS + ["component_type", "subject"],
+)
+
 # Kafka Consumer
 KAFKA_MESSAGES_CONSUMED_TOTAL = Counter(
     "k2_kafka_messages_consumed_total",
@@ -294,6 +325,11 @@ _METRIC_REGISTRY: Dict[str, object] = {
     "kafka_messages_produced_total": KAFKA_MESSAGES_PRODUCED_TOTAL,
     "kafka_produce_errors_total": KAFKA_PRODUCE_ERRORS_TOTAL,
     "kafka_produce_duration_seconds": KAFKA_PRODUCE_DURATION_SECONDS,
+    "kafka_produce_retries_total": KAFKA_PRODUCE_RETRIES_TOTAL,
+    "kafka_produce_max_retries_exceeded_total": KAFKA_PRODUCE_MAX_RETRIES_EXCEEDED_TOTAL,
+    "producer_initialized_total": PRODUCER_INITIALIZED_TOTAL,
+    "producer_init_errors_total": PRODUCER_INIT_ERRORS_TOTAL,
+    "serializer_errors_total": SERIALIZER_ERRORS_TOTAL,
     "kafka_messages_consumed_total": KAFKA_MESSAGES_CONSUMED_TOTAL,
     "kafka_consumer_lag_seconds": KAFKA_CONSUMER_LAG_SECONDS,
     "kafka_consumer_lag_messages": KAFKA_CONSUMER_LAG_MESSAGES,
