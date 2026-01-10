@@ -96,8 +96,46 @@ Documentation:
 
 **Result**: Storage tests now pass (config module was missing dependency)
 
+### Integration Test Results (2026-01-10)
+
+**Infrastructure Tests** (tests/integration/test_infrastructure.py):
+- ✅ **Kafka**: 6/8 tests passed (75%)
+  - ✅ Kafka broker available
+  - ✅ MinIO available and accessible
+  - ✅ PostgreSQL available
+  - ✅ Iceberg REST available
+  - ✅ Prometheus available
+  - ✅ Grafana available
+  - ❌ Schema Registry not started (leader election issue)
+  - ❌ Kafka UI not started (depends on Schema Registry)
+
+**Iceberg Storage Tests** (tests/integration/test_iceberg_storage.py):
+- ⚠️ **Iceberg Storage**: 6/11 tests passed (55%)
+  - ✅ Create trades table
+  - ✅ Create quotes table
+  - ✅ Table partition spec validation
+  - ✅ Table sort order validation
+  - ⚠️ List tables (assertion format issue, tables exist)
+  - ❌ Write trades (schema mismatch: nullable vs required fields)
+  - ❌ Write quotes (schema mismatch: nullable vs required fields)
+  - ❌ Write batch (schema mismatch: nullable vs required fields)
+  - ❌ Decimal precision (schema mismatch: nullable vs required fields)
+  - ✅ Empty write handling
+  - ✅ Table not found error handling
+
+**Schema Registry Tests**: Not run (service unavailable)
+
+**Overall Integration Tests**: 12/27 passed (44%) ⚠️
+
+**Issues Identified**:
+1. **Schema Registry**: Leader election timeout in single-node mode (ongoing)
+2. **Iceberg Writer**: PyArrow creates nullable fields but Iceberg schema expects required fields
+3. **AWS Region**: Fixed by adding AWS_REGION=us-east-1 to iceberg-rest service
+
 ### Configuration Fixes Applied
 - Fixed docker-compose.yml Iceberg REST health check (curl → TCP check)
+- Fixed docker-compose.yml Schema Registry health check (curl → TCP check)
+- Fixed docker-compose.yml Iceberg REST missing AWS_REGION environment variable
 - Fixed pyproject.toml pytest minversion (9.1 → 9.0)
 - Fixed package imports in storage/__init__.py
 

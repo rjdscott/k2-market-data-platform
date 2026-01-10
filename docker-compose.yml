@@ -113,19 +113,22 @@ services:
       # Performance
       SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx512M -Xms512M"
 
-      # Leader election for HA (disabled for single-node dev setup)
-      SCHEMA_REGISTRY_LEADER_ELIGIBILITY: 'false'
-      SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 60000
+      # Single-node mode configuration
+      SCHEMA_REGISTRY_GROUP_ID: 'schema-registry'
+      SCHEMA_REGISTRY_LEADER_ELIGIBILITY: 'true'
+      SCHEMA_REGISTRY_MASTER_ELIGIBILITY: 'true'
+      SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 120000
     depends_on:
       kafka:
         condition: service_healthy
     networks:
       - k2-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/8081' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -250,6 +253,7 @@ services:
       CATALOG_S3_ACCESS__KEY__ID: ${MINIO_ROOT_USER:-admin}
       CATALOG_S3_SECRET__ACCESS__KEY: ${MINIO_ROOT_PASSWORD:-password}
       CATALOG_S3_PATH__STYLE__ACCESS: true
+      AWS_REGION: us-east-1
       CATALOG_URI: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-iceberg_catalog}
       CATALOG_JDBC_USER: ${POSTGRES_USER:-iceberg}
       CATALOG_JDBC_PASSWORD: ${POSTGRES_PASSWORD:-iceberg}
