@@ -105,35 +105,35 @@ This platform is built on six non-negotiable principles. See [**Platform Princip
 
 ---
 
-## Implementation Documentation
+## Documentation
 
-This repository includes comprehensive implementation documentation organized for clarity and progress tracking:
+This repository includes comprehensive documentation organized for staff/principal engineers and AI assistants:
 
-### 📚 **Main Implementation Plan**
-- [**Implementation Plan Index**](./docs/implementation/IMPLEMENTATION_PLAN.md) - Overview and step-by-step guide
-- [**Progress Tracker**](./docs/implementation/PROGRESS.md) - Current status and timeline
-- [**Architectural Decisions (ADRs)**](./docs/implementation/DECISIONS.md) - Key design choices and trade-offs
+### 📚 **Documentation Hub**
+- [**Documentation Index**](./docs/README.md) - Complete documentation navigation
+- [**Claude.md**](./docs/CLAUDE.md) - AI assistant guidance for documentation maintenance
 
-### 📝 **Implementation Steps** (16 steps total)
-All steps are in [`docs/implementation/steps/`](./docs/implementation/steps/):
-- Steps 01-02: Infrastructure & Schemas
-- Steps 03-05: Storage Layer (Iceberg)
-- Steps 06-08: Ingestion Layer (Kafka)
-- Steps 09-11: Query Layer (DuckDB)
-- Steps 12-13: API Layer (FastAPI)
-- Steps 14-16: Observability & Documentation
+### 🏗️ **Architecture & Design**
+- [**Architecture**](./docs/architecture/) - Permanent architectural decisions, platform principles, tech stack
+- [**Design**](./docs/design/) - Component-level design, data guarantees, interfaces
+- [**Alternative Architectures**](./docs/architecture/alternatives.md) - Architectures we considered
 
-### 📖 **Reference Documentation**
-- [**Verification Checklist**](./docs/implementation/reference/verification-checklist.md) - Final validation before review
-- [**Testing Strategy**](./docs/implementation/reference/testing-summary.md) - Unit, integration, and E2E testing
-- [**Architectural Summary**](./docs/implementation/reference/architectural-decisions.md) - Technology choices and deferred features
-- [**Success Criteria**](./docs/implementation/reference/success-criteria.md) - Portfolio readiness definition
+### 📋 **Phase 1: Portfolio Demo** (Current)
+- [**Implementation Plan**](./docs/phases/phase-1-portfolio-demo/IMPLEMENTATION_PLAN.md) - 16-step plan
+- [**Progress Tracker**](./docs/phases/phase-1-portfolio-demo/PROGRESS.md) - Current status
+- [**Decisions (ADRs)**](./docs/phases/phase-1-portfolio-demo/DECISIONS.md) - Phase 1 design choices
+- [**Implementation Steps**](./docs/phases/phase-1-portfolio-demo/steps/) - Detailed step guides
+
+### 🔧 **Operations & Testing**
+- [**Operations**](./docs/operations/) - Runbooks, monitoring, performance tuning
+- [**Testing**](./docs/testing/) - Testing strategy, patterns, coverage targets
+- [**Reference**](./docs/reference/) - API docs, glossary, configuration
 
 ---
 
 ## Market Data Guarantees
 
-Financial data has unique ordering and replay requirements. See [**Market Data Guarantees**](./docs/MARKET_DATA_GUARANTEES.md) for full design.
+Financial data has unique ordering and replay requirements. See [**Market Data Guarantees**](./docs/design/data-guarantees/ordering-guarantees.md) for full design.
 
 ### Per-Symbol Ordering
 
