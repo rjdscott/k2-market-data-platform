@@ -113,8 +113,20 @@ services:
       # Performance
       SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx512M -Xms512M"
 
-      # Development mode - single instance, immediate leader election
-      SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS: 10000
+      # Single-node leader election configuration
+      # Critical: Explicit group.id for Kafka-based coordination
+      SCHEMA_REGISTRY_KAFKASTORE_GROUP_ID: "schema-registry-cluster"
+
+      # Increased timeout for reliable single-node coordination
+      SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS: 30000
+
+      # Explicit leader eligibility flag
+      SCHEMA_REGISTRY_LEADER_ELIGIBILITY: "true"
+
+      # Consumer group coordination timeouts
+      SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 90000
+      SCHEMA_REGISTRY_REQUEST_TIMEOUT_MS: 40000
+      SCHEMA_REGISTRY_SESSION_TIMEOUT_MS: 30000
     depends_on:
       kafka:
         condition: service_healthy
