@@ -115,8 +115,10 @@ class TestIcebergCatalog:
         # List tables
         tables = manager.list_tables('market_data')
 
-        assert 'trades' in tables or 'market_data.trades' in str(tables)
-        assert 'quotes' in tables or 'market_data.quotes' in str(tables)
+        # Tables are returned as tuples: (namespace, table_name)
+        table_names = [table[1] if isinstance(table, tuple) else table for table in tables]
+        assert 'trades' in table_names
+        assert 'quotes' in table_names
 
         logger.info("Tables listed", count=len(tables))
 
@@ -212,12 +214,14 @@ class TestIcebergWriter:
         records = []
 
         for i in range(batch_size):
+            # Use string formatting to ensure proper decimal precision (6 places)
+            price_increment = Decimal(f"{i * 0.01:.6f}")
             records.append({
                 "symbol": "BATCH",
                 "company_id": 9999,
                 "exchange": "ASX",
-                "exchange_timestamp": datetime(2014, 3, 10, 10, 0, i, 0),
-                "price": Decimal("100.00") + Decimal(str(i * 0.01)),
+                "exchange_timestamp": datetime(2014, 3, 10, 10, 0, i % 60, i * 1000),  # Use modulo for seconds, microseconds for uniqueness
+                "price": Decimal("100.00") + price_increment,
                 "volume": 1000 + i,
                 "qualifiers": 0,
                 "venue": "X",

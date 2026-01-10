@@ -276,19 +276,19 @@ class IcebergWriter:
         Raises:
             Exception: If conversion fails
         """
-        # Define schema matching Iceberg table
+        # Define schema matching Iceberg table (with explicit nullable flags)
         schema = pa.schema([
-            ("symbol", pa.string()),
-            ("company_id", pa.int32()),
-            ("exchange", pa.string()),
-            ("exchange_timestamp", pa.timestamp('us')),  # microsecond precision
-            ("price", pa.decimal128(18, 6)),
-            ("volume", pa.int64()),
-            ("qualifiers", pa.int32()),
-            ("venue", pa.string()),
-            ("buyer_id", pa.string()),  # nullable
-            ("ingestion_timestamp", pa.timestamp('us')),
-            ("sequence_number", pa.int64()),  # nullable
+            pa.field("symbol", pa.string(), nullable=False),
+            pa.field("company_id", pa.int32(), nullable=False),
+            pa.field("exchange", pa.string(), nullable=False),
+            pa.field("exchange_timestamp", pa.timestamp('us'), nullable=False),
+            pa.field("price", pa.decimal128(18, 6), nullable=False),
+            pa.field("volume", pa.int64(), nullable=False),
+            pa.field("qualifiers", pa.int32(), nullable=False),
+            pa.field("venue", pa.string(), nullable=False),
+            pa.field("buyer_id", pa.string(), nullable=True),
+            pa.field("ingestion_timestamp", pa.timestamp('us'), nullable=False),
+            pa.field("sequence_number", pa.int64(), nullable=True),
         ])
 
         # Convert records, handling type conversions
@@ -327,18 +327,18 @@ class IcebergWriter:
         Raises:
             Exception: If conversion fails
         """
-        # Define schema matching Iceberg table
+        # Define schema matching Iceberg table (with explicit nullable flags)
         schema = pa.schema([
-            ("symbol", pa.string()),
-            ("company_id", pa.int32()),
-            ("exchange", pa.string()),
-            ("exchange_timestamp", pa.timestamp('us')),
-            ("bid_price", pa.decimal128(18, 6)),
-            ("bid_volume", pa.int64()),
-            ("ask_price", pa.decimal128(18, 6)),
-            ("ask_volume", pa.int64()),
-            ("ingestion_timestamp", pa.timestamp('us')),
-            ("sequence_number", pa.int64()),  # nullable
+            pa.field("symbol", pa.string(), nullable=False),
+            pa.field("company_id", pa.int32(), nullable=False),
+            pa.field("exchange", pa.string(), nullable=False),
+            pa.field("exchange_timestamp", pa.timestamp('us'), nullable=False),
+            pa.field("bid_price", pa.decimal128(18, 6), nullable=False),
+            pa.field("bid_volume", pa.int64(), nullable=False),
+            pa.field("ask_price", pa.decimal128(18, 6), nullable=False),
+            pa.field("ask_volume", pa.int64(), nullable=False),
+            pa.field("ingestion_timestamp", pa.timestamp('us'), nullable=False),
+            pa.field("sequence_number", pa.int64(), nullable=True),
         ])
 
         # Convert records, handling type conversions
