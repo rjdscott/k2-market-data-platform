@@ -1,395 +1,331 @@
 # K2 Platform - Implementation Progress
 
+**Started**: TBD
+**Target Completion**: TBD
+**Current Sprint**: Sprint 1 (Foundation)
 **Last Updated**: 2026-01-10
-**Status**: Steps 1-2 Complete (Code), Validation Pending (Environment Setup Required)
-
-This document tracks the implementation progress of the K2 Market Data Platform Phase 1.
 
 ---
 
-## 🎯 Current Status Summary
+## Current Status
 
-### ✅ Completed: Steps 1-3 Implementation (100%)
-- Infrastructure validation and setup (Step 1)
-- Avro schema design and registration (Step 2)
-- Iceberg storage layer with ACID writes (Step 3)
-- 17 new files created (~3,400 lines of code)
-- 39 test cases written (20 unit + 19 integration)
-- 4 comprehensive documentation files (~2,000+ lines)
-- Ready for validation once environment is properly configured
+### This Week
+- 🟡 **In Progress**: None (not started)
+- ⬜ **Next Up**: Step 1 - Infrastructure Validation
+- 🔴 **Blocked**: None
 
-### ⚠️ Blocked: Environment Setup
-- **Issue**: Python 3.11+ required but not available on current system (has 3.9.7)
-- **Impact**: Cannot run tests or validate implementation
-- **Resolution**: Install Python 3.11+ and create new virtual environment
-- **Docker**: `docker compose` failed with MinIO unhealthy, needs restart
-
-### 📋 Next Steps
-1. Install Python 3.11 or 3.12 on system: `brew install python@3.11`
-2. Create virtual environment with correct Python version: `python3.11 -m venv .venv`
-3. Install dependencies: `pip install -e ".[dev]"`
-4. Fix Docker issues: `docker compose down && docker compose up -d`
-5. Run validation tests (see `VALIDATION_GUIDE.md`)
-6. Proceed to Step 3 (Storage Layer)
-
-### 📄 Quick Reference
-- **Detailed Instructions**: [`VALIDATION_GUIDE.md`](./VALIDATION_GUIDE.md)
-- **Current State Snapshot**: [`STATUS.md`](./STATUS.md)
-- **Quick Reference**: [`README.md`](./README.md)
+### Completed This Week
+- None (implementation not started)
 
 ---
 
-## Completed: Step 3 (Storage Layer - Iceberg)
+## Detailed Progress by Step
 
-### ✅ Step 3: Storage Layer
+### Step 01: Infrastructure Validation & Setup Scripts
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 4-6h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: None
+- **Decisions**: -
 
-**Implemented**:
-- ✅ Iceberg catalog manager (`src/k2/storage/catalog.py`)
-  - Table creation with partitioning and sorting
-  - Daily partitions by exchange_timestamp
-  - Sorted by (exchange_timestamp, sequence_number)
-  - Namespace management
-  - Table existence checking and listing
+### Step 02: Schema Design & Registration
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 4-6h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Step 1
+- **Decisions**: -
 
-- ✅ Iceberg writer (`src/k2/storage/writer.py`)
-  - ACID write operations
-  - PyArrow columnar conversion
-  - Batch write support (100-10,000 records)
-  - Decimal precision handling
-  - Performance metrics collection
+### Step 03: Iceberg Catalog & Table Initialization
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 6-8h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Steps 1-2
+- **Decisions**: -
 
-- ✅ Updated `scripts/init_infra.py` to create tables
-  - Creates market_data.trades table
-  - Creates market_data.quotes table
-  - Integrated into infrastructure initialization
+### Step 04: Iceberg Writer
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 6-8h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Step 3
+- **Decisions**: -
 
-- ✅ Unit tests (`tests/unit/test_storage.py`)
-  - 10 test cases for catalog and writer
-  - Mocked catalog operations
-  - Arrow conversion testing
-  - Decimal handling validation
+### Step 05: Configuration Management
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 2-3h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Steps 1-4
+- **Decisions**: -
 
-- ✅ Integration tests (`tests/integration/test_iceberg_storage.py`)
-  - 11 test cases for real Iceberg operations
-  - Table creation validation
-  - Write and read verification
-  - Batch write testing
-  - Precision testing
+### Step 06: Kafka Producer
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 4-6h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Steps 2, 5
+- **Decisions**: -
 
-**Code Reference**:
-- Catalog: [`src/k2/storage/catalog.py`](../../src/k2/storage/catalog.py)
-- Writer: [`src/k2/storage/writer.py`](../../src/k2/storage/writer.py)
+### Step 07: CSV Batch Loader
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 3-4h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Step 6
+- **Decisions**: -
 
-**Validation**:
-- Unit tests ready to run (mocked, no Docker required)
-- Integration tests require Iceberg REST, MinIO, PostgreSQL
-- Expected: 21 tests (10 unit + 11 integration)
+### Step 08: Kafka Consumer → Iceberg
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 6-8h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Steps 4, 6
+- **Decisions**: -
+
+### Step 09: DuckDB Query Engine
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 4-6h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Step 8
+- **Decisions**: -
+
+### Step 10: Replay Engine
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 4-5h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Step 3
+- **Decisions**: -
+
+### Step 11: Query CLI
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 2-3h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Steps 9-10
+- **Decisions**: -
+
+### Step 12: REST API with FastAPI
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 4-6h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Steps 9-10
+- **Decisions**: -
+
+### Step 13: Prometheus Metrics Endpoint
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 2-3h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Step 12
+- **Decisions**: -
+
+### Step 14: Grafana Dashboard
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 2-3h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires Step 13
+- **Decisions**: -
+
+### Step 15: End-to-End Testing & Demo
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 4-6h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires all previous steps
+- **Decisions**: -
+
+### Step 16: Documentation & Cleanup
+- **Status**: ⬜ Not Started
+- **Started**: -
+- **Completed**: -
+- **Time**: - (est. 2-4h)
+- **Commit**: -
+- **Notes**: -
+- **Blockers**: Requires all previous steps
+- **Decisions**: -
 
 ---
 
-## Completed: Steps 1-2 (Infrastructure & Schemas)
+## Sprint Planning
 
-### ✅ Step 1: Infrastructure Validation & Setup Scripts
+### Sprint 1 (Week 1): Foundation Layer
+**Goal**: Complete infrastructure and storage foundation
 
-**Implemented**:
-- ✅ Infrastructure integration tests (`tests/integration/test_infrastructure.py`)
-  - Kafka broker connectivity test
-  - Schema Registry health check
-  - MinIO/S3 health check
-  - PostgreSQL connection test
-  - Iceberg REST catalog validation
-  - Prometheus and Grafana health checks
-  - Kafka UI accessibility test
+- [ ] Step 01: Infrastructure Validation (4-6h)
+- [ ] Step 02: Schema Design (4-6h)
+- [ ] Step 03: Iceberg Catalog (6-8h)
 
-- ✅ Infrastructure initialization script (`scripts/init_infra.py`)
-  - Creates Kafka topics with proper configuration:
-    - `market.trades.raw` (6 partitions, 7-day retention)
-    - `market.quotes.raw` (6 partitions, 7-day retention)
-    - `market.reference_data` (1 partition, compacted)
-  - Validates MinIO buckets (`warehouse`, `data`, `backups`)
-  - Creates Iceberg namespaces (`market_data`, `reference_data`)
-  - Comprehensive error handling and logging
+**Target**: 14-20 hours, complete by end of week 1
 
-- ✅ Updated `Makefile` target `init-infra` to use new script
+### Sprint 2 (Week 2): Storage & Ingestion
+**Goal**: Data ingestion pipeline functional
 
-**Validation**:
-- Infrastructure tests can validate all services are healthy
-- Init script automates setup for consistent environments
-- Documented in inline comments and docstrings
+- [ ] Step 04: Iceberg Writer (6-8h)
+- [ ] Step 05: Configuration (2-3h)
+- [ ] Step 06: Kafka Producer (4-6h)
+- [ ] Step 07: Batch Loader (3-4h)
+- [ ] Step 08: Kafka Consumer (6-8h)
 
----
+**Target**: 21-29 hours, complete by end of week 2
 
-### ✅ Step 2: Schema Design & Registration
+### Sprint 3 (Week 3): Query & API
+**Goal**: Query layer and API operational
 
-**Implemented**:
-- ✅ Avro schema definitions (`src/k2/schemas/*.avsc`)
-  - **trade.avsc**: Complete trade schema with 11 fields
-    - Decimal price type (precision=18, scale=6)
-    - Timestamp-millis logical types
-    - Optional buyer_id and sequence_number
-    - Comprehensive field documentation
+- [ ] Step 09: Query Engine (4-6h)
+- [ ] Step 10: Replay Engine (4-5h)
+- [ ] Step 11: Query CLI (2-3h)
+- [ ] Step 12: REST API (4-6h)
+- [ ] Step 13: Metrics (2-3h)
 
-  - **quote.avsc**: Complete quote schema with 10 fields
-    - Bid/ask prices and volumes
-    - Same timestamp and decimal patterns as trade
-    - Consistent field structure
+**Target**: 16-23 hours, complete by end of week 3
 
-  - **reference_data.avsc**: Company reference data
-    - Company ID, symbol, name, ISIN
-    - Start/end dates for listing periods
-    - Designed for Kafka compaction
+### Sprint 4 (Week 4): Finalization
+**Goal**: Observability and complete documentation
 
-- ✅ Schema management module (`src/k2/schemas/__init__.py`)
-  - `load_avro_schema(name)`: Load schema from file
-  - `list_available_schemas()`: Discover available schemas
-  - `register_schemas(url)`: Register all schemas with Schema Registry
-  - `get_schema_registry_client(url)`: Create SR client
-  - Subject naming convention: `market.{type}s.raw-value`
-  - Comprehensive error handling and validation
+- [ ] Step 14: Grafana Dashboard (2-3h)
+- [ ] Step 15: E2E Testing (4-6h)
+- [ ] Step 16: Documentation (2-4h)
 
-- ✅ Unit tests (`tests/unit/test_schemas.py`)
-  - Schema validation with avro-python library
-  - Required fields verification (symbol, timestamps, etc.)
-  - Logical type validation (timestamp-millis, decimal)
-  - Doc string completeness checks
-  - Optional field defaults validation
-  - 10 test cases covering schema correctness
-
-- ✅ Integration tests (`tests/integration/test_schema_registry.py`)
-  - Schema registration end-to-end
-  - Idempotency verification (re-registration returns same IDs)
-  - Subject naming convention validation
-  - Schema retrieval by ID
-  - Compatibility mode checking
-  - Version listing
-  - Health check validation
-  - 8 test cases covering Schema Registry integration
-
-**Validation**:
-- All schemas parse correctly with avro-python
-- Schemas follow design patterns (decimals for prices, logical types)
-- Schema management module provides clean API
-- Tests validate both schema structure and registry integration
+**Target**: 8-13 hours, complete by end of week 4
 
 ---
 
-## Next Steps: Step 3 (Storage Layer - Iceberg)
+## Velocity Metrics
 
-**To Implement**:
-- [ ] Iceberg catalog manager (`src/k2/storage/catalog.py`)
-- [ ] Create trades and quotes tables with partitioning
-- [ ] Iceberg writer implementation (`src/k2/storage/writer.py`)
-- [ ] PyArrow integration for columnar writes
-- [ ] Integration tests for table creation and writes
+### Estimated vs Actual Time
+- **Total Estimated**: 59-85 hours
+- **Total Actual**: 0 hours (not started)
+- **Variance**: N/A
+- **Average per Step**: 3.7-5.3 hours (estimated)
+
+### Completion Rate
+- **Steps Completed**: 0/16 (0%)
+- **Steps In Progress**: 0/16 (0%)
+- **Steps Pending**: 16/16 (100%)
+- **Steps Blocked**: 0/16 (0%)
+
+### Quality Metrics
+- **Test Coverage**: Not measured yet
+- **Code Review**: Not started
+- **Documentation**: 0% (templates created)
 
 ---
 
-## Files Created
+## Risk Log
 
-### Infrastructure (Step 1)
+| Risk ID | Risk | Severity | Probability | Mitigation | Status | Owner |
+|---------|------|----------|-------------|------------|--------|-------|
+| R001 | Docker resource limits on local machine | High | Medium | Document minimum requirements (8GB RAM), test on target hardware | Open | TBD |
+| R002 | Schema evolution breaking changes | Medium | Low | Version all schemas from v1, enforce backward compatibility | Mitigated | TBD |
+| R003 | Iceberg metadata conflicts | Medium | Low | Use single writer pattern initially, add locking if needed | Open | TBD |
+| R004 | Test data too large for quick demo | Low | Medium | Use DVN (low-volume stock) for demo dataset | Mitigated | TBD |
+| R005 | Dependency version conflicts | Medium | Medium | Pin exact versions, test in clean venv | Open | TBD |
+
+---
+
+## Decision Log (Quick Reference)
+
+See [DECISIONS.md](./DECISIONS.md) for complete architectural decision records.
+
+### Decisions Logged
+- None yet (implementation not started)
+
+### Decisions Pending
+- Database for sequence tracker (Redis vs PostgreSQL) - Step 8
+- Consumer group naming strategy - Step 8
+- API authentication method - Step 12
+- Log aggregation approach - Step 14
+
+---
+
+## Weekly Status Template
+
+**Copy this template for weekly status updates:**
+
+```markdown
+# Week X Status (YYYY-MM-DD to YYYY-MM-DD)
+
+## Summary
+- Completed: X steps (Y hours)
+- In Progress: Z steps
+- Blocked: W steps
+- Overall Progress: A/16 (B%)
+
+## Accomplishments
+- ✅ Step X: [Description] - Took Y hours (est. Z hours)
+
+## In Progress
+- 🟡 Step Y: [Description] - 50% complete
+
+## Blockers
+- 🔴 Step Z blocked by: [reason]
+
+## Next Week
+- Complete Step Y
+- Start Steps [list]
 ```
-tests/integration/test_infrastructure.py     - 134 lines
-scripts/init_infra.py                         - 189 lines
-```
-
-### Schemas (Step 2)
-```
-src/k2/schemas/trade.avsc                     - 74 lines
-src/k2/schemas/quote.avsc                     - 60 lines
-src/k2/schemas/reference_data.avsc            - 35 lines
-src/k2/schemas/__init__.py                    - 162 lines
-tests/unit/test_schemas.py                    - 168 lines
-tests/integration/test_schema_registry.py     - 179 lines
-```
-
-### Documentation
-```
-docs/implementation/PROGRESS.md               - This file
-```
-
-**Total Lines**: ~1,001 lines of production code and tests
 
 ---
 
-## Testing Status
+## Maintenance
 
-### Unit Tests
-- ✅ Schema validation (10 tests)
-- Status: All tests should pass
-- Run: `pytest tests/unit/test_schemas.py -v`
+### Updating This File
+1. **After completing a step**: Update status to ✅, add completion date and actual time
+2. **When starting a step**: Update status to 🟡, add start date
+3. **If blocked**: Update status to 🔴, document blocker
+4. **Weekly**: Add summary to "Completed This Week"
+5. **Decision made**: Reference decision number from DECISIONS.md
 
-### Integration Tests
-- ✅ Infrastructure health checks (8 tests)
-- ✅ Schema Registry integration (8 tests)
-- Status: Require docker-compose services running
-- Run: `pytest tests/integration/ -v -m integration`
-
----
-
-## Key Design Decisions
-
-### 1. Avro Schema Design
-- **Decision**: Use `decimal` logical type for prices (not `float`)
-- **Rationale**: Financial data requires exact decimal precision; floating point causes rounding errors
-- **Trade-off**: Slightly more complex serialization vs data correctness
-
-### 2. Timestamp Representation
-- **Decision**: Use `timestamp-millis` logical type (epoch milliseconds)
-- **Rationale**: Standardized format, efficient storage, easy conversion
-- **Trade-off**: Millisecond precision (acceptable for market data)
-
-### 3. Kafka Topic Partitioning
-- **Decision**: 6 partitions for market data topics
-- **Rationale**: Enables parallel processing, balances overhead vs throughput
-- **Trade-off**: More partitions = more metadata overhead, but better parallelism
-
-### 4. Schema Registry Subjects
-- **Decision**: Use `-value` suffix (e.g., `market.trades.raw-value`)
-- **Rationale**: Confluent convention for value schemas (separate from key schemas)
-- **Trade-off**: More verbose names, but follows industry standard
-
----
-
-## Architecture Patterns Established
-
-### 1. Structured Logging
-All modules use `structlog` with contextual fields:
-```python
-logger.info("Operation complete", field1=value1, field2=value2)
-```
-
-### 2. Type Hints
-Full type annotations on all functions:
-```python
-def load_avro_schema(schema_name: str) -> str:
-```
-
-### 3. Error Handling
-Pragmatic approach:
-- Validate inputs early
-- Let exceptions propagate with context
-- Log errors with structured data
-- Provide helpful error messages
-
-### 4. Testing Organization
-- `tests/unit/`: Fast, no external dependencies
-- `tests/integration/`: Requires Docker services
-- Markers: `@pytest.mark.unit`, `@pytest.mark.integration`
-
----
-
-## Validation Status: Steps 1-2
-
-### ⚠️ Validation Blocked - Environment Setup Required
-
-**Issue**: System Python version is 3.9.7, but project requires Python 3.11+
-
-**What Was Attempted**:
-1. ✅ Created all required files (tests, scripts, schemas, modules)
-2. ✅ Files are syntactically correct and well-structured
-3. ⚠️ Attempted to run tests - blocked by Python version requirement
-4. ⚠️ Attempted to start Docker services - MinIO container unhealthy
-
-**Blockers**:
-- Python 3.11 or 3.12 not available on system (`which python3.11` returns not found)
-- Cannot install k2-platform package: `ERROR: Package 'k2-platform' requires a different Python: 3.9.7 not in '>=3.11'`
-- Docker services started but MinIO container unhealthy (blocking dependent services)
-
-### Prerequisites for Validation
-
-**System Requirements**:
+### Progress Tracking Commands
 ```bash
-# Required: Python 3.11 or higher
-python3.11 --version  # Should be 3.11.x or 3.12.x
+# View current progress
+cat docs/implementation/PROGRESS.md | grep "Status:"
 
-# Required: Docker with docker-compose
-docker --version
-docker compose version
+# Count completed steps
+grep -c "Status.*✅" docs/implementation/steps/*.md
+
+# View blockers
+grep "Status.*🔴" docs/implementation/PROGRESS.md -A 2
 ```
-
-**Setup Steps**:
-```bash
-# 1. Install Python 3.11+ (if not available)
-# macOS:
-brew install python@3.11
-
-# Ubuntu/Debian:
-sudo apt-get update
-sudo apt-get install python3.11 python3.11-venv
-
-# 2. Create virtual environment with correct Python version
-python3.11 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# 3. Verify Python version
-python --version  # Should show 3.11.x or higher
-
-# 4. Install dependencies
-pip install --upgrade pip
-pip install -e ".[dev]"
-
-# 5. Start Docker services
-docker compose up -d
-
-# 6. Wait for services to be healthy
-sleep 30
-docker compose ps
-```
-
-### Validation Test Plan (To Execute)
-
-Once environment is properly set up, run these commands:
-
-```bash
-# Unit tests (no Docker required)
-pytest tests/unit/test_schemas.py -v -m unit
-
-# Integration tests (requires Docker services)
-pytest tests/integration/test_infrastructure.py -v -m integration
-pytest tests/integration/test_schema_registry.py -v -m integration
-
-# Initialize infrastructure
-python scripts/init_infra.py
-
-# Verify Kafka topics created
-docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list
-
-# Verify schemas registered (after init_infra.py)
-curl http://localhost:8081/subjects
-```
-
-### Expected Results (Once Validated)
-- ✅ All unit tests pass (10/10)
-- ✅ Infrastructure tests pass if services are healthy (8/8)
-- ✅ Schema registry tests pass after running init script (8/8)
-- ✅ Kafka topics created: `market.trades.raw`, `market.quotes.raw`, `market.reference_data`
-- ✅ Schemas registered in Schema Registry (visible in Kafka UI at http://localhost:8080)
-- ✅ All Docker containers healthy
 
 ---
 
-## Notes & Observations
-
-### What Worked Well
-- Test-alongside approach enabled quick validation
-- Avro schemas caught data type issues early
-- Structured logging provides clear operational visibility
-- Schema Registry integration straightforward with confluent-kafka library
-
-### Challenges Encountered
-- None significant yet
-
-### Improvements for Future Steps
-- Consider adding schema version management utilities
-- May need to handle Schema Registry compatibility modes more explicitly
-- Could add schema migration testing for evolution scenarios
-
----
-
-## References
-
-- [Platform Principles](../PLATFORM_PRINCIPLES.md)
-- [Market Data Guarantees](../MARKET_DATA_GUARANTEES.md)
-- [Implementation Plan](../../.claude/plans/rippling-yawning-duckling.md)
-- [Avro Specification](https://avro.apache.org/docs/current/spec.html)
-- [Confluent Schema Registry Docs](https://docs.confluent.io/platform/current/schema-registry/index.html)
+**Last Updated**: 2026-01-10
+**Maintained By**: Implementation Team

@@ -105,6 +105,32 @@ This platform is built on six non-negotiable principles. See [**Platform Princip
 
 ---
 
+## Implementation Documentation
+
+This repository includes comprehensive implementation documentation organized for clarity and progress tracking:
+
+### 📚 **Main Implementation Plan**
+- [**Implementation Plan Index**](./docs/implementation/IMPLEMENTATION_PLAN.md) - Overview and step-by-step guide
+- [**Progress Tracker**](./docs/implementation/PROGRESS.md) - Current status and timeline
+- [**Architectural Decisions (ADRs)**](./docs/implementation/DECISIONS.md) - Key design choices and trade-offs
+
+### 📝 **Implementation Steps** (16 steps total)
+All steps are in [`docs/implementation/steps/`](./docs/implementation/steps/):
+- Steps 01-02: Infrastructure & Schemas
+- Steps 03-05: Storage Layer (Iceberg)
+- Steps 06-08: Ingestion Layer (Kafka)
+- Steps 09-11: Query Layer (DuckDB)
+- Steps 12-13: API Layer (FastAPI)
+- Steps 14-16: Observability & Documentation
+
+### 📖 **Reference Documentation**
+- [**Verification Checklist**](./docs/implementation/reference/verification-checklist.md) - Final validation before review
+- [**Testing Strategy**](./docs/implementation/reference/testing-summary.md) - Unit, integration, and E2E testing
+- [**Architectural Summary**](./docs/implementation/reference/architectural-decisions.md) - Technology choices and deferred features
+- [**Success Criteria**](./docs/implementation/reference/success-criteria.md) - Portfolio readiness definition
+
+---
+
 ## Market Data Guarantees
 
 Financial data has unique ordering and replay requirements. See [**Market Data Guarantees**](./docs/MARKET_DATA_GUARANTEES.md) for full design.

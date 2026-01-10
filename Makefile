@@ -244,6 +244,51 @@ minio-shell: ## Open MinIO client shell
 	@docker exec -it k2-minio-init mc
 
 # ==============================================================================
+# Implementation Plan Management
+# ==============================================================================
+
+plan-status: ## Show current implementation progress
+	@echo "$(BLUE)K2 Implementation Progress$(NC)"
+	@echo ""
+	@grep -A 10 "^## Current Status" docs/implementation/PROGRESS.md | head -15
+
+plan-steps: ## List all implementation steps with status
+	@echo "$(BLUE)Implementation Steps Status:$(NC)"
+	@echo ""
+	@for file in docs/implementation/steps/step-*.md; do \
+		step=$$(basename $$file .md | sed 's/step-//'); \
+		status=$$(grep "^\*\*Status\*\*:" $$file | sed 's/.*: //; s/^ *//'); \
+		title=$$(head -1 $$file | sed 's/^# //'); \
+		printf "  %-50s %s\n" "$$title" "$$status"; \
+	done
+
+plan-check: ## Check how many steps are completed
+	@echo "$(BLUE)Checking implementation progress...$(NC)"
+	@completed=$$(grep -l "Status\*\*: ✅" docs/implementation/steps/*.md | wc -l | tr -d ' '); \
+	total=$$(ls docs/implementation/steps/step-*.md | wc -l | tr -d ' '); \
+	percentage=$$((completed * 100 / total)); \
+	echo "$(GREEN)Steps completed: $$completed/$$total ($$percentage%)$(NC)"
+
+plan-todo: ## Show next steps to work on
+	@echo "$(BLUE)Next Steps:$(NC)"
+	@echo ""
+	@grep -A 3 "Next Up:" docs/implementation/PROGRESS.md | head -5
+
+plan-open: ## Open implementation plan in browser
+	@echo "$(BLUE)Opening implementation plan...$(NC)"
+	@open docs/implementation/IMPLEMENTATION_PLAN.md 2>/dev/null || \
+	 xdg-open docs/implementation/IMPLEMENTATION_PLAN.md 2>/dev/null || \
+	 echo "$(YELLOW)Open docs/implementation/IMPLEMENTATION_PLAN.md manually$(NC)"
+
+plan-verify: ## Run verification checklist
+	@echo "$(BLUE)Implementation Verification Checklist$(NC)"
+	@echo ""
+	@cat docs/implementation/reference/verification-checklist.md | \
+	 grep -E "^\- \[" | head -20
+	@echo ""
+	@echo "$(YELLOW)See docs/implementation/reference/verification-checklist.md for full checklist$(NC)"
+
+# ==============================================================================
 # Documentation
 # ==============================================================================
 

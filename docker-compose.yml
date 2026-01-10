@@ -113,8 +113,9 @@ services:
       # Performance
       SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx512M -Xms512M"
 
-      # Leader election for HA
-      SCHEMA_REGISTRY_LEADER_ELIGIBILITY: 'true'
+      # Leader election for HA (disabled for single-node dev setup)
+      SCHEMA_REGISTRY_LEADER_ELIGIBILITY: 'false'
+      SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 60000
     depends_on:
       kafka:
         condition: service_healthy
@@ -157,7 +158,7 @@ services:
     networks:
       - k2-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5

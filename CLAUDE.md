@@ -11,6 +11,7 @@ Prefer forward progress over theoretical perfection.
 4. Good performance (apply 80/20)  
 5. Nice abstractions (only when low cost)
 6. Best documentation (after code works)
+7. Always research latest documentation for any libraries / frameworks used
 
 ---
 
