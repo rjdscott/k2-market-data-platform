@@ -16,7 +16,7 @@ K2 is a distributed market data platform designed for high-frequency trading env
 
 ## Core Design Principles
 
-This platform is built on six non-negotiable principles. See [**Platform Principles**](./docs/PLATFORM_PRINCIPLES.md) for detailed rationale.
+This platform is built on six non-negotiable principles. See [**Platform Principles**](./docs/architecture/platform-principles.md) for detailed rationale.
 
 1. **Replayable by Default** - Every pipeline supports arbitrary time-range replay
 2. **Schema-First, Always** - No unstructured data enters the platform
@@ -25,7 +25,7 @@ This platform is built on six non-negotiable principles. See [**Platform Princip
 5. **Idempotency Over Exactly-Once** - At-least-once + deduplication by default
 6. **Observable by Default** - Metrics, logs, traces are not optional
 
-**Guardrails for Downstream Teams**: See [Platform Principles - What Teams MUST/MUST NOT Do](./docs/PLATFORM_PRINCIPLES.md#platform-guardrails)
+**Guardrails for Downstream Teams**: See [Platform Principles - What Teams MUST/MUST NOT Do](./docs/architecture/platform-principles.md#platform-guardrails)
 
 ---
 
@@ -105,6 +105,23 @@ This platform is built on six non-negotiable principles. See [**Platform Princip
 
 ---
 
+## Detailed Architecture
+
+For a comprehensive architectural overview with detailed component diagrams, data flow sequences, and scaling considerations, see:
+
+**[📐 System Architecture & Design](./docs/architecture/system-design.md)**
+
+This document includes:
+- High-level system architecture (Mermaid diagrams)
+- Detailed component interactions (Ingestion, Storage, Query, Observability)
+- Data flow sequences (happy path and failure scenarios)
+- Latency budget breakdown (<500ms p99 target)
+- Scaling considerations (1x → 100x → 1000x)
+- Technology decision matrix and rationale
+- Security architecture and disaster recovery strategy
+
+---
+
 ## Documentation
 
 This repository includes comprehensive documentation organized for staff/principal engineers and AI assistants:
@@ -133,7 +150,7 @@ This repository includes comprehensive documentation organized for staff/princip
 
 ## Market Data Guarantees
 
-Financial data has unique ordering and replay requirements. See [**Market Data Guarantees**](./docs/design/data-guarantees/ordering-guarantees.md) for full design.
+Financial data has unique ordering and replay requirements. See [**Ordering Guarantees**](./docs/design/data-guarantees/ordering-guarantees.md) for full design.
 
 ### Per-Symbol Ordering
 
@@ -170,7 +187,7 @@ Every exchange provides monotonically increasing sequence numbers. Platform dete
 
 ## Latency Budgets & Backpressure
 
-See [**Latency & Backpressure Design**](./docs/LATENCY_BACKPRESSURE.md) for detailed performance characteristics.
+See [**Latency & Backpressure Design**](./docs/operations/performance/latency-budgets.md) for detailed performance characteristics.
 
 ### End-to-End Latency Budget
 
@@ -186,7 +203,7 @@ See [**Latency & Backpressure Design**](./docs/LATENCY_BACKPRESSURE.md) for deta
 
 ### Degradation Cascade
 
-Under load, components degrade in this order (see [Latency & Backpressure](./docs/LATENCY_BACKPRESSURE.md#backpressure-cascade)):
+Under load, components degrade in this order (see [Latency & Backpressure](./docs/operations/performance/latency-budgets.md#backpressure-cascade)):
 
 1. **Soft Degradation**: p99 latency increases (alert, no user impact)
 2. **Graceful Degradation**: Drop low-priority symbols, skip enrichment
@@ -199,7 +216,7 @@ Under load, components degrade in this order (see [Latency & Backpressure](./doc
 
 ## Correctness Trade-offs
 
-See [**Correctness Trade-offs**](./docs/CORRECTNESS_TRADEOFFS.md) for full decision tree.
+See [**Correctness Trade-offs**](./docs/design/data-guarantees/correctness-tradeoffs.md) for full decision tree.
 
 ### Delivery Guarantees
 
@@ -231,7 +248,7 @@ See [**Correctness Trade-offs**](./docs/CORRECTNESS_TRADEOFFS.md) for full decis
 
 ## Failure & Recovery
 
-See [**Failure & Recovery Runbook**](./docs/FAILURE_RECOVERY.md) for operational procedures.
+See [**Failure & Recovery Runbook**](./docs/operations/runbooks/failure-recovery.md) for operational procedures.
 
 ### Covered Scenarios
 
@@ -368,35 +385,89 @@ docker-compose ps
 
 ```bash
 # Create virtual environment
-python -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install dependencies
-pip install -e .
+pip install --upgrade pip
+pip install -e ".[dev]"
 
-# Initialize Iceberg tables (TODO: implement scripts/init_tables.py)
-python scripts/init_tables.py
-
-# Start market data simulation (TODO: implement)
-python scripts/simulate_market_data.py
+# Initialize infrastructure (Kafka topics, schemas, Iceberg tables)
+python scripts/init_infra.py
 ```
 
-### 3. Query Data
+**Expected Output**:
+```
+✅ Kafka broker available
+✅ Schema Registry available
+✅ MinIO available
+✅ PostgreSQL available
+✅ Iceberg REST catalog available
 
-```python
-from k2.query import QueryEngine
+Creating Kafka topics...
+✅ Created topic: market.equities.trades.asx (30 partitions)
+✅ Created topic: market.equities.quotes.asx (30 partitions)
+✅ Created topic: market.crypto.trades.binance (40 partitions)
 
-engine = QueryEngine()
+Registering Avro schemas...
+✅ Registered schema: market.equities.trades-value (ID: 2)
+✅ Registered schema: market.equities.quotes-value (ID: 4)
 
-# Query last 1 hour of BHP ticks
-df = engine.query("""
-    SELECT timestamp, symbol, price, volume
-    FROM market_data.ticks
-    WHERE symbol = 'BHP'
-      AND timestamp >= NOW() - INTERVAL '1 hour'
-    ORDER BY timestamp DESC
-    LIMIT 1000
-""")
+Initializing Iceberg tables...
+✅ Created table: trades (partitioned by day)
+✅ Created table: quotes (partitioned by day)
+
+Infrastructure initialization complete! ✅
+```
+
+### 3. Verify Installation
+
+```bash
+# Run unit tests
+pytest tests/unit/ -v
+
+# Run infrastructure integration tests
+pytest tests/integration/test_infrastructure.py -v
+
+# View Kafka topics
+docker exec k2-kafka kafka-topics --list --bootstrap-server localhost:9092
+
+# Check registered schemas
+curl http://localhost:8081/subjects
+```
+
+**Expected Output**:
+```bash
+# Kafka topics
+market.crypto.quotes.binance
+market.crypto.reference_data.binance
+market.crypto.trades.binance
+market.equities.quotes.asx
+market.equities.reference_data.asx
+market.equities.trades.asx
+
+# Schema subjects
+["market.crypto.quotes-value","market.crypto.reference_data-value","market.crypto.trades-value","market.equities.quotes-value","market.equities.reference_data-value","market.equities.trades-value"]
+```
+
+### 4. Access Web Interfaces
+
+- **Kafka UI**: http://localhost:8080 - Browse topics, messages, consumers
+- **MinIO Console**: http://localhost:9001 - View object storage (admin / password123!)
+- **Grafana**: http://localhost:3000 - Dashboards (admin / admin)
+- **Prometheus**: http://localhost:9090 - Metrics and alerts
+
+### 5. Query Data (Coming Soon - Step 9-11)
+
+Query functionality will be available after completing Phase 1 Steps 9-11:
+- Step 9: DuckDB Query Engine
+- Step 10: Replay Engine
+- Step 11: Query CLI
+
+For now, you can inspect Iceberg tables directly:
+```bash
+# View Iceberg table metadata
+docker exec -it k2-postgres psql -U iceberg -d iceberg_catalog -c "SELECT * FROM iceberg_tables;"
 ```
 
 ---
@@ -477,7 +548,7 @@ mypy src/
 
 ### RFC Process
 
-All significant platform changes require an RFC (Request for Comments). See [**RFC Template**](./docs/RFC_TEMPLATE.md).
+All significant platform changes require an RFC (Request for Comments). See [**RFC Template**](./docs/governance/rfc-template.md).
 
 **Examples of RFC-Worthy Changes**:
 - New storage format (Hudi, Delta Lake)
@@ -529,37 +600,37 @@ Before deploying to production, validate these requirements:
 
 | Document | Purpose | Audience |
 |----------|---------|----------|
-| [Platform Principles](./docs/PLATFORM_PRINCIPLES.md) | Core design philosophy, guardrails | All engineers, new hires |
-| [Query Architecture](./docs/QUERY_ARCHITECTURE.md) | Query routing, caching, performance optimization | Platform engineers, data engineers |
-| [Market Data Guarantees](./docs/MARKET_DATA_GUARANTEES.md) | Ordering, sequencing, replay semantics | Stream processing engineers |
-| [Data Consistency](./docs/DATA_CONSISTENCY.md) | End-to-end consistency model, cross-layer guarantees | All engineers |
-| [Alternative Architectures](./docs/ALTERNATIVE_ARCHITECTURES.md) | Comparison of Lambda, Kappa, and other patterns | Architecture team, tech leads |
+| [Platform Principles](./docs/architecture/platform-principles.md) | Core design philosophy, guardrails | All engineers, new hires |
+| [Query Architecture](./docs/design/query-architecture.md) | Query routing, caching, performance optimization | Platform engineers, data engineers |
+| [Ordering Guarantees](./docs/design/data-guarantees/ordering-guarantees.md) | Ordering, sequencing, replay semantics | Stream processing engineers |
+| [Data Consistency](./docs/design/data-guarantees/consistency-model.md) | End-to-end consistency model, cross-layer guarantees | All engineers |
+| [Alternative Architectures](./docs/architecture/alternatives.md) | Comparison of Lambda, Kappa, and other patterns | Architecture team, tech leads |
 
 ### Operational Excellence
 
 | Document | Purpose | Audience |
 |----------|---------|----------|
-| [Latency & Backpressure](./docs/LATENCY_BACKPRESSURE.md) | Performance budgets, degradation cascade | SRE, platform team |
-| [Failure & Recovery](./docs/FAILURE_RECOVERY.md) | Incident response runbooks | On-call engineers, SRE |
-| [Disaster Recovery](./docs/DISASTER_RECOVERY.md) | Backup strategy, multi-region failover, DR drills | SRE, platform lead |
-| [Observability Dashboards](./docs/OBSERVABILITY_DASHBOARDS.md) | Grafana dashboards, Prometheus alerts | SRE, on-call engineers |
+| [Latency & Backpressure](./docs/operations/performance/latency-budgets.md) | Performance budgets, degradation cascade | SRE, platform team |
+| [Failure & Recovery](./docs/operations/runbooks/failure-recovery.md) | Incident response runbooks | On-call engineers, SRE |
+| [Disaster Recovery](./docs/operations/runbooks/disaster-recovery.md) | Backup strategy, multi-region failover, DR drills | SRE, platform lead |
+| [Observability Dashboards](./docs/operations/monitoring/observability-dashboards.md) | Grafana dashboards, Prometheus alerts | SRE, on-call engineers |
 
 ### Data Quality & Governance
 
 | Document | Purpose | Audience |
 |----------|---------|----------|
-| [Data Quality](./docs/DATA_QUALITY.md) | Validation framework, anomaly detection, quarantine | Data engineers, platform team |
-| [Data Source Assumptions](./docs/DATA_SOURCE_ASSUMPTIONS.md) | Exchange feed characteristics, vendor adaptations | Integration engineers |
-| [Correctness Trade-offs](./docs/CORRECTNESS_TRADEOFFS.md) | Exactly-once vs at-least-once delivery | All engineers |
+| [Data Quality](./docs/design/data-guarantees/data-quality.md) | Validation framework, anomaly detection, quarantine | Data engineers, platform team |
+| [Data Source Assumptions](./docs/governance/data-source-assumptions.md) | Exchange feed characteristics, vendor adaptations | Integration engineers |
+| [Correctness Trade-offs](./docs/design/data-guarantees/correctness-tradeoffs.md) | Exactly-once vs at-least-once delivery | All engineers |
 
 ### Development & Operations
 
 | Document | Purpose | Audience |
 |----------|---------|----------|
-| [Testing Strategy](./docs/TESTING_STRATEGY.md) | Unit, integration, performance, chaos tests | All engineers, QA |
+| [Testing Strategy](./docs/testing/strategy.md) | Unit, integration, performance, chaos tests | All engineers, QA |
 | [Storage Optimization](./docs/STORAGE_OPTIMIZATION.md) | Compaction, lifecycle policies, cost optimization | Data engineers, FinOps |
-| [Versioning Policy](./docs/VERSIONING_POLICY.md) | SemVer, deprecation process, upgrade procedures | All engineers |
-| [RFC Template](./docs/RFC_TEMPLATE.md) | Platform change proposals | Platform lead, staff engineers |
+| [Versioning Policy](./docs/reference/versioning-policy.md) | SemVer, deprecation process, upgrade procedures | All engineers |
+| [RFC Template](./docs/governance/rfc-template.md) | Platform change proposals | Platform lead, staff engineers |
 
 ---
 

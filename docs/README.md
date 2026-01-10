@@ -10,9 +10,9 @@ Welcome to the K2 platform documentation. This README serves as your navigation 
 ## Quick Navigation
 
 ### For New Engineers
-1. Start with [Architecture Overview](./architecture/README.md)
-2. Read [Platform Principles](./architecture/platform-principles.md)
-3. Review [System Design](./architecture/README.md#system-design)
+1. Start with [System Architecture & Design](./architecture/system-design.md) - **Visual overview with diagrams**
+2. Read [Platform Principles](./architecture/platform-principles.md) - Core philosophy
+3. Review [Architecture Overview](./architecture/README.md) - Detailed documentation
 4. Check current [Implementation Status](./phases/phase-1-portfolio-demo/STATUS.md)
 
 ### For AI Assistants (Claude Code)
@@ -33,9 +33,10 @@ Welcome to the K2 platform documentation. This README serves as your navigation 
 Long-lived architectural choices that transcend individual phases.
 
 **Key Documents**:
+- [System Architecture & Design](./architecture/system-design.md) - **START HERE** - Visual diagrams, data flow, scaling
 - [Platform Principles](./architecture/platform-principles.md) - Core operational philosophy
+- [Kafka Topic Strategy](./architecture/kafka-topic-strategy.md) - Exchange-level topic architecture
 - [Technology Decisions](./architecture/README.md#technology-stack) - Why Kafka, Iceberg, DuckDB
-- [System Design](./architecture/README.md#system-design) - High-level component architecture
 - [Alternative Architectures](./architecture/alternatives.md) - Architectures we considered
 
 **When to read**: Understanding the "why" behind technology choices

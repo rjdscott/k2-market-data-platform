@@ -5,23 +5,81 @@ This module provides write operations for Iceberg tables with:
 - PyArrow for efficient columnar conversion
 - Automatic schema validation
 - Metrics collection for observability
+- Exponential backoff retry for transient failures
 
 Writers are designed for batch writes (100-10,000 records per call) to
 optimize Iceberg's append performance and minimize metadata operations.
 """
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Generator
 from datetime import datetime
 from decimal import Decimal
+from contextlib import contextmanager
+import time
 import pyarrow as pa
 from pyiceberg.catalog import load_catalog
 from pyiceberg.table import Table
 from pyiceberg.exceptions import NoSuchTableError
-import structlog
+from pyiceberg.exceptions import CommitFailedException
 
 from k2.common.config import config
-from k2.common.metrics import metrics
+from k2.common.metrics import create_component_metrics
+from k2.common.logging import get_logger, set_correlation_id
 
-logger = structlog.get_logger()
+logger = get_logger(__name__, component="storage")
+metrics = create_component_metrics("storage")
+
+
+def _retry_with_exponential_backoff(
+    max_retries: int = 3,
+    initial_delay: float = 0.1,
+    max_delay: float = 10.0,
+    backoff_factor: float = 2.0,
+):
+    """
+    Decorator for retrying operations with exponential backoff.
+
+    Args:
+        max_retries: Maximum number of retry attempts
+        initial_delay: Initial delay in seconds
+        max_delay: Maximum delay in seconds
+        backoff_factor: Multiplier for delay between retries
+
+    Example:
+        @_retry_with_exponential_backoff(max_retries=5)
+        def write_data():
+            # ... code that might fail transiently
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            delay = initial_delay
+            last_exception = None
+
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except (ConnectionError, TimeoutError, CommitFailedException) as e:
+                    last_exception = e
+
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"Attempt {attempt + 1}/{max_retries} failed, retrying",
+                            function=func.__name__,
+                            error=str(e),
+                            delay_seconds=delay,
+                        )
+                        time.sleep(delay)
+                        delay = min(delay * backoff_factor, max_delay)
+                    else:
+                        logger.error(
+                            f"All {max_retries} retry attempts failed",
+                            function=func.__name__,
+                            error=str(e),
+                        )
+
+            raise last_exception
+
+        return wrapper
+    return decorator
 
 
 class IcebergWriter:
@@ -85,47 +143,62 @@ class IcebergWriter:
                 }
             )
 
-            logger.debug("Iceberg writer initialized", uri=self.catalog_uri)
+            logger.debug("Iceberg writer initialized", catalog_uri=self.catalog_uri)
 
         except Exception as e:
             logger.error(
                 "Failed to initialize Iceberg writer",
                 error=str(e),
-                uri=self.catalog_uri
+                catalog_uri=self.catalog_uri
             )
-            metrics.increment("iceberg_writer_init_errors")
+            metrics.increment(
+                "iceberg_write_errors_total",
+                labels={"error_type": "initialization_failed", "table": "unknown"}
+            )
             raise
 
+    @_retry_with_exponential_backoff(max_retries=3)
     def write_trades(
         self,
         records: List[Dict[str, Any]],
-        table_name: str = "market_data.trades"
+        table_name: str = "market_data.trades",
+        exchange: str = "unknown",
+        asset_class: str = "equities",
     ) -> int:
         """
-        Write trade records to Iceberg table.
+        Write trade records to Iceberg table with automatic retry.
 
         Args:
             records: List of trade dictionaries matching schema
             table_name: Fully qualified table name (namespace.table)
+            exchange: Exchange code for metrics (e.g., "asx", "nyse")
+            asset_class: Asset class for metrics (e.g., "equities", "futures")
 
         Returns:
             Number of records written
 
         Raises:
             NoSuchTableError: If table doesn't exist
-            Exception: If write fails
+            Exception: If write fails after retries
         """
         if not records:
             logger.warning("No records to write", table=table_name)
             return 0
 
-        start_time = datetime.now()
-
+        # Load table
         try:
             table = self.catalog.load_table(table_name)
         except NoSuchTableError:
             logger.error("Table not found", table=table_name)
-            metrics.increment("iceberg_write_errors", tags={"reason": "table_not_found"})
+            metrics.increment(
+                "iceberg_write_errors_total",
+                labels={
+                    "exchange": exchange,
+                    "asset_class": asset_class,
+                    "table": "trades",
+                    "error_type": "table_not_found",
+                }
+            )
             raise
 
         # Convert to PyArrow table
@@ -135,79 +208,125 @@ class IcebergWriter:
             logger.error(
                 "Failed to convert records to Arrow",
                 table=table_name,
-                records=len(records),
+                record_count=len(records),
                 error=str(e)
             )
-            metrics.increment("iceberg_write_errors", tags={"reason": "arrow_conversion"})
-            raise
-
-        # Append data (ACID transaction)
-        try:
-            table.append(arrow_table)
-
-            duration_ms = (datetime.now() - start_time).total_seconds() * 1000
-
-            logger.info(
-                "Trades written to Iceberg",
-                table=table_name,
-                records=len(records),
-                duration_ms=f"{duration_ms:.2f}",
-                throughput_per_sec=f"{len(records) / (duration_ms / 1000):.0f}"
-            )
-
-            metrics.histogram(
-                "iceberg_write_duration_ms",
-                duration_ms,
-                tags={"table": "trades"}
-            )
             metrics.increment(
-                "iceberg_records_written",
-                value=len(records),
-                tags={"table": "trades"}
+                "iceberg_write_errors_total",
+                labels={
+                    "exchange": exchange,
+                    "asset_class": asset_class,
+                    "table": "trades",
+                    "error_type": "arrow_conversion_failed",
+                }
             )
-
-            return len(records)
-
-        except Exception as e:
-            logger.error(
-                "Failed to write trades",
-                table=table_name,
-                records=len(records),
-                error=str(e),
-            )
-            metrics.increment("iceberg_write_errors", tags={"reason": "append_failed"})
             raise
 
+        # Append data with timing (ACID transaction)
+        with metrics.timer(
+            "iceberg_write_duration_seconds",
+            labels={
+                "exchange": exchange,
+                "asset_class": asset_class,
+                "table": "trades",
+                "operation": "append",
+            }
+        ):
+            try:
+                table.append(arrow_table)
+
+                logger.info(
+                    "Trades written to Iceberg",
+                    table=table_name,
+                    exchange=exchange,
+                    asset_class=asset_class,
+                    record_count=len(records),
+                )
+
+                # Track rows written
+                metrics.increment(
+                    "iceberg_rows_written_total",
+                    value=len(records),
+                    labels={
+                        "exchange": exchange,
+                        "asset_class": asset_class,
+                        "table": "trades",
+                    }
+                )
+
+                # Track batch size distribution
+                metrics.histogram(
+                    "iceberg_batch_size",
+                    value=len(records),
+                    labels={
+                        "exchange": exchange,
+                        "asset_class": asset_class,
+                        "table": "trades",
+                    }
+                )
+
+                return len(records)
+
+            except Exception as e:
+                logger.error(
+                    "Failed to append trades",
+                    table=table_name,
+                    record_count=len(records),
+                    error=str(e),
+                )
+                metrics.increment(
+                    "iceberg_write_errors_total",
+                    labels={
+                        "exchange": exchange,
+                        "asset_class": asset_class,
+                        "table": "trades",
+                        "error_type": "append_failed",
+                    }
+                )
+                raise
+
+    @_retry_with_exponential_backoff(max_retries=3)
     def write_quotes(
         self,
         records: List[Dict[str, Any]],
-        table_name: str = "market_data.quotes"
+        table_name: str = "market_data.quotes",
+        exchange: str = "unknown",
+        asset_class: str = "equities",
     ) -> int:
         """
-        Write quote records to Iceberg table.
+        Write quote records to Iceberg table with automatic retry.
 
         Args:
             records: List of quote dictionaries matching schema
             table_name: Fully qualified table name (namespace.table)
+            exchange: Exchange code for metrics (e.g., "asx", "nyse")
+            asset_class: Asset class for metrics (e.g., "equities", "futures")
 
         Returns:
             Number of records written
 
         Raises:
             NoSuchTableError: If table doesn't exist
-            Exception: If write fails
+            Exception: If write fails after retries
         """
         if not records:
             logger.warning("No records to write", table=table_name)
             return 0
 
-        start_time = datetime.now()
-
+        # Load table
         try:
             table = self.catalog.load_table(table_name)
         except NoSuchTableError:
             logger.error("Table not found", table=table_name)
-            metrics.increment("iceberg_write_errors", tags={"reason": "table_not_found"})
+            metrics.increment(
+                "iceberg_write_errors_total",
+                labels={
+                    "exchange": exchange,
+                    "asset_class": asset_class,
+                    "table": "quotes",
+                    "error_type": "table_not_found",
+                }
+            )
             raise
 
         # Convert to PyArrow table
@@ -217,48 +336,82 @@ class IcebergWriter:
             logger.error(
                 "Failed to convert records to Arrow",
                 table=table_name,
-                records=len(records),
+                record_count=len(records),
                 error=str(e)
             )
-            metrics.increment("iceberg_write_errors", tags={"reason": "arrow_conversion"})
-            raise
-
-        # Append data (ACID transaction)
-        try:
-            table.append(arrow_table)
-
-            duration_ms = (datetime.now() - start_time).total_seconds() * 1000
-
-            logger.info(
-                "Quotes written to Iceberg",
-                table=table_name,
-                records=len(records),
-                duration_ms=f"{duration_ms:.2f}",
-                throughput_per_sec=f"{len(records) / (duration_ms / 1000):.0f}"
-            )
-
-            metrics.histogram(
-                "iceberg_write_duration_ms",
-                duration_ms,
-                tags={"table": "quotes"}
-            )
             metrics.increment(
-                "iceberg_records_written",
-                value=len(records),
-                tags={"table": "quotes"}
+                "iceberg_write_errors_total",
+                labels={
+                    "exchange": exchange,
+                    "asset_class": asset_class,
+                    "table": "quotes",
+                    "error_type": "arrow_conversion_failed",
+                }
             )
-
-            return len(records)
-
-        except Exception as e:
-            logger.error(
-                "Failed to write quotes",
-                table=table_name,
-                records=len(records),
-                error=str(e),
-            )
-            metrics.increment("iceberg_write_errors", tags={"reason": "append_failed"})
             raise
+
+        # Append data with timing (ACID transaction)
+        with metrics.timer(
+            "iceberg_write_duration_seconds",
+            labels={
+                "exchange": exchange,
+                "asset_class": asset_class,
+                "table": "quotes",
+                "operation": "append",
+            }
+        ):
+            try:
+                table.append(arrow_table)
+
+                logger.info(
+                    "Quotes written to Iceberg",
+                    table=table_name,
+                    exchange=exchange,
+                    asset_class=asset_class,
+                    record_count=len(records),
+                )
+
+                # Track rows written
+                metrics.increment(
+                    "iceberg_rows_written_total",
+                    value=len(records),
+                    labels={
+                        "exchange": exchange,
+                        "asset_class": asset_class,
+                        "table": "quotes",
+                    }
+                )
+
+                # Track batch size distribution
+                metrics.histogram(
+                    "iceberg_batch_size",
+                    value=len(records),
+                    labels={
+                        "exchange": exchange,
+                        "asset_class": asset_class,
+                        "table": "quotes",
+                    }
+                )
+
+                return len(records)
+
+            except Exception as e:
+                logger.error(
+                    "Failed to append quotes",
+                    table=table_name,
+                    record_count=len(records),
+                    error=str(e),
+                )
+                metrics.increment(
+                    "iceberg_write_errors_total",
+                    labels={
+                        "exchange": exchange,
+                        "asset_class": asset_class,
+                        "table": "quotes",
+                        "error_type": "append_failed",
+                    }
+                )
+                raise
 
     def _records_to_arrow_trades(
         self,

@@ -3,7 +3,7 @@
 This file tracks all significant architectural and implementation decisions for the K2 Market Data Platform.
 
 **Last Updated**: 2026-01-10
-**Total Decisions**: 5
+**Total Decisions**: 11
 
 ---
 
@@ -59,6 +59,13 @@ When adding new decisions, use this template:
 | #002 | Daily Partitioning for Iceberg Tables | 2026-01-10 | Accepted | 3 |
 | #003 | At-Least-Once Delivery with Manual Commit | 2026-01-10 | Accepted | 6, 8 |
 | #004 | Embedded Architecture for Phase 1 | 2026-01-10 | Accepted | All |
+| #005 | Infrastructure Observability Stack Upgrades | 2026-01-10 | Accepted | Infra |
+| #006 | Exponential Backoff Retry Strategy | 2026-01-10 | Accepted | 4, 8 |
+| #007 | Centralized Metrics Registry Pattern | 2026-01-10 | Accepted | All |
+| #008 | Structured Logging with Correlation IDs | 2026-01-10 | Accepted | All |
+| #009 | Partition by Symbol for Kafka Topics | 2026-01-10 | Accepted | 6, 8 |
+| #010 | At-Least-Once with Idempotent Producers | 2026-01-10 | Accepted | 6 |
+| #011 | Per-Symbol Sequence Tracking with LRU Cache | 2026-01-10 | Accepted | 8 |
 
 ---
 

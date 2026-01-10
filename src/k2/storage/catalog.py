@@ -23,12 +23,13 @@ from pyiceberg.transforms import DayTransform
 from pyiceberg.table.sorting import SortOrder, SortField
 from pyiceberg.transforms import IdentityTransform
 from pyiceberg.exceptions import NamespaceAlreadyExistsError, TableAlreadyExistsError
-import structlog
 
 from k2.common.config import config
-from k2.common.metrics import metrics
+from k2.common.metrics import create_component_metrics
+from k2.common.logging import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(__name__, component="storage")
+metrics = create_component_metrics("storage")
 
 
 class IcebergCatalogManager:
@@ -102,9 +103,12 @@ class IcebergCatalogManager:
             logger.error(
                 "Failed to initialize Iceberg catalog",
                 error=str(e),
-                uri=self.catalog_uri
+                catalog_uri=self.catalog_uri
             )
-            metrics.increment("iceberg_catalog_init_errors")
+            metrics.increment(
+                "iceberg_write_errors_total",
+                labels={"error_type": "catalog_init_failed", "table": "unknown"}
+            )
             raise
 
     def create_trades_table(
@@ -189,8 +193,9 @@ class IcebergCatalogManager:
             )
 
             metrics.increment(
-                "iceberg_tables_created",
-                tags={"namespace": namespace, "table": table_name}
+                "iceberg_rows_written_total",
+                value=0,
+                labels={"exchange": "system", "asset_class": "system", "table": table_name}
             )
 
         except TableAlreadyExistsError:
@@ -203,8 +208,8 @@ class IcebergCatalogManager:
                 error=str(e)
             )
             metrics.increment(
-                "iceberg_table_creation_errors",
-                tags={"namespace": namespace, "table": table_name}
+                "iceberg_write_errors_total",
+                labels={"exchange": "system", "asset_class": "system", "table": table_name, "error_type": "table_creation_failed"}
             )
             raise
 
@@ -286,8 +291,9 @@ class IcebergCatalogManager:
             )
 
             metrics.increment(
-                "iceberg_tables_created",
-                tags={"namespace": namespace, "table": table_name}
+                "iceberg_rows_written_total",
+                value=0,
+                labels={"exchange": "system", "asset_class": "system", "table": table_name}
             )
 
         except TableAlreadyExistsError:
@@ -300,8 +306,8 @@ class IcebergCatalogManager:
                 error=str(e)
             )
             metrics.increment(
-                "iceberg_table_creation_errors",
-                tags={"namespace": namespace, "table": table_name}
+                "iceberg_write_errors_total",
+                labels={"exchange": "system", "asset_class": "system", "table": table_name, "error_type": "table_creation_failed"}
             )
             raise
 
@@ -378,9 +384,10 @@ class IcebergCatalogManager:
 
             logger.info("Table dropped", table=table_id, purged=purge)
 
-            metrics.increment(
-                "iceberg_tables_dropped",
-                tags={"namespace": namespace, "table": table_name, "purged": str(purge)}
+            logger.info(
+                "Table dropped successfully",
+                table=table_id,
+                purged=purge
             )
 
         except Exception as e:
