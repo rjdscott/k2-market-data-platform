@@ -133,7 +133,12 @@ Documentation:
 3. ✅ **Test Issues**: Fixed test assertions and decimal precision
 
 **Issues Remaining**:
-1. ⚠️ **Schema Registry**: Leader election timeout in single-node mode (ongoing, non-blocking for current phase)
+1. ⚠️ **Schema Registry**: Leader election timeout in single-node mode
+   - **Status**: Deferred to Step 6-8 (when Kafka producers/consumers needed)
+   - **Impact**: Does not block Steps 1-5 validation
+   - **Workarounds**: Use Confluent Cloud Schema Registry, or configure multi-node setup
+   - **Root Cause**: Kafka-based consumer group coordination timing out in single-instance development setup
+   - **Attempts**: Tried leader eligibility, group ID, timeouts, TCP health checks - all timeout at group join
 
 ### Configuration Fixes Applied
 - Fixed docker-compose.yml Iceberg REST health check (curl → TCP check)

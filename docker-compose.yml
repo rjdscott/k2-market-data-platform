@@ -113,11 +113,8 @@ services:
       # Performance
       SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx512M -Xms512M"
 
-      # Single-node mode configuration
-      SCHEMA_REGISTRY_GROUP_ID: 'schema-registry'
-      SCHEMA_REGISTRY_LEADER_ELIGIBILITY: 'true'
-      SCHEMA_REGISTRY_MASTER_ELIGIBILITY: 'true'
-      SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 120000
+      # Development mode - single instance, immediate leader election
+      SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS: 10000
     depends_on:
       kafka:
         condition: service_healthy
