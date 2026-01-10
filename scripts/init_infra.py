@@ -26,55 +26,71 @@ logger = structlog.get_logger()
 
 def create_kafka_topics(bootstrap_servers: str = 'localhost:9092') -> None:
     """
-    Create required Kafka topics.
+    Create Kafka topics from configuration file.
 
-    Topics created:
-    - market.trades.raw: Raw trade data (6 partitions, keyed by exchange.symbol)
-    - market.quotes.raw: Raw quote data (6 partitions, keyed by exchange.symbol)
-    - market.reference_data: Reference data (1 partition, compacted)
+    Topics are created based on config/kafka/topics.yaml which defines:
+    - Asset classes (equities, crypto)
+    - Exchanges per asset class (ASX, Binance, etc.)
+    - Data types (trades, quotes, reference_data)
+    - Partition counts and retention policies per exchange
+
+    Topic naming: market.{asset_class}.{data_type}.{exchange}
+
+    Examples of topics created:
+        - market.equities.trades.asx (30 partitions)
+        - market.equities.quotes.asx (30 partitions)
+        - market.equities.reference_data.asx (1 partition, compacted)
+        - market.crypto.trades.binance (40 partitions)
+        - market.crypto.quotes.binance (40 partitions)
+        - market.crypto.reference_data.binance (1 partition, compacted)
 
     Args:
         bootstrap_servers: Kafka broker connection string
     """
-    logger.info("Creating Kafka topics", bootstrap_servers=bootstrap_servers)
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+    from k2.kafka import get_topic_builder, DataType
+
+    logger.info("Creating Kafka topics from configuration", bootstrap_servers=bootstrap_servers)
 
     admin = AdminClient({'bootstrap.servers': bootstrap_servers})
+    topic_builder = get_topic_builder()
 
-    topics = [
-        NewTopic(
-            topic='market.trades.raw',
-            num_partitions=6,
-            replication_factor=1,
-            config={
-                'compression.type': 'lz4',
-                'retention.ms': '604800000',  # 7 days
-                'cleanup.policy': 'delete',
-            }
-        ),
-        NewTopic(
-            topic='market.quotes.raw',
-            num_partitions=6,
-            replication_factor=1,
-            config={
-                'compression.type': 'lz4',
-                'retention.ms': '604800000',  # 7 days
-                'cleanup.policy': 'delete',
-            }
-        ),
-        NewTopic(
-            topic='market.reference_data',
-            num_partitions=1,
-            replication_factor=1,
-            config={
-                'cleanup.policy': 'compact',
-                'compression.type': 'lz4',
-                'min.compaction.lag.ms': '60000',  # Compact after 1 minute
-            }
-        ),
-    ]
+    # Build NewTopic objects from config
+    new_topics = []
+
+    for asset_class, asset_cfg in topic_builder.config['asset_classes'].items():
+        for exchange, exchange_cfg in asset_cfg['exchanges'].items():
+            for data_type in DataType:
+                topic_config = topic_builder.get_topic_config(asset_class, data_type, exchange)
+                topic_name = topic_config.topic_name
+
+                # Prepare Kafka config (exclude replication.factor and min.insync.replicas as they're NewTopic params)
+                kafka_config = {
+                    k: v for k, v in topic_config.kafka_config.items()
+                    if k not in ['replication.factor', 'min.insync.replicas']
+                }
+
+                new_topic = NewTopic(
+                    topic=topic_name,
+                    num_partitions=topic_config.partitions,
+                    replication_factor=int(topic_config.kafka_config['replication.factor']),
+                    config=kafka_config
+                )
+                new_topics.append(new_topic)
+
+                logger.info(
+                    "Prepared topic for creation",
+                    topic=topic_name,
+                    partitions=topic_config.partitions,
+                    asset_class=asset_class,
+                    exchange=exchange,
+                    data_type=data_type.value,
+                )
 
     # Create topics
-    futures = admin.create_topics(topics)
+    logger.info("Creating topics in Kafka", total=len(new_topics))
+    futures = admin.create_topics(new_topics)
 
     for topic, future in futures.items():
         try:
@@ -87,6 +103,8 @@ def create_kafka_topics(bootstrap_servers: str = 'localhost:9092') -> None:
             else:
                 logger.error("Failed to create topic", topic=topic, error=str(e))
                 raise
+
+    logger.info("All topics created", total_topics=len(new_topics))
 
 
 def validate_minio_buckets(

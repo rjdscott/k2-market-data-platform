@@ -86,76 +86,98 @@ def register_schemas(
     schema_registry_url: str = None
 ) -> Dict[str, int]:
     """
-    Register all Avro schemas with Schema Registry.
+    Register all Avro schemas with Schema Registry using asset-class-level subjects.
 
     This function:
-    1. Loads all .avsc files from the schemas directory
-    2. Registers them with the Schema Registry
-    3. Returns mapping of schema name to schema ID
+    1. Reads topic configuration to determine asset classes
+    2. Loads .avsc files from the schemas directory
+    3. Registers schemas with asset-class-level subject naming
+    4. Returns mapping of subject name to schema ID
 
-    Schema subjects are named: market.{schema_name}s.raw-value
-    For example: market.trades.raw-value
+    Schema subject naming: market.{asset_class}.{data_type}-value
+    Examples:
+        - market.equities.trades-value (shared by ASX, NYSE, etc.)
+        - market.crypto.quotes-value (shared by Binance, Coinbase, etc.)
+
+    This approach uses shared schemas across exchanges within the same asset class,
+    simplifying schema management and evolution.
 
     Args:
         schema_registry_url: Schema Registry base URL (defaults to config)
 
     Returns:
-        Dictionary mapping schema names to schema IDs
+        Dictionary mapping subject names to schema IDs
 
     Raises:
         SchemaRegistryError: If registration fails
     """
     from k2.common.config import config
+    from k2.kafka import get_topic_builder
 
     if schema_registry_url is None:
         schema_registry_url = config.kafka.schema_registry_url
 
-    logger.info("Registering schemas", registry_url=schema_registry_url)
+    logger.info("Registering schemas with asset-class-level subjects", registry_url=schema_registry_url)
 
     client = SchemaRegistryClient({'url': schema_registry_url})
+    topic_builder = get_topic_builder()
 
     schema_ids = {}
 
-    for schema_name in list_available_schemas():
-        try:
-            # Load schema
-            schema_str = load_avro_schema(schema_name)
-            schema = Schema(schema_str, schema_type='AVRO')
+    # Get schema registry config
+    subject_pattern = topic_builder.config['schema_registry']['subject_pattern']
 
-            # Determine subject name
-            # Convention: topic-value for value schemas
-            if schema_name == 'reference_data':
-                subject = f"market.{schema_name}-value"
-            else:
-                subject = f"market.{schema_name}s.raw-value"
+    # Register schemas for each asset class
+    for asset_class in topic_builder.config['asset_classes'].keys():
+        for data_type_name, data_type_cfg in topic_builder.config['data_types'].items():
+            schema_name = data_type_cfg['schema_name']
 
-            # Register schema
-            schema_id = client.register_schema(subject, schema)
+            try:
+                # Load schema
+                schema_str = load_avro_schema(schema_name)
+                schema = Schema(schema_str, schema_type='AVRO')
 
-            schema_ids[schema_name] = schema_id
+                # Build subject name using asset-class-level pattern
+                subject = subject_pattern.format(
+                    asset_class=asset_class,
+                    data_type=data_type_name
+                )
 
-            logger.info(
-                "Schema registered successfully",
-                schema=schema_name,
-                subject=subject,
-                schema_id=schema_id,
-            )
+                # Register schema
+                schema_id = client.register_schema(subject, schema)
 
-        except SchemaRegistryError as e:
-            logger.error(
-                "Failed to register schema",
-                schema=schema_name,
-                error=str(e),
-            )
-            raise
+                schema_ids[subject] = schema_id
 
-        except Exception as e:
-            logger.error(
-                "Unexpected error registering schema",
-                schema=schema_name,
-                error=str(e),
-            )
-            raise
+                logger.info(
+                    "Schema registered successfully",
+                    schema=schema_name,
+                    subject=subject,
+                    schema_id=schema_id,
+                    asset_class=asset_class,
+                    data_type=data_type_name,
+                )
+
+            except SchemaRegistryError as e:
+                logger.error(
+                    "Failed to register schema",
+                    schema=schema_name,
+                    subject=subject,
+                    asset_class=asset_class,
+                    data_type=data_type_name,
+                    error=str(e),
+                )
+                raise
+
+            except Exception as e:
+                logger.error(
+                    "Unexpected error registering schema",
+                    schema=schema_name,
+                    subject=subject,
+                    asset_class=asset_class,
+                    data_type=data_type_name,
+                    error=str(e),
+                )
+                raise
 
     logger.info("All schemas registered", count=len(schema_ids))
 
