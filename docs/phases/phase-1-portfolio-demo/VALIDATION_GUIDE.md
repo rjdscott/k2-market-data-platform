@@ -15,31 +15,31 @@
 - Memory: 8GB minimum allocated to Docker
 - Storage: 20GB free space for images
 
-✅ **Python 3.11 or 3.12**
+✅ **Python 3.13 or 3.12**
 - Required for type hints (`list[str]` syntax)
-- Check version: `python3.11 --version` or `python3.12 --version`
+- Check version: `python3.13 --version` or `python3.12 --version`
 
-### Install Python 3.11+ (If Not Available)
+### Install Python 3.13+ (If Not Available)
 
 #### macOS (Homebrew)
 ```bash
-brew install python@3.11
+brew install python@3.13
 
 # Verify installation
-python3.11 --version
+python3.13 --version
 ```
 
 #### Ubuntu/Debian
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
+sudo apt-get install -y python3.13 python3.13-venv python3.13-dev
 
 # Verify installation
-python3.11 --version
+python3.13 --version
 ```
 
 #### Windows
-Download from https://www.python.org/downloads/ (Python 3.11.x)
+Download from https://www.python.org/downloads/ (Python 3.13.x)
 
 ---
 
@@ -51,23 +51,20 @@ Download from https://www.python.org/downloads/ (Python 3.11.x)
 # Navigate to project directory
 cd /path/to/k2-market-data-platform
 
-# Create virtual environment with Python 3.11
-python3.11 -m venv .venv
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Activate virtual environment
+# Install dependencies (creates .venv automatically)
+uv sync --all-extras
+
+# Optional: Activate virtual environment
 source .venv/bin/activate  # Linux/macOS
 # OR
 .venv\Scripts\activate     # Windows
 
-# Verify Python version in venv
-python --version
-# Expected: Python 3.11.x or 3.12.x
-
-# Upgrade pip
-pip install --upgrade pip setuptools wheel
-
-# Install package in development mode with dev dependencies
-pip install -e ".[dev]"
+# Verify Python version
+uv run python --version
+# Expected: Python 3.13.x
 ```
 
 **Expected output**: No errors, all packages installed successfully
@@ -271,7 +268,7 @@ xdg-open http://localhost:8080  # Linux
 
 Complete this checklist to confirm Steps 1-2 are fully validated:
 
-- [ ] Python 3.11+ installed and verified
+- [ ] Python 3.13+ installed and verified
 - [ ] Virtual environment created with correct Python version
 - [ ] All dependencies installed without errors (`pip install -e ".[dev]"`)
 - [ ] Docker services started and all containers healthy
@@ -289,9 +286,9 @@ Complete this checklist to confirm Steps 1-2 are fully validated:
 
 ### Issue: Python version too old
 
-**Error**: `ERROR: Package 'k2-platform' requires a different Python: 3.9.7 not in '>=3.11'`
+**Error**: `ERROR: Package 'k2-platform' requires a different Python: 3.9.7 not in '>=3.13'`
 
-**Solution**: Install Python 3.11+ (see Prerequisites section above)
+**Solution**: Install Python 3.13+ (see Prerequisites section above)
 
 ---
 

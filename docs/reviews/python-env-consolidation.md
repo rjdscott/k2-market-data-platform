@@ -121,10 +121,10 @@ VENV := .venv  # Only .venv is used
 
 ### 4. Hardcoded Python Version (Medium Priority)
 
-**Issue**: Makefile hardcodes `python3.11` without version management.
+**Issue**: Makefile hardcodes `python3.13` without version management.
 
 ```makefile
-PYTHON := python3.11  # What if 3.11 isn't installed?
+PYTHON := python3.13  # What if 3.13 isn't installed?
 ```
 
 **Risk**:
@@ -168,7 +168,7 @@ uv sync --all-extras     → 3 seconds (cached: <1 second)
 
 ```
 k2-market-data-platform/
-├── .python-version          # NEW: "3.11"
+├── .python-version          # NEW: "3.13"
 ├── pyproject.toml           # EXISTING: Single source of truth
 ├── uv.lock                  # NEW: Committed for reproducibility
 ├── .venv/                   # EXISTING: Managed by uv
@@ -193,7 +193,7 @@ uv --version  # Should be >= 0.5.x
 
 #### Step 1.2: Create `.python-version`
 ```bash
-echo "3.11" > .python-version
+echo "3.13" > .python-version
 ```
 
 ### Phase 2: Configuration
@@ -224,7 +224,7 @@ This creates `uv.lock` with pinned versions of all direct and transitive depende
 
 **Before**:
 ```makefile
-PYTHON := python3.11
+PYTHON := python3.13
 VENV := .venv
 PIP := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
@@ -373,7 +373,7 @@ uv sync --all-extras
 **Before**:
 ```markdown
 # Create virtual environment
-python3.11 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 
 # Install dependencies
@@ -452,7 +452,7 @@ git rm requirements.txt requirements-dev.txt
 git commit -m "chore: migrate to uv for Python environment management
 
 - Remove requirements.txt and requirements-dev.txt (duplicates pyproject.toml)
-- Add .python-version (3.11) for uv Python version management
+- Add .python-version (3.13) for uv Python version management
 - Add uv.lock for reproducible builds (critical for HFT)
 - Add [tool.uv] section to pyproject.toml
 - Update Makefile to use 'uv run' and 'uv sync'
@@ -485,7 +485,7 @@ Benefits:
 ## Post-Migration Checklist
 
 - [ ] `uv --version` shows installed
-- [ ] `.python-version` contains `3.11`
+- [ ] `.python-version` contains `3.13`
 - [ ] `uv.lock` exists and is committed
 - [ ] No `requirements.txt` or `requirements-dev.txt`
 - [ ] No `venv/` directory (only `.venv/`)
@@ -553,7 +553,7 @@ uv run python script.py     # Run script in venv
 uv run -- command           # Run arbitrary command
 
 # Python management
-uv python install 3.11      # Install Python
+uv python install 3.13      # Install Python
 uv python list              # List available versions
 ```
 

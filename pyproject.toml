@@ -7,7 +7,7 @@ name = "k2-platform"
 version = "0.1.0"
 description = "Real-time market data platform with streaming ingestion and lakehouse storage"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 license = {text = "MIT"}
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -18,8 +18,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Database :: Database Engines/Servers",
 ]
@@ -168,7 +167,7 @@ k2 = ["py.typed"]
 
 [tool.black]
 line-length = 100
-target-version = ['py311']
+target-version = ['py313']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -196,7 +195,7 @@ skip_gitignore = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -253,7 +252,7 @@ convention = "google"
 max-complexity = 10
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

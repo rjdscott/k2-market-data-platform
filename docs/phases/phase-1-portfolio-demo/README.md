@@ -27,7 +27,7 @@ This directory contains implementation progress tracking and validation guides f
 
 **What's Inside**:
 - Prerequisites and system requirements
-- Python 3.11+ installation instructions
+- Python 3.13+ installation instructions
 - Docker setup and troubleshooting
 - Complete validation test plan
 - Expected outputs for each step
@@ -107,14 +107,14 @@ docs/implementation/README.md                This file
 ### Unit Tests
 - **Location**: `tests/unit/test_schemas.py`
 - **Count**: 10 tests
-- **Status**: Ready to run (requires Python 3.11+)
+- **Status**: Ready to run (requires Python 3.13+)
 - **Run**: `pytest tests/unit/ -v -m unit`
 
 ### Integration Tests
 - **Infrastructure**: `tests/integration/test_infrastructure.py` (8 tests)
 - **Schema Registry**: `tests/integration/test_schema_registry.py` (8 tests)
 - **Count**: 16 tests total
-- **Status**: Ready to run (requires Docker + Python 3.11+)
+- **Status**: Ready to run (requires Docker + Python 3.13+)
 - **Run**: `pytest tests/integration/ -v -m integration`
 
 ### Total Test Coverage
@@ -130,7 +130,7 @@ docs/implementation/README.md                This file
 ```bash
 # Check current Python version
 python3 --version
-python3.11 --version  # Should exist
+python3.13 --version  # Should exist
 
 # Check Docker
 docker --version
@@ -139,15 +139,15 @@ docker compose version
 
 ### Setup Commands
 ```bash
-# 1. Install Python 3.11 (if needed)
+# 1. Install Python 3.13 (if needed)
 # macOS:
-brew install python@3.11
+brew install python@3.13
 
 # Ubuntu/Debian:
-sudo apt-get install python3.11 python3.11-venv
+sudo apt-get install python3.13 python3.13-venv
 
 # 2. Create virtual environment
-python3.11 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 
 # 3. Install dependencies
@@ -202,7 +202,7 @@ open http://localhost:8080
 
 ### For First-Time Setup
 1. Read [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md) completely
-2. Install Python 3.11+ following guide instructions
+2. Install Python 3.13+ following guide instructions
 3. Follow validation steps sequentially
 4. Check off validation checklist
 5. Update [PROGRESS.md](./PROGRESS.md) with results

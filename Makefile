@@ -385,13 +385,13 @@ check-env: ## Check if environment is set up correctly
 
 install-deps-mac: ## Install system dependencies on macOS
 	@echo "$(BLUE)Installing system dependencies...$(NC)"
-	@brew install python@3.11 docker docker-compose tree
+	@brew install python@3.13 docker docker-compose tree
 	@echo "$(GREEN)✓ Dependencies installed$(NC)"
 
 install-deps-ubuntu: ## Install system dependencies on Ubuntu
 	@echo "$(BLUE)Installing system dependencies...$(NC)"
 	@sudo apt-get update
-	@sudo apt-get install -y python3.11 python3.11-venv docker.io docker-compose tree
+	@sudo apt-get install -y python3.13 python3.13-venv docker.io docker-compose tree
 	@echo "$(GREEN)✓ Dependencies installed$(NC)"
 
 # ==============================================================================

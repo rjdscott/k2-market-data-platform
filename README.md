@@ -365,7 +365,7 @@ Each scenario documents: detection signal, blast radius, recovery procedure, fol
 ### Prerequisites
 
 - Docker Desktop (8GB RAM minimum)
-- Python 3.11+
+- Python 3.13+
 - Make (optional)
 
 ### 1. Start Infrastructure
