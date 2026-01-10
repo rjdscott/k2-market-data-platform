@@ -562,9 +562,9 @@ Before deploying to production, validate these requirements:
 
 ## Contact & Contribution
 
-**Author**: Rob Scott
-**Role**: Platform Lead / Senior Data Engineer
-**LinkedIn**: https://www.linkedin.com/in/rjdscott/
+**Author**: Rob Scott  
+**Role**: Platform Lead / Senior Data Engineer  
+**LinkedIn**: https://www.linkedin.com/in/rjdscott/  
 
 ---
 
