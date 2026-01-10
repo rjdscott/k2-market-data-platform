@@ -59,7 +59,7 @@ Alternative considered: <one-line>
 Recommended flow:
 1. Write a happy-path test → minimal implementation.  
 2. Add one important edge/error case.  
-3. Make them pass.  
+3. Make them good but also make sure they pass.  
 4. Refactor only when readability or duplication hurts.  
 5. Repeat for next important test.
 
@@ -109,5 +109,6 @@ Added tests for token rotation and failure cases.
 - Enough tests > Maximal coverage  
 - Working today > Perfect tomorrow
 - Always update documentation after changes
+- You are a principal/staff data engineer
 
 Keep momentum. Make small, verifiable improvements; prefer readable, maintainable code.

@@ -1,10 +1,10 @@
 
 # K2 Market Data Platform - Implementation Plan
 
-**Status**: Ready for Implementation
+**Status**: Active Implementation - Query Layer Complete
 **Target Audience**: Principal Data Engineer Review
 **Last Updated**: 2026-01-10
-**Overall Progress**: 0/16 steps complete (0%)
+**Overall Progress**: 11/16 steps complete (68.75%)
 
 ---
 
@@ -70,65 +70,65 @@ Documentation (Step 16)
 
 ## Implementation Steps
 
-### Layer 1: Infrastructure & Foundation (8-12 hours)
+### Layer 1: Infrastructure & Foundation (8-12 hours) ✅ COMPLETE
 
-- [ ] [**Step 01** — Infrastructure Validation & Setup Scripts](./steps/step-01-infrastructure.md) (4-6h)
+- [x] [**Step 01** — Infrastructure Validation & Setup Scripts](./steps/step-01-infrastructure.md) (4h actual)
   - Validate Docker Compose services health
   - Create infrastructure initialization scripts
   - Test Kafka, Schema Registry, MinIO, PostgreSQL, Iceberg REST
 
-- [ ] [**Step 02** — Schema Design & Registration](./steps/step-02-schemas.md) (4-6h)
+- [x] [**Step 02** — Schema Design & Registration](./steps/step-02-schemas.md) (3h actual)
   - Design Avro schemas (Trade, Quote, Reference Data)
   - Implement schema management module
   - Register schemas with Schema Registry
 
-### Layer 2: Storage (14-19 hours)
+### Layer 2: Storage (14-19 hours) ✅ COMPLETE
 
-- [ ] [**Step 03** — Iceberg Catalog & Table Initialization](./steps/step-03-iceberg-catalog.md) (6-8h)
+- [x] [**Step 03** — Iceberg Catalog & Table Initialization](./steps/step-03-iceberg-catalog.md) (4h actual)
   - Implement Iceberg catalog manager
   - Create trades and quotes tables
   - Configure partitioning (daily) and sorting
 
-- [ ] [**Step 04** — Iceberg Writer](./steps/step-04-iceberg-writer.md) (6-8h)
+- [x] [**Step 04** — Iceberg Writer](./steps/step-04-iceberg-writer.md) (5h actual)
   - Implement writer with ACID transactions
   - PyArrow conversion for efficient columnar writes
   - Metrics tracking and error handling
 
-- [ ] [**Step 05** — Configuration Management](./steps/step-05-configuration.md) (2-3h)
+- [x] [**Step 05** — Configuration Management](./steps/step-05-configuration.md) (3h actual)
   - Centralized config with Pydantic Settings
   - Environment variable support
   - Type-safe configuration for all components
 
-### Layer 3: Ingestion (13-18 hours)
+### Layer 3: Ingestion (13-18 hours) ✅ COMPLETE
 
-- [ ] [**Step 06** — Kafka Producer](./steps/step-06-kafka-producer.md) (4-6h)
+- [x] [**Step 06** — Kafka Producer](./steps/step-06-kafka-producer.md) (5h actual)
   - Implement Avro producer with Schema Registry
   - Idempotent producer configuration
   - Compression and batching optimization
 
-- [ ] [**Step 07** — CSV Batch Loader](./steps/step-07-batch-loader.md) (3-4h)
+- [x] [**Step 07** — CSV Batch Loader](./steps/step-07-batch-loader.md) (4h actual)
   - CSV to Kafka batch loading
   - CLI tool for data ingestion
   - Progress tracking and logging
 
-- [ ] [**Step 08** — Kafka Consumer → Iceberg](./steps/step-08-kafka-consumer.md) (6-8h)
+- [x] [**Step 08** — Kafka Consumer → Iceberg](./steps/step-08-kafka-consumer.md) (5h actual)
   - Consumer with manual commit strategy
   - Batch writing to Iceberg
   - Sequence gap detection
 
-### Layer 4: Query (10-14 hours)
+### Layer 4: Query (10-14 hours) ✅ COMPLETE
 
-- [ ] [**Step 09** — DuckDB Query Engine](./steps/step-09-query-engine.md) (4-6h)
+- [x] [**Step 09** — DuckDB Query Engine](./steps/step-09-query-engine.md) (2h actual)
   - DuckDB integration with Iceberg extension
   - S3/MinIO configuration
   - Trade queries and market summaries
 
-- [ ] [**Step 10** — Replay Engine](./steps/step-10-replay-engine.md) (4-5h)
+- [x] [**Step 10** — Replay Engine](./steps/step-10-replay-engine.md) (1.5h actual)
   - Time-travel query support
   - Cold start replay for backtesting
   - Snapshot management
 
-- [ ] [**Step 11** — Query CLI](./steps/step-11-query-cli.md) (2-3h)
+- [x] [**Step 11** — Query CLI](./steps/step-11-query-cli.md) (1h actual)
   - Command-line query interface
   - Rich formatted output
   - Typer-based CLI framework
@@ -168,13 +168,13 @@ Documentation (Step 16)
 
 | Layer | Steps | Status | Time Est. | Time Actual | Completion |
 |-------|-------|--------|-----------|-------------|------------|
-| **Infrastructure** | 1-2 | ⬜ | 8-12h | - | 0% |
-| **Storage** | 3-5 | ⬜ | 14-19h | - | 0% |
-| **Ingestion** | 6-8 | ⬜ | 13-18h | - | 0% |
-| **Query** | 9-11 | ⬜ | 10-14h | - | 0% |
+| **Infrastructure** | 1-2 | ✅ | 8-12h | 7h | 100% |
+| **Storage** | 3-5 | ✅ | 14-19h | 12h | 100% |
+| **Ingestion** | 6-8 | ✅ | 13-18h | 14h | 100% |
+| **Query** | 9-11 | ✅ | 10-14h | 4.5h | 100% |
 | **API** | 12-13 | ⬜ | 6-9h | - | 0% |
 | **Final** | 14-16 | ⬜ | 8-13h | - | 0% |
-| **TOTAL** | **1-16** | **⬜** | **59-85h** | **0h** | **0%** |
+| **TOTAL** | **1-16** | **🟡** | **59-85h** | **37.5h** | **68.75%** |
 
 ---
 
@@ -202,6 +202,8 @@ Documentation (Step 16)
 2. `tests/integration/test_producer.py` - Kafka producer tests
 3. `tests/integration/test_consumer.py` - Consumer tests
 4. `tests/integration/test_query_engine.py` - Query tests
+5. `tests/unit/test_query_engine.py` - Query engine unit tests (23 tests)
+6. `tests/unit/test_replay_engine.py` - Replay engine unit tests (20 tests)
 
 ---
 
@@ -214,6 +216,8 @@ See [DECISIONS.md](./DECISIONS.md) for complete decision records.
 2. **Daily partitioning** - Optimizes time-range queries typical for market data
 3. **At-least-once delivery** - Manual commit after Iceberg write, accept potential duplicates
 4. **Manual schema evolution** - Start with v1, add fields backward-compatibly as needed
+5. **Version guessing for local dev** - Enable `unsafe_enable_version_guessing=true` for DuckDB Iceberg
+6. **Generator pattern for replay** - Memory-efficient streaming via Python generators (O(batch_size))
 
 ---
 
@@ -235,14 +239,32 @@ See [Testing Summary](./reference/testing-summary.md) for complete strategy.
 
 ## Getting Started
 
-Once approved, implementation begins with **Step 1: Infrastructure Validation**.
+**Current Status**: Steps 1-11 complete. Ready to continue with **Step 12: REST API with FastAPI**.
 
-1. Review this index and individual step files
-2. Approve the plan
-3. Execute steps sequentially (1 → 16)
-4. Update [PROGRESS.md](./PROGRESS.md) as each step completes
-5. Log decisions in [DECISIONS.md](./DECISIONS.md)
-6. Verify against [Verification Checklist](./reference/verification-checklist.md)
+### Already Complete (Steps 1-11)
+- ✅ Infrastructure validation and setup
+- ✅ Schema design and registration (Avro)
+- ✅ Iceberg catalog and table initialization
+- ✅ Iceberg writer with ACID transactions
+- ✅ Configuration management (Pydantic Settings)
+- ✅ Kafka producer with Avro serialization
+- ✅ CSV batch loader CLI
+- ✅ Kafka consumer → Iceberg pipeline
+- ✅ DuckDB query engine
+- ✅ Replay engine with time-travel
+- ✅ Query CLI (`k2-query`)
+
+### Remaining (Steps 12-16)
+1. [Step 12](./steps/step-12-rest-api.md): REST API with FastAPI
+2. [Step 13](./steps/step-13-metrics.md): Prometheus metrics endpoint
+3. [Step 14](./steps/step-14-grafana.md): Grafana dashboard
+4. [Step 15](./steps/step-15-e2e-testing.md): End-to-end testing
+5. [Step 16](./steps/step-16-documentation.md): Documentation & cleanup
+
+### Development Workflow
+1. Update [PROGRESS.md](./PROGRESS.md) as each step completes
+2. Log decisions in [DECISIONS.md](./DECISIONS.md)
+3. Verify against [Verification Checklist](./reference/verification-checklist.md)
 
 ---
 
@@ -255,4 +277,4 @@ Once approved, implementation begins with **Step 1: Infrastructure Validation**.
 
 ---
 
-**Ready to begin implementation.**
+**Status**: 68.75% complete. Ready to continue with API Layer (Step 12).

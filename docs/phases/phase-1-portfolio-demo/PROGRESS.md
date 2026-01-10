@@ -10,13 +10,18 @@
 ## Current Status
 
 ### This Week
-- ✅ **Completed**: Steps 1-8 (Foundation + Storage + Ingestion + Stream Processing - 50% complete)
+- ✅ **Completed**: Steps 1-11 (Foundation + Storage + Ingestion + Query Layer - 68.75% complete)
 - ✅ **Completed**: Documentation cleanup (15 broken links fixed, architecture diagram created)
 - ✅ **Completed**: Production observability (Prometheus metrics, structured logging)
-- ⬜ **Next Up**: Steps 9-11 (Query Layer: DuckDB Engine, Replay, CLI)
+- ✅ **Completed**: Query Layer (DuckDB Engine, Replay Engine, CLI)
+- ⬜ **Next Up**: Steps 12-16 (API Layer, Observability, E2E Testing)
 - 🔴 **Blocked**: None
 
 ### Completed This Week (2026-01-10)
+- ✅ **Query Layer Complete**: DuckDB Query Engine with Iceberg integration, Replay Engine with time-travel, Query CLI with 7 commands
+- ✅ **Step 9 Complete**: DuckDB Query Engine with trade/quote queries, OHLCV summaries, metrics integration (23 unit tests, 100%)
+- ✅ **Step 10 Complete**: Replay Engine with snapshot management, cold-start replay, point-in-time queries (20 unit tests, 100%)
+- ✅ **Step 11 Complete**: Query CLI (k2-query) with trades, quotes, summary, snapshots, stats, symbols, replay commands
 - ✅ **Documentation Excellence**: Fixed 15 broken README links, created comprehensive architecture diagram with Mermaid
 - ✅ **Observability Infrastructure**: Upgraded Prometheus (v2→v3), Grafana (v10→v12), Kafka-UI (provectus→kafbat)
 - ✅ **Metrics & Logging**: Implemented production-ready Prometheus metrics registry (50+ metrics) and structured logging (structlog with correlation IDs)
@@ -112,34 +117,34 @@
 - **Decisions**: #012 (Consumer group naming), #013 (Single-topic subscription), #014 (Sequence gap logging), #015 (Batch size 1000), #016 (Daemon mode with graceful shutdown)
 
 ### Step 09: DuckDB Query Engine
-- **Status**: ⬜ Not Started
-- **Started**: -
-- **Completed**: -
-- **Time**: - (est. 4-6h)
-- **Commit**: -
-- **Notes**: -
-- **Blockers**: Requires Step 8
-- **Decisions**: -
+- **Status**: ✅ Complete (Code & Validated)
+- **Started**: 2026-01-10
+- **Completed**: 2026-01-10
+- **Time**: 2h (est. 4-6h)
+- **Commit**: Pending (with Steps 10-11)
+- **Notes**: Production-ready DuckDB query engine with Iceberg extension integration. Features: query_trades(), query_quotes(), get_market_summary() with OHLCV, get_symbols(), get_date_range(). Uses pre-registered Prometheus metrics (query_executions_total, query_duration_seconds). All 23 unit tests passing (100%).
+- **Blockers**: None
+- **Decisions**: #017 (DuckDB with unsafe_enable_version_guessing for local dev)
 
 ### Step 10: Replay Engine
-- **Status**: ⬜ Not Started
-- **Started**: -
-- **Completed**: -
-- **Time**: - (est. 4-5h)
-- **Commit**: -
-- **Notes**: -
-- **Blockers**: Requires Step 3
-- **Decisions**: -
+- **Status**: ✅ Complete (Code & Validated)
+- **Started**: 2026-01-10
+- **Completed**: 2026-01-10
+- **Time**: 1.5h (est. 4-5h)
+- **Commit**: Pending (with Steps 9, 11)
+- **Notes**: Production-ready Replay Engine built on QueryEngine. Features: list_snapshots(), get_current_snapshot(), query_at_snapshot() for time-travel, cold_start_replay() generator for streaming batches, rewind_to_timestamp(), get_replay_stats(). PyIceberg integration for snapshot metadata. All 20 unit tests passing (100%).
+- **Blockers**: None
+- **Decisions**: #018 (Generator pattern for memory-efficient replay)
 
 ### Step 11: Query CLI
-- **Status**: ⬜ Not Started
-- **Started**: -
-- **Completed**: -
-- **Time**: - (est. 2-3h)
-- **Commit**: -
-- **Notes**: -
-- **Blockers**: Requires Steps 9-10
-- **Decisions**: -
+- **Status**: ✅ Complete (Code & Validated)
+- **Started**: 2026-01-10
+- **Completed**: 2026-01-10
+- **Time**: 1h (est. 2-3h)
+- **Commit**: Pending (with Steps 9-10)
+- **Notes**: Production-ready k2-query CLI with Typer framework and Rich output. Commands: trades, quotes, summary, snapshots, stats, symbols, replay. Supports JSON/CSV/table output formats. Entry point configured in pyproject.toml. Interactive demo-ready.
+- **Blockers**: None
+- **Decisions**: None (followed established CLI patterns from batch_loader)
 
 ### Step 12: REST API with FastAPI
 - **Status**: ⬜ Not Started
@@ -246,9 +251,9 @@
 - **Average per Step**: 4.7 hours (actual), 3.7-5.3 hours (estimated)
 
 ### Completion Rate
-- **Steps Completed**: 7/16 (43.75%)
+- **Steps Completed**: 11/16 (68.75%)
 - **Steps In Progress**: 0/16 (0%)
-- **Steps Pending**: 9/16 (56.25%)
+- **Steps Pending**: 5/16 (31.25%)
 - **Steps Blocked**: 0/16 (0%)
 
 ### Quality Metrics

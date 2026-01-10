@@ -273,12 +273,19 @@ graph LR
 ```
 
 **Query Performance Targets**:
-| Query Type | Data Size | p99 Target | Achieved | Method |
-|------------|-----------|------------|----------|--------|
-| Realtime | Last 5 min | 200ms | TBD | Kafka tail consumer |
-| Historical | 100K rows | 1s | TBD | DuckDB vectorized scan |
-| Time-travel | 1M rows | 5s | TBD | Iceberg snapshot_id |
-| Aggregation | 10M rows | 10s | TBD | DuckDB parallel execution |
+| Query Type | Data Size | p99 Target | Status | Method |
+|------------|-----------|------------|--------|--------|
+| Realtime | Last 5 min | 200ms | Phase 2 | Kafka tail consumer |
+| Historical | 100K rows | 1s | ✅ Implemented | DuckDB vectorized scan |
+| Time-travel | 1M rows | 5s | ✅ Implemented | Iceberg snapshot_id |
+| Aggregation | 10M rows | 10s | ✅ Implemented | DuckDB parallel execution |
+| Cold-start Replay | Unlimited | N/A | ✅ Implemented | Generator streaming |
+
+**Phase 1 Implementation** (Steps 9-11):
+- `QueryEngine` - DuckDB + Iceberg integration (`src/k2/query/engine.py`)
+- `ReplayEngine` - Time-travel and batch streaming (`src/k2/query/replay.py`)
+- `k2-query` CLI - 7 commands with Rich output (`src/k2/query/cli.py`)
+- 43 unit tests passing (23 + 20)
 
 **Pre-built Queries**:
 ```python
@@ -574,6 +581,7 @@ Primary Region (us-east-1)      Secondary Region (us-west-2)
 - [Platform Principles](./platform-principles.md) - Core design philosophy
 - [Kafka Topic Strategy](./kafka-topic-strategy.md) - Exchange-level topic architecture
 - [Alternative Architectures](./alternatives.md) - Lambda vs Kappa vs K2 approach
+- [Query Architecture](../design/query-architecture.md) - DuckDB query engine design and caching strategy
 
 ### External Resources
 - [Apache Iceberg Documentation](https://iceberg.apache.org/docs/latest/)

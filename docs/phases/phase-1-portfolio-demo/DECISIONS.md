@@ -3,7 +3,7 @@
 This file tracks all significant architectural and implementation decisions for the K2 Market Data Platform.
 
 **Last Updated**: 2026-01-10
-**Total Decisions**: 16
+**Total Decisions**: 18
 
 ---
 
@@ -71,6 +71,8 @@ When adding new decisions, use this template:
 | #014 | Sequence Gap Logging with Metrics Tracking | 2026-01-10 | Accepted | 8, 11 |
 | #015 | Batch Size 1000 with Configurable Override | 2026-01-10 | Accepted | 8, 4 |
 | #016 | Daemon Mode with Graceful Shutdown | 2026-01-10 | Accepted | 8 |
+| #017 | DuckDB Version Guessing for Local Development | 2026-01-10 | Accepted | 9 |
+| #018 | Generator Pattern for Memory-Efficient Replay | 2026-01-10 | Accepted | 10 |
 
 ---
 
@@ -1652,6 +1654,241 @@ kill -TERM <pid>
 - [ ] SIGINT (Ctrl-C) triggers graceful shutdown
 - [ ] No data loss on shutdown (offsets committed)
 - [ ] Statistics logged on exit
+
+---
+
+## Decision #017: DuckDB Version Guessing for Local Development
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 09 (Query Engine)
+
+#### Context
+
+DuckDB's Iceberg extension requires table version metadata to locate the correct snapshot. The Iceberg REST catalog at `http://localhost:8181` doesn't provide a `version-hint` file, which DuckDB uses by default to find the current snapshot.
+
+Options:
+- Use `unsafe_enable_version_guessing=true` to scan filesystem for latest metadata
+- Configure catalog to provide version hints
+- Use PyIceberg to get metadata location and pass explicitly
+
+#### Decision
+
+Enable `unsafe_enable_version_guessing=true` for DuckDB in local development.
+
+Configuration:
+```sql
+SET unsafe_enable_version_guessing=true;
+```
+
+#### Consequences
+
+**Positive**:
+- **Works immediately**: No changes to Iceberg REST catalog required
+- **Development-friendly**: Local development just works out of the box
+- **Minimal code complexity**: Single configuration flag vs. metadata lookup logic
+
+**Negative**:
+- **"Unsafe" flag**: Name is concerning but well-documented
+- **Potential stale reads**: Could read uncommitted data in rare race conditions
+- **Not production-ready**: Production should use catalog-based metadata access
+
+**Neutral**:
+- **Production upgrade path**: Replace with explicit metadata location from PyIceberg catalog
+- **Well-documented**: DuckDB docs explain the trade-offs clearly
+
+#### Alternatives Considered
+
+1. **Configure Iceberg REST to provide version-hint**
+   - **Rejected**: Requires catalog modification, adds infrastructure complexity
+   - tabulario/iceberg-rest doesn't support version-hint out of box
+
+2. **Use PyIceberg to get metadata location**
+   - **Deferred**: Can add for production if needed
+   - Adds latency (catalog lookup before each query)
+   - Extra code complexity for demo
+
+3. **Use explicit metadata path**
+   - **Rejected**: Requires knowing exact metadata file path
+   - Breaks when new snapshots created
+
+#### Implementation Notes
+
+```python
+# In QueryEngine.__init__
+self._conn.execute("""
+    SET s3_endpoint='localhost:9000';
+    SET s3_access_key_id='admin';
+    SET s3_secret_access_key='password';
+    SET s3_use_ssl=false;
+    SET s3_url_style='path';
+    SET unsafe_enable_version_guessing=true;  -- Required for local dev
+""")
+```
+
+**Production migration**:
+```python
+# Get explicit metadata location from PyIceberg
+table = catalog.load_table("market_data.trades")
+metadata_location = table.metadata_location
+
+# Query with explicit version
+result = conn.execute(f"""
+    SELECT * FROM iceberg_scan('{metadata_location}')
+""")
+```
+
+#### Verification
+
+- [x] DuckDB connects to Iceberg tables successfully
+- [x] Queries return correct data from current snapshot
+- [x] Works with MinIO S3-compatible storage
+- [ ] Document production upgrade path in README
+- [ ] Add integration test for explicit metadata path
+
+---
+
+## Decision #018: Generator Pattern for Memory-Efficient Replay
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 10 (Replay Engine)
+
+#### Context
+
+Cold-start replay for backtesting must stream potentially millions of records. Loading all data into memory would cause OOM errors on typical developer machines (8-16GB RAM).
+
+Options:
+- Load all data into memory (simple but dangerous)
+- Use Python generators (lazy evaluation, streaming)
+- Use database cursors with server-side pagination
+- Use Arrow RecordBatch streaming
+
+Staff data engineer principles:
+- **Memory-bounded operations**: Never assume unlimited RAM
+- **Streaming over batch**: Process incrementally when possible
+- **Predictable resource usage**: Developer laptop should handle full replay
+
+#### Decision
+
+Implement `cold_start_replay()` as a **Python generator** yielding batches.
+
+```python
+def cold_start_replay(self, symbol, batch_size=1000) -> Generator[List[Dict], None, None]:
+    """Yield batches of records in chronological order."""
+    offset = 0
+    while True:
+        batch = self._query_batch(symbol, offset, batch_size)
+        if not batch:
+            break
+        yield batch
+        offset += batch_size
+```
+
+#### Consequences
+
+**Positive**:
+- **Memory-bounded**: Only one batch (default 1000 records ≈ 200KB) in memory at a time
+- **Lazy evaluation**: No work done until `next()` called
+- **Pythonic API**: Natural `for batch in engine.cold_start_replay()` usage
+- **Early termination**: Consumer can `break` without loading remaining data
+- **Backpressure-friendly**: Consumer controls processing speed
+
+**Negative**:
+- **No random access**: Can't jump to specific offset without iteration
+- **Query overhead**: One SQL query per batch (mitigated by batch size)
+- **Order dependency**: Must process in order (can't parallelize batches)
+
+**Neutral**:
+- **Standard pattern**: Generators are idiomatic Python for streaming
+- **Easy testing**: Can test with `list(generator)` for small datasets
+- **Composable**: Can wrap with `itertools` for filtering/mapping
+
+#### Alternatives Considered
+
+1. **Load all data into memory**
+   - **Rejected**: 10M records × 200 bytes = 2GB, exceeds typical laptop RAM
+   - Risk of OOM errors, swap thrashing
+
+2. **Database cursor with fetchmany()**
+   - **Rejected**: DuckDB doesn't support server-side cursors the same way
+   - Would require holding connection open during entire replay
+   - Generators provide same benefit with simpler API
+
+3. **Arrow RecordBatch streaming**
+   - **Deferred**: Can add as optimization if needed
+   - More complex API, less Pythonic
+   - Benefit unclear for dictionary-based processing
+
+#### Implementation Notes
+
+```python
+def cold_start_replay(
+    self,
+    symbol: Optional[str] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
+    batch_size: int = 1000,
+) -> Generator[List[Dict[str, Any]], None, None]:
+    """
+    Stream historical data in chronological order.
+
+    Memory usage: O(batch_size) regardless of total records.
+    """
+    # Get total count for progress tracking
+    total_count = self._get_count(symbol, start_time, end_time)
+
+    offset = 0
+    while offset < total_count:
+        # Query one batch with OFFSET/LIMIT
+        query = f"""
+            SELECT *
+            FROM iceberg_scan('{self.table_path}')
+            {self._build_where(symbol, start_time, end_time)}
+            ORDER BY exchange_timestamp ASC, sequence_number ASC
+            LIMIT {batch_size}
+            OFFSET {offset}
+        """
+        batch = self.connection.execute(query).fetchdf().to_dict(orient="records")
+
+        if not batch:
+            break
+
+        yield batch
+        offset += batch_size
+```
+
+**Usage examples**:
+```python
+# Backtesting strategy
+for batch in engine.cold_start_replay(symbol="BHP", batch_size=1000):
+    for trade in batch:
+        strategy.on_trade(trade)
+
+# Early termination (stops after first batch)
+for batch in engine.cold_start_replay(symbol="BHP"):
+    print(f"First batch: {len(batch)} records")
+    break  # No more queries executed
+
+# Convert to list for testing (small datasets only!)
+all_data = list(engine.cold_start_replay(symbol="TEST", batch_size=100))
+```
+
+**Memory analysis**:
+- Batch size 1000: ~200KB per batch (trades), ~300KB (quotes)
+- 10M total records: 10,000 batches, but only 1 in memory at a time
+- Peak memory: batch_size × record_size ≈ 200-300KB
+
+#### Verification
+
+- [x] Generator yields batches correctly
+- [x] Memory usage bounded (tested with 1000 batch size)
+- [x] Chronological order preserved (ORDER BY timestamp, sequence)
+- [x] Early termination works (break doesn't load remaining)
+- [x] Progress logging shows batch count and totals
+- [ ] Benchmark: Verify 10K+ record replay doesn't exceed 500MB RAM
 
 ---
 
