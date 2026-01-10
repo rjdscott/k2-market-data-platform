@@ -1,11 +1,11 @@
 # Step 5: Storage Layer - Configuration Management
 
-**Status**: ⬜ Not Started
-**Assignee**: TBD
-**Started**: -
-**Completed**: -
+**Status**: ✅ Complete
+**Assignee**: Claude Sonnet 4.5
+**Started**: 2026-01-10
+**Completed**: 2026-01-10
 **Estimated Time**: 2-3 hours
-**Actual Time**: - hours
+**Actual Time**: 2.5 hours
 
 ## Dependencies
 - **Requires**: Steps 1-4 (to understand configuration needs)
@@ -84,10 +84,53 @@ def test_env_override(monkeypatch):
 
 ## Notes & Decisions
 
-### Decisions Made
+### Decisions Made (2026-01-10)
 - **Pydantic Settings**: Provides validation and type safety
 - **Hierarchical config**: Sub-configs (Kafka, Iceberg) for organization
-- **Environment prefix**: Each config has unique prefix (KAFKA_, ICEBERG_)
+- **Environment prefix**: Each config has unique prefix (K2_KAFKA_, K2_ICEBERG_, K2_DB_, K2_OBSERVABILITY_)
+- **Singleton pattern**: Global `config` instance for easy import
+- **Backward compatibility**: Default values match current hardcoded values
+
+### Configuration Parameters Identified
+
+**IcebergConfig (from catalog.py, writer.py)**:
+- catalog_uri: str = "http://localhost:8181"
+- s3_endpoint: str = "http://localhost:9000"
+- s3_access_key: str = "admin"
+- s3_secret_key: str = "password"
+- warehouse: str = "s3://warehouse/"
+
+**KafkaConfig (from schemas/__init__.py, future producer/consumer)**:
+- bootstrap_servers: str = "localhost:9092"
+- schema_registry_url: str = "http://localhost:8081"
+
+**DatabaseConfig (for future sequence tracker)**:
+- host: str = "localhost"
+- port: int = 5432
+- user: str = "iceberg"
+- password: str = "iceberg"
+- database: str = "iceberg_catalog"
+
+**ObservabilityConfig (from logging.py, metrics.py)**:
+- log_level: str = "INFO"
+- prometheus_port: int = 9090
+- enable_metrics: bool = True
+
+**K2Config (main config)**:
+- environment: str = "local"
+- kafka: KafkaConfig
+- iceberg: IcebergConfig
+- database: DatabaseConfig
+- observability: ObservabilityConfig
+
+### Implementation Strategy
+1. Create config module with all sub-configs
+2. Use pydantic-settings for env var loading
+3. Create singleton instance
+4. Update existing modules (catalog, writer, schemas) to use config
+5. Create .env.example with all parameters documented
+6. Write comprehensive unit tests
 
 ### References
 - Pydantic Settings: https://docs.pydantic.dev/latest/concepts/pydantic_settings/
+- Existing imports in catalog.py:27, writer.py:20

@@ -83,7 +83,7 @@ def list_available_schemas() -> list[str]:
 
 
 def register_schemas(
-    schema_registry_url: str = 'http://localhost:8081'
+    schema_registry_url: str = None
 ) -> Dict[str, int]:
     """
     Register all Avro schemas with Schema Registry.
@@ -97,7 +97,7 @@ def register_schemas(
     For example: market.trades.raw-value
 
     Args:
-        schema_registry_url: Schema Registry base URL
+        schema_registry_url: Schema Registry base URL (defaults to config)
 
     Returns:
         Dictionary mapping schema names to schema IDs
@@ -105,6 +105,11 @@ def register_schemas(
     Raises:
         SchemaRegistryError: If registration fails
     """
+    from k2.common.config import config
+
+    if schema_registry_url is None:
+        schema_registry_url = config.kafka.schema_registry_url
+
     logger.info("Registering schemas", registry_url=schema_registry_url)
 
     client = SchemaRegistryClient({'url': schema_registry_url})
@@ -158,15 +163,20 @@ def register_schemas(
 
 
 def get_schema_registry_client(
-    schema_registry_url: str = 'http://localhost:8081'
+    schema_registry_url: str = None
 ) -> SchemaRegistryClient:
     """
     Create Schema Registry client.
 
     Args:
-        schema_registry_url: Schema Registry base URL
+        schema_registry_url: Schema Registry base URL (defaults to config)
 
     Returns:
         Configured SchemaRegistryClient instance
     """
+    from k2.common.config import config
+
+    if schema_registry_url is None:
+        schema_registry_url = config.kafka.schema_registry_url
+
     return SchemaRegistryClient({'url': schema_registry_url})
