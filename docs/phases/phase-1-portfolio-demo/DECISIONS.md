@@ -2,8 +2,8 @@
 
 This file tracks all significant architectural and implementation decisions for the K2 Market Data Platform.
 
-**Last Updated**: 2026-01-10
-**Total Decisions**: 18
+**Last Updated**: 2026-01-11
+**Total Decisions**: 22
 
 ---
 
@@ -73,6 +73,10 @@ When adding new decisions, use this template:
 | #016 | Daemon Mode with Graceful Shutdown | 2026-01-10 | Accepted | 8 |
 | #017 | DuckDB Version Guessing for Local Development | 2026-01-10 | Accepted | 9 |
 | #018 | Generator Pattern for Memory-Efficient Replay | 2026-01-10 | Accepted | 10 |
+| #019 | API Versioning with /v1/ Prefix | 2026-01-11 | Accepted | 12 |
+| #020 | API Key Authentication | 2026-01-11 | Accepted | 12 |
+| #021 | Rate Limiting (100 req/min) | 2026-01-11 | Accepted | 12 |
+| #022 | Flexible Data Type Handling in API Models | 2026-01-11 | Accepted | 12 |
 
 ---
 
@@ -1892,13 +1896,270 @@ all_data = list(engine.cold_start_replay(symbol="TEST", batch_size=100))
 
 ---
 
+## Decision #019: API Versioning with /v1/ Prefix
+
+**Date**: 2026-01-11
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 12 (REST API)
+
+#### Context
+
+REST APIs evolve over time. Breaking changes are inevitable (field renames, removed endpoints, changed response formats). Need a strategy to handle API evolution without breaking existing clients.
+
+Options:
+- **No versioning**: Simple URLs (`/trades`), but breaking changes affect all clients
+- **URL path versioning**: `/v1/trades`, `/v2/trades`
+- **Header versioning**: `Accept: application/vnd.k2.v1+json`
+- **Query parameter**: `/trades?version=1`
+
+#### Decision
+
+Use **URL path versioning with `/v1/` prefix** for all data endpoints.
+
+```
+GET /v1/trades
+GET /v1/quotes
+GET /v1/summary/{symbol}/{date}
+```
+
+Root endpoints (`/`, `/health`) remain unversioned as they're metadata.
+
+#### Consequences
+
+**Positive**:
+- **Industry standard**: Most REST APIs use URL versioning (Stripe, GitHub, etc.)
+- **Explicit**: Version visible in URL, easy to understand
+- **Caching friendly**: Different URLs = different cache keys
+- **Easy routing**: Simple router configuration
+
+**Negative**:
+- **URL pollution**: Longer URLs
+- **Duplicate code risk**: v2 may copy-paste v1 code
+
+**Neutral**:
+- **Migration path**: Can run v1 and v2 simultaneously during transition
+
+#### Trade-offs
+
+1. **Simplicity over REST purity**: Header versioning is "more RESTful" but harder to test (can't just paste URL in browser)
+2. **Forward compatibility**: Chose explicit versioning over trying to be backwards-compatible (YAGNI)
+
+#### Verification
+
+- [x] All data endpoints under `/v1/` prefix
+- [x] OpenAPI shows versioned paths
+- [x] Root and health endpoints unversioned
+
+---
+
+## Decision #020: API Key Authentication
+
+**Date**: 2026-01-11
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 12 (REST API)
+
+#### Context
+
+Need authentication for market data API. Requirements:
+- Simple for demo/portfolio
+- Production-like security patterns
+- Easy to test with curl
+- Supports rate limiting per client
+
+Options:
+- **No auth**: Simplest, but not production-like
+- **API key**: `X-API-Key` header, simple but effective
+- **JWT tokens**: Full auth flow, but complex for demo
+- **OAuth2**: Enterprise-grade, massive overkill
+
+#### Decision
+
+Use **API key authentication via X-API-Key header**.
+
+```bash
+curl -H "X-API-Key: k2-dev-api-key-2026" http://localhost:8000/v1/trades
+```
+
+Configuration:
+- Development key: `k2-dev-api-key-2026` (hardcoded default)
+- Production: Set via `K2_API_KEY` environment variable
+
+Health endpoint (`/health`) is unauthenticated for load balancer probes.
+
+#### Consequences
+
+**Positive**:
+- **Simple**: Single header, no token refresh logic
+- **Production-like**: Real APIs use API keys (Stripe, SendGrid, etc.)
+- **Easy testing**: curl works without setup
+- **Rate limiting**: Can rate limit per API key
+
+**Negative**:
+- **Not for production**: API keys in headers are visible in logs
+- **No user identity**: Just key validation, no user context
+- **No expiration**: Keys don't expire automatically
+
+**Neutral**:
+- **Rotation**: Keys can be rotated by changing environment variable
+
+#### Trade-offs
+
+1. **Demo simplicity > Production security**: JWT would be more secure but adds complexity
+2. **Hardcoded dev key**: Acceptable for portfolio demo, not for real deployment
+3. **No HTTPS enforcement**: Demo runs on localhost, production would require TLS
+
+#### Verification
+
+- [x] Missing key returns 401 Unauthorized
+- [x] Invalid key returns 403 Forbidden
+- [x] Valid key allows access
+- [x] Health endpoint works without auth
+
+---
+
+## Decision #021: Rate Limiting (100 req/min)
+
+**Date**: 2026-01-11
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 12 (REST API)
+
+#### Context
+
+Market data APIs can be abused (scraping, DoS). Need rate limiting to:
+- Protect infrastructure
+- Demonstrate production awareness
+- Enable fair usage across clients
+
+Options:
+- **No rate limiting**: Simple but vulnerable
+- **Per-IP limiting**: Basic protection
+- **Per-API-key limiting**: Better for multi-tenant
+- **Token bucket**: Sophisticated but complex
+
+#### Decision
+
+Use **slowapi** library with **100 requests per minute per API key** (falls back to IP).
+
+```python
+from slowapi import Limiter
+limiter = Limiter(key_func=get_api_key_for_limit)
+
+@app.get("/v1/trades")
+@limiter.limit("100/minute")
+async def get_trades():
+    ...
+```
+
+#### Consequences
+
+**Positive**:
+- **Protection**: Basic abuse prevention
+- **Standard headers**: `X-RateLimit-*` headers in response
+- **Per-client fairness**: Each API key gets own quota
+
+**Negative**:
+- **In-memory state**: Limits reset on server restart
+- **Single-instance only**: Distributed rate limiting needs Redis
+
+**Neutral**:
+- **Configurable**: Can adjust limit without code changes
+- **Health exempt**: Health check is separately rate limited (60/min)
+
+#### Trade-offs
+
+1. **In-memory vs Redis**: Chose simplicity (in-memory) over durability (Redis)
+2. **100 req/min**: Conservative default, can increase for trusted clients
+3. **No burst support**: Simple sliding window, not token bucket
+
+#### Verification
+
+- [x] Rate limiter configured in FastAPI
+- [x] Returns 429 when limit exceeded
+- [x] Headers include limit info
+
+---
+
+## Decision #022: Flexible Data Type Handling in API Models
+
+**Date**: 2026-01-11
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 12 (REST API)
+
+#### Context
+
+During E2E testing, discovered data type mismatches between database and API models:
+- `company_id`: Expected `str`, database has `int`
+- `qualifiers`: Expected `str`, database has `int`
+- `exchange_timestamp`: Expected `datetime`, database has Pandas `Timestamp`
+
+Options:
+- **Fix database schema**: Change Iceberg schema to match API expectations
+- **Fix API models**: Make models accept multiple types
+- **Add transformation layer**: Convert types in query results
+
+#### Decision
+
+Use **flexible Pydantic models with Union types and validators** to handle real-world data variations.
+
+```python
+class Trade(BaseModel):
+    company_id: Optional[Union[str, int]] = Field(...)
+    qualifiers: Optional[Union[str, int]] = Field(...)
+    exchange_timestamp: Any = Field(...)
+
+    @field_validator("exchange_timestamp", mode="before")
+    def convert_timestamp(cls, v):
+        if hasattr(v, "isoformat"):
+            return v.isoformat()
+        return str(v)
+```
+
+#### Consequences
+
+**Positive**:
+- **Robust**: API works with actual data, not theoretical schemas
+- **Zero database changes**: No migration needed
+- **Self-documenting**: Union types show acceptable inputs
+
+**Negative**:
+- **Looser typing**: Less strict validation
+- **Tech debt indicator**: Highlights schema inconsistency
+
+**Neutral**:
+- **Principal engineer pattern**: Production systems often have schema drift
+- **Future cleanup**: Can tighten types after schema alignment
+
+#### Trade-offs
+
+1. **Pragmatism > Purity**: Real systems have messy data, API should handle it
+2. **Document the drift**: This ADR documents why types are flexible
+3. **Fix forward**: Future schema evolution can align types properly
+
+#### Technical Notes
+
+The root cause is likely:
+- CSV batch loader storing `company_id` as integer
+- Avro schema using `int` for numeric fields
+- No explicit type coercion in ingestion pipeline
+
+This is a **data quality issue** to address in future steps, not an API bug.
+
+#### Verification
+
+- [x] Trades endpoint returns data without validation errors
+- [x] Quotes endpoint handles Pandas Timestamps
+- [x] Summary endpoint works with actual data
+- [x] All 31 unit tests pass
+
+---
+
 ## Pending Decisions
 
 These decisions will be made during implementation:
-
-### PD-002: API Authentication Method
-**Step**: 12
-**Options**: None (demo), API keys, JWT, OAuth2
 
 ### PD-003: Log Aggregation Approach
 **Step**: 14

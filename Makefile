@@ -1,6 +1,7 @@
 .PHONY: help setup install dev-install clean test test-unit test-integration \
         test-performance coverage lint format type-check quality docker-up \
-        docker-down docker-logs docker-clean init-infra simulate docs
+        docker-down docker-logs docker-clean init-infra simulate docs \
+        api api-prod api-test
 
 # Default target
 .DEFAULT_GOAL := help
@@ -213,6 +214,31 @@ type-check: ## Run type checker (mypy)
 
 quality: format lint type-check ## Run all code quality checks
 	@echo "$(GREEN)✓ All quality checks passed$(NC)"
+
+# ==============================================================================
+# API Server
+# ==============================================================================
+
+api: ## Start API server in development mode
+	@echo "$(BLUE)Starting K2 API server...$(NC)"
+	@echo "$(YELLOW)API Docs: http://localhost:8000/docs$(NC)"
+	@echo "$(YELLOW)Health:   http://localhost:8000/health$(NC)"
+	@$(VENV)/bin/uvicorn k2.api.main:app --reload --host 0.0.0.0 --port 8000
+
+api-prod: ## Start API server in production mode
+	@echo "$(BLUE)Starting K2 API server (production)...$(NC)"
+	@$(VENV)/bin/gunicorn k2.api.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+
+api-test: ## Test API endpoints with curl
+	@echo "$(BLUE)Testing API endpoints...$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Health check:$(NC)"
+	@curl -s http://localhost:8000/health | python -m json.tool || echo "$(RED)API not running$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Trades (with auth):$(NC)"
+	@curl -s -H "X-API-Key: k2-dev-api-key-2026" "http://localhost:8000/v1/trades?limit=3" | python -m json.tool || echo "$(RED)Request failed$(NC)"
+	@echo ""
+	@echo "$(GREEN)✓ API test complete$(NC)"
 
 # ==============================================================================
 # Operations

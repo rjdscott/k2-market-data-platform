@@ -154,6 +154,7 @@ Issues = "https://github.com/rjdscott/k2-market-data-platform/issues"
 k2 = "k2.cli:main"
 k2-ingest = "k2.ingestion.cli:main"
 k2-query = "k2.query.cli:main"
+k2-api = "k2.api.main:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]

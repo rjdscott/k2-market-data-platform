@@ -3,19 +3,23 @@
 **Started**: TBD
 **Target Completion**: TBD
 **Current Sprint**: Sprint 1 (Foundation)
-**Last Updated**: 2026-01-10
+**Last Updated**: 2026-01-11
 
 ---
 
 ## Current Status
 
 ### This Week
-- ✅ **Completed**: Steps 1-11 (Foundation + Storage + Ingestion + Query Layer - 68.75% complete)
+- ✅ **Completed**: Steps 1-12 (Foundation + Storage + Ingestion + Query Layer + API - 75% complete)
+- ✅ **Completed**: REST API with FastAPI, auth, rate limiting, correlation IDs
 - ✅ **Completed**: Documentation cleanup (15 broken links fixed, architecture diagram created)
 - ✅ **Completed**: Production observability (Prometheus metrics, structured logging)
 - ✅ **Completed**: Query Layer (DuckDB Engine, Replay Engine, CLI)
-- ⬜ **Next Up**: Steps 12-16 (API Layer, Observability, E2E Testing)
+- ⬜ **Next Up**: Steps 13-16 (Prometheus Endpoint, Grafana Dashboard, E2E Testing)
 - 🔴 **Blocked**: None
+
+### Completed Today (2026-01-11)
+- ✅ **Step 12 Complete**: REST API with FastAPI, API key authentication, rate limiting (100 req/min), correlation IDs, response caching, 8 endpoints under /v1/ prefix, 31 unit tests passing (100%)
 
 ### Completed This Week (2026-01-10)
 - ✅ **Query Layer Complete**: DuckDB Query Engine with Iceberg integration, Replay Engine with time-travel, Query CLI with 7 commands
@@ -147,14 +151,14 @@
 - **Decisions**: None (followed established CLI patterns from batch_loader)
 
 ### Step 12: REST API with FastAPI
-- **Status**: ⬜ Not Started
-- **Started**: -
-- **Completed**: -
-- **Time**: - (est. 4-6h)
-- **Commit**: -
-- **Notes**: -
-- **Blockers**: Requires Steps 9-10
-- **Decisions**: -
+- **Status**: ✅ Complete (Code & Validated)
+- **Started**: 2026-01-11
+- **Completed**: 2026-01-11
+- **Time**: 3h (est. 4-6h)
+- **Commit**: Pending
+- **Notes**: Production-ready REST API with FastAPI. Endpoints: /v1/trades, /v1/quotes, /v1/summary/{symbol}/{date}, /v1/symbols, /v1/stats, /v1/snapshots, /health. Features: API key auth (X-API-Key), rate limiting (100 req/min via slowapi), correlation IDs (X-Correlation-ID), response caching (Cache-Control), Pydantic V2 models, OpenAPI docs (/docs, /redoc). 31 unit tests passing (100%). Makefile targets: api, api-prod, api-test.
+- **Blockers**: None
+- **Decisions**: #019 (API versioning with /v1/ prefix), #020 (API key auth), #021 (Rate limiting 100 req/min), #022 (Full endpoint suite)
 
 ### Step 13: Prometheus Metrics Endpoint
 - **Status**: ⬜ Not Started
@@ -246,14 +250,14 @@
 
 ### Estimated vs Actual Time
 - **Total Estimated**: 59-85 hours
-- **Total Actual**: 33h (Steps 1-7)
-- **Variance**: On track (estimated 31-41h for Steps 1-7)
-- **Average per Step**: 4.7 hours (actual), 3.7-5.3 hours (estimated)
+- **Total Actual**: 36h (Steps 1-12)
+- **Variance**: On track (estimated 35-47h for Steps 1-12)
+- **Average per Step**: 3h (actual), 3.7-5.3 hours (estimated)
 
 ### Completion Rate
-- **Steps Completed**: 11/16 (68.75%)
+- **Steps Completed**: 12/16 (75%)
 - **Steps In Progress**: 0/16 (0%)
-- **Steps Pending**: 5/16 (31.25%)
+- **Steps Pending**: 4/16 (25%)
 - **Steps Blocked**: 0/16 (0%)
 
 ### Quality Metrics
