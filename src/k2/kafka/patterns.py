@@ -18,7 +18,7 @@ Examples:
         >>> from k2.kafka import DataType
         >>> topics = builder.subscribe_to_data_type(DataType.TRADES)
 """
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import structlog
 

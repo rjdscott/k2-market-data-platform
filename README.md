@@ -391,16 +391,17 @@ docker-compose ps
 ### 2. Initialize Platform
 
 ```bash
-# Create virtual environment
-python3.11 -m venv .venv
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install dependencies (creates .venv automatically)
+uv sync --all-extras
+
+# Optional: Activate venv (uv run works without activation)
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install dependencies
-pip install --upgrade pip
-pip install -e ".[dev]"
-
 # Initialize infrastructure (Kafka topics, schemas, Iceberg tables)
-python scripts/init_infra.py
+uv run python scripts/init_infra.py
 ```
 
 **Expected Output**:
@@ -431,10 +432,10 @@ Infrastructure initialization complete! ✅
 
 ```bash
 # Run unit tests
-pytest tests/unit/ -v
+uv run pytest tests/unit/ -v
 
 # Run infrastructure integration tests
-pytest tests/integration/test_infrastructure.py -v
+uv run pytest tests/integration/test_infrastructure.py -v
 
 # View Kafka topics
 docker exec k2-kafka kafka-topics --list --bootstrap-server localhost:9092
@@ -526,27 +527,57 @@ k2-market-data-platform/
 
 ```bash
 # Unit tests (no Docker required)
-pytest tests/unit/ -v
+uv run pytest tests/unit/ -v
 
 # Integration tests (requires services)
-pytest tests/integration/ -v
+uv run pytest tests/integration/ -v
 
 # Performance benchmarks
-pytest tests/performance/ --benchmark-only
+uv run pytest tests/performance/ --benchmark-only
+
+# Or use make targets
+make test-unit          # Fast unit tests
+make test-integration   # Requires Docker
+make coverage           # With coverage report
 ```
 
 ### Code Quality
 
 ```bash
-# Format
-black src/ tests/
-isort src/ tests/
+# Format code
+uv run black src/ tests/
+uv run isort src/ tests/
 
 # Lint
-ruff check src/ tests/
+uv run ruff check src/ tests/
 
 # Type check
-mypy src/
+uv run mypy src/
+
+# Or use make targets
+make format      # Black + isort
+make lint        # Ruff linter
+make lint-fix    # Auto-fix lint issues
+make type-check  # MyPy
+make quality     # All of the above
+```
+
+### Package Management
+
+```bash
+# Install dependencies
+uv sync                    # Core only
+uv sync --all-extras       # All (dev, api, monitoring, quality)
+
+# Add new packages
+uv add package-name        # Production dependency
+uv add --dev package-name  # Development dependency
+
+# Update lock file after pyproject.toml changes
+uv lock
+
+# Upgrade all packages to latest compatible versions
+uv lock --upgrade && uv sync
 ```
 
 ---

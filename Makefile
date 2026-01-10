@@ -1,7 +1,7 @@
-.PHONY: help setup install dev-install clean test test-unit test-integration \
+.PHONY: help setup install dev-install clean clean-venv test test-unit test-integration \
         test-performance coverage lint format type-check quality docker-up \
         docker-down docker-logs docker-clean init-infra simulate docs \
-        api api-prod api-test
+        api api-prod api-test uv-lock uv-upgrade uv-add uv-add-dev
 
 # Default target
 .DEFAULT_GOAL := help
@@ -13,15 +13,16 @@ YELLOW := \033[0;33m
 RED := \033[0;31m
 NC := \033[0m # No Color
 
-# Python and environment
-PYTHON := python3.11
+# Python and environment (using uv)
 VENV := .venv
-PIP := $(VENV)/bin/pip
-PYTEST := $(VENV)/bin/pytest
-BLACK := $(VENV)/bin/black
-ISORT := $(VENV)/bin/isort
-RUFF := $(VENV)/bin/ruff
-MYPY := $(VENV)/bin/mypy
+UV := uv
+
+# Tool execution via uv run (handles venv automatically)
+PYTEST := $(UV) run pytest
+BLACK := $(UV) run black
+ISORT := $(UV) run isort
+RUFF := $(UV) run ruff
+MYPY := $(UV) run mypy
 
 # Docker compose
 DOCKER_COMPOSE := docker-compose
@@ -68,18 +69,13 @@ setup: ## Complete setup (create venv, install deps, start services, init infra)
 	@echo "$(GREEN)✓ Setup complete! Run 'make help' for available commands$(NC)"
 
 install: ## Create virtual environment and install dependencies
-	@echo "$(BLUE)Creating virtual environment...$(NC)"
-	@$(PYTHON) -m venv $(VENV)
-	@echo "$(BLUE)Installing dependencies...$(NC)"
-	@$(PIP) install --upgrade pip setuptools wheel
-	@$(PIP) install -e .
+	@echo "$(BLUE)Creating virtual environment and installing dependencies...$(NC)"
+	@$(UV) sync
 	@echo "$(GREEN)✓ Installation complete$(NC)"
 
 dev-install: ## Install with all development dependencies
 	@echo "$(BLUE)Installing with development dependencies...$(NC)"
-	@$(PYTHON) -m venv $(VENV)
-	@$(PIP) install --upgrade pip setuptools wheel
-	@$(PIP) install -e ".[all]"
+	@$(UV) sync --all-extras
 	@echo "$(GREEN)✓ Development installation complete$(NC)"
 
 clean: ## Remove generated files and caches
@@ -91,6 +87,11 @@ clean: ## Remove generated files and caches
 	@find . -type f -name ".coverage" -delete
 	@rm -rf htmlcov/ .coverage coverage.xml
 	@echo "$(GREEN)✓ Cleanup complete$(NC)"
+
+clean-venv: ## Remove virtual environment (for fresh reinstall)
+	@echo "$(BLUE)Removing virtual environment...$(NC)"
+	@rm -rf $(VENV)
+	@echo "$(GREEN)✓ Virtual environment removed. Run 'make install' to recreate.$(NC)"
 
 # ==============================================================================
 # Docker Services
@@ -223,11 +224,11 @@ api: ## Start API server in development mode
 	@echo "$(BLUE)Starting K2 API server...$(NC)"
 	@echo "$(YELLOW)API Docs: http://localhost:8000/docs$(NC)"
 	@echo "$(YELLOW)Health:   http://localhost:8000/health$(NC)"
-	@$(VENV)/bin/uvicorn k2.api.main:app --reload --host 0.0.0.0 --port 8000
+	@$(UV) run uvicorn k2.api.main:app --reload --host 0.0.0.0 --port 8000
 
 api-prod: ## Start API server in production mode
 	@echo "$(BLUE)Starting K2 API server (production)...$(NC)"
-	@$(VENV)/bin/gunicorn k2.api.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+	@$(UV) run gunicorn k2.api.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
 
 api-test: ## Test API endpoints with curl
 	@echo "$(BLUE)Testing API endpoints...$(NC)"
@@ -246,15 +247,15 @@ api-test: ## Test API endpoints with curl
 
 init-infra: ## Initialize infrastructure (create topics, tables, etc.)
 	@echo "$(BLUE)Initializing infrastructure...$(NC)"
-	@$(VENV)/bin/python scripts/init_infra.py
+	@$(UV) run python scripts/init_infra.py
 	@echo "$(GREEN)✓ Infrastructure initialized$(NC)"
 
 simulate: docker-up ## Start market data simulation
 	@echo "$(BLUE)Starting market data simulation...$(NC)"
-	@$(VENV)/bin/python scripts/simulate_market_data.py
+	@$(UV) run python scripts/simulate_market_data.py
 
 shell: ## Open Python shell with platform modules loaded
-	@$(VENV)/bin/ipython -i -c "from k2 import *; print('K2 Platform modules loaded')"
+	@$(UV) run ipython -i -c "from k2 import *; print('K2 Platform modules loaded')"
 
 kafka-topics: ## List Kafka topics
 	@docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list
@@ -320,7 +321,7 @@ plan-verify: ## Run verification checklist
 
 docs: ## Build documentation
 	@echo "$(BLUE)Building documentation...$(NC)"
-	@cd docs && $(VENV)/bin/sphinx-build -b html . _build/html
+	@cd docs && $(UV) run sphinx-build -b html . _build/html
 	@echo "$(GREEN)✓ Documentation built in docs/_build/html$(NC)"
 
 docs-serve: docs ## Build and serve documentation
@@ -351,20 +352,20 @@ version: ## Show current version
 
 bump-patch: ## Bump patch version (0.1.0 -> 0.1.1)
 	@echo "$(BLUE)Bumping patch version...$(NC)"
-	@$(VENV)/bin/pip install bump2version
-	@$(VENV)/bin/bump2version patch
+	@$(UV) add --dev bump2version
+	@$(UV) run bump2version patch
 	@echo "$(GREEN)✓ Version bumped$(NC)"
 
 bump-minor: ## Bump minor version (0.1.0 -> 0.2.0)
 	@echo "$(BLUE)Bumping minor version...$(NC)"
-	@$(VENV)/bin/pip install bump2version
-	@$(VENV)/bin/bump2version minor
+	@$(UV) add --dev bump2version
+	@$(UV) run bump2version minor
 	@echo "$(GREEN)✓ Version bumped$(NC)"
 
 bump-major: ## Bump major version (0.1.0 -> 1.0.0)
 	@echo "$(BLUE)Bumping major version...$(NC)"
-	@$(VENV)/bin/pip install bump2version
-	@$(VENV)/bin/bump2version major
+	@$(UV) add --dev bump2version
+	@$(UV) run bump2version major
 	@echo "$(GREEN)✓ Version bumped$(NC)"
 
 # ==============================================================================
@@ -376,7 +377,7 @@ tree: ## Show project structure
 
 check-env: ## Check if environment is set up correctly
 	@echo "$(BLUE)Checking environment...$(NC)"
-	@which $(PYTHON) > /dev/null || (echo "$(RED)Python 3.11+ not found$(NC)" && exit 1)
+	@which uv > /dev/null || (echo "$(RED)uv not found. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh$(NC)" && exit 1)
 	@which docker > /dev/null || (echo "$(RED)Docker not found$(NC)" && exit 1)
 	@which docker-compose > /dev/null || (echo "$(RED)docker-compose not found$(NC)" && exit 1)
 	@test -f .env || (echo "$(YELLOW)Warning: .env file not found. Copy from .env.example$(NC)")
@@ -402,12 +403,12 @@ db-shell: ## Open PostgreSQL shell
 
 db-migrate: ## Run database migrations
 	@echo "$(BLUE)Running database migrations...$(NC)"
-	@$(VENV)/bin/alembic upgrade head
+	@$(UV) run alembic upgrade head
 	@echo "$(GREEN)✓ Migrations complete$(NC)"
 
 db-rollback: ## Rollback last migration
 	@echo "$(BLUE)Rolling back last migration...$(NC)"
-	@$(VENV)/bin/alembic downgrade -1
+	@$(UV) run alembic downgrade -1
 	@echo "$(GREEN)✓ Rollback complete$(NC)"
 
 db-reset: ## Drop and recreate database (WARNING: deletes all data)
@@ -422,3 +423,28 @@ db-reset: ## Drop and recreate database (WARNING: deletes all data)
 	else \
 		echo "$(YELLOW)Aborted$(NC)"; \
 	fi
+
+# ==============================================================================
+# UV Package Management
+# ==============================================================================
+
+uv-lock: ## Update lock file after pyproject.toml changes
+	@echo "$(BLUE)Updating uv.lock...$(NC)"
+	@$(UV) lock
+	@echo "$(GREEN)✓ Lock file updated$(NC)"
+
+uv-upgrade: ## Upgrade all dependencies to latest compatible versions
+	@echo "$(BLUE)Upgrading dependencies...$(NC)"
+	@$(UV) lock --upgrade
+	@$(UV) sync
+	@echo "$(GREEN)✓ Dependencies upgraded$(NC)"
+
+uv-add: ## Add a new dependency (usage: make uv-add PKG=package-name)
+	@echo "$(BLUE)Adding $(PKG)...$(NC)"
+	@$(UV) add $(PKG)
+	@echo "$(GREEN)✓ $(PKG) added$(NC)"
+
+uv-add-dev: ## Add a new dev dependency (usage: make uv-add-dev PKG=package-name)
+	@echo "$(BLUE)Adding $(PKG) as dev dependency...$(NC)"
+	@$(UV) add --dev $(PKG)
+	@echo "$(GREEN)✓ $(PKG) added to dev dependencies$(NC)"

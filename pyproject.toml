@@ -339,3 +339,14 @@ exclude_lines = [
 
 [tool.coverage.html]
 directory = "htmlcov"
+
+# ==============================================================================
+# UV Configuration
+# ==============================================================================
+
+[tool.uv]
+# Use managed Python from .python-version
+python-preference = "managed"
+
+# Default dev dependencies for 'uv sync' without --all-extras
+dev-dependencies = ["k2-platform[all]"]
