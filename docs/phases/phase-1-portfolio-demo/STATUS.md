@@ -1,8 +1,8 @@
 # K2 Platform - Current Status
 
 **Date**: 2026-01-10
-**Phase**: Steps 1-5 Implementation Complete (25%), All Unit Tests Passing
-**Blocker**: None - All blockers resolved
+**Phase**: Steps 1-5 Implementation Complete (25%), Core Integration Tests Passing
+**Blocker**: None - All critical blockers resolved (Schema Registry optional)
 
 ---
 
@@ -110,27 +110,30 @@ Documentation:
   - ❌ Kafka UI not started (depends on Schema Registry)
 
 **Iceberg Storage Tests** (tests/integration/test_iceberg_storage.py):
-- ⚠️ **Iceberg Storage**: 6/11 tests passed (55%)
+- ✅ **Iceberg Storage**: 11/11 tests passed (100%) ✅
   - ✅ Create trades table
   - ✅ Create quotes table
   - ✅ Table partition spec validation
   - ✅ Table sort order validation
-  - ⚠️ List tables (assertion format issue, tables exist)
-  - ❌ Write trades (schema mismatch: nullable vs required fields)
-  - ❌ Write quotes (schema mismatch: nullable vs required fields)
-  - ❌ Write batch (schema mismatch: nullable vs required fields)
-  - ❌ Decimal precision (schema mismatch: nullable vs required fields)
+  - ✅ List tables
+  - ✅ Write trades
+  - ✅ Write quotes
+  - ✅ Write batch (100 records)
+  - ✅ Decimal precision handling
   - ✅ Empty write handling
   - ✅ Table not found error handling
 
 **Schema Registry Tests**: Not run (service unavailable)
 
-**Overall Integration Tests**: 12/27 passed (44%) ⚠️
+**Overall Integration Tests**: 17/27 passed (63%) ⚠️
 
-**Issues Identified**:
-1. **Schema Registry**: Leader election timeout in single-node mode (ongoing)
-2. **Iceberg Writer**: PyArrow creates nullable fields but Iceberg schema expects required fields
-3. **AWS Region**: Fixed by adding AWS_REGION=us-east-1 to iceberg-rest service
+**Issues Resolved**:
+1. ✅ **Iceberg Writer**: Fixed PyArrow nullable fields to match Iceberg required fields
+2. ✅ **AWS Region**: Added AWS_REGION=us-east-1 to iceberg-rest service
+3. ✅ **Test Issues**: Fixed test assertions and decimal precision
+
+**Issues Remaining**:
+1. ⚠️ **Schema Registry**: Leader election timeout in single-node mode (ongoing, non-blocking for current phase)
 
 ### Configuration Fixes Applied
 - Fixed docker-compose.yml Iceberg REST health check (curl → TCP check)
