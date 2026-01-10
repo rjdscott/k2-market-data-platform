@@ -1,14 +1,18 @@
 # K2 - Market Data Platform
 
-**Status**: Production-Ready Design | Demo Implementation
-**Version**: 0.1.0
-**Last Updated**: 2026-01-09
-
+**Status**: Production-Ready Design | Demo Implementation  
+**Version**: 0.1.0  
+**Last Updated**: 2026-01-10  
+**Author**: Rob Scott (Platform Lead)
 ---
 
 ## Platform Overview
 
-K2 is a distributed market data platform designed for high-frequency trading environments where microsecond latency and petabyte-scale storage must coexist. This implementation demonstrates architectural patterns for streaming ingestion, lakehouse storage, and operational reliability suitable for financial services infrastructure.
+K2 is a distributed market data platform designed for high-frequency trading environments where microsecond latency and petabyte-scale storage must coexist. 
+
+This implementation aims to demonstrate architectural patterns for streaming ingestion, lakehouse storage, and operational reliability suitable for financial services infrastructure to run on a local machine.
+
+The full scale production implementation will be contained in another separate project.
 
 **Design Philosophy**: Explicit trade-offs over implicit complexity. Every architectural decision documents what we optimize for, what we sacrifice, and what breaks first under load.
 
@@ -16,7 +20,9 @@ K2 is a distributed market data platform designed for high-frequency trading env
 
 ## Core Design Principles
 
-This platform is built on six non-negotiable principles. See [**Platform Principles**](./docs/architecture/platform-principles.md) for detailed rationale.
+This platform is built on six non-negotiable principles. 
+
+See [**Platform Principles**](./docs/architecture/platform-principles.md) for detailed rationale.
 
 1. **Replayable by Default** - Every pipeline supports arbitrary time-range replay
 2. **Schema-First, Always** - No unstructured data enters the platform

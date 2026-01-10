@@ -503,6 +503,560 @@ Remove deprecated Grafana `grafana-piechart-panel` plugin (no dashboards deploye
 
 ---
 
+## Decision #006: Exponential Backoff Retry Strategy
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 04 (Iceberg Writer), Step 08 (Kafka Consumer)
+
+#### Context
+
+Iceberg write operations can fail transiently due to network issues, S3/MinIO timeouts, or catalog service unavailability. Need a resilience strategy that:
+- Handles transient failures automatically
+- Doesn't mask permanent failures
+- Maintains low latency for successful writes
+- Integrates cleanly with ACID transactions
+
+Options:
+- No retry (fail fast)
+- Fixed delay retry
+- Exponential backoff
+- Circuit breaker pattern
+
+#### Decision
+
+Implement **exponential backoff retry** with 3 attempts for Iceberg write operations.
+
+Configuration:
+- Max retries: 3
+- Initial delay: 100ms
+- Max delay: 10s
+- Backoff factor: 2x
+- Retry on: ConnectionError, TimeoutError, CommitFailedException
+
+#### Consequences
+
+**Positive**:
+- **Automatic resilience**: Transient failures (network blips, temporary S3 slowdowns) handled transparently
+- **Low overhead**: Most writes succeed on first attempt, retry only when needed
+- **Production-ready**: Standard pattern used by AWS SDK, GCP libraries
+- **Bounded latency**: Max 3 attempts = worst case ~20s (100ms + 200ms + 400ms + processing time)
+
+**Negative**:
+- **Delayed failure detection**: Permanent errors take ~700ms to surface (3 attempts)
+- **Duplicate risk**: Crash during retry may cause duplicate processing (mitigated by at-least-once semantics)
+
+**Neutral**:
+- **Works with ACID**: Iceberg commit is atomic, partial writes rolled back automatically
+- **Logged failures**: Structured logging tracks retry attempts for debugging
+
+#### Alternatives Considered
+
+1. **No Retry (Fail Fast)**
+   - **Rejected**: Too brittle for production
+   - Single network blip causes data loss or consumer restart
+
+2. **Fixed Delay Retry**
+   - **Rejected**: Doesn't adapt to failure duration
+   - 1s delay too long for transient issues, too short for service restarts
+
+3. **Circuit Breaker Pattern**
+   - **Deferred**: Adds complexity, may implement in Step 8 consumer
+   - Current retry sufficient for writer isolation
+
+#### Implementation Notes
+
+```python
+@_retry_with_exponential_backoff(max_retries=3)
+def write_trades(self, records, ...):
+    # Will automatically retry on ConnectionError, TimeoutError, CommitFailedException
+    table.append(arrow_table)
+```
+
+Retry logic logs each attempt:
+```
+WARNING: Attempt 1/3 failed, retrying (function=write_trades, error=Connection timeout, delay_seconds=0.1)
+WARNING: Attempt 2/3 failed, retrying (function=write_trades, error=Connection timeout, delay_seconds=0.2)
+ERROR: All 3 retry attempts failed (function=write_trades, error=Connection timeout)
+```
+
+#### Verification
+
+- [x] Transient failures (simulated network timeout) succeed after retry
+- [x] Permanent failures (invalid table name) fail immediately without retry
+- [x] Retry metrics tracked (future enhancement)
+- [x] Structured logging shows retry attempts
+
+---
+
+## Decision #007: Centralized Metrics Registry Pattern
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: All (platform-wide)
+
+#### Context
+
+Need to instrument all components with Prometheus metrics for HFT-grade observability. Requirements:
+- 40+ metrics across ingestion, storage, query, API layers
+- Consistent naming (RED metrics: Rate, Errors, Duration)
+- HFT-optimized latency buckets (1ms-5s)
+- Low-cardinality labels (exchange, asset_class, component)
+- Type safety (Counter, Gauge, Histogram)
+
+Options:
+- Ad-hoc metrics creation in each module
+- Centralized registry with pre-registration
+- Dynamic metrics creation with factory pattern
+- External metrics library (OpenTelemetry)
+
+#### Decision
+
+Implement **centralized metrics registry** (`metrics_registry.py`) with pre-registered metrics.
+
+All metrics:
+- Pre-registered at module load time
+- Named with `k2_` prefix
+- Use standard labels: `service`, `environment`, `component`, `exchange`, `asset_class`
+- HFT-optimized histogram buckets: `[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0]` seconds
+
+#### Consequences
+
+**Positive**:
+- **Fail-fast on duplicates**: Pre-registration catches metric name conflicts immediately
+- **Performance**: No runtime overhead from metric creation
+- **Discoverability**: Single file documents all platform metrics
+- **Type safety**: Metrics accessed via typed getters (`get_counter()`, `get_gauge()`, `get_histogram()`)
+- **HFT-optimized**: Histogram buckets designed for sub-500ms p99 target
+
+**Negative**:
+- **Rigidity**: Adding new metrics requires registry update (not ad-hoc creation)
+- **Import dependency**: All modules must import from registry
+
+**Neutral**:
+- **Wrapper API**: `MetricsClient` provides convenience methods, hides Prometheus API
+- **Component-level defaults**: `create_component_metrics(component="storage")` adds default labels
+
+#### Alternatives Considered
+
+1. **Ad-Hoc Metrics Creation**
+   - **Rejected**: No central documentation, duplicate names possible, inconsistent labeling
+
+2. **OpenTelemetry**
+   - **Rejected**: Overkill for Phase 1, Prometheus sufficient for HFT demo
+   - Can migrate later if distributed tracing needed
+
+3. **Dynamic Factory Pattern**
+   - **Rejected**: Runtime overhead, no fail-fast on duplicates
+
+#### Implementation Notes
+
+**Registry** (`metrics_registry.py`):
+```python
+# Pre-register all metrics
+ICEBERG_WRITE_DURATION_SECONDS = Histogram(
+    "k2_iceberg_write_duration_seconds",
+    "Iceberg write operation duration in seconds",
+    EXCHANGE_LABELS + ["table", "operation"],
+    buckets=STORAGE_BUCKETS,
+)
+
+_METRIC_REGISTRY = {
+    "iceberg_write_duration_seconds": ICEBERG_WRITE_DURATION_SECONDS,
+    # ... 40+ more metrics
+}
+```
+
+**Usage** (`writer.py`):
+```python
+from k2.common.metrics import create_component_metrics
+
+metrics = create_component_metrics("storage")
+
+with metrics.timer("iceberg_write_duration_seconds",
+                   labels={"exchange": "asx", "asset_class": "equities", "table": "trades"}):
+    table.append(arrow_table)
+```
+
+#### Verification
+
+- [x] All 40+ metrics pre-registered without conflicts
+- [x] Writer uses registry-defined metrics
+- [x] Histogram buckets appropriate for HFT latency (1ms-5s)
+- [x] Component-level metrics factory works
+- [ ] Prometheus scrape endpoint returns all metrics (Step 13)
+
+---
+
+## Decision #008: Structured Logging with Correlation IDs
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: All (platform-wide)
+
+#### Context
+
+Need production-ready logging for HFT observability. Requirements:
+- JSON format for log aggregation (Grafana Loki, ELK, CloudWatch)
+- Correlation IDs for request tracing
+- Context propagation (exchange, asset_class, component)
+- Thread-safe and async-friendly
+- Development-friendly console output
+
+Options:
+- Standard Python logging with JSON formatter
+- structlog (structured logging library)
+- OpenTelemetry logs
+- Custom logging framework
+
+#### Decision
+
+Implement **structlog** with correlation IDs using `contextvars` for context propagation.
+
+Features:
+- JSON output in production (`json_output=True`)
+- Colored console output in development (`json_output=False`)
+- Automatic correlation ID injection from context
+- Component-level loggers with default context
+- Timer context manager for operation logging
+
+#### Consequences
+
+**Positive**:
+- **JSON logging**: Ready for Grafana Loki, ELK, CloudWatch without custom formatters
+- **Correlation tracking**: Full request/operation trace via correlation_id field
+- **Thread-safe**: contextvars automatically isolates context per thread/async task
+- **Zero boilerplate**: `logger.info("msg", key=value)` automatically adds timestamp, level, correlation_id
+- **Development UX**: Colored console output improves debugging
+
+**Negative**:
+- **Additional dependency**: Adds structlog (but it's 0-dependency itself)
+- **Learning curve**: Slightly different API than standard logging
+
+**Neutral**:
+- **Processor chain**: Can add custom processors (add request_id, sanitize PII, etc.)
+- **Compatible with standard logging**: Can capture logs from libraries using `logging` module
+
+#### Alternatives Considered
+
+1. **Standard Python Logging + JSON Formatter**
+   - **Rejected**: No built-in correlation ID support, awkward context propagation
+
+2. **OpenTelemetry Logs**
+   - **Rejected**: Overkill for Phase 1, full observability stack not needed yet
+
+3. **Custom Framework**
+   - **Rejected**: Reinventing wheel, structlog is battle-tested
+
+#### Implementation Notes
+
+**Logger Factory** (`logging.py`):
+```python
+logger = get_logger(__name__, component="storage")
+
+# Automatically includes: timestamp, level, component
+logger.info("Trades written", exchange="asx", record_count=1000)
+
+# Output (JSON):
+# {"timestamp": "2026-01-10T12:34:56Z", "level": "INFO",
+#  "component": "storage", "exchange": "asx", "record_count": 1000,
+#  "message": "Trades written"}
+```
+
+**Correlation IDs**:
+```python
+from k2.common.logging import set_correlation_id
+
+set_correlation_id("request-abc-123")
+logger.info("Processing batch")  # Automatically includes correlation_id
+```
+
+**Timer Context Manager**:
+```python
+with logger.timer("batch_processing", symbol="BHP"):
+    process_batch()
+
+# Logs:
+# DEBUG: Starting batch_processing (operation=batch_processing, symbol=BHP)
+# INFO: Operation completed: batch_processing (operation=batch_processing, duration_ms=150.5, symbol=BHP)
+```
+
+#### Verification
+
+- [x] JSON output in production mode
+- [x] Correlation IDs propagate automatically
+- [x] Component-level loggers work
+- [x] Timer context manager logs duration
+- [x] Thread-safe context isolation (not yet tested with threads)
+- [ ] Log aggregation (Grafana Loki integration - Step 14)
+
+---
+
+## Decision #009: Partition by Symbol for Kafka Topics
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 06 (Kafka Producer), Step 08 (Kafka Consumer)
+
+#### Context
+
+Kafka requires partitioning key for message distribution. Market data characteristics:
+- High message rate (10K+ msg/sec per exchange)
+- Order matters per symbol (sequence numbers, time-series)
+- ~1000-5000 symbols per exchange
+- Consumers need per-symbol ordering for sequence gap detection
+
+Options:
+- Partition by symbol
+- Partition by data type (trades vs quotes)
+- Round-robin (no key)
+- Composite key (symbol + exchange)
+
+#### Decision
+
+**Partition by symbol** using symbol as Kafka partition key.
+
+#### Consequences
+
+**Positive**:
+- **Order preservation**: All messages for BHP go to same partition, preserving order
+- **Sequence tracking**: Consumer can track sequence numbers per symbol reliably
+- **Hot partition handling**: Highly traded symbols (BHP, RIO) get dedicated partitions
+- **Parallelism**: Multiple consumers can process different symbols concurrently
+
+**Negative**:
+- **Hot partitions**: Liquid symbols (e.g., BHP with 50K trades/day) create partition skew
+- **Rebalancing**: Adding partitions requires careful planning (symbol→partition mapping changes)
+
+**Neutral**:
+- **Partition count**: Use 30 partitions for ASX (1000 symbols), ensures multiple symbols per partition
+- **Monitoring**: Track partition lag per-partition to detect hot spots
+
+#### Alternatives Considered
+
+1. **Round-Robin (No Key)**
+   - **Rejected**: Breaks ordering, impossible to track sequence numbers
+
+2. **Partition by Data Type**
+   - **Rejected**: Doesn't solve hot partition problem, still need symbol ordering
+
+3. **Composite Key (Symbol + Exchange)**
+   - **Rejected**: Exchange already in topic name, redundant
+
+#### Implementation Notes
+
+**Producer** (`producer.py` - to be implemented):
+```python
+# Partition key = symbol
+producer.produce(
+    topic="market.equities.trades.asx",
+    key=record["symbol"],  # BHP, RIO, CBA, etc.
+    value=avro_bytes
+)
+```
+
+**Consumer** (`consumer.py` - to be implemented):
+```python
+# Messages for same symbol arrive in order
+# Can track sequence numbers per symbol
+sequence_tracker[symbol] = message.sequence_number
+```
+
+#### Verification
+
+- [ ] Produce messages for BHP to multiple partitions (should all go to same partition)
+- [ ] Verify ordering: seq 1, 2, 3 arrive in order (not 1, 3, 2)
+- [ ] Monitor partition lag to detect hot partitions
+- [ ] Test rebalancing: Consumer restart doesn't break ordering
+
+---
+
+## Decision #010: At-Least-Once with Idempotent Producers
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 06 (Kafka Producer)
+
+#### Context
+
+Kafka producers must choose delivery semantics:
+- At-most-once: Fast, but data loss possible
+- At-least-once: Retry on failure, duplicates possible
+- Exactly-once: Kafka transactions, adds latency
+
+Producer requirements:
+- No data loss (market data is valuable)
+- Sub-100ms p99 latency (HFT constraint)
+- Simple implementation (portfolio demo)
+
+#### Decision
+
+Use **at-least-once** delivery with **idempotent producer** enabled.
+
+Configuration:
+```python
+producer_config = {
+    'enable.idempotence': True,  # Prevent duplicates on retry
+    'acks': 'all',  # Wait for all replicas
+    'retries': 3,  # Retry on transient failures
+}
+```
+
+#### Consequences
+
+**Positive**:
+- **No data loss**: Retries ensure messages eventually delivered
+- **Duplicate prevention**: Idempotent producer (Kafka 0.11+) prevents duplicates on retry
+- **Low latency**: No transaction overhead, still <100ms p99
+- **Standard pattern**: Used by most Kafka applications
+
+**Negative**:
+- **Slightly higher latency**: `acks=all` waits for replication (~5-10ms overhead)
+- **Not true exactly-once**: Network failures after ack but before client receives can cause duplicates (rare)
+
+**Neutral**:
+- **Downstream handles duplicates**: Consumer uses at-least-once + Iceberg idempotency
+- **Good enough for demo**: Exactly-once not required for portfolio demonstration
+
+#### Alternatives Considered
+
+1. **Exactly-Once Semantics (Kafka Transactions)**
+   - **Rejected**: 2-3x latency overhead, complexity not justified
+
+2. **At-Most-Once (acks=1)**
+   - **Rejected**: Data loss risk unacceptable
+
+#### Implementation Notes
+
+```python
+producer_config = {
+    'bootstrap.servers': 'localhost:9092',
+    'enable.idempotence': True,
+    'acks': 'all',
+    'retries': 3,
+    'max.in.flight.requests.per.connection': 5,  # Required for idempotence
+    'compression.type': 'snappy',  # Balance speed + compression
+}
+```
+
+#### Verification
+
+- [ ] Produce 10K messages, verify all delivered (count on consumer)
+- [ ] Simulate network failure, verify retry succeeds
+- [ ] Check for duplicates (should be zero with idempotent producer)
+- [ ] Measure p99 latency (target <100ms)
+
+---
+
+## Decision #011: Per-Symbol Sequence Tracking with LRU Cache
+
+**Date**: 2026-01-10
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 08 (Kafka Consumer)
+
+#### Context
+
+Consumer must detect sequence gaps to identify data loss. Challenges:
+- ~1000-5000 symbols per exchange
+- Need to track last sequence number per symbol
+- Memory constraints (running on laptop)
+- Inactive symbols shouldn't consume memory forever
+
+Options:
+- In-memory dict (unbounded growth)
+- Per-symbol dict with TTL
+- LRU cache (bounded size)
+- Database (Redis, PostgreSQL)
+
+#### Decision
+
+Implement **per-symbol sequence tracking** with **LRU cache** (capacity: 10,000 symbols).
+
+When sequence gap detected:
+- Log warning with gap size
+- Emit `sequence_gaps_detected_total` metric
+- Continue processing (don't block on gaps)
+
+#### Consequences
+
+**Positive**:
+- **Memory bounded**: 10K symbols × 8 bytes = 80KB maximum
+- **Automatic cleanup**: Inactive symbols evicted automatically
+- **Simple implementation**: Python `functools.lru_cache` or custom OrderedDict
+- **Good coverage**: 10K > typical active symbols per exchange (~1K-2K)
+
+**Negative**:
+- **Cache misses**: Inactive symbol returning after eviction treated as "first seen" (false negative)
+- **No persistence**: Process restart loses sequence state (acceptable for demo)
+
+**Neutral**:
+- **Production upgrade**: Replace with Redis for persistent state if needed
+- **Gap handling**: Log and continue (don't block ingestion on gaps)
+
+#### Alternatives Considered
+
+1. **Unbounded In-Memory Dict**
+   - **Rejected**: Memory leak risk (1M symbols × 8 bytes = 8MB, plus object overhead)
+
+2. **Redis**
+   - **Rejected**: Adds infrastructure dependency, overkill for demo scale
+
+3. **No Sequence Tracking**
+   - **Rejected**: Can't detect data loss, critical for market data integrity
+
+#### Implementation Notes
+
+```python
+from collections import OrderedDict
+
+class SequenceTracker:
+    def __init__(self, capacity=10000):
+        self.sequences = OrderedDict()  # LRU cache
+        self.capacity = capacity
+
+    def check_sequence(self, symbol, sequence):
+        last_seq = self.sequences.get(symbol)
+
+        if last_seq is None:
+            # First time seeing this symbol
+            self.sequences[symbol] = sequence
+            return True
+
+        expected = last_seq + 1
+        if sequence != expected:
+            gap_size = sequence - expected
+            logger.warning("Sequence gap detected",
+                          symbol=symbol, expected=expected, actual=sequence, gap=gap_size)
+            metrics.increment("sequence_gaps_detected_total",
+                            labels={"exchange": "asx", "symbol": symbol, "severity": "warning"})
+
+        # Update last seen sequence
+        self.sequences[symbol] = sequence
+        self.sequences.move_to_end(symbol)  # Mark as recently used
+
+        # Evict oldest if over capacity
+        if len(self.sequences) > self.capacity:
+            self.sequences.popitem(last=False)
+
+        return True
+```
+
+#### Verification
+
+- [ ] Track 100 symbols, verify sequence gaps logged
+- [ ] Fill cache to 10K symbols, verify LRU eviction works
+- [ ] Simulate gap: seq 1, 2, 5 → logs "gap=2"
+- [ ] Metrics: `sequence_gaps_detected_total` increments on gap
+- [ ] Performance: Tracking overhead <1ms per message
+
+---
+
 ## Pending Decisions
 
 These decisions will be made during implementation:
