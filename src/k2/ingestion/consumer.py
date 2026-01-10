@@ -574,3 +574,131 @@ def create_consumer(
         batch_size=batch_size,
         max_messages=max_messages,
     )
+
+
+# ==============================================================================
+# CLI Interface
+# ==============================================================================
+
+try:
+    import typer
+    from rich.console import Console
+
+    app = typer.Typer(
+        name="consumer",
+        help="Kafka consumer for market data ingestion to Iceberg",
+        add_completion=False,
+    )
+    console = Console()
+
+    @app.command()
+    def consume(
+        topic: Optional[str] = typer.Option(
+            None,
+            "--topic",
+            "-t",
+            help="Kafka topic to consume from (e.g., market.equities.trades.asx)",
+        ),
+        topic_pattern: Optional[str] = typer.Option(
+            None,
+            "--topic-pattern",
+            "-p",
+            help="Kafka topic pattern (e.g., 'market\\.equities\\.trades\\..*')",
+        ),
+        consumer_group: Optional[str] = typer.Option(
+            None,
+            "--consumer-group",
+            "-g",
+            help="Consumer group name (default: k2-iceberg-writer)",
+        ),
+        batch_size: int = typer.Option(
+            1000,
+            "--batch-size",
+            "-b",
+            help="Batch size for Iceberg writes",
+        ),
+        max_messages: Optional[int] = typer.Option(
+            None,
+            "--max-messages",
+            "-n",
+            help="Maximum messages to consume (None = daemon mode)",
+        ),
+    ):
+        """Consume messages from Kafka and write to Iceberg.
+
+        Examples:
+            # Daemon mode (runs until stopped)
+            python -m k2.ingestion.consumer consume --topic market.equities.trades.asx
+
+            # Batch mode (consume 1000 messages then exit)
+            python -m k2.ingestion.consumer consume --topic market.equities.trades.asx --max-messages 1000
+
+            # Pattern matching (all equity trades)
+            python -m k2.ingestion.consumer consume --topic-pattern "market\\.equities\\.trades\\..*"
+
+            # Custom batch size
+            python -m k2.ingestion.consumer consume --topic market.equities.trades.asx --batch-size 5000
+        """
+        # Validate input
+        if not topic and not topic_pattern:
+            console.print("[red]Error: Must specify either --topic or --topic-pattern[/red]")
+            raise typer.Exit(1)
+
+        if topic and topic_pattern:
+            console.print("[red]Error: Specify either --topic or --topic-pattern, not both[/red]")
+            raise typer.Exit(1)
+
+        # Display configuration
+        console.print("\n[bold cyan]K2 Market Data Consumer[/bold cyan]")
+        console.print("=" * 60)
+
+        if topic:
+            console.print(f"[green]Topic:[/green] {topic}")
+        else:
+            console.print(f"[green]Topic Pattern:[/green] {topic_pattern}")
+
+        console.print(f"[green]Consumer Group:[/green] {consumer_group or 'k2-iceberg-writer'}")
+        console.print(f"[green]Batch Size:[/green] {batch_size}")
+        console.print(f"[green]Mode:[/green] {'daemon' if max_messages is None else f'batch ({max_messages} messages)'}")
+        console.print("=" * 60)
+        console.print()
+
+        # Create and run consumer
+        try:
+            topics_list = [topic] if topic else None
+
+            consumer = create_consumer(
+                topics=topics_list,
+                topic_pattern=topic_pattern,
+                consumer_group=consumer_group,
+                batch_size=batch_size,
+                max_messages=max_messages,
+            )
+
+            console.print("[green]Starting consumer...[/green]")
+            console.print("[dim]Press Ctrl+C to stop[/dim]\n")
+
+            consumer.run()
+
+            # Success
+            console.print(f"\n[green]✓[/green] Consumed {consumer.stats.messages_consumed} messages")
+            console.print(f"[green]✓[/green] Written {consumer.stats.messages_written} records to Iceberg")
+
+            if consumer.stats.errors > 0:
+                console.print(f"[yellow]⚠[/yellow]  {consumer.stats.errors} errors")
+
+            if consumer.stats.sequence_gaps > 0:
+                console.print(f"[yellow]⚠[/yellow]  {consumer.stats.sequence_gaps} sequence gaps detected")
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Consumer stopped by user[/yellow]")
+        except Exception as err:
+            console.print(f"\n[red]Error: {err}[/red]")
+            raise typer.Exit(1)
+
+    if __name__ == "__main__":
+        app()
+
+except ImportError:
+    # Typer not installed, skip CLI
+    pass
