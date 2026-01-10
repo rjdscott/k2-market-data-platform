@@ -366,3 +366,448 @@ class HealthResponse(BaseModel):
     dependencies: List[DependencyHealth] = Field(
         default_factory=list, description="Dependency health checks"
     )
+
+
+# =============================================================================
+# POST Request Models (Complex Queries)
+# =============================================================================
+
+
+class OutputFormat(str, Enum):
+    """Output format for query results."""
+
+    JSON = "json"
+    CSV = "csv"
+    PARQUET = "parquet"
+
+
+class AggregationMetric(str, Enum):
+    """Available aggregation metrics."""
+
+    VWAP = "vwap"  # Volume-weighted average price
+    TWAP = "twap"  # Time-weighted average price
+    OHLCV = "ohlcv"  # Open, High, Low, Close, Volume
+    VOLUME_PROFILE = "volume_profile"  # Volume distribution by price
+    TRADE_COUNT = "trade_count"  # Number of trades
+
+
+class AggregationInterval(str, Enum):
+    """Time intervals for aggregations."""
+
+    ONE_MIN = "1min"
+    FIVE_MIN = "5min"
+    FIFTEEN_MIN = "15min"
+    THIRTY_MIN = "30min"
+    ONE_HOUR = "1hour"
+    ONE_DAY = "1day"
+
+
+# Allowlist of valid fields for field selection (security measure)
+VALID_TRADE_FIELDS = frozenset([
+    "symbol", "company_id", "exchange", "exchange_timestamp",
+    "price", "volume", "qualifiers", "venue", "buyer_id",
+    "ingestion_timestamp", "sequence_number"
+])
+
+VALID_QUOTE_FIELDS = frozenset([
+    "symbol", "company_id", "exchange", "exchange_timestamp",
+    "bid_price", "bid_volume", "ask_price", "ask_volume",
+    "ingestion_timestamp", "sequence_number"
+])
+
+
+class TradeQueryRequest(BaseModel):
+    """
+    Complex trade query request for POST /v1/trades/query.
+
+    Supports multi-symbol queries, field selection, advanced filters,
+    and multiple output formats. Use this for analytical queries;
+    use GET /v1/trades for simple single-symbol lookups.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "symbols": ["BHP", "RIO", "FMG"],
+                "exchanges": ["ASX"],
+                "start_time": "2024-01-01T09:00:00",
+                "end_time": "2024-01-31T16:00:00",
+                "fields": ["symbol", "exchange_timestamp", "price", "volume"],
+                "limit": 10000,
+                "format": "json",
+            }
+        }
+    )
+
+    # Symbol filters (empty list = all symbols)
+    symbols: List[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description="Filter by symbols (max 100). Empty = all symbols.",
+    )
+    exchanges: List[str] = Field(
+        default_factory=list,
+        description="Filter by exchanges. Empty = all exchanges.",
+    )
+
+    # Time filters
+    start_time: Optional[datetime] = Field(
+        default=None,
+        description="Filter trades after this time (ISO 8601)",
+    )
+    end_time: Optional[datetime] = Field(
+        default=None,
+        description="Filter trades before this time (ISO 8601)",
+    )
+
+    # Field selection (None = all fields)
+    fields: Optional[List[str]] = Field(
+        default=None,
+        description="Fields to return. None = all fields. Reduces payload size.",
+    )
+
+    # Pagination
+    limit: int = Field(
+        default=1000,
+        ge=1,
+        le=100000,
+        description="Maximum records to return (max 100,000)",
+    )
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="Number of records to skip",
+    )
+
+    # Advanced filters
+    min_price: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Minimum trade price filter",
+    )
+    max_price: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Maximum trade price filter",
+    )
+    min_volume: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Minimum trade volume filter",
+    )
+
+    # Output options
+    format: OutputFormat = Field(
+        default=OutputFormat.JSON,
+        description="Output format: json, csv, or parquet",
+    )
+
+    @field_validator("fields", mode="before")
+    @classmethod
+    def validate_fields(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        """Validate field names against allowlist to prevent SQL injection."""
+        if v is None:
+            return None
+        invalid = set(v) - VALID_TRADE_FIELDS
+        if invalid:
+            raise ValueError(f"Invalid fields: {invalid}. Valid: {VALID_TRADE_FIELDS}")
+        return v
+
+
+class QuoteQueryRequest(BaseModel):
+    """
+    Complex quote query request for POST /v1/quotes/query.
+
+    Supports multi-symbol queries, field selection, and multiple output formats.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "symbols": ["BHP", "RIO"],
+                "start_time": "2024-01-15T09:30:00",
+                "end_time": "2024-01-15T16:00:00",
+                "fields": ["symbol", "exchange_timestamp", "bid_price", "ask_price"],
+                "limit": 5000,
+                "format": "json",
+            }
+        }
+    )
+
+    symbols: List[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description="Filter by symbols (max 100)",
+    )
+    exchanges: List[str] = Field(
+        default_factory=list,
+        description="Filter by exchanges",
+    )
+    start_time: Optional[datetime] = Field(
+        default=None,
+        description="Filter quotes after this time",
+    )
+    end_time: Optional[datetime] = Field(
+        default=None,
+        description="Filter quotes before this time",
+    )
+    fields: Optional[List[str]] = Field(
+        default=None,
+        description="Fields to return. None = all fields.",
+    )
+    limit: int = Field(
+        default=1000,
+        ge=1,
+        le=100000,
+        description="Maximum records (max 100,000)",
+    )
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="Records to skip",
+    )
+    format: OutputFormat = Field(
+        default=OutputFormat.JSON,
+        description="Output format",
+    )
+
+    @field_validator("fields", mode="before")
+    @classmethod
+    def validate_fields(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        """Validate field names against allowlist."""
+        if v is None:
+            return None
+        invalid = set(v) - VALID_QUOTE_FIELDS
+        if invalid:
+            raise ValueError(f"Invalid fields: {invalid}. Valid: {VALID_QUOTE_FIELDS}")
+        return v
+
+
+class ReplayRequest(BaseModel):
+    """
+    Historical data replay request for POST /v1/replay.
+
+    Returns paginated batches of historical data in chronological order.
+    Use for backtesting, rebuilding state, or data migration.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "data_type": "trades",
+                "symbol": "BHP",
+                "start_time": "2024-01-01T00:00:00",
+                "end_time": "2024-01-31T23:59:59",
+                "batch_size": 1000,
+                "snapshot_id": None,
+            }
+        }
+    )
+
+    data_type: DataType = Field(
+        default=DataType.TRADES,
+        description="Data type to replay: trades or quotes",
+    )
+    symbol: Optional[str] = Field(
+        default=None,
+        description="Filter by symbol (None = all symbols)",
+    )
+    exchange: Optional[str] = Field(
+        default=None,
+        description="Filter by exchange",
+    )
+    start_time: datetime = Field(
+        description="Start of replay period (required)",
+    )
+    end_time: datetime = Field(
+        description="End of replay period (required)",
+    )
+    batch_size: int = Field(
+        default=1000,
+        ge=100,
+        le=10000,
+        description="Records per batch (100-10,000)",
+    )
+    snapshot_id: Optional[int] = Field(
+        default=None,
+        description="Optional snapshot ID for point-in-time replay",
+    )
+    cursor: Optional[str] = Field(
+        default=None,
+        description="Cursor from previous response for pagination",
+    )
+    format: OutputFormat = Field(
+        default=OutputFormat.JSON,
+        description="Output format",
+    )
+
+
+class ReplayCursor(BaseModel):
+    """Cursor for replay pagination (base64 encoded in API)."""
+
+    offset: int = Field(description="Current offset position")
+    total: int = Field(description="Total records in replay")
+    batch_number: int = Field(description="Current batch number")
+
+
+class ReplayResponse(APIResponse):
+    """Response model for replay endpoint."""
+
+    data: List[Union[Trade, Quote]] = Field(
+        default_factory=list,
+        description="Batch of records",
+    )
+    cursor: Optional[str] = Field(
+        default=None,
+        description="Cursor for next batch (None if complete)",
+    )
+    batch_info: dict = Field(
+        default_factory=dict,
+        description="Batch metadata (number, size, progress)",
+    )
+
+
+class SnapshotQueryRequest(BaseModel):
+    """
+    Point-in-time query request for POST /v1/snapshots/{id}/query.
+
+    Query data as it existed at a specific Iceberg snapshot.
+    Use for compliance auditing, debugging, or disaster recovery.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "data_type": "trades",
+                "symbol": "BHP",
+                "limit": 1000,
+                "format": "json",
+            }
+        }
+    )
+
+    data_type: DataType = Field(
+        default=DataType.TRADES,
+        description="Data type: trades or quotes",
+    )
+    symbol: Optional[str] = Field(
+        default=None,
+        description="Filter by symbol",
+    )
+    exchange: Optional[str] = Field(
+        default=None,
+        description="Filter by exchange",
+    )
+    limit: int = Field(
+        default=1000,
+        ge=1,
+        le=100000,
+        description="Maximum records",
+    )
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="Records to skip",
+    )
+    format: OutputFormat = Field(
+        default=OutputFormat.JSON,
+        description="Output format",
+    )
+
+
+class SnapshotQueryResponse(APIResponse):
+    """Response model for snapshot query endpoint."""
+
+    data: List[Union[Trade, Quote]] = Field(
+        default_factory=list,
+        description="Records as of snapshot",
+    )
+    snapshot_id: int = Field(description="Queried snapshot ID")
+    snapshot_timestamp: Optional[datetime] = Field(
+        default=None,
+        description="Snapshot creation time",
+    )
+    pagination: Optional[PaginationMeta] = Field(
+        default=None,
+        description="Pagination info",
+    )
+
+
+class AggregationRequest(BaseModel):
+    """
+    Custom aggregation request for POST /v1/aggregations.
+
+    Compute VWAP, TWAP, OHLCV, and other metrics over time intervals.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "symbols": ["BHP", "RIO"],
+                "metrics": ["vwap", "ohlcv"],
+                "interval": "5min",
+                "start_time": "2024-01-15T09:30:00",
+                "end_time": "2024-01-15T16:00:00",
+            }
+        }
+    )
+
+    symbols: List[str] = Field(
+        min_length=1,
+        max_length=50,
+        description="Symbols to aggregate (1-50, required)",
+    )
+    metrics: List[AggregationMetric] = Field(
+        min_length=1,
+        description="Metrics to compute",
+    )
+    interval: AggregationInterval = Field(
+        description="Time interval for aggregation",
+    )
+    start_time: datetime = Field(
+        description="Start of aggregation period",
+    )
+    end_time: datetime = Field(
+        description="End of aggregation period",
+    )
+    exchange: Optional[str] = Field(
+        default=None,
+        description="Filter by exchange",
+    )
+    format: OutputFormat = Field(
+        default=OutputFormat.JSON,
+        description="Output format",
+    )
+
+
+class AggregationBucket(BaseModel):
+    """Single time bucket in aggregation results."""
+
+    symbol: str = Field(description="Symbol")
+    interval_start: datetime = Field(description="Bucket start time")
+    interval_end: datetime = Field(description="Bucket end time")
+
+    # OHLCV fields
+    open_price: Optional[float] = Field(default=None)
+    high_price: Optional[float] = Field(default=None)
+    low_price: Optional[float] = Field(default=None)
+    close_price: Optional[float] = Field(default=None)
+    volume: Optional[int] = Field(default=None)
+    trade_count: Optional[int] = Field(default=None)
+
+    # Weighted averages
+    vwap: Optional[float] = Field(default=None, description="Volume-weighted avg price")
+    twap: Optional[float] = Field(default=None, description="Time-weighted avg price")
+
+
+class AggregationResponse(APIResponse):
+    """Response model for aggregation endpoint."""
+
+    data: List[AggregationBucket] = Field(
+        default_factory=list,
+        description="Aggregation results by time bucket",
+    )
+    request_summary: dict = Field(
+        default_factory=dict,
+        description="Summary of request parameters",
+    )

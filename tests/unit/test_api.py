@@ -506,3 +506,418 @@ class TestOpenAPI:
         """ReDoc should be accessible."""
         response = client.get("/redoc")
         assert response.status_code == 200
+
+
+# =============================================================================
+# POST Trades Query Tests
+# =============================================================================
+
+
+class TestPostTradesQuery:
+    """Tests for POST /v1/trades/query endpoint."""
+
+    def test_post_trades_query_basic(self, client, auth_header):
+        """POST /v1/trades/query should return trades."""
+        response = client.post(
+            "/v1/trades/query",
+            headers=auth_header,
+            json={"limit": 100},
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["success"] is True
+        assert "data" in data
+
+    def test_post_trades_query_multi_symbol(self, client, auth_header):
+        """POST /v1/trades/query should accept multiple symbols."""
+        response = client.post(
+            "/v1/trades/query",
+            headers=auth_header,
+            json={
+                "symbols": ["BHP", "RIO"],
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 200
+
+    def test_post_trades_query_field_selection(self, client, auth_header):
+        """POST /v1/trades/query should support field selection."""
+        response = client.post(
+            "/v1/trades/query",
+            headers=auth_header,
+            json={
+                "fields": ["symbol", "price", "volume"],
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 200
+
+    def test_post_trades_query_invalid_field(self, client, auth_header):
+        """POST /v1/trades/query should reject invalid fields."""
+        response = client.post(
+            "/v1/trades/query",
+            headers=auth_header,
+            json={
+                "fields": ["symbol", "invalid_field"],
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 422  # Validation error
+
+    def test_post_trades_query_price_filter(self, client, auth_header):
+        """POST /v1/trades/query should accept price filters."""
+        response = client.post(
+            "/v1/trades/query",
+            headers=auth_header,
+            json={
+                "min_price": 40.0,
+                "max_price": 50.0,
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 200
+
+    def test_post_trades_query_time_filter(self, client, auth_header):
+        """POST /v1/trades/query should accept time range."""
+        response = client.post(
+            "/v1/trades/query",
+            headers=auth_header,
+            json={
+                "start_time": "2024-01-01T00:00:00",
+                "end_time": "2024-01-31T23:59:59",
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 200
+
+    def test_post_trades_query_csv_format(self, client, auth_header):
+        """POST /v1/trades/query should return CSV when requested."""
+        response = client.post(
+            "/v1/trades/query",
+            headers=auth_header,
+            json={
+                "format": "csv",
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/csv")
+        assert "attachment" in response.headers.get("content-disposition", "")
+
+    def test_post_trades_query_parquet_format(self, client, auth_header):
+        """POST /v1/trades/query should return Parquet when requested."""
+        response = client.post(
+            "/v1/trades/query",
+            headers=auth_header,
+            json={
+                "format": "parquet",
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/octet-stream"
+
+
+# =============================================================================
+# POST Quotes Query Tests
+# =============================================================================
+
+
+class TestPostQuotesQuery:
+    """Tests for POST /v1/quotes/query endpoint."""
+
+    def test_post_quotes_query_basic(self, client, auth_header):
+        """POST /v1/quotes/query should return quotes."""
+        response = client.post(
+            "/v1/quotes/query",
+            headers=auth_header,
+            json={"limit": 100},
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["success"] is True
+
+    def test_post_quotes_query_multi_symbol(self, client, auth_header):
+        """POST /v1/quotes/query should accept multiple symbols."""
+        response = client.post(
+            "/v1/quotes/query",
+            headers=auth_header,
+            json={
+                "symbols": ["BHP", "RIO"],
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 200
+
+    def test_post_quotes_query_field_selection(self, client, auth_header):
+        """POST /v1/quotes/query should support field selection."""
+        response = client.post(
+            "/v1/quotes/query",
+            headers=auth_header,
+            json={
+                "fields": ["symbol", "bid_price", "ask_price"],
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 200
+
+
+# =============================================================================
+# POST Replay Tests
+# =============================================================================
+
+
+class TestPostReplay:
+    """Tests for POST /v1/replay endpoint."""
+
+    def test_post_replay_basic(self, client, auth_header, mock_replay_engine):
+        """POST /v1/replay should return batch with cursor."""
+        # Setup mock for replay stats
+        mock_replay_engine.get_replay_stats.return_value = {
+            "total_records": 100,
+            "min_timestamp": datetime(2024, 1, 1),
+            "max_timestamp": datetime(2024, 1, 31),
+        }
+
+        response = client.post(
+            "/v1/replay",
+            headers=auth_header,
+            json={
+                "data_type": "trades",
+                "start_time": "2024-01-01T00:00:00",
+                "end_time": "2024-01-31T23:59:59",
+                "batch_size": 100,
+            },
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["success"] is True
+        assert "batch_info" in data
+
+    def test_post_replay_with_symbol(self, client, auth_header, mock_replay_engine):
+        """POST /v1/replay should accept symbol filter."""
+        mock_replay_engine.get_replay_stats.return_value = {"total_records": 50}
+
+        response = client.post(
+            "/v1/replay",
+            headers=auth_header,
+            json={
+                "data_type": "trades",
+                "symbol": "BHP",
+                "start_time": "2024-01-01T00:00:00",
+                "end_time": "2024-01-31T23:59:59",
+                "batch_size": 100,
+            },
+        )
+        assert response.status_code == 200
+
+    def test_post_replay_validates_time_range(self, client, auth_header):
+        """POST /v1/replay should require start and end time."""
+        response = client.post(
+            "/v1/replay",
+            headers=auth_header,
+            json={
+                "data_type": "trades",
+                # Missing start_time and end_time
+                "batch_size": 100,
+            },
+        )
+        assert response.status_code == 422  # Validation error
+
+
+# =============================================================================
+# POST Snapshot Query Tests
+# =============================================================================
+
+
+class TestPostSnapshotQuery:
+    """Tests for POST /v1/snapshots/{id}/query endpoint."""
+
+    def test_post_snapshot_query_basic(self, client, auth_header, mock_replay_engine):
+        """POST /v1/snapshots/{id}/query should return data at snapshot."""
+        # Setup mock
+        snapshot_mock = MagicMock()
+        snapshot_mock.snapshot_id = 1234567890
+        snapshot_mock.timestamp = datetime(2024, 1, 15, 10, 30, 0)
+        mock_replay_engine.get_snapshot.return_value = snapshot_mock
+        mock_replay_engine.query_at_snapshot.return_value = [
+            {
+                "symbol": "BHP",
+                "exchange": "ASX",
+                "exchange_timestamp": datetime(2024, 1, 15, 10, 0, 0),
+                "price": 45.50,
+                "volume": 1000,
+            }
+        ]
+
+        response = client.post(
+            "/v1/snapshots/1234567890/query",
+            headers=auth_header,
+            json={
+                "data_type": "trades",
+                "symbol": "BHP",
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["success"] is True
+        assert data["snapshot_id"] == 1234567890
+
+    def test_post_snapshot_query_not_found(self, client, auth_header, mock_replay_engine):
+        """POST /v1/snapshots/{id}/query should return 404 for invalid snapshot."""
+        mock_replay_engine.get_snapshot.return_value = None
+
+        response = client.post(
+            "/v1/snapshots/999999999/query",
+            headers=auth_header,
+            json={
+                "data_type": "trades",
+                "limit": 100,
+            },
+        )
+        assert response.status_code == 404
+
+
+# =============================================================================
+# POST Aggregations Tests
+# =============================================================================
+
+
+class TestPostAggregations:
+    """Tests for POST /v1/aggregations endpoint."""
+
+    def test_post_aggregations_basic(self, client, auth_header, mock_query_engine):
+        """POST /v1/aggregations should return bucketed data."""
+        # Setup mock connection to return aggregation results
+        mock_df = MagicMock()
+        mock_df.to_dict.return_value = [
+            {
+                "symbol": "BHP",
+                "bucket_start": datetime(2024, 1, 15, 10, 0, 0),
+                "bucket_end": datetime(2024, 1, 15, 10, 5, 0),
+                "open_price": 45.20,
+                "high_price": 45.80,
+                "low_price": 45.00,
+                "close_price": 45.50,
+                "volume": 10000,
+                "trade_count": 100,
+                "vwap": 45.40,
+                "twap": 45.35,
+            }
+        ]
+        mock_query_engine.connection.execute.return_value.fetchdf.return_value = mock_df
+
+        response = client.post(
+            "/v1/aggregations",
+            headers=auth_header,
+            json={
+                "symbols": ["BHP"],
+                "metrics": ["ohlcv", "vwap"],
+                "interval": "5min",
+                "start_time": "2024-01-15T09:00:00",
+                "end_time": "2024-01-15T16:00:00",
+            },
+        )
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["success"] is True
+        assert "request_summary" in data
+
+    def test_post_aggregations_requires_symbols(self, client, auth_header):
+        """POST /v1/aggregations should require at least one symbol."""
+        response = client.post(
+            "/v1/aggregations",
+            headers=auth_header,
+            json={
+                "symbols": [],  # Empty
+                "metrics": ["vwap"],
+                "interval": "5min",
+                "start_time": "2024-01-15T09:00:00",
+                "end_time": "2024-01-15T16:00:00",
+            },
+        )
+        assert response.status_code == 422  # Validation error
+
+    def test_post_aggregations_requires_metrics(self, client, auth_header):
+        """POST /v1/aggregations should require at least one metric."""
+        response = client.post(
+            "/v1/aggregations",
+            headers=auth_header,
+            json={
+                "symbols": ["BHP"],
+                "metrics": [],  # Empty
+                "interval": "5min",
+                "start_time": "2024-01-15T09:00:00",
+                "end_time": "2024-01-15T16:00:00",
+            },
+        )
+        assert response.status_code == 422  # Validation error
+
+    def test_post_aggregations_csv_format(self, client, auth_header, mock_query_engine):
+        """POST /v1/aggregations should return CSV when requested."""
+        mock_df = MagicMock()
+        mock_df.to_dict.return_value = []
+        mock_query_engine.connection.execute.return_value.fetchdf.return_value = mock_df
+
+        response = client.post(
+            "/v1/aggregations",
+            headers=auth_header,
+            json={
+                "symbols": ["BHP"],
+                "metrics": ["vwap"],
+                "interval": "1hour",
+                "start_time": "2024-01-15T09:00:00",
+                "end_time": "2024-01-15T16:00:00",
+                "format": "csv",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/csv")
+
+
+# =============================================================================
+# POST Endpoints OpenAPI Tests
+# =============================================================================
+
+
+class TestPostEndpointsOpenAPI:
+    """Tests for POST endpoints in OpenAPI documentation."""
+
+    def test_openapi_includes_post_endpoints(self, client):
+        """OpenAPI should document all POST endpoints."""
+        response = client.get("/openapi.json")
+        data = response.json()
+
+        paths = data.get("paths", {})
+
+        # Check POST endpoints exist
+        assert "/v1/trades/query" in paths
+        assert "post" in paths["/v1/trades/query"]
+
+        assert "/v1/quotes/query" in paths
+        assert "post" in paths["/v1/quotes/query"]
+
+        assert "/v1/replay" in paths
+        assert "post" in paths["/v1/replay"]
+
+        assert "/v1/aggregations" in paths
+        assert "post" in paths["/v1/aggregations"]
+
+    def test_openapi_post_endpoints_have_request_body(self, client):
+        """POST endpoints should have requestBody schema."""
+        response = client.get("/openapi.json")
+        data = response.json()
+
+        paths = data.get("paths", {})
+
+        # Check request body is documented
+        assert "requestBody" in paths["/v1/trades/query"]["post"]
+        assert "requestBody" in paths["/v1/quotes/query"]["post"]
+        assert "requestBody" in paths["/v1/replay"]["post"]
+        assert "requestBody" in paths["/v1/aggregations"]["post"]

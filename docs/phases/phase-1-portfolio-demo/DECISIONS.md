@@ -2157,6 +2157,292 @@ This is a **data quality issue** to address in future steps, not an API bug.
 
 ---
 
+## Decision #023: Hybrid GET/POST Architecture for Query API
+
+**Date**: 2026-01-11
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 12 (REST API)
+
+#### Context
+
+The initial REST API used GET endpoints with query parameters exclusively. This works for simple lookups but doesn't scale for complex queries needed by trading firms:
+
+- Multi-symbol batch queries (portfolio analytics)
+- Field selection (reduce payload 60%+)
+- Complex aggregations (VWAP, OHLCV by interval)
+- Historical replay with cursor pagination
+
+Industry patterns (Bloomberg, Refinitiv, Jane Street) use POST for complex queries because:
+- URL length limits (~2KB) prevent multi-symbol queries
+- Request bodies enable typed schemas and validation
+- POST bodies are easier to audit/log than URL strings
+- Complex queries are not cacheable anyway (stale data is dangerous)
+
+#### Decision
+
+Implement **hybrid GET/POST architecture**:
+
+| Endpoint | Method | Use Case |
+|----------|--------|----------|
+| `/v1/trades` | GET | Simple single-symbol lookups |
+| `/v1/trades/query` | POST | Multi-symbol, field selection, advanced filters |
+| `/v1/quotes` | GET | Simple lookups |
+| `/v1/quotes/query` | POST | Complex queries |
+| `/v1/replay` | POST | Historical replay with pagination |
+| `/v1/aggregations` | POST | Custom VWAP, OHLCV, TWAP |
+| `/v1/snapshots/{id}/query` | POST | Point-in-time queries |
+
+#### Consequences
+
+**Positive**:
+- **Tier-1 trading firm pattern**: Matches Bloomberg, Refinitiv API design
+- **Scalable**: Can query 100 symbols without URL length issues
+- **Type-safe**: Pydantic request bodies with validation
+- **Auditable**: POST bodies logged in structured format
+- **Flexible output**: JSON, CSV, Parquet from same endpoint
+
+**Negative**:
+- **Not cacheable**: POST responses can't be CDN-cached (acceptable for market data)
+- **More endpoints**: 5 new POST endpoints to maintain
+- **Testing overhead**: Need JSON payloads in curl, not just URL params
+
+**Neutral**:
+- **Backward compatible**: GET endpoints unchanged
+- **Self-documenting**: OpenAPI shows both GET and POST patterns
+
+#### Verification
+
+- [x] POST /v1/trades/query works with multi-symbol
+- [x] POST /v1/quotes/query works with field selection
+- [x] POST /v1/replay returns paginated batches
+- [x] POST /v1/aggregations computes VWAP, OHLCV
+- [x] All 53 unit tests pass
+
+---
+
+## Decision #024: Field Selection with Allowlist Validation
+
+**Date**: 2026-01-11
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 12 (REST API)
+
+#### Context
+
+POST query endpoints support field selection to reduce response payload. Security consideration: field names are used in SQL column selection. Without validation, this could enable SQL injection.
+
+Options:
+- **No validation**: Accept any field name (dangerous)
+- **Blocklist**: Block known-bad patterns (fragile)
+- **Allowlist**: Only accept known-good fields (secure)
+- **No field selection**: Always return all fields (simple but wasteful)
+
+#### Decision
+
+Use **allowlist validation** with Pydantic validators.
+
+```python
+VALID_TRADE_FIELDS = frozenset([
+    "symbol", "company_id", "exchange", "exchange_timestamp",
+    "price", "volume", "qualifiers", "venue", "buyer_id",
+    "ingestion_timestamp", "sequence_number"
+])
+
+@field_validator("fields", mode="before")
+def validate_fields(cls, v):
+    if v is None:
+        return None
+    invalid = set(v) - VALID_TRADE_FIELDS
+    if invalid:
+        raise ValueError(f"Invalid fields: {invalid}")
+    return v
+```
+
+#### Consequences
+
+**Positive**:
+- **Secure**: SQL injection impossible with known-good field names
+- **Fast validation**: `frozenset` membership check is O(1)
+- **Clear error messages**: "Invalid fields: {'hack_field'}"
+- **Self-documenting**: Allowlist shows available fields
+
+**Negative**:
+- **Maintenance**: New fields require allowlist update
+- **Rigid**: Can't dynamically add fields without code change
+
+**Neutral**:
+- **Standard pattern**: Used by Stripe, GitHub APIs for field selection
+- **Fail-fast**: Invalid requests rejected at validation, not SQL execution
+
+#### Verification
+
+- [x] Valid fields accepted: `["symbol", "price", "volume"]`
+- [x] Invalid fields rejected with 422: `["symbol", "invalid_field"]`
+- [x] None (all fields) works correctly
+
+---
+
+## Decision #025: Multi-Format Output (JSON/CSV/Parquet)
+
+**Date**: 2026-01-11
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 12 (REST API)
+
+#### Context
+
+Different consumers need different output formats:
+- **JSON**: Applications, standard REST response
+- **CSV**: Analysts, Excel users, quick data export
+- **Parquet**: Data scientists, efficient columnar storage
+
+Options:
+- **JSON only**: Simple, one format to support
+- **JSON + CSV**: Covers apps and analysts
+- **JSON + CSV + Parquet**: Full data science support
+
+#### Decision
+
+Support **all three formats** via `format` field in request body.
+
+```python
+class OutputFormat(str, Enum):
+    JSON = "json"
+    CSV = "csv"
+    PARQUET = "parquet"
+
+# Usage
+POST /v1/trades/query
+{"format": "csv", "symbols": ["BHP"]}
+```
+
+Response varies by format:
+- **JSON**: Standard JSON body with `data`, `meta`, `pagination`
+- **CSV**: `Content-Type: text/csv`, `Content-Disposition: attachment`
+- **Parquet**: `Content-Type: application/octet-stream`, binary body
+
+#### Consequences
+
+**Positive**:
+- **Universal access**: Apps get JSON, analysts get CSV, data scientists get Parquet
+- **Bandwidth optimization**: Parquet is 50-80% smaller than JSON
+- **Type preservation**: Parquet preserves datetime types, no string parsing needed
+- **Single endpoint**: One API for all formats, not separate endpoints
+
+**Negative**:
+- **Implementation complexity**: Three code paths for formatting
+- **Testing overhead**: Must test all three formats
+- **Dependency**: Parquet requires pyarrow
+
+**Neutral**:
+- **Industry standard**: Most data APIs support multiple formats
+- **Consistent UX**: Same query, different output
+
+#### Implementation Notes
+
+Format conversion handled by `formatters.py` module:
+- `to_json_response()`: Standard JSON
+- `to_csv_response()`: Pandas DataFrame → CSV string
+- `to_parquet_response()`: Pandas DataFrame → Parquet bytes
+
+#### Verification
+
+- [x] JSON format returns application/json
+- [x] CSV format returns text/csv with attachment header
+- [x] Parquet format returns application/octet-stream binary
+- [x] Field selection works with all formats
+
+---
+
+## Decision #026: Cursor-Based Pagination for Replay
+
+**Date**: 2026-01-11
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 12 (REST API)
+
+#### Context
+
+Historical replay can return millions of records. Need pagination strategy that:
+- Handles large datasets without memory issues
+- Provides progress indication
+- Allows resumable iteration
+- Works with REST semantics
+
+Options:
+- **Offset/limit**: Simple but expensive for large offsets
+- **Cursor-based**: Opaque cursor encodes position
+- **Keyset pagination**: Use timestamps as cursor (complex with duplicates)
+- **Streaming**: Server-sent events or chunked encoding (complex clients)
+
+#### Decision
+
+Use **cursor-based pagination** with base64-encoded JSON cursor.
+
+```python
+# First request
+POST /v1/replay
+{"start_time": "2024-01-01T00:00:00", "end_time": "2024-01-31T23:59:59", "batch_size": 1000}
+
+# Response
+{
+  "data": [...1000 records...],
+  "cursor": "eyJvIjogMTAwMCwgInQiOiAxMDAwMDAsICJiIjogMX0=",  # base64({offset, total, batch})
+  "batch_info": {"batch_number": 1, "batch_size": 1000, "total_records": 100000, "progress_percent": 1.0}
+}
+
+# Next request
+POST /v1/replay
+{"cursor": "eyJvIjogMTAwMCwgInQiOiAxMDAwMDAsICJiIjogMX0=", "batch_size": 1000}
+```
+
+Cursor encodes:
+- `o`: Current offset position
+- `t`: Total records for progress tracking
+- `b`: Batch number
+
+#### Consequences
+
+**Positive**:
+- **Resumable**: Can continue from last cursor after failure
+- **Progress indication**: `batch_info.progress_percent` shows completion
+- **Memory bounded**: Only one batch in memory at a time
+- **REST-friendly**: Stateless, cursor contains all state
+- **Opaque cursor**: Client doesn't need to understand internals
+
+**Negative**:
+- **Offset under the hood**: Still uses SQL OFFSET which is O(n) on large tables
+- **No random access**: Can't jump to arbitrary position
+- **Cursor validation**: Must handle invalid/expired cursors gracefully
+
+**Neutral**:
+- **Base64 encoding**: Standard practice (GitHub, Stripe use this)
+- **JSON cursor**: Human-readable when decoded for debugging
+
+#### Implementation Notes
+
+Cursor encoding/decoding in `formatters.py`:
+```python
+def encode_cursor(offset: int, total: int, batch_number: int) -> str:
+    return base64.urlsafe_b64encode(
+        json.dumps({"o": offset, "t": total, "b": batch_number}).encode()
+    ).decode()
+
+def decode_cursor(cursor: str) -> dict:
+    return json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+```
+
+#### Verification
+
+- [x] First request returns cursor for next page
+- [x] Subsequent request with cursor returns next batch
+- [x] Final batch has `cursor: null`
+- [x] Progress percent calculated correctly
+- [x] Invalid cursor returns 400 error
+
+---
+
 ## Pending Decisions
 
 These decisions will be made during implementation:
