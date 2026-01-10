@@ -261,7 +261,7 @@ services:
     networks:
       - k2-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8181/v1/config"]
+      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/8181' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5

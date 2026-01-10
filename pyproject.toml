@@ -27,7 +27,7 @@ classifiers = [
 # Core dependencies - required for all installations
 dependencies = [
     # Kafka streaming
-    "confluent-kafka[avro,schema-registry]>=2.3.0",
+    "confluent-kafka[avro,schema-registry]>=2.13.0",  # Latest: 2.13.0 (2026-01-05)
     "kafka-python>=2.0.2",  # Alternative client for some operations
 
     # Schema management
@@ -35,34 +35,34 @@ dependencies = [
     "fastavro>=1.9.0",  # Faster Avro implementation
 
     # Apache Iceberg lakehouse
-    "pyiceberg[s3fs,duckdb,pyarrow]>=0.6.0",
+    "pyiceberg[s3fs,duckdb,pyarrow]>=0.10.0",  # Latest: 0.10.0 (2025)
 
     # Storage backends
     "s3fs>=2024.2.0",  # S3 filesystem interface
-    "boto3>=1.34.0",   # AWS SDK (for S3 operations)
+    "boto3>=1.42.0",   # Latest: 1.42.24 (2026-01-07) - AWS SDK
 
     # Query engine
-    "duckdb>=0.10.0",
-    "pyarrow>=15.0.0",  # Columnar data format
+    "duckdb>=1.4.0",  # Latest: 1.4.3 (2025-12-09)
+    "pyarrow>=22.0.0",  # Latest: 22.0.0 (2025-10-24) - Columnar data format
 
     # Data processing
-    "pandas>=2.2.0",
-    "polars>=0.20.0",  # Alternative to pandas for large datasets
-    "numpy>=1.26.0",
+    "pandas>=2.3.0",  # Latest: 2.3.3 (2025-09-29), Python 3.14 support
+    "polars>=1.36.0",  # Latest: 1.36.1 (2026-01), Modern fast dataframe library
+    "numpy>=2.4.0",  # Latest: 2.4.0 (2025-12-20), NumPy 2.x series
 
     # Database
-    "sqlalchemy>=2.0.25",
+    "sqlalchemy>=2.0.45",  # Latest: 2.0.45 (2025-12-09), Python 3.14 support
     "psycopg2-binary>=2.9.9",  # PostgreSQL adapter
-    "alembic>=1.13.0",  # Database migrations
+    "alembic>=1.17.0",  # Latest: 1.17.2 (2025), PEP 621 support - Database migrations
 
     # Configuration & Environment
-    "pydantic>=2.6.0",  # Data validation
-    "pydantic-settings>=2.2.0",  # Settings management
+    "pydantic>=2.12.0",  # Latest: 2.12.5 (2025), Python 3.14 support - Data validation
+    "pydantic-settings>=2.12.0",  # Latest: 2.12.0 (2025) - Settings management
     "python-dotenv>=1.0.0",
 
     # Logging & Observability
-    "structlog>=24.1.0",  # Structured logging
-    "prometheus-client>=0.20.0",  # Metrics
+    "structlog>=25.5.0",  # Latest: 25.5.0 (2025) - Enhanced async logging
+    "prometheus-client>=0.23.0",  # Latest: 0.23.1 (2025-09) - Metrics
     "opentelemetry-api>=1.22.0",  # Distributed tracing
     "opentelemetry-sdk>=1.22.0",
     "opentelemetry-instrumentation-kafka-python>=0.43b0",
@@ -71,17 +71,17 @@ dependencies = [
     "tenacity>=8.2.3",  # Retry logic
     "click>=8.1.7",     # CLI framework
     "rich>=13.7.0",     # Beautiful terminal output
-    "typer>=0.9.0",     # Modern CLI framework
+    "typer>=0.21.0",    # Latest: 0.21.1 (2026-01-06) - Modern CLI framework
 ]
 
 [project.optional-dependencies]
 # API server dependencies
 api = [
-    "fastapi>=0.109.0",
-    "uvicorn[standard]>=0.27.0",
+    "fastapi>=0.128.0",  # Latest: 0.128.0 (2025-12-27), Python 3.9+ dropped
+    "uvicorn[standard]>=0.40.0",  # Latest: 0.40.0 (2026), Python 3.10+ required
     "gunicorn>=21.2.0",
     "python-multipart>=0.0.9",
-    "pydantic[email]>=2.6.0",
+    "pydantic[email]>=2.12.0",
     "slowapi>=0.1.9",  # Rate limiting
     "python-jose[cryptography]>=3.3.0",  # JWT tokens
     "passlib[bcrypt]>=1.7.4",  # Password hashing
@@ -90,7 +90,7 @@ api = [
 # Development tools
 dev = [
     # Testing
-    "pytest>=8.0.0",
+    "pytest>=9.1",  # Latest: 9.1 (2026-01-05), Python 3.10+ required
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
     "pytest-xdist>=3.5.0",  # Parallel test execution
@@ -100,10 +100,10 @@ dev = [
     "faker>=22.6.0",  # Test data generation
 
     # Code quality
-    "black>=24.1.0",
+    "black>=25.12.0",  # Latest: 25.12.0 (2025-12), Python 3.10+ required
     "isort>=5.13.0",
-    "ruff>=0.2.0",
-    "mypy>=1.8.0",
+    "ruff>=0.14.0",  # Latest: 0.14.11 (2026-01-08)
+    "mypy>=1.19.0",  # Latest: 1.19.1 (2025-12-15)
     "pylint>=3.0.0",
 
     # Type stubs
@@ -134,7 +134,7 @@ monitoring = [
 
 # Data quality & validation
 quality = [
-    "great-expectations>=0.18.0",
+    "great-expectations>=1.10.0",  # Latest: 1.10.0 (2025-12-18), Python 3.10-3.13
     "pandera>=0.18.0",  # DataFrame validation
 ]
 
@@ -283,7 +283,7 @@ module = [
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-minversion = "8.0"
+minversion = "9.0"
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
