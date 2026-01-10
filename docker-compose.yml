@@ -24,7 +24,7 @@ services:
   # reducing operational complexity and improving metadata scalability.
   # In production: Would run 3+ brokers for fault tolerance
   kafka:
-    image: confluentinc/cp-kafka:7.6.0
+    image: confluentinc/cp-kafka:8.1.1
     container_name: k2-kafka
     hostname: kafka
     ports:
@@ -65,6 +65,29 @@ services:
       KAFKA_JMX_PORT: 9997
       KAFKA_JMX_HOSTNAME: localhost
 
+      # Consumer Group Coordinator (CRITICAL - Required for Schema Registry)
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 3
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 30000  # Wait 30s for members to join
+      KAFKA_OFFSETS_RETENTION_MINUTES: 10080          # 7 days
+
+      # Transaction Coordinator
+      KAFKA_TRANSACTION_STATE_LOG_NUM_PARTITIONS: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # Broker Session Management (KRaft-specific)
+      KAFKA_BROKER_SESSION_TIMEOUT_MS: 10000
+      KAFKA_BROKER_HEARTBEAT_INTERVAL_MS: 3000
+
+      # Protocol Version (ensures consumer group compatibility)
+      KAFKA_INTER_BROKER_PROTOCOL_VERSION: 3.6
+
+      # Socket Settings (helps with connection stability)
+      KAFKA_SOCKET_KEEPALIVE_ENABLED: "true"
+      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 102400
+      KAFKA_SOCKET_SEND_BUFFER_BYTES: 102400
+
       # Log directories
       KAFKA_LOG_DIRS: '/var/lib/kafka/data'
     volumes:
@@ -87,40 +110,74 @@ services:
           memory: 2G
 
   # ============================================================================
-  # SCHEMA REGISTRY - Schema Evolution & Data Governance
+  # SCHEMA REGISTRY - Schema Evolution & Data Governance (Multi-Node)
   # ============================================================================
   # Central schema management ensures:
   # - Producer/consumer compatibility
   # - Schema evolution without breaking changes
   # - Data governance and documentation
-  # In production: Deploy 3+ instances behind load balancer
-  schema-registry:
-    image: confluentinc/cp-schema-registry:7.6.0
-    container_name: k2-schema-registry
-    hostname: schema-registry
+  # Multi-node deployment: 2 instances for leader election reliability
+  schema-registry-1:
+    image: confluentinc/cp-schema-registry:8.1.1
+    container_name: k2-schema-registry-1
+    hostname: schema-registry-1
     ports:
       - "8081:8081"
     environment:
-      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry-1
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
       SCHEMA_REGISTRY_LISTENERS: 'http://0.0.0.0:8081'
 
       # Schema Compatibility
-      # BACKWARD: New schema can read old data (safe for consumers)
-      # Critical for market data: Can't break downstream analytics
       SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: 'BACKWARD'
 
       # Performance
       SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx512M -Xms512M"
 
-      # Single-node leader election configuration
-      # Critical: Explicit group.id for Kafka-based coordination
+      # Multi-node leader election configuration
       SCHEMA_REGISTRY_KAFKASTORE_GROUP_ID: "schema-registry-cluster"
+      SCHEMA_REGISTRY_LEADER_ELIGIBILITY: "true"
 
-      # Increased timeout for reliable single-node coordination
-      SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS: 30000
+      # Consumer group coordination timeouts
+      SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 90000
+      SCHEMA_REGISTRY_REQUEST_TIMEOUT_MS: 40000
+      SCHEMA_REGISTRY_SESSION_TIMEOUT_MS: 30000
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/8081' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 768M
 
-      # Explicit leader eligibility flag
+  schema-registry-2:
+    image: confluentinc/cp-schema-registry:8.1.1
+    container_name: k2-schema-registry-2
+    hostname: schema-registry-2
+    ports:
+      - "8082:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry-2
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
+      SCHEMA_REGISTRY_LISTENERS: 'http://0.0.0.0:8081'
+
+      # Schema Compatibility
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: 'BACKWARD'
+
+      # Performance
+      SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx512M -Xms512M"
+
+      # Multi-node leader election configuration (same group.id)
+      SCHEMA_REGISTRY_KAFKASTORE_GROUP_ID: "schema-registry-cluster"
       SCHEMA_REGISTRY_LEADER_ELIGIBILITY: "true"
 
       # Consumer group coordination timeouts
@@ -377,13 +434,13 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: k2-market-data
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
-      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry-1:8081
       KAFKA_CLUSTERS_0_METRICS_PORT: 9997
       DYNAMIC_CONFIG_ENABLED: 'true'
     depends_on:
       kafka:
         condition: service_healthy
-      schema-registry:
+      schema-registry-1:
         condition: service_healthy
     networks:
       - k2-network
