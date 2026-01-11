@@ -198,7 +198,7 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 - DuckDB vs Presto: Single-node simplicity for Phase 1, scales to ~10TB dataset
 - At-least-once vs Exactly-once: Market data duplicates acceptable, simpler implementation
 
-See [Architecture Decision Records](./docs/phases/phase-1-core-demo/DECISIONS.md) for 26 detailed decisions.
+See [Architecture Decision Records](./docs/phases/phase-1-single-node-implementation/DECISIONS.md) for 26 detailed decisions.
 
 ---
 
@@ -477,7 +477,7 @@ Comprehensive documentation organized by audience and purpose.
 
 ### For Implementation
 
-- [Phase 1: Single-Node](./docs/phases/phase-1-core-demo/) - Implementation plan, progress, decisions
+- [Phase 1: Single-Node](./docs/phases/phase-1-single-node-implementation/) - Implementation plan, progress, decisions
 - [Phase 2: Enhancements](./docs/phases/phase-2-demo-enhancements/) - Production readiness steps
 
 ### Reference
@@ -512,7 +512,7 @@ K2 is developed in phases, each with clear business drivers and validation crite
 - 8 REST endpoints
 - 7 CLI commands
 
-See [Phase 1 Status](./docs/phases/phase-1-core-demo/STATUS.md) for detailed completion report.
+See [Phase 1 Status](./docs/phases/phase-1-single-node-implementation/STATUS.md) for detailed completion report.
 
 ### Phase 2: Production Enhancements 🟡 Ready to Start
 
@@ -563,7 +563,7 @@ Contributions welcome. See [Contributing Guide](./CONTRIBUTING.md) for developme
 
 - **Documentation**: See [docs/](./docs/)
 - **Issues**: [GitHub Issues](https://github.com/rjdscott/k2-market-data-platform/issues)
-- **Architecture Questions**: [Architecture Decision Records](./docs/phases/phase-1-core-demo/DECISIONS.md)
+- **Architecture Questions**: [Architecture Decision Records](./docs/phases/phase-1-single-node-implementation/DECISIONS.md)
 
 ---
 

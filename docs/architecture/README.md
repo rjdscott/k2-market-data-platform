@@ -41,7 +41,7 @@ Why we chose our tech stack:
 - **FastAPI**: Modern Python framework with auto-documentation
 - **Prometheus + Grafana**: Open-source observability standard
 
-**Decision Log**: See [Phase 1 DECISIONS.md](../phases/phase-1-core-demo/DECISIONS.md)
+**Decision Log**: See [Phase 1 DECISIONS.md](../phases/phase-1-single-node-implementation/DECISIONS.md)
 
 ### [Alternative Architectures](./alternatives.md)
 Architectures we considered and why we rejected them:
@@ -204,7 +204,7 @@ Architectures we considered and why we rejected them:
 ## Related Documentation
 
 - **Detailed Design**: [../design/](../design/)
-- **Implementation Plan**: [../phases/phase-1-core-demo/IMPLEMENTATION_PLAN.md](../phases/phase-1-core-demo/IMPLEMENTATION_PLAN.md)
+- **Implementation Plan**: [../phases/phase-1-single-node-implementation/IMPLEMENTATION_PLAN.md](../phases/phase-1-single-node-implementation/IMPLEMENTATION_PLAN.md)
 - **Operations**: [../operations/](../operations/)
 - **Testing**: [../testing/](../testing/)
 

@@ -13,12 +13,12 @@ Welcome to the K2 platform documentation. This README serves as your navigation 
 1. Start with [System Architecture & Design](./architecture/system-design.md) - **Visual overview with diagrams**
 2. Read [Platform Principles](./architecture/platform-principles.md) - Core philosophy
 3. Review [Architecture Overview](./architecture/README.md) - Detailed documentation
-4. Check current [Implementation Status](./phases/phase-1-core-demo/STATUS.md)
+4. Check current [Implementation Status](./phases/phase-1-single-node-implementation/STATUS.md)
 
 ### For AI Assistants (Claude Code)
 - **Start Here**: [CLAUDE.md](./CLAUDE.md) - Comprehensive AI assistant guidance
-- **Current Phase**: [Phase 1 Progress](./phases/phase-1-core-demo/PROGRESS.md)
-- **Decision Log**: [Architectural Decisions](./phases/phase-1-core-demo/DECISIONS.md)
+- **Current Phase**: [Phase 1 Progress](./phases/phase-1-single-node-implementation/PROGRESS.md)
+- **Decision Log**: [Architectural Decisions](./phases/phase-1-single-node-implementation/DECISIONS.md)
 
 ### For Operators
 - [Operations Runbooks](./operations/runbooks/)
@@ -84,11 +84,11 @@ How we ensure correctness, quality, and performance.
 ### 📦 [Phases](./phases/) - Phase-Specific Implementation
 Implementation tracking for specific project phases.
 
-**Current Phase**: [Phase 1 - Core Demo](./phases/phase-1-core-demo/)
-- [Implementation Plan](./phases/phase-1-core-demo/IMPLEMENTATION_PLAN.md) - 16-step plan
-- [Progress Tracking](./phases/phase-1-core-demo/PROGRESS.md) - Current status
-- [Decisions Log](./phases/phase-1-core-demo/DECISIONS.md) - Phase 1 ADRs
-- [Validation Guide](./phases/phase-1-core-demo/VALIDATION_GUIDE.md) - Testing procedures
+**Current Phase**: [Phase 1 - Core Demo](./phases/phase-1-single-node-implementation/)
+- [Implementation Plan](./phases/phase-1-single-node-implementation/IMPLEMENTATION_PLAN.md) - 16-step plan
+- [Progress Tracking](./phases/phase-1-single-node-implementation/PROGRESS.md) - Current status
+- [Decisions Log](./phases/phase-1-single-node-implementation/DECISIONS.md) - Phase 1 ADRs
+- [Validation Guide](./phases/phase-1-single-node-implementation/VALIDATION_GUIDE.md) - Testing procedures
 
 **Future Phases**:
 - [Phase 2 - Production Prep](phases/phase-2-demo-enhancements/) - Productionization
@@ -154,8 +154,8 @@ Architecture and project review documents.
 ## Common Tasks
 
 ### Starting New Work
-1. Check [Current Phase Status](./phases/phase-1-core-demo/STATUS.md)
-2. Review relevant [Implementation Step](./phases/phase-1-core-demo/steps/)
+1. Check [Current Phase Status](./phases/phase-1-single-node-implementation/STATUS.md)
+2. Review relevant [Implementation Step](./phases/phase-1-single-node-implementation/steps/)
 3. Read related [Design Docs](./design/)
 4. Understand [Testing Requirements](./testing/strategy.md)
 
@@ -168,7 +168,7 @@ Architecture and project review documents.
 ### Making Architectural Changes
 1. Review [Platform Principles](./architecture/platform-principles.md)
 2. Check existing [Technology Decisions](./architecture/README.md#technology-stack)
-3. Create ADR in [DECISIONS.md](./phases/phase-1-core-demo/DECISIONS.md)
+3. Create ADR in [DECISIONS.md](./phases/phase-1-single-node-implementation/DECISIONS.md)
 4. Update architecture and design docs
 5. Update reference materials if needed
 

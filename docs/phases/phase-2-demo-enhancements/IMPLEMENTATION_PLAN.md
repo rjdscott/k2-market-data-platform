@@ -232,7 +232,7 @@ Phase 2 not yet started. Begin with **Step 01: Platform Positioning**.
 
 ## See Also
 
-- [Phase 1 Implementation Plan](../phase-1-core-demo/IMPLEMENTATION_PLAN.md)
+- [Phase 1 Implementation Plan](../phase-1-single-node-implementation/IMPLEMENTATION_PLAN.md)
 - [Principal Data Engineer Demo Review](../../reviews/2026-01-11-principal-data-engineer-demo-review.md)
 - [Platform Principles](../../architecture/platform-principles.md)
 - [Testing Strategy](./reference/testing-summary.md)

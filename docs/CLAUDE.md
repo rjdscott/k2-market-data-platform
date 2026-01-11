@@ -104,7 +104,7 @@
 **Stability**: Low - actively updated during phase
 **Update Frequency**: Daily to weekly during active development
 
-**Current Phase**: `phase-1-core-demo/`
+**Current Phase**: `phase-1-single-node-implementation/`
 - Implementation plan with 16 steps
 - Progress tracking (PROGRESS.md updated after each step)
 - Phase-specific ADRs (DECISIONS.md)
@@ -141,23 +141,23 @@
 **Scenario**: User asks Claude to implement Step 5 (Configuration Management)
 
 **Claude Should**:
-1. Read `docs/phases/phase-1-core-demo/steps/step-05-configuration.md`
+1. Read `docs/phases/phase-1-single-node-implementation/steps/step-05-configuration.md`
 2. Implement the code per the step
 3. Update the step file:
    - Change Status from ⬜ to ✅
    - Add actual time taken
    - Fill in Notes & Decisions section
-4. Update `docs/phases/phase-1-core-demo/PROGRESS.md`:
+4. Update `docs/phases/phase-1-single-node-implementation/PROGRESS.md`:
    - Update "Detailed Progress" section for Step 5
    - Update completion percentage
-5. If architectural decision made → Add to `docs/phases/phase-1-core-demo/DECISIONS.md`
+5. If architectural decision made → Add to `docs/phases/phase-1-single-node-implementation/DECISIONS.md`
 6. If tests added → Reference in `docs/testing/strategy.md` if pattern is novel
 7. Commit with message: `feat: complete step 5 - configuration management`
 
 **Files Updated**:
-- `docs/phases/phase-1-core-demo/steps/step-05-configuration.md`
-- `docs/phases/phase-1-core-demo/PROGRESS.md`
-- `docs/phases/phase-1-core-demo/DECISIONS.md` (if applicable)
+- `docs/phases/phase-1-single-node-implementation/steps/step-05-configuration.md`
+- `docs/phases/phase-1-single-node-implementation/PROGRESS.md`
+- `docs/phases/phase-1-single-node-implementation/DECISIONS.md` (if applicable)
 
 ### Workflow 2: Architectural Change
 
@@ -437,7 +437,7 @@ See [Query Architecture](../design/query-architecture.md) for detailed routing l
 
 Related:
 - [Platform Principles](../architecture/platform-principles.md#idempotency)
-- [Decision #005](../phases/phase-1-core-demo/DECISIONS.md#decision-005)
+- [Decision #005](../phases/phase-1-single-node-implementation/DECISIONS.md#decision-005)
 - [Runbook: Query Timeout](../operations/runbooks/query-timeout-runbook.md)
 ```
 
@@ -446,7 +446,7 @@ Related:
 ## File Naming Conventions
 
 ### Directory Names
-- Use kebab-case: `data-guarantees/`, `runbooks/`, `phase-1-core-demo/`
+- Use kebab-case: `data-guarantees/`, `runbooks/`, `phase-1-single-node-implementation/`
 - Be specific: `monitoring/` not `mon/`
 - Plural for collections: `runbooks/`, `reviews/`
 
@@ -524,14 +524,14 @@ Related:
 **User Request**: "Implement Step 6 - Kafka Producer"
 
 **Claude Workflow**:
-1. Read: `docs/phases/phase-1-core-demo/steps/step-06-kafka-producer.md`
+1. Read: `docs/phases/phase-1-single-node-implementation/steps/step-06-kafka-producer.md`
 2. Implement code in `src/k2/ingestion/producer.py`
 3. Write tests in `tests/unit/test_producer.py`
-4. Update `docs/phases/phase-1-core-demo/steps/step-06-kafka-producer.md`:
+4. Update `docs/phases/phase-1-single-node-implementation/steps/step-06-kafka-producer.md`:
    - Status: ⬜ → ✅
    - Actual Time: 5 hours
    - Notes: "Implemented with idempotent config, added retry logic"
-5. Update `docs/phases/phase-1-core-demo/PROGRESS.md`:
+5. Update `docs/phases/phase-1-single-node-implementation/PROGRESS.md`:
    - Step 06 status: ✅ Complete
    - Overall progress: 6/16 (37.5%)
 6. No ADR needed (implementation matches plan)
