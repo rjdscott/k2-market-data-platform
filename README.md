@@ -127,6 +127,14 @@ make demo-quick   # Interactive CLI demo (~1 min)
 make notebook     # Jupyter notebook exploration
 ```
 
+### 6. Reset Between Demos
+
+```bash
+make demo-reset           # Full reset with confirmation
+make demo-reset-dry-run   # Preview what will be reset
+make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
+```
+
 ### Verify Services
 
 **Infrastructure** (started by docker-compose):
