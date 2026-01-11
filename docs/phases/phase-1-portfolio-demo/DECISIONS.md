@@ -3,7 +3,7 @@
 This file tracks all significant architectural and implementation decisions for the K2 Market Data Platform.
 
 **Last Updated**: 2026-01-11
-**Total Decisions**: 22
+**Total Decisions**: 24
 
 ---
 
@@ -77,6 +77,8 @@ When adding new decisions, use this template:
 | #020 | API Key Authentication | 2026-01-11 | Accepted | 12 |
 | #021 | Rate Limiting (100 req/min) | 2026-01-11 | Accepted | 12 |
 | #022 | Flexible Data Type Handling in API Models | 2026-01-11 | Accepted | 12 |
+| #023 | Standard /metrics Endpoint for Prometheus | 2026-01-11 | Accepted | 13 |
+| #024 | Comprehensive Grafana Dashboard Layout | 2026-01-11 | Accepted | 14 |
 
 ---
 
@@ -2440,6 +2442,130 @@ def decode_cursor(cursor: str) -> dict:
 - [x] Final batch has `cursor: null`
 - [x] Progress percent calculated correctly
 - [x] Invalid cursor returns 400 error
+
+---
+
+## Decision #023: Standard /metrics Endpoint for Prometheus
+
+**Date**: 2026-01-11
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 13 (Prometheus Metrics Endpoint)
+
+#### Context
+
+Need to expose platform metrics for Prometheus scraping. Key considerations:
+- Endpoint path convention (industry standard vs custom)
+- Authentication requirements (Prometheus doesn't easily support auth headers)
+- Rate limiting (Prometheus scrapes frequently)
+- Metrics format (Prometheus exposition format required)
+
+#### Decision
+
+Use standard `/metrics` endpoint path with no authentication and no rate limiting.
+
+#### Consequences
+
+**Positive**:
+- Follows Prometheus convention, works with default scrape configs
+- No configuration needed for Prometheus server
+- Immediate compatibility with Grafana Cloud, DataDog, etc.
+
+**Negative**:
+- No authentication on endpoint (mitigated by network policies in production)
+- Public metrics exposure (but no sensitive data in metrics)
+
+**Neutral**:
+- Must exclude from OpenAPI docs (hide via `include_in_schema=False`)
+
+#### Alternatives Considered
+
+1. **`/api/metrics`**: Custom path - rejected, requires custom Prometheus config
+2. **`/v1/metrics` with auth**: Authenticated metrics - rejected, Prometheus doesn't easily support auth
+3. **Separate metrics server on different port**: More secure but complex - rejected for Phase 1
+
+#### Implementation Notes
+
+```python
+@app.get("/metrics", include_in_schema=False, tags=["Observability"])
+async def prometheus_metrics() -> Response:
+    return Response(
+        content=generate_latest(REGISTRY),
+        media_type=CONTENT_TYPE_LATEST,
+    )
+```
+
+#### Verification
+
+- [x] `/metrics` returns Prometheus exposition format
+- [x] Endpoint has no authentication requirement
+- [x] Endpoint not rate limited
+- [x] Endpoint not in OpenAPI docs
+- [x] Prometheus can scrape successfully
+
+---
+
+## Decision #024: Comprehensive Grafana Dashboard Layout
+
+**Date**: 2026-01-11
+**Status**: Accepted
+**Deciders**: Implementation Team
+**Related Steps**: Step 14 (Grafana Dashboard)
+
+#### Context
+
+Need to create a Grafana dashboard for platform monitoring. User requirements:
+- Both platform health AND data pipeline focus
+- Comprehensive visibility into all components
+- Usable for demo and production monitoring
+
+#### Decision
+
+Create a 5-row, 15-panel dashboard with logical grouping by platform layer.
+
+#### Dashboard Structure
+
+| Row | Focus | Panels |
+|-----|-------|--------|
+| 1 | API Health | Request Rate, Latency p99, Error Rate |
+| 2 | Data Pipeline | Kafka Produced, Consumed, Consumer Lag |
+| 3 | Storage | Iceberg Write Duration, Rows Written, Batch Size |
+| 4 | Query Engine | Query Rate, Duration p99, Cache Hit Ratio |
+| 5 | System Health | Degradation Level, Circuit Breaker, Sequence Gaps |
+
+#### Consequences
+
+**Positive**:
+- Complete platform visibility in single dashboard
+- Logical grouping makes it easy to diagnose issues
+- Color-coded thresholds based on platform SLOs
+- Template variables for flexibility
+
+**Negative**:
+- Large dashboard may be slow on first load
+- 15 panels may be overwhelming initially
+
+**Neutral**:
+- Auto-refresh every 10s (standard for observability)
+
+#### Alternatives Considered
+
+1. **Separate dashboards per layer**: More focused but fragmented view - rejected for Phase 1
+2. **Minimal 6-panel dashboard**: Simpler but incomplete visibility - rejected per user preference
+3. **Tab-based dashboard**: Cleaner but less at-a-glance visibility - deferred to Phase 2
+
+#### Implementation Notes
+
+Dashboard UID: `k2-platform-overview`
+Auto-provisioned via `config/grafana/dashboards/dashboard.yml`
+
+#### Verification
+
+- [x] Dashboard JSON created (1,700+ lines)
+- [x] All 15 panels defined with proper Prometheus queries
+- [x] Template variables work (datasource, interval)
+- [x] Dashboard auto-provisions on Grafana startup
+- [x] Thresholds match platform SLOs (500ms API, 200ms storage, etc.)
 
 ---
 

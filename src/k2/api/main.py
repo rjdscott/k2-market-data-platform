@@ -5,10 +5,12 @@ This module provides the main FastAPI application for the K2 platform:
 - OpenAPI/Swagger documentation
 - Production-ready middleware (auth, rate limiting, correlation IDs)
 - Health check endpoints with dependency monitoring
+- Prometheus metrics endpoint for observability
 
 Architecture:
 - /v1/* endpoints: Versioned API for market data queries
 - /health: Health check endpoint (no auth required)
+- /metrics: Prometheus metrics endpoint (no auth required)
 - /docs: Swagger UI documentation
 - /redoc: ReDoc documentation
 
@@ -31,7 +33,8 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -47,7 +50,7 @@ from k2.api.middleware import (
 from k2.api.deps import startup_engines, shutdown_engines, get_query_engine
 from k2.common.config import config
 from k2.common.logging import get_logger
-from k2.common.metrics import create_component_metrics
+from k2.common.metrics import create_component_metrics, initialize_metrics
 
 logger = get_logger(__name__, component="api")
 metrics = create_component_metrics("api")
@@ -70,11 +73,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Application lifespan manager.
 
     Handles startup and shutdown events:
-    - Startup: Initialize query engines, warm up connections
+    - Startup: Initialize query engines, warm up connections, set up metrics
     - Shutdown: Close connections, cleanup resources
     """
     # Startup
     logger.info("K2 API starting up")
+
+    # Initialize Prometheus metrics with platform info
+    environment = getattr(config, "environment", "dev")
+    initialize_metrics(version="0.1.0", environment=environment)
+    logger.info("Prometheus metrics initialized", version="0.1.0", environment=environment)
+
     await startup_engines()
     logger.info("K2 API startup complete")
 
@@ -297,6 +306,38 @@ async def health_check(request: Request) -> HealthResponse:
         version="1.0.0",
         timestamp=datetime.utcnow(),
         dependencies=dependencies,
+    )
+
+
+# =============================================================================
+# Observability Endpoints
+# =============================================================================
+
+
+@app.get(
+    "/metrics",
+    summary="Prometheus Metrics",
+    description="Prometheus metrics endpoint for scraping by Prometheus server.",
+    tags=["Observability"],
+    include_in_schema=False,  # Hide from OpenAPI docs (Prometheus endpoint convention)
+)
+async def prometheus_metrics() -> Response:
+    """
+    Expose Prometheus metrics for scraping.
+
+    Returns all registered metrics in Prometheus exposition format.
+    This endpoint is not rate-limited as Prometheus scrapes frequently.
+
+    Metrics include:
+    - HTTP request counts and durations (k2_http_*)
+    - Kafka producer/consumer metrics (k2_kafka_*)
+    - Iceberg storage metrics (k2_iceberg_*)
+    - Query engine metrics (k2_query_*)
+    - System health metrics (k2_degradation_*, k2_circuit_breaker_*)
+    """
+    return Response(
+        content=generate_latest(REGISTRY),
+        media_type=CONTENT_TYPE_LATEST,
     )
 
 

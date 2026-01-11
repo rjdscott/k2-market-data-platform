@@ -5,11 +5,13 @@ This module implements production-grade middleware for the K2 API:
 - Rate limiting (100 req/min default)
 - Request correlation ID tracking
 - Response caching headers
+- Prometheus metrics collection
 
 Middleware follows trading firm conventions:
 - Fail-fast authentication before request processing
 - Non-blocking rate limiting with clear error messages
 - Correlation IDs for distributed tracing
+- RED metrics (Rate, Errors, Duration) for observability
 """
 
 import time
@@ -140,8 +142,10 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     - Client IP (for audit)
 
     Emits Prometheus metrics:
-    - api_requests_total: Counter by method, path, status
-    - api_request_duration_seconds: Histogram of response times
+    - k2_http_requests_total: Counter by method, path, status
+    - k2_http_request_duration_seconds: Histogram of response times
+    - k2_http_requests_in_progress: Gauge of currently processing requests
+    - k2_http_request_errors_total: Counter of failed requests
     """
 
     async def dispatch(
@@ -156,11 +160,23 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         if forwarded_for:
             client_ip = forwarded_for.split(",")[0].strip()
 
+        # Normalize path for metrics (avoid high cardinality)
+        metrics_path = self._normalize_path(request.url.path)
+        method = request.method
+
+        # Track in-progress requests
+        progress_labels = {"method": method, "endpoint": metrics_path}
+        metrics.gauge(
+            "http_requests_in_progress",
+            1,
+            labels=progress_labels,
+        )
+
         # Process request
+        status_code = 500
         try:
             response = await call_next(request)
             status_code = response.status_code
-            status = "success" if status_code < 400 else "error"
         except Exception as e:
             logger.error(
                 "Request failed with exception",
@@ -168,7 +184,23 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 path=request.url.path,
                 error=str(e),
             )
+            # Track error
+            metrics.increment(
+                "http_request_errors_total",
+                labels={
+                    "method": method,
+                    "endpoint": metrics_path,
+                    "error_type": type(e).__name__,
+                }
+            )
             raise
+        finally:
+            # Decrement in-progress gauge
+            metrics.gauge(
+                "http_requests_in_progress",
+                0,
+                labels=progress_labels,
+            )
 
         # Calculate duration
         duration = time.time() - start_time
@@ -179,7 +211,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         log_method(
             "API request completed",
             correlation_id=correlation_id,
-            method=request.method,
+            method=method,
             path=request.url.path,
             status_code=status_code,
             duration_ms=round(duration_ms, 2),
@@ -187,25 +219,25 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         )
 
         # Emit metrics
-        # Normalize path for metrics (avoid high cardinality)
-        metrics_path = self._normalize_path(request.url.path)
-        metrics.increment(
-            "http_requests_total",
-            labels={
-                "method": request.method,
-                "endpoint": metrics_path,
-                "status_code": str(status_code),
-            }
-        )
-        metrics.histogram(
-            "http_request_duration_seconds",
-            duration,
-            labels={
-                "method": request.method,
-                "endpoint": metrics_path,
-                "status_code": str(status_code),
-            }
-        )
+        request_labels = {
+            "method": method,
+            "endpoint": metrics_path,
+            "status_code": str(status_code),
+        }
+        metrics.increment("http_requests_total", labels=request_labels)
+        metrics.histogram("http_request_duration_seconds", duration, labels=request_labels)
+
+        # Track errors (4xx and 5xx)
+        if status_code >= 400:
+            error_type = "client_error" if status_code < 500 else "server_error"
+            metrics.increment(
+                "http_request_errors_total",
+                labels={
+                    "method": method,
+                    "endpoint": metrics_path,
+                    "error_type": error_type,
+                }
+            )
 
         return response
 
@@ -253,6 +285,7 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
     # Path patterns to cache durations (in seconds)
     CACHE_RULES = {
         "/health": 0,
+        "/metrics": 0,  # Prometheus metrics - always fresh
         "/v1/health": 0,
         "/v1/trades": 5,
         "/v1/quotes": 5,

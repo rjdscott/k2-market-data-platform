@@ -921,3 +921,101 @@ class TestPostEndpointsOpenAPI:
         assert "requestBody" in paths["/v1/quotes/query"]["post"]
         assert "requestBody" in paths["/v1/replay"]["post"]
         assert "requestBody" in paths["/v1/aggregations"]["post"]
+
+
+# =============================================================================
+# Prometheus Metrics Endpoint Tests
+# =============================================================================
+
+
+class TestMetricsEndpoint:
+    """Tests for the /metrics Prometheus endpoint."""
+
+    def test_metrics_returns_prometheus_format(self, client):
+        """Metrics endpoint should return Prometheus exposition format."""
+        response = client.get("/metrics")
+        assert response.status_code == 200
+
+        # Check content type is Prometheus format
+        content_type = response.headers.get("content-type", "")
+        assert "text/plain" in content_type or "text/plain" in content_type
+
+    def test_metrics_includes_platform_info(self, client):
+        """Metrics endpoint should include platform info metric."""
+        response = client.get("/metrics")
+        assert response.status_code == 200
+
+        content = response.text
+        # Platform info metric should be present
+        assert "k2_platform_info" in content
+
+    def test_metrics_includes_http_request_metrics(self, client, auth_header):
+        """Metrics endpoint should include HTTP request metrics after traffic."""
+        # Generate some traffic first
+        client.get("/health")
+        client.get("/v1/trades", headers=auth_header)
+
+        # Now check metrics
+        response = client.get("/metrics")
+        assert response.status_code == 200
+
+        content = response.text
+        # Should have HTTP metrics
+        assert "k2_http_requests_total" in content
+        assert "k2_http_request_duration_seconds" in content
+
+    def test_metrics_no_auth_required(self, client):
+        """Metrics endpoint should not require authentication."""
+        # No X-API-Key header
+        response = client.get("/metrics")
+        assert response.status_code == 200
+
+    def test_metrics_not_rate_limited(self, client):
+        """Metrics endpoint should not be rate limited."""
+        # Prometheus scrapes frequently - must not be limited
+        for _ in range(20):
+            response = client.get("/metrics")
+            assert response.status_code == 200
+
+    def test_metrics_includes_correlation_id(self, client):
+        """Metrics endpoint should include correlation ID in response."""
+        response = client.get("/metrics")
+        assert "X-Correlation-ID" in response.headers
+
+    def test_metrics_not_cached(self, client):
+        """Metrics endpoint should not be cached."""
+        response = client.get("/metrics")
+        cache_control = response.headers.get("Cache-Control", "")
+        # Should have no-cache or no-store
+        assert "no-cache" in cache_control or "no-store" in cache_control
+
+    def test_metrics_hidden_from_openapi(self, client):
+        """Metrics endpoint should not appear in OpenAPI docs."""
+        response = client.get("/openapi.json")
+        data = response.json()
+        paths = data.get("paths", {})
+
+        # /metrics should not be documented (include_in_schema=False)
+        assert "/metrics" not in paths
+
+    def test_metrics_includes_histogram_buckets(self, client, auth_header):
+        """Metrics should include histogram bucket data."""
+        # Generate traffic
+        client.get("/v1/trades", headers=auth_header)
+
+        response = client.get("/metrics")
+        content = response.text
+
+        # Histogram buckets should be present
+        assert "_bucket{" in content or "_bucket{" in content
+
+    def test_metrics_includes_counter_totals(self, client, auth_header):
+        """Metrics should include counter totals."""
+        # Generate traffic
+        client.get("/v1/trades", headers=auth_header)
+
+        response = client.get("/metrics")
+        content = response.text
+
+        # Counter metrics should have _total suffix
+        assert "_total{" in content or "_total " in content

@@ -1,11 +1,11 @@
 # Step 13: API Layer - Prometheus Metrics Endpoint
 
-**Status**: ⬜ Not Started
-**Assignee**: TBD
-**Started**: -
-**Completed**: -
+**Status**: ✅ Complete
+**Assignee**: Claude
+**Started**: 2026-01-11
+**Completed**: 2026-01-11
 **Estimated Time**: 2-3 hours
-**Actual Time**: - hours
+**Actual Time**: 1.5 hours
 
 ## Dependencies
 - **Requires**: Step 12 (API server)
@@ -57,13 +57,14 @@ curl http://localhost:8000/metrics
 
 ## Validation Checklist
 
-- [ ] Metrics module updated (`src/k2/common/metrics.py`)
-- [ ] `/metrics` endpoint added to API
-- [ ] Endpoint returns Prometheus format
-- [ ] Counters increment correctly
-- [ ] Histograms record observations
-- [ ] Prometheus can scrape endpoint
-- [ ] All existing metrics still tracked
+- [x] Metrics module updated (`src/k2/common/metrics.py`)
+- [x] `/metrics` endpoint added to API
+- [x] Endpoint returns Prometheus format
+- [x] Counters increment correctly
+- [x] Histograms record observations
+- [x] Prometheus can scrape endpoint
+- [x] All existing metrics still tracked
+- [x] Unit tests added (10 tests in test_api.py)
 
 ---
 
@@ -84,14 +85,33 @@ curl http://localhost:8000/metrics
 ## Notes & Decisions
 
 ### Decisions Made
-- **Auto-registration**: Simplifies adding new metrics
-- **Standard buckets**: Histogram buckets optimized for typical query times
+- **Standard `/metrics` path**: Follows Prometheus convention, no auth required
+- **Existing metrics registry**: Leveraged 50+ pre-registered metrics from `metrics_registry.py`
+- **Enhanced RequestLoggingMiddleware**: Added in-progress request tracking and error counters
+- **Platform info metric**: Initializes `k2_platform_info` with version and environment on startup
 
-### Metrics Exported
-- `api_requests_total` - API request counter
-- `query_duration_milliseconds` - Query latency histogram
-- `kafka_messages_produced_total` - Kafka producer counter
-- `kafka_messages_consumed_total` - Kafka consumer counter
+### Implementation Details
+
+**Files Modified:**
+- `src/k2/api/main.py` - Added `/metrics` endpoint using `prometheus_client.generate_latest()`
+- `src/k2/api/middleware.py` - Enhanced with in-progress gauge and error tracking
+- `config/prometheus/prometheus.yml` - Enabled k2-api scrape job
+- `tests/unit/test_api.py` - Added 10 tests for metrics endpoint
+
+### Metrics Exported (50+)
+- `k2_http_requests_total` - HTTP request counter by method/endpoint/status
+- `k2_http_request_duration_seconds` - HTTP latency histogram
+- `k2_http_requests_in_progress` - Current in-flight requests gauge
+- `k2_http_request_errors_total` - Error counter by type
+- `k2_kafka_messages_produced_total` - Kafka producer counter
+- `k2_kafka_messages_consumed_total` - Kafka consumer counter
+- `k2_iceberg_rows_written_total` - Iceberg write counter
+- `k2_iceberg_write_duration_seconds` - Storage latency histogram
+- `k2_query_executions_total` - Query execution counter
+- `k2_query_duration_seconds` - Query latency histogram
+- `k2_degradation_level` - System degradation gauge
+- `k2_circuit_breaker_state` - Circuit breaker state gauge
+- ...and 40+ more metrics
 
 ### References
 - Prometheus Python client: https://github.com/prometheus/client_python

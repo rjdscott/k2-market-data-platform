@@ -50,11 +50,17 @@ scrape_configs:
   #     - targets: ['postgres-exporter:9187']
 
   # Application metrics (FastAPI service)
-  # Uncomment when API service is running
-  # - job_name: 'k2-api'
-  #   static_configs:
-  #     - targets: ['k2-api:8000']
-  #   metrics_path: /metrics
+  # The K2 API exposes Prometheus metrics at /metrics
+  - job_name: 'k2-api'
+    static_configs:
+      - targets: ['host.docker.internal:8000']  # host.docker.internal for local dev
+    metrics_path: /metrics
+    scrape_interval: 10s
+    # Relabel to add job-specific labels
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'k2-api:8000'
 
   # Schema Registry metrics
   # Note: Requires JMX exporter configuration
