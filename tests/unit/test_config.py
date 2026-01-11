@@ -2,15 +2,16 @@
 
 Tests configuration loading, validation, and environment variable overrides.
 """
+
 import pytest
 from pydantic import ValidationError
 
 from k2.common.config import (
-    KafkaConfig,
-    IcebergConfig,
     DatabaseConfig,
-    ObservabilityConfig,
+    IcebergConfig,
     K2Config,
+    KafkaConfig,
+    ObservabilityConfig,
 )
 
 
@@ -101,8 +102,7 @@ class TestIcebergConfig:
 
         # Valid URLs
         config = IcebergConfig(
-            catalog_uri="https://iceberg.example.com",
-            s3_endpoint="https://s3.amazonaws.com"
+            catalog_uri="https://iceberg.example.com", s3_endpoint="https://s3.amazonaws.com",
         )
         assert config.catalog_uri == "https://iceberg.example.com"
         assert config.s3_endpoint == "https://s3.amazonaws.com"
@@ -165,11 +165,7 @@ class TestDatabaseConfig:
     def test_connection_string(self):
         """Test connection string generation."""
         config = DatabaseConfig(
-            host="postgres",
-            port=5432,
-            user="myuser",
-            password="mypassword",
-            database="mydb"
+            host="postgres", port=5432, user="myuser", password="mypassword", database="mydb",
         )
         expected = "postgresql://myuser:mypassword@postgres:5432/mydb"
         assert config.connection_string == expected

@@ -39,7 +39,7 @@ import os
 import signal
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 from confluent_kafka.schema_registry import SchemaRegistryClient
@@ -109,15 +109,15 @@ class MarketDataConsumer:
 
     def __init__(
         self,
-        topics: Optional[List[str]] = None,
-        topic_pattern: Optional[str] = None,
-        consumer_group: Optional[str] = None,
-        bootstrap_servers: Optional[str] = None,
-        schema_registry_url: Optional[str] = None,
-        batch_size: Optional[int] = None,
-        max_messages: Optional[int] = None,
-        iceberg_writer: Optional[IcebergWriter] = None,
-        sequence_tracker: Optional[SequenceTracker] = None,
+        topics: list[str] | None = None,
+        topic_pattern: str | None = None,
+        consumer_group: str | None = None,
+        bootstrap_servers: str | None = None,
+        schema_registry_url: str | None = None,
+        batch_size: int | None = None,
+        max_messages: int | None = None,
+        iceberg_writer: IcebergWriter | None = None,
+        sequence_tracker: SequenceTracker | None = None,
     ):
         """Initialize consumer with configuration."""
         # Validate topic subscription
@@ -129,18 +129,16 @@ class MarketDataConsumer:
         # Load configuration
         self.topics = topics
         self.topic_pattern = topic_pattern
-        self.consumer_group = consumer_group or os.getenv(
-            'K2_CONSUMER_GROUP', 'k2-iceberg-writer'
-        )
+        self.consumer_group = consumer_group or os.getenv("K2_CONSUMER_GROUP", "k2-iceberg-writer")
         self.bootstrap_servers = bootstrap_servers or config.kafka.bootstrap_servers
         self.schema_registry_url = schema_registry_url or config.kafka.schema_registry_url
-        self.batch_size = batch_size or int(os.getenv('K2_CONSUMER_BATCH_SIZE', '1000'))
+        self.batch_size = batch_size or int(os.getenv("K2_CONSUMER_BATCH_SIZE", "1000"))
         self.max_messages = max_messages
 
         # Processing state
         self.running = True
         self.stats = ConsumerStats(start_time=time.time())
-        self._current_batch: List[Dict[str, Any]] = []
+        self._current_batch: list[dict[str, Any]] = []
 
         # Initialize components
         self._init_schema_registry()
@@ -165,9 +163,7 @@ class MarketDataConsumer:
     def _init_schema_registry(self):
         """Initialize Schema Registry client and deserializer."""
         try:
-            self.schema_registry_client = SchemaRegistryClient({
-                'url': self.schema_registry_url
-            })
+            self.schema_registry_client = SchemaRegistryClient({"url": self.schema_registry_url})
 
             logger.info(
                 "Schema Registry client initialized",
@@ -182,7 +178,7 @@ class MarketDataConsumer:
             )
             metrics.increment(
                 "consumer_init_errors_total",
-                labels={"error_type": "schema_registry", "consumer_group": self.consumer_group}
+                labels={"error_type": "schema_registry", "consumer_group": self.consumer_group},
             )
             raise
 
@@ -190,13 +186,13 @@ class MarketDataConsumer:
         """Initialize Kafka consumer with configuration."""
         # Consumer configuration (Decision #003: At-least-once with manual commit)
         consumer_config = {
-            'bootstrap.servers': self.bootstrap_servers,
-            'group.id': self.consumer_group,
-            'auto.offset.reset': 'earliest',  # Start from beginning for new consumer groups
-            'enable.auto.commit': False,  # Manual commit after Iceberg write
-            'max.poll.interval.ms': 300000,  # 5 minutes for slow Iceberg writes
-            'session.timeout.ms': 45000,  # 45 seconds
-            'heartbeat.interval.ms': 3000,  # 3 seconds
+            "bootstrap.servers": self.bootstrap_servers,
+            "group.id": self.consumer_group,
+            "auto.offset.reset": "earliest",  # Start from beginning for new consumer groups
+            "enable.auto.commit": False,  # Manual commit after Iceberg write
+            "max.poll.interval.ms": 300000,  # 5 minutes for slow Iceberg writes
+            "session.timeout.ms": 45000,  # 45 seconds
+            "heartbeat.interval.ms": 3000,  # 3 seconds
         }
 
         try:
@@ -218,7 +214,7 @@ class MarketDataConsumer:
             )
             metrics.increment(
                 "consumer_init_errors_total",
-                labels={"error_type": "kafka_consumer", "consumer_group": self.consumer_group}
+                labels={"error_type": "kafka_consumer", "consumer_group": self.consumer_group},
             )
             raise
 
@@ -233,8 +229,8 @@ class MarketDataConsumer:
         Returns:
             AvroDeserializer instance
         """
-        if not hasattr(self, '_deserializers'):
-            self._deserializers: Dict[str, AvroDeserializer] = {}
+        if not hasattr(self, "_deserializers"):
+            self._deserializers: dict[str, AvroDeserializer] = {}
 
         if subject not in self._deserializers:
             try:
@@ -262,7 +258,7 @@ class MarketDataConsumer:
                 )
                 metrics.increment(
                     "deserializer_errors_total",
-                    labels={"subject": subject, "consumer_group": self.consumer_group}
+                    labels={"subject": subject, "consumer_group": self.consumer_group},
                 )
                 raise
 
@@ -306,7 +302,7 @@ class MarketDataConsumer:
             logger.error("Consumer error", error=str(err), exc_info=True)
             metrics.increment(
                 "consumer_errors_total",
-                labels={"error_type": "unexpected", "consumer_group": self.consumer_group}
+                labels={"error_type": "unexpected", "consumer_group": self.consumer_group},
             )
             raise
         finally:
@@ -315,7 +311,7 @@ class MarketDataConsumer:
 
     def _consume_batch(self):
         """Consume a batch of messages and write to Iceberg (Decision #015)."""
-        batch: List[Dict[str, Any]] = []
+        batch: list[dict[str, Any]] = []
         batch_start_time = time.time()
 
         # Poll messages until batch is full or timeout
@@ -326,9 +322,8 @@ class MarketDataConsumer:
                 # No more messages available, process what we have
                 if batch:
                     break
-                else:
-                    # No messages at all, continue polling
-                    continue
+                # No messages at all, continue polling
+                continue
 
             if msg.error():
                 if msg.error().code() == KafkaError._PARTITION_EOF:
@@ -337,20 +332,19 @@ class MarketDataConsumer:
                     if batch:
                         break
                     continue
-                else:
-                    # Real error
-                    logger.error(
-                        "Consumer error",
-                        error=msg.error(),
-                        topic=msg.topic(),
-                        partition=msg.partition(),
-                    )
-                    self.stats.errors += 1
-                    metrics.increment(
-                        "consumer_errors_total",
-                        labels={"error_type": "poll_error", "consumer_group": self.consumer_group}
-                    )
-                    continue
+                # Real error
+                logger.error(
+                    "Consumer error",
+                    error=msg.error(),
+                    topic=msg.topic(),
+                    partition=msg.partition(),
+                )
+                self.stats.errors += 1
+                metrics.increment(
+                    "consumer_errors_total",
+                    labels={"error_type": "poll_error", "consumer_group": self.consumer_group},
+                )
+                continue
 
             # Deserialize message
             try:
@@ -368,14 +362,13 @@ class MarketDataConsumer:
                             "exchange": record.get("exchange", "unknown"),
                             "asset_class": record.get("asset_class", "unknown"),
                             "data_type": record.get("data_type", "unknown"),
-                        }
+                        },
                     )
 
                     # Check sequence (Decision #014: Sequence gap logging)
-                    if 'symbol' in record and 'sequence_number' in record:
+                    if "symbol" in record and "sequence_number" in record:
                         gap = self.sequence_tracker.check_sequence(
-                            record['symbol'],
-                            record['sequence_number']
+                            record["symbol"], record["sequence_number"],
                         )
                         if gap:
                             self.stats.sequence_gaps += 1
@@ -391,7 +384,7 @@ class MarketDataConsumer:
                 self.stats.errors += 1
                 metrics.increment(
                     "consumer_errors_total",
-                    labels={"error_type": "deserialization", "consumer_group": self.consumer_group}
+                    labels={"error_type": "deserialization", "consumer_group": self.consumer_group},
                 )
                 continue
 
@@ -419,7 +412,7 @@ class MarketDataConsumer:
                 metrics.observe(
                     "iceberg_batch_size",
                     len(batch),
-                    labels={"table": "trades", "consumer_group": self.consumer_group}
+                    labels={"table": "trades", "consumer_group": self.consumer_group},
                 )
 
             except Exception as err:
@@ -431,12 +424,12 @@ class MarketDataConsumer:
                 self.stats.errors += 1
                 metrics.increment(
                     "consumer_errors_total",
-                    labels={"error_type": "iceberg_write", "consumer_group": self.consumer_group}
+                    labels={"error_type": "iceberg_write", "consumer_group": self.consumer_group},
                 )
                 # Don't commit offsets on failure - will reprocess
                 raise
 
-    def _deserialize_message(self, msg) -> Optional[Dict[str, Any]]:
+    def _deserialize_message(self, msg) -> dict[str, Any] | None:
         """Deserialize Avro message from Kafka.
 
         Args:
@@ -450,14 +443,11 @@ class MarketDataConsumer:
         deserializer = self._get_deserializer(subject)
 
         # Deserialize value
-        value = deserializer(
-            msg.value(),
-            SerializationContext(msg.topic(), MessageField.VALUE)
-        )
+        value = deserializer(msg.value(), SerializationContext(msg.topic(), MessageField.VALUE))
 
         return value
 
-    def _write_batch_to_iceberg(self, batch: List[Dict[str, Any]]):
+    def _write_batch_to_iceberg(self, batch: list[dict[str, Any]]):
         """Write batch of records to Iceberg.
 
         Args:
@@ -477,8 +467,8 @@ class MarketDataConsumer:
                 labels={
                     "table": "trades",
                     "operation": "batch_write",
-                    "consumer_group": self.consumer_group
-                }
+                    "consumer_group": self.consumer_group,
+                },
             )
 
             logger.debug(
@@ -493,8 +483,8 @@ class MarketDataConsumer:
                 labels={
                     "table": "trades",
                     "error_type": str(type(err).__name__),
-                    "consumer_group": self.consumer_group
-                }
+                    "consumer_group": self.consumer_group,
+                },
             )
             raise
 
@@ -534,11 +524,11 @@ class MarketDataConsumer:
 
 
 def create_consumer(
-    topics: Optional[List[str]] = None,
-    topic_pattern: Optional[str] = None,
-    consumer_group: Optional[str] = None,
-    batch_size: Optional[int] = None,
-    max_messages: Optional[int] = None,
+    topics: list[str] | None = None,
+    topic_pattern: str | None = None,
+    consumer_group: str | None = None,
+    batch_size: int | None = None,
+    max_messages: int | None = None,
 ) -> MarketDataConsumer:
     """Factory function to create a MarketDataConsumer instance.
 
@@ -586,19 +576,19 @@ try:
 
     @app.command()
     def consume(
-        topic: Optional[str] = typer.Option(
+        topic: str | None = typer.Option(
             None,
             "--topic",
             "-t",
             help="Kafka topic to consume from (e.g., market.equities.trades.asx)",
         ),
-        topic_pattern: Optional[str] = typer.Option(
+        topic_pattern: str | None = typer.Option(
             None,
             "--topic-pattern",
             "-p",
             help="Kafka topic pattern (e.g., 'market\\.equities\\.trades\\..*')",
         ),
-        consumer_group: Optional[str] = typer.Option(
+        consumer_group: str | None = typer.Option(
             None,
             "--consumer-group",
             "-g",
@@ -610,7 +600,7 @@ try:
             "-b",
             help="Batch size for Iceberg writes",
         ),
-        max_messages: Optional[int] = typer.Option(
+        max_messages: int | None = typer.Option(
             None,
             "--max-messages",
             "-n",
@@ -652,7 +642,9 @@ try:
 
         console.print(f"[green]Consumer Group:[/green] {consumer_group or 'k2-iceberg-writer'}")
         console.print(f"[green]Batch Size:[/green] {batch_size}")
-        console.print(f"[green]Mode:[/green] {'daemon' if max_messages is None else f'batch ({max_messages} messages)'}")
+        console.print(
+            f"[green]Mode:[/green] {'daemon' if max_messages is None else f'batch ({max_messages} messages)'}",
+        )
         console.print("=" * 60)
         console.print()
 
@@ -674,14 +666,20 @@ try:
             consumer.run()
 
             # Success
-            console.print(f"\n[green]✓[/green] Consumed {consumer.stats.messages_consumed} messages")
-            console.print(f"[green]✓[/green] Written {consumer.stats.messages_written} records to Iceberg")
+            console.print(
+                f"\n[green]✓[/green] Consumed {consumer.stats.messages_consumed} messages",
+            )
+            console.print(
+                f"[green]✓[/green] Written {consumer.stats.messages_written} records to Iceberg",
+            )
 
             if consumer.stats.errors > 0:
                 console.print(f"[yellow]⚠[/yellow]  {consumer.stats.errors} errors")
 
             if consumer.stats.sequence_gaps > 0:
-                console.print(f"[yellow]⚠[/yellow]  {consumer.stats.sequence_gaps} sequence gaps detected")
+                console.print(
+                    f"[yellow]⚠[/yellow]  {consumer.stats.sequence_gaps} sequence gaps detected",
+                )
 
         except KeyboardInterrupt:
             console.print("\n[yellow]Consumer stopped by user[/yellow]")

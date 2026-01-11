@@ -17,12 +17,11 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-
 # Configuration
 SOURCE_DIR = Path("data/raw/raw-au-equity-sample-data")
 TARGET_DIR = Path("data/sample")
 START_DATE = datetime(2014, 3, 10)  # March 10, 2014
-END_DATE = datetime(2014, 3, 14)    # March 14, 2014
+END_DATE = datetime(2014, 3, 14)  # March 14, 2014
 
 
 def parse_date(date_str: str) -> datetime:
@@ -57,7 +56,7 @@ def filter_csv_by_date(source_file: Path, target_file: Path, date_column: int = 
     rows_kept = 0
     rows_total = 0
 
-    with source_file.open('r') as infile, target_file.open('w', newline='') as outfile:
+    with source_file.open("r") as infile, target_file.open("w", newline="") as outfile:
         reader = csv.reader(infile)
         writer = csv.writer(outfile)
 
@@ -89,10 +88,10 @@ def copy_directory(source: Path, target: Path):
     shutil.copytree(source, target)
 
     # Calculate total size
-    total_size = sum(f.stat().st_size for f in target.rglob('*') if f.is_file())
+    total_size = sum(f.stat().st_size for f in target.rglob("*") if f.is_file())
     size_mb = total_size / 1024 / 1024
 
-    file_count = len(list(target.rglob('*.csv')))
+    file_count = len(list(target.rglob("*.csv")))
     print(f"  ✓ {source.name}: {file_count} files copied ({size_mb:.2f} MB)")
 
 
@@ -323,9 +322,9 @@ For questions or issues with this dataset, please open an issue in the GitHub re
 
 def main():
     """Main execution function."""
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("K2 Market Data Platform - Sample Dataset Creator")
-    print("="*70)
+    print("=" * 70)
     print(f"\nExtracting: {START_DATE.strftime('%B %d, %Y')} to {END_DATE.strftime('%B %d, %Y')}")
     print(f"Source: {SOURCE_DIR}")
     print(f"Target: {TARGET_DIR}\n")
@@ -344,11 +343,7 @@ def main():
 
     if quotes_source.exists():
         for csv_file in quotes_source.glob("*.csv"):
-            filter_csv_by_date(
-                csv_file,
-                quotes_target / csv_file.name,
-                date_column=0
-            )
+            filter_csv_by_date(csv_file, quotes_target / csv_file.name, date_column=0)
 
     # Process trades (filter by date)
     print("\n[2/4] Processing trades (tick-level executions)...")
@@ -357,11 +352,7 @@ def main():
 
     if trades_source.exists():
         for csv_file in trades_source.glob("*.csv"):
-            filter_csv_by_date(
-                csv_file,
-                trades_target / csv_file.name,
-                date_column=0
-            )
+            filter_csv_by_date(csv_file, trades_target / csv_file.name, date_column=0)
 
     # Copy bars-1min (keep all - already small)
     print("\n[3/4] Copying 1-minute bars (full month coverage)...")
@@ -376,22 +367,24 @@ def main():
     create_sample_readme()
 
     # Summary
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("Summary")
-    print("="*70)
+    print("=" * 70)
 
-    total_size = sum(f.stat().st_size for f in TARGET_DIR.rglob('*') if f.is_file())
+    total_size = sum(f.stat().st_size for f in TARGET_DIR.rglob("*") if f.is_file())
     total_size_mb = total_size / 1024 / 1024
 
-    file_count = len(list(TARGET_DIR.rglob('*.csv')))
+    file_count = len(list(TARGET_DIR.rglob("*.csv")))
 
     print(f"\n✓ Sample dataset created successfully!")
     print(f"  Location: {TARGET_DIR}")
     print(f"  Files: {file_count} CSV files")
     print(f"  Total size: {total_size_mb:.2f} MB")
     print(f"  Date range: {START_DATE.strftime('%B %d, %Y')} - {END_DATE.strftime('%B %d, %Y')}")
-    print(f"\n  GitHub-ready: {'✓ Yes' if total_size_mb < 50 else '✗ Too large'} ({total_size_mb:.1f} MB / 50 MB limit)")
-    print("\n" + "="*70 + "\n")
+    print(
+        f"\n  GitHub-ready: {'✓ Yes' if total_size_mb < 50 else '✗ Too large'} ({total_size_mb:.1f} MB / 50 MB limit)"
+    )
+    print("\n" + "=" * 70 + "\n")
 
 
 if __name__ == "__main__":

@@ -18,7 +18,8 @@ Examples:
         >>> from k2.kafka import DataType
         >>> topics = builder.subscribe_to_data_type(DataType.TRADES)
 """
-from typing import Dict, List, Optional
+
+from typing import Optional
 
 import structlog
 
@@ -49,8 +50,8 @@ class SubscriptionBuilder:
         self,
         asset_class: str,
         exchange: str,
-        data_types: Optional[List[DataType]] = None,
-    ) -> List[str]:
+        data_types: list[DataType] | None = None,
+    ) -> list[str]:
         """Subscribe to all data types for a specific exchange.
 
         Use this pattern when your consumer needs all data from a single exchange.
@@ -77,8 +78,7 @@ class SubscriptionBuilder:
             data_types = list(DataType)
 
         topics = [
-            self.topic_builder.build_topic_name(asset_class, dt, exchange)
-            for dt in data_types
+            self.topic_builder.build_topic_name(asset_class, dt, exchange) for dt in data_types
         ]
 
         logger.debug(
@@ -95,9 +95,9 @@ class SubscriptionBuilder:
     def subscribe_to_asset_class(
         self,
         asset_class: str,
-        data_types: Optional[List[DataType]] = None,
-        exchanges: Optional[List[str]] = None,
-    ) -> List[str]:
+        data_types: list[DataType] | None = None,
+        exchanges: list[str] | None = None,
+    ) -> list[str]:
         """Subscribe to all exchanges for an asset class.
 
         Use this pattern when your consumer needs data from all exchanges within
@@ -125,10 +125,10 @@ class SubscriptionBuilder:
         if data_types is None:
             data_types = list(DataType)
 
-        asset_cfg = self.topic_builder.config['asset_classes'][asset_class]
+        asset_cfg = self.topic_builder.config["asset_classes"][asset_class]
 
         if exchanges is None:
-            exchanges = list(asset_cfg['exchanges'].keys())
+            exchanges = list(asset_cfg["exchanges"].keys())
 
         topics = []
         for exchange in exchanges:
@@ -150,9 +150,9 @@ class SubscriptionBuilder:
     def subscribe_to_data_type(
         self,
         data_type: DataType,
-        asset_classes: Optional[List[str]] = None,
-        exchanges: Optional[Dict[str, List[str]]] = None,
-    ) -> List[str]:
+        asset_classes: list[str] | None = None,
+        exchanges: dict[str, list[str]] | None = None,
+    ) -> list[str]:
         """Subscribe to a specific data type across exchanges.
 
         Use this pattern when your consumer only cares about one type of data
@@ -184,12 +184,12 @@ class SubscriptionBuilder:
             ... )
         """
         if asset_classes is None:
-            asset_classes = list(self.topic_builder.config['asset_classes'].keys())
+            asset_classes = list(self.topic_builder.config["asset_classes"].keys())
 
         topics = []
 
         for asset_class in asset_classes:
-            asset_cfg = self.topic_builder.config['asset_classes'][asset_class]
+            asset_cfg = self.topic_builder.config["asset_classes"][asset_class]
 
             # Determine which exchanges to use for this asset class
             if exchanges is not None and asset_class in exchanges:
@@ -197,7 +197,7 @@ class SubscriptionBuilder:
                 exchange_list = exchanges[asset_class]
             else:
                 # Use all exchanges for this asset class
-                exchange_list = list(asset_cfg['exchanges'].keys())
+                exchange_list = list(asset_cfg["exchanges"].keys())
 
             for exchange in exchange_list:
                 topic = self.topic_builder.build_topic_name(asset_class, data_type, exchange)
@@ -215,8 +215,8 @@ class SubscriptionBuilder:
 
     def subscribe_to_specific_topics(
         self,
-        topic_specs: List[tuple],
-    ) -> List[str]:
+        topic_specs: list[tuple],
+    ) -> list[str]:
         """Subscribe to a specific list of topics by specification.
 
         Use this pattern for very targeted subscriptions where you know exactly
@@ -250,7 +250,7 @@ class SubscriptionBuilder:
 
         return sorted(topics)
 
-    def subscribe_to_all(self) -> List[str]:
+    def subscribe_to_all(self) -> list[str]:
         """Subscribe to all topics in the system.
 
         Use with caution - this subscribes to ALL topics across ALL exchanges
@@ -274,7 +274,7 @@ class SubscriptionBuilder:
 
 
 # Global singleton
-_subscription_builder: Optional['SubscriptionBuilder'] = None
+_subscription_builder: Optional["SubscriptionBuilder"] = None
 
 
 def get_subscription_builder() -> SubscriptionBuilder:
@@ -296,6 +296,6 @@ def get_subscription_builder() -> SubscriptionBuilder:
 
 # Public API
 __all__ = [
-    'SubscriptionBuilder',
-    'get_subscription_builder',
+    "SubscriptionBuilder",
+    "get_subscription_builder",
 ]

@@ -1,8 +1,9 @@
 # K2 - Market Data Platform
 
-**Status**: Production-Ready Design | Demo Implementation  
-**Version**: 0.1.0  
-**Last Updated**: 2026-01-10  
+**Status**: Production-Ready Design | Demo Implementation
+**Version**: 0.1.0
+**Progress**: 93.75% Complete (15/16 steps)
+**Last Updated**: 2026-01-11
 **Author**: Rob Scott (Platform Lead)
 
 ---
@@ -465,17 +466,59 @@ market.equities.trades.asx
 - **Grafana**: http://localhost:3000 - Dashboards (admin / admin)
 - **Prometheus**: http://localhost:9090 - Metrics and alerts
 
-### 5. Query Data (Coming Soon - Step 9-11)
+### 5. Query Data
 
-Query functionality will be available after completing Phase 1 Steps 9-11:
-- Step 9: DuckDB Query Engine
-- Step 10: Replay Engine
-- Step 11: Query CLI
+Query the platform using the CLI or REST API:
 
-For now, you can inspect Iceberg tables directly:
 ```bash
-# View Iceberg table metadata
-docker exec -it k2-postgres psql -U iceberg -d iceberg_catalog -c "SELECT * FROM iceberg_tables;"
+# Query trades
+k2-query trades --symbol DVN --limit 10
+
+# Get OHLCV summary
+k2-query summary DVN 2014-03-10
+
+# List available symbols
+k2-query symbols
+
+# View Iceberg snapshots (time-travel)
+k2-query snapshots
+
+# Replay historical data
+k2-query replay --symbol DVN --batch-size 100
+```
+
+### 6. Start REST API
+
+```bash
+# Start API server
+make api
+
+# Or run directly
+uv run uvicorn k2.api.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+**API Endpoints** (http://localhost:8000):
+- `GET /health` - Health check (no auth)
+- `GET /v1/trades` - Query trades
+- `GET /v1/quotes` - Query quotes
+- `GET /v1/symbols` - List symbols
+- `GET /v1/summary/{symbol}/{date}` - OHLCV summary
+- `GET /metrics` - Prometheus metrics
+- `GET /docs` - OpenAPI documentation
+
+**Authentication**: Pass `X-API-Key: k2-dev-api-key-2026` header for /v1/ endpoints.
+
+### 7. Run Demo
+
+```bash
+# Interactive demo (~3 minutes)
+make demo
+
+# Quick demo (no delays, CI-friendly)
+make demo-quick
+
+# Jupyter notebook walkthrough
+make notebook
 ```
 
 ---
@@ -674,13 +717,16 @@ Before deploying to production, validate these requirements:
 
 ## Roadmap
 
-### Phase 1: Core Platform (Current)
-- [ ] Kafka + Schema Registry setup
-- [ ] Iceberg lakehouse with ACID
-- [ ] Sequence tracking and gap detection
-- [ ] DuckDB query engine implementation
-- [ ] Replay engine (cold start, catch-up, rewind)
-- [ ] Observability Dashboards
+### Phase 1: Core Platform (93.75% Complete)
+- [x] Kafka + Schema Registry setup
+- [x] Iceberg lakehouse with ACID
+- [x] Sequence tracking and gap detection
+- [x] DuckDB query engine implementation
+- [x] Replay engine (cold start, catch-up, rewind)
+- [x] REST API with FastAPI
+- [x] Observability (Prometheus + Grafana)
+- [x] E2E Testing & Demo
+- [ ] Final documentation cleanup
 
 ### Phase 2: Advanced Processing
 - [ ] Real-time aggregations (OHLCV windows)

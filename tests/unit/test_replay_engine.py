@@ -3,9 +3,11 @@
 These tests mock the PyIceberg catalog and DuckDB connection to test
 replay logic without requiring actual Iceberg tables or S3 storage.
 """
+
+from datetime import datetime
+from unittest.mock import MagicMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, date
 
 from k2.query.replay import ReplayEngine, SnapshotInfo
 
@@ -170,7 +172,7 @@ class TestListSnapshots:
                 timestamp_ms=i * 1000,
                 parent_snapshot_id=None,
                 manifest_list="",
-                summary=None
+                summary=None,
             )
             for i in range(10)
         ]
@@ -224,17 +226,11 @@ class TestQueryAtSnapshot:
         _, query_engine = mock_query_engine
 
         mock_df = Mock()
-        mock_df.to_dict.return_value = [
-            {"symbol": "BHP", "price": 36.50}
-        ]
+        mock_df.to_dict.return_value = [{"symbol": "BHP", "price": 36.50}]
         query_engine.connection.execute.return_value.fetchdf.return_value = mock_df
         query_engine._get_table_path.return_value = "s3://warehouse/market_data/trades"
 
-        result = engine.query_at_snapshot(
-            snapshot_id=12345,
-            symbol="BHP",
-            limit=100
-        )
+        result = engine.query_at_snapshot(snapshot_id=12345, symbol="BHP", limit=100)
 
         assert len(result) == 1
         assert result[0]["symbol"] == "BHP"
@@ -248,11 +244,7 @@ class TestQueryAtSnapshot:
         query_engine.connection.execute.return_value.fetchdf.return_value = mock_df
         query_engine._get_table_path.return_value = "s3://warehouse/market_data/trades"
 
-        engine.query_at_snapshot(
-            snapshot_id=12345,
-            symbol="BHP",
-            exchange="ASX"
-        )
+        engine.query_at_snapshot(snapshot_id=12345, symbol="BHP", exchange="ASX")
 
         # Check query contains filters
         call_args = query_engine.connection.execute.call_args
@@ -338,21 +330,21 @@ class TestRewindToTimestamp:
                 timestamp_ms=3000000,  # 3000 seconds
                 parent_snapshot_id=2,
                 manifest_list="",
-                summary=None
+                summary=None,
             ),
             MagicMock(
                 snapshot_id=2,
                 timestamp_ms=2000000,  # 2000 seconds
                 parent_snapshot_id=1,
                 manifest_list="",
-                summary=None
+                summary=None,
             ),
             MagicMock(
                 snapshot_id=1,
                 timestamp_ms=1000000,  # 1000 seconds
                 parent_snapshot_id=None,
                 manifest_list="",
-                summary=None
+                summary=None,
             ),
         ]
         catalog.load_table.return_value = mock_table
@@ -377,7 +369,7 @@ class TestRewindToTimestamp:
                 timestamp_ms=2000000,
                 parent_snapshot_id=None,
                 manifest_list="",
-                summary=None
+                summary=None,
             ),
         ]
         catalog.load_table.return_value = mock_table
@@ -404,8 +396,8 @@ class TestReplayStats:
                 timestamp_ms=1000,
                 parent_snapshot_id=None,
                 manifest_list="",
-                summary=None
-            )
+                summary=None,
+            ),
         ]
         catalog.load_table.return_value = mock_table
 

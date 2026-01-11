@@ -13,15 +13,14 @@ Usage:
 
 Entry point configured in pyproject.toml as 'k2-query'.
 """
-from typing import Optional
-from datetime import datetime, date
-from pathlib import Path
+
+from datetime import date, datetime
 
 import typer
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
 from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 from k2.query.engine import QueryEngine
 from k2.query.replay import ReplayEngine
@@ -57,21 +56,20 @@ def _parse_datetime(dt_str: str) -> datetime:
         except ValueError:
             continue
     raise typer.BadParameter(
-        f"Invalid datetime format: {dt_str}. Use YYYY-MM-DD or YYYY-MM-DD HH:MM:SS"
+        f"Invalid datetime format: {dt_str}. Use YYYY-MM-DD or YYYY-MM-DD HH:MM:SS",
     )
 
 
 @app.command()
 def trades(
-    symbol: Optional[str] = typer.Option(None, "--symbol", "-s", help="Filter by symbol"),
-    exchange: Optional[str] = typer.Option(None, "--exchange", "-e", help="Filter by exchange"),
-    start: Optional[str] = typer.Option(None, "--start", help="Start time (YYYY-MM-DD)"),
-    end: Optional[str] = typer.Option(None, "--end", help="End time (YYYY-MM-DD)"),
+    symbol: str | None = typer.Option(None, "--symbol", "-s", help="Filter by symbol"),
+    exchange: str | None = typer.Option(None, "--exchange", "-e", help="Filter by exchange"),
+    start: str | None = typer.Option(None, "--start", help="Start time (YYYY-MM-DD)"),
+    end: str | None = typer.Option(None, "--end", help="End time (YYYY-MM-DD)"),
     limit: int = typer.Option(20, "--limit", "-n", help="Maximum rows to return"),
     output: str = typer.Option("table", "--output", "-o", help="Output format: table, csv, json"),
 ):
-    """
-    Query trade records.
+    """Query trade records.
 
     Examples:
         k2-query trades --symbol BHP --limit 10
@@ -97,6 +95,7 @@ def trades(
 
         if output == "json":
             import json
+
             console.print(json.dumps(trades, indent=2, default=str))
         elif output == "csv":
             if trades:
@@ -132,15 +131,14 @@ def trades(
 
 @app.command()
 def quotes(
-    symbol: Optional[str] = typer.Option(None, "--symbol", "-s", help="Filter by symbol"),
-    exchange: Optional[str] = typer.Option(None, "--exchange", "-e", help="Filter by exchange"),
-    start: Optional[str] = typer.Option(None, "--start", help="Start time (YYYY-MM-DD)"),
-    end: Optional[str] = typer.Option(None, "--end", help="End time (YYYY-MM-DD)"),
+    symbol: str | None = typer.Option(None, "--symbol", "-s", help="Filter by symbol"),
+    exchange: str | None = typer.Option(None, "--exchange", "-e", help="Filter by exchange"),
+    start: str | None = typer.Option(None, "--start", help="Start time (YYYY-MM-DD)"),
+    end: str | None = typer.Option(None, "--end", help="End time (YYYY-MM-DD)"),
     limit: int = typer.Option(20, "--limit", "-n", help="Maximum rows to return"),
     output: str = typer.Option("table", "--output", "-o", help="Output format: table, csv, json"),
 ):
-    """
-    Query quote records (bid/ask).
+    """Query quote records (bid/ask).
 
     Examples:
         k2-query quotes --symbol BHP --limit 10
@@ -165,6 +163,7 @@ def quotes(
 
         if output == "json":
             import json
+
             console.print(json.dumps(quote_data, indent=2, default=str))
         elif output == "csv":
             if quote_data:
@@ -210,10 +209,9 @@ def quotes(
 def summary(
     symbol: str = typer.Argument(..., help="Symbol to query (e.g., BHP)"),
     query_date: str = typer.Argument(..., help="Date to summarize (YYYY-MM-DD)"),
-    exchange: Optional[str] = typer.Option(None, "--exchange", "-e", help="Filter by exchange"),
+    exchange: str | None = typer.Option(None, "--exchange", "-e", help="Filter by exchange"),
 ):
-    """
-    Get OHLCV market summary for a symbol on a date.
+    """Get OHLCV market summary for a symbol on a date.
 
     Examples:
         k2-query summary BHP 2024-01-15
@@ -262,8 +260,7 @@ def snapshots(
     table: str = typer.Option("market_data.trades", "--table", "-t", help="Table name"),
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum snapshots to show"),
 ):
-    """
-    List Iceberg table snapshots.
+    """List Iceberg table snapshots.
 
     Examples:
         k2-query snapshots
@@ -305,10 +302,9 @@ def snapshots(
 
 @app.command()
 def stats(
-    symbol: Optional[str] = typer.Option(None, "--symbol", "-s", help="Filter by symbol"),
+    symbol: str | None = typer.Option(None, "--symbol", "-s", help="Filter by symbol"),
 ):
-    """
-    Show query engine and data statistics.
+    """Show query engine and data statistics.
 
     Examples:
         k2-query stats
@@ -354,7 +350,7 @@ def stats(
         replay_table.add_row("Snapshot Count", str(replay_stats.get("snapshot_count", 0)))
         replay_table.add_row(
             "Date Range",
-            f"{replay_stats.get('min_timestamp', 'N/A')} to {replay_stats.get('max_timestamp', 'N/A')}"
+            f"{replay_stats.get('min_timestamp', 'N/A')} to {replay_stats.get('max_timestamp', 'N/A')}",
         )
 
         console.print(replay_table)
@@ -366,10 +362,9 @@ def stats(
 
 @app.command()
 def symbols(
-    exchange: Optional[str] = typer.Option(None, "--exchange", "-e", help="Filter by exchange"),
+    exchange: str | None = typer.Option(None, "--exchange", "-e", help="Filter by exchange"),
 ):
-    """
-    List available symbols.
+    """List available symbols.
 
     Examples:
         k2-query symbols
@@ -388,7 +383,7 @@ def symbols(
         # Display in columns
         cols = 5
         for i in range(0, len(symbol_list), cols):
-            row = symbol_list[i:i + cols]
+            row = symbol_list[i : i + cols]
             console.print("  " + "  ".join(f"[cyan]{s:10}[/cyan]" for s in row))
 
         console.print()
@@ -400,15 +395,14 @@ def symbols(
 
 @app.command()
 def replay(
-    symbol: Optional[str] = typer.Option(None, "--symbol", "-s", help="Filter by symbol"),
-    exchange: Optional[str] = typer.Option(None, "--exchange", "-e", help="Filter by exchange"),
-    start: Optional[str] = typer.Option(None, "--start", help="Start time (YYYY-MM-DD)"),
-    end: Optional[str] = typer.Option(None, "--end", help="End time (YYYY-MM-DD)"),
+    symbol: str | None = typer.Option(None, "--symbol", "-s", help="Filter by symbol"),
+    exchange: str | None = typer.Option(None, "--exchange", "-e", help="Filter by exchange"),
+    start: str | None = typer.Option(None, "--start", help="Start time (YYYY-MM-DD)"),
+    end: str | None = typer.Option(None, "--end", help="End time (YYYY-MM-DD)"),
     batch_size: int = typer.Option(100, "--batch-size", "-b", help="Records per batch"),
     max_batches: int = typer.Option(5, "--max-batches", "-m", help="Maximum batches to show"),
 ):
-    """
-    Replay historical data in batches.
+    """Replay historical data in batches.
 
     Examples:
         k2-query replay --symbol BHP --batch-size 50
@@ -439,14 +433,18 @@ def replay(
                     last = batch[-1]
                     console.print(
                         f"  Batch {batch_count}: {len(batch)} records "
-                        f"({first['exchange_timestamp']} to {last['exchange_timestamp']})"
+                        f"({first['exchange_timestamp']} to {last['exchange_timestamp']})",
                     )
 
                 if batch_count >= max_batches:
-                    console.print(f"\n[yellow]Stopped after {max_batches} batches (use --max-batches for more)[/yellow]")
+                    console.print(
+                        f"\n[yellow]Stopped after {max_batches} batches (use --max-batches for more)[/yellow]",
+                    )
                     break
 
-            console.print(f"\n[green]Replayed {total_records:,} records in {batch_count} batches[/green]\n")
+            console.print(
+                f"\n[green]Replayed {total_records:,} records in {batch_count} batches[/green]\n",
+            )
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")

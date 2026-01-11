@@ -11,17 +11,15 @@ Test categories:
 - Error handling: 4xx and 5xx responses
 """
 
-from datetime import datetime, date
-from unittest.mock import MagicMock, patch
-import pytest
+from datetime import date, datetime
+from unittest.mock import MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 
+from k2.api.deps import get_query_engine, get_replay_engine
 from k2.api.main import app
-from k2.api.deps import get_query_engine, get_replay_engine, reset_engines
-from k2.api.models import HealthStatus
 from k2.query.engine import MarketSummary
-
 
 # =============================================================================
 # Fixtures
@@ -47,7 +45,7 @@ def mock_query_engine():
             "buyer_id": "BROKER001",
             "ingestion_timestamp": datetime(2024, 1, 15, 10, 30, 1),
             "sequence_number": 12345,
-        }
+        },
     ]
 
     # Mock query_quotes
@@ -63,7 +61,7 @@ def mock_query_engine():
             "ask_volume": 750,
             "ingestion_timestamp": datetime(2024, 1, 15, 10, 30, 1),
             "sequence_number": 12345,
-        }
+        },
     ]
 
     # Mock get_market_summary
@@ -750,7 +748,7 @@ class TestPostSnapshotQuery:
                 "exchange_timestamp": datetime(2024, 1, 15, 10, 0, 0),
                 "price": 45.50,
                 "volume": 1000,
-            }
+            },
         ]
 
         response = client.post(
@@ -808,7 +806,7 @@ class TestPostAggregations:
                 "trade_count": 100,
                 "vwap": 45.40,
                 "twap": 45.35,
-            }
+            },
         ]
         mock_query_engine.connection.execute.return_value.fetchdf.return_value = mock_df
 

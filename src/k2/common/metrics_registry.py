@@ -1,5 +1,4 @@
-"""
-Prometheus metrics registry for K2 Platform.
+"""Prometheus metrics registry for K2 Platform.
 
 Pre-registers all metrics at module load time for better performance
 and fail-fast behavior on duplicate metric names.
@@ -10,8 +9,8 @@ Metrics follow Prometheus naming conventions:
 - Descriptive help text
 """
 
+
 from prometheus_client import Counter, Gauge, Histogram, Info
-from typing import Dict
 
 # ==============================================================================
 # Configuration
@@ -51,7 +50,7 @@ STORAGE_BUCKETS = [
     1.000,  # 1s
     2.000,  # 2s
     5.000,  # 5s
-    10.000, # 10s
+    10.000,  # 10s
 ]
 
 # ==============================================================================
@@ -320,7 +319,7 @@ DEGRADATION_LEVEL = Gauge(
 # Registry Helper Functions
 # ==============================================================================
 
-_METRIC_REGISTRY: Dict[str, object] = {
+_METRIC_REGISTRY: dict[str, object] = {
     # Ingestion
     "kafka_messages_produced_total": KAFKA_MESSAGES_PRODUCED_TOTAL,
     "kafka_produce_errors_total": KAFKA_PRODUCE_ERRORS_TOTAL,
@@ -337,27 +336,23 @@ _METRIC_REGISTRY: Dict[str, object] = {
     "sequence_resets_detected_total": SEQUENCE_RESETS_DETECTED_TOTAL,
     "out_of_order_messages_total": OUT_OF_ORDER_MESSAGES_TOTAL,
     "duplicate_messages_detected_total": DUPLICATE_MESSAGES_DETECTED_TOTAL,
-
     # Storage
     "iceberg_rows_written_total": ICEBERG_ROWS_WRITTEN_TOTAL,
     "iceberg_write_duration_seconds": ICEBERG_WRITE_DURATION_SECONDS,
     "iceberg_write_errors_total": ICEBERG_WRITE_ERRORS_TOTAL,
     "iceberg_commit_failures_total": ICEBERG_COMMIT_FAILURES_TOTAL,
     "iceberg_batch_size": ICEBERG_BATCH_SIZE,
-
     # Query
     "query_executions_total": QUERY_EXECUTIONS_TOTAL,
     "query_duration_seconds": QUERY_DURATION_SECONDS,
     "query_rows_scanned": QUERY_ROWS_SCANNED,
     "query_cache_hits_total": QUERY_CACHE_HITS_TOTAL,
     "query_cache_misses_total": QUERY_CACHE_MISSES_TOTAL,
-
     # API
     "http_requests_total": HTTP_REQUESTS_TOTAL,
     "http_request_duration_seconds": HTTP_REQUEST_DURATION_SECONDS,
     "http_request_errors_total": HTTP_REQUEST_ERRORS_TOTAL,
     "http_requests_in_progress": HTTP_REQUESTS_IN_PROGRESS,
-
     # System
     "circuit_breaker_state": CIRCUIT_BREAKER_STATE,
     "circuit_breaker_failures_total": CIRCUIT_BREAKER_FAILURES_TOTAL,
@@ -367,8 +362,7 @@ _METRIC_REGISTRY: Dict[str, object] = {
 
 
 def get_metric(metric_name: str) -> object:
-    """
-    Get a pre-registered metric by name.
+    """Get a pre-registered metric by name.
 
     Args:
         metric_name: Metric name (without k2_ prefix)
@@ -382,7 +376,7 @@ def get_metric(metric_name: str) -> object:
     if metric_name not in _METRIC_REGISTRY:
         raise KeyError(
             f"Metric '{metric_name}' not found in registry. "
-            f"Available metrics: {sorted(_METRIC_REGISTRY.keys())}"
+            f"Available metrics: {sorted(_METRIC_REGISTRY.keys())}",
         )
     return _METRIC_REGISTRY[metric_name]
 
@@ -403,16 +397,17 @@ def get_histogram(metric_name: str) -> Histogram:
 
 
 def initialize_platform_info(version: str, environment: str, deployment: str):
-    """
-    Initialize platform information metric.
+    """Initialize platform information metric.
 
     Args:
         version: Platform version (e.g., "0.1.0")
         environment: Environment name (e.g., "dev", "staging", "prod")
         deployment: Deployment ID or timestamp
     """
-    PLATFORM_INFO.info({
-        "version": version,
-        "environment": environment,
-        "deployment": deployment,
-    })
+    PLATFORM_INFO.info(
+        {
+            "version": version,
+            "environment": environment,
+            "deployment": deployment,
+        },
+    )

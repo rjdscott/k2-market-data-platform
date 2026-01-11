@@ -29,13 +29,14 @@ Usage:
     engine.close()
     replay.close()
 """
-from k2.query.engine import QueryEngine, QueryType, MarketSummary
+
+from k2.query.engine import MarketSummary, QueryEngine, QueryType
 from k2.query.replay import ReplayEngine, SnapshotInfo
 
 __all__ = [
+    "MarketSummary",
     "QueryEngine",
     "QueryType",
-    "MarketSummary",
     "ReplayEngine",
     "SnapshotInfo",
 ]

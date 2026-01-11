@@ -11,24 +11,22 @@ Using FastAPI's Depends() pattern ensures:
 - Easy testing with dependency overrides
 """
 
-from typing import Generator, Optional
 from functools import lru_cache
 
+from k2.common.logging import get_logger
 from k2.query.engine import QueryEngine
 from k2.query.replay import ReplayEngine
-from k2.common.logging import get_logger
 
 logger = get_logger(__name__, component="api")
 
 # Global engine instances (singleton pattern)
-_query_engine: Optional[QueryEngine] = None
-_replay_engine: Optional[ReplayEngine] = None
+_query_engine: QueryEngine | None = None
+_replay_engine: ReplayEngine | None = None
 
 
 @lru_cache(maxsize=1)
 def get_query_engine() -> QueryEngine:
-    """
-    Get or create the QueryEngine singleton.
+    """Get or create the QueryEngine singleton.
 
     Uses lru_cache to ensure single instance across all requests.
     The engine is initialized on first access and reused.
@@ -45,8 +43,7 @@ def get_query_engine() -> QueryEngine:
 
 @lru_cache(maxsize=1)
 def get_replay_engine() -> ReplayEngine:
-    """
-    Get or create the ReplayEngine singleton.
+    """Get or create the ReplayEngine singleton.
 
     Uses lru_cache to ensure single instance across all requests.
 
@@ -61,8 +58,7 @@ def get_replay_engine() -> ReplayEngine:
 
 
 def reset_engines() -> None:
-    """
-    Reset engine singletons (for testing).
+    """Reset engine singletons (for testing).
 
     Clears the cached engines so they will be recreated on next access.
     """
@@ -90,8 +86,7 @@ def reset_engines() -> None:
 
 
 async def startup_engines() -> None:
-    """
-    Initialize engines on application startup.
+    """Initialize engines on application startup.
 
     Called during FastAPI startup event to warm up connections.
     """
@@ -113,8 +108,7 @@ async def startup_engines() -> None:
 
 
 async def shutdown_engines() -> None:
-    """
-    Clean up engines on application shutdown.
+    """Clean up engines on application shutdown.
 
     Called during FastAPI shutdown event to close connections.
     """

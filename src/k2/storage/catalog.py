@@ -6,35 +6,33 @@ by timestamp + sequence for ordered scans.
 
 See docs/STORAGE_OPTIMIZATION.md for partitioning strategy rationale.
 """
-from typing import Optional, Dict, Any
+
+
 from pyiceberg.catalog import load_catalog
-from pyiceberg.catalog.rest import RestCatalog
+from pyiceberg.exceptions import TableAlreadyExistsError
+from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
+from pyiceberg.table.sorting import SortField, SortOrder
+from pyiceberg.transforms import DayTransform, IdentityTransform
 from pyiceberg.types import (
+    DecimalType,
+    IntegerType,
+    LongType,
     NestedField,
     StringType,
-    LongType,
     TimestampType,
-    IntegerType,
-    DecimalType,
 )
-from pyiceberg.partitioning import PartitionSpec, PartitionField
-from pyiceberg.transforms import DayTransform
-from pyiceberg.table.sorting import SortOrder, SortField
-from pyiceberg.transforms import IdentityTransform
-from pyiceberg.exceptions import NamespaceAlreadyExistsError, TableAlreadyExistsError
 
 from k2.common.config import config
-from k2.common.metrics import create_component_metrics
 from k2.common.logging import get_logger
+from k2.common.metrics import create_component_metrics
 
 logger = get_logger(__name__, component="storage")
 metrics = create_component_metrics("storage")
 
 
 class IcebergCatalogManager:
-    """
-    Manages Iceberg catalog and table operations.
+    """Manages Iceberg catalog and table operations.
 
     This class handles:
     - Catalog connection management
@@ -63,13 +61,12 @@ class IcebergCatalogManager:
 
     def __init__(
         self,
-        catalog_uri: Optional[str] = None,
-        s3_endpoint: Optional[str] = None,
-        s3_access_key: Optional[str] = None,
-        s3_secret_key: Optional[str] = None,
+        catalog_uri: str | None = None,
+        s3_endpoint: str | None = None,
+        s3_access_key: str | None = None,
+        s3_secret_key: str | None = None,
     ):
-        """
-        Initialize Iceberg catalog connection.
+        """Initialize Iceberg catalog connection.
 
         Args:
             catalog_uri: Iceberg REST catalog URI (defaults to config)
@@ -91,23 +88,19 @@ class IcebergCatalogManager:
                     "s3.access-key-id": self.s3_access_key,
                     "s3.secret-access-key": self.s3_secret_key,
                     "s3.path-style-access": "true",
-                }
+                },
             )
             logger.info(
-                "Iceberg catalog initialized",
-                uri=self.catalog_uri,
-                endpoint=self.s3_endpoint
+                "Iceberg catalog initialized", uri=self.catalog_uri, endpoint=self.s3_endpoint,
             )
 
         except Exception as e:
             logger.error(
-                "Failed to initialize Iceberg catalog",
-                error=str(e),
-                catalog_uri=self.catalog_uri
+                "Failed to initialize Iceberg catalog", error=str(e), catalog_uri=self.catalog_uri,
             )
             metrics.increment(
                 "iceberg_write_errors_total",
-                labels={"error_type": "catalog_init_failed", "table": "unknown"}
+                labels={"error_type": "catalog_init_failed", "table": "unknown"},
             )
             raise
 
@@ -116,8 +109,7 @@ class IcebergCatalogManager:
         namespace: str = "market_data",
         table_name: str = "trades",
     ) -> None:
-        """
-        Create trades table with appropriate partitioning and sorting.
+        """Create trades table with appropriate partitioning and sorting.
 
         Table schema matches trade.avsc Avro schema with Iceberg types.
         Partitioned by day for efficient time-range queries.
@@ -130,11 +122,7 @@ class IcebergCatalogManager:
         Raises:
             TableAlreadyExistsError: If table already exists
         """
-        logger.info(
-            "Creating trades table",
-            namespace=namespace,
-            table=table_name
-        )
+        logger.info("Creating trades table", namespace=namespace, table=table_name)
 
         # Schema matches trade.avsc Avro schema
         schema = Schema(
@@ -155,11 +143,8 @@ class IcebergCatalogManager:
         # Hidden partitioning: users query by timestamp, Iceberg handles partition pruning
         partition_spec = PartitionSpec(
             PartitionField(
-                source_id=4,
-                field_id=1000,
-                transform=DayTransform(),
-                name="exchange_date"
-            )
+                source_id=4, field_id=1000, transform=DayTransform(), name="exchange_date",
+            ),
         )
 
         # Sort for ordered scans (replay, gap detection)
@@ -182,34 +167,35 @@ class IcebergCatalogManager:
                     "write.metadata.compression-codec": "gzip",
                     "write.parquet.page-size-bytes": "1048576",  # 1MB pages
                     "write.parquet.row-group-size-bytes": "134217728",  # 128MB row groups
-                }
+                },
             )
 
             logger.info(
                 "Trades table created successfully",
                 table=table_id,
                 partitions="daily",
-                sort="timestamp,sequence"
+                sort="timestamp,sequence",
             )
 
             metrics.increment(
                 "iceberg_rows_written_total",
                 value=0,
-                labels={"exchange": "system", "asset_class": "system", "table": table_name}
+                labels={"exchange": "system", "asset_class": "system", "table": table_name},
             )
 
         except TableAlreadyExistsError:
             logger.info("Trades table already exists", table=table_id)
 
         except Exception as e:
-            logger.error(
-                "Failed to create trades table",
-                table=table_id,
-                error=str(e)
-            )
+            logger.error("Failed to create trades table", table=table_id, error=str(e))
             metrics.increment(
                 "iceberg_write_errors_total",
-                labels={"exchange": "system", "asset_class": "system", "table": table_name, "error_type": "table_creation_failed"}
+                labels={
+                    "exchange": "system",
+                    "asset_class": "system",
+                    "table": table_name,
+                    "error_type": "table_creation_failed",
+                },
             )
             raise
 
@@ -218,8 +204,7 @@ class IcebergCatalogManager:
         namespace: str = "market_data",
         table_name: str = "quotes",
     ) -> None:
-        """
-        Create quotes table with appropriate partitioning and sorting.
+        """Create quotes table with appropriate partitioning and sorting.
 
         Table schema matches quote.avsc Avro schema with Iceberg types.
         Same partitioning and sorting strategy as trades table.
@@ -231,11 +216,7 @@ class IcebergCatalogManager:
         Raises:
             TableAlreadyExistsError: If table already exists
         """
-        logger.info(
-            "Creating quotes table",
-            namespace=namespace,
-            table=table_name
-        )
+        logger.info("Creating quotes table", namespace=namespace, table=table_name)
 
         # Schema matches quote.avsc Avro schema
         schema = Schema(
@@ -254,11 +235,8 @@ class IcebergCatalogManager:
         # Same partitioning and sorting as trades
         partition_spec = PartitionSpec(
             PartitionField(
-                source_id=4,
-                field_id=1000,
-                transform=DayTransform(),
-                name="exchange_date"
-            )
+                source_id=4, field_id=1000, transform=DayTransform(), name="exchange_date",
+            ),
         )
 
         sort_order = SortOrder(
@@ -280,40 +258,40 @@ class IcebergCatalogManager:
                     "write.metadata.compression-codec": "gzip",
                     "write.parquet.page-size-bytes": "1048576",
                     "write.parquet.row-group-size-bytes": "134217728",
-                }
+                },
             )
 
             logger.info(
                 "Quotes table created successfully",
                 table=table_id,
                 partitions="daily",
-                sort="timestamp,sequence"
+                sort="timestamp,sequence",
             )
 
             metrics.increment(
                 "iceberg_rows_written_total",
                 value=0,
-                labels={"exchange": "system", "asset_class": "system", "table": table_name}
+                labels={"exchange": "system", "asset_class": "system", "table": table_name},
             )
 
         except TableAlreadyExistsError:
             logger.info("Quotes table already exists", table=table_id)
 
         except Exception as e:
-            logger.error(
-                "Failed to create quotes table",
-                table=table_id,
-                error=str(e)
-            )
+            logger.error("Failed to create quotes table", table=table_id, error=str(e))
             metrics.increment(
                 "iceberg_write_errors_total",
-                labels={"exchange": "system", "asset_class": "system", "table": table_name, "error_type": "table_creation_failed"}
+                labels={
+                    "exchange": "system",
+                    "asset_class": "system",
+                    "table": table_name,
+                    "error_type": "table_creation_failed",
+                },
             )
             raise
 
     def list_tables(self, namespace: str) -> list[str]:
-        """
-        List all tables in a namespace.
+        """List all tables in a namespace.
 
         Args:
             namespace: Namespace to list tables from
@@ -327,16 +305,11 @@ class IcebergCatalogManager:
             return tables
 
         except Exception as e:
-            logger.error(
-                "Failed to list tables",
-                namespace=namespace,
-                error=str(e)
-            )
+            logger.error("Failed to list tables", namespace=namespace, error=str(e))
             return []
 
     def table_exists(self, namespace: str, table_name: str) -> bool:
-        """
-        Check if a table exists.
+        """Check if a table exists.
 
         Args:
             namespace: Table namespace
@@ -353,14 +326,8 @@ class IcebergCatalogManager:
         except Exception:
             return False
 
-    def drop_table(
-        self,
-        namespace: str,
-        table_name: str,
-        purge: bool = False
-    ) -> None:
-        """
-        Drop a table.
+    def drop_table(self, namespace: str, table_name: str, purge: bool = False) -> None:
+        """Drop a table.
 
         Args:
             namespace: Table namespace
@@ -376,7 +343,7 @@ class IcebergCatalogManager:
             "Dropping table",
             table=table_id,
             purge=purge,
-            warning="This operation cannot be undone if purge=True"
+            warning="This operation cannot be undone if purge=True",
         )
 
         try:
@@ -384,11 +351,7 @@ class IcebergCatalogManager:
 
             logger.info("Table dropped", table=table_id, purged=purge)
 
-            logger.info(
-                "Table dropped successfully",
-                table=table_id,
-                purged=purge
-            )
+            logger.info("Table dropped successfully", table=table_id, purged=purge)
 
         except Exception as e:
             logger.error("Failed to drop table", table=table_id, error=str(e))

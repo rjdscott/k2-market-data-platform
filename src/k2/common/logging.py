@@ -1,5 +1,4 @@
-"""
-Structured logging with correlation IDs.
+"""Structured logging with correlation IDs.
 
 All logs are JSON-formatted for easy parsing in Grafana Loki / ELK.
 Uses structlog for structured logging with context propagation.
@@ -28,20 +27,19 @@ import contextvars
 import logging
 import sys
 import time
-from typing import Any, Dict, Optional
 from contextlib import contextmanager
+from typing import Any
 
 import structlog
 from structlog.types import EventDict, Processor
 
-
 # Context variables for correlation ID and request ID
 # These are thread-safe and async-friendly
-_correlation_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    "correlation_id", default=None
+_correlation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "correlation_id", default=None,
 )
-_request_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    "request_id", default=None
+_request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "request_id", default=None,
 )
 
 
@@ -51,8 +49,7 @@ _request_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
 
 
 def set_correlation_id(correlation_id: str) -> None:
-    """
-    Set correlation ID for current context.
+    """Set correlation ID for current context.
 
     The correlation ID will be automatically included in all log messages
     within the current context (thread or async task).
@@ -63,7 +60,7 @@ def set_correlation_id(correlation_id: str) -> None:
     _correlation_id_var.set(correlation_id)
 
 
-def get_correlation_id() -> Optional[str]:
+def get_correlation_id() -> str | None:
     """Get current correlation ID from context."""
     return _correlation_id_var.get()
 
@@ -74,8 +71,7 @@ def clear_correlation_id() -> None:
 
 
 def set_request_id(request_id: str) -> None:
-    """
-    Set request ID for current context (API requests only).
+    """Set request ID for current context (API requests only).
 
     Args:
         request_id: Unique identifier for HTTP/API request
@@ -83,7 +79,7 @@ def set_request_id(request_id: str) -> None:
     _request_id_var.set(request_id)
 
 
-def get_request_id() -> Optional[str]:
+def get_request_id() -> str | None:
     """Get current request ID from context."""
     return _request_id_var.get()
 
@@ -99,8 +95,7 @@ def clear_request_id() -> None:
 
 
 def add_correlation_ids(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
-    """
-    Add correlation_id and request_id to log events from context.
+    """Add correlation_id and request_id to log events from context.
 
     This processor automatically includes correlation IDs in all log messages
     without requiring them to be passed explicitly.
@@ -117,20 +112,18 @@ def add_correlation_ids(logger: Any, method_name: str, event_dict: EventDict) ->
 
 
 def add_timestamp(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
-    """
-    Add ISO 8601 timestamp to log events.
+    """Add ISO 8601 timestamp to log events.
 
     Uses UTC timezone for consistency across regions.
     """
     import datetime
 
-    event_dict["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    event_dict["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat()
     return event_dict
 
 
 def add_log_level(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
-    """
-    Add log level to event dict.
+    """Add log level to event dict.
 
     Converts method_name (info, warning, error) to uppercase level.
     """
@@ -154,8 +147,7 @@ def configure_logging(
     json_output: bool = False,
     log_level: str = "INFO",
 ) -> None:
-    """
-    Configure structlog for the application.
+    """Configure structlog for the application.
 
     Should be called once at application startup.
 
@@ -197,9 +189,7 @@ def configure_logging(
 
     structlog.configure(
         processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(
-            getattr(logging, log_level.upper())
-        ),
+        wrapper_class=structlog.make_filtering_bound_logger(getattr(logging, log_level.upper())),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
@@ -212,16 +202,14 @@ def configure_logging(
 
 
 class K2Logger:
-    """
-    K2 Platform logger with additional convenience methods.
+    """K2 Platform logger with additional convenience methods.
 
     Wraps structlog BoundLogger with K2-specific functionality like
     timing context managers and standard field helpers.
     """
 
-    def __init__(self, logger: structlog.BoundLogger, component: Optional[str] = None):
-        """
-        Initialize K2 logger.
+    def __init__(self, logger: structlog.BoundLogger, component: str | None = None):
+        """Initialize K2 logger.
 
         Args:
             logger: Structlog bound logger
@@ -235,8 +223,7 @@ class K2Logger:
             self._logger = self._logger.bind(component=component)
 
     def bind(self, **kwargs: Any) -> "K2Logger":
-        """
-        Bind additional context to logger.
+        """Bind additional context to logger.
 
         Returns a new logger with the additional context.
 
@@ -272,8 +259,7 @@ class K2Logger:
 
     @contextmanager
     def timer(self, operation: str, **context: Any):
-        """
-        Context manager for timing operations.
+        """Context manager for timing operations.
 
         Logs operation start, duration, and any context on completion.
 
@@ -313,11 +299,10 @@ class K2Logger:
 
 def get_logger(
     name: str,
-    component: Optional[str] = None,
+    component: str | None = None,
     **initial_context: Any,
 ) -> K2Logger:
-    """
-    Get a structured logger for a module.
+    """Get a structured logger for a module.
 
     Args:
         name: Module name (typically __name__)

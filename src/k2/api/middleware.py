@@ -16,10 +16,10 @@ Middleware follows trading firm conventions:
 
 import time
 import uuid
-from typing import Optional, Callable
+from collections.abc import Callable
 from contextvars import ContextVar
 
-from fastapi import Request, HTTPException, Security
+from fastapi import HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -49,10 +49,9 @@ def get_api_key_from_env() -> str:
 
 
 async def verify_api_key(
-    api_key: Optional[str] = Security(api_key_header),
+    api_key: str | None = Security(api_key_header),
 ) -> str:
-    """
-    Verify the API key from request header.
+    """Verify the API key from request header.
 
     Args:
         api_key: API key from X-API-Key header
@@ -94,8 +93,7 @@ async def verify_api_key(
 
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware to add correlation IDs to all requests.
+    """Middleware to add correlation IDs to all requests.
 
     If X-Correlation-ID header is present, use it.
     Otherwise, generate a new UUID.
@@ -106,9 +104,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
     - Included in all log messages
     """
 
-    async def dispatch(
-        self, request: Request, call_next: Callable
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # Get or generate correlation ID
         correlation_id = request.headers.get("X-Correlation-ID")
         if not correlation_id:
@@ -133,8 +129,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware to log all requests with timing and metrics.
+    """Middleware to log all requests with timing and metrics.
 
     Logs:
     - Request method, path, status
@@ -148,9 +143,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     - k2_http_request_errors_total: Counter of failed requests
     """
 
-    async def dispatch(
-        self, request: Request, call_next: Callable
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
         start_time = time.time()
         correlation_id = correlation_id_var.get() or "unknown"
 
@@ -191,7 +184,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                     "method": method,
                     "endpoint": metrics_path,
                     "error_type": type(e).__name__,
-                }
+                },
             )
             raise
         finally:
@@ -236,14 +229,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                     "method": method,
                     "endpoint": metrics_path,
                     "error_type": error_type,
-                }
+                },
             )
 
         return response
 
     def _normalize_path(self, path: str) -> str:
-        """
-        Normalize path for metrics to avoid high cardinality.
+        """Normalize path for metrics to avoid high cardinality.
 
         Replaces dynamic segments with placeholders.
         """
@@ -270,8 +262,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 
 class CacheControlMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware to add Cache-Control headers based on endpoint.
+    """Middleware to add Cache-Control headers based on endpoint.
 
     Caching strategy:
     - /health: no-cache (always fresh)
@@ -295,9 +286,7 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
         "/v1/snapshots": 10,
     }
 
-    async def dispatch(
-        self, request: Request, call_next: Callable
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
         response = await call_next(request)
 
         # Only cache successful GET requests
@@ -331,8 +320,7 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
 
 
 def get_client_ip(request: Request) -> str:
-    """
-    Get client IP for rate limiting.
+    """Get client IP for rate limiting.
 
     Handles X-Forwarded-For header for reverse proxy scenarios.
     """
@@ -343,8 +331,7 @@ def get_client_ip(request: Request) -> str:
 
 
 def get_api_key_for_limit(request: Request) -> str:
-    """
-    Get API key for rate limiting (rate limit per API key).
+    """Get API key for rate limiting (rate limit per API key).
 
     Falls back to IP if no API key present.
     """

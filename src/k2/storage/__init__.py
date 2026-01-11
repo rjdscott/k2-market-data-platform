@@ -15,7 +15,6 @@ Components:
 See docs/STORAGE_OPTIMIZATION.md for performance tuning guidance.
 """
 
-from . import catalog
-from . import writer
+from . import catalog, writer
 
-__all__ = ['catalog', 'writer']
+__all__ = ["catalog", "writer"]

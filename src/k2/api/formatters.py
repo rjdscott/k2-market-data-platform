@@ -18,15 +18,15 @@ Usage:
     response = format_response(data, OutputFormat.CSV, "trades")
 """
 
-from typing import List, Dict, Any, Optional
-from datetime import datetime
-import io
 import base64
+import io
 import json
+from datetime import datetime
+from typing import Any
 
+import pandas as pd
 from fastapi import Response
 from fastapi.responses import JSONResponse
-import pandas as pd
 
 from k2.api.models import OutputFormat
 from k2.common.logging import get_logger
@@ -49,9 +49,8 @@ FILE_EXTENSIONS = {
 }
 
 
-def _convert_timestamps(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Convert any Pandas Timestamps to ISO strings for serialization.
+def _convert_timestamps(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert any Pandas Timestamps to ISO strings for serialization.
 
     Args:
         data: List of record dictionaries
@@ -74,11 +73,10 @@ def _convert_timestamps(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _apply_field_selection(
-    data: List[Dict[str, Any]],
-    fields: Optional[List[str]],
-) -> List[Dict[str, Any]]:
-    """
-    Apply field selection to filter columns.
+    data: list[dict[str, Any]],
+    fields: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Apply field selection to filter columns.
 
     Args:
         data: List of record dictionaries
@@ -94,12 +92,11 @@ def _apply_field_selection(
 
 
 def to_json_response(
-    data: List[Dict[str, Any]],
-    meta: Optional[Dict[str, Any]] = None,
-    pagination: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """
-    Format data as JSON response body.
+    data: list[dict[str, Any]],
+    meta: dict[str, Any] | None = None,
+    pagination: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Format data as JSON response body.
 
     Args:
         data: List of record dictionaries
@@ -124,11 +121,10 @@ def to_json_response(
 
 
 def to_csv_response(
-    data: List[Dict[str, Any]],
+    data: list[dict[str, Any]],
     filename: str = "export",
 ) -> Response:
-    """
-    Format data as CSV file response.
+    """Format data as CSV file response.
 
     Args:
         data: List of record dictionaries
@@ -164,11 +160,10 @@ def to_csv_response(
 
 
 def to_parquet_response(
-    data: List[Dict[str, Any]],
+    data: list[dict[str, Any]],
     filename: str = "export",
 ) -> Response:
-    """
-    Format data as Parquet file response.
+    """Format data as Parquet file response.
 
     Parquet is optimal for:
     - Large datasets (columnar compression)
@@ -214,15 +209,14 @@ def to_parquet_response(
 
 
 def format_response(
-    data: List[Dict[str, Any]],
+    data: list[dict[str, Any]],
     output_format: OutputFormat,
     resource_name: str = "data",
-    fields: Optional[List[str]] = None,
-    meta: Optional[Dict[str, Any]] = None,
-    pagination: Optional[Dict[str, Any]] = None,
+    fields: list[str] | None = None,
+    meta: dict[str, Any] | None = None,
+    pagination: dict[str, Any] | None = None,
 ) -> Response:
-    """
-    Format query results in the requested output format.
+    """Format query results in the requested output format.
 
     This is the main entry point for format conversion. Use this function
     in endpoints to return data in JSON, CSV, or Parquet format.
@@ -267,22 +261,20 @@ def format_response(
         body = to_json_response(filtered_data, meta, pagination)
         return JSONResponse(content=body)
 
-    elif output_format == OutputFormat.CSV:
+    if output_format == OutputFormat.CSV:
         return to_csv_response(filtered_data, filename)
 
-    elif output_format == OutputFormat.PARQUET:
+    if output_format == OutputFormat.PARQUET:
         return to_parquet_response(filtered_data, filename)
 
-    else:
-        # Fallback to JSON
-        logger.warning("Unknown format, falling back to JSON", format=output_format)
-        body = to_json_response(filtered_data, meta, pagination)
-        return JSONResponse(content=body)
+    # Fallback to JSON
+    logger.warning("Unknown format, falling back to JSON", format=output_format)
+    body = to_json_response(filtered_data, meta, pagination)
+    return JSONResponse(content=body)
 
 
 def encode_cursor(offset: int, total: int, batch_number: int) -> str:
-    """
-    Encode replay cursor as base64 string.
+    """Encode replay cursor as base64 string.
 
     Args:
         offset: Current offset position
@@ -301,9 +293,8 @@ def encode_cursor(offset: int, total: int, batch_number: int) -> str:
     return base64.urlsafe_b64encode(json_str.encode()).decode()
 
 
-def decode_cursor(cursor: str) -> Dict[str, int]:
-    """
-    Decode replay cursor from base64 string.
+def decode_cursor(cursor: str) -> dict[str, int]:
+    """Decode replay cursor from base64 string.
 
     Args:
         cursor: Base64-encoded cursor string

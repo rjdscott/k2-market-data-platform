@@ -14,17 +14,18 @@ Usage:
 """
 import sys
 from typing import Dict, List
-from confluent_kafka.admin import AdminClient, NewTopic, KafkaException
+
 import boto3
+import structlog
 from botocore.exceptions import ClientError
+from confluent_kafka.admin import AdminClient, KafkaException, NewTopic
 from pyiceberg.catalog import load_catalog
 from pyiceberg.exceptions import NamespaceAlreadyExistsError
-import structlog
 
 logger = structlog.get_logger()
 
 
-def create_kafka_topics(bootstrap_servers: str = 'localhost:9092') -> None:
+def create_kafka_topics(bootstrap_servers: str = "localhost:9092") -> None:
     """
     Create Kafka topics from configuration file.
 
@@ -48,34 +49,36 @@ def create_kafka_topics(bootstrap_servers: str = 'localhost:9092') -> None:
         bootstrap_servers: Kafka broker connection string
     """
     from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
-    from k2.kafka import get_topic_builder, DataType
+
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from k2.kafka import DataType, get_topic_builder
 
     logger.info("Creating Kafka topics from configuration", bootstrap_servers=bootstrap_servers)
 
-    admin = AdminClient({'bootstrap.servers': bootstrap_servers})
+    admin = AdminClient({"bootstrap.servers": bootstrap_servers})
     topic_builder = get_topic_builder()
 
     # Build NewTopic objects from config
     new_topics = []
 
-    for asset_class, asset_cfg in topic_builder.config['asset_classes'].items():
-        for exchange, exchange_cfg in asset_cfg['exchanges'].items():
+    for asset_class, asset_cfg in topic_builder.config["asset_classes"].items():
+        for exchange, exchange_cfg in asset_cfg["exchanges"].items():
             for data_type in DataType:
                 topic_config = topic_builder.get_topic_config(asset_class, data_type, exchange)
                 topic_name = topic_config.topic_name
 
                 # Prepare Kafka config (exclude replication.factor and min.insync.replicas as they're NewTopic params)
                 kafka_config = {
-                    k: v for k, v in topic_config.kafka_config.items()
-                    if k not in ['replication.factor', 'min.insync.replicas']
+                    k: v
+                    for k, v in topic_config.kafka_config.items()
+                    if k not in ["replication.factor", "min.insync.replicas"]
                 }
 
                 new_topic = NewTopic(
                     topic=topic_name,
                     num_partitions=topic_config.partitions,
-                    replication_factor=int(topic_config.kafka_config['replication.factor']),
-                    config=kafka_config
+                    replication_factor=int(topic_config.kafka_config["replication.factor"]),
+                    config=kafka_config,
                 )
                 new_topics.append(new_topic)
 
@@ -98,7 +101,7 @@ def create_kafka_topics(bootstrap_servers: str = 'localhost:9092') -> None:
             logger.info("Topic created successfully", topic=topic)
         except KafkaException as e:
             # Topic might already exist
-            if 'already exists' in str(e).lower():
+            if "already exists" in str(e).lower():
                 logger.info("Topic already exists", topic=topic)
             else:
                 logger.error("Failed to create topic", topic=topic, error=str(e))
@@ -108,9 +111,9 @@ def create_kafka_topics(bootstrap_servers: str = 'localhost:9092') -> None:
 
 
 def validate_minio_buckets(
-    endpoint_url: str = 'http://localhost:9000',
-    access_key: str = 'admin',
-    secret_key: str = 'password',
+    endpoint_url: str = "http://localhost:9000",
+    access_key: str = "admin",
+    secret_key: str = "password",
 ) -> None:
     """
     Validate that required MinIO buckets exist.
@@ -128,25 +131,25 @@ def validate_minio_buckets(
     logger.info("Validating MinIO buckets", endpoint=endpoint_url)
 
     s3 = boto3.client(
-        's3',
+        "s3",
         endpoint_url=endpoint_url,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
     )
 
-    required_buckets = ['warehouse', 'data', 'backups']
+    required_buckets = ["warehouse", "data", "backups"]
 
     for bucket in required_buckets:
         try:
             s3.head_bucket(Bucket=bucket)
             logger.info("Bucket exists", bucket=bucket)
         except ClientError as e:
-            error_code = e.response['Error']['Code']
-            if error_code == '404':
+            error_code = e.response["Error"]["Code"]
+            if error_code == "404":
                 logger.error(
                     "Required bucket missing",
                     bucket=bucket,
-                    hint="Ensure docker-compose minio-init service ran successfully"
+                    hint="Ensure docker-compose minio-init service ran successfully",
                 )
                 sys.exit(1)
             else:
@@ -155,10 +158,10 @@ def validate_minio_buckets(
 
 
 def create_iceberg_namespaces(
-    catalog_uri: str = 'http://localhost:8181',
-    s3_endpoint: str = 'http://localhost:9000',
-    s3_access_key: str = 'admin',
-    s3_secret_key: str = 'password',
+    catalog_uri: str = "http://localhost:8181",
+    s3_endpoint: str = "http://localhost:9000",
+    s3_access_key: str = "admin",
+    s3_secret_key: str = "password",
 ) -> None:
     """
     Create Iceberg namespaces for organizing tables.
@@ -184,13 +187,13 @@ def create_iceberg_namespaces(
                 "s3.access-key-id": s3_access_key,
                 "s3.secret-access-key": s3_secret_key,
                 "s3.path-style-access": "true",
-            }
+            },
         )
     except Exception as e:
         logger.error("Failed to connect to Iceberg catalog", error=str(e))
         sys.exit(1)
 
-    namespaces = ['market_data', 'reference_data']
+    namespaces = ["market_data", "reference_data"]
 
     for namespace in namespaces:
         try:
@@ -199,11 +202,7 @@ def create_iceberg_namespaces(
         except NamespaceAlreadyExistsError:
             logger.info("Namespace already exists", namespace=namespace)
         except Exception as e:
-            logger.error(
-                "Failed to create namespace",
-                namespace=namespace,
-                error=str(e)
-            )
+            logger.error("Failed to create namespace", namespace=namespace, error=str(e))
             # Continue with other namespaces
 
 
@@ -226,10 +225,10 @@ def create_iceberg_tables() -> None:
         manager = IcebergCatalogManager()
 
         # Create trades table
-        manager.create_trades_table(namespace='market_data', table_name='trades')
+        manager.create_trades_table(namespace="market_data", table_name="trades")
 
         # Create quotes table
-        manager.create_quotes_table(namespace='market_data', table_name='quotes')
+        manager.create_quotes_table(namespace="market_data", table_name="quotes")
 
         logger.info("Iceberg tables created successfully")
 
@@ -266,5 +265,5 @@ def main():
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

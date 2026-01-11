@@ -9,6 +9,7 @@ environment variable override support. Configuration is hierarchical:
 - K2Config: Main configuration aggregating all sub-configs
 
 Environment variables follow the pattern: K2_{COMPONENT}_{PARAMETER}
+
 Examples:
     K2_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
     K2_ICEBERG_CATALOG_URI=http://iceberg-rest:8181
@@ -24,7 +25,9 @@ Usage:
     # Configuration is validated on load
     # Invalid values will raise ValidationError
 """
+
 from typing import Literal
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -36,23 +39,19 @@ class KafkaConfig(BaseSettings):
     Avro schema management and event streaming.
     """
 
-    model_config = SettingsConfigDict(
-        env_prefix='K2_KAFKA_',
-        case_sensitive=False,
-        extra='ignore'
-    )
+    model_config = SettingsConfigDict(env_prefix="K2_KAFKA_", case_sensitive=False, extra="ignore")
 
     bootstrap_servers: str = Field(
         default="localhost:9092",
-        description="Kafka bootstrap servers (comma-separated for multiple brokers)"
+        description="Kafka bootstrap servers (comma-separated for multiple brokers)",
     )
 
     schema_registry_url: str = Field(
         default="http://localhost:8081",
-        description="Confluent Schema Registry URL for Avro schema management"
+        description="Confluent Schema Registry URL for Avro schema management",
     )
 
-    @field_validator('bootstrap_servers')
+    @field_validator("bootstrap_servers")
     @classmethod
     def validate_bootstrap_servers(cls, v: str) -> str:
         """Ensure bootstrap servers is not empty."""
@@ -60,13 +59,13 @@ class KafkaConfig(BaseSettings):
             raise ValueError("bootstrap_servers cannot be empty")
         return v.strip()
 
-    @field_validator('schema_registry_url')
+    @field_validator("schema_registry_url")
     @classmethod
     def validate_schema_registry_url(cls, v: str) -> str:
         """Ensure schema registry URL is a valid HTTP(S) URL."""
-        if not v.startswith(('http://', 'https://')):
+        if not v.startswith(("http://", "https://")):
             raise ValueError("schema_registry_url must start with http:// or https://")
-        return v.rstrip('/')
+        return v.rstrip("/")
 
 
 class IcebergConfig(BaseSettings):
@@ -77,49 +76,36 @@ class IcebergConfig(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix='K2_ICEBERG_',
-        case_sensitive=False,
-        extra='ignore'
+        env_prefix="K2_ICEBERG_", case_sensitive=False, extra="ignore",
     )
 
     catalog_uri: str = Field(
-        default="http://localhost:8181",
-        description="Iceberg REST catalog URI"
+        default="http://localhost:8181", description="Iceberg REST catalog URI",
     )
 
-    s3_endpoint: str = Field(
-        default="http://localhost:9000",
-        description="S3/MinIO endpoint URL"
-    )
+    s3_endpoint: str = Field(default="http://localhost:9000", description="S3/MinIO endpoint URL")
 
-    s3_access_key: str = Field(
-        default="admin",
-        description="S3/MinIO access key ID"
-    )
+    s3_access_key: str = Field(default="admin", description="S3/MinIO access key ID")
 
-    s3_secret_key: str = Field(
-        default="password",
-        description="S3/MinIO secret access key"
-    )
+    s3_secret_key: str = Field(default="password", description="S3/MinIO secret access key")
 
     warehouse: str = Field(
-        default="s3://warehouse/",
-        description="Iceberg warehouse location (S3 path)"
+        default="s3://warehouse/", description="Iceberg warehouse location (S3 path)",
     )
 
-    @field_validator('catalog_uri', 's3_endpoint')
+    @field_validator("catalog_uri", "s3_endpoint")
     @classmethod
     def validate_url(cls, v: str) -> str:
         """Ensure URLs are valid HTTP(S) URLs."""
-        if not v.startswith(('http://', 'https://')):
+        if not v.startswith(("http://", "https://")):
             raise ValueError("URL must start with http:// or https://")
-        return v.rstrip('/')
+        return v.rstrip("/")
 
-    @field_validator('warehouse')
+    @field_validator("warehouse")
     @classmethod
     def validate_warehouse(cls, v: str) -> str:
         """Ensure warehouse path is valid S3 path."""
-        if not v.startswith('s3://'):
+        if not v.startswith("s3://"):
             raise ValueError("warehouse must be an S3 path (s3://bucket/path)")
         return v
 
@@ -130,38 +116,17 @@ class DatabaseConfig(BaseSettings):
     Used for Iceberg catalog metadata and sequence tracking.
     """
 
-    model_config = SettingsConfigDict(
-        env_prefix='K2_DB_',
-        case_sensitive=False,
-        extra='ignore'
-    )
+    model_config = SettingsConfigDict(env_prefix="K2_DB_", case_sensitive=False, extra="ignore")
 
-    host: str = Field(
-        default="localhost",
-        description="PostgreSQL host"
-    )
+    host: str = Field(default="localhost", description="PostgreSQL host")
 
-    port: int = Field(
-        default=5432,
-        description="PostgreSQL port",
-        ge=1,
-        le=65535
-    )
+    port: int = Field(default=5432, description="PostgreSQL port", ge=1, le=65535)
 
-    user: str = Field(
-        default="iceberg",
-        description="PostgreSQL username"
-    )
+    user: str = Field(default="iceberg", description="PostgreSQL username")
 
-    password: str = Field(
-        default="iceberg",
-        description="PostgreSQL password"
-    )
+    password: str = Field(default="iceberg", description="PostgreSQL password")
 
-    database: str = Field(
-        default="iceberg_catalog",
-        description="PostgreSQL database name"
-    )
+    database: str = Field(default="iceberg_catalog", description="PostgreSQL database name")
 
     @property
     def connection_string(self) -> str:
@@ -176,27 +141,18 @@ class ObservabilityConfig(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix='K2_OBSERVABILITY_',
-        case_sensitive=False,
-        extra='ignore'
+        env_prefix="K2_OBSERVABILITY_", case_sensitive=False, extra="ignore",
     )
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
-        default="INFO",
-        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
+        default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
 
     prometheus_port: int = Field(
-        default=9090,
-        description="Prometheus metrics port",
-        ge=1024,
-        le=65535
+        default=9090, description="Prometheus metrics port", ge=1024, le=65535,
     )
 
-    enable_metrics: bool = Field(
-        default=True,
-        description="Enable Prometheus metrics collection"
-    )
+    enable_metrics: bool = Field(default=True, description="Enable Prometheus metrics collection")
 
 
 class K2Config(BaseSettings):
@@ -207,16 +163,15 @@ class K2Config(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix='K2_',
+        env_prefix="K2_",
         case_sensitive=False,
-        extra='ignore',
-        env_file='.env',
-        env_file_encoding='utf-8'
+        extra="ignore",
+        env_file=".env",
+        env_file_encoding="utf-8",
     )
 
     environment: Literal["local", "test", "staging", "production"] = Field(
-        default="local",
-        description="Deployment environment"
+        default="local", description="Deployment environment",
     )
 
     # Sub-configurations

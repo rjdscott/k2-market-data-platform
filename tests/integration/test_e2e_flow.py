@@ -13,13 +13,10 @@ Usage:
     pytest tests/integration/test_e2e_flow.py -v -s -m integration
 """
 
-import csv
-import io
 import tempfile
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 import pytest
@@ -104,21 +101,23 @@ def transform_sample_trades(
     symbol = company_info["symbol"]
 
     # Transform columns
-    result = pd.DataFrame({
-        "symbol": symbol,
-        "company_id": int(company_id),
-        "exchange": "ASX",
-        "exchange_timestamp": df.apply(
-            lambda row: _parse_timestamp(row["Date"], row["Time"]),
-            axis=1,
-        ),
-        "price": df["Price"].apply(Decimal),
-        "volume": df["Volume"],
-        "qualifiers": df["Qualifiers"],
-        "venue": df["Venue"].fillna("X"),
-        "buyer_id": df["BuyerID"].fillna(""),
-        "sequence_number": range(1, len(df) + 1),
-    })
+    result = pd.DataFrame(
+        {
+            "symbol": symbol,
+            "company_id": int(company_id),
+            "exchange": "ASX",
+            "exchange_timestamp": df.apply(
+                lambda row: _parse_timestamp(row["Date"], row["Time"]),
+                axis=1,
+            ),
+            "price": df["Price"].apply(Decimal),
+            "volume": df["Volume"],
+            "qualifiers": df["Qualifiers"],
+            "venue": df["Venue"].fillna("X"),
+            "buyer_id": df["BuyerID"].fillna(""),
+            "sequence_number": range(1, len(df) + 1),
+        },
+    )
 
     return result
 
@@ -258,8 +257,15 @@ class TestDataTransformation:
 
         # Check required columns present
         required_cols = [
-            "symbol", "company_id", "exchange", "exchange_timestamp",
-            "price", "volume", "qualifiers", "venue", "sequence_number",
+            "symbol",
+            "company_id",
+            "exchange",
+            "exchange_timestamp",
+            "price",
+            "volume",
+            "qualifiers",
+            "venue",
+            "sequence_number",
         ]
         for col in required_cols:
             assert col in df.columns, f"Missing column: {col}"
@@ -382,6 +388,7 @@ class TestQueryEngineIntegration:
         """Create QueryEngine instance."""
         try:
             from k2.query.engine import QueryEngine
+
             engine = QueryEngine()
             yield engine
             engine.close()
@@ -416,6 +423,7 @@ class TestAPIIntegration:
         """Create API test client."""
         try:
             from k2.api.main import app
+
             yield TestClient(app)
         except Exception as e:
             pytest.skip(f"API not available: {e}")

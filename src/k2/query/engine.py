@@ -24,16 +24,18 @@ Usage:
     # Get daily summary
     summary = engine.get_market_summary("BHP", date(2024, 1, 15))
 """
-from typing import Optional, List, Dict, Any
-from datetime import datetime, date
+
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import date, datetime
 from enum import Enum
+from typing import Any
+
 import duckdb
 
 from k2.common.config import config
-from k2.common.metrics import create_component_metrics
 from k2.common.logging import get_logger
+from k2.common.metrics import create_component_metrics
 
 logger = get_logger(__name__, component="query")
 metrics = create_component_metrics("query")
@@ -41,6 +43,7 @@ metrics = create_component_metrics("query")
 
 class QueryType(str, Enum):
     """Query type classification for metrics."""
+
     TRADES = "trades"
     QUOTES = "quotes"
     SUMMARY = "summary"
@@ -51,6 +54,7 @@ class QueryType(str, Enum):
 @dataclass
 class MarketSummary:
     """OHLCV daily market summary for a symbol."""
+
     symbol: str
     date: date
     open_price: float
@@ -63,8 +67,7 @@ class MarketSummary:
 
 
 class QueryEngine:
-    """
-    DuckDB query engine for Iceberg market data tables.
+    """DuckDB query engine for Iceberg market data tables.
 
     Provides efficient analytical queries over trades and quotes data with:
     - Direct Parquet scanning via Iceberg extension
@@ -87,13 +90,12 @@ class QueryEngine:
 
     def __init__(
         self,
-        s3_endpoint: Optional[str] = None,
-        s3_access_key: Optional[str] = None,
-        s3_secret_key: Optional[str] = None,
-        warehouse_path: Optional[str] = None,
+        s3_endpoint: str | None = None,
+        s3_access_key: str | None = None,
+        s3_secret_key: str | None = None,
+        warehouse_path: str | None = None,
     ):
-        """
-        Initialize DuckDB query engine.
+        """Initialize DuckDB query engine.
 
         Args:
             s3_endpoint: S3/MinIO endpoint (defaults to config)
@@ -110,7 +112,7 @@ class QueryEngine:
         self._s3_endpoint_host = self.s3_endpoint.replace("http://", "").replace("https://", "")
 
         # Initialize DuckDB connection
-        self._conn: Optional[duckdb.DuckDBPyConnection] = None
+        self._conn: duckdb.DuckDBPyConnection | None = None
         self._init_connection()
 
         logger.info(
@@ -129,22 +131,23 @@ class QueryEngine:
             self._conn.execute("INSTALL httpfs; LOAD httpfs;")
 
             # Configure S3/MinIO credentials
-            self._conn.execute(f"""
+            self._conn.execute(
+                f"""
                 SET s3_endpoint='{self._s3_endpoint_host}';
                 SET s3_access_key_id='{self.s3_access_key}';
                 SET s3_secret_access_key='{self.s3_secret_key}';
                 SET s3_use_ssl=false;
                 SET s3_url_style='path';
                 SET unsafe_enable_version_guessing=true;
-            """)
+            """,
+            )
 
             logger.debug("DuckDB connection initialized with Iceberg extension")
 
         except Exception as e:
             logger.error("Failed to initialize DuckDB connection", error=str(e))
             metrics.increment(
-                "query_executions_total",
-                labels={"query_type": "initialization", "status": "error"}
+                "query_executions_total", labels={"query_type": "initialization", "status": "error"},
             )
             raise
 
@@ -156,8 +159,7 @@ class QueryEngine:
         return self._conn
 
     def _get_table_path(self, table_name: str) -> str:
-        """
-        Get the full S3 path for an Iceberg table.
+        """Get the full S3 path for an Iceberg table.
 
         Args:
             table_name: Table name (e.g., "trades" or "market_data.trades")
@@ -183,34 +185,27 @@ class QueryEngine:
         try:
             yield
             metrics.increment(
-                "query_executions_total",
-                labels={"query_type": query_type, "status": "success"}
+                "query_executions_total", labels={"query_type": query_type, "status": "success"},
             )
         except Exception:
             metrics.increment(
-                "query_executions_total",
-                labels={"query_type": query_type, "status": "error"}
+                "query_executions_total", labels={"query_type": query_type, "status": "error"},
             )
             raise
         finally:
             duration = (datetime.now() - start_time).total_seconds()
-            metrics.histogram(
-                "query_duration_seconds",
-                duration,
-                labels={"query_type": query_type}
-            )
+            metrics.histogram("query_duration_seconds", duration, labels={"query_type": query_type})
 
     def query_trades(
         self,
-        symbol: Optional[str] = None,
-        exchange: Optional[str] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        symbol: str | None = None,
+        exchange: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
         limit: int = 1000,
         table_name: str = "market_data.trades",
-    ) -> List[Dict[str, Any]]:
-        """
-        Query trade records with optional filters.
+    ) -> list[dict[str, Any]]:
+        """Query trade records with optional filters.
 
         Args:
             symbol: Filter by symbol (e.g., "BHP")
@@ -280,9 +275,7 @@ class QueryEngine:
 
                 # Record rows scanned
                 metrics.histogram(
-                    "query_rows_scanned",
-                    len(rows),
-                    labels={"query_type": QueryType.TRADES.value}
+                    "query_rows_scanned", len(rows), labels={"query_type": QueryType.TRADES.value},
                 )
 
                 return rows
@@ -298,15 +291,14 @@ class QueryEngine:
 
     def query_quotes(
         self,
-        symbol: Optional[str] = None,
-        exchange: Optional[str] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        symbol: str | None = None,
+        exchange: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
         limit: int = 1000,
         table_name: str = "market_data.quotes",
-    ) -> List[Dict[str, Any]]:
-        """
-        Query quote records with optional filters.
+    ) -> list[dict[str, Any]]:
+        """Query quote records with optional filters.
 
         Args:
             symbol: Filter by symbol (e.g., "BHP")
@@ -367,9 +359,7 @@ class QueryEngine:
                 )
 
                 metrics.histogram(
-                    "query_rows_scanned",
-                    len(rows),
-                    labels={"query_type": QueryType.QUOTES.value}
+                    "query_rows_scanned", len(rows), labels={"query_type": QueryType.QUOTES.value},
                 )
 
                 return rows
@@ -387,11 +377,10 @@ class QueryEngine:
         self,
         symbol: str,
         query_date: date,
-        exchange: Optional[str] = None,
+        exchange: str | None = None,
         table_name: str = "market_data.trades",
-    ) -> Optional[MarketSummary]:
-        """
-        Get OHLCV market summary for a symbol on a specific date.
+    ) -> MarketSummary | None:
+        """Get OHLCV market summary for a symbol on a specific date.
 
         Args:
             symbol: Symbol to query (e.g., "BHP")
@@ -486,11 +475,10 @@ class QueryEngine:
 
     def get_symbols(
         self,
-        exchange: Optional[str] = None,
+        exchange: str | None = None,
         table_name: str = "market_data.trades",
-    ) -> List[str]:
-        """
-        Get distinct symbols from trades table.
+    ) -> list[str]:
+        """Get distinct symbols from trades table.
 
         Args:
             exchange: Optional exchange filter
@@ -519,9 +507,8 @@ class QueryEngine:
     def get_date_range(
         self,
         table_name: str = "market_data.trades",
-    ) -> tuple[Optional[datetime], Optional[datetime]]:
-        """
-        Get the date range of data in a table.
+    ) -> tuple[datetime | None, datetime | None]:
+        """Get the date range of data in a table.
 
         Args:
             table_name: Iceberg table name
@@ -542,9 +529,8 @@ class QueryEngine:
             result = self.connection.execute(query).fetchone()
             return (result[0], result[1]) if result else (None, None)
 
-    def execute_raw(self, query: str) -> List[Dict[str, Any]]:
-        """
-        Execute a raw SQL query against DuckDB.
+    def execute_raw(self, query: str) -> list[dict[str, Any]]:
+        """Execute a raw SQL query against DuckDB.
 
         Use with caution - this bypasses query building and validation.
 
@@ -562,9 +548,8 @@ class QueryEngine:
                 logger.error("Raw query failed", query=query[:100], error=str(e))
                 raise
 
-    def get_stats(self) -> Dict[str, Any]:
-        """
-        Get engine statistics and metadata.
+    def get_stats(self) -> dict[str, Any]:
+        """Get engine statistics and metadata.
 
         Returns:
             Dictionary with connection info and table stats
@@ -581,10 +566,10 @@ class QueryEngine:
             quotes_path = self._get_table_path("quotes")
 
             trades_count = self.connection.execute(
-                f"SELECT COUNT(*) FROM iceberg_scan('{trades_path}')"
+                f"SELECT COUNT(*) FROM iceberg_scan('{trades_path}')",
             ).fetchone()[0]
             quotes_count = self.connection.execute(
-                f"SELECT COUNT(*) FROM iceberg_scan('{quotes_path}')"
+                f"SELECT COUNT(*) FROM iceberg_scan('{quotes_path}')",
             ).fetchone()[0]
 
             stats["trades_count"] = trades_count

@@ -36,19 +36,19 @@ Usage:
     ):
         process_batch(batch)
 """
-from typing import Optional, List, Dict, Any, Iterator, Generator
-from datetime import datetime
+
+from collections.abc import Generator
 from dataclasses import dataclass
-from contextlib import contextmanager
-import duckdb
+from datetime import datetime
+from typing import Any
 
 from pyiceberg.catalog import load_catalog
-from pyiceberg.table import Table
 from pyiceberg.exceptions import NoSuchTableError
+from pyiceberg.table import Table
 
 from k2.common.config import config
-from k2.common.metrics import create_component_metrics
 from k2.common.logging import get_logger
+from k2.common.metrics import create_component_metrics
 from k2.query.engine import QueryEngine
 
 logger = get_logger(__name__, component="replay")
@@ -58,11 +58,12 @@ metrics = create_component_metrics("replay")
 @dataclass
 class SnapshotInfo:
     """Information about an Iceberg table snapshot."""
+
     snapshot_id: int
     timestamp_ms: int
-    parent_id: Optional[int]
+    parent_id: int | None
     manifest_list: str
-    summary: Dict[str, str]
+    summary: dict[str, str]
 
     @property
     def timestamp(self) -> datetime:
@@ -81,8 +82,7 @@ class SnapshotInfo:
 
 
 class ReplayEngine:
-    """
-    Engine for time-travel queries and historical data replay.
+    """Engine for time-travel queries and historical data replay.
 
     Built on top of QueryEngine, this class adds:
     - Snapshot management and enumeration
@@ -111,14 +111,13 @@ class ReplayEngine:
 
     def __init__(
         self,
-        catalog_uri: Optional[str] = None,
-        s3_endpoint: Optional[str] = None,
-        s3_access_key: Optional[str] = None,
-        s3_secret_key: Optional[str] = None,
-        warehouse_path: Optional[str] = None,
+        catalog_uri: str | None = None,
+        s3_endpoint: str | None = None,
+        s3_access_key: str | None = None,
+        s3_secret_key: str | None = None,
+        warehouse_path: str | None = None,
     ):
-        """
-        Initialize replay engine.
+        """Initialize replay engine.
 
         Args:
             catalog_uri: Iceberg REST catalog URI (defaults to config)
@@ -162,7 +161,7 @@ class ReplayEngine:
                     "s3.access-key-id": self.s3_access_key,
                     "s3.secret-access-key": self.s3_secret_key,
                     "s3.path-style-access": "true",
-                }
+                },
             )
             logger.debug("PyIceberg catalog initialized")
         except Exception as e:
@@ -170,8 +169,7 @@ class ReplayEngine:
             raise
 
     def _load_table(self, table_name: str) -> Table:
-        """
-        Load an Iceberg table.
+        """Load an Iceberg table.
 
         Args:
             table_name: Table name (e.g., "trades" or "market_data.trades")
@@ -191,10 +189,9 @@ class ReplayEngine:
     def list_snapshots(
         self,
         table_name: str = "market_data.trades",
-        limit: Optional[int] = None,
-    ) -> List[SnapshotInfo]:
-        """
-        List snapshots for a table, newest first.
+        limit: int | None = None,
+    ) -> list[SnapshotInfo]:
+        """List snapshots for a table, newest first.
 
         Args:
             table_name: Iceberg table name
@@ -212,8 +209,13 @@ class ReplayEngine:
             if snapshot.summary:
                 try:
                     # Try to iterate as dict-like object
-                    for key in ["operation", "added-records", "total-records",
-                                "added-data-files", "deleted-records"]:
+                    for key in [
+                        "operation",
+                        "added-records",
+                        "total-records",
+                        "added-data-files",
+                        "deleted-records",
+                    ]:
                         try:
                             val = snapshot.summary.get(key)
                             if val is not None:
@@ -250,9 +252,8 @@ class ReplayEngine:
         self,
         snapshot_id: int,
         table_name: str = "market_data.trades",
-    ) -> Optional[SnapshotInfo]:
-        """
-        Get information about a specific snapshot.
+    ) -> SnapshotInfo | None:
+        """Get information about a specific snapshot.
 
         Args:
             snapshot_id: Snapshot ID
@@ -270,9 +271,8 @@ class ReplayEngine:
     def get_current_snapshot(
         self,
         table_name: str = "market_data.trades",
-    ) -> Optional[SnapshotInfo]:
-        """
-        Get the current (latest) snapshot for a table.
+    ) -> SnapshotInfo | None:
+        """Get the current (latest) snapshot for a table.
 
         Args:
             table_name: Iceberg table name
@@ -291,8 +291,13 @@ class ReplayEngine:
         summary_dict = {}
         if snapshot.summary:
             try:
-                for key in ["operation", "added-records", "total-records",
-                            "added-data-files", "deleted-records"]:
+                for key in [
+                    "operation",
+                    "added-records",
+                    "total-records",
+                    "added-data-files",
+                    "deleted-records",
+                ]:
                     try:
                         val = snapshot.summary.get(key)
                         if val is not None:
@@ -313,13 +318,12 @@ class ReplayEngine:
     def query_at_snapshot(
         self,
         snapshot_id: int,
-        symbol: Optional[str] = None,
-        exchange: Optional[str] = None,
+        symbol: str | None = None,
+        exchange: str | None = None,
         limit: int = 1000,
         table_name: str = "market_data.trades",
-    ) -> List[Dict[str, Any]]:
-        """
-        Query trades as of a specific snapshot (time-travel).
+    ) -> list[dict[str, Any]]:
+        """Query trades as of a specific snapshot (time-travel).
 
         Args:
             snapshot_id: Iceberg snapshot ID to query
@@ -380,8 +384,7 @@ class ReplayEngine:
             )
 
             metrics.increment(
-                "query_executions_total",
-                labels={"query_type": "snapshot", "status": "success"}
+                "query_executions_total", labels={"query_type": "snapshot", "status": "success"},
             )
 
             return rows
@@ -393,22 +396,20 @@ class ReplayEngine:
                 error=str(e),
             )
             metrics.increment(
-                "query_executions_total",
-                labels={"query_type": "snapshot", "status": "error"}
+                "query_executions_total", labels={"query_type": "snapshot", "status": "error"},
             )
             raise
 
     def cold_start_replay(
         self,
-        symbol: Optional[str] = None,
-        exchange: Optional[str] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        symbol: str | None = None,
+        exchange: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
         batch_size: int = 1000,
         table_name: str = "market_data.trades",
-    ) -> Generator[List[Dict[str, Any]], None, None]:
-        """
-        Replay historical data in chronological order.
+    ) -> Generator[list[dict[str, Any]]]:
+        """Replay historical data in chronological order.
 
         Streams data in batches for memory efficiency. Use for:
         - Backtesting trading strategies
@@ -536,17 +537,15 @@ class ReplayEngine:
         )
 
         metrics.increment(
-            "query_executions_total",
-            labels={"query_type": "replay", "status": "success"}
+            "query_executions_total", labels={"query_type": "replay", "status": "success"},
         )
 
     def rewind_to_timestamp(
         self,
         target_time: datetime,
         table_name: str = "market_data.trades",
-    ) -> Optional[SnapshotInfo]:
-        """
-        Find the snapshot closest to (but not after) a target timestamp.
+    ) -> SnapshotInfo | None:
+        """Find the snapshot closest to (but not after) a target timestamp.
 
         Useful for finding the correct snapshot for point-in-time queries.
 
@@ -580,11 +579,10 @@ class ReplayEngine:
 
     def get_replay_stats(
         self,
-        symbol: Optional[str] = None,
+        symbol: str | None = None,
         table_name: str = "market_data.trades",
-    ) -> Dict[str, Any]:
-        """
-        Get statistics for replay planning.
+    ) -> dict[str, Any]:
+        """Get statistics for replay planning.
 
         Args:
             symbol: Optional symbol filter

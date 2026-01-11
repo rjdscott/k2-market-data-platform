@@ -37,23 +37,22 @@ Example CSV format (trades):
     BHP,2026-01-10T10:30:00.123Z,45.50,1000,buy,12345,T-001
     RIO,2026-01-10T10:30:00.456Z,120.75,500,sell,12346,T-002
 """
+
 import csv
 import sys
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import typer
 from rich.console import Console
 from rich.progress import (
+    BarColumn,
     Progress,
     SpinnerColumn,
-    BarColumn,
+    TaskProgressColumn,
     TextColumn,
     TimeRemainingColumn,
-    TaskProgressColumn,
 )
 from rich.table import Table
 
@@ -70,11 +69,12 @@ app = typer.Typer(help="K2 CSV Batch Loader - Load market data from CSV to Kafka
 @dataclass
 class LoadStats:
     """Statistics for batch load operation."""
+
     total_rows: int = 0
     success_count: int = 0
     error_count: int = 0
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
 
     @property
     def duration_seconds(self) -> float:
@@ -119,8 +119,8 @@ class BatchLoader:
         asset_class: str,
         exchange: str,
         data_type: str,
-        producer: Optional[MarketDataProducer] = None,
-        dlq_file: Optional[Path] = None,
+        producer: MarketDataProducer | None = None,
+        dlq_file: Path | None = None,
     ):
         """Initialize batch loader.
 
@@ -139,11 +139,9 @@ class BatchLoader:
         self.data_type = data_type.lower()
 
         # Validate data type
-        valid_data_types = ['trades', 'quotes', 'reference_data']
+        valid_data_types = ["trades", "quotes", "reference_data"]
         if self.data_type not in valid_data_types:
-            raise ValueError(
-                f"Invalid data_type '{data_type}'. Must be one of: {valid_data_types}"
-            )
+            raise ValueError(f"Invalid data_type '{data_type}'. Must be one of: {valid_data_types}")
 
         # Create or use provided producer
         self.producer = producer or MarketDataProducer()
@@ -170,11 +168,11 @@ class BatchLoader:
         self.dlq_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Open DLQ file in append mode
-        self._dlq_handle = open(self.dlq_file, 'a', newline='', encoding='utf-8')
+        self._dlq_handle = open(self.dlq_file, "a", newline="", encoding="utf-8")
         self._dlq_writer = csv.DictWriter(
             self._dlq_handle,
-            fieldnames=['row_number', 'error', 'raw_record'],
-            extrasaction='ignore',
+            fieldnames=["row_number", "error", "raw_record"],
+            extrasaction="ignore",
         )
 
         # Write header if file is new
@@ -183,7 +181,7 @@ class BatchLoader:
 
         logger.info("Dead Letter Queue initialized", dlq_file=str(self.dlq_file))
 
-    def _write_to_dlq(self, row_number: int, error: str, record: Dict):
+    def _write_to_dlq(self, row_number: int, error: str, record: dict):
         """Write failed record to Dead Letter Queue.
 
         Args:
@@ -195,11 +193,13 @@ class BatchLoader:
             return
 
         try:
-            self._dlq_writer.writerow({
-                'row_number': row_number,
-                'error': error,
-                'raw_record': str(record),
-            })
+            self._dlq_writer.writerow(
+                {
+                    "row_number": row_number,
+                    "error": error,
+                    "raw_record": str(record),
+                },
+            )
             self._dlq_handle.flush()
 
         except Exception as e:
@@ -209,7 +209,7 @@ class BatchLoader:
                 error=str(e),
             )
 
-    def _parse_csv_row(self, row: Dict) -> Dict:
+    def _parse_csv_row(self, row: dict) -> dict:
         """Parse CSV row and convert to appropriate types.
 
         Args:
@@ -225,16 +225,15 @@ class BatchLoader:
         row = {k: v.strip() if isinstance(v, str) else v for k, v in row.items()}
 
         # Type conversions based on data type
-        if self.data_type == 'trades':
+        if self.data_type == "trades":
             return self._parse_trade_row(row)
-        elif self.data_type == 'quotes':
+        if self.data_type == "quotes":
             return self._parse_quote_row(row)
-        elif self.data_type == 'reference_data':
+        if self.data_type == "reference_data":
             return self._parse_reference_data_row(row)
-        else:
-            raise ValueError(f"Unsupported data_type: {self.data_type}")
+        raise ValueError(f"Unsupported data_type: {self.data_type}")
 
-    def _parse_trade_row(self, row: Dict) -> Dict:
+    def _parse_trade_row(self, row: dict) -> dict:
         """Parse trade CSV row.
 
         Required fields: symbol, exchange_timestamp, price, quantity, side,
@@ -250,8 +249,13 @@ class BatchLoader:
             ValueError: If required fields missing or invalid
         """
         required_fields = [
-            'symbol', 'exchange_timestamp', 'price', 'quantity',
-            'side', 'sequence_number', 'trade_id'
+            "symbol",
+            "exchange_timestamp",
+            "price",
+            "quantity",
+            "side",
+            "sequence_number",
+            "trade_id",
         ]
 
         # Check required fields
@@ -261,16 +265,16 @@ class BatchLoader:
 
         # Type conversions
         return {
-            'symbol': row['symbol'],
-            'exchange_timestamp': row['exchange_timestamp'],  # ISO format string
-            'price': float(row['price']),
-            'quantity': int(row['quantity']),
-            'side': row['side'].lower(),
-            'sequence_number': int(row['sequence_number']),
-            'trade_id': row['trade_id'],
+            "symbol": row["symbol"],
+            "exchange_timestamp": row["exchange_timestamp"],  # ISO format string
+            "price": float(row["price"]),
+            "quantity": int(row["quantity"]),
+            "side": row["side"].lower(),
+            "sequence_number": int(row["sequence_number"]),
+            "trade_id": row["trade_id"],
         }
 
-    def _parse_quote_row(self, row: Dict) -> Dict:
+    def _parse_quote_row(self, row: dict) -> dict:
         """Parse quote CSV row.
 
         Required fields: symbol, exchange_timestamp, bid_price, ask_price,
@@ -286,8 +290,13 @@ class BatchLoader:
             ValueError: If required fields missing or invalid
         """
         required_fields = [
-            'symbol', 'exchange_timestamp', 'bid_price', 'ask_price',
-            'bid_size', 'ask_size', 'sequence_number'
+            "symbol",
+            "exchange_timestamp",
+            "bid_price",
+            "ask_price",
+            "bid_size",
+            "ask_size",
+            "sequence_number",
         ]
 
         missing = [f for f in required_fields if f not in row or not row[f]]
@@ -295,16 +304,16 @@ class BatchLoader:
             raise ValueError(f"Missing required fields: {missing}")
 
         return {
-            'symbol': row['symbol'],
-            'exchange_timestamp': row['exchange_timestamp'],
-            'bid_price': float(row['bid_price']),
-            'ask_price': float(row['ask_price']),
-            'bid_size': int(row['bid_size']),
-            'ask_size': int(row['ask_size']),
-            'sequence_number': int(row['sequence_number']),
+            "symbol": row["symbol"],
+            "exchange_timestamp": row["exchange_timestamp"],
+            "bid_price": float(row["bid_price"]),
+            "ask_price": float(row["ask_price"]),
+            "bid_size": int(row["bid_size"]),
+            "ask_size": int(row["ask_size"]),
+            "sequence_number": int(row["sequence_number"]),
         }
 
-    def _parse_reference_data_row(self, row: Dict) -> Dict:
+    def _parse_reference_data_row(self, row: dict) -> dict:
         """Parse reference data CSV row.
 
         Required fields: company_id, symbol, company_name, sector
@@ -318,30 +327,34 @@ class BatchLoader:
         Raises:
             ValueError: If required fields missing or invalid
         """
-        required_fields = ['company_id', 'symbol', 'company_name', 'sector']
+        required_fields = ["company_id", "symbol", "company_name", "sector"]
 
         missing = [f for f in required_fields if f not in row or not row[f]]
         if missing:
             raise ValueError(f"Missing required fields: {missing}")
 
         record = {
-            'company_id': row['company_id'],
-            'symbol': row['symbol'],
-            'company_name': row['company_name'],
-            'sector': row['sector'],
+            "company_id": row["company_id"],
+            "symbol": row["symbol"],
+            "company_name": row["company_name"],
+            "sector": row["sector"],
         }
 
         # Optional fields with type conversions
-        if row.get('market_cap'):
-            record['market_cap'] = int(row['market_cap'])
-        if row.get('employees'):
-            record['employees'] = int(row['employees'])
-        if row.get('founded_year'):
-            record['founded_year'] = int(row['founded_year'])
+        if row.get("market_cap"):
+            record["market_cap"] = int(row["market_cap"])
+        if row.get("employees"):
+            record["employees"] = int(row["employees"])
+        if row.get("founded_year"):
+            record["founded_year"] = int(row["founded_year"])
 
         # Pass through other optional string fields
         optional_string_fields = [
-            'industry', 'headquarters', 'description', 'website', 'last_updated'
+            "industry",
+            "headquarters",
+            "description",
+            "website",
+            "last_updated",
         ]
         for field in optional_string_fields:
             if row.get(field):
@@ -349,7 +362,7 @@ class BatchLoader:
 
         return record
 
-    def _produce_record(self, record: Dict):
+    def _produce_record(self, record: dict):
         """Produce record to Kafka using appropriate method.
 
         Args:
@@ -358,11 +371,11 @@ class BatchLoader:
         Raises:
             Exception: If production fails
         """
-        if self.data_type == 'trades':
+        if self.data_type == "trades":
             self.producer.produce_trade(self.asset_class, self.exchange, record)
-        elif self.data_type == 'quotes':
+        elif self.data_type == "quotes":
             self.producer.produce_quote(self.asset_class, self.exchange, record)
-        elif self.data_type == 'reference_data':
+        elif self.data_type == "reference_data":
             self.producer.produce_reference_data(self.asset_class, self.exchange, record)
         else:
             raise ValueError(f"Unsupported data_type: {self.data_type}")
@@ -404,7 +417,7 @@ class BatchLoader:
         )
 
         # Count total rows for progress bar
-        with open(csv_file, 'r', encoding='utf-8') as f:
+        with open(csv_file, encoding="utf-8") as f:
             total_rows = sum(1 for line in f) - 1  # Subtract header
 
         stats.total_rows = total_rows
@@ -433,7 +446,7 @@ class BatchLoader:
             )
 
             # Read and process CSV
-            with open(csv_file, 'r', encoding='utf-8') as f:
+            with open(csv_file, encoding="utf-8") as f:
                 reader = csv.DictReader(f)
 
                 for row_num, row in enumerate(reader, start=2):  # Start at 2 (after header)
@@ -445,7 +458,9 @@ class BatchLoader:
                         self._produce_record(record)
 
                         stats.success_count += 1
-                        progress.update(task, advance=1, success=stats.success_count, errors=stats.error_count)
+                        progress.update(
+                            task, advance=1, success=stats.success_count, errors=stats.error_count,
+                        )
 
                         # Flush periodically
                         if stats.success_count % flush_interval == 0:
@@ -459,7 +474,9 @@ class BatchLoader:
                     except ValueError as e:
                         # Invalid record (schema validation failure)
                         stats.error_count += 1
-                        progress.update(task, advance=1, success=stats.success_count, errors=stats.error_count)
+                        progress.update(
+                            task, advance=1, success=stats.success_count, errors=stats.error_count,
+                        )
 
                         logger.warning(
                             "Invalid record",
@@ -474,7 +491,9 @@ class BatchLoader:
                     except Exception as e:
                         # Producer error (Kafka/network issue)
                         stats.error_count += 1
-                        progress.update(task, advance=1, success=stats.success_count, errors=stats.error_count)
+                        progress.update(
+                            task, advance=1, success=stats.success_count, errors=stats.error_count,
+                        )
 
                         logger.error(
                             "Failed to produce record",
@@ -545,13 +564,15 @@ def print_summary(stats: LoadStats):
 
 @app.command()
 def load(
-    csv: Path = typer.Option(..., help="Path to CSV file", exists=True, file_okay=True, dir_okay=False),
+    csv: Path = typer.Option(
+        ..., help="Path to CSV file", exists=True, file_okay=True, dir_okay=False,
+    ),
     asset_class: str = typer.Option(..., help="Asset class (e.g., 'equities', 'crypto')"),
     exchange: str = typer.Option(..., help="Exchange code (e.g., 'asx', 'binance')"),
     data_type: str = typer.Option(..., help="Data type ('trades', 'quotes', 'reference_data')"),
     batch_size: int = typer.Option(1000, help="Batch size for processing"),
     flush_interval: int = typer.Option(100, help="Flush producer every N records"),
-    dlq_file: Optional[Path] = typer.Option(None, help="Dead letter queue file for errors"),
+    dlq_file: Path | None = typer.Option(None, help="Dead letter queue file for errors"),
     no_progress: bool = typer.Option(False, help="Disable progress bar"),
 ):
     """Load CSV file into Kafka topics.
@@ -564,7 +585,7 @@ def load(
             --data-type trades \\
             --dlq-file errors.csv
     """
-    console.print(f"[cyan]K2 Batch Loader[/cyan]")
+    console.print("[cyan]K2 Batch Loader[/cyan]")
     console.print(f"CSV: {csv}")
     console.print(f"Target: {asset_class}.{data_type}.{exchange}")
     console.print()
@@ -615,8 +636,8 @@ def create_loader(
     asset_class: str,
     exchange: str,
     data_type: str,
-    producer: Optional[MarketDataProducer] = None,
-    dlq_file: Optional[Path] = None,
+    producer: MarketDataProducer | None = None,
+    dlq_file: Path | None = None,
 ) -> BatchLoader:
     """Factory function to create a BatchLoader instance.
 

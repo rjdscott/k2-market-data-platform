@@ -27,9 +27,9 @@ Environment Variables:
 """
 
 import time
-from datetime import datetime
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,17 +37,16 @@ from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
-from k2.api.v1 import router as v1_router
-from k2.api.models import HealthResponse, HealthStatus, DependencyHealth
+from k2.api.deps import get_query_engine, shutdown_engines, startup_engines
 from k2.api.middleware import (
+    CacheControlMiddleware,
     CorrelationIdMiddleware,
     RequestLoggingMiddleware,
-    CacheControlMiddleware,
     get_api_key_for_limit,
 )
-from k2.api.deps import startup_engines, shutdown_engines, get_query_engine
+from k2.api.models import DependencyHealth, HealthResponse, HealthStatus
+from k2.api.v1 import router as v1_router
 from k2.common.config import config
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics, initialize_metrics
@@ -68,9 +67,8 @@ limiter = Limiter(key_func=get_api_key_for_limit)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """
-    Application lifespan manager.
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    """Application lifespan manager.
 
     Handles startup and shutdown events:
     - Startup: Initialize query engines, warm up connections, set up metrics
@@ -229,8 +227,7 @@ async def root() -> dict:
 )
 @limiter.limit("60/minute")
 async def health_check(request: Request) -> HealthResponse:
-    """
-    Health check endpoint.
+    """Health check endpoint.
 
     Returns overall health status and dependency checks.
     Used by load balancers and monitoring systems.
@@ -266,7 +263,7 @@ async def health_check(request: Request) -> HealthResponse:
             status=duckdb_status,
             latency_ms=duckdb_latency,
             message=duckdb_message,
-        )
+        ),
     )
 
     # Check Iceberg table access
@@ -298,7 +295,7 @@ async def health_check(request: Request) -> HealthResponse:
             status=iceberg_status,
             latency_ms=iceberg_latency,
             message=iceberg_message,
-        )
+        ),
     )
 
     return HealthResponse(
@@ -322,8 +319,7 @@ async def health_check(request: Request) -> HealthResponse:
     include_in_schema=False,  # Hide from OpenAPI docs (Prometheus endpoint convention)
 )
 async def prometheus_metrics() -> Response:
-    """
-    Expose Prometheus metrics for scraping.
+    """Expose Prometheus metrics for scraping.
 
     Returns all registered metrics in Prometheus exposition format.
     This endpoint is not rate-limited as Prometheus scrapes frequently.
@@ -348,8 +344,7 @@ async def prometheus_metrics() -> Response:
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """
-    Global exception handler for unhandled errors.
+    """Global exception handler for unhandled errors.
 
     Logs the error and returns a standardized error response.
     """

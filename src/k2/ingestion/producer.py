@@ -41,17 +41,17 @@ See Also:
     - Decision #009: Partition by symbol for ordering
     - Decision #010: At-least-once with idempotent producers
 """
+
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 from confluent_kafka import Producer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
-from confluent_kafka.serialization import SerializationContext, MessageField
-import structlog
+from confluent_kafka.serialization import MessageField, SerializationContext
 
 from k2.common.config import config
-from k2.common.logging import get_logger, set_correlation_id
+from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
 from k2.kafka import DataType, get_topic_builder
 
@@ -84,8 +84,8 @@ class MarketDataProducer:
 
     def __init__(
         self,
-        bootstrap_servers: Optional[str] = None,
-        schema_registry_url: Optional[str] = None,
+        bootstrap_servers: str | None = None,
+        schema_registry_url: str | None = None,
         max_retries: int = 3,
         initial_retry_delay: float = 0.1,
         retry_backoff_factor: float = 2.0,
@@ -123,7 +123,7 @@ class MarketDataProducer:
         self._init_producer()
 
         # Cache for Avro serializers (keyed by schema subject)
-        self._serializers: Dict[str, AvroSerializer] = {}
+        self._serializers: dict[str, AvroSerializer] = {}
 
         # Statistics
         self._total_produced = 0
@@ -141,9 +141,7 @@ class MarketDataProducer:
     def _init_schema_registry(self):
         """Initialize Schema Registry client."""
         try:
-            self.schema_registry_client = SchemaRegistryClient(
-                {"url": self.schema_registry_url}
-            )
+            self.schema_registry_client = SchemaRegistryClient({"url": self.schema_registry_url})
             logger.debug(
                 "Schema Registry client initialized",
                 url=self.schema_registry_url,
@@ -254,7 +252,7 @@ class MarketDataProducer:
         self,
         err,
         msg,
-        context: Dict[str, Any],
+        context: dict[str, Any],
     ):
         """Callback invoked on message delivery.
 
@@ -298,10 +296,10 @@ class MarketDataProducer:
     def _produce_with_retry(
         self,
         topic: str,
-        value: Dict[str, Any],
+        value: dict[str, Any],
         key: str,
         serializer: AvroSerializer,
-        labels: Dict[str, str],
+        labels: dict[str, str],
     ):
         """Produce message with exponential backoff retry.
 
@@ -330,7 +328,7 @@ class MarketDataProducer:
                     value=serialized_value,
                     key=key.encode("utf-8"),  # Partition key (Decision #009)
                     on_delivery=lambda err, msg: self._delivery_callback(
-                        err, msg, {"topic": topic, "partition_key": key, "labels": labels}
+                        err, msg, {"topic": topic, "partition_key": key, "labels": labels},
                     ),
                 )
 
@@ -347,7 +345,7 @@ class MarketDataProducer:
                     )
                 return
 
-            except BufferError as e:
+            except BufferError:
                 # Producer queue full - poll and retry
                 logger.warning(
                     "Producer queue full, polling...",
@@ -410,7 +408,7 @@ class MarketDataProducer:
         self,
         asset_class: str,
         exchange: str,
-        record: Dict[str, Any],
+        record: dict[str, Any],
     ):
         """Produce a trade record to Kafka.
 
@@ -448,7 +446,7 @@ class MarketDataProducer:
         self,
         asset_class: str,
         exchange: str,
-        record: Dict[str, Any],
+        record: dict[str, Any],
     ):
         """Produce a quote record to Kafka.
 
@@ -472,7 +470,7 @@ class MarketDataProducer:
         self,
         asset_class: str,
         exchange: str,
-        record: Dict[str, Any],
+        record: dict[str, Any],
     ):
         """Produce a reference data record to Kafka.
 
@@ -497,7 +495,7 @@ class MarketDataProducer:
         asset_class: str,
         data_type: DataType,
         exchange: str,
-        record: Dict[str, Any],
+        record: dict[str, Any],
     ):
         """Internal method to produce a message to Kafka.
 
@@ -521,7 +519,7 @@ class MarketDataProducer:
         partition_key = record.get(partition_key_field)
         if not partition_key:
             raise ValueError(
-                f"Record missing partition key field '{partition_key_field}': {record}"
+                f"Record missing partition key field '{partition_key_field}': {record}",
             )
 
         # Get Avro serializer
@@ -621,7 +619,7 @@ class MarketDataProducer:
 
         logger.info("Kafka producer closed")
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> dict[str, int]:
         """Get producer statistics.
 
         Returns:

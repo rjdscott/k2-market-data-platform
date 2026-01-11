@@ -9,13 +9,11 @@ Models follow trading firm conventions:
 - Clear field descriptions for API consumers
 """
 
-from datetime import datetime, date
-from decimal import Decimal
-from typing import Optional, List, Any, Union
+from datetime import date, datetime
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, Field, ConfigDict, field_validator
-
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # =============================================================================
 # Enums
@@ -51,8 +49,8 @@ class APIResponse(BaseModel):
                 "success": True,
                 "data": {},
                 "meta": {"correlation_id": "abc-123"},
-            }
-        }
+            },
+        },
     )
 
     success: bool = Field(default=True, description="Request success status")
@@ -71,8 +69,8 @@ class ErrorResponse(BaseModel):
                     "message": "Symbol 'INVALID' not found",
                     "details": {},
                 },
-            }
-        }
+            },
+        },
     )
 
     success: bool = Field(default=False)
@@ -84,7 +82,7 @@ class PaginationMeta(BaseModel):
 
     limit: int = Field(description="Maximum items per page")
     offset: int = Field(default=0, description="Number of items skipped")
-    total: Optional[int] = Field(default=None, description="Total items available")
+    total: int | None = Field(default=None, description="Total items available")
     has_more: bool = Field(default=False, description="More items available")
 
 
@@ -109,27 +107,23 @@ class Trade(BaseModel):
                 "venue": "ASX",
                 "buyer_id": "BROKER001",
                 "sequence_number": 12345,
-            }
+            },
         },
         # Allow arbitrary types for Pandas Timestamp etc
         arbitrary_types_allowed=True,
     )
 
     symbol: str = Field(description="Security symbol (e.g., BHP)")
-    company_id: Optional[Union[str, int]] = Field(default=None, description="Company identifier")
+    company_id: str | int | None = Field(default=None, description="Company identifier")
     exchange: str = Field(description="Exchange code (e.g., ASX)")
     exchange_timestamp: Any = Field(description="Trade execution time")
     price: float = Field(description="Trade price")
     volume: int = Field(description="Trade volume (shares)")
-    qualifiers: Optional[Union[str, int]] = Field(default=None, description="Trade condition codes")
-    venue: Optional[str] = Field(default=None, description="Execution venue")
-    buyer_id: Optional[str] = Field(default=None, description="Buyer broker ID")
-    ingestion_timestamp: Optional[Any] = Field(
-        default=None, description="Time data was ingested"
-    )
-    sequence_number: Optional[int] = Field(
-        default=None, description="Sequence number for ordering"
-    )
+    qualifiers: str | int | None = Field(default=None, description="Trade condition codes")
+    venue: str | None = Field(default=None, description="Execution venue")
+    buyer_id: str | None = Field(default=None, description="Buyer broker ID")
+    ingestion_timestamp: Any | None = Field(default=None, description="Time data was ingested")
+    sequence_number: int | None = Field(default=None, description="Sequence number for ordering")
 
     @field_validator("exchange_timestamp", "ingestion_timestamp", mode="before")
     @classmethod
@@ -145,10 +139,8 @@ class Trade(BaseModel):
 class TradesResponse(APIResponse):
     """Response model for trades query."""
 
-    data: List[Trade] = Field(default_factory=list, description="List of trades")
-    pagination: Optional[PaginationMeta] = Field(
-        default=None, description="Pagination info"
-    )
+    data: list[Trade] = Field(default_factory=list, description="List of trades")
+    pagination: PaginationMeta | None = Field(default=None, description="Pagination info")
 
 
 # =============================================================================
@@ -171,25 +163,21 @@ class Quote(BaseModel):
                 "ask_price": "45.52",
                 "ask_volume": 750,
                 "spread": "0.04",
-            }
+            },
         },
         arbitrary_types_allowed=True,
     )
 
     symbol: str = Field(description="Security symbol")
-    company_id: Optional[Union[str, int]] = Field(default=None, description="Company identifier")
+    company_id: str | int | None = Field(default=None, description="Company identifier")
     exchange: str = Field(description="Exchange code")
     exchange_timestamp: Any = Field(description="Quote time")
-    bid_price: Optional[float] = Field(default=None, description="Best bid price")
-    bid_volume: Optional[int] = Field(default=None, description="Best bid volume")
-    ask_price: Optional[float] = Field(default=None, description="Best ask price")
-    ask_volume: Optional[int] = Field(default=None, description="Best ask volume")
-    ingestion_timestamp: Optional[Any] = Field(
-        default=None, description="Time data was ingested"
-    )
-    sequence_number: Optional[int] = Field(
-        default=None, description="Sequence number"
-    )
+    bid_price: float | None = Field(default=None, description="Best bid price")
+    bid_volume: int | None = Field(default=None, description="Best bid volume")
+    ask_price: float | None = Field(default=None, description="Best ask price")
+    ask_volume: int | None = Field(default=None, description="Best ask volume")
+    ingestion_timestamp: Any | None = Field(default=None, description="Time data was ingested")
+    sequence_number: int | None = Field(default=None, description="Sequence number")
 
     @field_validator("exchange_timestamp", "ingestion_timestamp", mode="before")
     @classmethod
@@ -205,10 +193,8 @@ class Quote(BaseModel):
 class QuotesResponse(APIResponse):
     """Response model for quotes query."""
 
-    data: List[Quote] = Field(default_factory=list, description="List of quotes")
-    pagination: Optional[PaginationMeta] = Field(
-        default=None, description="Pagination info"
-    )
+    data: list[Quote] = Field(default_factory=list, description="List of quotes")
+    pagination: PaginationMeta | None = Field(default=None, description="Pagination info")
 
 
 # =============================================================================
@@ -231,8 +217,8 @@ class MarketSummaryData(BaseModel):
                 "volume": 2500000,
                 "trade_count": 15432,
                 "vwap": "45.55",
-            }
-        }
+            },
+        },
     )
 
     symbol: str = Field(description="Security symbol")
@@ -249,7 +235,7 @@ class MarketSummaryData(BaseModel):
 class SummaryResponse(APIResponse):
     """Response model for market summary."""
 
-    data: Optional[MarketSummaryData] = Field(default=None, description="Market summary")
+    data: MarketSummaryData | None = Field(default=None, description="Market summary")
 
 
 # =============================================================================
@@ -260,7 +246,7 @@ class SummaryResponse(APIResponse):
 class SymbolsResponse(APIResponse):
     """Response model for symbols list."""
 
-    data: List[str] = Field(default_factory=list, description="List of symbols")
+    data: list[str] = Field(default_factory=list, description="List of symbols")
 
 
 # =============================================================================
@@ -281,9 +267,9 @@ class StatsData(BaseModel):
     s3_endpoint: str = Field(description="S3/MinIO endpoint")
     warehouse_path: str = Field(description="Iceberg warehouse path")
     connection_active: bool = Field(description="DuckDB connection status")
-    trades_count: Optional[int] = Field(default=None, description="Trade records")
-    quotes_count: Optional[int] = Field(default=None, description="Quote records")
-    error: Optional[str] = Field(default=None, description="Error if stats failed")
+    trades_count: int | None = Field(default=None, description="Trade records")
+    quotes_count: int | None = Field(default=None, description="Quote records")
+    error: str | None = Field(default=None, description="Error if stats failed")
 
 
 class StatsResponse(APIResponse):
@@ -307,24 +293,20 @@ class SnapshotInfo(BaseModel):
                 "timestamp": "2024-01-15T10:30:00.000000",
                 "manifest_list": "s3://warehouse/market_data/trades/metadata/snap-123.avro",
                 "summary": {"operation": "append", "added-records": "1000"},
-            }
-        }
+            },
+        },
     )
 
     snapshot_id: int = Field(description="Snapshot ID")
-    timestamp: Optional[datetime] = Field(default=None, description="Snapshot time")
-    manifest_list: Optional[str] = Field(
-        default=None, description="Path to manifest list"
-    )
-    summary: Optional[dict] = Field(default=None, description="Snapshot summary")
+    timestamp: datetime | None = Field(default=None, description="Snapshot time")
+    manifest_list: str | None = Field(default=None, description="Path to manifest list")
+    summary: dict | None = Field(default=None, description="Snapshot summary")
 
 
 class SnapshotsResponse(APIResponse):
     """Response model for snapshots list."""
 
-    data: List[SnapshotInfo] = Field(
-        default_factory=list, description="List of snapshots"
-    )
+    data: list[SnapshotInfo] = Field(default_factory=list, description="List of snapshots")
     table_name: str = Field(description="Table name")
 
 
@@ -338,10 +320,10 @@ class DependencyHealth(BaseModel):
 
     name: str = Field(description="Dependency name")
     status: HealthStatus = Field(description="Health status")
-    latency_ms: Optional[float] = Field(
-        default=None, description="Response latency in milliseconds"
+    latency_ms: float | None = Field(
+        default=None, description="Response latency in milliseconds",
     )
-    message: Optional[str] = Field(default=None, description="Status message")
+    message: str | None = Field(default=None, description="Status message")
 
 
 class HealthResponse(BaseModel):
@@ -356,15 +338,15 @@ class HealthResponse(BaseModel):
                     {"name": "duckdb", "status": "healthy", "latency_ms": 5.2},
                     {"name": "iceberg", "status": "healthy", "latency_ms": 12.3},
                 ],
-            }
-        }
+            },
+        },
     )
 
     status: HealthStatus = Field(description="Overall health status")
     version: str = Field(description="API version")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    dependencies: List[DependencyHealth] = Field(
-        default_factory=list, description="Dependency health checks"
+    dependencies: list[DependencyHealth] = Field(
+        default_factory=list, description="Dependency health checks",
     )
 
 
@@ -403,22 +385,40 @@ class AggregationInterval(str, Enum):
 
 
 # Allowlist of valid fields for field selection (security measure)
-VALID_TRADE_FIELDS = frozenset([
-    "symbol", "company_id", "exchange", "exchange_timestamp",
-    "price", "volume", "qualifiers", "venue", "buyer_id",
-    "ingestion_timestamp", "sequence_number"
-])
+VALID_TRADE_FIELDS = frozenset(
+    [
+        "symbol",
+        "company_id",
+        "exchange",
+        "exchange_timestamp",
+        "price",
+        "volume",
+        "qualifiers",
+        "venue",
+        "buyer_id",
+        "ingestion_timestamp",
+        "sequence_number",
+    ],
+)
 
-VALID_QUOTE_FIELDS = frozenset([
-    "symbol", "company_id", "exchange", "exchange_timestamp",
-    "bid_price", "bid_volume", "ask_price", "ask_volume",
-    "ingestion_timestamp", "sequence_number"
-])
+VALID_QUOTE_FIELDS = frozenset(
+    [
+        "symbol",
+        "company_id",
+        "exchange",
+        "exchange_timestamp",
+        "bid_price",
+        "bid_volume",
+        "ask_price",
+        "ask_volume",
+        "ingestion_timestamp",
+        "sequence_number",
+    ],
+)
 
 
 class TradeQueryRequest(BaseModel):
-    """
-    Complex trade query request for POST /v1/trades/query.
+    """Complex trade query request for POST /v1/trades/query.
 
     Supports multi-symbol queries, field selection, advanced filters,
     and multiple output formats. Use this for analytical queries;
@@ -435,33 +435,33 @@ class TradeQueryRequest(BaseModel):
                 "fields": ["symbol", "exchange_timestamp", "price", "volume"],
                 "limit": 10000,
                 "format": "json",
-            }
-        }
+            },
+        },
     )
 
     # Symbol filters (empty list = all symbols)
-    symbols: List[str] = Field(
+    symbols: list[str] = Field(
         default_factory=list,
         max_length=100,
         description="Filter by symbols (max 100). Empty = all symbols.",
     )
-    exchanges: List[str] = Field(
+    exchanges: list[str] = Field(
         default_factory=list,
         description="Filter by exchanges. Empty = all exchanges.",
     )
 
     # Time filters
-    start_time: Optional[datetime] = Field(
+    start_time: datetime | None = Field(
         default=None,
         description="Filter trades after this time (ISO 8601)",
     )
-    end_time: Optional[datetime] = Field(
+    end_time: datetime | None = Field(
         default=None,
         description="Filter trades before this time (ISO 8601)",
     )
 
     # Field selection (None = all fields)
-    fields: Optional[List[str]] = Field(
+    fields: list[str] | None = Field(
         default=None,
         description="Fields to return. None = all fields. Reduces payload size.",
     )
@@ -480,17 +480,17 @@ class TradeQueryRequest(BaseModel):
     )
 
     # Advanced filters
-    min_price: Optional[float] = Field(
+    min_price: float | None = Field(
         default=None,
         ge=0,
         description="Minimum trade price filter",
     )
-    max_price: Optional[float] = Field(
+    max_price: float | None = Field(
         default=None,
         ge=0,
         description="Maximum trade price filter",
     )
-    min_volume: Optional[int] = Field(
+    min_volume: int | None = Field(
         default=None,
         ge=0,
         description="Minimum trade volume filter",
@@ -504,7 +504,7 @@ class TradeQueryRequest(BaseModel):
 
     @field_validator("fields", mode="before")
     @classmethod
-    def validate_fields(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+    def validate_fields(cls, v: list[str] | None) -> list[str] | None:
         """Validate field names against allowlist to prevent SQL injection."""
         if v is None:
             return None
@@ -515,8 +515,7 @@ class TradeQueryRequest(BaseModel):
 
 
 class QuoteQueryRequest(BaseModel):
-    """
-    Complex quote query request for POST /v1/quotes/query.
+    """Complex quote query request for POST /v1/quotes/query.
 
     Supports multi-symbol queries, field selection, and multiple output formats.
     """
@@ -530,28 +529,28 @@ class QuoteQueryRequest(BaseModel):
                 "fields": ["symbol", "exchange_timestamp", "bid_price", "ask_price"],
                 "limit": 5000,
                 "format": "json",
-            }
-        }
+            },
+        },
     )
 
-    symbols: List[str] = Field(
+    symbols: list[str] = Field(
         default_factory=list,
         max_length=100,
         description="Filter by symbols (max 100)",
     )
-    exchanges: List[str] = Field(
+    exchanges: list[str] = Field(
         default_factory=list,
         description="Filter by exchanges",
     )
-    start_time: Optional[datetime] = Field(
+    start_time: datetime | None = Field(
         default=None,
         description="Filter quotes after this time",
     )
-    end_time: Optional[datetime] = Field(
+    end_time: datetime | None = Field(
         default=None,
         description="Filter quotes before this time",
     )
-    fields: Optional[List[str]] = Field(
+    fields: list[str] | None = Field(
         default=None,
         description="Fields to return. None = all fields.",
     )
@@ -573,7 +572,7 @@ class QuoteQueryRequest(BaseModel):
 
     @field_validator("fields", mode="before")
     @classmethod
-    def validate_fields(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+    def validate_fields(cls, v: list[str] | None) -> list[str] | None:
         """Validate field names against allowlist."""
         if v is None:
             return None
@@ -584,8 +583,7 @@ class QuoteQueryRequest(BaseModel):
 
 
 class ReplayRequest(BaseModel):
-    """
-    Historical data replay request for POST /v1/replay.
+    """Historical data replay request for POST /v1/replay.
 
     Returns paginated batches of historical data in chronological order.
     Use for backtesting, rebuilding state, or data migration.
@@ -600,19 +598,19 @@ class ReplayRequest(BaseModel):
                 "end_time": "2024-01-31T23:59:59",
                 "batch_size": 1000,
                 "snapshot_id": None,
-            }
-        }
+            },
+        },
     )
 
     data_type: DataType = Field(
         default=DataType.TRADES,
         description="Data type to replay: trades or quotes",
     )
-    symbol: Optional[str] = Field(
+    symbol: str | None = Field(
         default=None,
         description="Filter by symbol (None = all symbols)",
     )
-    exchange: Optional[str] = Field(
+    exchange: str | None = Field(
         default=None,
         description="Filter by exchange",
     )
@@ -628,11 +626,11 @@ class ReplayRequest(BaseModel):
         le=10000,
         description="Records per batch (100-10,000)",
     )
-    snapshot_id: Optional[int] = Field(
+    snapshot_id: int | None = Field(
         default=None,
         description="Optional snapshot ID for point-in-time replay",
     )
-    cursor: Optional[str] = Field(
+    cursor: str | None = Field(
         default=None,
         description="Cursor from previous response for pagination",
     )
@@ -653,11 +651,11 @@ class ReplayCursor(BaseModel):
 class ReplayResponse(APIResponse):
     """Response model for replay endpoint."""
 
-    data: List[Union[Trade, Quote]] = Field(
+    data: list[Trade | Quote] = Field(
         default_factory=list,
         description="Batch of records",
     )
-    cursor: Optional[str] = Field(
+    cursor: str | None = Field(
         default=None,
         description="Cursor for next batch (None if complete)",
     )
@@ -668,8 +666,7 @@ class ReplayResponse(APIResponse):
 
 
 class SnapshotQueryRequest(BaseModel):
-    """
-    Point-in-time query request for POST /v1/snapshots/{id}/query.
+    """Point-in-time query request for POST /v1/snapshots/{id}/query.
 
     Query data as it existed at a specific Iceberg snapshot.
     Use for compliance auditing, debugging, or disaster recovery.
@@ -682,19 +679,19 @@ class SnapshotQueryRequest(BaseModel):
                 "symbol": "BHP",
                 "limit": 1000,
                 "format": "json",
-            }
-        }
+            },
+        },
     )
 
     data_type: DataType = Field(
         default=DataType.TRADES,
         description="Data type: trades or quotes",
     )
-    symbol: Optional[str] = Field(
+    symbol: str | None = Field(
         default=None,
         description="Filter by symbol",
     )
-    exchange: Optional[str] = Field(
+    exchange: str | None = Field(
         default=None,
         description="Filter by exchange",
     )
@@ -718,24 +715,23 @@ class SnapshotQueryRequest(BaseModel):
 class SnapshotQueryResponse(APIResponse):
     """Response model for snapshot query endpoint."""
 
-    data: List[Union[Trade, Quote]] = Field(
+    data: list[Trade | Quote] = Field(
         default_factory=list,
         description="Records as of snapshot",
     )
     snapshot_id: int = Field(description="Queried snapshot ID")
-    snapshot_timestamp: Optional[datetime] = Field(
+    snapshot_timestamp: datetime | None = Field(
         default=None,
         description="Snapshot creation time",
     )
-    pagination: Optional[PaginationMeta] = Field(
+    pagination: PaginationMeta | None = Field(
         default=None,
         description="Pagination info",
     )
 
 
 class AggregationRequest(BaseModel):
-    """
-    Custom aggregation request for POST /v1/aggregations.
+    """Custom aggregation request for POST /v1/aggregations.
 
     Compute VWAP, TWAP, OHLCV, and other metrics over time intervals.
     """
@@ -748,16 +744,16 @@ class AggregationRequest(BaseModel):
                 "interval": "5min",
                 "start_time": "2024-01-15T09:30:00",
                 "end_time": "2024-01-15T16:00:00",
-            }
-        }
+            },
+        },
     )
 
-    symbols: List[str] = Field(
+    symbols: list[str] = Field(
         min_length=1,
         max_length=50,
         description="Symbols to aggregate (1-50, required)",
     )
-    metrics: List[AggregationMetric] = Field(
+    metrics: list[AggregationMetric] = Field(
         min_length=1,
         description="Metrics to compute",
     )
@@ -770,7 +766,7 @@ class AggregationRequest(BaseModel):
     end_time: datetime = Field(
         description="End of aggregation period",
     )
-    exchange: Optional[str] = Field(
+    exchange: str | None = Field(
         default=None,
         description="Filter by exchange",
     )
@@ -788,22 +784,22 @@ class AggregationBucket(BaseModel):
     interval_end: datetime = Field(description="Bucket end time")
 
     # OHLCV fields
-    open_price: Optional[float] = Field(default=None)
-    high_price: Optional[float] = Field(default=None)
-    low_price: Optional[float] = Field(default=None)
-    close_price: Optional[float] = Field(default=None)
-    volume: Optional[int] = Field(default=None)
-    trade_count: Optional[int] = Field(default=None)
+    open_price: float | None = Field(default=None)
+    high_price: float | None = Field(default=None)
+    low_price: float | None = Field(default=None)
+    close_price: float | None = Field(default=None)
+    volume: int | None = Field(default=None)
+    trade_count: int | None = Field(default=None)
 
     # Weighted averages
-    vwap: Optional[float] = Field(default=None, description="Volume-weighted avg price")
-    twap: Optional[float] = Field(default=None, description="Time-weighted avg price")
+    vwap: float | None = Field(default=None, description="Volume-weighted avg price")
+    twap: float | None = Field(default=None, description="Time-weighted avg price")
 
 
 class AggregationResponse(APIResponse):
     """Response model for aggregation endpoint."""
 
-    data: List[AggregationBucket] = Field(
+    data: list[AggregationBucket] = Field(
         default_factory=list,
         description="Aggregation results by time bucket",
     )

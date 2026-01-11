@@ -24,45 +24,44 @@ All endpoints:
 - Return standardized response models
 """
 
-from datetime import datetime, date, timedelta
-from typing import Optional, List, Dict, Any
+from datetime import date, datetime, timedelta
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Path, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 
-from k2.api.models import (
-    TradesResponse,
-    QuotesResponse,
-    SummaryResponse,
-    SymbolsResponse,
-    StatsResponse,
-    SnapshotsResponse,
-    Trade,
-    Quote,
-    MarketSummaryData,
-    StatsData,
-    SnapshotInfo,
-    PaginationMeta,
-    DataType,
-    OutputFormat,
-    # POST request models
-    TradeQueryRequest,
-    QuoteQueryRequest,
-    ReplayRequest,
-    ReplayResponse,
-    SnapshotQueryRequest,
-    SnapshotQueryResponse,
+from k2.api.deps import get_query_engine, get_replay_engine
+from k2.api.formatters import decode_cursor, encode_cursor, format_response
+from k2.api.middleware import correlation_id_var, verify_api_key
+from k2.api.models import (  # POST request models
+    AggregationBucket,
+    AggregationInterval,
+    AggregationMetric,
     AggregationRequest,
     AggregationResponse,
-    AggregationBucket,
-    AggregationMetric,
-    AggregationInterval,
+    DataType,
+    MarketSummaryData,
+    OutputFormat,
+    PaginationMeta,
+    Quote,
+    QuoteQueryRequest,
+    QuotesResponse,
+    ReplayRequest,
+    ReplayResponse,
+    SnapshotInfo,
+    SnapshotQueryRequest,
+    SnapshotQueryResponse,
+    SnapshotsResponse,
+    StatsData,
+    StatsResponse,
+    SummaryResponse,
+    SymbolsResponse,
+    Trade,
+    TradeQueryRequest,
+    TradesResponse,
 )
-from k2.api.deps import get_query_engine, get_replay_engine
-from k2.api.middleware import verify_api_key, correlation_id_var
-from k2.api.formatters import format_response, encode_cursor, decode_cursor
+from k2.common.logging import get_logger
 from k2.query.engine import QueryEngine
 from k2.query.replay import ReplayEngine
-from k2.common.logging import get_logger
 
 logger = get_logger(__name__, component="api")
 
@@ -111,22 +110,22 @@ def _get_meta() -> dict:
     },
 )
 async def get_trades(
-    symbol: Optional[str] = Query(
+    symbol: str | None = Query(
         default=None,
         description="Filter by symbol (e.g., BHP)",
         example="BHP",
     ),
-    exchange: Optional[str] = Query(
+    exchange: str | None = Query(
         default=None,
         description="Filter by exchange (e.g., ASX)",
         example="ASX",
     ),
-    start_time: Optional[datetime] = Query(
+    start_time: datetime | None = Query(
         default=None,
         description="Filter trades after this time (ISO 8601)",
         example="2024-01-15T09:00:00",
     ),
-    end_time: Optional[datetime] = Query(
+    end_time: datetime | None = Query(
         default=None,
         description="Filter trades before this time (ISO 8601)",
         example="2024-01-15T16:00:00",
@@ -200,10 +199,10 @@ async def get_trades(
     """,
 )
 async def get_quotes(
-    symbol: Optional[str] = Query(default=None, description="Filter by symbol"),
-    exchange: Optional[str] = Query(default=None, description="Filter by exchange"),
-    start_time: Optional[datetime] = Query(default=None, description="Filter after time"),
-    end_time: Optional[datetime] = Query(default=None, description="Filter before time"),
+    symbol: str | None = Query(default=None, description="Filter by symbol"),
+    exchange: str | None = Query(default=None, description="Filter by exchange"),
+    start_time: datetime | None = Query(default=None, description="Filter after time"),
+    end_time: datetime | None = Query(default=None, description="Filter before time"),
     limit: int = Query(default=100, ge=1, le=10000, description="Max records"),
     engine: QueryEngine = Depends(get_query_engine),
 ) -> QuotesResponse:
@@ -276,7 +275,7 @@ async def get_market_summary(
         description="Trading date (YYYY-MM-DD)",
         example="2024-01-15",
     ),
-    exchange: Optional[str] = Query(
+    exchange: str | None = Query(
         default=None,
         description="Optional exchange filter",
     ),
@@ -340,7 +339,7 @@ async def get_market_summary(
     description="Get a list of all symbols available in the trades table.",
 )
 async def get_symbols(
-    exchange: Optional[str] = Query(default=None, description="Filter by exchange"),
+    exchange: str | None = Query(default=None, description="Filter by exchange"),
     engine: QueryEngine = Depends(get_query_engine),
 ) -> SymbolsResponse:
     """List all available symbols."""
@@ -515,8 +514,7 @@ async def query_trades_advanced(
     request: TradeQueryRequest,
     engine: QueryEngine = Depends(get_query_engine),
 ) -> Response:
-    """
-    Advanced trade query with multi-symbol support and field selection.
+    """Advanced trade query with multi-symbol support and field selection.
 
     Returns JSON, CSV, or Parquet based on request.format.
     """
@@ -528,7 +526,7 @@ async def query_trades_advanced(
             limit=request.limit,
         )
 
-        all_trades: List[Dict[str, Any]] = []
+        all_trades: list[dict[str, Any]] = []
 
         # Multi-symbol query: iterate over symbols or query all
         symbols_to_query = request.symbols if request.symbols else [None]
@@ -552,7 +550,10 @@ async def query_trades_advanced(
                     if request.max_price is not None and trade.get("price", 0) > request.max_price:
                         continue
                     # Volume filter
-                    if request.min_volume is not None and trade.get("volume", 0) < request.min_volume:
+                    if (
+                        request.min_volume is not None
+                        and trade.get("volume", 0) < request.min_volume
+                    ):
                         continue
                     all_trades.append(trade)
 
@@ -564,7 +565,7 @@ async def query_trades_advanced(
                 break
 
         # Apply offset and limit
-        all_trades = all_trades[request.offset:request.offset + request.limit]
+        all_trades = all_trades[request.offset : request.offset + request.limit]
 
         return format_response(
             data=all_trades,
@@ -615,7 +616,7 @@ async def query_quotes_advanced(
             limit=request.limit,
         )
 
-        all_quotes: List[Dict[str, Any]] = []
+        all_quotes: list[dict[str, Any]] = []
 
         symbols_to_query = request.symbols if request.symbols else [None]
         exchanges_to_query = request.exchanges if request.exchanges else [None]
@@ -637,7 +638,7 @@ async def query_quotes_advanced(
                 break
 
         # Apply offset and limit
-        all_quotes = all_quotes[request.offset:request.offset + request.limit]
+        all_quotes = all_quotes[request.offset : request.offset + request.limit]
 
         return format_response(
             data=all_quotes,
@@ -693,8 +694,7 @@ async def replay_historical(
     engine: QueryEngine = Depends(get_query_engine),
     replay_engine: ReplayEngine = Depends(get_replay_engine),
 ) -> ReplayResponse:
-    """
-    Replay historical data with cursor-based pagination.
+    """Replay historical data with cursor-based pagination.
 
     Returns data in batches with a cursor for the next page.
     """
@@ -866,7 +866,7 @@ async def query_at_snapshot(
         )
 
         # Apply offset
-        rows = rows[request.offset:request.offset + request.limit]
+        rows = rows[request.offset : request.offset + request.limit]
 
         # Return in requested format
         if request.format != OutputFormat.JSON:
@@ -1030,7 +1030,10 @@ async def compute_aggregations(
             if AggregationMetric.TWAP in request.metrics:
                 bucket.twap = float(row["twap"]) if row["twap"] else None
 
-            if AggregationMetric.TRADE_COUNT in request.metrics or AggregationMetric.VOLUME_PROFILE in request.metrics:
+            if (
+                AggregationMetric.TRADE_COUNT in request.metrics
+                or AggregationMetric.VOLUME_PROFILE in request.metrics
+            ):
                 bucket.trade_count = int(row["trade_count"]) if row["trade_count"] else None
 
             buckets.append(bucket)

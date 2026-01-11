@@ -10,20 +10,18 @@ This module provides write operations for Iceberg tables with:
 Writers are designed for batch writes (100-10,000 records per call) to
 optimize Iceberg's append performance and minimize metadata operations.
 """
-from typing import List, Dict, Any, Optional, Generator
-from datetime import datetime
-from decimal import Decimal
-from contextlib import contextmanager
+
 import time
+from decimal import Decimal
+from typing import Any
+
 import pyarrow as pa
 from pyiceberg.catalog import load_catalog
-from pyiceberg.table import Table
-from pyiceberg.exceptions import NoSuchTableError
-from pyiceberg.exceptions import CommitFailedException
+from pyiceberg.exceptions import CommitFailedException, NoSuchTableError
 
 from k2.common.config import config
+from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
-from k2.common.logging import get_logger, set_correlation_id
 
 logger = get_logger(__name__, component="storage")
 metrics = create_component_metrics("storage")
@@ -35,8 +33,7 @@ def _retry_with_exponential_backoff(
     max_delay: float = 10.0,
     backoff_factor: float = 2.0,
 ):
-    """
-    Decorator for retrying operations with exponential backoff.
+    """Decorator for retrying operations with exponential backoff.
 
     Args:
         max_retries: Maximum number of retry attempts
@@ -49,6 +46,7 @@ def _retry_with_exponential_backoff(
         def write_data():
             # ... code that might fail transiently
     """
+
     def decorator(func):
         def wrapper(*args, **kwargs):
             delay = initial_delay
@@ -79,12 +77,12 @@ def _retry_with_exponential_backoff(
             raise last_exception
 
         return wrapper
+
     return decorator
 
 
 class IcebergWriter:
-    """
-    Write data to Iceberg tables with ACID guarantees.
+    """Write data to Iceberg tables with ACID guarantees.
 
     This writer:
     - Converts Python dictionaries to PyArrow tables
@@ -112,13 +110,12 @@ class IcebergWriter:
 
     def __init__(
         self,
-        catalog_uri: Optional[str] = None,
-        s3_endpoint: Optional[str] = None,
-        s3_access_key: Optional[str] = None,
-        s3_secret_key: Optional[str] = None,
+        catalog_uri: str | None = None,
+        s3_endpoint: str | None = None,
+        s3_access_key: str | None = None,
+        s3_secret_key: str | None = None,
     ):
-        """
-        Initialize Iceberg writer.
+        """Initialize Iceberg writer.
 
         Args:
             catalog_uri: Iceberg REST catalog URI (defaults to config)
@@ -140,33 +137,30 @@ class IcebergWriter:
                     "s3.access-key-id": self.s3_access_key,
                     "s3.secret-access-key": self.s3_secret_key,
                     "s3.path-style-access": "true",
-                }
+                },
             )
 
             logger.debug("Iceberg writer initialized", catalog_uri=self.catalog_uri)
 
         except Exception as e:
             logger.error(
-                "Failed to initialize Iceberg writer",
-                error=str(e),
-                catalog_uri=self.catalog_uri
+                "Failed to initialize Iceberg writer", error=str(e), catalog_uri=self.catalog_uri,
             )
             metrics.increment(
                 "iceberg_write_errors_total",
-                labels={"error_type": "initialization_failed", "table": "unknown"}
+                labels={"error_type": "initialization_failed", "table": "unknown"},
             )
             raise
 
     @_retry_with_exponential_backoff(max_retries=3)
     def write_trades(
         self,
-        records: List[Dict[str, Any]],
+        records: list[dict[str, Any]],
         table_name: str = "market_data.trades",
         exchange: str = "unknown",
         asset_class: str = "equities",
     ) -> int:
-        """
-        Write trade records to Iceberg table with automatic retry.
+        """Write trade records to Iceberg table with automatic retry.
 
         Args:
             records: List of trade dictionaries matching schema
@@ -197,7 +191,7 @@ class IcebergWriter:
                     "asset_class": asset_class,
                     "table": "trades",
                     "error_type": "table_not_found",
-                }
+                },
             )
             raise
 
@@ -209,7 +203,7 @@ class IcebergWriter:
                 "Failed to convert records to Arrow",
                 table=table_name,
                 record_count=len(records),
-                error=str(e)
+                error=str(e),
             )
             metrics.increment(
                 "iceberg_write_errors_total",
@@ -218,7 +212,7 @@ class IcebergWriter:
                     "asset_class": asset_class,
                     "table": "trades",
                     "error_type": "arrow_conversion_failed",
-                }
+                },
             )
             raise
 
@@ -230,7 +224,7 @@ class IcebergWriter:
                 "asset_class": asset_class,
                 "table": "trades",
                 "operation": "append",
-            }
+            },
         ):
             try:
                 table.append(arrow_table)
@@ -251,7 +245,7 @@ class IcebergWriter:
                         "exchange": exchange,
                         "asset_class": asset_class,
                         "table": "trades",
-                    }
+                    },
                 )
 
                 # Track batch size distribution
@@ -262,7 +256,7 @@ class IcebergWriter:
                         "exchange": exchange,
                         "asset_class": asset_class,
                         "table": "trades",
-                    }
+                    },
                 )
 
                 return len(records)
@@ -281,20 +275,19 @@ class IcebergWriter:
                         "asset_class": asset_class,
                         "table": "trades",
                         "error_type": "append_failed",
-                    }
+                    },
                 )
                 raise
 
     @_retry_with_exponential_backoff(max_retries=3)
     def write_quotes(
         self,
-        records: List[Dict[str, Any]],
+        records: list[dict[str, Any]],
         table_name: str = "market_data.quotes",
         exchange: str = "unknown",
         asset_class: str = "equities",
     ) -> int:
-        """
-        Write quote records to Iceberg table with automatic retry.
+        """Write quote records to Iceberg table with automatic retry.
 
         Args:
             records: List of quote dictionaries matching schema
@@ -325,7 +318,7 @@ class IcebergWriter:
                     "asset_class": asset_class,
                     "table": "quotes",
                     "error_type": "table_not_found",
-                }
+                },
             )
             raise
 
@@ -337,7 +330,7 @@ class IcebergWriter:
                 "Failed to convert records to Arrow",
                 table=table_name,
                 record_count=len(records),
-                error=str(e)
+                error=str(e),
             )
             metrics.increment(
                 "iceberg_write_errors_total",
@@ -346,7 +339,7 @@ class IcebergWriter:
                     "asset_class": asset_class,
                     "table": "quotes",
                     "error_type": "arrow_conversion_failed",
-                }
+                },
             )
             raise
 
@@ -358,7 +351,7 @@ class IcebergWriter:
                 "asset_class": asset_class,
                 "table": "quotes",
                 "operation": "append",
-            }
+            },
         ):
             try:
                 table.append(arrow_table)
@@ -379,7 +372,7 @@ class IcebergWriter:
                         "exchange": exchange,
                         "asset_class": asset_class,
                         "table": "quotes",
-                    }
+                    },
                 )
 
                 # Track batch size distribution
@@ -390,7 +383,7 @@ class IcebergWriter:
                         "exchange": exchange,
                         "asset_class": asset_class,
                         "table": "quotes",
-                    }
+                    },
                 )
 
                 return len(records)
@@ -409,16 +402,12 @@ class IcebergWriter:
                         "asset_class": asset_class,
                         "table": "quotes",
                         "error_type": "append_failed",
-                    }
+                    },
                 )
                 raise
 
-    def _records_to_arrow_trades(
-        self,
-        records: List[Dict[str, Any]]
-    ) -> pa.Table:
-        """
-        Convert trade records to PyArrow table.
+    def _records_to_arrow_trades(self, records: list[dict[str, Any]]) -> pa.Table:
+        """Convert trade records to PyArrow table.
 
         Args:
             records: List of trade dictionaries
@@ -430,19 +419,21 @@ class IcebergWriter:
             Exception: If conversion fails
         """
         # Define schema matching Iceberg table (with explicit nullable flags)
-        schema = pa.schema([
-            pa.field("symbol", pa.string(), nullable=False),
-            pa.field("company_id", pa.int32(), nullable=False),
-            pa.field("exchange", pa.string(), nullable=False),
-            pa.field("exchange_timestamp", pa.timestamp('us'), nullable=False),
-            pa.field("price", pa.decimal128(18, 6), nullable=False),
-            pa.field("volume", pa.int64(), nullable=False),
-            pa.field("qualifiers", pa.int32(), nullable=False),
-            pa.field("venue", pa.string(), nullable=False),
-            pa.field("buyer_id", pa.string(), nullable=True),
-            pa.field("ingestion_timestamp", pa.timestamp('us'), nullable=False),
-            pa.field("sequence_number", pa.int64(), nullable=True),
-        ])
+        schema = pa.schema(
+            [
+                pa.field("symbol", pa.string(), nullable=False),
+                pa.field("company_id", pa.int32(), nullable=False),
+                pa.field("exchange", pa.string(), nullable=False),
+                pa.field("exchange_timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("price", pa.decimal128(18, 6), nullable=False),
+                pa.field("volume", pa.int64(), nullable=False),
+                pa.field("qualifiers", pa.int32(), nullable=False),
+                pa.field("venue", pa.string(), nullable=False),
+                pa.field("buyer_id", pa.string(), nullable=True),
+                pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("sequence_number", pa.int64(), nullable=True),
+            ],
+        )
 
         # Convert records, handling type conversions
         converted_records = []
@@ -452,7 +443,11 @@ class IcebergWriter:
                 "company_id": record["company_id"],
                 "exchange": record["exchange"],
                 "exchange_timestamp": record["exchange_timestamp"],
-                "price": record["price"] if isinstance(record["price"], Decimal) else Decimal(str(record["price"])),
+                "price": (
+                    record["price"]
+                    if isinstance(record["price"], Decimal)
+                    else Decimal(str(record["price"]))
+                ),
                 "volume": record["volume"],
                 "qualifiers": record["qualifiers"],
                 "venue": record["venue"],
@@ -464,12 +459,8 @@ class IcebergWriter:
 
         return pa.Table.from_pylist(converted_records, schema=schema)
 
-    def _records_to_arrow_quotes(
-        self,
-        records: List[Dict[str, Any]]
-    ) -> pa.Table:
-        """
-        Convert quote records to PyArrow table.
+    def _records_to_arrow_quotes(self, records: list[dict[str, Any]]) -> pa.Table:
+        """Convert quote records to PyArrow table.
 
         Args:
             records: List of quote dictionaries
@@ -481,18 +472,20 @@ class IcebergWriter:
             Exception: If conversion fails
         """
         # Define schema matching Iceberg table (with explicit nullable flags)
-        schema = pa.schema([
-            pa.field("symbol", pa.string(), nullable=False),
-            pa.field("company_id", pa.int32(), nullable=False),
-            pa.field("exchange", pa.string(), nullable=False),
-            pa.field("exchange_timestamp", pa.timestamp('us'), nullable=False),
-            pa.field("bid_price", pa.decimal128(18, 6), nullable=False),
-            pa.field("bid_volume", pa.int64(), nullable=False),
-            pa.field("ask_price", pa.decimal128(18, 6), nullable=False),
-            pa.field("ask_volume", pa.int64(), nullable=False),
-            pa.field("ingestion_timestamp", pa.timestamp('us'), nullable=False),
-            pa.field("sequence_number", pa.int64(), nullable=True),
-        ])
+        schema = pa.schema(
+            [
+                pa.field("symbol", pa.string(), nullable=False),
+                pa.field("company_id", pa.int32(), nullable=False),
+                pa.field("exchange", pa.string(), nullable=False),
+                pa.field("exchange_timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("bid_price", pa.decimal128(18, 6), nullable=False),
+                pa.field("bid_volume", pa.int64(), nullable=False),
+                pa.field("ask_price", pa.decimal128(18, 6), nullable=False),
+                pa.field("ask_volume", pa.int64(), nullable=False),
+                pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("sequence_number", pa.int64(), nullable=True),
+            ],
+        )
 
         # Convert records, handling type conversions
         converted_records = []
@@ -502,9 +495,17 @@ class IcebergWriter:
                 "company_id": record["company_id"],
                 "exchange": record["exchange"],
                 "exchange_timestamp": record["exchange_timestamp"],
-                "bid_price": record["bid_price"] if isinstance(record["bid_price"], Decimal) else Decimal(str(record["bid_price"])),
+                "bid_price": (
+                    record["bid_price"]
+                    if isinstance(record["bid_price"], Decimal)
+                    else Decimal(str(record["bid_price"]))
+                ),
                 "bid_volume": record["bid_volume"],
-                "ask_price": record["ask_price"] if isinstance(record["ask_price"], Decimal) else Decimal(str(record["ask_price"])),
+                "ask_price": (
+                    record["ask_price"]
+                    if isinstance(record["ask_price"], Decimal)
+                    else Decimal(str(record["ask_price"]))
+                ),
                 "ask_volume": record["ask_volume"],
                 "ingestion_timestamp": record["ingestion_timestamp"],
                 "sequence_number": record.get("sequence_number"),

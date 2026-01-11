@@ -25,11 +25,11 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
-from rich import box
 
 # Add src to path for k2 imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -280,9 +280,7 @@ def step_3_query_demo(quick: bool = False) -> None:
         console.print()
 
     except ImportError:
-        console.print(
-            "[yellow]QueryEngine not available - ensure Docker is running[/yellow]"
-        )
+        console.print("[yellow]QueryEngine not available - ensure Docker is running[/yellow]")
         console.print("[dim]Run: make docker-up && make init-infra[/dim]\n")
 
     pause(2, quick)
@@ -355,9 +353,7 @@ Each snapshot represents the table state at a point in time.
                 progress.update(task, description=f"[yellow]Not available: {e}")
 
     except ImportError:
-        console.print(
-            "[yellow]ReplayEngine not available - ensure Docker is running[/yellow]"
-        )
+        console.print("[yellow]ReplayEngine not available - ensure Docker is running[/yellow]")
 
     console.print()
     pause(2, quick)
@@ -407,16 +403,13 @@ def step_5_summary(quick: bool = False) -> None:
 @app.command()
 def main(
     quick: bool = typer.Option(False, "--quick", "-q", help="Skip delays (CI mode)"),
-    step: Optional[int] = typer.Option(
-        None, "--step", "-s", help="Run specific step (1-5)"
-    ),
+    step: Optional[int] = typer.Option(None, "--step", "-s", help="Run specific step (1-5)"),
 ) -> None:
     """Run the K2 Market Data Platform interactive demo."""
     console.print()
     console.print(
         Panel(
-            "[bold cyan]K2 Market Data Platform[/bold cyan]\n"
-            "[dim]Interactive Demo[/dim]",
+            "[bold cyan]K2 Market Data Platform[/bold cyan]\n" "[dim]Interactive Demo[/dim]",
             border_style="cyan",
         )
     )

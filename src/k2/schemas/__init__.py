@@ -23,12 +23,14 @@ Usage:
     # Register all schemas with Schema Registry
     schema_ids = register_schemas('http://localhost:8081')
 """
+
 import json
 from pathlib import Path
 from typing import Dict
-from confluent_kafka.schema_registry import SchemaRegistryClient, Schema
-from confluent_kafka.schema_registry.error import SchemaRegistryError
+
 import structlog
+from confluent_kafka.schema_registry import Schema, SchemaRegistryClient
+from confluent_kafka.schema_registry.error import SchemaRegistryError
 
 logger = structlog.get_logger()
 
@@ -36,8 +38,7 @@ SCHEMA_DIR = Path(__file__).parent
 
 
 def load_avro_schema(schema_name: str) -> str:
-    """
-    Load Avro schema from .avsc file.
+    """Load Avro schema from .avsc file.
 
     Args:
         schema_name: Name of schema file without extension (e.g., 'trade')
@@ -54,7 +55,7 @@ def load_avro_schema(schema_name: str) -> str:
     if not schema_path.exists():
         raise FileNotFoundError(
             f"Schema file not found: {schema_path}\n"
-            f"Available schemas: {list_available_schemas()}"
+            f"Available schemas: {list_available_schemas()}",
         )
 
     schema_str = schema_path.read_text()
@@ -72,8 +73,7 @@ def load_avro_schema(schema_name: str) -> str:
 
 
 def list_available_schemas() -> list[str]:
-    """
-    List all available Avro schemas.
+    """List all available Avro schemas.
 
     Returns:
         List of schema names (without .avsc extension)
@@ -82,11 +82,8 @@ def list_available_schemas() -> list[str]:
     return [f.stem for f in schema_files]
 
 
-def register_schemas(
-    schema_registry_url: str = None
-) -> Dict[str, int]:
-    """
-    Register all Avro schemas with Schema Registry using asset-class-level subjects.
+def register_schemas(schema_registry_url: str = None) -> dict[str, int]:
+    """Register all Avro schemas with Schema Registry using asset-class-level subjects.
 
     This function:
     1. Reads topic configuration to determine asset classes
@@ -117,31 +114,30 @@ def register_schemas(
     if schema_registry_url is None:
         schema_registry_url = config.kafka.schema_registry_url
 
-    logger.info("Registering schemas with asset-class-level subjects", registry_url=schema_registry_url)
+    logger.info(
+        "Registering schemas with asset-class-level subjects", registry_url=schema_registry_url,
+    )
 
-    client = SchemaRegistryClient({'url': schema_registry_url})
+    client = SchemaRegistryClient({"url": schema_registry_url})
     topic_builder = get_topic_builder()
 
     schema_ids = {}
 
     # Get schema registry config
-    subject_pattern = topic_builder.config['schema_registry']['subject_pattern']
+    subject_pattern = topic_builder.config["schema_registry"]["subject_pattern"]
 
     # Register schemas for each asset class
-    for asset_class in topic_builder.config['asset_classes'].keys():
-        for data_type_name, data_type_cfg in topic_builder.config['data_types'].items():
-            schema_name = data_type_cfg['schema_name']
+    for asset_class in topic_builder.config["asset_classes"].keys():
+        for data_type_name, data_type_cfg in topic_builder.config["data_types"].items():
+            schema_name = data_type_cfg["schema_name"]
 
             try:
                 # Load schema
                 schema_str = load_avro_schema(schema_name)
-                schema = Schema(schema_str, schema_type='AVRO')
+                schema = Schema(schema_str, schema_type="AVRO")
 
                 # Build subject name using asset-class-level pattern
-                subject = subject_pattern.format(
-                    asset_class=asset_class,
-                    data_type=data_type_name
-                )
+                subject = subject_pattern.format(asset_class=asset_class, data_type=data_type_name)
 
                 # Register schema
                 schema_id = client.register_schema(subject, schema)
@@ -184,11 +180,8 @@ def register_schemas(
     return schema_ids
 
 
-def get_schema_registry_client(
-    schema_registry_url: str = None
-) -> SchemaRegistryClient:
-    """
-    Create Schema Registry client.
+def get_schema_registry_client(schema_registry_url: str = None) -> SchemaRegistryClient:
+    """Create Schema Registry client.
 
     Args:
         schema_registry_url: Schema Registry base URL (defaults to config)
@@ -201,4 +194,4 @@ def get_schema_registry_client(
     if schema_registry_url is None:
         schema_registry_url = config.kafka.schema_registry_url
 
-    return SchemaRegistryClient({'url': schema_registry_url})
+    return SchemaRegistryClient({"url": schema_registry_url})

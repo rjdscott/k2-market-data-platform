@@ -3,12 +3,13 @@
 These tests mock the DuckDB connection to test query logic without
 requiring actual Iceberg tables or S3 storage.
 """
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, date
-from decimal import Decimal
 
-from k2.query.engine import QueryEngine, QueryType, MarketSummary
+from datetime import date, datetime
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
+
+from k2.query.engine import MarketSummary, QueryEngine, QueryType
 
 
 @pytest.fixture
@@ -97,9 +98,7 @@ class TestQueryTrades:
 
         # Setup mock response
         mock_df = Mock()
-        mock_df.to_dict.return_value = [
-            {"symbol": "BHP", "price": 36.50, "volume": 1000}
-        ]
+        mock_df.to_dict.return_value = [{"symbol": "BHP", "price": 36.50, "volume": 1000}]
         mock_conn.execute.return_value.fetchdf.return_value = mock_df
 
         result = engine.query_trades(limit=100)
@@ -183,7 +182,7 @@ class TestQueryQuotes:
                 "ask_price": 36.52,
                 "bid_volume": 1000,
                 "ask_volume": 500,
-            }
+            },
         ]
         mock_conn.execute.return_value.fetchdf.return_value = mock_df
 
@@ -204,15 +203,15 @@ class TestMarketSummary:
 
         # Mock OHLCV result
         mock_conn.execute.return_value.fetchone.return_value = (
-            "BHP",           # symbol
-            "2024-01-15",    # date
-            36.00,           # open
-            37.50,           # high
-            35.80,           # low
-            37.25,           # close
-            1000000,         # volume
-            5000,            # trade_count
-            36.75,           # vwap
+            "BHP",  # symbol
+            "2024-01-15",  # date
+            36.00,  # open
+            37.50,  # high
+            35.80,  # low
+            37.25,  # close
+            1000000,  # volume
+            5000,  # trade_count
+            36.75,  # vwap
         )
 
         result = engine.get_market_summary("BHP", date(2024, 1, 15))
@@ -234,7 +233,15 @@ class TestMarketSummary:
 
         # Mock empty result (trade_count is None)
         mock_conn.execute.return_value.fetchone.return_value = (
-            "BHP", "2024-01-15", None, None, None, None, None, None, None
+            "BHP",
+            "2024-01-15",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
 
         result = engine.get_market_summary("BHP", date(2024, 1, 15))
@@ -245,7 +252,15 @@ class TestMarketSummary:
         _, mock_conn = mock_duckdb
 
         mock_conn.execute.return_value.fetchone.return_value = (
-            "BHP", "2024-01-15", 36.0, 37.5, 35.8, 37.25, 1000, 100, 36.75
+            "BHP",
+            "2024-01-15",
+            36.0,
+            37.5,
+            35.8,
+            37.25,
+            1000,
+            100,
+            36.75,
         )
 
         engine.get_market_summary("BHP", date(2024, 1, 15), exchange="ASX")
@@ -262,9 +277,7 @@ class TestHelperMethods:
         """Test getting distinct symbols."""
         _, mock_conn = mock_duckdb
 
-        mock_conn.execute.return_value.fetchall.return_value = [
-            ("BHP",), ("RIO",), ("FMG",)
-        ]
+        mock_conn.execute.return_value.fetchall.return_value = [("BHP",), ("RIO",), ("FMG",)]
 
         symbols = engine.get_symbols()
 

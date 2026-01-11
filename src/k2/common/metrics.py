@@ -1,5 +1,4 @@
-"""
-Prometheus metrics instrumentation.
+"""Prometheus metrics instrumentation.
 
 Provides RED metrics (Rate, Errors, Duration) for all platform components.
 This module provides a simple API wrapper around the metrics registry.
@@ -33,8 +32,8 @@ Usage:
 """
 
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Dict, Optional, Generator
 
 from k2.common.metrics_registry import (
     get_counter,
@@ -45,17 +44,15 @@ from k2.common.metrics_registry import (
 
 
 class MetricsClient:
-    """
-    Lightweight wrapper around Prometheus metrics registry.
+    """Lightweight wrapper around Prometheus metrics registry.
 
     Provides a simple API for instrumenting code with counters, gauges,
     and histograms. All metrics are pre-registered in metrics_registry.py
     for better performance and fail-fast behavior.
     """
 
-    def __init__(self, default_labels: Optional[Dict[str, str]] = None):
-        """
-        Initialize metrics client.
+    def __init__(self, default_labels: dict[str, str] | None = None):
+        """Initialize metrics client.
 
         Args:
             default_labels: Default labels to apply to all metrics
@@ -63,7 +60,7 @@ class MetricsClient:
         """
         self.default_labels = default_labels or {}
 
-    def _merge_labels(self, labels: Optional[Dict[str, str]]) -> Dict[str, str]:
+    def _merge_labels(self, labels: dict[str, str] | None) -> dict[str, str]:
         """Merge provided labels with default labels."""
         merged = self.default_labels.copy()
         if labels:
@@ -74,10 +71,9 @@ class MetricsClient:
         self,
         metric_name: str,
         value: int = 1,
-        labels: Optional[Dict[str, str]] = None,
+        labels: dict[str, str] | None = None,
     ) -> None:
-        """
-        Increment a counter metric.
+        """Increment a counter metric.
 
         Args:
             metric_name: Name of the counter (without k2_ prefix)
@@ -98,10 +94,9 @@ class MetricsClient:
         self,
         metric_name: str,
         value: float,
-        labels: Optional[Dict[str, str]] = None,
+        labels: dict[str, str] | None = None,
     ) -> None:
-        """
-        Set a gauge metric to a specific value.
+        """Set a gauge metric to a specific value.
 
         Args:
             metric_name: Name of the gauge (without k2_ prefix)
@@ -123,10 +118,9 @@ class MetricsClient:
         self,
         metric_name: str,
         value: float,
-        labels: Optional[Dict[str, str]] = None,
+        labels: dict[str, str] | None = None,
     ) -> None:
-        """
-        Record a histogram observation.
+        """Record a histogram observation.
 
         Args:
             metric_name: Name of the histogram (without k2_ prefix)
@@ -148,10 +142,9 @@ class MetricsClient:
     def timer(
         self,
         metric_name: str,
-        labels: Optional[Dict[str, str]] = None,
-    ) -> Generator[None, None, None]:
-        """
-        Context manager for timing operations.
+        labels: dict[str, str] | None = None,
+    ) -> Generator[None]:
+        """Context manager for timing operations.
 
         Automatically records duration in a histogram metric.
 
@@ -171,8 +164,7 @@ class MetricsClient:
             self.histogram(metric_name, duration, labels)
 
     def set_degradation_level(self, level: int) -> None:
-        """
-        Set current system degradation level.
+        """Set current system degradation level.
 
         Levels:
             0: Normal operation
@@ -198,8 +190,7 @@ class MetricsClient:
         breaker_name: str,
         state: str,
     ) -> None:
-        """
-        Record circuit breaker state change.
+        """Record circuit breaker state change.
 
         Args:
             breaker_name: Name of the circuit breaker
@@ -227,8 +218,7 @@ metrics = MetricsClient()
 
 
 def initialize_metrics(version: str, environment: str) -> None:
-    """
-    Initialize platform metrics with version info.
+    """Initialize platform metrics with version info.
 
     Should be called once at application startup.
 
@@ -238,7 +228,7 @@ def initialize_metrics(version: str, environment: str) -> None:
     """
     import datetime
 
-    deployment = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    deployment = datetime.datetime.now(datetime.UTC).isoformat()
     initialize_platform_info(version, environment, deployment)
 
 
@@ -247,8 +237,7 @@ def create_component_metrics(
     service: str = "k2-platform",
     environment: str = "dev",
 ) -> MetricsClient:
-    """
-    Create a metrics client with default labels for a component.
+    """Create a metrics client with default labels for a component.
 
     Args:
         component: Component name (e.g., "ingestion", "storage", "query")
@@ -276,5 +265,5 @@ def create_component_metrics(
             "service": service,
             "environment": environment,
             "component": component,
-        }
+        },
     )

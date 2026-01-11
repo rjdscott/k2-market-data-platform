@@ -26,15 +26,16 @@ Examples:
     # Execute with custom Kafka bootstrap servers
     python scripts/migrate_topics.py --bootstrap-servers kafka:29092
 """
-import sys
 import argparse
+import sys
 from pathlib import Path
 from typing import Set
-from confluent_kafka.admin import AdminClient, KafkaException
+
 import structlog
+from confluent_kafka.admin import AdminClient, KafkaException
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from k2.kafka import get_topic_builder
 from k2.schemas import register_schemas
@@ -43,15 +44,15 @@ logger = structlog.get_logger()
 
 
 OLD_TOPICS = [
-    'market.trades.raw',
-    'market.quotes.raw',
-    'market.reference_data',
+    "market.trades.raw",
+    "market.quotes.raw",
+    "market.reference_data",
 ]
 
 OLD_SCHEMA_SUBJECTS = [
-    'market.trades.raw-value',
-    'market.quotes.raw-value',
-    'market.reference_data-value',
+    "market.trades.raw-value",
+    "market.quotes.raw-value",
+    "market.reference_data-value",
 ]
 
 
@@ -68,8 +69,9 @@ def get_existing_topics(admin: AdminClient) -> Set[str]:
         metadata = admin.list_topics(timeout=10)
         # Filter out internal topics (start with _ or __)
         topics = {
-            topic for topic in metadata.topics.keys()
-            if not topic.startswith('_') and not topic.startswith('__')
+            topic
+            for topic in metadata.topics.keys()
+            if not topic.startswith("_") and not topic.startswith("__")
         }
         return topics
     except Exception as e:
@@ -136,8 +138,9 @@ def create_new_topics(bootstrap_servers: str, dry_run: bool = False) -> None:
 
         # Show details for each topic
         from k2.kafka import DataType
-        for asset_class, asset_cfg in topic_builder.config['asset_classes'].items():
-            for exchange in asset_cfg['exchanges'].keys():
+
+        for asset_class, asset_cfg in topic_builder.config["asset_classes"].items():
+            for exchange in asset_cfg["exchanges"].keys():
                 for data_type in DataType:
                     topic_config = topic_builder.get_topic_config(asset_class, data_type, exchange)
                     logger.info(
@@ -150,6 +153,7 @@ def create_new_topics(bootstrap_servers: str, dry_run: bool = False) -> None:
 
     # Use the updated init_infra function
     import init_infra
+
     init_infra.create_kafka_topics(bootstrap_servers=bootstrap_servers)
 
 
@@ -167,8 +171,8 @@ def migrate_schemas(schema_registry_url: str, dry_run: bool = False) -> None:
 
     if dry_run:
         topic_builder = get_topic_builder()
-        asset_classes = topic_builder.config['asset_classes'].keys()
-        data_types = topic_builder.config['data_types'].keys()
+        asset_classes = topic_builder.config["asset_classes"].keys()
+        data_types = topic_builder.config["data_types"].keys()
 
         subjects = []
         for asset_class in asset_classes:
@@ -202,21 +206,26 @@ def verify_migration(admin: AdminClient) -> bool:
     # Check all expected topics exist
     missing_topics = expected_topics - existing_topics
     if missing_topics:
-        logger.error("Migration verification failed: missing topics", missing=sorted(missing_topics))
+        logger.error(
+            "Migration verification failed: missing topics", missing=sorted(missing_topics)
+        )
         return False
 
     # Check old topics are gone
     old_topics_remaining = set(OLD_TOPICS) & existing_topics
     if old_topics_remaining:
-        logger.error("Migration verification failed: old topics still exist", remaining=sorted(old_topics_remaining))
+        logger.error(
+            "Migration verification failed: old topics still exist",
+            remaining=sorted(old_topics_remaining),
+        )
         return False
 
     # Verify partition counts
     metadata = admin.list_topics(timeout=10)
     from k2.kafka import DataType
 
-    for asset_class, asset_cfg in topic_builder.config['asset_classes'].items():
-        for exchange in asset_cfg['exchanges'].keys():
+    for asset_class, asset_cfg in topic_builder.config["asset_classes"].items():
+        for exchange in asset_cfg["exchanges"].keys():
             for data_type in DataType:
                 topic_config = topic_builder.get_topic_config(asset_class, data_type, exchange)
                 topic_name = topic_config.topic_name
@@ -252,24 +261,20 @@ def main():
         epilog=__doc__,
     )
     parser.add_argument(
-        '--dry-run',
-        action='store_true',
-        help="Show what would be done without making changes"
+        "--dry-run", action="store_true", help="Show what would be done without making changes"
     )
     parser.add_argument(
-        '--bootstrap-servers',
-        default='localhost:9092',
-        help="Kafka bootstrap servers (default: localhost:9092)"
+        "--bootstrap-servers",
+        default="localhost:9092",
+        help="Kafka bootstrap servers (default: localhost:9092)",
     )
     parser.add_argument(
-        '--schema-registry-url',
-        default='http://localhost:8081',
-        help="Schema Registry URL (default: http://localhost:8081)"
+        "--schema-registry-url",
+        default="http://localhost:8081",
+        help="Schema Registry URL (default: http://localhost:8081)",
     )
     parser.add_argument(
-        '--skip-delete',
-        action='store_true',
-        help="Skip deleting old topics (useful for testing)"
+        "--skip-delete", action="store_true", help="Skip deleting old topics (useful for testing)"
     )
 
     args = parser.parse_args()
@@ -281,7 +286,7 @@ def main():
         schema_registry_url=args.schema_registry_url,
     )
 
-    admin = AdminClient({'bootstrap.servers': args.bootstrap_servers})
+    admin = AdminClient({"bootstrap.servers": args.bootstrap_servers})
 
     try:
         # Step 1: Show existing topics
@@ -319,9 +324,10 @@ def main():
     except Exception as e:
         logger.error("Migration failed", error=str(e), error_type=type(e).__name__)
         import traceback
+
         logger.error("Traceback", traceback=traceback.format_exc())
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

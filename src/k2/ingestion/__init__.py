@@ -32,25 +32,25 @@ Usage:
     loader.close()
 """
 
-from k2.ingestion.producer import MarketDataProducer, create_producer
-from k2.ingestion.consumer import MarketDataConsumer, ConsumerStats, create_consumer
 from k2.ingestion.batch_loader import BatchLoader, LoadStats, create_loader
+from k2.ingestion.consumer import ConsumerStats, MarketDataConsumer, create_consumer
+from k2.ingestion.producer import MarketDataProducer, create_producer
 from k2.ingestion.sequence_tracker import (
-    SequenceTracker,
-    SequenceEvent,
     DeduplicationCache,
+    SequenceEvent,
+    SequenceTracker,
 )
 
 __all__ = [
-    "MarketDataProducer",
-    "create_producer",
-    "MarketDataConsumer",
-    "ConsumerStats",
-    "create_consumer",
     "BatchLoader",
-    "LoadStats",
-    "create_loader",
-    "SequenceTracker",
-    "SequenceEvent",
+    "ConsumerStats",
     "DeduplicationCache",
+    "LoadStats",
+    "MarketDataConsumer",
+    "MarketDataProducer",
+    "SequenceEvent",
+    "SequenceTracker",
+    "create_consumer",
+    "create_loader",
+    "create_producer",
 ]
