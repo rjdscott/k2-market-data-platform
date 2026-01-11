@@ -1,8 +1,8 @@
 # K2 - Market Data Platform
 
-**Status**: Production-Ready Design | Demo Implementation
+**Status**: Phase 1 Complete | Production-Ready Design
 **Version**: 0.1.0
-**Progress**: 93.75% Complete (15/16 steps)
+**Progress**: 100% Complete (16/16 steps)
 **Last Updated**: 2026-01-11
 **Author**: Rob Scott (Platform Lead)
 
@@ -17,6 +17,35 @@ This implementation aims to demonstrate architectural patterns for streaming ing
 The full scale production implementation will be contained in another separate project.
 
 **Design Philosophy**: Explicit trade-offs over implicit complexity. Every architectural decision documents what we optimize for, what we sacrifice, and what breaks first under load.
+
+---
+
+## What's Implemented (Phase 1 Complete)
+
+This repository contains a **fully functional portfolio demo** of a distributed market data platform:
+
+| Component | Implementation | Tests |
+|-----------|----------------|-------|
+| **Ingestion** | CSV → Kafka (Avro) batch loader, idempotent producers | 24 unit tests |
+| **Storage** | Iceberg lakehouse with PyIceberg, MinIO (S3), daily partitions | 8 unit tests |
+| **Query** | DuckDB engine, time-travel queries, cold-start replay | 43 unit tests |
+| **API** | FastAPI REST endpoints, auth, rate limiting, correlation IDs | 31 unit tests |
+| **Observability** | Prometheus metrics (50+), Grafana dashboard (15 panels) | 10 unit tests |
+| **Demo** | CLI demo script, Jupyter notebook, E2E tests | 7 E2E tests |
+
+**Total**: 170+ tests | **Sample Data**: ASX trades (March 2014)
+
+### Quick Demo
+
+```bash
+# Start services and run 1-minute interactive demo
+make docker-up && make demo-quick
+
+# Or explore with Jupyter notebook
+make notebook
+```
+
+See [Implementation Details](./docs/phases/phase-1-portfolio-demo/PROGRESS.md) for step-by-step breakdown.
 
 ---
 
@@ -143,16 +172,21 @@ This repository includes comprehensive documentation organized for staff/princip
 - [**Design**](./docs/design/) - Component-level design, data guarantees, interfaces
 - [**Alternative Architectures**](./docs/architecture/alternatives.md) - Architectures we considered
 
-### 📋 **Phase 1: Portfolio Demo** (Current)
+### 📋 **Phase 1: Portfolio Demo** (Complete)
 - [**Implementation Plan**](./docs/phases/phase-1-portfolio-demo/IMPLEMENTATION_PLAN.md) - 16-step plan
 - [**Progress Tracker**](./docs/phases/phase-1-portfolio-demo/PROGRESS.md) - Current status
 - [**Decisions (ADRs)**](./docs/phases/phase-1-portfolio-demo/DECISIONS.md) - Phase 1 design choices
 - [**Implementation Steps**](./docs/phases/phase-1-portfolio-demo/steps/) - Detailed step guides
 
-### 🔧 **Operations & Testing**
+### 🔧 **Operations & Reference**
 - [**Operations**](./docs/operations/) - Runbooks, monitoring, performance tuning
-- [**Testing**](./docs/testing/) - Testing strategy, patterns, coverage targets
 - [**Reference**](./docs/reference/) - API docs, glossary, configuration
+
+### 🧪 **Testing & Demo**
+- [**Testing Guide**](./docs/TESTING.md) - Running unit, integration, E2E tests
+- [**Testing Strategy**](./docs/testing/) - Test patterns, coverage targets
+- [**Demo Script**](./scripts/demo.py) - Interactive CLI walkthrough
+- [**Demo Notebook**](./notebooks/demo.ipynb) - Jupyter notebook with visualizations
 
 ---
 
@@ -584,6 +618,8 @@ make test-integration   # Requires Docker
 make coverage           # With coverage report
 ```
 
+See [Testing Guide](./docs/TESTING.md) for complete documentation including test organization, markers, and writing tests.
+
 ### Code Quality
 
 ```bash
@@ -639,8 +675,9 @@ All significant platform changes require an RFC (Request for Comments). See [**R
 
 **Approval Requirements**: Platform Lead + 1 Staff Engineer (minimum)
 
-**Recent RFCs**:
-- _(Demo project - no historical RFCs)_
+**Phase 1 Decisions**:
+- 30 architectural decisions documented in [DECISIONS.md](./docs/phases/phase-1-portfolio-demo/DECISIONS.md)
+- Key: Idempotent Kafka producers, DuckDB query engine, daily partitioning, at-least-once delivery
 
 ---
 
@@ -717,16 +754,18 @@ Before deploying to production, validate these requirements:
 
 ## Roadmap
 
-### Phase 1: Core Platform (93.75% Complete)
+### Phase 1: Core Platform (Complete)
 - [x] Kafka + Schema Registry setup
-- [x] Iceberg lakehouse with ACID
+- [x] Iceberg lakehouse with ACID transactions
 - [x] Sequence tracking and gap detection
 - [x] DuckDB query engine implementation
 - [x] Replay engine (cold start, catch-up, rewind)
 - [x] REST API with FastAPI
 - [x] Observability (Prometheus + Grafana)
 - [x] E2E Testing & Demo
-- [ ] Final documentation cleanup
+- [x] Documentation & Cleanup
+
+**Completed**: 2026-01-11 | [View Implementation →](./docs/phases/phase-1-portfolio-demo/PROGRESS.md)
 
 ### Phase 2: Advanced Processing
 - [ ] Real-time aggregations (OHLCV windows)
