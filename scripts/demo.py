@@ -336,10 +336,14 @@ Each snapshot represents the table state at a point in time.
                     snap_table.add_column("Records", justify="right", style="green")
 
                     for snap in snapshots:
+                        # SnapshotInfo is an object with attributes, not a dict
+                        snapshot_id = getattr(snap, "snapshot_id", None) or "N/A"
+                        timestamp = getattr(snap, "timestamp", None) or "N/A"
+                        added_records = getattr(snap, "added_records", 0) or 0
                         snap_table.add_row(
-                            str(snap.get("snapshot_id", "N/A"))[:16] + "...",
-                            str(snap.get("timestamp", "N/A")),
-                            f"{snap.get('added_records', 0):,}",
+                            str(snapshot_id)[:16] + "...",
+                            str(timestamp),
+                            f"{added_records:,}",
                         )
 
                     console.print(snap_table)
