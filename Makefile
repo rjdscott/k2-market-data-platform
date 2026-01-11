@@ -1,7 +1,8 @@
 .PHONY: help setup install dev-install clean clean-venv test test-unit test-integration \
         test-performance coverage lint format type-check quality docker-up \
         docker-down docker-logs docker-clean init-infra simulate docs \
-        api api-prod api-test uv-lock uv-upgrade uv-add uv-add-dev
+        api api-prod api-test uv-lock uv-upgrade uv-add uv-add-dev \
+        demo-reset demo-reset-force demo-reset-dry-run demo-reset-custom
 
 # Default target
 .DEFAULT_GOAL := help
@@ -349,12 +350,38 @@ test-e2e: docker-up ## Run E2E integration tests
 notebook: ## Start Jupyter notebook server
 	@echo "$(BLUE)Starting Jupyter notebook server...$(NC)"
 	@echo "$(YELLOW)Notebooks: http://localhost:8888$(NC)"
-	@$(UV) run jupyter notebook notebooks/
+	@SSL_CERT_FILE=$$($(UV) run python -c "import certifi; print(certifi.where())") \
+		$(UV) run jupyter notebook notebooks/
 
 notebook-install: ## Install notebook dependencies
 	@echo "$(BLUE)Installing notebook dependencies...$(NC)"
 	@$(UV) add jupyter matplotlib mplfinance requests
 	@echo "$(GREEN)✓ Notebook dependencies installed$(NC)"
+
+# ==============================================================================
+# Demo Reset
+# ==============================================================================
+
+demo-reset: ## Reset demo environment (full reset with confirmation)
+	@echo "$(BLUE)Starting demo reset...$(NC)"
+	@$(UV) run python scripts/reset_demo.py
+
+demo-reset-force: ## Reset demo environment (skip confirmation)
+	@echo "$(BLUE)Force resetting demo environment...$(NC)"
+	@$(UV) run python scripts/reset_demo.py --force
+
+demo-reset-dry-run: ## Preview demo reset operations
+	@echo "$(BLUE)Preview demo reset (dry run)...$(NC)"
+	@$(UV) run python scripts/reset_demo.py --dry-run
+
+demo-reset-custom: ## Reset with flags (KEEP_METRICS=1, KEEP_KAFKA=1, KEEP_ICEBERG=1, NO_RELOAD=1, FORCE=1)
+	@echo "$(BLUE)Custom demo reset...$(NC)"
+	@$(UV) run python scripts/reset_demo.py \
+		$(if $(KEEP_METRICS),--keep-metrics,) \
+		$(if $(KEEP_KAFKA),--keep-kafka,) \
+		$(if $(KEEP_ICEBERG),--keep-iceberg,) \
+		$(if $(NO_RELOAD),--no-reload,) \
+		$(if $(FORCE),--force,)
 
 # ==============================================================================
 # CI/CD Helpers
