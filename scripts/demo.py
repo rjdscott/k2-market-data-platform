@@ -130,9 +130,6 @@ def step_2_ingestion(quick: bool = False) -> None:
     try:
         import pandas as pd
 
-        from k2.ingestion.batch_loader import BatchLoader
-        from k2.ingestion.producer import TradeProducer
-
         # Check if sample data exists
         dvn_file = TRADES_DIR / "7181.csv"
         if not dvn_file.exists():
