@@ -349,7 +349,8 @@ test-e2e: docker-up ## Run E2E integration tests
 notebook: ## Start Jupyter notebook server
 	@echo "$(BLUE)Starting Jupyter notebook server...$(NC)"
 	@echo "$(YELLOW)Notebooks: http://localhost:8888$(NC)"
-	@$(UV) run jupyter notebook notebooks/
+	@SSL_CERT_FILE=$$($(UV) run python -c "import certifi; print(certifi.where())") \
+		$(UV) run jupyter notebook notebooks/
 
 notebook-install: ## Install notebook dependencies
 	@echo "$(BLUE)Installing notebook dependencies...$(NC)"
