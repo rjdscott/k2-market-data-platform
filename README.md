@@ -3,14 +3,14 @@
 A distributed market data lakehouse for quantitative research, compliance, and analytics.
 
 **Stack**: Kafka (KRaft) → Iceberg → DuckDB → FastAPI
-**Data**: ASX equities tick data (200K+ trades, March 2014)
+**Data**: ASX equities tick data (200K+ trades, March 2014), Crypto (planned)
 **Python**: 3.13+ with uv package manager
 
 ---
 
 ## Platform Positioning
 
-K2 is a **Reference Data Platform** designed for:
+K2 is a **Market Data Platform** designed for:
 - **Quantitative Research**: Backtest trading strategies on historical tick data
 - **Compliance & Audit**: Time-travel queries for regulatory investigations
 - **Market Analytics**: OHLCV aggregations, microstructure analysis
@@ -29,7 +29,7 @@ L2 Warm Path (<10ms)   │ Risk, Position Management     │ In-memory streaming
 L3 Cold Path (<500ms)  │ Analytics, Compliance         │ ← K2 Platform
 ```
 
-For production HFT execution infrastructure, see [HFT Architecture Patterns](./docs/architecture/alternatives.md).
+For alternative production infrastructure, see [HFT Architecture Patterns](./docs/architecture/alternatives.md).
 
 ---
 
@@ -243,32 +243,6 @@ Base URL: `http://localhost:8000` | Auth: `X-API-Key: k2-dev-api-key-2026`
 
 ---
 
-## Data Guarantees
-
-### Per-Symbol Ordering
-
-- Kafka partitioned by `hash(symbol)` → ordering within partition
-- Iceberg sorted by `(exchange_timestamp, sequence_number)`
-- **Guarantee**: For symbol S, sequence N+1 is always newer than N
-
-### Sequence Gap Detection
-
-| Gap Size | Action |
-|----------|--------|
-| < 10 | Log warning, continue |
-| 10-100 | Alert, request recovery |
-| > 100 | Halt consumer, investigate |
-
-### Replay Modes
-
-| Mode | Use Case | Guarantee |
-|------|----------|-----------|
-| **Cold Start** | Backtest 6-month strategy | Per-symbol ordering |
-| **Catch-Up** | Resume after lag | Seamless Iceberg→Kafka handoff |
-| **Rewind** | Compliance audit | Query as-of Iceberg snapshot |
-
----
-
 ## Operations
 
 K2 is designed for operational simplicity with comprehensive observability and runbooks.
@@ -327,23 +301,13 @@ Operational procedures for common scenarios:
 - [Kafka Operations](./docs/operations/kafka-runbook.md) - Topic management, troubleshooting
 - [Performance Tuning](./docs/operations/performance/latency-budgets.md) - Optimization guides
 
-**Demo Reset**: For demonstration purposes, use `make demo-reset` to clear all datastores.
-
-```bash
-make demo-reset           # Full reset with confirmation
-make demo-reset-dry-run   # Preview what will be reset
-make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
-```
-
-See [Demo Reset Guide](./docs/operations/README.md#demo-reset) for detailed options.
-
 ### Scaling Strategy
 
 **Current State (Single-Node)**:
 - **Throughput**: ~10K msg/sec per consumer
-- **Storage**: <1GB (MinIO local)
+- **Storage**: <10GB (MinIO local)
 - **Query**: DuckDB embedded (single-node)
-- **Kafka**: 1 broker, 6 partitions per topic
+- **Kafka**: 1 broker, 20 partitions per topic
 
 **100x Scale (Distributed)**:
 - **Throughput**: 1M msg/sec → Add Kafka brokers, increase partitions
