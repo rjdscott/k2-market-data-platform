@@ -24,14 +24,14 @@ The K2 platform is being built in phases, each with specific goals and scope:
 **Timeline**: 59-85 hours estimated
 **Goal**: Demonstrate end-to-end platform capabilities for portfolio review
 
-**Directory**: [phase-1-portfolio-demo/](./phase-1-portfolio-demo/)
+**Directory**: [phase-1-core-demo/](./phase-1-core-demo/)
 
 ### Key Documents
-- [Implementation Plan](./phase-1-portfolio-demo/IMPLEMENTATION_PLAN.md) - 16-step implementation plan
-- [Progress Tracking](./phase-1-portfolio-demo/PROGRESS.md) - Detailed progress log
-- [Status](./phase-1-portfolio-demo/STATUS.md) - Current snapshot
-- [Decisions](./phase-1-portfolio-demo/DECISIONS.md) - Phase 1 architectural decisions (ADRs)
-- [Validation Guide](./phase-1-portfolio-demo/VALIDATION_GUIDE.md) - Testing and validation procedures
+- [Implementation Plan](./phase-1-core-demo/IMPLEMENTATION_PLAN.md) - 16-step implementation plan
+- [Progress Tracking](./phase-1-core-demo/PROGRESS.md) - Detailed progress log
+- [Status](./phase-1-core-demo/STATUS.md) - Current snapshot
+- [Decisions](./phase-1-core-demo/DECISIONS.md) - Phase 1 architectural decisions (ADRs)
+- [Validation Guide](./phase-1-core-demo/VALIDATION_GUIDE.md) - Testing and validation procedures
 
 ### Implementation Steps (16 Total)
 

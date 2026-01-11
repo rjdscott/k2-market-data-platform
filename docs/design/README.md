@@ -242,7 +242,7 @@ Used in: Query engine, API layer
 ## Related Documentation
 
 - **Architecture**: [../architecture/](../architecture/)
-- **Implementation**: [../phases/phase-1-portfolio-demo/](../phases/phase-1-portfolio-demo/)
+- **Implementation**: [../phases/phase-1-core-demo/](../phases/phase-1-core-demo/)
 - **Operations**: [../operations/](../operations/)
 - **Testing**: [../testing/](../testing/)
 
