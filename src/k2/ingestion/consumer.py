@@ -1,0 +1,695 @@
+"""Kafka consumer for market data ingestion to Iceberg.
+
+This module provides a production-ready Kafka consumer that bridges the streaming
+layer (Kafka) and the lakehouse layer (Iceberg). Features include:
+
+- Avro deserialization with Schema Registry
+- Batch processing with configurable batch size
+- Manual commit after successful Iceberg write (at-least-once delivery)
+- Sequence gap detection and logging
+- Graceful shutdown with signal handling
+- Comprehensive metrics and structured logging
+- Daemon and batch execution modes
+
+Architecture Decisions:
+- #012: Data-type-based consumer group naming
+- #013: Single-topic subscription (with pattern support)
+- #014: Sequence gap logging with metrics tracking
+- #015: Batch size 1000 with configurable override
+- #016: Daemon mode with graceful shutdown
+
+Usage:
+    # Daemon mode (runs until stopped)
+    consumer = MarketDataConsumer(
+        topics=['market.equities.trades.asx'],
+        consumer_group='k2-iceberg-writer-trades',
+    )
+    consumer.run()
+
+    # Batch mode (consume N messages)
+    consumer = MarketDataConsumer(
+        topics=['market.equities.trades.asx'],
+        consumer_group='k2-iceberg-writer-trades',
+        max_messages=1000,
+    )
+    consumer.run()
+"""
+
+import os
+import signal
+import time
+from dataclasses import dataclass
+from typing import Any
+
+from confluent_kafka import Consumer, KafkaError, KafkaException
+from confluent_kafka.schema_registry import SchemaRegistryClient
+from confluent_kafka.schema_registry.avro import AvroDeserializer
+from confluent_kafka.serialization import MessageField, SerializationContext
+
+from k2.common.config import config
+from k2.common.logging import get_logger
+from k2.common.metrics import create_component_metrics
+from k2.ingestion.sequence_tracker import SequenceTracker
+from k2.storage.writer import IcebergWriter
+
+logger = get_logger(__name__)
+metrics = create_component_metrics("consumer")
+
+
+@dataclass
+class ConsumerStats:
+    """Statistics from consumer operation."""
+
+    messages_consumed: int = 0
+    messages_written: int = 0
+    errors: int = 0
+    sequence_gaps: int = 0
+    duplicates_skipped: int = 0
+    start_time: float = 0.0
+
+    @property
+    def duration_seconds(self) -> float:
+        """Calculate duration in seconds."""
+        if self.start_time == 0:
+            return 0.0
+        return time.time() - self.start_time
+
+    @property
+    def throughput(self) -> float:
+        """Calculate throughput in messages per second."""
+        if self.duration_seconds == 0:
+            return 0.0
+        return self.messages_consumed / self.duration_seconds
+
+
+class MarketDataConsumer:
+    """Kafka consumer with Iceberg writer integration.
+
+    Consumes messages from Kafka topics and writes them to Iceberg tables
+    using batch processing with manual offset commits for at-least-once
+    delivery guarantees.
+
+    Args:
+        topics: List of Kafka topics to subscribe to
+        consumer_group: Consumer group name (e.g., 'k2-iceberg-writer-trades')
+        bootstrap_servers: Kafka bootstrap servers
+        schema_registry_url: Schema Registry URL
+        batch_size: Number of messages to batch before writing to Iceberg
+        max_messages: Maximum messages to consume (None = infinite, for daemon mode)
+        iceberg_writer: Optional IcebergWriter instance
+        sequence_tracker: Optional SequenceTracker instance
+
+    Example:
+        >>> consumer = MarketDataConsumer(
+        ...     topics=['market.equities.trades.asx'],
+        ...     consumer_group='k2-iceberg-writer-trades',
+        ... )
+        >>> consumer.run()
+    """
+
+    def __init__(
+        self,
+        topics: list[str] | None = None,
+        topic_pattern: str | None = None,
+        consumer_group: str | None = None,
+        bootstrap_servers: str | None = None,
+        schema_registry_url: str | None = None,
+        batch_size: int | None = None,
+        max_messages: int | None = None,
+        iceberg_writer: IcebergWriter | None = None,
+        sequence_tracker: SequenceTracker | None = None,
+    ):
+        """Initialize consumer with configuration."""
+        # Validate topic subscription
+        if not topics and not topic_pattern:
+            raise ValueError("Must specify either topics or topic_pattern")
+        if topics and topic_pattern:
+            raise ValueError("Specify either topics or topic_pattern, not both")
+
+        # Load configuration
+        self.topics = topics
+        self.topic_pattern = topic_pattern
+        self.consumer_group = consumer_group or os.getenv("K2_CONSUMER_GROUP", "k2-iceberg-writer")
+        self.bootstrap_servers = bootstrap_servers or config.kafka.bootstrap_servers
+        self.schema_registry_url = schema_registry_url or config.kafka.schema_registry_url
+        self.batch_size = batch_size or int(os.getenv("K2_CONSUMER_BATCH_SIZE", "1000"))
+        self.max_messages = max_messages
+
+        # Processing state
+        self.running = True
+        self.stats = ConsumerStats(start_time=time.time())
+        self._current_batch: list[dict[str, Any]] = []
+
+        # Initialize components
+        self._init_schema_registry()
+        self._init_consumer()
+        self.iceberg_writer = iceberg_writer or IcebergWriter()
+        self.sequence_tracker = sequence_tracker or SequenceTracker()
+
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGTERM, self._shutdown_handler)
+        signal.signal(signal.SIGINT, self._shutdown_handler)
+
+        logger.info(
+            "Consumer initialized",
+            consumer_group=self.consumer_group,
+            topics=self.topics,
+            topic_pattern=self.topic_pattern,
+            batch_size=self.batch_size,
+            mode="daemon" if self.max_messages is None else "batch",
+            max_messages=self.max_messages,
+        )
+
+    def _init_schema_registry(self):
+        """Initialize Schema Registry client and deserializer."""
+        try:
+            self.schema_registry_client = SchemaRegistryClient({"url": self.schema_registry_url})
+
+            logger.info(
+                "Schema Registry client initialized",
+                url=self.schema_registry_url,
+            )
+
+        except Exception as err:
+            logger.error(
+                "Failed to initialize Schema Registry client",
+                url=self.schema_registry_url,
+                error=str(err),
+            )
+            metrics.increment(
+                "consumer_init_errors_total",
+                labels={"error_type": "schema_registry", "consumer_group": self.consumer_group},
+            )
+            raise
+
+    def _init_consumer(self):
+        """Initialize Kafka consumer with configuration."""
+        # Consumer configuration (Decision #003: At-least-once with manual commit)
+        consumer_config = {
+            "bootstrap.servers": self.bootstrap_servers,
+            "group.id": self.consumer_group,
+            "auto.offset.reset": "earliest",  # Start from beginning for new consumer groups
+            "enable.auto.commit": False,  # Manual commit after Iceberg write
+            "max.poll.interval.ms": 300000,  # 5 minutes for slow Iceberg writes
+            "session.timeout.ms": 45000,  # 45 seconds
+            "heartbeat.interval.ms": 3000,  # 3 seconds
+        }
+
+        try:
+            self.consumer = Consumer(consumer_config)
+
+            # Subscribe to topics or pattern (Decision #013)
+            if self.topics:
+                self.consumer.subscribe(self.topics)
+                logger.info("Subscribed to topics", topics=self.topics)
+            elif self.topic_pattern:
+                self.consumer.subscribe(pattern=self.topic_pattern)
+                logger.info("Subscribed to topic pattern", pattern=self.topic_pattern)
+
+        except KafkaException as err:
+            logger.error(
+                "Failed to initialize Kafka consumer",
+                bootstrap_servers=self.bootstrap_servers,
+                error=str(err),
+            )
+            metrics.increment(
+                "consumer_init_errors_total",
+                labels={"error_type": "kafka_consumer", "consumer_group": self.consumer_group},
+            )
+            raise
+
+    def _get_deserializer(self, subject: str) -> AvroDeserializer:
+        """Get or create Avro deserializer for subject.
+
+        Deserializers are cached per subject for performance.
+
+        Args:
+            subject: Schema Registry subject (e.g., 'market.equities.trades.asx-value')
+
+        Returns:
+            AvroDeserializer instance
+        """
+        if not hasattr(self, "_deserializers"):
+            self._deserializers: dict[str, AvroDeserializer] = {}
+
+        if subject not in self._deserializers:
+            try:
+                # Get latest schema from Schema Registry
+                schema_info = self.schema_registry_client.get_latest_version(subject)
+
+                # Create deserializer
+                self._deserializers[subject] = AvroDeserializer(
+                    schema_registry_client=self.schema_registry_client,
+                    schema_str=schema_info.schema.schema_str,
+                )
+
+                logger.debug(
+                    "Created Avro deserializer",
+                    subject=subject,
+                    schema_id=schema_info.schema_id,
+                    version=schema_info.version,
+                )
+
+            except Exception as err:
+                logger.error(
+                    "Failed to create deserializer",
+                    subject=subject,
+                    error=str(err),
+                )
+                metrics.increment(
+                    "deserializer_errors_total",
+                    labels={"subject": subject, "consumer_group": self.consumer_group},
+                )
+                raise
+
+        return self._deserializers[subject]
+
+    def _shutdown_handler(self, signum, frame):
+        """Handle graceful shutdown signals (Decision #016)."""
+        logger.info("Shutdown signal received", signal=signum)
+        self.running = False
+
+    def run(self):
+        """Main consumer loop (Decision #016: Daemon or batch mode).
+
+        Runs indefinitely in daemon mode (max_messages=None) or until
+        max_messages consumed in batch mode.
+        """
+        logger.info(
+            "Consumer starting",
+            mode="daemon" if self.max_messages is None else "batch",
+            max_messages=self.max_messages,
+            batch_size=self.batch_size,
+        )
+
+        try:
+            while self.running:
+                # Check message limit (batch mode)
+                if self.max_messages and self.stats.messages_consumed >= self.max_messages:
+                    logger.info(
+                        "Max messages reached",
+                        count=self.stats.messages_consumed,
+                        max_messages=self.max_messages,
+                    )
+                    break
+
+                # Consume batch
+                self._consume_batch()
+
+        except KeyboardInterrupt:
+            logger.info("Consumer interrupted by user")
+        except Exception as err:
+            logger.error("Consumer error", error=str(err), exc_info=True)
+            metrics.increment(
+                "consumer_errors_total",
+                labels={"error_type": "unexpected", "consumer_group": self.consumer_group},
+            )
+            raise
+        finally:
+            # Graceful shutdown
+            self._shutdown()
+
+    def _consume_batch(self):
+        """Consume a batch of messages and write to Iceberg (Decision #015)."""
+        batch: list[dict[str, Any]] = []
+        batch_start_time = time.time()
+
+        # Poll messages until batch is full or timeout
+        while len(batch) < self.batch_size:
+            msg = self.consumer.poll(timeout=0.1)
+
+            if msg is None:
+                # No more messages available, process what we have
+                if batch:
+                    break
+                # No messages at all, continue polling
+                continue
+
+            if msg.error():
+                if msg.error().code() == KafkaError._PARTITION_EOF:
+                    # End of partition, not an error
+                    logger.debug("Reached end of partition", partition=msg.partition())
+                    if batch:
+                        break
+                    continue
+                # Real error
+                logger.error(
+                    "Consumer error",
+                    error=msg.error(),
+                    topic=msg.topic(),
+                    partition=msg.partition(),
+                )
+                self.stats.errors += 1
+                metrics.increment(
+                    "consumer_errors_total",
+                    labels={"error_type": "poll_error", "consumer_group": self.consumer_group},
+                )
+                continue
+
+            # Deserialize message
+            try:
+                record = self._deserialize_message(msg)
+                if record:
+                    batch.append(record)
+                    self.stats.messages_consumed += 1
+
+                    # Update consumer metrics
+                    metrics.increment(
+                        "kafka_messages_consumed_total",
+                        labels={
+                            "topic": msg.topic(),
+                            "consumer_group": self.consumer_group,
+                            "exchange": record.get("exchange", "unknown"),
+                            "asset_class": record.get("asset_class", "unknown"),
+                            "data_type": record.get("data_type", "unknown"),
+                        },
+                    )
+
+                    # Check sequence (Decision #014: Sequence gap logging)
+                    if "symbol" in record and "sequence_number" in record:
+                        gap = self.sequence_tracker.check_sequence(
+                            record["symbol"], record["sequence_number"],
+                        )
+                        if gap:
+                            self.stats.sequence_gaps += 1
+
+            except Exception as err:
+                logger.error(
+                    "Failed to deserialize message",
+                    topic=msg.topic(),
+                    partition=msg.partition(),
+                    offset=msg.offset(),
+                    error=str(err),
+                )
+                self.stats.errors += 1
+                metrics.increment(
+                    "consumer_errors_total",
+                    labels={"error_type": "deserialization", "consumer_group": self.consumer_group},
+                )
+                continue
+
+        # Write batch to Iceberg if we have messages
+        if batch:
+            try:
+                self._write_batch_to_iceberg(batch)
+                self.stats.messages_written += len(batch)
+
+                # Commit offsets after successful write (at-least-once)
+                self.consumer.commit(asynchronous=False)
+
+                # Log batch statistics
+                batch_duration = time.time() - batch_start_time
+                logger.info(
+                    "Batch processed",
+                    batch_size=len(batch),
+                    duration_seconds=batch_duration,
+                    throughput=len(batch) / batch_duration if batch_duration > 0 else 0,
+                    total_consumed=self.stats.messages_consumed,
+                    total_written=self.stats.messages_written,
+                )
+
+                # Track batch processing metrics
+                metrics.observe(
+                    "iceberg_batch_size",
+                    len(batch),
+                    labels={"table": "trades", "consumer_group": self.consumer_group},
+                )
+
+            except Exception as err:
+                logger.error(
+                    "Failed to write batch to Iceberg",
+                    batch_size=len(batch),
+                    error=str(err),
+                )
+                self.stats.errors += 1
+                metrics.increment(
+                    "consumer_errors_total",
+                    labels={"error_type": "iceberg_write", "consumer_group": self.consumer_group},
+                )
+                # Don't commit offsets on failure - will reprocess
+                raise
+
+    def _deserialize_message(self, msg) -> dict[str, Any] | None:
+        """Deserialize Avro message from Kafka.
+
+        Args:
+            msg: Kafka message
+
+        Returns:
+            Deserialized record as dictionary, or None if deserialization fails
+        """
+        # Get deserializer for this topic
+        subject = f"{msg.topic()}-value"
+        deserializer = self._get_deserializer(subject)
+
+        # Deserialize value
+        value = deserializer(msg.value(), SerializationContext(msg.topic(), MessageField.VALUE))
+
+        return value
+
+    def _write_batch_to_iceberg(self, batch: list[dict[str, Any]]):
+        """Write batch of records to Iceberg.
+
+        Args:
+            batch: List of deserialized records
+        """
+        start_time = time.time()
+
+        try:
+            # Write to Iceberg (IcebergWriter handles transaction)
+            self.iceberg_writer.write_batch(batch)
+
+            # Track write duration
+            duration = time.time() - start_time
+            metrics.observe(
+                "iceberg_write_duration_seconds",
+                duration,
+                labels={
+                    "table": "trades",
+                    "operation": "batch_write",
+                    "consumer_group": self.consumer_group,
+                },
+            )
+
+            logger.debug(
+                "Batch written to Iceberg",
+                batch_size=len(batch),
+                duration_seconds=duration,
+            )
+
+        except Exception as err:
+            metrics.increment(
+                "iceberg_write_errors_total",
+                labels={
+                    "table": "trades",
+                    "error_type": str(type(err).__name__),
+                    "consumer_group": self.consumer_group,
+                },
+            )
+            raise
+
+    def _shutdown(self):
+        """Clean shutdown: flush, commit, log stats (Decision #016)."""
+        logger.info("Consumer shutting down")
+
+        try:
+            # Flush Iceberg writer
+            if self.iceberg_writer:
+                self.iceberg_writer.flush()
+
+            # Final commit
+            self.consumer.commit()
+
+            # Close consumer
+            self.consumer.close()
+
+            # Log final statistics
+            logger.info(
+                "Consumer stopped",
+                messages_consumed=self.stats.messages_consumed,
+                messages_written=self.stats.messages_written,
+                errors=self.stats.errors,
+                sequence_gaps=self.stats.sequence_gaps,
+                duration_seconds=self.stats.duration_seconds,
+                throughput=self.stats.throughput,
+            )
+
+        except Exception as err:
+            logger.error("Error during shutdown", error=str(err))
+
+    def close(self):
+        """Close consumer and cleanup resources."""
+        self.running = False
+        self._shutdown()
+
+
+def create_consumer(
+    topics: list[str] | None = None,
+    topic_pattern: str | None = None,
+    consumer_group: str | None = None,
+    batch_size: int | None = None,
+    max_messages: int | None = None,
+) -> MarketDataConsumer:
+    """Factory function to create a MarketDataConsumer instance.
+
+    Args:
+        topics: List of Kafka topics to subscribe to
+        topic_pattern: Topic pattern to subscribe to (e.g., 'market\\..*\\.trades\\..*')
+        consumer_group: Consumer group name
+        batch_size: Number of messages to batch before writing
+        max_messages: Maximum messages to consume (None = infinite)
+
+    Returns:
+        MarketDataConsumer: Configured consumer instance
+
+    Example:
+        >>> consumer = create_consumer(
+        ...     topics=['market.equities.trades.asx'],
+        ...     consumer_group='k2-iceberg-writer-trades',
+        ...     batch_size=1000,
+        ... )
+        >>> consumer.run()
+    """
+    return MarketDataConsumer(
+        topics=topics,
+        topic_pattern=topic_pattern,
+        consumer_group=consumer_group,
+        batch_size=batch_size,
+        max_messages=max_messages,
+    )
+
+
+# ==============================================================================
+# CLI Interface
+# ==============================================================================
+
+try:
+    import typer
+    from rich.console import Console
+
+    app = typer.Typer(
+        name="consumer",
+        help="Kafka consumer for market data ingestion to Iceberg",
+        add_completion=False,
+    )
+    console = Console()
+
+    @app.command()
+    def consume(
+        topic: str | None = typer.Option(
+            None,
+            "--topic",
+            "-t",
+            help="Kafka topic to consume from (e.g., market.equities.trades.asx)",
+        ),
+        topic_pattern: str | None = typer.Option(
+            None,
+            "--topic-pattern",
+            "-p",
+            help="Kafka topic pattern (e.g., 'market\\.equities\\.trades\\..*')",
+        ),
+        consumer_group: str | None = typer.Option(
+            None,
+            "--consumer-group",
+            "-g",
+            help="Consumer group name (default: k2-iceberg-writer)",
+        ),
+        batch_size: int = typer.Option(
+            1000,
+            "--batch-size",
+            "-b",
+            help="Batch size for Iceberg writes",
+        ),
+        max_messages: int | None = typer.Option(
+            None,
+            "--max-messages",
+            "-n",
+            help="Maximum messages to consume (None = daemon mode)",
+        ),
+    ):
+        """Consume messages from Kafka and write to Iceberg.
+
+        Examples:
+            # Daemon mode (runs until stopped)
+            python -m k2.ingestion.consumer consume --topic market.equities.trades.asx
+
+            # Batch mode (consume 1000 messages then exit)
+            python -m k2.ingestion.consumer consume --topic market.equities.trades.asx --max-messages 1000
+
+            # Pattern matching (all equity trades)
+            python -m k2.ingestion.consumer consume --topic-pattern "market\\.equities\\.trades\\..*"
+
+            # Custom batch size
+            python -m k2.ingestion.consumer consume --topic market.equities.trades.asx --batch-size 5000
+        """
+        # Validate input
+        if not topic and not topic_pattern:
+            console.print("[red]Error: Must specify either --topic or --topic-pattern[/red]")
+            raise typer.Exit(1)
+
+        if topic and topic_pattern:
+            console.print("[red]Error: Specify either --topic or --topic-pattern, not both[/red]")
+            raise typer.Exit(1)
+
+        # Display configuration
+        console.print("\n[bold cyan]K2 Market Data Consumer[/bold cyan]")
+        console.print("=" * 60)
+
+        if topic:
+            console.print(f"[green]Topic:[/green] {topic}")
+        else:
+            console.print(f"[green]Topic Pattern:[/green] {topic_pattern}")
+
+        console.print(f"[green]Consumer Group:[/green] {consumer_group or 'k2-iceberg-writer'}")
+        console.print(f"[green]Batch Size:[/green] {batch_size}")
+        console.print(
+            f"[green]Mode:[/green] {'daemon' if max_messages is None else f'batch ({max_messages} messages)'}",
+        )
+        console.print("=" * 60)
+        console.print()
+
+        # Create and run consumer
+        try:
+            topics_list = [topic] if topic else None
+
+            consumer = create_consumer(
+                topics=topics_list,
+                topic_pattern=topic_pattern,
+                consumer_group=consumer_group,
+                batch_size=batch_size,
+                max_messages=max_messages,
+            )
+
+            console.print("[green]Starting consumer...[/green]")
+            console.print("[dim]Press Ctrl+C to stop[/dim]\n")
+
+            consumer.run()
+
+            # Success
+            console.print(
+                f"\n[green]✓[/green] Consumed {consumer.stats.messages_consumed} messages",
+            )
+            console.print(
+                f"[green]✓[/green] Written {consumer.stats.messages_written} records to Iceberg",
+            )
+
+            if consumer.stats.errors > 0:
+                console.print(f"[yellow]⚠[/yellow]  {consumer.stats.errors} errors")
+
+            if consumer.stats.sequence_gaps > 0:
+                console.print(
+                    f"[yellow]⚠[/yellow]  {consumer.stats.sequence_gaps} sequence gaps detected",
+                )
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Consumer stopped by user[/yellow]")
+        except Exception as err:
+            console.print(f"\n[red]Error: {err}[/red]")
+            raise typer.Exit(1)
+
+    if __name__ == "__main__":
+        app()
+
+except ImportError:
+    # Typer not installed, skip CLI
+    pass

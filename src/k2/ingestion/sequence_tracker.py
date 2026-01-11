@@ -1,5 +1,4 @@
-"""
-Sequence number tracking and gap detection for market data.
+"""Sequence number tracking and gap detection for market data.
 
 Ensures ordering guarantees are maintained from exchange through storage.
 See docs/MARKET_DATA_GUARANTEES.md for design rationale.
@@ -7,10 +6,9 @@ See docs/MARKET_DATA_GUARANTEES.md for design rationale.
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple
 
-from k2.common.metrics import metrics
 from k2.common.logging import get_logger
+from k2.common.metrics import metrics
 
 logger = get_logger(__name__)
 
@@ -27,8 +25,7 @@ class SequenceState:
 
 
 class SequenceTracker:
-    """
-    Tracks exchange sequence numbers to detect gaps and out-of-order delivery.
+    """Tracks exchange sequence numbers to detect gaps and out-of-order delivery.
 
     Market data exchanges provide monotonically increasing sequence numbers per symbol.
     This tracker detects:
@@ -57,8 +54,7 @@ class SequenceTracker:
         gap_alert_threshold: int = 10,
         reset_detection_window: timedelta = timedelta(hours=1),
     ):
-        """
-        Initialize sequence tracker.
+        """Initialize sequence tracker.
 
         Args:
             gap_alert_threshold: Alert if gap exceeds this size
@@ -68,7 +64,7 @@ class SequenceTracker:
         self.reset_window = reset_detection_window
 
         # State per (exchange, symbol)
-        self._state: Dict[Tuple[str, str], SequenceState] = {}
+        self._state: dict[tuple[str, str], SequenceState] = {}
 
     def check_sequence(
         self,
@@ -77,8 +73,7 @@ class SequenceTracker:
         sequence: int,
         timestamp: datetime,
     ) -> "SequenceEvent":
-        """
-        Validate sequence number and detect anomalies.
+        """Validate sequence number and detect anomalies.
 
         Args:
             exchange: Exchange identifier (e.g., "ASX", "Chi-X")
@@ -100,9 +95,7 @@ class SequenceTracker:
                 gap_count=0,
                 out_of_order_count=0,
             )
-            logger.debug(
-                f"First message for {exchange}.{symbol} at sequence {sequence}"
-            )
+            logger.debug(f"First message for {exchange}.{symbol} at sequence {sequence}")
             return SequenceEvent.OK
 
         state = self._state[key]
@@ -123,7 +116,7 @@ class SequenceTracker:
             if self._is_session_reset(state, sequence, timestamp):
                 logger.info(
                     f"Session reset detected: {exchange}.{symbol} "
-                    f"{state.last_sequence} → {sequence}"
+                    f"{state.last_sequence} → {sequence}",
                 )
                 metrics.increment(
                     "sequence_resets_total",
@@ -140,7 +133,7 @@ class SequenceTracker:
             state.gap_count += 1
             logger.warning(
                 f"Sequence gap detected: {exchange}.{symbol} "
-                f"expected {expected_sequence}, got {sequence} (gap: {gap_size})"
+                f"expected {expected_sequence}, got {sequence} (gap: {gap_size})",
             )
 
             metrics.increment(
@@ -161,7 +154,7 @@ class SequenceTracker:
             if gap_size > self.gap_threshold:
                 logger.error(
                     f"LARGE GAP: {exchange}.{symbol} gap of {gap_size} "
-                    f"(threshold: {self.gap_threshold})"
+                    f"(threshold: {self.gap_threshold})",
                 )
                 return SequenceEvent.LARGE_GAP
 
@@ -172,7 +165,7 @@ class SequenceTracker:
             state.out_of_order_count += 1
             logger.warning(
                 f"Out-of-order message: {exchange}.{symbol} "
-                f"sequence {sequence} received after {state.last_sequence}"
+                f"sequence {sequence} received after {state.last_sequence}",
             )
 
             metrics.increment(
@@ -187,10 +180,9 @@ class SequenceTracker:
         return SequenceEvent.OK
 
     def _is_session_reset(
-        self, state: SequenceState, new_sequence: int, new_timestamp: datetime
+        self, state: SequenceState, new_sequence: int, new_timestamp: datetime,
     ) -> bool:
-        """
-        Detect if sequence number reset is due to session restart.
+        """Detect if sequence number reset is due to session restart.
 
         Heuristics:
         1. Sequence dropped by >50% (e.g., 1M → 100)
@@ -212,7 +204,7 @@ class SequenceTracker:
 
         return sequence_dropped and time_jumped
 
-    def get_stats(self, exchange: str, symbol: str) -> Optional[SequenceState]:
+    def get_stats(self, exchange: str, symbol: str) -> SequenceState | None:
         """Get tracking statistics for a symbol."""
         return self._state.get((exchange, symbol))
 
@@ -235,8 +227,7 @@ class SequenceEvent:
 
 
 class DeduplicationCache:
-    """
-    Message deduplication based on unique message IDs.
+    """Message deduplication based on unique message IDs.
 
     Uses time-windowed cache to detect duplicate delivery.
     See docs/CORRECTNESS_TRADEOFFS.md for at-least-once semantics.
@@ -254,21 +245,19 @@ class DeduplicationCache:
     """
 
     def __init__(self, window_hours: int = 24):
-        """
-        Initialize deduplication cache.
+        """Initialize deduplication cache.
 
         Args:
             window_hours: How long to remember message IDs
         """
         # In production, use Redis with TTL
         # For now, simple in-memory cache
-        self._cache: Dict[str, datetime] = {}
+        self._cache: dict[str, datetime] = {}
         self._window = timedelta(hours=window_hours)
         self._last_cleanup = datetime.utcnow()
 
     def is_duplicate(self, message_id: str) -> bool:
-        """
-        Check if message ID was seen recently.
+        """Check if message ID was seen recently.
 
         Args:
             message_id: Unique message identifier
@@ -296,9 +285,7 @@ class DeduplicationCache:
         expired_threshold = now - self._window
 
         expired_keys = [
-            msg_id
-            for msg_id, timestamp in self._cache.items()
-            if timestamp < expired_threshold
+            msg_id for msg_id, timestamp in self._cache.items() if timestamp < expired_threshold
         ]
 
         for key in expired_keys:

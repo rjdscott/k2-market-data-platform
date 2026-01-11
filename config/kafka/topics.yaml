@@ -1,0 +1,180 @@
+# Kafka Topic Configuration for K2 Market Data Platform
+# Topic naming convention: market.{asset_class}.{data_type}.{exchange}
+#
+# This file defines all Kafka topics for the K2 platform following a hierarchical
+# structure optimized for high-frequency trading (HFT) and multi-exchange environments.
+#
+# Benefits:
+# - Per-exchange topic isolation enables selective consumption
+# - Independent scaling per exchange (different partition counts)
+# - Failure isolation (exchange outages don't affect others)
+# - Easy to add new exchanges (config-only, no code changes)
+#
+# Last updated: 2026-01-10
+
+# Asset classes and their exchanges
+asset_classes:
+  equities:
+    description: "Traditional equity markets (stocks, ETFs, listed securities)"
+    exchanges:
+      asx:
+        name: "Australian Securities Exchange"
+        partitions: 30
+        country: "AU"
+        timezone: "Australia/Sydney"
+        trading_hours: "10:00-16:00 AEST"
+        description: "Primary Australian equities exchange, ~2000 listed securities"
+
+      # Future exchanges (uncomment when ready):
+      # nyse:
+      #   name: "New York Stock Exchange"
+      #   partitions: 100
+      #   country: "US"
+      #   timezone: "America/New_York"
+      #   trading_hours: "09:30-16:00 EST"
+      #   description: "Largest US equities exchange, ~3000 listed securities"
+      #
+      # nasdaq:
+      #   name: "NASDAQ"
+      #   partitions: 100
+      #   country: "US"
+      #   timezone: "America/New_York"
+      #   trading_hours: "09:30-16:00 EST"
+      #   description: "US tech-focused exchange, high message volume"
+      #
+      # lse:
+      #   name: "London Stock Exchange"
+      #   partitions: 50
+      #   country: "GB"
+      #   timezone: "Europe/London"
+      #   trading_hours: "08:00-16:30 GMT"
+      #   description: "Primary UK equities exchange"
+
+  crypto:
+    description: "Cryptocurrency and digital asset markets (24/7 trading)"
+    exchanges:
+      binance:
+        name: "Binance"
+        partitions: 40
+        country: "GLOBAL"
+        timezone: "UTC"
+        trading_hours: "24/7"
+        description: "Largest crypto exchange by volume, ~1000+ trading pairs"
+
+      # Future exchanges (uncomment when ready):
+      # coinbase:
+      #   name: "Coinbase"
+      #   partitions: 30
+      #   country: "US"
+      #   timezone: "UTC"
+      #   trading_hours: "24/7"
+      #   description: "Major US-based crypto exchange"
+      #
+      # kraken:
+      #   name: "Kraken"
+      #   partitions: 20
+      #   country: "US"
+      #   timezone: "UTC"
+      #   trading_hours: "24/7"
+      #   description: "Established crypto exchange with EUR pairs"
+
+# Data types (apply to all asset classes and exchanges)
+# Each data type defines the schema, partition strategy, and Kafka configuration
+data_types:
+  trades:
+    description: "Trade execution events (filled orders)"
+    partition_key: "symbol"
+    schema_name: "trade"
+    config:
+      compression.type: "lz4"
+      retention.ms: "604800000"  # 7 days (in milliseconds)
+      cleanup.policy: "delete"
+      # For HFT, consider shorter retention (1-24 hours) to reduce storage:
+      # retention.ms: "86400000"  # 1 day
+
+  quotes:
+    description: "Best bid/ask quotes (Level 1 order book snapshots)"
+    partition_key: "symbol"
+    schema_name: "quote"
+    config:
+      compression.type: "lz4"
+      retention.ms: "604800000"  # 7 days (in milliseconds)
+      cleanup.policy: "delete"
+      # For HFT, quotes typically need shorter retention:
+      # retention.ms: "3600000"  # 1 hour
+
+  reference_data:
+    description: "Company/instrument reference data (slowly-changing metadata)"
+    partition_key: "company_id"
+    schema_name: "reference_data"
+    partitions: 1  # Override: always 1 partition for reference data
+    config:
+      cleanup.policy: "compact"  # Log compaction keeps latest value per key
+      compression.type: "lz4"
+      min.compaction.lag.ms: "60000"  # Wait 1 minute before compacting
+      delete.retention.ms: "86400000"  # Tombstones retained for 1 day
+      segment.ms: "604800000"  # Roll segments weekly
+
+# Global defaults (can be overridden per topic)
+defaults:
+  replication_factor: 1  # Dev/Test: 1, Production: 3+ for fault tolerance
+  min_insync_replicas: 1  # Dev/Test: 1, Production: 2+ for durability
+
+# Schema Registry configuration
+schema_registry:
+  compatibility: "BACKWARD"  # New schema can read old data
+  # Subject naming strategy: shared schemas per asset class
+  # Pattern: market.{asset_class}.{data_type}-value
+  # Examples:
+  #   - market.equities.trades-value (shared by ASX, NYSE, LSE, etc.)
+  #   - market.crypto.quotes-value (shared by Binance, Coinbase, etc.)
+  subject_pattern: "market.{asset_class}.{data_type}-value"
+
+  # Rationale for shared schemas:
+  # - Trade/quote structure is uniform across exchanges within asset class
+  # - Simpler schema evolution (one change affects all exchanges)
+  # - Fewer schemas to manage (6 schemas vs 18+ for per-exchange)
+  # - Exchange name is in Avro record `exchange` field, topic provides routing
+
+# Partition count guidelines for future exchanges:
+#
+# Target: <100 symbols per partition for optimal performance
+#
+# Low volume (<500 symbols, <100 msgs/sec):
+#   10-20 partitions
+#
+# Medium volume (500-2000 symbols, 100-1000 msgs/sec):
+#   30-50 partitions
+#
+# High volume (2000+ symbols, 1000+ msgs/sec):
+#   50-100 partitions
+#
+# Very high volume (major exchanges, 5000+ symbols, 10000+ msgs/sec):
+#   100-200 partitions
+#
+# Note: Partition count can be increased but NOT decreased without topic recreation.
+# Start conservative and increase as needed based on monitoring.
+
+# Production configuration recommendations:
+#
+# 1. Replication:
+#    - Set replication_factor: 3
+#    - Set min_insync_replicas: 2
+#    - Ensures durability with one broker failure
+#
+# 2. Retention:
+#    - Trades: 7-30 days (audit trail, backtesting)
+#    - Quotes: 1-24 hours (real-time only, storage intensive)
+#    - Reference data: compacted (keep latest, no time limit)
+#
+# 3. Compression:
+#    - lz4: Lowest latency, good compression (~2-3x)
+#    - snappy: Slightly better compression, slightly higher latency
+#    - zstd: Best compression (~5x), higher CPU/latency
+#    - Use lz4 for HFT workloads
+#
+# 4. Monitoring:
+#    - Consumer lag per topic/partition
+#    - Partition distribution (hot partitions)
+#    - Message rate and size
+#    - Schema evolution events

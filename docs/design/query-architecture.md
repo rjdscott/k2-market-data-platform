@@ -1,8 +1,8 @@
 # Query Architecture & Performance Design
 
-**Last Updated**: 2026-01-09
+**Last Updated**: 2026-01-10
 **Owners**: Platform Team, Query Engineering
-**Status**: Implementation Plan
+**Status**: Implemented (Phase 1)
 **Scope**: Query layer design, caching, optimization, resource management
 
 ---
@@ -15,7 +15,132 @@ The query layer provides unified access to both real-time (Kafka) and historical
 
 ---
 
-## Query Router Architecture
+## Phase 1 Implementation Status
+
+**Implemented Components** (Steps 9-11):
+- ✅ `QueryEngine` - DuckDB query engine with Iceberg integration
+- ✅ `ReplayEngine` - Time-travel queries and cold-start replay
+- ✅ `k2-query` CLI - Command-line interface with Rich output
+
+**Key Implementation Decisions**:
+- Decision #017: Enable `unsafe_enable_version_guessing=true` for DuckDB Iceberg extension (local development)
+- Decision #018: Generator pattern for memory-efficient replay (O(batch_size) memory)
+
+**Deferred to Phase 2**:
+- Real-time Kafka tail queries (Hybrid mode)
+- Redis query result caching (L1 cache)
+- Async concurrency limits (semaphore-based queuing)
+- Query timeout enforcement (signal-based)
+
+---
+
+## Current Implementation (Phase 1)
+
+### QueryEngine (`src/k2/query/engine.py`)
+
+The implemented query engine provides direct DuckDB access to Iceberg tables stored in MinIO/S3:
+
+```python
+from k2.query import QueryEngine, MarketSummary
+
+# Basic usage
+with QueryEngine() as engine:
+    # Query trades with filters
+    trades = engine.query_trades(
+        symbol="BHP",
+        exchange="ASX",
+        start_time=datetime(2024, 1, 1),
+        end_time=datetime(2024, 1, 31),
+        limit=1000
+    )
+
+    # Get OHLCV summary
+    summary: MarketSummary = engine.get_market_summary(
+        symbol="BHP",
+        query_date=date(2024, 1, 15)
+    )
+
+    # Query quotes
+    quotes = engine.query_quotes(symbol="BHP", limit=100)
+
+    # List available symbols
+    symbols = engine.get_symbols(exchange="ASX")
+```
+
+**Key Features**:
+- DuckDB Iceberg extension with S3/MinIO configuration
+- Prometheus metrics: `k2_query_executions_total`, `k2_query_duration_seconds`
+- Connection pooling via context manager pattern
+- Parameterized queries to prevent SQL injection
+
+### ReplayEngine (`src/k2/query/replay.py`)
+
+The replay engine provides time-travel capabilities and memory-efficient streaming:
+
+```python
+from k2.query import ReplayEngine, SnapshotInfo
+
+with ReplayEngine() as engine:
+    # List Iceberg snapshots
+    snapshots: list[SnapshotInfo] = engine.list_snapshots(
+        table_name="market_data.trades",
+        limit=10
+    )
+
+    # Query at specific snapshot (point-in-time)
+    trades = engine.query_at_snapshot(
+        snapshot_id=snapshots[0].snapshot_id,
+        symbol="BHP"
+    )
+
+    # Memory-efficient streaming replay (generator)
+    for batch in engine.cold_start_replay(
+        symbol="BHP",
+        start_time=datetime(2024, 1, 1),
+        batch_size=1000
+    ):
+        process_batch(batch)  # O(batch_size) memory
+
+    # Find snapshot closest to timestamp
+    snapshot = engine.rewind_to_timestamp(
+        target_time=datetime(2024, 6, 15, 10, 30, 0)
+    )
+```
+
+**Key Features**:
+- PyIceberg catalog integration for snapshot metadata
+- Generator-based streaming for O(batch_size) memory usage
+- Time-travel via Iceberg snapshot IDs
+- Guaranteed temporal ordering
+
+### Query CLI (`src/k2/query/cli.py`)
+
+```bash
+# Query trades
+k2-query trades --symbol BHP --limit 10 --output json
+
+# Query quotes
+k2-query quotes --exchange ASX --limit 20
+
+# Get OHLCV summary
+k2-query summary BHP 2024-01-15
+
+# List snapshots
+k2-query snapshots --table market_data.trades --limit 5
+
+# Show statistics
+k2-query stats --symbol BHP
+
+# List symbols
+k2-query symbols --exchange ASX
+
+# Replay historical data
+k2-query replay --symbol BHP --batch-size 100 --max-batches 10
+```
+
+---
+
+## Query Router Architecture (Future)
 
 ### Decision Tree
 
@@ -833,7 +958,25 @@ def test_hybrid_deduplication():
 
 ## Related Documentation
 
-- [Platform Principles](./PLATFORM_PRINCIPLES.md) - Observable by default
-- [Latency & Backpressure](./LATENCY_BACKPRESSURE.md) - Query API degradation cascade
-- [Market Data Guarantees](./MARKET_DATA_GUARANTEES.md) - Replay semantics
-- [Data Consistency](./DATA_CONSISTENCY.md) - Kafka/Iceberg consistency model
+### Architecture
+- [Platform Principles](../architecture/platform-principles.md) - Observable by default
+- [System Design](../architecture/system-design.md) - High-level architecture
+- [Technology Decisions](../architecture/alternatives.md) - Why DuckDB over Spark
+
+### Design
+- [Data Consistency Model](./data-guarantees/consistency-model.md) - Kafka/Iceberg consistency
+- [Ordering Guarantees](./data-guarantees/ordering-guarantees.md) - Temporal ordering
+- [Data Quality](./data-guarantees/data-quality.md) - Quality validation
+
+### Implementation
+- [Step 9: DuckDB Query Engine](../phases/phase-1-portfolio-demo/steps/step-09-query-engine.md)
+- [Step 10: Replay Engine](../phases/phase-1-portfolio-demo/steps/step-10-replay-engine.md)
+- [Step 11: Query CLI](../phases/phase-1-portfolio-demo/steps/step-11-query-cli.md)
+- [Architectural Decisions](../phases/phase-1-portfolio-demo/DECISIONS.md) - Decision #017, #018
+
+### Source Code
+- `src/k2/query/engine.py` - QueryEngine implementation
+- `src/k2/query/replay.py` - ReplayEngine implementation
+- `src/k2/query/cli.py` - CLI implementation
+- `tests/unit/test_query_engine.py` - 23 unit tests
+- `tests/unit/test_replay_engine.py` - 20 unit tests

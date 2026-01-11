@@ -1,0 +1,76 @@
+{
+  "type": "record",
+  "name": "Quote",
+  "namespace": "com.k2.market_data",
+  "doc": "Best bid/ask quote event from exchange order book",
+  "fields": [
+    {
+      "name": "symbol",
+      "type": "string",
+      "doc": "Trading symbol"
+    },
+    {
+      "name": "company_id",
+      "type": "int",
+      "doc": "Company identifier for enrichment"
+    },
+    {
+      "name": "exchange",
+      "type": "string",
+      "default": "ASX",
+      "doc": "Exchange identifier"
+    },
+    {
+      "name": "exchange_timestamp",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "doc": "Exchange-reported timestamp (epoch milliseconds)"
+    },
+    {
+      "name": "bid_price",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 18,
+        "scale": 6
+      },
+      "doc": "Best bid price"
+    },
+    {
+      "name": "bid_volume",
+      "type": "long",
+      "doc": "Size at best bid"
+    },
+    {
+      "name": "ask_price",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 18,
+        "scale": 6
+      },
+      "doc": "Best ask price"
+    },
+    {
+      "name": "ask_volume",
+      "type": "long",
+      "doc": "Size at best ask"
+    },
+    {
+      "name": "ingestion_timestamp",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "doc": "Platform ingestion timestamp"
+    },
+    {
+      "name": "sequence_number",
+      "type": ["null", "long"],
+      "default": null,
+      "doc": "Platform-assigned sequence number"
+    }
+  ]
+}
