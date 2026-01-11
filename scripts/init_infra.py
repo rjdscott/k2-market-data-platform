@@ -6,13 +6,18 @@ This script automates the setup of:
 - Iceberg namespaces
 - Iceberg tables (trades, quotes)
 - Validation of MinIO buckets
+- Loading sample ASX equity data
 
 Run this after starting docker-compose services.
 
 Usage:
     python scripts/init_infra.py
 """
+import csv
 import sys
+from datetime import datetime
+from decimal import Decimal
+from pathlib import Path
 from typing import Dict, List
 
 import boto3
@@ -23,6 +28,11 @@ from pyiceberg.catalog import load_catalog
 from pyiceberg.exceptions import NamespaceAlreadyExistsError
 
 logger = structlog.get_logger()
+
+# Sample data paths
+SAMPLE_DATA_DIR = Path(__file__).parent.parent / "data" / "sample"
+TRADES_DIR = SAMPLE_DATA_DIR / "trades"
+REFERENCE_DIR = SAMPLE_DATA_DIR / "reference-data"
 
 
 def create_kafka_topics(bootstrap_servers: str = "localhost:9092") -> None:
@@ -238,6 +248,121 @@ def create_iceberg_tables() -> None:
         logger.warning("Continuing despite table creation error")
 
 
+def load_sample_data() -> None:
+    """
+    Load sample ASX equity data into Iceberg tables.
+
+    Reads CSV files from data/sample/trades/ and transforms them
+    to match the Iceberg schema. Uses reference data to map
+    company_id to symbol.
+
+    Sample data includes:
+    - BHP (company_id: 7078) - ~91K trades
+    - RIO (company_id: 7458) - ~108K trades
+    - DVN (company_id: 7181) - 231 trades
+    - MWR (company_id: 3153) - 10 trades
+    """
+    from k2.storage.writer import IcebergWriter
+
+    logger.info("Loading sample ASX equity data")
+
+    if not TRADES_DIR.exists():
+        logger.warning("Sample data directory not found", path=str(TRADES_DIR))
+        return
+
+    # Load reference data for company_id -> symbol mapping
+    company_info_file = REFERENCE_DIR / "company_info.csv"
+    if not company_info_file.exists():
+        logger.warning("Reference data not found", path=str(company_info_file))
+        return
+
+    company_map: Dict[str, Dict[str, str]] = {}
+    with open(company_info_file) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            company_map[row["company_id"]] = {
+                "symbol": row["symbol"],
+                "company_name": row["company_name"],
+            }
+
+    logger.info("Loaded company reference data", companies=len(company_map))
+
+    # Initialize writer
+    try:
+        writer = IcebergWriter()
+    except Exception as e:
+        logger.error("Failed to initialize Iceberg writer", error=str(e))
+        return
+
+    total_records = 0
+    ingestion_time = datetime.utcnow()
+
+    # Process each trade file
+    for trade_file in sorted(TRADES_DIR.glob("*.csv")):
+        company_id = trade_file.stem  # e.g., "7078" from "7078.csv"
+
+        if company_id not in company_map:
+            logger.warning("Unknown company_id, skipping", company_id=company_id)
+            continue
+
+        symbol = company_map[company_id]["symbol"]
+        logger.info("Processing trades", symbol=symbol, company_id=company_id, file=trade_file.name)
+
+        records = []
+        sequence_number = 0
+
+        with open(trade_file) as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) < 6:
+                    continue
+
+                try:
+                    # Parse date and time: "03/10/2014", "07:57:14.754"
+                    date_str, time_str = row[0], row[1]
+                    dt = datetime.strptime(f"{date_str} {time_str}", "%m/%d/%Y %H:%M:%S.%f")
+
+                    record = {
+                        "symbol": symbol,
+                        "company_id": int(company_id),
+                        "exchange": "ASX",
+                        "exchange_timestamp": dt,
+                        "price": Decimal(row[2]),
+                        "volume": int(row[3]),
+                        "qualifiers": int(row[4]) if row[4] else 0,
+                        "venue": row[5] if row[5] else "ASX",
+                        "buyer_id": row[6] if len(row) > 6 and row[6] else None,
+                        "ingestion_timestamp": ingestion_time,
+                        "sequence_number": sequence_number,
+                    }
+                    records.append(record)
+                    sequence_number += 1
+
+                except (ValueError, IndexError) as e:
+                    logger.debug("Skipping malformed row", error=str(e), row=row)
+                    continue
+
+        # Write batch to Iceberg
+        if records:
+            try:
+                written = writer.write_trades(
+                    records=records,
+                    table_name="market_data.trades",
+                    exchange="asx",
+                    asset_class="equities",
+                )
+                total_records += written
+                logger.info(
+                    "Loaded trades",
+                    symbol=symbol,
+                    records=written,
+                )
+            except Exception as e:
+                logger.error("Failed to write trades", symbol=symbol, error=str(e))
+
+    logger.info("Sample data loading complete", total_records=total_records)
+
+
 def main():
     """Run infrastructure initialization."""
     logger.info("Starting K2 infrastructure initialization")
@@ -254,6 +379,9 @@ def main():
 
         # Step 4: Create Iceberg tables
         create_iceberg_tables()
+
+        # Step 5: Load sample data
+        load_sample_data()
 
         logger.info("Infrastructure initialization complete")
 
