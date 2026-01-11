@@ -378,3 +378,53 @@ Once all criteria are met, document results in `PROGRESS.md` and proceed to Step
    ```
 
 3. Begin Step 3: Storage Layer - Iceberg Table Initialization
+
+---
+
+## Demo Reset (Between Demos)
+
+If running multiple demos, use the reset utility to clear all datastores:
+
+### Preview Reset (Dry Run)
+
+```bash
+make demo-reset-dry-run
+```
+
+This shows what would be reset without making changes.
+
+### Full Reset
+
+```bash
+# With confirmation prompt
+make demo-reset
+
+# Skip confirmation (for automation)
+make demo-reset-force
+```
+
+### Selective Reset
+
+```bash
+# Keep metrics data (Prometheus/Grafana)
+make demo-reset-custom KEEP_METRICS=1
+
+# Keep Kafka messages
+make demo-reset-custom KEEP_KAFKA=1
+
+# Keep Iceberg tables/MinIO data
+make demo-reset-custom KEEP_ICEBERG=1
+```
+
+### What Gets Reset
+
+| Component | Reset Action |
+|-----------|--------------|
+| Kafka | Purge messages (keep topic config) |
+| Iceberg | Drop and recreate tables |
+| MinIO | Clear warehouse/ bucket |
+| PostgreSQL | Truncate audit/lineage tables |
+| Prometheus | Clear time-series data |
+| Grafana | Clear sessions (keep dashboards) |
+
+After reset, sample data is automatically reloaded via `init_infra.py`.

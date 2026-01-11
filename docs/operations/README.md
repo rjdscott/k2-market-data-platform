@@ -1,6 +1,6 @@
 # Operations Documentation
 
-**Last Updated**: 2026-01-10
+**Last Updated**: 2026-01-11
 **Stability**: Medium - updated after incidents
 **Target Audience**: DevOps, SREs, On-Call Engineers
 
@@ -266,6 +266,58 @@ docker network inspect k2-network
 - [ ] Review recent changes/deployments
 - [ ] Confirm contact info current
 - [ ] Test pager/alerting
+
+---
+
+## Demo Reset
+
+For demonstration purposes, the platform includes a reset utility to clear all datastores between demos.
+
+### Reset Commands
+
+```bash
+# Preview what will be reset (dry-run)
+make demo-reset-dry-run
+
+# Full reset with confirmation prompt
+make demo-reset
+
+# Force reset (skip confirmation)
+make demo-reset-force
+
+# Selective reset with flags
+make demo-reset-custom KEEP_METRICS=1    # Preserve Prometheus/Grafana
+make demo-reset-custom KEEP_KAFKA=1       # Preserve Kafka messages
+make demo-reset-custom KEEP_ICEBERG=1     # Preserve Iceberg tables
+```
+
+### What Gets Reset
+
+| Component | Action | Notes |
+|-----------|--------|-------|
+| **Kafka** | Purge messages (keep topics) | Topic config preserved |
+| **Iceberg** | Drop and recreate tables | Schema recreated via init_infra.py |
+| **MinIO** | Clear warehouse/ bucket | Bucket structure preserved |
+| **PostgreSQL** | Truncate audit/lineage tables | Catalog metadata auto-managed |
+| **Prometheus** | Clear time-series data | Container restarted |
+| **Grafana** | Clear sessions | Dashboards preserved (provisioned) |
+
+### Demo Workflow
+
+```bash
+# 1. Before first demo of the day
+make docker-up && make init-infra
+
+# 2. Run demo
+make demo-quick
+
+# 3. Reset between demos
+make demo-reset-force
+
+# 4. Repeat steps 2-3 for subsequent demos
+```
+
+**Tip**: Use `--dry-run` first to preview what will be cleared before running actual reset.
 
 ---
 

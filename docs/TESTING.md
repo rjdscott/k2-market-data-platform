@@ -1,7 +1,7 @@
 # K2 Platform - Testing Guide
 
 **Last Updated**: 2026-01-11
-**Test Coverage**: 170+ unit tests across all modules
+**Test Coverage**: 180+ unit tests across all modules
 
 ---
 
@@ -37,7 +37,8 @@ tests/
 │   ├── test_writer.py         # Iceberg writer tests (8 tests)
 │   ├── test_query_engine.py   # DuckDB query engine tests (23 tests)
 │   ├── test_replay_engine.py  # Replay engine tests (20 tests)
-│   └── test_api_main.py       # REST API tests (53 tests)
+│   ├── test_api_main.py       # REST API tests (53 tests)
+│   └── test_reset_demo.py     # Demo reset utility tests (12 tests)
 │
 ├── integration/               # Tests requiring Docker services
 │   ├── test_infrastructure.py # Kafka, MinIO, Iceberg connectivity
@@ -81,8 +82,9 @@ tests/unit/test_writer.py           8 passed
 tests/unit/test_query_engine.py    23 passed
 tests/unit/test_replay_engine.py   20 passed
 tests/unit/test_api_main.py        53 passed
+tests/unit/test_reset_demo.py      12 passed
 ─────────────────────────────────────────────
-Total                             170+ passed
+Total                             180+ passed
 ```
 
 ### Integration Tests (Requires Docker)
