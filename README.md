@@ -29,29 +29,29 @@ A distributed market data lakehouse demonstrating production patterns for high-f
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Data Sources                              │
-│                    CSV files (ASX equities)                      │
+│                        Data Sources                             │
+│                    CSV files (ASX equities)                     │
 └─────────────────────────────┬───────────────────────────────────┘
                               │ Batch ingestion
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Ingestion Layer                              │
+│                     Ingestion Layer                             │
 │  ┌──────────────┐    ┌─────────────────┐                        │
-│  │    Kafka     │◄───│ Schema Registry │  BACKWARD compatibility │
+│  │    Kafka     │◄───│ Schema Registry │  BACKWARD compatibility│
 │  │   (KRaft)    │    │   (Avro, HA)    │                        │
 │  └──────┬───────┘    └─────────────────┘                        │
-│         │ Topics: market.equities.{trades,quotes}.asx            │
-│         │ Partitioning: hash(symbol)                             │
+│         │ Topics: market.equities.{trades,quotes}.asx           │
+│         │ Partitioning: hash(symbol)                            │
 └─────────┼───────────────────────────────────────────────────────┘
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   Storage Layer (Iceberg)                        │
+│                   Storage Layer (Iceberg)                       │
 │  ┌──────────────────┐        ┌────────────────┐                 │
 │  │  Apache Iceberg  │◄───────│   PostgreSQL   │  Catalog        │
 │  │  (ACID, Parquet) │        │      16        │  metadata       │
 │  └────────┬─────────┘        └────────────────┘                 │
-│           ▼                                                      │
+│           ▼                                                     │
 │  ┌──────────────────┐                                           │
 │  │  MinIO (S3 API)  │  Parquet + Zstd compression               │
 │  │                  │  Daily partitions (exchange_date)         │
@@ -60,7 +60,7 @@ A distributed market data lakehouse demonstrating production patterns for high-f
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      Query Layer                                 │
+│                      Query Layer                                │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │  DuckDB Engine                                             │ │
 │  │  • Vectorized execution                                    │ │
@@ -77,7 +77,7 @@ A distributed market data lakehouse demonstrating production patterns for high-f
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Observability                                 │
+│                    Observability                                │
 │  Prometheus (40+ metrics) → Grafana (15-panel dashboard)        │
 │  Structured logging (structlog) with correlation IDs            │
 └─────────────────────────────────────────────────────────────────┘
@@ -97,15 +97,24 @@ cd k2-market-data-platform
 docker-compose up -d
 ```
 
-### 2. Initialize Platform
+### 2. Set Up Python Environment
 
 ```bash
-# Install uv if needed: curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install uv if needed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create virtual environment and install dependencies
+uv venv
 uv sync --all-extras
+```
+
+### 3. Initialize Platform
+
+```bash
 uv run python scripts/init_infra.py
 ```
 
-### 3. Run Demo
+### 4. Run Demo
 
 ```bash
 make demo-quick   # Interactive CLI demo (~1 min)
