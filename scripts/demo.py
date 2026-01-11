@@ -323,7 +323,7 @@ Each snapshot represents the table state at a point in time.
             try:
                 replay = ReplayEngine()
                 progress.update(task, description="Listing snapshots...")
-                snapshots = replay.list_snapshots(table_type="trades", limit=5)
+                snapshots = replay.list_snapshots(table_name="trades", limit=5)
                 pause(0.5, quick)
                 progress.update(task, description="[green]Complete!")
 
