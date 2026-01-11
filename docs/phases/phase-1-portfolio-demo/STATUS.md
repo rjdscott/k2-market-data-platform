@@ -1,10 +1,10 @@
 # K2 Platform - Current Status
 
 **Date**: 2026-01-11
-**Phase**: Steps 1-14 Complete (API & Observability Implementation)
-**Status**: ✅ **87.5% COMPLETE** - Foundation + Storage + Ingestion + Query + API + Observability operational
+**Phase**: Steps 1-15 Complete (E2E Testing & Demo)
+**Status**: ✅ **93.75% COMPLETE** - Foundation + Storage + Ingestion + Query + API + Observability + E2E Testing operational
 **Blocker**: None
-**Next**: Steps 15-16 (E2E Testing & Demo, Documentation & Cleanup)
+**Next**: Step 16 (Documentation & Cleanup)
 
 ---
 
@@ -12,18 +12,37 @@
 
 | Metric | Value |
 |--------|-------|
-| Steps Complete | 14/16 (87.5%) |
+| Steps Complete | 15/16 (93.75%) |
 | Test Coverage | 170+ unit tests across all modules |
-| Lines of Code | ~5,000+ lines (full platform) |
-| Documentation | 26 architectural decisions documented |
+| Lines of Code | ~6,000+ lines (full platform) |
+| Documentation | 29 architectural decisions documented |
 | CLI Commands | 7 k2-query commands + k2-ingest CLI |
 | API Endpoints | 8 REST endpoints under /v1/ |
 | Metrics | 50+ Prometheus metrics exposed |
 | Dashboard Panels | 15 Grafana panels (5 rows) |
+| Demo Assets | 1 CLI script, 1 Jupyter notebook, 1 E2E test suite |
 
 ---
 
 ## 🏆 Recent Accomplishments (2026-01-11)
+
+### ✅ E2E Testing & Demo Complete (Step 15)
+
+**Step 15: E2E Testing & Demo** - ✅ COMPLETE (3h)
+- E2E integration tests (`tests/integration/test_e2e_flow.py`)
+  - 5 test classes covering sample data, transformation, E2E flow, query, API
+  - Data transformation utilities for sample data (DVN, BHP, RIO, MWR)
+  - Company ID → Symbol mapping (7181→DVN, 7078→BHP, etc.)
+- Interactive CLI demo (`scripts/demo.py`)
+  - 5 demo steps with Rich formatting
+  - Quick mode (`--quick`) for CI
+  - Step-by-step mode (`--step N`)
+- Jupyter notebook (`notebooks/demo.ipynb`)
+  - 30 cells covering architecture, data exploration, visualization
+  - OHLCV analysis with matplotlib charts
+  - Query engine and API integration examples
+- Makefile targets: `demo`, `demo-quick`, `test-e2e`, `notebook`
+- pyproject.toml: Added `notebooks` optional dependency group
 
 ### ✅ API & Observability Complete (Steps 12-14)
 

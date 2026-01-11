@@ -137,6 +137,14 @@ quality = [
     "pandera>=0.18.0",  # DataFrame validation
 ]
 
+# Notebook dependencies for demos
+notebooks = [
+    "jupyter>=1.0.0",
+    "matplotlib>=3.8.0",
+    "mplfinance>=0.12.0",  # Financial charts
+    "requests>=2.31.0",  # API testing in notebooks
+]
+
 # All optional dependencies
 all = [
     "k2-platform[api,dev,monitoring,quality]",

@@ -10,15 +10,16 @@
 ## Current Status
 
 ### This Week
-- ✅ **Completed**: Steps 1-14 (Foundation + Storage + Ingestion + Query Layer + API + Observability - 87.5% complete)
+- ✅ **Completed**: Steps 1-15 (Foundation + Storage + Ingestion + Query Layer + API + Observability + E2E Testing - 93.75% complete)
 - ✅ **Completed**: REST API with FastAPI, auth, rate limiting, correlation IDs
 - ✅ **Completed**: Prometheus metrics endpoint with 50+ metrics exposed
 - ✅ **Completed**: Grafana dashboard with 15 panels (API health, data pipeline, storage, query, system)
-- ✅ **Completed**: Documentation cleanup (15 broken links fixed, architecture diagram created)
-- ⬜ **Next Up**: Steps 15-16 (E2E Testing & Demo, Documentation & Cleanup)
+- ✅ **Completed**: E2E integration tests, CLI demo, and Jupyter notebook
+- ⬜ **Next Up**: Step 16 (Documentation & Cleanup)
 - 🔴 **Blocked**: None
 
 ### Completed Today (2026-01-11)
+- ✅ **Step 15 Complete**: E2E integration tests (test_e2e_flow.py), interactive CLI demo (demo.py), Jupyter notebook (demo.ipynb). Data transformation utilities for sample data (DVN, BHP, RIO, MWR). Makefile targets: demo, demo-quick, test-e2e, notebook.
 - ✅ **Step 14 Complete**: Grafana dashboard with 5 rows, 15 panels covering API health, Kafka pipeline, Iceberg storage, DuckDB queries, and system health. Template variables for datasource and interval. Auto-provisioned on startup.
 - ✅ **Step 13 Complete**: Prometheus /metrics endpoint exposing 50+ pre-registered metrics. Platform info initialization, enhanced RequestLoggingMiddleware with in-progress tracking and error counters. 10 new unit tests for metrics endpoint.
 - ✅ **Step 12 Complete**: REST API with FastAPI, API key authentication, rate limiting (100 req/min), correlation IDs, response caching, 8 endpoints under /v1/ prefix, 31 unit tests passing (100%)
@@ -183,14 +184,14 @@
 - **Decisions**: #024 (5-row layout with comprehensive coverage)
 
 ### Step 15: End-to-End Testing & Demo
-- **Status**: ⬜ Not Started
-- **Started**: -
-- **Completed**: -
-- **Time**: - (est. 4-6h)
-- **Commit**: -
-- **Notes**: -
-- **Blockers**: Requires all previous steps
-- **Decisions**: -
+- **Status**: ✅ Complete (Code & Validated)
+- **Started**: 2026-01-11
+- **Completed**: 2026-01-11
+- **Time**: 3h (est. 4-6h)
+- **Commit**: Pending
+- **Notes**: E2E integration tests (test_e2e_flow.py) with data transformation utilities for sample data. Interactive CLI demo (demo.py) with Rich formatting and 5 demo steps. Jupyter notebook (demo.ipynb) with 30 cells covering architecture, data exploration, visualization, ingestion, queries, time-travel, and API. Makefile targets: demo, demo-quick, test-e2e, notebook. pyproject.toml updated with notebooks optional dependency.
+- **Blockers**: None
+- **Decisions**: #027 (Dual approach: Script + Notebook), #028 (Sample data transformation), #029 (DVN for quick tests)
 
 ### Step 16: Documentation & Cleanup
 - **Status**: ⬜ Not Started

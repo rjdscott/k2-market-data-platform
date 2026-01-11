@@ -329,6 +329,34 @@ docs-serve: docs ## Build and serve documentation
 	@cd docs/_build/html && python -m http.server 8001
 
 # ==============================================================================
+# Demo & E2E Testing
+# ==============================================================================
+
+demo: ## Run interactive platform demo
+	@echo "$(BLUE)Starting K2 Platform Demo...$(NC)"
+	@$(UV) run python scripts/demo.py
+
+demo-quick: ## Run demo without delays (CI mode)
+	@echo "$(BLUE)Starting K2 Platform Demo (quick mode)...$(NC)"
+	@$(UV) run python scripts/demo.py --quick
+
+test-e2e: docker-up ## Run E2E integration tests
+	@echo "$(BLUE)Running E2E integration tests...$(NC)"
+	@sleep 5  # Wait for services to be ready
+	@$(PYTEST) tests/integration/test_e2e_flow.py -v -s -m integration
+	@echo "$(GREEN)✓ E2E tests passed$(NC)"
+
+notebook: ## Start Jupyter notebook server
+	@echo "$(BLUE)Starting Jupyter notebook server...$(NC)"
+	@echo "$(YELLOW)Notebooks: http://localhost:8888$(NC)"
+	@$(UV) run jupyter notebook notebooks/
+
+notebook-install: ## Install notebook dependencies
+	@echo "$(BLUE)Installing notebook dependencies...$(NC)"
+	@$(UV) add jupyter matplotlib mplfinance requests
+	@echo "$(GREEN)✓ Notebook dependencies installed$(NC)"
+
+# ==============================================================================
 # CI/CD Helpers
 # ==============================================================================
 
