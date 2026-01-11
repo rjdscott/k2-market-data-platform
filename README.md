@@ -146,6 +146,10 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 | MinIO | http://localhost:9001 | admin / password |
 | Prometheus | http://localhost:9090 | - |
 
+| Kafka UI (Kafbat) | MinIO Console |
+|-------------------|---------------|
+| ![Kafka UI](docs/images/kafbat.png) | ![MinIO Console](docs/images/minio.png) |
+
 **Application** (started by `make api`):
 
 | Service | URL | Credentials |
@@ -174,6 +178,8 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 ## API Reference
 
 Base URL: `http://localhost:8000` | Auth: `X-API-Key: k2-dev-api-key-2026`
+
+![FastAPI Swagger Documentation](docs/images/swagger-fastapi.png)
 
 ### Read Endpoints
 
@@ -254,6 +260,8 @@ k2-query trades --symbol BHP --limit 5    # Via CLI (requires services running)
 ---
 
 ## Observability
+
+![Prometheus Metrics Dashboard](docs/images/prometheus.png)
 
 ### Prometheus Metrics (40+)
 

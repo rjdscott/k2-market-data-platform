@@ -99,7 +99,7 @@ The K2 platform is being built in phases, each with specific goals and scope:
 **Timeline**: 4-6 weeks estimated
 **Goal**: Cloud-ready production deployment
 
-**Directory**: [phase-2-production-prep/](./phase-2-production-prep/)
+**Directory**: [phase-2-production-prep/](phase-2-demo-enhancements/)
 
 ### Planned Features
 - [ ] Replace DuckDB with Presto/Trino cluster

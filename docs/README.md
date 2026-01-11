@@ -91,7 +91,7 @@ Implementation tracking for specific project phases.
 - [Validation Guide](./phases/phase-1-portfolio-demo/VALIDATION_GUIDE.md) - Testing procedures
 
 **Future Phases**:
-- [Phase 2 - Production Prep](./phases/phase-2-production-prep/) - Productionization
+- [Phase 2 - Production Prep](phases/phase-2-demo-enhancements/) - Productionization
 - [Phase 3 - Scale](./phases/phase-3-scale/) - Distributed scaling
 
 **When to read**: Tracking implementation progress, understanding what's built
