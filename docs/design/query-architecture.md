@@ -969,10 +969,10 @@ def test_hybrid_deduplication():
 - [Data Quality](./data-guarantees/data-quality.md) - Quality validation
 
 ### Implementation
-- [Step 9: DuckDB Query Engine](../phases/phase-1-portfolio-demo/steps/step-09-query-engine.md)
-- [Step 10: Replay Engine](../phases/phase-1-portfolio-demo/steps/step-10-replay-engine.md)
-- [Step 11: Query CLI](../phases/phase-1-portfolio-demo/steps/step-11-query-cli.md)
-- [Architectural Decisions](../phases/phase-1-portfolio-demo/DECISIONS.md) - Decision #017, #018
+- [Step 9: DuckDB Query Engine](../phases/phase-1-single-node-implementation/steps/step-09-query-engine.md)
+- [Step 10: Replay Engine](../phases/phase-1-single-node-implementation/steps/step-10-replay-engine.md)
+- [Step 11: Query CLI](../phases/phase-1-single-node-implementation/steps/step-11-query-cli.md)
+- [Architectural Decisions](../phases/phase-1-single-node-implementation/DECISIONS.md) - Decision #017, #018
 
 ### Source Code
 - `src/k2/query/engine.py` - QueryEngine implementation

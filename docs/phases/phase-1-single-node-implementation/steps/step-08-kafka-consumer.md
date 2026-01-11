@@ -100,7 +100,7 @@ src/k2/ingestion/
 tests/unit/
 └── test_consumer.py    # 33 tests (620 lines)
 
-docs/phases/phase-1-portfolio-demo/
+docs/phases/phase-1-single-node-implementation/
 └── DECISIONS.md        # ADRs #012-#016
 ```
 

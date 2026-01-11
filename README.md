@@ -1,27 +1,35 @@
 # K2 Market Data Platform
 
-A distributed market data lakehouse demonstrating production patterns for high-frequency trading infrastructure.
+A distributed market data lakehouse for quantitative research, compliance, and analytics.
 
-| | |
-|---|---|
-| **Stack** | Kafka (KRaft) → Iceberg → DuckDB → FastAPI |
-| **Data** | ASX equities tick data (200K+ trades, March 2014) |
-| **Tests** | 170+ tests (unit, integration, E2E) |
-| **Python** | 3.13+ with uv package manager |
+**Stack**: Kafka (KRaft) → Iceberg → DuckDB → FastAPI
+**Data**: ASX equities tick data (200K+ trades, March 2014), Crypto (planned)
+**Python**: 3.13+ with uv package manager
 
 ---
 
-## What This Demonstrates
+## Platform Positioning
 
-| Skill Area | Implementation |
-|------------|----------------|
-| **Stream Processing** | Idempotent Kafka producers, Avro serialization, Schema Registry HA (2 nodes) |
-| **Lakehouse Architecture** | Apache Iceberg with ACID transactions, time-travel queries, hidden partitioning |
-| **Query Optimization** | DuckDB vectorized execution, predicate pushdown to Parquet, sub-second OLAP |
-| **API Design** | FastAPI with rate limiting (100 req/min), correlation IDs, multi-format output |
-| **Observability** | 40+ Prometheus metrics, 15-panel Grafana dashboard, structured logging |
-| **Data Quality** | Sequence gap detection, deduplication, schema validation |
-| **Testing** | Pytest fixtures, mocking external services, E2E pipeline validation |
+K2 is a **Market Data Platform** designed for:
+- **Quantitative Research**: Backtest trading strategies on historical tick data
+- **Compliance & Audit**: Time-travel queries for regulatory investigations
+- **Market Analytics**: OHLCV aggregations, microstructure analysis
+
+### What K2 Is NOT
+
+- ❌ **Execution infrastructure** (requires <100μs latency, FPGA/kernel bypass)
+- ❌ **Real-time risk systems** (requires <10ms in-memory streaming)
+- ✅ **K2 targets <500ms p99 latency** for analytical workloads
+
+### Tiered Architecture Context
+
+```
+L1 Hot Path  (<10μs)   │ Execution, Order Routing      │ Shared memory, FPGAs
+L2 Warm Path (<10ms)   │ Risk, Position Management     │ In-memory streaming
+L3 Cold Path (<500ms)  │ Analytics, Compliance         │ ← K2 Platform
+```
+
+For alternative production infrastructure, see [HFT Architecture Patterns](./docs/architecture/alternatives.md).
 
 ---
 
@@ -82,6 +90,17 @@ A distributed market data lakehouse demonstrating production patterns for high-f
 │  Structured logging (structlog) with correlation IDs            │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Key Design Decisions**:
+- **Kafka with KRaft**: Sub-1s broker failover (no ZooKeeper dependency)
+- **Iceberg ACID**: Time-travel queries, schema evolution, hidden partitioning
+- **DuckDB Embedded**: Sub-second queries without cluster management overhead
+- **Schema Registry HA**: BACKWARD compatibility enforcement across all producers
+
+For detailed architecture:
+- [System Design](./docs/architecture/system-design.md) - Component diagrams, data flow
+- [Platform Principles](./docs/architecture/platform-principles.md) - Core design philosophy
+- [Technology Decisions](./docs/architecture/README.md#technology-stack) - Why we chose each tool
 
 ---
 
@@ -146,6 +165,10 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 | MinIO | http://localhost:9001 | admin / password |
 | Prometheus | http://localhost:9090 | - |
 
+| Kafka UI (Kafbat) | MinIO Console |
+|-------------------|---------------|
+| ![Kafka UI](docs/images/kafbat.png) | ![MinIO Console](docs/images/minio.png) |
+
 **Application** (started by `make api`):
 
 | Service | URL | Credentials |
@@ -157,23 +180,37 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 
 ## Technology Stack
 
-| Layer | Technology | Version | Rationale |
-|-------|------------|---------|-----------|
+| Layer | Technology | Version | Why This Choice |
+|-------|------------|---------|-----------------|
 | Streaming | Apache Kafka | 3.7 (KRaft) | No ZooKeeper, sub-1s failover |
-| Schema | Confluent Schema Registry | 7.6 | BACKWARD compatibility, Avro |
-| Storage | Apache Iceberg | 1.4 | ACID, time-travel, schema evolution |
+| Schema | Confluent Schema Registry | 7.6 | BACKWARD compatibility enforcement |
+| Storage | Apache Iceberg | 1.4 | ACID + time-travel for compliance |
 | Object Store | MinIO | Latest | S3-compatible local development |
-| Catalog | PostgreSQL | 16 | Iceberg metadata store |
-| Query | DuckDB | 0.10 | Vectorized OLAP, zero-copy S3 |
-| API | FastAPI | 0.111 | Async, OpenAPI, Pydantic |
-| Metrics | Prometheus | 2.51 | Pull-based metrics collection |
-| Dashboards | Grafana | 10.4 | Visualization, alerting |
+| Catalog | PostgreSQL | 16 | Proven Iceberg metadata store |
+| Query | DuckDB | 0.10 | Zero-ops for Phase 1, migration path to Presto documented |
+| API | FastAPI | 0.111 | Async + auto-docs, Python ecosystem integration |
+| Metrics | Prometheus | 2.51 | Pull-based metrics, industry standard |
+| Dashboards | Grafana | 10.4 | Visualization + alerting |
+
+**Philosophy**: [Boring Technology](./docs/architecture/platform-principles.md#boring-technology) - Choose proven tools over bleeding-edge.
+
+**Key Trade-offs**:
+- DuckDB vs Presto: Single-node simplicity for Phase 1, scales to ~10TB dataset
+- At-least-once vs Exactly-once: Market data duplicates acceptable, simpler implementation
+
+See [Architecture Decision Records](./docs/phases/phase-1-single-node-implementation/DECISIONS.md) for 26 detailed decisions.
 
 ---
 
 ## API Reference
 
 Base URL: `http://localhost:8000` | Auth: `X-API-Key: k2-dev-api-key-2026`
+
+**Full API documentation**: http://localhost:8000/docs (when running)
+
+**API design patterns**: [Technology Decisions](./docs/architecture/README.md#technology-stack)
+
+![FastAPI Swagger Documentation](docs/images/swagger-fastapi.png)
 
 ### Read Endpoints
 
@@ -206,33 +243,91 @@ Base URL: `http://localhost:8000` | Auth: `X-API-Key: k2-dev-api-key-2026`
 
 ---
 
-## Data Guarantees
+## Operations
 
-### Per-Symbol Ordering
+K2 is designed for operational simplicity with comprehensive observability and runbooks.
 
-- Kafka partitioned by `hash(symbol)` → ordering within partition
-- Iceberg sorted by `(exchange_timestamp, sequence_number)`
-- **Guarantee**: For symbol S, sequence N+1 is always newer than N
+### Service Level Objectives
 
-### Sequence Gap Detection
+*Note: SLOs will be validated in Phase 2 production benchmarking*
 
-| Gap Size | Action |
-|----------|--------|
-| < 10 | Log warning, continue |
-| 10-100 | Alert, request recovery |
-| > 100 | Halt consumer, investigate |
+| Metric | Target | Measurement Window |
+|--------|--------|-------------------|
+| API Availability | 99.9% | 30 days |
+| Query p99 Latency | < 5s | 7 days |
+| Data Freshness | < 5 minutes | Real-time |
+| Consumer Lag | < 1000 messages | Real-time |
 
-### Replay Modes
+See [Operations Guide](./docs/operations/README.md) for current operational targets.
 
-| Mode | Use Case | Guarantee |
-|------|----------|-----------|
-| **Cold Start** | Backtest 6-month strategy | Per-symbol ordering |
-| **Catch-Up** | Resume after lag | Seamless Iceberg→Kafka handoff |
-| **Rewind** | Compliance audit | Query as-of Iceberg snapshot |
+### Observability
+
+**Metrics**: 50+ Prometheus metrics across ingestion, storage, query, and API layers.
+
+![Prometheus Metrics Dashboard](docs/images/prometheus.png)
+
+**Key Dashboards**:
+- [System Overview](http://localhost:3000) - Throughput, latency p99, error rates
+- [Per-Exchange Drill-down](http://localhost:3000) - ASX-specific metrics
+- [Query Performance](http://localhost:3000) - Latency breakdown by query mode
+
+**Prometheus Metrics** (50+):
+
+| Category | Examples |
+|----------|----------|
+| **Ingestion** | `k2_kafka_messages_produced_total`, `k2_sequence_gaps_detected_total` |
+| **Storage** | `k2_iceberg_rows_written_total`, `k2_iceberg_write_duration_seconds` |
+| **Query** | `k2_query_executions_total`, `k2_query_duration_seconds` |
+| **API** | `k2_http_requests_total`, `k2_http_request_duration_seconds` |
+| **System** | `k2_circuit_breaker_state`, `k2_degradation_level` |
+
+**Grafana Dashboard** (15 panels):
+- API request rate and latency (p99)
+- Kafka consumer lag
+- Iceberg write performance
+- Query cache hit ratio
+- System degradation level
+
+**Structured Logging**: JSON logs with correlation IDs (`structlog`), propagated via `X-Correlation-ID` header.
+
+See [Monitoring Guide](./docs/operations/monitoring/) for dashboard configuration.
+
+### Runbooks
+
+Operational procedures for common scenarios:
+
+- [Failure Recovery](./docs/operations/runbooks/failure-recovery.md) - Service restarts, rollbacks, health checks
+- [Disaster Recovery](./docs/operations/runbooks/disaster-recovery.md) - Full system recovery, RTO/RPO targets
+- [Kafka Operations](./docs/operations/kafka-runbook.md) - Topic management, troubleshooting
+- [Performance Tuning](./docs/operations/performance/latency-budgets.md) - Optimization guides
+
+### Scaling Strategy
+
+**Current State (Single-Node)**:
+- **Throughput**: ~10K msg/sec per consumer
+- **Storage**: <10GB (MinIO local)
+- **Query**: DuckDB embedded (single-node)
+- **Kafka**: 1 broker, 20 partitions per topic
+
+**100x Scale (Distributed)**:
+- **Throughput**: 1M msg/sec → Add Kafka brokers, increase partitions
+- **Storage**: TBs → MinIO distributed cluster or S3
+- **Query**: Concurrent users → Migrate to Presto/Trino cluster
+- **HA**: 99.9% → Multi-AZ deployment
+
+See [Scaling Strategy](./docs/architecture/system-design.md#scaling-considerations) for detailed projections.
+
+### Cost Model (Phase 2)
+
+*Cost modeling and FinOps analysis will be added in Phase 2 to demonstrate business awareness.*
+
+**Estimated monthly cost at 100x scale**: ~$15K/month AWS (ap-southeast-2).
+
+See [Phase 2: Cost Model](./docs/phases/phase-2-demo-enhancements/steps/step-08-cost-model.md) for planned analysis.
 
 ---
 
-## Sample Data
+## Data
 
 ASX equities tick data from March 10-14, 2014.
 
@@ -246,43 +341,18 @@ ASX equities tick data from March 10-14, 2014.
 **Location**: `data/sample/{trades,quotes,bars-1min,reference-data}/`
 
 ```bash
-# Explore sample data
+# Explore data
 head data/sample/trades/7078_trades.csv   # BHP trades
 k2-query trades --symbol BHP --limit 5    # Via CLI (requires services running)
 ```
 
----
-
-## Observability
-
-### Prometheus Metrics (40+)
-
-| Category | Examples |
-|----------|----------|
-| **Ingestion** | `k2_kafka_messages_produced_total`, `k2_sequence_gaps_detected_total` |
-| **Storage** | `k2_iceberg_rows_written_total`, `k2_iceberg_write_duration_seconds` |
-| **Query** | `k2_query_executions_total`, `k2_query_duration_seconds` |
-| **API** | `k2_http_requests_total`, `k2_http_request_duration_seconds` |
-| **System** | `k2_circuit_breaker_state`, `k2_degradation_level` |
-
-### Grafana Dashboard (15 panels)
-
-Pre-configured dashboard at http://localhost:3000 with:
-- API request rate and latency (p99)
-- Kafka consumer lag
-- Iceberg write performance
-- Query cache hit ratio
-- System degradation level
-
-### Structured Logging
-
-- **Library**: structlog with JSON output
-- **Correlation IDs**: Propagated via `X-Correlation-ID` header
-- **Fields**: timestamp, level, correlation_id, endpoint, duration_ms
+See [Data Dictionary](./docs/reference/data-dictionary.md) for complete schema definitions.
 
 ---
 
 ## Testing
+
+180+ tests across all modules (unit, integration, E2E).
 
 ### Coverage
 
@@ -315,6 +385,8 @@ make test-unit          # Fast unit tests (~10s)
 make test-integration   # Full integration (~60s, requires Docker)
 make coverage           # Generate coverage report
 ```
+
+See [Testing Guide](./docs/TESTING.md) for comprehensive testing procedures and patterns.
 
 ---
 
@@ -389,41 +461,109 @@ make quality            # All checks
 
 ## Documentation
 
-| Document | Purpose |
-|----------|---------|
-| [Implementation Plan](./docs/phases/phase-1-portfolio-demo/IMPLEMENTATION_PLAN.md) | 16-step build plan |
-| [Progress Tracker](./docs/phases/phase-1-portfolio-demo/PROGRESS.md) | Detailed status |
-| [Decisions (ADRs)](./docs/phases/phase-1-portfolio-demo/DECISIONS.md) | 30 architectural decisions |
-| [Testing Guide](./docs/TESTING.md) | Test organization and patterns |
-| [Architecture](./docs/architecture/README.md) | System design documents |
+Comprehensive documentation organized by audience and purpose.
+
+### For Engineers
+
+- [Architecture](./docs/architecture/README.md) - System design, platform principles, technology decisions
+- [Design](./docs/design/README.md) - Component-level design, data guarantees, query architecture
+- [Testing](./docs/TESTING.md) - Test organization, running tests, writing tests
+
+### For Operators
+
+- [Operations](./docs/operations/README.md) - Runbooks, monitoring, performance tuning
+- [Runbooks](./docs/operations/runbooks/) - Incident response procedures
+- [Monitoring](./docs/operations/monitoring/) - Dashboards, alerts, SLOs
+
+### For Implementation
+
+- [Phase 1: Single-Node](./docs/phases/phase-1-single-node-implementation/) - Implementation plan, progress, decisions
+- [Phase 2: Enhancements](./docs/phases/phase-2-demo-enhancements/) - Production readiness steps
+
+### Reference
+
+- [Data Dictionary](./docs/reference/data-dictionary.md) - Schema definitions, field types
+- [Glossary](./docs/reference/glossary.md) - Terminology and concepts
+- [Configuration](./docs/reference/configuration.md) - All configurable parameters
 
 ---
 
-## Roadmap
+## Platform Evolution
 
-### Implemented (Phase 1)
+K2 is developed in phases, each with clear business drivers and validation criteria.
 
-- [x] Kafka ingestion with Avro schemas
-- [x] Iceberg lakehouse with time-travel
-- [x] DuckDB query engine
-- [x] REST API with authentication
-- [x] Prometheus + Grafana observability
-- [x] Demo and E2E tests
+### Phase 1: Single-Node Implementation ✅ Complete
 
-### Planned (Phase 2+)
+**Business Driver**: Demonstrate reference data lakehouse architecture with production patterns.
 
-- [ ] Real-time streaming consumers
-- [ ] RBAC and row-level security
-- [ ] Kubernetes deployment
-- [ ] Multi-region replication
+**Delivered** (2026-01-11):
+- ✅ Kafka ingestion with Avro schemas (idempotent, sequence tracking)
+- ✅ Iceberg lakehouse with time-travel (ACID, snapshot isolation)
+- ✅ DuckDB query engine (sub-second OLAP)
+- ✅ REST API with FastAPI (authentication, rate limiting)
+- ✅ Prometheus + Grafana observability (50+ metrics, 15 panels)
+- ✅ 180+ tests (unit, integration, E2E)
+- ✅ Comprehensive documentation (26 ADRs, runbooks, architecture docs)
+
+**Metrics**:
+- 6,500+ lines of production Python
+- 180+ tests passing
+- 50+ Prometheus metrics
+- 8 REST endpoints
+- 7 CLI commands
+
+See [Phase 1 Status](./docs/phases/phase-1-single-node-implementation/STATUS.md) for detailed completion report.
+
+### Phase 2: Production Enhancements 🟡 Ready to Start
+
+**Business Driver**: Address principal engineer review feedback to demonstrate Staff+ level thinking.
+
+**Focus Areas** ([Principal Review](./docs/reviews/2026-01-11-principal-data-engineer-demo-review.md)):
+1. **Platform Positioning** - Clear L3 cold path positioning vs HFT execution
+2. **Graceful Degradation** - Circuit breaker with demonstrable backpressure handling
+3. **Scalable State Management** - Redis-backed sequence tracking (>1M msg/sec)
+4. **Production Deduplication** - Bloom filter + Redis hybrid (24hr window)
+5. **Hybrid Query Path** - Merge real-time Kafka + historical Iceberg
+6. **Compelling Demo** - 10-minute CTO narrative with load testing
+7. **Cost Awareness** - FinOps model showing business acumen
+
+**Deliverables**:
+- Redis integration for stateful components
+- Circuit breaker with 4-level degradation cascade
+- Hybrid query engine (Kafka tail + Iceberg)
+- Enhanced demo script with architectural storytelling
+- Cost model (AWS pricing at 1M msg/sec scale)
+
+See [Phase 2 Implementation Plan](./docs/phases/phase-2-demo-enhancements/IMPLEMENTATION_PLAN.md) for 9-step roadmap.
+
+### Phase 3: Multi-Region & Scale (Future)
+
+**Business Driver**: Demonstrate distributed systems expertise at global scale.
+
+**Planned**:
+- Multi-region replication (MirrorMaker 2.0)
+- Kubernetes deployment (Helm charts)
+- Presto/Trino distributed query cluster
+- RBAC and row-level security
+- Auto-scaling and cost optimization
+
+See [Architecture Alternatives](./docs/architecture/alternatives.md) for scaling patterns.
 
 ---
 
-## Contact
+## Contributors
 
-**Author**: Rob Scott
-**Role**: Senior Data Engineer
-**LinkedIn**: [rjdscott](https://www.linkedin.com/in/rjdscott/)
+**Project Lead**: Rob Scott
+
+### Contributing
+
+Contributions welcome. See [Contributing Guide](./CONTRIBUTING.md) for development setup and guidelines.
+
+### Questions?
+
+- **Documentation**: See [docs/](./docs/)
+- **Issues**: [GitHub Issues](https://github.com/rjdscott/k2-market-data-platform/issues)
+- **Architecture Questions**: [Architecture Decision Records](./docs/phases/phase-1-single-node-implementation/DECISIONS.md)
 
 ---
 

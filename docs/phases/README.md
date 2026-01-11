@@ -24,14 +24,14 @@ The K2 platform is being built in phases, each with specific goals and scope:
 **Timeline**: 59-85 hours estimated
 **Goal**: Demonstrate end-to-end platform capabilities for portfolio review
 
-**Directory**: [phase-1-portfolio-demo/](./phase-1-portfolio-demo/)
+**Directory**: [phase-1-single-node-implementation/](./phase-1-single-node-implementation/)
 
 ### Key Documents
-- [Implementation Plan](./phase-1-portfolio-demo/IMPLEMENTATION_PLAN.md) - 16-step implementation plan
-- [Progress Tracking](./phase-1-portfolio-demo/PROGRESS.md) - Detailed progress log
-- [Status](./phase-1-portfolio-demo/STATUS.md) - Current snapshot
-- [Decisions](./phase-1-portfolio-demo/DECISIONS.md) - Phase 1 architectural decisions (ADRs)
-- [Validation Guide](./phase-1-portfolio-demo/VALIDATION_GUIDE.md) - Testing and validation procedures
+- [Implementation Plan](./phase-1-single-node-implementation/IMPLEMENTATION_PLAN.md) - 16-step implementation plan
+- [Progress Tracking](./phase-1-single-node-implementation/PROGRESS.md) - Detailed progress log
+- [Status](./phase-1-single-node-implementation/STATUS.md) - Current snapshot
+- [Decisions](./phase-1-single-node-implementation/DECISIONS.md) - Phase 1 architectural decisions (ADRs)
+- [Validation Guide](./phase-1-single-node-implementation/VALIDATION_GUIDE.md) - Testing and validation procedures
 
 ### Implementation Steps (16 Total)
 
@@ -99,7 +99,7 @@ The K2 platform is being built in phases, each with specific goals and scope:
 **Timeline**: 4-6 weeks estimated
 **Goal**: Cloud-ready production deployment
 
-**Directory**: [phase-2-production-prep/](./phase-2-production-prep/)
+**Directory**: [phase-2-production-prep/](phase-2-demo-enhancements/)
 
 ### Planned Features
 - [ ] Replace DuckDB with Presto/Trino cluster

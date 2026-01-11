@@ -393,7 +393,7 @@ def step_5_summary(quick: bool = False) -> None:
 [bold]Documentation:[/bold]
 
   [dim]•[/dim] README.md - Quick start guide
-  [dim]•[/dim] docs/phases/phase-1-portfolio-demo/ - Implementation details
+  [dim]•[/dim] docs/phases/phase-1-single-node-implementation/ - Implementation details
   [dim]•[/dim] http://localhost:8000/docs - OpenAPI documentation
   [dim]•[/dim] http://localhost:3000 - Grafana dashboards
 """

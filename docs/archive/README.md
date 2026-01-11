@@ -12,8 +12,8 @@
 
 | File | Archived Date | Reason | Replaced By |
 |------|---------------|--------|-------------|
-| `IMPLEMENTATION_PLAN_ORIGINAL.md` | 2026-01-10 | Superseded by refined implementation plan | `../phases/phase-1-portfolio-demo/IMPLEMENTATION_PLAN.md` |
-| `PROGRESS_OLD.md` | 2026-01-10 | Superseded by updated progress tracking | `../phases/phase-1-portfolio-demo/PROGRESS.md` |
+| `IMPLEMENTATION_PLAN_ORIGINAL.md` | 2026-01-10 | Superseded by refined implementation plan | `../phases/phase-1-single-node-implementation/IMPLEMENTATION_PLAN.md` |
+| `PROGRESS_OLD.md` | 2026-01-10 | Superseded by updated progress tracking | `../phases/phase-1-single-node-implementation/PROGRESS.md` |
 
 ---
 

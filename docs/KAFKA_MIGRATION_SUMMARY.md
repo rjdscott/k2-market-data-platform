@@ -452,7 +452,7 @@ If issues discovered:
 ### Documentation
 - Architecture: `docs/architecture/kafka-topic-strategy.md`
 - Operations: `docs/operations/kafka-runbook.md`
-- Status: `docs/phases/phase-1-portfolio-demo/STATUS.md`
+- Status: `docs/phases/phase-1-single-node-implementation/STATUS.md`
 
 ### Configuration
 - Topics: `config/kafka/topics.yaml`
