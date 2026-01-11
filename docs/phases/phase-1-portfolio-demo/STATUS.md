@@ -1,10 +1,10 @@
 # K2 Platform - Current Status
 
-**Date**: 2026-01-10
-**Phase**: Steps 1-11 Complete (Query Layer Implementation)
-**Status**: ✅ **68.75% COMPLETE** - Foundation + Storage + Ingestion + Query Layer operational
+**Date**: 2026-01-11
+**Phase**: Steps 1-14 Complete (API & Observability Implementation)
+**Status**: ✅ **87.5% COMPLETE** - Foundation + Storage + Ingestion + Query + API + Observability operational
 **Blocker**: None
-**Next**: Steps 12-16 (API Layer, Observability, E2E Testing)
+**Next**: Steps 15-16 (E2E Testing & Demo, Documentation & Cleanup)
 
 ---
 
@@ -12,15 +12,46 @@
 
 | Metric | Value |
 |--------|-------|
-| Steps Complete | 11/16 (68.75%) |
-| Test Coverage | 43 unit tests for query layer, all passing |
-| Lines of Code | ~1,400 lines (query layer) |
-| Documentation | 18 architectural decisions documented |
-| CLI Commands | 7 k2-query commands operational |
+| Steps Complete | 14/16 (87.5%) |
+| Test Coverage | 170+ unit tests across all modules |
+| Lines of Code | ~5,000+ lines (full platform) |
+| Documentation | 26 architectural decisions documented |
+| CLI Commands | 7 k2-query commands + k2-ingest CLI |
+| API Endpoints | 8 REST endpoints under /v1/ |
+| Metrics | 50+ Prometheus metrics exposed |
+| Dashboard Panels | 15 Grafana panels (5 rows) |
 
 ---
 
-## 🏆 Recent Accomplishments (2026-01-10)
+## 🏆 Recent Accomplishments (2026-01-11)
+
+### ✅ API & Observability Complete (Steps 12-14)
+
+**Step 12: REST API with FastAPI** - ✅ COMPLETE (3h)
+- FastAPI server with 8 endpoints under /v1/ prefix
+- API key authentication (`X-API-Key` header)
+- Rate limiting (100 req/min via slowapi)
+- Correlation IDs for request tracing
+- POST endpoints for complex queries (multi-symbol, field selection)
+- Multi-format output (JSON, CSV, Parquet)
+- 53 unit tests passing (100%)
+
+**Step 13: Prometheus Metrics Endpoint** - ✅ COMPLETE (1.5h)
+- `/metrics` endpoint exposing 50+ pre-registered metrics
+- Platform info gauge initialized on startup
+- Enhanced RequestLoggingMiddleware with in-progress tracking
+- 10 unit tests for metrics endpoint
+
+**Step 14: Grafana Dashboard** - ✅ COMPLETE (1.5h)
+- 5-row, 15-panel comprehensive dashboard
+- Rows: API Health, Data Pipeline, Storage, Query Engine, System Health
+- Template variables for datasource and interval
+- Color-coded thresholds based on platform SLOs
+- Auto-provisioned on Grafana startup
+
+---
+
+## 🏆 Previous Accomplishments (2026-01-10)
 
 ### ✅ Query Layer Complete (Steps 9-11)
 
@@ -52,60 +83,102 @@
 ## 📊 Current Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    K2 Query Layer                            │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐    │
-│  │  QueryEngine │   │ ReplayEngine │   │   CLI        │    │
-│  │   (DuckDB)   │◄──│ (Time-Travel)│   │ (k2-query)   │    │
-│  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘    │
-│         │                  │                  │             │
-│         ▼                  ▼                  ▼             │
-│  ┌────────────────────────────────────────────────────┐    │
-│  │                 Iceberg Tables                      │    │
-│  │  market_data.trades  │  market_data.quotes          │    │
-│  └────────────────────────────────────────────────────┘    │
-│                          │                                  │
-│                          ▼                                  │
-│  ┌────────────────────────────────────────────────────┐    │
-│  │                    MinIO (S3)                       │    │
-│  │  s3://warehouse/market_data/{trades,quotes}/        │    │
-│  └────────────────────────────────────────────────────┘    │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                         K2 Platform (Complete)                       │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │                      API Layer (FastAPI)                     │   │
+│  │  /v1/trades  /v1/quotes  /v1/summary  /v1/replay  /metrics  │   │
+│  │  Auth: X-API-Key │ Rate Limit: 100/min │ Formats: JSON/CSV  │   │
+│  └─────────────────────────────┬───────────────────────────────┘   │
+│                                │                                    │
+│  ┌──────────────┐   ┌──────────▼───────┐   ┌──────────────┐       │
+│  │  QueryEngine │◄──│   ReplayEngine   │   │     CLI      │       │
+│  │   (DuckDB)   │   │  (Time-Travel)   │   │  (k2-query)  │       │
+│  └──────┬───────┘   └──────────────────┘   └──────────────┘       │
+│         │                                                          │
+│         ▼                                                          │
+│  ┌────────────────────────────────────────────────────────────┐   │
+│  │                    Iceberg Tables (ACID)                    │   │
+│  │  market_data.trades  │  market_data.quotes                  │   │
+│  └────────────────────────────────────────────────────────────┘   │
+│                          │                                         │
+│  ┌───────────────────────▼────────────────────────────────────┐   │
+│  │                      MinIO (S3 API)                         │   │
+│  │  s3://warehouse/market_data/{trades,quotes}/                │   │
+│  └────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  ┌────────────────────────────────────────────────────────────┐   │
+│  │                  Observability (Complete)                   │   │
+│  │  Prometheus: 50+ metrics │ Grafana: 15 panels (5 rows)     │   │
+│  └────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 📁 Files Created This Session
+## 📁 Key Files by Layer
+
+### API Layer (`src/k2/api/`)
+```
+src/k2/api/
+├── __init__.py          # Public exports
+├── main.py              # FastAPI application
+├── routes.py            # GET endpoints (trades, quotes, summary)
+├── routes_post.py       # POST endpoints (query, replay, aggregations)
+├── models.py            # Pydantic request/response models
+├── formatters.py        # JSON/CSV/Parquet output formatting
+└── dependencies.py      # Auth, rate limiting, shared deps
+```
 
 ### Query Layer (`src/k2/query/`)
 ```
 src/k2/query/
-├── __init__.py          # Public API exports (40 lines)
-├── engine.py            # DuckDB QueryEngine (400 lines)
-├── replay.py            # ReplayEngine with time-travel (500 lines)
-└── cli.py               # k2-query CLI application (460 lines)
+├── __init__.py          # Public API exports
+├── engine.py            # DuckDB QueryEngine
+├── replay.py            # ReplayEngine with time-travel
+└── cli.py               # k2-query CLI application
+```
+
+### Observability (`config/grafana/`)
+```
+config/grafana/
+├── dashboards/
+│   ├── dashboard.yml    # Auto-provisioning config
+│   └── k2-platform.json # 15-panel dashboard
+└── provisioning/
+    └── datasources/
+        └── datasource.yml  # Prometheus datasource
 ```
 
 ### Unit Tests
 ```
 tests/unit/
-├── test_query_engine.py   # 23 tests, 100% passing
-└── test_replay_engine.py  # 20 tests, 100% passing
+├── test_api_main.py       # 53 tests (API endpoints)
+├── test_query_engine.py   # 23 tests
+├── test_replay_engine.py  # 20 tests
+├── test_producer.py       # 21 tests
+├── test_batch_loader.py   # 24 tests
+└── ...                    # 170+ total tests
 ```
 
 ---
 
-## 🧪 Test Results (2026-01-10)
+## 🧪 Test Results (2026-01-11)
 
-### Query Layer Tests
+### All Unit Tests
 ```
+tests/unit/test_api_main.py        53 passed  ✅
 tests/unit/test_query_engine.py    23 passed  ✅
 tests/unit/test_replay_engine.py   20 passed  ✅
+tests/unit/test_producer.py        21 passed  ✅
+tests/unit/test_batch_loader.py    24 passed  ✅
+tests/unit/test_writer.py           8 passed  ✅
+tests/unit/test_schemas.py         10 passed  ✅
 ─────────────────────────────────────────────
-Total                              43 passed
+Total                             170+ passed
 ```
 
 ### CLI Verification
@@ -118,27 +191,38 @@ k2-query stats                                ✅ Works
 k2-query replay --symbol BATCH --batch-size 10  ✅ Works
 ```
 
+### API Verification
+```bash
+curl -H "X-API-Key: k2-dev-api-key-2026" localhost:8000/v1/trades?limit=5  ✅ Works
+curl localhost:8000/health                                                  ✅ Works
+curl localhost:8000/metrics | head                                          ✅ Works
+```
+
 ---
 
-## 📋 Architectural Decisions Made (Query Layer)
+## 📋 Recent Architectural Decisions (Steps 12-14)
 
-### Decision #017: DuckDB Version Guessing for Local Development
-- **Context**: DuckDB Iceberg extension needs version metadata
-- **Decision**: Enable `unsafe_enable_version_guessing=true`
-- **Rationale**: Works out of box, no catalog modification needed
-- **Production Path**: Use PyIceberg catalog for explicit metadata location
+### Decision #019-022: API Design Patterns
+- **#019 API Versioning**: `/v1/` prefix for all data endpoints
+- **#020 API Key Auth**: `X-API-Key` header, dev key for portfolio demo
+- **#021 Rate Limiting**: 100 req/min via slowapi
+- **#022 Flexible Types**: Union types in Pydantic to handle real-world data
 
-### Decision #018: Generator Pattern for Memory-Efficient Replay
-- **Context**: Cold-start replay must stream millions of records
-- **Decision**: Use Python generator yielding batches
-- **Rationale**: O(batch_size) memory regardless of total records
-- **Usage**: `for batch in engine.cold_start_replay(symbol="BHP"):`
+### Decision #023-026: Advanced Query API
+- **#023 Hybrid GET/POST**: Simple lookups via GET, complex queries via POST
+- **#024 Field Selection**: Allowlist validation for SQL injection prevention
+- **#025 Multi-Format**: JSON, CSV, Parquet output from same endpoint
+- **#026 Cursor Pagination**: Base64-encoded cursor for replay streaming
+
+### Query Layer Decisions (#017-018)
+- **#017 Version Guessing**: `unsafe_enable_version_guessing=true` for local dev
+- **#018 Generator Pattern**: Memory-efficient streaming via Python generators
 
 ---
 
 ## 🎯 Progress Overview
 
-### Completed (Steps 1-11)
+### Completed (Steps 1-14)
 
 | Step | Component | Time | Tests | Status |
 |------|-----------|------|-------|--------|
@@ -153,16 +237,16 @@ k2-query replay --symbol BATCH --batch-size 10  ✅ Works
 | 9 | DuckDB Query Engine | 2h | 23 | ✅ |
 | 10 | Replay Engine | 1.5h | 20 | ✅ |
 | 11 | Query CLI | 1h | - | ✅ |
+| 12 | REST API with FastAPI | 3h | 53 | ✅ |
+| 13 | Prometheus Metrics Endpoint | 1.5h | 10 | ✅ |
+| 14 | Grafana Dashboard | 1.5h | - | ✅ |
 
-### Remaining (Steps 12-16)
+### Remaining (Steps 15-16)
 
 | Step | Component | Est. Time |
 |------|-----------|-----------|
-| 12 | REST API with FastAPI | 4-6h |
-| 13 | Prometheus Metrics Endpoint | 2-3h |
-| 14 | Grafana Dashboard | 3-4h |
-| 15 | End-to-End Testing | 4-5h |
-| 16 | Documentation & Demo | 3-4h |
+| 15 | End-to-End Testing & Demo | 4-6h |
+| 16 | Documentation & Cleanup | 2-4h |
 
 ---
 
@@ -218,26 +302,32 @@ All 9 services healthy:
 
 ## 🚀 Next Steps
 
-### Immediate (Step 12: REST API)
-1. Create FastAPI application (`src/k2/api/`)
-2. Implement trade/quote query endpoints
-3. Add market summary endpoint
-4. Configure CORS and rate limiting
-5. Add OpenAPI documentation
+### Immediate (Step 15: E2E Testing & Demo)
+1. Create E2E integration test (`tests/integration/test_e2e_flow.py`)
+2. Validate complete data flow: CSV → Kafka → Iceberg → Query API
+3. Create interactive demo script (`scripts/demo.py`)
+4. Verify data correctness (row counts, precision, timestamps)
 
-### Following
-- Step 13: Expose Prometheus metrics endpoint
-- Step 14: Create Grafana dashboard
-- Step 15: End-to-end testing with demo script
-- Step 16: Final documentation and cleanup
+### Following (Step 16: Documentation & Cleanup)
+- Update README Quick Start with complete instructions
+- Create TESTING.md with testing procedures
+- Run code quality checks (format, lint, type-check)
+- Final verification against success criteria
 
 ---
 
 ## 📞 Quick Commands Reference
 
 ```bash
-# Run query layer tests
-pytest tests/unit/test_query_engine.py tests/unit/test_replay_engine.py -v
+# Run all unit tests
+uv run pytest tests/unit/ -v
+
+# Run specific layer tests
+uv run pytest tests/unit/test_api_main.py -v
+uv run pytest tests/unit/test_query_engine.py -v
+
+# Start API server
+make api
 
 # Use CLI
 k2-query --help
@@ -246,12 +336,12 @@ k2-query trades --symbol BATCH --limit 5
 # Check infrastructure
 docker compose ps
 
-# View test data
-k2-query stats
+# View Grafana dashboard
+open http://localhost:3000  # admin/admin
 ```
 
 ---
 
-**Last Updated**: 2026-01-10 13:30 UTC
-**Status**: ✅ **QUERY LAYER COMPLETE** - Ready for API Layer implementation
-**Next Action**: Proceed to Step 12 (REST API with FastAPI)
+**Last Updated**: 2026-01-11
+**Status**: ✅ **API & OBSERVABILITY COMPLETE** - Ready for E2E Testing
+**Next Action**: Proceed to Step 15 (End-to-End Testing & Demo)

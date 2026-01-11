@@ -1,10 +1,10 @@
 
 # K2 Market Data Platform - Implementation Plan
 
-**Status**: Active Implementation - Query Layer Complete
+**Status**: Active Implementation - API & Observability Complete
 **Target Audience**: Principal Data Engineer Review
-**Last Updated**: 2026-01-10
-**Overall Progress**: 11/16 steps complete (68.75%)
+**Last Updated**: 2026-01-11
+**Overall Progress**: 14/16 steps complete (87.5%)
 
 ---
 
@@ -133,24 +133,24 @@ Documentation (Step 16)
   - Rich formatted output
   - Typer-based CLI framework
 
-### Layer 5: API (6-9 hours)
+### Layer 5: API (6-9 hours) ✅ COMPLETE
 
-- [ ] [**Step 12** — REST API with FastAPI](./steps/step-12-rest-api.md) (4-6h)
-  - FastAPI server implementation
-  - Query endpoints (/trades, /summary, /snapshots)
-  - OpenAPI documentation
+- [x] [**Step 12** — REST API with FastAPI](./steps/step-12-rest-api.md) (3h actual)
+  - FastAPI server with 8 endpoints under /v1/ prefix
+  - API key auth, rate limiting, correlation IDs
+  - OpenAPI documentation at /docs
 
-- [ ] [**Step 13** — Prometheus Metrics Endpoint](./steps/step-13-metrics.md) (2-3h)
-  - Metrics client implementation
-  - /metrics endpoint for Prometheus
-  - Counter, histogram, and gauge support
+- [x] [**Step 13** — Prometheus Metrics Endpoint](./steps/step-13-metrics.md) (1.5h actual)
+  - 50+ pre-registered metrics exposed at /metrics
+  - Platform info initialization on startup
+  - Enhanced RequestLoggingMiddleware
 
 ### Layer 6: Observability & Completion (8-13 hours)
 
-- [ ] [**Step 14** — Grafana Dashboard](./steps/step-14-grafana.md) (2-3h)
-  - Pre-configured dashboard JSON
-  - Panels for API, Kafka, Iceberg metrics
-  - Auto-provisioning configuration
+- [x] [**Step 14** — Grafana Dashboard](./steps/step-14-grafana.md) (1.5h actual)
+  - 5-row, 15-panel dashboard (k2-platform.json)
+  - Template variables for datasource and interval
+  - Auto-provisioning on Grafana startup
 
 - [ ] [**Step 15** — End-to-End Testing & Demo](./steps/step-15-e2e-testing.md) (4-6h)
   - E2E integration test (CSV → API)
@@ -172,9 +172,9 @@ Documentation (Step 16)
 | **Storage** | 3-5 | ✅ | 14-19h | 12h | 100% |
 | **Ingestion** | 6-8 | ✅ | 13-18h | 14h | 100% |
 | **Query** | 9-11 | ✅ | 10-14h | 4.5h | 100% |
-| **API** | 12-13 | ⬜ | 6-9h | - | 0% |
-| **Final** | 14-16 | ⬜ | 8-13h | - | 0% |
-| **TOTAL** | **1-16** | **🟡** | **59-85h** | **37.5h** | **68.75%** |
+| **API** | 12-13 | ✅ | 6-9h | 4.5h | 100% |
+| **Final** | 14-16 | 🟡 | 8-13h | 1.5h | 33% |
+| **TOTAL** | **1-16** | **🟡** | **59-85h** | **43.5h** | **87.5%** |
 
 ---
 
@@ -239,9 +239,9 @@ See [Testing Summary](./reference/testing-summary.md) for complete strategy.
 
 ## Getting Started
 
-**Current Status**: Steps 1-11 complete. Ready to continue with **Step 12: REST API with FastAPI**.
+**Current Status**: Steps 1-14 complete. Ready to continue with **Step 15: End-to-End Testing & Demo**.
 
-### Already Complete (Steps 1-11)
+### Already Complete (Steps 1-14)
 - ✅ Infrastructure validation and setup
 - ✅ Schema design and registration (Avro)
 - ✅ Iceberg catalog and table initialization
@@ -253,13 +253,13 @@ See [Testing Summary](./reference/testing-summary.md) for complete strategy.
 - ✅ DuckDB query engine
 - ✅ Replay engine with time-travel
 - ✅ Query CLI (`k2-query`)
+- ✅ REST API with FastAPI (8 endpoints, auth, rate limiting)
+- ✅ Prometheus metrics endpoint (50+ metrics)
+- ✅ Grafana dashboard (15 panels, auto-provisioned)
 
-### Remaining (Steps 12-16)
-1. [Step 12](./steps/step-12-rest-api.md): REST API with FastAPI
-2. [Step 13](./steps/step-13-metrics.md): Prometheus metrics endpoint
-3. [Step 14](./steps/step-14-grafana.md): Grafana dashboard
-4. [Step 15](./steps/step-15-e2e-testing.md): End-to-end testing
-5. [Step 16](./steps/step-16-documentation.md): Documentation & cleanup
+### Remaining (Steps 15-16)
+1. [Step 15](./steps/step-15-e2e-testing.md): End-to-end testing & demo script
+2. [Step 16](./steps/step-16-documentation.md): Documentation & cleanup
 
 ### Development Workflow
 1. Update [PROGRESS.md](./PROGRESS.md) as each step completes
@@ -277,4 +277,4 @@ See [Testing Summary](./reference/testing-summary.md) for complete strategy.
 
 ---
 
-**Status**: 68.75% complete. Ready to continue with API Layer (Step 12).
+**Status**: 87.5% complete. Ready to continue with E2E Testing (Step 15).
