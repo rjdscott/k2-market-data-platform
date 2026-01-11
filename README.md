@@ -114,7 +114,13 @@ uv sync --all-extras
 uv run python scripts/init_infra.py
 ```
 
-### 4. Run Demo
+### 4. Start API Server
+
+```bash
+make api   # Starts FastAPI on http://localhost:8000
+```
+
+### 5. Run Demo (Optional)
 
 ```bash
 make demo-quick   # Interactive CLI demo (~1 min)
@@ -123,13 +129,21 @@ make notebook     # Jupyter notebook exploration
 
 ### Verify Services
 
+**Infrastructure** (started by docker-compose):
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Grafana | http://localhost:3000 | admin / admin |
+| Kafka UI | http://localhost:8080 | - |
+| MinIO | http://localhost:9001 | admin / password |
+| Prometheus | http://localhost:9090 | - |
+
+**Application** (started by `make api`):
+
 | Service | URL | Credentials |
 |---------|-----|-------------|
 | API Docs | http://localhost:8000/docs | `X-API-Key: k2-dev-api-key-2026` |
-| Grafana | http://localhost:3000 | admin / admin |
-| Kafka UI | http://localhost:8080 | - |
-| MinIO | http://localhost:9001 | admin / password123! |
-| Prometheus | http://localhost:9090 | - |
+| Health Check | http://localhost:8000/health | - |
 
 ---
 
