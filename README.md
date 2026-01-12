@@ -350,6 +350,66 @@ See [Data Dictionary](./docs/reference/data-dictionary.md) for complete schema d
 
 ---
 
+## Schema Evolution
+
+K2 uses **industry-standard hybrid schemas** (v2) that support multiple data sources and asset classes.
+
+### V1 → V2 Migration
+
+**V1 (Legacy ASX-specific)**:
+```
+volume (int64)             → quantity (Decimal 18,8)
+exchange_timestamp (millis) → timestamp (micros)
+company_id, qualifiers, venue → vendor_data (map)
+```
+
+**V2 (Multi-source standard)**:
+- **Core fields**: message_id, trade_id, symbol, exchange, asset_class, timestamp, price, quantity, currency
+- **Trading fields**: side (BUY/SELL enum), trade_conditions (array)
+- **Vendor extensions**: vendor_data (map<string, string>) for exchange-specific fields
+
+### Why V2?
+
+| Feature | V1 | V2 |
+|---------|----|----|
+| Multi-source support | ❌ ASX only | ✅ ASX, Binance, FIX |
+| Asset classes | ❌ Equities only | ✅ Equities, crypto, futures |
+| Decimal precision | 18,6 | 18,8 (micro-prices) |
+| Timestamp precision | milliseconds | microseconds |
+| Deduplication | ❌ | ✅ message_id (UUID) |
+| Standardization | ❌ Vendor-specific | ✅ FIX-inspired |
+
+### Usage
+
+```python
+# Producer (v2 default)
+from k2.ingestion.message_builders import build_trade_v2
+
+trade = build_trade_v2(
+    symbol="BHP",
+    exchange="ASX",
+    asset_class="equities",
+    timestamp=datetime.utcnow(),
+    price=Decimal("45.67"),
+    quantity=Decimal("1000"),
+    currency="AUD",
+    side="BUY",
+    vendor_data={"company_id": "123", "qualifiers": "0"}  # ASX-specific
+)
+
+# Query engine (v2 default)
+engine = QueryEngine(table_version="v2")
+trades = engine.query_trades(symbol="BHP")  # Queries trades_v2 table
+
+# Batch loader (v2 default)
+loader = BatchLoader(asset_class="equities", exchange="asx",
+                      schema_version="v2", currency="AUD")
+```
+
+See [Schema Design V2](./docs/architecture/schema-design-v2.md) for complete specification.
+
+---
+
 ## Testing
 
 180+ tests across all modules (unit, integration, E2E).
