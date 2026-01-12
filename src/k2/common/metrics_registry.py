@@ -175,6 +175,52 @@ DEDUPLICATION_CACHE_SIZE = Gauge(
 )
 
 # ==============================================================================
+# Binance WebSocket Streaming Metrics
+# ==============================================================================
+
+BINANCE_CONNECTION_STATUS = Gauge(
+    "k2_binance_connection_status",
+    "Binance WebSocket connection status (1=connected, 0=disconnected)",
+    STANDARD_LABELS + ["symbols"],  # symbols: comma-separated list
+)
+
+BINANCE_MESSAGES_RECEIVED_TOTAL = Counter(
+    "k2_binance_messages_received_total",
+    "Total trade messages received from Binance WebSocket",
+    STANDARD_LABELS + ["symbol"],
+)
+
+BINANCE_MESSAGE_ERRORS_TOTAL = Counter(
+    "k2_binance_message_errors_total",
+    "Total message parsing/validation errors from Binance",
+    STANDARD_LABELS + ["error_type"],
+)
+
+BINANCE_RECONNECTS_TOTAL = Counter(
+    "k2_binance_reconnects_total",
+    "Total Binance WebSocket reconnection attempts",
+    STANDARD_LABELS + ["reason"],  # reason: connection_closed|websocket_error|unexpected_error
+)
+
+BINANCE_CONNECTION_ERRORS_TOTAL = Counter(
+    "k2_binance_connection_errors_total",
+    "Total Binance WebSocket connection errors",
+    STANDARD_LABELS + ["error_type"],
+)
+
+BINANCE_LAST_MESSAGE_TIMESTAMP_SECONDS = Gauge(
+    "k2_binance_last_message_timestamp_seconds",
+    "Timestamp of last message received from Binance (for health check)",
+    STANDARD_LABELS + ["symbols"],
+)
+
+BINANCE_RECONNECT_DELAY_SECONDS = Gauge(
+    "k2_binance_reconnect_delay_seconds",
+    "Current reconnection delay in seconds (exponential backoff)",
+    STANDARD_LABELS,
+)
+
+# ==============================================================================
 # Storage Layer Metrics (Iceberg)
 # ==============================================================================
 
@@ -336,6 +382,15 @@ _METRIC_REGISTRY: dict[str, object] = {
     "sequence_resets_detected_total": SEQUENCE_RESETS_DETECTED_TOTAL,
     "out_of_order_messages_total": OUT_OF_ORDER_MESSAGES_TOTAL,
     "duplicate_messages_detected_total": DUPLICATE_MESSAGES_DETECTED_TOTAL,
+    "deduplication_cache_size": DEDUPLICATION_CACHE_SIZE,
+    # Binance
+    "binance_connection_status": BINANCE_CONNECTION_STATUS,
+    "binance_messages_received_total": BINANCE_MESSAGES_RECEIVED_TOTAL,
+    "binance_message_errors_total": BINANCE_MESSAGE_ERRORS_TOTAL,
+    "binance_reconnects_total": BINANCE_RECONNECTS_TOTAL,
+    "binance_connection_errors_total": BINANCE_CONNECTION_ERRORS_TOTAL,
+    "binance_last_message_timestamp_seconds": BINANCE_LAST_MESSAGE_TIMESTAMP_SECONDS,
+    "binance_reconnect_delay_seconds": BINANCE_RECONNECT_DELAY_SECONDS,
     # Storage
     "iceberg_rows_written_total": ICEBERG_ROWS_WRITTEN_TOTAL,
     "iceberg_write_duration_seconds": ICEBERG_WRITE_DURATION_SECONDS,

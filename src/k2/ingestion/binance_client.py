@@ -35,7 +35,11 @@ import structlog
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
+from k2.common.circuit_breaker import CircuitBreaker
+from k2.common.metrics import create_component_metrics
+
 logger = structlog.get_logger(__name__)
+metrics = create_component_metrics("binance_streaming")
 
 
 def parse_binance_symbol(symbol: str) -> tuple[str, str, str]:
@@ -182,8 +186,12 @@ class BinanceWebSocketClient:
         symbols: list[str],
         on_message: Optional[Callable[[dict[str, Any]], None]] = None,
         url: str = "wss://stream.binance.com:9443/stream",
+        failover_urls: Optional[list[str]] = None,
         reconnect_delay: int = 5,
         max_reconnect_attempts: int = 10,
+        health_check_interval: int = 30,
+        health_check_timeout: int = 60,
+        enable_circuit_breaker: bool = True,
     ) -> None:
         """Initialize Binance WebSocket client.
 
@@ -191,24 +199,101 @@ class BinanceWebSocketClient:
             symbols: List of symbols to stream (e.g., ["BTCUSDT", "ETHUSDT"])
             on_message: Callback function for handling converted v2 trades
             url: Binance WebSocket stream URL
+            failover_urls: Failover URLs (tried in order if primary fails)
             reconnect_delay: Initial reconnect delay in seconds
             max_reconnect_attempts: Maximum number of reconnect attempts
+            health_check_interval: Health check interval in seconds
+            health_check_timeout: Max seconds without message before reconnect (0=disabled)
+            enable_circuit_breaker: Enable circuit breaker protection
         """
         self.symbols = symbols
         self.on_message = on_message
         self.url = url
+        self.failover_urls = failover_urls or []
+        self.all_urls = [self.url] + self.failover_urls
+        self.current_url_index = 0
         self.reconnect_delay = reconnect_delay
         self.max_reconnect_attempts = max_reconnect_attempts
+        self.health_check_interval = health_check_interval
+        self.health_check_timeout = health_check_timeout
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.is_running = False
         self.reconnect_attempts = 0
+
+        # Health check state
+        self.last_message_time: float = time.time()
+        self.health_check_task: Optional[asyncio.Task] = None
+
+        # Circuit breaker for resilience
+        self.circuit_breaker: Optional[CircuitBreaker] = None
+        if enable_circuit_breaker:
+            self.circuit_breaker = CircuitBreaker(
+                name="binance_websocket",
+                failure_threshold=3,  # Open after 3 consecutive failures
+                success_threshold=2,  # Close after 2 consecutive successes
+                timeout_seconds=30.0,  # Try reset after 30s
+            )
+
+        # Metrics labels
+        self.metrics_labels = {
+            "symbols": ",".join(symbols),
+        }
+
+    async def _health_check_loop(self) -> None:
+        """Monitor connection health and reconnect if stale.
+
+        Checks last_message_time periodically and triggers reconnect
+        if no messages received within timeout period.
+        """
+        logger.info(
+            "binance_health_check_started",
+            interval_seconds=self.health_check_interval,
+            timeout_seconds=self.health_check_timeout,
+        )
+
+        while self.is_running:
+            await asyncio.sleep(self.health_check_interval)
+
+            if not self.is_running:
+                break
+
+            # Check if connection is stale
+            if self.health_check_timeout > 0:
+                elapsed = time.time() - self.last_message_time
+
+                if elapsed > self.health_check_timeout:
+                    logger.warning(
+                        "binance_connection_stale_reconnecting",
+                        seconds_since_last_message=elapsed,
+                        timeout_seconds=self.health_check_timeout,
+                    )
+
+                    # Update metric
+                    metrics.increment(
+                        "binance_reconnects_total",
+                        labels={**self.metrics_labels, "reason": "health_check_timeout"},
+                    )
+
+                    # Close current connection to trigger reconnect
+                    if self.ws:
+                        await self.ws.close()
 
     async def connect(self) -> None:
         """Connect to Binance WebSocket and start receiving messages.
 
         Implements automatic reconnection with exponential backoff on failure.
+        Starts health check monitoring if configured.
         """
         self.is_running = True
+
+        # Start health check loop
+        if self.health_check_timeout > 0:
+            self.health_check_task = asyncio.create_task(self._health_check_loop())
+            logger.info(
+                "binance_health_check_enabled",
+                interval=self.health_check_interval,
+                timeout=self.health_check_timeout,
+            )
 
         while self.is_running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
@@ -219,12 +304,32 @@ class BinanceWebSocketClient:
                     attempt=self.reconnect_attempts + 1,
                     max_attempts=self.max_reconnect_attempts,
                 )
+                metrics.increment(
+                    "binance_reconnects_total",
+                    labels={**self.metrics_labels, "reason": "connection_closed"},
+                )
                 await self._handle_reconnect()
             except WebSocketException as e:
                 logger.error("binance_websocket_error", error=str(e), type=type(e).__name__)
+                metrics.increment(
+                    "binance_connection_errors_total",
+                    labels={**self.metrics_labels, "error_type": type(e).__name__},
+                )
+                metrics.increment(
+                    "binance_reconnects_total",
+                    labels={**self.metrics_labels, "reason": "websocket_error"},
+                )
                 await self._handle_reconnect()
             except Exception as e:
                 logger.error("binance_unexpected_error", error=str(e), type=type(e).__name__)
+                metrics.increment(
+                    "binance_connection_errors_total",
+                    labels={**self.metrics_labels, "error_type": type(e).__name__},
+                )
+                metrics.increment(
+                    "binance_reconnects_total",
+                    labels={**self.metrics_labels, "reason": "unexpected_error"},
+                )
                 await self._handle_reconnect()
 
         if self.reconnect_attempts >= self.max_reconnect_attempts:
@@ -233,26 +338,69 @@ class BinanceWebSocketClient:
                 attempts=self.reconnect_attempts,
                 max_attempts=self.max_reconnect_attempts,
             )
+            # Set connection status to disconnected
+            metrics.gauge(
+                "binance_connection_status",
+                value=0.0,
+                labels=self.metrics_labels,
+            )
 
     async def _connect_and_stream(self) -> None:
-        """Establish WebSocket connection and stream messages."""
+        """Establish WebSocket connection and stream messages.
+
+        Uses failover URLs if primary connection fails.
+        """
         # Build stream URL with multiple symbols
         streams = [f"{s.lower()}@trade" for s in self.symbols]
         stream_param = "/".join(streams)
-        ws_url = f"{self.url}?streams={stream_param}"
 
-        logger.info("binance_connecting", url=ws_url, symbols=self.symbols)
+        # Try current URL (with failover rotation)
+        current_url = self.all_urls[self.current_url_index]
+        ws_url = f"{current_url}?streams={stream_param}"
+
+        logger.info(
+            "binance_connecting",
+            url=current_url,
+            url_index=self.current_url_index,
+            symbols=self.symbols,
+        )
 
         async with websockets.connect(ws_url) as ws:
             self.ws = ws
             self.reconnect_attempts = 0  # Reset on successful connection
-            logger.info("binance_connected", symbols=self.symbols)
+            self.last_message_time = time.time()  # Reset health check timer
+
+            # Update connection status metric
+            metrics.gauge(
+                "binance_connection_status",
+                value=1.0,
+                labels=self.metrics_labels,
+            )
+
+            logger.info(
+                "binance_connected",
+                url=current_url,
+                symbols=self.symbols,
+            )
+
+            # Notify circuit breaker of success (if enabled)
+            if self.circuit_breaker:
+                self.circuit_breaker._on_success()
 
             async for message in ws:
                 try:
                     await self._handle_message(message)
                 except Exception as e:
-                    logger.error("binance_message_error", error=str(e), message=message[:100])
+                    logger.error(
+                        "binance_message_error",
+                        error=str(e),
+                        error_type=type(e).__name__,
+                        message=message[:100],
+                    )
+                    metrics.increment(
+                        "binance_message_errors_total",
+                        labels={**self.metrics_labels, "error_type": type(e).__name__},
+                    )
 
     async def _handle_message(self, message: str) -> None:
         """Parse and handle incoming WebSocket message.
@@ -260,6 +408,16 @@ class BinanceWebSocketClient:
         Args:
             message: Raw WebSocket message (JSON string)
         """
+        # Update health check timestamp
+        self.last_message_time = time.time()
+
+        # Update last message timestamp metric
+        metrics.gauge(
+            "binance_last_message_timestamp_seconds",
+            value=self.last_message_time,
+            labels=self.metrics_labels,
+        )
+
         # Parse JSON
         data = json.loads(message)
 
@@ -272,29 +430,77 @@ class BinanceWebSocketClient:
         # Convert to v2 schema
         v2_trade = convert_binance_trade_to_v2(trade_data)
 
+        # Update message received metric (per symbol)
+        metrics.increment(
+            "binance_messages_received_total",
+            labels={**self.metrics_labels, "symbol": v2_trade["symbol"]},
+        )
+
         # Call user callback
         if self.on_message:
             self.on_message(v2_trade)
 
     async def _handle_reconnect(self) -> None:
-        """Handle reconnection with exponential backoff."""
+        """Handle reconnection with exponential backoff and failover rotation."""
         self.reconnect_attempts += 1
 
+        # Set connection status to disconnected
+        metrics.gauge(
+            "binance_connection_status",
+            value=0.0,
+            labels=self.metrics_labels,
+        )
+
         if self.reconnect_attempts < self.max_reconnect_attempts:
+            # Try next failover URL (if available)
+            if len(self.all_urls) > 1:
+                self.current_url_index = (self.current_url_index + 1) % len(self.all_urls)
+                logger.info(
+                    "binance_failover_url_rotation",
+                    new_url_index=self.current_url_index,
+                    new_url=self.all_urls[self.current_url_index],
+                )
+
             # Exponential backoff: 5s, 10s, 20s, 40s, ...
             delay = self.reconnect_delay * (2 ** (self.reconnect_attempts - 1))
             delay = min(delay, 60)  # Cap at 60 seconds
+
+            # Update reconnect delay metric
+            metrics.gauge(
+                "binance_reconnect_delay_seconds",
+                value=float(delay),
+                labels=self.metrics_labels,
+            )
 
             logger.info(
                 "binance_reconnecting",
                 attempt=self.reconnect_attempts,
                 delay_seconds=delay,
+                url=self.all_urls[self.current_url_index],
             )
             await asyncio.sleep(delay)
 
     async def disconnect(self) -> None:
-        """Gracefully disconnect from WebSocket."""
+        """Gracefully disconnect from WebSocket and stop health check."""
         self.is_running = False
+
+        # Cancel health check task
+        if self.health_check_task:
+            self.health_check_task.cancel()
+            try:
+                await self.health_check_task
+            except asyncio.CancelledError:
+                logger.info("binance_health_check_cancelled")
+
+        # Close WebSocket
         if self.ws:
             await self.ws.close()
-            logger.info("binance_disconnected")
+
+        # Update connection status metric
+        metrics.gauge(
+            "binance_connection_status",
+            value=0.0,
+            labels=self.metrics_labels,
+        )
+
+        logger.info("binance_disconnected")

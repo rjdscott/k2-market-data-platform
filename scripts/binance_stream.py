@@ -204,21 +204,28 @@ Environment Variables:
                 trade_id=trade.get("trade_id"),
             )
 
-    # Create WebSocket client
+    # Create WebSocket client with resilience features
     client = BinanceWebSocketClient(
         symbols=symbols,
         on_message=handle_trade,
         url=config.binance.websocket_url,
+        failover_urls=config.binance.failover_urls,
         reconnect_delay=config.binance.reconnect_delay,
         max_reconnect_attempts=config.binance.max_reconnect_attempts,
+        health_check_interval=config.binance.health_check_interval,
+        health_check_timeout=config.binance.health_check_timeout,
+        enable_circuit_breaker=True,  # Enable circuit breaker for production resilience
     )
 
     logger.info(
         "binance_client_created",
         symbols=symbols,
         websocket_url=config.binance.websocket_url,
+        failover_urls=config.binance.failover_urls,
         reconnect_delay=config.binance.reconnect_delay,
         max_reconnect_attempts=config.binance.max_reconnect_attempts,
+        health_check_interval=config.binance.health_check_interval,
+        health_check_timeout=config.binance.health_check_timeout,
     )
 
     # Start streaming

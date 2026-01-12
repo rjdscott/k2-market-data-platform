@@ -172,6 +172,11 @@ class BinanceConfig(BaseSettings):
         description="Binance WebSocket stream URL",
     )
 
+    failover_urls: list[str] = Field(
+        default=["wss://stream.binance.us:9443/stream"],
+        description="Failover WebSocket URLs (tried in order if primary fails)",
+    )
+
     symbols: list[str] = Field(
         default=["BTCUSDT", "ETHUSDT"],
         description="List of symbols to stream (e.g., BTCUSDT, ETHBTC)",
@@ -183,6 +188,15 @@ class BinanceConfig(BaseSettings):
 
     max_reconnect_attempts: int = Field(
         default=10, description="Maximum number of reconnect attempts before giving up"
+    )
+
+    health_check_interval: int = Field(
+        default=30, description="Health check interval in seconds (check for stale connection)"
+    )
+
+    health_check_timeout: int = Field(
+        default=60,
+        description="Max seconds without message before triggering reconnect (0 = disabled)",
     )
 
     @field_validator("websocket_url")
