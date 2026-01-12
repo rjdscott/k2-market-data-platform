@@ -170,3 +170,139 @@ class TestSchemas:
                     assert (
                         "default" in field
                     ), f"{schema_name}.{field['name']} is optional but has no default"
+
+
+@pytest.mark.unit
+class TestSchemasV2:
+    """Validate v2 Avro schemas with industry-standard fields."""
+
+    def test_trade_v2_schema_valid(self):
+        """Trade v2 schema should parse without errors."""
+        schema_str = load_avro_schema("trade", version="v2")
+        schema_dict = json.loads(schema_str)
+
+        # Parse with Avro library
+        schema = avro.schema.parse(schema_str)
+
+        assert schema.name == "TradeV2"
+        assert schema.namespace == "com.k2.marketdata"
+
+        # Check v2 fields exist
+        field_names = [f.name for f in schema.fields]
+        assert "message_id" in field_names
+        assert "trade_id" in field_names
+        assert "symbol" in field_names
+        assert "exchange" in field_names
+        assert "asset_class" in field_names
+        assert "timestamp" in field_names  # v2: not exchange_timestamp
+        assert "price" in field_names
+        assert "quantity" in field_names  # v2: not volume
+        assert "currency" in field_names
+        assert "side" in field_names
+        assert "vendor_data" in field_names
+
+    def test_quote_v2_schema_valid(self):
+        """Quote v2 schema should parse without errors."""
+        schema_str = load_avro_schema("quote", version="v2")
+        schema_dict = json.loads(schema_str)
+
+        schema = avro.schema.parse(schema_str)
+
+        assert schema.name == "QuoteV2"
+        assert schema.namespace == "com.k2.marketdata"
+
+        field_names = [f.name for f in schema.fields]
+        assert "message_id" in field_names
+        assert "quote_id" in field_names
+        assert "symbol" in field_names
+        assert "asset_class" in field_names
+        assert "timestamp" in field_names
+        assert "bid_price" in field_names
+        assert "bid_quantity" in field_names  # v2: not bid_volume
+        assert "ask_quantity" in field_names  # v2: not ask_volume
+        assert "currency" in field_names
+        assert "vendor_data" in field_names
+
+    def test_v2_timestamp_uses_microseconds(self):
+        """V2 schemas should use timestamp-micros (not millis)."""
+        schema_str = load_avro_schema("trade", version="v2")
+        schema_dict = json.loads(schema_str)
+
+        # Find timestamp field
+        timestamp_field = next(f for f in schema_dict["fields"] if f["name"] == "timestamp")
+        field_type = timestamp_field["type"]
+
+        assert isinstance(field_type, dict)
+        assert field_type.get("logicalType") == "timestamp-micros"
+
+    def test_v2_decimal_precision_18_8(self):
+        """V2 price/quantity fields should use Decimal(18,8) not (18,6)."""
+        schema_str = load_avro_schema("trade", version="v2")
+        schema_dict = json.loads(schema_str)
+
+        # Check price and quantity fields
+        for field_name in ["price", "quantity"]:
+            field = next(f for f in schema_dict["fields"] if f["name"] == field_name)
+            field_type = field["type"]
+
+            assert isinstance(field_type, dict), f"{field_name} should be dict type"
+            assert field_type.get("logicalType") == "decimal"
+            assert field_type.get("precision") == 18
+            assert field_type.get("scale") == 8, f"v2 {field_name} should have scale=8"
+
+    def test_v2_enum_fields(self):
+        """V2 schemas should have enum fields for asset_class and side."""
+        schema_str = load_avro_schema("trade", version="v2")
+        schema_dict = json.loads(schema_str)
+
+        # Check asset_class enum
+        asset_class_field = next(f for f in schema_dict["fields"] if f["name"] == "asset_class")
+        assert asset_class_field["type"]["type"] == "enum"
+        assert asset_class_field["type"]["name"] == "AssetClass"
+        assert set(asset_class_field["type"]["symbols"]) == {"equities", "crypto", "futures", "options"}
+
+        # Check side enum
+        side_field = next(f for f in schema_dict["fields"] if f["name"] == "side")
+        assert side_field["type"]["type"] == "enum"
+        assert side_field["type"]["name"] == "TradeSide"
+        assert set(side_field["type"]["symbols"]) == {"BUY", "SELL", "SELL_SHORT", "UNKNOWN"}
+
+    def test_v2_vendor_data_is_map(self):
+        """V2 vendor_data should be optional map<string, string>."""
+        schema_str = load_avro_schema("trade", version="v2")
+        schema_dict = json.loads(schema_str)
+
+        vendor_data_field = next(f for f in schema_dict["fields"] if f["name"] == "vendor_data")
+        field_type = vendor_data_field["type"]
+
+        # Should be union with null (optional)
+        assert isinstance(field_type, list)
+        assert "null" in field_type
+
+        # Extract map type
+        map_type = next(t for t in field_type if isinstance(t, dict))
+        assert map_type["type"] == "map"
+        assert map_type["values"] == "string"
+
+    def test_load_schema_with_invalid_version(self):
+        """Loading schema with invalid version should raise ValueError."""
+        with pytest.raises(ValueError) as exc_info:
+            load_avro_schema("trade", version="v99")
+
+        assert "version" in str(exc_info.value).lower()
+
+    def test_v2_schemas_have_doc_strings(self):
+        """V2 schemas and fields should have doc strings."""
+        for schema_name in ["trade", "quote"]:
+            schema_str = load_avro_schema(schema_name, version="v2")
+            schema_dict = json.loads(schema_str)
+
+            # Schema-level doc
+            assert "doc" in schema_dict, f"{schema_name}_v2 schema missing doc string"
+
+            # Field-level docs (check key fields)
+            key_fields = ["message_id", "symbol", "timestamp", "vendor_data"]
+            for field_name in key_fields:
+                field = next((f for f in schema_dict["fields"] if f["name"] == field_name), None)
+                if field:
+                    assert "doc" in field, f"{schema_name}_v2.{field_name} missing doc string"
