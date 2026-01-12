@@ -10,6 +10,11 @@ layer (Kafka) and the lakehouse layer (Iceberg). Features include:
 - Graceful shutdown with signal handling
 - Comprehensive metrics and structured logging
 - Daemon and batch execution modes
+- Support for v1 (legacy) and v2 (industry-standard) schemas
+
+Schema Evolution:
+- v1: Legacy ASX-specific schemas → market_data.trades table
+- v2: Industry-standard hybrid schemas → market_data.trades_v2 table
 
 Architecture Decisions:
 - #012: Data-type-based consumer group naming
@@ -18,19 +23,29 @@ Architecture Decisions:
 - #015: Batch size 1000 with configurable override
 - #016: Daemon mode with graceful shutdown
 
-Usage:
-    # Daemon mode (runs until stopped)
+Usage (v2 schemas):
+    # Daemon mode (runs until stopped) with v2 schemas
     consumer = MarketDataConsumer(
         topics=['market.equities.trades.asx'],
-        consumer_group='k2-iceberg-writer-trades',
+        consumer_group='k2-iceberg-writer-trades-v2',
+        schema_version='v2',
     )
     consumer.run()
 
-    # Batch mode (consume N messages)
+    # Batch mode (consume N messages) with v2 schemas
+    consumer = MarketDataConsumer(
+        topics=['market.equities.trades.asx'],
+        consumer_group='k2-iceberg-writer-trades-v2',
+        schema_version='v2',
+        max_messages=1000,
+    )
+    consumer.run()
+
+Usage (v1 schemas - backward compatibility):
     consumer = MarketDataConsumer(
         topics=['market.equities.trades.asx'],
         consumer_group='k2-iceberg-writer-trades',
-        max_messages=1000,
+        schema_version='v1',
     )
     consumer.run()
 """
@@ -114,6 +129,7 @@ class MarketDataConsumer:
         consumer_group: str | None = None,
         bootstrap_servers: str | None = None,
         schema_registry_url: str | None = None,
+        schema_version: str = "v2",
         batch_size: int | None = None,
         max_messages: int | None = None,
         iceberg_writer: IcebergWriter | None = None,
@@ -126,12 +142,17 @@ class MarketDataConsumer:
         if topics and topic_pattern:
             raise ValueError("Specify either topics or topic_pattern, not both")
 
+        # Validate schema version
+        if schema_version not in ("v1", "v2"):
+            raise ValueError(f"Invalid schema_version: {schema_version}. Must be 'v1' or 'v2'")
+
         # Load configuration
         self.topics = topics
         self.topic_pattern = topic_pattern
         self.consumer_group = consumer_group or os.getenv("K2_CONSUMER_GROUP", "k2-iceberg-writer")
         self.bootstrap_servers = bootstrap_servers or config.kafka.bootstrap_servers
         self.schema_registry_url = schema_registry_url or config.kafka.schema_registry_url
+        self.schema_version = schema_version
         self.batch_size = batch_size or int(os.getenv("K2_CONSUMER_BATCH_SIZE", "1000"))
         self.max_messages = max_messages
 
@@ -143,7 +164,7 @@ class MarketDataConsumer:
         # Initialize components
         self._init_schema_registry()
         self._init_consumer()
-        self.iceberg_writer = iceberg_writer or IcebergWriter()
+        self.iceberg_writer = iceberg_writer or IcebergWriter(schema_version=self.schema_version)
         self.sequence_tracker = sequence_tracker or SequenceTracker()
 
         # Register signal handlers for graceful shutdown
@@ -155,6 +176,7 @@ class MarketDataConsumer:
             consumer_group=self.consumer_group,
             topics=self.topics,
             topic_pattern=self.topic_pattern,
+            schema_version=self.schema_version,
             batch_size=self.batch_size,
             mode="daemon" if self.max_messages is None else "batch",
             max_messages=self.max_messages,

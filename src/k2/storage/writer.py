@@ -6,11 +6,17 @@ This module provides write operations for Iceberg tables with:
 - Automatic schema validation
 - Metrics collection for observability
 - Exponential backoff retry for transient failures
+- Support for v1 (legacy) and v2 (industry-standard) schemas
 
 Writers are designed for batch writes (100-10,000 records per call) to
 optimize Iceberg's append performance and minimize metadata operations.
+
+Schema Evolution:
+- v1: Legacy ASX-specific schemas (volume, company_id fields)
+- v2: Industry-standard hybrid schemas (quantity, vendor_data pattern)
 """
 
+import json
 import time
 from decimal import Decimal
 from typing import Any
@@ -114,6 +120,7 @@ class IcebergWriter:
         s3_endpoint: str | None = None,
         s3_access_key: str | None = None,
         s3_secret_key: str | None = None,
+        schema_version: str = "v2",
     ):
         """Initialize Iceberg writer.
 
@@ -122,11 +129,19 @@ class IcebergWriter:
             s3_endpoint: S3/MinIO endpoint (defaults to config)
             s3_access_key: S3 access key (defaults to config)
             s3_secret_key: S3 secret key (defaults to config)
+            schema_version: Schema version - 'v1' or 'v2' (default: 'v2')
+
+        Raises:
+            ValueError: If schema_version is not 'v1' or 'v2'
         """
+        if schema_version not in ("v1", "v2"):
+            raise ValueError(f"Invalid schema_version: {schema_version}. Must be 'v1' or 'v2'")
+
         self.catalog_uri = catalog_uri or config.iceberg.catalog_uri
         self.s3_endpoint = s3_endpoint or config.iceberg.s3_endpoint
         self.s3_access_key = s3_access_key or config.iceberg.s3_access_key
         self.s3_secret_key = s3_secret_key or config.iceberg.s3_secret_key
+        self.schema_version = schema_version
 
         try:
             self.catalog = load_catalog(
@@ -195,14 +210,18 @@ class IcebergWriter:
             )
             raise
 
-        # Convert to PyArrow table
+        # Convert to PyArrow table (use appropriate schema version)
         try:
-            arrow_table = self._records_to_arrow_trades(records)
+            if self.schema_version == "v2":
+                arrow_table = self._records_to_arrow_trades_v2(records)
+            else:
+                arrow_table = self._records_to_arrow_trades(records)
         except Exception as e:
             logger.error(
                 "Failed to convert records to Arrow",
                 table=table_name,
                 record_count=len(records),
+                schema_version=self.schema_version,
                 error=str(e),
             )
             metrics.increment(
@@ -212,6 +231,7 @@ class IcebergWriter:
                     "asset_class": asset_class,
                     "table": "trades",
                     "error_type": "arrow_conversion_failed",
+                    "schema_version": self.schema_version,
                 },
             )
             raise
@@ -322,14 +342,18 @@ class IcebergWriter:
             )
             raise
 
-        # Convert to PyArrow table
+        # Convert to PyArrow table (use appropriate schema version)
         try:
-            arrow_table = self._records_to_arrow_quotes(records)
+            if self.schema_version == "v2":
+                arrow_table = self._records_to_arrow_quotes_v2(records)
+            else:
+                arrow_table = self._records_to_arrow_quotes(records)
         except Exception as e:
             logger.error(
                 "Failed to convert records to Arrow",
                 table=table_name,
                 record_count=len(records),
+                schema_version=self.schema_version,
                 error=str(e),
             )
             metrics.increment(
@@ -339,6 +363,7 @@ class IcebergWriter:
                     "asset_class": asset_class,
                     "table": "quotes",
                     "error_type": "arrow_conversion_failed",
+                    "schema_version": self.schema_version,
                 },
             )
             raise
@@ -509,6 +534,172 @@ class IcebergWriter:
                 "ask_volume": record["ask_volume"],
                 "ingestion_timestamp": record["ingestion_timestamp"],
                 "sequence_number": record.get("sequence_number"),
+            }
+            converted_records.append(converted)
+
+        return pa.Table.from_pylist(converted_records, schema=schema)
+
+    def _records_to_arrow_trades_v2(self, records: list[dict[str, Any]]) -> pa.Table:
+        """Convert v2 trade records to PyArrow table.
+
+        V2 schema changes from v1:
+        - volume → quantity (Decimal instead of int64)
+        - exchange_timestamp → timestamp (field rename for clarity)
+        - Add: message_id, trade_id, currency, side, asset_class
+        - Add: trade_conditions (array of strings)
+        - Add: vendor_data (map serialized as JSON string)
+        - company_id, qualifiers, venue → moved to vendor_data
+        - precision: Decimal(18,6) → Decimal(18,8)
+        - timestamp: milliseconds → microseconds
+
+        Args:
+            records: List of v2 trade dictionaries
+
+        Returns:
+            PyArrow table matching trades_v2 schema
+
+        Raises:
+            Exception: If conversion fails
+        """
+        # Define v2 schema matching TradeV2 Iceberg table
+        schema = pa.schema(
+            [
+                pa.field("message_id", pa.string(), nullable=False),
+                pa.field("trade_id", pa.string(), nullable=False),
+                pa.field("symbol", pa.string(), nullable=False),
+                pa.field("exchange", pa.string(), nullable=False),
+                pa.field("asset_class", pa.string(), nullable=False),  # enum stored as string
+                pa.field("timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("price", pa.decimal128(18, 8), nullable=False),  # Higher precision
+                pa.field("quantity", pa.decimal128(18, 8), nullable=False),  # Decimal, not int64
+                pa.field("currency", pa.string(), nullable=False),
+                pa.field("side", pa.string(), nullable=False),  # enum stored as string
+                pa.field("trade_conditions", pa.list_(pa.string()), nullable=False),
+                pa.field("source_sequence", pa.int64(), nullable=True),
+                pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("platform_sequence", pa.int64(), nullable=True),
+                pa.field("vendor_data", pa.string(), nullable=True),  # JSON string
+            ],
+        )
+
+        # Convert records, handling type conversions
+        converted_records = []
+        for record in records:
+            # Serialize vendor_data to JSON string if present
+            vendor_data_json = None
+            if record.get("vendor_data"):
+                vendor_data_json = json.dumps(record["vendor_data"])
+
+            converted = {
+                "message_id": record["message_id"],
+                "trade_id": record["trade_id"],
+                "symbol": record["symbol"],
+                "exchange": record["exchange"],
+                "asset_class": record["asset_class"],  # enum value as string
+                "timestamp": record["timestamp"],  # microseconds
+                "price": (
+                    record["price"]
+                    if isinstance(record["price"], Decimal)
+                    else Decimal(str(record["price"]))
+                ),
+                "quantity": (
+                    record["quantity"]
+                    if isinstance(record["quantity"], Decimal)
+                    else Decimal(str(record["quantity"]))
+                ),
+                "currency": record["currency"],
+                "side": record["side"],  # enum value as string
+                "trade_conditions": record.get("trade_conditions", []),
+                "source_sequence": record.get("source_sequence"),
+                "ingestion_timestamp": record["ingestion_timestamp"],  # microseconds
+                "platform_sequence": record.get("platform_sequence"),
+                "vendor_data": vendor_data_json,
+            }
+            converted_records.append(converted)
+
+        return pa.Table.from_pylist(converted_records, schema=schema)
+
+    def _records_to_arrow_quotes_v2(self, records: list[dict[str, Any]]) -> pa.Table:
+        """Convert v2 quote records to PyArrow table.
+
+        V2 schema changes from v1:
+        - bid_volume/ask_volume → bid_quantity/ask_quantity (Decimal)
+        - exchange_timestamp → timestamp (field rename)
+        - Add: message_id, quote_id, currency, asset_class
+        - Add: vendor_data (map serialized as JSON string)
+        - company_id → moved to vendor_data
+        - precision: Decimal(18,6) → Decimal(18,8)
+
+        Args:
+            records: List of v2 quote dictionaries
+
+        Returns:
+            PyArrow table matching quotes_v2 schema
+
+        Raises:
+            Exception: If conversion fails
+        """
+        # Define v2 schema matching QuoteV2 Iceberg table
+        schema = pa.schema(
+            [
+                pa.field("message_id", pa.string(), nullable=False),
+                pa.field("quote_id", pa.string(), nullable=False),
+                pa.field("symbol", pa.string(), nullable=False),
+                pa.field("exchange", pa.string(), nullable=False),
+                pa.field("asset_class", pa.string(), nullable=False),
+                pa.field("timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("bid_price", pa.decimal128(18, 8), nullable=False),
+                pa.field("bid_quantity", pa.decimal128(18, 8), nullable=False),
+                pa.field("ask_price", pa.decimal128(18, 8), nullable=False),
+                pa.field("ask_quantity", pa.decimal128(18, 8), nullable=False),
+                pa.field("currency", pa.string(), nullable=False),
+                pa.field("source_sequence", pa.int64(), nullable=True),
+                pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("platform_sequence", pa.int64(), nullable=True),
+                pa.field("vendor_data", pa.string(), nullable=True),  # JSON string
+            ],
+        )
+
+        # Convert records, handling type conversions
+        converted_records = []
+        for record in records:
+            # Serialize vendor_data to JSON string if present
+            vendor_data_json = None
+            if record.get("vendor_data"):
+                vendor_data_json = json.dumps(record["vendor_data"])
+
+            converted = {
+                "message_id": record["message_id"],
+                "quote_id": record["quote_id"],
+                "symbol": record["symbol"],
+                "exchange": record["exchange"],
+                "asset_class": record["asset_class"],
+                "timestamp": record["timestamp"],
+                "bid_price": (
+                    record["bid_price"]
+                    if isinstance(record["bid_price"], Decimal)
+                    else Decimal(str(record["bid_price"]))
+                ),
+                "bid_quantity": (
+                    record["bid_quantity"]
+                    if isinstance(record["bid_quantity"], Decimal)
+                    else Decimal(str(record["bid_quantity"]))
+                ),
+                "ask_price": (
+                    record["ask_price"]
+                    if isinstance(record["ask_price"], Decimal)
+                    else Decimal(str(record["ask_price"]))
+                ),
+                "ask_quantity": (
+                    record["ask_quantity"]
+                    if isinstance(record["ask_quantity"], Decimal)
+                    else Decimal(str(record["ask_quantity"]))
+                ),
+                "currency": record["currency"],
+                "source_sequence": record.get("source_sequence"),
+                "ingestion_timestamp": record["ingestion_timestamp"],
+                "platform_sequence": record.get("platform_sequence"),
+                "vendor_data": vendor_data_json,
             }
             converted_records.append(converted)
 
