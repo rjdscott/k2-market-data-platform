@@ -6,6 +6,7 @@ This module provides a production-ready Kafka producer with:
 - Partition by symbol for ordering guarantees
 - Exponential backoff retry for transient failures
 - Structured logging and Prometheus metrics
+- Support for v1 (legacy) and v2 (industry-standard) schemas
 
 Architecture:
     The producer uses the exchange + asset class topic architecture via
@@ -15,20 +16,58 @@ Architecture:
     Topic naming: market.{asset_class}.{data_type}.{exchange}
     Example: market.equities.trades.asx
 
-Usage:
-    from k2.ingestion.producer import MarketDataProducer
-    from k2.kafka import DataType
+Schema Evolution:
+    The producer supports both v1 and v2 schemas:
+    - v1: Legacy ASX-specific schemas (volume, company_id fields)
+    - v2: Industry-standard hybrid schemas (quantity, vendor_data pattern)
 
-    producer = MarketDataProducer()
+    Use schema_version parameter to specify which schema version to use.
+    Default is v2 (industry-standard).
 
-    # Produce a trade record
+Usage (v2 schemas):
+    from k2.ingestion.producer import MarketDataProducer, build_trade_v2
+    from decimal import Decimal
+    from datetime import datetime
+
+    # Create producer with v2 schemas (default)
+    producer = MarketDataProducer(schema_version='v2')
+
+    # Build v2 trade message
+    trade = build_trade_v2(
+        symbol='BHP',
+        exchange='ASX',
+        asset_class='equities',
+        timestamp=datetime.utcnow(),
+        price=Decimal('45.67'),
+        quantity=Decimal('1000'),
+        currency='AUD',
+        side='BUY',
+        vendor_data={'company_id': '123', 'qualifiers': '0'}
+    )
+
+    # Produce to Kafka
     producer.produce_trade(
         asset_class='equities',
         exchange='asx',
-        record={'symbol': 'BHP', 'price': 45.50, ...}
+        record=trade
     )
 
-    # Flush pending messages
+    producer.flush()
+    producer.close()
+
+Usage (v1 schemas - backward compatibility):
+    from k2.ingestion.producer import MarketDataProducer
+
+    # Create producer with v1 schemas
+    producer = MarketDataProducer(schema_version='v1')
+
+    # Produce v1 trade record
+    producer.produce_trade(
+        asset_class='equities',
+        exchange='asx',
+        record={'symbol': 'BHP', 'price': 45.50, 'volume': 1000, ...}
+    )
+
     producer.flush()
     producer.close()
 
@@ -40,6 +79,7 @@ Configuration:
 See Also:
     - Decision #009: Partition by symbol for ordering
     - Decision #010: At-least-once with idempotent producers
+    - k2.ingestion.message_builders: v2 message building utilities
 """
 
 import time
@@ -54,6 +94,13 @@ from k2.common.config import config
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
 from k2.kafka import DataType, get_topic_builder
+
+# Import v2 message builders for convenience
+from k2.ingestion.message_builders import (
+    build_quote_v2,
+    build_trade_v2,
+    convert_v1_to_v2_trade,
+)
 
 logger = get_logger(__name__, component="ingestion")
 metrics = create_component_metrics("ingestion")
@@ -86,6 +133,7 @@ class MarketDataProducer:
         self,
         bootstrap_servers: str | None = None,
         schema_registry_url: str | None = None,
+        schema_version: str = "v2",
         max_retries: int = 3,
         initial_retry_delay: float = 0.1,
         retry_backoff_factor: float = 2.0,
@@ -96,6 +144,7 @@ class MarketDataProducer:
         Args:
             bootstrap_servers: Kafka bootstrap servers (default: from config)
             schema_registry_url: Schema Registry URL (default: from config)
+            schema_version: Schema version to use - 'v1' or 'v2' (default: 'v2')
             max_retries: Maximum retry attempts for transient failures (default: 3)
             initial_retry_delay: Initial retry delay in seconds (default: 0.1)
             retry_backoff_factor: Exponential backoff multiplier (default: 2.0)
@@ -103,9 +152,14 @@ class MarketDataProducer:
 
         Raises:
             Exception: If producer initialization fails
+            ValueError: If schema_version is not 'v1' or 'v2'
         """
+        if schema_version not in ("v1", "v2"):
+            raise ValueError(f"Invalid schema_version: {schema_version}. Must be 'v1' or 'v2'")
+
         self.bootstrap_servers = bootstrap_servers or config.kafka.bootstrap_servers
         self.schema_registry_url = schema_registry_url or config.kafka.schema_registry_url
+        self.schema_version = schema_version
 
         # Retry configuration (Decision #006: Exponential Backoff Retry)
         self.max_retries = max_retries
@@ -134,9 +188,13 @@ class MarketDataProducer:
             "Kafka producer initialized",
             bootstrap_servers=self.bootstrap_servers,
             schema_registry_url=self.schema_registry_url,
+            schema_version=self.schema_version,
             max_retries=self.max_retries,
         )
-        metrics.increment("producer_initialized_total", labels={"component_type": "producer"})
+        metrics.increment(
+            "producer_initialized_total",
+            labels={"component_type": "producer", "schema_version": self.schema_version},
+        )
 
     def _init_schema_registry(self):
         """Initialize Schema Registry client."""
