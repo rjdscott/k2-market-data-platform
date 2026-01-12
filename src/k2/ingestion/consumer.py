@@ -388,9 +388,11 @@ class MarketDataConsumer:
                     )
 
                     # Check sequence (Decision #014: Sequence gap logging)
-                    if "symbol" in record and "sequence_number" in record:
+                    # V2 schema uses "source_sequence" instead of "sequence_number"
+                    seq_field = "source_sequence" if self.schema_version == "v2" else "sequence_number"
+                    if "symbol" in record and seq_field in record:
                         gap = self.sequence_tracker.check_sequence(
-                            record["symbol"], record["sequence_number"],
+                            record["symbol"], record[seq_field],
                         )
                         if gap:
                             self.stats.sequence_gaps += 1

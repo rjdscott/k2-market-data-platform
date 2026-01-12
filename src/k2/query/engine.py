@@ -246,25 +246,40 @@ class QueryEngine:
             trades = engine.query_trades(symbol="BHP")
             # Returns: symbol, company_id, exchange, exchange_timestamp, price, volume, ...
         """
+        # Validate table_version
+        if self.table_version not in ("v1", "v2"):
+            raise ValueError(
+                f"Invalid table_version: {self.table_version}. Must be 'v1' or 'v2'"
+            )
+
         # Auto-determine table name based on table_version
         if table_name is None:
-            table_name = f"market_data.trades_{self.table_version}" if self.table_version == "v2" else "market_data.trades"
+            if self.table_version == "v2":
+                table_name = f"market_data.trades_v2"
+            elif self.table_version == "v1":
+                table_name = "market_data.trades"  # Legacy table name for backward compatibility
 
         table_path = self._get_table_path(table_name)
 
         # Field names differ between v1 and v2
         timestamp_field = "timestamp" if self.table_version == "v2" else "exchange_timestamp"
 
-        # Build WHERE clause
+        # Build WHERE clause with parameterized queries (SQL injection protection)
         conditions = []
+        params = []
+
         if symbol:
-            conditions.append(f"symbol = '{symbol}'")
+            conditions.append("symbol = ?")
+            params.append(symbol)
         if exchange:
-            conditions.append(f"exchange = '{exchange}'")
+            conditions.append("exchange = ?")
+            params.append(exchange)
         if start_time:
-            conditions.append(f"{timestamp_field} >= '{start_time.isoformat()}'")
+            conditions.append(f"{timestamp_field} >= ?")
+            params.append(start_time.isoformat())
         if end_time:
-            conditions.append(f"{timestamp_field} <= '{end_time.isoformat()}'")
+            conditions.append(f"{timestamp_field} <= ?")
+            params.append(end_time.isoformat())
 
         where_clause = ""
         if conditions:
@@ -316,7 +331,7 @@ class QueryEngine:
 
         with self._query_timer(QueryType.TRADES.value):
             try:
-                result = self.connection.execute(query).fetchdf()
+                result = self.connection.execute(query, params).fetchdf()
                 rows = result.to_dict(orient="records")
 
                 logger.debug(
@@ -368,23 +383,32 @@ class QueryEngine:
         """
         # Auto-determine table name based on table_version
         if table_name is None:
-            table_name = f"market_data.quotes_{self.table_version}" if self.table_version == "v2" else "market_data.quotes"
+            if self.table_version == "v2":
+                table_name = f"market_data.quotes_v2"
+            elif self.table_version == "v1":
+                table_name = "market_data.quotes"  # Legacy table name for backward compatibility
 
         table_path = self._get_table_path(table_name)
 
         # Field names differ between v1 and v2
         timestamp_field = "timestamp" if self.table_version == "v2" else "exchange_timestamp"
 
-        # Build WHERE clause
+        # Build WHERE clause with parameterized queries (SQL injection protection)
         conditions = []
+        params = []
+
         if symbol:
-            conditions.append(f"symbol = '{symbol}'")
+            conditions.append("symbol = ?")
+            params.append(symbol)
         if exchange:
-            conditions.append(f"exchange = '{exchange}'")
+            conditions.append("exchange = ?")
+            params.append(exchange)
         if start_time:
-            conditions.append(f"{timestamp_field} >= '{start_time.isoformat()}'")
+            conditions.append(f"{timestamp_field} >= ?")
+            params.append(start_time.isoformat())
         if end_time:
-            conditions.append(f"{timestamp_field} <= '{end_time.isoformat()}'")
+            conditions.append(f"{timestamp_field} <= ?")
+            params.append(end_time.isoformat())
 
         where_clause = ""
         if conditions:
@@ -435,7 +459,7 @@ class QueryEngine:
 
         with self._query_timer(QueryType.QUOTES.value):
             try:
-                result = self.connection.execute(query).fetchdf()
+                result = self.connection.execute(query, params).fetchdf()
                 rows = result.to_dict(orient="records")
 
                 logger.debug(
@@ -484,9 +508,18 @@ class QueryEngine:
             summary = engine.get_market_summary("BHP", date(2024, 1, 15))
             print(f"VWAP: {summary.vwap}")
         """
+        # Validate table_version
+        if self.table_version not in ("v1", "v2"):
+            raise ValueError(
+                f"Invalid table_version: {self.table_version}. Must be 'v1' or 'v2'"
+            )
+
         # Auto-determine table name based on table_version
         if table_name is None:
-            table_name = f"market_data.trades_{self.table_version}" if self.table_version == "v2" else "market_data.trades"
+            if self.table_version == "v2":
+                table_name = f"market_data.trades_v2"
+            elif self.table_version == "v1":
+                table_name = "market_data.trades"  # Legacy table name for backward compatibility
 
         table_path = self._get_table_path(table_name)
 
@@ -498,9 +531,12 @@ class QueryEngine:
         start_dt = datetime.combine(query_date, datetime.min.time())
         end_dt = datetime.combine(query_date, datetime.max.time())
 
+        # Build parameterized query (SQL injection protection)
+        params = [symbol, start_dt.isoformat(), end_dt.isoformat()]
         exchange_filter = ""
         if exchange:
-            exchange_filter = f"AND exchange = '{exchange}'"
+            exchange_filter = "AND exchange = ?"
+            params.append(exchange)
 
         query = f"""
             WITH day_trades AS (
@@ -510,14 +546,14 @@ class QueryEngine:
                     price,
                     {volume_field} as volume
                 FROM iceberg_scan('{table_path}')
-                WHERE symbol = '{symbol}'
-                  AND {timestamp_field} >= '{start_dt.isoformat()}'
-                  AND {timestamp_field} <= '{end_dt.isoformat()}'
+                WHERE symbol = ?
+                  AND {timestamp_field} >= ?
+                  AND {timestamp_field} <= ?
                   {exchange_filter}
             )
             SELECT
-                '{symbol}' as symbol,
-                '{query_date}' as query_date,
+                ? as symbol,
+                ? as query_date,
                 FIRST(price ORDER BY timestamp ASC) as open_price,
                 MAX(price) as high_price,
                 MIN(price) as low_price,
@@ -527,10 +563,12 @@ class QueryEngine:
                 SUM(price * volume) / NULLIF(SUM(volume), 0) as vwap
             FROM day_trades
         """
+        # Add symbol and query_date for SELECT clause
+        params.extend([symbol, str(query_date)])
 
         with self._query_timer(QueryType.SUMMARY.value):
             try:
-                result = self.connection.execute(query).fetchone()
+                result = self.connection.execute(query, params).fetchone()
 
                 if result is None or result[6] is None:  # Check trade_count
                     logger.debug(
@@ -587,9 +625,18 @@ class QueryEngine:
         Returns:
             List of unique symbols
         """
+        # Validate table_version
+        if self.table_version not in ("v1", "v2"):
+            raise ValueError(
+                f"Invalid table_version: {self.table_version}. Must be 'v1' or 'v2'"
+            )
+
         # Auto-determine table name based on table_version
         if table_name is None:
-            table_name = f"market_data.trades_{self.table_version}" if self.table_version == "v2" else "market_data.trades"
+            if self.table_version == "v2":
+                table_name = f"market_data.trades_v2"
+            elif self.table_version == "v1":
+                table_name = "market_data.trades"  # Legacy table name for backward compatibility
 
         table_path = self._get_table_path(table_name)
 
@@ -620,9 +667,18 @@ class QueryEngine:
         Returns:
             Tuple of (min_timestamp, max_timestamp)
         """
+        # Validate table_version
+        if self.table_version not in ("v1", "v2"):
+            raise ValueError(
+                f"Invalid table_version: {self.table_version}. Must be 'v1' or 'v2'"
+            )
+
         # Auto-determine table name based on table_version
         if table_name is None:
-            table_name = f"market_data.trades_{self.table_version}" if self.table_version == "v2" else "market_data.trades"
+            if self.table_version == "v2":
+                table_name = f"market_data.trades_v2"
+            elif self.table_version == "v1":
+                table_name = "market_data.trades"  # Legacy table name for backward compatibility
 
         table_path = self._get_table_path(table_name)
 

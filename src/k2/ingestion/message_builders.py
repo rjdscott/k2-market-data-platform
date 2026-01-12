@@ -36,6 +36,54 @@ from decimal import Decimal
 from typing import Any, Optional
 
 
+def _validate_decimal_precision(
+    value: Decimal,
+    max_digits: int = 18,
+    max_scale: int = 8,
+    field_name: str = "value"
+) -> None:
+    """Validate Decimal fits within (max_digits, max_scale) precision.
+
+    This validates that Decimal values fit within Iceberg's Decimal(18,8) schema
+    constraints. Failing fast here prevents silent failures at write time.
+
+    Args:
+        value: Decimal to validate
+        max_digits: Maximum total digits (default 18)
+        max_scale: Maximum decimal places (default 8)
+        field_name: Field name for error message
+
+    Raises:
+        ValueError: If value is negative, exceeds max_digits, or exceeds max_scale
+
+    Examples:
+        >>> _validate_decimal_precision(Decimal("45.67"), field_name="price")  # OK
+        >>> _validate_decimal_precision(Decimal("12345678901234567890.12"))  # Raises ValueError (20 digits > 18 max)
+        >>> _validate_decimal_precision(Decimal("45.123456789"))  # Raises ValueError (9 decimals > 8 max)
+        >>> _validate_decimal_precision(Decimal("-45.67"), field_name="price")  # Raises ValueError (negative)
+    """
+    if value < 0:
+        raise ValueError(f"{field_name} must be non-negative, got {value}")
+
+    # Check total digits (including decimal places)
+    sign, digits, exponent = value.as_tuple()
+    total_digits = len(digits)
+
+    if total_digits > max_digits:
+        raise ValueError(
+            f"{field_name} exceeds maximum precision: {total_digits} digits > {max_digits} max. "
+            f"Value: {value}"
+        )
+
+    # Check decimal places
+    scale = -exponent if exponent < 0 else 0
+    if scale > max_scale:
+        raise ValueError(
+            f"{field_name} exceeds maximum scale: {scale} decimal places > {max_scale} max. "
+            f"Value: {value}"
+        )
+
+
 def build_trade_v2(
     symbol: str,
     exchange: str,
@@ -131,6 +179,10 @@ def build_trade_v2(
         price = Decimal(str(price))
     if not isinstance(quantity, Decimal):
         quantity = Decimal(str(quantity))
+
+    # Validate Decimal precision (18,8) for Iceberg schema
+    _validate_decimal_precision(price, field_name="price")
+    _validate_decimal_precision(quantity, field_name="quantity")
 
     # Generate defaults
     current_time_micros = int(time.time() * 1_000_000)
@@ -242,6 +294,12 @@ def build_quote_v2(
         ask_price = Decimal(str(ask_price))
     if not isinstance(ask_quantity, Decimal):
         ask_quantity = Decimal(str(ask_quantity))
+
+    # Validate Decimal precision (18,8) for Iceberg schema
+    _validate_decimal_precision(bid_price, field_name="bid_price")
+    _validate_decimal_precision(bid_quantity, field_name="bid_quantity")
+    _validate_decimal_precision(ask_price, field_name="ask_price")
+    _validate_decimal_precision(ask_quantity, field_name="ask_quantity")
 
     # Generate defaults
     current_time_micros = int(time.time() * 1_000_000)
