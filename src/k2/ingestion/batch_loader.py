@@ -7,41 +7,59 @@ MarketDataProducer. Features include:
 - Schema validation and error handling
 - Dead Letter Queue (DLQ) for invalid records
 - Summary report with statistics
+- v1 and v2 schema support with automatic message building
 
 Usage:
-    # Load trades from CSV
-    python -m k2.ingestion.batch_loader load \
-        --csv data/asx_trades.csv \
-        --asset-class equities \
-        --exchange asx \
-        --data-type trades
-
-    # Load with custom batch size
+    # Load trades from CSV (v2 schema with currency)
     python -m k2.ingestion.batch_loader load \
         --csv data/asx_trades.csv \
         --asset-class equities \
         --exchange asx \
         --data-type trades \
-        --batch-size 5000
+        --currency AUD
 
-    # Load with DLQ for error tracking
+    # Load with custom batch size and DLQ
     python -m k2.ingestion.batch_loader load \
         --csv data/asx_trades.csv \
         --asset-class equities \
         --exchange asx \
         --data-type trades \
+        --batch-size 5000 \
+        --currency AUD \
         --dlq-file errors.csv
 
-Example CSV format (trades):
+    # Load v1 legacy schema
+    python -m k2.ingestion.batch_loader load \
+        --csv data/asx_trades.csv \
+        --asset-class equities \
+        --exchange asx \
+        --data-type trades \
+        --schema-version v1
+
+Example CSV format (v2 trades - minimal):
     symbol,exchange_timestamp,price,quantity,side,sequence_number,trade_id
     BHP,2026-01-10T10:30:00.123Z,45.50,1000,buy,12345,T-001
     RIO,2026-01-10T10:30:00.456Z,120.75,500,sell,12346,T-002
+
+Example CSV format (v2 trades - with ASX vendor_data):
+    symbol,exchange_timestamp,price,quantity,side,sequence_number,trade_id,company_id,qualifiers,venue
+    BHP,2026-01-10T10:30:00.123Z,45.50,1000,buy,12345,T-001,123,0,X
+    RIO,2026-01-10T10:30:00.456Z,120.75,500,sell,12346,T-002,456,0,X
+
+V2 Schema Features:
+- Auto-generates message_id (UUID) for deduplication
+- Maps side: buy → BUY, sell → SELL (enum)
+- Supports vendor_data: company_id, qualifiers, venue → vendor_data map
+- Decimal precision: price/quantity as Decimal(18,8)
+- Timestamp: microseconds precision
 """
 
 import csv
 import sys
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 import typer
@@ -57,6 +75,7 @@ from rich.progress import (
 from rich.table import Table
 
 from k2.common.logging import get_logger
+from k2.ingestion.message_builders import build_quote_v2, build_trade_v2
 from k2.ingestion.producer import MarketDataProducer
 
 logger = get_logger(__name__, component="batch_loader")
@@ -121,6 +140,8 @@ class BatchLoader:
         data_type: str,
         producer: MarketDataProducer | None = None,
         dlq_file: Path | None = None,
+        schema_version: str = "v2",
+        currency: str = "USD",
     ):
         """Initialize batch loader.
 
@@ -130,21 +151,29 @@ class BatchLoader:
             data_type: Data type ('trades', 'quotes', 'reference_data')
             producer: Optional MarketDataProducer instance (default: creates new)
             dlq_file: Optional path to dead letter queue CSV file
+            schema_version: Schema version - 'v1' or 'v2' (default: 'v2')
+            currency: Default currency code (default: 'USD', ASX typically 'AUD')
 
         Raises:
-            ValueError: If data_type is invalid
+            ValueError: If data_type or schema_version is invalid
         """
         self.asset_class = asset_class
         self.exchange = exchange
         self.data_type = data_type.lower()
+        self.schema_version = schema_version
+        self.currency = currency
 
         # Validate data type
         valid_data_types = ["trades", "quotes", "reference_data"]
         if self.data_type not in valid_data_types:
             raise ValueError(f"Invalid data_type '{data_type}'. Must be one of: {valid_data_types}")
 
-        # Create or use provided producer
-        self.producer = producer or MarketDataProducer()
+        # Validate schema version
+        if schema_version not in ("v1", "v2"):
+            raise ValueError(f"Invalid schema_version '{schema_version}'. Must be 'v1' or 'v2'")
+
+        # Create or use provided producer (with schema_version)
+        self.producer = producer or MarketDataProducer(schema_version=schema_version)
 
         # Dead Letter Queue setup
         self.dlq_file = dlq_file
@@ -157,6 +186,8 @@ class BatchLoader:
             asset_class=asset_class,
             exchange=exchange,
             data_type=data_type,
+            schema_version=schema_version,
+            currency=currency,
             dlq_enabled=dlq_file is not None,
         )
 
@@ -236,14 +267,19 @@ class BatchLoader:
     def _parse_trade_row(self, row: dict) -> dict:
         """Parse trade CSV row.
 
+        V2 schema:
         Required fields: symbol, exchange_timestamp, price, quantity, side,
                         sequence_number, trade_id
+        Optional v2 fields: company_id, qualifiers, venue (mapped to vendor_data)
+
+        V1 schema (legacy):
+        Same required fields with simplified structure
 
         Args:
             row: Raw CSV row
 
         Returns:
-            Parsed trade record
+            Parsed trade record (v2 format if schema_version='v2')
 
         Raises:
             ValueError: If required fields missing or invalid
@@ -263,10 +299,55 @@ class BatchLoader:
         if missing:
             raise ValueError(f"Missing required fields: {missing}")
 
-        # Type conversions
+        # Parse timestamp (ISO format string → datetime)
+        try:
+            timestamp = datetime.fromisoformat(row["exchange_timestamp"].replace("Z", "+00:00"))
+        except ValueError as e:
+            raise ValueError(f"Invalid timestamp format: {row['exchange_timestamp']}") from e
+
+        # Map side to enum (buy → BUY, sell → SELL)
+        side_mapping = {
+            "buy": "BUY",
+            "sell": "SELL",
+            "sell_short": "SELL_SHORT",
+            "unknown": "UNKNOWN",
+        }
+        side_lower = row["side"].lower()
+        side_enum = side_mapping.get(side_lower, "UNKNOWN")
+
+        # Use v2 builder for v2 schema
+        if self.schema_version == "v2":
+            # Build vendor_data from ASX-specific fields (if present)
+            vendor_data = None
+            if any(k in row for k in ["company_id", "qualifiers", "venue"]):
+                vendor_data = {}
+                if row.get("company_id"):
+                    vendor_data["company_id"] = str(row["company_id"])
+                if row.get("qualifiers"):
+                    vendor_data["qualifiers"] = str(row["qualifiers"])
+                if row.get("venue"):
+                    vendor_data["venue"] = str(row["venue"])
+
+            # Build v2 trade message
+            return build_trade_v2(
+                symbol=row["symbol"],
+                exchange=self.exchange.upper(),
+                asset_class=self.asset_class,
+                timestamp=timestamp,
+                price=Decimal(str(row["price"])),
+                quantity=Decimal(str(row["quantity"])),
+                currency=self.currency,
+                side=side_enum,
+                trade_id=row["trade_id"],
+                message_id=str(uuid.uuid4()),
+                source_sequence=int(row["sequence_number"]),
+                vendor_data=vendor_data,
+            )
+
+        # V1 legacy format
         return {
             "symbol": row["symbol"],
-            "exchange_timestamp": row["exchange_timestamp"],  # ISO format string
+            "exchange_timestamp": row["exchange_timestamp"],
             "price": float(row["price"]),
             "quantity": int(row["quantity"]),
             "side": row["side"].lower(),
@@ -277,14 +358,19 @@ class BatchLoader:
     def _parse_quote_row(self, row: dict) -> dict:
         """Parse quote CSV row.
 
+        V2 schema:
         Required fields: symbol, exchange_timestamp, bid_price, ask_price,
-                        bid_size, ask_size, sequence_number
+                        bid_quantity, ask_quantity, sequence_number
+        Optional v2 fields: company_id, qualifiers, venue (mapped to vendor_data)
+
+        V1 schema (legacy):
+        Same required fields with simplified structure
 
         Args:
             row: Raw CSV row
 
         Returns:
-            Parsed quote record
+            Parsed quote record (v2 format if schema_version='v2')
 
         Raises:
             ValueError: If required fields missing or invalid
@@ -303,6 +389,42 @@ class BatchLoader:
         if missing:
             raise ValueError(f"Missing required fields: {missing}")
 
+        # Parse timestamp (ISO format string → datetime)
+        try:
+            timestamp = datetime.fromisoformat(row["exchange_timestamp"].replace("Z", "+00:00"))
+        except ValueError as e:
+            raise ValueError(f"Invalid timestamp format: {row['exchange_timestamp']}") from e
+
+        # Use v2 builder for v2 schema
+        if self.schema_version == "v2":
+            # Build vendor_data from ASX-specific fields (if present)
+            vendor_data = None
+            if any(k in row for k in ["company_id", "qualifiers", "venue"]):
+                vendor_data = {}
+                if row.get("company_id"):
+                    vendor_data["company_id"] = str(row["company_id"])
+                if row.get("qualifiers"):
+                    vendor_data["qualifiers"] = str(row["qualifiers"])
+                if row.get("venue"):
+                    vendor_data["venue"] = str(row["venue"])
+
+            # Build v2 quote message
+            return build_quote_v2(
+                symbol=row["symbol"],
+                exchange=self.exchange.upper(),
+                asset_class=self.asset_class,
+                timestamp=timestamp,
+                bid_price=Decimal(str(row["bid_price"])),
+                bid_quantity=Decimal(str(row["bid_size"])),
+                ask_price=Decimal(str(row["ask_price"])),
+                ask_quantity=Decimal(str(row["ask_size"])),
+                currency=self.currency,
+                message_id=str(uuid.uuid4()),
+                source_sequence=int(row["sequence_number"]),
+                vendor_data=vendor_data,
+            )
+
+        # V1 legacy format
         return {
             "symbol": row["symbol"],
             "exchange_timestamp": row["exchange_timestamp"],
@@ -574,20 +696,32 @@ def load(
     flush_interval: int = typer.Option(100, help="Flush producer every N records"),
     dlq_file: Path | None = typer.Option(None, help="Dead letter queue file for errors"),
     no_progress: bool = typer.Option(False, help="Disable progress bar"),
+    schema_version: str = typer.Option("v2", help="Schema version ('v1' or 'v2')"),
+    currency: str = typer.Option("USD", help="Currency code (e.g., 'USD', 'AUD')"),
 ):
     """Load CSV file into Kafka topics.
 
-    Example:
+    Example (v2 schema):
         python -m k2.ingestion.batch_loader load \\
             --csv data/asx_trades.csv \\
             --asset-class equities \\
             --exchange asx \\
             --data-type trades \\
+            --currency AUD \\
             --dlq-file errors.csv
+
+    Example (v1 legacy):
+        python -m k2.ingestion.batch_loader load \\
+            --csv data/asx_trades.csv \\
+            --asset-class equities \\
+            --exchange asx \\
+            --data-type trades \\
+            --schema-version v1
     """
     console.print("[cyan]K2 Batch Loader[/cyan]")
     console.print(f"CSV: {csv}")
     console.print(f"Target: {asset_class}.{data_type}.{exchange}")
+    console.print(f"Schema: {schema_version} | Currency: {currency}")
     console.print()
 
     loader = None
@@ -598,6 +732,8 @@ def load(
             exchange=exchange,
             data_type=data_type,
             dlq_file=dlq_file,
+            schema_version=schema_version,
+            currency=currency,
         )
 
         # Load CSV
@@ -638,6 +774,8 @@ def create_loader(
     data_type: str,
     producer: MarketDataProducer | None = None,
     dlq_file: Path | None = None,
+    schema_version: str = "v2",
+    currency: str = "USD",
 ) -> BatchLoader:
     """Factory function to create a BatchLoader instance.
 
@@ -647,12 +785,19 @@ def create_loader(
         data_type: Data type ('trades', 'quotes', 'reference_data')
         producer: Optional MarketDataProducer instance (creates new if None)
         dlq_file: Optional path to dead letter queue file
+        schema_version: Schema version - 'v1' or 'v2' (default: 'v2')
+        currency: Currency code (default: 'USD')
 
     Returns:
         BatchLoader: Configured batch loader instance
 
-    Example:
-        >>> loader = create_loader('equities', 'asx', 'trades')
+    Example (v2 schema):
+        >>> loader = create_loader('equities', 'asx', 'trades', currency='AUD')
+        >>> stats = loader.load_csv(Path('data/trades.csv'))
+        >>> loader.close()
+
+    Example (v1 legacy):
+        >>> loader = create_loader('equities', 'asx', 'trades', schema_version='v1')
         >>> stats = loader.load_csv(Path('data/trades.csv'))
         >>> loader.close()
     """
@@ -662,6 +807,8 @@ def create_loader(
         data_type=data_type,
         producer=producer,
         dlq_file=dlq_file,
+        schema_version=schema_version,
+        currency=currency,
     )
 
 
