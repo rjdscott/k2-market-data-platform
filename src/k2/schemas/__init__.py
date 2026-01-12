@@ -101,7 +101,7 @@ def list_available_schemas() -> list[str]:
     return [f.stem for f in schema_files]
 
 
-def register_schemas(schema_registry_url: str = None) -> dict[str, int]:
+def register_schemas(schema_registry_url: str = None, version: str = "v2") -> dict[str, int]:
     """Register all Avro schemas with Schema Registry using asset-class-level subjects.
 
     This function:
@@ -120,12 +120,14 @@ def register_schemas(schema_registry_url: str = None) -> dict[str, int]:
 
     Args:
         schema_registry_url: Schema Registry base URL (defaults to config)
+        version: Schema version to register - 'v1' or 'v2' (default: 'v2')
 
     Returns:
         Dictionary mapping subject names to schema IDs
 
     Raises:
         SchemaRegistryError: If registration fails
+        ValueError: If version is not 'v1' or 'v2'
     """
     from k2.common.config import config
     from k2.kafka import get_topic_builder
@@ -133,8 +135,13 @@ def register_schemas(schema_registry_url: str = None) -> dict[str, int]:
     if schema_registry_url is None:
         schema_registry_url = config.kafka.schema_registry_url
 
+    if version not in ("v1", "v2"):
+        raise ValueError(f"Invalid version: {version}. Must be 'v1' or 'v2'")
+
     logger.info(
-        "Registering schemas with asset-class-level subjects", registry_url=schema_registry_url,
+        "Registering schemas with asset-class-level subjects",
+        registry_url=schema_registry_url,
+        version=version,
     )
 
     client = SchemaRegistryClient({"url": schema_registry_url})
@@ -151,8 +158,8 @@ def register_schemas(schema_registry_url: str = None) -> dict[str, int]:
             schema_name = data_type_cfg["schema_name"]
 
             try:
-                # Load schema
-                schema_str = load_avro_schema(schema_name)
+                # Load schema with specified version
+                schema_str = load_avro_schema(schema_name, version=version)
                 schema = Schema(schema_str, schema_type="AVRO")
 
                 # Build subject name using asset-class-level pattern

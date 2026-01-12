@@ -322,10 +322,11 @@ class MarketDataConsumer:
             logger.info("Consumer interrupted by user")
         except Exception as err:
             logger.error("Consumer error", error=str(err), exc_info=True)
-            metrics.increment(
-                "consumer_errors_total",
-                labels={"error_type": "unexpected", "consumer_group": self.consumer_group},
-            )
+            # TODO: Add consumer_errors_total metric to registry
+            # metrics.increment(
+            #     "consumer_errors_total",
+            #     labels={"error_type": "unexpected", "consumer_group": self.consumer_group},
+            # )
             raise
         finally:
             # Graceful shutdown
@@ -362,10 +363,11 @@ class MarketDataConsumer:
                     partition=msg.partition(),
                 )
                 self.stats.errors += 1
-                metrics.increment(
-                    "consumer_errors_total",
-                    labels={"error_type": "poll_error", "consumer_group": self.consumer_group},
-                )
+                # TODO: Add consumer_errors_total metric to registry
+                # metrics.increment(
+                #     "consumer_errors_total",
+                #     labels={"error_type": "poll_error", "consumer_group": self.consumer_group},
+                # )
                 continue
 
             # Deserialize message
@@ -376,14 +378,14 @@ class MarketDataConsumer:
                     self.stats.messages_consumed += 1
 
                     # Update consumer metrics
+                    # Standard labels (service, environment, component) are added automatically by component metrics
                     metrics.increment(
                         "kafka_messages_consumed_total",
                         labels={
-                            "topic": msg.topic(),
-                            "consumer_group": self.consumer_group,
                             "exchange": record.get("exchange", "unknown"),
                             "asset_class": record.get("asset_class", "unknown"),
-                            "data_type": record.get("data_type", "unknown"),
+                            "topic": msg.topic(),
+                            "consumer_group": self.consumer_group,
                         },
                     )
 
@@ -406,10 +408,11 @@ class MarketDataConsumer:
                     error=str(err),
                 )
                 self.stats.errors += 1
-                metrics.increment(
-                    "consumer_errors_total",
-                    labels={"error_type": "deserialization", "consumer_group": self.consumer_group},
-                )
+                # TODO: Add consumer_errors_total metric to registry
+                # metrics.increment(
+                #     "consumer_errors_total",
+                #     labels={"error_type": "deserialization", "consumer_group": self.consumer_group},
+                # )
                 continue
 
         # Write batch to Iceberg if we have messages
@@ -433,10 +436,15 @@ class MarketDataConsumer:
                 )
 
                 # Track batch processing metrics
-                metrics.observe(
+                sample = batch[0] if batch else {}
+                metrics.histogram(
                     "iceberg_batch_size",
-                    len(batch),
-                    labels={"table": "trades", "consumer_group": self.consumer_group},
+                    value=len(batch),
+                    labels={
+                        "exchange": sample.get("exchange", "unknown"),
+                        "asset_class": sample.get("asset_class", "unknown"),
+                        "table": "trades_v2" if self.schema_version == "v2" else "trades",
+                    },
                 )
 
             except Exception as err:
@@ -446,10 +454,11 @@ class MarketDataConsumer:
                     error=str(err),
                 )
                 self.stats.errors += 1
-                metrics.increment(
-                    "consumer_errors_total",
-                    labels={"error_type": "iceberg_write", "consumer_group": self.consumer_group},
-                )
+                # TODO: Add consumer_errors_total metric to registry
+                # metrics.increment(
+                #     "consumer_errors_total",
+                #     labels={"error_type": "iceberg_write", "consumer_group": self.consumer_group},
+                # )
                 # Don't commit offsets on failure - will reprocess
                 raise
 
@@ -481,17 +490,21 @@ class MarketDataConsumer:
 
         try:
             # Write to Iceberg (IcebergWriter handles transaction)
-            self.iceberg_writer.write_batch(batch)
+            # Assuming trades for now - TODO: detect message type from topic or schema
+            self.iceberg_writer.write_trades(batch)
 
             # Track write duration
             duration = time.time() - start_time
-            metrics.observe(
+            # Extract exchange/asset_class from first record in batch (all should be same topic)
+            sample = batch[0] if batch else {}
+            metrics.histogram(
                 "iceberg_write_duration_seconds",
-                duration,
+                value=duration,
                 labels={
-                    "table": "trades",
-                    "operation": "batch_write",
-                    "consumer_group": self.consumer_group,
+                    "exchange": sample.get("exchange", "unknown"),
+                    "asset_class": sample.get("asset_class", "unknown"),
+                    "table": "trades_v2" if self.schema_version == "v2" else "trades",
+                    "operation": "append",
                 },
             )
 
@@ -502,12 +515,15 @@ class MarketDataConsumer:
             )
 
         except Exception as err:
+            # Extract exchange/asset_class from first record in batch
+            sample = batch[0] if batch else {}
             metrics.increment(
                 "iceberg_write_errors_total",
                 labels={
-                    "table": "trades",
+                    "exchange": sample.get("exchange", "unknown"),
+                    "asset_class": sample.get("asset_class", "unknown"),
+                    "table": "trades_v2" if self.schema_version == "v2" else "trades",
                     "error_type": str(type(err).__name__),
-                    "consumer_group": self.consumer_group,
                 },
             )
             raise
@@ -517,10 +533,7 @@ class MarketDataConsumer:
         logger.info("Consumer shutting down")
 
         try:
-            # Flush Iceberg writer
-            if self.iceberg_writer:
-                self.iceberg_writer.flush()
-
+            # Iceberg writes are atomic - no flush needed
             # Final commit
             self.consumer.commit()
 

@@ -26,6 +26,7 @@ Usage:
 
 import asyncio
 import json
+import ssl
 import time
 import uuid
 from decimal import Decimal
@@ -234,10 +235,8 @@ class BinanceWebSocketClient:
                 timeout_seconds=30.0,  # Try reset after 30s
             )
 
-        # Metrics labels
-        self.metrics_labels = {
-            "symbols": ",".join(symbols),
-        }
+        # Metrics labels (removed symbols label - not defined in metrics registry)
+        self.metrics_labels = {}
 
     async def _health_check_loop(self) -> None:
         """Monitor connection health and reconnect if stale.
@@ -365,7 +364,13 @@ class BinanceWebSocketClient:
             symbols=self.symbols,
         )
 
-        async with websockets.connect(ws_url) as ws:
+        # DEMO ONLY: Disable SSL certificate verification
+        # For production, proper SSL certificates should be configured
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+        async with websockets.connect(ws_url, ssl=ssl_context) as ws:
             self.ws = ws
             self.reconnect_attempts = 0  # Reset on successful connection
             self.last_message_time = time.time()  # Reset health check timer

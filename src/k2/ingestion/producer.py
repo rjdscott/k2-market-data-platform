@@ -193,7 +193,7 @@ class MarketDataProducer:
         )
         metrics.increment(
             "producer_initialized_total",
-            labels={"component_type": "producer", "schema_version": self.schema_version},
+            labels={"component_type": "producer"},  # Removed schema_version - not in metric definition
         )
 
     def _init_schema_registry(self):
@@ -327,10 +327,9 @@ class MarketDataProducer:
             self._total_errors += 1
             logger.error(
                 "Message delivery failed",
-                topic=topic,
                 partition_key=partition_key,
                 error=str(err),
-                **labels,
+                **labels,  # labels already contains 'topic'
             )
             metrics.increment(
                 "kafka_produce_errors_total",
@@ -340,11 +339,10 @@ class MarketDataProducer:
             self._total_produced += 1
             logger.debug(
                 "Message delivered",
-                topic=topic,
                 partition=msg.partition(),
                 offset=msg.offset(),
                 partition_key=partition_key,
-                **labels,
+                **labels,  # labels already contains 'topic'
             )
             metrics.increment(
                 "kafka_messages_produced_total",
@@ -422,9 +420,11 @@ class MarketDataProducer:
                         max_retries=self.max_retries,
                         **labels,  # Includes topic
                     )
+                    # Metric doesn't expect data_type, only error_type
+                    retry_labels = {k: v for k, v in labels.items() if k != "data_type"}
                     metrics.increment(
                         "kafka_produce_max_retries_exceeded_total",
-                        labels={**labels, "error_type": "buffer_error"},
+                        labels={**retry_labels, "error_type": "buffer_error"},
                     )
                     raise
 
@@ -452,9 +452,11 @@ class MarketDataProducer:
                         max_retries=self.max_retries,
                         **labels,  # Includes topic
                     )
+                    # Metric doesn't expect data_type, only error_type
+                    retry_labels = {k: v for k, v in labels.items() if k != "data_type"}
                     metrics.increment(
                         "kafka_produce_max_retries_exceeded_total",
-                        labels={**labels, "error_type": str(e)[:50]},
+                        labels={**retry_labels, "error_type": str(e)[:50]},
                     )
                     raise
 

@@ -484,7 +484,7 @@ services:
 
       # Binance Configuration
       K2_BINANCE_ENABLED: "true"
-      K2_BINANCE_SYMBOLS: BTCUSDT,ETHUSDT,BNBUSDT
+      K2_BINANCE_SYMBOLS: '["BTCUSDT", "ETHUSDT", "BNBUSDT"]'
       K2_BINANCE_WEBSOCKET_URL: wss://stream.binance.com:9443/stream
       K2_BINANCE_FAILOVER_URLS: '["wss://stream.binance.us:9443/stream"]'
 

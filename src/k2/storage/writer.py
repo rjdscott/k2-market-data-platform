@@ -171,7 +171,7 @@ class IcebergWriter:
     def write_trades(
         self,
         records: list[dict[str, Any]],
-        table_name: str = "market_data.trades",
+        table_name: str | None = None,
         exchange: str = "unknown",
         asset_class: str = "equities",
     ) -> int:
@@ -179,7 +179,9 @@ class IcebergWriter:
 
         Args:
             records: List of trade dictionaries matching schema
-            table_name: Fully qualified table name (namespace.table)
+            table_name: Fully qualified table name (namespace.table). If None, uses appropriate
+                       table based on schema_version: "market_data.trades_v2" for v2,
+                       "market_data.trades" for v1
             exchange: Exchange code for metrics (e.g., "asx", "nyse")
             asset_class: Asset class for metrics (e.g., "equities", "futures")
 
@@ -190,6 +192,10 @@ class IcebergWriter:
             NoSuchTableError: If table doesn't exist
             Exception: If write fails after retries
         """
+        # Default table based on schema version
+        if table_name is None:
+            table_name = "market_data.trades_v2" if self.schema_version == "v2" else "market_data.trades"
+
         if not records:
             logger.warning("No records to write", table=table_name)
             return 0
@@ -574,21 +580,26 @@ class IcebergWriter:
                 pa.field("quantity", pa.decimal128(18, 8), nullable=False),  # Decimal, not int64
                 pa.field("currency", pa.string(), nullable=False),
                 pa.field("side", pa.string(), nullable=False),  # enum stored as string
-                pa.field("trade_conditions", pa.list_(pa.string()), nullable=False),
+                pa.field("trade_conditions", pa.string(), nullable=True),  # JSON string for compatibility
                 pa.field("source_sequence", pa.int64(), nullable=True),
                 pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
                 pa.field("platform_sequence", pa.int64(), nullable=True),
                 pa.field("vendor_data", pa.string(), nullable=True),  # JSON string
+                pa.field("is_sample_data", pa.bool_(), nullable=False),
             ],
         )
 
         # Convert records, handling type conversions
         converted_records = []
         for record in records:
-            # Serialize vendor_data to JSON string if present
+            # Serialize vendor_data and trade_conditions to JSON strings if present
             vendor_data_json = None
             if record.get("vendor_data"):
                 vendor_data_json = json.dumps(record["vendor_data"])
+
+            trade_conditions_json = None
+            if record.get("trade_conditions"):
+                trade_conditions_json = json.dumps(record["trade_conditions"])
 
             converted = {
                 "message_id": record["message_id"],
@@ -609,11 +620,12 @@ class IcebergWriter:
                 ),
                 "currency": record["currency"],
                 "side": record["side"],  # enum value as string
-                "trade_conditions": record.get("trade_conditions", []),
+                "trade_conditions": trade_conditions_json,  # JSON string
                 "source_sequence": record.get("source_sequence"),
                 "ingestion_timestamp": record["ingestion_timestamp"],  # microseconds
                 "platform_sequence": record.get("platform_sequence"),
                 "vendor_data": vendor_data_json,
+                "is_sample_data": record.get("is_sample_data", False),
             }
             converted_records.append(converted)
 

@@ -181,7 +181,7 @@ DEDUPLICATION_CACHE_SIZE = Gauge(
 BINANCE_CONNECTION_STATUS = Gauge(
     "k2_binance_connection_status",
     "Binance WebSocket connection status (1=connected, 0=disconnected)",
-    STANDARD_LABELS + ["symbols"],  # symbols: comma-separated list
+    STANDARD_LABELS,  # Removed symbols label - use symbol label for per-symbol metrics
 )
 
 BINANCE_MESSAGES_RECEIVED_TOTAL = Counter(
@@ -211,7 +211,7 @@ BINANCE_CONNECTION_ERRORS_TOTAL = Counter(
 BINANCE_LAST_MESSAGE_TIMESTAMP_SECONDS = Gauge(
     "k2_binance_last_message_timestamp_seconds",
     "Timestamp of last message received from Binance (for health check)",
-    STANDARD_LABELS + ["symbols"],
+    STANDARD_LABELS,  # Removed symbols label - aggregate metric across all symbols
 )
 
 BINANCE_RECONNECT_DELAY_SECONDS = Gauge(
