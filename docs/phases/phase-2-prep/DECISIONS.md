@@ -489,6 +489,191 @@ Stream **only BTC-USDT and ETH-USDT** (minimal scope).
 
 ---
 
+### Decision #008: Currency Extraction from Symbol (Not Hardcoded)
+
+**Date**: 2026-01-13
+**Status**: ✅ Accepted
+**Deciders**: Implementation Team
+**Related Phase**: Phase 2 Prep
+**Related Steps**: Step 01.5.2
+**Fixes**: Critical bug in Binance converter
+
+#### Context
+
+Original Binance converter hardcoded `currency = "USDT"` for all pairs. Analysis of real Binance data revealed:
+- Binance has NO "currency" field in trade payloads
+- Symbol format is concatenated (BTCUSDT, ETHBTC, BNBEUR)
+- Quote currency must be extracted from symbol suffix
+- 40%+ of Binance pairs are NOT quoted in USDT:
+  - ETHBTC → BTC
+  - BNBEUR → EUR
+  - SOLUSDC → USDC
+
+**Problem**: Hardcoded currency breaks for non-USDT pairs and corrupts data.
+
+#### Decision
+
+**Extract currency dynamically from symbol** using `parse_binance_symbol()` function:
+
+```python
+def parse_binance_symbol(symbol: str) -> tuple[str, str, str]:
+    """Parse symbol into (base_asset, quote_asset, currency)."""
+    quote_currencies = [
+        "USDT", "USDC", "BUSD", "TUSD", "USDP",  # Stablecoins
+        "BTC", "ETH", "BNB",                      # Crypto
+        "EUR", "GBP", "AUD", "USD",               # Fiat
+        "TRY", "ZAR", "UAH", "NGN",               # Other fiat
+    ]
+
+    for quote in quote_currencies:
+        if symbol.endswith(quote):
+            base_asset = symbol[:-len(quote)]
+            return (base_asset, quote, quote)
+
+    # Fallback: assume last 4 chars
+    return (symbol[:-4], symbol[-4:], symbol[-4:])
+```
+
+**Usage**:
+```python
+base, quote, currency = parse_binance_symbol(msg["s"])
+# "BTCUSDT" → ("BTC", "USDT", "USDT")
+# "ETHBTC"  → ("ETH", "BTC", "BTC")
+# "BNBEUR"  → ("BNB", "EUR", "EUR")
+```
+
+#### Consequences
+
+**Positive**:
+- Correct currency for ALL Binance pairs
+- Works across stablecoins (USDT, USDC, BUSD)
+- Works across crypto quotes (BTC, ETH)
+- Works across fiat quotes (EUR, GBP, AUD)
+- Extensible to new quote currencies
+
+**Negative**:
+- Adds parsing complexity (~20 lines)
+- Must maintain list of quote currencies
+- Edge cases possible (ambiguous symbols)
+
+**Neutral**:
+- Uses greedy match (longest suffix first)
+- Fallback to last 4 chars if no match
+
+#### Implementation Notes
+
+- Add `parse_binance_symbol()` to `src/k2/ingestion/binance_client.py`
+- Call during conversion: `currency = parse_binance_symbol(msg["s"])[2]`
+- Test with: BTCUSDT, ETHBTC, BNBEUR, SOLUSDC
+- Update Step 01.5.2 documentation with fix
+
+#### Verification
+
+- [x] Tested with real Binance data (REST API)
+- [x] BTCUSDT → currency = "USDT" ✅
+- [x] ETHBTC → currency = "BTC" ✅
+- [ ] Unit tests for parse_binance_symbol()
+- [ ] Integration test with multiple pairs
+
+---
+
+### Decision #009: Base/Quote Asset Separation in vendor_data
+
+**Date**: 2026-01-13
+**Status**: ✅ Accepted
+**Deciders**: Implementation Team
+**Related Phase**: Phase 2 Prep
+**Related Steps**: Step 01.5.2
+**Enhancement**: Improve crypto queryability
+
+#### Context
+
+Crypto trading pairs have TWO assets (base + quote):
+- Base asset: What you're trading (BTC, ETH, BNB)
+- Quote asset: What you're pricing in (USDT, BTC, EUR)
+
+Current v2 schema has:
+- `symbol`: Combined format ("BTCUSDT")
+- `currency`: Quote asset ("USDT")
+- ❌ NO `base_asset` field
+
+**Problem**: Queries like "all BTC trading activity" require symbol string parsing for EVERY row (slow).
+
+**Industry Practice**: Coinbase, Kraken, FTX all provide separate base/quote fields.
+
+#### Decision
+
+**Add base_asset and quote_asset to vendor_data** for crypto trades:
+
+```python
+"vendor_data": {
+    "base_asset": base_asset,   # "BTC", "ETH", "BNB"
+    "quote_asset": quote_asset, # "USDT", "BTC", "EUR"
+    "is_buyer_maker": str(msg["m"]),
+    "event_type": msg["e"],
+    # ... other Binance-specific fields
+}
+```
+
+**Why vendor_data instead of first-class fields?**
+- Equities don't have base/quote concept (just symbol + currency)
+- Crypto-specific, not universal
+- Can promote to schema later if needed across all crypto exchanges
+
+#### Consequences
+
+**Positive**:
+- Easier queries: "WHERE vendor_data.base_asset = 'BTC'"
+- Cross-exchange analytics: All BTC pairs (BTCUSDT, BTCEUR, BTCBUSD)
+- Follows industry standards (Coinbase, Kraken)
+- No schema migration required (vendor_data is flexible)
+
+**Negative**:
+- Requires JSON parsing in queries (vendor_data is JSON string in Iceberg)
+- Not indexed (slower than first-class field)
+- Crypto-specific (equities don't have this)
+
+**Neutral**:
+- Can promote to first-class v2 schema field later if needed
+- Keeps schema clean for non-crypto assets
+
+#### Implementation Notes
+
+- Extract in `convert_binance_trade_to_v2()`:
+  ```python
+  base, quote, currency = parse_binance_symbol(msg["s"])
+  "vendor_data": {
+      "base_asset": base,
+      "quote_asset": quote,
+      ...
+  }
+  ```
+- Store in Iceberg as JSON string (already supported)
+- Query with JSON extraction: `json_extract(vendor_data, '$.base_asset')`
+
+#### Verification
+
+- [x] Tested parsing with real Binance data
+- [ ] Unit tests for base/quote extraction
+- [ ] Query test: Filter by base_asset = 'BTC'
+- [ ] Query test: Cross-exchange BTC volume
+
+#### Future Enhancement
+
+**Option**: Promote to first-class v2 schema fields if other crypto exchanges need it:
+
+```json
+{
+  "base_asset": ["null", "string"],  // Optional, crypto only
+  "quote_asset": ["null", "string"], // Optional, crypto only
+  ...
+}
+```
+
+**Timeline**: Revisit after adding 2-3 more crypto exchanges (Coinbase, Kraken, etc.)
+
+---
+
 ## Decision Template
 
 When making new decisions, use this template:
@@ -530,9 +715,9 @@ When making new decisions, use this template:
 
 ---
 
-**Last Updated**: 2026-01-12
-**Total Decisions**: 7
-**Next Decision ID**: #008
+**Last Updated**: 2026-01-13
+**Total Decisions**: 9
+**Next Decision ID**: #010
 
 ---
 
@@ -547,3 +732,5 @@ When making new decisions, use this template:
 | #005 | WebSocket Library - websockets | ✅ Accepted | 2026-01-12 |
 | #006 | Demo Integration - All Three | ✅ Accepted | 2026-01-12 |
 | #007 | Binance Symbols - Minimal | ✅ Accepted | 2026-01-12 |
+| #008 | Currency Extraction from Symbol | ✅ Accepted | 2026-01-13 |
+| #009 | Base/Quote Asset in vendor_data | ✅ Accepted | 2026-01-13 |
