@@ -1,9 +1,9 @@
 # Phase 2 Prep: Implementation Progress
 
 **Last Updated**: 2026-01-13
-**Overall Progress**: 47% (7/15 steps complete)
+**Overall Progress**: 67% (10/15 steps complete)
 **Estimated Duration**: 13-18 days total
-**Elapsed Time**: ~4 days (schema evolution + bug fixes)
+**Elapsed Time**: ~4.5 days (schema evolution + bug fixes + binance client)
 
 ---
 
@@ -18,9 +18,9 @@ Phase 2 Prep Status:
 • [✅] 00.5 - Update query engine for v2
 • [✅] 00.6 - Update tests
 • [✅] 00.7 - Documentation
-• [ ] 01.5.1 - Binance WebSocket Client
-• [ ] 01.5.2 - Message Conversion
-• [ ] 01.5.3 - Streaming Service
+• [✅] 01.5.1 - Binance WebSocket Client
+• [✅] 01.5.2 - Message Conversion
+• [✅] 01.5.3 - Streaming Service
 • [ ] 01.5.4 - Error Handling & Resilience
 • [ ] 01.5.5 - Testing
 • [ ] 01.5.6 - Docker Compose Integration
@@ -267,85 +267,86 @@ After completing Steps 00.1-00.7, a comprehensive staff-level code review identi
 
 ## Part 2: Binance Streaming (Phase 1.5)
 
-**Progress**: 0/8 substeps complete (0%)
+**Progress**: 3/8 substeps complete (37.5%)
 **Estimated**: 3-5 days (40 hours)
-**Actual**: Not started
+**Actual**: ~0.5 days (WebSocket client + conversion + streaming service)
 
 ### Step 01.5.1: Binance WebSocket Client
 
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Estimated Time**: 6 hours
-**Actual Time**: -
-**Completion**: 0%
+**Actual Time**: ~3 hours
+**Completion**: 100%
 
 **Tasks**:
-- [ ] Create `src/k2/ingestion/binance_client.py`
-- [ ] Implement `BinanceWebSocketClient` class
-- [ ] Connect to `wss://stream.binance.com:9443/stream`
-- [ ] Subscribe to BTC-USDT and ETH-USDT trade streams
-- [ ] Parse JSON messages
-- [ ] Handle connection events (open, close, error)
-- [ ] Add `BinanceConfig` to config.py
+- [x] Create `src/k2/ingestion/binance_client.py`
+- [x] Implement `BinanceWebSocketClient` class
+- [x] Connect to `wss://stream.binance.com:9443/stream`
+- [x] Subscribe to BTC-USDT and ETH-USDT trade streams
+- [x] Parse JSON messages
+- [x] Handle connection events (open, close, error)
+- [x] Add `BinanceConfig` to config.py
 
 **Deliverables**:
-- `src/k2/ingestion/binance_client.py`
-- Updated `src/k2/common/config.py`
+- `src/k2/ingestion/binance_client.py` ✅
+- Updated `src/k2/common/config.py` ✅
+- `scripts/test_binance_stream.py` (test/demo script) ✅
 
-**Notes**: -
+**Notes**: Full async WebSocket client with automatic reconnection (exponential backoff 5s→10s→20s→40s), multi-symbol support, comprehensive error handling. Includes `parse_binance_symbol()` for dynamic currency extraction and `convert_binance_trade_to_v2()` for message conversion.
 
-**Decisions Made**: -
+**Decisions Made**: Decision #008 - Currency Extraction from Symbol, Decision #009 - Base/Quote Asset in vendor_data (documented in DECISIONS.md)
 
-**Commit**: `feat(binance): add websocket client for trade streams`
+**Commit**: `feat(binance): add websocket client for trade streaming` (e998dd1)
 
 ---
 
 ### Step 01.5.2: Message Conversion
 
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Estimated Time**: 4 hours
-**Actual Time**: -
-**Completion**: 0%
+**Actual Time**: ~2 hours (integrated with 01.5.1)
+**Completion**: 100%
 
 **Tasks**:
-- [ ] Add `convert_binance_trade_to_v2()` converter
-- [ ] Map Binance fields to v2 schema
-- [ ] Handle side mapping (buyer maker → SELL aggressor)
-- [ ] Add vendor_data for Binance-specific fields
-- [ ] Add validation and error handling
+- [x] Add `convert_binance_trade_to_v2()` converter
+- [x] Map Binance fields to v2 schema
+- [x] Handle side mapping (buyer maker → SELL aggressor)
+- [x] Add vendor_data for Binance-specific fields (base_asset, quote_asset, is_buyer_maker, event_time, trade_time)
+- [x] Add validation and error handling (`_validate_binance_message()`)
 
 **Deliverables**:
-- Message converter in binance_client.py
+- Message converter in binance_client.py ✅
 
-**Notes**: -
+**Notes**: Implemented as part of binance_client.py. Includes dynamic currency extraction via `parse_binance_symbol()` function that supports multiple quote currencies (USDT, BTC, EUR, etc.). Fixed critical bug from original plan that hardcoded currency="USDT".
 
-**Decisions Made**: -
+**Decisions Made**: Decision #008 - Currency Extraction from Symbol (documented in DECISIONS.md)
 
-**Commit**: `feat(binance): add message converter to v2 schema`
+**Commit**: Integrated with `feat(binance): add websocket client for trade streaming` (e998dd1)
 
 ---
 
 ### Step 01.5.3: Streaming Service
 
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Estimated Time**: 6 hours
-**Actual Time**: -
-**Completion**: 0%
+**Actual Time**: ~2 hours
+**Completion**: 100%
 
 **Tasks**:
-- [ ] Create `scripts/binance_stream.py` daemon
-- [ ] Integrate BinanceWebSocketClient with MarketDataProducer
-- [ ] Add CLI arguments (--symbols, --daemon, --log-level)
-- [ ] Add graceful shutdown (SIGINT/SIGTERM)
-- [ ] Test streaming: Binance → Kafka
+- [x] Create `scripts/binance_stream.py` daemon
+- [x] Integrate BinanceWebSocketClient with MarketDataProducer
+- [x] Add CLI arguments (--symbols, --daemon, --log-level)
+- [x] Add graceful shutdown (SIGINT/SIGTERM)
+- [x] Test streaming: Binance → Kafka
 
 **Deliverables**:
-- `scripts/binance_stream.py`
+- `scripts/binance_stream.py` ✅
 
-**Notes**: -
+**Notes**: Production-ready streaming daemon with comprehensive features: graceful shutdown sequence (disconnect WebSocket → wait for task → flush producer → close), statistics tracking (trades received/produced, errors, retries), Rich console output with progress indicators, daemon mode for background operation. Streams to Kafka topic: market.crypto.trades
 
-**Decisions Made**: -
+**Decisions Made**: None (implementation followed established patterns)
 
-**Commit**: `feat(binance): add streaming service daemon`
+**Commit**: `feat(binance): add streaming service daemon for production use` (eeab262)
 
 ---
 
