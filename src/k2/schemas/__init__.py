@@ -37,11 +37,14 @@ logger = structlog.get_logger()
 SCHEMA_DIR = Path(__file__).parent
 
 
-def load_avro_schema(schema_name: str) -> str:
+def load_avro_schema(schema_name: str, version: str = "v1") -> str:
     """Load Avro schema from .avsc file.
 
+    Supports both v1 (legacy ASX-specific) and v2 (industry-standard) schemas.
+
     Args:
-        schema_name: Name of schema file without extension (e.g., 'trade')
+        schema_name: Name of schema file without extension (e.g., 'trade', 'quote')
+        version: Schema version - 'v1' (default) or 'v2'
 
     Returns:
         Schema definition as JSON string
@@ -49,8 +52,24 @@ def load_avro_schema(schema_name: str) -> str:
     Raises:
         FileNotFoundError: If schema file doesn't exist
         json.JSONDecodeError: If schema file is not valid JSON
+        ValueError: If version is not 'v1' or 'v2'
+
+    Examples:
+        >>> # Load v1 schema (legacy)
+        >>> schema_v1 = load_avro_schema('trade', version='v1')
+        >>> # Load v2 schema (industry-standard)
+        >>> schema_v2 = load_avro_schema('trade', version='v2')
     """
-    schema_path = SCHEMA_DIR / f"{schema_name}.avsc"
+    if version not in ("v1", "v2"):
+        raise ValueError(f"Invalid version: {version}. Must be 'v1' or 'v2'")
+
+    # Determine filename based on version
+    if version == "v2":
+        filename = f"{schema_name}_v2.avsc"
+    else:
+        filename = f"{schema_name}.avsc"
+
+    schema_path = SCHEMA_DIR / filename
 
     if not schema_path.exists():
         raise FileNotFoundError(
@@ -67,7 +86,7 @@ def load_avro_schema(schema_name: str) -> str:
         logger.error("Invalid JSON in schema file", schema=schema_name, error=str(e))
         raise
 
-    logger.debug("Schema loaded", schema=schema_name, path=str(schema_path))
+    logger.debug("Schema loaded", schema=schema_name, version=version, path=str(schema_path))
 
     return schema_str
 

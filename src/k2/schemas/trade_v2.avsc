@@ -1,0 +1,123 @@
+{
+  "type": "record",
+  "name": "TradeV2",
+  "namespace": "com.k2.marketdata",
+  "doc": "Industry-standard trade execution event (v2). Supports multi-source ingestion with hybrid schema approach: core standard fields + vendor-specific extensions.",
+  "fields": [
+    {
+      "name": "message_id",
+      "type": "string",
+      "doc": "Unique message identifier (UUID v4) for deduplication. Generated at ingestion time."
+    },
+    {
+      "name": "trade_id",
+      "type": "string",
+      "doc": "Exchange-specific trade identifier. Format: {EXCHANGE}-{trade_id} (e.g., 'ASX-123456', 'BINANCE-789012')"
+    },
+    {
+      "name": "symbol",
+      "type": "string",
+      "doc": "Trading symbol. Examples: 'BHP' (equities), 'BTCUSDT' (crypto), 'ESZ3' (futures)"
+    },
+    {
+      "name": "exchange",
+      "type": "string",
+      "doc": "Exchange code. Examples: 'ASX', 'BINANCE', 'NYSE', 'CME'"
+    },
+    {
+      "name": "asset_class",
+      "type": {
+        "type": "enum",
+        "name": "AssetClass",
+        "namespace": "com.k2.marketdata",
+        "symbols": ["equities", "crypto", "futures", "options"],
+        "doc": "Asset class categorization for multi-asset platform support"
+      },
+      "doc": "Asset class: equities (stocks), crypto (cryptocurrencies), futures, options"
+    },
+    {
+      "name": "timestamp",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-micros"
+      },
+      "doc": "Exchange-reported trade execution timestamp in microseconds (UTC). Microsecond precision supports high-frequency data sources."
+    },
+    {
+      "name": "price",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 18,
+        "scale": 8
+      },
+      "doc": "Trade execution price. Decimal (18,8) supports both traditional equities (e.g., 45.67) and crypto (e.g., 0.00012345)"
+    },
+    {
+      "name": "quantity",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 18,
+        "scale": 8
+      },
+      "doc": "Trade quantity (shares, contracts, tokens). Decimal (18,8) supports fractional crypto quantities (e.g., 0.05 BTC)"
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "Currency code (ISO 4217 for fiat, ticker for crypto). Examples: 'AUD', 'USD', 'USDT', 'BTC'"
+    },
+    {
+      "name": "side",
+      "type": {
+        "type": "enum",
+        "name": "TradeSide",
+        "namespace": "com.k2.marketdata",
+        "symbols": ["BUY", "SELL", "SELL_SHORT", "UNKNOWN"],
+        "doc": "Trade side from aggressor (market taker) perspective"
+      },
+      "doc": "Trade side: BUY (aggressor bought), SELL (aggressor sold), SELL_SHORT (short sale), UNKNOWN (side not determinable)"
+    },
+    {
+      "name": "trade_conditions",
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "doc": "Array of trade condition codes (exchange-specific). Examples: ASX ['0'] (normal), ['C'] (cash trade), ['X'] (crossing). Empty array if no conditions."
+    },
+    {
+      "name": "source_sequence",
+      "type": ["null", "long"],
+      "default": null,
+      "doc": "Exchange-provided sequence number (if available). Used for gap detection and ordering. Null if exchange doesn't provide."
+    },
+    {
+      "name": "ingestion_timestamp",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-micros"
+      },
+      "doc": "Platform ingestion timestamp in microseconds (UTC). Used for latency calculation: ingestion_timestamp - timestamp"
+    },
+    {
+      "name": "platform_sequence",
+      "type": ["null", "long"],
+      "default": null,
+      "doc": "Platform-assigned sequence number (auto-increment per partition). Used for ordering and gap detection within platform."
+    },
+    {
+      "name": "vendor_data",
+      "type": [
+        "null",
+        {
+          "type": "map",
+          "values": "string"
+        }
+      ],
+      "default": null,
+      "doc": "Exchange-specific fields as key-value pairs. Examples: ASX {'company_id': '123', 'qualifiers': '0', 'venue': 'X'}, Binance {'is_buyer_maker': 'true', 'event_type': 'trade'}. Stored as JSON string in Iceberg."
+    }
+  ]
+}
