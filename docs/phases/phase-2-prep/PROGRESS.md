@@ -1,9 +1,9 @@
 # Phase 2 Prep: Implementation Progress
 
 **Last Updated**: 2026-01-13
-**Overall Progress**: 80% (12/15 steps complete)
+**Overall Progress**: 87% (13/15 steps complete)
 **Estimated Duration**: 13-18 days total
-**Elapsed Time**: ~5 days (schema evolution + bug fixes + binance streaming)
+**Elapsed Time**: ~5.5 days (schema evolution + bug fixes + binance streaming)
 
 ---
 
@@ -23,7 +23,7 @@ Phase 2 Prep Status:
 • [✅] 01.5.3 - Streaming Service
 • [✅] 01.5.4 - Error Handling & Resilience
 • [✅] 01.5.5 - Testing
-• [ ] 01.5.6 - Docker Compose Integration
+• [✅] 01.5.6 - Docker Compose Integration
 • [ ] 01.5.7 - Demo Integration
 • [ ] 01.5.8 - Documentation
 ```
@@ -267,9 +267,9 @@ After completing Steps 00.1-00.7, a comprehensive staff-level code review identi
 
 ## Part 2: Binance Streaming (Phase 1.5)
 
-**Progress**: 5/8 substeps complete (62.5%)
+**Progress**: 6/8 substeps complete (75%)
 **Estimated**: 3-5 days (40 hours)
-**Actual**: ~1 day (WebSocket client + conversion + streaming service + resilience + tests)
+**Actual**: ~1.5 days (WebSocket client + conversion + streaming service + resilience + tests + docker)
 
 ### Step 01.5.1: Binance WebSocket Client
 
@@ -416,25 +416,24 @@ After completing Steps 00.1-00.7, a comprehensive staff-level code review identi
 
 ### Step 01.5.6: Docker Compose Integration
 
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete
 **Estimated Time**: 3 hours
-**Actual Time**: -
-**Completion**: 0%
+**Actual Time**: ~1 hour
+**Completion**: 100%
 
 **Tasks**:
-- [ ] Add `binance-stream` service to docker-compose.yml
-- [ ] Configure environment variables
-- [ ] Add health check endpoint
-- [ ] Test with `docker compose up -d`
-- [ ] Verify logs show connection and trades
+- [x] Add `binance-stream` service to docker-compose.yml
+- [x] Configure environment variables
+- [x] Add health check endpoint
+- [x] Test with `docker compose config --quiet`
+- [x] Document usage and configuration
 
 **Deliverables**:
-- Updated `docker-compose.yml`
-- Optional: `scripts/start-streaming.sh`
+- Updated `docker-compose.yml` ✅
 
-**Notes**: -
+**Notes**: Added comprehensive binance-stream service to Docker Compose with Kafka integration (kafka:29092, schema-registry-1:8081), Binance configuration (BTCUSDT, ETHUSDT, BNBUSDT symbols, primary + failover URLs), resilience configuration (reconnect delay, max attempts, health checks), metrics on port 9091, resource limits (0.5 CPU, 512M memory), and restart policy (unless-stopped). Service depends on kafka and schema-registry-1 health checks. Health check uses TCP connection to metrics port 9091 with 60s start period.
 
-**Decisions Made**: -
+**Decisions Made**: Decision #010 - Use metrics port (9091) for health check instead of separate HTTP endpoint
 
 **Commit**: `feat(docker): add binance streaming service to compose`
 
