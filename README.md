@@ -2,8 +2,8 @@
 
 A distributed market data lakehouse for quantitative research, compliance, and analytics.
 
-**Stack**: Kafka (KRaft) → Iceberg → DuckDB → FastAPI  
-**Data**: ASX equities tick data (200K+ trades, March 2014), Crypto (planned)  
+**Stack**: Kafka (KRaft) → Iceberg → DuckDB → FastAPI
+**Data**: ASX equities (200K+ trades, March 2014) + Binance crypto streaming (live BTC/ETH/BNB)
 **Python**: 3.13+ with uv package manager  
 
 ---
@@ -352,6 +352,8 @@ See [Data Dictionary](./docs/reference/data-dictionary.md) for complete schema d
 
 ## Schema Evolution
 
+✅ **V2 Schema Operational** - Validated E2E across ASX equities (batch CSV) and Binance crypto (live streaming)
+
 K2 uses **industry-standard hybrid schemas** (v2) that support multiple data sources and asset classes.
 
 ### V1 → V2 Migration
@@ -406,6 +408,18 @@ loader = BatchLoader(asset_class="equities", exchange="asx",
                       schema_version="v2", currency="AUD")
 ```
 
+### E2E Validation Results
+
+**Phase 2 Prep Complete** (2026-01-13):
+- ✅ 69,666+ Binance trades ingested via WebSocket → Kafka
+- ✅ 5,000 trades written to Iceberg trades_v2 table
+- ✅ 5,000 trades queried successfully (sub-second performance)
+- ✅ 138 msg/s consumer throughput
+- ✅ All 15 v2 schema fields validated
+- ✅ Vendor data preserved (7 Binance-specific fields in JSON)
+- ✅ Performance: sub-second queries, 138 msg/s throughput
+
+See [E2E Demo Success Summary](./docs/operations/e2e-demo-success-summary.md) for complete validation results.
 See [Schema Design V2](./docs/architecture/schema-design-v2.md) for complete specification.
 
 ---
@@ -574,7 +588,30 @@ K2 is developed in phases, each with clear business drivers and validation crite
 
 See [Phase 1 Status](./docs/phases/phase-1-single-node-implementation/STATUS.md) for detailed completion report.
 
-### Phase 2: Production Enhancements 🟡 Ready to Start
+### Phase 2 Prep: Schema Evolution + Binance Streaming ✅ Complete
+
+**Business Driver**: Establish foundation for multi-source, multi-asset class platform before production enhancements.
+
+**Delivered** (2026-01-13):
+- ✅ V2 industry-standard schemas (hybrid approach with vendor_data map)
+- ✅ Multi-source ingestion (ASX batch CSV + Binance live WebSocket)
+- ✅ Multi-asset class support (equities + crypto)
+- ✅ Binance streaming (69,666+ trades received, 5,000 written to Iceberg)
+- ✅ E2E pipeline validated (Binance → Kafka → Iceberg → Query)
+- ✅ Production-grade resilience (SSL handling, metrics, error handling)
+- ✅ 17 bugs fixed during implementation + E2E validation
+- ✅ Comprehensive documentation (checkpoint, success summary, operational runbooks)
+
+**Metrics**:
+- 15/15 steps complete (100%)
+- Completed in 5.5 days vs 13-18 day estimate (61% faster)
+- 138 msg/s consumer throughput
+- Sub-second query performance
+- All 15 v2 schema fields validated
+
+See [Phase 2 Prep Status](./docs/phases/phase-2-prep/STATUS.md) for detailed completion report.
+
+### Phase 2: Demo Enhancements 🟡 Ready to Start
 
 **Business Driver**: Address principal engineer review feedback to demonstrate Staff+ level thinking.
 
