@@ -74,11 +74,15 @@ class QueryEngine:
     - Predicate pushdown for partition pruning
     - Query performance metrics
     - Connection pooling (reuse connection)
+    - Support for both v1 (legacy) and v2 (industry-standard) schemas
 
     Usage:
-        engine = QueryEngine()
+        # Query v2 tables (default)
+        engine = QueryEngine(table_version="v2")
+        trades = engine.query_trades(symbol="BHP", limit=100)
 
-        # Query with filters
+        # Query v1 legacy tables
+        engine = QueryEngine(table_version="v1")
         trades = engine.query_trades(symbol="BHP", limit=100)
 
         # Get market summary
@@ -94,6 +98,7 @@ class QueryEngine:
         s3_access_key: str | None = None,
         s3_secret_key: str | None = None,
         warehouse_path: str | None = None,
+        table_version: str = "v2",
     ):
         """Initialize DuckDB query engine.
 
@@ -102,11 +107,19 @@ class QueryEngine:
             s3_access_key: S3 access key (defaults to config)
             s3_secret_key: S3 secret key (defaults to config)
             warehouse_path: Iceberg warehouse path (defaults to config)
+            table_version: Table schema version - 'v1' or 'v2' (default: 'v2')
+
+        Raises:
+            ValueError: If table_version is invalid
         """
+        if table_version not in ("v1", "v2"):
+            raise ValueError(f"Invalid table_version '{table_version}'. Must be 'v1' or 'v2'")
+
         self.s3_endpoint = s3_endpoint or config.iceberg.s3_endpoint
         self.s3_access_key = s3_access_key or config.iceberg.s3_access_key
         self.s3_secret_key = s3_secret_key or config.iceberg.s3_secret_key
         self.warehouse_path = warehouse_path or config.iceberg.warehouse
+        self.table_version = table_version
 
         # Remove http(s):// prefix for DuckDB endpoint
         self._s3_endpoint_host = self.s3_endpoint.replace("http://", "").replace("https://", "")
@@ -119,6 +132,7 @@ class QueryEngine:
             "Query engine initialized",
             s3_endpoint=self.s3_endpoint,
             warehouse_path=self.warehouse_path,
+            table_version=table_version,
         )
 
     def _init_connection(self) -> None:
@@ -203,7 +217,7 @@ class QueryEngine:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         limit: int = 1000,
-        table_name: str = "market_data.trades",
+        table_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Query trade records with optional filters.
 
@@ -213,19 +227,33 @@ class QueryEngine:
             start_time: Filter trades after this time
             end_time: Filter trades before this time
             limit: Maximum records to return (default: 1000)
-            table_name: Iceberg table name
+            table_name: Iceberg table name (default: auto-determined from table_version)
 
         Returns:
-            List of trade dictionaries
+            List of trade dictionaries (schema depends on table_version)
 
-        Example:
+        Example (v2):
             trades = engine.query_trades(
                 symbol="BHP",
                 start_time=datetime(2024, 1, 1),
                 limit=100
             )
+            # Returns: message_id, trade_id, symbol, exchange, asset_class, timestamp,
+            #          price, quantity, currency, side, ...
+
+        Example (v1 legacy):
+            engine = QueryEngine(table_version="v1")
+            trades = engine.query_trades(symbol="BHP")
+            # Returns: symbol, company_id, exchange, exchange_timestamp, price, volume, ...
         """
+        # Auto-determine table name based on table_version
+        if table_name is None:
+            table_name = f"market_data.trades_{self.table_version}" if self.table_version == "v2" else "market_data.trades"
+
         table_path = self._get_table_path(table_name)
+
+        # Field names differ between v1 and v2
+        timestamp_field = "timestamp" if self.table_version == "v2" else "exchange_timestamp"
 
         # Build WHERE clause
         conditions = []
@@ -234,32 +262,57 @@ class QueryEngine:
         if exchange:
             conditions.append(f"exchange = '{exchange}'")
         if start_time:
-            conditions.append(f"exchange_timestamp >= '{start_time.isoformat()}'")
+            conditions.append(f"{timestamp_field} >= '{start_time.isoformat()}'")
         if end_time:
-            conditions.append(f"exchange_timestamp <= '{end_time.isoformat()}'")
+            conditions.append(f"{timestamp_field} <= '{end_time.isoformat()}'")
 
         where_clause = ""
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
 
-        query = f"""
-            SELECT
-                symbol,
-                company_id,
-                exchange,
-                exchange_timestamp,
-                price,
-                volume,
-                qualifiers,
-                venue,
-                buyer_id,
-                ingestion_timestamp,
-                sequence_number
-            FROM iceberg_scan('{table_path}')
-            {where_clause}
-            ORDER BY exchange_timestamp DESC
-            LIMIT {limit}
-        """
+        # Different SELECT clauses for v1 vs v2
+        if self.table_version == "v2":
+            query = f"""
+                SELECT
+                    message_id,
+                    trade_id,
+                    symbol,
+                    exchange,
+                    asset_class,
+                    timestamp,
+                    price,
+                    quantity,
+                    currency,
+                    side,
+                    trade_conditions,
+                    source_sequence,
+                    ingestion_timestamp,
+                    platform_sequence,
+                    vendor_data
+                FROM iceberg_scan('{table_path}')
+                {where_clause}
+                ORDER BY timestamp DESC
+                LIMIT {limit}
+            """
+        else:  # v1 legacy
+            query = f"""
+                SELECT
+                    symbol,
+                    company_id,
+                    exchange,
+                    exchange_timestamp,
+                    price,
+                    volume,
+                    qualifiers,
+                    venue,
+                    buyer_id,
+                    ingestion_timestamp,
+                    sequence_number
+                FROM iceberg_scan('{table_path}')
+                {where_clause}
+                ORDER BY exchange_timestamp DESC
+                LIMIT {limit}
+            """
 
         with self._query_timer(QueryType.TRADES.value):
             try:
@@ -270,6 +323,7 @@ class QueryEngine:
                     "Trades query completed",
                     symbol=symbol,
                     exchange=exchange,
+                    table_version=self.table_version,
                     row_count=len(rows),
                 )
 
@@ -285,6 +339,7 @@ class QueryEngine:
                     "Trades query failed",
                     symbol=symbol,
                     exchange=exchange,
+                    table_version=self.table_version,
                     error=str(e),
                 )
                 raise
@@ -296,7 +351,7 @@ class QueryEngine:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         limit: int = 1000,
-        table_name: str = "market_data.quotes",
+        table_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Query quote records with optional filters.
 
@@ -306,12 +361,19 @@ class QueryEngine:
             start_time: Filter quotes after this time
             end_time: Filter quotes before this time
             limit: Maximum records to return (default: 1000)
-            table_name: Iceberg table name
+            table_name: Iceberg table name (default: auto-determined from table_version)
 
         Returns:
-            List of quote dictionaries with bid/ask data
+            List of quote dictionaries with bid/ask data (schema depends on table_version)
         """
+        # Auto-determine table name based on table_version
+        if table_name is None:
+            table_name = f"market_data.quotes_{self.table_version}" if self.table_version == "v2" else "market_data.quotes"
+
         table_path = self._get_table_path(table_name)
+
+        # Field names differ between v1 and v2
+        timestamp_field = "timestamp" if self.table_version == "v2" else "exchange_timestamp"
 
         # Build WHERE clause
         conditions = []
@@ -320,31 +382,56 @@ class QueryEngine:
         if exchange:
             conditions.append(f"exchange = '{exchange}'")
         if start_time:
-            conditions.append(f"exchange_timestamp >= '{start_time.isoformat()}'")
+            conditions.append(f"{timestamp_field} >= '{start_time.isoformat()}'")
         if end_time:
-            conditions.append(f"exchange_timestamp <= '{end_time.isoformat()}'")
+            conditions.append(f"{timestamp_field} <= '{end_time.isoformat()}'")
 
         where_clause = ""
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
 
-        query = f"""
-            SELECT
-                symbol,
-                company_id,
-                exchange,
-                exchange_timestamp,
-                bid_price,
-                bid_volume,
-                ask_price,
-                ask_volume,
-                ingestion_timestamp,
-                sequence_number
-            FROM iceberg_scan('{table_path}')
-            {where_clause}
-            ORDER BY exchange_timestamp DESC
-            LIMIT {limit}
-        """
+        # Different SELECT clauses for v1 vs v2
+        if self.table_version == "v2":
+            query = f"""
+                SELECT
+                    message_id,
+                    quote_id,
+                    symbol,
+                    exchange,
+                    asset_class,
+                    timestamp,
+                    bid_price,
+                    bid_quantity,
+                    ask_price,
+                    ask_quantity,
+                    currency,
+                    source_sequence,
+                    ingestion_timestamp,
+                    platform_sequence,
+                    vendor_data
+                FROM iceberg_scan('{table_path}')
+                {where_clause}
+                ORDER BY timestamp DESC
+                LIMIT {limit}
+            """
+        else:  # v1 legacy
+            query = f"""
+                SELECT
+                    symbol,
+                    company_id,
+                    exchange,
+                    exchange_timestamp,
+                    bid_price,
+                    bid_volume,
+                    ask_price,
+                    ask_volume,
+                    ingestion_timestamp,
+                    sequence_number
+                FROM iceberg_scan('{table_path}')
+                {where_clause}
+                ORDER BY exchange_timestamp DESC
+                LIMIT {limit}
+            """
 
         with self._query_timer(QueryType.QUOTES.value):
             try:
@@ -355,6 +442,7 @@ class QueryEngine:
                     "Quotes query completed",
                     symbol=symbol,
                     exchange=exchange,
+                    table_version=self.table_version,
                     row_count=len(rows),
                 )
 
@@ -369,6 +457,7 @@ class QueryEngine:
                     "Quotes query failed",
                     symbol=symbol,
                     exchange=exchange,
+                    table_version=self.table_version,
                     error=str(e),
                 )
                 raise
@@ -378,7 +467,7 @@ class QueryEngine:
         symbol: str,
         query_date: date,
         exchange: str | None = None,
-        table_name: str = "market_data.trades",
+        table_name: str | None = None,
     ) -> MarketSummary | None:
         """Get OHLCV market summary for a symbol on a specific date.
 
@@ -386,7 +475,7 @@ class QueryEngine:
             symbol: Symbol to query (e.g., "BHP")
             query_date: Date for summary
             exchange: Optional exchange filter
-            table_name: Iceberg table name
+            table_name: Iceberg table name (default: auto-determined from table_version)
 
         Returns:
             MarketSummary with OHLCV data, or None if no data
@@ -395,7 +484,15 @@ class QueryEngine:
             summary = engine.get_market_summary("BHP", date(2024, 1, 15))
             print(f"VWAP: {summary.vwap}")
         """
+        # Auto-determine table name based on table_version
+        if table_name is None:
+            table_name = f"market_data.trades_{self.table_version}" if self.table_version == "v2" else "market_data.trades"
+
         table_path = self._get_table_path(table_name)
+
+        # Field names differ between v1 and v2
+        timestamp_field = "timestamp" if self.table_version == "v2" else "exchange_timestamp"
+        volume_field = "quantity" if self.table_version == "v2" else "volume"
 
         # Date range for the day
         start_dt = datetime.combine(query_date, datetime.min.time())
@@ -409,22 +506,22 @@ class QueryEngine:
             WITH day_trades AS (
                 SELECT
                     symbol,
-                    exchange_timestamp,
+                    {timestamp_field} as timestamp,
                     price,
-                    volume
+                    {volume_field} as volume
                 FROM iceberg_scan('{table_path}')
                 WHERE symbol = '{symbol}'
-                  AND exchange_timestamp >= '{start_dt.isoformat()}'
-                  AND exchange_timestamp <= '{end_dt.isoformat()}'
+                  AND {timestamp_field} >= '{start_dt.isoformat()}'
+                  AND {timestamp_field} <= '{end_dt.isoformat()}'
                   {exchange_filter}
             )
             SELECT
                 '{symbol}' as symbol,
                 '{query_date}' as query_date,
-                FIRST(price ORDER BY exchange_timestamp ASC) as open_price,
+                FIRST(price ORDER BY timestamp ASC) as open_price,
                 MAX(price) as high_price,
                 MIN(price) as low_price,
-                FIRST(price ORDER BY exchange_timestamp DESC) as close_price,
+                FIRST(price ORDER BY timestamp DESC) as close_price,
                 SUM(volume) as total_volume,
                 COUNT(*) as trade_count,
                 SUM(price * volume) / NULLIF(SUM(volume), 0) as vwap
@@ -440,6 +537,7 @@ class QueryEngine:
                         "No trades found for summary",
                         symbol=symbol,
                         date=str(query_date),
+                        table_version=self.table_version,
                     )
                     return None
 
@@ -459,6 +557,7 @@ class QueryEngine:
                     "Market summary generated",
                     symbol=symbol,
                     date=str(query_date),
+                    table_version=self.table_version,
                     trade_count=summary.trade_count,
                 )
 
@@ -469,6 +568,7 @@ class QueryEngine:
                     "Market summary query failed",
                     symbol=symbol,
                     date=str(query_date),
+                    table_version=self.table_version,
                     error=str(e),
                 )
                 raise
@@ -476,17 +576,21 @@ class QueryEngine:
     def get_symbols(
         self,
         exchange: str | None = None,
-        table_name: str = "market_data.trades",
+        table_name: str | None = None,
     ) -> list[str]:
         """Get distinct symbols from trades table.
 
         Args:
             exchange: Optional exchange filter
-            table_name: Iceberg table name
+            table_name: Iceberg table name (default: auto-determined from table_version)
 
         Returns:
             List of unique symbols
         """
+        # Auto-determine table name based on table_version
+        if table_name is None:
+            table_name = f"market_data.trades_{self.table_version}" if self.table_version == "v2" else "market_data.trades"
+
         table_path = self._get_table_path(table_name)
 
         where_clause = ""
@@ -506,22 +610,29 @@ class QueryEngine:
 
     def get_date_range(
         self,
-        table_name: str = "market_data.trades",
+        table_name: str | None = None,
     ) -> tuple[datetime | None, datetime | None]:
         """Get the date range of data in a table.
 
         Args:
-            table_name: Iceberg table name
+            table_name: Iceberg table name (default: auto-determined from table_version)
 
         Returns:
             Tuple of (min_timestamp, max_timestamp)
         """
+        # Auto-determine table name based on table_version
+        if table_name is None:
+            table_name = f"market_data.trades_{self.table_version}" if self.table_version == "v2" else "market_data.trades"
+
         table_path = self._get_table_path(table_name)
+
+        # Field name differs between v1 and v2
+        timestamp_field = "timestamp" if self.table_version == "v2" else "exchange_timestamp"
 
         query = f"""
             SELECT
-                MIN(exchange_timestamp) as min_ts,
-                MAX(exchange_timestamp) as max_ts
+                MIN({timestamp_field}) as min_ts,
+                MAX({timestamp_field}) as max_ts
             FROM iceberg_scan('{table_path}')
         """
 
