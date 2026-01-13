@@ -71,6 +71,7 @@ For alternative production infrastructure, see [HFT Architecture Patterns](./doc
 │                      Query Layer                                │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │  DuckDB Engine                                             │ │
+│  │  • Connection pooling (5-50 concurrent queries)           │ │
 │  │  • Vectorized execution                                    │ │
 │  │  • Direct Parquet/Iceberg scan (no staging)                │ │
 │  │  • Time-travel via Iceberg snapshots                       │ │
@@ -88,6 +89,7 @@ For alternative production infrastructure, see [HFT Architecture Patterns](./doc
 │                    Observability                                │
 │  Prometheus (40+ metrics) → Grafana (15-panel dashboard)        │
 │  Structured logging (structlog) with correlation IDs            │
+│  21 critical alerts with runbooks                               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -187,7 +189,7 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 | Storage | Apache Iceberg | 1.4 | ACID + time-travel for compliance |
 | Object Store | MinIO | Latest | S3-compatible local development |
 | Catalog | PostgreSQL | 16 | Proven Iceberg metadata store |
-| Query | DuckDB | 0.10 | Zero-ops for Phase 1, migration path to Presto documented |
+| Query | DuckDB | 0.10 | Zero-ops with connection pooling (5-50 concurrent queries) |
 | API | FastAPI | 0.111 | Async + auto-docs, Python ecosystem integration |
 | Metrics | Prometheus | 2.51 | Pull-based metrics, industry standard |
 | Dashboards | Grafana | 10.4 | Visualization + alerting |
