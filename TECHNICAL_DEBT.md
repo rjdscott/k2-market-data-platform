@@ -23,6 +23,30 @@ This document tracks known technical debt, deferred fixes, and improvement oppor
 
 ---
 
+## Phase 0: Technical Debt Resolution
+
+**Comprehensive documentation** of all P0/P1/P2 resolution work:
+
+📁 **Documentation Location**: [`docs/phases/phase-0-technical-debt-resolution/`](docs/phases/phase-0-technical-debt-resolution/)
+
+**Quick Links**:
+- [📊 README - Overview](docs/phases/phase-0-technical-debt-resolution/README.md) - Phase overview, achievements, impact metrics
+- [📈 PROGRESS - Detailed Tracking](docs/phases/phase-0-technical-debt-resolution/PROGRESS.md) - All 7 TD items with resolution details
+- [📸 STATUS - Current Snapshot](docs/phases/phase-0-technical-debt-resolution/STATUS.md) - Quick status, completion metrics
+- [📝 DECISIONS - ADRs](docs/phases/phase-0-technical-debt-resolution/DECISIONS.md) - Technical decisions made during fixes
+- [✅ VALIDATION GUIDE](docs/phases/phase-0-technical-debt-resolution/VALIDATION_GUIDE.md) - How to validate all fixes
+
+**Resolution Summary**:
+- ✅ P0 Critical: 1/1 resolved (TD-000)
+- ✅ P1 Operational: 3/3 resolved (TD-001, TD-002, TD-003)
+- ✅ P2 Testing/Quality: 3/3 resolved (TD-004, TD-005, TD-006)
+- **Total**: 7/7 items (100%) - ~18.5 hours
+- **Platform Score**: 78 → 86 (+8 points)
+- **Tests Added**: 36 (29 consumer + 7 metrics)
+- **Automation**: Pre-commit hook validates 83 metrics calls
+
+---
+
 ## Active Technical Debt
 
 ### ~~TD-001: Consumer Sequence Tracker API Mismatch~~ [RESOLVED - See Resolved Section]

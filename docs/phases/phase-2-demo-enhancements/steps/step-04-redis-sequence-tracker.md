@@ -1,20 +1,40 @@
 # Step 04: Redis Sequence Tracker
 
-**Status**: ⬜ Not Started
-**Assignee**: Implementation Team
+**Status**: 🔵 Deferred to Multi-Node Implementation
+**Assignee**: Implementation Team (Future)
 **Issue**: #3 - Sequence Tracking Uses Python Dict Under GIL
+**Decision Date**: 2026-01-13
+**Deferred By**: User + Implementation Team
 
 ---
 
-## Dependencies
-- **Requires**: Redis service added to Docker Compose
-- **Blocks**: None (can be used alongside existing tracker)
+## Deferral Rationale
+
+**This step has been deferred to multi-node implementation.** See `TODO.md` for full details.
+
+### Why Deferred for Single-Node Crypto:
+1. **Not the bottleneck**: Current throughput is 138 msg/sec (I/O bound), not CPU bound
+2. **In-memory is faster**: Dict lookup <1μs vs Redis 1-2ms network latency
+3. **GIL not a problem**: Only matters at >100K msg/sec (we're at 138 msg/sec)
+4. **Crypto rates modest**: Peak 10K-50K msg/sec for top pairs (well within in-memory capacity)
+5. **Adds complexity**: New Redis dependency to monitor and maintain
+6. **Wrong optimization**: Solving distributed systems problem for single-node use case
+
+### When to Reconsider:
+- Multi-node consumer fleet deployment
+- Throughput exceeds 100K msg/sec per node
+- Need for shared sequence state across instances
+- State persistence requirements across restarts
+
+### Effort Saved: 6-8 hours (redirected to Hybrid Query Engine)
 
 ---
 
-## Goal
+## Original Goal (For Reference)
 
 Replace in-memory dict with Redis-backed sequence tracking. The current implementation uses a Python dict which suffers from GIL contention at high message rates. Redis provides O(1) lookups without GIL overhead and survives process restarts.
+
+**Note**: This goal remains valid for multi-node deployments. For single-node crypto, in-memory dict is optimal.
 
 ---
 

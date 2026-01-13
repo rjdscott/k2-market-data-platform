@@ -1,20 +1,40 @@
 # Step 05: Bloom Filter Deduplication
 
-**Status**: ⬜ Not Started
-**Assignee**: Implementation Team
+**Status**: 🔵 Deferred to Multi-Node Implementation
+**Assignee**: Implementation Team (Future)
 **Issue**: #4 - Deduplication Cache is Memory-Bound
+**Decision Date**: 2026-01-13
+**Deferred By**: User + Implementation Team
 
 ---
 
-## Dependencies
-- **Requires**: Redis service (from Step 04)
-- **Blocks**: None
+## Deferral Rationale
+
+**This step has been deferred to multi-node implementation.** See `TODO.md` for full details.
+
+### Why Deferred for Single-Node Crypto:
+1. **Memory not constrained**: Crypto dedup (1-hour window) easily fits in memory
+2. **In-memory dict sufficient**: 10K-50K msg/sec peak rates don't require Bloom filter
+3. **False positives add complexity**: Bloom filter requires Redis confirmation layer anyway
+4. **Network latency overhead**: Redis hop adds 1-2ms vs <1μs in-memory
+5. **Not memory-bound**: Current usage well under 2GB threshold
+6. **24-hour window unnecessary**: Crypto has natural gaps (exchange maintenance, low liquidity periods)
+
+### When to Reconsider:
+- Memory usage for deduplication exceeds 2GB
+- Need for 24-hour dedup window at >1M msg/sec scale
+- Deploying distributed consumer instances needing shared dedup state
+- In-memory dict becomes demonstrable bottleneck
+
+### Effort Saved: 6-8 hours (redirected to Demo Narrative and Cost Model)
 
 ---
 
-## Goal
+## Original Goal (For Reference)
 
 Implement scalable deduplication using Bloom filter + Redis hybrid. The current in-memory dict can't handle 24-hour windows at scale. A Bloom filter uses ~1.4GB for 1 billion entries vs. ~86TB for a dict.
+
+**Note**: This goal remains valid for multi-node deployments at high scale. For single-node crypto, in-memory dict is optimal.
 
 ---
 
