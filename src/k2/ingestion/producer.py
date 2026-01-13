@@ -345,9 +345,11 @@ class MarketDataProducer:
                 error=str(err),
                 **labels,  # labels already contains 'topic'
             )
+            # Metric doesn't expect data_type, only error_type
+            error_labels = {k: v for k, v in labels.items() if k != "data_type"}
             metrics.increment(
                 "kafka_produce_errors_total",
-                labels={**labels, "error_type": str(err)[:50]},
+                labels={**error_labels, "error_type": str(err)[:50]},
             )
         else:
             self._total_produced += 1
