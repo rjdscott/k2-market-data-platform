@@ -1,6 +1,6 @@
 # Observability Dashboards & Alerts
 
-**Last Updated**: 2026-01-09
+**Last Updated**: 2026-01-13
 **Owners**: Platform Team, SRE
 **Status**: Implementation Plan
 **Scope**: Grafana dashboards, Prometheus alerts, on-call runbooks
@@ -208,6 +208,24 @@ rate(s3_api_errors_total[5m]) / rate(s3_api_requests_total[5m])
 
 # Alert: Error rate > 5%
 rate(s3_api_errors_total[5m]) / rate(s3_api_requests_total[5m]) > 0.05
+```
+
+**Transaction Logging**:
+```promql
+# Iceberg transaction rate
+rate(iceberg_transaction_completed_total[5m])
+
+# Transaction snapshots created
+rate(iceberg_snapshot_created_total[5m])
+
+# Files added per transaction (average)
+avg(iceberg_transaction_files_added) by (table)
+
+# Data size per transaction (average bytes)
+avg(iceberg_transaction_bytes_added) by (table)
+
+# Transaction sequence tracking (detect gaps)
+increase(iceberg_transaction_sequence_number[5m])
 ```
 
 ### Visualization

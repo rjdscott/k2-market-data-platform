@@ -28,8 +28,9 @@ Key components:
 - `IcebergWriter` class with `write_trades()` and `write_quotes()` methods
 - PyArrow table conversion (`_records_to_arrow()`)
 - ACID transaction support via Iceberg append()
-- Metrics tracking (duration, record count)
-- Error handling and logging
+- Transaction logging (snapshot IDs, sequence numbers, file statistics)
+- Metrics tracking (duration, record count, batch size)
+- Error handling and structured logging
 
 ### 4.2 Test Writer
 

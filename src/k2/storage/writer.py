@@ -2,6 +2,7 @@
 
 This module provides write operations for Iceberg tables with:
 - ACID transactions (all-or-nothing writes)
+- Transaction logging (snapshot IDs, sequence numbers, file statistics)
 - PyArrow for efficient columnar conversion
 - Automatic schema validation
 - Metrics collection for observability
@@ -10,6 +11,13 @@ This module provides write operations for Iceberg tables with:
 
 Writers are designed for batch writes (100-10,000 records per call) to
 optimize Iceberg's append performance and minimize metadata operations.
+
+Transaction Logging:
+After each successful write, the writer logs detailed transaction metadata including:
+- Snapshot ID: Unique identifier for the ACID transaction
+- Sequence number: Transaction ordering for consistency verification
+- File statistics: Files added, records written, bytes written
+- Table totals: Total records, data files, delete files
 
 Schema Evolution:
 - v1: Legacy ASX-specific schemas (volume, company_id fields)
@@ -255,13 +263,38 @@ class IcebergWriter:
             try:
                 table.append(arrow_table)
 
-                logger.info(
-                    "Trades written to Iceberg",
-                    table=table_name,
-                    exchange=exchange,
-                    asset_class=asset_class,
-                    record_count=len(records),
-                )
+                # Get transaction metadata after successful write
+                current_snapshot = table.current_snapshot()
+                if current_snapshot:
+                    snapshot_id = current_snapshot.snapshot_id
+                    sequence_number = current_snapshot.sequence_number
+                    summary = current_snapshot.summary or {}
+
+                    # Log detailed transaction information
+                    logger.info(
+                        "Trades written to Iceberg",
+                        table=table_name,
+                        exchange=exchange,
+                        asset_class=asset_class,
+                        record_count=len(records),
+                        transaction_snapshot_id=snapshot_id,
+                        transaction_sequence_number=sequence_number,
+                        total_records=summary.get("total-records", "unknown"),
+                        total_data_files=summary.get("total-data-files", "unknown"),
+                        total_delete_files=summary.get("total-delete-files", "unknown"),
+                        added_data_files=summary.get("added-data-files", "0"),
+                        added_records=summary.get("added-records", "0"),
+                        added_files_size_bytes=summary.get("added-files-size", "0"),
+                    )
+                else:
+                    # Fallback to basic logging if snapshot metadata unavailable
+                    logger.info(
+                        "Trades written to Iceberg",
+                        table=table_name,
+                        exchange=exchange,
+                        asset_class=asset_class,
+                        record_count=len(records),
+                    )
 
                 # Track rows written
                 metrics.increment(
@@ -387,13 +420,38 @@ class IcebergWriter:
             try:
                 table.append(arrow_table)
 
-                logger.info(
-                    "Quotes written to Iceberg",
-                    table=table_name,
-                    exchange=exchange,
-                    asset_class=asset_class,
-                    record_count=len(records),
-                )
+                # Get transaction metadata after successful write
+                current_snapshot = table.current_snapshot()
+                if current_snapshot:
+                    snapshot_id = current_snapshot.snapshot_id
+                    sequence_number = current_snapshot.sequence_number
+                    summary = current_snapshot.summary or {}
+
+                    # Log detailed transaction information
+                    logger.info(
+                        "Quotes written to Iceberg",
+                        table=table_name,
+                        exchange=exchange,
+                        asset_class=asset_class,
+                        record_count=len(records),
+                        transaction_snapshot_id=snapshot_id,
+                        transaction_sequence_number=sequence_number,
+                        total_records=summary.get("total-records", "unknown"),
+                        total_data_files=summary.get("total-data-files", "unknown"),
+                        total_delete_files=summary.get("total-delete-files", "unknown"),
+                        added_data_files=summary.get("added-data-files", "0"),
+                        added_records=summary.get("added-records", "0"),
+                        added_files_size_bytes=summary.get("added-files-size", "0"),
+                    )
+                else:
+                    # Fallback to basic logging if snapshot metadata unavailable
+                    logger.info(
+                        "Quotes written to Iceberg",
+                        table=table_name,
+                        exchange=exchange,
+                        asset_class=asset_class,
+                        record_count=len(records),
+                    )
 
                 # Track rows written
                 metrics.increment(
