@@ -1038,6 +1038,150 @@ jobs:
 
 ---
 
+## Chaos Testing
+
+### Purpose
+
+Validate platform resilience to production failure scenarios through controlled fault injection.
+
+**Philosophy**: "Test in production-like conditions, but controlled and repeatable."
+
+### Implementation
+
+**Location**: `tests/chaos/` directory with framework and test suites
+
+**Framework Components**:
+1. **Chaos Fixtures** (`tests/chaos/conftest.py`):
+   - Service failure injection (stop/pause containers)
+   - Network partition simulation
+   - Resource constraints (CPU, memory limits)
+   - Latency injection (network delays)
+
+2. **Kafka Chaos Tests** (`tests/chaos/test_kafka_chaos.py`):
+   - Broker failures and recovery
+   - Network partitions
+   - Resource exhaustion
+   - Concurrent failures
+
+3. **Storage Chaos Tests** (`tests/chaos/test_storage_chaos.py`):
+   - MinIO/S3 outages
+   - Query engine resilience
+   - Data corruption handling
+   - Catalog database failures
+
+### Chaos Scenarios
+
+**Kafka Resilience**:
+- ✅ Producer buffering during brief outages
+- ✅ Producer recovery after broker restart
+- ✅ Consumer timeout handling
+- ⚠️ Network partition (requires privileged container)
+- ⚠️ Latency injection (requires `tc` command)
+
+**Storage Resilience**:
+- ✅ Writer failure handling (graceful degradation)
+- ✅ Query engine recovery after storage restoration
+- ✅ Data validation (schema enforcement)
+- ✅ Decimal precision handling
+- ⚠️ Catalog failure (requires PostgreSQL chaos)
+
+**Concurrent Failures**:
+- Multiple service outages simultaneously
+- Cascading failure detection
+- Recovery coordination
+
+### Running Chaos Tests
+
+```bash
+# Run all chaos tests (WARNING: Destructive!)
+pytest tests/chaos/ -v -m chaos
+
+# Run only Kafka chaos tests
+pytest tests/chaos/test_kafka_chaos.py -v -m chaos_kafka
+
+# Run only storage chaos tests
+pytest tests/chaos/test_storage_chaos.py -v -m chaos_storage
+
+# Run specific test
+pytest tests/chaos/test_kafka_chaos.py::TestKafkaBrokerFailure::test_producer_survives_brief_kafka_outage -v
+```
+
+### Prerequisites
+
+```bash
+# Ensure Docker services are running
+make docker-up
+make init-infra
+
+# Verify services are healthy
+docker ps --filter "name=k2-" --format "table {{.Names}}\t{{.Status}}"
+```
+
+### Success Criteria
+
+**Acceptable Outcomes**:
+- ✅ Platform **recovers** after failure injection
+- ✅ Platform **fails gracefully** (no crashes, data corruption)
+- ✅ Platform logs **meaningful error messages**
+
+**Critical Failures**:
+- ❌ Platform **crashes** or **loses data**
+- ❌ Platform **hangs** indefinitely
+- ❌ Silent data loss (no errors logged)
+
+### Chaos Injection Mechanisms
+
+**Service Failure**:
+```python
+with service_failure(kafka_container, duration_seconds=5, mode="pause"):
+    # Kafka is frozen - test resilience
+    producer.produce(...)  # Should buffer or fail gracefully
+```
+
+**Network Partition**:
+```python
+with network_partition(kafka_container, duration_seconds=10):
+    # Kafka is unreachable - test timeout handling
+    consumer.poll(timeout=5.0)
+```
+
+**Resource Limits**:
+```python
+with resource_limit(kafka_container, cpu_quota=50000, mem_limit="512m"):
+    # Kafka has only 50% CPU and 512MB RAM
+    producer.produce(...)  # Should handle degraded performance
+```
+
+**Latency Injection**:
+```python
+with inject_latency(kafka_container, latency_ms=200, jitter_ms=50):
+    # Kafka responses have 200ms ± 50ms latency
+    consumer.poll(timeout=5.0)
+```
+
+### Known Limitations
+
+1. **Privileged Container Access**: Some chaos injection requires privileged Docker operations
+2. **Network Latency Requires `tc`**: Latency injection needs `tc` (traffic control) in container
+3. **Timing Sensitivity**: Tests depend on service restart timing
+4. **Non-Deterministic**: Distributed systems have inherent non-determinism
+5. **Docker Compose Only**: Framework targets Docker Compose, not Kubernetes
+
+### Future Enhancements
+
+- Schema evolution chaos (incompatible changes during production)
+- Consumer rebalancing chaos (crashes during rebalance)
+- Clock skew chaos (NTP failures, DST transitions)
+- Disk exhaustion chaos (Kafka log full, MinIO storage full)
+- API gateway chaos (rate limits, circuit breakers)
+- Integration with Chaos Mesh (Kubernetes-native)
+
+### Documentation
+
+See comprehensive chaos testing guide: `tests/chaos/README.md`
+
+---
+
 ## Related Documentation
 
 - [Platform Principles](./PLATFORM_PRINCIPLES.md) - Observable by default
