@@ -24,36 +24,42 @@ Schema Evolution:
     Use schema_version parameter to specify which schema version to use.
     Default is v2 (industry-standard).
 
-Usage (v2 schemas):
+Usage (v2 schemas with context manager - RECOMMENDED):
     from k2.ingestion.producer import MarketDataProducer, build_trade_v2
     from decimal import Decimal
     from datetime import datetime
 
-    # Create producer with v2 schemas (default)
+    # Context manager ensures proper cleanup even on exceptions
+    with MarketDataProducer(schema_version='v2') as producer:
+        # Build v2 trade message
+        trade = build_trade_v2(
+            symbol='BHP',
+            exchange='ASX',
+            asset_class='equities',
+            timestamp=datetime.utcnow(),
+            price=Decimal('45.67'),
+            quantity=Decimal('1000'),
+            currency='AUD',
+            side='BUY',
+            vendor_data={'company_id': '123', 'qualifiers': '0'}
+        )
+
+        # Produce to Kafka
+        producer.produce_trade(
+            asset_class='equities',
+            exchange='asx',
+            record=trade
+        )
+        # Producer automatically flushed and closed on exit
+
+Usage (manual cleanup - legacy):
+    # Manual cleanup (ensure close() is called)
     producer = MarketDataProducer(schema_version='v2')
-
-    # Build v2 trade message
-    trade = build_trade_v2(
-        symbol='BHP',
-        exchange='ASX',
-        asset_class='equities',
-        timestamp=datetime.utcnow(),
-        price=Decimal('45.67'),
-        quantity=Decimal('1000'),
-        currency='AUD',
-        side='BUY',
-        vendor_data={'company_id': '123', 'qualifiers': '0'}
-    )
-
-    # Produce to Kafka
-    producer.produce_trade(
-        asset_class='equities',
-        exchange='asx',
-        record=trade
-    )
-
-    producer.flush()
-    producer.close()
+    try:
+        producer.produce_trade(asset_class='equities', exchange='asx', record=trade)
+        producer.flush()
+    finally:
+        producer.close()
 
 Usage (v1 schemas - backward compatibility):
     from k2.ingestion.producer import MarketDataProducer
@@ -110,6 +116,7 @@ class MarketDataProducer:
     """Production-ready Kafka producer for market data.
 
     Features:
+    - Context manager support for automatic resource cleanup
     - Idempotent producer (enable.idempotence=True) prevents duplicates on retry
     - At-least-once delivery semantics with acks=all
     - Partition by symbol to preserve per-symbol ordering
@@ -118,15 +125,22 @@ class MarketDataProducer:
     - Structured logging with correlation IDs
     - Comprehensive Prometheus metrics
 
-    Example:
+    Example (recommended - context manager):
+        >>> with MarketDataProducer() as producer:
+        ...     producer.produce_trade(
+        ...         asset_class='equities',
+        ...         exchange='asx',
+        ...         record={'symbol': 'BHP', 'price': 45.50, 'quantity': 1000}
+        ...     )
+        ...     # Producer automatically flushed and closed on exit
+
+    Example (manual cleanup):
         >>> producer = MarketDataProducer()
-        >>> producer.produce_trade(
-        ...     asset_class='equities',
-        ...     exchange='asx',
-        ...     record={'symbol': 'BHP', 'price': 45.50, 'quantity': 1000}
-        ... )
-        >>> producer.flush()  # Wait for all messages to be sent
-        >>> producer.close()
+        >>> try:
+        ...     producer.produce_trade(...)
+        ...     producer.flush()
+        ... finally:
+        ...     producer.close()
     """
 
     def __init__(
@@ -566,9 +580,15 @@ class MarketDataProducer:
             record: Record dict matching Avro schema
 
         Raises:
+            RuntimeError: If producer has been closed
             ValueError: If required field 'symbol' is missing
             Exception: If production fails after retries
         """
+        if self.producer is None:
+            raise RuntimeError(
+                "Producer has been closed and cannot be reused. "
+                "Create a new MarketDataProducer instance."
+            )
         # Get topic configuration
         topic_config = self.topic_builder.get_topic_config(asset_class, data_type, exchange)
         topic = topic_config.topic_name
@@ -636,12 +656,19 @@ class MarketDataProducer:
         Returns:
             Number of messages still in queue after timeout
 
+        Raises:
+            RuntimeError: If producer has been closed
+
         Example:
             >>> producer.produce_trade(...)
             >>> remaining = producer.flush()
             >>> if remaining > 0:
             ...     print(f"Warning: {remaining} messages not sent")
         """
+        if self.producer is None:
+            logger.warning("Attempted to flush closed producer, skipping")
+            return 0
+
         logger.info("Flushing producer queue", timeout=timeout)
         start_time = time.time()
 
@@ -659,11 +686,16 @@ class MarketDataProducer:
     def close(self):
         """Close producer and cleanup resources.
 
-        Flushes all pending messages before closing.
+        Flushes all pending messages before closing. After calling close(),
+        the producer cannot be reused.
 
         Example:
             >>> producer.close()
         """
+        if self.producer is None:
+            logger.debug("Producer already closed, skipping")
+            return
+
         logger.info(
             "Closing Kafka producer",
             total_produced=self._total_produced,
@@ -671,11 +703,21 @@ class MarketDataProducer:
             total_retries=self._total_retries,
         )
 
-        # Flush remaining messages
-        self.flush()
+        try:
+            # Flush remaining messages before closing
+            remaining = self.flush()
+            if remaining > 0:
+                logger.warning(
+                    "Producer closed with messages still in queue",
+                    remaining_messages=remaining,
+                )
+        except Exception as e:
+            logger.error("Error flushing producer during close", error=str(e))
 
-        # No explicit close needed for confluent_kafka.Producer
-        # It will be cleaned up by garbage collection
+        # Clear producer reference to prevent reuse and allow GC
+        # Note: confluent_kafka.Producer doesn't have explicit close(),
+        # but setting to None ensures cleanup and prevents reuse
+        self.producer = None
 
         logger.info("Kafka producer closed")
 
@@ -694,6 +736,39 @@ class MarketDataProducer:
             "errors": self._total_errors,
             "retries": self._total_retries,
         }
+
+    def __enter__(self):
+        """Context manager entry.
+
+        Returns:
+            self for use in with statement
+
+        Example:
+            >>> with MarketDataProducer() as producer:
+            ...     producer.produce_trade(...)
+            ...     # Producer automatically closed on exit
+        """
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - close producer.
+
+        Ensures producer is closed even if exception occurs.
+
+        Args:
+            exc_type: Exception type (if exception occurred)
+            exc_val: Exception value (if exception occurred)
+            exc_tb: Exception traceback (if exception occurred)
+
+        Returns:
+            False to propagate exceptions
+        """
+        try:
+            self.close()
+        except Exception as e:
+            logger.error("Error closing producer in context manager", error=str(e))
+            # Don't suppress the original exception
+        return False  # Propagate any exceptions
 
 
 # Convenience factory function
