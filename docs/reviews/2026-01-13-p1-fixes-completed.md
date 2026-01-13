@@ -248,12 +248,88 @@ print(stats)
 
 ---
 
-## Pending Items
+---
 
-### P1.3: Add Producer Resource Cleanup ⏳
-**Status**: PENDING
-**Effort**: 2 hours
-**Priority**: High
+### P1.3: Add Producer Resource Cleanup ✅
+
+**Status**: COMPLETED
+**Test Coverage**: 20 tests, 48.19% producer coverage (focused on cleanup)
+**Files Changed**:
+- Modified: `src/k2/ingestion/producer.py` (+85 lines, -37 lines)
+- Created: `tests/unit/test_producer_cleanup.py` (356 lines, 20 tests)
+
+**Implementation Summary**:
+Added context manager support and enhanced resource cleanup to prevent resource leaks in the Kafka producer.
+
+**Problem Solved**:
+The Producer relied on Python's garbage collector for cleanup, which is not deterministic and can lead to:
+- File descriptor leaks
+- Network connection leaks
+- Buffered messages not being sent
+- Resource exhaustion under load
+
+**Solution**:
+1. **Context Manager Support** (`__enter__`, `__exit__`)
+   - Automatic cleanup even on exceptions
+   - Recommended usage pattern for new code
+
+2. **Enhanced close() Method**:
+   - Idempotent (can be called multiple times)
+   - Handles flush() errors gracefully
+   - Sets `self.producer = None` to prevent reuse
+   - Logs warning if messages remain in queue
+
+3. **Usage Guards**:
+   - `RuntimeError` if produce methods called after close
+   - Safe flush() after close (returns 0 with warning)
+   - Statistics still accessible after close
+
+4. **Backward Compatibility**:
+   - Existing code still works (manual close)
+   - Zero breaking changes
+
+**Usage Examples**:
+
+**Recommended - Context Manager**:
+```python
+with MarketDataProducer() as producer:
+    producer.produce_trade(
+        asset_class='equities',
+        exchange='asx',
+        record=trade
+    )
+    # Producer automatically flushed and closed on exit
+```
+
+**Legacy - Manual Cleanup**:
+```python
+producer = MarketDataProducer()
+try:
+    producer.produce_trade(...)
+    producer.flush()
+finally:
+    producer.close()
+```
+
+**Test Coverage** (20 tests):
+1. **Context Manager** (4 tests): Normal exit, exception exit, multiple exits, manual close + context
+2. **Close Behavior** (4 tests): Flush called, remaining messages, idempotent, flush errors
+3. **After Close** (5 tests): Produce raises error, flush safe, stats accessible
+4. **Resource Cleanup** (3 tests): Reference cleared, caches retained, stats retained
+5. **Exception Handling** (2 tests): Exceptions propagated, close errors handled
+6. **Integration** (2 tests): Multiple producers, nested context managers
+
+**Impact**:
+- ✅ Prevents resource leaks (file descriptors, connections)
+- ✅ Ensures buffered messages are flushed
+- ✅ Deterministic cleanup (not GC-dependent)
+- ✅ Better error handling on cleanup failures
+- ✅ Prevents accidental producer reuse after close
+- ✅ Zero breaking changes (backward compatible)
+
+---
+
+## Pending Items
 
 ### P1.4: Add API Request Body Size Limit ⏳
 **Status**: PENDING
@@ -274,10 +350,10 @@ print(stats)
 
 ## Progress Summary
 
-**Completed**: 2/6 items (33%)
-**Current Score**: ~83/100 (estimated +1 from baseline 82)
+**Completed**: 3/6 items (50%)
+**Current Score**: ~84/100 (estimated +2 from baseline 82)
 **Target Score**: 86/100
-**Remaining Effort**: ~4 days
+**Remaining Effort**: ~3 days (2 hours + 2 hours + 1 day)
 
 ### Impact Assessment
 
@@ -291,10 +367,17 @@ print(stats)
 - Enables concurrent API queries
 - 5x throughput improvement (scalable to 50x)
 
+**P1.3 Producer Cleanup**:
+- Prevents resource leaks
+- Deterministic cleanup (not GC-dependent)
+- Better error handling
+- Zero breaking changes
+
 **Combined Impact**:
 - Platform more production-ready
 - Better operational visibility
 - Improved API performance
+- Prevents resource exhaustion
 - Foundation for high-concurrency workloads
 
 ---
@@ -314,6 +397,14 @@ print(stats)
 - ✅ Timeout behavior verified
 - ✅ Exception handling tested
 - ✅ Metrics integration verified
+
+### P1.3 Producer Cleanup
+- ✅ 20/20 tests passing
+- ✅ 48.19% producer coverage (focused on cleanup)
+- ✅ Context manager validated
+- ✅ Exception handling tested
+- ✅ Idempotent close verified
+- ✅ Resource leak prevention verified
 
 ---
 
