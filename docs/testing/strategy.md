@@ -313,6 +313,124 @@ pytest tests/unit/test_data_validation.py -vv --tb=short
 - Add data profiling and anomaly detection
 - Track validation failures as metrics
 
+### Middleware Tests
+
+**Implementation**: Tests implemented in `tests/unit/test_middleware.py` (36 tests, 680+ lines)
+
+**Purpose**: Validate all API middleware components for authentication, observability, caching, and security.
+
+**Coverage**: 93% middleware code coverage
+
+**Test Categories**:
+
+1. **API Key Authentication** (5 tests):
+   - Valid/invalid API key handling
+   - Missing API key detection
+   - Default vs configured API keys
+   - 401/403 error responses
+
+2. **Correlation ID Middleware** (3 tests):
+   - Automatic correlation ID generation
+   - Using provided correlation IDs
+   - Response header injection
+
+3. **Request Logging Middleware** (6 tests):
+   - Successful request logging
+   - Failed request error logging
+   - Client IP extraction (including X-Forwarded-For)
+   - Path normalization for metrics
+   - In-progress request tracking
+   - Prometheus metrics emission
+
+4. **Cache Control Middleware** (5 tests):
+   - Health endpoint no-cache headers
+   - Trades endpoint short cache (5s)
+   - Symbols endpoint longer cache (5min)
+   - POST request no-cache
+   - Error response no-cache
+
+5. **Request Size Limit Middleware** (6 tests):
+   - Small request allowance
+   - Large request rejection (413)
+   - Missing Content-Length handling
+   - Invalid Content-Length handling
+   - GET request bypass
+   - Default size limit (10MB)
+
+6. **Rate Limiting Helpers** (5 tests):
+   - Client IP extraction
+   - X-Forwarded-For header parsing
+   - Unknown client handling
+   - API key rate limit keys
+   - IP-based rate limit keys
+
+7. **Integration Tests** (3 tests):
+   - Multiple middleware stack
+   - Correlation ID preservation
+   - Error handling across middleware
+
+8. **Edge Cases** (3 tests):
+   - Empty correlation ID regeneration
+   - Unknown path cache behavior
+   - Request size boundary conditions
+
+**Example**:
+
+```python
+# tests/unit/test_middleware.py
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from k2.api.middleware import CorrelationIdMiddleware
+
+class TestCorrelationIdMiddleware:
+    """Test correlation ID middleware."""
+
+    @pytest.mark.asyncio
+    async def test_generates_correlation_id_when_missing(self, test_app):
+        """Test that middleware generates correlation ID when not provided."""
+        test_app.add_middleware(CorrelationIdMiddleware)
+        client = TestClient(test_app)
+
+        response = client.get("/test")
+
+        assert response.status_code == 200
+        assert "X-Correlation-ID" in response.headers
+        # Should be 8-character UUID
+        assert len(response.headers["X-Correlation-ID"]) == 8
+
+    @pytest.mark.asyncio
+    async def test_uses_provided_correlation_id(self, test_app):
+        """Test that middleware uses provided correlation ID."""
+        test_app.add_middleware(CorrelationIdMiddleware)
+        client = TestClient(test_app)
+
+        custom_id = "custom-correlation-123"
+        response = client.get("/test", headers={"X-Correlation-ID": custom_id})
+
+        assert response.status_code == 200
+        assert response.headers["X-Correlation-ID"] == custom_id
+```
+
+**Running Middleware Tests**:
+
+```bash
+# Run all middleware tests
+pytest tests/unit/test_middleware.py -v
+
+# Run specific test class
+pytest tests/unit/test_middleware.py::TestAPIKeyAuthentication -v
+
+# Run with coverage
+pytest tests/unit/test_middleware.py --cov=src/k2/api/middleware
+```
+
+**Benefits**:
+- **Comprehensive security testing**: API key auth, request size limits
+- **Observability validation**: Logging, metrics, correlation IDs
+- **Cache strategy verification**: Appropriate cache headers by endpoint type
+- **Integration validation**: Multiple middleware working together
+- **Production readiness**: 93% coverage ensures middleware reliability
+
 ### Running Unit Tests
 
 ```bash
