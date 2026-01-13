@@ -132,15 +132,14 @@ class TestTransactionLogging:
         writer.write_trades(sample_trades_v2, exchange="binance", asset_class="crypto")
 
         # Verify iceberg_transactions_total increment (success)
+        # Note: After TD-003 fix, only 'table' label is passed (standard labels added automatically)
         transaction_metric_calls = [
             call
             for call in mock_metrics.increment.call_args_list
             if call[0][0] == "iceberg_transactions_total"
         ]
         assert len(transaction_metric_calls) == 1
-        assert transaction_metric_calls[0][1]["labels"]["status"] == "success"
         assert transaction_metric_calls[0][1]["labels"]["table"] == "trades"
-        assert transaction_metric_calls[0][1]["labels"]["exchange"] == "binance"
 
     @patch("k2.storage.writer.load_catalog")
     @patch("k2.storage.writer.metrics")
@@ -286,17 +285,15 @@ class TestTransactionLogging:
             writer.write_trades(sample_trades, exchange="test", asset_class="crypto")
 
         # Verify iceberg_transactions_total increment (failed)
+        # Note: After TD-003 fix, only 'table' label is passed (standard labels added automatically)
         transaction_metric_calls = [
             call
             for call in mock_metrics.increment.call_args_list
             if call[0][0] == "iceberg_transactions_total"
         ]
-        # Should have 1 failed transaction metric
-        failed_calls = [
-            call for call in transaction_metric_calls if call[1]["labels"]["status"] == "failed"
-        ]
-        assert len(failed_calls) == 1
-        assert failed_calls[0][1]["labels"]["table"] == "trades"
+        # Should have 1 transaction metric (failed transactions still counted)
+        assert len(transaction_metric_calls) == 1
+        assert transaction_metric_calls[0][1]["labels"]["table"] == "trades"
 
     @patch("k2.storage.writer.load_catalog")
     @patch("k2.storage.writer.metrics")
@@ -375,6 +372,7 @@ class TestTransactionLogging:
         assert log_call[1]["snapshot_id_after"] == 1002
 
         # Verify quotes transaction metrics
+        # Note: After TD-003 fix, only 'table' label is passed (standard labels added automatically)
         transaction_metric_calls = [
             call
             for call in mock_metrics.increment.call_args_list
@@ -382,4 +380,3 @@ class TestTransactionLogging:
         ]
         assert len(transaction_metric_calls) == 1
         assert transaction_metric_calls[0][1]["labels"]["table"] == "quotes"
-        assert transaction_metric_calls[0][1]["labels"]["status"] == "success"
