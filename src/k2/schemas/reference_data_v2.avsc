@@ -1,0 +1,106 @@
+{
+  "type": "record",
+  "name": "ReferenceDataV2",
+  "namespace": "com.k2.marketdata",
+  "doc": "Company reference data for enrichment (v2). Industry-standard reference data schema with hybrid approach: core standard fields + vendor-specific extensions. Used in compacted Kafka topic for latest-value lookup.",
+  "fields": [
+    {
+      "name": "message_id",
+      "type": "string",
+      "doc": "Unique message identifier (UUID v4) for deduplication. Generated at ingestion time."
+    },
+    {
+      "name": "company_id",
+      "type": "string",
+      "doc": "Primary identifier - vendor-specific company/instrument ID. Used as Kafka message key for compaction. Examples: ASX '7078' (BHP), ISIN 'AU000000BHP4'"
+    },
+    {
+      "name": "symbol",
+      "type": "string",
+      "doc": "Trading symbol. Examples: 'BHP' (equities), 'BTCUSDT' (crypto), 'ESZ3' (futures)"
+    },
+    {
+      "name": "exchange",
+      "type": "string",
+      "doc": "Exchange code. Examples: 'ASX', 'BINANCE', 'NYSE', 'CME'"
+    },
+    {
+      "name": "asset_class",
+      "type": {
+        "type": "enum",
+        "name": "AssetClass",
+        "namespace": "com.k2.marketdata",
+        "symbols": ["equities", "crypto", "futures", "options"],
+        "doc": "Asset class categorization for multi-asset platform support"
+      },
+      "doc": "Asset class: equities (stocks), crypto (cryptocurrencies), futures, options"
+    },
+    {
+      "name": "company_name",
+      "type": "string",
+      "doc": "Full company or instrument name. Examples: 'BHP BILLITON LTD', 'Bitcoin', 'E-mini S&P 500'"
+    },
+    {
+      "name": "isin",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "International Securities Identification Number (ISO 6166). Example: 'AU000000BHP4'. Null for crypto and some derivatives."
+    },
+    {
+      "name": "currency",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Primary trading currency (ISO 4217 for fiat, ticker for crypto). Examples: 'AUD', 'USD', 'USDT', 'BTC'. Null if not applicable."
+    },
+    {
+      "name": "listing_date",
+      "type": [
+        "null",
+        {
+          "type": "long",
+          "logicalType": "timestamp-micros"
+        }
+      ],
+      "default": null,
+      "doc": "Instrument listing/activation date in microseconds (UTC). Null if not applicable or unknown."
+    },
+    {
+      "name": "delisting_date",
+      "type": [
+        "null",
+        {
+          "type": "long",
+          "logicalType": "timestamp-micros"
+        }
+      ],
+      "default": null,
+      "doc": "Instrument delisting/deactivation date in microseconds (UTC). Null if actively traded or unknown."
+    },
+    {
+      "name": "is_active",
+      "type": "boolean",
+      "default": true,
+      "doc": "Indicates if instrument is currently active for trading. True = active, False = delisted/inactive."
+    },
+    {
+      "name": "ingestion_timestamp",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-micros"
+      },
+      "doc": "Platform ingestion timestamp in microseconds (UTC). When this reference data record was ingested."
+    },
+    {
+      "name": "vendor_data",
+      "type": [
+        "null",
+        {
+          "type": "map",
+          "values": "string"
+        }
+      ],
+      "default": null,
+      "doc": "Exchange-specific reference fields as key-value pairs. Examples: ASX {'sector': 'Materials', 'industry': 'Metals & Mining'}, Binance {'base_asset': 'BTC', 'quote_asset': 'USDT', 'status': 'TRADING'}. Stored as JSON string in Iceberg."
+    }
+  ]
+}
