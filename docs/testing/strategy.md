@@ -1,6 +1,6 @@
 # Testing Strategy
 
-**Last Updated**: 2026-01-09
+**Last Updated**: 2026-01-13
 **Owners**: Platform Team, QA Engineering
 **Status**: Implementation Plan
 **Scope**: Unit tests, integration tests, performance tests, chaos engineering
@@ -201,6 +201,117 @@ class TestBusinessRuleValidator:
 
         assert result.valid, f"Non-negative volume {volume} should be valid"
 ```
+
+### Data Quality & Validation Tests
+
+**Implementation**: Tests implemented in `tests/unit/test_data_validation.py` using Pandera
+
+**Purpose**: Validate data quality constraints for market data records using schema-based validation.
+
+**Framework**: [Pandera](https://pandera.readthedocs.io/) - DataFrame validation library
+
+**Coverage**:
+- **Trade v2 Schema Validation**:
+  - Price > 0, Quantity > 0
+  - Timestamp range validation (>= 2000-01-01, < 5 minutes in future)
+  - Symbol format (alphanumeric uppercase)
+  - Exchange/asset_class enum validation
+  - Trade side enum validation
+  - Required field presence
+  - Decimal precision constraints
+  - Timestamp ordering
+
+- **Quote v2 Schema Validation**:
+  - Bid/Ask prices > 0
+  - Bid/Ask quantities > 0
+  - Bid-ask spread validation (ask >= bid)
+  - Cross-field validation
+  - Symbol format and enum validation
+
+- **Batch Validation**:
+  - Large batch validation (1000+ records)
+  - Mixed asset class validation
+  - Partial batch failure detection
+
+**Example**:
+
+```python
+# tests/unit/test_data_validation.py
+import pandas as pd
+import pandera.pandas as pa
+from pandera.pandas import Check, Column, DataFrameSchema
+
+# Define validation schema
+TRADE_V2_SCHEMA = DataFrameSchema(
+    columns={
+        "price": Column(
+            float,
+            checks=[
+                Check.greater_than(0, error="Price must be > 0"),
+                Check.less_than_or_equal_to(1_000_000_000),
+            ],
+            nullable=False,
+        ),
+        "quantity": Column(
+            float,
+            checks=[Check.greater_than(0, error="Quantity must be > 0")],
+            nullable=False,
+        ),
+        "symbol": Column(
+            str,
+            checks=[
+                Check.str_matches(r"^[A-Z0-9]+$"),  # Alphanumeric uppercase
+                Check(lambda s: s.notna().all()),
+            ],
+            nullable=False,
+        ),
+        # ... other columns
+    },
+    strict=False,
+    coerce=True,
+)
+
+# Validate DataFrame
+def test_valid_trades_pass_validation(valid_trades_df):
+    """Test that valid trades pass all validation checks."""
+    validated_df = TRADE_V2_SCHEMA.validate(valid_trades_df)
+    assert len(validated_df) == 2
+    assert validated_df["price"].min() > 0
+
+def test_negative_price_fails(valid_trades_df):
+    """Test that negative price fails validation."""
+    invalid_df = valid_trades_df.copy()
+    invalid_df.loc[0, "price"] = -100.0
+
+    with pytest.raises(pa.errors.SchemaError):
+        TRADE_V2_SCHEMA.validate(invalid_df)
+```
+
+**Running Data Validation Tests**:
+
+```bash
+# Run all data validation tests
+pytest tests/unit/test_data_validation.py -v
+
+# Run specific test class
+pytest tests/unit/test_data_validation.py::TestTradeValidation -v
+
+# Run with verbose output
+pytest tests/unit/test_data_validation.py -vv --tb=short
+```
+
+**Benefits**:
+- **Schema-driven validation**: Validation rules defined declaratively
+- **Rich error messages**: Pandera provides detailed error messages with failure cases
+- **Type coercion**: Automatic type conversion where possible
+- **DataFrame-level validation**: Cross-column validation (e.g., bid < ask)
+- **Integration with data pipelines**: Can be used in production for data quality checks
+
+**Future Enhancements**:
+- Add Great Expectations for more complex data quality rules
+- Integrate validation in production ingestion pipeline
+- Add data profiling and anomaly detection
+- Track validation failures as metrics
 
 ### Running Unit Tests
 
