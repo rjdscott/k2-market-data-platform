@@ -298,25 +298,18 @@ class IcebergWriter:
                     )
 
                     # Track successful transactions (P1.5: Transaction metrics)
+                    # Note: Only pass 'table' label - standard labels added automatically
                     metrics.increment(
                         "iceberg_transactions_total",
-                        labels={
-                            "exchange": exchange,
-                            "asset_class": asset_class,
-                            "table": "trades",
-                            "status": "success",
-                        },
+                        labels={"table": "trades"},
                     )
 
                     # Track transaction row count distribution
+                    # Note: Only pass 'table' label - standard labels added automatically
                     metrics.histogram(
                         "iceberg_transaction_rows",
                         value=len(records),
-                        labels={
-                            "exchange": exchange,
-                            "asset_class": asset_class,
-                            "table": "trades",
-                        },
+                        labels={"table": "trades"},
                     )
 
                 else:
@@ -374,14 +367,10 @@ class IcebergWriter:
                     },
                 )
                 # Track failed transactions (P1.5)
+                # Note: Only pass 'table' label - standard labels added automatically
                 metrics.increment(
                     "iceberg_transactions_total",
-                    labels={
-                        "exchange": exchange,
-                        "asset_class": asset_class,
-                        "table": "trades",
-                        "status": "failed",
-                    },
+                    labels={"table": "trades"},
                 )
                 raise
 
@@ -502,25 +491,18 @@ class IcebergWriter:
                     )
 
                     # Track successful transactions (P1.5: Transaction metrics)
+                    # Note: Only pass 'table' label - standard labels added automatically
                     metrics.increment(
                         "iceberg_transactions_total",
-                        labels={
-                            "exchange": exchange,
-                            "asset_class": asset_class,
-                            "table": "quotes",
-                            "status": "success",
-                        },
+                        labels={"table": "quotes"},
                     )
 
                     # Track transaction row count distribution
+                    # Note: Only pass 'table' label - standard labels added automatically
                     metrics.histogram(
                         "iceberg_transaction_rows",
                         value=len(records),
-                        labels={
-                            "exchange": exchange,
-                            "asset_class": asset_class,
-                            "table": "quotes",
-                        },
+                        labels={"table": "quotes"},
                     )
 
                 else:
@@ -578,14 +560,10 @@ class IcebergWriter:
                     },
                 )
                 # Track failed transactions (P1.5)
+                # Note: Only pass 'table' label - standard labels added automatically
                 metrics.increment(
                     "iceberg_transactions_total",
-                    labels={
-                        "exchange": exchange,
-                        "asset_class": asset_class,
-                        "table": "quotes",
-                        "status": "failed",
-                    },
+                    labels={"table": "quotes"},
                 )
                 raise
 

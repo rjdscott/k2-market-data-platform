@@ -27,12 +27,47 @@ Usage:
 
 import json
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from k2.common.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles datetime and Decimal objects.
+
+    Converts:
+    - datetime objects to ISO 8601 format strings
+    - Decimal objects to strings (preserving precision)
+
+    This is essential for DLQ messages that may contain these types
+    (datetime from timestamps, Decimal from price/quantity fields).
+
+    Example:
+        >>> json.dumps({
+        ...     "timestamp": datetime.utcnow(),
+        ...     "price": Decimal("43250.50")
+        ... }, cls=DateTimeEncoder)
+        '{"timestamp": "2024-01-15T10:30:45.123456", "price": "43250.50"}'
+    """
+
+    def default(self, obj):
+        """Override default JSON encoding to handle datetime and Decimal objects.
+
+        Args:
+            obj: Object to encode
+
+        Returns:
+            ISO format string for datetime, string for Decimal, default encoding otherwise
+        """
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, Decimal):
+            return str(obj)  # Preserve precision as string
+        return super().default(obj)
 
 
 class DeadLetterQueue:
@@ -121,7 +156,8 @@ class DeadLetterQueue:
                     "metadata": metadata or {},
                 }
 
-                line = json.dumps(entry) + "\n"
+                # Use DateTimeEncoder to handle datetime objects in message payload
+                line = json.dumps(entry, cls=DateTimeEncoder) + "\n"
                 f.write(line)
                 self._current_size += len(line.encode("utf-8"))
                 entries_written += 1

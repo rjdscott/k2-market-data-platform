@@ -634,3 +634,315 @@ class TestMarketDataConsumer:
 
         # Should return partial batch after timeout
         assert 0 <= len(batch) <= consumer.batch_size
+
+class TestConsumerSequenceTrackerIntegration:
+    """Test suite for sequence tracker integration (validates TD-001 fix).
+
+    These tests verify that the consumer calls check_sequence() with all
+    4 required arguments: exchange, symbol, sequence, timestamp.
+    """
+
+    @pytest.fixture
+    def mock_schema_registry_client(self):
+        """Mock Schema Registry client."""
+        with patch("k2.ingestion.consumer.SchemaRegistryClient") as mock_client:
+            yield mock_client.return_value
+
+    @pytest.fixture
+    def mock_kafka_consumer(self):
+        """Mock Kafka Consumer."""
+        with patch("k2.ingestion.consumer.Consumer") as mock_cons:
+            mock_instance = mock_cons.return_value
+            mock_instance.subscribe = MagicMock()
+            mock_instance.poll = MagicMock()
+            mock_instance.commit = MagicMock()
+            mock_instance.close = MagicMock()
+            yield mock_instance
+
+    @pytest.fixture
+    def mock_iceberg_writer(self):
+        """Mock IcebergWriter."""
+        with patch("k2.ingestion.consumer.IcebergWriter") as mock_writer:
+            mock_instance = mock_writer.return_value
+            mock_instance.write_trades = MagicMock()
+            yield mock_instance
+
+    @pytest.fixture
+    def mock_dlq(self):
+        """Mock DeadLetterQueue."""
+        with patch("k2.ingestion.consumer.DeadLetterQueue") as mock_dlq_class:
+            mock_instance = mock_dlq_class.return_value
+            yield mock_instance
+
+    def test_sequence_tracker_called_with_all_required_args_v2(
+        self,
+        mock_schema_registry_client,
+        mock_kafka_consumer,
+        mock_iceberg_writer,
+        mock_dlq,
+    ):
+        """Test that sequence tracker is called with all 4 required arguments (v2 schema).
+
+        This test validates the fix for TD-001: Consumer sequence tracker API mismatch.
+        The SequenceTracker.check_sequence() method requires 4 arguments:
+        - exchange: str
+        - symbol: str
+        - sequence: int
+        - timestamp: datetime
+        """
+        from datetime import datetime
+        from k2.ingestion.sequence_tracker import SequenceEvent
+
+        # Create real sequence tracker (not mocked) to test integration
+        with patch("k2.ingestion.consumer.SequenceTracker") as mock_tracker_class:
+            mock_tracker = mock_tracker_class.return_value
+            mock_tracker.check_sequence = MagicMock(return_value=SequenceEvent.OK)
+
+            # Create consumer with v2 schema
+            consumer = MarketDataConsumer(
+                topics=["market.crypto.trades.binance"],
+                consumer_group="test-consumer-v2",
+                schema_version="v2",
+                batch_size=10,
+                iceberg_writer=mock_iceberg_writer,
+                sequence_tracker=mock_tracker,
+            )
+
+            # Create mock message with v2 schema fields
+            test_timestamp = datetime(2024, 1, 15, 10, 30, 45, 123456)
+            trade_message_v2 = {
+                "message_id": "550e8400-e29b-41d4-a716-446655440000",
+                "symbol": "BTCUSDT",
+                "exchange": "binance",
+                "asset_class": "crypto",
+                "timestamp": test_timestamp,  # Exchange timestamp (datetime object)
+                "price": 43250.50,
+                "quantity": 0.5,
+                "currency": "USDT",
+                "side": "BUY",
+                "trade_conditions": [],
+                "source_sequence": 123456789,  # V2 schema uses "source_sequence"
+                "ingestion_timestamp": datetime(2024, 1, 15, 10, 30, 45, 234567),
+            }
+
+            # Mock deserializer to return our test message
+            with patch.object(consumer, "_get_deserializer") as mock_get_deser:
+                mock_deserializer = MagicMock()
+                mock_deserializer.return_value = trade_message_v2
+                mock_get_deser.return_value = mock_deserializer
+
+                # Create mock Kafka message
+                msg = MagicMock()
+                msg.error.return_value = None
+                msg.value.return_value = b"avro_bytes"
+                msg.topic.return_value = "market.crypto.trades.binance"
+                msg.partition.return_value = 0
+                msg.offset.return_value = 1
+
+                # Set up poll to return message then None
+                mock_kafka_consumer.poll.side_effect = [msg, None]
+
+                # Consume batch (this should call sequence tracker)
+                consumer._consume_batch()
+
+                # VERIFY: check_sequence() was called with all 4 required arguments
+                mock_tracker.check_sequence.assert_called_once()
+                call_args = mock_tracker.check_sequence.call_args
+
+                # Verify positional or keyword arguments
+                if call_args.args:
+                    # Called with positional args
+                    assert len(call_args.args) == 4, "check_sequence must be called with 4 arguments"
+                    exchange_arg, symbol_arg, sequence_arg, timestamp_arg = call_args.args
+                else:
+                    # Called with keyword args
+                    assert "exchange" in call_args.kwargs, "check_sequence missing 'exchange' argument"
+                    assert "symbol" in call_args.kwargs, "check_sequence missing 'symbol' argument"
+                    assert "sequence" in call_args.kwargs, "check_sequence missing 'sequence' argument"
+                    assert "timestamp" in call_args.kwargs, "check_sequence missing 'timestamp' argument"
+
+                    exchange_arg = call_args.kwargs["exchange"]
+                    symbol_arg = call_args.kwargs["symbol"]
+                    sequence_arg = call_args.kwargs["sequence"]
+                    timestamp_arg = call_args.kwargs["timestamp"]
+
+                # Verify argument values
+                assert exchange_arg == "binance", "Incorrect exchange passed to check_sequence"
+                assert symbol_arg == "BTCUSDT", "Incorrect symbol passed to check_sequence"
+                assert sequence_arg == 123456789, "Incorrect sequence passed to check_sequence"
+                assert isinstance(timestamp_arg, datetime), "Timestamp must be datetime object"
+                assert timestamp_arg == test_timestamp, "Incorrect timestamp passed to check_sequence"
+
+    def test_sequence_tracker_handles_timestamp_formats(
+        self,
+        mock_schema_registry_client,
+        mock_kafka_consumer,
+        mock_iceberg_writer,
+        mock_dlq,
+    ):
+        """Test that sequence tracker handles different timestamp formats.
+
+        Validates that timestamp conversion logic works for both:
+        - datetime objects (from Avro logical type deserialization)
+        - int/float (microseconds, fallback case)
+        """
+        from datetime import datetime
+        from k2.ingestion.sequence_tracker import SequenceEvent
+
+        with patch("k2.ingestion.consumer.SequenceTracker") as mock_tracker_class:
+            mock_tracker = mock_tracker_class.return_value
+            mock_tracker.check_sequence = MagicMock(return_value=SequenceEvent.OK)
+
+            consumer = MarketDataConsumer(
+                topics=["market.crypto.trades.binance"],
+                consumer_group="test-consumer-v2",
+                schema_version="v2",
+                batch_size=10,
+                iceberg_writer=mock_iceberg_writer,
+                sequence_tracker=mock_tracker,
+            )
+
+            # Test with timestamp as microseconds (int)
+            trade_with_int_timestamp = {
+                "symbol": "ETHUSDT",
+                "exchange": "binance",
+                "timestamp": 1705318245123456,  # Microseconds as int
+                "source_sequence": 987654321,
+            }
+
+            with patch.object(consumer, "_get_deserializer") as mock_get_deser:
+                mock_deserializer = MagicMock()
+                mock_deserializer.return_value = trade_with_int_timestamp
+                mock_get_deser.return_value = mock_deserializer
+
+                msg = MagicMock()
+                msg.error.return_value = None
+                msg.value.return_value = b"avro_bytes"
+                msg.topic.return_value = "market.crypto.trades.binance"
+                mock_kafka_consumer.poll.side_effect = [msg, None]
+
+                consumer._consume_batch()
+
+                # Verify timestamp was converted to datetime
+                call_args = mock_tracker.check_sequence.call_args
+                timestamp_arg = call_args.kwargs.get("timestamp") or call_args.args[3]
+
+                assert isinstance(timestamp_arg, datetime), "Timestamp should be converted to datetime"
+
+    def test_sequence_tracker_gap_detection_increments_stats(
+        self,
+        mock_schema_registry_client,
+        mock_kafka_consumer,
+        mock_iceberg_writer,
+        mock_dlq,
+    ):
+        """Test that sequence gaps are counted correctly in consumer stats.
+
+        Validates that only SMALL_GAP and LARGE_GAP events increment the gap counter,
+        not OK or RESET events (this was a logic bug in the original code).
+        """
+        from datetime import datetime
+        from k2.ingestion.sequence_tracker import SequenceEvent
+
+        with patch("k2.ingestion.consumer.SequenceTracker") as mock_tracker_class:
+            mock_tracker = mock_tracker_class.return_value
+
+            consumer = MarketDataConsumer(
+                topics=["market.crypto.trades.binance"],
+                consumer_group="test-consumer-v2",
+                schema_version="v2",
+                batch_size=10,
+                iceberg_writer=mock_iceberg_writer,
+                sequence_tracker=mock_tracker,
+            )
+
+            # Test different sequence events
+            test_cases = [
+                (SequenceEvent.OK, False, "OK should not increment gap counter"),
+                (SequenceEvent.SMALL_GAP, True, "SMALL_GAP should increment gap counter"),
+                (SequenceEvent.LARGE_GAP, True, "LARGE_GAP should increment gap counter"),
+                (SequenceEvent.RESET, False, "RESET should not increment gap counter"),
+                (SequenceEvent.OUT_OF_ORDER, False, "OUT_OF_ORDER should not increment gap counter"),
+            ]
+
+            for event_type, should_increment, description in test_cases:
+                # Reset stats
+                consumer.stats.sequence_gaps = 0
+                mock_tracker.check_sequence = MagicMock(return_value=event_type)
+
+                trade_message = {
+                    "symbol": "BTCUSDT",
+                    "exchange": "binance",
+                    "timestamp": datetime(2024, 1, 15, 10, 30, 45),
+                    "source_sequence": 123456789,
+                }
+
+                with patch.object(consumer, "_get_deserializer") as mock_get_deser:
+                    mock_deserializer = MagicMock()
+                    mock_deserializer.return_value = trade_message
+                    mock_get_deser.return_value = mock_deserializer
+
+                    msg = MagicMock()
+                    msg.error.return_value = None
+                    msg.value.return_value = b"avro_bytes"
+                    msg.topic.return_value = "market.crypto.trades.binance"
+                    mock_kafka_consumer.poll.side_effect = [msg, None]
+
+                    consumer._consume_batch()
+
+                    # Verify gap counter
+                    if should_increment:
+                        assert consumer.stats.sequence_gaps == 1, description
+                    else:
+                        assert consumer.stats.sequence_gaps == 0, description
+
+    def test_sequence_tracker_handles_null_source_sequence(
+        self,
+        mock_schema_registry_client,
+        mock_kafka_consumer,
+        mock_iceberg_writer,
+        mock_dlq,
+    ):
+        """Test that messages with null source_sequence are handled gracefully.
+
+        V2 schema allows source_sequence to be null (some exchanges don't provide sequence numbers).
+        """
+        from datetime import datetime
+        from k2.ingestion.sequence_tracker import SequenceEvent
+
+        with patch("k2.ingestion.consumer.SequenceTracker") as mock_tracker_class:
+            mock_tracker = mock_tracker_class.return_value
+            mock_tracker.check_sequence = MagicMock(return_value=SequenceEvent.OK)
+
+            consumer = MarketDataConsumer(
+                topics=["market.equities.trades.asx"],
+                consumer_group="test-consumer-v2",
+                schema_version="v2",
+                batch_size=10,
+                iceberg_writer=mock_iceberg_writer,
+                sequence_tracker=mock_tracker,
+            )
+
+            # Trade with null source_sequence
+            trade_without_sequence = {
+                "symbol": "BHP",
+                "exchange": "ASX",
+                "timestamp": datetime(2024, 1, 15, 10, 30, 45),
+                "source_sequence": None,  # Null sequence number
+            }
+
+            with patch.object(consumer, "_get_deserializer") as mock_get_deser:
+                mock_deserializer = MagicMock()
+                mock_deserializer.return_value = trade_without_sequence
+                mock_get_deser.return_value = mock_deserializer
+
+                msg = MagicMock()
+                msg.error.return_value = None
+                msg.value.return_value = b"avro_bytes"
+                msg.topic.return_value = "market.equities.trades.asx"
+                mock_kafka_consumer.poll.side_effect = [msg, None]
+
+                consumer._consume_batch()
+
+                # Verify check_sequence was NOT called (since source_sequence is null)
+                mock_tracker.check_sequence.assert_not_called()

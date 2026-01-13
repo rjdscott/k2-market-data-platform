@@ -54,6 +54,7 @@ import os
 import signal
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -73,7 +74,7 @@ from k2.common.config import config
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
 from k2.ingestion.dead_letter_queue import DeadLetterQueue
-from k2.ingestion.sequence_tracker import SequenceTracker
+from k2.ingestion.sequence_tracker import SequenceTracker, SequenceEvent
 from k2.storage.writer import IcebergWriter
 
 logger = get_logger(__name__)
@@ -425,11 +426,27 @@ class MarketDataConsumer:
                     # Check sequence (Decision #014: Sequence gap logging)
                     # V2 schema uses "source_sequence" instead of "sequence_number"
                     seq_field = "source_sequence" if self.schema_version == "v2" else "sequence_number"
-                    if "symbol" in record and seq_field in record:
-                        gap = self.sequence_tracker.check_sequence(
-                            record["symbol"], record[seq_field],
+                    if "symbol" in record and seq_field in record and record[seq_field] is not None:
+                        # Extract timestamp (Avro logical type deserializes to datetime)
+                        timestamp = record.get("timestamp")
+
+                        # Handle different timestamp formats (datetime object or microseconds)
+                        if timestamp and isinstance(timestamp, (int, float)):
+                            # If timestamp is in microseconds, convert to datetime
+                            timestamp = datetime.fromtimestamp(timestamp / 1_000_000)
+                        elif not isinstance(timestamp, datetime):
+                            # Fallback to current time if timestamp unavailable
+                            timestamp = datetime.utcnow()
+
+                        event = self.sequence_tracker.check_sequence(
+                            exchange=record.get("exchange", "unknown"),
+                            symbol=record["symbol"],
+                            sequence=record[seq_field],
+                            timestamp=timestamp,
                         )
-                        if gap:
+
+                        # Count only actual gaps (not OK or RESET events)
+                        if event in (SequenceEvent.SMALL_GAP, SequenceEvent.LARGE_GAP):
                             self.stats.sequence_gaps += 1
 
             except Exception as err:

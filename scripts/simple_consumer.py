@@ -36,9 +36,11 @@ except Exception as e:
     sys.exit(1)
 
 # Get stats
-stats = consumer.get_stats()
+stats = consumer.stats
 print(f"\nStatistics:")
-print(f"  Messages consumed: {stats['messages_consumed']}")
-print(f"  Batches written: {stats['batches_written']}")
-print(f"  Processing errors: {stats['processing_errors']}")
-print(f"  Last commit offset: {stats['last_committed_offset']}")
+print(f"  Messages consumed: {stats.messages_consumed}")
+print(f"  Messages written: {stats.messages_written}")
+print(f"  Errors: {stats.errors}")
+print(f"  Sequence gaps: {stats.sequence_gaps}")
+print(f"  Duration: {stats.duration_seconds:.2f} seconds")
+print(f"  Throughput: {stats.throughput:.2f} msg/sec")
