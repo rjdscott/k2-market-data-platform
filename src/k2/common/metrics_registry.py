@@ -305,6 +305,47 @@ QUERY_CACHE_MISSES_TOTAL = Counter(
 )
 
 # ==============================================================================
+# Connection Pool Metrics (DuckDB)
+# ==============================================================================
+
+CONNECTION_POOL_SIZE = Gauge(
+    "k2_connection_pool_size",
+    "Total size of connection pool (max concurrent connections)",
+    STANDARD_LABELS,
+)
+
+CONNECTION_POOL_ACTIVE_CONNECTIONS = Gauge(
+    "k2_connection_pool_active_connections",
+    "Number of connections currently in use",
+    STANDARD_LABELS,
+)
+
+CONNECTION_POOL_AVAILABLE_CONNECTIONS = Gauge(
+    "k2_connection_pool_available_connections",
+    "Number of connections available in pool",
+    STANDARD_LABELS,
+)
+
+CONNECTION_POOL_WAIT_TIME_SECONDS = Histogram(
+    "k2_connection_pool_wait_time_seconds",
+    "Time spent waiting to acquire connection from pool",
+    STANDARD_LABELS,
+    buckets=[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0],
+)
+
+CONNECTION_POOL_ACQUISITION_TIMEOUTS_TOTAL = Counter(
+    "k2_connection_pool_acquisition_timeouts_total",
+    "Total number of connection acquisition timeouts",
+    STANDARD_LABELS,
+)
+
+CONNECTION_POOL_CREATION_ERRORS_TOTAL = Counter(
+    "k2_connection_pool_creation_errors_total",
+    "Total number of connection creation errors",
+    STANDARD_LABELS,
+)
+
+# ==============================================================================
 # API Layer Metrics (FastAPI)
 # ==============================================================================
 
@@ -403,6 +444,13 @@ _METRIC_REGISTRY: dict[str, object] = {
     "query_rows_scanned": QUERY_ROWS_SCANNED,
     "query_cache_hits_total": QUERY_CACHE_HITS_TOTAL,
     "query_cache_misses_total": QUERY_CACHE_MISSES_TOTAL,
+    # Connection Pool
+    "connection_pool_size": CONNECTION_POOL_SIZE,
+    "connection_pool_active_connections": CONNECTION_POOL_ACTIVE_CONNECTIONS,
+    "connection_pool_available_connections": CONNECTION_POOL_AVAILABLE_CONNECTIONS,
+    "connection_pool_wait_time_seconds": CONNECTION_POOL_WAIT_TIME_SECONDS,
+    "connection_pool_acquisition_timeouts_total": CONNECTION_POOL_ACQUISITION_TIMEOUTS_TOTAL,
+    "connection_pool_creation_errors_total": CONNECTION_POOL_CREATION_ERRORS_TOTAL,
     # API
     "http_requests_total": HTTP_REQUESTS_TOTAL,
     "http_request_duration_seconds": HTTP_REQUEST_DURATION_SECONDS,

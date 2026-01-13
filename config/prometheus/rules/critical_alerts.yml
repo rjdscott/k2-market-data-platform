@@ -1,0 +1,401 @@
+# K2 Market Data Platform - Critical Alert Rules
+#
+# These alerts monitor critical system health and data integrity.
+# All alerts include runbook links for on-call engineers.
+#
+# Alert Severity Levels:
+# - critical: Page on-call immediately (potential data loss, system down)
+# - high: Escalate within 15 minutes (degraded service, SLA risk)
+# - medium: Alert during business hours (non-critical issues)
+#
+# Last Updated: 2026-01-13
+
+groups:
+  # ============================================================================
+  # Data Pipeline Health - CRITICAL for data integrity
+  # ============================================================================
+  - name: data_pipeline_critical
+    interval: 30s
+    rules:
+      # Consumer lag exceeding 1M messages indicates processing is falling behind
+      # Risk: Data freshness SLA violation, potential data loss if lag grows unbounded
+      - alert: ConsumerLagCritical
+        expr: kafka_consumer_lag_messages > 1000000
+        for: 5m
+        labels:
+          severity: critical
+          component: ingestion
+          team: data-platform
+        annotations:
+          summary: "Consumer lag > 1M messages ({{ $labels.consumer_group }})"
+          description: |
+            Consumer {{ $labels.consumer_group }} is {{ $value }} messages behind.
+            Data freshness SLA at risk. Check consumer health and Iceberg write performance.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/consumer-lag-recovery.md"
+          dashboard: "https://grafana.k2.local/d/consumer-health"
+
+      # Iceberg write failures indicate potential data loss
+      # Must be addressed immediately as messages may be lost
+      - alert: IcebergWriteFailures
+        expr: rate(k2_iceberg_write_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: storage
+          team: data-platform
+        annotations:
+          summary: "Iceberg writes failing ({{ $value | humanize }} errors/sec)"
+          description: |
+            Iceberg write operations are failing at {{ $value | humanize }} errors/sec.
+            Potential data loss. Check S3 connectivity, catalog availability, and consumer logs.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/storage-failures.md"
+          dashboard: "https://grafana.k2.local/d/storage-health"
+
+      # High rate of sequence gaps indicates upstream data quality issues
+      # May indicate exchange feed problems or network issues
+      - alert: SequenceGapsHigh
+        expr: rate(k2_sequence_gaps_detected_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: high
+          component: ingestion
+          team: data-platform
+        annotations:
+          summary: "High rate of sequence gaps ({{ $value | humanize }}/sec)"
+          description: |
+            Detecting {{ $value | humanize }} sequence gaps per second.
+            Data quality issue. Check exchange feed connectivity and network stability.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/sequence-gaps.md"
+          dashboard: "https://grafana.k2.local/d/data-quality"
+
+      # No data ingested for 15+ minutes indicates pipeline stuck or producer down
+      - alert: NoDataIngested
+        expr: rate(k2_kafka_messages_consumed_total[10m]) == 0
+        for: 15m
+        labels:
+          severity: high
+          component: ingestion
+          team: data-platform
+        annotations:
+          summary: "No data received in 15 minutes"
+          description: |
+            Data pipeline has not received any messages in 15 minutes.
+            Check producer health, Kafka broker connectivity, and exchange feeds.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/data-pipeline-stuck.md"
+          dashboard: "https://grafana.k2.local/d/pipeline-health"
+
+      # Duplicate rate > 10% indicates replay issues or deduplication problems
+      - alert: DuplicateRateHigh
+        expr: |
+          rate(k2_duplicate_messages_detected_total[5m])
+          /
+          rate(k2_kafka_messages_consumed_total[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: medium
+          component: ingestion
+          team: data-platform
+        annotations:
+          summary: "Duplicate message rate > 10%"
+          description: |
+            {{ $value | humanizePercentage }} of messages are duplicates.
+            Check consumer offset management and Kafka rebalancing frequency.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/duplicate-handling.md"
+
+  # ============================================================================
+  # Circuit Breaker & Degradation - Service health
+  # ============================================================================
+  - name: circuit_breaker_alerts
+    interval: 30s
+    rules:
+      # Circuit breaker open indicates service is degraded or failing
+      # System is protecting itself but functionality is impaired
+      - alert: CircuitBreakerOpen
+        expr: k2_circuit_breaker_state{state="open"} == 1
+        for: 1m
+        labels:
+          severity: critical
+          component: "{{ $labels.component }}"
+          team: data-platform
+        annotations:
+          summary: "Circuit breaker OPEN for {{ $labels.component }}"
+          description: |
+            Circuit breaker protecting {{ $labels.component }} is open.
+            Service is degraded. Check downstream dependencies and error logs.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/circuit-breaker-recovery.md"
+          dashboard: "https://grafana.k2.local/d/circuit-breakers"
+
+      # High circuit breaker failure rate indicates repeated failures
+      - alert: CircuitBreakerFailureRateHigh
+        expr: rate(k2_circuit_breaker_failures_total[5m]) > 5
+        for: 3m
+        labels:
+          severity: high
+          component: "{{ $labels.component }}"
+          team: data-platform
+        annotations:
+          summary: "High failure rate on {{ $labels.component }} circuit breaker"
+          description: |
+            Circuit breaker for {{ $labels.component }} is experiencing {{ $value }} failures/sec.
+            Check service health and downstream dependencies.
+
+  # ============================================================================
+  # API Health - User-facing service availability
+  # ============================================================================
+  - name: api_health_alerts
+    interval: 30s
+    rules:
+      # API error rate > 5% indicates service degradation
+      # Impacts user experience and data access
+      - alert: APIErrorRateHigh
+        expr: |
+          sum(rate(k2_http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(k2_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: high
+          component: api
+          team: data-platform
+        annotations:
+          summary: "API error rate > 5%"
+          description: |
+            {{ $value | humanizePercentage }} of API requests are failing with 5xx errors.
+            Check application logs, database connectivity, and query engine health.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/api-errors.md"
+          dashboard: "https://grafana.k2.local/d/api-health"
+
+      # API p99 latency > 5s indicates query performance issues
+      - alert: APILatencyHigh
+        expr: |
+          histogram_quantile(0.99,
+            rate(k2_http_request_duration_seconds_bucket[5m])
+          ) > 5
+        for: 10m
+        labels:
+          severity: high
+          component: api
+          team: data-platform
+        annotations:
+          summary: "API p99 latency > 5 seconds"
+          description: |
+            API p99 latency is {{ $value | humanizeDuration }}.
+            Query performance degraded. Check DuckDB query execution and Iceberg scan performance.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/query-performance.md"
+          dashboard: "https://grafana.k2.local/d/query-performance"
+
+      # API service down (no metrics received)
+      - alert: APIServiceDown
+        expr: up{job="k2-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: api
+          team: data-platform
+        annotations:
+          summary: "API service is DOWN"
+          description: |
+            K2 API service is not responding. Check container health and application logs.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/service-recovery.md"
+          dashboard: "https://grafana.k2.local/d/api-health"
+
+  # ============================================================================
+  # Infrastructure Health - Core dependencies
+  # ============================================================================
+  - name: infrastructure_alerts
+    interval: 30s
+    rules:
+      # Kafka broker down - critical data pipeline dependency
+      - alert: KafkaBrokerDown
+        expr: up{job="kafka"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: kafka
+          team: infrastructure
+        annotations:
+          summary: "Kafka broker DOWN"
+          description: |
+            Kafka broker {{ $labels.instance }} is unreachable.
+            Data ingestion will fail. Check broker health and network connectivity.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/kafka-recovery.md"
+          dashboard: "https://grafana.k2.local/d/kafka-health"
+
+      # PostgreSQL catalog down - prevents Iceberg writes
+      - alert: PostgreSQLCatalogDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: catalog
+          team: infrastructure
+        annotations:
+          summary: "PostgreSQL catalog DOWN"
+          description: |
+            Iceberg catalog (PostgreSQL) is unavailable. All writes will fail.
+            Check database health and network connectivity.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/catalog-recovery.md"
+          dashboard: "https://grafana.k2.local/d/postgres-health"
+
+      # MinIO (S3) down - prevents Iceberg reads/writes
+      - alert: MinIOStorageDown
+        expr: up{job="minio"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: storage
+          team: infrastructure
+        annotations:
+          summary: "MinIO storage DOWN"
+          description: |
+            MinIO (S3-compatible storage) is unavailable. Iceberg reads and writes will fail.
+            Check MinIO service health and storage capacity.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/minio-recovery.md"
+          dashboard: "https://grafana.k2.local/d/minio-health"
+
+      # Disk space critically low - risk of data loss
+      - alert: DiskSpaceCriticallyLow
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"}
+          /
+          node_filesystem_size_bytes{mountpoint="/"}) < 0.1
+        for: 10m
+        labels:
+          severity: critical
+          component: infrastructure
+          team: infrastructure
+        annotations:
+          summary: "Disk space < 10% on {{ $labels.instance }}"
+          description: |
+            Only {{ $value | humanizePercentage }} disk space remaining.
+            Risk of data loss and service failure. Clean up old files or expand storage.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/disk-space-recovery.md"
+
+      # Memory usage > 90% - risk of OOM kills
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.9
+        for: 10m
+        labels:
+          severity: high
+          component: infrastructure
+          team: infrastructure
+        annotations:
+          summary: "Memory usage > 90% on {{ $labels.instance }}"
+          description: |
+            System memory at {{ $value | humanizePercentage }}.
+            Risk of OOM kills. Check memory-intensive processes.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/memory-pressure.md"
+
+  # ============================================================================
+  # Query Performance - Data access health
+  # ============================================================================
+  - name: query_performance_alerts
+    interval: 1m
+    rules:
+      # Query timeout rate indicates expensive queries or resource contention
+      - alert: QueryTimeoutRateHigh
+        expr: |
+          rate(k2_query_executions_total{status="error"}[5m])
+          /
+          rate(k2_query_executions_total[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: high
+          component: query
+          team: data-platform
+        annotations:
+          summary: "Query timeout rate > 10%"
+          description: |
+            {{ $value | humanizePercentage }} of queries are timing out.
+            Check query complexity, DuckDB resource limits, and Iceberg file count.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/query-optimization.md"
+          dashboard: "https://grafana.k2.local/d/query-performance"
+
+      # High query execution time indicates performance degradation
+      - alert: QueryExecutionTimeSlow
+        expr: |
+          histogram_quantile(0.95,
+            rate(k2_query_duration_seconds_bucket[5m])
+          ) > 10
+        for: 15m
+        labels:
+          severity: medium
+          component: query
+          team: data-platform
+        annotations:
+          summary: "Query p95 execution time > 10 seconds"
+          description: |
+            Query p95 execution time is {{ $value | humanizeDuration }}.
+            Consider query optimization or Iceberg table compaction.
+
+  # ============================================================================
+  # Kafka Consumer Health - Offset and lag monitoring
+  # ============================================================================
+  - name: kafka_consumer_health
+    interval: 30s
+    rules:
+      # Consumer lag growing indicates processing can't keep up with ingest rate
+      - alert: ConsumerLagGrowing
+        expr: |
+          delta(kafka_consumer_lag_messages[10m]) > 100000
+        for: 10m
+        labels:
+          severity: high
+          component: ingestion
+          team: data-platform
+        annotations:
+          summary: "Consumer lag growing ({{ $labels.consumer_group }})"
+          description: |
+            Consumer lag increased by {{ $value }} messages in 10 minutes.
+            Processing rate cannot keep up with ingest rate. Check consumer CPU and Iceberg write performance.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/consumer-lag-recovery.md"
+
+      # Consumer rebalancing frequently indicates instability
+      - alert: ConsumerRebalancingFrequently
+        expr: rate(kafka_consumer_rebalances_total[15m]) > 0.1
+        for: 15m
+        labels:
+          severity: medium
+          component: ingestion
+          team: data-platform
+        annotations:
+          summary: "Consumer rebalancing frequently ({{ $labels.consumer_group }})"
+          description: |
+            Consumer group {{ $labels.consumer_group }} is rebalancing {{ $value }} times per second.
+            Check consumer health, network stability, and session timeouts.
+
+  # ============================================================================
+  # Producer Health - Data ingestion monitoring
+  # ============================================================================
+  - name: producer_health_alerts
+    interval: 30s
+    rules:
+      # Producer errors indicate upstream data feed or Kafka connectivity issues
+      - alert: ProducerErrorRateHigh
+        expr: rate(k2_kafka_produce_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: high
+          component: producer
+          team: data-platform
+        annotations:
+          summary: "Producer error rate high ({{ $value | humanize }} errors/sec)"
+          description: |
+            Producer is experiencing {{ $value | humanize }} errors per second.
+            Check Kafka broker health and producer configuration.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/producer-errors.md"
+
+      # Producer retries exhausted indicates persistent failures
+      - alert: ProducerRetriesExhausted
+        expr: rate(k2_kafka_produce_max_retries_exceeded_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: producer
+          team: data-platform
+        annotations:
+          summary: "Producer retries exhausted"
+          description: |
+            Producer has exhausted retries for {{ $value }} messages.
+            Potential data loss. Check Kafka broker health and network connectivity.

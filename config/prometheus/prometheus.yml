@@ -17,7 +17,7 @@ alerting:
 
 # Load rules once and periodically evaluate them
 rule_files:
-  # - "rules/*.yml"  # Add alert rules here
+  - "/etc/prometheus/rules/*.yml"  # Critical alert rules
 
 # Scrape configurations
 scrape_configs:

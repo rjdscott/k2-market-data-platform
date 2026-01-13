@@ -34,6 +34,7 @@ from typing import Any
 import duckdb
 
 from k2.common.config import config
+from k2.common.connection_pool import DuckDBConnectionPool
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
 
@@ -73,13 +74,22 @@ class QueryEngine:
     - Direct Parquet scanning via Iceberg extension
     - Predicate pushdown for partition pruning
     - Query performance metrics
-    - Connection pooling (reuse connection)
+    - Connection pooling for concurrent queries (configurable pool size)
     - Support for both v1 (legacy) and v2 (industry-standard) schemas
 
+    Connection Pool:
+    - Default pool size: 5 connections (supports 5 concurrent API requests)
+    - Configurable via pool_size parameter
+    - Thread-safe with automatic connection acquisition/release
+    - Metrics tracking: wait time, utilization, peak usage
+
     Usage:
-        # Query v2 tables (default)
+        # Query v2 tables (default, pool size 5)
         engine = QueryEngine(table_version="v2")
         trades = engine.query_trades(symbol="BHP", limit=100)
+
+        # Query with larger pool for high concurrency
+        engine = QueryEngine(table_version="v2", pool_size=10)
 
         # Query v1 legacy tables
         engine = QueryEngine(table_version="v1")
@@ -88,7 +98,7 @@ class QueryEngine:
         # Get market summary
         summary = engine.get_market_summary("BHP", date(2024, 1, 15))
 
-        # Close when done
+        # Close when done (releases all pool connections)
         engine.close()
     """
 
@@ -99,8 +109,9 @@ class QueryEngine:
         s3_secret_key: str | None = None,
         warehouse_path: str | None = None,
         table_version: str = "v2",
+        pool_size: int = 5,
     ):
-        """Initialize DuckDB query engine.
+        """Initialize DuckDB query engine with connection pooling.
 
         Args:
             s3_endpoint: S3/MinIO endpoint (defaults to config)
@@ -108,6 +119,9 @@ class QueryEngine:
             s3_secret_key: S3 secret key (defaults to config)
             warehouse_path: Iceberg warehouse path (defaults to config)
             table_version: Table schema version - 'v1' or 'v2' (default: 'v2')
+            pool_size: Number of connections in pool (default: 5)
+                - Demo/dev: 5 connections
+                - Production: 20-50 connections depending on load
 
         Raises:
             ValueError: If table_version is invalid
@@ -120,70 +134,27 @@ class QueryEngine:
         self.s3_secret_key = s3_secret_key or config.iceberg.s3_secret_key
         self.warehouse_path = warehouse_path or config.iceberg.warehouse
         self.table_version = table_version
+        self.pool_size = pool_size
 
         # Remove http(s):// prefix for DuckDB endpoint
         self._s3_endpoint_host = self.s3_endpoint.replace("http://", "").replace("https://", "")
 
-        # Initialize DuckDB connection
-        self._conn: duckdb.DuckDBPyConnection | None = None
-        self._init_connection()
+        # Initialize connection pool (replaces single connection)
+        self.pool = DuckDBConnectionPool(
+            s3_endpoint=self.s3_endpoint,
+            s3_access_key=self.s3_access_key,
+            s3_secret_key=self.s3_secret_key,
+            pool_size=pool_size,
+        )
 
         logger.info(
-            "Query engine initialized",
+            "Query engine initialized with connection pool",
             s3_endpoint=self.s3_endpoint,
             warehouse_path=self.warehouse_path,
             table_version=table_version,
+            pool_size=pool_size,
         )
 
-    def _init_connection(self) -> None:
-        """Initialize DuckDB connection with Iceberg and S3 extensions.
-
-        Configures safety limits:
-        - Query timeout: 60 seconds (prevents runaway queries)
-        - Memory limit: 4GB (prevents OOM on large result sets)
-        """
-        try:
-            self._conn = duckdb.connect()
-
-            # Install and load extensions
-            self._conn.execute("INSTALL iceberg; LOAD iceberg;")
-            self._conn.execute("INSTALL httpfs; LOAD httpfs;")
-
-            # Configure safety limits (SECURITY: Prevent resource exhaustion)
-            self._conn.execute("SET query_timeout = 60000")  # 60 seconds in milliseconds
-            self._conn.execute("SET memory_limit = '4GB'")
-
-            # Configure S3/MinIO credentials
-            self._conn.execute(
-                f"""
-                SET s3_endpoint='{self._s3_endpoint_host}';
-                SET s3_access_key_id='{self.s3_access_key}';
-                SET s3_secret_access_key='{self.s3_secret_key}';
-                SET s3_use_ssl=false;
-                SET s3_url_style='path';
-                SET unsafe_enable_version_guessing=true;
-            """,
-            )
-
-            logger.debug(
-                "DuckDB connection initialized with Iceberg extension",
-                query_timeout_ms=60000,
-                memory_limit="4GB",
-            )
-
-        except Exception as e:
-            logger.error("Failed to initialize DuckDB connection", error=str(e))
-            metrics.increment(
-                "query_executions_total", labels={"query_type": "initialization", "status": "error"},
-            )
-            raise
-
-    @property
-    def connection(self) -> duckdb.DuckDBPyConnection:
-        """Get the DuckDB connection, reinitializing if needed."""
-        if self._conn is None:
-            self._init_connection()
-        return self._conn
 
     def _get_table_path(self, table_name: str) -> str:
         """Get the full S3 path for an Iceberg table.
@@ -344,8 +315,10 @@ class QueryEngine:
 
         with self._query_timer(QueryType.TRADES.value):
             try:
-                result = self.connection.execute(query, params).fetchdf()
-                rows = result.to_dict(orient="records")
+                # Acquire connection from pool (thread-safe)
+                with self.pool.acquire(timeout=30.0) as conn:
+                    result = conn.execute(query, params).fetchdf()
+                    rows = result.to_dict(orient="records")
 
                 logger.debug(
                     "Trades query completed",
@@ -472,8 +445,10 @@ class QueryEngine:
 
         with self._query_timer(QueryType.QUOTES.value):
             try:
-                result = self.connection.execute(query, params).fetchdf()
-                rows = result.to_dict(orient="records")
+                # Acquire connection from pool (thread-safe)
+                with self.pool.acquire(timeout=30.0) as conn:
+                    result = conn.execute(query, params).fetchdf()
+                    rows = result.to_dict(orient="records")
 
                 logger.debug(
                     "Quotes query completed",
@@ -581,7 +556,9 @@ class QueryEngine:
 
         with self._query_timer(QueryType.SUMMARY.value):
             try:
-                result = self.connection.execute(query, params).fetchone()
+                # Acquire connection from pool (thread-safe)
+                with self.pool.acquire(timeout=30.0) as conn:
+                    result = conn.execute(query, params).fetchone()
 
                 if result is None or result[6] is None:  # Check trade_count
                     logger.debug(
@@ -672,8 +649,10 @@ class QueryEngine:
         """
 
         with self._query_timer(QueryType.HISTORICAL.value):
-            result = self.connection.execute(query, params).fetchall()
-            return [row[0] for row in result]
+            # Acquire connection from pool (thread-safe)
+            with self.pool.acquire(timeout=30.0) as conn:
+                result = conn.execute(query, params).fetchall()
+                return [row[0] for row in result]
 
     def get_date_range(
         self,
@@ -713,8 +692,10 @@ class QueryEngine:
         """
 
         with self._query_timer(QueryType.HISTORICAL.value):
-            result = self.connection.execute(query).fetchone()
-            return (result[0], result[1]) if result else (None, None)
+            # Acquire connection from pool (thread-safe)
+            with self.pool.acquire(timeout=30.0) as conn:
+                result = conn.execute(query).fetchone()
+                return (result[0], result[1]) if result else (None, None)
 
     def execute_raw(self, query: str) -> list[dict[str, Any]]:
         """Execute a raw SQL query against DuckDB.
@@ -729,35 +710,42 @@ class QueryEngine:
         """
         with self._query_timer(QueryType.HISTORICAL.value):
             try:
-                result = self.connection.execute(query).fetchdf()
-                return result.to_dict(orient="records")
+                # Acquire connection from pool (thread-safe)
+                with self.pool.acquire(timeout=30.0) as conn:
+                    result = conn.execute(query).fetchdf()
+                    return result.to_dict(orient="records")
             except Exception as e:
                 logger.error("Raw query failed", query=query[:100], error=str(e))
                 raise
 
     def get_stats(self) -> dict[str, Any]:
-        """Get engine statistics and metadata.
+        """Get engine statistics and metadata including connection pool stats.
 
         Returns:
-            Dictionary with connection info and table stats
+            Dictionary with connection info, pool statistics, and table stats
         """
+        # Get pool statistics
+        pool_stats = self.pool.get_stats()
+
         stats = {
             "s3_endpoint": self.s3_endpoint,
             "warehouse_path": self.warehouse_path,
-            "connection_active": self._conn is not None,
+            "table_version": self.table_version,
+            "pool": pool_stats,  # Include full pool statistics
         }
 
         try:
-            # Get row counts
+            # Get row counts using pool connection
             trades_path = self._get_table_path("trades")
             quotes_path = self._get_table_path("quotes")
 
-            trades_count = self.connection.execute(
-                f"SELECT COUNT(*) FROM iceberg_scan('{trades_path}')",
-            ).fetchone()[0]
-            quotes_count = self.connection.execute(
-                f"SELECT COUNT(*) FROM iceberg_scan('{quotes_path}')",
-            ).fetchone()[0]
+            with self.pool.acquire(timeout=30.0) as conn:
+                trades_count = conn.execute(
+                    f"SELECT COUNT(*) FROM iceberg_scan('{trades_path}')",
+                ).fetchone()[0]
+                quotes_count = conn.execute(
+                    f"SELECT COUNT(*) FROM iceberg_scan('{quotes_path}')",
+                ).fetchone()[0]
 
             stats["trades_count"] = trades_count
             stats["quotes_count"] = quotes_count
@@ -767,11 +755,9 @@ class QueryEngine:
         return stats
 
     def close(self) -> None:
-        """Close the DuckDB connection."""
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
-            logger.debug("Query engine connection closed")
+        """Close all connections in the pool."""
+        self.pool.close_all()
+        logger.debug("Query engine connection pool closed")
 
     def __enter__(self) -> "QueryEngine":
         """Context manager entry."""

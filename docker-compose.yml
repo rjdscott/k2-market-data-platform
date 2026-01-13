@@ -364,6 +364,7 @@ services:
       - '--web.enable-lifecycle'
     volumes:
       - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./config/prometheus/rules:/etc/prometheus/rules
       - prometheus-data:/prometheus
     networks:
       - k2-network
