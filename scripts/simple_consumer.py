@@ -19,6 +19,7 @@ consumer = MarketDataConsumer(
     iceberg_writer=writer,
     consumer_group="k2-iceberg-writer-crypto-v2",
     max_messages=5000,  # Stop after 5000 messages
+    dlq_path=Path("./data/dlq"),  # Use local path for DLQ
 )
 print("✓ Consumer initialized\n")
 

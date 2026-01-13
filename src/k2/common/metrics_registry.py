@@ -142,6 +142,12 @@ KAFKA_CONSUMER_OFFSET = Gauge(
     EXCHANGE_LABELS + ["topic", "partition", "consumer_group"],
 )
 
+CONSUMER_ERRORS_TOTAL = Counter(
+    "k2_consumer_errors_total",
+    "Total consumer errors",
+    STANDARD_LABELS + ["error_type", "consumer_group"],
+)
+
 # Sequence Tracking
 SEQUENCE_GAPS_DETECTED_TOTAL = Counter(
     "k2_sequence_gaps_detected_total",
@@ -247,6 +253,19 @@ ICEBERG_COMMIT_FAILURES_TOTAL = Counter(
     "k2_iceberg_commit_failures_total",
     "Total Iceberg transaction commit failures",
     EXCHANGE_LABELS + ["table"],
+)
+
+ICEBERG_TRANSACTIONS_TOTAL = Counter(
+    "k2_iceberg_transactions_total",
+    "Total Iceberg transactions committed",
+    STANDARD_LABELS + ["table"],
+)
+
+ICEBERG_TRANSACTION_ROWS = Histogram(
+    "k2_iceberg_transaction_rows",
+    "Number of rows per Iceberg transaction",
+    STANDARD_LABELS + ["table"],
+    buckets=[10, 50, 100, 500, 1000, 5000, 10000, 50000],
 )
 
 ICEBERG_BATCH_SIZE = Histogram(
@@ -419,6 +438,7 @@ _METRIC_REGISTRY: dict[str, object] = {
     "kafka_messages_consumed_total": KAFKA_MESSAGES_CONSUMED_TOTAL,
     "kafka_consumer_lag_seconds": KAFKA_CONSUMER_LAG_SECONDS,
     "kafka_consumer_lag_messages": KAFKA_CONSUMER_LAG_MESSAGES,
+    "consumer_errors_total": CONSUMER_ERRORS_TOTAL,
     "sequence_gaps_detected_total": SEQUENCE_GAPS_DETECTED_TOTAL,
     "sequence_resets_detected_total": SEQUENCE_RESETS_DETECTED_TOTAL,
     "out_of_order_messages_total": OUT_OF_ORDER_MESSAGES_TOTAL,
@@ -437,6 +457,8 @@ _METRIC_REGISTRY: dict[str, object] = {
     "iceberg_write_duration_seconds": ICEBERG_WRITE_DURATION_SECONDS,
     "iceberg_write_errors_total": ICEBERG_WRITE_ERRORS_TOTAL,
     "iceberg_commit_failures_total": ICEBERG_COMMIT_FAILURES_TOTAL,
+    "iceberg_transactions_total": ICEBERG_TRANSACTIONS_TOTAL,
+    "iceberg_transaction_rows": ICEBERG_TRANSACTION_ROWS,
     "iceberg_batch_size": ICEBERG_BATCH_SIZE,
     # Query
     "query_executions_total": QUERY_EXECUTIONS_TOTAL,
