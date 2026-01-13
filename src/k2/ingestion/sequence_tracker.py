@@ -119,8 +119,8 @@ class SequenceTracker:
                     f"{state.last_sequence} → {sequence}",
                 )
                 metrics.increment(
-                    "sequence_resets_total",
-                    tags={"exchange": exchange, "symbol": symbol},
+                    "sequence_resets_detected_total",
+                    labels={"exchange": exchange, "symbol": symbol},
                 )
 
                 # Reset state for new session
@@ -137,8 +137,8 @@ class SequenceTracker:
             )
 
             metrics.increment(
-                "sequence_gaps_total",
-                tags={
+                "sequence_gaps_detected_total",
+                labels={
                     "exchange": exchange,
                     "symbol": symbol,
                     "gap_size": str(gap_size),
@@ -170,7 +170,7 @@ class SequenceTracker:
 
             metrics.increment(
                 "out_of_order_messages_total",
-                tags={"exchange": exchange, "symbol": symbol},
+                labels={"exchange": exchange, "symbol": symbol},
             )
 
             # Don't update last_sequence (preserve high watermark)

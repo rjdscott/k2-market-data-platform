@@ -136,13 +136,22 @@ class QueryEngine:
         )
 
     def _init_connection(self) -> None:
-        """Initialize DuckDB connection with Iceberg and S3 extensions."""
+        """Initialize DuckDB connection with Iceberg and S3 extensions.
+
+        Configures safety limits:
+        - Query timeout: 60 seconds (prevents runaway queries)
+        - Memory limit: 4GB (prevents OOM on large result sets)
+        """
         try:
             self._conn = duckdb.connect()
 
             # Install and load extensions
             self._conn.execute("INSTALL iceberg; LOAD iceberg;")
             self._conn.execute("INSTALL httpfs; LOAD httpfs;")
+
+            # Configure safety limits (SECURITY: Prevent resource exhaustion)
+            self._conn.execute("SET query_timeout = 60000")  # 60 seconds in milliseconds
+            self._conn.execute("SET memory_limit = '4GB'")
 
             # Configure S3/MinIO credentials
             self._conn.execute(
@@ -156,7 +165,11 @@ class QueryEngine:
             """,
             )
 
-            logger.debug("DuckDB connection initialized with Iceberg extension")
+            logger.debug(
+                "DuckDB connection initialized with Iceberg extension",
+                query_timeout_ms=60000,
+                memory_limit="4GB",
+            )
 
         except Exception as e:
             logger.error("Failed to initialize DuckDB connection", error=str(e))
@@ -624,6 +637,9 @@ class QueryEngine:
 
         Returns:
             List of unique symbols
+
+        Security:
+            Uses parameterized queries to prevent SQL injection
         """
         # Validate table_version
         if self.table_version not in ("v1", "v2"):
@@ -640,9 +656,13 @@ class QueryEngine:
 
         table_path = self._get_table_path(table_name)
 
+        # Build WHERE clause with parameterized query (SECURITY: SQL injection protection)
         where_clause = ""
+        params = []
+
         if exchange:
-            where_clause = f"WHERE exchange = '{exchange}'"
+            where_clause = "WHERE exchange = ?"
+            params.append(exchange)
 
         query = f"""
             SELECT DISTINCT symbol
@@ -652,7 +672,7 @@ class QueryEngine:
         """
 
         with self._query_timer(QueryType.HISTORICAL.value):
-            result = self.connection.execute(query).fetchall()
+            result = self.connection.execute(query, params).fetchall()
             return [row[0] for row in result]
 
     def get_date_range(

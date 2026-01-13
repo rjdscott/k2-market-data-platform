@@ -54,21 +54,45 @@ import os
 import signal
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
 from confluent_kafka.serialization import MessageField, SerializationContext
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    RetryError,
+)
 
 from k2.common.config import config
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
+from k2.ingestion.dead_letter_queue import DeadLetterQueue
 from k2.ingestion.sequence_tracker import SequenceTracker
 from k2.storage.writer import IcebergWriter
 
 logger = get_logger(__name__)
 metrics = create_component_metrics("consumer")
+
+
+# Define retryable exceptions (transient failures that should be retried)
+RETRYABLE_ERRORS = (
+    ConnectionError,  # Network issues
+    TimeoutError,  # S3 timeouts, catalog timeouts
+    OSError,  # File system errors (disk full, permissions)
+)
+
+# Permanent errors that should go to DLQ (no retry)
+PERMANENT_ERRORS = (
+    ValueError,  # Data validation failures
+    TypeError,  # Schema mismatches
+    KeyError,  # Missing required fields
+)
 
 
 @dataclass
@@ -134,8 +158,13 @@ class MarketDataConsumer:
         max_messages: int | None = None,
         iceberg_writer: IcebergWriter | None = None,
         sequence_tracker: SequenceTracker | None = None,
+        dlq_path: Path | str | None = None,
     ):
-        """Initialize consumer with configuration."""
+        """Initialize consumer with configuration.
+
+        Args:
+            dlq_path: Path for Dead Letter Queue files (for permanent failures)
+        """
         # Validate topic subscription
         if not topics and not topic_pattern:
             raise ValueError("Must specify either topics or topic_pattern")
@@ -166,6 +195,10 @@ class MarketDataConsumer:
         self._init_consumer()
         self.iceberg_writer = iceberg_writer or IcebergWriter(schema_version=self.schema_version)
         self.sequence_tracker = sequence_tracker or SequenceTracker()
+
+        # Initialize Dead Letter Queue for permanent failures
+        dlq_default_path = Path("/var/k2/dlq") if dlq_path is None else Path(dlq_path)
+        self.dlq = DeadLetterQueue(path=dlq_default_path, max_size_mb=100)
 
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._shutdown_handler)
@@ -418,7 +451,8 @@ class MarketDataConsumer:
         # Write batch to Iceberg if we have messages
         if batch:
             try:
-                self._write_batch_to_iceberg(batch)
+                # Use retry logic for transient failures
+                self._write_batch_with_retry(batch)
                 self.stats.messages_written += len(batch)
 
                 # Commit offsets after successful write (at-least-once)
@@ -447,19 +481,67 @@ class MarketDataConsumer:
                     },
                 )
 
-            except Exception as err:
-                logger.error(
-                    "Failed to write batch to Iceberg",
+            except RetryError as err:
+                # Exhausted retries for transient error - CRASH and restart
+                logger.critical(
+                    "Iceberg write failed after 3 retries - CRASH",
+                    error=str(err.last_attempt.exception()),
+                    error_type=type(err.last_attempt.exception()).__name__,
                     batch_size=len(batch),
-                    error=str(err),
+                    consumer_group=self.consumer_group,
                 )
                 self.stats.errors += 1
-                # TODO: Add consumer_errors_total metric to registry
-                # metrics.increment(
-                #     "consumer_errors_total",
-                #     labels={"error_type": "iceberg_write", "consumer_group": self.consumer_group},
-                # )
-                # Don't commit offsets on failure - will reprocess
+                metrics.increment(
+                    "consumer_errors_total",
+                    labels={"error_type": "exhausted_retries", "consumer_group": self.consumer_group},
+                )
+                # Don't commit offsets - will reprocess after restart
+                raise
+
+            except PERMANENT_ERRORS as err:
+                # Permanent error (validation, schema mismatch) - send to DLQ
+                logger.error(
+                    "Permanent write error - sending to DLQ",
+                    error=str(err),
+                    error_type=type(err).__name__,
+                    batch_size=len(batch),
+                    consumer_group=self.consumer_group,
+                )
+
+                # Write to DLQ for manual review
+                self.dlq.write(
+                    messages=batch,
+                    error=str(err),
+                    error_type=type(err).__name__,
+                    metadata={
+                        "consumer_group": self.consumer_group,
+                        "topic": batch[0].get("topic", "unknown") if batch else "unknown",
+                        "schema_version": self.schema_version,
+                    },
+                )
+
+                self.stats.errors += 1
+                metrics.increment(
+                    "consumer_errors_total",
+                    labels={"error_type": "permanent", "consumer_group": self.consumer_group},
+                )
+
+                # Commit offsets to skip bad messages (already in DLQ)
+                self.consumer.commit(asynchronous=False)
+
+            except Exception as err:
+                # Unexpected error - log and crash for investigation
+                logger.critical(
+                    "Unexpected error during batch processing",
+                    error=str(err),
+                    error_type=type(err).__name__,
+                    batch_size=len(batch),
+                )
+                self.stats.errors += 1
+                metrics.increment(
+                    "consumer_errors_total",
+                    labels={"error_type": "unexpected", "consumer_group": self.consumer_group},
+                )
                 raise
 
     def _deserialize_message(self, msg) -> dict[str, Any] | None:
@@ -479,6 +561,40 @@ class MarketDataConsumer:
         value = deserializer(msg.value(), SerializationContext(msg.topic(), MessageField.VALUE))
 
         return value
+
+    @retry(
+        retry=retry_if_exception_type(RETRYABLE_ERRORS),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        reraise=True,
+    )
+    def _write_batch_with_retry(self, batch: list[dict[str, Any]]) -> None:
+        """Write batch to Iceberg with automatic retry for transient failures.
+
+        Retries on transient errors (connection, timeout, OSError) with exponential backoff:
+        - Attempt 1: Immediate
+        - Attempt 2: 2 seconds wait
+        - Attempt 3: 4 seconds wait
+
+        Raises:
+            RetryError: If all retry attempts exhausted (transient error)
+            Other exceptions: Permanent errors (schema mismatch, validation, etc.)
+
+        Security:
+            Prevents data loss by retrying transient failures (S3 throttling,
+            network timeouts) while properly handling permanent errors via DLQ.
+        """
+        try:
+            self.iceberg_writer.write_trades(batch)
+
+        except RETRYABLE_ERRORS as err:
+            logger.warning(
+                "Transient Iceberg write failure, will retry",
+                error=str(err),
+                error_type=type(err).__name__,
+                batch_size=len(batch),
+            )
+            raise  # Let tenacity handle retry
 
     def _write_batch_to_iceberg(self, batch: list[dict[str, Any]]):
         """Write batch of records to Iceberg.
