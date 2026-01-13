@@ -108,6 +108,16 @@ class TestMarketDataConsumer:
             yield mock_instance
 
     @pytest.fixture
+    def mock_dlq(self):
+        """Mock DeadLetterQueue."""
+        with patch("k2.ingestion.consumer.DeadLetterQueue") as mock_dlq_class:
+            mock_instance = mock_dlq_class.return_value
+            mock_instance.write = MagicMock()
+            mock_instance.close = MagicMock()
+
+            yield mock_instance
+
+    @pytest.fixture
     def consumer(
         self,
         mock_schema_registry_client,
@@ -115,6 +125,7 @@ class TestMarketDataConsumer:
         mock_avro_deserializer,
         mock_iceberg_writer,
         mock_sequence_tracker,
+        mock_dlq,
     ):
         """Create consumer with all mocked dependencies."""
         return MarketDataConsumer(
@@ -134,6 +145,7 @@ class TestMarketDataConsumer:
         mock_avro_deserializer,
         mock_iceberg_writer,
         mock_sequence_tracker,
+        mock_dlq,
     ):
         """Test consumer initializes with topic list."""
         consumer = MarketDataConsumer(
@@ -155,6 +167,7 @@ class TestMarketDataConsumer:
         mock_avro_deserializer,
         mock_iceberg_writer,
         mock_sequence_tracker,
+        mock_dlq,
     ):
         """Test consumer initializes with topic pattern."""
         consumer = MarketDataConsumer(
@@ -186,6 +199,7 @@ class TestMarketDataConsumer:
         mock_avro_deserializer,
         mock_iceberg_writer,
         mock_sequence_tracker,
+        mock_dlq,
     ):
         """Test consumer accepts custom batch size."""
         consumer = MarketDataConsumer(
@@ -204,6 +218,7 @@ class TestMarketDataConsumer:
         mock_avro_deserializer,
         mock_iceberg_writer,
         mock_sequence_tracker,
+        mock_dlq,
     ):
         """Test consumer reads defaults from environment."""
         with patch.dict(
@@ -244,6 +259,7 @@ class TestMarketDataConsumer:
         mock_avro_deserializer,
         mock_iceberg_writer,
         mock_sequence_tracker,
+        mock_dlq,
     ):
         """Test consumer subscribes to topic pattern."""
         consumer = MarketDataConsumer(
@@ -492,6 +508,7 @@ class TestMarketDataConsumer:
         mock_avro_deserializer,
         mock_iceberg_writer,
         mock_sequence_tracker,
+        mock_dlq,
     ):
         """Test consumer handles Kafka initialization exception."""
         with patch("k2.ingestion.consumer.Consumer") as mock_cons:
@@ -510,6 +527,7 @@ class TestMarketDataConsumer:
         mock_avro_deserializer,
         mock_iceberg_writer,
         mock_sequence_tracker,
+        mock_dlq,
     ):
         """Test consumer handles Schema Registry exception."""
         with patch("k2.ingestion.consumer.SchemaRegistryClient") as mock_client:
@@ -529,6 +547,7 @@ class TestMarketDataConsumer:
         mock_avro_deserializer,
         mock_iceberg_writer,
         mock_sequence_tracker,
+        mock_dlq,
     ):
         """Test create_consumer factory function."""
         consumer = create_consumer(

@@ -130,7 +130,8 @@ class DuckDBConnectionPool:
             conn.execute("INSTALL httpfs; LOAD httpfs;")
 
             # Configure safety limits
-            conn.execute(f"SET query_timeout = {self.query_timeout_ms}")
+            # Note: DuckDB doesn't support query_timeout setting
+            # Query timeouts should be implemented at the Python level if needed
             conn.execute(f"SET memory_limit = '{self.memory_limit}'")
 
             # Configure S3/MinIO credentials
