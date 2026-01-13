@@ -164,11 +164,12 @@ Consumer E2E validation not completed. Cannot verify Kafka → Iceberg → Query
 
 ### TD-004: Metrics Unit Tests Missing
 
-**Status**: NEW
+**Status**: RESOLVED
 **Priority**: P2 - Medium
-**Estimate**: 2-3 hours
+**Estimate**: 2-3 hours → **Actual**: 2.5 hours
 **Created**: 2026-01-13
-**Owner**: TBD
+**Resolved**: 2026-01-13
+**Resolution**: Commit `cc389e2` - Created comprehensive metrics label testing framework with 7 tests
 
 **Description**:
 No unit tests verify correct labels are passed to Prometheus metrics, leading to runtime "Incorrect label names" errors.
@@ -239,11 +240,12 @@ def test_kafka_produce_error_metric_labels():
 
 ### TD-005: Metrics Linting Pre-commit Hook
 
-**Status**: NEW
+**Status**: RESOLVED
 **Priority**: P2 - Medium
-**Estimate**: 3-4 hours
+**Estimate**: 3-4 hours → **Actual**: 1 hour
 **Created**: 2026-01-13
-**Owner**: TBD
+**Resolved**: 2026-01-13
+**Resolution**: Commit `9e8b342` - Created AST-based validation script and pre-commit hook
 
 **Description**:
 No automated validation that metrics calls match metric definitions. Label mismatches only discovered at runtime.
@@ -291,11 +293,12 @@ fi
 
 ### TD-006: Missing reference_data_v2.avsc Schema
 
-**Status**: NEW
+**Status**: RESOLVED
 **Priority**: P2 - Medium
-**Estimate**: 1 hour
+**Estimate**: 1 hour → **Actual**: 1 hour
 **Created**: 2026-01-13
-**Owner**: TBD
+**Resolved**: 2026-01-13
+**Resolution**: Commit `e6c0f5e` - Created v2 schema with hybrid approach and registered with Schema Registry
 
 **Description**:
 The v2 schema for reference data doesn't exist, causing `init_e2e_demo.py` to fail.
