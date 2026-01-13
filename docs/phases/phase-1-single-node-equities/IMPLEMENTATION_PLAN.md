@@ -261,7 +261,7 @@ See [Testing Summary](./reference/testing-summary.md) for complete strategy.
 - ✅ Documentation & cleanup
 
 ### Next Phase
-See [Phase 2: Demo Enhancements](../phase-2-demo-enhancements/) for the next implementation plan addressing:
+See [Phase 2: Demo Enhancements](../phase-2-platform-enhancements/) for the next implementation plan addressing:
 - Platform positioning as Research Data Platform
 - Circuit breaker and degradation cascade
 - Redis sequence tracker
@@ -286,4 +286,4 @@ See [Phase 2: Demo Enhancements](../phase-2-demo-enhancements/) for the next imp
 
 ---
 
-**Status**: ✅ 100% complete. Phase 1 finished. See [Phase 2](../phase-2-demo-enhancements/) for next steps.
+**Status**: ✅ 100% complete. Phase 1 finished. See [Phase 2](../phase-2-platform-enhancements/) for next steps.

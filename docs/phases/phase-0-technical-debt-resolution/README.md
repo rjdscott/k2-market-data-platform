@@ -247,9 +247,9 @@ Phase 1: Single-Node Implementation
 - [src/k2/schemas/reference_data_v2.avsc](../../../src/k2/schemas/reference_data_v2.avsc) - V2 schema (TD-006)
 
 **Related Phases**:
-- [Phase 1: Single-Node Implementation](../phase-1-single-node-implementation/)
-- [Phase 2 Prep: V2 Schema + Binance](../phase-2-prep/)
-- [Phase 2: Demo Enhancements](../phase-2-demo-enhancements/)
+- [Phase 1: Single-Node Implementation](../phase-1-single-node-equities/)
+- [Phase 2 Prep: V2 Schema + Binance](../phase-3-crypto/)
+- [Phase 2: Demo Enhancements](../phase-2-platform-enhancements/)
 
 ---
 

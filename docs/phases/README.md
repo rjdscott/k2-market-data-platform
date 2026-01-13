@@ -27,7 +27,7 @@ This directory contains phase-specific implementation documentation. Each phase 
 2. **Phase 2** = **Project Phase** (Demo Enhancements)
    - Sequential project phases (Phase 0, 1, 2, 3...)
    - Each phase = major feature milestone
-   - Tracked in: [`phase-2-demo-enhancements/`](./phase-2-demo-enhancements/)
+   - Tracked in: [`phase-2-demo-enhancements/`](phase-2-platform-enhancements/)
 
 **Example**:
 - ✅ "P2 technical debt resolved" = Priority-2 items (TD-004, TD-005, TD-006) complete
@@ -82,7 +82,7 @@ docs/phases/
 - REST API with authentication
 - Prometheus + Grafana monitoring
 
-**Documentation**: [`phase-1-single-node-implementation/`](./phase-1-single-node-implementation/)
+**Documentation**: [`phase-1-single-node-implementation/`](phase-1-single-node-equities/)
 
 ---
 
@@ -99,7 +99,7 @@ docs/phases/
 - E2E pipeline validated
 - 138 msg/s throughput, sub-second queries
 
-**Documentation**: [`phase-2-prep/`](./phase-2-prep/)
+**Documentation**: [`phase-2-prep/`](phase-3-crypto/)
 
 ---
 
@@ -120,7 +120,7 @@ docs/phases/
 8. Cost Model (FinOps documentation)
 9. Final Validation
 
-**Documentation**: [`phase-2-demo-enhancements/`](./phase-2-demo-enhancements/)
+**Documentation**: [`phase-2-demo-enhancements/`](phase-2-platform-enhancements/)
 
 **Prerequisites**: ✅ Phase 2 Prep complete, ✅ P0/P1/P2 technical debt resolved
 
@@ -137,7 +137,7 @@ docs/phases/
 - Distributed deployment
 - Auto-scaling policies
 
-**Documentation**: [`phase-3-scale/`](./phase-3-scale/)
+**Documentation**: [`phase-3-scale/`](phase-4-consolidate-docs/)
 
 **Prerequisites**: Phase 2 Demo Enhancements complete
 
@@ -160,14 +160,14 @@ docs/phases/
 ## Quick Navigation
 
 ### By Status
-- ✅ **Complete Phases**: [Phase 0](./phase-0-technical-debt-resolution/), [Phase 1](./phase-1-single-node-implementation/), [Phase 2 Prep](./phase-2-prep/)
-- ⬜ **Next Phase**: [Phase 2: Demo Enhancements](./phase-2-demo-enhancements/)
-- 📋 **Future Phases**: [Phase 3: Scale](./phase-3-scale/)
+- ✅ **Complete Phases**: [Phase 0](./phase-0-technical-debt-resolution/), [Phase 1](phase-1-single-node-equities/), [Phase 2 Prep](phase-3-crypto/)
+- ⬜ **Next Phase**: [Phase 2: Demo Enhancements](phase-2-platform-enhancements/)
+- 📋 **Future Phases**: [Phase 3: Scale](phase-4-consolidate-docs/)
 
 ### By Topic
 - **Technical Debt**: [Phase 0](./phase-0-technical-debt-resolution/) | [TECHNICAL_DEBT.md](../../TECHNICAL_DEBT.md)
-- **Feature Development**: [Phase 1](./phase-1-single-node-implementation/), [Phase 2 Prep](./phase-2-prep/), [Phase 2](./phase-2-demo-enhancements/)
-- **Scaling & Production**: [Phase 3](./phase-3-scale/)
+- **Feature Development**: [Phase 1](phase-1-single-node-equities/), [Phase 2 Prep](phase-3-crypto/), [Phase 2](phase-2-platform-enhancements/)
+- **Scaling & Production**: [Phase 3](phase-4-consolidate-docs/)
 
 ---
 

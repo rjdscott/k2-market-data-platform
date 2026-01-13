@@ -243,9 +243,9 @@ After P2:       86/100 (maintained, quality improvements)
 - [src/k2/schemas/reference_data_v2.avsc](../../../src/k2/schemas/reference_data_v2.avsc) - TD-006
 
 ### Related Phases
-- [Phase 1: Single-Node Implementation](../phase-1-single-node-implementation/) - Foundation
-- [Phase 2 Prep: V2 Schema + Binance](../phase-2-prep/) - Feature work
-- [Phase 2: Demo Enhancements](../phase-2-demo-enhancements/) - Next phase
+- [Phase 1: Single-Node Implementation](../phase-1-single-node-equities/) - Foundation
+- [Phase 2 Prep: V2 Schema + Binance](../phase-3-crypto/) - Feature work
+- [Phase 2: Demo Enhancements](../phase-2-platform-enhancements/) - Next phase
 
 ---
 

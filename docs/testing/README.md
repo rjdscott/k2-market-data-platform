@@ -392,7 +392,7 @@ steps:
 ## Related Documentation
 
 - **Strategy Details**: [strategy.md](./strategy.md)
-- **Implementation Steps**: [../phases/phase-1-single-node-implementation/steps/](../phases/phase-1-single-node-implementation/steps/)
+- **Implementation Steps**: [../phases/phase-1-single-node-implementation/steps/](../phases/phase-1-single-node-equities/steps/)
 - **CI/CD**: [../operations/](../operations/)
 
 ---

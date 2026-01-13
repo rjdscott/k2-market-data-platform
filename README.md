@@ -298,7 +298,7 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 - DuckDB vs Presto: Single-node simplicity for Phase 1, scales to ~10TB dataset
 - At-least-once vs Exactly-once: Market data duplicates acceptable, simpler implementation
 
-See [Architecture Decision Records](./docs/phases/phase-1-single-node-implementation/DECISIONS.md) for 26 detailed decisions.
+See [Architecture Decision Records](docs/phases/phase-1-single-node-equities/DECISIONS.md) for 26 detailed decisions.
 
 ---
 
@@ -423,7 +423,7 @@ See [Scaling Strategy](./docs/architecture/system-design.md#scaling-consideratio
 
 **Estimated monthly cost at 100x scale**: ~$15K/month AWS (ap-southeast-2).
 
-See [Phase 2: Cost Model](./docs/phases/phase-2-demo-enhancements/steps/step-08-cost-model.md) for planned analysis.
+See [Phase 2: Cost Model](docs/phases/phase-2-platform-enhancements/steps/step-08-cost-model.md) for planned analysis.
 
 ---
 
@@ -651,8 +651,8 @@ Comprehensive documentation organized by audience and purpose.
 
 ### For Implementation
 
-- [Phase 1: Single-Node](./docs/phases/phase-1-single-node-implementation/) - Implementation plan, progress, decisions
-- [Phase 2: Enhancements](./docs/phases/phase-2-demo-enhancements/) - Production readiness steps
+- [Phase 1: Single-Node](docs/phases/phase-1-single-node-equities/) - Implementation plan, progress, decisions
+- [Phase 2: Enhancements](docs/phases/phase-2-platform-enhancements/) - Production readiness steps
 
 ### Reference
 
@@ -686,7 +686,7 @@ K2 is developed in phases, each with clear business drivers and validation crite
 - 8 REST endpoints
 - 7 CLI commands
 
-See [Phase 1 Status](./docs/phases/phase-1-single-node-implementation/STATUS.md) for detailed completion report.
+See [Phase 1 Status](docs/phases/phase-1-single-node-equities/STATUS.md) for detailed completion report.
 
 ### Phase 2 Prep: Schema Evolution + Binance Streaming ✅ Complete
 
@@ -709,7 +709,7 @@ See [Phase 1 Status](./docs/phases/phase-1-single-node-implementation/STATUS.md)
 - Sub-second query performance
 - All 15 v2 schema fields validated
 
-See [Phase 2 Prep Status](./docs/phases/phase-2-prep/STATUS.md) for detailed completion report.
+See [Phase 2 Prep Status](docs/phases/phase-3-crypto/STATUS.md) for detailed completion report.
 
 ### Phase 2: Demo Enhancements 🟡 Ready to Start
 
@@ -731,7 +731,7 @@ See [Phase 2 Prep Status](./docs/phases/phase-2-prep/STATUS.md) for detailed com
 - Enhanced demo script with architectural storytelling
 - Cost model (AWS pricing at 1M msg/sec scale)
 
-See [Phase 2 Implementation Plan](./docs/phases/phase-2-demo-enhancements/IMPLEMENTATION_PLAN.md) for 9-step roadmap.
+See [Phase 2 Implementation Plan](docs/phases/phase-2-platform-enhancements/IMPLEMENTATION_PLAN.md) for 9-step roadmap.
 
 ### Phase 3: Multi-Region & Scale (Future)
 
@@ -760,7 +760,7 @@ Contributions welcome. See [Contributing Guide](./CONTRIBUTING.md) for developme
 
 - **Documentation**: See [docs/](./docs/)
 - **Issues**: [GitHub Issues](https://github.com/rjdscott/k2-market-data-platform/issues)
-- **Architecture Questions**: [Architecture Decision Records](./docs/phases/phase-1-single-node-implementation/DECISIONS.md)
+- **Architecture Questions**: [Architecture Decision Records](docs/phases/phase-1-single-node-equities/DECISIONS.md)
 
 ---
 
