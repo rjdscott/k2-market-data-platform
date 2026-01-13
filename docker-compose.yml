@@ -1,5 +1,3 @@
-version: '3.9'
-
 # Real-time Market Data Platform - Infrastructure Stack
 #
 # Architecture: Event-driven streaming platform with lakehouse storage

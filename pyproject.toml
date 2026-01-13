@@ -65,7 +65,8 @@ dependencies = [
     "typer>=0.21.0",    # Latest: 0.21.1 (2026-01-06) - Modern CLI framework
     # WebSocket streaming
     "websockets>=13.0",  # Latest: 13.1 (2024-12), Async WebSocket client/server
-    "docker>=7.1.0",
+    "docker==7.1.0",
+    "pytest-timeout==2.3.1",
 ]
 
 [project.optional-dependencies]

@@ -250,6 +250,11 @@ class IcebergWriter:
             )
             raise
 
+        # Capture snapshot BEFORE write (P1.5: Transaction logging enhancement)
+        snapshot_before = table.current_snapshot()
+        snapshot_id_before = snapshot_before.snapshot_id if snapshot_before else None
+        sequence_number_before = snapshot_before.sequence_number if snapshot_before else None
+
         # Append data with timing (ACID transaction)
         with metrics.timer(
             "iceberg_write_duration_seconds",
@@ -261,7 +266,9 @@ class IcebergWriter:
             },
         ):
             try:
+                start_time = time.time()
                 table.append(arrow_table)
+                duration_ms = (time.time() - start_time) * 1000
 
                 # Get transaction metadata after successful write
                 current_snapshot = table.current_snapshot()
@@ -270,15 +277,18 @@ class IcebergWriter:
                     sequence_number = current_snapshot.sequence_number
                     summary = current_snapshot.summary or {}
 
-                    # Log detailed transaction information
+                    # Log detailed transaction information with before/after snapshots
                     logger.info(
-                        "Trades written to Iceberg",
+                        "Iceberg transaction committed",
                         table=table_name,
                         exchange=exchange,
                         asset_class=asset_class,
                         record_count=len(records),
-                        transaction_snapshot_id=snapshot_id,
-                        transaction_sequence_number=sequence_number,
+                        snapshot_id_before=snapshot_id_before,
+                        snapshot_id_after=snapshot_id,
+                        sequence_number_before=sequence_number_before,
+                        sequence_number_after=sequence_number,
+                        transaction_duration_ms=round(duration_ms, 2),
                         total_records=summary.get("total-records", "unknown"),
                         total_data_files=summary.get("total-data-files", "unknown"),
                         total_delete_files=summary.get("total-delete-files", "unknown"),
@@ -286,6 +296,29 @@ class IcebergWriter:
                         added_records=summary.get("added-records", "0"),
                         added_files_size_bytes=summary.get("added-files-size", "0"),
                     )
+
+                    # Track successful transactions (P1.5: Transaction metrics)
+                    metrics.increment(
+                        "iceberg_transactions_total",
+                        labels={
+                            "exchange": exchange,
+                            "asset_class": asset_class,
+                            "table": "trades",
+                            "status": "success",
+                        },
+                    )
+
+                    # Track transaction row count distribution
+                    metrics.histogram(
+                        "iceberg_transaction_rows",
+                        value=len(records),
+                        labels={
+                            "exchange": exchange,
+                            "asset_class": asset_class,
+                            "table": "trades",
+                        },
+                    )
+
                 else:
                     # Fallback to basic logging if snapshot metadata unavailable
                     logger.info(
@@ -321,11 +354,15 @@ class IcebergWriter:
                 return len(records)
 
             except Exception as e:
+                # Enhanced error logging with snapshot context (P1.5)
                 logger.error(
-                    "Failed to append trades",
+                    "Iceberg transaction failed",
                     table=table_name,
                     record_count=len(records),
+                    snapshot_id_before=snapshot_id_before,
+                    sequence_number_before=sequence_number_before,
                     error=str(e),
+                    error_type=type(e).__name__,
                 )
                 metrics.increment(
                     "iceberg_write_errors_total",
@@ -334,6 +371,16 @@ class IcebergWriter:
                         "asset_class": asset_class,
                         "table": "trades",
                         "error_type": "append_failed",
+                    },
+                )
+                # Track failed transactions (P1.5)
+                metrics.increment(
+                    "iceberg_transactions_total",
+                    labels={
+                        "exchange": exchange,
+                        "asset_class": asset_class,
+                        "table": "trades",
+                        "status": "failed",
                     },
                 )
                 raise
@@ -407,6 +454,11 @@ class IcebergWriter:
             )
             raise
 
+        # Capture snapshot BEFORE write (P1.5: Transaction logging enhancement)
+        snapshot_before = table.current_snapshot()
+        snapshot_id_before = snapshot_before.snapshot_id if snapshot_before else None
+        sequence_number_before = snapshot_before.sequence_number if snapshot_before else None
+
         # Append data with timing (ACID transaction)
         with metrics.timer(
             "iceberg_write_duration_seconds",
@@ -418,7 +470,9 @@ class IcebergWriter:
             },
         ):
             try:
+                start_time = time.time()
                 table.append(arrow_table)
+                duration_ms = (time.time() - start_time) * 1000
 
                 # Get transaction metadata after successful write
                 current_snapshot = table.current_snapshot()
@@ -427,15 +481,18 @@ class IcebergWriter:
                     sequence_number = current_snapshot.sequence_number
                     summary = current_snapshot.summary or {}
 
-                    # Log detailed transaction information
+                    # Log detailed transaction information with before/after snapshots
                     logger.info(
-                        "Quotes written to Iceberg",
+                        "Iceberg transaction committed",
                         table=table_name,
                         exchange=exchange,
                         asset_class=asset_class,
                         record_count=len(records),
-                        transaction_snapshot_id=snapshot_id,
-                        transaction_sequence_number=sequence_number,
+                        snapshot_id_before=snapshot_id_before,
+                        snapshot_id_after=snapshot_id,
+                        sequence_number_before=sequence_number_before,
+                        sequence_number_after=sequence_number,
+                        transaction_duration_ms=round(duration_ms, 2),
                         total_records=summary.get("total-records", "unknown"),
                         total_data_files=summary.get("total-data-files", "unknown"),
                         total_delete_files=summary.get("total-delete-files", "unknown"),
@@ -443,6 +500,29 @@ class IcebergWriter:
                         added_records=summary.get("added-records", "0"),
                         added_files_size_bytes=summary.get("added-files-size", "0"),
                     )
+
+                    # Track successful transactions (P1.5: Transaction metrics)
+                    metrics.increment(
+                        "iceberg_transactions_total",
+                        labels={
+                            "exchange": exchange,
+                            "asset_class": asset_class,
+                            "table": "quotes",
+                            "status": "success",
+                        },
+                    )
+
+                    # Track transaction row count distribution
+                    metrics.histogram(
+                        "iceberg_transaction_rows",
+                        value=len(records),
+                        labels={
+                            "exchange": exchange,
+                            "asset_class": asset_class,
+                            "table": "quotes",
+                        },
+                    )
+
                 else:
                     # Fallback to basic logging if snapshot metadata unavailable
                     logger.info(
@@ -478,11 +558,15 @@ class IcebergWriter:
                 return len(records)
 
             except Exception as e:
+                # Enhanced error logging with snapshot context (P1.5)
                 logger.error(
-                    "Failed to append quotes",
+                    "Iceberg transaction failed",
                     table=table_name,
                     record_count=len(records),
+                    snapshot_id_before=snapshot_id_before,
+                    sequence_number_before=sequence_number_before,
                     error=str(e),
+                    error_type=type(e).__name__,
                 )
                 metrics.increment(
                     "iceberg_write_errors_total",
@@ -491,6 +575,16 @@ class IcebergWriter:
                         "asset_class": asset_class,
                         "table": "quotes",
                         "error_type": "append_failed",
+                    },
+                )
+                # Track failed transactions (P1.5)
+                metrics.increment(
+                    "iceberg_transactions_total",
+                    labels={
+                        "exchange": exchange,
+                        "asset_class": asset_class,
+                        "table": "quotes",
+                        "status": "failed",
                     },
                 )
                 raise
