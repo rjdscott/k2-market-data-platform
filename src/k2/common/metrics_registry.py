@@ -421,6 +421,18 @@ DEGRADATION_LEVEL = Gauge(
     STANDARD_LABELS,
 )
 
+DEGRADATION_TRANSITIONS_TOTAL = Counter(
+    "k2_degradation_transitions_total",
+    "Total degradation level transitions",
+    STANDARD_LABELS + ["from_level", "to_level"],
+)
+
+MESSAGES_SHED_TOTAL = Counter(
+    "k2_messages_shed_total",
+    "Total messages shed due to load shedding",
+    STANDARD_LABELS + ["symbol_tier", "reason"],
+)
+
 # ==============================================================================
 # Registry Helper Functions
 # ==============================================================================
@@ -483,6 +495,8 @@ _METRIC_REGISTRY: dict[str, object] = {
     "circuit_breaker_failures_total": CIRCUIT_BREAKER_FAILURES_TOTAL,
     "backpressure_events_total": BACKPRESSURE_EVENTS_TOTAL,
     "degradation_level": DEGRADATION_LEVEL,
+    "degradation_transitions_total": DEGRADATION_TRANSITIONS_TOTAL,
+    "messages_shed_total": MESSAGES_SHED_TOTAL,
 }
 
 

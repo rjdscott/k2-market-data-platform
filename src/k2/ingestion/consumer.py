@@ -71,6 +71,8 @@ from tenacity import (
 )
 
 from k2.common.config import config
+from k2.common.degradation_manager import DegradationManager, DegradationLevel
+from k2.common.load_shedder import LoadShedder
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
 from k2.ingestion.dead_letter_queue import DeadLetterQueue
@@ -201,6 +203,10 @@ class MarketDataConsumer:
         dlq_default_path = Path("/var/k2/dlq") if dlq_path is None else Path(dlq_path)
         self.dlq = DeadLetterQueue(path=dlq_default_path, max_size_mb=100)
 
+        # Initialize degradation management for graceful load handling
+        self.degradation_manager = DegradationManager()
+        self.load_shedder = LoadShedder()
+
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._shutdown_handler)
         signal.signal(signal.SIGINT, self._shutdown_handler)
@@ -325,6 +331,38 @@ class MarketDataConsumer:
         logger.info("Shutdown signal received", signal=signum)
         self.running = False
 
+    def _get_consumer_lag(self) -> int:
+        """Get current consumer lag (uncommitted messages).
+
+        Returns:
+            Total lag across all assigned partitions
+        """
+        try:
+            # Get assigned partitions
+            assignment = self.consumer.assignment()
+            if not assignment:
+                return 0
+
+            # Get committed offsets and high water marks
+            total_lag = 0
+            for partition in assignment:
+                # Get committed offset
+                committed = self.consumer.committed([partition])[0]
+                committed_offset = committed.offset if committed and committed.offset >= 0 else 0
+
+                # Get high water mark (latest offset)
+                low, high = self.consumer.get_watermark_offsets(partition)
+
+                # Calculate lag for this partition
+                lag = high - committed_offset
+                total_lag += max(0, lag)
+
+            return total_lag
+
+        except Exception as err:
+            logger.warning("Failed to calculate consumer lag", error=str(err))
+            return 0  # Default to no lag if calculation fails
+
     def run(self):
         """Main consumer loop (Decision #016: Daemon or batch mode).
 
@@ -371,6 +409,16 @@ class MarketDataConsumer:
         batch: list[dict[str, Any]] = []
         batch_start_time = time.time()
 
+        # Check degradation level based on consumer lag and system health
+        lag = self._get_consumer_lag()
+        current_level = self.degradation_manager.check_and_degrade(lag=lag)
+
+        logger.debug(
+            "Batch degradation check",
+            consumer_lag=lag,
+            degradation_level=current_level.name,
+        )
+
         # Poll messages until batch is full or timeout
         while len(batch) < self.batch_size:
             msg = self.consumer.poll(timeout=0.1)
@@ -408,7 +456,6 @@ class MarketDataConsumer:
             try:
                 record = self._deserialize_message(msg)
                 if record:
-                    batch.append(record)
                     self.stats.messages_consumed += 1
 
                     # Update consumer metrics
@@ -422,6 +469,30 @@ class MarketDataConsumer:
                             "consumer_group": self.consumer_group,
                         },
                     )
+
+                    # Apply load shedding based on degradation level and symbol priority
+                    # Only shed at GRACEFUL level and above
+                    if current_level >= DegradationLevel.GRACEFUL:
+                        symbol = record.get("symbol", "unknown")
+                        # Determine data type from topic or message
+                        # For now, assume 'trades' - could be enhanced to detect from topic name
+                        data_type = "trades"
+
+                        if not self.load_shedder.should_process(
+                            symbol=symbol,
+                            degradation_level=current_level.value,
+                            data_type=data_type,
+                        ):
+                            # Message shed - skip processing
+                            logger.debug(
+                                "Message shed due to load",
+                                symbol=symbol,
+                                degradation_level=current_level.name,
+                            )
+                            continue
+
+                    # Message passes load shedding - add to batch
+                    batch.append(record)
 
                     # Check sequence (Decision #014: Sequence gap logging)
                     # V2 schema uses "source_sequence" instead of "sequence_number"
