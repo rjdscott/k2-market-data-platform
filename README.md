@@ -47,18 +47,19 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Data Sources                             │
-│                    CSV files (ASX equities)                     │
-└─────────────────────────────┬───────────────────────────────────┘
-                              │ Batch ingestion
-                              ▼
+│   CSV Batch (ASX equities)  │  WebSocket Stream (Binance crypto)│
+└──────────────┬──────────────┴──────────────┬───────────────────┘
+               │ Batch ingestion              │ Live streaming
+               ▼                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Ingestion Layer                             │
 │  ┌──────────────┐    ┌─────────────────┐                        │
 │  │    Kafka     │◄───│ Schema Registry │  BACKWARD compatibility│
 │  │   (KRaft)    │    │   (Avro, HA)    │                        │
 │  └──────┬───────┘    └─────────────────┘                        │
-│         │ Topics: market.equities.{trades,quotes}.asx           │
+│         │ Topics: market.{equities,crypto}.{trades,quotes}.{asx,binance}
 │         │ Partitioning: hash(symbol)                            │
+│         │ V2 Schema: Multi-source, multi-asset class            │
 └─────────┼───────────────────────────────────────────────────────┘
           │
           ▼
@@ -72,7 +73,7 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
 │  ┌──────────────────┐                                           │
 │  │  MinIO (S3 API)  │  Parquet + Zstd compression               │
 │  │                  │  Daily partitions (exchange_date)         │
-│  └──────────────────┘                                           │
+│  └──────────────────┘  Tables: trades_v2, quotes_v2             │
 └─────────┼───────────────────────────────────────────────────────┘
           │
           ▼
@@ -96,9 +97,9 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
           ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Observability                                │
-│  Prometheus (40+ metrics) → Grafana (15-panel dashboard)        │
+│  Prometheus (50+ metrics) → Grafana (15-panel dashboard)        │
 │  Structured logging (structlog) with correlation IDs            │
-│  21 critical alerts with runbooks                               │
+│  Circuit breaker + graceful degradation (4 levels)              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
