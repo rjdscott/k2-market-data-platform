@@ -43,7 +43,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from k2.common.logging import get_logger
-from k2.common.metrics_registry import METRICS
 from k2.query.engine import QueryEngine
 from k2.query.kafka_tail import KafkaTail
 

@@ -67,6 +67,7 @@ dependencies = [
     "websockets>=13.0",  # Latest: 13.1 (2024-12), Async WebSocket client/server
     "docker==7.1.0",
     "pytest-timeout==2.3.1",
+    "psutil>=7.2.1",
 ]
 
 [project.optional-dependencies]
