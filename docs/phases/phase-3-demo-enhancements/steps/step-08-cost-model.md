@@ -1,8 +1,11 @@
-# Step 08: Cost Model
+# Step 06: Cost Model (formerly Step 08)
 
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete (2026-01-13)
 **Assignee**: Implementation Team
 **Issue**: #7 - Missing Cost Awareness
+**Effort**: 4 hours (actual)
+
+**Note**: Renumbered from Step 08 to Step 06 after deferring Redis/Bloom to multi-node (see Decision #004 in DECISIONS.md)
 
 ---
 
