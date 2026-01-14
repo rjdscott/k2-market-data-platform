@@ -423,7 +423,7 @@ See [Scaling Strategy](./docs/architecture/system-design.md#scaling-consideratio
 
 **Estimated monthly cost at 100x scale**: ~$15K/month AWS (ap-southeast-2).
 
-See [Phase 2: Cost Model](docs/phases/phase-2-platform-enhancements/steps/step-08-cost-model.md) for planned analysis.
+See [Phase 2: Cost Model](docs/phases/phase-3-demo-enhancements/steps/step-08-cost-model.md) for planned analysis.
 
 ---
 
@@ -652,7 +652,7 @@ Comprehensive documentation organized by audience and purpose.
 ### For Implementation
 
 - [Phase 1: Single-Node](docs/phases/phase-1-single-node-equities/) - Implementation plan, progress, decisions
-- [Phase 2: Enhancements](docs/phases/phase-2-platform-enhancements/) - Production readiness steps
+- [Phase 2: Enhancements](docs/phases/phase-3-demo-enhancements/) - Production readiness steps
 
 ### Reference
 
@@ -709,7 +709,7 @@ See [Phase 1 Status](docs/phases/phase-1-single-node-equities/STATUS.md) for det
 - Sub-second query performance
 - All 15 v2 schema fields validated
 
-See [Phase 2 Prep Status](docs/phases/phase-3-crypto/STATUS.md) for detailed completion report.
+See [Phase 2 Status](docs/phases/phase-2-prep/STATUS.md) for detailed completion report.
 
 ### Phase 2: Demo Enhancements 🟡 Ready to Start
 
@@ -731,7 +731,7 @@ See [Phase 2 Prep Status](docs/phases/phase-3-crypto/STATUS.md) for detailed com
 - Enhanced demo script with architectural storytelling
 - Cost model (AWS pricing at 1M msg/sec scale)
 
-See [Phase 2 Implementation Plan](docs/phases/phase-2-platform-enhancements/IMPLEMENTATION_PLAN.md) for 9-step roadmap.
+See [Phase 2 Implementation Plan](docs/phases/phase-3-demo-enhancements/IMPLEMENTATION_PLAN.md) for 9-step roadmap.
 
 ### Phase 3: Multi-Region & Scale (Future)
 

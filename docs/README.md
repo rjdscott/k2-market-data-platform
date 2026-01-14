@@ -91,7 +91,7 @@ Implementation tracking for specific project phases.
 - [Validation Guide](phases/phase-1-single-node-equities/VALIDATION_GUIDE.md) - Testing procedures
 
 **Future Phases**:
-- [Phase 2 - Production Prep](phases/phase-2-platform-enhancements/) - Productionization
+- [Phase 2 - Production Prep](phases/phase-3-demo-enhancements/) - Productionization
 - [Phase 3 - Scale](phases/phase-4-consolidate-docs/) - Distributed scaling
 
 **When to read**: Tracking implementation progress, understanding what's built

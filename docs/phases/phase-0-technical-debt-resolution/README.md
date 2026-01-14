@@ -248,8 +248,8 @@ Phase 1: Single-Node Implementation
 
 **Related Phases**:
 - [Phase 1: Single-Node Implementation](../phase-1-single-node-equities/)
-- [Phase 2 Prep: V2 Schema + Binance](../phase-3-crypto/)
-- [Phase 2: Demo Enhancements](../phase-2-platform-enhancements/)
+- [Phase 2: Multi-Source Foundation](../phase-2-prep/)
+- [Phase 3: Demo Enhancements](../phase-3-demo-enhancements/)
 
 ---
 

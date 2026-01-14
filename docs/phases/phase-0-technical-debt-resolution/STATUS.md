@@ -244,8 +244,8 @@ After P2:       86/100 (maintained, quality improvements)
 
 ### Related Phases
 - [Phase 1: Single-Node Implementation](../phase-1-single-node-equities/) - Foundation
-- [Phase 2 Prep: V2 Schema + Binance](../phase-3-crypto/) - Feature work
-- [Phase 2: Demo Enhancements](../phase-2-platform-enhancements/) - Next phase
+- [Phase 2: Multi-Source Foundation](../phase-2-prep/) - V2 Schema + Binance
+- [Phase 3: Demo Enhancements](../phase-3-demo-enhancements/) - Next phase
 
 ---
 
