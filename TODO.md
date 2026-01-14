@@ -11,8 +11,8 @@ These features are designed for distributed deployments and add unnecessary comp
 
 ### 1. Redis-Backed Sequence Tracker
 
-**Status**: Deferred from Phase 2
-**Originally**: Step 04 in Phase 2 Demo Enhancements
+**Status**: Deferred from Phase 3
+**Originally**: Step 04 in Phase 3 Demo Enhancements
 **Rationale for Deferral**:
 - Single-node in-memory dict is faster (no network hop)
 - Current throughput (138 msg/sec) is I/O bound, not CPU bound
@@ -37,15 +37,15 @@ These features are designed for distributed deployments and add unnecessary comp
 ```
 
 **References**:
-- `docs/phases/phase-2-demo-enhancements/steps/step-04-redis-sequence-tracker.md`
-- `docs/phases/phase-2-demo-enhancements/NEXT_STEPS.md` (lines 60-91)
+- `docs/phases/phase-3-demo-enhancements/steps/step-04-redis-sequence-tracker.md`
+- `docs/phases/phase-3-demo-enhancements/NEXT_STEPS.md` (lines 60-91)
 
 ---
 
 ### 2. Bloom Filter Deduplication
 
-**Status**: Deferred from Phase 2
-**Originally**: Step 05 in Phase 2 Demo Enhancements
+**Status**: Deferred from Phase 3
+**Originally**: Step 05 in Phase 3 Demo Enhancements
 **Rationale for Deferral**:
 - In-memory dict sufficient for single-node crypto workloads
 - Crypto message rates (10K-50K peak) fit in memory
@@ -72,8 +72,8 @@ These features are designed for distributed deployments and add unnecessary comp
 ```
 
 **References**:
-- `docs/phases/phase-2-demo-enhancements/steps/step-05-bloom-filter-dedup.md`
-- `docs/phases/phase-2-demo-enhancements/NEXT_STEPS.md` (lines 94-115)
+- `docs/phases/phase-3-demo-enhancements/steps/step-05-bloom-filter-dedup.md`
+- `docs/phases/phase-3-demo-enhancements/NEXT_STEPS.md` (lines 94-115)
 
 ---
 
@@ -100,7 +100,7 @@ These features are designed for distributed deployments and add unnecessary comp
 
 ### What We Focused On Instead
 
-**Phase 2 Priorities** (High Value for Single-Node Crypto):
+**Phase 3 Priorities** (High Value for Single-Node Crypto):
 1. ✅ Platform Positioning - Clear L3 cold path messaging
 2. ✅ Circuit Breaker - Graceful degradation (production-grade resilience)
 3. ✅ Degradation Demo - Compelling visual demonstration
@@ -196,7 +196,7 @@ Instead of Redis/Bloom, focus on:
 ### Decision: Defer Redis & Bloom to Multi-Node Phase
 
 **Date**: 2026-01-13
-**Context**: Phase 2 Demo Enhancements step prioritization
+**Context**: Phase 3 Demo Enhancements step prioritization
 **Decision**: Skip Steps 04-05 (Redis Sequence Tracker, Bloom Filter Dedup)
 **Rationale**:
 1. Over-engineering for single-node use case
@@ -219,10 +219,10 @@ Instead of Redis/Bloom, focus on:
 
 ## References
 
-- Phase 2 Plan: `docs/phases/phase-2-demo-enhancements/README.md`
-- NEXT_STEPS: `docs/phases/phase-2-demo-enhancements/NEXT_STEPS.md`
-- Original Step 04: `docs/phases/phase-2-demo-enhancements/steps/step-04-redis-sequence-tracker.md`
-- Original Step 05: `docs/phases/phase-2-demo-enhancements/steps/step-05-bloom-filter-dedup.md`
+- Phase 3 Plan: `docs/phases/phase-3-demo-enhancements/README.md`
+- NEXT_STEPS: `docs/phases/phase-3-demo-enhancements/NEXT_STEPS.md`
+- Original Step 04: `docs/phases/phase-3-demo-enhancements/steps/step-04-redis-sequence-tracker.md`
+- Original Step 05: `docs/phases/phase-3-demo-enhancements/steps/step-05-bloom-filter-dedup.md`
 
 ---
 
