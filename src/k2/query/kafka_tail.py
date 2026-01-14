@@ -37,7 +37,7 @@ from typing import Any
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 
-from k2.common.config import Settings
+from k2.common.config import config
 from k2.common.logging import get_logger
 
 logger = get_logger(__name__, component="kafka_tail")
@@ -98,8 +98,7 @@ class KafkaTail:
             max_messages_per_symbol: Max messages per symbol in buffer
             trim_interval_seconds: How often to trim old messages
         """
-        self.config = Settings()
-        self.bootstrap_servers = bootstrap_servers or self.config.kafka_bootstrap_servers
+        self.bootstrap_servers = bootstrap_servers or config.kafka.bootstrap_servers
         self.topic = topic
         self.group_id = group_id
         self.buffer_minutes = buffer_minutes

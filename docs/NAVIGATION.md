@@ -1,6 +1,6 @@
 # K2 Documentation Navigation Guide
 
-**Last Updated**: 2026-01-14
+**Last Updated**: 2026-01-15
 **Purpose**: Role-based documentation paths to help you find what you need in <2 minutes
 
 ---
@@ -246,7 +246,8 @@ What's been built and when
 - [Phase 0 - Technical Debt Resolution](./phases/phase-0-technical-debt-resolution/) ✅ COMPLETE
 - [Phase 1 - Single-Node Implementation](./phases/phase-1-single-node-equities/) ✅ COMPLETE
 - [Phase 2 - Multi-Source Foundation](./phases/phase-2-prep/) ✅ COMPLETE (V2 Schema + Binance)
-- [Phase 3 - Demo Enhancements](./phases/phase-3-demo-enhancements/) 🟡 IN PROGRESS
+- [Phase 3 - Demo Enhancements](./phases/phase-3-demo-enhancements/) ✅ COMPLETE (Circuit breaker, Hybrid queries, Cost model)
+- [Phase 4 - Demo Readiness](./phases/phase-4-demo-readiness/) ✅ COMPLETE (9/10 steps, 135/100 score)
 
 ### 📚 Reference (Quick Lookup)
 Field definitions, APIs, configuration

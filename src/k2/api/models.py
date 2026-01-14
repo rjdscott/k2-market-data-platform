@@ -92,40 +92,48 @@ class PaginationMeta(BaseModel):
 
 
 class Trade(BaseModel):
-    """Individual trade record."""
+    """Individual trade record (V2 schema)."""
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "symbol": "BHP",
-                "company_id": "BHP.AX",
-                "exchange": "ASX",
-                "exchange_timestamp": "2024-01-15T10:30:00.123456",
-                "price": "45.50",
-                "volume": 1000,
-                "qualifiers": "XT",
-                "venue": "ASX",
-                "buyer_id": "BROKER001",
-                "sequence_number": 12345,
+                "message_id": "msg-123",
+                "trade_id": "trade-456",
+                "symbol": "BTCUSDT",
+                "exchange": "BINANCE",
+                "asset_class": "CRYPTO",
+                "timestamp": "2024-01-15T10:30:00.123456",
+                "price": 45004.12,
+                "quantity": 0.5,
+                "currency": "USDT",
+                "side": "BUY",
+                "trade_conditions": None,
+                "source_sequence": 12345,
+                "ingestion_timestamp": "2024-01-15T10:30:00.123456",
+                "platform_sequence": 67890,
+                "vendor_data": None,
             },
         },
-        # Allow arbitrary types for Pandas Timestamp etc
         arbitrary_types_allowed=True,
     )
 
-    symbol: str = Field(description="Security symbol (e.g., BHP)")
-    company_id: str | int | None = Field(default=None, description="Company identifier")
-    exchange: str = Field(description="Exchange code (e.g., ASX)")
-    exchange_timestamp: Any = Field(description="Trade execution time")
+    message_id: str = Field(description="Unique message identifier")
+    trade_id: str = Field(description="Trade identifier")
+    symbol: str = Field(description="Security symbol (e.g., BTCUSDT)")
+    exchange: str = Field(description="Exchange code (e.g., BINANCE)")
+    asset_class: str = Field(description="Asset class (EQUITY, CRYPTO, etc)")
+    timestamp: Any = Field(description="Trade execution time (microseconds precision)")
     price: float = Field(description="Trade price")
-    volume: int = Field(description="Trade volume (shares)")
-    qualifiers: str | int | None = Field(default=None, description="Trade condition codes")
-    venue: str | None = Field(default=None, description="Execution venue")
-    buyer_id: str | None = Field(default=None, description="Buyer broker ID")
-    ingestion_timestamp: Any | None = Field(default=None, description="Time data was ingested")
-    sequence_number: int | None = Field(default=None, description="Sequence number for ordering")
+    quantity: float = Field(description="Trade quantity (Decimal precision)")
+    currency: str = Field(description="Currency code (e.g., USDT, USD)")
+    side: str = Field(description="Trade side (BUY, SELL)")
+    trade_conditions: str | None = Field(default=None, description="Trade conditions (JSON)")
+    source_sequence: int | None = Field(default=None, description="Source sequence number")
+    ingestion_timestamp: Any = Field(description="Time data was ingested")
+    platform_sequence: int | None = Field(default=None, description="Platform sequence number")
+    vendor_data: str | None = Field(default=None, description="Vendor-specific data (JSON)")
 
-    @field_validator("exchange_timestamp", "ingestion_timestamp", mode="before")
+    @field_validator("timestamp", "ingestion_timestamp", mode="before")
     @classmethod
     def convert_timestamp(cls, v: Any) -> Any:
         """Convert Pandas Timestamp to ISO string for JSON serialization."""
@@ -149,37 +157,48 @@ class TradesResponse(APIResponse):
 
 
 class Quote(BaseModel):
-    """Individual quote record with bid/ask."""
+    """Individual quote record with bid/ask (V2 schema)."""
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "symbol": "BHP",
-                "company_id": "BHP.AX",
-                "exchange": "ASX",
-                "exchange_timestamp": "2024-01-15T10:30:00.123456",
-                "bid_price": "45.48",
-                "bid_volume": 500,
-                "ask_price": "45.52",
-                "ask_volume": 750,
-                "spread": "0.04",
+                "message_id": "msg-123",
+                "quote_id": "quote-456",
+                "symbol": "BTCUSDT",
+                "exchange": "BINANCE",
+                "asset_class": "CRYPTO",
+                "timestamp": "2024-01-15T10:30:00.123456",
+                "bid_price": 45000.00,
+                "bid_quantity": 1.5,
+                "ask_price": 45005.00,
+                "ask_quantity": 2.0,
+                "currency": "USDT",
+                "source_sequence": 12345,
+                "ingestion_timestamp": "2024-01-15T10:30:00.123456",
+                "platform_sequence": 67890,
+                "vendor_data": None,
             },
         },
         arbitrary_types_allowed=True,
     )
 
+    message_id: str = Field(description="Unique message identifier")
+    quote_id: str = Field(description="Quote identifier")
     symbol: str = Field(description="Security symbol")
-    company_id: str | int | None = Field(default=None, description="Company identifier")
     exchange: str = Field(description="Exchange code")
-    exchange_timestamp: Any = Field(description="Quote time")
+    asset_class: str = Field(description="Asset class (EQUITY, CRYPTO, etc)")
+    timestamp: Any = Field(description="Quote time (microseconds precision)")
     bid_price: float | None = Field(default=None, description="Best bid price")
-    bid_volume: int | None = Field(default=None, description="Best bid volume")
+    bid_quantity: float | None = Field(default=None, description="Best bid quantity (Decimal precision)")
     ask_price: float | None = Field(default=None, description="Best ask price")
-    ask_volume: int | None = Field(default=None, description="Best ask volume")
-    ingestion_timestamp: Any | None = Field(default=None, description="Time data was ingested")
-    sequence_number: int | None = Field(default=None, description="Sequence number")
+    ask_quantity: float | None = Field(default=None, description="Best ask quantity (Decimal precision)")
+    currency: str = Field(description="Currency code (e.g., USDT, USD)")
+    source_sequence: int | None = Field(default=None, description="Source sequence number")
+    ingestion_timestamp: Any = Field(description="Time data was ingested")
+    platform_sequence: int | None = Field(default=None, description="Platform sequence number")
+    vendor_data: str | None = Field(default=None, description="Vendor-specific data (JSON)")
 
-    @field_validator("exchange_timestamp", "ingestion_timestamp", mode="before")
+    @field_validator("timestamp", "ingestion_timestamp", mode="before")
     @classmethod
     def convert_timestamp(cls, v: Any) -> Any:
         """Convert Pandas Timestamp to ISO string for JSON serialization."""
@@ -387,32 +406,41 @@ class AggregationInterval(str, Enum):
 # Allowlist of valid fields for field selection (security measure)
 VALID_TRADE_FIELDS = frozenset(
     [
+        "message_id",
+        "trade_id",
         "symbol",
-        "company_id",
         "exchange",
-        "exchange_timestamp",
+        "asset_class",
+        "timestamp",
         "price",
-        "volume",
-        "qualifiers",
-        "venue",
-        "buyer_id",
+        "quantity",
+        "currency",
+        "side",
+        "trade_conditions",
+        "source_sequence",
         "ingestion_timestamp",
-        "sequence_number",
+        "platform_sequence",
+        "vendor_data",
     ],
 )
 
 VALID_QUOTE_FIELDS = frozenset(
     [
+        "message_id",
+        "quote_id",
         "symbol",
-        "company_id",
         "exchange",
-        "exchange_timestamp",
+        "asset_class",
+        "timestamp",
         "bid_price",
-        "bid_volume",
+        "bid_quantity",
         "ask_price",
-        "ask_volume",
+        "ask_quantity",
+        "currency",
+        "source_sequence",
         "ingestion_timestamp",
-        "sequence_number",
+        "platform_sequence",
+        "vendor_data",
     ],
 )
 
@@ -432,7 +460,7 @@ class TradeQueryRequest(BaseModel):
                 "exchanges": ["ASX"],
                 "start_time": "2024-01-01T09:00:00",
                 "end_time": "2024-01-31T16:00:00",
-                "fields": ["symbol", "exchange_timestamp", "price", "volume"],
+                "fields": ["symbol", "timestamp", "price", "quantity"],
                 "limit": 10000,
                 "format": "json",
             },
@@ -490,10 +518,10 @@ class TradeQueryRequest(BaseModel):
         ge=0,
         description="Maximum trade price filter",
     )
-    min_volume: int | None = Field(
+    min_quantity: float | None = Field(
         default=None,
         ge=0,
-        description="Minimum trade volume filter",
+        description="Minimum trade quantity filter",
     )
 
     # Output options
@@ -526,7 +554,7 @@ class QuoteQueryRequest(BaseModel):
                 "symbols": ["BHP", "RIO"],
                 "start_time": "2024-01-15T09:30:00",
                 "end_time": "2024-01-15T16:00:00",
-                "fields": ["symbol", "exchange_timestamp", "bid_price", "ask_price"],
+                "fields": ["symbol", "timestamp", "bid_price", "ask_price"],
                 "limit": 5000,
                 "format": "json",
             },

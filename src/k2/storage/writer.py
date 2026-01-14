@@ -7,7 +7,7 @@ This module provides write operations for Iceberg tables with:
 - Automatic schema validation
 - Metrics collection for observability
 - Exponential backoff retry for transient failures
-- Support for v1 (legacy) and v2 (industry-standard) schemas
+- V2 schema support (industry-standard market data format)
 
 Writers are designed for batch writes (100-10,000 records per call) to
 optimize Iceberg's append performance and minimize metadata operations.
@@ -19,9 +19,8 @@ After each successful write, the writer logs detailed transaction metadata inclu
 - File statistics: Files added, records written, bytes written
 - Table totals: Total records, data files, delete files
 
-Schema Evolution:
-- v1: Legacy ASX-specific schemas (volume, company_id fields)
-- v2: Industry-standard hybrid schemas (quantity, vendor_data pattern)
+Schema:
+- V2 industry-standard hybrid schemas with vendor_data pattern for extensibility
 """
 
 import json
@@ -128,7 +127,6 @@ class IcebergWriter:
         s3_endpoint: str | None = None,
         s3_access_key: str | None = None,
         s3_secret_key: str | None = None,
-        schema_version: str = "v2",
     ):
         """Initialize Iceberg writer.
 
@@ -137,19 +135,12 @@ class IcebergWriter:
             s3_endpoint: S3/MinIO endpoint (defaults to config)
             s3_access_key: S3 access key (defaults to config)
             s3_secret_key: S3 secret key (defaults to config)
-            schema_version: Schema version - 'v1' or 'v2' (default: 'v2')
-
-        Raises:
-            ValueError: If schema_version is not 'v1' or 'v2'
         """
-        if schema_version not in ("v1", "v2"):
-            raise ValueError(f"Invalid schema_version: {schema_version}. Must be 'v1' or 'v2'")
-
         self.catalog_uri = catalog_uri or config.iceberg.catalog_uri
         self.s3_endpoint = s3_endpoint or config.iceberg.s3_endpoint
         self.s3_access_key = s3_access_key or config.iceberg.s3_access_key
         self.s3_secret_key = s3_secret_key or config.iceberg.s3_secret_key
-        self.schema_version = schema_version
+        self.schema_version = "v2"  # Only v2 schema supported
 
         try:
             self.catalog = load_catalog(
@@ -186,10 +177,9 @@ class IcebergWriter:
         """Write trade records to Iceberg table with automatic retry.
 
         Args:
-            records: List of trade dictionaries matching schema
-            table_name: Fully qualified table name (namespace.table). If None, uses appropriate
-                       table based on schema_version: "market_data.trades_v2" for v2,
-                       "market_data.trades" for v1
+            records: List of trade dictionaries matching v2 schema
+            table_name: Fully qualified table name (namespace.table). If None, defaults to
+                       "market_data.trades_v2"
             exchange: Exchange code for metrics (e.g., "asx", "nyse")
             asset_class: Asset class for metrics (e.g., "equities", "futures")
 
@@ -200,9 +190,9 @@ class IcebergWriter:
             NoSuchTableError: If table doesn't exist
             Exception: If write fails after retries
         """
-        # Default table based on schema version
+        # Default table (v2 only)
         if table_name is None:
-            table_name = "market_data.trades_v2" if self.schema_version == "v2" else "market_data.trades"
+            table_name = "market_data.trades_v2"
 
         if not records:
             logger.warning("No records to write", table=table_name)
@@ -224,12 +214,9 @@ class IcebergWriter:
             )
             raise
 
-        # Convert to PyArrow table (use appropriate schema version)
+        # Convert to PyArrow table (v2 schema)
         try:
-            if self.schema_version == "v2":
-                arrow_table = self._records_to_arrow_trades_v2(records)
-            else:
-                arrow_table = self._records_to_arrow_trades(records)
+            arrow_table = self._records_to_arrow_trades_v2(records)
         except Exception as e:
             logger.error(
                 "Failed to convert records to Arrow",
@@ -378,7 +365,7 @@ class IcebergWriter:
     def write_quotes(
         self,
         records: list[dict[str, Any]],
-        table_name: str = "market_data.quotes",
+        table_name: str = "market_data.quotes_v2",
         exchange: str = "unknown",
         asset_class: str = "equities",
     ) -> int:
@@ -417,12 +404,9 @@ class IcebergWriter:
             )
             raise
 
-        # Convert to PyArrow table (use appropriate schema version)
+        # Convert to PyArrow table (v2 schema)
         try:
-            if self.schema_version == "v2":
-                arrow_table = self._records_to_arrow_quotes_v2(records)
-            else:
-                arrow_table = self._records_to_arrow_quotes(records)
+            arrow_table = self._records_to_arrow_quotes_v2(records)
         except Exception as e:
             logger.error(
                 "Failed to convert records to Arrow",
@@ -567,126 +551,16 @@ class IcebergWriter:
                 )
                 raise
 
-    def _records_to_arrow_trades(self, records: list[dict[str, Any]]) -> pa.Table:
-        """Convert trade records to PyArrow table.
-
-        Args:
-            records: List of trade dictionaries
-
-        Returns:
-            PyArrow table matching trades schema
-
-        Raises:
-            Exception: If conversion fails
-        """
-        # Define schema matching Iceberg table (with explicit nullable flags)
-        schema = pa.schema(
-            [
-                pa.field("symbol", pa.string(), nullable=False),
-                pa.field("company_id", pa.int32(), nullable=False),
-                pa.field("exchange", pa.string(), nullable=False),
-                pa.field("exchange_timestamp", pa.timestamp("us"), nullable=False),
-                pa.field("price", pa.decimal128(18, 6), nullable=False),
-                pa.field("volume", pa.int64(), nullable=False),
-                pa.field("qualifiers", pa.int32(), nullable=False),
-                pa.field("venue", pa.string(), nullable=False),
-                pa.field("buyer_id", pa.string(), nullable=True),
-                pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
-                pa.field("sequence_number", pa.int64(), nullable=True),
-            ],
-        )
-
-        # Convert records, handling type conversions
-        converted_records = []
-        for record in records:
-            converted = {
-                "symbol": record["symbol"],
-                "company_id": record["company_id"],
-                "exchange": record["exchange"],
-                "exchange_timestamp": record["exchange_timestamp"],
-                "price": (
-                    record["price"]
-                    if isinstance(record["price"], Decimal)
-                    else Decimal(str(record["price"]))
-                ),
-                "volume": record["volume"],
-                "qualifiers": record["qualifiers"],
-                "venue": record["venue"],
-                "buyer_id": record.get("buyer_id"),
-                "ingestion_timestamp": record["ingestion_timestamp"],
-                "sequence_number": record.get("sequence_number"),
-            }
-            converted_records.append(converted)
-
-        return pa.Table.from_pylist(converted_records, schema=schema)
-
-    def _records_to_arrow_quotes(self, records: list[dict[str, Any]]) -> pa.Table:
-        """Convert quote records to PyArrow table.
-
-        Args:
-            records: List of quote dictionaries
-
-        Returns:
-            PyArrow table matching quotes schema
-
-        Raises:
-            Exception: If conversion fails
-        """
-        # Define schema matching Iceberg table (with explicit nullable flags)
-        schema = pa.schema(
-            [
-                pa.field("symbol", pa.string(), nullable=False),
-                pa.field("company_id", pa.int32(), nullable=False),
-                pa.field("exchange", pa.string(), nullable=False),
-                pa.field("exchange_timestamp", pa.timestamp("us"), nullable=False),
-                pa.field("bid_price", pa.decimal128(18, 6), nullable=False),
-                pa.field("bid_volume", pa.int64(), nullable=False),
-                pa.field("ask_price", pa.decimal128(18, 6), nullable=False),
-                pa.field("ask_volume", pa.int64(), nullable=False),
-                pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
-                pa.field("sequence_number", pa.int64(), nullable=True),
-            ],
-        )
-
-        # Convert records, handling type conversions
-        converted_records = []
-        for record in records:
-            converted = {
-                "symbol": record["symbol"],
-                "company_id": record["company_id"],
-                "exchange": record["exchange"],
-                "exchange_timestamp": record["exchange_timestamp"],
-                "bid_price": (
-                    record["bid_price"]
-                    if isinstance(record["bid_price"], Decimal)
-                    else Decimal(str(record["bid_price"]))
-                ),
-                "bid_volume": record["bid_volume"],
-                "ask_price": (
-                    record["ask_price"]
-                    if isinstance(record["ask_price"], Decimal)
-                    else Decimal(str(record["ask_price"]))
-                ),
-                "ask_volume": record["ask_volume"],
-                "ingestion_timestamp": record["ingestion_timestamp"],
-                "sequence_number": record.get("sequence_number"),
-            }
-            converted_records.append(converted)
-
-        return pa.Table.from_pylist(converted_records, schema=schema)
-
     def _records_to_arrow_trades_v2(self, records: list[dict[str, Any]]) -> pa.Table:
         """Convert v2 trade records to PyArrow table.
 
-        V2 schema changes from v1:
-        - volume → quantity (Decimal instead of int64)
-        - exchange_timestamp → timestamp (field rename for clarity)
-        - Add: message_id, trade_id, currency, side, asset_class
-        - Add: trade_conditions (array of strings)
-        - Add: vendor_data (map serialized as JSON string)
-        - company_id, qualifiers, venue → moved to vendor_data
-        - precision: Decimal(18,6) → Decimal(18,8)
-        - timestamp: milliseconds → microseconds
+        V2 schema features (industry-standard market data format):
+        - quantity: Decimal(18,8) for precise volume representation
+        - timestamp: Microsecond precision for accurate trade timing
+        - message_id, trade_id: Unique identifiers for deduplication
+        - currency, side, asset_class: Standard market data fields
+        - trade_conditions: Extensible conditions array
+        - vendor_data: JSON map for vendor-specific fields (extensibility)
 
         Args:
             records: List of v2 trade dictionaries
@@ -764,13 +638,12 @@ class IcebergWriter:
     def _records_to_arrow_quotes_v2(self, records: list[dict[str, Any]]) -> pa.Table:
         """Convert v2 quote records to PyArrow table.
 
-        V2 schema changes from v1:
-        - bid_volume/ask_volume → bid_quantity/ask_quantity (Decimal)
-        - exchange_timestamp → timestamp (field rename)
-        - Add: message_id, quote_id, currency, asset_class
-        - Add: vendor_data (map serialized as JSON string)
-        - company_id → moved to vendor_data
-        - precision: Decimal(18,6) → Decimal(18,8)
+        V2 schema features (industry-standard market data format):
+        - bid_quantity/ask_quantity: Decimal(18,8) for precise volume representation
+        - timestamp: Microsecond precision for accurate quote timing
+        - message_id, quote_id: Unique identifiers for deduplication
+        - currency, asset_class: Standard market data fields
+        - vendor_data: JSON map for vendor-specific fields (extensibility)
 
         Args:
             records: List of v2 quote dictionaries
