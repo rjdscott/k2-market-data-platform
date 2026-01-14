@@ -223,9 +223,37 @@ docker-compose up -d
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Create virtual environment and install dependencies
-uv venv
 uv sync --all-extras
 ```
+
+**Package Management with uv**:
+
+```bash
+# Install dependencies
+uv sync                    # Core dependencies only
+uv sync --all-extras       # All extras (dev, api, monitoring, quality)
+
+# Add new packages
+uv add package-name        # Production dependency
+uv add --dev package-name  # Development dependency
+
+# Update lock file (after editing pyproject.toml)
+uv lock
+
+# Upgrade all packages to latest compatible versions
+uv lock --upgrade && uv sync
+
+# Run commands in the virtual environment
+uv run python scripts/example.py
+uv run pytest tests/
+uv run k2 --help
+```
+
+**Benefits of uv**:
+- **10-100x faster installs**: Binary caching vs pip's source compilation
+- **Reproducible builds**: `uv.lock` ensures exact versions (critical for financial data)
+- **Single tool**: Manages Python versions + virtualenv + dependencies
+- **Zero config**: Auto-creates `.venv/` and reads `.python-version`
 
 ### 3. Initialize Platform
 
