@@ -1,10 +1,13 @@
 # Step 09: Final Dress Rehearsal
 
-**Status**: ⬜ Not Started
-**Priority**: 🔴 CRITICAL (before demo day)
-**Estimated Time**: 60-90 minutes
+**Status**: ✅ Infrastructure Complete (validation script created; actual rehearsal before demo day)
+**Priority**: 🔴 CRITICAL (perform rehearsal 1 day before demo)
+**Estimated Time**: 60-90 minutes (actual rehearsal)
+**Actual Time**: 30 minutes (script creation)
 **Dependencies**: All previous steps (01-07)
 **Last Updated**: 2026-01-14
+
+**Note**: Pre-demo validation script created and tested. Actual dress rehearsal (timing demo, practicing talking points) should be performed 1 day before demo.
 
 ---
 
@@ -18,11 +21,18 @@ Full simulation of demo presentation with timing, enabling confident execution o
 
 ## Deliverables
 
-1. ✅ Complete demo execution (timed)
-2. ✅ All talking points practiced
-3. ✅ Q&A responses rehearsed
-4. ✅ Failure recovery tested
-5. ✅ Pre-demo validation script passing
+### Infrastructure Complete ✅
+5. ✅ **Pre-demo validation script** (`scripts/pre_demo_check.py`)
+   - 7 validation checks (infrastructure, data, monitoring, API, backup materials, scripts)
+   - `--full` flag for comprehensive checks
+   - Rich console output with summary panel
+   - Exit code 0/1 for CI integration
+
+### Pending Before Demo Day ⚠️
+1. ⚠️ **Complete demo execution** (timed) - Perform 1 day before demo
+2. ⚠️ **All talking points practiced** - Practice out loud before demo
+3. ⚠️ **Q&A responses rehearsed** - Rehearse 5 common questions
+4. ⚠️ **Failure recovery tested** - Test switching to backup in <30 sec
 
 ---
 
