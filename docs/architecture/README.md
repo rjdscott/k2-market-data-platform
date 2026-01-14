@@ -33,13 +33,22 @@ The "constitution" of the K2 platform. Core operational principles:
 
 **When to update**: Adding/changing core principles (requires RFC)
 
-### Technology Decisions
-Why we chose our tech stack:
-- **Kafka**: Industry-standard streaming, proven at scale
-- **Iceberg**: ACID lakehouse with time-travel and schema evolution
-- **DuckDB**: Embedded analytics for Phase 1 (migration path to Presto)
-- **FastAPI**: Modern Python framework with auto-documentation
-- **Prometheus + Grafana**: Open-source observability standard
+### [Technology Stack](./technology-stack.md)
+Core technology decisions with trade-offs and replacement guidance:
+
+| Layer | Technology | Why Chosen | When to Replace |
+|-------|------------|------------|-----------------|
+| **Streaming** | Kafka 3.7 (KRaft) | No ZooKeeper, proven at scale, sub-1s failover | Never (industry standard) |
+| **Schema** | Confluent Schema Registry 7.6 | BACKWARD compatibility, Avro native | When migrating away from Avro |
+| **Storage** | Apache Iceberg 1.4 | ACID, time-travel, schema evolution | Rarely (unless specific format needed) |
+| **Query** | DuckDB 0.10 | Zero-ops, embedded, 5-50 concurrent queries | **>10TB dataset or >100 concurrent users** |
+| **API** | FastAPI | Async Python, auto-docs, type safety | When Python performance inadequate |
+| **Observability** | Prometheus + Grafana | Open-source, queryable metrics, alerting | When managed observability preferred (Datadog) |
+
+**Key Trade-offs**:
+- **DuckDB vs Presto**: Single-node simplicity vs distributed query (scales to ~10TB before replacement needed)
+- **At-least-once vs Exactly-once**: Market data duplicates acceptable, simpler implementation
+- **Self-hosted vs Managed**: More control vs less operational overhead (current: self-hosted Kafka/Schema Registry)
 
 **Decision Log**: See [Phase 1 DECISIONS.md](../phases/phase-1-single-node-equities/DECISIONS.md)
 
