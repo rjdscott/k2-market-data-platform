@@ -75,7 +75,7 @@ class QueryEngine:
     - Predicate pushdown for partition pruning
     - Query performance metrics
     - Connection pooling for concurrent queries (configurable pool size)
-    - Support for both v1 (legacy) and v2 (industry-standard) schemas
+    - V2 schema support (industry-standard market data format)
 
     Connection Pool:
     - Default pool size: 5 connections (supports 5 concurrent API requests)
@@ -84,19 +84,15 @@ class QueryEngine:
     - Metrics tracking: wait time, utilization, peak usage
 
     Usage:
-        # Query v2 tables (default, pool size 5)
-        engine = QueryEngine(table_version="v2")
-        trades = engine.query_trades(symbol="BHP", limit=100)
+        # Query v2 tables (default pool size: 5)
+        engine = QueryEngine()
+        trades = engine.query_trades(symbol="BTCUSDT", limit=100)
 
         # Query with larger pool for high concurrency
-        engine = QueryEngine(table_version="v2", pool_size=10)
-
-        # Query v1 legacy tables
-        engine = QueryEngine(table_version="v1")
-        trades = engine.query_trades(symbol="BHP", limit=100)
+        engine = QueryEngine(pool_size=10)
 
         # Get market summary
-        summary = engine.get_market_summary("BHP", date(2024, 1, 15))
+        summary = engine.get_market_summary("BTCUSDT", date(2024, 1, 15))
 
         # Close when done (releases all pool connections)
         engine.close()
@@ -108,7 +104,6 @@ class QueryEngine:
         s3_access_key: str | None = None,
         s3_secret_key: str | None = None,
         warehouse_path: str | None = None,
-        table_version: str = "v2",
         pool_size: int = 5,
     ):
         """Initialize DuckDB query engine with connection pooling.
@@ -118,22 +113,15 @@ class QueryEngine:
             s3_access_key: S3 access key (defaults to config)
             s3_secret_key: S3 secret key (defaults to config)
             warehouse_path: Iceberg warehouse path (defaults to config)
-            table_version: Table schema version - 'v1' or 'v2' (default: 'v2')
             pool_size: Number of connections in pool (default: 5)
                 - Demo/dev: 5 connections
                 - Production: 20-50 connections depending on load
-
-        Raises:
-            ValueError: If table_version is invalid
         """
-        if table_version not in ("v1", "v2"):
-            raise ValueError(f"Invalid table_version '{table_version}'. Must be 'v1' or 'v2'")
-
         self.s3_endpoint = s3_endpoint or config.iceberg.s3_endpoint
         self.s3_access_key = s3_access_key or config.iceberg.s3_access_key
         self.s3_secret_key = s3_secret_key or config.iceberg.s3_secret_key
         self.warehouse_path = warehouse_path or config.iceberg.warehouse
-        self.table_version = table_version
+        self.table_version = "v2"  # Only v2 schema supported
         self.pool_size = pool_size
 
         # Remove http(s):// prefix for DuckDB endpoint
@@ -151,7 +139,6 @@ class QueryEngine:
             "Query engine initialized with connection pool",
             s3_endpoint=self.s3_endpoint,
             warehouse_path=self.warehouse_path,
-            table_version=table_version,
             pool_size=pool_size,
         )
 
@@ -211,42 +198,25 @@ class QueryEngine:
             start_time: Filter trades after this time
             end_time: Filter trades before this time
             limit: Maximum records to return (default: 1000)
-            table_name: Iceberg table name (default: auto-determined from table_version)
+            table_name: Iceberg table name (default: v2 tables)
 
         Returns:
-            List of trade dictionaries (schema depends on table_version)
+            List of trade dictionaries (v2 schema with industry-standard fields)
 
-        Example (v2):
+        Example:
             trades = engine.query_trades(
-                symbol="BHP",
+                symbol="BTCUSDT",
                 start_time=datetime(2024, 1, 1),
                 limit=100
             )
             # Returns: message_id, trade_id, symbol, exchange, asset_class, timestamp,
-            #          price, quantity, currency, side, ...
-
-        Example (v1 legacy):
-            engine = QueryEngine(table_version="v1")
-            trades = engine.query_trades(symbol="BHP")
-            # Returns: symbol, company_id, exchange, exchange_timestamp, price, volume, ...
+            #          price, quantity, currency, side, trade_conditions, vendor_data, ...
         """
-        # Validate table_version
-        if self.table_version not in ("v1", "v2"):
-            raise ValueError(
-                f"Invalid table_version: {self.table_version}. Must be 'v1' or 'v2'"
-            )
-
-        # Auto-determine table name based on table_version
+        # Auto-determine table name
         if table_name is None:
-            if self.table_version == "v2":
-                table_name = f"market_data.trades_v2"
-            elif self.table_version == "v1":
-                table_name = "market_data.trades"  # Legacy table name for backward compatibility
+            table_name = "market_data.trades_v2"
 
         table_path = self._get_table_path(table_name)
-
-        # Field names differ between v1 and v2
-        timestamp_field = "timestamp" if self.table_version == "v2" else "exchange_timestamp"
 
         # Build WHERE clause with parameterized queries (SQL injection protection)
         conditions = []
@@ -259,59 +229,39 @@ class QueryEngine:
             conditions.append("exchange = ?")
             params.append(exchange)
         if start_time:
-            conditions.append(f"{timestamp_field} >= ?")
+            conditions.append("timestamp >= ?")
             params.append(start_time.isoformat())
         if end_time:
-            conditions.append(f"{timestamp_field} <= ?")
+            conditions.append("timestamp <= ?")
             params.append(end_time.isoformat())
 
         where_clause = ""
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
 
-        # Different SELECT clauses for v1 vs v2
-        if self.table_version == "v2":
-            query = f"""
-                SELECT
-                    message_id,
-                    trade_id,
-                    symbol,
-                    exchange,
-                    asset_class,
-                    timestamp AS exchange_timestamp,
-                    price,
-                    CAST(quantity AS INTEGER) AS volume,
-                    currency,
-                    side,
-                    trade_conditions,
-                    source_sequence,
-                    ingestion_timestamp,
-                    platform_sequence,
-                    vendor_data
-                FROM iceberg_scan('{table_path}')
-                {where_clause}
-                ORDER BY timestamp DESC
-                LIMIT {limit}
-            """
-        else:  # v1 legacy
-            query = f"""
-                SELECT
-                    symbol,
-                    company_id,
-                    exchange,
-                    exchange_timestamp,
-                    price,
-                    volume,
-                    qualifiers,
-                    venue,
-                    buyer_id,
-                    ingestion_timestamp,
-                    sequence_number
-                FROM iceberg_scan('{table_path}')
-                {where_clause}
-                ORDER BY exchange_timestamp DESC
-                LIMIT {limit}
-            """
+        # V2 query - use native v2 field names
+        query = f"""
+            SELECT
+                message_id,
+                trade_id,
+                symbol,
+                exchange,
+                asset_class,
+                timestamp,
+                price,
+                quantity,
+                currency,
+                side,
+                trade_conditions,
+                source_sequence,
+                ingestion_timestamp,
+                platform_sequence,
+                vendor_data
+            FROM iceberg_scan('{table_path}')
+            {where_clause}
+            ORDER BY timestamp DESC
+            LIMIT {limit}
+        """
 
         with self._query_timer(QueryType.TRADES.value):
             try:
@@ -362,22 +312,16 @@ class QueryEngine:
             start_time: Filter quotes after this time
             end_time: Filter quotes before this time
             limit: Maximum records to return (default: 1000)
-            table_name: Iceberg table name (default: auto-determined from table_version)
+            table_name: Iceberg table name (default: market_data.quotes_v2)
 
         Returns:
-            List of quote dictionaries with bid/ask data (schema depends on table_version)
+            List of quote dictionaries with bid/ask data (v2 schema)
         """
-        # Auto-determine table name based on table_version
+        # Auto-determine table name (v2 only)
         if table_name is None:
-            if self.table_version == "v2":
-                table_name = f"market_data.quotes_v2"
-            elif self.table_version == "v1":
-                table_name = "market_data.quotes"  # Legacy table name for backward compatibility
+            table_name = "market_data.quotes_v2"
 
         table_path = self._get_table_path(table_name)
-
-        # Field names differ between v1 and v2
-        timestamp_field = "timestamp" if self.table_version == "v2" else "exchange_timestamp"
 
         # Build WHERE clause with parameterized queries (SQL injection protection)
         conditions = []
@@ -390,58 +334,39 @@ class QueryEngine:
             conditions.append("exchange = ?")
             params.append(exchange)
         if start_time:
-            conditions.append(f"{timestamp_field} >= ?")
+            conditions.append("timestamp >= ?")
             params.append(start_time.isoformat())
         if end_time:
-            conditions.append(f"{timestamp_field} <= ?")
+            conditions.append("timestamp <= ?")
             params.append(end_time.isoformat())
 
         where_clause = ""
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
 
-        # Different SELECT clauses for v1 vs v2
-        if self.table_version == "v2":
-            query = f"""
-                SELECT
-                    message_id,
-                    quote_id,
-                    symbol,
-                    exchange,
-                    asset_class,
-                    timestamp AS exchange_timestamp,
-                    bid_price,
-                    CAST(bid_quantity AS INTEGER) AS bid_volume,
-                    ask_price,
-                    CAST(ask_quantity AS INTEGER) AS ask_volume,
-                    currency,
-                    source_sequence,
-                    ingestion_timestamp,
-                    platform_sequence,
-                    vendor_data
-                FROM iceberg_scan('{table_path}')
-                {where_clause}
-                ORDER BY timestamp DESC
-                LIMIT {limit}
-            """
-        else:  # v1 legacy
-            query = f"""
-                SELECT
-                    symbol,
-                    company_id,
-                    exchange,
-                    exchange_timestamp,
-                    bid_price,
-                    bid_volume,
-                    ask_price,
-                    ask_volume,
-                    ingestion_timestamp,
-                    sequence_number
-                FROM iceberg_scan('{table_path}')
-                {where_clause}
-                ORDER BY exchange_timestamp DESC
-                LIMIT {limit}
-            """
+        # V2 query - use native v2 field names
+        query = f"""
+            SELECT
+                message_id,
+                quote_id,
+                symbol,
+                exchange,
+                asset_class,
+                timestamp,
+                bid_price,
+                bid_quantity,
+                ask_price,
+                ask_quantity,
+                currency,
+                source_sequence,
+                ingestion_timestamp,
+                platform_sequence,
+                vendor_data
+            FROM iceberg_scan('{table_path}')
+            {where_clause}
+            ORDER BY timestamp DESC
+            LIMIT {limit}
+        """
 
         with self._query_timer(QueryType.QUOTES.value):
             try:
@@ -487,7 +412,7 @@ class QueryEngine:
             symbol: Symbol to query (e.g., "BHP")
             query_date: Date for summary
             exchange: Optional exchange filter
-            table_name: Iceberg table name (default: auto-determined from table_version)
+            table_name: Iceberg table name (default: v2 tables)
 
         Returns:
             MarketSummary with OHLCV data, or None if no data
@@ -496,30 +421,17 @@ class QueryEngine:
             summary = engine.get_market_summary("BHP", date(2024, 1, 15))
             print(f"VWAP: {summary.vwap}")
         """
-        # Validate table_version
-        if self.table_version not in ("v1", "v2"):
-            raise ValueError(
-                f"Invalid table_version: {self.table_version}. Must be 'v1' or 'v2'"
-            )
-
-        # Auto-determine table name based on table_version
+        # Auto-determine table name
         if table_name is None:
-            if self.table_version == "v2":
-                table_name = f"market_data.trades_v2"
-            elif self.table_version == "v1":
-                table_name = "market_data.trades"  # Legacy table name for backward compatibility
+            table_name = "market_data.trades_v2"
 
         table_path = self._get_table_path(table_name)
-
-        # Field names differ between v1 and v2
-        timestamp_field = "timestamp" if self.table_version == "v2" else "exchange_timestamp"
-        volume_field = "quantity" if self.table_version == "v2" else "volume"
 
         # Date range for the day
         start_dt = datetime.combine(query_date, datetime.min.time())
         end_dt = datetime.combine(query_date, datetime.max.time())
 
-        # Build parameterized query (SQL injection protection)
+        # Build parameterized query (SQL injection protection) - v2 schema
         params = [symbol, start_dt.isoformat(), end_dt.isoformat()]
         exchange_filter = ""
         if exchange:
@@ -530,13 +442,13 @@ class QueryEngine:
             WITH day_trades AS (
                 SELECT
                     symbol,
-                    {timestamp_field} as timestamp,
+                    timestamp,
                     price,
-                    {volume_field} as volume
+                    quantity as volume
                 FROM iceberg_scan('{table_path}')
                 WHERE symbol = ?
-                  AND {timestamp_field} >= ?
-                  AND {timestamp_field} <= ?
+                  AND timestamp >= ?
+                  AND timestamp <= ?
                   {exchange_filter}
             )
             SELECT
@@ -610,7 +522,7 @@ class QueryEngine:
 
         Args:
             exchange: Optional exchange filter
-            table_name: Iceberg table name (default: auto-determined from table_version)
+            table_name: Iceberg table name (default: v2 tables)
 
         Returns:
             List of unique symbols
@@ -618,18 +530,9 @@ class QueryEngine:
         Security:
             Uses parameterized queries to prevent SQL injection
         """
-        # Validate table_version
-        if self.table_version not in ("v1", "v2"):
-            raise ValueError(
-                f"Invalid table_version: {self.table_version}. Must be 'v1' or 'v2'"
-            )
-
-        # Auto-determine table name based on table_version
+        # Auto-determine table name (v2 only)
         if table_name is None:
-            if self.table_version == "v2":
-                table_name = f"market_data.trades_v2"
-            elif self.table_version == "v1":
-                table_name = "market_data.trades"  # Legacy table name for backward compatibility
+            table_name = "market_data.trades_v2"
 
         table_path = self._get_table_path(table_name)
 
@@ -661,33 +564,22 @@ class QueryEngine:
         """Get the date range of data in a table.
 
         Args:
-            table_name: Iceberg table name (default: auto-determined from table_version)
+            table_name: Iceberg table name (default: v2 tables)
 
         Returns:
             Tuple of (min_timestamp, max_timestamp)
         """
-        # Validate table_version
-        if self.table_version not in ("v1", "v2"):
-            raise ValueError(
-                f"Invalid table_version: {self.table_version}. Must be 'v1' or 'v2'"
-            )
-
-        # Auto-determine table name based on table_version
+        # Auto-determine table name (v2 only)
         if table_name is None:
-            if self.table_version == "v2":
-                table_name = f"market_data.trades_v2"
-            elif self.table_version == "v1":
-                table_name = "market_data.trades"  # Legacy table name for backward compatibility
+            table_name = "market_data.trades_v2"
 
         table_path = self._get_table_path(table_name)
 
-        # Field name differs between v1 and v2
-        timestamp_field = "timestamp" if self.table_version == "v2" else "exchange_timestamp"
-
+        # V2 schema uses 'timestamp' field
         query = f"""
             SELECT
-                MIN({timestamp_field}) as min_ts,
-                MAX({timestamp_field}) as max_ts
+                MIN(timestamp) as min_ts,
+                MAX(timestamp) as max_ts
             FROM iceberg_scan('{table_path}')
         """
 
