@@ -6,14 +6,14 @@
 
 ---
 
-## Overall Progress: 60% Complete
+## Overall Progress: 70% Complete
 
 **Phase 1: Audit and Analysis** - ✅ COMPLETE (100%)
 **Phase 2: Restructure Phase Directories** - ✅ COMPLETE (100%)
 **Phase 3: Consolidate Review Documents** - ✅ COMPLETE (100%)
-**Phase 4: Eliminate Content Duplication** - 🟡 PARTIAL (25%) - Root README updated
+**Phase 4: Eliminate Content Duplication** - 🟡 PARTIAL (60%) - Platform positioning, cost model, data dictionary done
 **Phase 5: Enhance Navigation** - 🟡 PARTIAL (50%) - Reviews index created
-**Phase 6: Fill Documentation Gaps** - 🟡 PARTIAL (40%) - Testing procedures, connection pool runbook
+**Phase 6: Fill Documentation Gaps** - 🟡 PARTIAL (60%) - Testing procedures, connection pool runbook, data dictionary
 **Phase 7: Quality Validation** - ⬜ NOT STARTED (0%)
 
 ---
@@ -153,48 +153,65 @@
 
 ---
 
-## Phase 4: Eliminate Content Duplication ⬜ NOT STARTED
+## Phase 4: Eliminate Content Duplication 🟡 PARTIAL
 
-**Status**: 0% complete
-**Estimated Effort**: 3-4 hours
+**Status**: 60% complete (1.5 hours)
+**Completed**: 2026-01-14
 **Priority**: 🟡 MEDIUM
 
-### Tasks
+### Tasks Completed
 
-#### Platform Positioning (9+ locations → 1 canonical)
-- [ ] Confirm `docs/architecture/platform-positioning.md` is complete
-- [ ] Reduce root README.md from 120 lines → summary table + link
-- [ ] Convert phase step-01 to implementation checklist only
-- [ ] Replace duplicates in review docs with references
-- [ ] Add "Referenced by" section to canonical doc
+#### Platform Positioning (9+ locations → 1 canonical) ✅
+- [x] Confirmed `docs/architecture/platform-positioning.md` is complete (comprehensive)
+- [x] Reduced root README.md from ~120 lines → 32 lines (73% reduction)
+  - Kept essential positioning statement (L3 Cold Path)
+  - Converted to concise table format
+  - Added clear link to detailed document
+- [x] Canonical document provides: competitive analysis, decision frameworks, workflow scenarios
 
-#### Cost Model (4+ locations → 1 canonical)
-- [ ] Consolidate all cost tables into `docs/operations/cost-model.md`
-- [ ] Reduce root README to brief summary + link
-- [ ] Update all references to canonical source
+**Impact**: 88 lines removed from README, single source of truth established
 
-#### V2 Schema (8+ locations → 3-tiered approach)
-- [ ] Create `docs/reference/data-dictionary-v2.md` (field-by-field reference)
-- [ ] Ensure `docs/architecture/schema-design-v2.md` is complete
-- [ ] Update phase step docs to reference instead of duplicate
-- [ ] Consolidate validation results into phase-2-prep completion report
+#### Cost Model (4+ locations → 1 canonical) ✅
+- [x] Canonical `docs/operations/cost-model.md` confirmed complete (26KB, comprehensive FinOps)
+- [x] Updated root README cost section with key metrics + link to detailed analysis
+  - At-scale costs: $15K/month, $0.85 per million messages
+  - Key FinOps principles highlighted
+  - Link to complete breakdown at 3 scales
+- [x] All references point to canonical source
+
+**Impact**: Cost information consolidated, easy access to detailed analysis
+
+#### V2 Schema Data Dictionary ✅
+- [x] Created `docs/reference/data-dictionary-v2.md` (comprehensive 650+ lines)
+  - Field-by-field reference for TradeV2, QuoteV2, ReferenceDataV2
+  - Data type specifications (Decimal 18,8, timestamp micros)
+  - Vendor_data mappings (ASX, Binance)
+  - Example records with annotations
+  - Query examples (DuckDB, Iceberg)
+  - Enum definitions (AssetClass, TradeSide)
+  - Iceberg partitioning and sort order
+  - Schema evolution guidance
+- [x] Cross-referenced with existing schema-design-v2.md
+
+**Impact**: Complete offline reference for schema fields, no more hunting through Avro files
+
+### Tasks Remaining
 
 #### Binance Implementation (10+ locations → structured approach)
-- [ ] Create `docs/architecture/streaming-sources.md` (generic + Binance)
-- [ ] Create `docs/operations/binance-streaming-guide.md` (runbook)
-- [ ] Merge E2E demo results into phase-2-prep completion report
-- [ ] Update step docs to reference architectural docs
+- [ ] Create `docs/architecture/streaming-sources.md` (generic + Binance example)
+- [ ] Create `docs/operations/binance-streaming-guide.md` (operational runbook)
+- [ ] Consolidate scattered Binance references
 
 #### Technology Stack (3 locations → 1 detailed)
-- [ ] Reduce root README to quick reference table
 - [ ] Add trade-offs to `docs/architecture/README.md`
-- [ ] Add "when to replace" guidance
+- [ ] Add "when to replace" guidance for each technology
+- [ ] Update root README technology section with link
 
-### Expected Impact
-- Single canonical source for each major concept
-- Size reduction: ~15-20% of total documentation
-- Easier maintenance (update once, not 9 times)
-- Clear "Referenced by" sections
+### Impact Achieved
+- **Platform Positioning**: 88 lines removed from README (73% reduction)
+- **Cost Model**: Consolidated with clear link to detailed analysis
+- **V2 Schema**: Complete reference eliminates need to read Avro files directly
+- **Documentation Size**: Reduced duplication while improving discoverability
 
 ---
 
@@ -326,12 +343,12 @@
 
 | Metric | Baseline | Target | Current | Status |
 |--------|----------|--------|---------|--------|
-| Total Files | 163 | ~130 | ~160 | 🟡 3 files removed, 6 added (net -3 + operational docs) |
-| Total Size | 2.1MB | ~1.6MB | ~2.3MB | 🟡 +0.2MB (consolidation complete, gap filling adds docs) |
+| Total Files | 163 | ~130 | ~161 | 🟡 Net: 11 archived, 7 created (consolidation + references) |
+| Total Size | 2.1MB | ~1.6MB | ~2.2MB | 🟡 +88 lines removed from README, +650 lines data dictionary |
 | Broken Links | ~15 | 0 | ~10 | 🟡 Some fixed (phase rename), more remain |
 | Review Docs | 22 | 6-8 | 9 | ✅ 59% reduction (target was 68%) |
-| Reference Docs | 2 | 8 | 4 | 🟡 Added testing procedures, connection pool runbook |
-| Outdated Dates | ~20 | 0 | ~15 | 🟡 Phase 0/2 completion reports updated |
+| Reference Docs | 2 | 8 | 5 | 🟡 Added: testing procedures, connection pool runbook, data dictionary |
+| Outdated Dates | ~20 | 0 | ~12 | 🟡 Phase 0/2 reports, data dictionary updated |
 | TODO Placeholders | ~10 | 0 | ~8 | 🟡 Some removed in consolidation |
 
 ### Qualitative Assessment
@@ -339,13 +356,13 @@
 | Criterion | Baseline | Target | Current | Status |
 |-----------|----------|--------|---------|--------|
 | Phase Progression Clarity | 4/10 | 10/10 | 10/10 | ✅ Phase renaming complete |
-| Navigation Ease | 6/10 | 9/10 | 8/10 | 🟡 Reviews index created, needs more "See Also" |
-| Content Duplication | 4/10 | 9/10 | 5/10 | 🟡 Some progress (README uv section), more needed |
-| Professional Appearance | 7/10 | 10/10 | 8.5/10 | 🟡 Much improved, minor polishing remains |
-| Reference Completeness | 5/10 | 9/10 | 7/10 | 🟡 Testing & operations docs added, API ref needed |
+| Navigation Ease | 6/10 | 9/10 | 8/10 | 🟡 Reviews index created, needs link validation |
+| Content Duplication | 4/10 | 9/10 | 7/10 | 🟡 Platform positioning, cost model, data dict consolidated |
+| Professional Appearance | 7/10 | 10/10 | 9/10 | 🟡 Much improved, nearly target |
+| Reference Completeness | 5/10 | 9/10 | 8/10 | 🟡 Testing, operations, data dict added; API ref needed |
 | Maintenance Readiness | 5/10 | 9/10 | 6/10 | 🟡 Archive strategy established, no schedule yet |
 
-**Overall Grade**: B+ (7/10) → Current: B+ (8/10) → Target: A (9.5/10)
+**Overall Grade**: B+ (7/10) → Current: A- (8.5/10) → Target: A (9.5/10)
 
 ---
 
@@ -434,5 +451,5 @@
 
 ---
 
-**Last Updated**: 2026-01-14 (Phase 3 complete)
-**Next Update**: After Phase 4/5/6 completion (content deduplication, navigation, gaps)
+**Last Updated**: 2026-01-14 (Phase 3 complete, Phase 4 60% complete)
+**Next Update**: After Phase 4/5/6 completion (remaining deduplication, navigation, gaps)

@@ -10,124 +10,35 @@ A distributed market data lakehouse for quantitative research, compliance, and a
 
 ## Platform Positioning
 
-K2 is an **L3 Cold Path Reference Data Platform** - a market data lakehouse optimized for analytics, compliance, and historical research rather than real-time execution.
+K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, compliance, and historical research rather than real-time execution.
 
-### Market Data Latency Tiers
+| Tier | Latency | K2 Target | Use Cases |
+|------|---------|-----------|-----------|
+| **L1 Hot Path** | <10μs | ❌ No | Execution, Market Making, Order Routing |
+| **L2 Warm Path** | <10ms | ❌ No | Real-time Risk, Position Tracking, Live P&L |
+| **L3 Cold Path** | <500ms | ✅ **Yes** | Research, Compliance, Analytics, Backtesting |
 
-The financial industry has distinct latency tiers for different use cases:
+**What K2 IS**:
+- High-throughput ingestion (1M+ msg/sec at scale)
+- ACID-compliant storage with time-travel queries
+- Sub-second analytical queries (point: <100ms, aggregations: 200-500ms)
+- Cost-effective at scale ($0.85 per million messages)
+- Unlimited historical storage (S3-backed Iceberg)
 
-| Tier | Latency Target | Use Case | Technology Examples | K2 Position |
-|------|---------------|----------|---------------------|-------------|
-| **L1 Hot Path** | <10μs | Execution, Order Routing, Market Making | Shared memory, FPGAs, Kernel bypass (Solarflare) | ❌ Not K2 |
-| **L2 Warm Path** | <10ms | Risk Management, Position Tracking, Real-time P&L | In-memory streaming (Flink, kdb+, KSQLDB) | ❌ Not K2 |
-| **L3 Cold Path** | <500ms | Analytics, Compliance, Backtesting, Research | Lakehouse platforms (Iceberg, Snowflake, Databricks) | ✅ **K2 Platform** |
+**What K2 is NOT**:
+- ❌ Ultra-low-latency execution (<10μs) for HFT
+- ❌ Real-time risk management (<10ms) for live P&L
+- ❌ Synchronous streaming API for tick-by-tick subscriptions
 
-### What K2 IS (L3 Cold Path)
+**Target Use Cases**:
+1. Quantitative research & backtesting
+2. Regulatory compliance & audits (FINRA, SEC, MiFID II)
+3. Market microstructure analysis
+4. Performance attribution & TCA
+5. Multi-vendor data reconciliation
+6. Historical research & ad-hoc analytics
 
-✅ **High-Throughput Ingestion**: 1M+ msg/sec at scale (single-node demo: 10K msg/sec producer, 138 msg/sec consumer with Iceberg writes)
-
-✅ **ACID-Compliant Storage**: Time-travel queries for regulatory investigations (FINRA, SEC, MiFID II)
-
-✅ **Sub-Second Analytical Queries**: Point queries <100ms, aggregations 200-500ms (single-node DuckDB; distributed Presto: <500ms p99)
-
-✅ **Cost-Effective at Scale**: $0.85 per million messages at 1M msg/sec (AWS MSK + S3 + Presto)
-
-✅ **Compliance & Audit**: Immutable audit trail with snapshot-based time-travel
-
-✅ **Unlimited Historical Storage**: S3-backed Iceberg tables with automatic compaction
-
-### What K2 is NOT
-
-❌ **Ultra-Low-Latency Execution** (<10μs): Not designed for order routing or market making (requires FPGA, kernel bypass, shared memory)
-
-❌ **Real-Time Risk Management** (<10ms): Not suitable for live position/P&L tracking (requires in-memory streaming like kdb+ or Flink)
-
-❌ **High-Frequency Trading Infrastructure**: Not optimized for tick-to-trade execution paths
-
-❌ **Synchronous Query API**: Queries are analytical batch operations, not streaming subscriptions
-
-### Target Use Cases
-
-1. **Quantitative Research**: Backtest trading strategies on years of tick data
-   - Example: "Test mean-reversion strategy on AAPL trades 2020-2023"
-   - Query: Millions of rows aggregated to OHLCV, <2 seconds
-
-2. **Compliance & Audit**: Time-travel queries for regulatory investigations
-   - Example: "What was our best execution for client order #12345 on 2023-06-15?"
-   - Query: Point lookup with time-travel, <100ms
-
-3. **Market Microstructure Analysis**: Study order book dynamics and trade patterns
-   - Example: "Analyze spread compression during market open for tech stocks"
-   - Query: Aggregations across symbols and time periods, <500ms
-
-4. **Performance Attribution**: Analyze execution quality vs benchmarks (VWAP, TWAP)
-   - Example: "Compare our execution prices vs market VWAP for Q3 2023"
-   - Query: Join trades with reference data, <1 second
-
-5. **Data Reconciliation**: Compare multiple vendor feeds for discrepancies
-   - Example: "Find differences between Refinitiv and Bloomberg prices for EUR/USD"
-   - Query: Cross-feed comparison, <500ms
-
-6. **Historical Research**: Ad-hoc queries on archived data for academic or strategy research
-   - Example: "Extract all trades for S&P 500 constituents during flash crash events"
-   - Query: Large-scale scan with predicates, 2-5 seconds
-
-### Tiered Architecture Context
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ L1 Hot Path (<10μs)  │ Execution Path                                  │
-│ ────────────────────────────────────────────────────────────────────── │
-│ • Order routing        • Market making       • FPGA tick-to-trade      │
-│ • Co-located matching  • Arbitrage           • Kernel bypass networking│
-│                                                                         │
-│ Technologies: Shared memory, FPGAs, Solarflare ONload, custom hardware │
-│ NOT K2 - requires specialized HFT infrastructure                       │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    ↓ (milliseconds)
-┌─────────────────────────────────────────────────────────────────────────┐
-│ L2 Warm Path (<10ms) │ Risk & Operations                               │
-│ ────────────────────────────────────────────────────────────────────── │
-│ • Real-time risk       • Position tracking   • Live P&L                │
-│ • Exposure monitoring  • Margin calculations • Pre-trade checks        │
-│                                                                         │
-│ Technologies: kdb+, Apache Flink, Kafka Streams, KSQLDB, Hazelcast    │
-│ NOT K2 - requires in-memory streaming engines                          │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    ↓ (hundreds of milliseconds)
-┌─────────────────────────────────────────────────────────────────────────┐
-│ L3 Cold Path (<500ms) │ Analytics & Compliance         ← K2 Platform  │
-│ ────────────────────────────────────────────────────────────────────── │
-│ • Quantitative research • Compliance queries • Historical backtesting  │
-│ • Market analytics      • Audit trails       • Data reconciliation     │
-│ • Performance attribution • Ad-hoc research  • Regulatory reporting    │
-│                                                                         │
-│ Technologies: Iceberg, Snowflake, Databricks, Presto, DuckDB          │
-│ K2 Platform: Market data lakehouse with ACID guarantees               │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Performance Characteristics
-
-**Current (Single-Node Demo)**:
-- Ingestion: 10K msg/sec producer throughput
-- Consumer: 138 msg/sec with Iceberg writes (I/O bound)
-- Query (DuckDB): Point queries <100ms, aggregations 200-500ms, full scans 2-5s
-- Kafka latency: <5ms p99
-
-**Projected (Distributed Production)**:
-- Ingestion: 1M msg/sec (20 Kafka partitions, horizontal scaling)
-- Consumer: 100K+ msg/sec (parallel workers, batch optimization)
-- Query (Presto): <500ms p99 for analytical queries (10-node cluster)
-- Storage: Unlimited (S3 + Iceberg compaction)
-
-**Why These Latencies Are Appropriate**:
-- Analysts don't need sub-millisecond responses for research queries
-- Compliance teams query historical data hours/days after events
-- Backtesting runs overnight on years of data
-- Cost-effective storage requires batch-oriented I/O patterns
-
-For alternative HFT/real-time architectures, see [HFT Architecture Patterns](./docs/architecture/alternatives.md).
+**For Detailed Information**: See [Platform Positioning](./docs/architecture/platform-positioning.md) for competitive analysis, decision frameworks, and workflow scenarios.
 
 ---
 
@@ -445,13 +356,19 @@ Operational procedures for common scenarios:
 
 See [Scaling Strategy](./docs/architecture/system-design.md#scaling-considerations) for detailed projections.
 
-### Cost Model (Phase 2)
+### Cost Model
 
-*Cost modeling and FinOps analysis will be added in Phase 2 to demonstrate business awareness.*
+**At Scale (1M msg/sec)**:
+- **AWS Monthly**: ~$15K (MSK, S3, Presto, monitoring)
+- **Per Message**: $0.85 per million messages
+- **Per Query**: <$0.01 for typical analytical query
 
-**Estimated monthly cost at 100x scale**: ~$15K/month AWS (ap-southeast-2).
+**Key FinOps Principles**:
+- Reserved instances for predictable workloads (40% savings)
+- S3 Intelligent-Tiering for historical data (automatic cost optimization)
+- Right-sizing query engine based on actual usage patterns
 
-See [Phase 2: Cost Model](docs/phases/phase-3-demo-enhancements/steps/step-08-cost-model.md) for planned analysis.
+**For Detailed Analysis**: See [Cost Model & FinOps](./docs/operations/cost-model.md) for complete breakdown at 3 scales (demo, production, enterprise), optimization strategies, and cost monitoring.
 
 ---
 
