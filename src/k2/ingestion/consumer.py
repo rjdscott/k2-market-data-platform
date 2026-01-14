@@ -10,6 +10,11 @@ layer (Kafka) and the lakehouse layer (Iceberg). Features include:
 - Graceful shutdown with signal handling
 - Comprehensive metrics and structured logging
 - Daemon and batch execution modes
+- Support for v1 (legacy) and v2 (industry-standard) schemas
+
+Schema Evolution:
+- v1: Legacy ASX-specific schemas → market_data.trades table
+- v2: Industry-standard hybrid schemas → market_data.trades_v2 table
 
 Architecture Decisions:
 - #012: Data-type-based consumer group naming
@@ -18,19 +23,29 @@ Architecture Decisions:
 - #015: Batch size 1000 with configurable override
 - #016: Daemon mode with graceful shutdown
 
-Usage:
-    # Daemon mode (runs until stopped)
+Usage (v2 schemas):
+    # Daemon mode (runs until stopped) with v2 schemas
     consumer = MarketDataConsumer(
         topics=['market.equities.trades.asx'],
-        consumer_group='k2-iceberg-writer-trades',
+        consumer_group='k2-iceberg-writer-trades-v2',
+        schema_version='v2',
     )
     consumer.run()
 
-    # Batch mode (consume N messages)
+    # Batch mode (consume N messages) with v2 schemas
+    consumer = MarketDataConsumer(
+        topics=['market.equities.trades.asx'],
+        consumer_group='k2-iceberg-writer-trades-v2',
+        schema_version='v2',
+        max_messages=1000,
+    )
+    consumer.run()
+
+Usage (v1 schemas - backward compatibility):
     consumer = MarketDataConsumer(
         topics=['market.equities.trades.asx'],
         consumer_group='k2-iceberg-writer-trades',
-        max_messages=1000,
+        schema_version='v1',
     )
     consumer.run()
 """
@@ -39,21 +54,48 @@ import os
 import signal
 import time
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
 from confluent_kafka.serialization import MessageField, SerializationContext
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    RetryError,
+)
 
 from k2.common.config import config
+from k2.common.degradation_manager import DegradationManager, DegradationLevel
+from k2.common.load_shedder import LoadShedder
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
-from k2.ingestion.sequence_tracker import SequenceTracker
+from k2.ingestion.dead_letter_queue import DeadLetterQueue
+from k2.ingestion.sequence_tracker import SequenceTracker, SequenceEvent
 from k2.storage.writer import IcebergWriter
 
 logger = get_logger(__name__)
 metrics = create_component_metrics("consumer")
+
+
+# Define retryable exceptions (transient failures that should be retried)
+RETRYABLE_ERRORS = (
+    ConnectionError,  # Network issues
+    TimeoutError,  # S3 timeouts, catalog timeouts
+    OSError,  # File system errors (disk full, permissions)
+)
+
+# Permanent errors that should go to DLQ (no retry)
+PERMANENT_ERRORS = (
+    ValueError,  # Data validation failures
+    TypeError,  # Schema mismatches
+    KeyError,  # Missing required fields
+)
 
 
 @dataclass
@@ -114,17 +156,27 @@ class MarketDataConsumer:
         consumer_group: str | None = None,
         bootstrap_servers: str | None = None,
         schema_registry_url: str | None = None,
+        schema_version: str = "v2",
         batch_size: int | None = None,
         max_messages: int | None = None,
         iceberg_writer: IcebergWriter | None = None,
         sequence_tracker: SequenceTracker | None = None,
+        dlq_path: Path | str | None = None,
     ):
-        """Initialize consumer with configuration."""
+        """Initialize consumer with configuration.
+
+        Args:
+            dlq_path: Path for Dead Letter Queue files (for permanent failures)
+        """
         # Validate topic subscription
         if not topics and not topic_pattern:
             raise ValueError("Must specify either topics or topic_pattern")
         if topics and topic_pattern:
             raise ValueError("Specify either topics or topic_pattern, not both")
+
+        # Validate schema version
+        if schema_version not in ("v1", "v2"):
+            raise ValueError(f"Invalid schema_version: {schema_version}. Must be 'v1' or 'v2'")
 
         # Load configuration
         self.topics = topics
@@ -132,6 +184,7 @@ class MarketDataConsumer:
         self.consumer_group = consumer_group or os.getenv("K2_CONSUMER_GROUP", "k2-iceberg-writer")
         self.bootstrap_servers = bootstrap_servers or config.kafka.bootstrap_servers
         self.schema_registry_url = schema_registry_url or config.kafka.schema_registry_url
+        self.schema_version = schema_version
         self.batch_size = batch_size or int(os.getenv("K2_CONSUMER_BATCH_SIZE", "1000"))
         self.max_messages = max_messages
 
@@ -143,8 +196,16 @@ class MarketDataConsumer:
         # Initialize components
         self._init_schema_registry()
         self._init_consumer()
-        self.iceberg_writer = iceberg_writer or IcebergWriter()
+        self.iceberg_writer = iceberg_writer or IcebergWriter(schema_version=self.schema_version)
         self.sequence_tracker = sequence_tracker or SequenceTracker()
+
+        # Initialize Dead Letter Queue for permanent failures
+        dlq_default_path = Path("/var/k2/dlq") if dlq_path is None else Path(dlq_path)
+        self.dlq = DeadLetterQueue(path=dlq_default_path, max_size_mb=100)
+
+        # Initialize degradation management for graceful load handling
+        self.degradation_manager = DegradationManager()
+        self.load_shedder = LoadShedder()
 
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._shutdown_handler)
@@ -155,6 +216,7 @@ class MarketDataConsumer:
             consumer_group=self.consumer_group,
             topics=self.topics,
             topic_pattern=self.topic_pattern,
+            schema_version=self.schema_version,
             batch_size=self.batch_size,
             mode="daemon" if self.max_messages is None else "batch",
             max_messages=self.max_messages,
@@ -269,6 +331,38 @@ class MarketDataConsumer:
         logger.info("Shutdown signal received", signal=signum)
         self.running = False
 
+    def _get_consumer_lag(self) -> int:
+        """Get current consumer lag (uncommitted messages).
+
+        Returns:
+            Total lag across all assigned partitions
+        """
+        try:
+            # Get assigned partitions
+            assignment = self.consumer.assignment()
+            if not assignment:
+                return 0
+
+            # Get committed offsets and high water marks
+            total_lag = 0
+            for partition in assignment:
+                # Get committed offset
+                committed = self.consumer.committed([partition])[0]
+                committed_offset = committed.offset if committed and committed.offset >= 0 else 0
+
+                # Get high water mark (latest offset)
+                low, high = self.consumer.get_watermark_offsets(partition)
+
+                # Calculate lag for this partition
+                lag = high - committed_offset
+                total_lag += max(0, lag)
+
+            return total_lag
+
+        except Exception as err:
+            logger.warning("Failed to calculate consumer lag", error=str(err))
+            return 0  # Default to no lag if calculation fails
+
     def run(self):
         """Main consumer loop (Decision #016: Daemon or batch mode).
 
@@ -300,10 +394,11 @@ class MarketDataConsumer:
             logger.info("Consumer interrupted by user")
         except Exception as err:
             logger.error("Consumer error", error=str(err), exc_info=True)
-            metrics.increment(
-                "consumer_errors_total",
-                labels={"error_type": "unexpected", "consumer_group": self.consumer_group},
-            )
+            # TODO: Add consumer_errors_total metric to registry
+            # metrics.increment(
+            #     "consumer_errors_total",
+            #     labels={"error_type": "unexpected", "consumer_group": self.consumer_group},
+            # )
             raise
         finally:
             # Graceful shutdown
@@ -313,6 +408,16 @@ class MarketDataConsumer:
         """Consume a batch of messages and write to Iceberg (Decision #015)."""
         batch: list[dict[str, Any]] = []
         batch_start_time = time.time()
+
+        # Check degradation level based on consumer lag and system health
+        lag = self._get_consumer_lag()
+        current_level = self.degradation_manager.check_and_degrade(lag=lag)
+
+        logger.debug(
+            "Batch degradation check",
+            consumer_lag=lag,
+            degradation_level=current_level.name,
+        )
 
         # Poll messages until batch is full or timeout
         while len(batch) < self.batch_size:
@@ -340,37 +445,79 @@ class MarketDataConsumer:
                     partition=msg.partition(),
                 )
                 self.stats.errors += 1
-                metrics.increment(
-                    "consumer_errors_total",
-                    labels={"error_type": "poll_error", "consumer_group": self.consumer_group},
-                )
+                # TODO: Add consumer_errors_total metric to registry
+                # metrics.increment(
+                #     "consumer_errors_total",
+                #     labels={"error_type": "poll_error", "consumer_group": self.consumer_group},
+                # )
                 continue
 
             # Deserialize message
             try:
                 record = self._deserialize_message(msg)
                 if record:
-                    batch.append(record)
                     self.stats.messages_consumed += 1
 
                     # Update consumer metrics
+                    # Standard labels (service, environment, component) are added automatically by component metrics
                     metrics.increment(
                         "kafka_messages_consumed_total",
                         labels={
-                            "topic": msg.topic(),
-                            "consumer_group": self.consumer_group,
                             "exchange": record.get("exchange", "unknown"),
                             "asset_class": record.get("asset_class", "unknown"),
-                            "data_type": record.get("data_type", "unknown"),
+                            "topic": msg.topic(),
+                            "consumer_group": self.consumer_group,
                         },
                     )
 
+                    # Apply load shedding based on degradation level and symbol priority
+                    # Only shed at GRACEFUL level and above
+                    if current_level >= DegradationLevel.GRACEFUL:
+                        symbol = record.get("symbol", "unknown")
+                        # Determine data type from topic or message
+                        # For now, assume 'trades' - could be enhanced to detect from topic name
+                        data_type = "trades"
+
+                        if not self.load_shedder.should_process(
+                            symbol=symbol,
+                            degradation_level=current_level.value,
+                            data_type=data_type,
+                        ):
+                            # Message shed - skip processing
+                            logger.debug(
+                                "Message shed due to load",
+                                symbol=symbol,
+                                degradation_level=current_level.name,
+                            )
+                            continue
+
+                    # Message passes load shedding - add to batch
+                    batch.append(record)
+
                     # Check sequence (Decision #014: Sequence gap logging)
-                    if "symbol" in record and "sequence_number" in record:
-                        gap = self.sequence_tracker.check_sequence(
-                            record["symbol"], record["sequence_number"],
+                    # V2 schema uses "source_sequence" instead of "sequence_number"
+                    seq_field = "source_sequence" if self.schema_version == "v2" else "sequence_number"
+                    if "symbol" in record and seq_field in record and record[seq_field] is not None:
+                        # Extract timestamp (Avro logical type deserializes to datetime)
+                        timestamp = record.get("timestamp")
+
+                        # Handle different timestamp formats (datetime object or microseconds)
+                        if timestamp and isinstance(timestamp, (int, float)):
+                            # If timestamp is in microseconds, convert to datetime
+                            timestamp = datetime.fromtimestamp(timestamp / 1_000_000)
+                        elif not isinstance(timestamp, datetime):
+                            # Fallback to current time if timestamp unavailable
+                            timestamp = datetime.utcnow()
+
+                        event = self.sequence_tracker.check_sequence(
+                            exchange=record.get("exchange", "unknown"),
+                            symbol=record["symbol"],
+                            sequence=record[seq_field],
+                            timestamp=timestamp,
                         )
-                        if gap:
+
+                        # Count only actual gaps (not OK or RESET events)
+                        if event in (SequenceEvent.SMALL_GAP, SequenceEvent.LARGE_GAP):
                             self.stats.sequence_gaps += 1
 
             except Exception as err:
@@ -382,16 +529,18 @@ class MarketDataConsumer:
                     error=str(err),
                 )
                 self.stats.errors += 1
-                metrics.increment(
-                    "consumer_errors_total",
-                    labels={"error_type": "deserialization", "consumer_group": self.consumer_group},
-                )
+                # TODO: Add consumer_errors_total metric to registry
+                # metrics.increment(
+                #     "consumer_errors_total",
+                #     labels={"error_type": "deserialization", "consumer_group": self.consumer_group},
+                # )
                 continue
 
         # Write batch to Iceberg if we have messages
         if batch:
             try:
-                self._write_batch_to_iceberg(batch)
+                # Use retry logic for transient failures
+                self._write_batch_with_retry(batch)
                 self.stats.messages_written += len(batch)
 
                 # Commit offsets after successful write (at-least-once)
@@ -409,24 +558,78 @@ class MarketDataConsumer:
                 )
 
                 # Track batch processing metrics
-                metrics.observe(
+                sample = batch[0] if batch else {}
+                metrics.histogram(
                     "iceberg_batch_size",
-                    len(batch),
-                    labels={"table": "trades", "consumer_group": self.consumer_group},
+                    value=len(batch),
+                    labels={
+                        "exchange": sample.get("exchange", "unknown"),
+                        "asset_class": sample.get("asset_class", "unknown"),
+                        "table": "trades_v2" if self.schema_version == "v2" else "trades",
+                    },
                 )
 
-            except Exception as err:
-                logger.error(
-                    "Failed to write batch to Iceberg",
+            except RetryError as err:
+                # Exhausted retries for transient error - CRASH and restart
+                logger.critical(
+                    "Iceberg write failed after 3 retries - CRASH",
+                    error=str(err.last_attempt.exception()),
+                    error_type=type(err.last_attempt.exception()).__name__,
                     batch_size=len(batch),
-                    error=str(err),
+                    consumer_group=self.consumer_group,
                 )
                 self.stats.errors += 1
                 metrics.increment(
                     "consumer_errors_total",
-                    labels={"error_type": "iceberg_write", "consumer_group": self.consumer_group},
+                    labels={"error_type": "exhausted_retries", "consumer_group": self.consumer_group},
                 )
-                # Don't commit offsets on failure - will reprocess
+                # Don't commit offsets - will reprocess after restart
+                raise
+
+            except PERMANENT_ERRORS as err:
+                # Permanent error (validation, schema mismatch) - send to DLQ
+                logger.error(
+                    "Permanent write error - sending to DLQ",
+                    error=str(err),
+                    error_type=type(err).__name__,
+                    batch_size=len(batch),
+                    consumer_group=self.consumer_group,
+                )
+
+                # Write to DLQ for manual review
+                self.dlq.write(
+                    messages=batch,
+                    error=str(err),
+                    error_type=type(err).__name__,
+                    metadata={
+                        "consumer_group": self.consumer_group,
+                        "topic": batch[0].get("topic", "unknown") if batch else "unknown",
+                        "schema_version": self.schema_version,
+                    },
+                )
+
+                self.stats.errors += 1
+                metrics.increment(
+                    "consumer_errors_total",
+                    labels={"error_type": "permanent", "consumer_group": self.consumer_group},
+                )
+
+                # Commit offsets to skip bad messages (already in DLQ)
+                self.consumer.commit(asynchronous=False)
+
+            except Exception as err:
+                # Unexpected error - log and crash for investigation
+                logger.critical(
+                    "Unexpected error during batch processing",
+                    error=str(err),
+                    error_type=type(err).__name__,
+                    batch_size=len(batch),
+                )
+                self.stats.errors += 1
+                metrics.increment(
+                    "consumer_errors_total",
+                    labels={"error_type": "unexpected", "consumer_group": self.consumer_group},
+                )
                 raise
 
     def _deserialize_message(self, msg) -> dict[str, Any] | None:
@@ -447,6 +650,40 @@ class MarketDataConsumer:
 
         return value
 
+    @retry(
+        retry=retry_if_exception_type(RETRYABLE_ERRORS),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        reraise=True,
+    )
+    def _write_batch_with_retry(self, batch: list[dict[str, Any]]) -> None:
+        """Write batch to Iceberg with automatic retry for transient failures.
+
+        Retries on transient errors (connection, timeout, OSError) with exponential backoff:
+        - Attempt 1: Immediate
+        - Attempt 2: 2 seconds wait
+        - Attempt 3: 4 seconds wait
+
+        Raises:
+            RetryError: If all retry attempts exhausted (transient error)
+            Other exceptions: Permanent errors (schema mismatch, validation, etc.)
+
+        Security:
+            Prevents data loss by retrying transient failures (S3 throttling,
+            network timeouts) while properly handling permanent errors via DLQ.
+        """
+        try:
+            self.iceberg_writer.write_trades(batch)
+
+        except RETRYABLE_ERRORS as err:
+            logger.warning(
+                "Transient Iceberg write failure, will retry",
+                error=str(err),
+                error_type=type(err).__name__,
+                batch_size=len(batch),
+            )
+            raise  # Let tenacity handle retry
+
     def _write_batch_to_iceberg(self, batch: list[dict[str, Any]]):
         """Write batch of records to Iceberg.
 
@@ -457,17 +694,21 @@ class MarketDataConsumer:
 
         try:
             # Write to Iceberg (IcebergWriter handles transaction)
-            self.iceberg_writer.write_batch(batch)
+            # Assuming trades for now - TODO: detect message type from topic or schema
+            self.iceberg_writer.write_trades(batch)
 
             # Track write duration
             duration = time.time() - start_time
-            metrics.observe(
+            # Extract exchange/asset_class from first record in batch (all should be same topic)
+            sample = batch[0] if batch else {}
+            metrics.histogram(
                 "iceberg_write_duration_seconds",
-                duration,
+                value=duration,
                 labels={
-                    "table": "trades",
-                    "operation": "batch_write",
-                    "consumer_group": self.consumer_group,
+                    "exchange": sample.get("exchange", "unknown"),
+                    "asset_class": sample.get("asset_class", "unknown"),
+                    "table": "trades_v2" if self.schema_version == "v2" else "trades",
+                    "operation": "append",
                 },
             )
 
@@ -478,12 +719,15 @@ class MarketDataConsumer:
             )
 
         except Exception as err:
+            # Extract exchange/asset_class from first record in batch
+            sample = batch[0] if batch else {}
             metrics.increment(
                 "iceberg_write_errors_total",
                 labels={
-                    "table": "trades",
+                    "exchange": sample.get("exchange", "unknown"),
+                    "asset_class": sample.get("asset_class", "unknown"),
+                    "table": "trades_v2" if self.schema_version == "v2" else "trades",
                     "error_type": str(type(err).__name__),
-                    "consumer_group": self.consumer_group,
                 },
             )
             raise
@@ -493,10 +737,7 @@ class MarketDataConsumer:
         logger.info("Consumer shutting down")
 
         try:
-            # Flush Iceberg writer
-            if self.iceberg_writer:
-                self.iceberg_writer.flush()
-
+            # Iceberg writes are atomic - no flush needed
             # Final commit
             self.consumer.commit()
 

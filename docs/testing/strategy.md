@@ -1,6 +1,6 @@
 # Testing Strategy
 
-**Last Updated**: 2026-01-09
+**Last Updated**: 2026-01-13
 **Owners**: Platform Team, QA Engineering
 **Status**: Implementation Plan
 **Scope**: Unit tests, integration tests, performance tests, chaos engineering
@@ -202,6 +202,235 @@ class TestBusinessRuleValidator:
         assert result.valid, f"Non-negative volume {volume} should be valid"
 ```
 
+### Data Quality & Validation Tests
+
+**Implementation**: Tests implemented in `tests/unit/test_data_validation.py` using Pandera
+
+**Purpose**: Validate data quality constraints for market data records using schema-based validation.
+
+**Framework**: [Pandera](https://pandera.readthedocs.io/) - DataFrame validation library
+
+**Coverage**:
+- **Trade v2 Schema Validation**:
+  - Price > 0, Quantity > 0
+  - Timestamp range validation (>= 2000-01-01, < 5 minutes in future)
+  - Symbol format (alphanumeric uppercase)
+  - Exchange/asset_class enum validation
+  - Trade side enum validation
+  - Required field presence
+  - Decimal precision constraints
+  - Timestamp ordering
+
+- **Quote v2 Schema Validation**:
+  - Bid/Ask prices > 0
+  - Bid/Ask quantities > 0
+  - Bid-ask spread validation (ask >= bid)
+  - Cross-field validation
+  - Symbol format and enum validation
+
+- **Batch Validation**:
+  - Large batch validation (1000+ records)
+  - Mixed asset class validation
+  - Partial batch failure detection
+
+**Example**:
+
+```python
+# tests/unit/test_data_validation.py
+import pandas as pd
+import pandera.pandas as pa
+from pandera.pandas import Check, Column, DataFrameSchema
+
+# Define validation schema
+TRADE_V2_SCHEMA = DataFrameSchema(
+    columns={
+        "price": Column(
+            float,
+            checks=[
+                Check.greater_than(0, error="Price must be > 0"),
+                Check.less_than_or_equal_to(1_000_000_000),
+            ],
+            nullable=False,
+        ),
+        "quantity": Column(
+            float,
+            checks=[Check.greater_than(0, error="Quantity must be > 0")],
+            nullable=False,
+        ),
+        "symbol": Column(
+            str,
+            checks=[
+                Check.str_matches(r"^[A-Z0-9]+$"),  # Alphanumeric uppercase
+                Check(lambda s: s.notna().all()),
+            ],
+            nullable=False,
+        ),
+        # ... other columns
+    },
+    strict=False,
+    coerce=True,
+)
+
+# Validate DataFrame
+def test_valid_trades_pass_validation(valid_trades_df):
+    """Test that valid trades pass all validation checks."""
+    validated_df = TRADE_V2_SCHEMA.validate(valid_trades_df)
+    assert len(validated_df) == 2
+    assert validated_df["price"].min() > 0
+
+def test_negative_price_fails(valid_trades_df):
+    """Test that negative price fails validation."""
+    invalid_df = valid_trades_df.copy()
+    invalid_df.loc[0, "price"] = -100.0
+
+    with pytest.raises(pa.errors.SchemaError):
+        TRADE_V2_SCHEMA.validate(invalid_df)
+```
+
+**Running Data Validation Tests**:
+
+```bash
+# Run all data validation tests
+pytest tests/unit/test_data_validation.py -v
+
+# Run specific test class
+pytest tests/unit/test_data_validation.py::TestTradeValidation -v
+
+# Run with verbose output
+pytest tests/unit/test_data_validation.py -vv --tb=short
+```
+
+**Benefits**:
+- **Schema-driven validation**: Validation rules defined declaratively
+- **Rich error messages**: Pandera provides detailed error messages with failure cases
+- **Type coercion**: Automatic type conversion where possible
+- **DataFrame-level validation**: Cross-column validation (e.g., bid < ask)
+- **Integration with data pipelines**: Can be used in production for data quality checks
+
+**Future Enhancements**:
+- Add Great Expectations for more complex data quality rules
+- Integrate validation in production ingestion pipeline
+- Add data profiling and anomaly detection
+- Track validation failures as metrics
+
+### Middleware Tests
+
+**Implementation**: Tests implemented in `tests/unit/test_middleware.py` (36 tests, 680+ lines)
+
+**Purpose**: Validate all API middleware components for authentication, observability, caching, and security.
+
+**Coverage**: 93% middleware code coverage
+
+**Test Categories**:
+
+1. **API Key Authentication** (5 tests):
+   - Valid/invalid API key handling
+   - Missing API key detection
+   - Default vs configured API keys
+   - 401/403 error responses
+
+2. **Correlation ID Middleware** (3 tests):
+   - Automatic correlation ID generation
+   - Using provided correlation IDs
+   - Response header injection
+
+3. **Request Logging Middleware** (6 tests):
+   - Successful request logging
+   - Failed request error logging
+   - Client IP extraction (including X-Forwarded-For)
+   - Path normalization for metrics
+   - In-progress request tracking
+   - Prometheus metrics emission
+
+4. **Cache Control Middleware** (5 tests):
+   - Health endpoint no-cache headers
+   - Trades endpoint short cache (5s)
+   - Symbols endpoint longer cache (5min)
+   - POST request no-cache
+   - Error response no-cache
+
+5. **Request Size Limit Middleware** (6 tests):
+   - Small request allowance
+   - Large request rejection (413)
+   - Missing Content-Length handling
+   - Invalid Content-Length handling
+   - GET request bypass
+   - Default size limit (10MB)
+
+6. **Rate Limiting Helpers** (5 tests):
+   - Client IP extraction
+   - X-Forwarded-For header parsing
+   - Unknown client handling
+   - API key rate limit keys
+   - IP-based rate limit keys
+
+7. **Integration Tests** (3 tests):
+   - Multiple middleware stack
+   - Correlation ID preservation
+   - Error handling across middleware
+
+8. **Edge Cases** (3 tests):
+   - Empty correlation ID regeneration
+   - Unknown path cache behavior
+   - Request size boundary conditions
+
+**Example**:
+
+```python
+# tests/unit/test_middleware.py
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from k2.api.middleware import CorrelationIdMiddleware
+
+class TestCorrelationIdMiddleware:
+    """Test correlation ID middleware."""
+
+    @pytest.mark.asyncio
+    async def test_generates_correlation_id_when_missing(self, test_app):
+        """Test that middleware generates correlation ID when not provided."""
+        test_app.add_middleware(CorrelationIdMiddleware)
+        client = TestClient(test_app)
+
+        response = client.get("/test")
+
+        assert response.status_code == 200
+        assert "X-Correlation-ID" in response.headers
+        # Should be 8-character UUID
+        assert len(response.headers["X-Correlation-ID"]) == 8
+
+    @pytest.mark.asyncio
+    async def test_uses_provided_correlation_id(self, test_app):
+        """Test that middleware uses provided correlation ID."""
+        test_app.add_middleware(CorrelationIdMiddleware)
+        client = TestClient(test_app)
+
+        custom_id = "custom-correlation-123"
+        response = client.get("/test", headers={"X-Correlation-ID": custom_id})
+
+        assert response.status_code == 200
+        assert response.headers["X-Correlation-ID"] == custom_id
+```
+
+**Running Middleware Tests**:
+
+```bash
+# Run all middleware tests
+pytest tests/unit/test_middleware.py -v
+
+# Run specific test class
+pytest tests/unit/test_middleware.py::TestAPIKeyAuthentication -v
+
+# Run with coverage
+pytest tests/unit/test_middleware.py --cov=src/k2/api/middleware
+```
+
+**Benefits**:
+- **Comprehensive security testing**: API key auth, request size limits
+- **Observability validation**: Logging, metrics, correlation IDs
+- **Cache strategy verification**: Appropriate cache headers by endpoint type
+- **Integration validation**: Multiple middleware working together
+- **Production readiness**: 93% coverage ensures middleware reliability
+
 ### Running Unit Tests
 
 ```bash
@@ -217,6 +446,116 @@ pytest tests/unit/test_sequence_tracker.py::TestSequenceTracker
 # Run with markers
 pytest tests/unit/ -m "not slow"
 ```
+
+### End-to-End Integration Tests
+
+**Implementation**: Tests implemented in `tests/integration/test_e2e_full_pipeline.py` (22 tests, 710+ lines)
+
+**Purpose**: Validate complete data pipeline integration with real Docker services, testing full flow from Producer through Kafka, Consumer, Iceberg storage, Query Engine, to API endpoints.
+
+**Coverage**: Full pipeline E2E tests across all components
+
+**Test Categories**:
+
+1. **Service Availability** (3 tests):
+   - Kafka connectivity and topic creation
+   - Schema Registry availability
+   - API server health checks
+
+2. **Producer → Kafka Integration** (4 tests):
+   - Crypto trade production with v2 schema
+   - Equity trade production with v2 schema
+   - Quote production
+   - Batch trade production (10+ messages)
+
+3. **Kafka → Consumer Integration** (1 test):
+   - Consumer message polling and receipt verification
+   - **Known Issue**: Test may fail if Kafka topics don't exist at consumer subscription time
+
+4. **Consumer → Iceberg Storage** (2 tests):
+   - Crypto trades persistence to Iceberg
+   - Equity trades persistence with proper schema mapping
+
+5. **Query Engine Integration** (3 tests):
+   - DuckDB connection pool initialization
+   - Symbol retrieval from Iceberg tables
+   - Trade filtering with SQL predicates
+   - **Known Issue**: DuckDB `query_timeout` parameter not recognized (platform code issue)
+
+6. **API Integration** (6 tests):
+   - Health endpoint validation
+   - Authentication middleware (API key required)
+   - Trades endpoint with filters
+   - Symbols endpoint
+   - Correlation ID header propagation
+   - Cache-Control header validation
+   - **Note**: Requires API server running on port 8000
+
+7. **Full Pipeline E2E** (1 test, marked as slow):
+   - Complete flow: Producer → Kafka → Consumer → Iceberg → Query → API
+   - End-to-end latency validation
+   - Data consistency verification across all stages
+
+8. **Performance & Load** (2 tests):
+   - Sustained producer throughput (100 msg/sec minimum)
+   - Consumer processing under load
+
+**Prerequisites**:
+```bash
+# Start required Docker services
+make docker-up
+
+# Initialize infrastructure (topics, schemas)
+make init-infra
+
+# Start API server (for API tests)
+make api-server
+
+# Start consumer (for full pipeline test)
+make consumer
+```
+
+**Running E2E Tests**:
+
+```bash
+# Run all E2E integration tests
+pytest tests/integration/test_e2e_full_pipeline.py -v -m integration
+
+# Run excluding API tests (when API server not running)
+pytest tests/integration/test_e2e_full_pipeline.py -v -m integration -k "not api"
+
+# Run only producer and storage tests (fastest subset)
+pytest tests/integration/test_e2e_full_pipeline.py -v -k "producer or iceberg"
+
+# Run full pipeline test (requires all services + consumer)
+pytest tests/integration/test_e2e_full_pipeline.py -v -k "complete_pipeline" -m slow
+```
+
+**Test Data**:
+- **Crypto**: Binance BTCUSDT trades with 8-decimal precision
+- **Equities**: ASX BHP trades with standard precision
+- **Multi-asset class**: Validates schema v2 flexibility
+- **Realistic data**: Proper Decimal types, timestamp handling, vendor_data
+
+**Known Issues & Limitations**:
+1. **Consumer test timing**: Topics must exist before consumer subscribes (race condition)
+2. **Query engine config**: DuckDB doesn't recognize `query_timeout` parameter (needs platform fix)
+3. **API server dependency**: 6 tests require API server running on localhost:8000
+4. **Consumer background process**: Full pipeline test requires consumer running in background
+
+**Success Metrics**:
+- ✅ 10/13 non-API tests passing (77% success rate without API server)
+- ✅ Producer throughput >100 msg/sec validated
+- ✅ Multi-asset class schema validation working
+- ✅ Iceberg storage layer functioning correctly
+- ⚠️ Some tests expose real platform bugs (good thing!)
+
+**Future Enhancements**:
+- Add chaos injection (network partitions, broker failures)
+- Add schema evolution E2E tests (backwards/forwards compatibility)
+- Add consumer rebalancing tests
+- Add query timeout and resource limit tests
+- Add distributed transaction E2E tests
 
 ---
 
@@ -696,6 +1035,150 @@ jobs:
 | Integration | 100+ | < 10 minutes | Every PR |
 | Performance | 20+ | < 30 minutes | Daily (main branch) |
 | Chaos | 5+ | < 1 hour | Weekly |
+
+---
+
+## Chaos Testing
+
+### Purpose
+
+Validate platform resilience to production failure scenarios through controlled fault injection.
+
+**Philosophy**: "Test in production-like conditions, but controlled and repeatable."
+
+### Implementation
+
+**Location**: `tests/chaos/` directory with framework and test suites
+
+**Framework Components**:
+1. **Chaos Fixtures** (`tests/chaos/conftest.py`):
+   - Service failure injection (stop/pause containers)
+   - Network partition simulation
+   - Resource constraints (CPU, memory limits)
+   - Latency injection (network delays)
+
+2. **Kafka Chaos Tests** (`tests/chaos/test_kafka_chaos.py`):
+   - Broker failures and recovery
+   - Network partitions
+   - Resource exhaustion
+   - Concurrent failures
+
+3. **Storage Chaos Tests** (`tests/chaos/test_storage_chaos.py`):
+   - MinIO/S3 outages
+   - Query engine resilience
+   - Data corruption handling
+   - Catalog database failures
+
+### Chaos Scenarios
+
+**Kafka Resilience**:
+- ✅ Producer buffering during brief outages
+- ✅ Producer recovery after broker restart
+- ✅ Consumer timeout handling
+- ⚠️ Network partition (requires privileged container)
+- ⚠️ Latency injection (requires `tc` command)
+
+**Storage Resilience**:
+- ✅ Writer failure handling (graceful degradation)
+- ✅ Query engine recovery after storage restoration
+- ✅ Data validation (schema enforcement)
+- ✅ Decimal precision handling
+- ⚠️ Catalog failure (requires PostgreSQL chaos)
+
+**Concurrent Failures**:
+- Multiple service outages simultaneously
+- Cascading failure detection
+- Recovery coordination
+
+### Running Chaos Tests
+
+```bash
+# Run all chaos tests (WARNING: Destructive!)
+pytest tests/chaos/ -v -m chaos
+
+# Run only Kafka chaos tests
+pytest tests/chaos/test_kafka_chaos.py -v -m chaos_kafka
+
+# Run only storage chaos tests
+pytest tests/chaos/test_storage_chaos.py -v -m chaos_storage
+
+# Run specific test
+pytest tests/chaos/test_kafka_chaos.py::TestKafkaBrokerFailure::test_producer_survives_brief_kafka_outage -v
+```
+
+### Prerequisites
+
+```bash
+# Ensure Docker services are running
+make docker-up
+make init-infra
+
+# Verify services are healthy
+docker ps --filter "name=k2-" --format "table {{.Names}}\t{{.Status}}"
+```
+
+### Success Criteria
+
+**Acceptable Outcomes**:
+- ✅ Platform **recovers** after failure injection
+- ✅ Platform **fails gracefully** (no crashes, data corruption)
+- ✅ Platform logs **meaningful error messages**
+
+**Critical Failures**:
+- ❌ Platform **crashes** or **loses data**
+- ❌ Platform **hangs** indefinitely
+- ❌ Silent data loss (no errors logged)
+
+### Chaos Injection Mechanisms
+
+**Service Failure**:
+```python
+with service_failure(kafka_container, duration_seconds=5, mode="pause"):
+    # Kafka is frozen - test resilience
+    producer.produce(...)  # Should buffer or fail gracefully
+```
+
+**Network Partition**:
+```python
+with network_partition(kafka_container, duration_seconds=10):
+    # Kafka is unreachable - test timeout handling
+    consumer.poll(timeout=5.0)
+```
+
+**Resource Limits**:
+```python
+with resource_limit(kafka_container, cpu_quota=50000, mem_limit="512m"):
+    # Kafka has only 50% CPU and 512MB RAM
+    producer.produce(...)  # Should handle degraded performance
+```
+
+**Latency Injection**:
+```python
+with inject_latency(kafka_container, latency_ms=200, jitter_ms=50):
+    # Kafka responses have 200ms ± 50ms latency
+    consumer.poll(timeout=5.0)
+```
+
+### Known Limitations
+
+1. **Privileged Container Access**: Some chaos injection requires privileged Docker operations
+2. **Network Latency Requires `tc`**: Latency injection needs `tc` (traffic control) in container
+3. **Timing Sensitivity**: Tests depend on service restart timing
+4. **Non-Deterministic**: Distributed systems have inherent non-determinism
+5. **Docker Compose Only**: Framework targets Docker Compose, not Kubernetes
+
+### Future Enhancements
+
+- Schema evolution chaos (incompatible changes during production)
+- Consumer rebalancing chaos (crashes during rebalance)
+- Clock skew chaos (NTP failures, DST transitions)
+- Disk exhaustion chaos (Kafka log full, MinIO storage full)
+- API gateway chaos (rate limits, circuit breakers)
+- Integration with Chaos Mesh (Kubernetes-native)
+
+### Documentation
+
+See comprehensive chaos testing guide: `tests/chaos/README.md`
 
 ---
 

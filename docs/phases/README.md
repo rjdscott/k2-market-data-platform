@@ -1,217 +1,246 @@
-# Implementation Phases
+# K2 Platform - Phase Documentation
 
-**Last Updated**: 2026-01-10
-**Stability**: Low - actively updated during development
-**Target Audience**: Implementation Team, Project Managers
-
-This directory contains phase-specific implementation documentation and progress tracking.
+**Last Updated**: 2026-01-14
+**Purpose**: Organized tracking of platform development phases
 
 ---
 
 ## Overview
 
-The K2 platform is being built in phases, each with specific goals and scope:
-
-1. **Phase 1: Portfolio Demo** (Current) - Local single-node demonstration
-2. **Phase 2: Production Prep** (Future) - Cloud deployment readiness
-3. **Phase 3: Scale** (Future) - Distributed, multi-region deployment
+This directory contains phase-specific implementation documentation. Each phase represents a cohesive unit of work with clear goals, deliverables, and success criteria.
 
 ---
 
-## Phase 1: Portfolio Demo
+## ⚠️ IMPORTANT: Terminology Clarification
 
-**Status**: In Progress (Steps 1-3 complete, 13 remaining)
-**Timeline**: 59-85 hours estimated
-**Goal**: Demonstrate end-to-end platform capabilities for portfolio review
+### "P0/P1/P2" (Priority) vs "Phase 2/3" (Project Phase)
 
-**Directory**: [phase-1-single-node-implementation/](./phase-1-single-node-implementation/)
+**Two different naming conventions**:
 
-### Key Documents
-- [Implementation Plan](./phase-1-single-node-implementation/IMPLEMENTATION_PLAN.md) - 16-step implementation plan
-- [Progress Tracking](./phase-1-single-node-implementation/PROGRESS.md) - Detailed progress log
-- [Status](./phase-1-single-node-implementation/STATUS.md) - Current snapshot
-- [Decisions](./phase-1-single-node-implementation/DECISIONS.md) - Phase 1 architectural decisions (ADRs)
-- [Validation Guide](./phase-1-single-node-implementation/VALIDATION_GUIDE.md) - Testing and validation procedures
+1. **P0/P1/P2** = **Priority Levels** (for technical debt items)
+   - P0 = Critical (same day)
+   - P1 = High priority (1-2 weeks)
+   - P2 = Medium priority (1 month)
+   - See: [TECHNICAL_DEBT.md](../../TECHNICAL_DEBT.md)
+   - Tracked in: [`phase-0-technical-debt-resolution/`](./phase-0-technical-debt-resolution/)
 
-### Implementation Steps (16 Total)
+2. **Phase 2/3/4** = **Project Phases** (Sequential milestones)
+   - Phase 0, 1, 2, 3... = Sequential project phases
+   - Each phase = major feature milestone
+   - Tracked in respective `phase-N-*/` directories
 
-**Layer 1: Infrastructure & Foundation** (8-12h)
-- [x] Step 01: Infrastructure Validation & Setup Scripts (4-6h)
-- [x] Step 02: Schema Design & Registration (4-6h)
+**Example**:
+- ✅ "P2 technical debt resolved" = Priority-2 items (TD-004, TD-005, TD-006) complete
+- ✅ "Phase 2 complete" = Multi-Source Foundation phase finished
+- 🟡 "Phase 3 in progress" = Demo Enhancements phase currently being implemented
 
-**Layer 2: Storage** (14-19h)
-- [x] Step 03: Iceberg Catalog & Table Initialization (6-8h)
-- [ ] Step 04: Iceberg Writer (6-8h)
-- [ ] Step 05: Configuration Management (2-3h)
-
-**Layer 3: Ingestion** (13-18h)
-- [ ] Step 06: Kafka Producer (4-6h)
-- [ ] Step 07: CSV Batch Loader (3-4h)
-- [ ] Step 08: Kafka Consumer → Iceberg (6-8h)
-
-**Layer 4: Query** (10-14h)
-- [ ] Step 09: DuckDB Query Engine (4-6h)
-- [ ] Step 10: Replay Engine (4-5h)
-- [ ] Step 11: Query CLI (2-3h)
-
-**Layer 5: API** (6-9h)
-- [ ] Step 12: REST API (4-6h)
-- [ ] Step 13: Prometheus Metrics (2-3h)
-
-**Layer 6: Observability & Completion** (8-13h)
-- [ ] Step 14: Grafana Dashboard (2-3h)
-- [ ] Step 15: E2E Testing (4-6h)
-- [ ] Step 16: Documentation (2-4h)
-
-### Phase 1 Success Criteria
-
-**Technical**:
-- [ ] Complete end-to-end data flow working
-- [ ] Test coverage ≥ 80%
-- [ ] No linting errors
-- [ ] Demo script runs successfully
-- [ ] README Quick Start works end-to-end
-
-**Documentation**:
-- [ ] All 16 steps documented
-- [ ] Architectural decisions recorded
-- [ ] Code well-commented
-- [ ] Portfolio-ready README
-
-**Portfolio Presentation**:
-- [ ] Professional README with architecture diagram
-- [ ] Clear value proposition
-- [ ] Demonstrates production patterns
-- [ ] Shows technical depth beyond tutorials
-
-### Phase 1 Constraints
-- **Deployment**: Docker Desktop on laptop (8GB RAM minimum)
-- **Query Engine**: DuckDB (single-node, embedded)
-- **Scale**: ~10MB sample data
-- **Auth**: None (localhost only)
-- **Regions**: Single region (local)
+**They are NOT the same thing!**
 
 ---
 
-## Phase 2: Production Prep
+## Phase Structure
 
-**Status**: Not Started (Planned)
-**Timeline**: 4-6 weeks estimated
-**Goal**: Cloud-ready production deployment
-
-**Directory**: [phase-2-production-prep/](phase-2-demo-enhancements/)
-
-### Planned Features
-- [ ] Replace DuckDB with Presto/Trino cluster
-- [ ] Add authentication (OAuth2 + JWT)
-- [ ] Deploy to cloud (AWS or GCP)
-- [ ] Add RBAC and data governance (Apache Ranger)
-- [ ] Implement distributed caching (Redis)
-- [ ] Add API rate limiting
-- [ ] Implement monitoring alerts (Alertmanager)
-- [ ] Add distributed tracing (Jaeger/Zipkin)
-
-### Phase 2 Success Criteria
-- [ ] Distributed query engine operational
-- [ ] Authentication and authorization working
-- [ ] Cloud deployment automated (Terraform/CloudFormation)
-- [ ] Production-grade monitoring and alerting
-- [ ] Load testing validates SLOs (1000 req/sec)
-
----
-
-## Phase 3: Scale
-
-**Status**: Not Started (Planned)
-**Timeline**: 6-8 weeks estimated
-**Goal**: Multi-region, production-scale deployment
-
-**Directory**: [phase-3-scale/](./phase-3-scale/)
-
-### Planned Features
-- [ ] Multi-region Kafka replication (MirrorMaker 2)
-- [ ] Active-active query regions
-- [ ] Advanced query optimization (materialized views)
-- [ ] Chaos engineering testing
-- [ ] Advanced data governance (lineage tracking)
-- [ ] Disaster recovery automation
-- [ ] Performance benchmarking suite
-
-### Phase 3 Success Criteria
-- [ ] Multi-region deployment operational
-- [ ] Handles 100x-1000x Phase 1 data volume
-- [ ] Chaos testing passes
-- [ ] DR procedures validated
-- [ ] Production SLOs met at scale
-
----
-
-## Phase Transition Criteria
-
-### Phase 1 → Phase 2
-**Prerequisites**:
-- [ ] All 16 Phase 1 steps complete
-- [ ] E2E test passing
-- [ ] Portfolio review complete
-- [ ] Phase 2 plan approved
-
-**Migration Effort**: 2-3 days
-**Risk**: Low (greenfield cloud deployment)
-
-### Phase 2 → Phase 3
-**Prerequisites**:
-- [ ] Production deployment stable for 30 days
-- [ ] Load testing validates performance
-- [ ] Monitoring and alerting mature
-- [ ] Phase 3 plan approved
-
-**Migration Effort**: 1-2 weeks
-**Risk**: Medium (data migration, multi-region coordination)
-
----
-
-## Progress Tracking Commands
-
-```bash
-# Check overall progress
-make plan-check
-
-# View current status
-make plan-status
-
-# List all steps with status
-make plan-steps
-
-# Open current phase plan
-make plan-open
+```
+docs/phases/
+├── README.md (this file)
+├── phase-0-technical-debt-resolution/  ✅ COMPLETE
+├── phase-1-single-node-equities/       ✅ COMPLETE
+├── phase-2-prep/                       ✅ COMPLETE
+└── phase-3-demo-enhancements/          🟡 IN PROGRESS (50%)
 ```
 
----
-
-## Decision Authority by Phase
-
-### Phase 1 (Portfolio Demo)
-- **Architecture**: Tech Lead (with ADR)
-- **Implementation**: Engineer (with code review)
-- **Testing**: Engineer (meet coverage targets)
-
-### Phase 2+ (Production)
-- **Architecture**: Tech Lead + Principal Engineer (with RFC)
-- **Cloud Resources**: DevOps Lead (with cost analysis)
-- **Security**: Security Team (compliance review)
-- **Deployment**: DevOps Lead (with runbook)
+**Note**: Phase 4 (Scale & Production) will be created when planning begins.
 
 ---
 
-## Related Documentation
+## Phase Descriptions
 
-- **Architecture**: [../architecture/](../architecture/)
-- **Design**: [../design/](../design/)
-- **Operations**: [../operations/](../operations/)
-- **Testing**: [../testing/](../testing/)
+### Phase 0: Technical Debt Resolution ✅
+
+**Status**: COMPLETE (2026-01-13)
+**Duration**: ~18.5 hours
+**Purpose**: Systematic resolution of P0/P1/P2 technical debt
+
+**Key Achievements**:
+- 7 technical debt items resolved (TD-000 through TD-006)
+- Platform maturity: 78 → 86 (+8 points)
+- 36 tests added (29 consumer + 7 metrics)
+- Pre-commit hook validates 83 metrics calls
+
+**Documentation**: [`phase-0-technical-debt-resolution/`](./phase-0-technical-debt-resolution/)
 
 ---
 
-**Maintained By**: Implementation Team
-**Review Frequency**: Weekly during active development
-**Last Review**: 2026-01-10
+### Phase 1: Single-Node Implementation ✅
+
+**Status**: COMPLETE
+**Purpose**: Build functional single-node market data platform
+
+**Key Achievements**:
+- CSV batch ingestion (ASX data)
+- Kafka streaming pipeline
+- Iceberg table storage
+- DuckDB query engine
+- REST API with authentication
+- Prometheus + Grafana monitoring
+
+**Documentation**: [`phase-1-single-node-equities/`](./phase-1-single-node-equities/)
+
+---
+
+### Phase 2: Multi-Source Foundation ✅
+
+**Status**: COMPLETE (2026-01-13)
+**Duration**: ~5.5 days (61% faster than estimated)
+**Purpose**: Multi-source, multi-asset class platform
+
+**Key Achievements**:
+- V2 schemas (hybrid approach: core fields + vendor_data)
+- Binance WebSocket streaming (BTC, ETH, BNB)
+- 69,666+ messages received, 5,000 trades written
+- E2E pipeline validated
+- 138 msg/s throughput, sub-second queries
+
+**Documentation**: [`phase-2-prep/`](./phase-2-prep/)
+
+**Note**: Previously located in `phase-3-crypto/` directory (renamed 2026-01-14 for clarity).
+
+---
+
+### Phase 3: Demo Enhancements 🟡
+
+**Status**: IN PROGRESS - 50% COMPLETE (3/6 steps)
+**Estimated Duration**: 40-60 hours (~4 weeks)
+**Purpose**: Transform platform into principal-level demonstration
+
+**Completed Steps**:
+1. ✅ Platform Positioning (L3 cold path clarity)
+2. ✅ Circuit Breaker Integration (5-level degradation, 64 tests)
+3. ✅ Degradation Demo (4-level cascade, 22 tests)
+
+**Remaining Steps**:
+4. ⬜ Hybrid Query Engine (Kafka + Iceberg merge) - **Highest impact**
+5. ⬜ Demo Narrative (10-minute presentation)
+6. ⬜ Cost Model (FinOps documentation)
+
+**Deferred to Multi-Node**:
+- Redis Sequence Tracker (over-engineering for single-node)
+- Bloom Filter Deduplication (in-memory dict sufficient for demo)
+
+**Documentation**: [`phase-3-demo-enhancements/`](./phase-3-demo-enhancements/)
+
+**Note**: Previously located in `phase-2-platform-enhancements/` directory (renamed 2026-01-14 for clarity).
+
+**Prerequisites**: ✅ Phase 2 complete, ✅ P0/P1/P2 technical debt resolved
+
+---
+
+### Phase 4: Scale & Production ⬜
+
+**Status**: PLANNED (not started)
+**Purpose**: Production deployment and scaling
+
+**Planned Features**:
+- Kubernetes deployment
+- Multi-region replication
+- Distributed deployment (Presto for distributed queries)
+- Auto-scaling policies
+- Production security (OAuth2, RBAC)
+- Redis-backed sequence tracking
+- Production-grade deduplication (Bloom filters)
+
+**Documentation**: Will be created when planning begins
+
+**Prerequisites**: Phase 3 Demo Enhancements complete
+
+---
+
+## Current Status Summary
+
+| Phase | Status | Completion | Score Impact | Duration |
+|-------|--------|------------|--------------|----------|
+| Phase 0: Technical Debt | ✅ Complete | 7/7 items | 78 → 86 | 18.5h |
+| Phase 1: Single-Node | ✅ Complete | 16/16 steps | - | ~3 weeks |
+| Phase 2: Multi-Source Foundation | ✅ Complete | 15/15 steps | - | 5.5 days |
+| **Phase 3: Demo Enhancements** | **🟡 50%** | **3/6 steps** | **86 → 92 (target)** | **~2 weeks** |
+| Phase 4: Scale & Production | ⬜ Planned | 0/? steps | - | TBD |
+
+**Current Focus**: Phase 3 Demo Enhancements (hybrid query engine next)
+
+---
+
+## Quick Navigation
+
+### By Status
+- ✅ **Complete Phases**:
+  - [Phase 0: Technical Debt](./phase-0-technical-debt-resolution/)
+  - [Phase 1: Single-Node](./phase-1-single-node-equities/)
+  - [Phase 2: Multi-Source Foundation](./phase-2-prep/)
+- 🟡 **Active Phase**: [Phase 3: Demo Enhancements](./phase-3-demo-enhancements/) (50% complete)
+- ⬜ **Future Phases**: Phase 4: Scale & Production (planning not started)
+
+### By Topic
+- **Technical Debt**: [Phase 0](./phase-0-technical-debt-resolution/) | [TECHNICAL_DEBT.md](../../TECHNICAL_DEBT.md)
+- **Core Platform**: [Phase 1: Single-Node](./phase-1-single-node-equities/)
+- **Multi-Source Support**: [Phase 2: Multi-Source Foundation](./phase-2-prep/)
+- **Demo & Resilience**: [Phase 3: Demo Enhancements](./phase-3-demo-enhancements/)
+- **Production & Scale**: Phase 4: Scale & Production (not started)
+
+### Quick Links
+- **Architecture Docs**: [../architecture/](../architecture/)
+- **Operations Runbooks**: [../operations/runbooks/](../operations/runbooks/)
+- **Testing Strategy**: [../testing/strategy.md](../testing/strategy.md)
+- **Main README**: [../../README.md](../../README.md)
+
+---
+
+## Phase Timeline
+
+```
+Phase 0          Phase 1         Phase 2           Phase 3        Phase 4
+(18.5h)         (~3 weeks)      (5.5 days)       (~4 weeks)      (TBD)
+   │               │                │                │             │
+   ├─✅ Complete   ├─✅ Complete    ├─✅ Complete    ├─🟡 50%     ├─⬜ Planned
+   │               │                │                │             │
+Technical       Single-Node     Multi-Source     Demo          Scale &
+Debt            Platform        Foundation       Enhancements  Production
+```
+
+**Total Completed**: 3 phases
+**In Progress**: 1 phase (Phase 3)
+**Remaining**: 1 phase (Phase 4)
+
+---
+
+## Documentation Standards
+
+Each phase directory contains:
+- **README.md** - Phase overview and goals
+- **STATUS.md** - Current snapshot (completion %, blockers, next steps)
+- **PROGRESS.md** - Detailed progress tracking (updated as work proceeds)
+- **DECISIONS.md** - Architectural Decision Records (ADRs)
+- **IMPLEMENTATION_PLAN.md** - Step-by-step implementation plan
+- **VALIDATION_GUIDE.md** - How to validate phase completion
+- **steps/** - Individual step documentation
+- **reference/** - Supporting reference materials
+
+---
+
+## Changelog
+
+### 2026-01-14: Phase Naming Consolidation
+- **Renamed**: `phase-3-crypto/` → `phase-2-prep/` (matches content)
+- **Renamed**: `phase-2-platform-enhancements/` → `phase-3-demo-enhancements/` (matches content)
+- **Removed**: Empty placeholder directories (`phase-4-consolidate-docs/`, `phase-5-multi-exchange-medallion/`)
+- **Rationale**: Directory names now match phase numbers and content for clarity
+
+### 2026-01-13: Phase 0 & Phase 2 Completion
+- Phase 0 (Technical Debt) marked complete (7/7 items resolved)
+- Phase 2 (Multi-Source Foundation) marked complete (15/15 steps)
+- Phase 3 (Demo Enhancements) status updated to 50% (3/6 steps)
+
+---
+
+**Last Updated**: 2026-01-14
+**Maintained By**: Engineering Team
+**Questions**: See [Phase Navigation Guide](../NAVIGATION.md) or create an issue

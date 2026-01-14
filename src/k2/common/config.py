@@ -155,6 +155,59 @@ class ObservabilityConfig(BaseSettings):
     enable_metrics: bool = Field(default=True, description="Enable Prometheus metrics collection")
 
 
+class BinanceConfig(BaseSettings):
+    """Binance WebSocket streaming configuration.
+
+    Controls connection to Binance WebSocket API for real-time trade streaming.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="K2_BINANCE_", case_sensitive=False, extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable Binance streaming")
+
+    websocket_url: str = Field(
+        default="wss://stream.binance.com:9443/stream",
+        description="Binance WebSocket stream URL",
+    )
+
+    failover_urls: list[str] = Field(
+        default=["wss://stream.binance.us:9443/stream"],
+        description="Failover WebSocket URLs (tried in order if primary fails)",
+    )
+
+    symbols: list[str] = Field(
+        default=["BTCUSDT", "ETHUSDT"],
+        description="List of symbols to stream (e.g., BTCUSDT, ETHBTC)",
+    )
+
+    reconnect_delay: int = Field(
+        default=5, description="Initial reconnect delay in seconds (exponential backoff)"
+    )
+
+    max_reconnect_attempts: int = Field(
+        default=10, description="Maximum number of reconnect attempts before giving up"
+    )
+
+    health_check_interval: int = Field(
+        default=30, description="Health check interval in seconds (check for stale connection)"
+    )
+
+    health_check_timeout: int = Field(
+        default=60,
+        description="Max seconds without message before triggering reconnect (0 = disabled)",
+    )
+
+    @field_validator("websocket_url")
+    @classmethod
+    def validate_websocket_url(cls, v: str) -> str:
+        """Ensure WebSocket URL starts with wss:// or ws://."""
+        if not v.startswith(("wss://", "ws://")):
+            raise ValueError("websocket_url must start with wss:// or ws://")
+        return v.rstrip("/")
+
+
 class K2Config(BaseSettings):
     """Main K2 platform configuration.
 
@@ -179,6 +232,7 @@ class K2Config(BaseSettings):
     iceberg: IcebergConfig = Field(default_factory=IcebergConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    binance: BinanceConfig = Field(default_factory=BinanceConfig)
 
 
 # Global singleton instance

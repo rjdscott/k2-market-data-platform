@@ -55,7 +55,26 @@ Cost: <one-line>
 Alternative considered: <one-line>
 ```
 
-### 5) TDD — Pragmatic Variant
+### 5) Python Environment & Testing Setup
+This project uses `uv` for Python environment management.
+
+Key commands:
+- `uv sync` — install/sync dependencies
+- `uv run pytest` — run tests in the uv environment
+- `uv run python -m <module>` — run Python modules
+- `uv add <package>` — add a dependency
+- `uv pip install <package>` — install package directly
+
+Always use `uv run` prefix when running tests or Python commands to ensure correct environment isolation.
+
+**Package Installation Best Practice:**
+When adding new Python packages, always research the latest stable version first:
+- Check PyPI, GitHub releases, or official docs for current stable version
+- Use explicit version pinning when adding: `uv add package==x.y.z`
+- Document version choice if non-obvious (e.g., compatibility constraints)
+- Avoid using `latest` or unpinned versions in production dependencies
+
+### 6) TDD — Pragmatic Variant
 Recommended flow:
 1. Write a happy-path test → minimal implementation.  
 2. Add one important edge/error case.  
@@ -65,7 +84,7 @@ Recommended flow:
 
 Writing a few good tests early is fine; avoid 15 unit tests before any logic.
 
-### 6) Output Style Guide
+### 7) Output Style Guide
 Preferred structure for responses:
 - Status (Done / In progress / Next)  
 - Decisions made (if any)  

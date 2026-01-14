@@ -3,6 +3,7 @@
 This module provides dependency injection for:
 - QueryEngine: DuckDB query engine for market data
 - ReplayEngine: Time-travel and historical replay
+- HybridQueryEngine: Unified Kafka + Iceberg queries
 - Authentication: API key validation
 
 Using FastAPI's Depends() pattern ensures:
@@ -15,6 +16,7 @@ from functools import lru_cache
 
 from k2.common.logging import get_logger
 from k2.query.engine import QueryEngine
+from k2.query.hybrid_engine import HybridQueryEngine
 from k2.query.replay import ReplayEngine
 
 logger = get_logger(__name__, component="api")
@@ -22,6 +24,7 @@ logger = get_logger(__name__, component="api")
 # Global engine instances (singleton pattern)
 _query_engine: QueryEngine | None = None
 _replay_engine: ReplayEngine | None = None
+_hybrid_engine: HybridQueryEngine | None = None
 
 
 @lru_cache(maxsize=1)
@@ -57,12 +60,30 @@ def get_replay_engine() -> ReplayEngine:
     return _replay_engine
 
 
+@lru_cache(maxsize=1)
+def get_hybrid_engine() -> HybridQueryEngine:
+    """Get or create the HybridQueryEngine singleton.
+
+    Uses lru_cache to ensure single instance across all requests.
+    The engine combines Kafka tail buffer + Iceberg queries.
+
+    Returns:
+        HybridQueryEngine instance for unified queries
+    """
+    global _hybrid_engine
+    if _hybrid_engine is None:
+        logger.info("Initializing HybridQueryEngine")
+        from k2.query.hybrid_engine import create_hybrid_engine
+        _hybrid_engine = create_hybrid_engine()
+    return _hybrid_engine
+
+
 def reset_engines() -> None:
     """Reset engine singletons (for testing).
 
     Clears the cached engines so they will be recreated on next access.
     """
-    global _query_engine, _replay_engine
+    global _query_engine, _replay_engine, _hybrid_engine
 
     if _query_engine is not None:
         try:
@@ -78,9 +99,20 @@ def reset_engines() -> None:
             pass
         _replay_engine = None
 
+    if _hybrid_engine is not None:
+        try:
+            # Stop Kafka tail consumer
+            _hybrid_engine.kafka_tail.stop()
+            # Close Iceberg engine
+            _hybrid_engine.iceberg.close()
+        except Exception:
+            pass
+        _hybrid_engine = None
+
     # Clear lru_cache
     get_query_engine.cache_clear()
     get_replay_engine.cache_clear()
+    get_hybrid_engine.cache_clear()
 
     logger.info("Engines reset")
 
@@ -105,6 +137,14 @@ async def startup_engines() -> None:
         logger.info("ReplayEngine initialized successfully")
     except Exception as e:
         logger.error("Failed to initialize ReplayEngine", error=str(e))
+
+    try:
+        # Initialize hybrid query engine (Kafka tail + Iceberg)
+        get_hybrid_engine()
+        logger.info("HybridQueryEngine initialized successfully")
+    except Exception as e:
+        logger.error("Failed to initialize HybridQueryEngine", error=str(e))
+        # Don't raise - allow API to start, hybrid queries will fail with clear error
 
 
 async def shutdown_engines() -> None:

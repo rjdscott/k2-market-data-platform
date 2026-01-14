@@ -43,6 +43,7 @@ from k2.api.middleware import (
     CacheControlMiddleware,
     CorrelationIdMiddleware,
     RequestLoggingMiddleware,
+    RequestSizeLimitMiddleware,
     get_api_key_for_limit,
 )
 from k2.api.models import DependencyHealth, HealthResponse, HealthStatus
@@ -178,6 +179,7 @@ app.add_middleware(
 app.add_middleware(CacheControlMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(RequestSizeLimitMiddleware, max_size_bytes=10 * 1024 * 1024)  # 10MB limit
 
 # =============================================================================
 # Include Routers

@@ -1,6 +1,6 @@
 # Operations Documentation
 
-**Last Updated**: 2026-01-11
+**Last Updated**: 2026-01-13
 **Stability**: Medium - updated after incidents
 **Target Audience**: DevOps, SREs, On-Call Engineers
 
@@ -76,6 +76,35 @@ Use this template:
 ## Related Monitoring
 [Dashboard links, alerts]
 ```
+
+### Runbook Validation
+
+All runbooks should be validated to ensure commands are executable and procedures work as expected.
+
+**Validation Script**: `scripts/ops/validate_runbooks.sh`
+
+```bash
+# Validate all runbooks (syntax checks)
+./scripts/ops/validate_runbooks.sh
+
+# Full validation (requires services running)
+./scripts/ops/validate_runbooks.sh --full
+```
+
+**What's Validated**:
+- Required tools are installed (Docker, Kafka CLI, curl, jq, etc.)
+- Services are accessible (Kafka, MinIO, Prometheus, API)
+- Runbook files exist and have required sections
+- Alert rules are properly configured
+- Commands have valid syntax
+
+**Best Practices**:
+- Run validation after updating runbooks
+- Include validation in CI/CD pipeline
+- Test runbooks during disaster recovery drills
+- Update validation script when adding new runbooks
+
+See [scripts/ops/README.md](../../scripts/ops/README.md) for detailed usage.
 
 ---
 

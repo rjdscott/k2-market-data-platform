@@ -65,13 +65,35 @@ def print_step_header(step: int, title: str) -> None:
 
 def step_1_architecture(quick: bool = False) -> None:
     """Step 1: Show platform architecture overview."""
-    print_step_header(1, "Platform Architecture Overview")
+    print_step_header(1, "Platform Architecture & Positioning")
 
+    # Platform positioning
+    positioning = """
+[bold white]K2 Market Data Platform - Research Data Platform (L3 Cold Path)[/bold white]
+
+[yellow]What K2 IS:[/yellow]
+  • [green]✓[/green] Research Data Platform for quantitative analysis
+  • [green]✓[/green] Strategy backtesting and alpha research
+  • [green]✓[/green] Sub-second historical queries with time-travel
+  • [green]✓[/green] ACID-compliant storage with schema evolution
+
+[yellow]What K2 is NOT:[/yellow]
+  • [red]✗[/red] HFT execution system (needs μs latency)
+  • [red]✗[/red] Real-time risk system (needs <10ms)
+  • [red]✗[/red] Order routing gateway
+
+[yellow]Tiered Architecture:[/yellow]
+  L1 Hot Path:  < 10μs   (FPGAs, execution)
+  L2 Warm Path: < 10ms   (Risk, positions)
+  [green]L3 Cold Path:  < 500ms  (K2 - Analytics, compliance)[/green]
+"""
+
+    console.print(Panel(positioning, title="Platform Positioning", border_style="yellow"))
+    pause(2, quick)
+
+    # Architecture diagram
     architecture = """
-[bold white]K2 Market Data Platform[/bold white]
-
-[dim]A distributed market data processing platform designed for
-high-frequency trading environments.[/dim]
+[bold white]Data Flow Architecture[/bold white]
 
 [cyan]┌─────────────────────────────────────────────────────────────┐[/cyan]
 [cyan]│[/cyan]                    [bold]Data Flow[/bold]                           [cyan]│[/cyan]
@@ -393,7 +415,7 @@ def step_5_summary(quick: bool = False) -> None:
 [bold]Documentation:[/bold]
 
   [dim]•[/dim] README.md - Quick start guide
-  [dim]•[/dim] docs/phases/phase-1-single-node-implementation/ - Implementation details
+  [dim]•[/dim] docs/phases/phase-1-single-node-equities/ - Implementation details
   [dim]•[/dim] http://localhost:8000/docs - OpenAPI documentation
   [dim]•[/dim] http://localhost:3000 - Grafana dashboards
 """

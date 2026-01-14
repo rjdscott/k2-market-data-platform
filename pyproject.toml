@@ -28,49 +28,45 @@ dependencies = [
     # Kafka streaming
     "confluent-kafka[avro,schema-registry]>=2.13.0",  # Latest: 2.13.0 (2026-01-05)
     "kafka-python>=2.0.2",  # Alternative client for some operations
-
     # Schema management
     "avro>=1.11.3",
     "fastavro>=1.9.0",  # Faster Avro implementation
-
     # Apache Iceberg lakehouse
     "pyiceberg[s3fs,duckdb,pyarrow]>=0.10.0",  # Latest: 0.10.0 (2025)
-
     # Storage backends
     "s3fs>=2024.2.0",  # S3 filesystem interface
     "boto3>=1.42.0",   # Latest: 1.42.24 (2026-01-07) - AWS SDK
-
     # Query engine
     "duckdb>=1.4.0",  # Latest: 1.4.3 (2025-12-09)
     "pyarrow>=22.0.0",  # Latest: 22.0.0 (2025-10-24) - Columnar data format
-
     # Data processing
     "pandas>=2.3.0",  # Latest: 2.3.3 (2025-09-29), Python 3.14 support
     "polars>=1.36.0",  # Latest: 1.36.1 (2026-01), Modern fast dataframe library
     "numpy>=2.4.0",  # Latest: 2.4.0 (2025-12-20), NumPy 2.x series
-
     # Database
     "sqlalchemy>=2.0.45",  # Latest: 2.0.45 (2025-12-09), Python 3.14 support
     "psycopg2-binary>=2.9.9",  # PostgreSQL adapter
     "alembic>=1.17.0",  # Latest: 1.17.2 (2025), PEP 621 support - Database migrations
-
     # Configuration & Environment
     "pydantic>=2.12.0",  # Latest: 2.12.5 (2025), Python 3.14 support - Data validation
     "pydantic-settings>=2.12.0",  # Latest: 2.12.0 (2025) - Settings management
     "python-dotenv>=1.0.0",
-
+    "pyyaml>=6.0.0",  # YAML configuration file parsing
     # Logging & Observability
     "structlog>=25.5.0",  # Latest: 25.5.0 (2025) - Enhanced async logging
     "prometheus-client>=0.23.0",  # Latest: 0.23.1 (2025-09) - Metrics
     "opentelemetry-api>=1.22.0",  # Distributed tracing
     "opentelemetry-sdk>=1.22.0",
     "opentelemetry-instrumentation-kafka-python>=0.43b0",
-
     # Utilities
     "tenacity>=8.2.3",  # Retry logic
     "click>=8.1.7",     # CLI framework
     "rich>=13.7.0",     # Beautiful terminal output
     "typer>=0.21.0",    # Latest: 0.21.1 (2026-01-06) - Modern CLI framework
+    # WebSocket streaming
+    "websockets>=13.0",  # Latest: 13.1 (2024-12), Async WebSocket client/server
+    "docker==7.1.0",
+    "pytest-timeout==2.3.1",
 ]
 
 [project.optional-dependencies]

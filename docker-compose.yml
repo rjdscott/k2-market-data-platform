@@ -1,5 +1,3 @@
-version: '3.9'
-
 # Real-time Market Data Platform - Infrastructure Stack
 #
 # Architecture: Event-driven streaming platform with lakehouse storage
@@ -364,6 +362,7 @@ services:
       - '--web.enable-lifecycle'
     volumes:
       - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./config/prometheus/rules:/etc/prometheus/rules
       - prometheus-data:/prometheus
     networks:
       - k2-network
@@ -454,6 +453,76 @@ services:
         limits:
           cpus: '0.5'
           memory: 512M
+
+  # ============================================================================
+  # BINANCE STREAM - Real-time Cryptocurrency Market Data Ingestion
+  # ============================================================================
+  # Streams live trades from Binance WebSocket API
+  # - Connects to Binance public trade streams
+  # - Converts Binance format to v2 schema
+  # - Publishes to Kafka market.crypto.trades topic
+  # - Production-grade resilience: circuit breakers, health checks, failover
+  binance-stream:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: k2-binance-stream
+    hostname: binance-stream
+    environment:
+      # Kafka Configuration
+      K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      K2_KAFKA_SCHEMA_REGISTRY_URL: http://schema-registry-1:8081
+      K2_KAFKA_BATCH_SIZE: 16384
+      K2_KAFKA_LINGER_MS: 10
+      K2_KAFKA_COMPRESSION_TYPE: lz4
+      K2_KAFKA_RETRIES: 3
+      K2_KAFKA_REQUEST_TIMEOUT_MS: 30000
+      K2_KAFKA_MAX_IN_FLIGHT_REQUESTS: 5
+      K2_KAFKA_ACKS: 1
+      K2_KAFKA_IDEMPOTENCE_ENABLED: "true"
+
+      # Binance Configuration
+      K2_BINANCE_ENABLED: "true"
+      K2_BINANCE_SYMBOLS: '["BTCUSDT", "ETHUSDT", "BNBUSDT"]'
+      K2_BINANCE_WEBSOCKET_URL: wss://stream.binance.com:9443/stream
+      K2_BINANCE_FAILOVER_URLS: '["wss://stream.binance.us:9443/stream"]'
+
+      # Resilience Configuration
+      K2_BINANCE_RECONNECT_DELAY: 5
+      K2_BINANCE_MAX_RECONNECT_ATTEMPTS: 10
+      K2_BINANCE_HEALTH_CHECK_INTERVAL: 30
+      K2_BINANCE_HEALTH_CHECK_TIMEOUT: 60
+
+      # Metrics Configuration
+      K2_METRICS_ENABLED: "true"
+      K2_METRICS_PORT: 9091
+
+      # Logging Configuration
+      K2_LOG_LEVEL: INFO
+      K2_LOG_FORMAT: json
+    command: python scripts/binance_stream.py
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry-1:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9091' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
 # ==============================================================================
 # NETWORKS

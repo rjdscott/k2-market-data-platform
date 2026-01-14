@@ -20,6 +20,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 
 from fastapi import HTTPException, Request, Security
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -339,3 +340,125 @@ def get_api_key_for_limit(request: Request) -> str:
     if api_key:
         return f"apikey:{api_key[:8]}"  # Truncate for privacy
     return f"ip:{get_client_ip(request)}"
+
+
+# =============================================================================
+# Request Size Limit Middleware
+# =============================================================================
+
+
+class RequestSizeLimitMiddleware:
+    """Middleware to enforce request body size limits.
+
+    Prevents resource exhaustion and DoS attacks from large payloads.
+
+    Default limit: 10MB (configurable)
+
+    Returns 413 Payload Too Large if request exceeds limit.
+    Tracks rejected requests in Prometheus metrics.
+    """
+
+    def __init__(self, app, max_size_bytes: int = 10 * 1024 * 1024):
+        """Initialize middleware with size limit.
+
+        Args:
+            app: FastAPI application
+            max_size_bytes: Maximum request body size in bytes (default: 10MB)
+        """
+        self.app = app
+        self.max_size_bytes = max_size_bytes
+        self.max_size_mb = max_size_bytes / (1024 * 1024)
+
+    async def __call__(self, scope, receive, send):
+        """ASGI middleware to check request size."""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Only check requests with bodies (POST, PUT, PATCH)
+        method = scope.get("method", "GET")
+        if method not in ("POST", "PUT", "PATCH"):
+            await self.app(scope, receive, send)
+            return
+
+        # Get Content-Length header
+        headers = {k.decode(): v.decode() for k, v in scope.get("headers", [])}
+        content_length = headers.get("content-length")
+
+        if content_length is None:
+            # No Content-Length header - allow but log warning
+            logger.warning(
+                "Request without Content-Length header",
+                method=method,
+                path=scope.get("path", "unknown"),
+            )
+            await self.app(scope, receive, send)
+            return
+
+        try:
+            size_bytes = int(content_length)
+        except (ValueError, TypeError):
+            # Invalid Content-Length header
+            logger.warning(
+                "Invalid Content-Length header",
+                method=method,
+                path=scope.get("path", "unknown"),
+                content_length=content_length,
+            )
+            metrics.increment(
+                "http_request_size_limit_errors_total",
+                labels={"reason": "invalid_content_length"},
+            )
+
+            # Send 400 response
+            error_response = JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": {
+                        "code": "INVALID_CONTENT_LENGTH",
+                        "message": "Invalid Content-Length header",
+                    },
+                },
+            )
+            await error_response(scope, receive, send)
+            return
+
+        # Check size limit
+        if size_bytes > self.max_size_bytes:
+            size_mb = size_bytes / (1024 * 1024)
+            logger.warning(
+                "Request body too large",
+                method=method,
+                path=scope.get("path", "unknown"),
+                size_mb=round(size_mb, 2),
+                limit_mb=self.max_size_mb,
+            )
+
+            # Track rejected request
+            metrics.increment(
+                "http_request_size_limit_exceeded_total",
+                labels={
+                    "method": method,
+                    "endpoint": scope.get("path", "unknown"),
+                },
+            )
+
+            # Send 413 response
+            error_response = JSONResponse(
+                status_code=413,
+                content={
+                    "success": False,
+                    "error": {
+                        "code": "PAYLOAD_TOO_LARGE",
+                        "message": f"Request body size ({size_mb:.2f} MB) exceeds maximum allowed size ({self.max_size_mb} MB)",
+                        "size_mb": round(size_mb, 2),
+                        "limit_mb": self.max_size_mb,
+                    },
+                },
+            )
+            await error_response(scope, receive, send)
+            return
+
+        # Request size OK, continue
+        await self.app(scope, receive, send)

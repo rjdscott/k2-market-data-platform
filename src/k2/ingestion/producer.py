@@ -6,6 +6,7 @@ This module provides a production-ready Kafka producer with:
 - Partition by symbol for ordering guarantees
 - Exponential backoff retry for transient failures
 - Structured logging and Prometheus metrics
+- Support for v1 (legacy) and v2 (industry-standard) schemas
 
 Architecture:
     The producer uses the exchange + asset class topic architecture via
@@ -15,20 +16,64 @@ Architecture:
     Topic naming: market.{asset_class}.{data_type}.{exchange}
     Example: market.equities.trades.asx
 
-Usage:
+Schema Evolution:
+    The producer supports both v1 and v2 schemas:
+    - v1: Legacy ASX-specific schemas (volume, company_id fields)
+    - v2: Industry-standard hybrid schemas (quantity, vendor_data pattern)
+
+    Use schema_version parameter to specify which schema version to use.
+    Default is v2 (industry-standard).
+
+Usage (v2 schemas with context manager - RECOMMENDED):
+    from k2.ingestion.producer import MarketDataProducer, build_trade_v2
+    from decimal import Decimal
+    from datetime import datetime
+
+    # Context manager ensures proper cleanup even on exceptions
+    with MarketDataProducer(schema_version='v2') as producer:
+        # Build v2 trade message
+        trade = build_trade_v2(
+            symbol='BHP',
+            exchange='ASX',
+            asset_class='equities',
+            timestamp=datetime.utcnow(),
+            price=Decimal('45.67'),
+            quantity=Decimal('1000'),
+            currency='AUD',
+            side='BUY',
+            vendor_data={'company_id': '123', 'qualifiers': '0'}
+        )
+
+        # Produce to Kafka
+        producer.produce_trade(
+            asset_class='equities',
+            exchange='asx',
+            record=trade
+        )
+        # Producer automatically flushed and closed on exit
+
+Usage (manual cleanup - legacy):
+    # Manual cleanup (ensure close() is called)
+    producer = MarketDataProducer(schema_version='v2')
+    try:
+        producer.produce_trade(asset_class='equities', exchange='asx', record=trade)
+        producer.flush()
+    finally:
+        producer.close()
+
+Usage (v1 schemas - backward compatibility):
     from k2.ingestion.producer import MarketDataProducer
-    from k2.kafka import DataType
 
-    producer = MarketDataProducer()
+    # Create producer with v1 schemas
+    producer = MarketDataProducer(schema_version='v1')
 
-    # Produce a trade record
+    # Produce v1 trade record
     producer.produce_trade(
         asset_class='equities',
         exchange='asx',
-        record={'symbol': 'BHP', 'price': 45.50, ...}
+        record={'symbol': 'BHP', 'price': 45.50, 'volume': 1000, ...}
     )
 
-    # Flush pending messages
     producer.flush()
     producer.close()
 
@@ -40,6 +85,7 @@ Configuration:
 See Also:
     - Decision #009: Partition by symbol for ordering
     - Decision #010: At-least-once with idempotent producers
+    - k2.ingestion.message_builders: v2 message building utilities
 """
 
 import time
@@ -55,6 +101,13 @@ from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
 from k2.kafka import DataType, get_topic_builder
 
+# Import v2 message builders for convenience
+from k2.ingestion.message_builders import (
+    build_quote_v2,
+    build_trade_v2,
+    convert_v1_to_v2_trade,
+)
+
 logger = get_logger(__name__, component="ingestion")
 metrics = create_component_metrics("ingestion")
 
@@ -63,6 +116,7 @@ class MarketDataProducer:
     """Production-ready Kafka producer for market data.
 
     Features:
+    - Context manager support for automatic resource cleanup
     - Idempotent producer (enable.idempotence=True) prevents duplicates on retry
     - At-least-once delivery semantics with acks=all
     - Partition by symbol to preserve per-symbol ordering
@@ -71,21 +125,29 @@ class MarketDataProducer:
     - Structured logging with correlation IDs
     - Comprehensive Prometheus metrics
 
-    Example:
+    Example (recommended - context manager):
+        >>> with MarketDataProducer() as producer:
+        ...     producer.produce_trade(
+        ...         asset_class='equities',
+        ...         exchange='asx',
+        ...         record={'symbol': 'BHP', 'price': 45.50, 'quantity': 1000}
+        ...     )
+        ...     # Producer automatically flushed and closed on exit
+
+    Example (manual cleanup):
         >>> producer = MarketDataProducer()
-        >>> producer.produce_trade(
-        ...     asset_class='equities',
-        ...     exchange='asx',
-        ...     record={'symbol': 'BHP', 'price': 45.50, 'quantity': 1000}
-        ... )
-        >>> producer.flush()  # Wait for all messages to be sent
-        >>> producer.close()
+        >>> try:
+        ...     producer.produce_trade(...)
+        ...     producer.flush()
+        ... finally:
+        ...     producer.close()
     """
 
     def __init__(
         self,
         bootstrap_servers: str | None = None,
         schema_registry_url: str | None = None,
+        schema_version: str = "v2",
         max_retries: int = 3,
         initial_retry_delay: float = 0.1,
         retry_backoff_factor: float = 2.0,
@@ -96,6 +158,7 @@ class MarketDataProducer:
         Args:
             bootstrap_servers: Kafka bootstrap servers (default: from config)
             schema_registry_url: Schema Registry URL (default: from config)
+            schema_version: Schema version to use - 'v1' or 'v2' (default: 'v2')
             max_retries: Maximum retry attempts for transient failures (default: 3)
             initial_retry_delay: Initial retry delay in seconds (default: 0.1)
             retry_backoff_factor: Exponential backoff multiplier (default: 2.0)
@@ -103,9 +166,14 @@ class MarketDataProducer:
 
         Raises:
             Exception: If producer initialization fails
+            ValueError: If schema_version is not 'v1' or 'v2'
         """
+        if schema_version not in ("v1", "v2"):
+            raise ValueError(f"Invalid schema_version: {schema_version}. Must be 'v1' or 'v2'")
+
         self.bootstrap_servers = bootstrap_servers or config.kafka.bootstrap_servers
         self.schema_registry_url = schema_registry_url or config.kafka.schema_registry_url
+        self.schema_version = schema_version
 
         # Retry configuration (Decision #006: Exponential Backoff Retry)
         self.max_retries = max_retries
@@ -134,9 +202,13 @@ class MarketDataProducer:
             "Kafka producer initialized",
             bootstrap_servers=self.bootstrap_servers,
             schema_registry_url=self.schema_registry_url,
+            schema_version=self.schema_version,
             max_retries=self.max_retries,
         )
-        metrics.increment("producer_initialized_total", labels={"component_type": "producer"})
+        metrics.increment(
+            "producer_initialized_total",
+            labels={"component_type": "producer"},  # Removed schema_version - not in metric definition
+        )
 
     def _init_schema_registry(self):
         """Initialize Schema Registry client."""
@@ -269,24 +341,24 @@ class MarketDataProducer:
             self._total_errors += 1
             logger.error(
                 "Message delivery failed",
-                topic=topic,
                 partition_key=partition_key,
                 error=str(err),
-                **labels,
+                **labels,  # labels already contains 'topic'
             )
+            # Metric doesn't expect data_type, only error_type
+            error_labels = {k: v for k, v in labels.items() if k != "data_type"}
             metrics.increment(
                 "kafka_produce_errors_total",
-                labels={**labels, "error_type": str(err)[:50]},
+                labels={**error_labels, "error_type": str(err)[:50]},
             )
         else:
             self._total_produced += 1
             logger.debug(
                 "Message delivered",
-                topic=topic,
                 partition=msg.partition(),
                 offset=msg.offset(),
                 partition_key=partition_key,
-                **labels,
+                **labels,  # labels already contains 'topic'
             )
             metrics.increment(
                 "kafka_messages_produced_total",
@@ -364,9 +436,11 @@ class MarketDataProducer:
                         max_retries=self.max_retries,
                         **labels,  # Includes topic
                     )
+                    # Metric doesn't expect data_type, only error_type
+                    retry_labels = {k: v for k, v in labels.items() if k != "data_type"}
                     metrics.increment(
                         "kafka_produce_max_retries_exceeded_total",
-                        labels={**labels, "error_type": "buffer_error"},
+                        labels={**retry_labels, "error_type": "buffer_error"},
                     )
                     raise
 
@@ -394,9 +468,11 @@ class MarketDataProducer:
                         max_retries=self.max_retries,
                         **labels,  # Includes topic
                     )
+                    # Metric doesn't expect data_type, only error_type
+                    retry_labels = {k: v for k, v in labels.items() if k != "data_type"}
                     metrics.increment(
                         "kafka_produce_max_retries_exceeded_total",
-                        labels={**labels, "error_type": str(e)[:50]},
+                        labels={**retry_labels, "error_type": str(e)[:50]},
                     )
                     raise
 
@@ -506,9 +582,15 @@ class MarketDataProducer:
             record: Record dict matching Avro schema
 
         Raises:
+            RuntimeError: If producer has been closed
             ValueError: If required field 'symbol' is missing
             Exception: If production fails after retries
         """
+        if self.producer is None:
+            raise RuntimeError(
+                "Producer has been closed and cannot be reused. "
+                "Create a new MarketDataProducer instance."
+            )
         # Get topic configuration
         topic_config = self.topic_builder.get_topic_config(asset_class, data_type, exchange)
         topic = topic_config.topic_name
@@ -576,12 +658,19 @@ class MarketDataProducer:
         Returns:
             Number of messages still in queue after timeout
 
+        Raises:
+            RuntimeError: If producer has been closed
+
         Example:
             >>> producer.produce_trade(...)
             >>> remaining = producer.flush()
             >>> if remaining > 0:
             ...     print(f"Warning: {remaining} messages not sent")
         """
+        if self.producer is None:
+            logger.warning("Attempted to flush closed producer, skipping")
+            return 0
+
         logger.info("Flushing producer queue", timeout=timeout)
         start_time = time.time()
 
@@ -599,11 +688,16 @@ class MarketDataProducer:
     def close(self):
         """Close producer and cleanup resources.
 
-        Flushes all pending messages before closing.
+        Flushes all pending messages before closing. After calling close(),
+        the producer cannot be reused.
 
         Example:
             >>> producer.close()
         """
+        if self.producer is None:
+            logger.debug("Producer already closed, skipping")
+            return
+
         logger.info(
             "Closing Kafka producer",
             total_produced=self._total_produced,
@@ -611,11 +705,21 @@ class MarketDataProducer:
             total_retries=self._total_retries,
         )
 
-        # Flush remaining messages
-        self.flush()
+        try:
+            # Flush remaining messages before closing
+            remaining = self.flush()
+            if remaining > 0:
+                logger.warning(
+                    "Producer closed with messages still in queue",
+                    remaining_messages=remaining,
+                )
+        except Exception as e:
+            logger.error("Error flushing producer during close", error=str(e))
 
-        # No explicit close needed for confluent_kafka.Producer
-        # It will be cleaned up by garbage collection
+        # Clear producer reference to prevent reuse and allow GC
+        # Note: confluent_kafka.Producer doesn't have explicit close(),
+        # but setting to None ensures cleanup and prevents reuse
+        self.producer = None
 
         logger.info("Kafka producer closed")
 
@@ -634,6 +738,39 @@ class MarketDataProducer:
             "errors": self._total_errors,
             "retries": self._total_retries,
         }
+
+    def __enter__(self):
+        """Context manager entry.
+
+        Returns:
+            self for use in with statement
+
+        Example:
+            >>> with MarketDataProducer() as producer:
+            ...     producer.produce_trade(...)
+            ...     # Producer automatically closed on exit
+        """
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - close producer.
+
+        Ensures producer is closed even if exception occurs.
+
+        Args:
+            exc_type: Exception type (if exception occurred)
+            exc_val: Exception value (if exception occurred)
+            exc_tb: Exception traceback (if exception occurred)
+
+        Returns:
+            False to propagate exceptions
+        """
+        try:
+            self.close()
+        except Exception as e:
+            logger.error("Error closing producer in context manager", error=str(e))
+            # Don't suppress the original exception
+        return False  # Propagate any exceptions
 
 
 # Convenience factory function

@@ -1,29 +1,27 @@
 # K2 Market Data Platform - Documentation
 
-**Last Updated**: 2026-01-10
+**Last Updated**: 2026-01-14
 **Status**: Active Development
 
 Welcome to the K2 platform documentation. This README serves as your navigation hub for all platform documentation.
 
 ---
 
-## Quick Navigation
+## Quick Start Paths
 
-### For New Engineers
-1. Start with [System Architecture & Design](./architecture/system-design.md) - **Visual overview with diagrams**
-2. Read [Platform Principles](./architecture/platform-principles.md) - Core philosophy
-3. Review [Architecture Overview](./architecture/README.md) - Detailed documentation
-4. Check current [Implementation Status](./phases/phase-1-single-node-implementation/STATUS.md)
+**New to K2?** → [**NAVIGATION.md**](./NAVIGATION.md) - Role-based documentation paths
 
-### For AI Assistants (Claude Code)
+### Find What You Need in <2 Minutes
+
+- **🆕 New Engineer** (30 min) → [Onboarding Path](./NAVIGATION.md#-new-engineer-30-minute-onboarding-path)
+- **🚨 On-Call Engineer** (15 min) → [Emergency Runbooks](./NAVIGATION.md#-operatoron-call-engineer-15-minute-emergency-path)
+- **📡 API Consumer** (20 min) → [Integration Guide](./NAVIGATION.md#-api-consumer-20-minute-integration-path)
+- **👨‍💻 Contributor** (45 min) → [Deep Dive Path](./NAVIGATION.md#-contributordeveloper-45-minute-deep-dive-path)
+
+### AI Assistants (Claude Code)
 - **Start Here**: [CLAUDE.md](./CLAUDE.md) - Comprehensive AI assistant guidance
-- **Current Phase**: [Phase 1 Progress](./phases/phase-1-single-node-implementation/PROGRESS.md)
-- **Decision Log**: [Architectural Decisions](./phases/phase-1-single-node-implementation/DECISIONS.md)
-
-### For Operators
-- [Operations Runbooks](./operations/runbooks/)
-- [Monitoring Dashboards](./operations/monitoring/)
-- [Common Issues](./operations/README.md#troubleshooting)
+- **Current Phase**: [Phase 3 Demo Enhancements](phases/phase-3-demo-enhancements/)
+- **Recent Work**: [Phase 2 Completion Report](phases/phase-2-prep/COMPLETION-REPORT.md)
 
 ---
 
@@ -84,15 +82,15 @@ How we ensure correctness, quality, and performance.
 ### 📦 [Phases](./phases/) - Phase-Specific Implementation
 Implementation tracking for specific project phases.
 
-**Current Phase**: [Phase 1 - Core Demo](./phases/phase-1-single-node-implementation/)
-- [Implementation Plan](./phases/phase-1-single-node-implementation/IMPLEMENTATION_PLAN.md) - 16-step plan
-- [Progress Tracking](./phases/phase-1-single-node-implementation/PROGRESS.md) - Current status
-- [Decisions Log](./phases/phase-1-single-node-implementation/DECISIONS.md) - Phase 1 ADRs
-- [Validation Guide](./phases/phase-1-single-node-implementation/VALIDATION_GUIDE.md) - Testing procedures
+**Completed Phases**:
+- [Phase 0 - Technical Debt Resolution](phases/phase-0-technical-debt-resolution/) ✅ COMPLETE
+- [Phase 1 - Single-Node Implementation](phases/phase-1-single-node-equities/) ✅ COMPLETE
+- [Phase 2 - Multi-Source Foundation (V2 Schema + Binance)](phases/phase-2-prep/) ✅ COMPLETE
 
-**Future Phases**:
-- [Phase 2 - Production Prep](phases/phase-2-demo-enhancements/) - Productionization
-- [Phase 3 - Scale](./phases/phase-3-scale/) - Distributed scaling
+**Current Phase**: [Phase 3 - Demo Enhancements](phases/phase-3-demo-enhancements/) 🟡 IN PROGRESS
+- Principal-level demos (Binance notebook, reference docs)
+- Documentation consolidation
+- Production readiness improvements
 
 **When to read**: Tracking implementation progress, understanding what's built
 
@@ -154,8 +152,8 @@ Architecture and project review documents.
 ## Common Tasks
 
 ### Starting New Work
-1. Check [Current Phase Status](./phases/phase-1-single-node-implementation/STATUS.md)
-2. Review relevant [Implementation Step](./phases/phase-1-single-node-implementation/steps/)
+1. Check [Current Phase Status](phases/phase-1-single-node-equities/STATUS.md)
+2. Review relevant [Implementation Step](phases/phase-1-single-node-equities/steps/)
 3. Read related [Design Docs](./design/)
 4. Understand [Testing Requirements](./testing/strategy.md)
 
@@ -168,7 +166,7 @@ Architecture and project review documents.
 ### Making Architectural Changes
 1. Review [Platform Principles](./architecture/platform-principles.md)
 2. Check existing [Technology Decisions](./architecture/README.md#technology-stack)
-3. Create ADR in [DECISIONS.md](./phases/phase-1-single-node-implementation/DECISIONS.md)
+3. Create ADR in [DECISIONS.md](phases/phase-1-single-node-equities/DECISIONS.md)
 4. Update architecture and design docs
 5. Update reference materials if needed
 

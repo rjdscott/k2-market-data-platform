@@ -2,15 +2,29 @@
 
 This module provides write operations for Iceberg tables with:
 - ACID transactions (all-or-nothing writes)
+- Transaction logging (snapshot IDs, sequence numbers, file statistics)
 - PyArrow for efficient columnar conversion
 - Automatic schema validation
 - Metrics collection for observability
 - Exponential backoff retry for transient failures
+- Support for v1 (legacy) and v2 (industry-standard) schemas
 
 Writers are designed for batch writes (100-10,000 records per call) to
 optimize Iceberg's append performance and minimize metadata operations.
+
+Transaction Logging:
+After each successful write, the writer logs detailed transaction metadata including:
+- Snapshot ID: Unique identifier for the ACID transaction
+- Sequence number: Transaction ordering for consistency verification
+- File statistics: Files added, records written, bytes written
+- Table totals: Total records, data files, delete files
+
+Schema Evolution:
+- v1: Legacy ASX-specific schemas (volume, company_id fields)
+- v2: Industry-standard hybrid schemas (quantity, vendor_data pattern)
 """
 
+import json
 import time
 from decimal import Decimal
 from typing import Any
@@ -114,6 +128,7 @@ class IcebergWriter:
         s3_endpoint: str | None = None,
         s3_access_key: str | None = None,
         s3_secret_key: str | None = None,
+        schema_version: str = "v2",
     ):
         """Initialize Iceberg writer.
 
@@ -122,11 +137,19 @@ class IcebergWriter:
             s3_endpoint: S3/MinIO endpoint (defaults to config)
             s3_access_key: S3 access key (defaults to config)
             s3_secret_key: S3 secret key (defaults to config)
+            schema_version: Schema version - 'v1' or 'v2' (default: 'v2')
+
+        Raises:
+            ValueError: If schema_version is not 'v1' or 'v2'
         """
+        if schema_version not in ("v1", "v2"):
+            raise ValueError(f"Invalid schema_version: {schema_version}. Must be 'v1' or 'v2'")
+
         self.catalog_uri = catalog_uri or config.iceberg.catalog_uri
         self.s3_endpoint = s3_endpoint or config.iceberg.s3_endpoint
         self.s3_access_key = s3_access_key or config.iceberg.s3_access_key
         self.s3_secret_key = s3_secret_key or config.iceberg.s3_secret_key
+        self.schema_version = schema_version
 
         try:
             self.catalog = load_catalog(
@@ -156,7 +179,7 @@ class IcebergWriter:
     def write_trades(
         self,
         records: list[dict[str, Any]],
-        table_name: str = "market_data.trades",
+        table_name: str | None = None,
         exchange: str = "unknown",
         asset_class: str = "equities",
     ) -> int:
@@ -164,7 +187,9 @@ class IcebergWriter:
 
         Args:
             records: List of trade dictionaries matching schema
-            table_name: Fully qualified table name (namespace.table)
+            table_name: Fully qualified table name (namespace.table). If None, uses appropriate
+                       table based on schema_version: "market_data.trades_v2" for v2,
+                       "market_data.trades" for v1
             exchange: Exchange code for metrics (e.g., "asx", "nyse")
             asset_class: Asset class for metrics (e.g., "equities", "futures")
 
@@ -175,6 +200,10 @@ class IcebergWriter:
             NoSuchTableError: If table doesn't exist
             Exception: If write fails after retries
         """
+        # Default table based on schema version
+        if table_name is None:
+            table_name = "market_data.trades_v2" if self.schema_version == "v2" else "market_data.trades"
+
         if not records:
             logger.warning("No records to write", table=table_name)
             return 0
@@ -195,14 +224,18 @@ class IcebergWriter:
             )
             raise
 
-        # Convert to PyArrow table
+        # Convert to PyArrow table (use appropriate schema version)
         try:
-            arrow_table = self._records_to_arrow_trades(records)
+            if self.schema_version == "v2":
+                arrow_table = self._records_to_arrow_trades_v2(records)
+            else:
+                arrow_table = self._records_to_arrow_trades(records)
         except Exception as e:
             logger.error(
                 "Failed to convert records to Arrow",
                 table=table_name,
                 record_count=len(records),
+                schema_version=self.schema_version,
                 error=str(e),
             )
             metrics.increment(
@@ -212,9 +245,15 @@ class IcebergWriter:
                     "asset_class": asset_class,
                     "table": "trades",
                     "error_type": "arrow_conversion_failed",
+                    "schema_version": self.schema_version,
                 },
             )
             raise
+
+        # Capture snapshot BEFORE write (P1.5: Transaction logging enhancement)
+        snapshot_before = table.current_snapshot()
+        snapshot_id_before = snapshot_before.snapshot_id if snapshot_before else None
+        sequence_number_before = snapshot_before.sequence_number if snapshot_before else None
 
         # Append data with timing (ACID transaction)
         with metrics.timer(
@@ -227,15 +266,61 @@ class IcebergWriter:
             },
         ):
             try:
+                start_time = time.time()
                 table.append(arrow_table)
+                duration_ms = (time.time() - start_time) * 1000
 
-                logger.info(
-                    "Trades written to Iceberg",
-                    table=table_name,
-                    exchange=exchange,
-                    asset_class=asset_class,
-                    record_count=len(records),
-                )
+                # Get transaction metadata after successful write
+                current_snapshot = table.current_snapshot()
+                if current_snapshot:
+                    snapshot_id = current_snapshot.snapshot_id
+                    sequence_number = current_snapshot.sequence_number
+                    summary = current_snapshot.summary or {}
+
+                    # Log detailed transaction information with before/after snapshots
+                    logger.info(
+                        "Iceberg transaction committed",
+                        table=table_name,
+                        exchange=exchange,
+                        asset_class=asset_class,
+                        record_count=len(records),
+                        snapshot_id_before=snapshot_id_before,
+                        snapshot_id_after=snapshot_id,
+                        sequence_number_before=sequence_number_before,
+                        sequence_number_after=sequence_number,
+                        transaction_duration_ms=round(duration_ms, 2),
+                        total_records=summary.get("total-records", "unknown"),
+                        total_data_files=summary.get("total-data-files", "unknown"),
+                        total_delete_files=summary.get("total-delete-files", "unknown"),
+                        added_data_files=summary.get("added-data-files", "0"),
+                        added_records=summary.get("added-records", "0"),
+                        added_files_size_bytes=summary.get("added-files-size", "0"),
+                    )
+
+                    # Track successful transactions (P1.5: Transaction metrics)
+                    # Note: Only pass 'table' label - standard labels added automatically
+                    metrics.increment(
+                        "iceberg_transactions_total",
+                        labels={"table": "trades"},
+                    )
+
+                    # Track transaction row count distribution
+                    # Note: Only pass 'table' label - standard labels added automatically
+                    metrics.histogram(
+                        "iceberg_transaction_rows",
+                        value=len(records),
+                        labels={"table": "trades"},
+                    )
+
+                else:
+                    # Fallback to basic logging if snapshot metadata unavailable
+                    logger.info(
+                        "Trades written to Iceberg",
+                        table=table_name,
+                        exchange=exchange,
+                        asset_class=asset_class,
+                        record_count=len(records),
+                    )
 
                 # Track rows written
                 metrics.increment(
@@ -262,11 +347,15 @@ class IcebergWriter:
                 return len(records)
 
             except Exception as e:
+                # Enhanced error logging with snapshot context (P1.5)
                 logger.error(
-                    "Failed to append trades",
+                    "Iceberg transaction failed",
                     table=table_name,
                     record_count=len(records),
+                    snapshot_id_before=snapshot_id_before,
+                    sequence_number_before=sequence_number_before,
                     error=str(e),
+                    error_type=type(e).__name__,
                 )
                 metrics.increment(
                     "iceberg_write_errors_total",
@@ -276,6 +365,12 @@ class IcebergWriter:
                         "table": "trades",
                         "error_type": "append_failed",
                     },
+                )
+                # Track failed transactions (P1.5)
+                # Note: Only pass 'table' label - standard labels added automatically
+                metrics.increment(
+                    "iceberg_transactions_total",
+                    labels={"table": "trades"},
                 )
                 raise
 
@@ -322,14 +417,18 @@ class IcebergWriter:
             )
             raise
 
-        # Convert to PyArrow table
+        # Convert to PyArrow table (use appropriate schema version)
         try:
-            arrow_table = self._records_to_arrow_quotes(records)
+            if self.schema_version == "v2":
+                arrow_table = self._records_to_arrow_quotes_v2(records)
+            else:
+                arrow_table = self._records_to_arrow_quotes(records)
         except Exception as e:
             logger.error(
                 "Failed to convert records to Arrow",
                 table=table_name,
                 record_count=len(records),
+                schema_version=self.schema_version,
                 error=str(e),
             )
             metrics.increment(
@@ -339,9 +438,15 @@ class IcebergWriter:
                     "asset_class": asset_class,
                     "table": "quotes",
                     "error_type": "arrow_conversion_failed",
+                    "schema_version": self.schema_version,
                 },
             )
             raise
+
+        # Capture snapshot BEFORE write (P1.5: Transaction logging enhancement)
+        snapshot_before = table.current_snapshot()
+        snapshot_id_before = snapshot_before.snapshot_id if snapshot_before else None
+        sequence_number_before = snapshot_before.sequence_number if snapshot_before else None
 
         # Append data with timing (ACID transaction)
         with metrics.timer(
@@ -354,15 +459,61 @@ class IcebergWriter:
             },
         ):
             try:
+                start_time = time.time()
                 table.append(arrow_table)
+                duration_ms = (time.time() - start_time) * 1000
 
-                logger.info(
-                    "Quotes written to Iceberg",
-                    table=table_name,
-                    exchange=exchange,
-                    asset_class=asset_class,
-                    record_count=len(records),
-                )
+                # Get transaction metadata after successful write
+                current_snapshot = table.current_snapshot()
+                if current_snapshot:
+                    snapshot_id = current_snapshot.snapshot_id
+                    sequence_number = current_snapshot.sequence_number
+                    summary = current_snapshot.summary or {}
+
+                    # Log detailed transaction information with before/after snapshots
+                    logger.info(
+                        "Iceberg transaction committed",
+                        table=table_name,
+                        exchange=exchange,
+                        asset_class=asset_class,
+                        record_count=len(records),
+                        snapshot_id_before=snapshot_id_before,
+                        snapshot_id_after=snapshot_id,
+                        sequence_number_before=sequence_number_before,
+                        sequence_number_after=sequence_number,
+                        transaction_duration_ms=round(duration_ms, 2),
+                        total_records=summary.get("total-records", "unknown"),
+                        total_data_files=summary.get("total-data-files", "unknown"),
+                        total_delete_files=summary.get("total-delete-files", "unknown"),
+                        added_data_files=summary.get("added-data-files", "0"),
+                        added_records=summary.get("added-records", "0"),
+                        added_files_size_bytes=summary.get("added-files-size", "0"),
+                    )
+
+                    # Track successful transactions (P1.5: Transaction metrics)
+                    # Note: Only pass 'table' label - standard labels added automatically
+                    metrics.increment(
+                        "iceberg_transactions_total",
+                        labels={"table": "quotes"},
+                    )
+
+                    # Track transaction row count distribution
+                    # Note: Only pass 'table' label - standard labels added automatically
+                    metrics.histogram(
+                        "iceberg_transaction_rows",
+                        value=len(records),
+                        labels={"table": "quotes"},
+                    )
+
+                else:
+                    # Fallback to basic logging if snapshot metadata unavailable
+                    logger.info(
+                        "Quotes written to Iceberg",
+                        table=table_name,
+                        exchange=exchange,
+                        asset_class=asset_class,
+                        record_count=len(records),
+                    )
 
                 # Track rows written
                 metrics.increment(
@@ -389,11 +540,15 @@ class IcebergWriter:
                 return len(records)
 
             except Exception as e:
+                # Enhanced error logging with snapshot context (P1.5)
                 logger.error(
-                    "Failed to append quotes",
+                    "Iceberg transaction failed",
                     table=table_name,
                     record_count=len(records),
+                    snapshot_id_before=snapshot_id_before,
+                    sequence_number_before=sequence_number_before,
                     error=str(e),
+                    error_type=type(e).__name__,
                 )
                 metrics.increment(
                     "iceberg_write_errors_total",
@@ -403,6 +558,12 @@ class IcebergWriter:
                         "table": "quotes",
                         "error_type": "append_failed",
                     },
+                )
+                # Track failed transactions (P1.5)
+                # Note: Only pass 'table' label - standard labels added automatically
+                metrics.increment(
+                    "iceberg_transactions_total",
+                    labels={"table": "quotes"},
                 )
                 raise
 
@@ -509,6 +670,178 @@ class IcebergWriter:
                 "ask_volume": record["ask_volume"],
                 "ingestion_timestamp": record["ingestion_timestamp"],
                 "sequence_number": record.get("sequence_number"),
+            }
+            converted_records.append(converted)
+
+        return pa.Table.from_pylist(converted_records, schema=schema)
+
+    def _records_to_arrow_trades_v2(self, records: list[dict[str, Any]]) -> pa.Table:
+        """Convert v2 trade records to PyArrow table.
+
+        V2 schema changes from v1:
+        - volume → quantity (Decimal instead of int64)
+        - exchange_timestamp → timestamp (field rename for clarity)
+        - Add: message_id, trade_id, currency, side, asset_class
+        - Add: trade_conditions (array of strings)
+        - Add: vendor_data (map serialized as JSON string)
+        - company_id, qualifiers, venue → moved to vendor_data
+        - precision: Decimal(18,6) → Decimal(18,8)
+        - timestamp: milliseconds → microseconds
+
+        Args:
+            records: List of v2 trade dictionaries
+
+        Returns:
+            PyArrow table matching trades_v2 schema
+
+        Raises:
+            Exception: If conversion fails
+        """
+        # Define v2 schema matching TradeV2 Iceberg table
+        schema = pa.schema(
+            [
+                pa.field("message_id", pa.string(), nullable=False),
+                pa.field("trade_id", pa.string(), nullable=False),
+                pa.field("symbol", pa.string(), nullable=False),
+                pa.field("exchange", pa.string(), nullable=False),
+                pa.field("asset_class", pa.string(), nullable=False),  # enum stored as string
+                pa.field("timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("price", pa.decimal128(18, 8), nullable=False),  # Higher precision
+                pa.field("quantity", pa.decimal128(18, 8), nullable=False),  # Decimal, not int64
+                pa.field("currency", pa.string(), nullable=False),
+                pa.field("side", pa.string(), nullable=False),  # enum stored as string
+                pa.field("trade_conditions", pa.string(), nullable=True),  # JSON string for compatibility
+                pa.field("source_sequence", pa.int64(), nullable=True),
+                pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("platform_sequence", pa.int64(), nullable=True),
+                pa.field("vendor_data", pa.string(), nullable=True),  # JSON string
+                pa.field("is_sample_data", pa.bool_(), nullable=False),
+            ],
+        )
+
+        # Convert records, handling type conversions
+        converted_records = []
+        for record in records:
+            # Serialize vendor_data and trade_conditions to JSON strings if present
+            vendor_data_json = None
+            if record.get("vendor_data"):
+                vendor_data_json = json.dumps(record["vendor_data"])
+
+            trade_conditions_json = None
+            if record.get("trade_conditions"):
+                trade_conditions_json = json.dumps(record["trade_conditions"])
+
+            converted = {
+                "message_id": record["message_id"],
+                "trade_id": record["trade_id"],
+                "symbol": record["symbol"],
+                "exchange": record["exchange"],
+                "asset_class": record["asset_class"],  # enum value as string
+                "timestamp": record["timestamp"],  # microseconds
+                "price": (
+                    record["price"]
+                    if isinstance(record["price"], Decimal)
+                    else Decimal(str(record["price"]))
+                ),
+                "quantity": (
+                    record["quantity"]
+                    if isinstance(record["quantity"], Decimal)
+                    else Decimal(str(record["quantity"]))
+                ),
+                "currency": record["currency"],
+                "side": record["side"],  # enum value as string
+                "trade_conditions": trade_conditions_json,  # JSON string
+                "source_sequence": record.get("source_sequence"),
+                "ingestion_timestamp": record["ingestion_timestamp"],  # microseconds
+                "platform_sequence": record.get("platform_sequence"),
+                "vendor_data": vendor_data_json,
+                "is_sample_data": record.get("is_sample_data", False),
+            }
+            converted_records.append(converted)
+
+        return pa.Table.from_pylist(converted_records, schema=schema)
+
+    def _records_to_arrow_quotes_v2(self, records: list[dict[str, Any]]) -> pa.Table:
+        """Convert v2 quote records to PyArrow table.
+
+        V2 schema changes from v1:
+        - bid_volume/ask_volume → bid_quantity/ask_quantity (Decimal)
+        - exchange_timestamp → timestamp (field rename)
+        - Add: message_id, quote_id, currency, asset_class
+        - Add: vendor_data (map serialized as JSON string)
+        - company_id → moved to vendor_data
+        - precision: Decimal(18,6) → Decimal(18,8)
+
+        Args:
+            records: List of v2 quote dictionaries
+
+        Returns:
+            PyArrow table matching quotes_v2 schema
+
+        Raises:
+            Exception: If conversion fails
+        """
+        # Define v2 schema matching QuoteV2 Iceberg table
+        schema = pa.schema(
+            [
+                pa.field("message_id", pa.string(), nullable=False),
+                pa.field("quote_id", pa.string(), nullable=False),
+                pa.field("symbol", pa.string(), nullable=False),
+                pa.field("exchange", pa.string(), nullable=False),
+                pa.field("asset_class", pa.string(), nullable=False),
+                pa.field("timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("bid_price", pa.decimal128(18, 8), nullable=False),
+                pa.field("bid_quantity", pa.decimal128(18, 8), nullable=False),
+                pa.field("ask_price", pa.decimal128(18, 8), nullable=False),
+                pa.field("ask_quantity", pa.decimal128(18, 8), nullable=False),
+                pa.field("currency", pa.string(), nullable=False),
+                pa.field("source_sequence", pa.int64(), nullable=True),
+                pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
+                pa.field("platform_sequence", pa.int64(), nullable=True),
+                pa.field("vendor_data", pa.string(), nullable=True),  # JSON string
+            ],
+        )
+
+        # Convert records, handling type conversions
+        converted_records = []
+        for record in records:
+            # Serialize vendor_data to JSON string if present
+            vendor_data_json = None
+            if record.get("vendor_data"):
+                vendor_data_json = json.dumps(record["vendor_data"])
+
+            converted = {
+                "message_id": record["message_id"],
+                "quote_id": record["quote_id"],
+                "symbol": record["symbol"],
+                "exchange": record["exchange"],
+                "asset_class": record["asset_class"],
+                "timestamp": record["timestamp"],
+                "bid_price": (
+                    record["bid_price"]
+                    if isinstance(record["bid_price"], Decimal)
+                    else Decimal(str(record["bid_price"]))
+                ),
+                "bid_quantity": (
+                    record["bid_quantity"]
+                    if isinstance(record["bid_quantity"], Decimal)
+                    else Decimal(str(record["bid_quantity"]))
+                ),
+                "ask_price": (
+                    record["ask_price"]
+                    if isinstance(record["ask_price"], Decimal)
+                    else Decimal(str(record["ask_price"]))
+                ),
+                "ask_quantity": (
+                    record["ask_quantity"]
+                    if isinstance(record["ask_quantity"], Decimal)
+                    else Decimal(str(record["ask_quantity"]))
+                ),
+                "currency": record["currency"],
+                "source_sequence": record.get("source_sequence"),
+                "ingestion_timestamp": record["ingestion_timestamp"],
+                "platform_sequence": record.get("platform_sequence"),
+                "vendor_data": vendor_data_json,
             }
             converted_records.append(converted)
 

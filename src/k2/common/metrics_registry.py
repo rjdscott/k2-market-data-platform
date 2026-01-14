@@ -142,6 +142,12 @@ KAFKA_CONSUMER_OFFSET = Gauge(
     EXCHANGE_LABELS + ["topic", "partition", "consumer_group"],
 )
 
+CONSUMER_ERRORS_TOTAL = Counter(
+    "k2_consumer_errors_total",
+    "Total consumer errors",
+    STANDARD_LABELS + ["error_type", "consumer_group"],
+)
+
 # Sequence Tracking
 SEQUENCE_GAPS_DETECTED_TOTAL = Counter(
     "k2_sequence_gaps_detected_total",
@@ -175,6 +181,52 @@ DEDUPLICATION_CACHE_SIZE = Gauge(
 )
 
 # ==============================================================================
+# Binance WebSocket Streaming Metrics
+# ==============================================================================
+
+BINANCE_CONNECTION_STATUS = Gauge(
+    "k2_binance_connection_status",
+    "Binance WebSocket connection status (1=connected, 0=disconnected)",
+    STANDARD_LABELS,  # Removed symbols label - use symbol label for per-symbol metrics
+)
+
+BINANCE_MESSAGES_RECEIVED_TOTAL = Counter(
+    "k2_binance_messages_received_total",
+    "Total trade messages received from Binance WebSocket",
+    STANDARD_LABELS + ["symbol"],
+)
+
+BINANCE_MESSAGE_ERRORS_TOTAL = Counter(
+    "k2_binance_message_errors_total",
+    "Total message parsing/validation errors from Binance",
+    STANDARD_LABELS + ["error_type"],
+)
+
+BINANCE_RECONNECTS_TOTAL = Counter(
+    "k2_binance_reconnects_total",
+    "Total Binance WebSocket reconnection attempts",
+    STANDARD_LABELS + ["reason"],  # reason: connection_closed|websocket_error|unexpected_error
+)
+
+BINANCE_CONNECTION_ERRORS_TOTAL = Counter(
+    "k2_binance_connection_errors_total",
+    "Total Binance WebSocket connection errors",
+    STANDARD_LABELS + ["error_type"],
+)
+
+BINANCE_LAST_MESSAGE_TIMESTAMP_SECONDS = Gauge(
+    "k2_binance_last_message_timestamp_seconds",
+    "Timestamp of last message received from Binance (for health check)",
+    STANDARD_LABELS,  # Removed symbols label - aggregate metric across all symbols
+)
+
+BINANCE_RECONNECT_DELAY_SECONDS = Gauge(
+    "k2_binance_reconnect_delay_seconds",
+    "Current reconnection delay in seconds (exponential backoff)",
+    STANDARD_LABELS,
+)
+
+# ==============================================================================
 # Storage Layer Metrics (Iceberg)
 # ==============================================================================
 
@@ -201,6 +253,19 @@ ICEBERG_COMMIT_FAILURES_TOTAL = Counter(
     "k2_iceberg_commit_failures_total",
     "Total Iceberg transaction commit failures",
     EXCHANGE_LABELS + ["table"],
+)
+
+ICEBERG_TRANSACTIONS_TOTAL = Counter(
+    "k2_iceberg_transactions_total",
+    "Total Iceberg transactions committed",
+    STANDARD_LABELS + ["table"],
+)
+
+ICEBERG_TRANSACTION_ROWS = Histogram(
+    "k2_iceberg_transaction_rows",
+    "Number of rows per Iceberg transaction",
+    STANDARD_LABELS + ["table"],
+    buckets=[10, 50, 100, 500, 1000, 5000, 10000, 50000],
 )
 
 ICEBERG_BATCH_SIZE = Histogram(
@@ -256,6 +321,47 @@ QUERY_CACHE_MISSES_TOTAL = Counter(
     "k2_query_cache_misses_total",
     "Total query cache misses",
     STANDARD_LABELS + ["cache_tier"],
+)
+
+# ==============================================================================
+# Connection Pool Metrics (DuckDB)
+# ==============================================================================
+
+CONNECTION_POOL_SIZE = Gauge(
+    "k2_connection_pool_size",
+    "Total size of connection pool (max concurrent connections)",
+    STANDARD_LABELS,
+)
+
+CONNECTION_POOL_ACTIVE_CONNECTIONS = Gauge(
+    "k2_connection_pool_active_connections",
+    "Number of connections currently in use",
+    STANDARD_LABELS,
+)
+
+CONNECTION_POOL_AVAILABLE_CONNECTIONS = Gauge(
+    "k2_connection_pool_available_connections",
+    "Number of connections available in pool",
+    STANDARD_LABELS,
+)
+
+CONNECTION_POOL_WAIT_TIME_SECONDS = Histogram(
+    "k2_connection_pool_wait_time_seconds",
+    "Time spent waiting to acquire connection from pool",
+    STANDARD_LABELS,
+    buckets=[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0],
+)
+
+CONNECTION_POOL_ACQUISITION_TIMEOUTS_TOTAL = Counter(
+    "k2_connection_pool_acquisition_timeouts_total",
+    "Total number of connection acquisition timeouts",
+    STANDARD_LABELS,
+)
+
+CONNECTION_POOL_CREATION_ERRORS_TOTAL = Counter(
+    "k2_connection_pool_creation_errors_total",
+    "Total number of connection creation errors",
+    STANDARD_LABELS,
 )
 
 # ==============================================================================
@@ -315,6 +421,18 @@ DEGRADATION_LEVEL = Gauge(
     STANDARD_LABELS,
 )
 
+DEGRADATION_TRANSITIONS_TOTAL = Counter(
+    "k2_degradation_transitions_total",
+    "Total degradation level transitions",
+    STANDARD_LABELS + ["from_level", "to_level"],
+)
+
+MESSAGES_SHED_TOTAL = Counter(
+    "k2_messages_shed_total",
+    "Total messages shed due to load shedding",
+    STANDARD_LABELS + ["symbol_tier", "reason"],
+)
+
 # ==============================================================================
 # Registry Helper Functions
 # ==============================================================================
@@ -332,15 +450,27 @@ _METRIC_REGISTRY: dict[str, object] = {
     "kafka_messages_consumed_total": KAFKA_MESSAGES_CONSUMED_TOTAL,
     "kafka_consumer_lag_seconds": KAFKA_CONSUMER_LAG_SECONDS,
     "kafka_consumer_lag_messages": KAFKA_CONSUMER_LAG_MESSAGES,
+    "consumer_errors_total": CONSUMER_ERRORS_TOTAL,
     "sequence_gaps_detected_total": SEQUENCE_GAPS_DETECTED_TOTAL,
     "sequence_resets_detected_total": SEQUENCE_RESETS_DETECTED_TOTAL,
     "out_of_order_messages_total": OUT_OF_ORDER_MESSAGES_TOTAL,
     "duplicate_messages_detected_total": DUPLICATE_MESSAGES_DETECTED_TOTAL,
+    "deduplication_cache_size": DEDUPLICATION_CACHE_SIZE,
+    # Binance
+    "binance_connection_status": BINANCE_CONNECTION_STATUS,
+    "binance_messages_received_total": BINANCE_MESSAGES_RECEIVED_TOTAL,
+    "binance_message_errors_total": BINANCE_MESSAGE_ERRORS_TOTAL,
+    "binance_reconnects_total": BINANCE_RECONNECTS_TOTAL,
+    "binance_connection_errors_total": BINANCE_CONNECTION_ERRORS_TOTAL,
+    "binance_last_message_timestamp_seconds": BINANCE_LAST_MESSAGE_TIMESTAMP_SECONDS,
+    "binance_reconnect_delay_seconds": BINANCE_RECONNECT_DELAY_SECONDS,
     # Storage
     "iceberg_rows_written_total": ICEBERG_ROWS_WRITTEN_TOTAL,
     "iceberg_write_duration_seconds": ICEBERG_WRITE_DURATION_SECONDS,
     "iceberg_write_errors_total": ICEBERG_WRITE_ERRORS_TOTAL,
     "iceberg_commit_failures_total": ICEBERG_COMMIT_FAILURES_TOTAL,
+    "iceberg_transactions_total": ICEBERG_TRANSACTIONS_TOTAL,
+    "iceberg_transaction_rows": ICEBERG_TRANSACTION_ROWS,
     "iceberg_batch_size": ICEBERG_BATCH_SIZE,
     # Query
     "query_executions_total": QUERY_EXECUTIONS_TOTAL,
@@ -348,6 +478,13 @@ _METRIC_REGISTRY: dict[str, object] = {
     "query_rows_scanned": QUERY_ROWS_SCANNED,
     "query_cache_hits_total": QUERY_CACHE_HITS_TOTAL,
     "query_cache_misses_total": QUERY_CACHE_MISSES_TOTAL,
+    # Connection Pool
+    "connection_pool_size": CONNECTION_POOL_SIZE,
+    "connection_pool_active_connections": CONNECTION_POOL_ACTIVE_CONNECTIONS,
+    "connection_pool_available_connections": CONNECTION_POOL_AVAILABLE_CONNECTIONS,
+    "connection_pool_wait_time_seconds": CONNECTION_POOL_WAIT_TIME_SECONDS,
+    "connection_pool_acquisition_timeouts_total": CONNECTION_POOL_ACQUISITION_TIMEOUTS_TOTAL,
+    "connection_pool_creation_errors_total": CONNECTION_POOL_CREATION_ERRORS_TOTAL,
     # API
     "http_requests_total": HTTP_REQUESTS_TOTAL,
     "http_request_duration_seconds": HTTP_REQUEST_DURATION_SECONDS,
@@ -358,6 +495,8 @@ _METRIC_REGISTRY: dict[str, object] = {
     "circuit_breaker_failures_total": CIRCUIT_BREAKER_FAILURES_TOTAL,
     "backpressure_events_total": BACKPRESSURE_EVENTS_TOTAL,
     "degradation_level": DEGRADATION_LEVEL,
+    "degradation_transitions_total": DEGRADATION_TRANSITIONS_TOTAL,
+    "messages_shed_total": MESSAGES_SHED_TOTAL,
 }
 
 

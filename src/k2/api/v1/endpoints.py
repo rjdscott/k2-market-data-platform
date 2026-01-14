@@ -29,7 +29,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 
-from k2.api.deps import get_query_engine, get_replay_engine
+from k2.api.deps import get_hybrid_engine, get_query_engine, get_replay_engine
 from k2.api.formatters import decode_cursor, encode_cursor, format_response
 from k2.api.middleware import correlation_id_var, verify_api_key
 from k2.api.models import (  # POST request models
@@ -61,6 +61,7 @@ from k2.api.models import (  # POST request models
 )
 from k2.common.logging import get_logger
 from k2.query.engine import QueryEngine
+from k2.query.hybrid_engine import HybridQueryEngine
 from k2.query.replay import ReplayEngine
 
 logger = get_logger(__name__, component="api")
@@ -178,6 +179,138 @@ async def get_trades(
             detail={
                 "error": "QUERY_FAILED",
                 "message": f"Failed to query trades: {e!s}",
+            },
+        )
+
+
+# =============================================================================
+# Hybrid Trades Endpoint (Kafka + Iceberg)
+# =============================================================================
+
+
+@router.get(
+    "/trades/recent",
+    response_model=TradesResponse,
+    summary="Query recent trades (hybrid Kafka + Iceberg)",
+    description="""
+    Query recent trades using hybrid engine that merges Kafka (uncommitted) + Iceberg (committed) data.
+
+    **This is the core lakehouse value proposition**: Unified queries spanning both
+    streaming (Kafka) and batch (Iceberg) sources without code changes.
+
+    Use Cases:
+    - "Give me last 15 minutes of BTCUSDT trades" → Queries both Kafka + Iceberg
+    - "Give me last 5 minutes" → Queries Kafka only (uncommitted)
+    - "Give me 1 hour ago" → Queries Iceberg only (committed)
+
+    Query Routing (automatic):
+    - Recent data (< 2 minutes from now) → Kafka + Iceberg
+    - Historical data (> 2 minutes ago) → Iceberg only
+
+    Deduplication:
+    Messages appearing in both sources are deduplicated by message_id.
+
+    Filters:
+    - **symbol**: Filter by security symbol (required for Kafka efficiency)
+    - **exchange**: Filter by exchange (required for Kafka efficiency)
+    - **window_minutes**: Time window to query (default: 15 minutes)
+    - **limit**: Maximum records to return (default: 1000, max: 10000)
+
+    Performance:
+    - Iceberg: ~200-500ms for historical data
+    - Kafka: <50ms for recent data (in-memory)
+    - Total: <500ms p99 for 15-minute window
+    """,
+    responses={
+        200: {"description": "Recent trades retrieved successfully"},
+        400: {"description": "Missing required filters (symbol, exchange)"},
+        401: {"description": "Missing API key"},
+        403: {"description": "Invalid API key"},
+        500: {"description": "Query execution failed"},
+    },
+)
+async def get_recent_trades(
+    symbol: str = Query(
+        description="Filter by symbol (required for hybrid queries)",
+        example="BTCUSDT",
+    ),
+    exchange: str = Query(
+        description="Filter by exchange (required for hybrid queries)",
+        example="binance",
+    ),
+    window_minutes: int = Query(
+        default=15,
+        ge=1,
+        le=60,
+        description="Time window in minutes (1-60)",
+    ),
+    limit: int = Query(
+        default=1000,
+        ge=1,
+        le=10000,
+        description="Maximum records to return",
+    ),
+    engine: HybridQueryEngine = Depends(get_hybrid_engine),
+) -> TradesResponse:
+    """Query recent trades using hybrid Kafka + Iceberg engine.
+
+    This endpoint demonstrates the lakehouse architecture by seamlessly
+    merging streaming (Kafka) and batch (Iceberg) data sources.
+    """
+    try:
+        # Calculate time range
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(minutes=window_minutes)
+
+        logger.debug(
+            "Hybrid query for recent trades",
+            symbol=symbol,
+            exchange=exchange,
+            window_minutes=window_minutes,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+        # Execute hybrid query
+        rows = engine.query_trades(
+            symbol=symbol,
+            exchange=exchange,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+        )
+
+        # Convert to response models
+        trades = [Trade(**row) for row in rows]
+
+        return TradesResponse(
+            success=True,
+            data=trades,
+            pagination=PaginationMeta(
+                limit=limit,
+                offset=0,
+                total=None,
+                has_more=len(trades) == limit,
+            ),
+            meta={
+                **_get_meta(),
+                "query": {
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "window_minutes": window_minutes,
+                    "start_time": start_time.isoformat(),
+                    "end_time": end_time.isoformat(),
+                },
+            },
+        )
+
+    except Exception as e:
+        logger.error("Hybrid trades query failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "HYBRID_QUERY_FAILED",
+                "message": f"Failed to query recent trades: {e!s}",
             },
         )
 

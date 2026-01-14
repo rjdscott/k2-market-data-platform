@@ -37,11 +37,14 @@ logger = structlog.get_logger()
 SCHEMA_DIR = Path(__file__).parent
 
 
-def load_avro_schema(schema_name: str) -> str:
+def load_avro_schema(schema_name: str, version: str = "v1") -> str:
     """Load Avro schema from .avsc file.
 
+    Supports both v1 (legacy ASX-specific) and v2 (industry-standard) schemas.
+
     Args:
-        schema_name: Name of schema file without extension (e.g., 'trade')
+        schema_name: Name of schema file without extension (e.g., 'trade', 'quote')
+        version: Schema version - 'v1' (default) or 'v2'
 
     Returns:
         Schema definition as JSON string
@@ -49,8 +52,24 @@ def load_avro_schema(schema_name: str) -> str:
     Raises:
         FileNotFoundError: If schema file doesn't exist
         json.JSONDecodeError: If schema file is not valid JSON
+        ValueError: If version is not 'v1' or 'v2'
+
+    Examples:
+        >>> # Load v1 schema (legacy)
+        >>> schema_v1 = load_avro_schema('trade', version='v1')
+        >>> # Load v2 schema (industry-standard)
+        >>> schema_v2 = load_avro_schema('trade', version='v2')
     """
-    schema_path = SCHEMA_DIR / f"{schema_name}.avsc"
+    if version not in ("v1", "v2"):
+        raise ValueError(f"Invalid version: {version}. Must be 'v1' or 'v2'")
+
+    # Determine filename based on version
+    if version == "v2":
+        filename = f"{schema_name}_v2.avsc"
+    else:
+        filename = f"{schema_name}.avsc"
+
+    schema_path = SCHEMA_DIR / filename
 
     if not schema_path.exists():
         raise FileNotFoundError(
@@ -67,7 +86,7 @@ def load_avro_schema(schema_name: str) -> str:
         logger.error("Invalid JSON in schema file", schema=schema_name, error=str(e))
         raise
 
-    logger.debug("Schema loaded", schema=schema_name, path=str(schema_path))
+    logger.debug("Schema loaded", schema=schema_name, version=version, path=str(schema_path))
 
     return schema_str
 
@@ -82,7 +101,7 @@ def list_available_schemas() -> list[str]:
     return [f.stem for f in schema_files]
 
 
-def register_schemas(schema_registry_url: str = None) -> dict[str, int]:
+def register_schemas(schema_registry_url: str = None, version: str = "v2") -> dict[str, int]:
     """Register all Avro schemas with Schema Registry using asset-class-level subjects.
 
     This function:
@@ -101,12 +120,14 @@ def register_schemas(schema_registry_url: str = None) -> dict[str, int]:
 
     Args:
         schema_registry_url: Schema Registry base URL (defaults to config)
+        version: Schema version to register - 'v1' or 'v2' (default: 'v2')
 
     Returns:
         Dictionary mapping subject names to schema IDs
 
     Raises:
         SchemaRegistryError: If registration fails
+        ValueError: If version is not 'v1' or 'v2'
     """
     from k2.common.config import config
     from k2.kafka import get_topic_builder
@@ -114,8 +135,13 @@ def register_schemas(schema_registry_url: str = None) -> dict[str, int]:
     if schema_registry_url is None:
         schema_registry_url = config.kafka.schema_registry_url
 
+    if version not in ("v1", "v2"):
+        raise ValueError(f"Invalid version: {version}. Must be 'v1' or 'v2'")
+
     logger.info(
-        "Registering schemas with asset-class-level subjects", registry_url=schema_registry_url,
+        "Registering schemas with asset-class-level subjects",
+        registry_url=schema_registry_url,
+        version=version,
     )
 
     client = SchemaRegistryClient({"url": schema_registry_url})
@@ -132,8 +158,8 @@ def register_schemas(schema_registry_url: str = None) -> dict[str, int]:
             schema_name = data_type_cfg["schema_name"]
 
             try:
-                # Load schema
-                schema_str = load_avro_schema(schema_name)
+                # Load schema with specified version
+                schema_str = load_avro_schema(schema_name, version=version)
                 schema = Schema(schema_str, schema_type="AVRO")
 
                 # Build subject name using asset-class-level pattern
