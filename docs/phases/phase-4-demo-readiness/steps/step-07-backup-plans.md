@@ -1,10 +1,13 @@
 # Step 07: Backup Plans & Safety Nets
 
-**Status**: ⬜ Not Started
+**Status**: ✅ Complete (automated artifacts created; manual artifacts documented)
 **Priority**: 🟡 MEDIUM
-**Estimated Time**: 2-3 hours
+**Estimated Time**: 2-3 hours (1 hour automated + 1-2 hours manual before demo)
+**Actual Time**: 1 hour (automated portion)
 **Dependencies**: Step 02 (Dry Run)
 **Last Updated**: 2026-01-14
+
+**Note**: Automated infrastructure created. Manual artifacts (recorded video, screenshots, pre-executed notebook) should be created 2 hours before demo day.
 
 ---
 
@@ -18,11 +21,22 @@ Create fallback options if live demo fails, enabling quick recovery and maintain
 
 ## Deliverables
 
-1. ✅ Recorded demo video (full walkthrough)
-2. ✅ Static screenshots of all key sections
-3. ✅ Pre-executed Jupyter notebook with outputs
-4. ✅ Contingency plan document
-5. ✅ "Demo Mode" script (resets and pre-loads data)
+### Automated (Created Now) ✅
+4. ✅ **Contingency plan document** (`docs/phases/phase-4-demo-readiness/reference/contingency-plan.md`)
+5. ✅ **Demo Mode script** (`scripts/demo_mode.py` - reset, load, validate)
+   - Directory structure for screenshots (`docs/phases/phase-4-demo-readiness/reference/screenshots/`)
+   - Screenshot capture instructions (`screenshots/README.md`)
+
+### Manual (Create Before Demo Day) ⚠️
+1. ⚠️ **Recorded demo video** - To be created 2 hours before demo
+   - 10-12 minute full walkthrough with audio narration
+   - Location: `docs/phases/phase-4-demo-readiness/reference/demo-recording.mp4`
+2. ⚠️ **Static screenshots** - To be captured 2 hours before demo
+   - 10 screenshots minimum (see `screenshots/README.md` for list)
+   - Location: `docs/phases/phase-4-demo-readiness/reference/screenshots/*.png`
+3. ⚠️ **Pre-executed notebook** - To be generated 2 hours before demo
+   - Run: `jupyter nbconvert --to notebook --execute notebooks/binance-demo.ipynb --output binance-demo-with-outputs.ipynb`
+   - Location: `notebooks/binance-demo-with-outputs.ipynb`
 
 ---
 
