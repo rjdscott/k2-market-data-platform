@@ -682,10 +682,10 @@ async def query_trades_advanced(
                         continue
                     if request.max_price is not None and trade.get("price", 0) > request.max_price:
                         continue
-                    # Volume filter
+                    # Quantity filter (v2 schema)
                     if (
-                        request.min_volume is not None
-                        and trade.get("volume", 0) < request.min_volume
+                        request.min_quantity is not None
+                        and trade.get("quantity", 0) < request.min_quantity
                     ):
                         continue
                     all_trades.append(trade)

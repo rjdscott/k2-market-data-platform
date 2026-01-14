@@ -31,36 +31,45 @@ def mock_query_engine():
     """Create a mock QueryEngine for testing."""
     engine = MagicMock()
 
-    # Mock query_trades
+    # Mock query_trades (v2 schema)
     engine.query_trades.return_value = [
         {
-            "symbol": "BHP",
-            "company_id": "BHP.AX",
-            "exchange": "ASX",
-            "exchange_timestamp": datetime(2024, 1, 15, 10, 30, 0),
-            "price": 45.50,
-            "volume": 1000,
-            "qualifiers": "XT",
-            "venue": "ASX",
-            "buyer_id": "BROKER001",
+            "message_id": "test-msg-001",
+            "trade_id": "test-trade-001",
+            "symbol": "BTCUSDT",
+            "exchange": "BINANCE",
+            "asset_class": "crypto",
+            "timestamp": datetime(2024, 1, 15, 10, 30, 0),
+            "price": 45000.50,
+            "quantity": 0.1,
+            "currency": "USDT",
+            "side": "BUY",
+            "trade_conditions": None,
+            "source_sequence": 12345,
             "ingestion_timestamp": datetime(2024, 1, 15, 10, 30, 1),
-            "sequence_number": 12345,
+            "platform_sequence": None,
+            "vendor_data": None,
         },
     ]
 
-    # Mock query_quotes
+    # Mock query_quotes (v2 schema)
     engine.query_quotes.return_value = [
         {
-            "symbol": "BHP",
-            "company_id": "BHP.AX",
-            "exchange": "ASX",
-            "exchange_timestamp": datetime(2024, 1, 15, 10, 30, 0),
-            "bid_price": 45.48,
-            "bid_volume": 500,
-            "ask_price": 45.52,
-            "ask_volume": 750,
+            "message_id": "test-msg-quote-001",
+            "quote_id": "test-quote-001",
+            "symbol": "BTCUSDT",
+            "exchange": "BINANCE",
+            "asset_class": "crypto",
+            "timestamp": datetime(2024, 1, 15, 10, 30, 0),
+            "bid_price": 44999.00,
+            "bid_quantity": 0.5,
+            "ask_price": 45001.00,
+            "ask_quantity": 0.75,
+            "currency": "USDT",
+            "source_sequence": 12345,
             "ingestion_timestamp": datetime(2024, 1, 15, 10, 30, 1),
-            "sequence_number": 12345,
+            "platform_sequence": None,
+            "vendor_data": None,
         },
     ]
 
