@@ -48,7 +48,7 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Data Sources                             │
 │   CSV Batch (ASX equities)  │  WebSocket Stream (Binance crypto)│
-└──────────────┬──────────────┴──────────────┬───────────────────┘
+└──────────────┬──────────────┴──────────────┬────────────────────┘
                │ Batch ingestion              │ Live streaming
                ▼                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -81,7 +81,7 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
 │                      Query Layer                                │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │  DuckDB Engine                                             │ │
-│  │  • Connection pooling (5-50 concurrent queries)           │ │
+│  │  • Connection pooling (5-50 concurrent queries)            │ │
 │  │  • Vectorized execution                                    │ │
 │  │  • Direct Parquet/Iceberg scan (no staging)                │ │
 │  │  • Time-travel via Iceberg snapshots                       │ │
@@ -375,22 +375,33 @@ See [Scaling Strategy](./docs/architecture/system-design.md#scaling-consideratio
 
 ## Data
 
-ASX equities tick data from March 10-14, 2014.
+The platform supports both batch (historical) and streaming (live) data sources across multiple asset classes.
 
-| Symbol | Company | Trades | Notes |
-|--------|---------|--------|-------|
-| BHP | BHP Billiton | 91,630 | High liquidity |
-| RIO | Rio Tinto | 108,670 | High liquidity |
-| DVN | Devine Ltd | 231 | Low liquidity |
-| MWR | MGM Wireless | 10 | Sparse |
+### Live Crypto Data (Binance)
 
-**Location**: `data/sample/{trades,quotes,bars-1min,reference-data}/`
+Real-time streaming cryptocurrency trades from Binance WebSocket API.
+
+| Symbol | Asset Class | Trades Ingested | Data Quality | Performance |
+|--------|-------------|-----------------|--------------|-------------|
+| BTCUSDT | Crypto | 69,666+ | Live streaming | 138 msg/s |
+| ETHUSDT | Crypto | 69,666+ | Live streaming | 138 msg/s |
+| BNBUSDT | Crypto | 69,666+ | Live streaming | 138 msg/s |
+
+**Data Flow**: Binance WebSocket → Kafka → Iceberg → Query Engine
+**Schema**: V2 multi-source schema with Binance-specific fields in `vendor_data`
+**Storage**: Apache Iceberg `trades_v2` table with daily partitions
 
 ```bash
-# Explore data
-head data/sample/trades/7078_trades.csv   # BHP trades
-k2-query trades --symbol BHP --limit 5    # Via CLI (requires services running)
+# Query live crypto data
+k2-query trades --symbol ETHUSDT --exchange BINANCE --limit 10
+
+# Start live streaming (requires Docker services)
+docker compose up -d binance-stream
 ```
+
+### Historical Data (ASX Equities)
+
+Sample ASX equities tick data available in `data/sample/{trades,quotes,bars-1min,reference-data}/`
 
 See [Data Dictionary V2](./docs/reference/data-dictionary-v2.md) for complete schema definitions.
 
