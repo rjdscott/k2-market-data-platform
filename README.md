@@ -2,9 +2,9 @@
 
 A distributed market data lakehouse for quantitative research, compliance, and analytics.
 
-**Stack**: Kafka (KRaft) → Iceberg → DuckDB → FastAPI
-**Data**: ASX equities (200K+ trades, March 2014) + Binance crypto streaming (live BTC/ETH/BNB)
-**Python**: 3.13+ with uv package manager  
+**Stack**: Kafka (KRaft) → Iceberg → DuckDB → FastAPI<br>
+**Data**: ASX equities (200K+ trades, March 2014) + Binance crypto streaming (live BTC/ETH/BNB)<br>
+**Python**: 3.13+ with uv package manager
 
 ---
 
