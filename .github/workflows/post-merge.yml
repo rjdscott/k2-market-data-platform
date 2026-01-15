@@ -1,0 +1,253 @@
+name: Post-Merge Validation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Don't cancel - we want each merge validated
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.13"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Full test suite
+  full-test-suite:
+    name: Full Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Docker Compose services
+        run: |
+          docker compose up -d
+          echo "Waiting for services to be healthy..."
+          sleep 30
+
+      - name: Wait for services
+        run: |
+          # Kafka
+          timeout 90s bash -c 'until docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list &>/dev/null; do sleep 2; done'
+          echo "✅ Kafka is ready"
+
+          # MinIO
+          timeout 60s bash -c 'until curl -sf http://localhost:9000/minio/health/live &>/dev/null; do sleep 2; done'
+          echo "✅ MinIO is ready"
+
+          # PostgreSQL
+          timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
+          echo "✅ PostgreSQL is ready"
+
+      - name: Run unit tests (parallel)
+        run: |
+          uv run pytest tests/unit/ \
+            -v \
+            -n auto \
+            --maxfail=10 \
+            --tb=short \
+            --junitxml=unit-test-results.xml
+
+      - name: Run integration tests (all)
+        run: |
+          uv run pytest tests/integration/ \
+            -v \
+            --maxfail=10 \
+            --tb=short \
+            --junitxml=integration-test-results.xml
+
+      - name: Run performance tests
+        run: |
+          uv run pytest tests/performance/ \
+            -v \
+            -m "not slow" \
+            --maxfail=5 \
+            --tb=short \
+            --junitxml=performance-test-results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-merge-test-results
+          path: |
+            unit-test-results.xml
+            integration-test-results.xml
+            performance-test-results.xml
+          retention-days: 30
+
+      - name: Cleanup Docker services
+        if: always()
+        run: docker compose down -v
+
+  # Coverage report
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run tests with coverage
+        run: |
+          uv run pytest tests/ \
+            -v \
+            -m "not slow and not chaos and not soak and not operational" \
+            --cov=src/k2 \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-report=term
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          name: codecov-k2-platform
+          fail_ci_if_error: false
+
+      - name: Upload coverage HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 30
+
+  # Build and push Docker images to GHCR
+  build-and-push-images:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    needs: [full-test-suite]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [producer, consumer, query-engine]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.component }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.${{ matrix.component }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image digest
+        run: echo "Pushed image with digest: ${{ steps.meta.outputs.digest }}"
+
+  # Post-merge summary
+  post-merge-summary:
+    name: Post-Merge Summary
+    runs-on: ubuntu-latest
+    needs: [full-test-suite, coverage, build-and-push-images]
+    if: always()
+
+    steps:
+      - name: Check job statuses
+        run: |
+          echo "Full Test Suite: ${{ needs.full-test-suite.result }}"
+          echo "Coverage: ${{ needs.coverage.result }}"
+          echo "Docker Images: ${{ needs.build-and-push-images.result }}"
+
+          if [ "${{ needs.full-test-suite.result }}" != "success" ] || \
+             [ "${{ needs.coverage.result }}" != "success" ] || \
+             [ "${{ needs.build-and-push-images.result }}" != "success" ]; then
+            echo "❌ Post-Merge Validation FAILED"
+            exit 1
+          else
+            echo "✅ Post-Merge Validation PASSED"
+            echo "Docker images published to GHCR"
+          fi
+
+  # Email notification on failure
+  notify-on-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [full-test-suite, coverage, build-and-push-images]
+    if: failure()
+
+    steps:
+      - name: Send notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "❌ K2 Platform: Post-Merge Validation Failed"
+          to: ${{ secrets.MAIL_TO }}
+          from: K2 CI/CD
+          body: |
+            Post-merge validation failed for commit ${{ github.sha }}
+
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.event.head_commit.message }}
+            Author: ${{ github.event.head_commit.author.name }}
+
+            Full Test Suite: ${{ needs.full-test-suite.result }}
+            Coverage: ${{ needs.coverage.result }}
+            Docker Images: ${{ needs.build-and-push-images.result }}
+
+            View workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Please investigate and fix immediately.

@@ -1,0 +1,199 @@
+name: PR Full Check (Pre-Merge)
+
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+
+# Cancel previous runs on new push
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  # Gate: Only run if PR has 'ready-for-merge' label
+  check-label:
+    name: Check PR Label
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.check.outputs.labeled }}
+
+    steps:
+      - name: Check for ready-for-merge label
+        id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "labeled=true" >> $GITHUB_OUTPUT
+            echo "✅ Manual trigger - proceeding"
+          elif [[ "${{ contains(github.event.pull_request.labels.*.name, 'ready-for-merge') }}" == "true" ]]; then
+            echo "labeled=true" >> $GITHUB_OUTPUT
+            echo "✅ PR has 'ready-for-merge' label - proceeding"
+          else
+            echo "labeled=false" >> $GITHUB_OUTPUT
+            echo "⏭️  PR does not have 'ready-for-merge' label - skipping"
+          fi
+
+  # Reuse PR validation workflow first
+  run-pr-validation:
+    name: Run PR Validation
+    needs: check-label
+    if: needs.check-label.outputs.should-run == 'true'
+    uses: ./.github/workflows/pr-validation.yml
+
+  # Full integration tests with Docker Compose
+  integration-tests:
+    name: Integration Tests (Full)
+    needs: [check-label, run-pr-validation]
+    if: needs.check-label.outputs.should-run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Docker Compose services
+        run: |
+          docker compose up -d
+          echo "Waiting for services to be healthy..."
+          sleep 30
+          docker compose ps
+
+      - name: Wait for Kafka to be ready
+        run: |
+          timeout 90s bash -c 'until docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list &>/dev/null; do sleep 2; done'
+          echo "✅ Kafka is ready"
+
+      - name: Wait for MinIO to be ready
+        run: |
+          timeout 60s bash -c 'until curl -sf http://localhost:9000/minio/health/live &>/dev/null; do sleep 2; done'
+          echo "✅ MinIO is ready"
+
+      - name: Wait for PostgreSQL to be ready
+        run: |
+          timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
+          echo "✅ PostgreSQL is ready"
+
+      - name: Run integration tests (excluding slow)
+        run: |
+          uv run pytest tests/integration/ \
+            -v \
+            -m "not slow" \
+            --maxfail=10 \
+            --tb=short \
+            --junitxml=integration-test-results.xml
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: integration-test-results.xml
+          retention-days: 7
+
+      - name: Show Docker logs on failure
+        if: failure()
+        run: |
+          echo "=== Kafka logs ==="
+          docker compose logs kafka --tail=50
+          echo "=== MinIO logs ==="
+          docker compose logs minio --tail=50
+          echo "=== PostgreSQL logs ==="
+          docker compose logs postgres --tail=50
+
+      - name: Cleanup Docker services
+        if: always()
+        run: docker compose down -v
+
+  # Validate Docker image builds (no push)
+  docker-build-validation:
+    name: Docker Build Validation
+    needs: [check-label, run-pr-validation]
+    if: needs.check-label.outputs.should-run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [producer, consumer, query-engine]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (${{ matrix.component }})
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.${{ matrix.component }}
+          push: false
+          tags: k2-${{ matrix.component }}:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Inspect image
+        run: |
+          docker images k2-${{ matrix.component }}:test
+          echo "✅ Image built successfully: k2-${{ matrix.component }}:test"
+
+  # Summary job
+  pr-full-check-summary:
+    name: PR Full Check Summary
+    runs-on: ubuntu-latest
+    needs: [check-label, run-pr-validation, integration-tests, docker-build-validation]
+    if: always() && needs.check-label.outputs.should-run == 'true'
+
+    steps:
+      - name: Check job statuses
+        run: |
+          echo "PR Validation: ${{ needs.run-pr-validation.result }}"
+          echo "Integration Tests: ${{ needs.integration-tests.result }}"
+          echo "Docker Build: ${{ needs.docker-build-validation.result }}"
+
+          if [ "${{ needs.run-pr-validation.result }}" != "success" ] || \
+             [ "${{ needs.integration-tests.result }}" != "success" ] || \
+             [ "${{ needs.docker-build-validation.result }}" != "success" ]; then
+            echo "❌ PR Full Check FAILED"
+            exit 1
+          else
+            echo "✅ PR Full Check PASSED - Ready for merge!"
+          fi
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ needs.run-pr-validation.result }}' === 'success' &&
+                          '${{ needs.integration-tests.result }}' === 'success' &&
+                          '${{ needs.docker-build-validation.result }}' === 'success'
+                          ? '✅ PASSED' : '❌ FAILED';
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## PR Full Check ${status}\n\n` +
+                    `- PR Validation: ${{ needs.run-pr-validation.result }}\n` +
+                    `- Integration Tests: ${{ needs.integration-tests.result }}\n` +
+                    `- Docker Build: ${{ needs.docker-build-validation.result }}\n\n` +
+                    (status === '✅ PASSED' ? 'This PR is ready to merge!' : 'Please address failures before merging.')
+            })

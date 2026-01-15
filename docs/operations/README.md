@@ -1,6 +1,6 @@
 # Operations Documentation
 
-**Last Updated**: 2026-01-13
+**Last Updated**: 2026-01-15
 **Stability**: Medium - updated after incidents
 **Target Audience**: DevOps, SREs, On-Call Engineers
 
@@ -15,6 +15,7 @@ Operations documentation helps you:
 - **Monitor system health** via dashboards and alerts
 - **Optimize performance** using tuning guides
 - **Prevent future issues** through post-incident reviews
+- **Maintain CI/CD pipeline** with automated testing and deployment
 
 ---
 
@@ -24,8 +25,54 @@ Operations documentation helps you:
 operations/
 ├── runbooks/              # Incident response procedures
 ├── monitoring/            # Dashboards, alerts, SLOs
-└── performance/           # Performance tuning guides
+├── performance/           # Performance tuning guides
+└── ci-cd-pipeline.md      # CI/CD pipeline documentation
 ```
+
+---
+
+## CI/CD Pipeline
+
+### [ci-cd-quickstart.md](./ci-cd-quickstart.md) 🚀
+**Quick start for developers (5 min read)**
+
+Essential commands and workflow overview for developers:
+- `make test-pr` - Run before pushing
+- `make test-pr-full` - Run before requesting merge
+- PR review flow and labeling
+- Common failures and quick fixes
+- Test categories and markers
+- Troubleshooting tips
+
+**Perfect for**: Developers who need to know the basics quickly
+
+### [ci-cd-pipeline.md](./ci-cd-pipeline.md)
+**Comprehensive CI/CD documentation**
+
+Complete guide to the CI/CD pipeline:
+- Overview of multi-tier GitHub Actions pipeline
+- Workflow descriptions (PR validation, post-merge, nightly, etc.)
+- Configuration guide (secrets, permissions, GHCR setup)
+- Local testing with Makefile targets
+- Test isolation strategy and resource management
+- Monitoring and metrics tracking
+- Best practices for developers, reviewers, and operations
+
+**Perfect for**: Understanding the full pipeline architecture and configuration
+
+### [runbooks/ci-cd-troubleshooting.md](./runbooks/ci-cd-troubleshooting.md)
+**CI/CD troubleshooting runbook**
+
+Step-by-step troubleshooting for CI/CD issues:
+- 15+ common failure scenarios with diagnosis and resolution
+- PR validation failures (import errors, no tests collected, security scans)
+- Integration test failures (connection refused, timeouts, OOM)
+- Post-merge failures (coverage upload, Docker push, email notifications)
+- General workflow issues (flaky tests, disk space, slow execution)
+- Debugging techniques (enable debug logging, local testing with act)
+- Escalation procedures and prevention checklists
+
+**Perfect for**: Diagnosing and fixing CI/CD pipeline failures
 
 ---
 
