@@ -202,7 +202,7 @@ class BinanceConfig(BaseSettings):
     )
 
     health_check_timeout: int = Field(
-        default=60,
+        default=30,
         description="Max seconds without message before triggering reconnect (0 = disabled)",
     )
 

@@ -317,7 +317,7 @@ class TestBinanceWebSocketClient:
         assert client.reconnect_delay == 5
         assert client.max_reconnect_attempts == 10
         assert client.health_check_interval == 30
-        assert client.health_check_timeout == 60
+        assert client.health_check_timeout == 30
         assert client.circuit_breaker is not None  # Enabled by default
 
     def test_client_custom_config(self):

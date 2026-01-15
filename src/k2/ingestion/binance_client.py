@@ -194,7 +194,7 @@ class BinanceWebSocketClient:
         reconnect_delay: int = 5,
         max_reconnect_attempts: int = 10,
         health_check_interval: int = 30,
-        health_check_timeout: int = 60,
+        health_check_timeout: int = 30,
         enable_circuit_breaker: bool = True,
     ) -> None:
         """Initialize Binance WebSocket client.
