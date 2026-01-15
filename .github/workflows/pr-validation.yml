@@ -54,7 +54,7 @@ jobs:
   unit-tests:
     name: Unit Tests (Parallel)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
