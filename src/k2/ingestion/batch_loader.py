@@ -305,15 +305,17 @@ class BatchLoader:
         except ValueError as e:
             raise ValueError(f"Invalid timestamp format: {row['exchange_timestamp']}") from e
 
-        # Map side to enum (buy → BUY, sell → SELL)
+        # Normalize side to lowercase, then map to uppercase for v2
+        side_lower = row["side"].lower()
+
+        # Map side to uppercase enum for v2 (buy → BUY, sell → SELL)
         side_mapping = {
             "buy": "BUY",
             "sell": "SELL",
             "sell_short": "SELL_SHORT",
             "unknown": "UNKNOWN",
         }
-        side_lower = row["side"].lower()
-        side_enum = side_mapping.get(side_lower, "UNKNOWN")
+        side_upper = side_mapping.get(side_lower, "UNKNOWN")
 
         # Use v2 builder for v2 schema
         if self.schema_version == "v2":
@@ -344,7 +346,7 @@ class BatchLoader:
                 price=price,
                 quantity=quantity,
                 currency=self.currency,
-                side=side_lower,  # Use lowercase side for consistency
+                side=side_upper,  # Use uppercase side for v2 schema
                 trade_id=row["trade_id"],
                 message_id=str(uuid.uuid4()),
                 source_sequence=int(row["sequence_number"]),

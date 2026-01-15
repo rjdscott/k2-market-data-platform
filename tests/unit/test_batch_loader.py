@@ -395,8 +395,16 @@ RIO,2026-01-10T10:30:02.345678Z,120.25,500,buy,12347,TRD003"""
             loader._parse_trade_row(row)
 
     def test_side_normalization(self, loader):
-        """Test side field is normalized to lowercase."""
-        for side_input in ["BUY", "Buy", "buy", "SELL", "Sell", "sell"]:
+        """Test side field is normalized to uppercase for v2 schema."""
+        test_cases = [
+            ("BUY", "BUY"),
+            ("Buy", "BUY"),
+            ("buy", "BUY"),
+            ("SELL", "SELL"),
+            ("Sell", "SELL"),
+            ("sell", "SELL"),
+        ]
+        for side_input, expected_side in test_cases:
             row = {
                 "symbol": "BHP",
                 "exchange_timestamp": "2026-01-10T10:30:00.123456Z",
@@ -408,7 +416,7 @@ RIO,2026-01-10T10:30:02.345678Z,120.25,500,buy,12347,TRD003"""
             }
 
             parsed = loader._parse_trade_row(row)
-            assert parsed["side"] == side_input.lower()
+            assert parsed["side"] == expected_side
 
     def test_large_market_cap(self, mock_producer):
         """Test handling of large market cap values."""
