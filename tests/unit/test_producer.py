@@ -433,3 +433,145 @@ class TestMarketDataProducer:
         assert calls[1].kwargs["topic"] == "market.crypto.trades.binance"
         assert calls[0].kwargs["key"] == b"BHP"
         assert calls[1].kwargs["key"] == b"BTCUSDT"
+
+
+class TestBoundedCache:
+    """Test BoundedCache with LRU eviction."""
+
+    def test_cache_initialization(self):
+        """Test that cache initializes with correct parameters."""
+        from k2.ingestion.producer import BoundedCache
+
+        cache = BoundedCache(max_size=5, component_type="test")
+
+        assert cache.size() == 0
+        assert cache._max_size == 5
+        assert cache._component_type == "test"
+
+    def test_cache_get_miss(self):
+        """Test that cache returns None for missing keys."""
+        from k2.ingestion.producer import BoundedCache
+
+        cache = BoundedCache(max_size=10)
+
+        result = cache.get("nonexistent")
+        assert result is None
+
+    def test_cache_set_and_get(self):
+        """Test basic cache set and get operations."""
+        from k2.ingestion.producer import BoundedCache
+
+        cache = BoundedCache(max_size=10)
+
+        # Set values
+        cache.set("key1", "value1")
+        cache.set("key2", "value2")
+
+        # Get values
+        assert cache.get("key1") == "value1"
+        assert cache.get("key2") == "value2"
+        assert cache.size() == 2
+
+    def test_cache_lru_eviction(self):
+        """Test that LRU eviction works correctly when cache exceeds max size."""
+        from k2.ingestion.producer import BoundedCache
+
+        cache = BoundedCache(max_size=3)
+
+        # Fill cache to max capacity
+        cache.set("key1", "value1")
+        cache.set("key2", "value2")
+        cache.set("key3", "value3")
+
+        assert cache.size() == 3
+        assert "key1" in cache
+        assert "key2" in cache
+        assert "key3" in cache
+
+        # Add one more - should evict key1 (least recently used)
+        cache.set("key4", "value4")
+
+        assert cache.size() == 3
+        assert "key1" not in cache  # Evicted
+        assert "key2" in cache
+        assert "key3" in cache
+        assert "key4" in cache
+
+    def test_cache_lru_ordering_on_get(self):
+        """Test that getting a key marks it as recently used."""
+        from k2.ingestion.producer import BoundedCache
+
+        cache = BoundedCache(max_size=3)
+
+        # Fill cache
+        cache.set("key1", "value1")
+        cache.set("key2", "value2")
+        cache.set("key3", "value3")
+
+        # Access key1 (mark as recently used)
+        cache.get("key1")
+
+        # Add key4 - should evict key2 (now the LRU)
+        cache.set("key4", "value4")
+
+        assert "key1" in cache  # Not evicted (accessed recently)
+        assert "key2" not in cache  # Evicted (LRU)
+        assert "key3" in cache
+        assert "key4" in cache
+
+    def test_cache_update_existing_key(self):
+        """Test that updating existing key doesn't cause eviction."""
+        from k2.ingestion.producer import BoundedCache
+
+        cache = BoundedCache(max_size=2)
+
+        cache.set("key1", "value1")
+        cache.set("key2", "value2")
+
+        # Update key1
+        cache.set("key1", "value1_updated")
+
+        assert cache.size() == 2
+        assert cache.get("key1") == "value1_updated"
+        assert "key2" in cache
+
+    def test_cache_eviction_with_15_serializers(self):
+        """Test creating 15 serializers with max_size=10 evicts 5."""
+        from k2.ingestion.producer import BoundedCache
+
+        cache = BoundedCache(max_size=10)
+
+        # Create 15 entries
+        for i in range(15):
+            cache.set(f"schema_{i}", f"serializer_{i}")
+
+        # Should have exactly 10 entries (5 evicted)
+        assert cache.size() == 10
+
+        # First 5 should be evicted (0-4)
+        for i in range(5):
+            assert f"schema_{i}" not in cache
+
+        # Last 10 should remain (5-14)
+        for i in range(5, 15):
+            assert f"schema_{i}" in cache
+
+    def test_cache_contains_operator(self):
+        """Test __contains__ operator works correctly."""
+        from k2.ingestion.producer import BoundedCache
+
+        cache = BoundedCache(max_size=10)
+
+        cache.set("exists", "value")
+
+        assert "exists" in cache
+        assert "not_exists" not in cache
+
+    def test_cache_default_parameters(self):
+        """Test that cache uses correct default parameters."""
+        from k2.ingestion.producer import BoundedCache
+
+        cache = BoundedCache()
+
+        assert cache._max_size == 10
+        assert cache._component_type == "producer"

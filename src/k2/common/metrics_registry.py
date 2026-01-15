@@ -117,6 +117,18 @@ SERIALIZER_ERRORS_TOTAL = Counter(
     STANDARD_LABELS + ["component_type", "subject"],
 )
 
+SERIALIZER_CACHE_SIZE = Gauge(
+    "k2_serializer_cache_size",
+    "Current number of cached Avro serializers",
+    STANDARD_LABELS + ["component_type"],
+)
+
+SERIALIZER_CACHE_EVICTIONS_TOTAL = Counter(
+    "k2_serializer_cache_evictions_total",
+    "Total number of serializer cache evictions (LRU)",
+    STANDARD_LABELS + ["component_type"],
+)
+
 # Kafka Consumer
 KAFKA_MESSAGES_CONSUMED_TOTAL = Counter(
     "k2_kafka_messages_consumed_total",
@@ -459,6 +471,8 @@ _METRIC_REGISTRY: dict[str, object] = {
     "producer_initialized_total": PRODUCER_INITIALIZED_TOTAL,
     "producer_init_errors_total": PRODUCER_INIT_ERRORS_TOTAL,
     "serializer_errors_total": SERIALIZER_ERRORS_TOTAL,
+    "serializer_cache_size": SERIALIZER_CACHE_SIZE,
+    "serializer_cache_evictions_total": SERIALIZER_CACHE_EVICTIONS_TOTAL,
     "kafka_messages_consumed_total": KAFKA_MESSAGES_CONSUMED_TOTAL,
     "kafka_consumer_lag_seconds": KAFKA_CONSUMER_LAG_SECONDS,
     "kafka_consumer_lag_messages": KAFKA_CONSUMER_LAG_MESSAGES,

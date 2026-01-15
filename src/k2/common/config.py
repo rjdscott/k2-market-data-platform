@@ -51,6 +51,13 @@ class KafkaConfig(BaseSettings):
         description="Confluent Schema Registry URL for Avro schema management",
     )
 
+    serializer_cache_max_size: int = Field(
+        default=10,
+        description="Maximum number of Avro serializers to cache (LRU eviction)",
+        ge=1,
+        le=100,
+    )
+
     @field_validator("bootstrap_servers")
     @classmethod
     def validate_bootstrap_servers(cls, v: str) -> str:
