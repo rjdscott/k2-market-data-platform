@@ -32,6 +32,7 @@ import uuid
 from decimal import Decimal
 from typing import Any, Callable, Optional
 
+import certifi
 import structlog
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
@@ -364,11 +365,29 @@ class BinanceWebSocketClient:
             symbols=self.symbols,
         )
 
-        # DEMO ONLY: Disable SSL certificate verification
-        # For production, proper SSL certificates should be configured
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
+        # SSL certificate verification configuration
+        if config.binance.ssl_verify:
+            # Production: Enable SSL certificate verification
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            ssl_context.check_hostname = True
+            ssl_context.verify_mode = ssl.CERT_REQUIRED
+
+            # Optional: Load custom CA bundle for corporate proxies
+            if config.binance.custom_ca_bundle:
+                ssl_context.load_verify_locations(config.binance.custom_ca_bundle)
+                logger.info(
+                    "binance_custom_ca_loaded",
+                    ca_bundle=config.binance.custom_ca_bundle,
+                )
+        else:
+            # Development only: Disable SSL verification (NOT for production)
+            logger.warning(
+                "binance_ssl_disabled",
+                message="SSL verification disabled - NOT RECOMMENDED for production",
+            )
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
 
         async with websockets.connect(ws_url, ssl=ssl_context) as ws:
             self.ws = ws

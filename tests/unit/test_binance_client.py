@@ -433,3 +433,44 @@ class TestTimestampConversion:
         # Should use T (trade time), not E (event time)
         assert result["timestamp"] == 1673356800456000  # T * 1000
         assert result["timestamp"] != 1673356800000000  # Not E * 1000
+
+
+class TestSSLConfiguration:
+    """Test SSL certificate verification configuration."""
+
+    def test_ssl_enabled_by_default(self):
+        """Test that SSL verification is enabled by default."""
+        from k2.common.config import BinanceConfig
+
+        config = BinanceConfig()
+        assert config.ssl_verify is True
+
+    def test_ssl_can_be_disabled(self):
+        """Test that SSL verification can be disabled via config."""
+        from k2.common.config import BinanceConfig
+
+        config = BinanceConfig(ssl_verify=False)
+        assert config.ssl_verify is False
+
+    def test_custom_ca_bundle_optional(self):
+        """Test that custom CA bundle is optional."""
+        from k2.common.config import BinanceConfig
+
+        config = BinanceConfig()
+        assert config.custom_ca_bundle is None
+
+        # Can be set
+        config_with_ca = BinanceConfig(custom_ca_bundle="/path/to/ca-bundle.crt")
+        assert config_with_ca.custom_ca_bundle == "/path/to/ca-bundle.crt"
+
+    def test_client_uses_global_config(self):
+        """Test that BinanceWebSocketClient uses global config for SSL settings."""
+        from k2.common.config import config
+
+        # The client should use the global config object
+        # By default, SSL verification is enabled
+        assert config.binance.ssl_verify is True
+
+        # Client can be created without explicitly passing SSL config
+        client = BinanceWebSocketClient(symbols=["BTCUSDT"])
+        assert client is not None  # Client creation succeeds with default SSL config

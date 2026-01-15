@@ -26,7 +26,7 @@ Usage:
     # Invalid values will raise ValidationError
 """
 
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -197,6 +197,16 @@ class BinanceConfig(BaseSettings):
     health_check_timeout: int = Field(
         default=60,
         description="Max seconds without message before triggering reconnect (0 = disabled)",
+    )
+
+    ssl_verify: bool = Field(
+        default=True,
+        description="Enable SSL certificate verification (REQUIRED for production)",
+    )
+
+    custom_ca_bundle: Optional[str] = Field(
+        default=None,
+        description="Path to custom CA certificate bundle (for corporate proxies)",
     )
 
     @field_validator("websocket_url")
