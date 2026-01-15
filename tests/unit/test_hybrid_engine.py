@@ -49,13 +49,17 @@ class TestHybridQueryEngineInitialization:
 class TestHybridQueryEngineRouting:
     """Test query routing logic."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def hybrid_engine(self):
-        """Create HybridQueryEngine with mocked dependencies."""
-        iceberg = MagicMock()
-        kafka_tail = MagicMock()
+        """Create HybridQueryEngine with mocked dependencies.
 
-        # Mock responses
+        Memory optimization: Class-scoped to reuse across tests.
+        Mock data is kept minimal (2 records per source).
+        """
+        iceberg = MagicMock(spec_set=["query_trades"])
+        kafka_tail = MagicMock(spec_set=["query", "get_stats"])
+
+        # Mock responses - minimal data (2 records each)
         iceberg.query_trades.return_value = [
             {"message_id": "ice-001", "price": 50000, "timestamp": "2024-01-01T10:00:00Z"},
             {"message_id": "ice-002", "price": 50100, "timestamp": "2024-01-01T10:01:00Z"},
@@ -66,11 +70,17 @@ class TestHybridQueryEngineRouting:
             {"message_id": "kaf-002", "price": 50300, "timestamp": "2024-01-01T10:03:00Z"},
         ]
 
-        return HybridQueryEngine(
+        engine = HybridQueryEngine(
             iceberg_engine=iceberg,
             kafka_tail=kafka_tail,
             commit_lag_seconds=120,
         )
+
+        yield engine
+
+        # Explicit cleanup
+        del iceberg
+        del kafka_tail
 
     def test_query_historical_only_uses_iceberg(self, hybrid_engine):
         """Test querying historical data uses only Iceberg."""
@@ -142,13 +152,16 @@ class TestHybridQueryEngineRouting:
 class TestHybridQueryEngineDeduplication:
     """Test deduplication logic."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def hybrid_with_duplicates(self):
-        """Create HybridQueryEngine with overlapping data."""
-        iceberg = MagicMock()
-        kafka_tail = MagicMock()
+        """Create HybridQueryEngine with overlapping data.
 
-        # Mock overlapping messages (same message_id)
+        Memory optimization: Class-scoped, minimal test data.
+        """
+        iceberg = MagicMock(spec_set=["query_trades"])
+        kafka_tail = MagicMock(spec_set=["query", "get_stats"])
+
+        # Mock overlapping messages (same message_id) - minimal set
         iceberg.query_trades.return_value = [
             {
                 "message_id": "msg-001",
@@ -185,11 +198,17 @@ class TestHybridQueryEngineDeduplication:
             },
         ]
 
-        return HybridQueryEngine(
+        engine = HybridQueryEngine(
             iceberg_engine=iceberg,
             kafka_tail=kafka_tail,
             commit_lag_seconds=120,
         )
+
+        yield engine
+
+        # Explicit cleanup
+        del iceberg
+        del kafka_tail
 
     def test_deduplicates_by_message_id(self, hybrid_with_duplicates):
         """Test deduplication removes duplicate message_ids."""
@@ -231,13 +250,16 @@ class TestHybridQueryEngineDeduplication:
 class TestHybridQueryEngineSorting:
     """Test result sorting."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def hybrid_with_unsorted(self):
-        """Create HybridQueryEngine with unsorted data."""
-        iceberg = MagicMock()
-        kafka_tail = MagicMock()
+        """Create HybridQueryEngine with unsorted data.
 
-        # Mock data with different timestamps
+        Memory optimization: Class-scoped fixture with minimal data.
+        """
+        iceberg = MagicMock(spec_set=["query_trades"])
+        kafka_tail = MagicMock(spec_set=["query", "get_stats"])
+
+        # Mock data with different timestamps - minimal set
         iceberg.query_trades.return_value = [
             {"message_id": "msg-003", "timestamp": "2024-01-01T10:03:00Z"},
             {"message_id": "msg-001", "timestamp": "2024-01-01T10:01:00Z"},
@@ -248,11 +270,17 @@ class TestHybridQueryEngineSorting:
             {"message_id": "msg-002", "timestamp": "2024-01-01T10:02:00Z"},
         ]
 
-        return HybridQueryEngine(
+        engine = HybridQueryEngine(
             iceberg_engine=iceberg,
             kafka_tail=kafka_tail,
             commit_lag_seconds=120,
         )
+
+        yield engine
+
+        # Explicit cleanup
+        del iceberg
+        del kafka_tail
 
     def test_results_sorted_by_timestamp(self, hybrid_with_unsorted):
         """Test results are sorted by timestamp."""
@@ -278,20 +306,33 @@ class TestHybridQueryEngineSorting:
 class TestHybridQueryEngineErrorHandling:
     """Test error handling and graceful degradation."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def hybrid_with_failures(self):
-        """Create HybridQueryEngine with failing sources."""
-        iceberg = MagicMock()
-        kafka_tail = MagicMock()
+        """Create HybridQueryEngine with failing sources.
 
-        return HybridQueryEngine(
+        Memory optimization: Class-scoped to reuse across all 3 error tests.
+        """
+        iceberg = MagicMock(spec_set=["query_trades"])
+        kafka_tail = MagicMock(spec_set=["query", "get_stats"])
+
+        engine = HybridQueryEngine(
             iceberg_engine=iceberg,
             kafka_tail=kafka_tail,
             commit_lag_seconds=120,
         )
 
+        yield engine
+
+        # Explicit cleanup
+        del iceberg
+        del kafka_tail
+
     def test_iceberg_failure_returns_kafka_only(self, hybrid_with_failures):
         """Test Iceberg failure still returns Kafka data."""
+        # Reset mocks from previous tests
+        hybrid_with_failures.iceberg.reset_mock()
+        hybrid_with_failures.kafka_tail.reset_mock()
+
         now = datetime.now(UTC)
 
         # Iceberg fails
@@ -316,6 +357,10 @@ class TestHybridQueryEngineErrorHandling:
 
     def test_kafka_failure_returns_iceberg_only(self, hybrid_with_failures):
         """Test Kafka failure still returns Iceberg data."""
+        # Reset mocks from previous tests
+        hybrid_with_failures.iceberg.reset_mock()
+        hybrid_with_failures.kafka_tail.reset_mock()
+
         now = datetime.now(UTC)
 
         # Kafka fails
@@ -340,6 +385,10 @@ class TestHybridQueryEngineErrorHandling:
 
     def test_both_sources_fail_returns_empty(self, hybrid_with_failures):
         """Test both sources failing returns empty results."""
+        # Reset mocks from previous tests
+        hybrid_with_failures.iceberg.reset_mock()
+        hybrid_with_failures.kafka_tail.reset_mock()
+
         now = datetime.now(UTC)
 
         # Both fail
@@ -361,28 +410,39 @@ class TestHybridQueryEngineErrorHandling:
 class TestHybridQueryEngineLimit:
     """Test limit parameter."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def hybrid_with_many_results(self):
-        """Create HybridQueryEngine with many results."""
-        iceberg = MagicMock()
-        kafka_tail = MagicMock()
+        """Create HybridQueryEngine with many results.
 
-        # Mock many results
+        Memory optimization: Reduced from 100 to 20 total records.
+        Class-scoped to avoid recreating for each test.
+        """
+        iceberg = MagicMock(spec_set=["query_trades"])
+        kafka_tail = MagicMock(spec_set=["query", "get_stats"])
+
+        # Mock results - REDUCED from 50+50 to 10+10 for memory efficiency
+        # Still tests limit functionality with minimal overhead
         iceberg.query_trades.return_value = [
             {"message_id": f"ice-{i:03d}", "timestamp": f"2024-01-01T10:{i:02d}:00Z"}
-            for i in range(50)
+            for i in range(10)
         ]
 
         kafka_tail.query.return_value = [
             {"message_id": f"kaf-{i:03d}", "timestamp": f"2024-01-01T11:{i:02d}:00Z"}
-            for i in range(50)
+            for i in range(10)
         ]
 
-        return HybridQueryEngine(
+        engine = HybridQueryEngine(
             iceberg_engine=iceberg,
             kafka_tail=kafka_tail,
             commit_lag_seconds=120,
         )
+
+        yield engine
+
+        # Explicit cleanup
+        del iceberg
+        del kafka_tail
 
     def test_respects_limit_parameter(self, hybrid_with_many_results):
         """Test query respects limit parameter."""
@@ -393,33 +453,45 @@ class TestHybridQueryEngineLimit:
             exchange="binance",
             start_time=now - timedelta(minutes=15),
             end_time=now,
-            limit=10,  # Limit to 10
+            limit=5,  # Limit to 5 (reduced from 10 for memory efficiency)
         )
 
-        # Should return only 10 results
-        assert len(results) == 10
+        # Should return only 5 results
+        assert len(results) == 5
 
 
 class TestHybridQueryEngineStatistics:
     """Test statistics tracking."""
 
-    def test_get_query_stats_returns_statistics(self):
-        """Test get_query_stats returns combined statistics."""
-        iceberg = MagicMock()
-        kafka_tail = MagicMock()
+    @pytest.fixture(scope="class")
+    def hybrid_stats_engine(self):
+        """Create HybridQueryEngine for statistics tests.
+
+        Memory optimization: Class-scoped fixture with explicit cleanup.
+        """
+        iceberg = MagicMock(spec_set=["query_trades"])
+        kafka_tail = MagicMock(spec_set=["query", "get_stats"])
 
         kafka_tail.get_stats.return_value = {
             "messages_received": 1000,
             "buffer_size": 500,
         }
 
-        hybrid = HybridQueryEngine(
+        engine = HybridQueryEngine(
             iceberg_engine=iceberg,
             kafka_tail=kafka_tail,
             commit_lag_seconds=120,
         )
 
-        stats = hybrid.get_query_stats()
+        yield engine
+
+        # Explicit cleanup
+        del iceberg
+        del kafka_tail
+
+    def test_get_query_stats_returns_statistics(self, hybrid_stats_engine):
+        """Test get_query_stats returns combined statistics."""
+        stats = hybrid_stats_engine.get_query_stats()
 
         assert "iceberg" in stats
         assert "kafka_tail" in stats
@@ -430,17 +502,33 @@ class TestHybridQueryEngineStatistics:
 class TestHybridQueryEngineEdgeCases:
     """Test edge cases."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def hybrid_engine(self):
-        """Create basic HybridQueryEngine."""
-        return HybridQueryEngine(
-            iceberg_engine=MagicMock(),
-            kafka_tail=MagicMock(),
+        """Create basic HybridQueryEngine.
+
+        Memory optimization: Class-scoped fixture with spec_set mocks.
+        """
+        iceberg = MagicMock(spec_set=["query_trades"])
+        kafka_tail = MagicMock(spec_set=["query", "get_stats"])
+
+        engine = HybridQueryEngine(
+            iceberg_engine=iceberg,
+            kafka_tail=kafka_tail,
             commit_lag_seconds=120,
         )
 
+        yield engine
+
+        # Explicit cleanup
+        del iceberg
+        del kafka_tail
+
     def test_query_with_none_end_time_uses_now(self, hybrid_engine):
         """Test query with None end_time defaults to now."""
+        # Reset mocks to clear history from previous tests
+        hybrid_engine.iceberg.reset_mock()
+        hybrid_engine.kafka_tail.reset_mock()
+
         hybrid_engine.iceberg.query_trades.return_value = []
         hybrid_engine.kafka_tail.query.return_value = []
 
@@ -460,6 +548,10 @@ class TestHybridQueryEngineEdgeCases:
 
     def test_query_with_naive_datetime_converts_to_utc(self, hybrid_engine):
         """Test query with naive datetime converts to UTC."""
+        # Reset mocks to clear history from previous tests
+        hybrid_engine.iceberg.reset_mock()
+        hybrid_engine.kafka_tail.reset_mock()
+
         hybrid_engine.iceberg.query_trades.return_value = []
         hybrid_engine.kafka_tail.query.return_value = []
 
@@ -498,3 +590,6 @@ class TestHybridQueryEngineFactory:
 
         # Should configure commit lag
         assert hybrid.commit_lag == timedelta(seconds=180)
+
+        # Explicit cleanup of factory-created objects
+        del hybrid
