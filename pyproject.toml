@@ -352,5 +352,6 @@ directory = "htmlcov"
 # Use managed Python from .python-version
 python-preference = "managed"
 
-# Default dev dependencies for 'uv sync' without --all-extras
-dev-dependencies = ["k2-platform[all]"]
+[dependency-groups]
+# Default dev dependencies for 'uv sync'
+dev = ["k2-platform[all]"]
