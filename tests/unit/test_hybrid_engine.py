@@ -84,6 +84,10 @@ class TestHybridQueryEngineRouting:
 
     def test_query_historical_only_uses_iceberg(self, hybrid_engine):
         """Test querying historical data uses only Iceberg."""
+        # Reset mocks from previous tests
+        hybrid_engine.iceberg.reset_mock()
+        hybrid_engine.kafka_tail.reset_mock()
+
         now = datetime.now(UTC)
         # Query 1 hour ago (all data committed)
         start = now - timedelta(hours=1, minutes=10)
@@ -106,6 +110,10 @@ class TestHybridQueryEngineRouting:
 
     def test_query_recent_only_uses_kafka(self, hybrid_engine):
         """Test querying very recent data uses only Kafka."""
+        # Reset mocks from previous tests
+        hybrid_engine.iceberg.reset_mock()
+        hybrid_engine.kafka_tail.reset_mock()
+
         now = datetime.now(UTC)
         # Query last 1 minute (not yet committed to Iceberg)
         start = now - timedelta(minutes=1)
@@ -128,6 +136,10 @@ class TestHybridQueryEngineRouting:
 
     def test_query_spanning_both_sources(self, hybrid_engine):
         """Test querying data spanning both Kafka and Iceberg."""
+        # Reset mocks from previous tests
+        hybrid_engine.iceberg.reset_mock()
+        hybrid_engine.kafka_tail.reset_mock()
+
         now = datetime.now(UTC)
         # Query last 15 minutes (commit lag is 2 minutes)
         start = now - timedelta(minutes=15)
@@ -332,6 +344,9 @@ class TestHybridQueryEngineErrorHandling:
         # Reset mocks from previous tests
         hybrid_with_failures.iceberg.reset_mock()
         hybrid_with_failures.kafka_tail.reset_mock()
+        # Clear side effects from previous tests
+        hybrid_with_failures.iceberg.query_trades.side_effect = None
+        hybrid_with_failures.kafka_tail.query.side_effect = None
 
         now = datetime.now(UTC)
 
@@ -360,6 +375,9 @@ class TestHybridQueryEngineErrorHandling:
         # Reset mocks from previous tests
         hybrid_with_failures.iceberg.reset_mock()
         hybrid_with_failures.kafka_tail.reset_mock()
+        # Clear side effects from previous tests
+        hybrid_with_failures.iceberg.query_trades.side_effect = None
+        hybrid_with_failures.kafka_tail.query.side_effect = None
 
         now = datetime.now(UTC)
 
@@ -388,6 +406,9 @@ class TestHybridQueryEngineErrorHandling:
         # Reset mocks from previous tests
         hybrid_with_failures.iceberg.reset_mock()
         hybrid_with_failures.kafka_tail.reset_mock()
+        # Clear side effects from previous tests
+        hybrid_with_failures.iceberg.query_trades.side_effect = None
+        hybrid_with_failures.kafka_tail.query.side_effect = None
 
         now = datetime.now(UTC)
 
