@@ -33,14 +33,14 @@ import time
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 
 def _validate_decimal_precision(
     value: Decimal,
     max_digits: int = 18,
     max_scale: int = 8,
-    field_name: str = "value"
+    field_name: str = "value",
 ) -> None:
     """Validate Decimal fits within (max_digits, max_scale) precision.
 
@@ -72,7 +72,7 @@ def _validate_decimal_precision(
     if total_digits > max_digits:
         raise ValueError(
             f"{field_name} exceeds maximum precision: {total_digits} digits > {max_digits} max. "
-            f"Value: {value}"
+            f"Value: {value}",
         )
 
     # Check decimal places
@@ -80,7 +80,7 @@ def _validate_decimal_precision(
     if scale > max_scale:
         raise ValueError(
             f"{field_name} exceeds maximum scale: {scale} decimal places > {max_scale} max. "
-            f"Value: {value}"
+            f"Value: {value}",
         )
 
 
@@ -93,12 +93,12 @@ def build_trade_v2(
     quantity: Decimal | float | str,
     currency: str = "USD",
     side: str = "UNKNOWN",
-    trade_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    trade_conditions: Optional[list[str]] = None,
-    source_sequence: Optional[int] = None,
-    platform_sequence: Optional[int] = None,
-    vendor_data: Optional[dict[str, str]] = None,
+    trade_id: str | None = None,
+    message_id: str | None = None,
+    trade_conditions: list[str] | None = None,
+    source_sequence: int | None = None,
+    platform_sequence: int | None = None,
+    vendor_data: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build a v2 Trade message conforming to TradeV2 Avro schema.
 
@@ -158,7 +158,7 @@ def build_trade_v2(
     valid_asset_classes = {"equities", "crypto", "futures", "options"}
     if asset_class not in valid_asset_classes:
         raise ValueError(
-            f"Invalid asset_class: {asset_class}. Must be one of {valid_asset_classes}"
+            f"Invalid asset_class: {asset_class}. Must be one of {valid_asset_classes}",
         )
 
     valid_sides = {"BUY", "SELL", "SELL_SHORT", "UNKNOWN"}
@@ -222,11 +222,11 @@ def build_quote_v2(
     ask_price: Decimal | float | str,
     ask_quantity: Decimal | float | str,
     currency: str = "USD",
-    quote_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    source_sequence: Optional[int] = None,
-    platform_sequence: Optional[int] = None,
-    vendor_data: Optional[dict[str, str]] = None,
+    quote_id: str | None = None,
+    message_id: str | None = None,
+    source_sequence: int | None = None,
+    platform_sequence: int | None = None,
+    vendor_data: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build a v2 Quote message conforming to QuoteV2 Avro schema.
 
@@ -273,7 +273,7 @@ def build_quote_v2(
     valid_asset_classes = {"equities", "crypto", "futures", "options"}
     if asset_class not in valid_asset_classes:
         raise ValueError(
-            f"Invalid asset_class: {asset_class}. Must be one of {valid_asset_classes}"
+            f"Invalid asset_class: {asset_class}. Must be one of {valid_asset_classes}",
         )
 
     # Convert timestamp to microseconds

@@ -15,12 +15,11 @@ Usage:
 
 import logging
 import time
-from decimal import Decimal
 from datetime import datetime
+from decimal import Decimal
 
 import pytest
-from confluent_kafka import Producer, Consumer, KafkaError
-from confluent_kafka.admin import AdminClient
+from confluent_kafka import Consumer
 
 from k2.ingestion.producer import MarketDataProducer
 
@@ -49,8 +48,8 @@ def producer_v2():
         schema_version="v2",
         config_overrides={
             "queue.buffering.max.messages": 10000,  # Limit buffer
-            "queue.buffering.max.kbytes": 10240,    # 10MB max
-        }
+            "queue.buffering.max.kbytes": 10240,  # 10MB max
+        },
     )
     yield producer
     producer.flush(timeout=10)
@@ -168,11 +167,13 @@ class TestKafkaBrokerFailure:
         chaos_kafka_failure,
     ):
         """Consumer should handle Kafka pause gracefully."""
-        consumer = Consumer({
-            "bootstrap.servers": KAFKA_BOOTSTRAP,
-            "group.id": f"chaos-test-{int(time.time())}",
-            "auto.offset.reset": "latest",
-        })
+        consumer = Consumer(
+            {
+                "bootstrap.servers": KAFKA_BOOTSTRAP,
+                "group.id": f"chaos-test-{int(time.time())}",
+                "auto.offset.reset": "latest",
+            }
+        )
 
         consumer.subscribe(["market.trades.crypto.binance"])
 
@@ -378,7 +379,7 @@ class TestKafkaLatency:
             assert remaining == 0, "All messages should be delivered despite latency"
 
             logger.info(
-                f"Latency test completed",
+                "Latency test completed",
                 messages=message_count,
                 elapsed=elapsed,
                 latency_impact=f"{elapsed / message_count:.3f}s per message",

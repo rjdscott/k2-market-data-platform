@@ -23,6 +23,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
 class TestMetricsLabelValidation:
     """Framework for validating metrics labels are sensible.
 
@@ -55,7 +56,7 @@ class TestMetricsLabelValidation:
                 pytest.fail(
                     f"Metric {metric_name} called with prohibited label '{prohibited_label}'\n"
                     f"This was fixed in TD-000 and should not regress.\n"
-                    f"Actual labels: {actual_label_keys}"
+                    f"Actual labels: {actual_label_keys}",
                 )
 
     def _validate_has_reasonable_labels(self, metric_name: str, actual_labels: dict):
@@ -80,7 +81,9 @@ class TestProducerMetricsLabels(TestMetricsLabelValidation):
     @patch("k2.ingestion.producer.AvroSerializer")
     @patch("k2.ingestion.producer.SchemaRegistryClient")
     @patch("k2.ingestion.producer.Producer")
-    def test_produce_total_labels(self, mock_producer_class, mock_sr_client, mock_avro_serializer, mock_metrics):
+    def test_produce_total_labels(
+        self, mock_producer_class, mock_sr_client, mock_avro_serializer, mock_metrics
+    ):
         """Test kafka_produce_total has correct labels."""
         from k2.ingestion.producer import MarketDataProducer
 
@@ -171,7 +174,7 @@ class TestProducerMetricsLabels(TestMetricsLabelValidation):
             def side_effect_produce(topic, **kwargs):
                 callback = kwargs.get("on_delivery")
                 # Simulate error
-                from confluent_kafka import KafkaError, KafkaException
+                from confluent_kafka import KafkaError
 
                 mock_err = MagicMock(spec=KafkaError)
                 mock_err.code.return_value = KafkaError._MSG_TIMED_OUT
@@ -188,7 +191,9 @@ class TestProducerMetricsLabels(TestMetricsLabelValidation):
 
         # Verify kafka_produce_errors_total called
         increment_calls = [call for call in mock_metrics.increment.call_args_list]
-        error_calls = [call for call in increment_calls if call[0][0] == "kafka_produce_errors_total"]
+        error_calls = [
+            call for call in increment_calls if call[0][0] == "kafka_produce_errors_total"
+        ]
 
         if len(error_calls) > 0:
             # Validate labels (should NOT include 'data_type' - TD-000 fix)
@@ -202,7 +207,9 @@ class TestProducerMetricsLabels(TestMetricsLabelValidation):
     @patch("k2.ingestion.producer.AvroSerializer")
     @patch("k2.ingestion.producer.SchemaRegistryClient")
     @patch("k2.ingestion.producer.Producer")
-    def test_producer_batch_size_labels(self, mock_producer_class, mock_sr_client, mock_avro_serializer, mock_metrics):
+    def test_producer_batch_size_labels(
+        self, mock_producer_class, mock_sr_client, mock_avro_serializer, mock_metrics
+    ):
         """Test kafka_producer_batch_size histogram has correct labels."""
         from k2.ingestion.producer import MarketDataProducer
 
@@ -272,7 +279,15 @@ class TestConsumerMetricsLabels(TestMetricsLabelValidation):
     @patch("k2.ingestion.consumer.AvroDeserializer")
     @patch("k2.ingestion.consumer.SchemaRegistryClient")
     @patch("k2.ingestion.consumer.Consumer")
-    def test_consume_total_labels(self, mock_consumer_class, mock_sr_client, mock_avro_deserializer, mock_dlq_class, mock_writer_class, mock_metrics):
+    def test_consume_total_labels(
+        self,
+        mock_consumer_class,
+        mock_sr_client,
+        mock_avro_deserializer,
+        mock_dlq_class,
+        mock_writer_class,
+        mock_metrics,
+    ):
         """Test kafka_consume_total has correct labels."""
         from k2.ingestion.consumer import MarketDataConsumer
 
@@ -314,8 +329,7 @@ class TestConsumerMetricsLabels(TestMetricsLabelValidation):
 
         # Check if consumer_initialized_total or similar metrics were called
         init_calls = [
-            call for call in increment_calls
-            if "consumer" in call[0][0] and "init" in call[0][0]
+            call for call in increment_calls if "consumer" in call[0][0] and "init" in call[0][0]
         ]
 
         # Consumer metrics are called during actual message processing
@@ -368,7 +382,7 @@ class TestWriterMetricsLabels(TestMetricsLabelValidation):
                 "currency": "USDT",
                 "side": "buy",
                 "ingestion_timestamp": datetime.utcnow(),
-            }
+            },
         ]
 
         # Write trades
@@ -426,7 +440,7 @@ class TestWriterMetricsLabels(TestMetricsLabelValidation):
                 "currency": "USDT",
                 "side": "buy",
                 "ingestion_timestamp": datetime.utcnow(),
-            }
+            },
         ]
 
         # Write trades
@@ -497,9 +511,7 @@ class TestWriterMetricsLabels(TestMetricsLabelValidation):
         histogram_calls = [call for call in mock_metrics.histogram.call_args_list]
 
         # Validate iceberg_batch_size labels
-        batch_size_calls = [
-            call for call in histogram_calls if call[0][0] == "iceberg_batch_size"
-        ]
+        batch_size_calls = [call for call in histogram_calls if call[0][0] == "iceberg_batch_size"]
 
         if len(batch_size_calls) > 0:
             for call in batch_size_calls:

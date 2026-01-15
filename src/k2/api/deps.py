@@ -74,6 +74,7 @@ def get_hybrid_engine() -> HybridQueryEngine:
     if _hybrid_engine is None:
         logger.info("Initializing HybridQueryEngine")
         from k2.query.hybrid_engine import create_hybrid_engine
+
         _hybrid_engine = create_hybrid_engine()
     return _hybrid_engine
 

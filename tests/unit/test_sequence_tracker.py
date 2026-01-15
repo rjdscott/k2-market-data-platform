@@ -9,15 +9,16 @@ These components are CRITICAL for data integrity - they detect:
 Without proper testing, silent data loss can occur in production.
 """
 
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import patch
+
+import pytest
 
 from k2.ingestion.sequence_tracker import (
-    SequenceTracker,
+    DeduplicationCache,
     SequenceEvent,
     SequenceState,
-    DeduplicationCache,
+    SequenceTracker,
 )
 
 
@@ -145,7 +146,7 @@ class TestSequenceTracker:
     def test_session_reset_detection(self):
         """Test session reset: large sequence drop + time jump"""
         tracker = SequenceTracker(
-            reset_detection_window=timedelta(hours=1)
+            reset_detection_window=timedelta(hours=1),
         )
 
         # Build up large sequence
@@ -167,7 +168,7 @@ class TestSequenceTracker:
     def test_session_reset_requires_time_jump(self):
         """Test that session reset requires BOTH sequence drop AND time jump"""
         tracker = SequenceTracker(
-            reset_detection_window=timedelta(hours=1)
+            reset_detection_window=timedelta(hours=1),
         )
 
         timestamp = datetime(2024, 1, 1, 10, 0, 0)
@@ -287,7 +288,7 @@ class TestSequenceTracker:
         tracker = SequenceTracker()
         timestamp1 = datetime(2024, 1, 1, 10, 0, 0)
 
-        with patch('k2.ingestion.sequence_tracker.metrics') as mock_metrics:
+        with patch("k2.ingestion.sequence_tracker.metrics") as mock_metrics:
             # Create gap
             tracker.check_sequence("ASX", "BHP", 1, timestamp1)
             tracker.check_sequence("ASX", "BHP", 5, timestamp1)  # Gap
@@ -361,7 +362,7 @@ class TestDeduplicationCache:
         # Mock current time
         fake_now = datetime(2024, 1, 1, 10, 0, 0)
 
-        with patch('k2.ingestion.sequence_tracker.datetime') as mock_datetime:
+        with patch("k2.ingestion.sequence_tracker.datetime") as mock_datetime:
             # Set initial time
             mock_datetime.utcnow.return_value = fake_now
 
@@ -389,7 +390,7 @@ class TestDeduplicationCache:
 
         fake_now = datetime(2024, 1, 1, 10, 0, 0)
 
-        with patch('k2.ingestion.sequence_tracker.datetime') as mock_datetime:
+        with patch("k2.ingestion.sequence_tracker.datetime") as mock_datetime:
             mock_datetime.utcnow.return_value = fake_now
 
             # Add message
@@ -409,7 +410,7 @@ class TestDeduplicationCache:
         """Test that duplicate detection increments metrics"""
         dedup = DeduplicationCache(window_hours=24)
 
-        with patch('k2.ingestion.sequence_tracker.metrics') as mock_metrics:
+        with patch("k2.ingestion.sequence_tracker.metrics") as mock_metrics:
             # First message (not duplicate)
             dedup.is_duplicate("msg_001")
             assert mock_metrics.increment.call_count == 0

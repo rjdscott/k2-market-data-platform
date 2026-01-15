@@ -7,7 +7,7 @@ This test suite verifies:
 4. Transaction duration tracking
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -58,14 +58,14 @@ def sample_trades_v2():
             "symbol": "BTCUSDT",
             "exchange": "binance",
             "asset_class": "crypto",
-            "timestamp": datetime(2024, 1, 10, 10, 0, 0, tzinfo=timezone.utc),
+            "timestamp": datetime(2024, 1, 10, 10, 0, 0, tzinfo=UTC),
             "price": Decimal("50000.12345678"),
             "quantity": Decimal("1.5"),
             "currency": "USDT",
             "side": "buy",
             "trade_conditions": [],
             "source_sequence": 123,
-            "ingestion_timestamp": datetime(2024, 1, 10, 10, 0, 1, tzinfo=timezone.utc),
+            "ingestion_timestamp": datetime(2024, 1, 10, 10, 0, 1, tzinfo=UTC),
             "platform_sequence": 456,
             "vendor_data": {"venue": "SPOT"},
             "is_sample_data": False,
@@ -76,14 +76,14 @@ def sample_trades_v2():
             "symbol": "ETHUSDT",
             "exchange": "binance",
             "asset_class": "crypto",
-            "timestamp": datetime(2024, 1, 10, 10, 0, 1, tzinfo=timezone.utc),
+            "timestamp": datetime(2024, 1, 10, 10, 0, 1, tzinfo=UTC),
             "price": Decimal("3000.12345678"),
             "quantity": Decimal("2.0"),
             "currency": "USDT",
             "side": "sell",
             "trade_conditions": [],
             "source_sequence": 124,
-            "ingestion_timestamp": datetime(2024, 1, 10, 10, 0, 2, tzinfo=timezone.utc),
+            "ingestion_timestamp": datetime(2024, 1, 10, 10, 0, 2, tzinfo=UTC),
             "platform_sequence": 457,
             "vendor_data": {"venue": "SPOT"},
             "is_sample_data": False,
@@ -98,7 +98,12 @@ class TestTransactionLogging:
     @patch("k2.storage.writer.metrics")
     @patch("k2.storage.writer.logger")
     def test_snapshot_ids_captured_before_and_after(
-        self, mock_logger, mock_metrics, mock_load_catalog, mock_catalog, sample_trades_v2
+        self,
+        mock_logger,
+        mock_metrics,
+        mock_load_catalog,
+        mock_catalog,
+        sample_trades_v2,
     ):
         """Test that snapshot IDs are captured before and after write."""
         catalog, table, snapshot_before, snapshot_after = mock_catalog
@@ -122,7 +127,12 @@ class TestTransactionLogging:
     @patch("k2.storage.writer.metrics")
     @patch("k2.storage.writer.logger")
     def test_transaction_success_metrics_recorded(
-        self, mock_logger, mock_metrics, mock_load_catalog, mock_catalog, sample_trades_v2
+        self,
+        mock_logger,
+        mock_metrics,
+        mock_load_catalog,
+        mock_catalog,
+        sample_trades_v2,
     ):
         """Test that successful transactions are tracked in metrics."""
         catalog, table, _, _ = mock_catalog
@@ -145,7 +155,12 @@ class TestTransactionLogging:
     @patch("k2.storage.writer.metrics")
     @patch("k2.storage.writer.logger")
     def test_transaction_row_count_histogram_recorded(
-        self, mock_logger, mock_metrics, mock_load_catalog, mock_catalog, sample_trades_v2
+        self,
+        mock_logger,
+        mock_metrics,
+        mock_load_catalog,
+        mock_catalog,
+        sample_trades_v2,
     ):
         """Test that transaction row counts are tracked in histogram."""
         catalog, table, _, _ = mock_catalog
@@ -168,7 +183,12 @@ class TestTransactionLogging:
     @patch("k2.storage.writer.metrics")
     @patch("k2.storage.writer.logger")
     def test_transaction_duration_tracked(
-        self, mock_logger, mock_metrics, mock_load_catalog, mock_catalog, sample_trades_v2
+        self,
+        mock_logger,
+        mock_metrics,
+        mock_load_catalog,
+        mock_catalog,
+        sample_trades_v2,
     ):
         """Test that transaction duration is calculated and logged."""
         catalog, table, _, _ = mock_catalog
@@ -187,7 +207,10 @@ class TestTransactionLogging:
     @patch("k2.storage.writer.metrics")
     @patch("k2.storage.writer.logger")
     def test_failed_transaction_logging_with_snapshot_context(
-        self, mock_logger, mock_metrics, mock_load_catalog
+        self,
+        mock_logger,
+        mock_metrics,
+        mock_load_catalog,
     ):
         """Test that failed transactions log snapshot context."""
         catalog = MagicMock()
@@ -213,18 +236,18 @@ class TestTransactionLogging:
                 "symbol": "FAILCOIN",
                 "exchange": "test",
                 "asset_class": "crypto",
-                "timestamp": datetime(2024, 1, 10, 10, 0, 0, tzinfo=timezone.utc),
+                "timestamp": datetime(2024, 1, 10, 10, 0, 0, tzinfo=UTC),
                 "price": Decimal("100.0"),
                 "quantity": Decimal("1.0"),
                 "currency": "USD",
                 "side": "buy",
                 "trade_conditions": [],
                 "source_sequence": 1,
-                "ingestion_timestamp": datetime(2024, 1, 10, 10, 0, 1, tzinfo=timezone.utc),
+                "ingestion_timestamp": datetime(2024, 1, 10, 10, 0, 1, tzinfo=UTC),
                 "platform_sequence": 1,
                 "vendor_data": None,
                 "is_sample_data": False,
-            }
+            },
         ]
 
         with pytest.raises(Exception, match="Simulated write failure"):
@@ -242,7 +265,10 @@ class TestTransactionLogging:
     @patch("k2.storage.writer.metrics")
     @patch("k2.storage.writer.logger")
     def test_failed_transaction_metrics_recorded(
-        self, mock_logger, mock_metrics, mock_load_catalog
+        self,
+        mock_logger,
+        mock_metrics,
+        mock_load_catalog,
     ):
         """Test that failed transactions increment failure counter."""
         catalog = MagicMock()
@@ -267,18 +293,18 @@ class TestTransactionLogging:
                 "symbol": "FAILCOIN2",
                 "exchange": "test",
                 "asset_class": "crypto",
-                "timestamp": datetime(2024, 1, 10, 10, 0, 0, tzinfo=timezone.utc),
+                "timestamp": datetime(2024, 1, 10, 10, 0, 0, tzinfo=UTC),
                 "price": Decimal("100.0"),
                 "quantity": Decimal("1.0"),
                 "currency": "USD",
                 "side": "buy",
                 "trade_conditions": [],
                 "source_sequence": 1,
-                "ingestion_timestamp": datetime(2024, 1, 10, 10, 0, 1, tzinfo=timezone.utc),
+                "ingestion_timestamp": datetime(2024, 1, 10, 10, 0, 1, tzinfo=UTC),
                 "platform_sequence": 1,
                 "vendor_data": None,
                 "is_sample_data": False,
-            }
+            },
         ]
 
         with pytest.raises(Exception):
@@ -299,7 +325,11 @@ class TestTransactionLogging:
     @patch("k2.storage.writer.metrics")
     @patch("k2.storage.writer.logger")
     def test_transaction_logging_handles_null_snapshot_before(
-        self, mock_logger, mock_metrics, mock_load_catalog, sample_trades_v2
+        self,
+        mock_logger,
+        mock_metrics,
+        mock_load_catalog,
+        sample_trades_v2,
     ):
         """Test transaction logging when no snapshot exists before write (first write)."""
         catalog = MagicMock()
@@ -335,7 +365,11 @@ class TestTransactionLogging:
     @patch("k2.storage.writer.metrics")
     @patch("k2.storage.writer.logger")
     def test_transaction_logging_for_quotes(
-        self, mock_logger, mock_metrics, mock_load_catalog, mock_catalog
+        self,
+        mock_logger,
+        mock_metrics,
+        mock_load_catalog,
+        mock_catalog,
     ):
         """Test transaction logging works for quotes (not just trades)."""
         catalog, table, snapshot_before, snapshot_after = mock_catalog
@@ -350,17 +384,17 @@ class TestTransactionLogging:
                 "symbol": "BTCUSDT",
                 "exchange": "binance",
                 "asset_class": "crypto",
-                "timestamp": datetime(2024, 1, 10, 10, 0, 0, tzinfo=timezone.utc),
+                "timestamp": datetime(2024, 1, 10, 10, 0, 0, tzinfo=UTC),
                 "bid_price": Decimal("50000.0"),
                 "bid_quantity": Decimal("1.0"),
                 "ask_price": Decimal("50001.0"),
                 "ask_quantity": Decimal("1.5"),
                 "currency": "USDT",
                 "source_sequence": 123,
-                "ingestion_timestamp": datetime(2024, 1, 10, 10, 0, 1, tzinfo=timezone.utc),
+                "ingestion_timestamp": datetime(2024, 1, 10, 10, 0, 1, tzinfo=UTC),
                 "platform_sequence": 456,
                 "vendor_data": None,
-            }
+            },
         ]
 
         writer.write_quotes(sample_quotes, exchange="binance", asset_class="crypto")

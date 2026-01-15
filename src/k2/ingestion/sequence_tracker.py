@@ -180,7 +180,10 @@ class SequenceTracker:
         return SequenceEvent.OK
 
     def _is_session_reset(
-        self, state: SequenceState, new_sequence: int, new_timestamp: datetime,
+        self,
+        state: SequenceState,
+        new_sequence: int,
+        new_timestamp: datetime,
     ) -> bool:
         """Detect if sequence number reset is due to session restart.
 

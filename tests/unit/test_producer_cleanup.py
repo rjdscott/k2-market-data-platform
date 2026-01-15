@@ -16,9 +16,11 @@ class TestProducerContextManager:
     @pytest.fixture
     def mock_producer_components(self):
         """Mock external dependencies for Producer."""
-        with patch("k2.ingestion.producer.SchemaRegistryClient") as mock_sr, \
-             patch("k2.ingestion.producer.Producer") as mock_prod, \
-             patch("k2.ingestion.producer.get_topic_builder") as mock_builder:
+        with (
+            patch("k2.ingestion.producer.SchemaRegistryClient") as mock_sr,
+            patch("k2.ingestion.producer.Producer") as mock_prod,
+            patch("k2.ingestion.producer.get_topic_builder") as mock_builder,
+        ):
 
             # Mock Schema Registry client
             mock_sr_instance = MagicMock()
@@ -93,9 +95,11 @@ class TestProducerClose:
     @pytest.fixture
     def mock_producer_components(self):
         """Mock external dependencies for Producer."""
-        with patch("k2.ingestion.producer.SchemaRegistryClient") as mock_sr, \
-             patch("k2.ingestion.producer.Producer") as mock_prod, \
-             patch("k2.ingestion.producer.get_topic_builder") as mock_builder:
+        with (
+            patch("k2.ingestion.producer.SchemaRegistryClient") as mock_sr,
+            patch("k2.ingestion.producer.Producer") as mock_prod,
+            patch("k2.ingestion.producer.get_topic_builder") as mock_builder,
+        ):
 
             mock_sr_instance = MagicMock()
             mock_sr.return_value = mock_sr_instance
@@ -170,9 +174,11 @@ class TestProducerAfterClose:
     @pytest.fixture
     def closed_producer(self):
         """Create a closed producer for testing."""
-        with patch("k2.ingestion.producer.SchemaRegistryClient"), \
-             patch("k2.ingestion.producer.Producer") as mock_prod, \
-             patch("k2.ingestion.producer.get_topic_builder"):
+        with (
+            patch("k2.ingestion.producer.SchemaRegistryClient"),
+            patch("k2.ingestion.producer.Producer") as mock_prod,
+            patch("k2.ingestion.producer.get_topic_builder"),
+        ):
 
             mock_prod_instance = MagicMock()
             mock_prod_instance.flush.return_value = 0
@@ -188,7 +194,7 @@ class TestProducerAfterClose:
             closed_producer.produce_trade(
                 asset_class="equities",
                 exchange="asx",
-                record={"symbol": "BHP", "price": 45.50, "quantity": 1000}
+                record={"symbol": "BHP", "price": 45.50, "quantity": 1000},
             )
 
     def test_produce_quote_after_close_raises_error(self, closed_producer):
@@ -197,7 +203,7 @@ class TestProducerAfterClose:
             closed_producer.produce_quote(
                 asset_class="equities",
                 exchange="asx",
-                record={"symbol": "BHP", "bid_price": 45.50, "ask_price": 45.60}
+                record={"symbol": "BHP", "bid_price": 45.50, "ask_price": 45.60},
             )
 
     def test_produce_reference_data_after_close_raises_error(self, closed_producer):
@@ -206,7 +212,7 @@ class TestProducerAfterClose:
             closed_producer.produce_reference_data(
                 asset_class="equities",
                 exchange="asx",
-                record={"symbol": "BHP", "company_name": "BHP Group"}
+                record={"symbol": "BHP", "company_name": "BHP Group"},
             )
 
     def test_flush_after_close_is_safe(self, closed_producer):
@@ -229,9 +235,11 @@ class TestProducerResourceCleanup:
 
     def test_producer_reference_cleared_on_close(self):
         """Test that producer reference is set to None on close."""
-        with patch("k2.ingestion.producer.SchemaRegistryClient"), \
-             patch("k2.ingestion.producer.Producer") as mock_prod, \
-             patch("k2.ingestion.producer.get_topic_builder"):
+        with (
+            patch("k2.ingestion.producer.SchemaRegistryClient"),
+            patch("k2.ingestion.producer.Producer") as mock_prod,
+            patch("k2.ingestion.producer.get_topic_builder"),
+        ):
 
             mock_prod_instance = MagicMock()
             mock_prod_instance.flush.return_value = 0
@@ -249,9 +257,11 @@ class TestProducerResourceCleanup:
 
     def test_serializers_cache_retained_after_close(self):
         """Test that serializer cache is retained after close (for stats)."""
-        with patch("k2.ingestion.producer.SchemaRegistryClient"), \
-             patch("k2.ingestion.producer.Producer") as mock_prod, \
-             patch("k2.ingestion.producer.get_topic_builder"):
+        with (
+            patch("k2.ingestion.producer.SchemaRegistryClient"),
+            patch("k2.ingestion.producer.Producer") as mock_prod,
+            patch("k2.ingestion.producer.get_topic_builder"),
+        ):
 
             mock_prod_instance = MagicMock()
             mock_prod_instance.flush.return_value = 0
@@ -268,9 +278,11 @@ class TestProducerResourceCleanup:
 
     def test_stats_retained_after_close(self):
         """Test that statistics are retained after close."""
-        with patch("k2.ingestion.producer.SchemaRegistryClient"), \
-             patch("k2.ingestion.producer.Producer") as mock_prod, \
-             patch("k2.ingestion.producer.get_topic_builder"):
+        with (
+            patch("k2.ingestion.producer.SchemaRegistryClient"),
+            patch("k2.ingestion.producer.Producer") as mock_prod,
+            patch("k2.ingestion.producer.get_topic_builder"),
+        ):
 
             mock_prod_instance = MagicMock()
             mock_prod_instance.flush.return_value = 0
@@ -298,9 +310,11 @@ class TestProducerExceptionHandling:
 
     def test_context_manager_exception_propagated(self):
         """Test that exceptions inside context manager are propagated."""
-        with patch("k2.ingestion.producer.SchemaRegistryClient"), \
-             patch("k2.ingestion.producer.Producer") as mock_prod, \
-             patch("k2.ingestion.producer.get_topic_builder"):
+        with (
+            patch("k2.ingestion.producer.SchemaRegistryClient"),
+            patch("k2.ingestion.producer.Producer") as mock_prod,
+            patch("k2.ingestion.producer.get_topic_builder"),
+        ):
 
             mock_prod_instance = MagicMock()
             mock_prod_instance.flush.return_value = 0
@@ -312,9 +326,11 @@ class TestProducerExceptionHandling:
 
     def test_close_error_in_exit_doesnt_suppress_original_exception(self):
         """Test that close() error doesn't suppress original exception."""
-        with patch("k2.ingestion.producer.SchemaRegistryClient"), \
-             patch("k2.ingestion.producer.Producer") as mock_prod, \
-             patch("k2.ingestion.producer.get_topic_builder"):
+        with (
+            patch("k2.ingestion.producer.SchemaRegistryClient"),
+            patch("k2.ingestion.producer.Producer") as mock_prod,
+            patch("k2.ingestion.producer.get_topic_builder"),
+        ):
 
             # Configure flush to raise error
             mock_prod_instance = MagicMock()
@@ -332,9 +348,11 @@ class TestProducerCleanupIntegration:
 
     def test_multiple_producers_independent_cleanup(self):
         """Test that multiple producers clean up independently."""
-        with patch("k2.ingestion.producer.SchemaRegistryClient"), \
-             patch("k2.ingestion.producer.Producer") as mock_prod, \
-             patch("k2.ingestion.producer.get_topic_builder"):
+        with (
+            patch("k2.ingestion.producer.SchemaRegistryClient"),
+            patch("k2.ingestion.producer.Producer") as mock_prod,
+            patch("k2.ingestion.producer.get_topic_builder"),
+        ):
 
             mock_prod.return_value = MagicMock()
             mock_prod.return_value.flush.return_value = 0
@@ -358,9 +376,11 @@ class TestProducerCleanupIntegration:
 
     def test_nested_context_managers(self):
         """Test nested context managers work correctly."""
-        with patch("k2.ingestion.producer.SchemaRegistryClient"), \
-             patch("k2.ingestion.producer.Producer") as mock_prod, \
-             patch("k2.ingestion.producer.get_topic_builder"):
+        with (
+            patch("k2.ingestion.producer.SchemaRegistryClient"),
+            patch("k2.ingestion.producer.Producer") as mock_prod,
+            patch("k2.ingestion.producer.get_topic_builder"),
+        ):
 
             mock_prod.return_value = MagicMock()
             mock_prod.return_value.flush.return_value = 0

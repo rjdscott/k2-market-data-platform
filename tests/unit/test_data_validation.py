@@ -12,9 +12,6 @@ Tests data quality constraints for market data records to ensure:
 Run: pytest tests/unit/test_data_validation.py -v
 """
 
-from datetime import datetime
-from decimal import Decimal
-
 import pandas as pd
 import pandera.pandas as pa
 import pytest
@@ -76,10 +73,14 @@ TRADE_V2_SCHEMA = DataFrameSchema(
         "timestamp": Column(
             pd.Timestamp,
             checks=[
-                Check(lambda ts: (ts >= pd.Timestamp("2000-01-01")).all(),
-                      error="Timestamps must be >= 2000-01-01"),
-                Check(lambda ts: (ts <= pd.Timestamp.now() + pd.Timedelta(minutes=5)).all(),
-                      error="Timestamps cannot be > 5 minutes in future"),
+                Check(
+                    lambda ts: (ts >= pd.Timestamp("2000-01-01")).all(),
+                    error="Timestamps must be >= 2000-01-01",
+                ),
+                Check(
+                    lambda ts: (ts <= pd.Timestamp.now() + pd.Timedelta(minutes=5)).all(),
+                    error="Timestamps cannot be > 5 minutes in future",
+                ),
             ],
             nullable=False,
             description="Exchange-reported trade timestamp",
@@ -130,7 +131,7 @@ TRADE_V2_SCHEMA = DataFrameSchema(
         ),
     },
     strict=False,  # Allow optional fields (source_sequence, platform_sequence, vendor_data)
-    coerce=True,   # Coerce types where possible
+    coerce=True,  # Coerce types where possible
 )
 
 
@@ -270,69 +271,73 @@ QUOTE_V2_SCHEMA = DataFrameSchema(
 @pytest.fixture
 def valid_trades_df():
     """Create a valid trades DataFrame for testing."""
-    return pd.DataFrame([
-        {
-            "message_id": "msg-001",
-            "trade_id": "BINANCE-12345",
-            "symbol": "BTCUSDT",
-            "exchange": "BINANCE",
-            "asset_class": "crypto",
-            "timestamp": pd.Timestamp("2025-01-13 10:00:00"),
-            "price": 45000.12345678,
-            "quantity": 1.5,
-            "currency": "USDT",
-            "side": "BUY",
-            "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.100"),
-        },
-        {
-            "message_id": "msg-002",
-            "trade_id": "ASX-67890",
-            "symbol": "BHP",
-            "exchange": "ASX",
-            "asset_class": "equities",
-            "timestamp": pd.Timestamp("2025-01-13 10:00:01"),
-            "price": 45.67,
-            "quantity": 1000.0,
-            "currency": "AUD",
-            "side": "SELL",
-            "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:01.050"),
-        },
-    ])
+    return pd.DataFrame(
+        [
+            {
+                "message_id": "msg-001",
+                "trade_id": "BINANCE-12345",
+                "symbol": "BTCUSDT",
+                "exchange": "BINANCE",
+                "asset_class": "crypto",
+                "timestamp": pd.Timestamp("2025-01-13 10:00:00"),
+                "price": 45000.12345678,
+                "quantity": 1.5,
+                "currency": "USDT",
+                "side": "BUY",
+                "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.100"),
+            },
+            {
+                "message_id": "msg-002",
+                "trade_id": "ASX-67890",
+                "symbol": "BHP",
+                "exchange": "ASX",
+                "asset_class": "equities",
+                "timestamp": pd.Timestamp("2025-01-13 10:00:01"),
+                "price": 45.67,
+                "quantity": 1000.0,
+                "currency": "AUD",
+                "side": "SELL",
+                "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:01.050"),
+            },
+        ]
+    )
 
 
 @pytest.fixture
 def valid_quotes_df():
     """Create a valid quotes DataFrame for testing."""
-    return pd.DataFrame([
-        {
-            "message_id": "msg-101",
-            "quote_id": "BINANCE-54321",
-            "symbol": "ETHUSDT",
-            "exchange": "BINANCE",
-            "asset_class": "crypto",
-            "timestamp": pd.Timestamp("2025-01-13 10:00:00"),
-            "bid_price": 3000.12,
-            "bid_quantity": 2.5,
-            "ask_price": 3001.12,
-            "ask_quantity": 3.0,
-            "currency": "USDT",
-            "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.050"),
-        },
-        {
-            "message_id": "msg-102",
-            "quote_id": "ASX-98765",
-            "symbol": "CBA",
-            "exchange": "ASX",
-            "asset_class": "equities",
-            "timestamp": pd.Timestamp("2025-01-13 10:00:01"),
-            "bid_price": 105.50,
-            "bid_quantity": 500.0,
-            "ask_price": 105.55,
-            "ask_quantity": 300.0,
-            "currency": "AUD",
-            "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:01.025"),
-        },
-    ])
+    return pd.DataFrame(
+        [
+            {
+                "message_id": "msg-101",
+                "quote_id": "BINANCE-54321",
+                "symbol": "ETHUSDT",
+                "exchange": "BINANCE",
+                "asset_class": "crypto",
+                "timestamp": pd.Timestamp("2025-01-13 10:00:00"),
+                "bid_price": 3000.12,
+                "bid_quantity": 2.5,
+                "ask_price": 3001.12,
+                "ask_quantity": 3.0,
+                "currency": "USDT",
+                "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.050"),
+            },
+            {
+                "message_id": "msg-102",
+                "quote_id": "ASX-98765",
+                "symbol": "CBA",
+                "exchange": "ASX",
+                "asset_class": "equities",
+                "timestamp": pd.Timestamp("2025-01-13 10:00:01"),
+                "bid_price": 105.50,
+                "bid_quantity": 500.0,
+                "ask_price": 105.55,
+                "ask_quantity": 300.0,
+                "currency": "AUD",
+                "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:01.025"),
+            },
+        ]
+    )
 
 
 # ==============================================================================
@@ -458,34 +463,36 @@ class TestTradeValidation:
 
     def test_timestamp_ordering_validation(self):
         """Test validation of timestamp ordering across multiple records."""
-        df = pd.DataFrame([
-            {
-                "message_id": "msg-001",
-                "trade_id": "BINANCE-1",
-                "symbol": "BTCUSDT",
-                "exchange": "BINANCE",
-                "asset_class": "crypto",
-                "timestamp": pd.Timestamp("2025-01-13 10:00:00"),
-                "price": 45000.0,
-                "quantity": 1.0,
-                "currency": "USDT",
-                "side": "BUY",
-                "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.100"),
-            },
-            {
-                "message_id": "msg-002",
-                "trade_id": "BINANCE-2",
-                "symbol": "BTCUSDT",
-                "exchange": "BINANCE",
-                "asset_class": "crypto",
-                "timestamp": pd.Timestamp("2025-01-13 10:00:01"),
-                "price": 45001.0,
-                "quantity": 1.0,
-                "currency": "USDT",
-                "side": "SELL",
-                "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:01.100"),
-            },
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "message_id": "msg-001",
+                    "trade_id": "BINANCE-1",
+                    "symbol": "BTCUSDT",
+                    "exchange": "BINANCE",
+                    "asset_class": "crypto",
+                    "timestamp": pd.Timestamp("2025-01-13 10:00:00"),
+                    "price": 45000.0,
+                    "quantity": 1.0,
+                    "currency": "USDT",
+                    "side": "BUY",
+                    "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.100"),
+                },
+                {
+                    "message_id": "msg-002",
+                    "trade_id": "BINANCE-2",
+                    "symbol": "BTCUSDT",
+                    "exchange": "BINANCE",
+                    "asset_class": "crypto",
+                    "timestamp": pd.Timestamp("2025-01-13 10:00:01"),
+                    "price": 45001.0,
+                    "quantity": 1.0,
+                    "currency": "USDT",
+                    "side": "SELL",
+                    "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:01.100"),
+                },
+            ]
+        )
 
         validated_df = TRADE_V2_SCHEMA.validate(df)
 
@@ -600,7 +607,9 @@ class TestQuoteValidation:
         df.loc[0, "ask_price"] = 3100.0  # Wide spread (3.3%)
 
         validated_df = QUOTE_V2_SCHEMA.validate(df)
-        spread = (validated_df.loc[0, "ask_price"] - validated_df.loc[0, "bid_price"]) / validated_df.loc[0, "bid_price"]
+        spread = (
+            validated_df.loc[0, "ask_price"] - validated_df.loc[0, "bid_price"]
+        ) / validated_df.loc[0, "bid_price"]
         assert spread > 0
 
 
@@ -618,19 +627,22 @@ class TestBatchValidation:
         # Generate 1000 valid trades
         trades = []
         for i in range(1000):
-            trades.append({
-                "message_id": f"msg-{i:06d}",
-                "trade_id": f"BINANCE-{i:06d}",
-                "symbol": "BTCUSDT",
-                "exchange": "BINANCE",
-                "asset_class": "crypto",
-                "timestamp": pd.Timestamp("2025-01-13 10:00:00") + pd.Timedelta(seconds=i),
-                "price": 45000.0 + i * 0.01,
-                "quantity": 1.0 + i * 0.001,
-                "currency": "USDT",
-                "side": "BUY" if i % 2 == 0 else "SELL",
-                "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.100") + pd.Timedelta(seconds=i),
-            })
+            trades.append(
+                {
+                    "message_id": f"msg-{i:06d}",
+                    "trade_id": f"BINANCE-{i:06d}",
+                    "symbol": "BTCUSDT",
+                    "exchange": "BINANCE",
+                    "asset_class": "crypto",
+                    "timestamp": pd.Timestamp("2025-01-13 10:00:00") + pd.Timedelta(seconds=i),
+                    "price": 45000.0 + i * 0.01,
+                    "quantity": 1.0 + i * 0.001,
+                    "currency": "USDT",
+                    "side": "BUY" if i % 2 == 0 else "SELL",
+                    "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.100")
+                    + pd.Timedelta(seconds=i),
+                }
+            )
 
         df = pd.DataFrame(trades)
         validated_df = TRADE_V2_SCHEMA.validate(df)
@@ -646,20 +658,23 @@ class TestBatchValidation:
         for i in range(1000):
             bid = 3000.0 + i * 0.01
             ask = bid + 1.0  # Fixed spread
-            quotes.append({
-                "message_id": f"msg-{i:06d}",
-                "quote_id": f"BINANCE-{i:06d}",
-                "symbol": "ETHUSDT",
-                "exchange": "BINANCE",
-                "asset_class": "crypto",
-                "timestamp": pd.Timestamp("2025-01-13 10:00:00") + pd.Timedelta(seconds=i),
-                "bid_price": bid,
-                "bid_quantity": 2.5 + i * 0.01,
-                "ask_price": ask,
-                "ask_quantity": 3.0 + i * 0.01,
-                "currency": "USDT",
-                "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.050") + pd.Timedelta(seconds=i),
-            })
+            quotes.append(
+                {
+                    "message_id": f"msg-{i:06d}",
+                    "quote_id": f"BINANCE-{i:06d}",
+                    "symbol": "ETHUSDT",
+                    "exchange": "BINANCE",
+                    "asset_class": "crypto",
+                    "timestamp": pd.Timestamp("2025-01-13 10:00:00") + pd.Timedelta(seconds=i),
+                    "bid_price": bid,
+                    "bid_quantity": 2.5 + i * 0.01,
+                    "ask_price": ask,
+                    "ask_quantity": 3.0 + i * 0.01,
+                    "currency": "USDT",
+                    "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.050")
+                    + pd.Timedelta(seconds=i),
+                }
+            )
 
         df = pd.DataFrame(quotes)
         validated_df = QUOTE_V2_SCHEMA.validate(df)
@@ -669,34 +684,36 @@ class TestBatchValidation:
 
     def test_mixed_asset_classes_validation(self):
         """Test validation of mixed asset classes in single batch."""
-        trades = pd.DataFrame([
-            {
-                "message_id": "msg-001",
-                "trade_id": "BINANCE-1",
-                "symbol": "BTCUSDT",
-                "exchange": "BINANCE",
-                "asset_class": "crypto",
-                "timestamp": pd.Timestamp("2025-01-13 10:00:00"),
-                "price": 45000.0,
-                "quantity": 1.0,
-                "currency": "USDT",
-                "side": "BUY",
-                "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.100"),
-            },
-            {
-                "message_id": "msg-002",
-                "trade_id": "ASX-1",
-                "symbol": "BHP",
-                "exchange": "ASX",
-                "asset_class": "equities",
-                "timestamp": pd.Timestamp("2025-01-13 10:00:01"),
-                "price": 45.67,
-                "quantity": 1000.0,
-                "currency": "AUD",
-                "side": "SELL",
-                "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:01.050"),
-            },
-        ])
+        trades = pd.DataFrame(
+            [
+                {
+                    "message_id": "msg-001",
+                    "trade_id": "BINANCE-1",
+                    "symbol": "BTCUSDT",
+                    "exchange": "BINANCE",
+                    "asset_class": "crypto",
+                    "timestamp": pd.Timestamp("2025-01-13 10:00:00"),
+                    "price": 45000.0,
+                    "quantity": 1.0,
+                    "currency": "USDT",
+                    "side": "BUY",
+                    "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:00.100"),
+                },
+                {
+                    "message_id": "msg-002",
+                    "trade_id": "ASX-1",
+                    "symbol": "BHP",
+                    "exchange": "ASX",
+                    "asset_class": "equities",
+                    "timestamp": pd.Timestamp("2025-01-13 10:00:01"),
+                    "price": 45.67,
+                    "quantity": 1000.0,
+                    "currency": "AUD",
+                    "side": "SELL",
+                    "ingestion_timestamp": pd.Timestamp("2025-01-13 10:00:01.050"),
+                },
+            ]
+        )
 
         validated_df = TRADE_V2_SCHEMA.validate(trades)
         assert len(validated_df) == 2

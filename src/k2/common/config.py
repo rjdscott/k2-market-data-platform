@@ -26,7 +26,7 @@ Usage:
     # Invalid values will raise ValidationError
 """
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -83,11 +83,14 @@ class IcebergConfig(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="K2_ICEBERG_", case_sensitive=False, extra="ignore",
+        env_prefix="K2_ICEBERG_",
+        case_sensitive=False,
+        extra="ignore",
     )
 
     catalog_uri: str = Field(
-        default="http://localhost:8181", description="Iceberg REST catalog URI",
+        default="http://localhost:8181",
+        description="Iceberg REST catalog URI",
     )
 
     s3_endpoint: str = Field(default="http://localhost:9000", description="S3/MinIO endpoint URL")
@@ -97,7 +100,8 @@ class IcebergConfig(BaseSettings):
     s3_secret_key: str = Field(default="password", description="S3/MinIO secret access key")
 
     warehouse: str = Field(
-        default="s3://warehouse/", description="Iceberg warehouse location (S3 path)",
+        default="s3://warehouse/",
+        description="Iceberg warehouse location (S3 path)",
     )
 
     @field_validator("catalog_uri", "s3_endpoint")
@@ -148,15 +152,21 @@ class ObservabilityConfig(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="K2_OBSERVABILITY_", case_sensitive=False, extra="ignore",
+        env_prefix="K2_OBSERVABILITY_",
+        case_sensitive=False,
+        extra="ignore",
     )
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
-        default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+        default="INFO",
+        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
 
     prometheus_port: int = Field(
-        default=9090, description="Prometheus metrics port", ge=1024, le=65535,
+        default=9090,
+        description="Prometheus metrics port",
+        ge=1024,
+        le=65535,
     )
 
     enable_metrics: bool = Field(default=True, description="Enable Prometheus metrics collection")
@@ -169,7 +179,9 @@ class BinanceConfig(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="K2_BINANCE_", case_sensitive=False, extra="ignore"
+        env_prefix="K2_BINANCE_",
+        case_sensitive=False,
+        extra="ignore",
     )
 
     enabled: bool = Field(default=False, description="Enable Binance streaming")
@@ -190,15 +202,18 @@ class BinanceConfig(BaseSettings):
     )
 
     reconnect_delay: int = Field(
-        default=5, description="Initial reconnect delay in seconds (exponential backoff)"
+        default=5,
+        description="Initial reconnect delay in seconds (exponential backoff)",
     )
 
     max_reconnect_attempts: int = Field(
-        default=10, description="Maximum number of reconnect attempts before giving up"
+        default=10,
+        description="Maximum number of reconnect attempts before giving up",
     )
 
     health_check_interval: int = Field(
-        default=30, description="Health check interval in seconds (check for stale connection)"
+        default=30,
+        description="Health check interval in seconds (check for stale connection)",
     )
 
     health_check_timeout: int = Field(
@@ -211,7 +226,7 @@ class BinanceConfig(BaseSettings):
         description="Enable SSL certificate verification (REQUIRED for production)",
     )
 
-    custom_ca_bundle: Optional[str] = Field(
+    custom_ca_bundle: str | None = Field(
         default=None,
         description="Path to custom CA certificate bundle (for corporate proxies)",
     )
@@ -262,7 +277,8 @@ class K2Config(BaseSettings):
     )
 
     environment: Literal["local", "test", "staging", "production"] = Field(
-        default="local", description="Deployment environment",
+        default="local",
+        description="Deployment environment",
     )
 
     # Sub-configurations

@@ -15,13 +15,13 @@ Usage:
 
 import logging
 import time
-from decimal import Decimal
 from datetime import datetime
+from decimal import Decimal
 
 import pytest
 
-from k2.storage.writer import IcebergWriter
 from k2.query.engine import QueryEngine
+from k2.storage.writer import IcebergWriter
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ def writer_v2():
         s3_secret_key=S3_SECRET_KEY,
         schema_version="v2",
     )
-    yield writer
+    return writer
     # No explicit cleanup needed
 
 
@@ -67,7 +67,7 @@ def query_engine():
         s3_secret_key=S3_SECRET_KEY,
         table_version="v2",
     )
-    yield engine
+    return engine
     # Connection pool cleanup handled by engine
 
 
@@ -76,24 +76,26 @@ def sample_trades():
     """Sample trades for storage chaos testing."""
     trades = []
     for i in range(5):
-        trades.append({
-            "message_id": f"chaos-storage-{int(time.time() * 1000)}-{i}",
-            "trade_id": f"CHAOS-{i}",
-            "symbol": "BTCUSDT",
-            "exchange": "BINANCE",
-            "asset_class": "crypto",
-            "timestamp": datetime.now(),
-            "price": Decimal(f"45000.{i}"),
-            "quantity": Decimal("1.0"),
-            "currency": "USDT",
-            "side": "BUY",
-            "trade_conditions": [],
-            "source_sequence": int(time.time() * 1000) + i,
-            "ingestion_timestamp": datetime.now(),
-            "platform_sequence": None,
-            "vendor_data": None,
-            "is_sample_data": True,
-        })
+        trades.append(
+            {
+                "message_id": f"chaos-storage-{int(time.time() * 1000)}-{i}",
+                "trade_id": f"CHAOS-{i}",
+                "symbol": "BTCUSDT",
+                "exchange": "BINANCE",
+                "asset_class": "crypto",
+                "timestamp": datetime.now(),
+                "price": Decimal(f"45000.{i}"),
+                "quantity": Decimal("1.0"),
+                "currency": "USDT",
+                "side": "BUY",
+                "trade_conditions": [],
+                "source_sequence": int(time.time() * 1000) + i,
+                "ingestion_timestamp": datetime.now(),
+                "platform_sequence": None,
+                "vendor_data": None,
+                "is_sample_data": True,
+            }
+        )
     return trades
 
 
@@ -302,7 +304,6 @@ class TestCatalogFailure:
         """Writer should handle catalog database unavailability."""
         # This would require stopping PostgreSQL container
         # Skipping as it's complex and affects all Iceberg operations
-        pass
 
     @pytest.mark.skip(reason="Catalog failure testing requires PostgreSQL chaos injection")
     def test_query_engine_handles_catalog_unavailable(
@@ -311,7 +312,6 @@ class TestCatalogFailure:
     ):
         """Query engine should handle catalog database unavailability."""
         # This would require stopping PostgreSQL container
-        pass
 
 
 # ==============================================================================
@@ -442,7 +442,6 @@ class TestConcurrentStorageOperations:
         """Multiple writers should handle MinIO stress."""
         # This would require threading/multiprocessing
         # to simulate concurrent writes
-        pass
 
     @pytest.mark.skip(reason="Requires concurrent execution framework")
     def test_writes_and_queries_under_minio_stress(
@@ -454,4 +453,3 @@ class TestConcurrentStorageOperations:
     ):
         """Concurrent writes and queries should handle MinIO stress."""
         # This would require threading/multiprocessing
-        pass

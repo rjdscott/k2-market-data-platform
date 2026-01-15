@@ -12,6 +12,7 @@ Features:
 Usage:
     These fixtures run automatically - no explicit imports needed.
 """
+
 import gc
 import logging
 
@@ -62,14 +63,14 @@ def check_system_resources():
 
     logger.info(
         f"Test session ending - Final memory: {final_mem_mb:.1f}MB "
-        f"(growth: {mem_growth_mb:+.1f}MB)"
+        f"(growth: {mem_growth_mb:+.1f}MB)",
     )
 
     if mem_growth_mb > 500:  # >500MB growth indicates leak
         pytest.fail(
             f"MEMORY LEAK DETECTED: Test session leaked {mem_growth_mb:.0f}MB of memory.\n"
             f"Initial: {initial_mem_mb:.0f}MB, Final: {final_mem_mb:.0f}MB\n"
-            f"This indicates a resource leak in the test suite."
+            f"This indicates a resource leak in the test suite.",
         )
 
 
@@ -109,7 +110,7 @@ def docker_container_health_check(request):
                 container = docker_client.containers.get(container_name)
                 if container.status != "running":
                     logger.warning(
-                        f"Container {container_name} is {container.status}, attempting restart"
+                        f"Container {container_name} is {container.status}, attempting restart",
                     )
                     container.start()
                     logger.info(f"Container {container_name} restarted successfully")
@@ -147,5 +148,3 @@ def configure_test_logging():
     logging.getLogger("boto3").setLevel(logging.WARNING)
     logging.getLogger("botocore").setLevel(logging.WARNING)
     logging.getLogger("s3fs").setLevel(logging.WARNING)
-
-    yield

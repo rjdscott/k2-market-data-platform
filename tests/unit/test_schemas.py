@@ -114,7 +114,8 @@ class TestSchemas:
                     field_type = field["type"]
 
                     assert isinstance(
-                        field_type, dict,
+                        field_type,
+                        dict,
                     ), f"{schema_name}.{field['name']} should be dict type"
                     assert (
                         field_type.get("logicalType") == "decimal"
@@ -259,7 +260,12 @@ class TestSchemasV2:
         asset_class_field = next(f for f in schema_dict["fields"] if f["name"] == "asset_class")
         assert asset_class_field["type"]["type"] == "enum"
         assert asset_class_field["type"]["name"] == "AssetClass"
-        assert set(asset_class_field["type"]["symbols"]) == {"equities", "crypto", "futures", "options"}
+        assert set(asset_class_field["type"]["symbols"]) == {
+            "equities",
+            "crypto",
+            "futures",
+            "options",
+        }
 
         # Check side enum
         side_field = next(f for f in schema_dict["fields"] if f["name"] == "side")

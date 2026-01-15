@@ -7,12 +7,13 @@ This test suite validates the fix for TD-002: DLQ JSON Serialization.
 """
 
 import json
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from k2.ingestion.dead_letter_queue import DeadLetterQueue, DateTimeEncoder
+import pytest
+
+from k2.ingestion.dead_letter_queue import DateTimeEncoder, DeadLetterQueue
 
 
 class TestDateTimeEncoder:
@@ -28,7 +29,7 @@ class TestDateTimeEncoder:
 
     def test_encode_datetime_utc(self):
         """Test encoding of UTC datetime."""
-        dt = datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc)
+        dt = datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC)
         result = json.dumps({"timestamp": dt}, cls=DateTimeEncoder)
 
         # Should contain timezone info
@@ -40,9 +41,9 @@ class TestDateTimeEncoder:
         data = {
             "level1": {
                 "level2": {
-                    "timestamp": datetime(2024, 1, 15, 10, 30, 45)
-                }
-            }
+                    "timestamp": datetime(2024, 1, 15, 10, 30, 45),
+                },
+            },
         }
 
         result = json.dumps(data, cls=DateTimeEncoder)
@@ -59,7 +60,7 @@ class TestDateTimeEncoder:
                 datetime(2024, 1, 15, 10, 0, 0),
                 datetime(2024, 1, 15, 11, 0, 0),
                 datetime(2024, 1, 15, 12, 0, 0),
-            ]
+            ],
         }
 
         result = json.dumps(data, cls=DateTimeEncoder)
@@ -78,7 +79,7 @@ class TestDateTimeEncoder:
             "boolean": True,
             "null": None,
             "list": [1, 2, 3],
-            "dict": {"nested": "value"}
+            "dict": {"nested": "value"},
         }
 
         result = json.dumps(data, cls=DateTimeEncoder)
@@ -138,7 +139,7 @@ class TestDeadLetterQueueDateTimeSerialization:
             {
                 "symbol": f"SYM{i}",
                 "timestamp": datetime(2024, 1, 15, 10, i, 0),
-                "data": {"nested_time": datetime(2024, 1, 15, 10, i, 30)}
+                "data": {"nested_time": datetime(2024, 1, 15, 10, i, 30)},
             }
             for i in range(5)
         ]
@@ -171,8 +172,8 @@ class TestDeadLetterQueueDateTimeSerialization:
             "list_field": [1, 2, datetime(2024, 1, 15, 11, 0, 0)],
             "dict_field": {
                 "nested_datetime": datetime(2024, 1, 15, 12, 0, 0),
-                "nested_value": "test"
-            }
+                "nested_value": "test",
+            },
         }
 
         dlq_file = temp_dlq.write(
@@ -258,7 +259,9 @@ class TestDeadLetterQueueIntegration:
             "symbol": "BTCUSDT",
             "exchange": "binance",
             "asset_class": "crypto",
-            "timestamp": datetime(2024, 1, 15, 10, 30, 45, 123456),  # Avro timestamp-micros → datetime
+            "timestamp": datetime(
+                2024, 1, 15, 10, 30, 45, 123456
+            ),  # Avro timestamp-micros → datetime
             "price": 43250.50,
             "quantity": 0.5,
             "currency": "USDT",
@@ -270,8 +273,8 @@ class TestDeadLetterQueueIntegration:
             "vendor_data": {
                 "is_buyer_maker": "true",
                 "event_type": "trade",
-                "event_time": datetime(2024, 1, 15, 10, 30, 45)  # Nested datetime
-            }
+                "event_time": datetime(2024, 1, 15, 10, 30, 45),  # Nested datetime
+            },
         }
 
         # Should handle all datetime fields without error
@@ -283,8 +286,8 @@ class TestDeadLetterQueueIntegration:
                 "consumer_group": "k2-iceberg-writer-trades-v2",
                 "topic": "market.crypto.trades.binance",
                 "schema_version": "v2",
-                "failure_time": datetime.utcnow()
-            }
+                "failure_time": datetime.utcnow(),
+            },
         )
 
         # Verify message was written correctly
@@ -312,8 +315,8 @@ class TestDeadLetterQueueIntegration:
             "price": -1.0,  # Invalid negative price
             "timestamp": datetime(2024, 1, 15, 10, 30, 45),
             "details": {
-                "created_at": datetime(2024, 1, 15, 9, 0, 0)
-            }
+                "created_at": datetime(2024, 1, 15, 9, 0, 0),
+            },
         }
 
         try:
@@ -328,8 +331,8 @@ class TestDeadLetterQueueIntegration:
                 error_type="validation",
                 metadata={
                     "consumer_group": "k2-trades",
-                    "detected_at": datetime.utcnow()
-                }
+                    "detected_at": datetime.utcnow(),
+                },
             )
 
         # Verify message and all datetime fields preserved

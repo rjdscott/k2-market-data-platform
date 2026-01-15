@@ -11,15 +11,13 @@ Tests all middleware components including:
 Run: pytest tests/unit/test_middleware.py -v
 """
 
-import time
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 
 from k2.api.middleware import (
     CacheControlMiddleware,
@@ -254,7 +252,10 @@ class TestRequestLoggingMiddleware:
         # Parts after snapshots also become :param (priority over digit check)
         assert middleware._normalize_path("/v1/snapshots/123") == "/v1/snapshots/:param"
         # Multiple parts after summary - only first one replaced
-        assert middleware._normalize_path("/v1/summary/BHP/2024-01-15") == "/v1/summary/:param/2024-01-15"
+        assert (
+            middleware._normalize_path("/v1/summary/BHP/2024-01-15")
+            == "/v1/summary/:param/2024-01-15"
+        )
         # Non-dynamic paths stay unchanged
         assert middleware._normalize_path("/health") == "/health"
         # Standalone digits become :id
@@ -275,7 +276,8 @@ class TestRequestLoggingMiddleware:
             assert response.status_code == 200
             # Should increment gauge for in-progress, then decrement
             gauge_calls = [
-                call for call in mock_metrics.gauge.call_args_list
+                call
+                for call in mock_metrics.gauge.call_args_list
                 if call[0][0] == "http_requests_in_progress"
             ]
             assert len(gauge_calls) >= 2  # At least increment and decrement
@@ -623,9 +625,8 @@ class TestMiddlewareIntegration:
 
         client = TestClient(test_app)
 
-        with patch("k2.api.middleware.logger"):
-            with pytest.raises(ValueError):
-                client.get("/error")
+        with patch("k2.api.middleware.logger"), pytest.raises(ValueError):
+            client.get("/error")
 
         # Even with error, correlation ID should be set
         # (TestClient doesn't return response on exception, but middleware ran)

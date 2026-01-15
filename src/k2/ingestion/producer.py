@@ -90,7 +90,7 @@ See Also:
 
 import time
 from collections import OrderedDict
-from typing import Any, Optional
+from typing import Any
 
 from confluent_kafka import Producer
 from confluent_kafka.schema_registry import SchemaRegistryClient
@@ -100,14 +100,9 @@ from confluent_kafka.serialization import MessageField, SerializationContext
 from k2.common.config import config
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
-from k2.kafka import DataType, get_topic_builder
 
 # Import v2 message builders for convenience
-from k2.ingestion.message_builders import (
-    build_quote_v2,
-    build_trade_v2,
-    convert_v1_to_v2_trade,
-)
+from k2.kafka import DataType, get_topic_builder
 
 logger = get_logger(__name__, component="ingestion")
 metrics = create_component_metrics("ingestion")
@@ -142,7 +137,7 @@ class BoundedCache:
             component_type=component_type,
         )
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         """Get value from cache, marking it as recently used.
 
         Args:
@@ -316,7 +311,9 @@ class MarketDataProducer:
         )
         metrics.increment(
             "producer_initialized_total",
-            labels={"component_type": "producer"},  # Removed schema_version - not in metric definition
+            labels={
+                "component_type": "producer"
+            },  # Removed schema_version - not in metric definition
         )
 
     def _init_schema_registry(self):
@@ -449,7 +446,7 @@ class MarketDataProducer:
             msg: Kafka message object
             context: Additional context (topic, partition_key, labels)
         """
-        topic = context.get("topic", "unknown")
+        context.get("topic", "unknown")
         partition_key = context.get("partition_key", "unknown")
         labels = context.get("labels", {})
 
@@ -516,7 +513,9 @@ class MarketDataProducer:
                     value=serialized_value,
                     key=key.encode("utf-8"),  # Partition key (Decision #009)
                     on_delivery=lambda err, msg: self._delivery_callback(
-                        err, msg, {"topic": topic, "partition_key": key, "labels": labels},
+                        err,
+                        msg,
+                        {"topic": topic, "partition_key": key, "labels": labels},
                     ),
                 )
 
@@ -705,7 +704,7 @@ class MarketDataProducer:
         if self.producer is None:
             raise RuntimeError(
                 "Producer has been closed and cannot be reused. "
-                "Create a new MarketDataProducer instance."
+                "Create a new MarketDataProducer instance.",
             )
         # Get topic configuration
         topic_config = self.topic_builder.get_topic_config(asset_class, data_type, exchange)

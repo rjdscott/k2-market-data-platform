@@ -220,7 +220,13 @@ class TestIcebergWriter:
                     "company_id": 9999,
                     "exchange": "ASX",
                     "exchange_timestamp": datetime(
-                        2014, 3, 10, 10, 0, i % 60, i * 1000,
+                        2014,
+                        3,
+                        10,
+                        10,
+                        0,
+                        i % 60,
+                        i * 1000,
                     ),  # Use modulo for seconds, microseconds for uniqueness
                     "price": Decimal("100.00") + price_increment,
                     "volume": 1000 + i,

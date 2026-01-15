@@ -20,7 +20,6 @@ Usage:
 """
 
 import time
-from pathlib import Path
 
 import docker
 import pytest
@@ -101,8 +100,9 @@ class TestDisasterRecovery:
         kafka_container.start()
 
         # Step 5: Wait for Kafka to be healthy
-        assert wait_for_container_healthy(kafka_container, timeout=90), \
-            "Kafka should recover and become healthy within 90s"
+        assert wait_for_container_healthy(
+            kafka_container, timeout=90
+        ), "Kafka should recover and become healthy within 90s"
 
         # Step 6: Verify Kafka accepts connections
         # Give Kafka a moment to fully initialize after health check
@@ -111,7 +111,7 @@ class TestDisasterRecovery:
         # Try to list topics as verification
         exit_code, output = kafka_container.exec_run(
             "bash -c 'kafka-topics --bootstrap-server localhost:9092 --list'",
-            demux=False
+            demux=False,
         )
         assert exit_code == 0, f"Kafka should accept connections, got exit code {exit_code}"
 
@@ -147,8 +147,9 @@ class TestDisasterRecovery:
         minio_container.start()
 
         # Step 5: Wait for MinIO to be healthy
-        assert wait_for_container_healthy(minio_container, timeout=60), \
-            "MinIO should recover and become healthy within 60s"
+        assert wait_for_container_healthy(
+            minio_container, timeout=60
+        ), "MinIO should recover and become healthy within 60s"
 
         # Step 6: Verify MinIO API is accessible
         time.sleep(3)  # Give MinIO time to fully initialize
@@ -187,14 +188,15 @@ class TestDisasterRecovery:
         postgres_container.start()
 
         # Step 5: Wait for PostgreSQL to be healthy
-        assert wait_for_container_healthy(postgres_container, timeout=60), \
-            "PostgreSQL should recover and become healthy within 60s"
+        assert wait_for_container_healthy(
+            postgres_container, timeout=60
+        ), "PostgreSQL should recover and become healthy within 60s"
 
         # Step 6: Verify PostgreSQL accepts connections
         time.sleep(3)  # Give PostgreSQL time to accept connections
         exit_code, output = postgres_container.exec_run(
             "pg_isready -U admin",
-            demux=False
+            demux=False,
         )
         assert exit_code == 0, "PostgreSQL should accept connections"
 
@@ -226,8 +228,7 @@ class TestDisasterRecovery:
 
         # Step 3: Restart Kafka
         kafka_container.start()
-        assert wait_for_container_healthy(kafka_container, timeout=90), \
-            "Kafka should recover"
+        assert wait_for_container_healthy(kafka_container, timeout=90), "Kafka should recover"
 
         # Step 4: Verify Schema Registry recovers
         # May need manual restart if it doesn't auto-recover
@@ -235,8 +236,9 @@ class TestDisasterRecovery:
         if schema_registry_container.status != "running":
             schema_registry_container.start()
 
-        assert wait_for_container_healthy(schema_registry_container, timeout=60), \
-            "Schema Registry should recover after Kafka is back"
+        assert wait_for_container_healthy(
+            schema_registry_container, timeout=60
+        ), "Schema Registry should recover after Kafka is back"
 
         # Step 5: Verify Schema Registry API is accessible
         time.sleep(5)
@@ -280,18 +282,19 @@ class TestDisasterRecovery:
 
         # 2a: Recover PostgreSQL (catalog) first
         postgres_container.start()
-        assert wait_for_container_healthy(postgres_container, timeout=60), \
-            "PostgreSQL should recover first"
+        assert wait_for_container_healthy(
+            postgres_container, timeout=60
+        ), "PostgreSQL should recover first"
 
         # 2b: Recover MinIO (storage) second
         minio_container.start()
-        assert wait_for_container_healthy(minio_container, timeout=60), \
-            "MinIO should recover second"
+        assert wait_for_container_healthy(
+            minio_container, timeout=60
+        ), "MinIO should recover second"
 
         # 2c: Recover Kafka (ingestion) last
         kafka_container.start()
-        assert wait_for_container_healthy(kafka_container, timeout=90), \
-            "Kafka should recover last"
+        assert wait_for_container_healthy(kafka_container, timeout=90), "Kafka should recover last"
 
         # Step 3: Verify full system functionality
         time.sleep(10)  # Allow services to fully stabilize
@@ -306,7 +309,7 @@ class TestDisasterRecovery:
 
         # Verify Kafka
         exit_code, _ = kafka_container.exec_run(
-            "bash -c 'kafka-topics --bootstrap-server localhost:9092 --list'"
+            "bash -c 'kafka-topics --bootstrap-server localhost:9092 --list'",
         )
         assert exit_code == 0, "Kafka should be functional"
 
@@ -330,8 +333,9 @@ class TestDisasterRecovery:
         kafka_recovery_time = time.time() - start_time
 
         assert kafka_healthy, "Kafka should recover"
-        assert kafka_recovery_time < 300, \
-            f"Kafka RTO should be < 5 min, actual: {kafka_recovery_time:.1f}s"
+        assert (
+            kafka_recovery_time < 300
+        ), f"Kafka RTO should be < 5 min, actual: {kafka_recovery_time:.1f}s"
 
         # Test MinIO RTO < 10 minutes (600 seconds)
         minio_container = docker_client.containers.get("k2-minio")
@@ -343,8 +347,9 @@ class TestDisasterRecovery:
         minio_recovery_time = time.time() - start_time
 
         assert minio_healthy, "MinIO should recover"
-        assert minio_recovery_time < 600, \
-            f"MinIO RTO should be < 10 min, actual: {minio_recovery_time:.1f}s"
+        assert (
+            minio_recovery_time < 600
+        ), f"MinIO RTO should be < 10 min, actual: {minio_recovery_time:.1f}s"
 
         # Test PostgreSQL RTO < 15 minutes (900 seconds)
         postgres_container = docker_client.containers.get("k2-postgres")
@@ -356,11 +361,12 @@ class TestDisasterRecovery:
         postgres_recovery_time = time.time() - start_time
 
         assert postgres_healthy, "PostgreSQL should recover"
-        assert postgres_recovery_time < 900, \
-            f"PostgreSQL RTO should be < 15 min, actual: {postgres_recovery_time:.1f}s"
+        assert (
+            postgres_recovery_time < 900
+        ), f"PostgreSQL RTO should be < 15 min, actual: {postgres_recovery_time:.1f}s"
 
         # Log recovery times for reporting
-        print(f"\nRecovery Times (RTO Validation):")
+        print("\nRecovery Times (RTO Validation):")
         print(f"  Kafka:      {kafka_recovery_time:.1f}s (target: < 300s)")
         print(f"  MinIO:      {minio_recovery_time:.1f}s (target: < 600s)")
         print(f"  PostgreSQL: {postgres_recovery_time:.1f}s (target: < 900s)")

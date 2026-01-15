@@ -143,7 +143,7 @@ class DuckDBConnectionPool:
                 SET s3_use_ssl=false;
                 SET s3_url_style='path';
                 SET unsafe_enable_version_guessing=true;
-            """
+            """,
             )
 
             logger.debug("Created new connection in pool", connection_id=id(conn))
@@ -193,7 +193,7 @@ class DuckDBConnectionPool:
             metrics.increment("connection_pool_acquisition_timeouts_total")
             raise TimeoutError(
                 f"Could not acquire connection within {timeout}s. "
-                f"Pool size: {self.pool_size}, active: {len(self._active_connections)}"
+                f"Pool size: {self.pool_size}, active: {len(self._active_connections)}",
             )
 
         # Track acquisition time
@@ -220,8 +220,7 @@ class DuckDBConnectionPool:
 
             # Track peak utilization
             active_count = len(self._active_connections)
-            if active_count > self._peak_utilization:
-                self._peak_utilization = active_count
+            self._peak_utilization = max(self._peak_utilization, active_count)
 
             # Record utilization metric
             metrics.gauge("connection_pool_active_connections", active_count)

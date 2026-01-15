@@ -17,14 +17,12 @@ Usage:
 
 import contextlib
 import logging
-import os
 import time
-from typing import Generator, Optional
+from collections.abc import Generator
 
 import docker
 import pytest
 import requests
-from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient
 
 logger = logging.getLogger(__name__)
@@ -80,7 +78,7 @@ def service_failure(
     container,
     duration_seconds: int = 5,
     failure_mode: str = "stop",
-) -> Generator[None, None, None]:
+) -> Generator[None]:
     """
     Simulate service failure by stopping/pausing container.
 
@@ -97,7 +95,7 @@ def service_failure(
     """
     original_status = container.status
     logger.info(
-        f"Injecting service failure",
+        "Injecting service failure",
         container=container.name,
         mode=failure_mode,
         duration=duration_seconds,
@@ -133,7 +131,7 @@ def service_failure(
 def network_partition(
     container,
     duration_seconds: int = 5,
-) -> Generator[None, None, None]:
+) -> Generator[None]:
     """
     Simulate network partition by disconnecting container from networks.
 
@@ -150,7 +148,7 @@ def network_partition(
     network_names = list(networks.keys())
 
     logger.info(
-        f"Injecting network partition",
+        "Injecting network partition",
         container=container.name,
         networks=network_names,
         duration=duration_seconds,
@@ -179,9 +177,9 @@ def network_partition(
 @contextlib.contextmanager
 def resource_limit(
     container,
-    cpu_quota: Optional[int] = None,
-    mem_limit: Optional[str] = None,
-) -> Generator[None, None, None]:
+    cpu_quota: int | None = None,
+    mem_limit: str | None = None,
+) -> Generator[None]:
     """
     Inject resource constraints on container.
 
@@ -196,7 +194,7 @@ def resource_limit(
             producer.produce(...)  # Should handle resource constraints
     """
     logger.info(
-        f"Injecting resource limits",
+        "Injecting resource limits",
         container=container.name,
         cpu_quota=cpu_quota,
         mem_limit=mem_limit,
@@ -238,7 +236,7 @@ def inject_latency(
     container,
     latency_ms: int = 100,
     jitter_ms: int = 20,
-) -> Generator[None, None, None]:
+) -> Generator[None]:
     """
     Inject network latency using tc (traffic control).
 
@@ -255,7 +253,7 @@ def inject_latency(
             consumer.poll(timeout=5.0)
     """
     logger.info(
-        f"Injecting network latency",
+        "Injecting network latency",
         container=container.name,
         latency_ms=latency_ms,
         jitter_ms=jitter_ms,
@@ -273,7 +271,7 @@ def inject_latency(
             logger.info(f"Latency injected on {container.name}")
         else:
             logger.warning(
-                f"Failed to inject latency (tc not available?)",
+                "Failed to inject latency (tc not available?)",
                 error=exec_result.output.decode(),
             )
 
@@ -334,7 +332,7 @@ def chaos_network_partition(kafka_container):
 def chaos_kafka_resource_limit(kafka_container):
     """Fixture to inject Kafka resource constraints."""
 
-    def _inject(cpu_quota: Optional[int] = None, mem_limit: Optional[str] = None):
+    def _inject(cpu_quota: int | None = None, mem_limit: str | None = None):
         return resource_limit(kafka_container, cpu_quota, mem_limit)
 
     return _inject
@@ -368,7 +366,7 @@ def _wait_for_container_health(container, timeout_seconds: int = 30) -> bool:
         time.sleep(1)
 
     logger.warning(
-        f"Container did not become healthy",
+        "Container did not become healthy",
         container=container.name,
         timeout=timeout_seconds,
     )
@@ -412,6 +410,7 @@ def _check_service_health(container) -> bool:
 # ==============================================================================
 # Chaos Test Markers
 # ==============================================================================
+
 
 # Register custom pytest markers
 def pytest_configure(config):

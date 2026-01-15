@@ -635,6 +635,7 @@ class TestMarketDataConsumer:
         # Should return partial batch after timeout
         assert 0 <= len(batch) <= consumer.batch_size
 
+
 class TestConsumerSequenceTrackerIntegration:
     """Test suite for sequence tracker integration (validates TD-001 fix).
 
@@ -691,6 +692,7 @@ class TestConsumerSequenceTrackerIntegration:
         - timestamp: datetime
         """
         from datetime import datetime
+
         from k2.ingestion.sequence_tracker import SequenceEvent
 
         # Create real sequence tracker (not mocked) to test integration
@@ -752,14 +754,22 @@ class TestConsumerSequenceTrackerIntegration:
                 # Verify positional or keyword arguments
                 if call_args.args:
                     # Called with positional args
-                    assert len(call_args.args) == 4, "check_sequence must be called with 4 arguments"
+                    assert (
+                        len(call_args.args) == 4
+                    ), "check_sequence must be called with 4 arguments"
                     exchange_arg, symbol_arg, sequence_arg, timestamp_arg = call_args.args
                 else:
                     # Called with keyword args
-                    assert "exchange" in call_args.kwargs, "check_sequence missing 'exchange' argument"
+                    assert (
+                        "exchange" in call_args.kwargs
+                    ), "check_sequence missing 'exchange' argument"
                     assert "symbol" in call_args.kwargs, "check_sequence missing 'symbol' argument"
-                    assert "sequence" in call_args.kwargs, "check_sequence missing 'sequence' argument"
-                    assert "timestamp" in call_args.kwargs, "check_sequence missing 'timestamp' argument"
+                    assert (
+                        "sequence" in call_args.kwargs
+                    ), "check_sequence missing 'sequence' argument"
+                    assert (
+                        "timestamp" in call_args.kwargs
+                    ), "check_sequence missing 'timestamp' argument"
 
                     exchange_arg = call_args.kwargs["exchange"]
                     symbol_arg = call_args.kwargs["symbol"]
@@ -771,7 +781,9 @@ class TestConsumerSequenceTrackerIntegration:
                 assert symbol_arg == "BTCUSDT", "Incorrect symbol passed to check_sequence"
                 assert sequence_arg == 123456789, "Incorrect sequence passed to check_sequence"
                 assert isinstance(timestamp_arg, datetime), "Timestamp must be datetime object"
-                assert timestamp_arg == test_timestamp, "Incorrect timestamp passed to check_sequence"
+                assert (
+                    timestamp_arg == test_timestamp
+                ), "Incorrect timestamp passed to check_sequence"
 
     def test_sequence_tracker_handles_timestamp_formats(
         self,
@@ -787,6 +799,7 @@ class TestConsumerSequenceTrackerIntegration:
         - int/float (microseconds, fallback case)
         """
         from datetime import datetime
+
         from k2.ingestion.sequence_tracker import SequenceEvent
 
         with patch("k2.ingestion.consumer.SequenceTracker") as mock_tracker_class:
@@ -827,7 +840,9 @@ class TestConsumerSequenceTrackerIntegration:
                 call_args = mock_tracker.check_sequence.call_args
                 timestamp_arg = call_args.kwargs.get("timestamp") or call_args.args[3]
 
-                assert isinstance(timestamp_arg, datetime), "Timestamp should be converted to datetime"
+                assert isinstance(
+                    timestamp_arg, datetime
+                ), "Timestamp should be converted to datetime"
 
     def test_sequence_tracker_gap_detection_increments_stats(
         self,
@@ -842,6 +857,7 @@ class TestConsumerSequenceTrackerIntegration:
         not OK or RESET events (this was a logic bug in the original code).
         """
         from datetime import datetime
+
         from k2.ingestion.sequence_tracker import SequenceEvent
 
         with patch("k2.ingestion.consumer.SequenceTracker") as mock_tracker_class:
@@ -862,7 +878,11 @@ class TestConsumerSequenceTrackerIntegration:
                 (SequenceEvent.SMALL_GAP, True, "SMALL_GAP should increment gap counter"),
                 (SequenceEvent.LARGE_GAP, True, "LARGE_GAP should increment gap counter"),
                 (SequenceEvent.RESET, False, "RESET should not increment gap counter"),
-                (SequenceEvent.OUT_OF_ORDER, False, "OUT_OF_ORDER should not increment gap counter"),
+                (
+                    SequenceEvent.OUT_OF_ORDER,
+                    False,
+                    "OUT_OF_ORDER should not increment gap counter",
+                ),
             ]
 
             for event_type, should_increment, description in test_cases:
@@ -908,6 +928,7 @@ class TestConsumerSequenceTrackerIntegration:
         V2 schema allows source_sequence to be null (some exchanges don't provide sequence numbers).
         """
         from datetime import datetime
+
         from k2.ingestion.sequence_tracker import SequenceEvent
 
         with patch("k2.ingestion.consumer.SequenceTracker") as mock_tracker_class:

@@ -138,7 +138,6 @@ class TestSchemaRegistry:
         }
         """
 
-
         # This should raise an error if compatibility mode is enforced
         try:
             from confluent_kafka.schema_registry import Schema as SchemaObj

@@ -244,7 +244,9 @@ class TestRequestSizeLimitMiddleware:
 
     @patch("k2.api.middleware.metrics")
     def test_metrics_tracked_on_invalid_content_length(
-        self, mock_metrics, app_with_size_limit
+        self,
+        mock_metrics,
+        app_with_size_limit,
     ):
         """Test that invalid Content-Length errors are tracked in metrics."""
         client = TestClient(app_with_size_limit)

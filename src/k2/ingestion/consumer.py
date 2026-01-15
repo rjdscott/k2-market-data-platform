@@ -63,20 +63,20 @@ from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
 from confluent_kafka.serialization import MessageField, SerializationContext
 from tenacity import (
+    RetryError,
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
-    RetryError,
 )
 
 from k2.common.config import config
-from k2.common.degradation_manager import DegradationManager, DegradationLevel
+from k2.common.degradation_manager import DegradationLevel, DegradationManager
 from k2.common.load_shedder import LoadShedder
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
 from k2.ingestion.dead_letter_queue import DeadLetterQueue
-from k2.ingestion.sequence_tracker import SequenceTracker, SequenceEvent
+from k2.ingestion.sequence_tracker import SequenceEvent, SequenceTracker
 from k2.storage.writer import IcebergWriter
 
 logger = get_logger(__name__)
@@ -496,7 +496,9 @@ class MarketDataConsumer:
 
                     # Check sequence (Decision #014: Sequence gap logging)
                     # V2 schema uses "source_sequence" instead of "sequence_number"
-                    seq_field = "source_sequence" if self.schema_version == "v2" else "sequence_number"
+                    seq_field = (
+                        "source_sequence" if self.schema_version == "v2" else "sequence_number"
+                    )
                     if "symbol" in record and seq_field in record and record[seq_field] is not None:
                         # Extract timestamp (Avro logical type deserializes to datetime)
                         timestamp = record.get("timestamp")
@@ -581,7 +583,10 @@ class MarketDataConsumer:
                 self.stats.errors += 1
                 metrics.increment(
                     "consumer_errors_total",
-                    labels={"error_type": "exhausted_retries", "consumer_group": self.consumer_group},
+                    labels={
+                        "error_type": "exhausted_retries",
+                        "consumer_group": self.consumer_group,
+                    },
                 )
                 # Don't commit offsets - will reprocess after restart
                 raise

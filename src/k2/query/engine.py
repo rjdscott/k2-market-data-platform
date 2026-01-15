@@ -31,8 +31,6 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
-import duckdb
-
 from k2.common.config import config
 from k2.common.connection_pool import DuckDBConnectionPool
 from k2.common.logging import get_logger
@@ -142,7 +140,6 @@ class QueryEngine:
             pool_size=pool_size,
         )
 
-
     def _get_table_path(self, table_name: str) -> str:
         """Get the full S3 path for an Iceberg table.
 
@@ -170,11 +167,13 @@ class QueryEngine:
         try:
             yield
             metrics.increment(
-                "query_executions_total", labels={"query_type": query_type, "status": "success"},
+                "query_executions_total",
+                labels={"query_type": query_type, "status": "success"},
             )
         except Exception:
             metrics.increment(
-                "query_executions_total", labels={"query_type": query_type, "status": "error"},
+                "query_executions_total",
+                labels={"query_type": query_type, "status": "error"},
             )
             raise
         finally:
@@ -280,7 +279,9 @@ class QueryEngine:
 
                 # Record rows scanned
                 metrics.histogram(
-                    "query_rows_scanned", len(rows), labels={"query_type": QueryType.TRADES.value},
+                    "query_rows_scanned",
+                    len(rows),
+                    labels={"query_type": QueryType.TRADES.value},
                 )
 
                 return rows
@@ -384,7 +385,9 @@ class QueryEngine:
                 )
 
                 metrics.histogram(
-                    "query_rows_scanned", len(rows), labels={"query_type": QueryType.QUOTES.value},
+                    "query_rows_scanned",
+                    len(rows),
+                    labels={"query_type": QueryType.QUOTES.value},
                 )
 
                 return rows

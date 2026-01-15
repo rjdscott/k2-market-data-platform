@@ -581,7 +581,10 @@ class BatchLoader:
 
                         stats.success_count += 1
                         progress.update(
-                            task, advance=1, success=stats.success_count, errors=stats.error_count,
+                            task,
+                            advance=1,
+                            success=stats.success_count,
+                            errors=stats.error_count,
                         )
 
                         # Flush periodically
@@ -597,7 +600,10 @@ class BatchLoader:
                         # Invalid record (schema validation failure)
                         stats.error_count += 1
                         progress.update(
-                            task, advance=1, success=stats.success_count, errors=stats.error_count,
+                            task,
+                            advance=1,
+                            success=stats.success_count,
+                            errors=stats.error_count,
                         )
 
                         logger.warning(
@@ -614,7 +620,10 @@ class BatchLoader:
                         # Producer error (Kafka/network issue)
                         stats.error_count += 1
                         progress.update(
-                            task, advance=1, success=stats.success_count, errors=stats.error_count,
+                            task,
+                            advance=1,
+                            success=stats.success_count,
+                            errors=stats.error_count,
                         )
 
                         logger.error(
@@ -687,7 +696,11 @@ def print_summary(stats: LoadStats):
 @app.command()
 def load(
     csv: Path = typer.Option(
-        ..., help="Path to CSV file", exists=True, file_okay=True, dir_okay=False,
+        ...,
+        help="Path to CSV file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
     ),
     asset_class: str = typer.Option(..., help="Asset class (e.g., 'equities', 'crypto')"),
     exchange: str = typer.Option(..., help="Exchange code (e.g., 'asx', 'binance')"),

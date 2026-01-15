@@ -25,7 +25,7 @@ from decimal import Decimal
 import pytest
 import requests
 import structlog
-from confluent_kafka import Consumer, Producer
+from confluent_kafka import Consumer
 from confluent_kafka.admin import AdminClient
 
 from k2.ingestion.producer import MarketDataProducer
@@ -330,19 +330,23 @@ class TestKafkaToConsumer:
 
         Note: Depends on producer_v2 to ensure topics exist before subscribing.
         """
-        consumer = Consumer({
-            "bootstrap.servers": KAFKA_BOOTSTRAP,
-            "group.id": f"test-e2e-{int(time.time())}",
-            "auto.offset.reset": "earliest",  # Read all messages from beginning
-            "enable.auto.commit": False,
-        })
+        consumer = Consumer(
+            {
+                "bootstrap.servers": KAFKA_BOOTSTRAP,
+                "group.id": f"test-e2e-{int(time.time())}",
+                "auto.offset.reset": "earliest",  # Read all messages from beginning
+                "enable.auto.commit": False,
+            }
+        )
 
         # Subscribe to v2 topics (using pattern to avoid errors on missing topics)
-        consumer.subscribe([
-            "market.trades.crypto.binance",
-            "market.trades.equities.asx",
-            "market.quotes.crypto.binance",
-        ])
+        consumer.subscribe(
+            [
+                "market.trades.crypto.binance",
+                "market.trades.equities.asx",
+                "market.quotes.crypto.binance",
+            ]
+        )
 
         yield consumer
 
@@ -410,24 +414,26 @@ class TestIcebergStorage:
         """Writer should persist crypto trades to Iceberg."""
         trades = []
         for i in range(5):
-            trades.append({
-                "message_id": f"test-iceberg-{int(time.time() * 1000)}-{i}",
-                "trade_id": f"ICE-{i}",
-                "symbol": "BTCUSDT",
-                "exchange": "BINANCE",
-                "asset_class": "crypto",
-                "timestamp": datetime.now(),
-                "price": Decimal(f"{45000 + i}.12"),
-                "quantity": Decimal("1.0"),
-                "currency": "USDT",
-                "side": "BUY",
-                "trade_conditions": None,
-                "source_sequence": int(time.time() * 1000) + i,
-                "ingestion_timestamp": datetime.now(),
-                "platform_sequence": None,
-                "vendor_data": None,
-                "is_sample_data": True,
-            })
+            trades.append(
+                {
+                    "message_id": f"test-iceberg-{int(time.time() * 1000)}-{i}",
+                    "trade_id": f"ICE-{i}",
+                    "symbol": "BTCUSDT",
+                    "exchange": "BINANCE",
+                    "asset_class": "crypto",
+                    "timestamp": datetime.now(),
+                    "price": Decimal(f"{45000 + i}.12"),
+                    "quantity": Decimal("1.0"),
+                    "currency": "USDT",
+                    "side": "BUY",
+                    "trade_conditions": None,
+                    "source_sequence": int(time.time() * 1000) + i,
+                    "ingestion_timestamp": datetime.now(),
+                    "platform_sequence": None,
+                    "vendor_data": None,
+                    "is_sample_data": True,
+                }
+            )
 
         # Write to Iceberg
         rows_written = writer_v2.write_trades(
@@ -444,24 +450,26 @@ class TestIcebergStorage:
         """Writer should persist equity trades to Iceberg."""
         trades = []
         for i in range(5):
-            trades.append({
-                "message_id": f"test-equity-iceberg-{int(time.time() * 1000)}-{i}",
-                "trade_id": f"EQ-{i}",
-                "symbol": "BHP",
-                "exchange": "ASX",
-                "asset_class": "equities",
-                "timestamp": datetime.now(),
-                "price": Decimal(f"45.{i}0"),
-                "quantity": Decimal("100.0"),
-                "currency": "AUD",
-                "side": "SELL",
-                "trade_conditions": None,
-                "source_sequence": int(time.time() * 1000) + i,
-                "ingestion_timestamp": datetime.now(),
-                "platform_sequence": None,
-                "vendor_data": None,
-                "is_sample_data": True,
-            })
+            trades.append(
+                {
+                    "message_id": f"test-equity-iceberg-{int(time.time() * 1000)}-{i}",
+                    "trade_id": f"EQ-{i}",
+                    "symbol": "BHP",
+                    "exchange": "ASX",
+                    "asset_class": "equities",
+                    "timestamp": datetime.now(),
+                    "price": Decimal(f"45.{i}0"),
+                    "quantity": Decimal("100.0"),
+                    "currency": "AUD",
+                    "side": "SELL",
+                    "trade_conditions": None,
+                    "source_sequence": int(time.time() * 1000) + i,
+                    "ingestion_timestamp": datetime.now(),
+                    "platform_sequence": None,
+                    "vendor_data": None,
+                    "is_sample_data": True,
+                }
+            )
 
         rows_written = writer_v2.write_trades(
             records=trades,

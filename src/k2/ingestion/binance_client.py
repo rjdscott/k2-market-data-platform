@@ -29,8 +29,9 @@ import json
 import ssl
 import time
 import uuid
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Any, Callable, Optional
+from typing import Any
 
 import certifi
 import psutil
@@ -47,8 +48,7 @@ metrics = create_component_metrics("binance_streaming")
 
 
 def parse_binance_symbol(symbol: str) -> tuple[str, str, str]:
-    """
-    Parse Binance symbol into base asset, quote asset, and quote currency.
+    """Parse Binance symbol into base asset, quote asset, and quote currency.
 
     Args:
         symbol: Binance symbol (e.g., BTCUSDT, ETHBTC, BNBEUR)
@@ -94,8 +94,7 @@ def parse_binance_symbol(symbol: str) -> tuple[str, str, str]:
 
 
 def _validate_binance_message(msg: dict[str, Any]) -> None:
-    """
-    Validate Binance trade message has required fields.
+    """Validate Binance trade message has required fields.
 
     Args:
         msg: Binance trade payload
@@ -114,8 +113,7 @@ def _validate_binance_message(msg: dict[str, Any]) -> None:
 
 
 def convert_binance_trade_to_v2(msg: dict[str, Any]) -> dict[str, Any]:
-    """
-    Convert Binance WebSocket trade to v2 Trade schema.
+    """Convert Binance WebSocket trade to v2 Trade schema.
 
     Args:
         msg: Binance trade payload from WebSocket
@@ -140,7 +138,7 @@ def convert_binance_trade_to_v2(msg: dict[str, Any]) -> dict[str, Any]:
 
     # Convert timestamps (Binance uses milliseconds, v2 uses microseconds)
     exchange_timestamp_micros = msg["T"] * 1000  # Trade time (T)
-    event_timestamp_micros = msg["E"] * 1000  # Event time (E)
+    msg["E"] * 1000  # Event time (E)
     ingestion_timestamp_micros = int(time.time() * 1_000_000)
 
     # Build v2 trade record
@@ -188,9 +186,9 @@ class BinanceWebSocketClient:
     def __init__(
         self,
         symbols: list[str],
-        on_message: Optional[Callable[[dict[str, Any]], None]] = None,
+        on_message: Callable[[dict[str, Any]], None] | None = None,
         url: str = "wss://stream.binance.com:9443/stream",
-        failover_urls: Optional[list[str]] = None,
+        failover_urls: list[str] | None = None,
         reconnect_delay: int = 5,
         max_reconnect_attempts: int = 10,
         health_check_interval: int = 30,
@@ -220,35 +218,33 @@ class BinanceWebSocketClient:
         self.max_reconnect_attempts = max_reconnect_attempts
         self.health_check_interval = health_check_interval
         self.health_check_timeout = health_check_timeout
-        self.ws: Optional[websockets.WebSocketClientProtocol] = None
+        self.ws: websockets.WebSocketClientProtocol | None = None
         self.is_running = False
         self.reconnect_attempts = 0
 
         # Health check state
         self.last_message_time: float = time.time()
-        self.health_check_task: Optional[asyncio.Task] = None
+        self.health_check_task: asyncio.Task | None = None
 
         # Connection rotation state (prevent memory accumulation in long-lived connections)
-        self.connection_start_time: Optional[float] = None
-        self.connection_max_lifetime_seconds = (
-            config.binance.connection_max_lifetime_hours * 3600
-        )
-        self.rotation_task: Optional[asyncio.Task] = None
+        self.connection_start_time: float | None = None
+        self.connection_max_lifetime_seconds = config.binance.connection_max_lifetime_hours * 3600
+        self.rotation_task: asyncio.Task | None = None
 
         # Memory monitoring state (detect memory leaks via linear regression)
         self.memory_samples: list[tuple[float, int]] = []  # [(timestamp, rss_bytes)]
-        self.memory_monitor_task: Optional[asyncio.Task] = None
+        self.memory_monitor_task: asyncio.Task | None = None
         self.memory_sample_interval_seconds = 30  # Sample memory every 30s
         self.memory_sample_window_size = 120  # Keep last 120 samples (1 hour at 30s intervals)
 
         # WebSocket ping-pong heartbeat state (detect silent connection drops)
-        self.last_pong_time: Optional[float] = None  # Track when last pong was received
-        self.ping_task: Optional[asyncio.Task] = None  # Async task for ping loop
+        self.last_pong_time: float | None = None  # Track when last pong was received
+        self.ping_task: asyncio.Task | None = None  # Async task for ping loop
         self.ping_interval_seconds = config.binance.ping_interval_seconds  # Default: 180s (3 min)
         self.ping_timeout_seconds = config.binance.ping_timeout_seconds  # Default: 10s
 
         # Circuit breaker for resilience
-        self.circuit_breaker: Optional[CircuitBreaker] = None
+        self.circuit_breaker: CircuitBreaker | None = None
         if enable_circuit_breaker:
             self.circuit_breaker = CircuitBreaker(
                 name="binance_websocket",
@@ -372,7 +368,9 @@ class BinanceWebSocketClient:
         # Extract x (time elapsed) and y (memory in MB) from samples
         first_timestamp = self.memory_samples[0][0]
         x_values = [(timestamp - first_timestamp) for timestamp, _ in self.memory_samples]
-        y_values = [rss_bytes / (1024 * 1024) for _, rss_bytes in self.memory_samples]  # Convert to MB
+        y_values = [
+            rss_bytes / (1024 * 1024) for _, rss_bytes in self.memory_samples
+        ]  # Convert to MB
 
         # Calculate means
         n = len(x_values)
@@ -403,7 +401,7 @@ class BinanceWebSocketClient:
             return 0.0
 
         # Calculate growth rate in MB per hour
-        time_span_hours = (x_values[-1] - x_values[0]) / 3600 if x_values[-1] != x_values[0] else 1
+        (x_values[-1] - x_values[0]) / 3600 if x_values[-1] != x_values[0] else 1
         mb_per_hour = slope * 3600  # Convert slope from MB/s to MB/hour
 
         # Score thresholds:
@@ -554,7 +552,7 @@ class BinanceWebSocketClient:
                         last_pong_time=self.last_pong_time,
                     )
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Pong timeout - connection is likely dead
                     logger.warning(
                         "binance_pong_timeout",

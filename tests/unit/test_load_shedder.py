@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from k2.common.load_shedder import LoadShedder, MessagePriority, SymbolTier
+from k2.common.load_shedder import LoadShedder, MessagePriority
 
 
 class TestPriorityClassification:
@@ -349,7 +349,9 @@ class TestEdgeCases:
         shedder = LoadShedder(tier_1=tier_1, tier_2=set())
 
         assert shedder.get_priority("BHP", "trades") == MessagePriority.CRITICAL
-        assert shedder.get_priority("bhp", "trades") == MessagePriority.NORMAL  # Lowercase not in tier
+        assert (
+            shedder.get_priority("bhp", "trades") == MessagePriority.NORMAL
+        )  # Lowercase not in tier
 
     def test_quotes_data_type(self):
         """Test quotes data type uses same priority as trades."""

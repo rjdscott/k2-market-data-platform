@@ -5,7 +5,6 @@ correct topic name generation, configuration retrieval, and subscription
 pattern building.
 """
 
-
 import pytest
 
 from k2.kafka import (
@@ -330,7 +329,9 @@ class TestSubscriptionBuilder:
         """Should subscribe to specific data types only."""
         builder = SubscriptionBuilder()
         topics = builder.subscribe_to_exchange(
-            "equities", "asx", data_types=[DataType.TRADES, DataType.QUOTES],
+            "equities",
+            "asx",
+            data_types=[DataType.TRADES, DataType.QUOTES],
         )
 
         assert len(topics) == 2
@@ -400,7 +401,8 @@ class TestSubscriptionBuilder:
         """Should subscribe to data type for specific exchanges."""
         builder = SubscriptionBuilder()
         topics = builder.subscribe_to_data_type(
-            DataType.TRADES, exchanges={"equities": ["asx"], "crypto": ["binance"]},
+            DataType.TRADES,
+            exchanges={"equities": ["asx"], "crypto": ["binance"]},
         )
 
         assert "market.equities.trades.asx" in topics

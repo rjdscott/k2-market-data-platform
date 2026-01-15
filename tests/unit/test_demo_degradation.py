@@ -4,10 +4,12 @@ Tests for the degradation demo script.
 Tests that the demo runs successfully in both normal and quick modes.
 """
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import Mock, patch
-from scripts.demo_degradation import DegradationDemo
+
 from k2.common.degradation_manager import DegradationLevel
+from scripts.demo_degradation import DegradationDemo
 
 
 class TestDegradationDemo:
@@ -29,8 +31,8 @@ class TestDegradationDemo:
 
         assert demo.quick_mode is True
 
-    @patch('scripts.demo_degradation.console')
-    @patch('time.sleep')
+    @patch("scripts.demo_degradation.console")
+    @patch("time.sleep")
     def test_show_intro(self, mock_sleep, mock_console):
         """Test intro panel displays correctly."""
         demo = DegradationDemo(quick_mode=True)
@@ -41,8 +43,8 @@ class TestDegradationDemo:
         # Verify pause was called
         assert mock_sleep.called
 
-    @patch('scripts.demo_degradation.console')
-    @patch('time.sleep')
+    @patch("scripts.demo_degradation.console")
+    @patch("time.sleep")
     def test_demonstrate_normal(self, mock_sleep, mock_console):
         """Test normal operation demonstration."""
         demo = DegradationDemo(quick_mode=True)
@@ -55,8 +57,8 @@ class TestDegradationDemo:
         # Verify console output
         assert mock_console.print.called
 
-    @patch('scripts.demo_degradation.console')
-    @patch('time.sleep')
+    @patch("scripts.demo_degradation.console")
+    @patch("time.sleep")
     def test_demonstrate_degradation(self, mock_sleep, mock_console):
         """Test degradation sequence demonstration."""
         demo = DegradationDemo(quick_mode=True)
@@ -69,8 +71,8 @@ class TestDegradationDemo:
         # Verify console output
         assert mock_console.print.called
 
-    @patch('scripts.demo_degradation.console')
-    @patch('time.sleep')
+    @patch("scripts.demo_degradation.console")
+    @patch("time.sleep")
     def test_demonstrate_recovery(self, mock_sleep, mock_console):
         """Test recovery sequence demonstration."""
         demo = DegradationDemo(quick_mode=True)
@@ -80,7 +82,7 @@ class TestDegradationDemo:
         demo.simulated_heap = 92.0
         demo.degradation_manager.check_and_degrade(
             lag=demo.simulated_lag,
-            heap_pct=demo.simulated_heap
+            heap_pct=demo.simulated_heap,
         )
 
         # Run recovery
@@ -90,7 +92,7 @@ class TestDegradationDemo:
         assert demo.simulated_lag <= 20_000
         assert demo.simulated_heap <= 50.0
 
-    @patch('scripts.demo_degradation.console')
+    @patch("scripts.demo_degradation.console")
     def test_show_status_table(self, mock_console):
         """Test status table displays correctly."""
         demo = DegradationDemo()
@@ -99,7 +101,7 @@ class TestDegradationDemo:
         demo.simulated_heap = 75.0
         demo.degradation_manager.check_and_degrade(
             lag=demo.simulated_lag,
-            heap_pct=demo.simulated_heap
+            heap_pct=demo.simulated_heap,
         )
 
         demo._show_status_table()
@@ -107,7 +109,7 @@ class TestDegradationDemo:
         # Verify table was printed
         assert mock_console.print.called
 
-    @patch('scripts.demo_degradation.console')
+    @patch("scripts.demo_degradation.console")
     def test_show_level_behavior(self, mock_console):
         """Test level behavior description."""
         demo = DegradationDemo()
@@ -118,7 +120,7 @@ class TestDegradationDemo:
             assert mock_console.print.called
             mock_console.reset_mock()
 
-    @patch('scripts.demo_degradation.console')
+    @patch("scripts.demo_degradation.console")
     def test_show_summary(self, mock_console):
         """Test summary panel displays."""
         demo = DegradationDemo()
@@ -131,7 +133,7 @@ class TestDegradationDemo:
         """Test pause in normal mode."""
         demo = DegradationDemo(quick_mode=False)
 
-        with patch('time.sleep') as mock_sleep:
+        with patch("time.sleep") as mock_sleep:
             demo._pause(3.0)
             mock_sleep.assert_called_once_with(3.0)
 
@@ -139,13 +141,13 @@ class TestDegradationDemo:
         """Test pause in quick mode (shorter)."""
         demo = DegradationDemo(quick_mode=True)
 
-        with patch('time.sleep') as mock_sleep:
+        with patch("time.sleep") as mock_sleep:
             demo._pause(3.0)
             # In quick mode, max pause is 0.5
             mock_sleep.assert_called_once_with(0.5)
 
-    @patch('scripts.demo_degradation.console')
-    @patch('time.sleep')
+    @patch("scripts.demo_degradation.console")
+    @patch("time.sleep")
     def test_full_demo_run(self, mock_sleep, mock_console):
         """Test full demo runs without errors."""
         demo = DegradationDemo(quick_mode=True)
@@ -183,11 +185,11 @@ class TestDegradationDemo:
         stats = demo.load_shedder.get_stats()
 
         # Verify stats have expected keys
-        assert 'total_checked' in stats
-        assert 'total_shed' in stats
-        assert 'shed_rate' in stats
-        assert 'tier_1_count' in stats
-        assert 'tier_2_count' in stats
+        assert "total_checked" in stats
+        assert "total_shed" in stats
+        assert "shed_rate" in stats
+        assert "tier_1_count" in stats
+        assert "tier_2_count" in stats
 
     def test_demo_state_transitions_sequence(self):
         """Test demo follows correct state transition sequence."""
@@ -196,19 +198,18 @@ class TestDegradationDemo:
         # Phase 1: Normal
         demo._demonstrate_normal()
         status = demo.degradation_manager.get_status()
-        assert status['level'] in ['NORMAL']
+        assert status["level"] in ["NORMAL"]
 
         # Phase 2: Degradation (simulates increasing load)
         # After degradation sequence, should be at higher level
         demo._demonstrate_degradation()
         status = demo.degradation_manager.get_status()
-        assert status['level_value'] >= DegradationLevel.SOFT
+        assert status["level_value"] >= DegradationLevel.SOFT
 
     @pytest.mark.parametrize("quick_mode", [True, False])
     def test_demo_runs_in_both_modes(self, quick_mode):
         """Test demo runs successfully in both quick and normal modes."""
-        with patch('scripts.demo_degradation.console'), \
-             patch('time.sleep'):
+        with patch("scripts.demo_degradation.console"), patch("time.sleep"):
 
             demo = DegradationDemo(quick_mode=quick_mode)
             demo.run()  # Should not raise
@@ -217,7 +218,7 @@ class TestDegradationDemo:
 class TestDegradationDemoEdgeCases:
     """Test edge cases and error conditions."""
 
-    @patch('scripts.demo_degradation.console')
+    @patch("scripts.demo_degradation.console")
     def test_status_table_with_extreme_lag(self, mock_console):
         """Test status table with extreme lag values."""
         demo = DegradationDemo()
@@ -226,13 +227,13 @@ class TestDegradationDemoEdgeCases:
         demo.simulated_heap = 99.0
         demo.degradation_manager.check_and_degrade(
             lag=demo.simulated_lag,
-            heap_pct=demo.simulated_heap
+            heap_pct=demo.simulated_heap,
         )
 
         # Should not raise
         demo._show_status_table()
 
-    @patch('scripts.demo_degradation.console')
+    @patch("scripts.demo_degradation.console")
     def test_level_behavior_with_unknown_level(self, mock_console):
         """Test behavior display with unknown level."""
         demo = DegradationDemo()
@@ -248,7 +249,7 @@ class TestDegradationDemoEdgeCases:
         """Test pause handles zero seconds gracefully."""
         demo = DegradationDemo()
 
-        with patch('time.sleep') as mock_sleep:
+        with patch("time.sleep") as mock_sleep:
             demo._pause(0.0)
             mock_sleep.assert_called_once_with(0.0)
 
@@ -262,19 +263,19 @@ class TestDegradationDemoMetrics:
 
         # Check initial level
         initial_status = demo.degradation_manager.get_status()
-        initial_level = initial_status['level_value']
+        initial_level = initial_status["level_value"]
 
         # Trigger degradation
         demo.simulated_lag = 600_000
         demo.simulated_heap = 82.0
         demo.degradation_manager.check_and_degrade(
             lag=demo.simulated_lag,
-            heap_pct=demo.simulated_heap
+            heap_pct=demo.simulated_heap,
         )
 
         # Check level changed
         new_status = demo.degradation_manager.get_status()
-        new_level = new_status['level_value']
+        new_level = new_status["level_value"]
 
         assert new_level > initial_level
 
@@ -284,8 +285,8 @@ class TestDegradationDemoMetrics:
 
         # Initially no messages checked
         stats = demo.load_shedder.get_stats()
-        assert stats['total_checked'] == 0
-        assert stats['total_shed'] == 0
+        assert stats["total_checked"] == 0
+        assert stats["total_shed"] == 0
 
         # Simulate checking messages
         demo.load_shedder.should_process("BHP", DegradationLevel.GRACEFUL, "trades")
@@ -293,7 +294,7 @@ class TestDegradationDemoMetrics:
 
         # Stats should update
         stats = demo.load_shedder.get_stats()
-        assert stats['total_checked'] > 0
+        assert stats["total_checked"] > 0
 
 
 if __name__ == "__main__":

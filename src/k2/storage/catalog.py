@@ -7,7 +7,6 @@ by timestamp + sequence for ordered scans.
 See docs/STORAGE_OPTIMIZATION.md for partitioning strategy rationale.
 """
 
-
 from pyiceberg.catalog import load_catalog
 from pyiceberg.exceptions import TableAlreadyExistsError
 from pyiceberg.partitioning import PartitionField, PartitionSpec
@@ -91,12 +90,16 @@ class IcebergCatalogManager:
                 },
             )
             logger.info(
-                "Iceberg catalog initialized", uri=self.catalog_uri, endpoint=self.s3_endpoint,
+                "Iceberg catalog initialized",
+                uri=self.catalog_uri,
+                endpoint=self.s3_endpoint,
             )
 
         except Exception as e:
             logger.error(
-                "Failed to initialize Iceberg catalog", error=str(e), catalog_uri=self.catalog_uri,
+                "Failed to initialize Iceberg catalog",
+                error=str(e),
+                catalog_uri=self.catalog_uri,
             )
             metrics.increment(
                 "iceberg_write_errors_total",
@@ -143,7 +146,10 @@ class IcebergCatalogManager:
         # Hidden partitioning: users query by timestamp, Iceberg handles partition pruning
         partition_spec = PartitionSpec(
             PartitionField(
-                source_id=4, field_id=1000, transform=DayTransform(), name="exchange_date",
+                source_id=4,
+                field_id=1000,
+                transform=DayTransform(),
+                name="exchange_date",
             ),
         )
 
@@ -235,7 +241,10 @@ class IcebergCatalogManager:
         # Same partitioning and sorting as trades
         partition_spec = PartitionSpec(
             PartitionField(
-                source_id=4, field_id=1000, transform=DayTransform(), name="exchange_date",
+                source_id=4,
+                field_id=1000,
+                transform=DayTransform(),
+                name="exchange_date",
             ),
         )
 

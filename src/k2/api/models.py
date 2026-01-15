@@ -189,9 +189,13 @@ class Quote(BaseModel):
     asset_class: str = Field(description="Asset class (EQUITY, CRYPTO, etc)")
     timestamp: Any = Field(description="Quote time (microseconds precision)")
     bid_price: float | None = Field(default=None, description="Best bid price")
-    bid_quantity: float | None = Field(default=None, description="Best bid quantity (Decimal precision)")
+    bid_quantity: float | None = Field(
+        default=None, description="Best bid quantity (Decimal precision)"
+    )
     ask_price: float | None = Field(default=None, description="Best ask price")
-    ask_quantity: float | None = Field(default=None, description="Best ask quantity (Decimal precision)")
+    ask_quantity: float | None = Field(
+        default=None, description="Best ask quantity (Decimal precision)"
+    )
     currency: str = Field(description="Currency code (e.g., USDT, USD)")
     source_sequence: int | None = Field(default=None, description="Source sequence number")
     ingestion_timestamp: Any = Field(description="Time data was ingested")
@@ -340,7 +344,8 @@ class DependencyHealth(BaseModel):
     name: str = Field(description="Dependency name")
     status: HealthStatus = Field(description="Health status")
     latency_ms: float | None = Field(
-        default=None, description="Response latency in milliseconds",
+        default=None,
+        description="Response latency in milliseconds",
     )
     message: str | None = Field(default=None, description="Status message")
 
@@ -365,7 +370,8 @@ class HealthResponse(BaseModel):
     version: str = Field(description="API version")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     dependencies: list[DependencyHealth] = Field(
-        default_factory=list, description="Dependency health checks",
+        default_factory=list,
+        description="Dependency health checks",
     )
 
 

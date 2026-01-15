@@ -1,5 +1,4 @@
-"""
-KafkaTail - In-memory buffer for recent Kafka messages.
+"""KafkaTail - In-memory buffer for recent Kafka messages.
 
 Maintains a sliding window of recent messages for hybrid queries that merge
 Kafka (uncommitted, last 2-5 minutes) with Iceberg (committed, historical).
@@ -32,7 +31,7 @@ import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from confluent_kafka import Consumer, KafkaError, KafkaException
@@ -55,8 +54,7 @@ class TailMessage:
 
 
 class KafkaTail:
-    """
-    In-memory buffer for recent Kafka messages.
+    """In-memory buffer for recent Kafka messages.
 
     Maintains a sliding window (default 5 minutes) of recent messages
     for hybrid queries. Background consumer thread reads from Kafka
@@ -87,8 +85,7 @@ class KafkaTail:
         max_messages_per_symbol: int = 10000,
         trim_interval_seconds: int = 10,
     ):
-        """
-        Initialize Kafka tail buffer.
+        """Initialize Kafka tail buffer.
 
         Args:
             bootstrap_servers: Kafka bootstrap servers (defaults to config)
@@ -139,14 +136,16 @@ class KafkaTail:
         self._running = True
 
         # Initialize Kafka consumer
-        self._consumer = Consumer({
-            'bootstrap.servers': self.bootstrap_servers,
-            'group.id': self.group_id,
-            'auto.offset.reset': 'latest',  # Start from latest (most recent)
-            'enable.auto.commit': True,
-            'auto.commit.interval.ms': 5000,
-            'session.timeout.ms': 30000,
-        })
+        self._consumer = Consumer(
+            {
+                "bootstrap.servers": self.bootstrap_servers,
+                "group.id": self.group_id,
+                "auto.offset.reset": "latest",  # Start from latest (most recent)
+                "enable.auto.commit": True,
+                "auto.commit.interval.ms": 5000,
+                "session.timeout.ms": 30000,
+            }
+        )
 
         # Subscribe to topic
         self._consumer.subscribe([self.topic])
@@ -201,9 +200,8 @@ class KafkaTail:
                     if msg.error().code() == KafkaError._PARTITION_EOF:
                         # End of partition, not an error
                         continue
-                    else:
-                        logger.error("Kafka error", error=msg.error())
-                        continue
+                    logger.error("Kafka error", error=msg.error())
+                    continue
 
                 # Process message
                 self._process_message(msg)
@@ -218,8 +216,7 @@ class KafkaTail:
         logger.info("Consumer loop stopped")
 
     def _process_message(self, msg: Any) -> None:
-        """
-        Process a message from Kafka.
+        """Process a message from Kafka.
 
         Args:
             msg: Kafka message
@@ -232,23 +229,24 @@ class KafkaTail:
 
             # Extract fields (assuming JSON for now)
             import json
-            data = json.loads(value.decode('utf-8'))
 
-            symbol = data.get('symbol')
-            exchange = data.get('exchange')
-            message_id = data.get('message_id')
+            data = json.loads(value.decode("utf-8"))
+
+            symbol = data.get("symbol")
+            exchange = data.get("exchange")
+            message_id = data.get("message_id")
 
             if not symbol or not exchange or not message_id:
                 logger.warning("Message missing required fields", data=data)
                 return
 
             # Parse timestamp
-            timestamp_str = data.get('timestamp')
+            timestamp_str = data.get("timestamp")
             if timestamp_str:
-                timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
             else:
                 # Use message timestamp if not in payload
-                timestamp = datetime.fromtimestamp(msg.timestamp()[1] / 1000, tz=timezone.utc)
+                timestamp = datetime.fromtimestamp(msg.timestamp()[1] / 1000, tz=UTC)
 
             # Create TailMessage
             tail_msg = TailMessage(
@@ -284,7 +282,7 @@ class KafkaTail:
 
     def _trim_old_messages(self) -> None:
         """Remove messages older than buffer_minutes."""
-        cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=self.buffer_minutes)
+        cutoff_time = datetime.now(UTC) - timedelta(minutes=self.buffer_minutes)
 
         with self._lock:
             trimmed = 0
@@ -327,8 +325,7 @@ class KafkaTail:
         start_time: datetime,
         end_time: datetime,
     ) -> list[dict[str, Any]]:
-        """
-        Query messages from buffer for given symbol and time range.
+        """Query messages from buffer for given symbol and time range.
 
         Args:
             symbol: Symbol to query (e.g., "BTCUSDT")
@@ -345,8 +342,7 @@ class KafkaTail:
             # Filter by time range and exchange
             results = []
             for msg in messages:
-                if (msg.exchange == exchange and
-                    start_time <= msg.timestamp <= end_time):
+                if msg.exchange == exchange and start_time <= msg.timestamp <= end_time:
                     results.append(msg.data)
 
             return results
@@ -374,8 +370,7 @@ def create_kafka_tail(
     bootstrap_servers: str | None = None,
     buffer_minutes: int = 5,
 ) -> KafkaTail:
-    """
-    Factory function to create and start KafkaTail.
+    """Factory function to create and start KafkaTail.
 
     Usage:
         tail = create_kafka_tail()

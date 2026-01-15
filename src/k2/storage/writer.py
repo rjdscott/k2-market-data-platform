@@ -158,7 +158,9 @@ class IcebergWriter:
 
         except Exception as e:
             logger.error(
-                "Failed to initialize Iceberg writer", error=str(e), catalog_uri=self.catalog_uri,
+                "Failed to initialize Iceberg writer",
+                error=str(e),
+                catalog_uri=self.catalog_uri,
             )
             metrics.increment(
                 "iceberg_write_errors_total",
@@ -584,7 +586,9 @@ class IcebergWriter:
                 pa.field("quantity", pa.decimal128(18, 8), nullable=False),  # Decimal, not int64
                 pa.field("currency", pa.string(), nullable=False),
                 pa.field("side", pa.string(), nullable=False),  # enum stored as string
-                pa.field("trade_conditions", pa.string(), nullable=True),  # JSON string for compatibility
+                pa.field(
+                    "trade_conditions", pa.string(), nullable=True
+                ),  # JSON string for compatibility
                 pa.field("source_sequence", pa.int64(), nullable=True),
                 pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
                 pa.field("platform_sequence", pa.int64(), nullable=True),

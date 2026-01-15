@@ -67,7 +67,10 @@ class TestMarketDataProducer:
         assert producer._total_errors == 0
 
     def test_producer_with_custom_retry_config(
-        self, mock_schema_registry_client, mock_producer, mock_avro_serializer,
+        self,
+        mock_schema_registry_client,
+        mock_producer,
+        mock_avro_serializer,
     ):
         """Test producer accepts custom retry configuration."""
         producer = MarketDataProducer(
@@ -348,7 +351,10 @@ class TestMarketDataProducer:
         assert stats["retries"] == 10
 
     def test_create_producer_factory(
-        self, mock_schema_registry_client, mock_producer, mock_avro_serializer,
+        self,
+        mock_schema_registry_client,
+        mock_producer,
+        mock_avro_serializer,
     ):
         """Test create_producer factory function."""
         producer = create_producer(
@@ -369,7 +375,9 @@ class TestMarketDataProducer:
                 MarketDataProducer()
 
     def test_kafka_producer_initialization_failure(
-        self, mock_schema_registry_client, mock_avro_serializer,
+        self,
+        mock_schema_registry_client,
+        mock_avro_serializer,
     ):
         """Test producer handles Kafka initialization failure."""
         with patch("k2.ingestion.producer.Producer") as mock_prod:
@@ -382,7 +390,9 @@ class TestMarketDataProducer:
         """Test producer handles serializer creation failure."""
         # Mock get_latest_version to raise error
         mock_schema_registry_client.get_latest_version.side_effect = SchemaRegistryError(
-            http_status_code=404, error_code=40401, error_message="Schema not found",
+            http_status_code=404,
+            error_code=40401,
+            error_message="Schema not found",
         )
 
         record = {

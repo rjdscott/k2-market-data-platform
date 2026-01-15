@@ -9,7 +9,6 @@ Metrics follow Prometheus naming conventions:
 - Descriptive help text
 """
 
-
 from prometheus_client import Counter, Gauge, Histogram, Info
 
 # ==============================================================================

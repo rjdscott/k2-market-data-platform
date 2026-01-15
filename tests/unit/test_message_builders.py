@@ -8,7 +8,7 @@ Tests ensure v2 messages conform to schema requirements:
 - vendor_data mapping
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -26,7 +26,7 @@ class TestTradeV2Builder:
             symbol="BHP",
             exchange="ASX",
             asset_class="equities",
-            timestamp=datetime(2026, 1, 12, 10, 30, 0, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 1, 12, 10, 30, 0, tzinfo=UTC),
             price=Decimal("45.67"),
             quantity=Decimal("1000"),
         )
@@ -68,7 +68,7 @@ class TestTradeV2Builder:
             symbol="BHP",
             exchange="ASX",
             asset_class="equities",
-            timestamp=datetime(2026, 1, 12, 10, 30, 0, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 1, 12, 10, 30, 0, tzinfo=UTC),
             price=Decimal("45.67"),
             quantity=Decimal("1000"),
             currency="AUD",
@@ -141,7 +141,7 @@ class TestTradeV2Builder:
 
     def test_build_trade_v2_timestamp_conversion(self):
         """Test timestamp conversion from datetime to microseconds."""
-        dt = datetime(2026, 1, 12, 10, 30, 0, tzinfo=timezone.utc)
+        dt = datetime(2026, 1, 12, 10, 30, 0, tzinfo=UTC)
         expected_micros = int(dt.timestamp() * 1_000_000)
 
         trade = build_trade_v2(
@@ -198,7 +198,7 @@ class TestQuoteV2Builder:
             symbol="BHP",
             exchange="ASX",
             asset_class="equities",
-            timestamp=datetime(2026, 1, 12, 10, 30, 0, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 1, 12, 10, 30, 0, tzinfo=UTC),
             bid_price=Decimal("45.60"),
             bid_quantity=Decimal("1000"),
             ask_price=Decimal("45.70"),

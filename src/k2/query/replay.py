@@ -384,7 +384,8 @@ class ReplayEngine:
             )
 
             metrics.increment(
-                "query_executions_total", labels={"query_type": "snapshot", "status": "success"},
+                "query_executions_total",
+                labels={"query_type": "snapshot", "status": "success"},
             )
 
             return rows
@@ -396,7 +397,8 @@ class ReplayEngine:
                 error=str(e),
             )
             metrics.increment(
-                "query_executions_total", labels={"query_type": "snapshot", "status": "error"},
+                "query_executions_total",
+                labels={"query_type": "snapshot", "status": "error"},
             )
             raise
 
@@ -537,7 +539,8 @@ class ReplayEngine:
         )
 
         metrics.increment(
-            "query_executions_total", labels={"query_type": "replay", "status": "success"},
+            "query_executions_total",
+            labels={"query_type": "replay", "status": "success"},
         )
 
     def rewind_to_timestamp(

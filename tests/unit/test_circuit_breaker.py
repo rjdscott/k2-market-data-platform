@@ -223,9 +223,8 @@ class TestCircuitBreakerContextManager:
         breaker = CircuitBreaker(name="test", failure_threshold=3)
 
         # First failure
-        with pytest.raises(ValueError):
-            with breaker:
-                raise ValueError("Test error")
+        with pytest.raises(ValueError), breaker:
+            raise ValueError("Test error")
 
         assert breaker.state == CircuitBreakerState.CLOSED
         assert breaker._failure_count == 1
@@ -235,9 +234,8 @@ class TestCircuitBreakerContextManager:
         breaker = CircuitBreaker(name="test", failure_threshold=1)
 
         # Open the circuit
-        with pytest.raises(ValueError):
-            with breaker:
-                raise ValueError("Test error")
+        with pytest.raises(ValueError), breaker:
+            raise ValueError("Test error")
 
         assert breaker.state == CircuitBreakerState.OPEN
 
