@@ -448,6 +448,12 @@ HTTP_REQUESTS_IN_PROGRESS = Gauge(
     STANDARD_LABELS + ["method", "endpoint"],
 )
 
+HTTP_REQUEST_SIZE_LIMIT_EXCEEDED_TOTAL = Counter(
+    "k2_http_request_size_limit_exceeded_total",
+    "Total HTTP requests rejected due to size limit exceeded",
+    STANDARD_LABELS + ["method", "endpoint"],
+)
+
 # ==============================================================================
 # System Metrics
 # ==============================================================================
@@ -556,6 +562,7 @@ _METRIC_REGISTRY: dict[str, object] = {
     "http_request_duration_seconds": HTTP_REQUEST_DURATION_SECONDS,
     "http_request_errors_total": HTTP_REQUEST_ERRORS_TOTAL,
     "http_requests_in_progress": HTTP_REQUESTS_IN_PROGRESS,
+    "http_request_size_limit_exceeded_total": HTTP_REQUEST_SIZE_LIMIT_EXCEEDED_TOTAL,
     # System
     "circuit_breaker_state": CIRCUIT_BREAKER_STATE,
     "circuit_breaker_failures_total": CIRCUIT_BREAKER_FAILURES_TOTAL,

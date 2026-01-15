@@ -328,16 +328,23 @@ class BatchLoader:
                 if row.get("venue"):
                     vendor_data["venue"] = str(row["venue"])
 
+            # Validate numeric fields before conversion
+            try:
+                price = Decimal(str(row["price"]))
+                quantity = Decimal(str(row["quantity"]))
+            except (ValueError, ArithmeticError) as e:
+                raise ValueError(f"Invalid numeric value in row: {e}") from e
+
             # Build v2 trade message
             return build_trade_v2(
                 symbol=row["symbol"],
                 exchange=self.exchange.upper(),
                 asset_class=self.asset_class,
                 timestamp=timestamp,
-                price=Decimal(str(row["price"])),
-                quantity=Decimal(str(row["quantity"])),
+                price=price,
+                quantity=quantity,
                 currency=self.currency,
-                side=side_enum,
+                side=side_lower,  # Use lowercase side for consistency
                 trade_id=row["trade_id"],
                 message_id=str(uuid.uuid4()),
                 source_sequence=int(row["sequence_number"]),

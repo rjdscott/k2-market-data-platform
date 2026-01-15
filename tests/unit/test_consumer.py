@@ -221,25 +221,28 @@ class TestMarketDataConsumer:
         mock_dlq,
     ):
         """Test consumer reads defaults from environment."""
-        with patch.dict(
-            "os.environ",
-            {
-                "K2_KAFKA_BOOTSTRAP_SERVERS": "kafka:29092",
-                "K2_SCHEMA_REGISTRY_URL": "http://schema-registry:8081",
-                "K2_CONSUMER_GROUP": "env-consumer-group",
-                "K2_CONSUMER_BATCH_SIZE": "2000",
-            },
-        ):
-            consumer = MarketDataConsumer(
-                topics=["topic1"],
-                iceberg_writer=mock_iceberg_writer,
-                sequence_tracker=mock_sequence_tracker,
-            )
+        with patch("k2.ingestion.consumer.config") as mock_config:
+            # Mock the config object's kafka properties
+            mock_config.kafka.bootstrap_servers = "kafka:29092"
+            mock_config.kafka.schema_registry_url = "http://schema-registry:8081"
 
-            assert consumer.bootstrap_servers == "kafka:29092"
-            assert consumer.schema_registry_url == "http://schema-registry:8081"
-            assert consumer.consumer_group == "env-consumer-group"
-            assert consumer.batch_size == 2000
+            with patch.dict(
+                "os.environ",
+                {
+                    "K2_CONSUMER_GROUP": "env-consumer-group",
+                    "K2_CONSUMER_BATCH_SIZE": "2000",
+                },
+            ):
+                consumer = MarketDataConsumer(
+                    topics=["topic1"],
+                    iceberg_writer=mock_iceberg_writer,
+                    sequence_tracker=mock_sequence_tracker,
+                )
+
+                assert consumer.bootstrap_servers == "kafka:29092"
+                assert consumer.schema_registry_url == "http://schema-registry:8081"
+                assert consumer.consumer_group == "env-consumer-group"
+                assert consumer.batch_size == 2000
 
     def test_consumer_config(self, consumer):
         """Test Kafka consumer configuration."""
@@ -248,9 +251,9 @@ class TestMarketDataConsumer:
 
     def test_consumer_subscribe_to_topics(self, consumer, mock_consumer):
         """Test consumer subscribes to topic list."""
-        consumer._init_consumer()
-
-        mock_consumer.subscribe.assert_called_once_with(["market.equities.trades.asx"])
+        # Consumer already initialized and subscribed in __init__
+        # Just verify subscribe was called with correct topics
+        mock_consumer.subscribe.assert_called_with(["market.equities.trades.asx"])
 
     def test_consumer_subscribe_to_pattern(
         self,
@@ -269,10 +272,8 @@ class TestMarketDataConsumer:
             sequence_tracker=mock_sequence_tracker,
         )
 
-        mock_consumer.subscribe.assert_called()
-        # Check pattern subscription (first arg is pattern string)
-        call_args = mock_consumer.subscribe.call_args
-        assert "market\\.equities\\..*" in str(call_args)
+        # Verify subscribe was called with the correct pattern
+        mock_consumer.subscribe.assert_called_with(pattern="market\\.equities\\..*")
 
     def test_deserialize_message_success(self, consumer, mock_avro_deserializer):
         """Test successful message deserialization."""
