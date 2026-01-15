@@ -193,7 +193,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Image digest
-        run: echo "Pushed image with digest: ${{ steps.meta.outputs.digest }}"
+        run: echo "Pushed image with digest - ${{ steps.meta.outputs.digest }}"
 
   # Post-merge summary
   post-merge-summary:
