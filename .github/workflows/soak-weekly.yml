@@ -1,0 +1,369 @@
+name: Weekly Soak Test
+
+on:
+  schedule:
+    # Run every Sunday at 2 AM UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      test_duration:
+        description: 'Test duration (1h or 24h)'
+        required: false
+        type: choice
+        options:
+          - '1h'
+          - '24h'
+        default: '24h'
+      confirm_24h:
+        description: 'Confirm 24h test (type "CONFIRM" for 24h test)'
+        required: false
+        type: string
+        default: ''
+
+# No concurrency control - soak tests run to completion
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  # Validation job - ensure user confirmed 24h test
+  validate-input:
+    name: Validate Input
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.check.outputs.run }}
+      duration: ${{ steps.check.outputs.duration }}
+
+    steps:
+      - name: Check confirmation for 24h test
+        id: check
+        run: |
+          # If scheduled run, always proceed with 24h
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "run=true" >> $GITHUB_OUTPUT
+            echo "duration=24h" >> $GITHUB_OUTPUT
+            echo "✅ Scheduled run - proceeding with 24h soak test"
+            exit 0
+          fi
+
+          # If manual trigger
+          duration="${{ inputs.test_duration }}"
+          confirm="${{ inputs.confirm_24h }}"
+
+          echo "duration=$duration" >> $GITHUB_OUTPUT
+
+          if [[ "$duration" == "24h" ]]; then
+            if [[ "$confirm" == "CONFIRM" ]]; then
+              echo "run=true" >> $GITHUB_OUTPUT
+              echo "✅ 24h test confirmed - proceeding"
+            else
+              echo "run=false" >> $GITHUB_OUTPUT
+              echo "❌ 24h test requires confirmation"
+              echo "Please set confirm_24h input to 'CONFIRM' to proceed"
+              exit 1
+            fi
+          else
+            echo "run=true" >> $GITHUB_OUTPUT
+            echo "✅ 1h test - proceeding"
+          fi
+
+  # 24-hour soak test
+  soak-test-24h:
+    name: 24-Hour Soak Test
+    runs-on: ubuntu-latest
+    needs: validate-input
+    if: needs.validate-input.outputs.should-run == 'true' && needs.validate-input.outputs.duration == '24h'
+    timeout-minutes: 1500  # 25 hours (24h test + buffer)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Docker Compose services
+        run: |
+          docker compose up -d
+          echo "Waiting for services to be healthy..."
+          sleep 60
+
+      - name: Wait for services
+        run: |
+          timeout 120s bash -c 'until docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list &>/dev/null; do sleep 2; done'
+          echo "✅ Kafka is ready"
+
+          timeout 90s bash -c 'until curl -sf http://localhost:9000/minio/health/live &>/dev/null; do sleep 2; done'
+          echo "✅ MinIO is ready"
+
+          timeout 90s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
+          echo "✅ PostgreSQL is ready"
+
+      - name: Run 24-hour soak test
+        run: |
+          echo "🚀 Starting 24-hour soak test at $(date -u)"
+          echo "This test will run for approximately 24 hours..."
+
+          uv run pytest tests/soak/test_binance_24h_soak.py \
+            -v \
+            -s \
+            -m soak \
+            --tb=short \
+            --junitxml=soak-24h-results.xml
+
+      - name: Collect memory profile
+        if: always()
+        run: |
+          echo "Collecting memory usage statistics..."
+
+          # Docker stats
+          docker stats --no-stream > docker-stats.txt
+
+          # System memory
+          free -h > system-memory.txt
+
+          # Disk usage
+          df -h > disk-usage.txt
+
+          echo "Memory profile collected"
+
+      - name: Show Docker logs
+        if: always()
+        run: |
+          echo "=== Kafka logs (last 200 lines) ==="
+          docker compose logs kafka --tail=200
+
+          echo "=== MinIO logs (last 200 lines) ==="
+          docker compose logs minio --tail=200
+
+          echo "=== PostgreSQL logs (last 200 lines) ==="
+          docker compose logs postgres --tail=200
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-test-24h-results
+          path: |
+            soak-24h-results.xml
+            docker-stats.txt
+            system-memory.txt
+            disk-usage.txt
+          retention-days: 90
+
+      - name: Cleanup Docker services
+        if: always()
+        run: docker compose down -v
+
+  # 1-hour soak test (for testing/validation)
+  soak-test-1h:
+    name: 1-Hour Soak Test
+    runs-on: ubuntu-latest
+    needs: validate-input
+    if: needs.validate-input.outputs.should-run == 'true' && needs.validate-input.outputs.duration == '1h'
+    timeout-minutes: 75  # 1h 15min
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Docker Compose services
+        run: |
+          docker compose up -d
+          sleep 60
+
+      - name: Wait for services
+        run: |
+          timeout 120s bash -c 'until docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list &>/dev/null; do sleep 2; done'
+          timeout 90s bash -c 'until curl -sf http://localhost:9000/minio/health/live &>/dev/null; do sleep 2; done'
+          timeout 90s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
+          echo "✅ All services ready"
+
+      - name: Run 1-hour soak test
+        run: |
+          echo "🚀 Starting 1-hour soak test at $(date -u)"
+
+          uv run pytest tests/soak/test_binance_1h_validation.py \
+            -v \
+            -s \
+            -m soak \
+            --tb=short \
+            --junitxml=soak-1h-results.xml
+
+      - name: Collect memory profile
+        if: always()
+        run: |
+          docker stats --no-stream > docker-stats.txt
+          free -h > system-memory.txt
+          df -h > disk-usage.txt
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-test-1h-results
+          path: |
+            soak-1h-results.xml
+            docker-stats.txt
+            system-memory.txt
+            disk-usage.txt
+          retention-days: 30
+
+      - name: Cleanup Docker services
+        if: always()
+        run: docker compose down -v
+
+  # Generate soak test report
+  generate-report:
+    name: Generate Soak Test Report
+    runs-on: ubuntu-latest
+    needs: [validate-input, soak-test-24h, soak-test-1h]
+    if: always() && needs.validate-input.outputs.should-run == 'true'
+
+    steps:
+      - name: Download test results
+        uses: actions/download-artifact@v4
+        with:
+          path: soak-results
+
+      - name: Generate report
+        run: |
+          duration="${{ needs.validate-input.outputs.duration }}"
+
+          echo "# Soak Test Report ($duration)" > report.md
+          echo "" >> report.md
+          echo "**Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> report.md
+          echo "**Duration**: $duration" >> report.md
+          echo "**Branch**: ${{ github.ref_name }}" >> report.md
+          echo "**Commit**: ${{ github.sha }}" >> report.md
+          echo "" >> report.md
+          echo "## Test Results" >> report.md
+          echo "" >> report.md
+
+          if [[ "$duration" == "24h" ]]; then
+            echo "| Test | Result |" >> report.md
+            echo "|------|--------|" >> report.md
+            echo "| 24-Hour Soak Test | ${{ needs.soak-test-24h.result }} |" >> report.md
+          else
+            echo "| Test | Result |" >> report.md
+            echo "|------|--------|" >> report.md
+            echo "| 1-Hour Soak Test | ${{ needs.soak-test-1h.result }} |" >> report.md
+          fi
+
+          echo "" >> report.md
+          echo "## Resource Usage" >> report.md
+          echo "" >> report.md
+
+          # Display memory stats if available
+          if [ -f "soak-results/soak-test-${duration}-results/system-memory.txt" ]; then
+            echo "### System Memory" >> report.md
+            echo '```' >> report.md
+            cat "soak-results/soak-test-${duration}-results/system-memory.txt" >> report.md
+            echo '```' >> report.md
+            echo "" >> report.md
+          fi
+
+          if [ -f "soak-results/soak-test-${duration}-results/disk-usage.txt" ]; then
+            echo "### Disk Usage" >> report.md
+            echo '```' >> report.md
+            cat "soak-results/soak-test-${duration}-results/disk-usage.txt" >> report.md
+            echo '```' >> report.md
+            echo "" >> report.md
+          fi
+
+          echo "## Workflow Details" >> report.md
+          echo "" >> report.md
+          echo "View full workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> report.md
+
+      - name: Display report
+        run: cat report.md
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-test-report
+          path: report.md
+          retention-days: 90
+
+  # Summary
+  soak-summary:
+    name: Soak Test Summary
+    runs-on: ubuntu-latest
+    needs: [validate-input, soak-test-24h, soak-test-1h]
+    if: always() && needs.validate-input.outputs.should-run == 'true'
+
+    steps:
+      - name: Check status
+        run: |
+          duration="${{ needs.validate-input.outputs.duration }}"
+
+          echo "Soak Test Summary ($duration)"
+          echo "============================="
+          echo ""
+
+          if [[ "$duration" == "24h" ]]; then
+            result="${{ needs.soak-test-24h.result }}"
+            echo "24-Hour Soak Test: $result"
+          else
+            result="${{ needs.soak-test-1h.result }}"
+            echo "1-Hour Soak Test: $result"
+          fi
+
+          echo ""
+
+          if [[ "$result" != "success" ]]; then
+            echo "❌ Soak Test FAILED"
+            exit 1
+          else
+            echo "✅ Soak Test PASSED"
+          fi
+
+  # Email notification
+  notify-on-completion:
+    name: Notify on Completion
+    runs-on: ubuntu-latest
+    needs: [validate-input, soak-test-24h, soak-test-1h]
+    if: always() && needs.validate-input.outputs.should-run == 'true'
+
+    steps:
+      - name: Send notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "${{ needs.soak-test-24h.result == 'success' || needs.soak-test-1h.result == 'success' && '✅' || '❌' }} K2 Platform: ${{ needs.validate-input.outputs.duration }} Soak Test Complete"
+          to: ${{ secrets.MAIL_TO }}
+          from: K2 CI/CD
+          body: |
+            Soak test completed for ${{ github.ref_name }}
+
+            Duration: ${{ needs.validate-input.outputs.duration }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+            Results:
+            - 24h Soak Test: ${{ needs.soak-test-24h.result }}
+            - 1h Soak Test: ${{ needs.soak-test-1h.result }}
+
+            View workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Download test results and resource profiles from workflow artifacts.

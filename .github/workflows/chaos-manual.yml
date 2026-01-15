@@ -1,0 +1,406 @@
+name: Manual Chaos Testing
+
+on:
+  workflow_dispatch:
+    inputs:
+      chaos_type:
+        description: 'Type of chaos test to run'
+        required: true
+        type: choice
+        options:
+          - 'all'
+          - 'kafka'
+          - 'storage'
+          - 'operational'
+        default: 'all'
+      confirmation:
+        description: 'Confirm destructive testing (type "CONFIRM")'
+        required: true
+        type: string
+
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  # Validation - ensure user confirmed
+  validate-input:
+    name: Validate Confirmation
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.check.outputs.run }}
+      chaos-type: ${{ inputs.chaos_type }}
+
+    steps:
+      - name: Check confirmation
+        id: check
+        run: |
+          if [[ "${{ inputs.confirmation }}" == "CONFIRM" ]]; then
+            echo "run=true" >> $GITHUB_OUTPUT
+            echo "✅ Chaos testing confirmed"
+            echo "Type: ${{ inputs.chaos_type }}"
+          else
+            echo "run=false" >> $GITHUB_OUTPUT
+            echo "❌ Chaos testing requires confirmation"
+            echo "Please set confirmation input to 'CONFIRM' to proceed"
+            exit 1
+          fi
+
+  # Kafka chaos tests
+  kafka-chaos:
+    name: Kafka Chaos Tests
+    runs-on: ubuntu-latest
+    needs: validate-input
+    if: needs.validate-input.outputs.should-run == 'true' && (inputs.chaos_type == 'all' || inputs.chaos_type == 'kafka')
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Docker Compose services
+        run: |
+          docker compose up -d
+          sleep 30
+
+      - name: Wait for services
+        run: |
+          timeout 90s bash -c 'until docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list &>/dev/null; do sleep 2; done'
+          timeout 60s bash -c 'until curl -sf http://localhost:9000/minio/health/live &>/dev/null; do sleep 2; done'
+          timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
+          echo "✅ All services ready for Kafka chaos testing"
+
+      - name: Run Kafka chaos tests
+        run: |
+          echo "🔥 Starting Kafka chaos tests..."
+
+          uv run pytest tests/chaos/test_kafka_chaos.py \
+            -v \
+            -s \
+            -m chaos \
+            --maxfail=5 \
+            --tb=short \
+            --junitxml=kafka-chaos-results.xml
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kafka-chaos-results
+          path: kafka-chaos-results.xml
+          retention-days: 30
+
+      - name: Show Docker logs on failure
+        if: failure()
+        run: |
+          echo "=== Kafka logs ==="
+          docker compose logs kafka --tail=200
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v
+
+  # Storage chaos tests
+  storage-chaos:
+    name: Storage Chaos Tests
+    runs-on: ubuntu-latest
+    needs: validate-input
+    if: needs.validate-input.outputs.should-run == 'true' && (inputs.chaos_type == 'all' || inputs.chaos_type == 'storage')
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Docker Compose services
+        run: |
+          docker compose up -d
+          sleep 30
+
+      - name: Wait for services
+        run: |
+          timeout 90s bash -c 'until docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list &>/dev/null; do sleep 2; done'
+          timeout 60s bash -c 'until curl -sf http://localhost:9000/minio/health/live &>/dev/null; do sleep 2; done'
+          timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
+          echo "✅ All services ready for storage chaos testing"
+
+      - name: Run storage chaos tests
+        run: |
+          echo "🔥 Starting storage chaos tests..."
+
+          uv run pytest tests/chaos/test_storage_chaos.py \
+            -v \
+            -s \
+            -m chaos \
+            --maxfail=5 \
+            --tb=short \
+            --junitxml=storage-chaos-results.xml
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-chaos-results
+          path: storage-chaos-results.xml
+          retention-days: 30
+
+      - name: Show Docker logs on failure
+        if: failure()
+        run: |
+          echo "=== MinIO logs ==="
+          docker compose logs minio --tail=200
+          echo "=== PostgreSQL logs ==="
+          docker compose logs postgres --tail=200
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v
+
+  # Operational/disaster recovery tests
+  operational-chaos:
+    name: Operational Tests
+    runs-on: ubuntu-latest
+    needs: validate-input
+    if: needs.validate-input.outputs.should-run == 'true' && (inputs.chaos_type == 'all' || inputs.chaos_type == 'operational')
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Docker Compose services
+        run: |
+          docker compose up -d
+          sleep 30
+
+      - name: Wait for services
+        run: |
+          timeout 90s bash -c 'until docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list &>/dev/null; do sleep 2; done'
+          timeout 60s bash -c 'until curl -sf http://localhost:9000/minio/health/live &>/dev/null; do sleep 2; done'
+          timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
+          echo "✅ All services ready for operational testing"
+
+      - name: Run operational tests
+        run: |
+          echo "🔥 Starting operational/disaster recovery tests..."
+
+          uv run pytest tests/operational/test_disaster_recovery.py \
+            -v \
+            -s \
+            -m operational \
+            --maxfail=3 \
+            --tb=short \
+            --junitxml=operational-chaos-results.xml
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operational-chaos-results
+          path: operational-chaos-results.xml
+          retention-days: 30
+
+      - name: Show Docker logs on failure
+        if: failure()
+        run: |
+          echo "=== Kafka logs ==="
+          docker compose logs kafka --tail=200
+          echo "=== MinIO logs ==="
+          docker compose logs minio --tail=200
+          echo "=== PostgreSQL logs ==="
+          docker compose logs postgres --tail=200
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v
+
+  # Generate chaos test report
+  generate-report:
+    name: Generate Chaos Report
+    runs-on: ubuntu-latest
+    needs: [validate-input, kafka-chaos, storage-chaos, operational-chaos]
+    if: always() && needs.validate-input.outputs.should-run == 'true'
+
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          path: chaos-results
+
+      - name: Generate report
+        run: |
+          chaos_type="${{ inputs.chaos_type }}"
+
+          echo "# Chaos Testing Report" > report.md
+          echo "" >> report.md
+          echo "**Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> report.md
+          echo "**Type**: $chaos_type" >> report.md
+          echo "**Branch**: ${{ github.ref_name }}" >> report.md
+          echo "**Commit**: ${{ github.sha }}" >> report.md
+          echo "" >> report.md
+          echo "## Test Results" >> report.md
+          echo "" >> report.md
+          echo "| Test Category | Result |" >> report.md
+          echo "|---------------|--------|" >> report.md
+
+          if [[ "$chaos_type" == "all" ]] || [[ "$chaos_type" == "kafka" ]]; then
+            echo "| Kafka Chaos | ${{ needs.kafka-chaos.result }} |" >> report.md
+          fi
+
+          if [[ "$chaos_type" == "all" ]] || [[ "$chaos_type" == "storage" ]]; then
+            echo "| Storage Chaos | ${{ needs.storage-chaos.result }} |" >> report.md
+          fi
+
+          if [[ "$chaos_type" == "all" ]] || [[ "$chaos_type" == "operational" ]]; then
+            echo "| Operational | ${{ needs.operational-chaos.result }} |" >> report.md
+          fi
+
+          echo "" >> report.md
+          echo "## Purpose" >> report.md
+          echo "" >> report.md
+          echo "Chaos engineering tests validate system resilience under adverse conditions:" >> report.md
+          echo "" >> report.md
+          echo "- **Kafka Chaos**: Tests producer/consumer behavior during broker failures" >> report.md
+          echo "- **Storage Chaos**: Tests storage layer resilience (MinIO/S3 outages)" >> report.md
+          echo "- **Operational**: Tests disaster recovery procedures and service dependencies" >> report.md
+          echo "" >> report.md
+          echo "## Workflow Details" >> report.md
+          echo "" >> report.md
+          echo "View full workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> report.md
+
+      - name: Display report
+        run: cat report.md
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-test-report
+          path: report.md
+          retention-days: 90
+
+  # Summary
+  chaos-summary:
+    name: Chaos Test Summary
+    runs-on: ubuntu-latest
+    needs: [validate-input, kafka-chaos, storage-chaos, operational-chaos]
+    if: always() && needs.validate-input.outputs.should-run == 'true'
+
+    steps:
+      - name: Check results
+        run: |
+          chaos_type="${{ inputs.chaos_type }}"
+
+          echo "Chaos Testing Summary ($chaos_type)"
+          echo "================================="
+          echo ""
+
+          failed=false
+
+          if [[ "$chaos_type" == "all" ]] || [[ "$chaos_type" == "kafka" ]]; then
+            kafka_result="${{ needs.kafka-chaos.result }}"
+            echo "Kafka Chaos: $kafka_result"
+            if [[ "$kafka_result" != "success" ]] && [[ "$kafka_result" != "skipped" ]]; then
+              failed=true
+            fi
+          fi
+
+          if [[ "$chaos_type" == "all" ]] || [[ "$chaos_type" == "storage" ]]; then
+            storage_result="${{ needs.storage-chaos.result }}"
+            echo "Storage Chaos: $storage_result"
+            if [[ "$storage_result" != "success" ]] && [[ "$storage_result" != "skipped" ]]; then
+              failed=true
+            fi
+          fi
+
+          if [[ "$chaos_type" == "all" ]] || [[ "$chaos_type" == "operational" ]]; then
+            operational_result="${{ needs.operational-chaos.result }}"
+            echo "Operational: $operational_result"
+            if [[ "$operational_result" != "success" ]] && [[ "$operational_result" != "skipped" ]]; then
+              failed=true
+            fi
+          fi
+
+          echo ""
+
+          if $failed; then
+            echo "❌ Chaos Testing FAILED"
+            echo "System resilience issues detected - review test results"
+            exit 1
+          else
+            echo "✅ Chaos Testing PASSED"
+            echo "System demonstrated resilience under adverse conditions"
+          fi
+
+  # Email notification
+  notify-on-completion:
+    name: Notify on Completion
+    runs-on: ubuntu-latest
+    needs: [validate-input, kafka-chaos, storage-chaos, operational-chaos]
+    if: always() && needs.validate-input.outputs.should-run == 'true'
+
+    steps:
+      - name: Determine overall result
+        id: result
+        run: |
+          kafka="${{ needs.kafka-chaos.result }}"
+          storage="${{ needs.storage-chaos.result }}"
+          operational="${{ needs.operational-chaos.result }}"
+
+          if [[ "$kafka" == "failure" ]] || [[ "$storage" == "failure" ]] || [[ "$operational" == "failure" ]]; then
+            echo "status=❌ FAILED" >> $GITHUB_OUTPUT
+          else
+            echo "status=✅ PASSED" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "${{ steps.result.outputs.status }} K2 Platform: Chaos Testing Complete"
+          to: ${{ secrets.MAIL_TO }}
+          from: K2 CI/CD
+          body: |
+            Chaos testing completed for ${{ github.ref_name }}
+
+            Type: ${{ inputs.chaos_type }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+            Results:
+            - Kafka Chaos: ${{ needs.kafka-chaos.result }}
+            - Storage Chaos: ${{ needs.storage-chaos.result }}
+            - Operational: ${{ needs.operational-chaos.result }}
+
+            View workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Chaos engineering tests validate system resilience under adverse conditions.

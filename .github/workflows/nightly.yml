@@ -1,0 +1,360 @@
+name: Nightly Build (Comprehensive)
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      skip_chaos:
+        description: 'Skip chaos tests'
+        required: false
+        type: boolean
+        default: false
+      skip_operational:
+        description: 'Skip operational tests'
+        required: false
+        type: boolean
+        default: false
+
+# No concurrency control - let nightly runs complete
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  # Full test suite
+  comprehensive-tests:
+    name: Comprehensive Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Docker Compose services
+        run: |
+          docker compose up -d
+          echo "Waiting for services to be healthy..."
+          sleep 30
+
+      - name: Wait for services
+        run: |
+          # Kafka
+          timeout 90s bash -c 'until docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list &>/dev/null; do sleep 2; done'
+          echo "✅ Kafka is ready"
+
+          # MinIO
+          timeout 60s bash -c 'until curl -sf http://localhost:9000/minio/health/live &>/dev/null; do sleep 2; done'
+          echo "✅ MinIO is ready"
+
+          # PostgreSQL
+          timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
+          echo "✅ PostgreSQL is ready"
+
+      - name: Run unit tests (parallel)
+        run: |
+          uv run pytest tests/unit/ \
+            -v \
+            -n auto \
+            --maxfail=20 \
+            --tb=short \
+            --junitxml=nightly-unit-results.xml
+
+      - name: Run integration tests (all)
+        run: |
+          uv run pytest tests/integration/ \
+            -v \
+            --maxfail=10 \
+            --tb=short \
+            --junitxml=nightly-integration-results.xml
+
+      - name: Run performance tests (all)
+        run: |
+          uv run pytest tests/performance/ \
+            -v \
+            --maxfail=5 \
+            --tb=short \
+            --junitxml=nightly-performance-results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-test-results
+          path: |
+            nightly-unit-results.xml
+            nightly-integration-results.xml
+            nightly-performance-results.xml
+          retention-days: 30
+
+      - name: Cleanup Docker services
+        if: always()
+        run: docker compose down -v
+
+  # Chaos engineering tests
+  chaos-tests:
+    name: Chaos Engineering Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ !inputs.skip_chaos }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Docker Compose services
+        run: |
+          docker compose up -d
+          sleep 30
+
+      - name: Wait for services
+        run: |
+          timeout 90s bash -c 'until docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list &>/dev/null; do sleep 2; done'
+          timeout 60s bash -c 'until curl -sf http://localhost:9000/minio/health/live &>/dev/null; do sleep 2; done'
+          timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
+          echo "✅ All services ready for chaos testing"
+
+      - name: Run chaos tests
+        run: |
+          uv run pytest tests/chaos/ \
+            -v \
+            -m chaos \
+            --maxfail=5 \
+            --tb=short \
+            --junitxml=nightly-chaos-results.xml
+
+      - name: Upload chaos test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-chaos-results
+          path: nightly-chaos-results.xml
+          retention-days: 30
+
+      - name: Show Docker logs on failure
+        if: failure()
+        run: |
+          echo "=== Kafka logs ==="
+          docker compose logs kafka --tail=100
+          echo "=== MinIO logs ==="
+          docker compose logs minio --tail=100
+          echo "=== PostgreSQL logs ==="
+          docker compose logs postgres --tail=100
+
+      - name: Cleanup Docker services
+        if: always()
+        run: docker compose down -v
+
+  # Operational/disaster recovery tests
+  operational-tests:
+    name: Operational Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ !inputs.skip_operational }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Docker Compose services
+        run: |
+          docker compose up -d
+          sleep 30
+
+      - name: Wait for services
+        run: |
+          timeout 90s bash -c 'until docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list &>/dev/null; do sleep 2; done'
+          timeout 60s bash -c 'until curl -sf http://localhost:9000/minio/health/live &>/dev/null; do sleep 2; done'
+          timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
+          echo "✅ All services ready for operational testing"
+
+      - name: Run operational tests
+        run: |
+          uv run pytest tests/operational/ \
+            -v \
+            -m operational \
+            --maxfail=3 \
+            --tb=short \
+            --junitxml=nightly-operational-results.xml
+
+      - name: Upload operational test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-operational-results
+          path: nightly-operational-results.xml
+          retention-days: 30
+
+      - name: Show Docker logs on failure
+        if: failure()
+        run: |
+          echo "=== Kafka logs ==="
+          docker compose logs kafka --tail=100
+          echo "=== MinIO logs ==="
+          docker compose logs minio --tail=100
+          echo "=== PostgreSQL logs ==="
+          docker compose logs postgres --tail=100
+
+      - name: Cleanup Docker services
+        if: always()
+        run: docker compose down -v
+
+  # Generate comprehensive test report
+  generate-report:
+    name: Generate Test Report
+    runs-on: ubuntu-latest
+    needs: [comprehensive-tests, chaos-tests, operational-tests]
+    if: always()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all test results
+        uses: actions/download-artifact@v4
+        with:
+          path: test-results
+
+      - name: Generate test summary
+        run: |
+          echo "# Nightly Build Test Report" > report.md
+          echo "" >> report.md
+          echo "**Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> report.md
+          echo "**Branch**: ${{ github.ref_name }}" >> report.md
+          echo "**Commit**: ${{ github.sha }}" >> report.md
+          echo "" >> report.md
+          echo "## Job Results" >> report.md
+          echo "" >> report.md
+          echo "| Job | Result |" >> report.md
+          echo "|-----|--------|" >> report.md
+          echo "| Comprehensive Tests | ${{ needs.comprehensive-tests.result }} |" >> report.md
+          echo "| Chaos Tests | ${{ needs.chaos-tests.result }} |" >> report.md
+          echo "| Operational Tests | ${{ needs.operational-tests.result }} |" >> report.md
+          echo "" >> report.md
+
+          # Count test results from XML files if available
+          if [ -d "test-results" ]; then
+            echo "## Test Counts" >> report.md
+            echo "" >> report.md
+
+            # Try to count tests from XML files
+            if command -v xmllint &> /dev/null; then
+              for file in test-results/**/*.xml; do
+                if [ -f "$file" ]; then
+                  tests=$(xmllint --xpath "string(//testsuite/@tests)" "$file" 2>/dev/null || echo "N/A")
+                  failures=$(xmllint --xpath "string(//testsuite/@failures)" "$file" 2>/dev/null || echo "N/A")
+                  errors=$(xmllint --xpath "string(//testsuite/@errors)" "$file" 2>/dev/null || echo "N/A")
+                  echo "- $(basename $file): $tests tests, $failures failures, $errors errors" >> report.md
+                fi
+              done
+            else
+              echo "xmllint not available for detailed test counts" >> report.md
+            fi
+          fi
+
+          echo "" >> report.md
+          echo "## Workflow Details" >> report.md
+          echo "" >> report.md
+          echo "View full workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> report.md
+
+      - name: Display report
+        run: cat report.md
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-build-report
+          path: report.md
+          retention-days: 90
+
+  # Nightly build summary
+  nightly-summary:
+    name: Nightly Build Summary
+    runs-on: ubuntu-latest
+    needs: [comprehensive-tests, chaos-tests, operational-tests]
+    if: always()
+
+    steps:
+      - name: Check job statuses
+        run: |
+          echo "Nightly Build Summary"
+          echo "===================="
+          echo ""
+          echo "Comprehensive Tests: ${{ needs.comprehensive-tests.result }}"
+          echo "Chaos Tests: ${{ needs.chaos-tests.result }}"
+          echo "Operational Tests: ${{ needs.operational-tests.result }}"
+          echo ""
+
+          # Determine overall status
+          if [ "${{ needs.comprehensive-tests.result }}" != "success" ] || \
+             [ "${{ needs.chaos-tests.result }}" != "success" ] && [ "${{ needs.chaos-tests.result }}" != "skipped" ] || \
+             [ "${{ needs.operational-tests.result }}" != "success" ] && [ "${{ needs.operational-tests.result }}" != "skipped" ]; then
+            echo "❌ Nightly Build FAILED"
+            exit 1
+          else
+            echo "✅ Nightly Build PASSED"
+          fi
+
+  # Email notification on failure
+  notify-on-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [comprehensive-tests, chaos-tests, operational-tests]
+    if: failure()
+
+    steps:
+      - name: Send notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "❌ K2 Platform: Nightly Build Failed"
+          to: ${{ secrets.MAIL_TO }}
+          from: K2 CI/CD
+          body: |
+            Nightly build failed on ${{ github.ref_name }}
+
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+            Job Results:
+            - Comprehensive Tests: ${{ needs.comprehensive-tests.result }}
+            - Chaos Tests: ${{ needs.chaos-tests.result }}
+            - Operational Tests: ${{ needs.operational-tests.result }}
+
+            View workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            This indicates potential stability or resilience issues that should be investigated.
