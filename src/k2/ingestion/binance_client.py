@@ -241,6 +241,12 @@ class BinanceWebSocketClient:
         self.memory_sample_interval_seconds = 30  # Sample memory every 30s
         self.memory_sample_window_size = 120  # Keep last 120 samples (1 hour at 30s intervals)
 
+        # WebSocket ping-pong heartbeat state (detect silent connection drops)
+        self.last_pong_time: Optional[float] = None  # Track when last pong was received
+        self.ping_task: Optional[asyncio.Task] = None  # Async task for ping loop
+        self.ping_interval_seconds = config.binance.ping_interval_seconds  # Default: 180s (3 min)
+        self.ping_timeout_seconds = config.binance.ping_timeout_seconds  # Default: 10s
+
         # Circuit breaker for resilience
         self.circuit_breaker: Optional[CircuitBreaker] = None
         if enable_circuit_breaker:
@@ -494,6 +500,87 @@ class BinanceWebSocketClient:
                     error_type=type(e).__name__,
                 )
 
+    async def _ping_loop(self) -> None:
+        """Send WebSocket ping frames periodically to detect silent connection drops.
+
+        Binance requires ping every <10 minutes to keep connection alive.
+        This loop sends pings every 3 minutes (configurable) and monitors
+        for pong responses. If pong is not received within timeout (10s),
+        triggers reconnection.
+        """
+        logger.info(
+            "binance_ping_loop_started",
+            ping_interval_seconds=self.ping_interval_seconds,
+            ping_timeout_seconds=self.ping_timeout_seconds,
+        )
+
+        while self.is_running:
+            # Wait for ping interval
+            await asyncio.sleep(self.ping_interval_seconds)
+
+            if not self.is_running:
+                break
+
+            # Skip if no active connection
+            if not self.ws or self.ws.closed:
+                continue
+
+            try:
+                # Send ping frame and wait for pong with timeout
+                # The websockets library automatically handles pong responses
+                pong_waiter = await self.ws.ping()
+
+                logger.debug(
+                    "binance_ping_sent",
+                    ping_interval_seconds=self.ping_interval_seconds,
+                )
+
+                # Wait for pong with timeout
+                try:
+                    await asyncio.wait_for(pong_waiter, timeout=self.ping_timeout_seconds)
+
+                    # Pong received successfully
+                    self.last_pong_time = time.time()
+
+                    # Update last pong timestamp metric
+                    metrics.gauge(
+                        "binance_last_pong_timestamp_seconds",
+                        value=self.last_pong_time,
+                        labels=self.metrics_labels,
+                    )
+
+                    logger.debug(
+                        "binance_pong_received",
+                        last_pong_time=self.last_pong_time,
+                    )
+
+                except asyncio.TimeoutError:
+                    # Pong timeout - connection is likely dead
+                    logger.warning(
+                        "binance_pong_timeout",
+                        ping_timeout_seconds=self.ping_timeout_seconds,
+                        last_pong_time=self.last_pong_time,
+                        message="No pong received within timeout - triggering reconnect",
+                    )
+
+                    # Increment pong timeout counter
+                    metrics.increment(
+                        "binance_pong_timeouts_total",
+                        labels=self.metrics_labels,
+                    )
+
+                    # Trigger reconnect by closing the websocket
+                    # The main connect loop will automatically reconnect
+                    if self.ws:
+                        await self.ws.close(code=1000, reason="Pong timeout")
+
+            except Exception as e:
+                logger.error(
+                    "binance_ping_error",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+
     async def connect(self) -> None:
         """Connect to Binance WebSocket and start receiving messages.
 
@@ -524,6 +611,14 @@ class BinanceWebSocketClient:
             "binance_memory_monitor_enabled",
             sample_interval_seconds=self.memory_sample_interval_seconds,
             sample_window_size=self.memory_sample_window_size,
+        )
+
+        # Start ping-pong heartbeat loop
+        self.ping_task = asyncio.create_task(self._ping_loop())
+        logger.info(
+            "binance_ping_loop_enabled",
+            ping_interval_seconds=self.ping_interval_seconds,
+            ping_timeout_seconds=self.ping_timeout_seconds,
         )
 
         while self.is_running and self.reconnect_attempts < self.max_reconnect_attempts:
@@ -763,6 +858,14 @@ class BinanceWebSocketClient:
                 await self.memory_monitor_task
             except asyncio.CancelledError:
                 logger.info("binance_memory_monitor_cancelled")
+
+        # Cancel ping task
+        if self.ping_task:
+            self.ping_task.cancel()
+            try:
+                await self.ping_task
+            except asyncio.CancelledError:
+                logger.info("binance_ping_task_cancelled")
 
         # Close WebSocket
         if self.ws:

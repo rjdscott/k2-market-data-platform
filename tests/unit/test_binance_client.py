@@ -668,3 +668,74 @@ class TestMemoryMonitoring:
         assert len(client.memory_samples) == 10
         # First sample should be timestamp 10 (samples 0-9 evicted)
         assert client.memory_samples[0][0] == 10.0
+
+
+class TestPingPongHeartbeat:
+    """Test WebSocket ping-pong heartbeat functionality."""
+
+    def test_ping_fields_initialized(self):
+        """Test that ping-pong fields are initialized."""
+        from k2.common.config import config
+
+        client = BinanceWebSocketClient(symbols=["BTCUSDT"])
+
+        # Ping-pong fields should be initialized
+        assert client.last_pong_time is None  # No pong received yet
+        assert client.ping_task is None  # Task not started yet
+        assert client.ping_interval_seconds == config.binance.ping_interval_seconds
+        assert client.ping_timeout_seconds == config.binance.ping_timeout_seconds
+
+    def test_default_ping_config(self):
+        """Test that default ping config is 180 seconds (3 minutes)."""
+        from k2.common.config import BinanceConfig
+
+        config = BinanceConfig()
+        assert config.ping_interval_seconds == 180  # 3 minutes
+        assert config.ping_timeout_seconds == 10  # 10 seconds
+
+    def test_ping_config_validation(self):
+        """Test that ping config validates bounds (30-600s interval, 5-60s timeout)."""
+        from k2.common.config import BinanceConfig
+
+        # Valid interval values
+        config_min = BinanceConfig(ping_interval_seconds=30)
+        assert config_min.ping_interval_seconds == 30
+
+        config_max = BinanceConfig(ping_interval_seconds=600)  # 10 minutes
+        assert config_max.ping_interval_seconds == 600
+
+        config_mid = BinanceConfig(ping_interval_seconds=180)  # 3 minutes
+        assert config_mid.ping_interval_seconds == 180
+
+        # Valid timeout values
+        config_timeout_min = BinanceConfig(ping_timeout_seconds=5)
+        assert config_timeout_min.ping_timeout_seconds == 5
+
+        config_timeout_max = BinanceConfig(ping_timeout_seconds=60)
+        assert config_timeout_max.ping_timeout_seconds == 60
+
+    def test_ping_metrics_defined(self):
+        """Test that ping-pong metrics are defined in registry."""
+        from k2.common import metrics_registry
+
+        # Check ping metrics are defined as module constants
+        assert hasattr(metrics_registry, "BINANCE_LAST_PONG_TIMESTAMP_SECONDS")
+        assert hasattr(metrics_registry, "BINANCE_PONG_TIMEOUTS_TOTAL")
+
+        # Get the metrics
+        last_pong_metric = metrics_registry.BINANCE_LAST_PONG_TIMESTAMP_SECONDS
+        pong_timeouts_metric = metrics_registry.BINANCE_PONG_TIMEOUTS_TOTAL
+
+        # Check they are valid Prometheus metrics
+        assert last_pong_metric is not None
+        assert pong_timeouts_metric is not None
+
+    def test_ping_interval_less_than_binance_requirement(self):
+        """Test that default ping interval is less than Binance's 10 minute requirement."""
+        from k2.common.config import BinanceConfig
+
+        config = BinanceConfig()
+        # Binance requires ping every <10 minutes (600 seconds)
+        # Default should be well under that (180 seconds = 3 minutes)
+        assert config.ping_interval_seconds < 600
+        assert config.ping_interval_seconds == 180  # 3 minutes

@@ -269,6 +269,19 @@ MEMORY_LEAK_DETECTION_SCORE = Gauge(
     STANDARD_LABELS,
 )
 
+# WebSocket ping-pong heartbeat metrics
+BINANCE_LAST_PONG_TIMESTAMP_SECONDS = Gauge(
+    "k2_binance_last_pong_timestamp_seconds",
+    "Timestamp of last pong response received (for heartbeat health monitoring)",
+    STANDARD_LABELS,
+)
+
+BINANCE_PONG_TIMEOUTS_TOTAL = Counter(
+    "k2_binance_pong_timeouts_total",
+    "Total WebSocket pong timeouts (no response within timeout period)",
+    STANDARD_LABELS,
+)
+
 # ==============================================================================
 # Storage Layer Metrics (Iceberg)
 # ==============================================================================
@@ -515,6 +528,9 @@ _METRIC_REGISTRY: dict[str, object] = {
     "process_memory_rss_bytes": PROCESS_MEMORY_RSS_BYTES,
     "process_memory_vms_bytes": PROCESS_MEMORY_VMS_BYTES,
     "memory_leak_detection_score": MEMORY_LEAK_DETECTION_SCORE,
+    # Ping-Pong Heartbeat
+    "binance_last_pong_timestamp_seconds": BINANCE_LAST_PONG_TIMESTAMP_SECONDS,
+    "binance_pong_timeouts_total": BINANCE_PONG_TIMEOUTS_TOTAL,
     # Storage
     "iceberg_rows_written_total": ICEBERG_ROWS_WRITTEN_TOTAL,
     "iceberg_write_duration_seconds": ICEBERG_WRITE_DURATION_SECONDS,

@@ -223,6 +223,20 @@ class BinanceConfig(BaseSettings):
         le=24,
     )
 
+    ping_interval_seconds: int = Field(
+        default=180,
+        description="WebSocket ping interval in seconds (Binance requires <10 minutes)",
+        ge=30,
+        le=600,
+    )
+
+    ping_timeout_seconds: int = Field(
+        default=10,
+        description="Max seconds to wait for pong response before triggering reconnect",
+        ge=5,
+        le=60,
+    )
+
     @field_validator("websocket_url")
     @classmethod
     def validate_websocket_url(cls, v: str) -> str:
