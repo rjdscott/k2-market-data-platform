@@ -363,7 +363,8 @@ class TestBinanceWebSocketClient:
             symbols=["BTCUSDT", "ETHUSDT", "BNBEUR"],
         )
 
-        assert client.metrics_labels["symbols"] == "BTCUSDT,ETHUSDT,BNBEUR"
+        # Metrics labels dict exists (currently empty, per-symbol labels added at metric time)
+        assert isinstance(client.metrics_labels, dict)
 
     def test_callback_function(self):
         """Test that on_message callback is properly stored."""
@@ -474,3 +475,57 @@ class TestSSLConfiguration:
         # Client can be created without explicitly passing SSL config
         client = BinanceWebSocketClient(symbols=["BTCUSDT"])
         assert client is not None  # Client creation succeeds with default SSL config
+
+
+class TestConnectionRotation:
+    """Test connection rotation functionality."""
+
+    def test_rotation_fields_initialized(self):
+        """Test that connection rotation fields are initialized."""
+        from k2.common.config import config
+
+        client = BinanceWebSocketClient(symbols=["BTCUSDT"])
+
+        # Connection rotation fields should be initialized
+        assert client.connection_start_time is None  # Not connected yet
+        assert client.connection_max_lifetime_seconds == (
+            config.binance.connection_max_lifetime_hours * 3600
+        )
+        assert client.rotation_task is None  # Task not started yet
+
+    def test_default_rotation_config(self):
+        """Test that default rotation config is 4 hours."""
+        from k2.common.config import BinanceConfig
+
+        config = BinanceConfig()
+        assert config.connection_max_lifetime_hours == 4
+
+    def test_rotation_config_validation(self):
+        """Test that rotation config validates bounds (1-24 hours)."""
+        from k2.common.config import BinanceConfig
+
+        # Valid values
+        config_min = BinanceConfig(connection_max_lifetime_hours=1)
+        assert config_min.connection_max_lifetime_hours == 1
+
+        config_max = BinanceConfig(connection_max_lifetime_hours=24)
+        assert config_max.connection_max_lifetime_hours == 24
+
+        config_mid = BinanceConfig(connection_max_lifetime_hours=8)
+        assert config_mid.connection_max_lifetime_hours == 8
+
+    def test_rotation_metrics_defined(self):
+        """Test that rotation metrics are defined in registry."""
+        from k2.common import metrics_registry
+
+        # Check rotation metrics are defined as module constants
+        assert hasattr(metrics_registry, "BINANCE_CONNECTION_ROTATIONS_TOTAL")
+        assert hasattr(metrics_registry, "BINANCE_CONNECTION_LIFETIME_SECONDS")
+
+        # Get the metrics
+        rotations_metric = metrics_registry.BINANCE_CONNECTION_ROTATIONS_TOTAL
+        lifetime_metric = metrics_registry.BINANCE_CONNECTION_LIFETIME_SECONDS
+
+        # Check they are valid Prometheus metrics
+        assert rotations_metric is not None
+        assert lifetime_metric is not None

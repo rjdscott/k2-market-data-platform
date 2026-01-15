@@ -38,6 +38,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from k2.common.circuit_breaker import CircuitBreaker
+from k2.common.config import config
 from k2.common.metrics import create_component_metrics
 
 logger = structlog.get_logger(__name__)
@@ -226,6 +227,13 @@ class BinanceWebSocketClient:
         self.last_message_time: float = time.time()
         self.health_check_task: Optional[asyncio.Task] = None
 
+        # Connection rotation state (prevent memory accumulation in long-lived connections)
+        self.connection_start_time: Optional[float] = None
+        self.connection_max_lifetime_seconds = (
+            config.binance.connection_max_lifetime_hours * 3600
+        )
+        self.rotation_task: Optional[asyncio.Task] = None
+
         # Circuit breaker for resilience
         self.circuit_breaker: Optional[CircuitBreaker] = None
         if enable_circuit_breaker:
@@ -278,6 +286,58 @@ class BinanceWebSocketClient:
                     if self.ws:
                         await self.ws.close()
 
+    async def _connection_rotation_loop(self) -> None:
+        """Monitor connection lifetime and trigger periodic rotation.
+
+        Rotates connections every N hours to prevent memory accumulation
+        in long-lived WebSocket connections. This addresses memory leaks
+        from frame buffers and other connection state.
+        """
+        logger.info(
+            "binance_connection_rotation_enabled",
+            max_lifetime_hours=config.binance.connection_max_lifetime_hours,
+            max_lifetime_seconds=self.connection_max_lifetime_seconds,
+        )
+
+        while self.is_running:
+            await asyncio.sleep(60)  # Check every minute
+
+            if not self.is_running:
+                break
+
+            # Skip if no active connection
+            if not self.connection_start_time:
+                continue
+
+            # Calculate connection lifetime
+            lifetime = time.time() - self.connection_start_time
+
+            # Update lifetime metric
+            metrics.gauge(
+                "binance_connection_lifetime_seconds",
+                value=lifetime,
+                labels=self.metrics_labels,
+            )
+
+            # Check if rotation needed
+            if lifetime > self.connection_max_lifetime_seconds:
+                logger.info(
+                    "binance_connection_rotation_triggered",
+                    lifetime_seconds=lifetime,
+                    max_lifetime_seconds=self.connection_max_lifetime_seconds,
+                )
+
+                # Increment rotation metric
+                metrics.increment(
+                    "binance_connection_rotations_total",
+                    labels={**self.metrics_labels, "reason": "scheduled_rotation"},
+                )
+
+                # Trigger graceful reconnect by closing connection
+                # The main connect loop will automatically reconnect
+                if self.ws:
+                    await self.ws.close(code=1000, reason="Periodic rotation")
+
     async def connect(self) -> None:
         """Connect to Binance WebSocket and start receiving messages.
 
@@ -294,6 +354,13 @@ class BinanceWebSocketClient:
                 interval=self.health_check_interval,
                 timeout=self.health_check_timeout,
             )
+
+        # Start connection rotation loop
+        self.rotation_task = asyncio.create_task(self._connection_rotation_loop())
+        logger.info(
+            "binance_connection_rotation_enabled",
+            max_lifetime_hours=config.binance.connection_max_lifetime_hours,
+        )
 
         while self.is_running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
@@ -393,6 +460,7 @@ class BinanceWebSocketClient:
             self.ws = ws
             self.reconnect_attempts = 0  # Reset on successful connection
             self.last_message_time = time.time()  # Reset health check timer
+            self.connection_start_time = time.time()  # Track connection lifetime for rotation
 
             # Update connection status metric
             metrics.gauge(
@@ -505,7 +573,7 @@ class BinanceWebSocketClient:
             await asyncio.sleep(delay)
 
     async def disconnect(self) -> None:
-        """Gracefully disconnect from WebSocket and stop health check."""
+        """Gracefully disconnect from WebSocket and stop monitoring tasks."""
         self.is_running = False
 
         # Cancel health check task
@@ -515,6 +583,14 @@ class BinanceWebSocketClient:
                 await self.health_check_task
             except asyncio.CancelledError:
                 logger.info("binance_health_check_cancelled")
+
+        # Cancel rotation task
+        if self.rotation_task:
+            self.rotation_task.cancel()
+            try:
+                await self.rotation_task
+            except asyncio.CancelledError:
+                logger.info("binance_rotation_task_cancelled")
 
         # Close WebSocket
         if self.ws:

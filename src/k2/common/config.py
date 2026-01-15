@@ -209,6 +209,13 @@ class BinanceConfig(BaseSettings):
         description="Path to custom CA certificate bundle (for corporate proxies)",
     )
 
+    connection_max_lifetime_hours: int = Field(
+        default=4,
+        description="Maximum connection lifetime before rotation (hours, prevents memory accumulation)",
+        ge=1,
+        le=24,
+    )
+
     @field_validator("websocket_url")
     @classmethod
     def validate_websocket_url(cls, v: str) -> str:

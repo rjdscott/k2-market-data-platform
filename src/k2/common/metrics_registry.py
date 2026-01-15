@@ -226,6 +226,18 @@ BINANCE_RECONNECT_DELAY_SECONDS = Gauge(
     STANDARD_LABELS,
 )
 
+BINANCE_CONNECTION_ROTATIONS_TOTAL = Counter(
+    "k2_binance_connection_rotations_total",
+    "Total scheduled connection rotations (periodic reconnects to prevent memory leaks)",
+    STANDARD_LABELS + ["reason"],  # reason: scheduled_rotation|manual_rotation
+)
+
+BINANCE_CONNECTION_LIFETIME_SECONDS = Gauge(
+    "k2_binance_connection_lifetime_seconds",
+    "Current WebSocket connection lifetime in seconds",
+    STANDARD_LABELS,
+)
+
 # ==============================================================================
 # Storage Layer Metrics (Iceberg)
 # ==============================================================================
@@ -464,6 +476,8 @@ _METRIC_REGISTRY: dict[str, object] = {
     "binance_connection_errors_total": BINANCE_CONNECTION_ERRORS_TOTAL,
     "binance_last_message_timestamp_seconds": BINANCE_LAST_MESSAGE_TIMESTAMP_SECONDS,
     "binance_reconnect_delay_seconds": BINANCE_RECONNECT_DELAY_SECONDS,
+    "binance_connection_rotations_total": BINANCE_CONNECTION_ROTATIONS_TOTAL,
+    "binance_connection_lifetime_seconds": BINANCE_CONNECTION_LIFETIME_SECONDS,
     # Storage
     "iceberg_rows_written_total": ICEBERG_ROWS_WRITTEN_TOTAL,
     "iceberg_write_duration_seconds": ICEBERG_WRITE_DURATION_SECONDS,
