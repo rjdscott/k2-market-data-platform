@@ -61,7 +61,6 @@ jobs:
         run: |
           uv run pytest tests/unit/ \
             -v \
-            -n auto \
             --maxfail=10 \
             --tb=short \
             --junitxml=unit-test-results.xml

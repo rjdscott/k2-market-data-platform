@@ -404,8 +404,12 @@ class MarketDataConsumer:
             # Graceful shutdown
             self._shutdown()
 
-    def _consume_batch(self):
-        """Consume a batch of messages and write to Iceberg (Decision #015)."""
+    def _consume_batch(self) -> list[dict[str, Any]]:
+        """Consume a batch of messages and write to Iceberg (Decision #015).
+
+        Returns:
+            List of successfully consumed and written records
+        """
         batch: list[dict[str, Any]] = []
         batch_start_time = time.time()
 
@@ -637,6 +641,9 @@ class MarketDataConsumer:
                 )
                 raise
 
+        # Return the batch for testing/monitoring purposes
+        return batch
+
     def _deserialize_message(self, msg) -> dict[str, Any] | None:
         """Deserialize Avro message from Kafka.
 
@@ -646,14 +653,41 @@ class MarketDataConsumer:
         Returns:
             Deserialized record as dictionary, or None if deserialization fails
         """
-        # Get deserializer for this topic
-        subject = f"{msg.topic()}-value"
-        deserializer = self._get_deserializer(subject)
+        # Check for message errors first
+        if msg.error():
+            if msg.error().code() == KafkaError._PARTITION_EOF:
+                # End of partition - not a real error, just return None
+                logger.debug("Reached end of partition", partition=msg.partition())
+            else:
+                # Real error - log and increment error count
+                logger.error(
+                    "Message has error",
+                    error=msg.error(),
+                    topic=msg.topic(),
+                    partition=msg.partition(),
+                )
+                self.stats.errors += 1
+            return None
 
-        # Deserialize value
-        value = deserializer(msg.value(), SerializationContext(msg.topic(), MessageField.VALUE))
+        try:
+            # Get deserializer for this topic
+            subject = f"{msg.topic()}-value"
+            deserializer = self._get_deserializer(subject)
 
-        return value
+            # Deserialize value
+            value = deserializer(msg.value(), SerializationContext(msg.topic(), MessageField.VALUE))
+
+            return value
+        except Exception as err:
+            # Deserialization failed - log and increment error count
+            logger.error(
+                "Failed to deserialize message",
+                error=str(err),
+                topic=msg.topic(),
+                partition=msg.partition(),
+            )
+            self.stats.errors += 1
+            return None
 
     @retry(
         retry=retry_if_exception_type(RETRYABLE_ERRORS),

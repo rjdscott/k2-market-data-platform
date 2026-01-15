@@ -1,8 +1,10 @@
-# CI/CD Quick Start Guide
+claude# CI/CD Quick Start Guide
 
 **Target Audience**: Developers
 **Time to Read**: 5 minutes
 **Last Updated**: 2026-01-15
+
+**Important**: Tests now run with a max of **8 parallel workers** by default to prevent OOM crashes on high-core-count machines. If you experience memory issues, reduce workers with `-n 4` or `-n 2`.
 
 **New**: Schema Registry schemas are now **automatically registered** when you run `make docker-up`. See [Schema Registry Quick Start](schema-registry-quickstart.md) for details.
 
@@ -270,11 +272,14 @@ def test_something():
 
 **Debug**:
 ```bash
-# Run with same conditions as CI
-uv run pytest tests/ -n auto -v
+# Run with same conditions as CI (max 8 workers to prevent OOM)
+uv run pytest tests/ -v
 
 # Enable debug logging
 uv run pytest tests/ -v -s --log-cli-level=DEBUG
+
+# Note: Default is -n 8 (parallel). To run sequentially use -n 0
+uv run pytest tests/ -v -n 0
 ```
 
 ---
@@ -294,7 +299,7 @@ make test-post-merge
 ### Speed Up Local Tests
 
 ```bash
-# Parallel execution
+# Parallel execution (max 8 workers to prevent OOM on high-core machines)
 make test-unit-parallel
 
 # Run only changed tests (requires pytest-picked)
@@ -302,6 +307,9 @@ uv run pytest --picked -v
 
 # Run failed tests first
 uv run pytest --failed-first -v
+
+# Note: Tests run with -n 8 by default. If you have memory issues, use -n 4 or -n 2
+uv run pytest tests/unit/ -v -n 4  # Use 4 workers instead of default 8
 ```
 
 ### Debug Slow Tests

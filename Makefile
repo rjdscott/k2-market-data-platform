@@ -169,9 +169,9 @@ test-unit: ## Run unit tests only (no Docker required)
 	@$(PYTEST) tests/unit/ -v
 	@echo "$(GREEN)✓ Unit tests passed$(NC)"
 
-test-unit-parallel: ## Run unit tests in parallel (faster)
+test-unit-parallel: ## Run unit tests in parallel (faster, max 8 workers to prevent OOM)
 	@echo "$(BLUE)Running unit tests in parallel...$(NC)"
-	@$(PYTEST) tests/unit/ -v -n auto
+	@$(PYTEST) tests/unit/ -v -n 8
 	@echo "$(GREEN)✓ Unit tests passed$(NC)"
 
 test-integration: docker-up ## Run integration tests (excludes slow tests)

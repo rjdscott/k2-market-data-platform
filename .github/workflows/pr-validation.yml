@@ -73,7 +73,6 @@ jobs:
         run: |
           uv run pytest tests/unit/ \
             -v \
-            -n auto \
             -m "not performance" \
             --maxfail=5 \
             --tb=short \

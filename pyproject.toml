@@ -310,6 +310,9 @@ addopts = [
     # Exclude heavy tests by default - must explicitly opt-in with -m flag
     # IMPORTANT: performance tests excluded to prevent OOM when running with -n auto
     "-m", "not slow and not chaos and not soak and not operational and not performance",
+    # Limit parallel workers to prevent OOM on high-core-count machines
+    # Max 8 workers even if more cores available (each worker ~500MB+ memory)
+    "-n", "8",
 ]
 markers = [
     "unit: Unit tests (fast, no external dependencies)",
