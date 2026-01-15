@@ -69,21 +69,31 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Run unit tests (parallel with pytest-xdist)
+      - name: Run unit tests (parallel, lightweight only)
         run: |
           uv run pytest tests/unit/ \
             -v \
             -n auto \
+            -m "not performance" \
             --maxfail=5 \
             --tb=short \
-            --junitxml=pytest-results.xml
+            --junitxml=pytest-unit-results.xml
+
+      - name: Run performance tests (sequential to prevent OOM)
+        run: |
+          uv run pytest tests/performance/ \
+            -v \
+            -n 0 \
+            -m performance \
+            --tb=short \
+            --junitxml=pytest-performance-results.xml
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: unit-test-results
-          path: pytest-results.xml
+          path: pytest-*-results.xml
           retention-days: 7
 
   security-scan:

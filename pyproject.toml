@@ -308,12 +308,13 @@ addopts = [
     "--showlocals",
     "--tb=short",
     # Exclude heavy tests by default - must explicitly opt-in with -m flag
-    "-m", "not slow and not chaos and not soak and not operational",
+    # IMPORTANT: performance tests excluded to prevent OOM when running with -n auto
+    "-m", "not slow and not chaos and not soak and not operational and not performance",
 ]
 markers = [
     "unit: Unit tests (fast, no external dependencies)",
     "integration: Integration tests (require Docker services)",
-    "performance: Performance benchmarks",
+    "performance: Performance benchmarks (memory intensive, run sequentially with -n 0)",
     "slow: Slow tests (> 1 second)",
     "soak: Soak tests (long-running endurance tests, hours to days)",
     "chaos: Chaos engineering tests (destructive, manipulates Docker)",

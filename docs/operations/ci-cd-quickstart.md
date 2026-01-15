@@ -4,6 +4,8 @@
 **Time to Read**: 5 minutes
 **Last Updated**: 2026-01-15
 
+**New**: Schema Registry schemas are now **automatically registered** when you run `make docker-up`. See [Schema Registry Quick Start](schema-registry-quickstart.md) for details.
+
 ---
 
 ## TL;DR - Essential Commands

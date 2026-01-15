@@ -92,6 +92,8 @@ RIO,RIO,Rio Tinto Limited,Materials,120000000000,2026-01-10T00:00:00Z"""
 
     def test_parse_trade_row_valid(self, loader):
         """Test parsing valid trade row."""
+        from decimal import Decimal
+
         row = {
             "symbol": "BHP",
             "exchange_timestamp": "2026-01-10T10:30:00.123456Z",
@@ -105,10 +107,10 @@ RIO,RIO,Rio Tinto Limited,Materials,120000000000,2026-01-10T00:00:00Z"""
         parsed = loader._parse_trade_row(row)
 
         assert parsed["symbol"] == "BHP"
-        assert parsed["price"] == 45.50
-        assert parsed["quantity"] == 1000
-        assert parsed["side"] == "buy"  # Lowercase
-        assert parsed["sequence_number"] == 12345
+        assert parsed["price"] == Decimal("45.50")  # v2 returns Decimal
+        assert parsed["quantity"] == Decimal("1000")  # v2 returns Decimal
+        assert parsed["side"] == "BUY"  # v2 returns uppercase
+        assert parsed["source_sequence"] == 12345  # v2 uses source_sequence
         assert parsed["trade_id"] == "TRD001"
 
     def test_parse_trade_row_missing_field(self, loader):
@@ -124,6 +126,8 @@ RIO,RIO,Rio Tinto Limited,Materials,120000000000,2026-01-10T00:00:00Z"""
 
     def test_parse_quote_row_valid(self, mock_producer):
         """Test parsing valid quote row."""
+        from decimal import Decimal
+
         loader = BatchLoader(
             asset_class="equities",
             exchange="asx",
@@ -144,10 +148,10 @@ RIO,RIO,Rio Tinto Limited,Materials,120000000000,2026-01-10T00:00:00Z"""
         parsed = loader._parse_quote_row(row)
 
         assert parsed["symbol"] == "BHP"
-        assert parsed["bid_price"] == 45.40
-        assert parsed["ask_price"] == 45.50
-        assert parsed["bid_size"] == 1000
-        assert parsed["ask_size"] == 2000
+        assert parsed["bid_price"] == Decimal("45.40")  # v2 returns Decimal
+        assert parsed["ask_price"] == Decimal("45.50")  # v2 returns Decimal
+        assert parsed["bid_quantity"] == Decimal("1000")  # v2 uses bid_quantity
+        assert parsed["ask_quantity"] == Decimal("2000")  # v2 uses ask_quantity
 
     def test_parse_reference_data_row_valid(self, mock_producer):
         """Test parsing valid reference data row."""

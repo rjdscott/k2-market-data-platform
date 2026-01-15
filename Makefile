@@ -101,7 +101,11 @@ clean-venv: ## Remove virtual environment (for fresh reinstall)
 docker-up: ## Start all Docker services
 	@echo "$(BLUE)Starting Docker services...$(NC)"
 	@$(DOCKER_COMPOSE) -f $(DOCKER_COMPOSE_FILE) up -d
-	@echo "$(GREEN)✓ Services started. Use 'make docker-logs' to view logs$(NC)"
+	@echo "$(BLUE)Waiting for Schema Registry to be ready...$(NC)"
+	@timeout 60 bash -c 'until curl -sf http://localhost:8081/subjects >/dev/null 2>&1; do sleep 2; done' || (echo "$(RED)Schema Registry failed to start$(NC)" && exit 1)
+	@echo "$(BLUE)Registering Avro schemas...$(NC)"
+	@$(UV) run python3 -c "from k2.schemas import register_schemas; register_schemas('http://localhost:8081')" || (echo "$(RED)Schema registration failed$(NC)" && exit 1)
+	@echo "$(GREEN)✓ Services started and schemas registered$(NC)"
 	@echo "$(YELLOW)Service URLs:$(NC)"
 	@echo "  Kafka UI:         http://localhost:8080"
 	@echo "  Schema Registry:  http://localhost:8081"
@@ -145,6 +149,11 @@ docker-rebuild: ## Rebuild and restart services
 	@echo "$(BLUE)Rebuilding services...$(NC)"
 	@$(DOCKER_COMPOSE) -f $(DOCKER_COMPOSE_FILE) up -d --build
 	@echo "$(GREEN)✓ Services rebuilt$(NC)"
+
+docker-register-schemas: ## Register Avro schemas with Schema Registry
+	@echo "$(BLUE)Registering Avro schemas...$(NC)"
+	@$(UV) run python3 -c "from k2.schemas import register_schemas; result = register_schemas('http://localhost:8081'); print(f'Registered {len(result)} schemas')"
+	@echo "$(GREEN)✓ Schemas registered successfully$(NC)"
 
 # ==============================================================================
 # Testing (Structured CI/CD Strategy)

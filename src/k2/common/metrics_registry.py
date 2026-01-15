@@ -454,6 +454,12 @@ HTTP_REQUEST_SIZE_LIMIT_EXCEEDED_TOTAL = Counter(
     STANDARD_LABELS + ["method", "endpoint"],
 )
 
+HTTP_REQUEST_SIZE_LIMIT_ERRORS_TOTAL = Counter(
+    "k2_http_request_size_limit_errors_total",
+    "Total HTTP request size limit validation errors",
+    STANDARD_LABELS + ["reason"],
+)
+
 # ==============================================================================
 # System Metrics
 # ==============================================================================
@@ -563,6 +569,7 @@ _METRIC_REGISTRY: dict[str, object] = {
     "http_request_errors_total": HTTP_REQUEST_ERRORS_TOTAL,
     "http_requests_in_progress": HTTP_REQUESTS_IN_PROGRESS,
     "http_request_size_limit_exceeded_total": HTTP_REQUEST_SIZE_LIMIT_EXCEEDED_TOTAL,
+    "http_request_size_limit_errors_total": HTTP_REQUEST_SIZE_LIMIT_ERRORS_TOTAL,
     # System
     "circuit_breaker_state": CIRCUIT_BREAKER_STATE,
     "circuit_breaker_failures_total": CIRCUIT_BREAKER_FAILURES_TOTAL,

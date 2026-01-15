@@ -482,7 +482,7 @@ class TestHybridQueryEngineEdgeCases:
 class TestHybridQueryEngineFactory:
     """Test factory function."""
 
-    @patch("k2.query.hybrid_engine.create_kafka_tail")
+    @patch("k2.query.kafka_tail.create_kafka_tail")
     @patch("k2.query.hybrid_engine.QueryEngine")
     def test_create_hybrid_engine_initializes_components(self, mock_engine, mock_kafka):
         """Test create_hybrid_engine factory creates all components."""

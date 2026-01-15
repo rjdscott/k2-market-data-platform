@@ -624,9 +624,9 @@ class TestBatchValidation:
 
     def test_large_trade_batch_validation(self):
         """Test validation of large batch of trade records."""
-        # Generate 1000 valid trades
+        # Generate 100 valid trades (reduced for memory efficiency in parallel tests)
         trades = []
-        for i in range(1000):
+        for i in range(100):
             trades.append(
                 {
                     "message_id": f"msg-{i:06d}",
@@ -647,15 +647,15 @@ class TestBatchValidation:
         df = pd.DataFrame(trades)
         validated_df = TRADE_V2_SCHEMA.validate(df)
 
-        assert len(validated_df) == 1000
+        assert len(validated_df) == 100
         assert validated_df["price"].min() > 0
         assert validated_df["quantity"].min() > 0
 
     def test_large_quote_batch_validation(self):
         """Test validation of large batch of quote records."""
-        # Generate 1000 valid quotes
+        # Generate 100 valid quotes (reduced for memory efficiency in parallel tests)
         quotes = []
-        for i in range(1000):
+        for i in range(100):
             bid = 3000.0 + i * 0.01
             ask = bid + 1.0  # Fixed spread
             quotes.append(
@@ -679,7 +679,7 @@ class TestBatchValidation:
         df = pd.DataFrame(quotes)
         validated_df = QUOTE_V2_SCHEMA.validate(df)
 
-        assert len(validated_df) == 1000
+        assert len(validated_df) == 100
         assert (validated_df["ask_price"] >= validated_df["bid_price"]).all()
 
     def test_mixed_asset_classes_validation(self):
