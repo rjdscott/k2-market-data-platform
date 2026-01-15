@@ -310,6 +310,7 @@ markers = [
     "integration: Integration tests (require Docker services)",
     "performance: Performance benchmarks",
     "slow: Slow tests (> 1 second)",
+    "soak: Soak tests (long-running endurance tests, hours to days)",
 ]
 filterwarnings = [
     "error",
