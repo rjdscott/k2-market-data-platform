@@ -31,7 +31,8 @@ KAFKA_BOOTSTRAP = "localhost:9092"
 SCHEMA_REGISTRY_URL = "http://localhost:8081"
 KAFKA_TIMEOUT = 30.0
 
-pytestmark = pytest.mark.chaos
+# Mark all tests in this file as chaos tests with 60s timeout
+pytestmark = [pytest.mark.chaos, pytest.mark.timeout(60)]
 
 
 # ==============================================================================
@@ -41,14 +42,19 @@ pytestmark = pytest.mark.chaos
 
 @pytest.fixture
 def producer_v2():
-    """Create v2 producer for chaos testing."""
+    """Create v2 producer for chaos testing with resource limits."""
     producer = MarketDataProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP,
         schema_registry_url=SCHEMA_REGISTRY_URL,
         schema_version="v2",
+        config_overrides={
+            "queue.buffering.max.messages": 10000,  # Limit buffer
+            "queue.buffering.max.kbytes": 10240,    # 10MB max
+        }
     )
     yield producer
-    producer.flush()
+    producer.flush(timeout=10)
+    producer.close()  # Explicit cleanup
 
 
 @pytest.fixture

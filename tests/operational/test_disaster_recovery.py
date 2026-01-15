@@ -65,6 +65,7 @@ def wait_for_container_healthy(container, timeout=90):
 
 
 @pytest.mark.operational
+@pytest.mark.timeout(300)  # 5 minutes max for disaster recovery tests
 class TestDisasterRecovery:
     """Test disaster recovery procedures from runbooks."""
 

@@ -32,7 +32,8 @@ S3_ENDPOINT = "http://localhost:9000"
 S3_ACCESS_KEY = "minioadmin"
 S3_SECRET_KEY = "minioadmin"
 
-pytestmark = [pytest.mark.chaos, pytest.mark.chaos_storage]
+# Mark all tests in this file as chaos tests with 60s timeout
+pytestmark = [pytest.mark.chaos, pytest.mark.chaos_storage, pytest.mark.timeout(60)]
 
 
 # ==============================================================================

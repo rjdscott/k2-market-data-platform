@@ -147,29 +147,98 @@ docker-rebuild: ## Rebuild and restart services
 	@echo "$(GREEN)✓ Services rebuilt$(NC)"
 
 # ==============================================================================
-# Testing
+# Testing (Structured CI/CD Strategy)
 # ==============================================================================
 
-test: ## Run all tests
-	@echo "$(BLUE)Running all tests...$(NC)"
-	@$(PYTEST) tests/ -v
-	@echo "$(GREEN)✓ All tests passed$(NC)"
+test: ## Run only fast tests (unit + light integration) - DEFAULT
+	@echo "$(BLUE)Running fast tests (unit + integration, no slow/chaos/soak/operational)...$(NC)"
+	@$(PYTEST) tests/ -v -m "not slow and not chaos and not soak and not operational"
+	@echo "$(GREEN)✓ Fast tests passed$(NC)"
 
-test-unit: ## Run unit tests only (fast, no Docker required)
+test-unit: ## Run unit tests only (no Docker required)
 	@echo "$(BLUE)Running unit tests...$(NC)"
-	@$(PYTEST) tests/unit/ -v -m unit
+	@$(PYTEST) tests/unit/ -v
 	@echo "$(GREEN)✓ Unit tests passed$(NC)"
 
-test-integration: docker-up ## Run integration tests (requires Docker)
-	@echo "$(BLUE)Running integration tests...$(NC)"
+test-unit-parallel: ## Run unit tests in parallel (faster)
+	@echo "$(BLUE)Running unit tests in parallel...$(NC)"
+	@$(PYTEST) tests/unit/ -v -n auto
+	@echo "$(GREEN)✓ Unit tests passed$(NC)"
+
+test-integration: docker-up ## Run integration tests (excludes slow tests)
+	@echo "$(BLUE)Running integration tests (excluding slow tests)...$(NC)"
 	@sleep 5  # Wait for services to be ready
-	@$(PYTEST) tests/integration/ -v -m integration
+	@$(PYTEST) tests/integration/ -v -m "not slow"
 	@echo "$(GREEN)✓ Integration tests passed$(NC)"
+
+test-integration-all: docker-up ## Run all integration tests including slow ones
+	@echo "$(BLUE)Running all integration tests...$(NC)"
+	@sleep 5  # Wait for services to be ready
+	@$(PYTEST) tests/integration/ -v
+	@echo "$(GREEN)✓ All integration tests passed$(NC)"
 
 test-performance: docker-up ## Run performance benchmarks
 	@echo "$(BLUE)Running performance benchmarks...$(NC)"
-	@$(PYTEST) tests/performance/ -v -m performance --benchmark-only
+	@$(PYTEST) tests/performance/ -v --benchmark-only
 	@echo "$(GREEN)✓ Benchmarks complete$(NC)"
+
+test-chaos: ## Run chaos tests (DESTRUCTIVE - requires confirmation)
+	@echo "$(RED)WARNING: Chaos tests will stop/start Docker containers$(NC)"
+	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || (echo "Aborted" && exit 1)
+	@$(PYTEST) tests/chaos/ -v -m chaos --maxfail=1
+	@echo "$(GREEN)✓ Chaos tests passed$(NC)"
+
+test-operational: ## Run operational tests (DESTRUCTIVE - requires confirmation)
+	@echo "$(RED)WARNING: Operational tests will manipulate Docker services$(NC)"
+	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || (echo "Aborted" && exit 1)
+	@$(PYTEST) tests/operational/ -v -m operational
+	@echo "$(GREEN)✓ Operational tests passed$(NC)"
+
+test-soak-1h: ## Run 1-hour soak test
+	@echo "$(YELLOW)Starting 1-hour soak test (requires ~70 minutes)...$(NC)"
+	@$(PYTEST) tests/soak/test_binance_1h_validation.py -v -s --timeout=4000
+	@echo "$(GREEN)✓ 1-hour soak test passed$(NC)"
+
+test-soak-24h: ## ERROR: DO NOT RUN LOCALLY
+	@echo "$(RED)ERROR: 24h soak test should only run in dedicated CI environment$(NC)"
+	@echo "$(RED)This test requires 25+ hours and will consume significant resources$(NC)"
+	@exit 1
+
+test-pr: ## Run PR validation tests (fast feedback)
+	@echo "$(BLUE)Running PR validation tests (unit + lint + type)...$(NC)"
+	@make lint
+	@make type-check
+	@make test-unit-parallel
+	@echo "$(GREEN)✓ PR validation passed$(NC)"
+
+test-pr-full: docker-up ## Run full PR tests before merge
+	@echo "$(BLUE)Running full PR tests (unit + integration, no slow/chaos/soak)...$(NC)"
+	@make test-pr
+	@make test-integration
+	@echo "$(GREEN)✓ Full PR validation passed$(NC)"
+
+test-post-merge: docker-up ## Run post-merge validation (includes performance)
+	@echo "$(BLUE)Running post-merge validation...$(NC)"
+	@make test-unit-parallel
+	@make test-integration-all
+	@make test-performance
+	@echo "$(GREEN)✓ Post-merge validation passed$(NC)"
+
+test-nightly: docker-up ## Run nightly comprehensive tests (excludes soak)
+	@echo "$(BLUE)Running nightly comprehensive tests...$(NC)"
+	@make test-unit-parallel
+	@make test-integration-all
+	@make test-performance
+	@make test-chaos
+	@make test-operational
+	@echo "$(GREEN)✓ Nightly tests passed$(NC)"
+
+test-all-local: docker-up ## Run all tests except 24h soak (for local comprehensive validation)
+	@echo "$(YELLOW)Running all tests except 24h soak (this will take 2-3 hours)...$(NC)"
+	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || (echo "Aborted" && exit 1)
+	@make test-nightly
+	@make test-soak-1h
+	@echo "$(GREEN)✓ All local tests passed$(NC)"
 
 test-watch: ## Run tests in watch mode
 	@echo "$(BLUE)Running tests in watch mode...$(NC)"
@@ -177,11 +246,33 @@ test-watch: ## Run tests in watch mode
 
 coverage: ## Run tests with coverage report
 	@echo "$(BLUE)Running tests with coverage...$(NC)"
-	@$(PYTEST) tests/ --cov=src/k2 --cov-report=term-missing --cov-report=html
+	@$(PYTEST) tests/ -v \
+		-m "not slow and not chaos and not soak and not operational" \
+		--cov=src/k2 \
+		--cov-report=term-missing \
+		--cov-report=html \
+		--cov-report=xml
 	@echo "$(GREEN)✓ Coverage report generated in htmlcov/index.html$(NC)"
 
 coverage-report: ## Open coverage report in browser
 	@open htmlcov/index.html 2>/dev/null || xdg-open htmlcov/index.html 2>/dev/null || echo "Open htmlcov/index.html manually"
+
+# CI/CD Targets (match GitHub Actions workflows)
+ci-test: ## Run CI test suite (matches GitHub Actions)
+	@echo "$(BLUE)Running CI test suite...$(NC)"
+	@make test-pr-full
+	@echo "$(GREEN)✓ CI tests passed$(NC)"
+
+ci-quality: ## Run quality checks (lint + type + format-check)
+	@echo "$(BLUE)Running quality checks...$(NC)"
+	@$(RUFF) check src/ tests/
+	@$(MYPY) src/
+	@$(BLACK) --check src/ tests/
+	@$(ISORT) --check-only src/ tests/
+	@echo "$(GREEN)✓ Quality checks passed$(NC)"
+
+ci-all: ci-quality ci-test coverage ## Run all CI checks
+	@echo "$(GREEN)✓ All CI checks passed$(NC)"
 
 # ==============================================================================
 # Code Quality

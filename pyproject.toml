@@ -294,16 +294,16 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+# CRITICAL: Exclude resource-intensive tests by default
+# Coverage removed from default (adds 20-30% overhead) - add --cov flag explicitly if needed
 addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
     "--showlocals",
     "--tb=short",
-    "--cov=src/k2",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-report=xml",
+    # Exclude heavy tests by default - must explicitly opt-in with -m flag
+    "-m", "not slow and not chaos and not soak and not operational",
 ]
 markers = [
     "unit: Unit tests (fast, no external dependencies)",
@@ -311,12 +311,17 @@ markers = [
     "performance: Performance benchmarks",
     "slow: Slow tests (> 1 second)",
     "soak: Soak tests (long-running endurance tests, hours to days)",
+    "chaos: Chaos engineering tests (destructive, manipulates Docker)",
+    "operational: Operational/disaster recovery tests (destructive)",
 ]
 filterwarnings = [
     "error",
     "ignore::UserWarning",
     "ignore::DeprecationWarning",
 ]
+# pytest-timeout: Apply default timeout to all tests (can be overridden per-test)
+timeout = 300  # 5 minutes default
+timeout_method = "thread"
 
 [tool.coverage.run]
 source = ["src/k2"]
