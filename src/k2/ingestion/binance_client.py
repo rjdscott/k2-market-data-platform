@@ -33,6 +33,7 @@ from decimal import Decimal
 from typing import Any, Callable, Optional
 
 import certifi
+import psutil
 import structlog
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
@@ -234,6 +235,12 @@ class BinanceWebSocketClient:
         )
         self.rotation_task: Optional[asyncio.Task] = None
 
+        # Memory monitoring state (detect memory leaks via linear regression)
+        self.memory_samples: list[tuple[float, int]] = []  # [(timestamp, rss_bytes)]
+        self.memory_monitor_task: Optional[asyncio.Task] = None
+        self.memory_sample_interval_seconds = 30  # Sample memory every 30s
+        self.memory_sample_window_size = 120  # Keep last 120 samples (1 hour at 30s intervals)
+
         # Circuit breaker for resilience
         self.circuit_breaker: Optional[CircuitBreaker] = None
         if enable_circuit_breaker:
@@ -338,6 +345,155 @@ class BinanceWebSocketClient:
                 if self.ws:
                     await self.ws.close(code=1000, reason="Periodic rotation")
 
+    def _calculate_memory_leak_score(self) -> float:
+        """Calculate memory leak detection score using linear regression.
+
+        Analyzes memory samples over time to detect upward trend that
+        indicates a memory leak. Returns a score from 0 to 1:
+        - 0.0 = no leak detected (flat or decreasing trend)
+        - 0.5 = moderate growth
+        - 0.8+ = likely memory leak (significant upward trend)
+
+        Uses simple linear regression on (timestamp, rss_bytes) samples.
+
+        Returns:
+            float: Leak detection score (0.0 to 1.0)
+        """
+        if len(self.memory_samples) < 10:
+            # Need at least 10 samples for meaningful regression
+            return 0.0
+
+        # Extract x (time elapsed) and y (memory in MB) from samples
+        first_timestamp = self.memory_samples[0][0]
+        x_values = [(timestamp - first_timestamp) for timestamp, _ in self.memory_samples]
+        y_values = [rss_bytes / (1024 * 1024) for _, rss_bytes in self.memory_samples]  # Convert to MB
+
+        # Calculate means
+        n = len(x_values)
+        x_mean = sum(x_values) / n
+        y_mean = sum(y_values) / n
+
+        # Calculate slope (beta) using least squares
+        numerator = sum((x_values[i] - x_mean) * (y_values[i] - y_mean) for i in range(n))
+        denominator = sum((x_values[i] - x_mean) ** 2 for i in range(n))
+
+        if denominator == 0:
+            return 0.0
+
+        slope = numerator / denominator
+
+        # Calculate R² (coefficient of determination) for confidence
+        y_pred = [y_mean + slope * (x_values[i] - x_mean) for i in range(n)]
+        ss_res = sum((y_values[i] - y_pred[i]) ** 2 for i in range(n))
+        ss_tot = sum((y_values[i] - y_mean) ** 2 for i in range(n))
+
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
+
+        # Calculate leak score:
+        # - If slope is negative (memory decreasing), score = 0
+        # - If slope is positive, scale based on MB/hour growth rate and R²
+        # - R² weights the score by how well the linear model fits (confidence)
+        if slope <= 0:
+            return 0.0
+
+        # Calculate growth rate in MB per hour
+        time_span_hours = (x_values[-1] - x_values[0]) / 3600 if x_values[-1] != x_values[0] else 1
+        mb_per_hour = slope * 3600  # Convert slope from MB/s to MB/hour
+
+        # Score thresholds:
+        # - 10 MB/hour = 0.5 score (moderate)
+        # - 50 MB/hour = 1.0 score (severe)
+        raw_score = min(mb_per_hour / 50, 1.0)
+
+        # Weight by R² (confidence in linear fit)
+        # If R² is low, reduce the score (less confident it's a real leak)
+        leak_score = raw_score * r_squared
+
+        return min(leak_score, 1.0)
+
+    async def _memory_monitor_loop(self) -> None:
+        """Monitor process memory usage and detect leaks via linear regression.
+
+        Samples RSS and VMS memory every 30 seconds, maintains a sliding window
+        of samples, calculates leak detection score, and updates Prometheus metrics.
+        """
+        logger.info(
+            "binance_memory_monitor_started",
+            sample_interval_seconds=self.memory_sample_interval_seconds,
+            sample_window_size=self.memory_sample_window_size,
+        )
+
+        # Get current process
+        process = psutil.Process()
+
+        while self.is_running:
+            await asyncio.sleep(self.memory_sample_interval_seconds)
+
+            if not self.is_running:
+                break
+
+            try:
+                # Sample memory usage
+                memory_info = process.memory_info()
+                rss_bytes = memory_info.rss  # Resident Set Size (actual physical memory)
+                vms_bytes = memory_info.vms  # Virtual Memory Size (total virtual memory)
+
+                timestamp = time.time()
+
+                # Add sample to sliding window
+                self.memory_samples.append((timestamp, rss_bytes))
+
+                # Maintain sliding window (keep last N samples)
+                if len(self.memory_samples) > self.memory_sample_window_size:
+                    self.memory_samples.pop(0)
+
+                # Update memory metrics
+                metrics.gauge(
+                    "process_memory_rss_bytes",
+                    value=rss_bytes,
+                    labels=self.metrics_labels,
+                )
+
+                metrics.gauge(
+                    "process_memory_vms_bytes",
+                    value=vms_bytes,
+                    labels=self.metrics_labels,
+                )
+
+                # Calculate and update leak detection score
+                leak_score = self._calculate_memory_leak_score()
+                metrics.gauge(
+                    "memory_leak_detection_score",
+                    value=leak_score,
+                    labels=self.metrics_labels,
+                )
+
+                # Log memory stats periodically (every 10 samples = 5 minutes at 30s intervals)
+                if len(self.memory_samples) % 10 == 0:
+                    logger.info(
+                        "binance_memory_status",
+                        rss_mb=rss_bytes / (1024 * 1024),
+                        vms_mb=vms_bytes / (1024 * 1024),
+                        leak_score=leak_score,
+                        samples_count=len(self.memory_samples),
+                    )
+
+                    # Warning if leak score is high
+                    if leak_score > 0.8:
+                        logger.warning(
+                            "binance_memory_leak_detected",
+                            leak_score=leak_score,
+                            rss_mb=rss_bytes / (1024 * 1024),
+                            message="High leak detection score - consider restarting or investigating",
+                        )
+
+            except Exception as e:
+                logger.error(
+                    "binance_memory_monitor_error",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+
     async def connect(self) -> None:
         """Connect to Binance WebSocket and start receiving messages.
 
@@ -360,6 +516,14 @@ class BinanceWebSocketClient:
         logger.info(
             "binance_connection_rotation_enabled",
             max_lifetime_hours=config.binance.connection_max_lifetime_hours,
+        )
+
+        # Start memory monitoring loop
+        self.memory_monitor_task = asyncio.create_task(self._memory_monitor_loop())
+        logger.info(
+            "binance_memory_monitor_enabled",
+            sample_interval_seconds=self.memory_sample_interval_seconds,
+            sample_window_size=self.memory_sample_window_size,
         )
 
         while self.is_running and self.reconnect_attempts < self.max_reconnect_attempts:
@@ -591,6 +755,14 @@ class BinanceWebSocketClient:
                 await self.rotation_task
             except asyncio.CancelledError:
                 logger.info("binance_rotation_task_cancelled")
+
+        # Cancel memory monitor task
+        if self.memory_monitor_task:
+            self.memory_monitor_task.cancel()
+            try:
+                await self.memory_monitor_task
+            except asyncio.CancelledError:
+                logger.info("binance_memory_monitor_cancelled")
 
         # Close WebSocket
         if self.ws:

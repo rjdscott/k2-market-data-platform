@@ -250,6 +250,25 @@ BINANCE_CONNECTION_LIFETIME_SECONDS = Gauge(
     STANDARD_LABELS,
 )
 
+# Memory monitoring metrics
+PROCESS_MEMORY_RSS_BYTES = Gauge(
+    "k2_process_memory_rss_bytes",
+    "Process Resident Set Size (RSS) memory usage in bytes",
+    STANDARD_LABELS,
+)
+
+PROCESS_MEMORY_VMS_BYTES = Gauge(
+    "k2_process_memory_vms_bytes",
+    "Process Virtual Memory Size (VMS) in bytes",
+    STANDARD_LABELS,
+)
+
+MEMORY_LEAK_DETECTION_SCORE = Gauge(
+    "k2_memory_leak_detection_score",
+    "Memory leak detection score (0-1, >0.8 indicates likely leak via linear regression)",
+    STANDARD_LABELS,
+)
+
 # ==============================================================================
 # Storage Layer Metrics (Iceberg)
 # ==============================================================================
@@ -492,6 +511,10 @@ _METRIC_REGISTRY: dict[str, object] = {
     "binance_reconnect_delay_seconds": BINANCE_RECONNECT_DELAY_SECONDS,
     "binance_connection_rotations_total": BINANCE_CONNECTION_ROTATIONS_TOTAL,
     "binance_connection_lifetime_seconds": BINANCE_CONNECTION_LIFETIME_SECONDS,
+    # Memory Monitoring
+    "process_memory_rss_bytes": PROCESS_MEMORY_RSS_BYTES,
+    "process_memory_vms_bytes": PROCESS_MEMORY_VMS_BYTES,
+    "memory_leak_detection_score": MEMORY_LEAK_DETECTION_SCORE,
     # Storage
     "iceberg_rows_written_total": ICEBERG_ROWS_WRITTEN_TOTAL,
     "iceberg_write_duration_seconds": ICEBERG_WRITE_DURATION_SECONDS,

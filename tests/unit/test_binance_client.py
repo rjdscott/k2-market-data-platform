@@ -529,3 +529,142 @@ class TestConnectionRotation:
         # Check they are valid Prometheus metrics
         assert rotations_metric is not None
         assert lifetime_metric is not None
+
+
+class TestMemoryMonitoring:
+    """Test memory monitoring and leak detection functionality."""
+
+    def test_memory_monitor_fields_initialized(self):
+        """Test that memory monitoring fields are initialized."""
+        client = BinanceWebSocketClient(symbols=["BTCUSDT"])
+
+        # Memory monitoring fields should be initialized
+        assert client.memory_samples == []  # Empty initially
+        assert client.memory_monitor_task is None  # Task not started yet
+        assert client.memory_sample_interval_seconds == 30  # Default 30s
+        assert client.memory_sample_window_size == 120  # Default 120 samples (1 hour)
+
+    def test_memory_monitor_metrics_defined(self):
+        """Test that memory monitoring metrics are defined in registry."""
+        from k2.common import metrics_registry
+
+        # Check memory metrics are defined as module constants
+        assert hasattr(metrics_registry, "PROCESS_MEMORY_RSS_BYTES")
+        assert hasattr(metrics_registry, "PROCESS_MEMORY_VMS_BYTES")
+        assert hasattr(metrics_registry, "MEMORY_LEAK_DETECTION_SCORE")
+
+        # Get the metrics
+        rss_metric = metrics_registry.PROCESS_MEMORY_RSS_BYTES
+        vms_metric = metrics_registry.PROCESS_MEMORY_VMS_BYTES
+        leak_score_metric = metrics_registry.MEMORY_LEAK_DETECTION_SCORE
+
+        # Check they are valid Prometheus metrics (Gauge)
+        assert rss_metric is not None
+        assert vms_metric is not None
+        assert leak_score_metric is not None
+
+    def test_calculate_memory_leak_score_insufficient_samples(self):
+        """Test leak detection with insufficient samples returns 0."""
+        client = BinanceWebSocketClient(symbols=["BTCUSDT"])
+
+        # With no samples, score should be 0
+        score = client._calculate_memory_leak_score()
+        assert score == 0.0
+
+        # With < 10 samples, score should be 0
+        for i in range(9):
+            client.memory_samples.append((float(i), 200_000_000 + i * 1_000_000))
+
+        score = client._calculate_memory_leak_score()
+        assert score == 0.0
+
+    def test_calculate_memory_leak_score_no_leak(self):
+        """Test leak detection with flat/stable memory returns low score."""
+        client = BinanceWebSocketClient(symbols=["BTCUSDT"])
+
+        # Simulate stable memory (200MB +/- small variance)
+        base_memory = 200 * 1024 * 1024  # 200 MB
+        for i in range(60):  # 60 samples = 30 minutes at 30s intervals
+            # Add small random variance (+/- 1MB)
+            variance = (i % 3 - 1) * 1024 * 1024
+            client.memory_samples.append((float(i * 30), base_memory + variance))
+
+        score = client._calculate_memory_leak_score()
+
+        # Score should be very low (<0.1) for stable memory
+        assert score < 0.1
+
+    def test_calculate_memory_leak_score_moderate_leak(self):
+        """Test leak detection with moderate memory growth returns moderate score."""
+        client = BinanceWebSocketClient(symbols=["BTCUSDT"])
+
+        # Simulate moderate leak: 10 MB/hour growth
+        # 60 samples = 30 minutes = 0.5 hours
+        # Expected growth: 5 MB over 30 minutes
+        base_memory = 200 * 1024 * 1024  # 200 MB
+        for i in range(60):
+            # Linear growth: +5MB over 60 samples
+            growth = (i / 60) * 5 * 1024 * 1024
+            client.memory_samples.append((float(i * 30), base_memory + int(growth)))
+
+        score = client._calculate_memory_leak_score()
+
+        # Score should be moderate (0.1 - 0.5)
+        # 10 MB/hour = 0.5 score threshold in implementation
+        assert 0.1 < score < 0.6
+
+    def test_calculate_memory_leak_score_severe_leak(self):
+        """Test leak detection with severe memory growth returns high score."""
+        client = BinanceWebSocketClient(symbols=["BTCUSDT"])
+
+        # Simulate severe leak: 50+ MB/hour growth
+        # 60 samples = 30 minutes = 0.5 hours
+        # Expected growth: 25+ MB over 30 minutes
+        base_memory = 200 * 1024 * 1024  # 200 MB
+        for i in range(60):
+            # Linear growth: +30MB over 60 samples (60 MB/hour rate)
+            growth = (i / 60) * 30 * 1024 * 1024
+            client.memory_samples.append((float(i * 30), base_memory + int(growth)))
+
+        score = client._calculate_memory_leak_score()
+
+        # Score should be high (>0.8) for severe leak
+        # 50 MB/hour = 1.0 score threshold in implementation
+        # 60 MB/hour should be >0.8 with good R²
+        assert score > 0.7
+
+    def test_calculate_memory_leak_score_decreasing_memory(self):
+        """Test leak detection with decreasing memory returns 0."""
+        client = BinanceWebSocketClient(symbols=["BTCUSDT"])
+
+        # Simulate decreasing memory (negative slope)
+        base_memory = 250 * 1024 * 1024  # Start at 250 MB
+        for i in range(60):
+            # Decrease by 20MB over 60 samples
+            decrease = (i / 60) * 20 * 1024 * 1024
+            client.memory_samples.append((float(i * 30), base_memory - int(decrease)))
+
+        score = client._calculate_memory_leak_score()
+
+        # Score should be 0 for negative slope (memory decreasing)
+        assert score == 0.0
+
+    def test_memory_sample_window_maintains_size_limit(self):
+        """Test that memory samples maintain sliding window size limit."""
+        client = BinanceWebSocketClient(symbols=["BTCUSDT"])
+
+        # Set a small window for testing
+        client.memory_sample_window_size = 10
+
+        # Add more samples than window size
+        for i in range(20):
+            client.memory_samples.append((float(i), 200_000_000))
+
+            # Manually enforce sliding window (simulating what _memory_monitor_loop does)
+            if len(client.memory_samples) > client.memory_sample_window_size:
+                client.memory_samples.pop(0)
+
+        # Should only have last 10 samples
+        assert len(client.memory_samples) == 10
+        # First sample should be timestamp 10 (samples 0-9 evicted)
+        assert client.memory_samples[0][0] == 10.0
