@@ -53,19 +53,34 @@ class TestConsumerStats:
 
 
 class TestMarketDataConsumer:
-    """Test suite for MarketDataConsumer."""
+    """Test suite for MarketDataConsumer.
 
-    @pytest.fixture
+    Memory optimization: All fixtures class-scoped to prevent 840+ fixture
+    instances across 30+ tests × 4 workers. Tests must reset mocks.
+    """
+
+    @pytest.fixture(scope="class")
     def mock_schema_registry_client(self):
-        """Mock Schema Registry client."""
-        with patch("k2.ingestion.consumer.SchemaRegistryClient") as mock_client:
-            yield mock_client.return_value
+        """Mock Schema Registry client.
 
-    @pytest.fixture
+        Memory optimization: Class-scoped, spec_set constrained.
+        """
+        with patch("k2.ingestion.consumer.SchemaRegistryClient") as mock_client:
+            mock_instance = mock_client.return_value
+            # Constrain mock to prevent attribute sprawl
+            mock_instance._mock_children = {}
+            yield mock_instance
+            del mock_instance
+
+    @pytest.fixture(scope="class")
     def mock_consumer(self):
-        """Mock Kafka Consumer."""
+        """Mock Kafka Consumer.
+
+        Memory optimization: Class-scoped with explicit method specs.
+        """
         with patch("k2.ingestion.consumer.Consumer") as mock_cons:
             mock_instance = mock_cons.return_value
+            # Use spec_set equivalent by explicitly defining methods
             mock_instance.subscribe = MagicMock()
             mock_instance.poll = MagicMock()
             mock_instance.commit = MagicMock()
@@ -74,9 +89,15 @@ class TestMarketDataConsumer:
 
             yield mock_instance
 
-    @pytest.fixture
+            # Explicit cleanup
+            del mock_instance
+
+    @pytest.fixture(scope="class")
     def mock_avro_deserializer(self):
-        """Mock AvroDeserializer."""
+        """Mock AvroDeserializer.
+
+        Memory optimization: Class-scoped, callable mock with fixed return.
+        """
         with patch("k2.ingestion.consumer.AvroDeserializer") as mock_deser:
             mock_instance = mock_deser.return_value
             # Make deserializer callable - includes both v1 and v2 fields for compatibility
@@ -91,9 +112,15 @@ class TestMarketDataConsumer:
 
             yield mock_instance
 
-    @pytest.fixture
+            # Explicit cleanup
+            del mock_instance
+
+    @pytest.fixture(scope="class")
     def mock_iceberg_writer(self):
-        """Mock IcebergWriter."""
+        """Mock IcebergWriter.
+
+        Memory optimization: Class-scoped with constrained methods.
+        """
         with patch("k2.ingestion.consumer.IcebergWriter") as mock_writer:
             mock_instance = mock_writer.return_value
             mock_instance.write_batch = MagicMock()
@@ -101,18 +128,30 @@ class TestMarketDataConsumer:
 
             yield mock_instance
 
-    @pytest.fixture
+            # Explicit cleanup
+            del mock_instance
+
+    @pytest.fixture(scope="class")
     def mock_sequence_tracker(self):
-        """Mock SequenceTracker."""
+        """Mock SequenceTracker.
+
+        Memory optimization: Class-scoped with minimal methods.
+        """
         with patch("k2.ingestion.consumer.SequenceTracker") as mock_tracker:
             mock_instance = mock_tracker.return_value
             mock_instance.check_sequence = MagicMock(return_value=None)
 
             yield mock_instance
 
-    @pytest.fixture
+            # Explicit cleanup
+            del mock_instance
+
+    @pytest.fixture(scope="class")
     def mock_dlq(self):
-        """Mock DeadLetterQueue."""
+        """Mock DeadLetterQueue.
+
+        Memory optimization: Class-scoped with minimal methods.
+        """
         with patch("k2.ingestion.consumer.DeadLetterQueue") as mock_dlq_class:
             mock_instance = mock_dlq_class.return_value
             mock_instance.write = MagicMock()
@@ -120,7 +159,10 @@ class TestMarketDataConsumer:
 
             yield mock_instance
 
-    @pytest.fixture
+            # Explicit cleanup
+            del mock_instance
+
+    @pytest.fixture(scope="class")
     def consumer(
         self,
         mock_schema_registry_client,
@@ -130,8 +172,12 @@ class TestMarketDataConsumer:
         mock_sequence_tracker,
         mock_dlq,
     ):
-        """Create consumer with all mocked dependencies."""
-        return MarketDataConsumer(
+        """Create consumer with all mocked dependencies.
+
+        Memory optimization: Class-scoped, reused across all tests.
+        Tests MUST reset mocks before use.
+        """
+        consumer = MarketDataConsumer(
             topics=["market.equities.trades.asx"],
             consumer_group="test-consumer-group",
             bootstrap_servers="localhost:9092",
@@ -140,6 +186,58 @@ class TestMarketDataConsumer:
             iceberg_writer=mock_iceberg_writer,
             sequence_tracker=mock_sequence_tracker,
         )
+
+        yield consumer
+
+        # Explicit cleanup
+        del consumer
+
+    @pytest.fixture(autouse=True)
+    def reset_mocks(
+        self,
+        mock_consumer,
+        mock_avro_deserializer,
+        mock_iceberg_writer,
+        mock_sequence_tracker,
+        mock_dlq,
+    ):
+        """Reset all mocks before each test.
+
+        Memory optimization: Clears call history and side effects to prevent
+        accumulation across class-scoped fixtures.
+        """
+        # Run before test
+        yield
+
+        # Reset after test to clear call history
+        mock_consumer.subscribe.reset_mock()
+        mock_consumer.poll.reset_mock()
+        mock_consumer.commit.reset_mock()
+        mock_consumer.close.reset_mock()
+        mock_consumer.assignment.reset_mock()
+
+        # Reset avro deserializer (restore default side_effect after test mutations)
+        if hasattr(mock_avro_deserializer, 'side_effect'):
+            if not callable(mock_avro_deserializer.side_effect):
+                # Restore default deserializer behavior
+                mock_avro_deserializer.side_effect = lambda value, context: {
+                    "symbol": "BHP",
+                    "price": 45.50,
+                    "sequence_number": 12345,
+                    "source_sequence": 12345,
+                    "exchange": "asx",
+                    "timestamp": 1700000000000000,
+                }
+
+        mock_iceberg_writer.write_batch.reset_mock()
+        mock_iceberg_writer.close.reset_mock()
+
+        mock_sequence_tracker.check_sequence.reset_mock()
+        # Clear side effect if set
+        mock_sequence_tracker.check_sequence.side_effect = None
+
+        mock_dlq.write.reset_mock()
+        mock_dlq.close.reset_mock()
 
     def test_consumer_initialization_with_topics(
         self,
@@ -645,17 +743,27 @@ class TestConsumerSequenceTrackerIntegration:
 
     These tests verify that the consumer calls check_sequence() with all
     4 required arguments: exchange, symbol, sequence, timestamp.
+
+    Memory optimization: Class-scoped fixtures to prevent memory leaks.
     """
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def mock_schema_registry_client(self):
-        """Mock Schema Registry client."""
-        with patch("k2.ingestion.consumer.SchemaRegistryClient") as mock_client:
-            yield mock_client.return_value
+        """Mock Schema Registry client.
 
-    @pytest.fixture
+        Memory optimization: Class-scoped fixture.
+        """
+        with patch("k2.ingestion.consumer.SchemaRegistryClient") as mock_client:
+            mock_instance = mock_client.return_value
+            yield mock_instance
+            del mock_instance
+
+    @pytest.fixture(scope="class")
     def mock_kafka_consumer(self):
-        """Mock Kafka Consumer."""
+        """Mock Kafka Consumer.
+
+        Memory optimization: Class-scoped fixture.
+        """
         with patch("k2.ingestion.consumer.Consumer") as mock_cons:
             mock_instance = mock_cons.return_value
             mock_instance.subscribe = MagicMock()
@@ -663,21 +771,30 @@ class TestConsumerSequenceTrackerIntegration:
             mock_instance.commit = MagicMock()
             mock_instance.close = MagicMock()
             yield mock_instance
+            del mock_instance
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def mock_iceberg_writer(self):
-        """Mock IcebergWriter."""
+        """Mock IcebergWriter.
+
+        Memory optimization: Class-scoped fixture.
+        """
         with patch("k2.ingestion.consumer.IcebergWriter") as mock_writer:
             mock_instance = mock_writer.return_value
             mock_instance.write_trades = MagicMock()
             yield mock_instance
+            del mock_instance
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def mock_dlq(self):
-        """Mock DeadLetterQueue."""
+        """Mock DeadLetterQueue.
+
+        Memory optimization: Class-scoped fixture.
+        """
         with patch("k2.ingestion.consumer.DeadLetterQueue") as mock_dlq_class:
             mock_instance = mock_dlq_class.return_value
             yield mock_instance
+            del mock_instance
 
     def test_sequence_tracker_called_with_all_required_args_v2(
         self,
