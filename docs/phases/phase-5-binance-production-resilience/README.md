@@ -1,6 +1,6 @@
 # Phase 5: Binance Production Resilience
 
-**Status**: 🟡 In Progress (5/9 steps complete - 56%)
+**Status**: 🟡 In Progress (6/9 steps complete - 67%)
 **Target**: Production-grade 24h+ stable operation, zero downtime tolerance
 **Last Updated**: 2026-01-15
 **Source**: Staff Data Engineer Production Resilience Review
@@ -43,12 +43,12 @@ Phase 5 addresses critical production readiness issues in the Binance streaming 
 | [03](./steps/step-03-bounded-cache.md) | P0.3 | Bounded Serializer Cache | 4h | ✅ Complete |
 | [04](./steps/step-04-memory-monitoring.md) | P0.4 | Memory Monitoring & Alerts | 6h | ✅ Complete |
 
-### P1 - Production Readiness (Week 2) - 🟡 IN PROGRESS (1/3)
+### P1 - Production Readiness (Week 2) - 🟡 IN PROGRESS (2/3)
 
 | Step | Priority | Focus | Est | Status |
 |------|----------|-------|-----|--------|
 | [05](./steps/step-05-websocket-heartbeat.md) | P1.1 | WebSocket Ping-Pong | 4h | ✅ Complete |
-| [06](./steps/step-06-health-check-tuning.md) | P1.2 | Health Check Timeout | 1h | ⬜ Not Started |
+| [06](./steps/step-06-health-check-tuning.md) | P1.2 | Health Check Timeout | 1h | ✅ Complete |
 | [07](./steps/step-07-soak-test.md) | P1.4 | 24h Soak Test | 8h | ⬜ Not Started |
 
 ### Deployment & Validation (Week 3)
@@ -58,7 +58,7 @@ Phase 5 addresses critical production readiness issues in the Binance streaming 
 | [08](./steps/step-08-deployment.md) | Deploy | Blue-Green Deployment | 4h | ⬜ Not Started |
 | [09](./steps/step-09-validation.md) | Validate | Production Validation | 16h | ⬜ Not Started |
 
-**Total**: 53 hours (3.3 weeks with 1 engineer) | **Progress**: 24h/53h (45%)
+**Total**: 53 hours (3.3 weeks with 1 engineer) | **Progress**: 25h/53h (47%)
 
 ---
 
@@ -129,7 +129,7 @@ Phase 5 is complete when:
 
 ### Week 2 (P1 Production Readiness) - 🟡 IN PROGRESS
 - [x] WebSocket ping-pong heartbeat active (ping every 3min)
-- [ ] Health check timeout reduced to 30s
+- [x] Health check timeout reduced to 30s
 - [ ] 24h soak test passes (<50MB memory growth, >10 msg/sec)
 
 ### Week 3 (Deployment & Validation)
