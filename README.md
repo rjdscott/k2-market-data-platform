@@ -521,6 +521,44 @@ See [Testing Guide](./docs/TESTING.md) for comprehensive testing procedures and 
 
 ---
 
+## CI/CD & Automation
+
+**6 GitHub Actions workflows** provide comprehensive automated testing and deployment:
+
+| Workflow | Trigger | Duration | Purpose |
+|----------|---------|----------|---------|
+| **PR Validation** | Every push to PR | <5 min | Fast feedback (quality + unit tests + security) |
+| **PR Full Check** | Label: `ready-for-merge` | <15 min | Pre-merge validation (integration + Docker build) |
+| **Post-Merge** | Push to `main` | <30 min | Publish Docker images to GHCR + full suite |
+| **Nightly Build** | Daily 2 AM UTC | <2 hours | Comprehensive (+ chaos + operational tests) |
+| **Weekly Soak** | Sunday 2 AM UTC | 24+ hours | Long-term stability validation |
+| **Manual Chaos** | On-demand | <1 hour | Resilience testing (Kafka/storage/operational) |
+
+### Key Features
+
+- **Fast Feedback**: PR validation completes in <5 minutes on every push
+- **Test Sharding**: Unit tests split 4-way for parallel execution
+- **Safe Defaults**: Heavy tests (chaos, soak, operational) excluded by default
+- **Resource Management**: Auto garbage collection, memory leak detection (<500MB threshold)
+- **Docker Publishing**: Images auto-pushed to GHCR on merge to main
+- **Dependabot**: Automated weekly dependency updates
+
+### Local Testing (matches CI)
+
+```bash
+make test-pr              # Before push: lint + type + unit tests (~2-3 min)
+make test-pr-full         # Before merge: + integration tests (~5-10 min)
+make ci-all               # Full CI validation locally
+```
+
+### Documentation
+
+- **Quick Start**: [CI/CD Quick Start](./docs/operations/ci-cd-quickstart.md) (5-minute read)
+- **Comprehensive**: [CI/CD Pipeline](./docs/operations/ci-cd-pipeline.md) (full reference)
+- **Troubleshooting**: [CI/CD Troubleshooting](./docs/operations/runbooks/ci-cd-troubleshooting.md) (15+ scenarios)
+
+---
+
 ## Project Structure
 
 ```
@@ -717,7 +755,68 @@ See [Phase 2 Status](docs/phases/phase-2-prep/STATUS.md) for detailed completion
 
 See [Phase 3 Status](docs/phases/phase-3-demo-enhancements/STATUS.md) for detailed completion report.
 
-### Phase 4: Multi-Region & Scale (Future)
+### Phase 4: Demo Readiness ✅ Complete
+
+**Business Driver**: Transform feature-complete platform to demo-ready with 135/100 execution score.
+
+**Delivered** (2026-01-14-15):
+- ✅ Infrastructure validation & automated health checks
+- ✅ Performance benchmarking & evidence collection
+- ✅ Resilience demonstration (circuit breaker + degradation)
+- ✅ Architecture decision summary & quick reference
+- ✅ Backup plans & safety nets
+- ✅ Final dress rehearsal & demo day checklist
+
+**Metrics**:
+- 9/10 steps complete (Step 08 optional, skipped)
+- Final score: 135/100 (exceeded target by 40 points)
+- 4 automated scripts (benchmark, failure simulation, demo mode, pre-check)
+- 5 reference documents
+
+See [Phase 4 Status](docs/phases/phase-4-demo-readiness/STATUS.md) for detailed completion report.
+
+### Phase 5: Binance Production Resilience ✅ Complete
+
+**Business Driver**: Production-grade resilience for live Binance WebSocket integration.
+
+**Delivered** (2026-01-15):
+- ✅ Exponential backoff reconnection (1s → 128s)
+- ✅ Blue-green deployment infrastructure (zero-downtime)
+- ✅ Health check timeout tuning (1s data, 10s mgmt, 30s control)
+- ✅ 24-hour soak test validation (99.99% uptime)
+- ✅ Comprehensive runbooks & documentation
+- ✅ Circuit breaker integration (5-level degradation)
+
+**Metrics**:
+- 8/8 steps complete (100%)
+- 99.99% uptime over 24-hour soak test
+- Zero-downtime deployments validated
+- Automatic recovery from transient failures
+
+See [Phase 5 Status](docs/phases/phase-5-binance-production-resilience/STATUS.md) for detailed completion report.
+
+### Phase 6: CI/CD & Test Infrastructure ✅ Complete
+
+**Business Driver**: Production-grade CI/CD infrastructure and test safety.
+
+**Delivered** (2026-01-15):
+- ✅ 6 GitHub Actions workflows (PR validation, full check, post-merge, nightly, soak, chaos)
+- ✅ Multi-tier testing pyramid (unit → integration → performance → chaos → operational → soak)
+- ✅ Resource exhaustion solved (tests <5 min, not 24+ hours)
+- ✅ Docker image publishing to GHCR
+- ✅ Comprehensive documentation (5,000+ lines)
+- ✅ Dependabot automated updates
+
+**Metrics**:
+- 13/13 steps complete (100%)
+- Final score: 18/18 success criteria (100%)
+- 35 heavy tests excluded by default
+- Test sharding: 4-way parallel execution
+- 17 structured Makefile targets
+
+See [Phase 6 Complete](docs/phases/phase-6-cicd/PHASE6_COMPLETE.md) for detailed completion report.
+
+### Phase 7: Multi-Region & Scale (Future)
 
 **Business Driver**: Demonstrate distributed systems expertise at global scale.
 
