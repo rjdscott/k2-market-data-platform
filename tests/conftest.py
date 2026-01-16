@@ -452,9 +452,9 @@ def sample_market_data() -> dict[str, Any]:
             "exchange": random.choice(exchanges),
             "timestamp": timestamp.isoformat(),
             "bid_price": str(Decimal(base_price - spread / 2).quantize(Decimal("0.01"))),
-            "bid_size": random.randint(100, 5000),
+            "bid_quantity": random.randint(100, 5000),
             "ask_price": str(Decimal(base_price + spread / 2).quantize(Decimal("0.01"))),
-            "ask_size": random.randint(100, 5000),
+            "ask_quantity": random.randint(100, 5000),
             "quote_condition": "real-time",
         }
         quotes.append(quote)

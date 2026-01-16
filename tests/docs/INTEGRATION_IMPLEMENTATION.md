@@ -83,10 +83,10 @@ This document outlines the implementation of integration tests for K2 Market Dat
     "timestamp": "Exchange timestamp (microseconds since epoch)",
     "bid_price": "Decimal bid price",
     "ask_price": "Decimal ask price",
-    "bid_size": "Integer bid size",
-    "ask_size": "Integer ask size", 
-    "quote_condition": "Quote status condition",
+    "bid_quantity": "Decimal bid quantity",
+    "ask_quantity": "Decimal ask quantity", 
     "asset_class": "Asset class enum",
+    "currency": "Currency code (default: USD)",
     "vendor_data": "Exchange-specific extensions"
 }
 ```
@@ -159,14 +159,14 @@ uv run pytest tests/integration/ --benchmark-only -v
 ## Implementation Status
 
 ### ✅ Completed
-- [x] Basic pipeline integration tests (Producer → Kafka → Iceberg)
+- [x] Basic pipeline integration tests (Producer → Kafka → Iceberg) - Fixed field mapping issues
 - [x] Hybrid query integration tests (Kafka + Iceberg merging)
 - [x] V2 schema validation compliance
 - [x] Performance baselines and metrics
 - [x] Docker infrastructure utilization
-- [x] Documentation updates
+- [x] Documentation updates to reflect field name corrections
 
-### 🚧 In Progress
+### 🚧 In Progress  
 - [ ] API integration tests (REST endpoints with full stack testing)
 - [ ] Error scenario and recovery testing
 - [ ] Load and stress testing under realistic volumes

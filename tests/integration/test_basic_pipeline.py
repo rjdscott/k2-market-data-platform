@@ -135,9 +135,9 @@ class TestBasicPipelineIntegration:
                 asset_class="equities",
                 timestamp=datetime.fromisoformat(quote["timestamp"]),
                 bid_price=Decimal(quote["bid_price"]),
-                bid_quantity=Decimal(quote["bid_size"]),
+                bid_quantity=Decimal(quote["bid_quantity"]),
                 ask_price=Decimal(quote["ask_price"]),
-                ask_quantity=Decimal(quote["ask_size"]),
+                ask_quantity=Decimal(quote["ask_quantity"]),
             )
 
             # Collect V2 quote record
@@ -221,9 +221,9 @@ class TestBasicPipelineIntegration:
                 asset_class="equities",
                 timestamp=datetime.fromisoformat(quote["timestamp"]),
                 bid_price=Decimal(quote["bid_price"]),
-                bid_quantity=Decimal(quote["bid_size"]),
+                bid_quantity=Decimal(quote["bid_quantity"]),
                 ask_price=Decimal(quote["ask_price"]),
-                ask_quantity=Decimal(quote["ask_size"]),
+                ask_quantity=Decimal(quote["ask_quantity"]),
             )
 
             # Core V2 quote fields should be present
@@ -233,9 +233,8 @@ class TestBasicPipelineIntegration:
             assert "timestamp" in v2_quote, "V2 quote needs timestamp"
             assert "bid_price" in v2_quote, "V2 quote needs bid_price"
             assert "ask_price" in v2_quote, "V2 quote needs ask_price"
-            assert "bid_size" in v2_quote, "V2 quote needs bid_size"
-            assert "ask_size" in v2_quote, "V2 quote needs ask_size"
-            assert "quote_condition" in v2_quote, "V2 quote needs quote_condition"
+            assert "bid_quantity" in v2_quote, "V2 quote needs bid_quantity"
+            assert "ask_quantity" in v2_quote, "V2 quote needs ask_quantity"
             assert "asset_class" in v2_quote, "V2 quote needs asset_class"
 
             # Validate data types
@@ -246,8 +245,12 @@ class TestBasicPipelineIntegration:
             assert isinstance(
                 v2_quote["ask_price"], (int, float, Decimal)
             ), "Ask price should be numeric"
-            assert isinstance(v2_quote["bid_size"], int), "Bid size should be integer"
-            assert isinstance(v2_quote["ask_size"], int), "Ask size should be integer"
+            assert isinstance(
+                v2_quote["bid_quantity"], (int, float, Decimal)
+            ), "Bid quantity should be numeric"
+            assert isinstance(
+                v2_quote["ask_quantity"], (int, float, Decimal)
+            ), "Ask quantity should be numeric"
 
     @pytest.mark.integration
     def test_v2_performance_baselines(self, kafka_cluster, sample_market_data):
