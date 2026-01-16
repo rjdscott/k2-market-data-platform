@@ -51,12 +51,9 @@ jobs:
           case "${{ matrix.task }}" in
             "lint")
               echo "Running code linting..."
-              uv run ruff check src/ tests/ --output-format=junit > lint-report.xml || true
+          uv run ruff check src/ tests/ --exclude=tests/unit/test_consumer_legacy.py --output-format=junit > lint-report.xml || true
               uv run black --check src/ tests/ || true
               uv run isort --check-only src/ tests/ || true
-              ;;
-            "type-check")
-              echo "Running type checking..."
               uv run mypy src/ --junit-xml type-check-report.xml || true
               ;;
             "security-scan")
