@@ -432,6 +432,8 @@ services:
       args:
         # Install API server dependencies
         INSTALL_API: "true"
+        # Force API dependencies installation
+        FORCE_INSTALL_API: "true"
     container_name: k2-query-api
     hostname: k2-query-api
     ports:
@@ -450,7 +452,7 @@ services:
       K2_KAFKA_CONSUMER_GROUP_PREFIX: k2-api
       
       # Iceberg Configuration
-      K2_ICEBERG_CATALOG_URI: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-iceberg_catalog}
+      K2_ICEBERG_CATALOG_URI: http://iceberg-rest:8181
       K2_ICEBERG_CATALOG_WAREHOUSE: s3://warehouse/
       K2_ICEBERG_S3_ENDPOINT: http://minio:9000
       K2_ICEBERG_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}

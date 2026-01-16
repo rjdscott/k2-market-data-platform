@@ -66,6 +66,7 @@ class TestAPIIntegration:
             yield client
 
     @pytest.mark.integration
+    @pytest.mark.asyncio
     async def test_api_health_endpoint(self, api_client: httpx.AsyncClient) -> None:
         """Test health check endpoint with authentication."""
 
@@ -79,6 +80,7 @@ class TestAPIIntegration:
         assert "checks" in data
 
     @pytest.mark.integration
+    @pytest.mark.asyncio
     async def test_api_health_endpoint_no_auth(
         self, unauthorized_client: httpx.AsyncClient
     ) -> None:
@@ -357,9 +359,9 @@ class TestAPIIntegration:
 
         # Check that average response time is reasonable (< 2 seconds)
         avg_response_time = sum(response_times) / len(response_times)
-        assert (
-            avg_response_time < 2.0
-        ), f"Average response time {avg_response_time:.2f}s is too slow"
+        assert avg_response_time < 2.0, (
+            f"Average response time {avg_response_time:.2f}s is too slow"
+        )
 
         # Check consistency (no extremely slow responses)
         max_response_time = max(response_times)

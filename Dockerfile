@@ -47,6 +47,9 @@ WORKDIR /app
 # ------------------------------------------------------------------------------
 FROM base AS dependencies
 
+# Declare build arguments that can be passed from docker-compose
+ARG INSTALL_API=false
+
 # Copy only dependency files first (leverages Docker layer caching)
 # This layer is cached unless pyproject.toml changes
 COPY pyproject.toml .
@@ -60,8 +63,10 @@ COPY src/ /app/src/
 # --no-cache-dir: Don't cache pip packages (reduces image size)
 # -e .: Install in editable mode (allows code changes without rebuild for development)
 RUN if [ "${INSTALL_API:-false}" = "true" ]; then \
+      echo "Installing API dependencies with [api] extras"; \
       uv pip install --system --no-cache-dir -e ".[api]"; \
     else \
+      echo "Installing base dependencies only"; \
       uv pip install --system --no-cache-dir -e .; \
     fi
 
