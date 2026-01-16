@@ -359,9 +359,9 @@ class TestAPIIntegration:
 
         # Check that average response time is reasonable (< 2 seconds)
         avg_response_time = sum(response_times) / len(response_times)
-        assert avg_response_time < 2.0, (
-            f"Average response time {avg_response_time:.2f}s is too slow"
-        )
+        assert (
+            avg_response_time < 2.0
+        ), f"Average response time {avg_response_time:.2f}s is too slow"
 
         # Check consistency (no extremely slow responses)
         max_response_time = max(response_times)
