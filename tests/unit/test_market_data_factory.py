@@ -8,14 +8,14 @@ Tests validate:
 - Time series data consistency
 """
 
-from datetime import datetime, timezone, timedelta
-from decimal import Decimal
-from typing import List, Dict, Any
 import uuid
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import Any
 
 import pytest
 
-from k2.api.models import Trade, Quote
+from k2.api.models import Quote, Trade
 
 
 class MarketDataFactory:
@@ -60,7 +60,7 @@ class MarketDataFactory:
         # Alternate between BUY and SELL
         side = "BUY" if uuid.uuid4().int % 2 == 0 else "SELL"
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         trade_data = {
             "message_id": f"msg-{uuid.uuid4().hex[:12]}",
             "trade_id": f"trd-{uuid.uuid4().hex[:12]}",
@@ -110,7 +110,7 @@ class MarketDataFactory:
         bid_size = self._get_realistic_quantity()
         ask_size = self._get_realistic_quantity()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         quote_data = {
             "message_id": f"msg-{uuid.uuid4().hex[:12]}",
             "quote_id": f"qt-{uuid.uuid4().hex[:12]}",
@@ -134,10 +134,10 @@ class MarketDataFactory:
 
     def create_time_series(
         self, record_type: str, count: int, start_time: datetime = None, interval_ms: int = 1000
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Create a time series of trades or quotes."""
         if start_time is None:
-            start_time = datetime.now(timezone.utc) - timedelta(minutes=count * interval_ms / 60000)
+            start_time = datetime.now(UTC) - timedelta(minutes=count * interval_ms / 60000)
 
         records = []
         for i in range(count):
@@ -154,7 +154,7 @@ class MarketDataFactory:
 
         return records
 
-    def create_market_scenario(self, scenario: str) -> Dict[str, Any]:
+    def create_market_scenario(self, scenario: str) -> dict[str, Any]:
         """Create predefined market scenarios for testing."""
         scenarios = {
             "normal_market": self._create_normal_market_scenario,
@@ -227,7 +227,7 @@ class MarketDataFactory:
         else:
             return "USD"
 
-    def _create_normal_market_scenario(self) -> Dict[str, Any]:
+    def _create_normal_market_scenario(self) -> dict[str, Any]:
         """Create normal market conditions."""
         trades = [self.create_trade() for _ in range(10)]
         quotes = [self.create_quote() for _ in range(20)]
@@ -239,7 +239,7 @@ class MarketDataFactory:
             "description": "Normal market with typical spreads and volume",
         }
 
-    def _create_high_volatility_scenario(self) -> Dict[str, Any]:
+    def _create_high_volatility_scenario(self) -> dict[str, Any]:
         """Create high volatility market conditions."""
         base_symbol = self._get_next_symbol()
 
@@ -269,7 +269,7 @@ class MarketDataFactory:
             "description": "High volatility with increasing price swings",
         }
 
-    def _create_wide_spreads_scenario(self) -> Dict[str, Any]:
+    def _create_wide_spreads_scenario(self) -> dict[str, Any]:
         """Create wide spread market conditions."""
         quotes = []
 
@@ -302,7 +302,7 @@ class MarketDataFactory:
             "description": "Wide bid-ask spreads indicating lower liquidity",
         }
 
-    def _create_thin_liquidity_scenario(self) -> Dict[str, Any]:
+    def _create_thin_liquidity_scenario(self) -> dict[str, Any]:
         """Create thin liquidity market conditions."""
         trades = []
         quotes = []
@@ -463,7 +463,7 @@ class TestMarketDataFactory:
     def test_time_series_with_custom_start_time(self):
         """Factory should use custom start time for time series."""
         factory = MarketDataFactory("EQUITY")
-        start_time = datetime(2024, 1, 15, 9, 30, tzinfo=timezone.utc)
+        start_time = datetime(2024, 1, 15, 9, 30, tzinfo=UTC)
 
         series = factory.create_time_series("trade", 5, start_time=start_time)
 

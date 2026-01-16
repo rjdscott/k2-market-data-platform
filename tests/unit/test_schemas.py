@@ -211,9 +211,9 @@ class TestSchemaValidation:
 
                 # Field-level documentation (sample check)
                 for field in schema_dict["fields"][:3]:  # Check first 3 fields
-                    assert "doc" in field, (
-                        f"{schema_name}_{version}.{field['name']} missing field doc"
-                    )
+                    assert (
+                        "doc" in field
+                    ), f"{schema_name}_{version}.{field['name']} missing field doc"
 
     def test_optional_fields_have_defaults(self):
         """Optional fields should have default values."""
@@ -228,9 +228,9 @@ class TestSchemaValidation:
                     # Check if union with null (optional)
                     if isinstance(field_type, list) and "null" in field_type:
                         # Optional field should have default
-                        assert "default" in field, (
-                            f"{schema_name}_{version}.{field['name']} is optional but missing default"
-                        )
+                        assert (
+                            "default" in field
+                        ), f"{schema_name}_{version}.{field['name']} is optional but missing default"
 
     def test_schema_file_naming_convention(self):
         """Schema files should follow naming convention."""

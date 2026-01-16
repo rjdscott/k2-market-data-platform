@@ -8,18 +8,17 @@ This module provides the foundational testing infrastructure including:
 - Performance and chaos testing utilities
 """
 
-import asyncio
 import gc
 import logging
 import os
 import uuid
+from collections.abc import Generator
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Union
+from typing import Any
 
 import docker
 import pytest
-import yaml
 from docker.errors import DockerException
 from docker.models.containers import Container
 from pytest_mock import MockerFixture
@@ -54,10 +53,10 @@ class ResourceTracker:
     """Track resource usage during test execution."""
 
     def __init__(self):
-        self.containers_created: List[str] = []
-        self.temp_files_created: List[str] = []
-        self.connections_opened: List[str] = []
-        self.memory_usage: List[float] = []
+        self.containers_created: list[str] = []
+        self.temp_files_created: list[str] = []
+        self.connections_opened: list[str] = []
+        self.memory_usage: list[float] = []
 
     def add_container(self, container_id: str):
         """Track created container."""
@@ -71,7 +70,7 @@ class ResourceTracker:
         """Track opened connection."""
         self.connections_opened.append(connection_id)
 
-    def verify_cleanup(self) -> Dict[str, Union[bool, float]]:
+    def verify_cleanup(self) -> dict[str, bool | float]:
         """Verify all resources are cleaned up."""
         import psutil
 
@@ -104,11 +103,11 @@ class ResourceTracker:
 class KafkaTestCluster:
     """Dockerized Kafka cluster for testing."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
         self.client = docker.from_env()
-        self.kafka_container: Optional[Container] = None
-        self.schema_registry_container: Optional[Container] = None
+        self.kafka_container: Container | None = None
+        self.schema_registry_container: Container | None = None
         self.network_name = f"k2-test-kafka-{uuid.uuid4().hex[:8]}"
 
     def start(self) -> None:
@@ -200,7 +199,8 @@ class KafkaTestCluster:
     def create_topics(self) -> None:
         """Create test topics."""
         try:
-            from confluent_kafka.admin import AdminClient, NewTopic
+            from confluent_kafka.admin import AdminClient
+            from confluent_kafka.cimpl import NewTopic
         except ImportError:
             logger.warning("confluent_kafka not available, skipping topic creation")
             return
@@ -249,7 +249,7 @@ class KafkaTestCluster:
             try:
                 network = self.client.networks.get(self.network_name)
                 network.remove()
-            except:
+            except Exception:
                 pass
 
             logger.info("Kafka cluster cleaned up")
@@ -261,10 +261,10 @@ class KafkaTestCluster:
 class MinioTestBackend:
     """Dockerized MinIO for S3-compatible storage testing."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
         self.client = docker.from_env()
-        self.container: Optional[Container] = None
+        self.container: Container | None = None
         self.container_name = f"k2-test-minio-{uuid.uuid4().hex[:8]}"
 
     def start(self) -> None:
@@ -295,6 +295,7 @@ class MinioTestBackend:
     def wait_for_health(self, timeout: int = 30) -> None:
         """Wait for MinIO to be healthy."""
         import time
+
         import requests
 
         start_time = time.time()
@@ -356,7 +357,7 @@ class MinioTestBackend:
 
 
 @pytest.fixture(scope="session")
-def resource_tracker() -> Generator[ResourceTracker, None, None]:
+def resource_tracker() -> Generator[ResourceTracker]:
     """Track resource usage across test session."""
     tracker = ResourceTracker()
     yield tracker
@@ -372,7 +373,7 @@ def resource_tracker() -> Generator[ResourceTracker, None, None]:
 
 
 @pytest.fixture(scope="session")
-def kafka_cluster(resource_tracker: ResourceTracker) -> Generator[KafkaTestCluster, None, None]:
+def kafka_cluster(resource_tracker: ResourceTracker) -> Generator[KafkaTestCluster]:
     """Dockerized Kafka cluster for integration testing."""
     cluster = KafkaTestCluster(TEST_CONFIG["kafka"])
 
@@ -393,7 +394,7 @@ def kafka_cluster(resource_tracker: ResourceTracker) -> Generator[KafkaTestClust
 
 
 @pytest.fixture(scope="session")
-def minio_backend(resource_tracker: ResourceTracker) -> Generator[MinioTestBackend, None, None]:
+def minio_backend(resource_tracker: ResourceTracker) -> Generator[MinioTestBackend]:
     """Dockerized MinIO backend for storage testing."""
     backend = MinioTestBackend(TEST_CONFIG["minio"])
 
@@ -412,7 +413,7 @@ def minio_backend(resource_tracker: ResourceTracker) -> Generator[MinioTestBacke
 
 
 @pytest.fixture(scope="function")
-def sample_market_data() -> Dict[str, Any]:
+def sample_market_data() -> dict[str, Any]:
     """Generate sample market data for testing."""
     import random
     from decimal import Decimal
@@ -470,7 +471,7 @@ def sample_market_data() -> Dict[str, Any]:
 
 
 @pytest.fixture(scope="function")
-def kafka_producer_config(kafka_cluster: KafkaTestCluster) -> Dict[str, Union[str, int, bool]]:
+def kafka_producer_config(kafka_cluster: KafkaTestCluster) -> dict[str, str | int | bool]:
     """Kafka producer configuration for testing."""
     return {
         "bootstrap.servers": kafka_cluster.brokers,
@@ -487,7 +488,7 @@ def kafka_producer_config(kafka_cluster: KafkaTestCluster) -> Dict[str, Union[st
 
 
 @pytest.fixture(scope="function")
-def kafka_consumer_config(kafka_cluster: KafkaTestCluster) -> Dict[str, Union[str, int, bool]]:
+def kafka_consumer_config(kafka_cluster: KafkaTestCluster) -> dict[str, str | int | bool]:
     """Kafka consumer configuration for testing."""
     group_id = f"test-group-{uuid.uuid4().hex[:8]}"
 
@@ -506,7 +507,7 @@ def kafka_consumer_config(kafka_cluster: KafkaTestCluster) -> Dict[str, Union[st
 
 
 @pytest.fixture(scope="function")
-def iceberg_config(minio_backend: MinioTestBackend) -> Dict[str, str]:
+def iceberg_config(minio_backend: MinioTestBackend) -> dict[str, str]:
     """Iceberg configuration for testing."""
     return {
         "warehouse": f"s3://{TEST_CONFIG['minio']['bucket']}/warehouse",
@@ -520,7 +521,7 @@ def iceberg_config(minio_backend: MinioTestBackend) -> Dict[str, str]:
 
 
 @pytest.fixture(scope="function")
-def duckdb_connection() -> Generator[Any, None, None]:
+def duckdb_connection() -> Generator[Any]:
     """In-memory DuckDB connection for testing."""
     import duckdb
 
@@ -552,7 +553,7 @@ def cleanup_temp_files():
 
 
 @pytest.fixture(scope="function")
-def mock_external_apis(mocker: MockerFixture) -> Dict[str, Any]:
+def mock_external_apis(mocker: MockerFixture) -> dict[str, Any]:
     """Mock external API calls for unit testing."""
     # Mock Binance API
     mock_binance = mocker.patch("k2.ingestion.binance_client.requests.get")
@@ -588,7 +589,7 @@ def wait_for_condition(condition_func, timeout: int = 30, interval: float = 1.0)
     return False
 
 
-def assert_data_quality(data: List[Dict], data_type: str) -> None:
+def assert_data_quality(data: list[dict], data_type: str) -> None:
     """Assert data quality for market data."""
     if not data:
         pytest.fail(f"No {data_type} data provided")

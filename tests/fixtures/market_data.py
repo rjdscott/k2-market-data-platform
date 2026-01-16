@@ -11,13 +11,12 @@ Provides realistic market data for various test scenarios:
 import json
 import random
 import uuid
-from decimal import Decimal
 from datetime import datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
-import yaml
 from faker import Faker
 
 # Initialize faker for realistic data generation
@@ -84,7 +83,7 @@ class MarketDataFactory:
     }
 
     @classmethod
-    def create_trade(cls, **kwargs) -> Dict[str, Any]:
+    def create_trade(cls, **kwargs) -> dict[str, Any]:
         """Create a realistic trade record."""
         symbol = kwargs.get("symbol", random.choice(cls.SYMBOLS))
         exchange = kwargs.get("exchange", random.choice(cls.EXCHANGES))
@@ -108,7 +107,7 @@ class MarketDataFactory:
         return trade
 
     @classmethod
-    def create_quote(cls, **kwargs) -> Dict[str, Any]:
+    def create_quote(cls, **kwargs) -> dict[str, Any]:
         """Create a realistic quote record."""
         symbol = kwargs.get("symbol", random.choice(cls.SYMBOLS))
         exchange = kwargs.get("exchange", random.choice(cls.EXCHANGES))
@@ -136,7 +135,7 @@ class MarketDataFactory:
         return quote
 
     @classmethod
-    def create_reference(cls, **kwargs) -> Dict[str, Any]:
+    def create_reference(cls, **kwargs) -> dict[str, Any]:
         """Create a realistic reference data record."""
         symbol = kwargs.get("symbol", random.choice(cls.SYMBOLS))
         sector = kwargs.get(
@@ -172,7 +171,7 @@ class MarketDataFactory:
     @classmethod
     def create_trade_sequence(
         cls, symbol: str, count: int, duration_minutes: int = 60
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Create a sequence of related trades for a symbol."""
         trades = []
         start_time = datetime.now() - timedelta(minutes=duration_minutes)
@@ -209,7 +208,7 @@ class MarketDataFactory:
     @classmethod
     def create_quote_sequence(
         cls, symbol: str, count: int, duration_minutes: int = 60
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Create a sequence of related quotes for a symbol."""
         quotes = []
         start_time = datetime.now() - timedelta(minutes=duration_minutes)
@@ -307,7 +306,7 @@ class MarketScenarioFactory:
     """Factory for creating market scenario data."""
 
     @classmethod
-    def create_market_opening(cls, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+    def create_market_opening(cls, symbols: list[str] | None = None) -> dict[str, Any]:
         """Create high-volume market opening scenario."""
         if symbols is None:
             symbols = random.sample(MarketDataFactory.SYMBOLS, 20)
@@ -349,7 +348,7 @@ class MarketScenarioFactory:
         }
 
     @classmethod
-    def create_volatile_session(cls, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+    def create_volatile_session(cls, symbols: list[str] | None = None) -> dict[str, Any]:
         """Create high-volatility trading session."""
         if symbols is None:
             symbols = random.sample(MarketDataFactory.SYMBOLS, 10)
@@ -401,7 +400,7 @@ class MarketScenarioFactory:
         }
 
     @classmethod
-    def create_low_volume_session(cls, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+    def create_low_volume_session(cls, symbols: list[str] | None = None) -> dict[str, Any]:
         """Create low-volume trading session."""
         if symbols is None:
             symbols = random.sample(MarketDataFactory.SYMBOLS, 15)
@@ -621,7 +620,7 @@ def persisted_sample_data(fixture_data_dir):
     data_file = fixture_data_dir / "comprehensive_sample.json"
 
     if data_file.exists():
-        with open(data_file, "r") as f:
+        with open(data_file) as f:
             return json.load(f)
     else:
         # Generate comprehensive dataset

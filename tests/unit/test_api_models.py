@@ -9,39 +9,32 @@ Tests validate:
 - Complex query parameter validation
 """
 
-from datetime import datetime, date
-from decimal import Decimal
+from datetime import datetime
 
 import pytest
 from pydantic import ValidationError
 
-from k2.api.models import (
-    # Base models
-    APIResponse,
-    ErrorResponse,
-    PaginationMeta,
-    # Data models
-    Trade,
-    Quote,
-    TradesResponse,
-    QuotesResponse,
-    # Query request models
-    TradeQueryRequest,
-    QuoteQueryRequest,
-    AggregationRequest,
-    ReplayRequest,
-    # Enums and constants
-    DataType,
-    OutputFormat,
-    AggregationMetric,
-    AggregationInterval,
-    VALID_TRADE_FIELDS,
+from k2.api.models import (  # Base models; Enums and constants; Health and stats; Data models
     VALID_QUOTE_FIELDS,
-    # Health and stats
-    HealthStatus,
+    VALID_TRADE_FIELDS,
+    AggregationInterval,
+    AggregationMetric,
+    AggregationRequest,
+    APIResponse,
+    DataType,
+    ErrorResponse,
     HealthResponse,
+    HealthStatus,
+    OutputFormat,
+    PaginationMeta,
+    Quote,
+    QuoteQueryRequest,
+    ReplayRequest,
     StatsData,
     StatsResponse,
+    Trade,
+    TradeQueryRequest,
+    TradesResponse,
 )
 
 

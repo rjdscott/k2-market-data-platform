@@ -9,12 +9,11 @@ Tests validate:
 - Data anomaly detection
 """
 
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import UTC, datetime
 
 import pytest
 
-from k2.api.models import Trade, Quote
+from k2.api.models import Quote, Trade
 
 
 class MarketDataFactory:
@@ -29,12 +28,12 @@ class MarketDataFactory:
             "symbol": "AAPL",
             "exchange": "NASDAQ",
             "asset_class": "EQUITY",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "price": 150.25,
             "quantity": 100.0,
             "currency": "USD",
             "side": "BUY",
-            "ingestion_timestamp": datetime.now(timezone.utc).isoformat(),
+            "ingestion_timestamp": datetime.now(UTC).isoformat(),
             "source_sequence": 12345,
             "platform_sequence": 67890,
         }
@@ -53,13 +52,13 @@ class MarketDataFactory:
             "symbol": "AAPL",
             "exchange": "NASDAQ",
             "asset_class": "EQUITY",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "bid_price": 150.20,
             "bid_quantity": 1000.0,
             "ask_price": 150.30,
             "ask_quantity": 800.0,
             "currency": "USD",
-            "ingestion_timestamp": datetime.now(timezone.utc).isoformat(),
+            "ingestion_timestamp": datetime.now(UTC).isoformat(),
             "source_sequence": 12345,
             "platform_sequence": 67890,
         }
@@ -80,12 +79,12 @@ class TestMarketDataFactory:
             "symbol": "AAPL",
             "exchange": "NASDAQ",
             "asset_class": "EQUITY",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "price": 150.25,
             "quantity": 100.0,
             "currency": "USD",
             "side": "BUY",
-            "ingestion_timestamp": datetime.now(timezone.utc).isoformat(),
+            "ingestion_timestamp": datetime.now(UTC).isoformat(),
             "source_sequence": 12345,
             "platform_sequence": 67890,
         }
@@ -104,13 +103,13 @@ class TestMarketDataFactory:
             "symbol": "AAPL",
             "exchange": "NASDAQ",
             "asset_class": "EQUITY",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "bid_price": 150.20,
             "bid_quantity": 1000.0,
             "ask_price": 150.30,
             "ask_quantity": 800.0,
             "currency": "USD",
-            "ingestion_timestamp": datetime.now(timezone.utc).isoformat(),
+            "ingestion_timestamp": datetime.now(UTC).isoformat(),
             "source_sequence": 12345,
             "platform_sequence": 67890,
         }
@@ -160,12 +159,12 @@ class TestDataQualityValidation:
     def test_trade_timestamp_validation(self):
         """Trade timestamps should be in valid format and reasonable range."""
         # Test with current timestamp
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         trade = MarketDataFactory.create_trade(timestamp=now.isoformat())
         assert trade.timestamp is not None
 
         # Test with historical timestamp
-        historical = datetime(2024, 1, 15, 10, 30, tzinfo=timezone.utc)
+        historical = datetime(2024, 1, 15, 10, 30, tzinfo=UTC)
         trade = MarketDataFactory.create_trade(timestamp=historical.isoformat())
         assert trade.timestamp == historical.isoformat()
 
@@ -231,7 +230,7 @@ class TestDataQualityValidation:
 
     def test_quote_timestamp_consistency(self):
         """Quote timestamps should be consistent with ingestion time."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         quote = MarketDataFactory.create_quote(
             timestamp=now.isoformat(), ingestion_timestamp=now.isoformat()
         )
@@ -265,7 +264,7 @@ class TestDataAnomalyDetection:
         # This would be a function to implement
         # For now, test the data structure
 
-        old_timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        old_timestamp = datetime(2024, 1, 1, tzinfo=UTC)
         old_trade = MarketDataFactory.create_trade(timestamp=old_timestamp.isoformat())
 
         # In a real system, this should trigger a stale price alert
@@ -400,13 +399,13 @@ class TestQualityMetrics:
     def test_timeliness_score(self):
         """Calculate timeliness based on ingestion vs event time."""
         # Recent trade (low latency)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         recent_trade = MarketDataFactory.create_trade(
             timestamp=now.isoformat(), ingestion_timestamp=now.isoformat()
         )
 
         # Stale trade (high latency)
-        old_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        old_time = datetime(2024, 1, 1, tzinfo=UTC)
         stale_trade = MarketDataFactory.create_trade(
             timestamp=old_time.isoformat(), ingestion_timestamp=now.isoformat()
         )

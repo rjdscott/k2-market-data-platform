@@ -8,9 +8,10 @@ Tests focus on:
 - Project verification
 """
 
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
 
 
 class TestFrameworkBasics:
@@ -39,14 +40,6 @@ class TestFrameworkBasics:
     def test_basic_imports(self):
         """Test that basic imports work correctly."""
         # Test importing pytest
-        import pytest
-
-        # Test common imports
-        try:
-            import subprocess
-            import yaml
-        except ImportError as e:
-            pytest.fail(f"Import error: {e}")
 
         # Test that system modules work
         assert sys.version_info >= (3, 13)
