@@ -768,7 +768,7 @@ class TestDisasterRecovery:
 **Usage Examples**:
 
 ```bash
-# Run all runbook validation tests
+# Run all runbook validation tests-backup
 ./scripts/ops/test_runbooks.sh
 
 # Run specific test

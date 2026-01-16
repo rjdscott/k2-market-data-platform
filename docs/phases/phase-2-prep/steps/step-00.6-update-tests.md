@@ -18,7 +18,7 @@ Update all tests to use v2 schemas and verify v2 functionality.
 ### 1. Update Unit Tests
 
 ```python
-# tests/unit/test_producer.py
+# tests-backup/unit/test_producer.py
 def test_build_trade_v2():
     msg = build_trade_v2(
         symbol="BHP", exchange="ASX", asset_class="equities",
@@ -28,12 +28,12 @@ def test_build_trade_v2():
     assert "message_id" in msg
     assert msg["quantity"] == Decimal("1000")
 
-# tests/unit/test_consumer.py
+# tests-backup/unit/test_consumer.py
 def test_consumer_v2_deserialization():
     consumer = MarketDataConsumer(schema_version="v2")
     # Test deserialization
 
-# tests/unit/test_query_engine.py
+# tests-backup/unit/test_query_engine.py
 def test_query_v2_trades():
     engine = QueryEngine(table_version="v2")
     df = engine.query_trades(symbol="BHP", side="BUY")
@@ -43,7 +43,7 @@ def test_query_v2_trades():
 ### 2. Update Integration Tests
 
 ```python
-# tests/integration/test_v2_pipeline.py
+# tests-backup/integration/test_v2_pipeline.py
 def test_e2e_v2_pipeline():
     # CSV → v2 Kafka → v2 Iceberg → v2 Query
     # 1. Load CSV
@@ -60,7 +60,7 @@ def test_e2e_v2_pipeline():
 ### 3. Update Test Fixtures
 
 ```python
-# tests/fixtures/__init__.py
+# tests-backup/fixtures/__init__.py
 def sample_v2_trade() -> Dict:
     return build_trade_v2(
         symbol="BHP", exchange="ASX", asset_class="equities",
@@ -75,8 +75,8 @@ def sample_v2_trade() -> Dict:
 ## Validation
 
 ```bash
-pytest tests/unit/ -v
-pytest tests/integration/ -v
+pytest tests-backup/unit/ -v
+pytest tests-backup/integration/ -v
 pytest --cov=src/k2 --cov-report=html
 # Coverage should be > 80%
 ```

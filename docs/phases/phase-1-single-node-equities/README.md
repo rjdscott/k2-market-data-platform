@@ -165,8 +165,8 @@ docker compose ps
 ### Validation Commands
 ```bash
 # Run all validation steps
-pytest tests/unit/ -v -m unit
-pytest tests/integration/ -v -m integration
+pytest tests-backup/unit/ -v -m unit
+pytest tests-backup/integration/ -v -m integration
 python scripts/init_infra.py
 
 # Verify Kafka topics

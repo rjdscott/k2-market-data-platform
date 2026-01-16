@@ -116,13 +116,13 @@ collected 0 items
 **Diagnosis**:
 ```bash
 # List what pytest finds
-uv run pytest tests/ --collect-only
+uv run pytest tests-backup/ --collect-only
 
 # Check for test file naming
-find tests/ -name "test_*.py" -o -name "*_test.py"
+find tests-backup/ -name "test_*.py" -o -name "*_test.py"
 
 # Check for pytest markers issue
-uv run pytest tests/ --markers
+uv run pytest tests-backup/ --markers
 ```
 
 **Resolution**:
@@ -130,7 +130,7 @@ uv run pytest tests/ --markers
 **Option A: Test Files Not Named Correctly**
 ```bash
 # Rename files to match pattern
-mv tests/unit/mytest.py tests/unit/test_mytest.py
+mv tests-backup/unit/mytest.py tests-backup/unit/test_mytest.py
 git commit -am "fix: rename test file"
 ```
 
@@ -139,14 +139,14 @@ git commit -am "fix: rename test file"
 # Check pyproject.toml addopts
 grep "addopts" pyproject.toml
 
-# Verify tests have correct markers
-grep "@pytest.mark" tests/unit/test_*.py
+# Verify tests-backup have correct markers
+grep "@pytest.mark" tests-backup/unit/test_*.py
 ```
 
 **Option C: Import Failures Silently Skip Tests**
 ```bash
 # Run with verbose output
-uv run pytest tests/ -v --tb=short
+uv run pytest tests-backup/ -v --tb=short
 
 # Fix import errors
 ```
@@ -268,12 +268,12 @@ Cancelling workflow due to timeout of 15 minutes
 # Check which test is timing out
 # Look at workflow logs for last test before timeout
 
-# Run integration tests locally with verbose output
+# Run integration tests-backup locally with verbose output
 make docker-up
-uv run pytest tests/integration/ -v -s
+uv run pytest tests-backup/integration/ -v -s
 
-# Check for hanging tests
-uv run pytest tests/integration/ --timeout=30 -v
+# Check for hanging tests-backup
+uv run pytest tests-backup/integration/ --timeout=30 -v
 ```
 
 **Resolution**:
@@ -379,7 +379,7 @@ head coverage.xml
 **Option A: Coverage File Missing**
 ```yaml
 # In workflow, check pytest coverage output
-- name: Run tests with coverage
+- name: Run tests-backup with coverage
   run: |
     uv run pytest tests/ --cov=src/k2 --cov-report=xml -v
     ls -la coverage.xml  # Verify file exists
@@ -568,7 +568,7 @@ Workflow running for hours, never completes
 # Check timeout settings
 grep "timeout-minutes" .github/workflows/*.yml
 
-# Look for infinite loops in tests
+# Look for infinite loops in tests-backup
 # Check workflow logs for last action
 
 # Check if service container is hanging
@@ -594,7 +594,7 @@ jobs:
   my-job:
     timeout-minutes: 15  # Add job-level timeout
     steps:
-      - name: Run tests
+      - name: Run tests-backup
         timeout-minutes: 10  # Add step-level timeout
 ```
 
@@ -619,7 +619,7 @@ Same test passes sometimes, fails other times
 ```bash
 # Run test multiple times locally
 for i in {1..10}; do
-  uv run pytest tests/integration/test_flaky.py -v || echo "Failed on run $i"
+  uv run pytest tests-backup/integration/test_flaky.py -v || echo "Failed on run $i"
 done
 
 # Check for timing issues
@@ -724,7 +724,7 @@ PR validation takes >10 minutes (target: <5 min)
 # Look for "Cache hit" vs "Cache miss" in logs
 
 # Check test count
-uv run pytest tests/unit/ --collect-only | tail -1
+uv run pytest tests-backup/unit/ --collect-only | tail -1
 ```
 
 **Resolution**:
@@ -741,14 +741,14 @@ uv run pytest tests/unit/ --collect-only | tail -1
 **Option B: Parallelize Tests**
 ```yaml
 # Add test sharding
-- name: Run unit tests
+- name: Run unit tests-backup
   run: |
     uv run pytest tests/unit/ -n auto  # Parallel execution
 ```
 
 **Option C: Reduce Test Scope**
 ```bash
-# Exclude slow tests from PR validation
+# Exclude slow tests-backup from PR validation
 # Move to post-merge or nightly
 ```
 
@@ -797,7 +797,7 @@ curl https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash 
 act pull_request -W .github/workflows/pr-validation.yml
 
 # Run specific job
-act pull_request -W .github/workflows/pr-validation.yml -j unit-tests
+act pull_request -W .github/workflows/pr-validation.yml -j unit-tests-backup
 
 # Use different runner image
 act -P ubuntu-latest=catthehacker/ubuntu:act-latest

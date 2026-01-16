@@ -115,8 +115,8 @@ Phase 2 is complete when:
 docker compose up -d
 
 # Run phase-2 validation
-pytest tests/unit/ -v -m "phase2"
-pytest tests/integration/ -v -m "phase2"
+pytest tests-backup/unit/ -v -m "phase2"
+pytest tests-backup/integration/ -v -m "phase2"
 
 # Run enhanced demo
 python scripts/demo.py --enhanced

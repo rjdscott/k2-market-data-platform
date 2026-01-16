@@ -418,8 +418,8 @@ Create `tests/unit/test_bloom_deduplicator.py` with 10+ tests.
 # Install dependency
 pip install pybloom-live
 
-# Run tests
-pytest tests/unit/test_bloom_deduplicator.py -v
+# Run tests-backup
+pytest tests-backup/unit/test_bloom_deduplicator.py -v
 
 # Test manually
 python -c "

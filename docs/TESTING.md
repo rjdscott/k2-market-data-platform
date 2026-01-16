@@ -8,16 +8,16 @@
 ## Quick Reference
 
 ```bash
-# Run all tests
+# Run all tests-backup
 make test
 
-# Run unit tests only (fast, no Docker)
+# Run unit tests-backup only (fast, no Docker)
 make test-unit
 
-# Run integration tests (requires Docker)
+# Run integration tests-backup (requires Docker)
 make test-integration
 
-# Run E2E tests
+# Run E2E tests-backup
 make test-e2e
 
 # Run with coverage report
@@ -57,20 +57,20 @@ tests/
 Unit tests are fast and isolated. They use mocking to simulate external dependencies.
 
 ```bash
-# Run all unit tests
+# Run all unit tests-backup
 make test-unit
 
 # Or directly with pytest
-.venv/bin/python -m pytest tests/unit/ -v
+.venv/bin/python -m pytest tests-backup/unit/ -v
 
 # Run specific test file
-.venv/bin/python -m pytest tests/unit/test_query_engine.py -v
+.venv/bin/python -m pytest tests-backup/unit/test_query_engine.py -v
 
 # Run specific test class
-.venv/bin/python -m pytest tests/unit/test_api_main.py::TestTradesEndpoint -v
+.venv/bin/python -m pytest tests-backup/unit/test_api_main.py::TestTradesEndpoint -v
 
 # Run specific test
-.venv/bin/python -m pytest tests/unit/test_api_main.py::TestTradesEndpoint::test_get_trades_success -v
+.venv/bin/python -m pytest tests-backup/unit/test_api_main.py::TestTradesEndpoint::test_get_trades_success -v
 ```
 
 **Expected Output**:
@@ -101,11 +101,11 @@ docker compose ps
 # Initialize infrastructure
 make init-infra
 
-# Run integration tests
+# Run integration tests-backup
 make test-integration
 
 # Or directly
-.venv/bin/python -m pytest tests/integration/ -v -m integration
+.venv/bin/python -m pytest tests-backup/integration/ -v -m integration
 ```
 
 ### E2E Tests
@@ -113,11 +113,11 @@ make test-integration
 End-to-end tests validate the complete data pipeline.
 
 ```bash
-# Run E2E tests (requires Docker)
+# Run E2E tests-backup (requires Docker)
 make test-e2e
 
-# Run only sample data tests (no Docker)
-.venv/bin/python -m pytest tests/integration/test_e2e_flow.py -v -k "TestSampleData or TestDataTransform"
+# Run only sample data tests-backup (no Docker)
+.venv/bin/python -m pytest tests-backup/integration/test_e2e_flow.py -v -k "TestSampleData or TestDataTransform"
 ```
 
 **E2E Test Classes**:
@@ -142,13 +142,13 @@ Tests are organized using pytest markers:
 
 **Run by marker**:
 ```bash
-# Unit tests only
+# Unit tests-backup only
 .venv/bin/python -m pytest -v -m unit
 
-# Integration tests only
+# Integration tests-backup only
 .venv/bin/python -m pytest -v -m integration
 
-# Exclude slow tests
+# Exclude slow tests-backup
 .venv/bin/python -m pytest -v -m "not slow"
 ```
 
@@ -157,7 +157,7 @@ Tests are organized using pytest markers:
 ## Coverage Reports
 
 ```bash
-# Run tests with coverage
+# Run tests-backup with coverage
 make coverage
 
 # View HTML report
@@ -234,7 +234,7 @@ import pytest
 from unittest.mock import Mock, patch
 
 class TestQueryEngine:
-    """Unit tests for QueryEngine."""
+    """Unit tests-backup for QueryEngine."""
 
     @pytest.fixture
     def mock_duckdb(self):
@@ -262,7 +262,7 @@ import pytest
 
 @pytest.mark.integration
 class TestKafkaIntegration:
-    """Integration tests requiring Kafka."""
+    """Integration tests-backup requiring Kafka."""
 
     @pytest.fixture
     def producer(self):
@@ -290,26 +290,26 @@ class TestKafkaIntegration:
 
 ```bash
 # Show print statements
-.venv/bin/python -m pytest tests/unit/ -v -s
+.venv/bin/python -m pytest tests-backup/unit/ -v -s
 
 # Show local variables on failure
-.venv/bin/python -m pytest tests/unit/ -v --showlocals
+.venv/bin/python -m pytest tests-backup/unit/ -v --showlocals
 
 # Stop on first failure
-.venv/bin/python -m pytest tests/unit/ -v -x
+.venv/bin/python -m pytest tests-backup/unit/ -v -x
 
-# Run last failed tests
-.venv/bin/python -m pytest tests/unit/ -v --lf
+# Run last failed tests-backup
+.venv/bin/python -m pytest tests-backup/unit/ -v --lf
 ```
 
 ### Debug Mode
 
 ```bash
 # Drop into debugger on failure
-.venv/bin/python -m pytest tests/unit/ -v --pdb
+.venv/bin/python -m pytest tests-backup/unit/ -v --pdb
 
 # Drop into debugger at start of test
-.venv/bin/python -m pytest tests/unit/test_query_engine.py::test_specific -v --pdb-first
+.venv/bin/python -m pytest tests-backup/unit/test_query_engine.py::test_specific -v --pdb-first
 ```
 
 ---
@@ -331,7 +331,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --all-extras
-      - run: uv run pytest tests/unit/ -v --no-cov
+      - run: uv run pytest tests-backup/unit/ -v --no-cov
 
   integration-tests:
     runs-on: ubuntu-latest
@@ -343,14 +343,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --all-extras
-      - run: uv run pytest tests/integration/ -v -m integration
+      - run: uv run pytest tests-backup/integration/ -v -m integration
 ```
 
 ### Make Targets
 
 ```bash
 # CI test suite
-make ci-test      # unit + integration tests
+make ci-test      # unit + integration tests-backup
 
 # CI quality checks
 make ci-quality   # format-check + lint + type-check

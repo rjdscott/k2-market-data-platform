@@ -99,7 +99,7 @@ make api-test   # Test API endpoints with curl
 2. **Remove API code**:
    ```bash
    rm -rf src/k2/api/
-   rm tests/unit/test_api.py
+   rm tests-backup/unit/test_api.py
    ```
 
 3. **Remove Makefile targets**:

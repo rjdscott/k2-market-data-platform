@@ -2,7 +2,7 @@
 #
 # Runbook Validation Test Framework
 #
-# This script automatically tests operational runbooks to ensure they work
+# This script automatically tests-backup operational runbooks to ensure they work
 # when needed during actual incidents. Runbooks are only valuable if they're
 # tested regularly.
 #
@@ -16,9 +16,9 @@
 #   --help              Show this help message
 #
 # Examples:
-#   ./test_runbooks.sh                    # Run all tests
+#   ./test_runbooks.sh                    # Run all tests-backup
 #   ./test_runbooks.sh --test kafka       # Test Kafka recovery only
-#   ./test_runbooks.sh --report           # Run all tests and generate report
+#   ./test_runbooks.sh --report           # Run all tests-backup and generate report
 #
 
 set -e  # Exit on error
@@ -527,7 +527,7 @@ main() {
         exit 1
     fi
 
-    # Run specific test or all tests
+    # Run specific test or all tests-backup
     if [ -n "$SPECIFIC_TEST" ]; then
         case "$SPECIFIC_TEST" in
             kafka|kafka-failure)
@@ -552,7 +552,7 @@ main() {
                 ;;
         esac
     else
-        # Run all tests
+        # Run all tests-backup
         test_kafka_failure_recovery || true
         test_minio_failure_recovery || true
         test_postgres_failure_recovery || true

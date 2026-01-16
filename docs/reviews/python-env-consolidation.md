@@ -422,8 +422,8 @@ uv --version
 # Verify environment
 ls -la .venv/
 
-# Run unit tests
-uv run pytest tests/unit/ -v --tb=short
+# Run unit tests-backup
+uv run pytest tests-backup/unit/ -v --tb=short
 
 # Verify CLI
 uv run k2 --help

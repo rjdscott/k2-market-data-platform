@@ -102,11 +102,11 @@ python scripts/demo.py --step 2  # Run specific step
 ## Commands Reference
 
 ```bash
-# Run E2E tests
+# Run E2E tests-backup
 make test-e2e
 
-# Run quick tests (no Docker required)
-pytest tests/integration/test_e2e_flow.py -v -k "TestSampleData or TestDataTransform"
+# Run quick tests-backup (no Docker required)
+pytest tests-backup/integration/test_e2e_flow.py -v -k "TestSampleData or TestDataTransform"
 
 # Run interactive demo
 make demo
@@ -138,7 +138,7 @@ make notebook
 
 1. **Remove created files**:
    ```bash
-   rm tests/integration/test_e2e_flow.py
+   rm tests-backup/integration/test_e2e_flow.py
    rm scripts/demo.py
    rm -rf notebooks/
    ```

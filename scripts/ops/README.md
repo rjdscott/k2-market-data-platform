@@ -21,7 +21,7 @@ Validates that runbook procedures are executable and services are accessible.
 # Basic validation (syntax checks only)
 ./scripts/ops/validate_runbooks.sh
 
-# Full validation (includes connectivity tests)
+# Full validation (includes connectivity tests-backup)
 ./scripts/ops/validate_runbooks.sh --full
 
 # Show help

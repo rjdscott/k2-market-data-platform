@@ -536,8 +536,8 @@ Create `tests/unit/test_circuit_breaker.py` with 15+ tests.
 ### Verification Commands
 
 ```bash
-# Run unit tests
-uv run pytest tests/unit/test_degradation_manager.py tests/unit/test_load_shedder.py -v
+# Run unit tests-backup
+uv run pytest tests-backup/unit/test_degradation_manager.py tests-backup/unit/test_load_shedder.py -v
 
 # Check metrics exposed
 curl http://localhost:8000/metrics | grep degradation

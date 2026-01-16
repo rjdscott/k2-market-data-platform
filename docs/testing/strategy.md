@@ -44,12 +44,12 @@ Testing distributed systems requires a multi-layered approach: fast unit tests f
 ### Test Structure
 
 ```python
-# tests/unit/test_sequence_tracker.py
+# tests-backup/unit/test_sequence_tracker.py
 import pytest
 from k2.ingestion.sequence_tracker import SequenceTracker
 
 class TestSequenceTracker:
-    """Unit tests for sequence number tracking."""
+    """Unit tests-backup for sequence number tracking."""
 
     def setup_method(self):
         """Setup for each test."""
@@ -110,13 +110,13 @@ class TestSequenceTracker:
 - PostgreSQL (use `pytest-postgresql`)
 
 ```python
-# tests/unit/test_iceberg_writer.py
+# tests-backup/unit/test_iceberg_writer.py
 import pytest
 from unittest.mock import Mock, patch
 from k2.storage.iceberg_writer import IcebergWriter
 
 class TestIcebergWriter:
-    """Unit tests for Iceberg writer."""
+    """Unit tests-backup for Iceberg writer."""
 
     @patch('pyiceberg.catalog.load_catalog')
     def test_write_batch_success(self, mock_catalog):
@@ -163,12 +163,12 @@ class TestIcebergWriter:
 **Use Hypothesis for edge cases**:
 
 ```python
-# tests/unit/test_business_rules.py
+# tests-backup/unit/test_business_rules.py
 from hypothesis import given, strategies as st
 from k2.validation.business_rules import BusinessRuleValidator
 
 class TestBusinessRuleValidator:
-    """Property-based tests for business rule validation."""
+    """Property-based tests-backup for business rule validation."""
 
     @given(st.floats(min_value=0.01, max_value=10000.0))
     def test_positive_prices_always_valid(self, price):
@@ -236,7 +236,7 @@ class TestBusinessRuleValidator:
 **Example**:
 
 ```python
-# tests/unit/test_data_validation.py
+# tests-backup/unit/test_data_validation.py
 import pandas as pd
 import pandera.pandas as pa
 from pandera.pandas import Check, Column, DataFrameSchema
@@ -290,14 +290,14 @@ def test_negative_price_fails(valid_trades_df):
 **Running Data Validation Tests**:
 
 ```bash
-# Run all data validation tests
-pytest tests/unit/test_data_validation.py -v
+# Run all data validation tests-backup
+pytest tests-backup/unit/test_data_validation.py -v
 
 # Run specific test class
-pytest tests/unit/test_data_validation.py::TestTradeValidation -v
+pytest tests-backup/unit/test_data_validation.py::TestTradeValidation -v
 
 # Run with verbose output
-pytest tests/unit/test_data_validation.py -vv --tb=short
+pytest tests-backup/unit/test_data_validation.py -vv --tb=short
 ```
 
 **Benefits**:
@@ -377,7 +377,7 @@ pytest tests/unit/test_data_validation.py -vv --tb=short
 **Example**:
 
 ```python
-# tests/unit/test_middleware.py
+# tests-backup/unit/test_middleware.py
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from k2.api.middleware import CorrelationIdMiddleware
@@ -414,14 +414,14 @@ class TestCorrelationIdMiddleware:
 **Running Middleware Tests**:
 
 ```bash
-# Run all middleware tests
-pytest tests/unit/test_middleware.py -v
+# Run all middleware tests-backup
+pytest tests-backup/unit/test_middleware.py -v
 
 # Run specific test class
-pytest tests/unit/test_middleware.py::TestAPIKeyAuthentication -v
+pytest tests-backup/unit/test_middleware.py::TestAPIKeyAuthentication -v
 
 # Run with coverage
-pytest tests/unit/test_middleware.py --cov=src/k2/api/middleware
+pytest tests-backup/unit/test_middleware.py --cov=src/k2/api/middleware
 ```
 
 **Benefits**:
@@ -434,17 +434,17 @@ pytest tests/unit/test_middleware.py --cov=src/k2/api/middleware
 ### Running Unit Tests
 
 ```bash
-# Run all unit tests
-pytest tests/unit/ -v
+# Run all unit tests-backup
+pytest tests-backup/unit/ -v
 
 # Run with coverage
-pytest tests/unit/ --cov=src/k2 --cov-report=html
+pytest tests-backup/unit/ --cov=src/k2 --cov-report=html
 
 # Run specific test class
-pytest tests/unit/test_sequence_tracker.py::TestSequenceTracker
+pytest tests-backup/unit/test_sequence_tracker.py::TestSequenceTracker
 
 # Run with markers
-pytest tests/unit/ -m "not slow"
+pytest tests-backup/unit/ -m "not slow"
 ```
 
 ### End-to-End Integration Tests
@@ -508,7 +508,7 @@ make docker-up
 # Initialize infrastructure (topics, schemas)
 make init-infra
 
-# Start API server (for API tests)
+# Start API server (for API tests-backup)
 make api-server
 
 # Start consumer (for full pipeline test)
@@ -518,17 +518,17 @@ make consumer
 **Running E2E Tests**:
 
 ```bash
-# Run all E2E integration tests
-pytest tests/integration/test_e2e_full_pipeline.py -v -m integration
+# Run all E2E integration tests-backup
+pytest tests-backup/integration/test_e2e_full_pipeline.py -v -m integration
 
-# Run excluding API tests (when API server not running)
-pytest tests/integration/test_e2e_full_pipeline.py -v -m integration -k "not api"
+# Run excluding API tests-backup (when API server not running)
+pytest tests-backup/integration/test_e2e_full_pipeline.py -v -m integration -k "not api"
 
-# Run only producer and storage tests (fastest subset)
-pytest tests/integration/test_e2e_full_pipeline.py -v -k "producer or iceberg"
+# Run only producer and storage tests-backup (fastest subset)
+pytest tests-backup/integration/test_e2e_full_pipeline.py -v -k "producer or iceberg"
 
 # Run full pipeline test (requires all services + consumer)
-pytest tests/integration/test_e2e_full_pipeline.py -v -k "complete_pipeline" -m slow
+pytest tests-backup/integration/test_e2e_full_pipeline.py -v -k "complete_pipeline" -m slow
 ```
 
 **Test Data**:
@@ -574,7 +574,7 @@ pytest tests/integration/test_e2e_full_pipeline.py -v -k "complete_pipeline" -m 
 ### Setup/Teardown
 
 ```python
-# tests/integration/conftest.py
+# tests-backup/integration/conftest.py
 import pytest
 import docker
 import time
@@ -583,7 +583,7 @@ from pyiceberg.catalog import load_catalog
 
 @pytest.fixture(scope="session")
 def docker_services():
-    """Start Docker Compose services for integration tests."""
+    """Start Docker Compose services for integration tests-backup."""
     client = docker.from_env()
 
     # Start services
@@ -601,7 +601,7 @@ def docker_services():
 
 @pytest.fixture
 def kafka_producer(docker_services):
-    """Create Kafka producer for tests."""
+    """Create Kafka producer for tests-backup."""
     producer = Producer({
         'bootstrap.servers': 'localhost:9092',
         'client.id': 'test-producer'
@@ -613,7 +613,7 @@ def kafka_producer(docker_services):
 
 @pytest.fixture
 def iceberg_table(docker_services):
-    """Load Iceberg table for tests."""
+    """Load Iceberg table for tests-backup."""
     catalog = load_catalog('default', **{
         'uri': 'http://localhost:8181',
         's3.endpoint': 'http://localhost:9000'
@@ -626,7 +626,7 @@ def iceberg_table(docker_services):
 ### End-to-End Flow Tests
 
 ```python
-# tests/integration/test_end_to_end_flow.py
+# tests-backup/integration/test_end_to_end_flow.py
 import pytest
 import time
 from datetime import datetime
@@ -667,7 +667,7 @@ def test_produce_consume_query(kafka_producer, iceberg_table):
 ### Schema Evolution Tests
 
 ```python
-# tests/integration/test_schema_evolution.py
+# tests-backup/integration/test_schema_evolution.py
 import pytest
 import requests
 
@@ -750,7 +750,7 @@ def test_backward_incompatible_schema_rejected():
 ### Failure Injection Tests
 
 ```python
-# tests/integration/test_failure_scenarios.py
+# tests-backup/integration/test_failure_scenarios.py
 import pytest
 import docker
 import time
@@ -826,7 +826,7 @@ def test_kafka_broker_failure():
 **Use pytest-benchmark**:
 
 ```python
-# tests/performance/test_ingestion_throughput.py
+# tests-backup/performance/test_ingestion_throughput.py
 import pytest
 
 @pytest.mark.performance
@@ -864,7 +864,7 @@ def test_iceberg_write_latency(benchmark, iceberg_writer):
 **Use Locust for Query API**:
 
 ```python
-# tests/performance/locustfile.py
+# tests-backup/performance/locustfile.py
 from locust import HttpUser, task, between
 
 class QueryAPIUser(HttpUser):
@@ -889,7 +889,7 @@ class QueryAPIUser(HttpUser):
 
 **Run load test**:
 ```bash
-locust -f tests/performance/locustfile.py \
+locust -f tests-backup/performance/locustfile.py \
   --host http://localhost:8000 \
   --users 100 \
   --spawn-rate 10 \
@@ -905,7 +905,7 @@ locust -f tests/performance/locustfile.py \
 **Use Chaos Mesh or Pumba**:
 
 ```yaml
-# tests/chaos/kafka-broker-kill.yaml
+# tests-backup/chaos/kafka-broker-kill.yaml
 apiVersion: chaos-mesh.org/v1alpha1
 kind: PodChaos
 metadata:
@@ -932,7 +932,7 @@ spec:
 ### Chaos Test Example
 
 ```python
-# tests/chaos/test_kafka_resilience.py
+# tests-backup/chaos/test_kafka_resilience.py
 import pytest
 import docker
 import time
@@ -1000,7 +1000,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -e .[dev]
-      - run: pytest tests/unit/ --cov --cov-report=xml
+      - run: pytest tests-backup/unit/ --cov --cov-report=xml
       - uses: codecov/codecov-action@v3
 
   integration-tests:
@@ -1011,7 +1011,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - run: docker-compose up -d
-      - run: pytest tests/integration/ -v
+      - run: pytest tests-backup/integration/ -v
       - run: docker-compose down
 
   performance-tests:
@@ -1019,7 +1019,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v3
-      - run: pytest tests/performance/ --benchmark-only
+      - run: pytest tests-backup/performance/ --benchmark-only
       - run: |
           # Compare to baseline
           pytest-benchmark compare \
@@ -1093,17 +1093,17 @@ Validate platform resilience to production failure scenarios through controlled 
 ### Running Chaos Tests
 
 ```bash
-# Run all chaos tests (WARNING: Destructive!)
-pytest tests/chaos/ -v -m chaos
+# Run all chaos tests-backup (WARNING: Destructive!)
+pytest tests-backup/chaos/ -v -m chaos
 
-# Run only Kafka chaos tests
-pytest tests/chaos/test_kafka_chaos.py -v -m chaos_kafka
+# Run only Kafka chaos tests-backup
+pytest tests-backup/chaos/test_kafka_chaos.py -v -m chaos_kafka
 
-# Run only storage chaos tests
-pytest tests/chaos/test_storage_chaos.py -v -m chaos_storage
+# Run only storage chaos tests-backup
+pytest tests-backup/chaos/test_storage_chaos.py -v -m chaos_storage
 
 # Run specific test
-pytest tests/chaos/test_kafka_chaos.py::TestKafkaBrokerFailure::test_producer_survives_brief_kafka_outage -v
+pytest tests-backup/chaos/test_kafka_chaos.py::TestKafkaBrokerFailure::test_producer_survives_brief_kafka_outage -v
 ```
 
 ### Prerequisites

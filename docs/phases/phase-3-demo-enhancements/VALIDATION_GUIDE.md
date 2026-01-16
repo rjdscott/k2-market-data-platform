@@ -12,9 +12,9 @@
 # Verify Phase 1 is complete
 cd /path/to/k2-market-data-platform
 
-# All Phase 1 tests should pass
-pytest tests/unit/ -v
-pytest tests/integration/ -v
+# All Phase 1 tests-backup should pass
+pytest tests-backup/unit/ -v
+pytest tests-backup/integration/ -v
 
 # Demo should run successfully
 python scripts/demo.py --quick
@@ -79,8 +79,8 @@ python scripts/demo.py --quick
 
 1. **Unit Tests**
 ```bash
-pytest tests/unit/test_circuit_breaker.py -v
-# Should show 15+ tests passing
+pytest tests-backup/unit/test_circuit_breaker.py -v
+# Should show 15+ tests-backup passing
 ```
 
 2. **Import Test**
@@ -136,13 +136,13 @@ open http://localhost:3000
 
 1. **Unit Tests**
 ```bash
-pytest tests/unit/test_redis_sequence_tracker.py -v
-# Should show 15+ tests passing
+pytest tests-backup/unit/test_redis_sequence_tracker.py -v
+# Should show 15+ tests-backup passing
 ```
 
 2. **Integration Tests**
 ```bash
-pytest tests/integration/test_redis_sequence_tracker.py -v
+pytest tests-backup/integration/test_redis_sequence_tracker.py -v
 # Requires Redis running
 ```
 
@@ -173,8 +173,8 @@ print(f"Gap detected: {result}")
 
 1. **Unit Tests**
 ```bash
-pytest tests/unit/test_bloom_deduplicator.py -v
-# Should show 10+ tests passing
+pytest tests-backup/unit/test_bloom_deduplicator.py -v
+# Should show 10+ tests-backup passing
 ```
 
 2. **Memory Test**
@@ -199,13 +199,13 @@ print("Bloom filter deduplication: OK")
 
 1. **Unit Tests**
 ```bash
-pytest tests/unit/test_hybrid_engine.py -v
-# Should show 15+ tests passing
+pytest tests-backup/unit/test_hybrid_engine.py -v
+# Should show 15+ tests-backup passing
 ```
 
 2. **Integration Tests**
 ```bash
-pytest tests/integration/test_hybrid_engine.py -v
+pytest tests-backup/integration/test_hybrid_engine.py -v
 ```
 
 3. **API Test**
@@ -296,9 +296,9 @@ grep -A 10 "Component.*Monthly Cost" docs/operations/cost-model.md
 
 **Full Integration Test**:
 ```bash
-# Run all Phase 2 tests
-pytest tests/ -v -m "phase2"
-# All tests should pass
+# Run all Phase 2 tests-backup
+pytest tests-backup/ -v -m "phase2"
+# All tests-backup should pass
 ```
 
 **Demo Run**:

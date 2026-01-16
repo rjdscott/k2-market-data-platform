@@ -112,7 +112,7 @@ tests/
 
 ### All Unit Tests (Fast - ~30 seconds)
 ```bash
-pytest tests/unit/ -v
+pytest tests-backup/unit/ -v
 ```
 
 ### All Integration Tests (Requires Docker - ~2-5 minutes)
@@ -120,13 +120,13 @@ pytest tests/unit/ -v
 # Start infrastructure first
 make docker-up
 
-# Run integration tests
-pytest tests/integration/ -v
+# Run integration tests-backup
+pytest tests-backup/integration/ -v
 ```
 
 ### Specific Test File
 ```bash
-pytest tests/integration/test_producer.py -v
+pytest tests-backup/integration/test_producer.py -v
 ```
 
 ### E2E Test (Requires infrastructure + init - ~1-2 minutes)
@@ -136,7 +136,7 @@ make docker-up
 make init-infra
 
 # Run E2E
-pytest tests/integration/test_e2e_flow.py -v -s
+pytest tests-backup/integration/test_e2e_flow.py -v -s
 ```
 
 ### With Coverage Report
@@ -160,18 +160,18 @@ Use pytest markers to filter tests:
 @pytest.mark.unit         # Fast, no Docker
 @pytest.mark.integration  # Requires Docker services
 @pytest.mark.slow         # Longer than 1 second
-@pytest.mark.performance  # Benchmark tests (future)
+@pytest.mark.performance  # Benchmark tests-backup (future)
 ```
 
 ### Filter by Marker
 ```bash
-# Only unit tests
+# Only unit tests-backup
 pytest -m unit
 
-# Only integration tests
+# Only integration tests-backup
 pytest -m integration
 
-# Exclude slow tests
+# Exclude slow tests-backup
 pytest -m "not slow"
 ```
 
@@ -300,7 +300,7 @@ def test_end_to_end_flow():
 ### Pre-Commit Checks
 ```bash
 # Run before every commit
-make test-fast  # Unit tests only (~30s)
+make test-fast  # Unit tests-backup only (~30s)
 ```
 
 ### Full Test Suite
@@ -313,9 +313,9 @@ make test-all   # Unit + Integration (~3-5 min)
 ```yaml
 # .github/workflows/test.yml
 steps:
-  - Unit tests (always)
-  - Integration tests (on PR)
-  - E2E tests (on main branch)
+  - Unit tests-backup (always)
+  - Integration tests-backup (on PR)
+  - E2E tests-backup (on main branch)
   - Coverage report (upload to Codecov)
 ```
 

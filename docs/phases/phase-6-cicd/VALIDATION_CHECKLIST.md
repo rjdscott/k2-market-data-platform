@@ -31,13 +31,13 @@ grep "addopts" pyproject.toml
 grep "markers" pyproject.toml
 grep "timeout = 300" pyproject.toml
 
-# Test that default excludes heavy tests
-uv run pytest tests/ --co -q | grep "deselected"
-# Expected: 35 deselected tests
+# Test that default excludes heavy tests-backup
+uv run pytest tests-backup/ --co -q | grep "deselected"
+# Expected: 35 deselected tests-backup
 
 # Test that markers work
 uv run pytest -m chaos --co -q
-# Expected: Only chaos tests collected
+# Expected: Only chaos tests-backup collected
 ```
 
 **Result**: ✅ PASSED
@@ -56,15 +56,15 @@ uv run pytest -m chaos --co -q
 **Verification**:
 ```bash
 # Check file exists
-ls -la tests/conftest.py
+ls -la tests-backup/conftest.py
 
 # Verify fixtures defined
-grep "cleanup_after_test" tests/conftest.py
-grep "check_system_resources" tests/conftest.py
-grep "docker_container_health_check" tests/conftest.py
+grep "cleanup_after_test" tests-backup/conftest.py
+grep "check_system_resources" tests-backup/conftest.py
+grep "docker_container_health_check" tests-backup/conftest.py
 
-# Run unit tests and check no memory leaks
-uv run pytest tests/unit/test_schemas.py -v
+# Run unit tests-backup and check no memory leaks
+uv run pytest tests-backup/unit/test_schemas.py -v
 # Expected: No memory leak warnings
 ```
 
@@ -88,14 +88,14 @@ uv run pytest tests/unit/test_schemas.py -v
 **Verification**:
 ```bash
 # Check chaos test timeouts
-grep "@pytest.mark.timeout(60)" tests/chaos/test_kafka_chaos.py
-grep "@pytest.mark.timeout(60)" tests/chaos/test_storage_chaos.py
+grep "@pytest.mark.timeout(60)" tests-backup/chaos/test_kafka_chaos.py
+grep "@pytest.mark.timeout(60)" tests-backup/chaos/test_storage_chaos.py
 
 # Check operational test timeouts
-grep "@pytest.mark.timeout(300)" tests/operational/test_disaster_recovery.py
+grep "@pytest.mark.timeout(300)" tests-backup/operational/test_disaster_recovery.py
 
 # Check resource limits in fixtures
-grep "queue.buffering.max" tests/chaos/test_kafka_chaos.py
+grep "queue.buffering.max" tests-backup/chaos/test_kafka_chaos.py
 ```
 
 **Result**: ✅ PASSED
@@ -492,7 +492,7 @@ done
 .github/workflows/soak-weekly.yml         ✅
 .github/workflows/chaos-manual.yml        ✅
 .github/dependabot.yml                    ✅
-tests/conftest.py                         ✅
+tests-backup/conftest.py                         ✅
 docs/operations/ci-cd-pipeline.md         ✅
 docs/operations/ci-cd-quickstart.md       ✅
 docs/operations/runbooks/ci-cd-troubleshooting.md ✅
@@ -515,7 +515,7 @@ make lint               ✅ (non-destructive)
 make format             ✅ (non-destructive)
 make type-check         ✅ (non-destructive)
 
-# Note: Full integration tests require Docker services
+# Note: Full integration tests-backup require Docker services
 ```
 
 **Result**: ✅ TARGETS AVAILABLE

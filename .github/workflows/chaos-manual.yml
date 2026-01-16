@@ -45,7 +45,7 @@ jobs:
             exit 1
           fi
 
-  # Kafka chaos tests
+  # Kafka chaos tests-backup
   kafka-chaos:
     name: Kafka Chaos Tests
     runs-on: ubuntu-latest
@@ -78,7 +78,7 @@ jobs:
           timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
           echo "✅ All services ready for Kafka chaos testing"
 
-      - name: Run Kafka chaos tests
+      - name: Run Kafka chaos tests-backup
         run: |
           echo "🔥 Starting Kafka chaos tests..."
 
@@ -108,7 +108,7 @@ jobs:
         if: always()
         run: docker compose down -v
 
-  # Storage chaos tests
+  # Storage chaos tests-backup
   storage-chaos:
     name: Storage Chaos Tests
     runs-on: ubuntu-latest
@@ -141,7 +141,7 @@ jobs:
           timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
           echo "✅ All services ready for storage chaos testing"
 
-      - name: Run storage chaos tests
+      - name: Run storage chaos tests-backup
         run: |
           echo "🔥 Starting storage chaos tests..."
 
@@ -173,7 +173,7 @@ jobs:
         if: always()
         run: docker compose down -v
 
-  # Operational/disaster recovery tests
+  # Operational/disaster recovery tests-backup
   operational-chaos:
     name: Operational Tests
     runs-on: ubuntu-latest
@@ -206,7 +206,7 @@ jobs:
           timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
           echo "✅ All services ready for operational testing"
 
-      - name: Run operational tests
+      - name: Run operational tests-backup
         run: |
           echo "🔥 Starting operational/disaster recovery tests..."
 

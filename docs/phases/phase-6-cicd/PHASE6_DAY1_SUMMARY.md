@@ -67,11 +67,11 @@ timeout_method = "thread"
 
 **Verification**:
 ```bash
-$ uv run pytest tests/ --co -q
-799/834 tests collected (35 deselected) in 0.89s
+$ uv run pytest tests-backup/ --co -q
+799/834 tests-backup collected (35 deselected) in 0.89s
 
-$ uv run pytest tests/soak/ tests/chaos/ tests/operational/ --co -q
-no tests collected (28 deselected) in 0.38s
+$ uv run pytest tests-backup/soak/ tests-backup/chaos/ tests-backup/operational/ --co -q
+no tests-backup collected (28 deselected) in 0.38s
 ```
 
 ---
@@ -113,7 +113,7 @@ def docker_container_health_check(request):
 
 **Verification**:
 ```bash
-$ uv run pytest tests/unit/test_schemas.py -v
+$ uv run pytest tests-backup/unit/test_schemas.py -v
 18 passed in 0.75s
 # No memory leaks detected
 ```
@@ -260,17 +260,17 @@ Heavy tests (excluded): 35 (4.2%)
 
 ### Explicit Opt-In
 ```bash
-# Chaos tests only
+# Chaos tests-backup only
 $ pytest -m chaos --co
-20/834 tests collected
+20/834 tests-backup collected
 
-# Soak tests only
+# Soak tests-backup only
 $ pytest -m soak --co
-2/834 tests collected
+2/834 tests-backup collected
 
-# Operational tests only
+# Operational tests-backup only
 $ pytest -m operational --co
-6/834 tests collected
+6/834 tests-backup collected
 ```
 
 ---

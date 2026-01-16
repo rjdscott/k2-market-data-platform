@@ -1,457 +1,429 @@
-"""Unit tests for Circuit Breaker pattern.
+"""
+Unit tests for K2 Market Data Platform circuit breaker functionality.
 
 Tests cover:
-- State transitions (CLOSED → OPEN → HALF_OPEN → CLOSED)
-- Failure threshold behavior
-- Success threshold behavior
-- Timeout and automatic recovery
-- Context manager usage
-- Function call usage
-- Metrics recording
+- Circuit breaker state transitions
+- Failure threshold detection
+- Recovery mechanisms
+- Configuration validation
+- Performance impact under load
 """
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
-from k2.common.circuit_breaker import CircuitBreaker, CircuitBreakerError, CircuitBreakerState
+from k2.common.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerState,
+    CircuitBreakerError,
+    CircuitBreakerConfig,
+)
 
 
-class TestCircuitBreakerInitialization:
-    """Test circuit breaker initialization."""
+class TestCircuitBreaker:
+    """Test suite for circuit breaker functionality."""
 
-    def test_default_initialization(self):
-        """Test circuit breaker initializes with default values."""
-        breaker = CircuitBreaker(name="test_breaker")
-
-        assert breaker.name == "test_breaker"
-        assert breaker.failure_threshold == 5
-        assert breaker.success_threshold == 2
-        assert breaker.timeout_seconds == 60.0
-        assert breaker.state == CircuitBreakerState.CLOSED
-        assert breaker._failure_count == 0
-        assert breaker._success_count == 0
-        assert breaker._last_failure_time is None
-
-    def test_custom_initialization(self):
-        """Test circuit breaker accepts custom parameters."""
-        breaker = CircuitBreaker(
-            name="custom_breaker",
-            failure_threshold=3,
-            success_threshold=1,
-            timeout_seconds=30.0,
-        )
-
-        assert breaker.name == "custom_breaker"
-        assert breaker.failure_threshold == 3
-        assert breaker.success_threshold == 1
-        assert breaker.timeout_seconds == 30.0
-
-
-class TestCircuitBreakerStateTransitions:
-    """Test circuit breaker state transitions."""
-
-    def test_closed_to_open_on_failure_threshold(self):
-        """Test that breaker opens after reaching failure threshold."""
-        breaker = CircuitBreaker(name="test", failure_threshold=3)
-
-        # Simulate 3 failures (should open circuit)
-        for i in range(3):
-            try:
-                breaker.call(self._failing_function)
-            except ValueError:
-                pass
-
-        assert breaker.state == CircuitBreakerState.OPEN
-        assert breaker._failure_count == 3
-
-    def test_open_rejects_calls(self):
-        """Test that open circuit rejects calls without executing."""
-        breaker = CircuitBreaker(name="test", failure_threshold=1)
-
-        # Open the circuit
-        try:
-            breaker.call(self._failing_function)
-        except ValueError:
-            pass
-
-        assert breaker.state == CircuitBreakerState.OPEN
-
-        # Next call should raise CircuitBreakerError without calling function
-        call_count = [0]
-
-        def tracked_function():
-            call_count[0] += 1
-            return "success"
-
-        with pytest.raises(CircuitBreakerError, match="Circuit breaker .* is OPEN"):
-            breaker.call(tracked_function)
-
-        # Function should not have been called
-        assert call_count[0] == 0
-
-    def test_open_to_half_open_after_timeout(self):
-        """Test that breaker transitions to half-open after timeout."""
-        breaker = CircuitBreaker(name="test", failure_threshold=1, timeout_seconds=0.1)
-
-        # Open the circuit
-        try:
-            breaker.call(self._failing_function)
-        except ValueError:
-            pass
-
-        assert breaker.state == CircuitBreakerState.OPEN
-
-        # Wait for timeout
-        time.sleep(0.15)
-
-        # Next call should transition to HALF_OPEN
-        try:
-            breaker.call(self._succeeding_function)
-        except Exception:
-            pass
-
-        assert breaker.state == CircuitBreakerState.HALF_OPEN
-
-    def test_half_open_to_closed_on_success_threshold(self):
-        """Test that breaker closes after success threshold in half-open state."""
-        breaker = CircuitBreaker(
-            name="test",
-            failure_threshold=1,
-            success_threshold=2,
-            timeout_seconds=0.1,
-        )
-
-        # Open the circuit
-        try:
-            breaker.call(self._failing_function)
-        except ValueError:
-            pass
-
-        assert breaker.state == CircuitBreakerState.OPEN
-
-        # Wait for timeout
-        time.sleep(0.15)
-
-        # First success → HALF_OPEN
-        result1 = breaker.call(self._succeeding_function)
-        assert result1 == "success"
-        assert breaker.state == CircuitBreakerState.HALF_OPEN
-        assert breaker._success_count == 1
-
-        # Second success → CLOSED
-        result2 = breaker.call(self._succeeding_function)
-        assert result2 == "success"
-        assert breaker.state == CircuitBreakerState.CLOSED
-        assert breaker._success_count == 0  # Reset
-
-    def test_half_open_to_open_on_failure(self):
-        """Test that single failure in half-open returns to open."""
-        breaker = CircuitBreaker(name="test", failure_threshold=1, timeout_seconds=0.1)
-
-        # Open the circuit
-        try:
-            breaker.call(self._failing_function)
-        except ValueError:
-            pass
-
-        assert breaker.state == CircuitBreakerState.OPEN
-
-        # Wait for timeout
-        time.sleep(0.15)
-
-        # Try success → HALF_OPEN
-        breaker.call(self._succeeding_function)
-        assert breaker.state == CircuitBreakerState.HALF_OPEN
-
-        # Failure in half-open → back to OPEN
-        try:
-            breaker.call(self._failing_function)
-        except ValueError:
-            pass
-
-        assert breaker.state == CircuitBreakerState.OPEN
-
-    def test_closed_success_resets_failure_count(self):
-        """Test that success in closed state resets failure count."""
-        breaker = CircuitBreaker(name="test", failure_threshold=3)
-
-        # 2 failures (not enough to open)
-        for i in range(2):
-            try:
-                breaker.call(self._failing_function)
-            except ValueError:
-                pass
-
-        assert breaker._failure_count == 2
-        assert breaker.state == CircuitBreakerState.CLOSED
-
-        # 1 success resets failure count
-        breaker.call(self._succeeding_function)
-        assert breaker._failure_count == 0
-        assert breaker.state == CircuitBreakerState.CLOSED
-
-    # Helper functions
-    @staticmethod
-    def _failing_function():
-        """Function that always fails."""
-        raise ValueError("Simulated failure")
-
-    @staticmethod
-    def _succeeding_function():
-        """Function that always succeeds."""
-        return "success"
-
-
-class TestCircuitBreakerContextManager:
-    """Test circuit breaker as context manager."""
-
-    def test_context_manager_success(self):
-        """Test that context manager handles successful execution."""
-        breaker = CircuitBreaker(name="test")
-
-        with breaker:
-            result = "success"
+    def test_initial_state(self):
+        """Test circuit breaker starts in closed state."""
+        breaker = CircuitBreaker("test_breaker")
 
         assert breaker.state == CircuitBreakerState.CLOSED
-        assert breaker._failure_count == 0
+        assert breaker.failure_count == 0
+        assert breaker.last_failure_time is None
+        assert breaker.is_closed() is True
+
+    def test_successful_operation(self):
+        """Test successful operation doesn't change state."""
+        breaker = CircuitBreaker("test_breaker", failure_threshold=3)
+
+        # Successful operation
+        result = breaker.call(lambda: "success")
+
         assert result == "success"
+        assert breaker.state == CircuitBreakerState.CLOSED
+        assert breaker.failure_count == 0
 
-    def test_context_manager_failure(self):
-        """Test that context manager handles failed execution."""
-        breaker = CircuitBreaker(name="test", failure_threshold=3)
+    def test_failure_threshold_trips(self):
+        """Test circuit breaker trips after failure threshold."""
+        breaker = CircuitBreaker("test_breaker", failure_threshold=2)
 
         # First failure
-        with pytest.raises(ValueError), breaker:
-            raise ValueError("Test error")
+        with pytest.raises(ValueError):
+            breaker.call(lambda: 1 / 0)
 
         assert breaker.state == CircuitBreakerState.CLOSED
-        assert breaker._failure_count == 1
+        assert breaker.failure_count == 1
 
-    def test_context_manager_open_rejects(self):
-        """Test that context manager rejects when circuit is open."""
-        breaker = CircuitBreaker(name="test", failure_threshold=1)
-
-        # Open the circuit
-        with pytest.raises(ValueError), breaker:
-            raise ValueError("Test error")
-
-        assert breaker.state == CircuitBreakerState.OPEN
-
-        # Next attempt should raise CircuitBreakerError
-        with pytest.raises(CircuitBreakerError, match="Circuit breaker .* is OPEN"):
-            with breaker:
-                pass
-
-
-class TestCircuitBreakerFunctionCall:
-    """Test circuit breaker with function calls."""
-
-    def test_call_with_args(self):
-        """Test that function arguments are passed through."""
-        breaker = CircuitBreaker(name="test")
-
-        def add(a, b):
-            return a + b
-
-        result = breaker.call(add, 2, 3)
-        assert result == 5
-
-    def test_call_with_kwargs(self):
-        """Test that keyword arguments are passed through."""
-        breaker = CircuitBreaker(name="test")
-
-        def greet(name, greeting="Hello"):
-            return f"{greeting}, {name}!"
-
-        result = breaker.call(greet, "Alice", greeting="Hi")
-        assert result == "Hi, Alice!"
-
-    def test_call_preserves_exception(self):
-        """Test that original exception is raised after recording."""
-        breaker = CircuitBreaker(name="test", failure_threshold=3)
-
-        def custom_error():
-            raise RuntimeError("Custom error message")
-
-        with pytest.raises(RuntimeError, match="Custom error message"):
-            breaker.call(custom_error)
-
-        assert breaker._failure_count == 1
-
-
-class TestCircuitBreakerReset:
-    """Test manual circuit breaker reset."""
-
-    def test_manual_reset(self):
-        """Test that manual reset returns breaker to closed state."""
-        breaker = CircuitBreaker(name="test", failure_threshold=1)
-
-        # Open the circuit
-        try:
+        # Second failure should trip
+        with pytest.raises(ValueError):
             breaker.call(lambda: 1 / 0)
-        except ZeroDivisionError:
-            pass
 
         assert breaker.state == CircuitBreakerState.OPEN
-        assert breaker._failure_count == 1
+        assert breaker.failure_count == 2
 
-        # Manual reset
+    def test_open_state_blocks_calls(self):
+        """Test open state blocks calls with CircuitBreakerError."""
+        breaker = CircuitBreaker("test_breaker", failure_threshold=1)
+
+        # Trip the breaker
+        with pytest.raises(ValueError):
+            breaker.call(lambda: 1 / 0)
+
+        assert breaker.state == CircuitBreakerState.OPEN
+
+        # Calls should be blocked
+        with pytest.raises(CircuitBreakerError) as exc_info:
+            breaker.call(lambda: "blocked")
+
+        assert "Circuit breaker is open" in str(exc_info.value)
+
+    def test_half_open_state_recovery(self):
+        """Test half-open state allows recovery."""
+        breaker = CircuitBreaker("test_breaker", failure_threshold=1, recovery_timeout=1.0)
+
+        # Trip the breaker
+        with pytest.raises(ValueError):
+            breaker.call(lambda: 1 / 0)
+
+        assert breaker.state == CircuitBreakerState.OPEN
+
+        # Wait for recovery timeout
+        time.sleep(1.1)
+
+        # Next call should be allowed (half-open state)
+        result = breaker.call(lambda: "recovered")
+
+        assert result == "recovered"
+        assert breaker.state == CircuitBreakerState.CLOSED
+        assert breaker.failure_count == 0
+
+    def test_half_open_state_failure_reopens(self):
+        """Test half-open state reopens on failure."""
+        breaker = CircuitBreaker("test_breaker", failure_threshold=1, recovery_timeout=1.0)
+
+        # Trip the breaker
+        with pytest.raises(ValueError):
+            breaker.call(lambda: 1 / 0)
+
+        assert breaker.state == CircuitBreakerState.OPEN
+
+        # Wait for recovery timeout
+        time.sleep(1.1)
+
+        # Failure in half-open state should reopen
+        with pytest.raises(ValueError):
+            breaker.call(lambda: 1 / 0)
+
+        assert breaker.state == CircuitBreakerState.OPEN
+
+    def test_reset_functionality(self):
+        """Test manual reset functionality."""
+        breaker = CircuitBreaker("test_breaker", failure_threshold=1)
+
+        # Trip the breaker
+        with pytest.raises(ValueError):
+            breaker.call(lambda: 1 / 0)
+
+        assert breaker.state == CircuitBreakerState.OPEN
+
+        # Reset the breaker
         breaker.reset()
 
         assert breaker.state == CircuitBreakerState.CLOSED
-        assert breaker._failure_count == 0
-        assert breaker._success_count == 0
-        assert breaker._last_failure_time is None
+        assert breaker.failure_count == 0
+        assert breaker.last_failure_time is None
 
+    def test_timeout_configuration(self):
+        """Test operation timeout functionality."""
+        breaker = CircuitBreaker("test_breaker", timeout=0.1)
 
-class TestCircuitBreakerStatistics:
-    """Test circuit breaker statistics."""
+        # Operation that takes too long should timeout
+        def slow_operation():
+            time.sleep(0.2)
+            return "slow"
 
-    def test_get_stats(self):
-        """Test that get_stats returns correct information."""
+        with pytest.raises(CircuitBreakerError) as exc_info:
+            breaker.call(slow_operation)
+
+        assert "timeout" in str(exc_info.value).lower()
+
+    def test_exception_filtering(self):
+        """Test filtering specific exceptions."""
+        # Only treat ValueError as failure
         breaker = CircuitBreaker(
-            name="test_stats",
-            failure_threshold=5,
-            success_threshold=2,
-            timeout_seconds=60.0,
+            "test_breaker",
+            failure_threshold=1,
+            exception_filter=lambda e: isinstance(e, ValueError),
         )
 
-        # Trigger one failure
-        try:
+        # TypeError should not trip the breaker
+        with pytest.raises(TypeError):
+            breaker.call(lambda: "string" + 1)
+
+        assert breaker.state == CircuitBreakerState.CLOSED
+        assert breaker.failure_count == 0
+
+        # ValueError should trip the breaker
+        with pytest.raises(ValueError):
             breaker.call(lambda: 1 / 0)
-        except ZeroDivisionError:
-            pass
 
-        stats = breaker.get_stats()
+        assert breaker.state == CircuitBreakerState.OPEN
 
-        assert stats["name"] == "test_stats"
-        assert stats["state"] == "closed"
-        assert stats["failure_count"] == 1
-        assert stats["success_count"] == 0
-        assert stats["last_failure_time"] is not None
-        assert stats["timeout_seconds"] == 60.0
-        assert stats["failure_threshold"] == 5
-        assert stats["success_threshold"] == 2
+    def test_fallback_function(self):
+        """Test fallback function when circuit is open."""
+        fallback_result = "fallback_value"
+
+        breaker = CircuitBreaker(
+            "test_breaker", failure_threshold=1, fallback=lambda: fallback_result
+        )
+
+        # Trip the breaker
+        with pytest.raises(ValueError):
+            breaker.call(lambda: 1 / 0)
+
+        # Should return fallback when open
+        result = breaker.call(lambda: "blocked")
+        assert result == fallback_result
+
+
+class TestCircuitBreakerConfig:
+    """Test circuit breaker configuration validation."""
+
+    def test_default_configuration(self):
+        """Test default configuration values."""
+        config = CircuitBreakerConfig()
+
+        assert config.failure_threshold == 5
+        assert config.recovery_timeout == 60.0
+        assert config.timeout == 30.0
+        assert config.exception_filter is None
+
+    def test_custom_configuration(self):
+        """Test custom configuration values."""
+
+        def custom_filter(e):
+            return isinstance(e, ValueError)
+
+        config = CircuitBreakerConfig(
+            failure_threshold=3, recovery_timeout=30.0, timeout=10.0, exception_filter=custom_filter
+        )
+
+        assert config.failure_threshold == 3
+        assert config.recovery_timeout == 30.0
+        assert config.timeout == 10.0
+        assert config.exception_filter == custom_filter
+
+    def test_invalid_configuration(self):
+        """Test invalid configuration validation."""
+        # Negative failure threshold
+        with pytest.raises(ValueError):
+            CircuitBreakerConfig(failure_threshold=-1)
+
+        # Negative recovery timeout
+        with pytest.raises(ValueError):
+            CircuitBreakerConfig(recovery_timeout=-1.0)
+
+        # Negative timeout
+        with pytest.raises(ValueError):
+            CircuitBreakerConfig(timeout=-1.0)
 
 
 class TestCircuitBreakerMetrics:
-    """Test circuit breaker metrics recording."""
+    """Test circuit breaker metrics and monitoring."""
 
-    @patch("k2.common.circuit_breaker.create_component_metrics")
-    def test_metrics_on_failure(self, mock_metrics_factory):
-        """Test that metrics are recorded on failure."""
-        mock_metrics = MagicMock()
-        mock_metrics_factory.return_value = mock_metrics
+    def test_metrics_collection(self):
+        """Test metrics are collected properly."""
+        breaker = CircuitBreaker("test_breaker", failure_threshold=3)
 
-        breaker = CircuitBreaker(name="test_metrics", failure_threshold=3)
-
-        # Trigger failure
-        try:
-            breaker.call(lambda: 1 / 0)
-        except ZeroDivisionError:
-            pass
-
-        # Check that failure metric was incremented
-        mock_metrics.increment.assert_called_with(
-            "circuit_breaker_failures_total",
-            labels={"breaker_name": "test_metrics"},
-        )
-
-    @patch("k2.common.circuit_breaker.create_component_metrics")
-    def test_metrics_on_state_change(self, mock_metrics_factory):
-        """Test that metrics are recorded on state change."""
-        mock_metrics = MagicMock()
-        mock_metrics_factory.return_value = mock_metrics
-
-        breaker = CircuitBreaker(name="test_metrics", failure_threshold=1)
-
-        # Open circuit (should record state change)
-        try:
-            breaker.call(lambda: 1 / 0)
-        except ZeroDivisionError:
-            pass
-
-        # Check that state metric was updated
-        assert mock_metrics.record_circuit_breaker_state.call_count >= 2  # Initial + transition
-
-
-class TestCircuitBreakerEdgeCases:
-    """Test circuit breaker edge cases."""
-
-    def test_timeout_not_elapsed(self):
-        """Test that circuit remains open if timeout not elapsed."""
-        breaker = CircuitBreaker(name="test", failure_threshold=1, timeout_seconds=10.0)
-
-        # Open circuit
-        try:
-            breaker.call(lambda: 1 / 0)
-        except ZeroDivisionError:
-            pass
-
-        assert breaker.state == CircuitBreakerState.OPEN
-
-        # Try immediately (timeout not elapsed)
-        with pytest.raises(CircuitBreakerError):
+        # Successful operations
+        for _ in range(5):
             breaker.call(lambda: "success")
 
-        # Should still be open
-        assert breaker.state == CircuitBreakerState.OPEN
+        # Failed operations
+        for _ in range(2):
+            try:
+                breaker.call(lambda: 1 / 0)
+            except ValueError:
+                pass
 
-    def test_success_threshold_one(self):
-        """Test breaker with success_threshold=1."""
+        metrics = breaker.get_metrics()
+
+        assert metrics["total_calls"] == 7
+        assert metrics["successful_calls"] == 5
+        assert metrics["failed_calls"] == 2
+        assert metrics["current_state"] == CircuitBreakerState.CLOSED.value
+        assert metrics["failure_count"] == 2
+
+    def test_metrics_reset(self):
+        """Test metrics reset functionality."""
+        breaker = CircuitBreaker("test_breaker")
+
+        # Generate some activity
+        breaker.call(lambda: "success")
+        try:
+            breaker.call(lambda: 1 / 0)
+        except ValueError:
+            pass
+
+        # Reset metrics
+        breaker.reset_metrics()
+
+        metrics = breaker.get_metrics()
+        assert metrics["total_calls"] == 0
+        assert metrics["successful_calls"] == 0
+        assert metrics["failed_calls"] == 0
+
+    def test_state_transition_history(self):
+        """Test state transition history tracking."""
+        breaker = CircuitBreaker("test_breaker", failure_threshold=1, recovery_timeout=0.1)
+
+        # Generate state transitions
+        try:
+            breaker.call(lambda: 1 / 0)
+        except ValueError:
+            pass  # Trip to OPEN
+
+        time.sleep(0.2)  # Allow recovery
+
+        breaker.call(lambda: "recovered")  # Should go to CLOSED
+
+        history = breaker.get_state_history()
+
+        assert len(history) >= 2
+        assert history[0]["from_state"] is None
+        assert history[0]["to_state"] == CircuitBreakerState.OPEN.value
+        assert history[-1]["to_state"] == CircuitBreakerState.CLOSED.value
+
+
+class TestCircuitBreakerPerformance:
+    """Test circuit breaker performance characteristics."""
+
+    def test_overhead_measurement(self):
+        """Test circuit breaker overhead is minimal."""
+        breaker = CircuitBreaker("test_breaker")
+
+        def simple_operation():
+            return "result"
+
+        # Measure time without circuit breaker
+        start_time = time.time()
+        for _ in range(10000):
+            simple_operation()
+        direct_time = time.time() - start_time
+
+        # Measure time with circuit breaker
+        start_time = time.time()
+        for _ in range(10000):
+            breaker.call(simple_operation)
+        breaker_time = time.time() - start_time
+
+        # Overhead should be minimal (< 50% increase)
+        overhead_ratio = (breaker_time - direct_time) / direct_time
+        assert overhead_ratio < 0.5
+
+    def test_concurrent_access(self):
+        """Test circuit breaker handles concurrent access."""
+        import threading
+
+        breaker = CircuitBreaker("test_breaker", failure_threshold=10)
+        results = []
+        errors = []
+
+        def worker():
+            try:
+                result = breaker.call(lambda: "success")
+                results.append(result)
+            except Exception as e:
+                errors.append(e)
+
+        # Create multiple threads
+        threads = []
+        for _ in range(10):
+            thread = threading.Thread(target=worker)
+            threads.append(thread)
+            thread.start()
+
+        # Wait for all threads to complete
+        for thread in threads:
+            thread.join()
+
+        # Should handle concurrent access without errors
+        assert len(errors) == 0
+        assert len(results) == 10
+        assert all(result == "success" for result in results)
+
+
+class TestCircuitBreakerIntegration:
+    """Test circuit breaker integration scenarios."""
+
+    @patch("requests.get")
+    def test_http_service_integration(self, mock_get):
+        """Test circuit breaker with HTTP service."""
+        # Configure circuit breaker for HTTP calls
         breaker = CircuitBreaker(
-            name="test",
-            failure_threshold=1,
-            success_threshold=1,
-            timeout_seconds=0.1,
+            "http_service",
+            failure_threshold=2,
+            timeout=1.0,
+            fallback=lambda: {"error": "service_unavailable"},
         )
 
-        # Open circuit
+        # Simulate successful response
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"data": "success"}
+
+        result = breaker.call(lambda: mock_get("http://api.example.com/data").json())
+        assert result == {"data": "success"}
+
+        # Simulate failures
+        mock_get.side_effect = Exception("Connection failed")
+
+        # First failure
         try:
-            breaker.call(lambda: 1 / 0)
-        except ZeroDivisionError:
+            breaker.call(lambda: mock_get("http://api.example.com/data"))
+        except Exception:
             pass
 
-        # Wait for timeout
-        time.sleep(0.15)
-
-        # Single success should close circuit
-        breaker.call(lambda: "success")
-        assert breaker.state == CircuitBreakerState.CLOSED
-
-    def test_failure_threshold_one(self):
-        """Test breaker with failure_threshold=1 (fail-fast)."""
-        breaker = CircuitBreaker(name="test", failure_threshold=1)
-
-        # Single failure should open circuit
+        # Second failure should trip
         try:
-            breaker.call(lambda: 1 / 0)
-        except ZeroDivisionError:
+            breaker.call(lambda: mock_get("http://api.example.com/data"))
+        except Exception:
+            pass
+
+        # Should return fallback
+        result = breaker.call(lambda: mock_get("http://api.example.com/data").json())
+        assert result == {"error": "service_unavailable"}
+
+    def test_database_connection_integration(self):
+        """Test circuit breaker with database connections."""
+        mock_db = Mock()
+
+        breaker = CircuitBreaker("database", failure_threshold=2, recovery_timeout=0.1)
+
+        # Simulate successful query
+        mock_db.query.return_value = [{"id": 1, "name": "test"}]
+
+        result = breaker.call(lambda: mock_db.query("SELECT * FROM users"))
+        assert result == [{"id": 1, "name": "test"}]
+
+        # Simulate database failure
+        mock_db.query.side_effect = Exception("Database connection failed")
+
+        # First failure
+        try:
+            breaker.call(lambda: mock_db.query("SELECT * FROM users"))
+        except Exception:
+            pass
+
+        # Second failure should trip
+        try:
+            breaker.call(lambda: mock_db.query("SELECT * FROM users"))
+        except Exception:
             pass
 
         assert breaker.state == CircuitBreakerState.OPEN
 
-    def test_multiple_failures_in_open_state(self):
-        """Test that failures in open state don't execute function."""
-        breaker = CircuitBreaker(name="test", failure_threshold=1)
-
-        # Open circuit
-        try:
-            breaker.call(lambda: 1 / 0)
-        except ZeroDivisionError:
-            pass
-
-        call_count = [0]
-
-        def tracked_function():
-            call_count[0] += 1
-            return "success"
-
-        # Multiple attempts should all fail fast without calling function
-        for _ in range(5):
-            with pytest.raises(CircuitBreakerError):
-                breaker.call(tracked_function)
-
-        assert call_count[0] == 0  # Function never called
+        # Should block subsequent calls
+        with pytest.raises(CircuitBreakerError):
+            breaker.call(lambda: mock_db.query("SELECT * FROM users"))

@@ -60,7 +60,7 @@ Reduce health check timeout from 60s → 30s for faster detection of stale conne
 ### Verification Results
 
 ```bash
-$ uv run pytest tests/unit/test_binance_client.py -v
+$ uv run pytest tests-backup/unit/test_binance_client.py -v
 ============================== 47 passed in 4.18s ==============================
 ```
 

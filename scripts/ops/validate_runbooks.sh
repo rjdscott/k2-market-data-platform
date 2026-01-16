@@ -3,12 +3,12 @@
 # Runbook Validation Script
 #
 # This script validates that runbook commands are executable and services are accessible.
-# It tests non-destructive commands and validates syntax for destructive ones.
+# It tests-backup non-destructive commands and validates syntax for destructive ones.
 #
 # Usage: ./scripts/ops/validate_runbooks.sh [--full]
 #
 # Options:
-#   --full    Run full validation including connectivity tests (requires services running)
+#   --full    Run full validation including connectivity tests-backup (requires services running)
 #   --help    Show this help message
 #
 # Exit Codes:

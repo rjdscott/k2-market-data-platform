@@ -179,7 +179,7 @@ if __name__ == '__main__':
 **File**: `tests/integration/test_iceberg_catalog.py`
 
 ```python
-"""Integration tests for Iceberg catalog."""
+"""Integration tests-backup for Iceberg catalog."""
 import pytest
 from k2.storage.catalog import IcebergCatalogManager
 from pyiceberg.catalog import load_catalog
@@ -232,8 +232,8 @@ class TestIcebergCatalog:
 # Initialize infrastructure
 make init-infra
 
-# Run integration tests
-pytest tests/integration/test_iceberg_catalog.py -v
+# Run integration tests-backup
+pytest tests-backup/integration/test_iceberg_catalog.py -v
 ```
 
 ---
@@ -277,7 +277,7 @@ If this step needs to be reverted:
 3. **Revert code**:
    ```bash
    rm src/k2/storage/catalog.py
-   rm tests/integration/test_iceberg_catalog.py
+   rm tests-backup/integration/test_iceberg_catalog.py
 
    # Revert init_infra.py changes
    git checkout scripts/init_infra.py
@@ -285,7 +285,7 @@ If this step needs to be reverted:
 
 4. **Verify rollback**:
    ```bash
-   pytest tests/integration/test_iceberg_catalog.py
+   pytest tests-backup/integration/test_iceberg_catalog.py
    # Should fail - table doesn't exist (expected)
    ```
 

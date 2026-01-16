@@ -87,7 +87,7 @@ Implement WebSocket ping-pong heartbeat to detect silent connection drops.
 ### Verification Results
 
 ```bash
-$ uv run pytest tests/unit/test_binance_client.py -v
+$ uv run pytest tests-backup/unit/test_binance_client.py -v
 ============================== 47 passed in 4.01s ==============================
 ```
 

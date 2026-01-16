@@ -237,7 +237,7 @@ v2_eur = convert_binance_trade_to_v2(binance_msg_eur)
 assert v2_eur["currency"] == "EUR"  # ✅ Works with fiat too
 print("✅ BNBEUR conversion works")
 
-print("\n✅ All currency extraction tests pass!")
+print("\n✅ All currency extraction tests-backup pass!")
 ```
 
 ### Test Side Determination

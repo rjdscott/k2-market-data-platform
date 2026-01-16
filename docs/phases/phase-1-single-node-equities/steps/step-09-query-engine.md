@@ -57,12 +57,12 @@ Key components:
 1. **Remove query engine**:
    ```bash
    rm src/k2/query/engine.py
-   rm tests/integration/test_query_engine.py
+   rm tests-backup/integration/test_query_engine.py
    ```
 
 2. **Verify rollback**:
    ```bash
-   pytest tests/integration/test_query_engine.py
+   pytest tests-backup/integration/test_query_engine.py
    # Should fail - module doesn't exist (expected)
    ```
 

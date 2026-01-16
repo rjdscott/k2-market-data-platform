@@ -472,7 +472,7 @@ class RequestSizeLimiter(BaseHTTPMiddleware):
 **Shell Script Test Framework** (540+ lines):
 ```bash
 #!/bin/bash
-# tests/integration/test_runbooks.sh
+# tests-backup/integration/test_runbooks.sh
 # Validates that runbook commands actually work
 
 # Test 1: Consumer Lag Recovery

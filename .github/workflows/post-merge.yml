@@ -57,7 +57,7 @@ jobs:
           timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
           echo "✅ PostgreSQL is ready"
 
-      - name: Run unit tests (parallel)
+      - name: Run unit tests-backup (parallel)
         run: |
           uv run pytest tests/unit/ \
             -v \
@@ -65,7 +65,7 @@ jobs:
             --tb=short \
             --junitxml=unit-test-results.xml
 
-      - name: Run integration tests (all)
+      - name: Run integration tests-backup (all)
         run: |
           uv run pytest tests/integration/ \
             -v \
@@ -73,7 +73,7 @@ jobs:
             --tb=short \
             --junitxml=integration-test-results.xml
 
-      - name: Run performance tests
+      - name: Run performance tests-backup
         run: |
           uv run pytest tests/performance/ \
             -v \
@@ -116,7 +116,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Run tests with coverage
+      - name: Run tests-backup with coverage
         run: |
           uv run pytest tests/ \
             -v \

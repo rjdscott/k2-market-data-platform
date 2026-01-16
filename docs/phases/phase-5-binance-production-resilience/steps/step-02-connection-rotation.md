@@ -139,7 +139,7 @@ docker logs k2-binance-stream | grep "rotation_triggered"
 ### Verification Results
 
 ```bash
-$ uv run pytest tests/unit/test_binance_client.py -v
+$ uv run pytest tests-backup/unit/test_binance_client.py -v
 ============================== 34 passed in 3.68s ==============================
 ```
 

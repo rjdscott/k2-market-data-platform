@@ -48,11 +48,11 @@ for /user.slice/user-1000.slice/user@1000.service being 66.42% > 50.00% for > 20
 Exclude performance tests from parallel execution:
 
 ```bash
-# Run unit tests in parallel (safe, small datasets)
-uv run pytest tests/unit/ -n auto -m "not performance"
+# Run unit tests-backup in parallel (safe, small datasets)
+uv run pytest tests-backup/unit/ -n auto -m "not performance"
 
-# Run performance tests sequentially (one at a time)
-uv run pytest tests/performance/ -n 0 -m performance
+# Run performance tests-backup sequentially (one at a time)
+uv run pytest tests-backup/performance/ -n 0 -m performance
 ```
 
 #### Option B: Limit Worker Count
@@ -60,18 +60,18 @@ Reduce parallelism to control memory usage:
 
 ```bash
 # Limit to 2 workers instead of auto-detect
-uv run pytest tests/unit/ -n 2
+uv run pytest tests-backup/unit/ -n 2
 ```
 
 #### Option C: Memory-Aware Test Grouping
 Run memory-intensive tests separately:
 
 ```bash
-# Fast, small unit tests in parallel
-uv run pytest tests/unit/ -n auto -m "not slow and not performance"
+# Fast, small unit tests-backup in parallel
+uv run pytest tests-backup/unit/ -n auto -m "not slow and not performance"
 
-# Slow/heavy tests sequentially
-uv run pytest tests/unit/ tests/performance/ -n 0 -m "slow or performance"
+# Slow/heavy tests-backup sequentially
+uv run pytest tests-backup/unit/ tests-backup/performance/ -n 0 -m "slow or performance"
 ```
 
 ### 2. Pytest Configuration Updates
@@ -86,7 +86,7 @@ addopts = [
     "--strict-config",
     "--showlocals",
     "--tb=short",
-    # Exclude heavy tests by default
+    # Exclude heavy tests-backup by default
     "-m", "not slow and not chaos and not soak and not operational and not performance",
 ]
 
@@ -124,7 +124,7 @@ for i in range(1000):
     trades.append(...)
 
 # After (safer, still validates logic)
-for i in range(100):  # 10x smaller, still tests edge cases
+for i in range(100):  # 10x smaller, still tests-backup edge cases
     trades.append(...)
 ```
 
@@ -135,7 +135,7 @@ for i in range(100):  # 10x smaller, still tests edge cases
 Update `.github/workflows/pr-validation.yml`:
 
 ```yaml
-- name: Run unit tests (parallel, lightweight)
+- name: Run unit tests-backup (parallel, lightweight)
   run: |
     uv run pytest tests/unit/ \
       -v \
@@ -145,7 +145,7 @@ Update `.github/workflows/pr-validation.yml`:
       --tb=short \
       --junitxml=pytest-unit-results.xml
 
-- name: Run performance tests (sequential)
+- name: Run performance tests-backup (sequential)
   run: |
     uv run pytest tests/performance/ \
       -v \
@@ -210,10 +210,10 @@ def test_throughput_benchmark(self):
 ### Local Testing (Safe Mode)
 ```bash
 # Test with limited parallelism
-uv run pytest tests/unit/ -n 2 -v
+uv run pytest tests-backup/unit/ -n 2 -v
 
-# Test performance tests sequentially
-uv run pytest tests/performance/ -n 0 -v
+# Test performance tests-backup sequentially
+uv run pytest tests-backup/performance/ -n 0 -v
 ```
 
 ### Verify Memory Impact

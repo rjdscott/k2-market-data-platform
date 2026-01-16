@@ -157,7 +157,7 @@ uv lock --upgrade && uv sync
 
 # Run commands in the virtual environment
 uv run python scripts/example.py
-uv run pytest tests/
+uv run pytest tests-backup/
 uv run k2 --help
 ```
 
@@ -512,7 +512,7 @@ tests/
 ### Run Tests
 
 ```bash
-make test-unit          # Fast unit tests (~10s)
+make test-unit          # Fast unit tests-backup (~10s)
 make test-integration   # Full integration (~60s, requires Docker)
 make coverage           # Generate coverage report
 ```
@@ -546,8 +546,8 @@ See [Testing Guide](./docs/TESTING.md) for comprehensive testing procedures and 
 ### Local Testing (matches CI)
 
 ```bash
-make test-pr              # Before push: lint + type + unit tests (~2-3 min)
-make test-pr-full         # Before merge: + integration tests (~5-10 min)
+make test-pr              # Before push: lint + type + unit tests-backup (~2-3 min)
+make test-pr-full         # Before merge: + integration tests-backup (~5-10 min)
 make ci-all               # Full CI validation locally
 ```
 
@@ -616,7 +616,7 @@ make demo-quick         # Run demo (CI-friendly)
 make notebook           # Jupyter notebook
 
 # Testing
-make test-unit          # Unit tests only
+make test-unit          # Unit tests-backup only
 make test-integration   # Requires Docker
 make coverage           # Coverage report
 

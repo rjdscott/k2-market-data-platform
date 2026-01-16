@@ -31,23 +31,23 @@
 
 ### Safe Mode (Recommended for Development)
 ```bash
-# Run unit tests with limited parallelism
-uv run pytest tests/unit/ -n 2 -v
+# Run unit tests-backup with limited parallelism
+uv run pytest tests-backup/unit/ -n 2 -v
 
-# Run performance tests sequentially
-uv run pytest tests/performance/ -n 0 -v
+# Run performance tests-backup sequentially
+uv run pytest tests-backup/performance/ -n 0 -v
 ```
 
 ### Production-Like (Matches CI)
 ```bash
-# Run all tests as CI does (unit parallel, performance sequential)
-uv run pytest tests/unit/ -n auto -m "not performance" -v
-uv run pytest tests/performance/ -n 0 -m performance -v
+# Run all tests-backup as CI does (unit parallel, performance sequential)
+uv run pytest tests-backup/unit/ -n auto -m "not performance" -v
+uv run pytest tests-backup/performance/ -n 0 -m performance -v
 ```
 
 ### Monitor Memory During Tests
 ```bash
-# In another terminal while tests run
+# In another terminal while tests-backup run
 watch -n 1 'free -h && echo "---" && ps aux | grep pytest | head -5'
 ```
 
@@ -76,15 +76,15 @@ def test_sustained_throughput_10k_messages(self, producer_with_real_kafka):
 ### 2. Test the Changes
 ```bash
 # Quick validation
-uv run pytest tests/unit/test_data_validation.py -v
+uv run pytest tests-backup/unit/test_data_validation.py -v
 
 # Full test suite (safe mode)
-uv run pytest tests/unit/ -n 2 -v
+uv run pytest tests-backup/unit/ -n 2 -v
 ```
 
 ### 3. Commit the Safeguards
 ```bash
-git add pyproject.toml .github/workflows/pr-validation.yml tests/unit/test_data_validation.py
+git add pyproject.toml .github/workflows/pr-validation.yml tests-backup/unit/test_data_validation.py
 git add CRASH_ANALYSIS.md SAFEGUARDS_SUMMARY.md
 git commit -m "feat(tests): add OOM safeguards - split test execution and reduce unit test data sizes
 
@@ -135,17 +135,17 @@ Addresses: OOM crash on 2026-01-15 during test execution"
 ## Quick Reference Commands
 
 ```bash
-# Run only unit tests (parallel, safe)
-uv run pytest tests/unit/ -n auto -m "not performance"
+# Run only unit tests-backup (parallel, safe)
+uv run pytest tests-backup/unit/ -n auto -m "not performance"
 
-# Run only performance tests (sequential)
-uv run pytest tests/performance/ -n 0 -m performance
+# Run only performance tests-backup (sequential)
+uv run pytest tests-backup/performance/ -n 0 -m performance
 
-# Run all tests (safe mode - limited parallelism)
-uv run pytest tests/ -n 2
+# Run all tests-backup (safe mode - limited parallelism)
+uv run pytest tests-backup/ -n 2
 
 # Run specific test file
-uv run pytest tests/unit/test_data_validation.py -v
+uv run pytest tests-backup/unit/test_data_validation.py -v
 
 # Check test markers
 uv run pytest --markers

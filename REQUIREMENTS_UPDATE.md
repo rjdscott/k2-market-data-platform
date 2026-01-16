@@ -128,8 +128,8 @@ pip install --upgrade -r requirements.txt
 # Verify no conflicts
 pip check
 
-# Run tests to ensure compatibility
-pytest tests/
+# Run tests-backup to ensure compatibility
+pytest tests-backup/
 ```
 
 ### Alternative: Use pyproject.toml

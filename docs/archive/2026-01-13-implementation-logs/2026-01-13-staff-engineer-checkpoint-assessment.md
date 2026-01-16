@@ -827,7 +827,7 @@ If sequence tracking fails, the platform could:
 
 **Recommendation**: Add comprehensive sequence tracker tests:
 ```python
-# tests/unit/test_sequence_tracker.py
+# tests-backup/unit/test_sequence_tracker.py
 class TestSequenceTracker:
     def test_in_order_sequence(self):
         """Test normal in-order sequence: 1, 2, 3, 4"""
@@ -892,7 +892,7 @@ For a market data platform, performance is **not optional**. Regression in throu
 
 **Recommendation**: Add baseline performance benchmarks:
 ```python
-# tests/performance/test_throughput.py
+# tests-backup/performance/test_throughput.py
 def test_producer_throughput(benchmark):
     """Benchmark producer throughput (messages/sec)"""
     producer = MarketDataProducer(...)
@@ -954,7 +954,7 @@ def test_query_latency(benchmark):
 
 **Recommendation**: Add data validation test suite:
 ```python
-# tests/unit/test_data_validation.py
+# tests-backup/unit/test_data_validation.py
 import pandera as pa
 from pandera import DataFrameSchema, Column, Check
 
@@ -1003,7 +1003,7 @@ def test_decimal_precision():
 
 **Recommendation**: Add middleware test suite:
 ```python
-# tests/unit/test_middleware.py
+# tests-backup/unit/test_middleware.py
 def test_correlation_id_propagation():
     """Test that correlation IDs flow through request"""
     client = TestClient(app)

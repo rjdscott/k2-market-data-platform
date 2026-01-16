@@ -74,7 +74,7 @@ Manual Trigger → Chaos Tests (<1 hour)
 ```bash
 # Run locally before pushing
 make test-pr
-# This runs: lint + type-check + unit tests (parallel)
+# This runs: lint + type-check + unit tests-backup (parallel)
 ```
 
 ---
@@ -118,13 +118,13 @@ make test-pr
 
 **When It Fails**:
 ```bash
-# Run integration tests locally
+# Run integration tests-backup locally
 make test-pr-full
 # This includes: lint + type + unit + integration
 
 # Debug specific integration test
 make docker-up
-uv run pytest tests/integration/test_specific.py -v
+uv run pytest tests-backup/integration/test_specific.py -v
 make docker-down
 ```
 
@@ -321,14 +321,14 @@ echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
 **PR Validation** (matches Step 1):
 ```bash
 make test-pr
-# Runs: lint + type-check + unit tests (parallel)
+# Runs: lint + type-check + unit tests-backup (parallel)
 # Duration: ~2-3 minutes locally
 ```
 
 **PR Full Check** (matches Step 2):
 ```bash
 make test-pr-full
-# Runs: test-pr + integration tests
+# Runs: test-pr + integration tests-backup
 # Duration: ~5-10 minutes locally
 # Requires: Docker Compose services
 ```
@@ -343,10 +343,10 @@ make test-post-merge
 
 **Individual Test Categories**:
 ```bash
-make test               # Fast tests only (default)
-make test-unit          # Unit tests only
-make test-unit-parallel # Unit tests in parallel (faster)
-make test-integration   # Integration tests (no slow)
+make test               # Fast tests-backup only (default)
+make test-unit          # Unit tests-backup only
+make test-unit-parallel # Unit tests-backup in parallel (faster)
+make test-integration   # Integration tests-backup (no slow)
 make test-performance   # Performance benchmarks
 ```
 
@@ -440,7 +440,7 @@ make test-chaos
 ```bash
 make test-operational
 # Requires confirmation: y/N
-# Stops/starts services, tests disaster recovery
+# Stops/starts services, tests-backup disaster recovery
 ```
 
 **Soak Tests**:
@@ -468,8 +468,8 @@ make test-soak-24h  # ERROR: Blocked, CI only
 # Check imports work
 uv run python -c "from k2.ingestion.producer import MarketDataProducer"
 
-# Run tests with verbose output
-uv run pytest tests/unit/ -v
+# Run tests-backup with verbose output
+uv run pytest tests-backup/unit/ -v
 
 # Check for syntax errors
 make lint
@@ -772,8 +772,8 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Run tests
-        run: uv run pytest tests/ -v
+      - name: Run tests-backup
+        run: uv run pytest tests-backup/ -v
 ```
 
 ### Docker Compose Services Pattern

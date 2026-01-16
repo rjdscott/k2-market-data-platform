@@ -1,4 +1,4 @@
-claude# CI/CD Quick Start Guide
+claud.# CI/CD Quick Start Guide
 
 **Target Audience**: Developers
 **Time to Read**: 5 minutes
@@ -14,14 +14,14 @@ claude# CI/CD Quick Start Guide
 
 ```bash
 # Before pushing code
-make test-pr              # Runs: lint + type-check + unit tests (~2-3 min)
+make test-pr              # Runs: lint + type-check + unit tests-backup (~2-3 min)
 
 # Before requesting merge
-make test-pr-full         # Runs: test-pr + integration tests (~5-10 min)
+make test-pr-full         # Runs: test-pr + integration tests-backup (~5-10 min)
 
 # Run specific test categories
-make test-unit            # Unit tests only
-make test-integration     # Integration tests (requires Docker)
+make test-unit            # Unit tests-backup only
+make test-integration     # Integration tests-backup (requires Docker)
 make test-performance     # Performance benchmarks
 
 # CI commands (exact match to GitHub Actions)
@@ -61,7 +61,7 @@ make ci-all               # All CI checks (quality + test + coverage)
 ### ✅ Checklist
 
 ```bash
-# 1. Run tests locally
+# 1. Run tests-backup locally
 make test-pr
 # If this passes, you're 90% good to push
 
@@ -87,18 +87,18 @@ uv run python -c "from k2.ingestion.producer import MarketDataProducer"
 
 **Test Markers**:
 ```python
-# Heavy tests need markers to avoid running by default
-@pytest.mark.chaos           # Chaos engineering tests
-@pytest.mark.operational     # Disaster recovery tests
-@pytest.mark.slow            # Slow tests (>1 sec)
-@pytest.mark.soak            # Long-running soak tests
+# Heavy tests-backup need markers to avoid running by default
+@pytest.mark.chaos           # Chaos engineering tests-backup
+@pytest.mark.operational     # Disaster recovery tests-backup
+@pytest.mark.slow            # Slow tests-backup (>1 sec)
+@pytest.mark.soak            # Long-running soak tests-backup
 ```
 
 **Docker Services**:
 ```bash
-# Integration tests need Docker
+# Integration tests-backup need Docker
 make docker-up               # Start services
-make test-integration        # Run integration tests
+make test-integration        # Run integration tests-backup
 make docker-down             # Stop services
 ```
 
@@ -151,7 +151,7 @@ git push
 # Run locally with verbose output
 make test-unit
 
-# Fix failing tests
+# Fix failing tests-backup
 # Push again
 ```
 
@@ -207,9 +207,9 @@ docker build -f docker/Dockerfile.producer -t test:latest .
 
 ```bash
 # Run specific marker
-uv run pytest -m chaos           # Chaos tests only
-uv run pytest -m operational     # Operational tests only
-uv run pytest -m slow            # Slow tests only
+uv run pytest -m chaos           # Chaos tests-backup only
+uv run pytest -m operational     # Operational tests-backup only
+uv run pytest -m slow            # Slow tests-backup only
 
 # Or use Makefile
 make test-chaos                  # Requires confirmation
@@ -228,7 +228,7 @@ make test-soak-1h                # 1-hour soak test
 **Fix**:
 ```bash
 # Check for import errors
-uv run pytest tests/unit/ -v
+uv run pytest tests-backup/unit/ -v
 
 # Check markers
 grep "addopts" pyproject.toml
@@ -247,7 +247,7 @@ docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list
 # Restart services
 make docker-down && make docker-up
 
-# Wait longer before running tests
+# Wait longer before running tests-backup
 sleep 30
 ```
 
@@ -273,13 +273,13 @@ def test_something():
 **Debug**:
 ```bash
 # Run with same conditions as CI (max 8 workers to prevent OOM)
-uv run pytest tests/ -v
+uv run pytest tests-backup/ -v
 
 # Enable debug logging
-uv run pytest tests/ -v -s --log-cli-level=DEBUG
+uv run pytest tests-backup/ -v -s --log-cli-level=DEBUG
 
 # Note: Default is -n 8 (parallel). To run sequentially use -n 0
-uv run pytest tests/ -v -n 0
+uv run pytest tests-backup/ -v -n 0
 ```
 
 ---
@@ -302,31 +302,31 @@ make test-post-merge
 # Parallel execution (max 8 workers to prevent OOM on high-core machines)
 make test-unit-parallel
 
-# Run only changed tests (requires pytest-picked)
+# Run only changed tests-backup (requires pytest-picked)
 uv run pytest --picked -v
 
-# Run failed tests first
+# Run failed tests-backup first
 uv run pytest --failed-first -v
 
 # Note: Tests run with -n 8 by default. If you have memory issues, use -n 4 or -n 2
-uv run pytest tests/unit/ -v -n 4  # Use 4 workers instead of default 8
+uv run pytest tests-backup/unit/ -v -n 4  # Use 4 workers instead of default 8
 ```
 
 ### Debug Slow Tests
 
 ```bash
 # Show test durations
-uv run pytest tests/ --durations=10
+uv run pytest tests-backup/ --durations=10
 
-# Profile tests
-uv run pytest tests/ --profile
+# Profile tests-backup
+uv run pytest tests-backup/ --profile
 ```
 
 ### Work on Flaky Tests
 
 ```bash
 # Run test multiple times
-uv run pytest tests/integration/test_flaky.py --count=10 -v
+uv run pytest tests-backup/integration/test_flaky.py --count=10 -v
 
 # Add retry logic
 @pytest.mark.flaky(reruns=3, reruns_delay=2)
@@ -375,14 +375,14 @@ Ask in #engineering-help if:
 ### Test Targets
 
 ```bash
-make test                  # Fast tests (default)
-make test-unit             # Unit tests only
-make test-unit-parallel    # Unit tests (parallel)
-make test-integration      # Integration tests (no slow)
-make test-integration-all  # All integration tests
+make test                  # Fast tests-backup (default)
+make test-unit             # Unit tests-backup only
+make test-unit-parallel    # Unit tests-backup (parallel)
+make test-integration      # Integration tests-backup (no slow)
+make test-integration-all  # All integration tests-backup
 make test-performance      # Performance benchmarks
-make test-chaos            # Chaos tests (requires confirmation)
-make test-operational      # Operational tests (requires confirmation)
+make test-chaos            # Chaos tests-backup (requires confirmation)
+make test-operational      # Operational tests-backup (requires confirmation)
 make test-soak-1h          # 1-hour soak test
 make test-soak-24h         # ERROR: Blocked (CI only)
 ```

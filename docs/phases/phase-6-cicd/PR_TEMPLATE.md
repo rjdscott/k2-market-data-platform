@@ -117,12 +117,12 @@ None. This is purely additive infrastructure.
 
 **Before Pushing** (fast feedback):
 ```bash
-make test-pr              # ~2-3 min (lint + type + unit tests)
+make test-pr              # ~2-3 min (lint + type + unit tests-backup)
 ```
 
 **Before Requesting Merge**:
 ```bash
-make test-pr-full         # ~5-10 min (+ integration tests)
+make test-pr-full         # ~5-10 min (+ integration tests-backup)
 ```
 
 **Heavy Tests** (now require explicit opt-in):

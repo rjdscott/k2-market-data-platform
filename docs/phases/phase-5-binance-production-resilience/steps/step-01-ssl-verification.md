@@ -208,7 +208,7 @@ openssl s_client -connect stream.binance.com:9443 -showcerts
 ### Verification Results
 
 ```bash
-$ uv run pytest tests/unit/test_binance_client.py::TestSSLConfiguration -v
+$ uv run pytest tests-backup/unit/test_binance_client.py::TestSSLConfiguration -v
 ========================= 4 passed in 4.18s =========================
 ```
 

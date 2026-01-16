@@ -569,7 +569,7 @@ All criteria met ✅
 - [binance_client.py](../../../src/k2/ingestion/binance_client.py)
 - [message_builders.py](../../../src/k2/ingestion/message_builders.py)
 - [trade_v2.avsc](../../../src/k2/schemas/trade_v2.avsc)
-- [test_binance_client.py](../../../tests/unit/test_binance_client.py)
+- [test_binance_client.py](../../../tests-backup/unit/test_binance_client.py)
 
 ### Related Phases
 - [Phase 0: Technical Debt](../phase-0-technical-debt-resolution/) - Operational readiness

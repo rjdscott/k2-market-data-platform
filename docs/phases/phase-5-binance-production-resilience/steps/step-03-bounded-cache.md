@@ -104,7 +104,7 @@ self._serializers = BoundedCache(max_size=10)
 ### Verification Results
 
 ```bash
-$ uv run pytest tests/unit/test_producer.py::TestBoundedCache -v
+$ uv run pytest tests-backup/unit/test_producer.py::TestBoundedCache -v
 ============================== 9 passed in 4.75s ==============================
 ```
 

@@ -1064,8 +1064,8 @@ def test_sequence_gap_detection():
 # Start services
 docker-compose up -d
 
-# Run integration tests
-pytest tests/integration/ -v
+# Run integration tests-backup
+pytest tests-backup/integration/ -v
 
 # Cleanup
 docker-compose down -v

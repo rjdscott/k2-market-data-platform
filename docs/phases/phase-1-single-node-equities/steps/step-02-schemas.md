@@ -270,7 +270,7 @@ def register_schemas(schema_registry_url: str) -> Dict[str, int]:
 **File**: `tests/unit/test_schemas.py`
 
 ```python
-"""Unit tests for schema validation."""
+"""Unit tests-backup for schema validation."""
 import pytest
 from pathlib import Path
 import json
@@ -314,7 +314,7 @@ class TestSchemas:
 **Integration Test**: `tests/integration/test_schema_registry.py`
 
 ```python
-"""Integration tests for Schema Registry."""
+"""Integration tests-backup for Schema Registry."""
 import pytest
 from k2.schemas import register_schemas
 from confluent_kafka.schema_registry import SchemaRegistryClient
@@ -354,11 +354,11 @@ class TestSchemaRegistry:
 
 ### Commands
 ```bash
-# Unit tests (no Docker needed)
-pytest tests/unit/test_schemas.py -v
+# Unit tests-backup (no Docker needed)
+pytest tests-backup/unit/test_schemas.py -v
 
-# Integration tests (requires Docker)
-pytest tests/integration/test_schema_registry.py -v
+# Integration tests-backup (requires Docker)
+pytest tests-backup/integration/test_schema_registry.py -v
 ```
 
 ---
@@ -399,8 +399,8 @@ If this step needs to be reverted:
 
 3. **Remove test files**:
    ```bash
-   rm tests/unit/test_schemas.py
-   rm tests/integration/test_schema_registry.py
+   rm tests-backup/unit/test_schemas.py
+   rm tests-backup/integration/test_schema_registry.py
    ```
 
 4. **Verify clean state**:

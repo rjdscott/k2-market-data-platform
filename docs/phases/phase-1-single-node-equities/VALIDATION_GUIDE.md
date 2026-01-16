@@ -105,20 +105,20 @@ docker compose ps
 Unit tests validate schema structure without requiring Docker services.
 
 ```bash
-# Run schema unit tests
-pytest tests/unit/test_schemas.py -v -m unit
+# Run schema unit tests-backup
+pytest tests-backup/unit/test_schemas.py -v -m unit
 
 # Expected output:
-# tests/unit/test_schemas.py::TestSchemas::test_trade_schema_valid PASSED
-# tests/unit/test_schemas.py::TestSchemas::test_quote_schema_valid PASSED
-# tests/unit/test_schemas.py::TestSchemas::test_reference_data_schema_valid PASSED
-# tests/unit/test_schemas.py::TestSchemas::test_all_schemas_have_required_fields PASSED
-# tests/unit/test_schemas.py::TestSchemas::test_timestamp_fields_use_logical_type PASSED
-# tests/unit/test_schemas.py::TestSchemas::test_decimal_fields_use_logical_type PASSED
-# tests/unit/test_schemas.py::TestSchemas::test_list_available_schemas PASSED
-# tests/unit/test_schemas.py::TestSchemas::test_load_nonexistent_schema_raises_error PASSED
-# tests/unit/test_schemas.py::TestSchemas::test_schema_files_have_doc_strings PASSED
-# tests/unit/test_schemas.py::TestSchemas::test_optional_fields_have_defaults PASSED
+# tests-backup/unit/test_schemas.py::TestSchemas::test_trade_schema_valid PASSED
+# tests-backup/unit/test_schemas.py::TestSchemas::test_quote_schema_valid PASSED
+# tests-backup/unit/test_schemas.py::TestSchemas::test_reference_data_schema_valid PASSED
+# tests-backup/unit/test_schemas.py::TestSchemas::test_all_schemas_have_required_fields PASSED
+# tests-backup/unit/test_schemas.py::TestSchemas::test_timestamp_fields_use_logical_type PASSED
+# tests-backup/unit/test_schemas.py::TestSchemas::test_decimal_fields_use_logical_type PASSED
+# tests-backup/unit/test_schemas.py::TestSchemas::test_list_available_schemas PASSED
+# tests-backup/unit/test_schemas.py::TestSchemas::test_load_nonexistent_schema_raises_error PASSED
+# tests-backup/unit/test_schemas.py::TestSchemas::test_schema_files_have_doc_strings PASSED
+# tests-backup/unit/test_schemas.py::TestSchemas::test_optional_fields_have_defaults PASSED
 #
 # ========== 10 passed in 0.XX s ==========
 ```
@@ -132,18 +132,18 @@ pytest tests/unit/test_schemas.py -v -m unit
 These tests validate Docker services are accessible.
 
 ```bash
-# Run infrastructure tests
-pytest tests/integration/test_infrastructure.py -v -m integration
+# Run infrastructure tests-backup
+pytest tests-backup/integration/test_infrastructure.py -v -m integration
 
 # Expected output:
-# tests/integration/test_infrastructure.py::TestInfrastructure::test_kafka_broker_available PASSED
-# tests/integration/test_infrastructure.py::TestInfrastructure::test_schema_registry_available PASSED
-# tests/integration/test_infrastructure.py::TestInfrastructure::test_minio_available PASSED
-# tests/integration/test_infrastructure.py::TestInfrastructure::test_postgres_available PASSED
-# tests/integration/test_infrastructure.py::TestInfrastructure::test_iceberg_rest_available PASSED
-# tests/integration/test_infrastructure.py::TestInfrastructure::test_prometheus_available PASSED
-# tests/integration/test_infrastructure.py::TestInfrastructure::test_grafana_available PASSED
-# tests/integration/test_infrastructure.py::TestInfrastructure::test_kafka_ui_available PASSED
+# tests-backup/integration/test_infrastructure.py::TestInfrastructure::test_kafka_broker_available PASSED
+# tests-backup/integration/test_infrastructure.py::TestInfrastructure::test_schema_registry_available PASSED
+# tests-backup/integration/test_infrastructure.py::TestInfrastructure::test_minio_available PASSED
+# tests-backup/integration/test_infrastructure.py::TestInfrastructure::test_postgres_available PASSED
+# tests-backup/integration/test_infrastructure.py::TestInfrastructure::test_iceberg_rest_available PASSED
+# tests-backup/integration/test_infrastructure.py::TestInfrastructure::test_prometheus_available PASSED
+# tests-backup/integration/test_infrastructure.py::TestInfrastructure::test_grafana_available PASSED
+# tests-backup/integration/test_infrastructure.py::TestInfrastructure::test_kafka_ui_available PASSED
 #
 # ========== 8 passed in 2.XX s ==========
 ```
@@ -211,18 +211,18 @@ docker exec k2-kafka kafka-topics --bootstrap-server localhost:9092 --list
 These tests validate schema registration.
 
 ```bash
-# Run schema registry tests
-pytest tests/integration/test_schema_registry.py -v -m integration
+# Run schema registry tests-backup
+pytest tests-backup/integration/test_schema_registry.py -v -m integration
 
 # Expected output:
-# tests/integration/test_schema_registry.py::TestSchemaRegistry::test_register_all_schemas PASSED
-# tests/integration/test_schema_registry.py::TestSchemaRegistry::test_schemas_are_idempotent PASSED
-# tests/integration/test_schema_registry.py::TestSchemaRegistry::test_schema_subjects_follow_convention PASSED
-# tests/integration/test_schema_registry.py::TestSchemaRegistry::test_retrieve_registered_schema PASSED
-# tests/integration/test_schema_registry.py::TestSchemaRegistry::test_schema_compatibility_mode PASSED
-# tests/integration/test_schema_registry.py::TestSchemaRegistry::test_list_schema_versions PASSED
-# tests/integration/test_schema_registry.py::TestSchemaRegistry::test_schema_registry_health PASSED
-# tests/integration/test_schema_registry.py::TestSchemaRegistry::test_incompatible_schema_rejected PASSED
+# tests-backup/integration/test_schema_registry.py::TestSchemaRegistry::test_register_all_schemas PASSED
+# tests-backup/integration/test_schema_registry.py::TestSchemaRegistry::test_schemas_are_idempotent PASSED
+# tests-backup/integration/test_schema_registry.py::TestSchemaRegistry::test_schema_subjects_follow_convention PASSED
+# tests-backup/integration/test_schema_registry.py::TestSchemaRegistry::test_retrieve_registered_schema PASSED
+# tests-backup/integration/test_schema_registry.py::TestSchemaRegistry::test_schema_compatibility_mode PASSED
+# tests-backup/integration/test_schema_registry.py::TestSchemaRegistry::test_list_schema_versions PASSED
+# tests-backup/integration/test_schema_registry.py::TestSchemaRegistry::test_schema_registry_health PASSED
+# tests-backup/integration/test_schema_registry.py::TestSchemaRegistry::test_incompatible_schema_rejected PASSED
 #
 # ========== 8 passed in 3.XX s ==========
 ```

@@ -25,7 +25,7 @@ This guide provides comprehensive validation procedures for Phase 5 improvements
 
 **Run Command**:
 ```bash
-uv run pytest tests/unit/ -v --cov=src/k2
+uv run pytest tests-backup/unit/ -v --cov=src/k2
 ```
 
 **Success Criteria**:
@@ -48,7 +48,7 @@ uv run pytest tests/unit/ -v --cov=src/k2
 
 **Run Command**:
 ```bash
-uv run pytest tests/integration/test_binance_live.py -v -s
+uv run pytest tests-backup/integration/test_binance_live.py -v -s
 ```
 
 **Success Criteria**:
@@ -91,10 +91,10 @@ uv run pytest tests/integration/test_binance_live.py -v -s
 **Run Command**:
 ```bash
 # Run 24h soak test (requires 25h timeout)
-uv run pytest tests/soak/test_binance_24h_soak.py --timeout=90000 -v -s
+uv run pytest tests-backup/soak/test_binance_24h_soak.py --timeout=90000 -v -s
 
 # Run shorter 1h validation test
-uv run pytest tests/soak/test_binance_1h_validation.py --timeout=4000 -v -s
+uv run pytest tests-backup/soak/test_binance_1h_validation.py --timeout=4000 -v -s
 ```
 
 **Success Criteria**:
@@ -207,7 +207,7 @@ curl -s http://localhost:9091/metrics | grep serializer_cache_size
 curl -s http://localhost:9091/metrics | grep serializer_cache_evictions_total
 
 # Run cache stress test
-uv run pytest tests/unit/test_producer.py::test_serializer_cache_lru_eviction -v
+uv run pytest tests-backup/unit/test_producer.py::test_serializer_cache_lru_eviction -v
 ```
 
 #### Step 04: Memory Monitoring & Alerts ✅
@@ -309,7 +309,7 @@ grep "HEALTH_CHECK_TIMEOUT" docker-compose.yml
 **Run Command**:
 ```bash
 # Run 24h soak test (background)
-nohup uv run pytest tests/soak/test_binance_24h_soak.py --timeout=90000 -v -s > soak_test.log 2>&1 &
+nohup uv run pytest tests-backup/soak/test_binance_24h_soak.py --timeout=90000 -v -s > soak_test.log 2>&1 &
 
 # Monitor progress (in separate terminal)
 tail -f soak_test.log

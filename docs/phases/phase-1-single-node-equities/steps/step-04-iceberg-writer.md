@@ -96,8 +96,8 @@ def test_write_trades():
 2. **Remove code files**:
    ```bash
    rm src/k2/storage/writer.py
-   rm tests/unit/test_iceberg_writer.py
-   rm tests/integration/test_iceberg_writer.py
+   rm tests-backup/unit/test_iceberg_writer.py
+   rm tests-backup/integration/test_iceberg_writer.py
    ```
 
 3. **Verify rollback**:

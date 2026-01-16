@@ -216,7 +216,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["F841"]  # Allow unused variables in tests
+"tests/*" = ["F841"]  # Allow unused variables in tests-backup
 "scripts/*" = []  # No special rules needed
 
 [tool.ruff.lint.pydocstyle]
@@ -299,7 +299,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-# CRITICAL: Exclude resource-intensive tests by default
+# CRITICAL: Exclude resource-intensive tests-backup by default
 # Coverage removed from default (adds 20-30% overhead) - add --cov flag explicitly if needed
 addopts = [
     "-ra",
@@ -307,12 +307,15 @@ addopts = [
     "--strict-config",
     "--showlocals",
     "--tb=short",
-    # Exclude heavy tests by default - must explicitly opt-in with -m flag
-    # IMPORTANT: performance tests excluded to prevent OOM when running with -n auto
+    # Exclude heavy tests-backup by default - must explicitly opt-in with -m flag
+    # IMPORTANT: performance tests-backup excluded to prevent OOM when running with -n auto
     "-m", "not slow and not chaos and not soak and not operational and not performance",
-    # Limit parallel workers to prevent OOM on high-core-count machines
-    # Max 8 workers even if more cores available (each worker ~500MB+ memory)
-    "-n", "8",
+    # Limit parallel workers to prevent OOM
+    # 4 workers = safer for CI (7GB / 4 = 1.75GB per worker)
+    # Override locally if you have 16GB+: pytest -n 8
+    "-n", "4",
+    # Distribute tests-backup by file to reduce fixture overhead
+    "--dist", "loadfile",
 ]
 markers = [
     "unit: Unit tests (fast, no external dependencies)",
@@ -328,7 +331,7 @@ filterwarnings = [
     "ignore::UserWarning",
     "ignore::DeprecationWarning",
 ]
-# pytest-timeout: Apply default timeout to all tests (can be overridden per-test)
+# pytest-timeout: Apply default timeout to all tests-backup (can be overridden per-test)
 timeout = 300  # 5 minutes default
 timeout_method = "thread"
 

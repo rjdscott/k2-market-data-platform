@@ -353,11 +353,11 @@ def test_get_stats():
 ### 1. Redis Sequence Tracker Integration
 
 ```python
-# tests/integration/test_redis_sequence_tracker.py
+# tests-backup/integration/test_redis_sequence_tracker.py
 
 @pytest.fixture
 def redis_client():
-    """Real Redis client for integration tests"""
+    """Real Redis client for integration tests-backup"""
     r = redis.Redis(host='localhost', port=6379, db=15)
     yield r
     r.flushdb()
@@ -378,7 +378,7 @@ def test_high_volume(redis_client):
 ### 2. Bloom Deduplicator Integration
 
 ```python
-# tests/integration/test_bloom_deduplicator.py
+# tests-backup/integration/test_bloom_deduplicator.py
 
 def test_full_dedup_workflow(redis_client):
     """Complete deduplication workflow"""
@@ -396,7 +396,7 @@ def test_false_positive_rate(redis_client):
 ### 3. Hybrid Query Integration
 
 ```python
-# tests/integration/test_hybrid_query.py
+# tests-backup/integration/test_hybrid_query.py
 
 def test_end_to_end_query():
     """Query spanning Kafka and Iceberg"""
@@ -414,7 +414,7 @@ def test_query_performance():
 ### 4. Full Pipeline Integration
 
 ```python
-# tests/integration/test_full_pipeline.py
+# tests-backup/integration/test_full_pipeline.py
 
 def test_ingest_to_query():
     """Message flows from ingestion to query"""
@@ -433,12 +433,12 @@ def test_sequence_tracking_in_pipeline():
 ### Run All Phase 2 Unit Tests
 
 ```bash
-pytest tests/unit/test_circuit_breaker.py \
-       tests/unit/test_load_shedder.py \
-       tests/unit/test_redis_sequence_tracker.py \
-       tests/unit/test_bloom_deduplicator.py \
-       tests/unit/test_hybrid_engine.py \
-       tests/unit/test_kafka_tail.py \
+pytest tests-backup/unit/test_circuit_breaker.py \
+       tests-backup/unit/test_load_shedder.py \
+       tests-backup/unit/test_redis_sequence_tracker.py \
+       tests-backup/unit/test_bloom_deduplicator.py \
+       tests-backup/unit/test_hybrid_engine.py \
+       tests-backup/unit/test_kafka_tail.py \
        -v --tb=short
 ```
 
@@ -448,16 +448,16 @@ pytest tests/unit/test_circuit_breaker.py \
 # Requires Redis running
 docker compose up -d redis
 
-pytest tests/integration/ -v -m "phase2"
+pytest tests-backup/integration/ -v -m "phase2"
 ```
 
 ### Run with Coverage
 
 ```bash
-pytest tests/unit/test_circuit_breaker.py \
-       tests/unit/test_redis_sequence_tracker.py \
-       tests/unit/test_bloom_deduplicator.py \
-       tests/unit/test_hybrid_engine.py \
+pytest tests-backup/unit/test_circuit_breaker.py \
+       tests-backup/unit/test_redis_sequence_tracker.py \
+       tests-backup/unit/test_bloom_deduplicator.py \
+       tests-backup/unit/test_hybrid_engine.py \
        --cov=src/k2/common \
        --cov=src/k2/ingestion \
        --cov=src/k2/query \
@@ -468,13 +468,13 @@ pytest tests/unit/test_circuit_breaker.py \
 
 ```bash
 # Circuit breaker only
-pytest tests/unit/test_circuit_breaker.py -v
+pytest tests-backup/unit/test_circuit_breaker.py -v
 
-# Hysteresis tests only
-pytest tests/unit/test_circuit_breaker.py -k "hysteresis" -v
+# Hysteresis tests-backup only
+pytest tests-backup/unit/test_circuit_breaker.py -k "hysteresis" -v
 
-# Integration tests only
-pytest tests/integration/ -v
+# Integration tests-backup only
+pytest tests-backup/integration/ -v
 ```
 
 ---
@@ -488,7 +488,7 @@ import fakeredis
 
 @pytest.fixture
 def mock_redis():
-    """Use fakeredis for unit tests"""
+    """Use fakeredis for unit tests-backup"""
     return fakeredis.FakeRedis()
 ```
 
@@ -499,7 +499,7 @@ from unittest.mock import Mock, patch
 
 @pytest.fixture
 def mock_consumer():
-    """Mock Kafka consumer for unit tests"""
+    """Mock Kafka consumer for unit tests-backup"""
     consumer = Mock()
     consumer.poll.return_value = None
     return consumer
@@ -563,21 +563,21 @@ test = [
 pytest_plugins = ['pytest_asyncio']
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "phase2: Phase 2 specific tests")
+    config.addinivalue_line("markers", "phase2: Phase 2 specific tests-backup")
     config.addinivalue_line("markers", "slow: Tests that take > 1 second")
-    config.addinivalue_line("markers", "integration: Integration tests requiring services")
+    config.addinivalue_line("markers", "integration: Integration tests-backup requiring services")
 ```
 
 ### Usage
 
 ```bash
-# Run only Phase 2 tests
+# Run only Phase 2 tests-backup
 pytest -m phase2
 
-# Skip slow tests
+# Skip slow tests-backup
 pytest -m "not slow"
 
-# Run integration tests
+# Run integration tests-backup
 pytest -m integration
 ```
 

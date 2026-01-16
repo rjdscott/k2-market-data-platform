@@ -183,19 +183,19 @@ Binance streaming container experiences **memory growth and connection drops wit
 
 ### Unit Tests
 ```bash
-uv run pytest tests/unit/ -v --cov=src/k2
+uv run pytest tests-backup/unit/ -v --cov=src/k2
 ```
 **Success**: All tests pass, coverage >90%
 
 ### Integration Tests
 ```bash
-uv run pytest tests/integration/test_binance_live.py -v -s
+uv run pytest tests-backup/integration/test_binance_live.py -v -s
 ```
 **Success**: SSL connects, rotation works, ping-pong active, memory stable (2h)
 
 ### Soak Tests
 ```bash
-uv run pytest tests/soak/test_binance_24h_soak.py --timeout=90000 -v -s
+uv run pytest tests-backup/soak/test_binance_24h_soak.py --timeout=90000 -v -s
 ```
 **Success**: <50MB memory growth over 24h, >10 msg/sec, <10 drops
 

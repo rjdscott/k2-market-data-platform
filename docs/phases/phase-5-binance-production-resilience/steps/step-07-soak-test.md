@@ -75,10 +75,10 @@ async def test_binance_24h_soak():
 **Run Command**:
 ```bash
 # Full 24h test
-uv run pytest tests/soak/test_binance_24h_soak.py --timeout=90000 -v -s
+uv run pytest tests-backup/soak/test_binance_24h_soak.py --timeout=90000 -v -s
 
 # Short 1h validation
-uv run pytest tests/soak/test_binance_1h_validation.py --timeout=4000 -v -s
+uv run pytest tests-backup/soak/test_binance_1h_validation.py --timeout=4000 -v -s
 ```
 
 ---
@@ -198,8 +198,8 @@ watch -n 60 'curl -s http://localhost:9091/metrics | grep binance_messages_recei
 ### Verification Results
 
 ```bash
-$ uv run pytest tests/soak/ --collect-only
-========================== 2 tests collected ==========================
+$ uv run pytest tests-backup/soak/ --collect-only
+========================== 2 tests-backup collected ==========================
 <Module test_binance_1h_validation.py>
   <Coroutine test_binance_1h_validation>
 <Module test_binance_24h_soak.py>
@@ -218,20 +218,20 @@ $ uv run pytest tests/soak/ --collect-only
 
 **Run 24h Soak Test** (for production validation):
 ```bash
-uv run pytest tests/soak/test_binance_24h_soak.py --timeout=90000 -v -s
+uv run pytest tests-backup/soak/test_binance_24h_soak.py --timeout=90000 -v -s
 ```
 
 **Run 1h Validation** (for quick feedback):
 ```bash
-uv run pytest tests/soak/test_binance_1h_validation.py --timeout=4000 -v -s
+uv run pytest tests-backup/soak/test_binance_1h_validation.py --timeout=4000 -v -s
 ```
 
 **Filter by marker**:
 ```bash
-# Run all soak tests
+# Run all soak tests-backup
 uv run pytest -m soak -v -s
 
-# Exclude soak tests from regular test runs
+# Exclude soak tests-backup from regular test runs
 uv run pytest -m "not soak" -v
 ```
 

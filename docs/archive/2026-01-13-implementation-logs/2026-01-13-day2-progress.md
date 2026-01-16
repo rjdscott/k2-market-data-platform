@@ -312,7 +312,7 @@ cd /Users/rjdscott/Documents/code/k2-market-data-platform
 # ================================================================
 #              RUNBOOK VALIDATION TEST FRAMEWORK
 # ================================================================
-# Running all tests...
+# Running all tests-backup...
 #
 # [✓] Test passed: kafka_failure_recovery (22s)
 # [✓] Test passed: minio_failure_recovery (12s)
@@ -349,7 +349,7 @@ cd /Users/rjdscott/Documents/code/k2-market-data-platform
 ### Python Integration Tests
 ```bash
 # Note: Requires Docker socket configuration
-uv run pytest tests/operational/test_disaster_recovery.py -v --timeout=300
+uv run pytest tests-backup/operational/test_disaster_recovery.py -v --timeout=300
 ```
 
 ---

@@ -7,12 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       skip_chaos:
-        description: 'Skip chaos tests'
+        description: 'Skip chaos tests-backup'
         required: false
         type: boolean
         default: false
       skip_operational:
-        description: 'Skip operational tests'
+        description: 'Skip operational tests-backup'
         required: false
         type: boolean
         default: false
@@ -63,7 +63,7 @@ jobs:
           timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
           echo "✅ PostgreSQL is ready"
 
-      - name: Run unit tests (parallel)
+      - name: Run unit tests-backup (parallel)
         run: |
           uv run pytest tests/unit/ \
             -v \
@@ -71,7 +71,7 @@ jobs:
             --tb=short \
             --junitxml=nightly-unit-results.xml
 
-      - name: Run integration tests (all)
+      - name: Run integration tests-backup (all)
         run: |
           uv run pytest tests/integration/ \
             -v \
@@ -79,7 +79,7 @@ jobs:
             --tb=short \
             --junitxml=nightly-integration-results.xml
 
-      - name: Run performance tests (all)
+      - name: Run performance tests-backup (all)
         run: |
           uv run pytest tests/performance/ \
             -v \
@@ -102,7 +102,7 @@ jobs:
         if: always()
         run: docker compose down -v
 
-  # Chaos engineering tests
+  # Chaos engineering tests-backup
   chaos-tests:
     name: Chaos Engineering Tests
     runs-on: ubuntu-latest
@@ -134,7 +134,7 @@ jobs:
           timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
           echo "✅ All services ready for chaos testing"
 
-      - name: Run chaos tests
+      - name: Run chaos tests-backup
         run: |
           uv run pytest tests/chaos/ \
             -v \
@@ -165,7 +165,7 @@ jobs:
         if: always()
         run: docker compose down -v
 
-  # Operational/disaster recovery tests
+  # Operational/disaster recovery tests-backup
   operational-tests:
     name: Operational Tests
     runs-on: ubuntu-latest
@@ -197,7 +197,7 @@ jobs:
           timeout 60s bash -c 'until docker exec k2-postgres pg_isready -U admin &>/dev/null; do sleep 2; done'
           echo "✅ All services ready for operational testing"
 
-      - name: Run operational tests
+      - name: Run operational tests-backup
         run: |
           uv run pytest tests/operational/ \
             -v \

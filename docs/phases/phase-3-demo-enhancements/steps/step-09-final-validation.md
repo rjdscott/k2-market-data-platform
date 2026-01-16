@@ -131,18 +131,18 @@ print('All imports successful')
 ### 3. Test Suite
 
 ```bash
-# Run all Phase 2 tests
+# Run all Phase 2 tests-backup
 echo "=== Unit Tests ==="
-pytest tests/unit/test_circuit_breaker.py -v
-pytest tests/unit/test_redis_sequence_tracker.py -v
-pytest tests/unit/test_bloom_deduplicator.py -v
-pytest tests/unit/test_hybrid_engine.py -v
+pytest tests-backup/unit/test_circuit_breaker.py -v
+pytest tests-backup/unit/test_redis_sequence_tracker.py -v
+pytest tests-backup/unit/test_bloom_deduplicator.py -v
+pytest tests-backup/unit/test_hybrid_engine.py -v
 
 echo "=== Integration Tests ==="
-pytest tests/integration/ -v -m "phase2"
+pytest tests-backup/integration/ -v -m "phase2"
 
 echo "=== Test Summary ==="
-pytest tests/ --collect-only | grep "test session starts"
+pytest tests-backup/ --collect-only | grep "test session starts"
 ```
 
 ### 4. Infrastructure Check

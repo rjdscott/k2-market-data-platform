@@ -563,7 +563,7 @@ finally:
 **Run Unit Tests**:
 ```bash
 PYTHONPATH=/path/to/k2-market-data-platform/src:$PYTHONPATH \
-pytest tests/unit/test_producer.py -v
+pytest tests-backup/unit/test_producer.py -v
 ```
 
 **Test Coverage**:
@@ -616,8 +616,8 @@ Integration tests will be implemented as part of Step 8 (Kafka Consumer → Iceb
 # Start infrastructure
 docker-compose up -d
 
-# Run integration tests (Step 8)
-pytest tests/integration/test_producer_integration.py -v
+# Run integration tests-backup (Step 8)
+pytest tests-backup/integration/test_producer_integration.py -v
 ```
 
 **Validation Checklist**:

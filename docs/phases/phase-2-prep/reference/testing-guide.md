@@ -270,7 +270,7 @@ def sample_binance_trade():
 ### Running Coverage
 
 ```bash
-pytest --cov=src/k2 --cov-report=html tests/
+pytest --cov=src/k2 --cov-report=html tests-backup/
 open htmlcov/index.html
 ```
 
@@ -326,7 +326,7 @@ tests/
 ### Verbose Output
 
 ```bash
-pytest tests/unit/test_producer.py::test_build_trade_v2 -vv -s
+pytest tests-backup/unit/test_producer.py::test_build_trade_v2 -vv -s
 ```
 
 ### PDB Debugging

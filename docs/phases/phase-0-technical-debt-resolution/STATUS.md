@@ -238,7 +238,7 @@ After P2:       86/100 (maintained, quality improvements)
 - [TECHNICAL_DEBT.md](../../TECHNICAL_DEBT.md) - Master tracker
 
 ### Code
-- [tests/unit/test_metrics_labels.py](../../../tests/unit/test_metrics_labels.py) - TD-004
+- [tests/unit/test_metrics_labels.py](../../../tests-backup/unit/test_metrics_labels.py) - TD-004
 - [scripts/validate_metrics_labels.py](../../../scripts/validate_metrics_labels.py) - TD-005
 - [src/k2/schemas/reference_data_v2.avsc](../../../src/k2/schemas/reference_data_v2.avsc) - TD-006
 

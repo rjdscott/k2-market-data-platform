@@ -242,7 +242,7 @@ Phase 1: Single-Node Implementation
 - [DECISIONS.md](./DECISIONS.md) - Technical decisions
 
 **Code**:
-- [tests/unit/test_metrics_labels.py](../../../tests/unit/test_metrics_labels.py) - Metrics tests (TD-004)
+- [tests/unit/test_metrics_labels.py](../../../tests-backup/unit/test_metrics_labels.py) - Metrics tests (TD-004)
 - [scripts/validate_metrics_labels.py](../../../scripts/validate_metrics_labels.py) - Validation script (TD-005)
 - [src/k2/schemas/reference_data_v2.avsc](../../../src/k2/schemas/reference_data_v2.avsc) - V2 schema (TD-006)
 

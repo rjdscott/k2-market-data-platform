@@ -165,9 +165,9 @@ docker compose ps
 # Verify all services healthy
 docker compose ps | grep -i "up"
 
-# Run Phase 1 tests to ensure baseline
-pytest tests/unit/ -v
-pytest tests/integration/ -v
+# Run Phase 1 tests-backup to ensure baseline
+pytest tests-backup/unit/ -v
+pytest tests-backup/integration/ -v
 ```
 
 ### Start Implementation

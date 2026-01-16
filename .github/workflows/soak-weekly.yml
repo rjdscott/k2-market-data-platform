@@ -20,7 +20,7 @@ on:
         type: string
         default: ''
 
-# No concurrency control - soak tests run to completion
+# No concurrency control - soak tests-backup run to completion
 env:
   PYTHON_VERSION: "3.13"
 

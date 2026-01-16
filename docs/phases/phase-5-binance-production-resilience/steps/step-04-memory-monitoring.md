@@ -102,7 +102,7 @@ Add comprehensive memory monitoring with leak detection and Prometheus alerts.
 ### Verification Results
 
 ```bash
-$ uv run pytest tests/unit/test_binance_client.py::TestMemoryMonitoring -v
+$ uv run pytest tests-backup/unit/test_binance_client.py::TestMemoryMonitoring -v
 ============================== 8 passed in 4.37s ==============================
 ```
 

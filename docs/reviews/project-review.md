@@ -741,7 +741,7 @@ class ReplayEngine:
 
 #### 3.6 Integration Tests
 ```python
-# tests/integration/test_end_to_end.py
+# tests-backup/integration/test_end_to_end.py
 
 import pytest
 from k2_platform.ingestion.consumer import MarketDataConsumer
@@ -818,7 +818,7 @@ def test_replay_engine():
 
 #### 3.7 Performance Benchmarks
 ```python
-# tests/performance/test_throughput.py
+# tests-backup/performance/test_throughput.py
 
 import pytest
 from k2_platform.storage.iceberg_writer import IcebergWriter
@@ -906,7 +906,7 @@ jobs:
           isort --check-only src/ tests/
 
       - name: Lint
-        run: ruff check src/ tests/
+        run: ruff check src/ tests-backup/
 
       - name: Type check
         run: mypy src/
@@ -932,11 +932,11 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[test]"
 
-      - name: Run unit tests
-        run: pytest tests/unit/ -v --cov=src/ --cov-report=xml
+      - name: Run unit tests-backup
+        run: pytest tests-backup/unit/ -v --cov=src/ --cov-report=xml
 
-      - name: Run integration tests
-        run: pytest tests/integration/ -v
+      - name: Run integration tests-backup
+        run: pytest tests-backup/integration/ -v
 
       - name: Upload coverage
         uses: codecov/codecov-action@v3
@@ -961,7 +961,7 @@ jobs:
         run: docker-compose up -d
 
       - name: Run benchmarks
-        run: pytest tests/performance/ --benchmark-only --benchmark-json=benchmark.json
+        run: pytest tests-backup/performance/ --benchmark-only --benchmark-json=benchmark.json
 
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1

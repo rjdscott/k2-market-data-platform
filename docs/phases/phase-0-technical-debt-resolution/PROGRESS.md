@@ -125,12 +125,12 @@ Technical Debt Resolution Status:
 
 **Test Results**:
 ```bash
-$ uv run pytest tests/unit/test_sequence_tracker.py -v
+$ uv run pytest tests-backup/unit/test_sequence_tracker.py -v
 ============================== test session starts ==============================
-tests/unit/test_sequence_tracker.py::TestSequenceTracker::test_gap_detection PASSED
-tests/unit/test_sequence_tracker.py::TestSequenceTracker::test_multiple_gaps PASSED
-tests/unit/test_sequence_tracker.py::TestSequenceTracker::test_large_gap PASSED
-... (29 tests total)
+tests-backup/unit/test_sequence_tracker.py::TestSequenceTracker::test_gap_detection PASSED
+tests-backup/unit/test_sequence_tracker.py::TestSequenceTracker::test_multiple_gaps PASSED
+tests-backup/unit/test_sequence_tracker.py::TestSequenceTracker::test_large_gap PASSED
+... (29 tests-backup total)
 ============================== 29 passed in 8.45s ===============================
 ```
 
@@ -272,7 +272,7 @@ PERMANENT_ERRORS = [
 **Test Framework**:
 ```python
 class TestMetricsLabelValidation:
-    """Base class for metrics label validation tests."""
+    """Base class for metrics label validation tests-backup."""
 
     PROHIBITED_LABELS = {
         "kafka_produce_errors_total": ["data_type"],  # TD-000 regression prevention
@@ -312,15 +312,15 @@ class TestMetricsLabelValidation:
 
 **Test Execution**:
 ```bash
-$ uv run pytest tests/unit/test_metrics_labels.py -v
+$ uv run pytest tests-backup/unit/test_metrics_labels.py -v
 ============================== test session starts ==============================
-tests/unit/test_metrics_labels.py::TestProducerMetricsLabels::test_produce_total_labels PASSED [ 14%]
-tests/unit/test_metrics_labels.py::TestProducerMetricsLabels::test_produce_errors_total_labels PASSED [ 28%]
-tests/unit/test_metrics_labels.py::TestProducerMetricsLabels::test_producer_batch_size_labels PASSED [ 42%]
-tests/unit/test_metrics_labels.py::TestConsumerMetricsLabels::test_consume_total_labels PASSED [ 57%]
-tests/unit/test_metrics_labels.py::TestWriterMetricsLabels::test_iceberg_writes_total_labels PASSED [ 71%]
-tests/unit/test_metrics_labels.py::TestWriterMetricsLabels::test_iceberg_transactions_total_labels PASSED [ 85%]
-tests/unit/test_metrics_labels.py::TestWriterMetricsLabels::test_iceberg_batch_size_labels PASSED [100%]
+tests-backup/unit/test_metrics_labels.py::TestProducerMetricsLabels::test_produce_total_labels PASSED [ 14%]
+tests-backup/unit/test_metrics_labels.py::TestProducerMetricsLabels::test_produce_errors_total_labels PASSED [ 28%]
+tests-backup/unit/test_metrics_labels.py::TestProducerMetricsLabels::test_producer_batch_size_labels PASSED [ 42%]
+tests-backup/unit/test_metrics_labels.py::TestConsumerMetricsLabels::test_consume_total_labels PASSED [ 57%]
+tests-backup/unit/test_metrics_labels.py::TestWriterMetricsLabels::test_iceberg_writes_total_labels PASSED [ 71%]
+tests-backup/unit/test_metrics_labels.py::TestWriterMetricsLabels::test_iceberg_transactions_total_labels PASSED [ 85%]
+tests-backup/unit/test_metrics_labels.py::TestWriterMetricsLabels::test_iceberg_batch_size_labels PASSED [100%]
 
 ============================== 7 passed in 4.57s ===============================
 ```
