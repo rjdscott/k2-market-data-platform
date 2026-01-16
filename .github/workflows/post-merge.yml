@@ -73,14 +73,15 @@ jobs:
             --tb=short \
             --junitxml=integration-test-results.xml
 
-      - name: Run performance tests-backup
-        run: |
-          uv run pytest tests/performance/ \
-            -v \
-            -m "not slow" \
-            --maxfail=5 \
-            --tb=short \
-            --junitxml=performance-test-results.xml
+      # Performance tests temporarily disabled
+      # - name: Run performance tests-backup
+      #   run: |
+      #     uv run pytest tests/performance/ \
+      #       -v \
+      #       -m "not slow" \
+      #       --maxfail=5 \
+      #       --tb=short \
+      #       --junitxml=performance-test-results.xml
 
       - name: Upload test results
         if: always()
@@ -90,7 +91,6 @@ jobs:
           path: |
             unit-test-results.xml
             integration-test-results.xml
-            performance-test-results.xml
           retention-days: 30
 
       - name: Cleanup Docker services

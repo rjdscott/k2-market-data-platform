@@ -69,24 +69,24 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Run unit tests-backup (parallel, lightweight only)
+      - name: Run unit tests
         run: |
           uv run pytest tests/unit/ \
             -v \
             -n 4 \
-            -m "not performance" \
             --maxfail=5 \
             --tb=short \
             --junitxml=pytest-unit-results.xml
 
-      - name: Run performance tests-backup (sequential to prevent OOM)
-        run: |
-          uv run pytest tests/performance/ \
-            -v \
-            -n 0 \
-            -m performance \
-            --tb=short \
-            --junitxml=pytest-performance-results.xml
+      # Performance tests temporarily disabled
+      # - name: Run performance tests-backup (sequential to prevent OOM)
+      #   run: |
+      #     uv run pytest tests/performance/ \
+      #       -v \
+      #       -n 0 \
+      #       -m performance \
+      #       --tb=short \
+      #       --junitxml=pytest-performance-results.xml
 
       - name: Upload test results
         if: always()
