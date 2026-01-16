@@ -417,6 +417,88 @@ services:
           memory: 512M
 
   # ============================================================================
+  # K2 QUERY API - REST API Service for Market Data Queries
+  # ============================================================================
+  # Provides RESTful interface for:
+  # - Market data queries (trades, quotes, summaries)
+  # - Hybrid queries (Kafka + Iceberg integration)
+  # - Health monitoring and metrics
+  # - OpenAPI documentation (/docs, /redoc)
+  # Production-ready: authentication, rate limiting, correlation IDs
+  k2-query-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: k2-query-api
+    hostname: k2-query-api
+    ports:
+      - "8000:8000"       # REST API
+      - "9092:9092"       # Prometheus metrics (alternative to 9091 for API)
+    environment:
+      # FastAPI Configuration
+      K2_API_KEY: ${K2_API_KEY:-k2-dev-api-key-2026}
+      K2_API_RATE_LIMIT: ${K2_API_RATE_LIMIT:-100}
+      K2_LOG_LEVEL: ${K2_API_LOG_LEVEL:-INFO}
+      K2_LOG_FORMAT: json
+      
+      # Kafka Configuration
+      K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      K2_KAFKA_SCHEMA_REGISTRY_URL: http://schema-registry-1:8081
+      K2_KAFKA_CONSUMER_GROUP_PREFIX: k2-api
+      
+      # Iceberg Configuration
+      K2_ICEBERG_CATALOG_URI: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-iceberg_catalog}
+      K2_ICEBERG_CATALOG_WAREHOUSE: s3://warehouse/
+      K2_ICEBERG_S3_ENDPOINT: http://minio:9000
+      K2_ICEBERG_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}
+      K2_ICEBERG_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-password}
+      K2_ICEBERG_S3_PATH_STYLE_ACCESS: "true"
+      
+      # Performance Configuration
+      K2_QUERY_MEMORY_LIMIT: 1GB
+      K2_QUERY_TIMEOUT_S: 30
+      K2_HYBRID_QUERY_MAX_MESSAGES: 1000
+      
+      # Metrics Configuration
+      K2_METRICS_ENABLED: "true"
+      K2_METRICS_PORT: 9092
+    command: >
+      uvicorn k2.api.main:app 
+      --host 0.0.0.0 
+      --port 8000 
+      --workers 1 
+      --access-log 
+      --log-level info
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry-1:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    restart: unless-stopped
+
+  # ============================================================================
   # KAFKA UI - Development & Debugging Tool
   # ============================================================================
   # Provides web interface for:
