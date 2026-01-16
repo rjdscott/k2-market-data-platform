@@ -35,6 +35,7 @@ from k2.common.config import config
 from k2.common.connection_pool import DuckDBConnectionPool
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
+from k2.common.table_resolver import TableType, get_table_resolver
 
 logger = get_logger(__name__, component="query")
 metrics = create_component_metrics("query")
@@ -119,8 +120,10 @@ class QueryEngine:
         self.s3_access_key = s3_access_key or config.iceberg.s3_access_key
         self.s3_secret_key = s3_secret_key or config.iceberg.s3_secret_key
         self.warehouse_path = warehouse_path or config.iceberg.warehouse
-        self.table_version = "v2"  # Only v2 schema supported
         self.pool_size = pool_size
+
+        # Initialize table resolver for dynamic table name resolution
+        self.table_resolver = get_table_resolver()
 
         # Remove http(s):// prefix for DuckDB endpoint
         self._s3_endpoint_host = self.s3_endpoint.replace("http://", "").replace("https://", "")
@@ -211,9 +214,9 @@ class QueryEngine:
             # Returns: message_id, trade_id, symbol, exchange, asset_class, timestamp,
             #          price, quantity, currency, side, trade_conditions, vendor_data, ...
         """
-        # Auto-determine table name
+        # Auto-determine table name using resolver
         if table_name is None:
-            table_name = "market_data.trades_v2"
+            table_name = self.table_resolver.resolve_table_name(TableType.TRADES, use_fallback=True)
 
         table_path = self._get_table_path(table_name)
 
@@ -238,7 +241,7 @@ class QueryEngine:
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
 
-        # V2 query - use native v2 field names
+        # V2 query - clean v2 schema
         query = f"""
             SELECT
                 message_id,
@@ -273,7 +276,7 @@ class QueryEngine:
                     "Trades query completed",
                     symbol=symbol,
                     exchange=exchange,
-                    table_version=self.table_version,
+                    table_name=table_name,
                     row_count=len(rows),
                 )
 
@@ -291,7 +294,7 @@ class QueryEngine:
                     "Trades query failed",
                     symbol=symbol,
                     exchange=exchange,
-                    table_version=self.table_version,
+                    table_name=table_name,
                     error=str(e),
                 )
                 raise
@@ -318,9 +321,9 @@ class QueryEngine:
         Returns:
             List of quote dictionaries with bid/ask data (v2 schema)
         """
-        # Auto-determine table name (v2 only)
+        # Auto-determine table name using resolver
         if table_name is None:
-            table_name = "market_data.quotes_v2"
+            table_name = self.table_resolver.resolve_table_name(TableType.QUOTES, use_fallback=True)
 
         table_path = self._get_table_path(table_name)
 
@@ -380,7 +383,7 @@ class QueryEngine:
                     "Quotes query completed",
                     symbol=symbol,
                     exchange=exchange,
-                    table_version=self.table_version,
+                    table_name=table_name,
                     row_count=len(rows),
                 )
 
@@ -397,7 +400,7 @@ class QueryEngine:
                     "Quotes query failed",
                     symbol=symbol,
                     exchange=exchange,
-                    table_version=self.table_version,
+                    table_name=table_name,
                     error=str(e),
                 )
                 raise
@@ -424,9 +427,9 @@ class QueryEngine:
             summary = engine.get_market_summary("BHP", date(2024, 1, 15))
             print(f"VWAP: {summary.vwap}")
         """
-        # Auto-determine table name
+        # Auto-determine table name using resolver
         if table_name is None:
-            table_name = "market_data.trades_v2"
+            table_name = self.table_resolver.resolve_table_name(TableType.TRADES, use_fallback=True)
 
         table_path = self._get_table_path(table_name)
 
@@ -480,7 +483,7 @@ class QueryEngine:
                         "No trades found for summary",
                         symbol=symbol,
                         date=str(query_date),
-                        table_version=self.table_version,
+                        table_name=table_name,
                     )
                     return None
 
@@ -500,7 +503,7 @@ class QueryEngine:
                     "Market summary generated",
                     symbol=symbol,
                     date=str(query_date),
-                    table_version=self.table_version,
+                    table_name=table_name,
                     trade_count=summary.trade_count,
                 )
 
@@ -511,7 +514,7 @@ class QueryEngine:
                     "Market summary query failed",
                     symbol=symbol,
                     date=str(query_date),
-                    table_version=self.table_version,
+                    table_name=table_name,
                     error=str(e),
                 )
                 raise
@@ -533,9 +536,9 @@ class QueryEngine:
         Security:
             Uses parameterized queries to prevent SQL injection
         """
-        # Auto-determine table name (v2 only)
+        # Auto-determine table name using resolver
         if table_name is None:
-            table_name = "market_data.trades_v2"
+            table_name = self.table_resolver.resolve_table_name(TableType.TRADES, use_fallback=True)
 
         table_path = self._get_table_path(table_name)
 
@@ -572,9 +575,9 @@ class QueryEngine:
         Returns:
             Tuple of (min_timestamp, max_timestamp)
         """
-        # Auto-determine table name (v2 only)
+        # Auto-determine table name using resolver
         if table_name is None:
-            table_name = "market_data.trades_v2"
+            table_name = self.table_resolver.resolve_table_name(TableType.TRADES, use_fallback=True)
 
         table_path = self._get_table_path(table_name)
 
@@ -625,25 +628,37 @@ class QueryEngine:
         stats = {
             "s3_endpoint": self.s3_endpoint,
             "warehouse_path": self.warehouse_path,
-            "table_version": self.table_version,
+            "table_mappings": self.table_resolver.get_all_mappings(),
             "pool": pool_stats,  # Include full pool statistics
         }
 
         try:
-            # Get row counts using pool connection
-            trades_path = self._get_table_path("trades")
-            quotes_path = self._get_table_path("quotes")
+            # Get row counts using resolved table names
+            trades_table = self.table_resolver.resolve_table_name(
+                TableType.TRADES, use_fallback=True
+            )
+            quotes_table = self.table_resolver.resolve_table_name(
+                TableType.QUOTES, use_fallback=True
+            )
+
+            trades_path = self._get_table_path(trades_table)
+            quotes_path = self._get_table_path(quotes_table)
 
             with self.pool.acquire(timeout=30.0) as conn:
-                trades_count = conn.execute(
+                trades_result = conn.execute(
                     f"SELECT COUNT(*) FROM iceberg_scan('{trades_path}')",
-                ).fetchone()[0]
-                quotes_count = conn.execute(
+                ).fetchone()
+                quotes_result = conn.execute(
                     f"SELECT COUNT(*) FROM iceberg_scan('{quotes_path}')",
-                ).fetchone()[0]
+                ).fetchone()
+
+                trades_count = trades_result[0] if trades_result else 0
+                quotes_count = quotes_result[0] if quotes_result else 0
 
             stats["trades_count"] = trades_count
             stats["quotes_count"] = quotes_count
+            stats["trades_table"] = trades_table
+            stats["quotes_table"] = quotes_table
         except Exception as e:
             stats["error"] = str(e)
 

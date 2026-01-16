@@ -555,6 +555,8 @@ services:
       dockerfile: Dockerfile
     container_name: k2-binance-stream
     hostname: binance-stream
+    ports:
+      - "9091:9091"       # Prometheus metrics
     environment:
       # Kafka Configuration
       K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092

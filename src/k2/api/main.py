@@ -245,8 +245,9 @@ async def health_check(request: Request) -> HealthResponse:
     try:
         start = time.time()
         engine = get_query_engine()
-        # Simple connectivity check
-        engine.connection.execute("SELECT 1").fetchone()
+        # Simple connectivity check using connection pool
+        with engine.pool.acquire(timeout=5.0) as conn:
+            conn.execute("SELECT 1").fetchone()
         duckdb_latency = (time.time() - start) * 1000
 
         if duckdb_latency > 1000:  # > 1 second is concerning
