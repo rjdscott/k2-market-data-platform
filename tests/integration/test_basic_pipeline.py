@@ -13,18 +13,14 @@ Validates:
 Uses production-like Docker infrastructure and realistic market data.
 """
 
-import asyncio
-import json
-import uuid
-import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 
 import pytest
 from pyiceberg.catalog import load_catalog
 
+from k2.ingestion.message_builders import build_quote_v2, build_trade_v2
 from k2.ingestion.producer import MarketDataProducer
-from k2.ingestion.message_builders import build_trade_v2, build_quote_v2
 from k2.storage.writer import IcebergWriter
 
 
@@ -52,6 +48,7 @@ class TestBasicPipelineIntegration:
             v2_trade = build_trade_v2(
                 symbol=trade["symbol"],
                 exchange=trade["exchange"],
+                asset_class="equities",
                 timestamp=datetime.fromisoformat(trade["timestamp"]),
                 price=Decimal(trade["price"]),
                 quantity=trade["quantity"],
@@ -78,6 +75,7 @@ class TestBasicPipelineIntegration:
             v2_trade = build_trade_v2(
                 symbol=trade["symbol"],
                 exchange=trade["exchange"],
+                asset_class="equities",
                 timestamp=datetime.fromisoformat(trade["timestamp"]),
                 price=Decimal(trade["price"]),
                 quantity=trade["quantity"],
@@ -108,10 +106,10 @@ class TestBasicPipelineIntegration:
         assert len(v2_records) == len(test_trades), "All V2 records should be created"
         assert records_written == len(v2_records), "All V2 records should be written"
 
-        print(f"✅ V2 trades pipeline test completed successfully")
+        print("✅ V2 trades pipeline test completed successfully")
         print(f"   - Produced: {len(test_trades)} trades")
         print(f"   - Written: {records_written} V2 records")
-        print(f"   - Table: market_data.trades_v2 exists and queryable")
+        print("   - Table: market_data.trades_v2 exists and queryable")
 
     @pytest.mark.integration
     def test_v2_quote_production_and_storage(
@@ -126,6 +124,7 @@ class TestBasicPipelineIntegration:
         )
 
         test_quotes = sample_market_data["quotes"][:30]  # Test with 30 quotes
+        v2_quotes = []  # Collect V2 quote records
 
         # Step 1: Produce V2 quotes to Kafka
         for quote in test_quotes:
@@ -133,13 +132,16 @@ class TestBasicPipelineIntegration:
             v2_quote = build_quote_v2(
                 symbol=quote["symbol"],
                 exchange=quote["exchange"],
+                asset_class="equities",
                 timestamp=datetime.fromisoformat(quote["timestamp"]),
                 bid_price=Decimal(quote["bid_price"]),
+                bid_quantity=Decimal(quote["bid_size"]),
                 ask_price=Decimal(quote["ask_price"]),
-                bid_size=quote["bid_size"],
-                ask_size=quote["ask_size"],
-                quote_condition=quote["quote_condition"],
+                ask_quantity=Decimal(quote["ask_size"]),
             )
+
+            # Collect V2 quote record
+            v2_quotes.append(v2_quote)
 
             # Produce to Kafka
             producer.produce_quote(asset_class="equities", exchange="asx", record=v2_quote)
@@ -147,7 +149,9 @@ class TestBasicPipelineIntegration:
         producer.flush(timeout=10)
         producer.close()
 
-        # Step 2: Write quotes to Iceberg
+        # Step 2: Configure writer for V2 schema
+        writer = IcebergWriter()
+
         try:
             records_written = writer.write_quotes(records=v2_quotes)
 
@@ -168,10 +172,10 @@ class TestBasicPipelineIntegration:
         assert len(v2_quotes) == len(test_quotes), "All V2 quote records should be created"
         assert records_written == len(v2_quotes), "All quote records should be written"
 
-        print(f"✅ V2 quotes pipeline test completed successfully")
+        print("✅ V2 quotes pipeline test completed successfully")
         print(f"   - Produced: {len(test_quotes)} quotes")
         print(f"   - Written: {records_written} V2 quote records")
-        print(f"   - Table: market_data.quotes_v2 exists and queryable")
+        print("   - Table: market_data.quotes_v2 exists and queryable")
 
     @pytest.mark.integration
     def test_v2_schema_compliance(self, sample_market_data):
@@ -185,6 +189,7 @@ class TestBasicPipelineIntegration:
             v2_trade = build_trade_v2(
                 symbol=trade["symbol"],
                 exchange=trade["exchange"],
+                asset_class="equities",
                 timestamp=datetime.fromisoformat(trade["timestamp"]),
                 price=Decimal(trade["price"]),
                 quantity=trade["quantity"],
@@ -213,12 +218,12 @@ class TestBasicPipelineIntegration:
             v2_quote = build_quote_v2(
                 symbol=quote["symbol"],
                 exchange=quote["exchange"],
+                asset_class="equities",
                 timestamp=datetime.fromisoformat(quote["timestamp"]),
                 bid_price=Decimal(quote["bid_price"]),
+                bid_quantity=Decimal(quote["bid_size"]),
                 ask_price=Decimal(quote["ask_price"]),
-                bid_size=quote["bid_size"],
-                ask_size=quote["ask_size"],
-                quote_condition=quote["quote_condition"],
+                ask_quantity=Decimal(quote["ask_size"]),
             )
 
             # Core V2 quote fields should be present
@@ -265,6 +270,7 @@ class TestBasicPipelineIntegration:
             v2_trade = build_trade_v2(
                 symbol=trade["symbol"],
                 exchange=trade["exchange"],
+                asset_class="equities",
                 timestamp=datetime.fromisoformat(trade["timestamp"]),
                 price=Decimal(trade["price"]),
                 quantity=trade["quantity"],
@@ -284,6 +290,6 @@ class TestBasicPipelineIntegration:
         )
         assert production_rate > 10, f"V2 production rate >10 trades/sec, was {production_rate:.1f}"
 
-        print(f"✅ V2 performance baselines met:")
+        print("✅ V2 performance baselines met:")
         print(f"   - Production time: {production_time:.2f}s")
         print(f"   - Production rate: {production_rate:.1f} trades/sec")

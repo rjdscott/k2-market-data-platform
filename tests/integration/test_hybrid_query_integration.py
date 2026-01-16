@@ -12,16 +12,16 @@ Validates:
 Uses V2 schema only for consistency.
 """
 
-import asyncio
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from k2.query.hybrid_engine import HybridQueryEngine
-from k2.query.engine import QueryEngine
-from k2.query.kafka_tail import KafkaTail
+
 from k2.ingestion.message_builders import build_trade_v2
 from k2.ingestion.producer import MarketDataProducer
+from k2.query.engine import QueryEngine
+from k2.query.hybrid_engine import HybridQueryEngine
+from k2.query.kafka_tail import KafkaTail
 
 
 class TestHybridQueryIntegration:
@@ -197,4 +197,4 @@ class TestHybridQueryIntegration:
 
             print(f"✅ {test_name} query: {len(trades)} trades in {query_time:.3f}s")
 
-        print(f"✅ All hybrid query performance tests completed successfully")
+        print("✅ All hybrid query performance tests completed successfully")
