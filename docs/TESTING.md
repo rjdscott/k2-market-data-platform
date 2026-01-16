@@ -22,6 +22,13 @@ make test-e2e
 
 # Run with coverage report
 make coverage
+
+# Test consumer service (new)
+uv run python scripts/consume_crypto_trades.py --max-messages 100 --no-ui
+
+# Verify end-to-end data flow
+curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
+  -H "X-API-Key: k2-dev-api-key-2026" | jq .
 ```
 
 ---
@@ -87,13 +94,45 @@ tests/unit/test_reset_demo.py      12 passed
 Total                             180+ passed
 ```
 
+### Consumer Testing (New)
+
+Test the Kafka-to-Iceberg consumer service that enables persistent storage.
+
+```bash
+# Manual consumer test (10 messages)
+uv run python scripts/consume_crypto_trades.py --max-messages 10 --no-ui
+
+# Manual consumer test (100 messages, validate batch processing)
+uv run python scripts/consume_crypto_trades.py --max-messages 100 --no-ui
+
+# Start consumer as service (continuous ingestion)
+docker compose up -d consumer-crypto
+
+# Verify data made it to Iceberg via API
+curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
+  -H "X-API-Key: k2-dev-api-key-2026" | jq .
+
+# Check consumer logs
+docker compose logs consumer-crypto --tail=50
+
+# Monitor consumer performance
+docker exec k2-consumer-crypto pgrep -af consume_crypto
+```
+
+**Expected Consumer Performance**:
+- Throughput: ~32 msg/s (sustained batch processing)
+- Error rate: 0% (with retry logic)
+- Data quality: 100% (schema validation)
+- Storage: Parquet files in MinIO (Iceberg format)
+
 ### Integration Tests (Requires Docker)
 
 Integration tests require Docker services running.
 
 ```bash
-# Start Docker services
+# Start all services including consumer
 make docker-up
+docker compose up -d consumer-crypto
 
 # Wait for services to be healthy
 docker compose ps

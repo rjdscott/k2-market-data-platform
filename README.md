@@ -179,14 +179,25 @@ uv run python scripts/init_infra.py
 make api   # Starts FastAPI on http://localhost:8000
 ```
 
-### 5. Run Demo (Optional)
+### 5. Start Consumer Service (Optional)
+
+```bash
+# Start continuous ingestion from Kafka to Iceberg
+docker compose up -d consumer-crypto
+
+# Verify data flow
+curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
+  -H "X-API-Key: k2-dev-api-key-2026"
+```
+
+### 6. Run Demo (Optional)
 
 ```bash
 make demo-quick   # Interactive CLI demo (~1 min)
 make notebook     # Jupyter notebook exploration
 ```
 
-### 6. Reset Between Demos
+### 7. Reset Between Demos
 
 ```bash
 make demo-reset           # Full reset with confirmation
@@ -381,22 +392,27 @@ The platform supports both batch (historical) and streaming (live) data sources 
 
 Real-time streaming cryptocurrency trades from Binance WebSocket API.
 
-| Symbol | Asset Class | Trades Ingested | Data Quality | Performance |
-|--------|-------------|-----------------|--------------|-------------|
-| BTCUSDT | Crypto | 69,666+ | Live streaming | 138 msg/s |
-| ETHUSDT | Crypto | 69,666+ | Live streaming | 138 msg/s |
-| BNBUSDT | Crypto | 69,666+ | Live streaming | 138 msg/s |
+| Symbol | Asset Class | Trades Ingested | Data Quality | Consumer Performance |
+|--------|-------------|-----------------|--------------|----------------------|
+| BTCUSDT | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
+| ETHUSDT | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
+| BNBUSDT | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
 
-**Data Flow**: Binance WebSocket → Kafka → Iceberg → Query Engine
+**Data Flow**: Binance WebSocket → Kafka → Consumer → Iceberg → Query Engine
+**Consumer**: Production-ready with batch processing (32 msg/s throughput)
 **Schema**: V2 multi-source schema with Binance-specific fields in `vendor_data`
 **Storage**: Apache Iceberg `trades_v2` table with daily partitions
 
 ```bash
-# Query live crypto data
-k2-query trades --symbol ETHUSDT --exchange BINANCE --limit 10
+# Query live crypto data (now available via API)
+curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
+  -H "X-API-Key: k2-dev-api-key-2026" | jq .
 
-# Start live streaming (requires Docker services)
-docker compose up -d binance-stream
+# Start live streaming + consumer (requires Docker services)
+docker compose up -d binance-stream consumer-crypto
+
+# Manual consumer testing
+uv run python scripts/consume_crypto_trades.py --max-messages 100 --no-ui
 ```
 
 ### Historical Data (ASX Equities)
@@ -468,13 +484,14 @@ loader = BatchLoader(asset_class="equities", exchange="asx",
 ### E2E Validation Results
 
 **Phase 2 Prep Complete** (2026-01-13):
-- ✅ 69,666+ Binance trades ingested via WebSocket → Kafka
-- ✅ 5,000 trades written to Iceberg trades_v2 table
-- ✅ 5,000 trades queried successfully (sub-second performance)
-- ✅ 138 msg/s consumer throughput
+- ✅ 321K+ Binance trades ingested via WebSocket → Kafka
+- ✅ 1,000+ trades written to Iceberg trades_v2 table (validated)
+- ✅ 1,000+ trades queried successfully via API (sub-second performance)
+- ✅ 32 msg/s sustained consumer throughput (batch processing)
 - ✅ All 15 v2 schema fields validated
 - ✅ Vendor data preserved (7 Binance-specific fields in JSON)
-- ✅ Performance: sub-second queries, 138 msg/s throughput
+- ✅ Production-ready consumer with error handling, retries, DLQ
+- ✅ End-to-end pipeline: Binance → Kafka → Consumer → Iceberg → API
 
 See [E2E Demo Success Summary](./docs/operations/e2e-demo-success-summary.md) for complete validation results.
 See [Schema Design V2](./docs/architecture/schema-design-v2.md) for complete specification.
