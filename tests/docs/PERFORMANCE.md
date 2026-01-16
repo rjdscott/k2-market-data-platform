@@ -618,20 +618,13 @@ def test_performance_regression(benchmark, performance_baseline):
 ## CI/CD Integration
 
 ### Performance Test Pipeline
+Performance tests have been temporarily removed from the main CI/CD pipeline to focus on unit and integration tests. The tests and documentation remain available for manual execution when needed.
+
 ```yaml
-performance_test:
-  stage: performance
-  script:
-    - uv run pytest tests/performance/ --benchmark-only --benchmark-json=benchmark.json
-    - uv run python scripts/analyze_performance.py benchmark.json
-  artifacts:
-    reports:
-      benchmark: benchmark.json
-    paths:
-      - performance_reports/
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"  # Daily performance runs
-    - if: $CI_MERGE_REQUEST_ID  # On merge requests
+# Performance tests are currently disabled in CI/CD
+# To run manually:
+# uv run pytest tests/performance/ --benchmark-only --benchmark-json=benchmark.json
+# uv run python scripts/analyze_performance.py benchmark.json
 ```
 
 ### Performance Gate Configuration

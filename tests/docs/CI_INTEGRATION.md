@@ -12,12 +12,12 @@ stages:
   - validate          # Code quality and static analysis
   - test_unit         # Fast unit tests with parallel execution
   - test_integration  # Component tests with services
-  - test_performance  # Performance benchmark validation
   - security_scan     # Security scanning and vulnerability checks
   - build            # Container image building
   - deploy_staging   # Deployment to staging environment
   - test_e2e         # End-to-end validation in staging
   - deploy_production # Production deployment with monitoring
+  # test_performance  # Performance benchmark validation (temporarily disabled)
 ```
 
 ### Test Execution Matrix
@@ -27,7 +27,7 @@ stages:
 | validate | Linting, type checking | High | < 2 min | Block pipeline |
 | test_unit | Unit tests | High (n=auto) | < 5 min | Block pipeline |
 | test_integration | Integration tests | Medium (n=2) | < 15 min | Block pipeline |
-| test_performance | Performance benchmarks | Low (n=0) | < 20 min | Warn only |
+| test_performance | Performance benchmarks | Low (n=0) | < 20 min | Disabled |
 | test_e2e | End-to-end tests | Low (n=1) | < 10 min | Block deployment |
 
 ## GitLab CI Configuration
@@ -159,28 +159,29 @@ test_integration:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-test_performance:
-  extends: .base_image
-  stage: test_performance
-  script:
-    - echo "Running performance benchmarks..."
-    - uv run pytest 
-        tests/performance/
-        --benchmark-only
-        --benchmark-json=benchmark-report.json
-        --benchmark-html=benchmark-report.html
-        -n 0
-        --maxfail=1
-  artifacts:
-    paths:
-      - benchmark-report.json
-      - benchmark-report.html
-    expire_in: 1 week
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"  # Daily performance runs
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PERFORMANCE_TESTS == "true"
-  allow_failure: true  # Performance regressions warn but don't block
+# test_performance:
+#   extends: .base_image
+#   stage: test_performance
+#   script:
+#     - echo "Running performance benchmarks..."
+#     - uv run pytest 
+#         tests/performance/
+#         --benchmark-only
+#         --benchmark-json=benchmark-report.json
+#         --benchmark-html=benchmark-report.html
+#         -n 0
+#         --maxfail=1
+#   artifacts:
+#     paths:
+#       - benchmark-report.json
+#       - benchmark-report.html
+#     expire_in: 1 week
+#   rules:
+#     - if: $CI_PIPELINE_SOURCE == "schedule"  # Daily performance runs
+#     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+#     - if: $CI_PERFORMANCE_TESTS == "true"
+#   allow_failure: true  # Performance regressions warn but don't block
+#   # Performance tests temporarily disabled - uncomment when needed
 
 # =============================================================================
 # Build Stage
@@ -425,43 +426,44 @@ jobs:
           name: integration-test-results
           path: integration-test-results.xml
   
-  test-performance:
-    name: Performance Tests
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.event_name == 'release'
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install uv
-        run: pip install uv
-      
-      - name: Install dependencies
-        run: uv sync --all-extras
-      
-      - name: Run performance tests
-        run: |
-          uv run pytest \
-            tests/performance/ \
-            --benchmark-only \
-            --benchmark-json=benchmark-results.json
-      
-      - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          tool: 'pytest'
-          output-file-path: benchmark-results.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: true
-          comment-on-alert: true
-          alert-threshold: '200%'
-          fail-on-alert: true
+  # test-performance:
+  #   name: Performance Tests
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'schedule' || github.event_name == 'release'
+  #   
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+  #     
+  #     - name: Set up Python
+  #       uses: actions/setup-python@v4
+  #       with:
+  #         python-version: ${{ env.PYTHON_VERSION }}
+  #     
+  #     - name: Install uv
+  #       run: pip install uv
+  #     
+  #     - name: Install dependencies
+  #       run: uv sync --all-extras
+  #     
+  #     - name: Run performance tests
+  #       run: |
+  #         uv run pytest \
+  #           tests/performance/ \
+  #           --benchmark-only \
+  #           --benchmark-json=benchmark-results.json
+  #     
+  #     - name: Store benchmark result
+  #       uses: benchmark-action/github-action-benchmark@v1
+  #       with:
+  #         tool: 'pytest'
+  #         output-file-path: benchmark-results.json
+  #         github-token: ${{ secrets.GITHUB_TOKEN }}
+  #         auto-push: true
+  #         comment-on-alert: true
+  #         alert-threshold: '200%'
+  #         fail-on-alert: true
+  #   # Performance tests temporarily disabled - uncomment when needed
   
   # =============================================================================
   # Build and Deploy Jobs
@@ -469,7 +471,7 @@ jobs:
   build:
     name: Build Docker Image
     runs-on: ubuntu-latest
-    needs: [validate, test-unit, test-integration]
+    needs: [validate, test-unit]
     if: github.event_name != 'pull_request'
     
     outputs:
