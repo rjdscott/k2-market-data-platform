@@ -292,7 +292,7 @@ class TestArrowConversion:
             trades = sample_trades_v2(count)
 
             start = time.perf_counter()
-            arrow_table = writer._records_to_arrow_trades_v2(trades)
+            writer._records_to_arrow_trades_v2(trades)
             elapsed = time.perf_counter() - start
 
             throughput = count / elapsed

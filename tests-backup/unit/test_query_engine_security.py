@@ -60,7 +60,7 @@ class TestSQLInjectionPrevention:
                 assert isinstance(result, list)
 
                 # Verify table still exists (DROP TABLE didn't execute)
-                tables = engine.connection.execute(
+                engine.connection.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='test_trades'",
                 ).fetchall()
 
@@ -128,7 +128,7 @@ class TestQueryTimeouts:
             mock_conn = MagicMock()
             mock_connect.return_value = mock_conn
 
-            engine = QueryEngine()
+            QueryEngine()
 
             # Verify timeout was set
             timeout_calls = [
@@ -147,7 +147,7 @@ class TestQueryTimeouts:
             mock_conn = MagicMock()
             mock_connect.return_value = mock_conn
 
-            engine = QueryEngine()
+            QueryEngine()
 
             # Verify memory limit was set
             memory_calls = [
@@ -194,7 +194,7 @@ class TestInputValidation:
     def test_table_version_validated(self):
         """Test that invalid table_version raises ValueError"""
         with pytest.raises(ValueError, match="Invalid table_version"):
-            engine = QueryEngine(table_version="v3")
+            QueryEngine(table_version="v3")
 
     def test_limit_parameter_prevents_excessive_results(self):
         """Test that limit parameter caps result size"""
@@ -210,7 +210,7 @@ class TestInputValidation:
 
             with patch.object(engine, "_get_table_path", return_value="s3://test/trades"):
                 # Query with small limit
-                result = engine.query_trades(symbol="BHP", limit=10)
+                engine.query_trades(symbol="BHP", limit=10)
 
                 # Verify LIMIT clause was used in query
                 executed_query = mock_conn.execute.call_args[0][0]
@@ -224,7 +224,7 @@ class TestErrorHandling:
         """Test that connection failures are logged properly"""
         with patch("duckdb.connect", side_effect=Exception("Connection failed")):
             with pytest.raises(Exception, match="Connection failed"):
-                engine = QueryEngine()
+                QueryEngine()
 
     def test_query_failure_logged_and_raised(self):
         """Test that query failures are logged and re-raised"""

@@ -41,7 +41,7 @@ class TestQueryEngineInitialization:
         """Test engine initializes with default config."""
         mock, mock_conn = mock_duckdb
 
-        engine = QueryEngine()
+        QueryEngine()
 
         # Should have created connection
         mock.connect.assert_called_once()

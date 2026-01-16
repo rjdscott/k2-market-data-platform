@@ -328,7 +328,7 @@ class TestConsumerMetricsLabels(TestMetricsLabelValidation):
         increment_calls = [call for call in mock_metrics.increment.call_args_list]
 
         # Check if consumer_initialized_total or similar metrics were called
-        init_calls = [
+        [
             call for call in increment_calls if "consumer" in call[0][0] and "init" in call[0][0]
         ]
 

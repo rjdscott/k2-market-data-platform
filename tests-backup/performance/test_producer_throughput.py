@@ -111,7 +111,7 @@ class TestProducerThroughput:
         """
         producer = MarketDataProducer(schema_version="v2")
 
-        result = benchmark(
+        benchmark(
             producer.produce_trade,
             asset_class="crypto",
             exchange="binance",
@@ -136,7 +136,7 @@ class TestProducerThroughput:
         """
         producer = MarketDataProducer(schema_version="v2")
 
-        result = benchmark(
+        benchmark(
             producer.produce_quote,
             asset_class="crypto",
             exchange="binance",
@@ -172,7 +172,7 @@ class TestProducerThroughput:
                     record=record,
                 )
 
-        result = benchmark(produce_batch)
+        benchmark(produce_batch)
 
         # Calculate throughput
         stats = benchmark.stats
@@ -206,7 +206,7 @@ class TestProducerThroughput:
                     record=record,
                 )
 
-        result = benchmark(produce_batch)
+        benchmark(produce_batch)
 
         stats = benchmark.stats
         throughput = batch_size / stats["mean"]

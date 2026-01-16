@@ -165,7 +165,7 @@ class TestConnectionPoolTimeout:
 
         # Try to acquire with short timeout (should fail - pool exhausted)
         with pytest.raises(TimeoutError, match="Could not acquire connection within"):
-            with pool.acquire(timeout=0.2) as conn:
+            with pool.acquire(timeout=0.2):
                 pass
 
         # Release connections and cleanup
@@ -199,7 +199,7 @@ class TestConnectionPoolExceptionHandling:
         """Test that connection is released even if exception occurs."""
         # Acquire connection and raise exception
         with pytest.raises(ValueError, match="Test error"):
-            with pool.acquire(timeout=5.0) as conn:
+            with pool.acquire(timeout=5.0):
                 raise ValueError("Test error")
 
         # Connection should be released back to pool
@@ -210,7 +210,7 @@ class TestConnectionPoolExceptionHandling:
     def test_multiple_exceptions_dont_leak_connections(self, pool):
         """Test that multiple exceptions don't leak connections."""
         for i in range(5):
-            with pytest.raises(RuntimeError), pool.acquire(timeout=5.0) as conn:
+            with pytest.raises(RuntimeError), pool.acquire(timeout=5.0):
                 raise RuntimeError(f"Error {i}")
 
         # All connections should be available
@@ -257,7 +257,7 @@ class TestConnectionPoolStatistics:
         """Test statistics after multiple acquisitions."""
         # Acquire and release 3 times
         for _ in range(3):
-            with pool.acquire(timeout=5.0) as conn:
+            with pool.acquire(timeout=5.0):
                 time.sleep(0.01)
 
         stats = pool.get_stats()
@@ -275,7 +275,7 @@ class TestConnectionPoolStatistics:
         threads = []
 
         def hold_connection():
-            with pool.acquire(timeout=5.0) as conn:
+            with pool.acquire(timeout=5.0):
                 # Signal we've acquired
                 acquired_count.release()
                 # Hold connection until told to release
@@ -334,7 +334,7 @@ class TestConnectionPoolCleanup:
 
             # Acquire and release to create connections
             for _ in range(3):
-                with pool.acquire(timeout=5.0) as conn:
+                with pool.acquire(timeout=5.0):
                     pass
 
             # Close all
@@ -360,7 +360,7 @@ class TestConnectionPoolCleanup:
                 pool_size=3,
             ) as pool:
                 # Use pool
-                with pool.acquire(timeout=5.0) as conn:
+                with pool.acquire(timeout=5.0):
                     pass
 
             # After context exit, pool should be closed
@@ -387,7 +387,7 @@ class TestConnectionPoolConfiguration:
             )
 
             # Acquire a connection (triggers creation)
-            with pool.acquire(timeout=5.0) as conn:
+            with pool.acquire(timeout=5.0):
                 pass
 
             # Verify connection was configured

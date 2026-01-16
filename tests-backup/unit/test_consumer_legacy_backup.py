@@ -28,13 +28,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from confluent_kafka import KafkaError
+from k2.ingestion.binance_client import convert_binance_trade_to_v2, parse_binance_symbol
 
 # Legacy tests-backup preserved for regression detection
 # Will be run selectively to ensure no functionality loss
-
 # Import only what's needed for basic regression checks
-from k2.ingestion.consumer import ConsumerStats
 from k2.ingestion.consumer import ConsumerStats, MarketDataConsumer
 
 
@@ -303,7 +301,7 @@ class TestMarketDataConsumerV2:
         """Test V2 consumer in batch mode with max_messages limit."""
         consumer, mocks = consumer_v2
         mock_consumer = mocks["consumer"]
-        mock_iceberg = mocks["iceberg"]
+        mocks["iceberg"]
 
         # Mock successful message processing
         mock_msg = MagicMock()
@@ -540,7 +538,7 @@ class TestErrorHandlingV2:
         """Test V2 batch processing with deserialization errors."""
         consumer, mocks = consumer_v2
         mock_consumer = mocks["consumer"]
-        mock_dlq = mocks["dlq"]
+        mocks["dlq"]
 
         # Mock message that causes deserialization error
         msg = MagicMock()

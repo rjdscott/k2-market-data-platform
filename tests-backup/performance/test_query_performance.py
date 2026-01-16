@@ -61,7 +61,7 @@ class TestQueryLatency:
             LIMIT 1000
         """
 
-        result = benchmark(engine.execute_query, query)
+        benchmark(engine.execute_query, query)
 
         stats = benchmark.stats
         print(
@@ -88,7 +88,7 @@ class TestQueryLatency:
             ORDER BY timestamp
         """
 
-        result = benchmark(engine.execute_query, query)
+        benchmark(engine.execute_query, query)
 
         stats = benchmark.stats
         print(f"\nFiltered query - Mean: {stats['mean']*1000:.1f}ms")
@@ -119,7 +119,7 @@ class TestQueryLatency:
             LIMIT 100
         """
 
-        result = benchmark(engine.execute_query, query)
+        benchmark(engine.execute_query, query)
 
         stats = benchmark.stats
         print(f"\nAggregation query - Mean: {stats['mean']*1000:.1f}ms")
@@ -146,7 +146,7 @@ class TestQueryLatency:
             ORDER BY timestamp
         """
 
-        result = benchmark(engine.execute_query, query)
+        benchmark(engine.execute_query, query)
 
         stats = benchmark.stats
         print(f"\nTime range query - Mean: {stats['mean']*1000:.1f}ms")
@@ -248,7 +248,7 @@ class TestQueryComplexity:
             LIMIT 1000
         """
 
-        result = benchmark.pedantic(
+        benchmark.pedantic(
             engine.execute_query,
             args=(query,),
             rounds=5,
@@ -284,7 +284,7 @@ class TestQueryComplexity:
             LIMIT 1000
         """
 
-        result = benchmark.pedantic(
+        benchmark.pedantic(
             engine.execute_query,
             args=(query,),
             rounds=5,
@@ -324,7 +324,7 @@ class TestQueryComplexity:
             LIMIT 50
         """
 
-        result = benchmark(engine.execute_query, query)
+        benchmark(engine.execute_query, query)
 
         stats = benchmark.stats
         print(f"\nSubquery - Mean: {stats['mean']*1000:.1f}ms")
@@ -354,12 +354,12 @@ class TestQueryCaching:
 
         # First query (cold cache)
         start = time.perf_counter()
-        result1 = engine.execute_query(query)
+        engine.execute_query(query)
         first_query_time = time.perf_counter() - start
 
         # Second query (potentially cached)
         start = time.perf_counter()
-        result2 = engine.execute_query(query)
+        engine.execute_query(query)
         second_query_time = time.perf_counter() - start
 
         print(f"\nFirst query (cold): {first_query_time*1000:.1f}ms")

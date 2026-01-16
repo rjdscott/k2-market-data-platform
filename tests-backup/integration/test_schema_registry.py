@@ -146,7 +146,7 @@ class TestSchemaRegistry:
 
             # Try to register - should fail if compatibility is enforced
             # Note: This might succeed if compatibility is NONE
-            result = client.register_schema("market.trades.raw-value", schema)
+            client.register_schema("market.trades.raw-value", schema)
 
             logger.warning(
                 "Incompatible schema was accepted",

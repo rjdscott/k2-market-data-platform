@@ -19,7 +19,7 @@ class TestSchemas:
     def test_trade_schema_valid(self):
         """Trade schema should parse without errors."""
         schema_str = load_avro_schema("trade")
-        schema_dict = json.loads(schema_str)
+        json.loads(schema_str)
 
         # Parse with Avro library
         schema = avro.schema.parse(schema_str)
@@ -37,7 +37,7 @@ class TestSchemas:
     def test_quote_schema_valid(self):
         """Quote schema should parse without errors."""
         schema_str = load_avro_schema("quote")
-        schema_dict = json.loads(schema_str)
+        json.loads(schema_str)
 
         schema = avro.schema.parse(schema_str)
 
@@ -180,7 +180,7 @@ class TestSchemasV2:
     def test_trade_v2_schema_valid(self):
         """Trade v2 schema should parse without errors."""
         schema_str = load_avro_schema("trade", version="v2")
-        schema_dict = json.loads(schema_str)
+        json.loads(schema_str)
 
         # Parse with Avro library
         schema = avro.schema.parse(schema_str)
@@ -205,7 +205,7 @@ class TestSchemasV2:
     def test_quote_v2_schema_valid(self):
         """Quote v2 schema should parse without errors."""
         schema_str = load_avro_schema("quote", version="v2")
-        schema_dict = json.loads(schema_str)
+        json.loads(schema_str)
 
         schema = avro.schema.parse(schema_str)
 

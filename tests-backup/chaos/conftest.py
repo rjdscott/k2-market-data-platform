@@ -93,7 +93,6 @@ def service_failure(
             producer.produce(...)
             # Producer should buffer or fail gracefully
     """
-    original_status = container.status
     logger.info(
         "Injecting service failure",
         container=container.name,

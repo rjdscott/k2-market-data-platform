@@ -56,7 +56,6 @@ async def test_binance_24h_soak():
     # Tracking state
     memory_samples = []
     messages_received_count = 0
-    connection_events = []
     last_progress_report = time.time()
 
     def on_message(message: dict) -> None:

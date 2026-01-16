@@ -555,7 +555,7 @@ class TestHybridQueryEngineEdgeCases:
 
         now_before = datetime.now(UTC)
 
-        results = hybrid_engine.query_trades(
+        hybrid_engine.query_trades(
             symbol="BTCUSDT",
             exchange="binance",
             start_time=now_before - timedelta(minutes=5),

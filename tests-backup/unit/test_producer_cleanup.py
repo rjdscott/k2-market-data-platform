@@ -321,7 +321,7 @@ class TestProducerExceptionHandling:
             mock_prod.return_value = mock_prod_instance
 
             with pytest.raises(ValueError, match="Test error"):
-                with MarketDataProducer() as producer:
+                with MarketDataProducer():
                     raise ValueError("Test error")
 
     def test_close_error_in_exit_doesnt_suppress_original_exception(self):
@@ -339,7 +339,7 @@ class TestProducerExceptionHandling:
 
             # Original exception should still be raised
             with pytest.raises(ValueError, match="Original error"):
-                with MarketDataProducer() as producer:
+                with MarketDataProducer():
                     raise ValueError("Original error")
 
 

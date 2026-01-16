@@ -48,7 +48,7 @@ class TestReplayEngineInitialization:
 
     def test_init_with_defaults(self, mock_catalog, mock_query_engine):
         """Test engine initializes with default config."""
-        engine = ReplayEngine()
+        ReplayEngine()
 
         # Should have created catalog
         mock, _ = mock_catalog
@@ -424,7 +424,7 @@ class TestContextManager:
         """Test engine works as context manager."""
         _, query_engine = mock_query_engine
 
-        with ReplayEngine() as engine:
+        with ReplayEngine():
             pass
 
         # QueryEngine should be closed
