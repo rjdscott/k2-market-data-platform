@@ -40,13 +40,13 @@ jobs:
         run: uv sync --frozen
 
       - name: Run Ruff (lint)
-        run: uv run ruff check src/ tests-backup/ --exclude=tests-backup/unit/test_consumer_legacy.py
+        run: uv run ruff check src/ tests/ --exclude=tests/unit/test_consumer_legacy.py
 
       - name: Run Black (format check)
-        run: uv run black --check src/ tests-backup/ --exclude=tests-backup/unit/test_consumer_legacy.py
+        run: uv run black --check src/ tests/ --exclude=tests/unit/test_consumer_legacy.py
 
       - name: Run isort (import order)
-        run: uv run isort --check-only src/ tests-backup/
+        run: uv run isort --check-only src/ tests/
 
       - name: Run mypy (type check)
         run: uv run mypy src/
@@ -79,7 +79,7 @@ jobs:
             --junitxml=pytest-unit-results.xml
 
       # Performance tests temporarily disabled
-      # - name: Run performance tests-backup (sequential to prevent OOM)
+      # - name: Run performance tests (sequential to prevent OOM)
       #   run: |
       #     uv run pytest tests/performance/ \
       #       -v \
