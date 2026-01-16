@@ -210,9 +210,9 @@ class TestBasicPipelineIntegration:
             assert isinstance(v2_trade["symbol"], str), "Symbol should be string"
             assert isinstance(v2_trade["exchange"], str), "Exchange should be string"
             assert isinstance(v2_trade["price"], (int, float, Decimal)), "Price should be numeric"
-            assert isinstance(v2_trade["quantity"], (int, float, Decimal)), (
-                "Quantity should be integer"
-            )
+            assert isinstance(
+                v2_trade["quantity"], (int, float, Decimal)
+            ), "Quantity should be integer"
 
         for quote in quotes:
             v2_quote = build_quote_v2(
@@ -240,12 +240,12 @@ class TestBasicPipelineIntegration:
 
             # Validate data types
             assert isinstance(v2_quote["symbol"], str), "Symbol should be string"
-            assert isinstance(v2_quote["bid_price"], (int, float, Decimal)), (
-                "Bid price should be numeric"
-            )
-            assert isinstance(v2_quote["ask_price"], (int, float, Decimal)), (
-                "Ask price should be numeric"
-            )
+            assert isinstance(
+                v2_quote["bid_price"], (int, float, Decimal)
+            ), "Bid price should be numeric"
+            assert isinstance(
+                v2_quote["ask_price"], (int, float, Decimal)
+            ), "Ask price should be numeric"
             assert isinstance(v2_quote["bid_size"], int), "Bid size should be integer"
             assert isinstance(v2_quote["ask_size"], int), "Ask size should be integer"
 
@@ -285,9 +285,9 @@ class TestBasicPipelineIntegration:
         production_rate = len(test_trades) / production_time if production_time > 0 else 0
 
         # Performance assertions for V2 pipeline
-        assert production_time < 30.0, (
-            f"V2 production should complete in <30s, took {production_time:.2f}s"
-        )
+        assert (
+            production_time < 30.0
+        ), f"V2 production should complete in <30s, took {production_time:.2f}s"
         assert production_rate > 10, f"V2 production rate >10 trades/sec, was {production_rate:.1f}"
 
         print("✅ V2 performance baselines met:")
