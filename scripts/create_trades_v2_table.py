@@ -3,6 +3,7 @@
 
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from pyiceberg.catalog import load_catalog
@@ -32,7 +33,7 @@ catalog = load_catalog(
         "s3.access-key-id": config.iceberg.s3_access_key,
         "s3.secret-access-key": config.iceberg.s3_secret_key,
         "s3.path-style-access": "true",
-    }
+    },
 )
 print("✓ Catalog loaded\n")
 
@@ -76,16 +77,16 @@ sort_order = SortOrder(
     ),
 )
 
-print("Creating trades_v2 table...")
+print("Creating trades table...")
 try:
     catalog.create_table(
-        identifier="market_data.trades_v2",
+        identifier="market_data.trades",
         schema=trades_v2_schema,
         partition_spec=partition_spec,
         sort_order=sort_order,
     )
-    print("✓ Table created: market_data.trades_v2\n")
+    print("✓ Table created: market_data.trades\n")
 except TableAlreadyExistsError:
-    print("✓ Table already exists: market_data.trades_v2\n")
+    print("✓ Table already exists: market_data.trades\n")
 
 print("Done!")

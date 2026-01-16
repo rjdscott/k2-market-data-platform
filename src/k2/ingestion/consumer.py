@@ -196,7 +196,7 @@ class MarketDataConsumer:
         # Initialize components
         self._init_schema_registry()
         self._init_consumer()
-        self.iceberg_writer = iceberg_writer or IcebergWriter(schema_version=self.schema_version)
+        self.iceberg_writer = iceberg_writer or IcebergWriter()
         self.sequence_tracker = sequence_tracker or SequenceTracker()
 
         # Initialize Dead Letter Queue for permanent failures
@@ -712,7 +712,9 @@ class MarketDataConsumer:
             network timeouts) while properly handling permanent errors via DLQ.
         """
         try:
-            self.iceberg_writer.write_trades(batch)
+            self.iceberg_writer.write_trades(
+                batch, table_name="market_data.trades", exchange="binance", asset_class="crypto"
+            )
 
         except RETRYABLE_ERRORS as err:
             logger.warning(
@@ -734,7 +736,9 @@ class MarketDataConsumer:
         try:
             # Write to Iceberg (IcebergWriter handles transaction)
             # Assuming trades for now - TODO: detect message type from topic or schema
-            self.iceberg_writer.write_trades(batch)
+            self.iceberg_writer.write_trades(
+                batch, table_name="market_data.trades", exchange="binance", asset_class="crypto"
+            )
 
             # Track write duration
             duration = time.time() - start_time

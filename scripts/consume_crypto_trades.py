@@ -134,7 +134,7 @@ def create_stats_table(consumer: MarketDataConsumer, start_time: float) -> Table
 
     # Current state
     table.add_row("Batch Size", f"{consumer.batch_size:,}")
-    table.add_row("Current Batch", f"{len(consumer.current_batch):,}")
+    table.add_row("Current Batch", f"{len(consumer._current_batch):,}")
 
     return table
 
@@ -231,12 +231,14 @@ Examples:
     # Note: log_level configuration removed as it's not part of K2Config
 
     # Display startup banner
-    console.print(Panel.fit(
-        "[bold cyan]K2 Market Data Platform[/bold cyan]\n"
-        "[white]Crypto Trades Consumer (v2 Schema)[/white]\n"
-        f"[dim]Started: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}[/dim]",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel.fit(
+            "[bold cyan]K2 Market Data Platform[/bold cyan]\n"
+            "[white]Crypto Trades Consumer (v2 Schema)[/white]\n"
+            f"[dim]Started: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}[/dim]",
+            border_style="cyan",
+        )
+    )
 
     # Display configuration
     config_table = Table(title="⚙ Configuration", show_header=False)
@@ -247,9 +249,11 @@ Examples:
     config_table.add_row("Topic", "market.crypto.trades")
     config_table.add_row("Consumer Group", args.consumer_group)
     config_table.add_row("Batch Size", f"{args.batch_size:,}")
-    config_table.add_row("Max Messages", f"{args.max_messages:,}" if args.max_messages else "Unlimited")
+    config_table.add_row(
+        "Max Messages", f"{args.max_messages:,}" if args.max_messages else "Unlimited"
+    )
     config_table.add_row("Schema Version", "v2")
-    config_table.add_row("Iceberg Table", "market_data.trades_v2")
+    config_table.add_row("Iceberg Table", "market_data.trades")
     config_table.add_row("Log Level", args.log_level)
     console.print(config_table)
     console.print()
@@ -261,7 +265,7 @@ Examples:
     try:
         # Initialize Iceberg writer
         console.print("[cyan]Initializing Iceberg writer...[/cyan]")
-        writer = IcebergWriter(schema_version="v2")
+        writer = IcebergWriter()
         console.print("[green]✓ Iceberg writer initialized[/green]\n")
 
         # Initialize consumer
@@ -271,6 +275,8 @@ Examples:
             batch_size=args.batch_size,
             iceberg_writer=writer,
             consumer_group=args.consumer_group,
+            dlq_path="/tmp/k2-dlq",  # Use temporary DLQ path to avoid permission issues
+            max_messages=args.max_messages,
         )
         console.print("[green]✓ Kafka consumer initialized[/green]\n")
 
@@ -279,7 +285,7 @@ Examples:
 
         if args.no_ui:
             # No UI mode (for Docker logs)
-            consumer.run(max_messages=args.max_messages)
+            consumer.run()
         else:
             # Rich UI mode (for terminal)
             import threading
@@ -287,7 +293,6 @@ Examples:
             # Run consumer in background thread
             consumer_thread = threading.Thread(
                 target=consumer.run,
-                kwargs={"max_messages": args.max_messages},
                 daemon=True,
             )
             consumer_thread.start()
@@ -300,15 +305,17 @@ Examples:
 
         # Print final statistics
         stats = consumer.stats
-        console.print(Panel.fit(
-            f"[bold green]✓ Consumer Completed[/bold green]\n\n"
-            f"Messages Consumed: {stats.messages_consumed:,}\n"
-            f"Messages Written: {stats.messages_written:,}\n"
-            f"Errors: {stats.errors:,}\n"
-            f"Throughput: {stats.throughput:.1f} msg/s\n"
-            f"Duration: {stats.duration_seconds:.1f}s",
-            border_style="green",
-        ))
+        console.print(
+            Panel.fit(
+                f"[bold green]✓ Consumer Completed[/bold green]\n\n"
+                f"Messages Consumed: {stats.messages_consumed:,}\n"
+                f"Messages Written: {stats.messages_written:,}\n"
+                f"Errors: {stats.errors:,}\n"
+                f"Throughput: {stats.throughput:.1f} msg/s\n"
+                f"Duration: {stats.duration_seconds:.1f}s",
+                border_style="green",
+            )
+        )
 
         sys.exit(0)
 
