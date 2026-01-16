@@ -429,11 +429,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Install API server dependencies
+        INSTALL_API: "true"
     container_name: k2-query-api
     hostname: k2-query-api
     ports:
       - "8000:8000"       # REST API
-      - "9092:9092"       # Prometheus metrics (alternative to 9091 for API)
+      - "9094:9094"       # Prometheus metrics (alternative to 9091 for API)
     environment:
       # FastAPI Configuration
       K2_API_KEY: ${K2_API_KEY:-k2-dev-api-key-2026}
@@ -461,9 +464,9 @@ services:
       
       # Metrics Configuration
       K2_METRICS_ENABLED: "true"
-      K2_METRICS_PORT: 9092
+      K2_METRICS_PORT: 9094
     command: >
-      uvicorn k2.api.main:app 
+      python -m uvicorn k2.api.main:app 
       --host 0.0.0.0 
       --port 8000 
       --workers 1 

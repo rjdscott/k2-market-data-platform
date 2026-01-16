@@ -59,7 +59,11 @@ COPY src/ /app/src/
 # --system: Install into system Python (not venv, since container is isolated)
 # --no-cache-dir: Don't cache pip packages (reduces image size)
 # -e .: Install in editable mode (allows code changes without rebuild for development)
-RUN uv pip install --system --no-cache-dir -e .
+RUN if [ "${INSTALL_API:-false}" = "true" ]; then \
+      uv pip install --system --no-cache-dir -e ".[api]"; \
+    else \
+      uv pip install --system --no-cache-dir -e .; \
+    fi
 
 # ------------------------------------------------------------------------------
 # Stage 3: Final Runtime Image
