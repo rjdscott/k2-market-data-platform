@@ -578,7 +578,7 @@ def main(
     console.print()
     console.print(
         Panel(
-            "[bold cyan]K2 Market Data Platform[/bold cyan]\n" "[dim]Demo Reset Utility[/dim]",
+            "[bold cyan]K2 Market Data Platform[/bold cyan]\n[dim]Demo Reset Utility[/dim]",
             border_style="cyan",
         )
     )

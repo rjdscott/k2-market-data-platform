@@ -14,6 +14,7 @@ Run this after starting docker-compose services.
 Usage:
     python scripts/init_infra.py
 """
+
 import csv
 import sys
 from datetime import datetime

@@ -110,12 +110,12 @@ class TestDataFreshnessAndLatency:
                 )
 
                 # SLA validation
-                assert (
-                    avg_latency <= max_latency_seconds
-                ), f"Average latency too high: {avg_latency:.2f}s"
-                assert (
-                    max_measured_latency <= max_latency_seconds * 2
-                ), f"Max latency too high: {max_measured_latency:.2f}s"
+                assert avg_latency <= max_latency_seconds, (
+                    f"Average latency too high: {avg_latency:.2f}s"
+                )
+                assert max_measured_latency <= max_latency_seconds * 2, (
+                    f"Max latency too high: {max_measured_latency:.2f}s"
+                )
 
         except httpx.ConnectError:
             pytest.skip("API service not available for latency testing")
@@ -174,9 +174,9 @@ class TestDataFreshnessAndLatency:
             )
 
             # SLA validation
-            assert (
-                throughput >= min_requests_per_second
-            ), f"Throughput too low: {throughput:.1f} req/s"
+            assert throughput >= min_requests_per_second, (
+                f"Throughput too low: {throughput:.1f} req/s"
+            )
             assert success_rate >= 0.95, f"Success rate too low: {success_rate:.1%}"
 
         except httpx.ConnectError:
@@ -216,12 +216,12 @@ class TestDataFreshnessAndLatency:
                 )
 
                 # SLA validation
-                assert (
-                    p95_response_time <= max_response_time_p95
-                ), f"P95 response time too high: {p95_response_time:.3f}s"
-                assert (
-                    avg_response_time <= max_response_time_p95 * 0.5
-                ), f"Avg response time too high: {avg_response_time:.3f}s"
+                assert p95_response_time <= max_response_time_p95, (
+                    f"P95 response time too high: {p95_response_time:.3f}s"
+                )
+                assert avg_response_time <= max_response_time_p95 * 0.5, (
+                    f"Avg response time too high: {avg_response_time:.3f}s"
+                )
 
         except httpx.ConnectError:
             pytest.skip("API service not available for response time testing")
@@ -289,9 +289,9 @@ class TestDataFreshnessAndLatency:
                 )
 
                 # SLA validation (allowing for test environment variations)
-                assert (
-                    trade_rate >= min_trades_per_second * 0.5
-                ), f"Trade rate too low: {trade_rate:.2f} trades/s"
+                assert trade_rate >= min_trades_per_second * 0.5, (
+                    f"Trade rate too low: {trade_rate:.2f} trades/s"
+                )
             else:
                 logger.warning("Insufficient time difference for rate calculation")
 
@@ -396,9 +396,9 @@ class TestDataFreshnessAndLatency:
             )
 
             # Allow up to 3x degradation under higher load
-            assert (
-                degradation_factor <= 3.0
-            ), f"Excessive performance degradation: {degradation_factor:.2f}x"
+            assert degradation_factor <= 3.0, (
+                f"Excessive performance degradation: {degradation_factor:.2f}x"
+            )
 
     @pytest.mark.asyncio
     async def test_rate_limiting_behavior(self, api_client):

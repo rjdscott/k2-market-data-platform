@@ -72,8 +72,7 @@ def load_avro_schema(schema_name: str, version: str = "v1") -> str:
 
     if not schema_path.exists():
         raise FileNotFoundError(
-            f"Schema file not found: {schema_path}\n"
-            f"Available schemas: {list_available_schemas()}",
+            f"Schema file not found: {schema_path}\nAvailable schemas: {list_available_schemas()}",
         )
 
     schema_str = schema_path.read_text()

@@ -206,8 +206,8 @@ def step_2_ingestion(quick: bool = False) -> None:
   Symbol:          [cyan]DVN[/cyan]
   Exchange:        ASX
   Date Range:      March 10-14, 2014
-  Price Range:     ${df['Price'].min():.2f} - ${df['Price'].max():.2f}
-  Total Volume:    {df['Volume'].sum():,}
+  Price Range:     ${df["Price"].min():.2f} - ${df["Price"].max():.2f}
+  Total Volume:    {df["Volume"].sum():,}
 
 [dim]Note: In production, data would flow through Kafka → Iceberg[/dim]
 """,
@@ -429,7 +429,7 @@ def main(
     console.print()
     console.print(
         Panel(
-            "[bold cyan]K2 Market Data Platform[/bold cyan]\n" "[dim]Interactive Demo[/dim]",
+            "[bold cyan]K2 Market Data Platform[/bold cyan]\n[dim]Interactive Demo[/dim]",
             border_style="cyan",
         )
     )

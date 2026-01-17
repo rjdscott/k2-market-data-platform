@@ -188,7 +188,9 @@ This demo shows how K2 handles system overload through graceful degradation.
         lag_status = (
             "OK"
             if self.simulated_lag < 100_000
-            else "WARNING" if self.simulated_lag < 1_000_000 else "CRITICAL"
+            else "WARNING"
+            if self.simulated_lag < 1_000_000
+            else "CRITICAL"
         )
         lag_color = (
             "green" if lag_status == "OK" else "yellow" if lag_status == "WARNING" else "red"
@@ -207,7 +209,9 @@ This demo shows how K2 handles system overload through graceful degradation.
         heap_status = (
             "OK"
             if self.simulated_heap < 70.0
-            else "WARNING" if self.simulated_heap < 90.0 else "CRITICAL"
+            else "WARNING"
+            if self.simulated_heap < 90.0
+            else "CRITICAL"
         )
         heap_color = (
             "green" if heap_status == "OK" else "yellow" if heap_status == "WARNING" else "red"

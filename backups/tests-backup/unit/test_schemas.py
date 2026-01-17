@@ -71,15 +71,15 @@ class TestSchemas:
 
             # Required for ordering and partitioning
             assert "symbol" in field_names, f"{schema_name} schema missing 'symbol' field"
-            assert (
-                "exchange_timestamp" in field_names
-            ), f"{schema_name} schema missing 'exchange_timestamp' field"
-            assert (
-                "ingestion_timestamp" in field_names
-            ), f"{schema_name} schema missing 'ingestion_timestamp' field"
-            assert (
-                "sequence_number" in field_names
-            ), f"{schema_name} schema missing 'sequence_number' field"
+            assert "exchange_timestamp" in field_names, (
+                f"{schema_name} schema missing 'exchange_timestamp' field"
+            )
+            assert "ingestion_timestamp" in field_names, (
+                f"{schema_name} schema missing 'ingestion_timestamp' field"
+            )
+            assert "sequence_number" in field_names, (
+                f"{schema_name} schema missing 'sequence_number' field"
+            )
 
     def test_timestamp_fields_use_logical_type(self):
         """Timestamp fields should use timestamp-millis logical type."""
@@ -98,9 +98,9 @@ class TestSchemas:
                         continue
 
                     if isinstance(field_type, dict):
-                        assert (
-                            field_type.get("logicalType") == "timestamp-millis"
-                        ), f"{schema_name}.{field['name']} should use timestamp-millis"
+                        assert field_type.get("logicalType") == "timestamp-millis", (
+                            f"{schema_name}.{field['name']} should use timestamp-millis"
+                        )
 
     def test_decimal_fields_use_logical_type(self):
         """Price fields should use decimal logical type (not float)."""
@@ -117,15 +117,15 @@ class TestSchemas:
                         field_type,
                         dict,
                     ), f"{schema_name}.{field['name']} should be dict type"
-                    assert (
-                        field_type.get("logicalType") == "decimal"
-                    ), f"{schema_name}.{field['name']} should use decimal type"
-                    assert (
-                        field_type.get("precision") == 18
-                    ), f"{schema_name}.{field['name']} should have precision=18"
-                    assert (
-                        field_type.get("scale") == 6
-                    ), f"{schema_name}.{field['name']} should have scale=6"
+                    assert field_type.get("logicalType") == "decimal", (
+                        f"{schema_name}.{field['name']} should use decimal type"
+                    )
+                    assert field_type.get("precision") == 18, (
+                        f"{schema_name}.{field['name']} should have precision=18"
+                    )
+                    assert field_type.get("scale") == 6, (
+                        f"{schema_name}.{field['name']} should have scale=6"
+                    )
 
     def test_list_available_schemas(self):
         """Should list all .avsc files."""
@@ -168,9 +168,9 @@ class TestSchemas:
                 # Check if union with null
                 if isinstance(field_type, list) and "null" in field_type:
                     # Optional field should have default
-                    assert (
-                        "default" in field
-                    ), f"{schema_name}.{field['name']} is optional but has no default"
+                    assert "default" in field, (
+                        f"{schema_name}.{field['name']} is optional but has no default"
+                    )
 
 
 @pytest.mark.unit

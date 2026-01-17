@@ -10,6 +10,7 @@ from confluent_kafka import Consumer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
 
+
 def main():
     # Configure consumer
     consumer_conf = {
@@ -62,6 +63,7 @@ def main():
     print("\n" + "=" * 60)
     print(f"Successfully consumed {count} messages")
     return 0 if count > 0 else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

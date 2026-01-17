@@ -20,7 +20,6 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
 
 # Add src to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -274,8 +273,7 @@ def generate_report() -> None:
 
     # Overall summary
     total_valid = sum(
-        sum(1 for r in validation_results[ex] if r["valid"])
-        for ex in validation_results
+        sum(1 for r in validation_results[ex] if r["valid"]) for ex in validation_results
     )
     total_trades = sum(len(validation_results[ex]) for ex in validation_results)
 
@@ -284,9 +282,7 @@ def generate_report() -> None:
         if overall_success == 100:
             console.print("[bold green]✓ All validations passed![/bold green]")
         else:
-            console.print(
-                f"[bold yellow]⚠ {overall_success:.1f}% success rate[/bold yellow]"
-            )
+            console.print(f"[bold yellow]⚠ {overall_success:.1f}% success rate[/bold yellow]")
     else:
         console.print("[bold red]✗ No trades received[/bold red]")
 

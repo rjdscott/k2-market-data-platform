@@ -164,7 +164,9 @@ def convert_kraken_trade_to_v2(msg: list[Any]) -> dict[str, Any]:
 
     # Generate trade_id from timestamp + hash of trade data for uniqueness
     # Kraken doesn't provide trade IDs, so we create deterministic ones
-    trade_hash = hashlib.sha256(f"{pair}{timestamp_str}{price_str}{volume_str}".encode()).hexdigest()[:8]
+    trade_hash = hashlib.sha256(
+        f"{pair}{timestamp_str}{price_str}{volume_str}".encode()
+    ).hexdigest()[:8]
     trade_id = f"KRAKEN-{int(timestamp_float * 1_000_000)}-{trade_hash}"
 
     # Build v2 trade record

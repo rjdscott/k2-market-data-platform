@@ -9,7 +9,6 @@ They are marked as 'integration' and can be skipped in CI if needed.
 
 import asyncio
 import time
-from typing import Any
 
 import pytest
 
@@ -101,15 +100,19 @@ async def test_binance_streaming_validation():
         # Give a moment for cleanup
         await asyncio.sleep(0.5)
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await client.disconnect()
-        pytest.fail(f"Timeout: Only received {len(trades_received)} trades (expected {target_trades})")
+        pytest.fail(
+            f"Timeout: Only received {len(trades_received)} trades (expected {target_trades})"
+        )
     except Exception as e:
         await client.disconnect()
         pytest.fail(f"Client error: {e}")
 
     # Validate results
-    assert len(trades_received) >= target_trades, f"Expected at least {target_trades} trades, got {len(trades_received)}"
+    assert len(trades_received) >= target_trades, (
+        f"Expected at least {target_trades} trades, got {len(trades_received)}"
+    )
     assert len(validation_errors) == 0, f"Schema validation errors: {validation_errors}"
 
     # Validate exchange-specific fields
@@ -159,15 +162,19 @@ async def test_kraken_streaming_validation():
         # Give a moment for cleanup
         await asyncio.sleep(0.5)
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await client.disconnect()
-        pytest.fail(f"Timeout: Only received {len(trades_received)} trades (expected {target_trades})")
+        pytest.fail(
+            f"Timeout: Only received {len(trades_received)} trades (expected {target_trades})"
+        )
     except Exception as e:
         await client.disconnect()
         pytest.fail(f"Client error: {e}")
 
     # Validate results
-    assert len(trades_received) >= target_trades, f"Expected at least {target_trades} trades, got {len(trades_received)}"
+    assert len(trades_received) >= target_trades, (
+        f"Expected at least {target_trades} trades, got {len(trades_received)}"
+    )
     assert len(validation_errors) == 0, f"Schema validation errors: {validation_errors}"
 
     # Validate exchange-specific fields
@@ -220,8 +227,7 @@ async def test_concurrent_streaming():
 
         # Wait for both to receive target trades
         await asyncio.wait_for(
-            asyncio.gather(binance_stop.wait(), kraken_stop.wait()),
-            timeout=60.0
+            asyncio.gather(binance_stop.wait(), kraken_stop.wait()), timeout=60.0
         )
 
         # Disconnect both
@@ -231,7 +237,7 @@ async def test_concurrent_streaming():
         # Give a moment for cleanup
         await asyncio.sleep(0.5)
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await binance_client.disconnect()
         await kraken_client.disconnect()
         pytest.fail(
@@ -275,7 +281,7 @@ async def test_kraken_xbt_normalization():
         await asyncio.wait_for(stop_event.wait(), timeout=20.0)
         await client.disconnect()
         await asyncio.sleep(0.5)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await client.disconnect()
         pytest.fail(f"Timeout: Only received {len(trades_received)} trades")
 
@@ -316,7 +322,7 @@ async def test_message_rate():
         await asyncio.wait_for(stop_event.wait(), timeout=20.0)
         await client.disconnect()
         await asyncio.sleep(0.5)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await client.disconnect()
         pytest.fail(f"Timeout: Only received {len(trades_received)} trades")
 

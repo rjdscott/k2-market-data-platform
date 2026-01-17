@@ -297,17 +297,17 @@ class TestConnectionPoolStatistics:
         # Check stats while connections are held
         stats = pool.get_stats()
         # Due to thread timing, active connections may vary, but total acquisitions should be 3
-        assert (
-            stats["total_acquisitions"] == 3
-        ), f"Expected 3 acquisitions, got {stats['total_acquisitions']}"
+        assert stats["total_acquisitions"] == 3, (
+            f"Expected 3 acquisitions, got {stats['total_acquisitions']}"
+        )
         # Peak utilization should be at least 1 (proves pool works)
-        assert (
-            stats["peak_utilization"] >= 1
-        ), f"Expected peak >= 1, got {stats['peak_utilization']}"
+        assert stats["peak_utilization"] >= 1, (
+            f"Expected peak >= 1, got {stats['peak_utilization']}"
+        )
         # We acquired 3 connections total
-        assert (
-            stats["active_connections"] >= 1
-        ), f"Expected at least 1 active, got {stats['active_connections']}"
+        assert stats["active_connections"] >= 1, (
+            f"Expected at least 1 active, got {stats['active_connections']}"
+        )
 
         # Release all connections
         release_event.set()

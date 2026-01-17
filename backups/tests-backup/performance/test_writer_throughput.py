@@ -136,8 +136,8 @@ class TestWriterLatency:
 
         stats = benchmark.stats
         print(
-            f"\nV1 write (100 trades) - Mean: {stats['mean']*1000:.1f}ms, "
-            f"StdDev: {stats['stddev']*1000:.1f}ms"
+            f"\nV1 write (100 trades) - Mean: {stats['mean'] * 1000:.1f}ms, "
+            f"StdDev: {stats['stddev'] * 1000:.1f}ms"
         )
 
     def test_single_batch_write_v2(self, benchmark, mock_iceberg_components, sample_trades_v2):
@@ -158,8 +158,8 @@ class TestWriterLatency:
 
         stats = benchmark.stats
         print(
-            f"\nV2 write (100 trades) - Mean: {stats['mean']*1000:.1f}ms, "
-            f"StdDev: {stats['stddev']*1000:.1f}ms"
+            f"\nV2 write (100 trades) - Mean: {stats['mean'] * 1000:.1f}ms, "
+            f"StdDev: {stats['stddev'] * 1000:.1f}ms"
         )
 
     def test_large_batch_write(self, benchmark, mock_iceberg_components, sample_trades_v2):
@@ -263,7 +263,7 @@ class TestArrowConversion:
         assert result.num_rows == 1000
 
         stats = benchmark.stats
-        print(f"\nArrow conversion v1 (1K rows) - Mean: {stats['mean']*1000:.1f}ms")
+        print(f"\nArrow conversion v1 (1K rows) - Mean: {stats['mean'] * 1000:.1f}ms")
 
     def test_arrow_conversion_v2(self, benchmark, sample_trades_v2):
         """Benchmark PyArrow conversion for v2 schema.
@@ -278,7 +278,7 @@ class TestArrowConversion:
         assert result.num_rows == 1000
 
         stats = benchmark.stats
-        print(f"\nArrow conversion v2 (1K rows) - Mean: {stats['mean']*1000:.1f}ms")
+        print(f"\nArrow conversion v2 (1K rows) - Mean: {stats['mean'] * 1000:.1f}ms")
 
     def test_arrow_conversion_scaling(self, sample_trades_v2):
         """Test Arrow conversion scaling with row count."""
@@ -298,7 +298,9 @@ class TestArrowConversion:
             throughput = count / elapsed
             results.append((count, elapsed * 1000, throughput))
 
-            print(f"Arrow {count:>6} rows: {elapsed*1000:>8.2f}ms ({throughput:>10,.0f} rows/sec)")
+            print(
+                f"Arrow {count:>6} rows: {elapsed * 1000:>8.2f}ms ({throughput:>10,.0f} rows/sec)"
+            )
 
         # Check that conversion scales linearly (within 20%)
         # Expect ~constant rows/sec across batch sizes
@@ -349,7 +351,7 @@ class TestDecimalPrecision:
         assert result.num_rows == 1000
 
         stats = benchmark.stats
-        print(f"\nDecimal conversion (1K rows) - Mean: {stats['mean']*1000:.1f}ms")
+        print(f"\nDecimal conversion (1K rows) - Mean: {stats['mean'] * 1000:.1f}ms")
 
 
 @pytest.mark.performance
@@ -378,7 +380,7 @@ class TestWriterStress:
                 elapsed = time.perf_counter() - start
                 rows_written = (i + 1) * batch_size
                 throughput = rows_written / elapsed
-                print(f"Batch {i+1}/{num_batches}: {throughput:,.0f} rows/sec")
+                print(f"Batch {i + 1}/{num_batches}: {throughput:,.0f} rows/sec")
 
         total_elapsed = time.perf_counter() - start
         total_rows = batch_size * num_batches
@@ -388,9 +390,9 @@ class TestWriterStress:
         print(f"Average throughput: {avg_throughput:,.0f} rows/sec")
 
         # Should maintain at least 8K rows/sec under sustained load
-        assert (
-            avg_throughput > 8_000
-        ), f"Sustained throughput {avg_throughput:,.0f} below 8,000 baseline"
+        assert avg_throughput > 8_000, (
+            f"Sustained throughput {avg_throughput:,.0f} below 8,000 baseline"
+        )
 
     def test_mixed_schema_performance(
         self, mock_iceberg_components, sample_trades_v1, sample_trades_v2
@@ -413,9 +415,9 @@ class TestWriterStress:
         writer_v2.write_trades(trades_v2, table_name="market_data.trades_v2")
         v2_time = time.perf_counter() - start
 
-        print(f"\nV1 schema (10K rows): {v1_time:.3f}s ({10_000/v1_time:,.0f} rows/sec)")
-        print(f"V2 schema (10K rows): {v2_time:.3f}s ({10_000/v2_time:,.0f} rows/sec)")
-        print(f"V2/V1 ratio: {v2_time/v1_time:.2f}x")
+        print(f"\nV1 schema (10K rows): {v1_time:.3f}s ({10_000 / v1_time:,.0f} rows/sec)")
+        print(f"V2 schema (10K rows): {v2_time:.3f}s ({10_000 / v2_time:,.0f} rows/sec)")
+        print(f"V2/V1 ratio: {v2_time / v1_time:.2f}x")
 
         # V2 should be within 50% of v1 performance (more complex schema acceptable)
         assert v2_time < v1_time * 1.5, "V2 schema significantly slower than v1"

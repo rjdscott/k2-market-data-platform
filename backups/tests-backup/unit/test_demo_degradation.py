@@ -210,7 +210,6 @@ class TestDegradationDemo:
     def test_demo_runs_in_both_modes(self, quick_mode):
         """Test demo runs successfully in both quick and normal modes."""
         with patch("scripts.demo_degradation.console"), patch("time.sleep"):
-
             demo = DegradationDemo(quick_mode=quick_mode)
             demo.run()  # Should not raise
 

@@ -35,9 +35,9 @@ def check_topic(topic_name: str, max_messages: int = 3) -> tuple[int, list]:
     messages = []
     count = 0
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Checking topic: {topic_name}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     try:
         # Poll for messages
@@ -75,18 +75,18 @@ def check_topic(topic_name: str, max_messages: int = 3) -> tuple[int, list]:
     finally:
         consumer.close()
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Total messages found in {topic_name}: {count}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     return count, messages
 
 
 def main():
     """Check both topics."""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("KAFKA TOPIC VERIFICATION")
-    print("="*60)
+    print("=" * 60)
 
     # Check Kraken topic
     kraken_count, kraken_msgs = check_topic("market.crypto.trades.kraken")
@@ -95,12 +95,12 @@ def main():
     binance_count, binance_msgs = check_topic("market.crypto.trades.binance")
 
     # Summary
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("SUMMARY")
-    print("="*60)
+    print("=" * 60)
     print(f"Kraken messages:  {kraken_count}")
     print(f"Binance messages: {binance_count}")
-    print("="*60)
+    print("=" * 60)
 
     if kraken_count > 0 and binance_count > 0:
         print("\n✅ SUCCESS: Both topics have messages!\n")

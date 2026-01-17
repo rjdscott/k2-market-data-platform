@@ -225,16 +225,16 @@ async def test_binance_24h_soak():
 
     # Criterion 3: 24h continuous operation
     print(f"✓ Duration: {total_elapsed_hours:.2f} hours (target: {test_duration_hours} hours)")
-    assert (
-        total_elapsed_hours >= test_duration_hours * 0.98
-    ), f"FAILED: Test only ran for {total_elapsed_hours:.2f}h (expected: {test_duration_hours}h)"
+    assert total_elapsed_hours >= test_duration_hours * 0.98, (
+        f"FAILED: Test only ran for {total_elapsed_hours:.2f}h (expected: {test_duration_hours}h)"
+    )
 
     # Criterion 4: Sufficient samples collected
     expected_samples = int(test_duration_hours * 3600 / memory_sample_interval_seconds)
     print(f"✓ Samples: {len(memory_samples)} (expected: ~{expected_samples})")
-    assert (
-        len(memory_samples) >= expected_samples * 0.95
-    ), f"FAILED: Only {len(memory_samples)} samples collected (expected: ~{expected_samples})"
+    assert len(memory_samples) >= expected_samples * 0.95, (
+        f"FAILED: Only {len(memory_samples)} samples collected (expected: ~{expected_samples})"
+    )
 
     print("-" * 80)
     print("✅ All success criteria passed!")

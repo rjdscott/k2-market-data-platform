@@ -115,9 +115,9 @@ class TestHybridQueryIntegration:
             )
 
             # Should have more trades than real-time only
-            assert len(recent_15min_trades) >= len(
-                recent_trades
-            ), "15-min query should include Kafka + Iceberg data"
+            assert len(recent_15min_trades) >= len(recent_trades), (
+                "15-min query should include Kafka + Iceberg data"
+            )
             print(f"✅ Recent query: {len(recent_15min_trades)} trades from last 15 minutes")
 
             # Test 3: Historical query (more than 15 minutes ago)
@@ -144,9 +144,9 @@ class TestHybridQueryIntegration:
             )
 
             # Should have most recent data from Kafka tail
-            assert len(very_recent_trades) >= len(
-                recent_trades
-            ), "Very recent query should include most recent Kafka data"
+            assert len(very_recent_trades) >= len(recent_trades), (
+                "Very recent query should include most recent Kafka data"
+            )
             print(f"✅ Very recent query: {len(very_recent_trades)} trades from last 1 minute")
 
         finally:
@@ -201,9 +201,9 @@ class TestHybridQueryIntegration:
 
         # Should deduplicate by message_id
         unique_message_ids = set(trade["trade_id"] for trade in overlapping_trades)
-        assert len(overlapping_trades) == len(
-            unique_message_ids
-        ), "Deduplication by message_id should work"
+        assert len(overlapping_trades) == len(unique_message_ids), (
+            "Deduplication by message_id should work"
+        )
         print(
             f"✅ Deduplication test: {len(overlapping_trades)} unique trades from {len(test_trades)} produced"
         )
@@ -286,9 +286,9 @@ class TestHybridQueryIntegration:
                 query_time = time.perf_counter() - start_time
 
                 # Performance assertions
-                assert (
-                    query_time < 1.0
-                ), f"{test_name} query should complete in <1s, took {query_time:.3f}s"
+                assert query_time < 1.0, (
+                    f"{test_name} query should complete in <1s, took {query_time:.3f}s"
+                )
 
                 # Only check for data in real-time queries (Kafka tail should have data)
                 if "Real-time" in test_name:

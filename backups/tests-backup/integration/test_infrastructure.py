@@ -62,9 +62,9 @@ class TestInfrastructure:
         assert response.status_code == 200, "Iceberg REST should return 200"
         config = response.json()
 
-        assert (
-            "defaults" in config or "overrides" in config
-        ), "Iceberg config should contain defaults or overrides"
+        assert "defaults" in config or "overrides" in config, (
+            "Iceberg config should contain defaults or overrides"
+        )
 
         logger.info("Iceberg REST catalog accessible")
 
