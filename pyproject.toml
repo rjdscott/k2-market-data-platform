@@ -337,6 +337,7 @@ filterwarnings = [
 ]
 # pytest-asyncio configuration
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 # pytest-timeout: Apply default timeout to all tests-backup (can be overridden per-test)
 timeout = 300  # 5 minutes default
 timeout_method = "thread"

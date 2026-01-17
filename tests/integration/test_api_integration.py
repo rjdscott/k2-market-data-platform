@@ -44,7 +44,7 @@ class TestAPIIntegration:
     API_KEY = "k2-dev-api-key-2026"
     TEST_TIMEOUT = 30.0
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture(scope="function")
     async def api_client(self) -> httpx.AsyncClient:
         """HTTP client for API tests with proper authentication."""
 
@@ -55,7 +55,7 @@ class TestAPIIntegration:
         ) as client:
             yield client
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture(scope="function")
     async def unauthorized_client(self) -> httpx.AsyncClient:
         """HTTP client without authentication for testing auth errors."""
 
@@ -475,7 +475,7 @@ class TestAPIHybridQueryIntegration:
     API_BASE_URL = "http://localhost:8000"
     API_KEY = "k2-dev-api-key-2026"
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture(scope="function")
     async def api_client(self) -> httpx.AsyncClient:
         """HTTP client with authentication."""
 
