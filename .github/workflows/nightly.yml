@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: nightly-test-results
           path: |
@@ -145,7 +145,7 @@ jobs:
 
       - name: Upload chaos test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: nightly-chaos-results
           path: nightly-chaos-results.xml
@@ -208,7 +208,7 @@ jobs:
 
       - name: Upload operational test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: nightly-operational-results
           path: nightly-operational-results.xml
@@ -290,7 +290,7 @@ jobs:
         run: cat report.md
 
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: nightly-build-report
           path: report.md
