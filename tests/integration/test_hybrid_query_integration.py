@@ -45,6 +45,34 @@ class TestHybridQueryIntegration:
 
         test_trades = sample_market_data["trades"][:10]
 
+        # Produce test data to Kafka to enable queries
+        producer = MarketDataProducer(
+            bootstrap_servers=kafka_cluster.brokers,
+            schema_registry_url=kafka_cluster.schema_registry_url,
+            schema_version="v2",
+        )
+
+        # Produce recent trades (will be in Kafka tail)
+        for trade in test_trades:
+            v2_trade = build_trade_v2(
+                symbol=trade["symbol"],
+                exchange="binance",
+                asset_class="crypto",
+                timestamp=datetime.now() - timedelta(minutes=1),
+                price=Decimal(trade["price"]),
+                quantity=trade["quantity"],
+                trade_id=trade["trade_id"],
+            )
+            producer.produce_trade(asset_class="crypto", exchange="binance", record=v2_trade)
+
+        producer.flush(timeout=10)
+        producer.close()
+
+        # Wait for Kafka messages to be available
+        import asyncio
+
+        asyncio.run(asyncio.sleep(1))
+
         # Test 1: Real-time query (last 2 minutes)
         recent_trades = hybrid_engine.query_trades(
             symbol=test_trades[0]["symbol"],
@@ -169,6 +197,34 @@ class TestHybridQueryIntegration:
         hybrid_engine = HybridQueryEngine(
             iceberg_engine=query_engine, kafka_tail=kafka_tail, commit_lag_seconds=120
         )
+
+        # Produce test data to Kafka for performance testing
+        producer = MarketDataProducer(
+            bootstrap_servers=kafka_cluster.brokers,
+            schema_registry_url=kafka_cluster.schema_registry_url,
+            schema_version="v2",
+        )
+
+        test_trades = sample_market_data["trades"][:20]
+        for trade in test_trades:
+            v2_trade = build_trade_v2(
+                symbol="BTCUSDT",
+                exchange="binance",
+                asset_class="crypto",
+                timestamp=datetime.now() - timedelta(minutes=1),
+                price=Decimal(trade["price"]),
+                quantity=trade["quantity"],
+                trade_id=trade["trade_id"],
+            )
+            producer.produce_trade(asset_class="crypto", exchange="binance", record=v2_trade)
+
+        producer.flush(timeout=10)
+        producer.close()
+
+        # Wait for messages to be available
+        import asyncio
+
+        asyncio.run(asyncio.sleep(1))
 
         # Test different query types and measure performance
         test_cases = [

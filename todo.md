@@ -1,8 +1,8 @@
 # K2 Market Data Platform - Integration Tests Status
 
-**Last Updated**: 2026-01-17 20:40 UTC
+**Last Updated**: 2026-01-17 20:50 UTC
 **Branch**: e3e-demo
-**Last Commit**: (pending) - fix: resolve test configuration issues (exchange, table names, API endpoints)
+**Last Commit**: (pending) - fix: resolve schema mismatches and complete test fixes
 
 ---
 
@@ -45,17 +45,38 @@
 7. Test Code Fixes
    - ✅ Fixed test_hybrid_query_deduplication missing asset_class parameter in build_trade_v2 call
 
+### Round 3: Schema & Infrastructure Fixes
+8. Iceberg Quotes Table Schema
+   - ✅ Dropped and recreated market_data.quotes table with v2 schema
+   - ✅ Fixed bid_price/ask_price precision: decimal(18, 6) → decimal(18, 8)
+   - ✅ Fixed ingestion_timestamp type: timestamp → long (microseconds)
+   - ✅ Added missing v2 columns: exchange, quote_id, vendor_data
+
+9. PyArrow Writer Schema
+   - ✅ Updated _records_to_arrow_quotes_v2 to use int64 for ingestion_timestamp
+   - ✅ Matches Iceberg table schema exactly
+
+10. Iceberg Config Fixture
+   - ✅ Fixed iceberg_config to use REST catalog (production-like)
+   - ✅ Changed from JDBC SQLite to REST catalog at http://localhost:8181
+   - ✅ Fixed test_v2_trade_production_and_storage catalog URI issue
+
+11. Hybrid Query Test Data
+   - ✅ Added data setup to test_hybrid_query_time_window_selection
+   - ✅ Added data setup to test_hybrid_query_performance_characteristics
+   - ⚠️ Tests still fail due to Kafka consumer timing (need longer wait)
+
 ---
 
 ## 📊 Integration Test Results Summary
 
 **Total Tests**: 24 tests
-**✅ Passing**: 17 tests (71%)
-**❌ Failing**: 5 tests (21%)
+**✅ Passing**: 20 tests (83%)
+**❌ Failing**: 2 tests (8%)
 **⏭️ Skipped**: 2 tests (8% - expected, features not implemented)
-**🔴 Errors**: 0 (all infrastructure errors fixed!)
+**🔴 Errors**: 0 (all infrastructure and schema errors fixed!)
 
-### ✅ Tests Passing (17)
+### ✅ Tests Passing (20)
 1. test_api_health_endpoint ✅
 2. test_api_health_endpoint_no_auth ✅
 3. test_api_unauthorized_access ✅
@@ -70,36 +91,26 @@
 12. test_api_recent_trades_hybrid_query ✅ (added required symbol/exchange params)
 13. test_api_hybrid_query_performance ✅ (added required symbol/exchange params)
 14. test_api_trades_endpoint_basic ✅ (fixed exchange: nasdaq → asx)
-15. test_v2_schema_compliance ✅
-16. test_v2_performance_baselines ✅
-17. test_hybrid_query_deduplication ✅ (fixed missing asset_class parameter)
+15. test_api_quotes_endpoint_basic ✅ (fixed schema mismatch)
+16. test_v2_trade_production_and_storage ✅ (fixed catalog URI config)
+17. test_v2_quote_production_and_storage ✅ (fixed schema mismatch)
+18. test_v2_schema_compliance ✅
+19. test_v2_performance_baselines ✅
+20. test_hybrid_query_deduplication ✅ (fixed missing asset_class parameter)
 
-### ❌ Tests Failing - Require Investigation (5)
+### ❌ Tests Failing - Require Investigation (2)
 
-#### Schema Mismatch Issues (3 tests)
-1. **test_api_quotes_endpoint_basic** - Iceberg schema mismatch
-   - Issue: PyArrow table contains more columns than Iceberg schema
-   - Root Cause: Iceberg quotes table missing v2 schema columns: `exchange`, `quote_id`, `ingestion_timestamp`, `vendor_data`
-   - Fix Required: Update Iceberg table schema to match v2 Avro schema OR modify writer to drop extra columns
+#### Hybrid Query Data Timing Issues (2 tests)
+1. **test_hybrid_query_time_window_selection** - Kafka tail not picking up messages
+   - Issue: Query returns 0 results even after producing data
+   - Root Cause: Kafka consumer needs more time to index messages before queries work
+   - Attempted Fix: Added data production + 1 second sleep, but still insufficient
+   - Recommended Fix: Increase sleep time or poll Kafka tail until messages are available
 
-2. **test_v2_quote_production_and_storage** - Same schema mismatch as #1
-   - Issue: Cannot write v2 quotes to Iceberg table with old schema
+2. **test_hybrid_query_performance_characteristics** - Same as #1
+   - Issue: Query returns 0 results
    - Root Cause: Same as #1
-
-3. **test_v2_trade_production_and_storage** - Catalog URI configuration
-   - Issue: "URI missing, please provide using --uri" during table verification
-   - Root Cause: Test not passing catalog config properly during verification step
-   - Fix Required: Add catalog URI to verification step
-
-#### Hybrid Query Data Issues (2 tests)
-4. **test_hybrid_query_time_window_selection** - No test data
-   - Issue: Query returns 0 results
-   - Root Cause: Tests need to produce data to Kafka/Iceberg before querying
-   - Fix Required: Add data setup before running queries
-
-5. **test_hybrid_query_performance_characteristics** - Same as #4
-   - Issue: Query returns 0 results
-   - Root Cause: Same as #4
+   - Recommended Fix: Same as #1
 
 ### ⏭️ Skipped Tests (Expected - 2)
 1. test_api_rate_limiting - Rate limiting not yet implemented

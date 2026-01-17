@@ -600,11 +600,9 @@ def kafka_consumer_config(kafka_cluster: KafkaTestCluster) -> dict[str, str | in
 
 @pytest.fixture(scope="function")
 def iceberg_config(minio_backend: MinioTestBackend) -> dict[str, str]:
-    """Iceberg configuration for testing."""
+    """Iceberg configuration for testing - uses REST catalog (production-like)."""
     return {
-        "warehouse": f"s3://{TEST_CONFIG['minio']['bucket']}/warehouse",
-        "catalog.backend": "jdbc",
-        "catalog.uri": "jdbc:sqlite::memory:",
+        "uri": "http://localhost:8181",  # Iceberg REST catalog
         "s3.endpoint": minio_backend.endpoint_url,
         "s3.access-key-id": TEST_CONFIG["minio"]["access_key"],
         "s3.secret-access-key": TEST_CONFIG["minio"]["secret_key"],

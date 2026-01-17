@@ -675,7 +675,9 @@ class IcebergWriter:
                 pa.field("ask_quantity", pa.decimal128(18, 8), nullable=False),
                 pa.field("currency", pa.string(), nullable=False),
                 pa.field("source_sequence", pa.int64(), nullable=True),
-                pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
+                pa.field(
+                    "ingestion_timestamp", pa.int64(), nullable=True
+                ),  # int64 (microseconds), not timestamp
                 pa.field("platform_sequence", pa.int64(), nullable=True),
                 pa.field("vendor_data", pa.string(), nullable=True),  # JSON string
             ],
