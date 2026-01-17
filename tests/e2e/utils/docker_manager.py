@@ -12,17 +12,13 @@ Key Features:
 """
 
 import asyncio
-import json
 import logging
 import time
-from pathlib import Path
-from typing import Dict, List, Optional, Any
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 import docker
-from docker.models.containers import Container
-from docker.models.volumes import Volume
-from docker.errors import DockerException, APIError
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +30,13 @@ class E2EDockerManager:
         """Initialize Docker manager with compose file path."""
         self.compose_file = Path(compose_file)
         self.docker_client = docker.from_env()
-        self.running_services: Dict[str, str] = {}
-        self.start_time: Optional[datetime] = None
-        self.resource_monitor: Dict[str, Dict[str, float]] = {}
+        self.running_services: dict[str, str] = {}
+        self.start_time: datetime | None = None
+        self.resource_monitor: dict[str, dict[str, float]] = {}
 
         logger.info(f"Initialized E2E Docker manager with compose file: {self.compose_file}")
 
-    async def start_minimal_stack(self) -> Dict[str, str]:
+    async def start_minimal_stack(self) -> dict[str, str]:
         """Start minimal stack: Kafka, Schema Registry, MinIO, PostgreSQL, Iceberg REST."""
 
         logger.info("Starting minimal Docker stack for E2E tests")
@@ -82,7 +78,7 @@ class E2EDockerManager:
             logger.error(f"Failed to start minimal stack: {e}")
             raise
 
-    async def start_full_stack(self) -> Dict[str, str]:
+    async def start_full_stack(self) -> dict[str, str]:
         """Start full stack including k2-query-api and consumer-crypto."""
 
         logger.info("Starting full Docker stack for E2E tests")
@@ -206,7 +202,7 @@ class E2EDockerManager:
         """Execute command in running service container."""
 
         try:
-            container_name = f"k2-{service_name}"
+            container_name = f"k2-{service}"
             container = self.docker_client.containers.get(container_name)
 
             if container:
@@ -216,10 +212,10 @@ class E2EDockerManager:
                 return f"Container {container_name} not found"
 
         except Exception as e:
-            logger.error(f"Error executing command in {service_name}: {e}")
+            logger.error(f"Error executing command in {service}: {e}")
             return f"Error executing command: {e}"
 
-    async def get_resource_usage(self, service_name: str) -> Dict[str, float]:
+    async def get_resource_usage(self, service_name: str) -> dict[str, float]:
         """Get current resource usage for monitoring."""
 
         try:
@@ -251,7 +247,7 @@ class E2EDockerManager:
             logger.error(f"Error getting resource usage for {service_name}: {e}")
             return {"error": str(e)}
 
-    async def _execute_command(self, cmd: List[str], timeout: int = 60) -> Dict[str, Any]:
+    async def _execute_command(self, cmd: list[str], timeout: int = 60) -> dict[str, Any]:
         """Execute shell command with timeout handling."""
 
         try:
@@ -267,7 +263,7 @@ class E2EDockerManager:
                 "stderr": stderr.decode("utf-8"),
             }
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error(f"Command timed out: {' '.join(cmd)}")
             process.terminate()
             await process.wait()
@@ -276,7 +272,7 @@ class E2EDockerManager:
             logger.error(f"Error executing command: {e}")
             return {"returncode": -1, "stderr": str(e)}
 
-    def _parse_cpu_usage(self, stats: Dict[str, Any]) -> float:
+    def _parse_cpu_usage(self, stats: dict[str, Any]) -> float:
         """Parse CPU usage from container stats."""
 
         try:
@@ -304,7 +300,7 @@ class E2EDockerManager:
         except Exception:
             return 0.0
 
-    def _parse_memory_usage(self, stats: Dict[str, Any]) -> float:
+    def _parse_memory_usage(self, stats: dict[str, Any]) -> float:
         """Parse memory usage from container stats."""
 
         try:
@@ -313,14 +309,14 @@ class E2EDockerManager:
         except Exception:
             return 0.0
 
-    def get_running_services(self) -> Dict[str, str]:
+    def get_running_services(self) -> dict[str, str]:
         """Get current running services status."""
         return self.running_services.copy()
 
-    def get_start_time(self) -> Optional[datetime]:
+    def get_start_time(self) -> datetime | None:
         """Get stack start time."""
         return self.start_time
 
-    def get_resource_monitoring_summary(self) -> Dict[str, Dict[str, float]]:
+    def get_resource_monitoring_summary(self) -> dict[str, dict[str, float]]:
         """Get resource usage summary for all monitored services."""
         return self.resource_monitor.copy()

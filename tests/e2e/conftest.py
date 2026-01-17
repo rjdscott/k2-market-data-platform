@@ -14,19 +14,21 @@ Fixtures Available:
 
 import asyncio
 import logging
-import pytest
-import httpx
-from typing import AsyncGenerator, Dict, Any, Optional
+from collections.abc import AsyncGenerator
+from typing import Any
 
-from .utils.docker_manager import E2EDockerManager
+import httpx
+import pytest
+
 from .utils.data_validator import DataValidator
+from .utils.docker_manager import E2EDockerManager
 from .utils.performance_monitor import PerformanceMonitor
 
 logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="session")
-async def docker_manager() -> AsyncGenerator[E2EDockerManager, None]:
+async def docker_manager() -> AsyncGenerator[E2EDockerManager]:
     """Provide Docker manager for E2E tests with session-scoped lifecycle."""
 
     manager = E2EDockerManager()
@@ -43,7 +45,7 @@ async def docker_manager() -> AsyncGenerator[E2EDockerManager, None]:
 
 
 @pytest.fixture(scope="session")
-async def minimal_stack(docker_manager: E2EDockerManager) -> AsyncGenerator[Dict[str, str], None]:
+async def minimal_stack(docker_manager: E2EDockerManager) -> AsyncGenerator[dict[str, str]]:
     """Start minimal Docker stack for E2E tests."""
 
     logger.info("Starting minimal Docker stack for E2E tests")
@@ -60,7 +62,7 @@ async def minimal_stack(docker_manager: E2EDockerManager) -> AsyncGenerator[Dict
 
 
 @pytest.fixture(scope="session")
-async def full_stack(docker_manager: E2EDockerManager) -> AsyncGenerator[Dict[str, str], None]:
+async def full_stack(docker_manager: E2EDockerManager) -> AsyncGenerator[dict[str, str]]:
     """Start full Docker stack for comprehensive E2E tests."""
 
     logger.info("Starting full Docker stack for E2E tests")
@@ -77,7 +79,7 @@ async def full_stack(docker_manager: E2EDockerManager) -> AsyncGenerator[Dict[st
 
 
 @pytest.fixture(scope="function")
-async def api_client() -> AsyncGenerator[httpx.AsyncClient, None]:
+async def api_client() -> AsyncGenerator[httpx.AsyncClient]:
     """HTTP client for API testing with authentication."""
 
     client = httpx.AsyncClient(
@@ -93,7 +95,7 @@ async def api_client() -> AsyncGenerator[httpx.AsyncClient, None]:
 
 
 @pytest.fixture(scope="session")
-async def initialized_infrastructure(minimal_stack: Dict[str, str]) -> Dict[str, Any]:
+async def initialized_infrastructure(minimal_stack: dict[str, str]) -> dict[str, Any]:
     """Initialize schemas, topics, and tables for E2E tests."""
 
     logger.info("Initializing infrastructure for E2E tests")
@@ -129,7 +131,7 @@ async def initialized_infrastructure(minimal_stack: Dict[str, str]) -> Dict[str,
 
 
 @pytest.fixture(scope="function")
-async def test_data() -> Dict[str, Any]:
+async def test_data() -> dict[str, Any]:
     """Generate controlled test data for E2E testing."""
 
     from datetime import datetime, timedelta
@@ -171,7 +173,7 @@ async def test_data() -> Dict[str, Any]:
 
 
 @pytest.fixture(scope="function")
-async def data_validator() -> AsyncGenerator[DataValidator, None]:
+async def data_validator() -> AsyncGenerator[DataValidator]:
     """Provide data validator for E2E tests."""
 
     validator = DataValidator()
@@ -184,7 +186,7 @@ async def data_validator() -> AsyncGenerator[DataValidator, None]:
 
 
 @pytest.fixture(scope="function")
-async def performance_monitor() -> AsyncGenerator[PerformanceMonitor, None]:
+async def performance_monitor() -> AsyncGenerator[PerformanceMonitor]:
     """Provide performance monitor for E2E tests."""
 
     monitor = PerformanceMonitor()
@@ -197,7 +199,7 @@ async def performance_monitor() -> AsyncGenerator[PerformanceMonitor, None]:
 
 
 @pytest.fixture(scope="session")
-def e2e_config() -> Dict[str, Any]:
+def e2e_config() -> dict[str, Any]:
     """Provide E2E test configuration."""
 
     return {

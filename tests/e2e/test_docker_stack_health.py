@@ -8,12 +8,9 @@ This module provides tests to validate:
 - Network connectivity between services
 """
 
-import asyncio
 import logging
+
 import pytest
-import httpx
-from typing import Dict, List, Set
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 

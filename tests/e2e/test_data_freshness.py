@@ -10,11 +10,11 @@ This module provides tests to validate:
 
 import asyncio
 import logging
-import pytest
-import httpx
-from typing import Dict, List, Any, Optional
-from datetime import datetime, timedelta
 import time
+from datetime import datetime
+
+import httpx
+import pytest
 
 logger = logging.getLogger(__name__)
 

@@ -14,8 +14,8 @@ Key Features:
 import asyncio
 import logging
 import time
-from typing import Dict, List, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +25,9 @@ class PerformanceMonitor:
 
     def __init__(self):
         """Initialize performance monitor."""
-        self.measurements: Dict[str, List[Dict[str, Any]]] = {}
-        self.start_time: Optional[float] = None
-        self.checkpoints: Dict[str, float] = {}
+        self.measurements: dict[str, list[dict[str, Any]]] = {}
+        self.start_time: float | None = None
+        self.checkpoints: dict[str, float] = {}
 
     def start_measurement(self, test_name: str) -> None:
         """Start performance measurement for a test."""
@@ -61,8 +61,8 @@ class PerformanceMonitor:
         logger.info(f"Added checkpoint '{checkpoint_name}' at {elapsed:.2f}s: {description}")
 
     def end_measurement(
-        self, test_name: str, additional_metrics: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        self, test_name: str, additional_metrics: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """End performance measurement and return results."""
 
         if self.start_time is None:
@@ -95,7 +95,7 @@ class PerformanceMonitor:
 
         return results
 
-    async def measure_pipeline_latency(self, test_duration: int = 60) -> Dict[str, float]:
+    async def measure_pipeline_latency(self, test_duration: int = 60) -> dict[str, float]:
         """Measure end-to-end latency from Binance to API."""
 
         logger.info(f"Starting pipeline latency measurement for {test_duration}s")
@@ -140,7 +140,7 @@ class PerformanceMonitor:
             logger.error(f"Error in pipeline latency measurement: {e}")
             return {"error": str(e)}
 
-    async def measure_throughput(self, test_duration: int = 60) -> Dict[str, float]:
+    async def measure_throughput(self, test_duration: int = 60) -> dict[str, float]:
         """Measure throughput metrics for pipeline."""
 
         logger.info(f"Starting throughput measurement for {test_duration}s")
@@ -186,7 +186,7 @@ class PerformanceMonitor:
             logger.error(f"Error in throughput measurement: {e}")
             return {"error": str(e)}
 
-    def validate_sla(self, metrics: Dict[str, Any]) -> Dict[str, bool]:
+    def validate_sla(self, metrics: dict[str, Any]) -> dict[str, bool]:
         """Validate SLA compliance based on metrics."""
 
         sla_checks = {}
@@ -217,14 +217,14 @@ class PerformanceMonitor:
 
         return sla_checks
 
-    def get_measurements(self, test_name: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
+    def get_measurements(self, test_name: str | None = None) -> dict[str, list[dict[str, Any]]]:
         """Get stored measurements."""
 
         if test_name:
             return {test_name: self.measurements.get(test_name, [])}
         return self.measurements.copy()
 
-    def get_performance_summary(self, test_name: str) -> Dict[str, Any]:
+    def get_performance_summary(self, test_name: str) -> dict[str, Any]:
         """Get performance summary for a specific test."""
 
         if test_name not in self.measurements:
@@ -251,7 +251,7 @@ class PerformanceMonitor:
 
         return summary
 
-    def clear_measurements(self, test_name: Optional[str] = None) -> None:
+    def clear_measurements(self, test_name: str | None = None) -> None:
         """Clear stored measurements."""
 
         if test_name:
@@ -275,7 +275,7 @@ class PerformanceMonitor:
         except Exception as e:
             logger.error(f"Error exporting measurements: {e}")
 
-    def get_current_checkpoints(self) -> Dict[str, float]:
+    def get_current_checkpoints(self) -> dict[str, float]:
         """Get current checkpoints."""
         return self.checkpoints.copy()
 

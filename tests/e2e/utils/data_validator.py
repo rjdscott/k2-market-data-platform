@@ -13,8 +13,8 @@ Key Features:
 
 import asyncio
 import logging
-from typing import Dict, List, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +24,9 @@ class DataValidator:
 
     def __init__(self):
         """Initialize data validator."""
-        self.validation_results: Dict[str, Any] = {}
+        self.validation_results: dict[str, Any] = {}
 
-    async def validate_data_consistency(self, stack: Dict[str, str]) -> Dict[str, int]:
+    async def validate_data_consistency(self, stack: dict[str, str]) -> dict[str, int]:
         """Validate data counts across all pipeline stages."""
 
         logger.info("Starting data consistency validation")
@@ -74,7 +74,7 @@ class DataValidator:
                 "validation_timestamp": datetime.utcnow().isoformat(),
             }
 
-    async def validate_schema_compliance(self, stack: Dict[str, str]) -> Dict[str, bool]:
+    async def validate_schema_compliance(self, stack: dict[str, str]) -> dict[str, bool]:
         """Validate V2 schema compliance at each stage."""
 
         logger.info("Starting schema compliance validation")
@@ -113,7 +113,7 @@ class DataValidator:
                 "overall_compliance": False,
             }
 
-    async def validate_timestamp_consistency(self, stack: Dict[str, str]) -> Dict[str, Any]:
+    async def validate_timestamp_consistency(self, stack: dict[str, str]) -> dict[str, Any]:
         """Validate timestamp handling and ordering."""
 
         logger.info("Starting timestamp consistency validation")
@@ -151,7 +151,7 @@ class DataValidator:
                 "overall_consistency": False,
             }
 
-    async def _count_kafka_messages(self, stack: Dict[str, str]) -> int:
+    async def _count_kafka_messages(self, stack: dict[str, str]) -> int:
         """Count messages in Kafka topic."""
 
         try:
@@ -194,7 +194,7 @@ class DataValidator:
             logger.error(f"Error counting Kafka messages: {e}")
             return 0
 
-    async def _count_iceberg_records(self, stack: Dict[str, str]) -> int:
+    async def _count_iceberg_records(self, stack: dict[str, str]) -> int:
         """Count records in Iceberg table."""
 
         try:
@@ -220,7 +220,7 @@ class DataValidator:
             logger.error(f"Error counting Iceberg records: {e}")
             return 0
 
-    async def _count_api_records(self, stack: Dict[str, str]) -> int:
+    async def _count_api_records(self, stack: dict[str, str]) -> int:
         """Count records returned by API."""
 
         try:
@@ -252,7 +252,7 @@ class DataValidator:
             logger.error(f"Error counting API records: {e}")
             return 0
 
-    async def _validate_kafka_schemas(self, stack: Dict[str, str]) -> bool:
+    async def _validate_kafka_schemas(self, stack: dict[str, str]) -> bool:
         """Validate Kafka message schemas."""
 
         try:
@@ -291,7 +291,7 @@ class DataValidator:
             logger.error(f"Error validating Kafka schema: {e}")
             return False
 
-    async def _validate_iceberg_schemas(self, stack: Dict[str, str]) -> bool:
+    async def _validate_iceberg_schemas(self, stack: dict[str, str]) -> bool:
         """Validate Iceberg table schemas."""
 
         try:
@@ -330,7 +330,7 @@ class DataValidator:
             logger.error(f"Error validating Iceberg schema: {e}")
             return False
 
-    async def _validate_api_schemas(self, stack: Dict[str, str]) -> bool:
+    async def _validate_api_schemas(self, stack: dict[str, str]) -> bool:
         """Validate API response schemas."""
 
         try:
@@ -372,32 +372,31 @@ class DataValidator:
             logger.error(f"Error validating API schema: {e}")
             return False
 
-    async def _validate_timestamp_format(self, stack: Dict[str, str]) -> bool:
+    async def _validate_timestamp_format(self, stack: dict[str, str]) -> bool:
         """Validate timestamp format consistency."""
 
         # For now, assume timestamp format is consistent
         # Real implementation would check ISO format consistency
         return True
 
-    async def _validate_timestamp_ordering(self, stack: Dict[str, str]) -> bool:
+    async def _validate_timestamp_ordering(self, stack: dict[str, str]) -> bool:
         """Validate chronological ordering where appropriate."""
 
         # For now, assume timestamp ordering is correct
         # Real implementation would check sequence in sorted data
         return True
 
-    async def _validate_timezone_handling(self, stack: Dict[str, str]) -> bool:
+    async def _validate_timezone_handling(self, stack: dict[str, str]) -> bool:
         """Validate timezone handling."""
 
         # For now, assume timezone handling is correct
         # Real implementation would check UTC consistency
         return True
 
-    async def _execute_command(self, cmd: List[str]) -> Dict[str, Any]:
+    async def _execute_command(self, cmd: list[str]) -> dict[str, Any]:
         """Execute shell command."""
 
         try:
-            import subprocess
 
             process = await asyncio.create_subprocess_exec(
                 cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -415,7 +414,7 @@ class DataValidator:
             logger.error(f"Error executing command: {e}")
             return {"returncode": -1, "stderr": str(e)}
 
-    def get_validation_results(self) -> Dict[str, Any]:
+    def get_validation_results(self) -> dict[str, Any]:
         """Get all validation results."""
         return self.validation_results.copy()
 

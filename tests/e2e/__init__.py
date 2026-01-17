@@ -20,8 +20,8 @@ Usage:
     pytest tests/e2e/test_complete_pipeline.py -v
 """
 
-from .utils.docker_manager import E2EDockerManager
 from .utils.data_validator import DataValidator
+from .utils.docker_manager import E2EDockerManager
 from .utils.performance_monitor import PerformanceMonitor
 
 __all__ = [
