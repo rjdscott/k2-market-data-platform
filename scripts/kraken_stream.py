@@ -179,6 +179,12 @@ Environment Variables:
 
             trade_count += 1
 
+            # Flush producer every 10 trades to ensure messages are written to Kafka
+            if trade_count % 10 == 0:
+                remaining = producer.flush(timeout=1.0)
+                if remaining > 0:
+                    logger.warning("producer_flush_timeout", remaining=remaining)
+
             # Log every 50 trades (Kraken has lower volume than Binance)
             if trade_count % 50 == 0:
                 logger.info(

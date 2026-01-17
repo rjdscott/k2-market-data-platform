@@ -1,60 +1,55 @@
 #!/usr/bin/env python3
-"""Test script to verify Kafka producer works independently."""
+"""Direct test of Kafka producer."""
 
 import sys
 from pathlib import Path
+from decimal import Decimal
+from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from datetime import UTC, datetime
-from decimal import Decimal
-
-from k2.ingestion.message_builders import build_trade_v2
 from k2.ingestion.producer import MarketDataProducer
+from k2.ingestion.message_builders import build_trade_v2
 
-# Initialize producer
-print("Initializing producer...")
+print("Creating producer...")
 producer = MarketDataProducer(schema_version="v2")
 
-# Build test trade
 print("Building test trade...")
 trade = build_trade_v2(
     symbol="TESTBTC",
-    exchange="binance",
+    exchange="KRAKEN",
     asset_class="crypto",
-    timestamp=datetime.now(UTC),
-    price=Decimal("50000.00"),
-    quantity=Decimal("1.0"),
-    currency="USDT",
+    timestamp=datetime.now(timezone.utc),
+    price=Decimal("95000.00"),
+    quantity=Decimal("0.001"),
+    currency="USD",
     side="BUY",
-    trade_id="test-001",
+    vendor_data={"pair": "XBT/USD", "test": "true"}
 )
 
-# Produce to Kafka
+print(f"Trade built: {trade['symbol']} @ {trade['price']}")
+
 print("Producing to Kafka...")
 try:
     producer.produce_trade(
         asset_class="crypto",
-        exchange="binance",
+        exchange="kraken",
         record=trade,
     )
-    print("✓ produce_trade() succeeded")
+    print("✓ produce_trade() called successfully")
 except Exception as e:
     print(f"✗ produce_trade() failed: {e}")
     sys.exit(1)
 
-# Flush to ensure message is sent
 print("Flushing producer...")
-remaining = producer.flush(timeout=10.0)
-print(f"✓ Flush complete, {remaining} messages remaining in queue")
+remaining = producer.flush(timeout=5.0)
+print(f"Flush complete. Remaining messages: {remaining}")
 
-# Get stats
 stats = producer.get_stats()
-print("\nProducer Statistics:")
+print(f"\nProducer stats:")
 print(f"  Produced: {stats['produced']}")
 print(f"  Errors: {stats['errors']}")
 print(f"  Retries: {stats['retries']}")
 
-# Close producer
 producer.close()
-print("\n✓ Test complete!")
+print("\n✓ Test complete")
