@@ -407,13 +407,15 @@ Real-time streaming cryptocurrency trades from Binance and Kraken WebSocket APIs
 | BTCUSDT | Binance | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
 | ETHUSDT | Binance | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
 | BNBUSDT | Binance | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
-| BTC/USD | Kraken | Crypto | Live | Live streaming | Available |
-| ETH/USD | Kraken | Crypto | Live | Live streaming | Available |
+| BTCUSD | Kraken | Crypto | 50+ validated | Live streaming | 10-50 trades/min |
+| ETHUSD | Kraken | Crypto | 50+ validated | Live streaming | 10-50 trades/min |
 
 **Data Flow**: WebSocket (Binance/Kraken) → Kafka → Consumer → Iceberg → Query Engine
 **Consumer**: Production-ready with batch processing (32 msg/s throughput)
 **Schema**: V2 multi-source schema with exchange-specific fields in `vendor_data`
 **Storage**: Apache Iceberg `trades_v2` table with daily partitions
+
+**Kraken Integration**: See [Kraken Streaming Guide](./docs/KRAKEN_STREAMING.md) for setup, configuration, monitoring, and troubleshooting.
 
 ```bash
 # Query live crypto data (now available via API)

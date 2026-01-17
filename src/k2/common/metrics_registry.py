@@ -282,6 +282,76 @@ BINANCE_PONG_TIMEOUTS_TOTAL = Counter(
 )
 
 # ==============================================================================
+# Kraken WebSocket Streaming Metrics
+# ==============================================================================
+
+KRAKEN_CONNECTION_STATUS = Gauge(
+    "k2_kraken_connection_status",
+    "Kraken WebSocket connection status (1=connected, 0=disconnected)",
+    STANDARD_LABELS,
+)
+
+KRAKEN_MESSAGES_RECEIVED_TOTAL = Counter(
+    "k2_kraken_messages_received_total",
+    "Total trade messages received from Kraken WebSocket",
+    STANDARD_LABELS + ["symbol"],
+)
+
+KRAKEN_MESSAGE_ERRORS_TOTAL = Counter(
+    "k2_kraken_message_errors_total",
+    "Total message parsing/validation errors from Kraken",
+    STANDARD_LABELS + ["error_type"],
+)
+
+KRAKEN_RECONNECTS_TOTAL = Counter(
+    "k2_kraken_reconnects_total",
+    "Total Kraken WebSocket reconnection attempts",
+    STANDARD_LABELS + ["reason"],
+)
+
+KRAKEN_CONNECTION_ERRORS_TOTAL = Counter(
+    "k2_kraken_connection_errors_total",
+    "Total Kraken WebSocket connection errors",
+    STANDARD_LABELS + ["error_type"],
+)
+
+KRAKEN_LAST_MESSAGE_TIMESTAMP_SECONDS = Gauge(
+    "k2_kraken_last_message_timestamp_seconds",
+    "Timestamp of last message received from Kraken (for health check)",
+    STANDARD_LABELS,
+)
+
+KRAKEN_RECONNECT_DELAY_SECONDS = Gauge(
+    "k2_kraken_reconnect_delay_seconds",
+    "Current reconnection delay in seconds (exponential backoff)",
+    STANDARD_LABELS,
+)
+
+KRAKEN_CONNECTION_ROTATIONS_TOTAL = Counter(
+    "k2_kraken_connection_rotations_total",
+    "Total scheduled connection rotations (periodic reconnects to prevent memory leaks)",
+    STANDARD_LABELS + ["reason"],
+)
+
+KRAKEN_CONNECTION_LIFETIME_SECONDS = Gauge(
+    "k2_kraken_connection_lifetime_seconds",
+    "Current WebSocket connection lifetime in seconds",
+    STANDARD_LABELS,
+)
+
+KRAKEN_LAST_PONG_TIMESTAMP_SECONDS = Gauge(
+    "k2_kraken_last_pong_timestamp_seconds",
+    "Timestamp of last pong response received (for heartbeat health monitoring)",
+    STANDARD_LABELS,
+)
+
+KRAKEN_PONG_TIMEOUTS_TOTAL = Counter(
+    "k2_kraken_pong_timeouts_total",
+    "Total WebSocket pong timeouts (no response within timeout period)",
+    STANDARD_LABELS,
+)
+
+# ==============================================================================
 # Storage Layer Metrics (Iceberg)
 # ==============================================================================
 
@@ -542,6 +612,18 @@ _METRIC_REGISTRY: dict[str, object] = {
     # Ping-Pong Heartbeat
     "binance_last_pong_timestamp_seconds": BINANCE_LAST_PONG_TIMESTAMP_SECONDS,
     "binance_pong_timeouts_total": BINANCE_PONG_TIMEOUTS_TOTAL,
+    # Kraken
+    "kraken_connection_status": KRAKEN_CONNECTION_STATUS,
+    "kraken_messages_received_total": KRAKEN_MESSAGES_RECEIVED_TOTAL,
+    "kraken_message_errors_total": KRAKEN_MESSAGE_ERRORS_TOTAL,
+    "kraken_reconnects_total": KRAKEN_RECONNECTS_TOTAL,
+    "kraken_connection_errors_total": KRAKEN_CONNECTION_ERRORS_TOTAL,
+    "kraken_last_message_timestamp_seconds": KRAKEN_LAST_MESSAGE_TIMESTAMP_SECONDS,
+    "kraken_reconnect_delay_seconds": KRAKEN_RECONNECT_DELAY_SECONDS,
+    "kraken_connection_rotations_total": KRAKEN_CONNECTION_ROTATIONS_TOTAL,
+    "kraken_connection_lifetime_seconds": KRAKEN_CONNECTION_LIFETIME_SECONDS,
+    "kraken_last_pong_timestamp_seconds": KRAKEN_LAST_PONG_TIMESTAMP_SECONDS,
+    "kraken_pong_timeouts_total": KRAKEN_PONG_TIMEOUTS_TOTAL,
     # Storage
     "iceberg_rows_written_total": ICEBERG_ROWS_WRITTEN_TOTAL,
     "iceberg_write_duration_seconds": ICEBERG_WRITE_DURATION_SECONDS,

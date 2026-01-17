@@ -628,7 +628,7 @@ services:
     container_name: k2-kraken-stream
     hostname: kraken-stream
     ports:
-      - "9092:9092"       # Prometheus metrics
+      - "9095:9095"       # Prometheus metrics
     environment:
       # Kafka Configuration
       K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
@@ -656,7 +656,7 @@ services:
 
       # Metrics Configuration
       K2_METRICS_ENABLED: "true"
-      K2_METRICS_PORT: 9092
+      K2_METRICS_PORT: 9095
 
       # Logging Configuration
       K2_LOG_LEVEL: INFO
@@ -671,7 +671,7 @@ services:
     networks:
       - k2-network
     healthcheck:
-      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9092' || exit 1"]
+      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9095' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

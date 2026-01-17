@@ -779,7 +779,7 @@ class KrakenWebSocketClient:
             if data.get("event") in ["subscriptionStatus", "systemStatus", "heartbeat"]:
                 logger.debug(
                     "kraken_system_message",
-                    event=data.get("event"),
+                    event_type=data.get("event"),
                     status=data.get("status"),
                 )
                 return
