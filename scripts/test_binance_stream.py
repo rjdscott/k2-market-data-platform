@@ -68,12 +68,8 @@ def print_trade(trade: dict) -> None:
     table.add_row("Price", f"{trade['price']}")
     table.add_row("Quantity", f"{trade['quantity']}")
     table.add_row("Currency", trade["currency"])
-    table.add_row(
-        "Base Asset", trade["vendor_data"]["base_asset"]
-    )  # From vendor_data
-    table.add_row(
-        "Quote Asset", trade["vendor_data"]["quote_asset"]
-    )  # From vendor_data
+    table.add_row("Base Asset", trade["vendor_data"]["base_asset"])  # From vendor_data
+    table.add_row("Quote Asset", trade["vendor_data"]["quote_asset"])  # From vendor_data
     table.add_row("Trade ID", trade["trade_id"])
 
     console.print(table)
@@ -94,9 +90,7 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    console.print(
-        f"[bold blue]Testing Binance WebSocket Client[/bold blue]\n"
-    )
+    console.print("[bold blue]Testing Binance WebSocket Client[/bold blue]\n")
     console.print(f"Symbols: {', '.join(args.symbols)}")
     console.print("Connecting...")
 
@@ -132,7 +126,7 @@ async def main() -> None:
         console.print(f"\n[red]Error: {e}[/red]")
         await client.disconnect()
 
-    console.print(f"\n[bold green]✓ Test complete![/bold green]")
+    console.print("\n[bold green]✓ Test complete![/bold green]")
     console.print(f"Received {trade_count} trades")
 
 

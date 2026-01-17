@@ -14,7 +14,6 @@ import json
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, List, Optional
 
 
 class QualityGate:
@@ -106,7 +105,7 @@ class QualityGate:
             self.add_failure("tests", f"Error parsing test results: {e}")
 
     def check_performance_regression(
-        self, benchmark_file: str, baseline_file: str, thresholds: Optional[Dict[str, float]] = None
+        self, benchmark_file: str, baseline_file: str, thresholds: dict[str, float] | None = None
     ):
         """Check for performance regressions."""
         if not Path(benchmark_file).exists():
@@ -124,10 +123,10 @@ class QualityGate:
             }
 
         try:
-            with open(benchmark_file, "r") as f:
+            with open(benchmark_file) as f:
                 benchmark_data = json.load(f)
 
-            with open(baseline_file, "r") as f:
+            with open(baseline_file) as f:
                 baseline_data = json.load(f)
 
             regressions = []
@@ -197,7 +196,7 @@ class QualityGate:
             return
 
         try:
-            with open(security_file, "r") as f:
+            with open(security_file) as f:
                 security_data = json.load(f)
 
             # Count vulnerabilities by severity

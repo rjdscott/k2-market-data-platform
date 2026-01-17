@@ -317,7 +317,7 @@ For questions or issues with this dataset, please open an issue in the GitHub re
 
     readme_path = TARGET_DIR / "README.md"
     readme_path.write_text(readme_content)
-    print(f"  ✓ README.md created")
+    print("  ✓ README.md created")
 
 
 def main():
@@ -376,7 +376,7 @@ def main():
 
     file_count = len(list(TARGET_DIR.rglob("*.csv")))
 
-    print(f"\n✓ Sample dataset created successfully!")
+    print("\n✓ Sample dataset created successfully!")
     print(f"  Location: {TARGET_DIR}")
     print(f"  Files: {file_count} CSV files")
     print(f"  Total size: {total_size_mb:.2f} MB")

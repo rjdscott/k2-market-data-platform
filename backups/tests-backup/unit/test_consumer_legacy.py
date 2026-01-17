@@ -966,22 +966,22 @@ class TestConsumerSequenceTrackerIntegration:
                 # Verify positional or keyword arguments
                 if call_args.args:
                     # Called with positional args
-                    assert len(call_args.args) == 4, (
-                        "check_sequence must be called with 4 arguments"
-                    )
+                    assert (
+                        len(call_args.args) == 4
+                    ), "check_sequence must be called with 4 arguments"
                     exchange_arg, symbol_arg, sequence_arg, timestamp_arg = call_args.args
                 else:
                     # Called with keyword args
-                    assert "exchange" in call_args.kwargs, (
-                        "check_sequence missing 'exchange' argument"
-                    )
+                    assert (
+                        "exchange" in call_args.kwargs
+                    ), "check_sequence missing 'exchange' argument"
                     assert "symbol" in call_args.kwargs, "check_sequence missing 'symbol' argument"
-                    assert "sequence" in call_args.kwargs, (
-                        "check_sequence missing 'sequence' argument"
-                    )
-                    assert "timestamp" in call_args.kwargs, (
-                        "check_sequence missing 'timestamp' argument"
-                    )
+                    assert (
+                        "sequence" in call_args.kwargs
+                    ), "check_sequence missing 'sequence' argument"
+                    assert (
+                        "timestamp" in call_args.kwargs
+                    ), "check_sequence missing 'timestamp' argument"
 
                     exchange_arg = call_args.kwargs["exchange"]
                     symbol_arg = call_args.kwargs["symbol"]
@@ -993,9 +993,9 @@ class TestConsumerSequenceTrackerIntegration:
                 assert symbol_arg == "BTCUSDT", "Incorrect symbol passed to check_sequence"
                 assert sequence_arg == 123456789, "Incorrect sequence passed to check_sequence"
                 assert isinstance(timestamp_arg, datetime), "Timestamp must be datetime object"
-                assert timestamp_arg == test_timestamp, (
-                    "Incorrect timestamp passed to check_sequence"
-                )
+                assert (
+                    timestamp_arg == test_timestamp
+                ), "Incorrect timestamp passed to check_sequence"
 
     def test_sequence_tracker_handles_timestamp_formats(
         self,
@@ -1052,9 +1052,9 @@ class TestConsumerSequenceTrackerIntegration:
                 call_args = mock_tracker.check_sequence.call_args
                 timestamp_arg = call_args.kwargs.get("timestamp") or call_args.args[3]
 
-                assert isinstance(timestamp_arg, datetime), (
-                    "Timestamp should be converted to datetime"
-                )
+                assert isinstance(
+                    timestamp_arg, datetime
+                ), "Timestamp should be converted to datetime"
 
     def test_sequence_tracker_gap_detection_increments_stats(
         self,

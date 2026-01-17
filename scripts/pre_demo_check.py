@@ -9,12 +9,11 @@ Usage:
 """
 
 import subprocess
-import time
 from pathlib import Path
+
 import click
 import requests
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
 
 console = Console()
@@ -49,9 +48,7 @@ class PreDemoValidator:
                 self.checks_passed.append("Docker services")
                 return True
             else:
-                console.print(
-                    f"  [red]✗[/red] Docker services: Only {up_count}/7+ running"
-                )
+                console.print(f"  [red]✗[/red] Docker services: Only {up_count}/7+ running")
                 console.print("  [yellow]→ Run: docker compose up -d[/yellow]")
                 self.checks_failed.append("Docker services")
                 return False
@@ -82,9 +79,7 @@ class PreDemoValidator:
                 console.print(
                     "  [yellow]⚠[/yellow] Binance stream: No recent trades (may be OK if just started)"
                 )
-                console.print(
-                    "  [yellow]→ Check: docker logs k2-binance-stream --follow[/yellow]"
-                )
+                console.print("  [yellow]→ Check: docker logs k2-binance-stream --follow[/yellow]")
                 self.checks_failed.append("Binance stream (warning)")
                 return False
         except Exception as e:
@@ -122,28 +117,20 @@ class PreDemoValidator:
                     if trades_response.status_code == 200:
                         trades_data = trades_response.json()
                         if trades_data.get("data"):
-                            console.print(
-                                "  [green]✓[/green] Trade queries: Returning data"
-                            )
+                            console.print("  [green]✓[/green] Trade queries: Returning data")
                             self.checks_passed.append("Data availability")
                             return True
                         else:
-                            console.print(
-                                "  [yellow]⚠[/yellow] Trade queries: Empty results"
-                            )
+                            console.print("  [yellow]⚠[/yellow] Trade queries: Empty results")
                             self.checks_failed.append("Trade queries (warning)")
                             return False
                 else:
                     console.print("  [red]✗[/red] Iceberg data: No symbols found")
-                    console.print(
-                        "  [yellow]→ Wait for data accumulation (10-15 minutes)[/yellow]"
-                    )
+                    console.print("  [yellow]→ Wait for data accumulation (10-15 minutes)[/yellow]")
                     self.checks_failed.append("Iceberg data")
                     return False
             else:
-                console.print(
-                    f"  [red]✗[/red] API request failed: HTTP {response.status_code}"
-                )
+                console.print(f"  [red]✗[/red] API request failed: HTTP {response.status_code}")
                 self.checks_failed.append("API availability")
                 return False
         except Exception as e:
@@ -206,9 +193,7 @@ class PreDemoValidator:
                 console.print("  [green]✓[/green] API /health: Responding")
                 self.checks_passed.append("API health")
             else:
-                console.print(
-                    f"  [red]✗[/red] API /health: HTTP {response.status_code}"
-                )
+                console.print(f"  [red]✗[/red] API /health: HTTP {response.status_code}")
                 checks_ok = False
                 self.checks_failed.append("API health")
         except Exception as e:
@@ -227,9 +212,7 @@ class PreDemoValidator:
                 console.print("  [green]✓[/green] API /v1/symbols: Responding")
                 self.checks_passed.append("API symbols")
             else:
-                console.print(
-                    f"  [red]✗[/red] API /v1/symbols: HTTP {response.status_code}"
-                )
+                console.print(f"  [red]✗[/red] API /v1/symbols: HTTP {response.status_code}")
                 checks_ok = False
                 self.checks_failed.append("API symbols")
         except Exception as e:
@@ -248,8 +231,7 @@ class PreDemoValidator:
 
         # Contingency plan
         contingency_path = (
-            base_path
-            / "docs/phases/phase-4-demo-readiness/reference/contingency-plan.md"
+            base_path / "docs/phases/phase-4-demo-readiness/reference/contingency-plan.md"
         )
         if contingency_path.exists():
             console.print("  [green]✓[/green] Contingency plan: Available")
@@ -261,8 +243,7 @@ class PreDemoValidator:
 
         # Quick reference
         quick_ref_path = (
-            base_path
-            / "docs/phases/phase-4-demo-readiness/reference/demo-quick-reference.md"
+            base_path / "docs/phases/phase-4-demo-readiness/reference/demo-quick-reference.md"
         )
         if quick_ref_path.exists():
             console.print("  [green]✓[/green] Quick reference: Available")
@@ -273,9 +254,7 @@ class PreDemoValidator:
             self.checks_failed.append("Quick reference")
 
         # Screenshots directory
-        screenshots_path = (
-            base_path / "docs/phases/phase-4-demo-readiness/reference/screenshots"
-        )
+        screenshots_path = base_path / "docs/phases/phase-4-demo-readiness/reference/screenshots"
         if screenshots_path.exists():
             console.print("  [green]✓[/green] Screenshots directory: Ready")
             self.checks_passed.append("Screenshots directory")

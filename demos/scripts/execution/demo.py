@@ -19,10 +19,7 @@ Demo Steps:
 
 import sys
 import time
-from datetime import datetime
-from decimal import Decimal
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich import box
@@ -426,7 +423,7 @@ def step_5_summary(quick: bool = False) -> None:
 @app.command()
 def main(
     quick: bool = typer.Option(False, "--quick", "-q", help="Skip delays (CI mode)"),
-    step: Optional[int] = typer.Option(None, "--step", "-s", help="Run specific step (1-5)"),
+    step: int | None = typer.Option(None, "--step", "-s", help="Run specific step (1-5)"),
 ) -> None:
     """Run the K2 Market Data Platform interactive demo."""
     console.print()

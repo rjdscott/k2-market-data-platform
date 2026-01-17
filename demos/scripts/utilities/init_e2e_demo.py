@@ -172,30 +172,70 @@ def create_iceberg_tables(catalog_uri: str) -> list[str]:
         # Define v2 trades schema (industry-standard fields + vendor_data)
         trades_v2_schema = Schema(
             # Core unique identifiers
-            NestedField(1, "message_id", StringType(), required=True, doc="Unique message ID (UUID)"),
+            NestedField(
+                1, "message_id", StringType(), required=True, doc="Unique message ID (UUID)"
+            ),
             NestedField(
                 2, "trade_id", StringType(), required=True, doc="Exchange-specific trade ID"
             ),
             # Symbol and exchange
             NestedField(3, "symbol", StringType(), required=True, doc="Trading symbol"),
             NestedField(4, "exchange", StringType(), required=True, doc="Exchange identifier"),
-            NestedField(5, "asset_class", StringType(), required=True, doc="Asset class (equities, crypto, fx)"),
+            NestedField(
+                5,
+                "asset_class",
+                StringType(),
+                required=True,
+                doc="Asset class (equities, crypto, fx)",
+            ),
             # Timestamps
-            NestedField(6, "timestamp", TimestampType(), required=True, doc="Trade execution timestamp"),
-            NestedField(7, "ingestion_timestamp", TimestampType(), required=True, doc="K2 ingestion timestamp"),
+            NestedField(
+                6, "timestamp", TimestampType(), required=True, doc="Trade execution timestamp"
+            ),
+            NestedField(
+                7,
+                "ingestion_timestamp",
+                TimestampType(),
+                required=True,
+                doc="K2 ingestion timestamp",
+            ),
             # Trade details
             NestedField(8, "price", DecimalType(18, 8), required=True, doc="Trade price"),
             NestedField(9, "quantity", DecimalType(18, 8), required=True, doc="Trade quantity"),
-            NestedField(10, "currency", StringType(), required=True, doc="Price currency (USD, BTC, etc.)"),
+            NestedField(
+                10, "currency", StringType(), required=True, doc="Price currency (USD, BTC, etc.)"
+            ),
             NestedField(11, "side", StringType(), required=True, doc="Aggressor side (BUY/SELL)"),
             # Optional fields
-            NestedField(12, "trade_conditions", StringType(), required=False, doc="Trade conditions (JSON array)"),
-            NestedField(13, "source_sequence", LongType(), required=False, doc="Exchange sequence number"),
-            NestedField(14, "platform_sequence", LongType(), required=False, doc="K2 platform sequence number"),
+            NestedField(
+                12,
+                "trade_conditions",
+                StringType(),
+                required=False,
+                doc="Trade conditions (JSON array)",
+            ),
+            NestedField(
+                13, "source_sequence", LongType(), required=False, doc="Exchange sequence number"
+            ),
+            NestedField(
+                14,
+                "platform_sequence",
+                LongType(),
+                required=False,
+                doc="K2 platform sequence number",
+            ),
             # Vendor-specific data (JSON string)
-            NestedField(15, "vendor_data", StringType(), required=False, doc="Exchange-specific fields (JSON)"),
+            NestedField(
+                15,
+                "vendor_data",
+                StringType(),
+                required=False,
+                doc="Exchange-specific fields (JSON)",
+            ),
             # Metadata flags
-            NestedField(16, "is_sample_data", BooleanType(), required=False, doc="True if sample/test data"),
+            NestedField(
+                16, "is_sample_data", BooleanType(), required=False, doc="True if sample/test data"
+            ),
         )
 
         # Create trades_v2 table
@@ -271,7 +311,6 @@ def validate_infrastructure() -> bool:
     # 4. Check MinIO
     try:
         import boto3
-        from botocore.exceptions import ClientError
 
         s3_client = boto3.client(
             "s3",

@@ -10,12 +10,12 @@ Usage:
     uv run python scripts/demo_mode.py --reset --load --validate
 """
 
-import time
 import subprocess
+import time
+
 import click
 import requests
 from rich.console import Console
-from rich.table import Table
 
 console = Console()
 
@@ -32,31 +32,23 @@ def demo_mode(reset, load, validate):
 
         # Stop and remove all containers
         console.print("  → Stopping services and removing volumes...")
-        result = subprocess.run(
-            ["docker", "compose", "down", "-v"], capture_output=True, text=True
-        )
+        result = subprocess.run(["docker", "compose", "down", "-v"], capture_output=True, text=True)
         if result.returncode == 0:
             console.print("  [green]✓[/green] Services stopped and volumes removed")
         else:
-            console.print(
-                f"  [red]✗[/red] Error stopping services: {result.stderr[:100]}"
-            )
+            console.print(f"  [red]✗[/red] Error stopping services: {result.stderr[:100]}")
             return
 
         # Start fresh
         console.print("  → Starting services...")
-        result = subprocess.run(
-            ["docker", "compose", "up", "-d"], capture_output=True, text=True
-        )
+        result = subprocess.run(["docker", "compose", "up", "-d"], capture_output=True, text=True)
         if result.returncode == 0:
             console.print("  [green]✓[/green] Services started")
         else:
             console.print(f"  [red]✗[/red] Error starting services: {result.stderr[:100]}")
             return
 
-        console.print(
-            "\n[yellow]Waiting 30 seconds for services to initialize...[/yellow]"
-        )
+        console.print("\n[yellow]Waiting 30 seconds for services to initialize...[/yellow]")
         for i in range(30, 0, -5):
             console.print(f"  {i} seconds remaining...", end="\r")
             time.sleep(5)
@@ -74,9 +66,7 @@ def demo_mode(reset, load, validate):
         # For now, let stream accumulate naturally
         console.print("  • Binance stream will accumulate data naturally")
         console.print("  • Recommendation: Let run for 10-15 minutes")
-        console.print(
-            "  • Monitor: docker logs k2-binance-stream --follow\n"
-        )
+        console.print("  • Monitor: docker logs k2-binance-stream --follow\n")
 
     if validate:
         console.print("\n[bold cyan]Validating Demo Readiness[/bold cyan]\n")
@@ -84,9 +74,7 @@ def demo_mode(reset, load, validate):
         checks = []
 
         # Check services
-        result = subprocess.run(
-            ["docker", "compose", "ps"], capture_output=True, text=True
-        )
+        result = subprocess.run(["docker", "compose", "ps"], capture_output=True, text=True)
         up_count = result.stdout.count("Up")
 
         if up_count >= 7:
@@ -105,9 +93,7 @@ def demo_mode(reset, load, validate):
         trade_count = result.stdout.count("Trade")
 
         if trade_count > 0:
-            console.print(
-                f"  [green]✓[/green] Binance stream: {trade_count} recent trades"
-            )
+            console.print(f"  [green]✓[/green] Binance stream: {trade_count} recent trades")
             checks.append(True)
         else:
             console.print("  [red]✗[/red] Binance stream: No recent trades")
@@ -189,12 +175,8 @@ def demo_mode(reset, load, validate):
                 f"[bold green]✓ Demo Ready: {passed}/{total} checks passed[/bold green]\n"
             )
         else:
-            console.print(
-                f"[bold red]✗ Not Ready: {passed}/{total} checks passed[/bold red]"
-            )
-            console.print(
-                "\n[yellow]Recommendations:[/yellow]"
-            )
+            console.print(f"[bold red]✗ Not Ready: {passed}/{total} checks passed[/bold red]")
+            console.print("\n[yellow]Recommendations:[/yellow]")
             if up_count < 7:
                 console.print("  • Start services: docker compose up -d")
             if trade_count == 0:

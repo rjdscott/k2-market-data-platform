@@ -15,7 +15,6 @@ Usage:
     uv run python scripts/simulate_failure.py --status
 """
 
-import time
 import click
 import requests
 from rich.console import Console
@@ -129,7 +128,9 @@ class FailureSimulator:
         )
 
         # Memory usage
-        memory_status = "✓ Normal" if memory_pct < 70 else "⚠ High" if memory_pct < 90 else "✗ Critical"
+        memory_status = (
+            "✓ Normal" if memory_pct < 70 else "⚠ High" if memory_pct < 90 else "✗ Critical"
+        )
         memory_color = "green" if memory_pct < 70 else "yellow" if memory_pct < 90 else "red"
         table.add_row(
             "Memory Usage",
@@ -169,17 +170,25 @@ class FailureSimulator:
             console.print("[green]  ✓ All symbols processing[/green]")
             console.print("[green]  ✓ Full enrichment enabled[/green]")
 
-        console.print("\n[yellow]→ Simulating scenario: Consumer lag reaches 600,000 messages[/yellow]\n")
+        console.print(
+            "\n[yellow]→ Simulating scenario: Consumer lag reaches 600,000 messages[/yellow]\n"
+        )
 
         # Explain what would happen
         console.print("[bold red]Expected System Response:[/bold red]")
         console.print("[red]  → Degradation level increases to: GRACEFUL (2)[/red]")
         console.print("[red]  → Action: Drop low-priority symbols (Tier 3)[/red]")
-        console.print("[red]  → Result: High-value data continues (BTC, ETH, critical symbols)[/red]")
+        console.print(
+            "[red]  → Result: High-value data continues (BTC, ETH, critical symbols)[/red]"
+        )
         console.print("[red]  → Throughput: Reduced to ~50-70% (load shedding active)[/red]\n")
 
-        console.print("[dim]Note: In production, this would be triggered by actual Kafka consumer lag.[/dim]")
-        console.print("[dim]The degradation manager automatically monitors lag and adjusts processing.[/dim]\n")
+        console.print(
+            "[dim]Note: In production, this would be triggered by actual Kafka consumer lag.[/dim]"
+        )
+        console.print(
+            "[dim]The degradation manager automatically monitors lag and adjusts processing.[/dim]\n"
+        )
 
         # Show metrics that would be affected
         console.print("[bold cyan]Circuit Breaker Metrics (Expected):[/bold cyan]")
@@ -201,7 +210,9 @@ class FailureSimulator:
         level_num, level_name = self.get_current_degradation_level()
         console.print(f"[green]Current state: {level_name} (level {level_num})[/green]\n")
 
-        console.print("[yellow]→ Simulating scenario: Consumer lag reaches 1,200,000 messages[/yellow]\n")
+        console.print(
+            "[yellow]→ Simulating scenario: Consumer lag reaches 1,200,000 messages[/yellow]\n"
+        )
 
         console.print("[bold red]Expected System Response:[/bold red]")
         console.print("[red]  → Degradation level increases to: AGGRESSIVE (3)[/red]")
@@ -209,7 +220,9 @@ class FailureSimulator:
         console.print("[red]  → Result: Only critical symbols processed (top 10-20)[/red]")
         console.print("[red]  → Throughput: Reduced to ~20-40% (aggressive shedding)[/red]\n")
 
-        console.print("[dim]Recovery: Automatic when lag < 600K (50% hysteresis) + 30s cooldown[/dim]\n")
+        console.print(
+            "[dim]Recovery: Automatic when lag < 600K (50% hysteresis) + 30s cooldown[/dim]\n"
+        )
 
     def simulate_memory_pressure(self):
         """Simulate high memory usage scenario."""

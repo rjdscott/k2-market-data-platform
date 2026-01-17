@@ -255,7 +255,7 @@ Environment Variables:
         try:
             await asyncio.wait_for(client_task, timeout=5.0)
             logger.info("client_task_completed")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("client_task_timeout", timeout_seconds=5)
             client_task.cancel()
             try:

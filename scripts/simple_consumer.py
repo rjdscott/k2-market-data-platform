@@ -3,6 +3,7 @@
 
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from k2.ingestion.consumer import MarketDataConsumer
@@ -32,12 +33,13 @@ except KeyboardInterrupt:
 except Exception as e:
     print(f"\n✗ Error: {e}")
     import traceback
+
     traceback.print_exc()
     sys.exit(1)
 
 # Get stats
 stats = consumer.stats
-print(f"\nStatistics:")
+print("\nStatistics:")
 print(f"  Messages consumed: {stats.messages_consumed}")
 print(f"  Messages written: {stats.messages_written}")
 print(f"  Errors: {stats.errors}")

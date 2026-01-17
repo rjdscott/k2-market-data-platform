@@ -15,13 +15,12 @@ Usage:
 
 import argparse
 import time
-from datetime import datetime
 
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
+from rich.table import Table
 
-from k2.common.degradation_manager import DegradationManager, DegradationLevel
+from k2.common.degradation_manager import DegradationLevel, DegradationManager
 from k2.common.load_shedder import LoadShedder
 from k2.common.logging import get_logger
 
@@ -167,7 +166,7 @@ This demo shows how K2 handles system overload through graceful degradation.
         table.add_column("Status", style="white", width=15)
 
         status = self.degradation_manager.get_status()
-        level = DegradationLevel(status['level_value'])
+        level = DegradationLevel(status["level_value"])
 
         # Color based on level
         level_color = {
@@ -186,8 +185,14 @@ This demo shows how K2 handles system overload through graceful degradation.
         )
 
         # Lag status
-        lag_status = "OK" if self.simulated_lag < 100_000 else "WARNING" if self.simulated_lag < 1_000_000 else "CRITICAL"
-        lag_color = "green" if lag_status == "OK" else "yellow" if lag_status == "WARNING" else "red"
+        lag_status = (
+            "OK"
+            if self.simulated_lag < 100_000
+            else "WARNING" if self.simulated_lag < 1_000_000 else "CRITICAL"
+        )
+        lag_color = (
+            "green" if lag_status == "OK" else "yellow" if lag_status == "WARNING" else "red"
+        )
 
         table.add_row(
             "Consumer Lag",
@@ -199,8 +204,14 @@ This demo shows how K2 handles system overload through graceful degradation.
         )
 
         # Heap status
-        heap_status = "OK" if self.simulated_heap < 70.0 else "WARNING" if self.simulated_heap < 90.0 else "CRITICAL"
-        heap_color = "green" if heap_status == "OK" else "yellow" if heap_status == "WARNING" else "red"
+        heap_status = (
+            "OK"
+            if self.simulated_heap < 70.0
+            else "WARNING" if self.simulated_heap < 90.0 else "CRITICAL"
+        )
+        heap_color = (
+            "green" if heap_status == "OK" else "yellow" if heap_status == "WARNING" else "red"
+        )
 
         table.add_row(
             "Heap Usage",
@@ -213,9 +224,9 @@ This demo shows how K2 handles system overload through graceful degradation.
 
         table.add_row(
             "Accepting Data",
-            "Yes" if status['is_accepting_data'] else "[red bold]NO[/red bold]",
+            "Yes" if status["is_accepting_data"] else "[red bold]NO[/red bold]",
             "CIRCUIT_BREAK stops data",
-            "[green]Active[/green]" if status['is_accepting_data'] else "[red]Stopped[/red]",
+            "[green]Active[/green]" if status["is_accepting_data"] else "[red]Stopped[/red]",
         )
 
         console.print(table)
@@ -263,8 +274,10 @@ This demo shows how K2 handles system overload through graceful degradation.
 
         # Show load shedding statistics
         stats = self.load_shedder.get_stats()
-        if stats['total_checked'] > 0:
-            console.print(f"\n[dim]Load Shedding: {stats['total_shed']:,} shed / {stats['total_checked']:,} checked ({stats['shed_rate']:.1f}%)[/dim]")
+        if stats["total_checked"] > 0:
+            console.print(
+                f"\n[dim]Load Shedding: {stats['total_shed']:,} shed / {stats['total_checked']:,} checked ({stats['shed_rate']:.1f}%)[/dim]"
+            )
 
         console.print()
 
@@ -330,7 +343,7 @@ This demo shows how K2 handles system overload through graceful degradation.
 def main():
     parser = argparse.ArgumentParser(
         description="K2 Platform: Graceful Degradation Demo",
-        epilog="Demonstrates the 5-level degradation cascade under simulated load"
+        epilog="Demonstrates the 5-level degradation cascade under simulated load",
     )
     parser.add_argument(
         "--quick",

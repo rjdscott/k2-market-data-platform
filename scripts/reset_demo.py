@@ -16,7 +16,7 @@ Usage:
 
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import boto3
@@ -33,7 +33,7 @@ from rich.table import Table
 # Add src to path for k2 imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from k2.kafka import DataType, get_topic_builder
+from k2.kafka import get_topic_builder
 from k2.storage.catalog import IcebergCatalogManager
 
 logger = structlog.get_logger()
@@ -270,7 +270,9 @@ def clear_minio_warehouse(cfg: ResetConfig) -> dict:
                 s3.delete_objects(Bucket="warehouse", Delete={"Objects": batch})
                 result["objects_deleted"] += len(batch)
 
-            console.print(f"  [green]Cleared:[/green] {result['objects_deleted']} objects from warehouse/")
+            console.print(
+                f"  [green]Cleared:[/green] {result['objects_deleted']} objects from warehouse/"
+            )
             result["status"] = "cleared"
         else:
             console.print("  [dim]Empty:[/dim] warehouse/ already empty")
@@ -461,7 +463,7 @@ def reload_sample_data(cfg: ResetConfig) -> dict:
             console.print("  [green]Sample data reloaded[/green]")
             result["status"] = "reloaded"
         else:
-            console.print(f"  [red]Error:[/red] init_infra.py failed")
+            console.print("  [red]Error:[/red] init_infra.py failed")
             if proc.stderr:
                 console.print(f"  [dim]{proc.stderr[:500]}[/dim]")
             result["status"] = "error"

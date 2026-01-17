@@ -18,7 +18,6 @@ import sys
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List
 
 import boto3
 import structlog
@@ -276,7 +275,7 @@ def load_sample_data() -> None:
         logger.warning("Reference data not found", path=str(company_info_file))
         return
 
-    company_map: Dict[str, Dict[str, str]] = {}
+    company_map: dict[str, dict[str, str]] = {}
     with open(company_info_file) as f:
         reader = csv.DictReader(f)
         for row in reader:

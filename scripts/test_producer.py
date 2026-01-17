@@ -3,13 +3,14 @@
 
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from datetime import UTC, datetime
 from decimal import Decimal
-from datetime import datetime, timezone
 
-from k2.ingestion.producer import MarketDataProducer
 from k2.ingestion.message_builders import build_trade_v2
+from k2.ingestion.producer import MarketDataProducer
 
 # Initialize producer
 print("Initializing producer...")
@@ -21,7 +22,7 @@ trade = build_trade_v2(
     symbol="TESTBTC",
     exchange="binance",
     asset_class="crypto",
-    timestamp=datetime.now(timezone.utc),
+    timestamp=datetime.now(UTC),
     price=Decimal("50000.00"),
     quantity=Decimal("1.0"),
     currency="USDT",
@@ -49,7 +50,7 @@ print(f"✓ Flush complete, {remaining} messages remaining in queue")
 
 # Get stats
 stats = producer.get_stats()
-print(f"\nProducer Statistics:")
+print("\nProducer Statistics:")
 print(f"  Produced: {stats['produced']}")
 print(f"  Errors: {stats['errors']}")
 print(f"  Retries: {stats['retries']}")

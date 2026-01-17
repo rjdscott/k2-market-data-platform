@@ -8,6 +8,7 @@ from pyiceberg.catalog import load_catalog
 
 from k2.common.config import config
 
+
 def delete_bhp_data():
     """Delete BHP symbol data from trades_v2 table."""
 
@@ -26,7 +27,7 @@ def delete_bhp_data():
     # Load trades_v2 table
     table = catalog.load_table("market_data.trades_v2")
 
-    print(f"Table before deletion:")
+    print("Table before deletion:")
     print(f"  Current snapshot: {table.current_snapshot()}")
     print(f"  Metadata: {table.metadata}")
 
@@ -34,12 +35,13 @@ def delete_bhp_data():
     print("\nDeleting BHP symbol data...")
     table.delete("symbol = 'BHP'")
 
-    print(f"\nTable after deletion:")
+    print("\nTable after deletion:")
     print(f"  Current snapshot: {table.current_snapshot()}")
     print(f"  Metadata: {table.metadata}")
 
     print("\n✅ BHP data deleted successfully")
     print("Remaining symbols should be: BTCUSDT, ETHUSDT")
+
 
 if __name__ == "__main__":
     delete_bhp_data()

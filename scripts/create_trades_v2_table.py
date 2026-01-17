@@ -7,20 +7,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from pyiceberg.catalog import load_catalog
+from pyiceberg.exceptions import TableAlreadyExistsError
+from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
+from pyiceberg.table.sorting import SortField, SortOrder
+from pyiceberg.transforms import DayTransform, IdentityTransform
 from pyiceberg.types import (
+    DoubleType,
+    IntegerType,
     NestedField,
     StringType,
     TimestampType,
-    DoubleType,
-    IntegerType,
-    LongType,
 )
-from pyiceberg.partitioning import PartitionSpec, PartitionField
-from pyiceberg.transforms import DayTransform
-from pyiceberg.table.sorting import SortOrder, SortField
-from pyiceberg.transforms import IdentityTransform
-from pyiceberg.exceptions import TableAlreadyExistsError
 
 from k2.common.config import config
 
