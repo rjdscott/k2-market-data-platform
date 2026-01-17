@@ -67,12 +67,29 @@ class PreDemoValidator:
                 capture_output=True,
                 text=True,
             )
-            trade_count = result.stdout.count("Trade")
 
-            if trade_count > 0:
-                console.print(
-                    f"  [green]✓[/green] Binance stream: {trade_count} recent trades in logs"
-                )
+            # Strip ANSI color codes from logs
+            import re
+            ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+            clean_output = ansi_escape.sub('', result.stdout)
+
+            # Look for actual log patterns from Binance stream
+            trade_count = clean_output.count("trades_streamed")
+            streamed_count = clean_output.count("Streamed")
+
+            # Extract latest trade count if available (find the highest count = most recent)
+            matches = re.findall(r'trades_streamed=(\d+)', clean_output)
+            latest_count = max([int(m) for m in matches]) if matches else 0
+
+            if trade_count > 0 or streamed_count > 0:
+                if latest_count > 0:
+                    console.print(
+                        f"  [green]✓[/green] Binance stream: {latest_count:,} total trades streamed"
+                    )
+                else:
+                    console.print(
+                        f"  [green]✓[/green] Binance stream: {max(trade_count, streamed_count)} recent log entries"
+                    )
                 self.checks_passed.append("Binance stream")
                 return True
             else:
