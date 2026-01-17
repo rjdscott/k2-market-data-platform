@@ -311,7 +311,7 @@ addopts = [
     "--tb=short",
     # Exclude heavy tests-backup by default - must explicitly opt-in with -m flag
     # IMPORTANT: performance tests-backup excluded to prevent OOM when running with -n auto
-    "-m", "not slow and not chaos and not soak and not operational and not performance",
+    "-m", "not slow and not chaos and not soak and not operational and not performance and not e2e",
     # Limit parallel workers to prevent OOM
     # 4 workers = safer for CI (7GB / 4 = 1.75GB per worker)
     # Override locally if you have 16GB+: pytest -n 8
@@ -327,12 +327,15 @@ markers = [
     "soak: Soak tests (long-running endurance tests, hours to days)",
     "chaos: Chaos engineering tests (destructive, manipulates Docker)",
     "operational: Operational/disaster recovery tests (destructive)",
+    "e2e: End-to-end tests (require full Docker stack, slow)",
 ]
 filterwarnings = [
     "error",
     "ignore::UserWarning",
     "ignore::DeprecationWarning",
 ]
+# pytest-asyncio configuration
+asyncio_mode = "auto"
 # pytest-timeout: Apply default timeout to all tests-backup (can be overridden per-test)
 timeout = 300  # 5 minutes default
 timeout_method = "thread"

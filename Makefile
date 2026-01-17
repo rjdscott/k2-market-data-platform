@@ -1,5 +1,5 @@
 .PHONY: help setup install dev-install clean clean-venv test test-unit test-integration \
-        test-performance coverage lint format type-check quality docker-up \
+        test-e2e test-performance coverage lint format type-check quality docker-up \
         docker-down docker-logs docker-clean init-infra simulate docs \
         api api-prod api-test uv-lock uv-upgrade uv-add uv-add-dev \
         demo-reset demo-reset-force demo-reset-dry-run demo-reset-custom
@@ -202,6 +202,38 @@ test-operational: ## Run operational tests (DESTRUCTIVE - requires confirmation)
 	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || (echo "Aborted" && exit 1)
 	@$(PYTEST) tests/operational/ -v -m operational
 	@echo "$(GREEN)✓ Operational tests passed$(NC)"
+
+test-e2e: docker-up ## Run end-to-end tests (requires full Docker stack)
+	@echo "$(BLUE)Running end-to-end tests (requires full Docker stack)...$(NC)"
+	@echo "$(YELLOW)NOTE: E2E tests require Docker permissions and may take several minutes$(NC)"
+	@sleep 10  # Wait for services to be fully ready
+	@$(PYTEST) tests/e2e/ -v -m e2e -n 0 --tb=short
+	@echo "$(GREEN)✓ E2E tests passed$(NC)"
+
+test-e2e-pipeline: docker-up ## Run E2E pipeline validation tests only
+	@echo "$(BLUE)Running E2E pipeline validation tests...$(NC)"
+	@sleep 10  # Wait for services to be ready
+	@$(PYTEST) tests/e2e/test_complete_pipeline.py -v -m e2e -n 0 --tb=short
+	@echo "$(GREEN)✓ E2E pipeline tests passed$(NC)"
+
+test-e2e-health: docker-up ## Run E2E Docker stack health tests only
+	@echo "$(BLUE)Running E2E Docker stack health tests...$(NC)"
+	@sleep 5  # Wait for services to be ready
+	@$(PYTEST) tests/e2e/test_docker_stack_health.py -v -m e2e -n 0 --tb=short
+	@echo "$(GREEN)✓ E2E health tests passed$(NC)"
+
+test-e2e-freshness: docker-up ## Run E2E data freshness and latency tests only
+	@echo "$(BLUE)Running E2E data freshness and latency tests...$(NC)"
+	@sleep 10  # Wait for services to be ready
+	@$(PYTEST) tests/e2e/test_data_freshness.py -v -m e2e -n 0 --tb=short
+	@echo "$(GREEN)✓ E2E freshness tests passed$(NC)"
+
+validate-pipeline: docker-up ## Validate complete pipeline health and data flow
+	@echo "$(BLUE)Validating complete K2 Market Data Pipeline...$(NC)"
+	@echo "$(YELLOW)This runs a comprehensive pipeline validation$(NC)"
+	@sleep 15  # Ensure all services are fully ready
+	@$(PYTEST) tests/e2e/ -v -m e2e -k "test_binance_to_api_pipeline or test_pipeline_data_consistency" -n 0 --tb=short
+	@echo "$(GREEN)✓ Pipeline validation complete$(NC)"
 
 test-soak-1h: ## Run 1-hour soak test
 	@echo "$(YELLOW)Starting 1-hour soak test (requires ~70 minutes)...$(NC)"
