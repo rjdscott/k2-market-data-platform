@@ -61,6 +61,14 @@ asset_classes:
         trading_hours: "24/7"
         description: "Largest crypto exchange by volume, ~1000+ trading pairs"
 
+      kraken:
+        name: "Kraken"
+        partitions: 20
+        country: "US"
+        timezone: "UTC"
+        trading_hours: "24/7"
+        description: "Established crypto exchange with EUR/USD pairs, XBT normalization"
+
       # Future exchanges (uncomment when ready):
       # coinbase:
       #   name: "Coinbase"
@@ -69,14 +77,6 @@ asset_classes:
       #   timezone: "UTC"
       #   trading_hours: "24/7"
       #   description: "Major US-based crypto exchange"
-      #
-      # kraken:
-      #   name: "Kraken"
-      #   partitions: 20
-      #   country: "US"
-      #   timezone: "UTC"
-      #   trading_hours: "24/7"
-      #   description: "Established crypto exchange with EUR pairs"
 
 # Data types (apply to all asset classes and exchanges)
 # Each data type defines the schema, partition strategy, and Kafka configuration
