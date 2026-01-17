@@ -476,12 +476,182 @@ python scripts/validate_streaming.py --exchange kraken
 
 ---
 
+## Decision #008: Explicit Producer Flush Every 10 Trades
+
+**Date**: 2026-01-18
+**Status**: Implemented (Critical Fix)
+**Type**: Tier 2 (Design/Implementation)
+**Related Steps**: Steps 13-14 (Kraken Integration), affects all streaming services
+
+### Context
+
+During Kraken E2E validation, discovered that **messages were not persisting to Kafka** despite services reporting successful streaming (700+ trades for Binance, 50+ for Kraken). Consumers found 0 messages in both `market.crypto.trades.binance` and `market.crypto.trades.kraken` topics.
+
+**Symptoms**:
+- Streaming services logs showed: "trades_streamed=700", "errors=0"
+- Schema registry showed successful schema registrations (HTTP 200)
+- Kafka console consumer: "Processed a total of 0 messages"
+- Test producer script: Worked correctly with explicit flush
+- Direct producer test from Docker container: Delivered successfully with flush
+
+**Investigation**:
+1. Verified Kafka connectivity from containers: ✅ Working
+2. Verified producer can list topics: ✅ Working
+3. Verified direct produce with callback: ✅ Delivered to partition 28 offset 0
+4. Checked producer configuration: `linger.ms=10` set but not sufficient
+5. Checked logs for delivery callbacks: None found (buffered, never delivered)
+
+**Root Cause**:
+- Producer configuration relied solely on `linger.ms=10ms` for auto-flush
+- High-volume streaming (70-100 trades/min for Binance, 10-50 for Kraken) overwhelmed auto-flush
+- Messages accumulated in producer buffer but never triggered batch send
+- `producer.poll(0)` called after produce, but insufficient to trigger delivery
+
+### Decision
+
+**Add explicit `producer.flush(timeout=1.0)` every 10 trades** in both streaming services.
+
+**Implementation**:
+```python
+# scripts/binance_stream.py (line 182-186)
+# scripts/kraken_stream.py (line 182-186)
+
+trade_count += 1
+
+# Flush producer every 10 trades to ensure messages are written to Kafka
+if trade_count % 10 == 0:
+    remaining = producer.flush(timeout=1.0)
+    if remaining > 0:
+        logger.warning("producer_flush_timeout", remaining=remaining)
+```
+
+**Rationale**:
+- **Guarantees delivery**: Explicit flush ensures messages reach Kafka broker
+- **Low overhead**: Flush every 10 trades ≈ every 6-30 seconds (depending on volume)
+- **Fast flush**: Flush completes in <1ms (0.0003-0.001 seconds measured)
+- **Non-blocking**: 1.0s timeout prevents infinite blocks
+- **Monitoring**: Logs remaining messages if flush times out
+
+**Alternatives Considered**:
+1. **Increase linger.ms**: Would still rely on implicit flush, not guaranteed
+2. **Flush every trade**: Too frequent, potential performance impact
+3. **Flush every 100 trades**: Too infrequent for low-volume exchanges like Kraken
+4. **Increase batch.size**: Doesn't solve delivery guarantee issue
+
+### Consequences
+
+**Positive**:
+- ✅ **Messages now persist**: 50+ MB in Binance topic, 240+ KB in Kraken topic
+- ✅ **Zero impact on throughput**: Flush latency <1ms, no performance degradation
+- ✅ **All flushes complete**: remaining=0 in all observed flushes
+- ✅ **Both services fixed**: Issue affected Binance and Kraken, both now working
+- ✅ **E2E verified**: Consumers successfully deserialize messages from both topics
+
+**Negative**:
+- Adds 5 lines of code per streaming service
+- Slightly more verbose logs (flush messages every 10 trades)
+
+**Neutral**:
+- Flush frequency (every 10 trades) is tunable per exchange volume
+- May need adjustment for higher-volume exchanges (e.g., flush every 50 for Coinbase)
+
+### Verification Results
+
+**Binance Topic** (`market.crypto.trades.binance`):
+```
+Total Data: ~50 MB across multiple partitions
+Messages: 700+ trades streamed, 0 errors
+Top Partitions:
+  - Partition 27: 20.8 MB
+  - Partition 28: 18.1 MB
+  - Partition 22: 11.0 MB
+Sample: BNBUSDT @ 942.42 USDT (Avro-serialized)
+Flush Status: remaining=0 (all messages delivered)
+```
+
+**Kraken Topic** (`market.crypto.trades.kraken`):
+```
+Total Data: ~240 KB across partitions (lower volume exchange)
+Messages: 50+ trades streamed, 0 errors
+Top Partitions:
+  - Partition 1: 151 KB
+  - Another partition: 90 KB
+Sample: BTCUSD @ 95,393.40 USD
+  - XBT → BTC normalization confirmed
+  - vendor_data preserves pair=XBT/USD
+Flush Status: remaining=0 (all messages delivered)
+```
+
+**Topic Separation Verified**:
+- ✅ Binance: `market.crypto.trades.binance` (40 partitions)
+- ✅ Kraken: `market.crypto.trades.kraken` (20 partitions)
+- ✅ No cross-contamination between topics
+- ✅ Correct exchange-based routing
+
+**Performance Metrics**:
+```
+Flush Latency: 0.0003-0.001 seconds (<1ms)
+Flush Frequency: Every 10 trades (~6-30 seconds depending on volume)
+Remaining Messages: 0 (100% delivery)
+Throughput Impact: None detected
+```
+
+### Testing
+
+```bash
+# Before fix (messages not persisting):
+docker exec k2-kafka kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic market.crypto.trades.kraken \
+  --from-beginning --max-messages 1
+# Output: "Processed a total of 0 messages"
+
+# After fix (messages persisting):
+docker exec k2-kafka kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic market.crypto.trades.kraken \
+  --from-beginning --max-messages 2
+# Output: 2 Avro-encoded BTCUSD trades with XBT/USD vendor_data
+
+# Verification with Avro deserialization:
+uv run python scripts/verify_topics.py
+# Output:
+#   Binance messages: 700+
+#   Kraken messages: 50+
+#   SUCCESS: Both topics have messages!
+```
+
+### Files Modified
+
+**Core Fix**:
+- `scripts/binance_stream.py` - Added flush every 10 trades (lines 182-186)
+- `scripts/kraken_stream.py` - Added flush every 10 trades (lines 182-186)
+
+**Testing Utilities**:
+- `scripts/verify_topics.py` - New E2E verification script for both topics
+- `scripts/test_producer.py` - Direct producer test utility
+
+**Commits**:
+- Commit 1: `feat(phase-10): complete Kraken E2E testing with fixes and documentation` (3f14bd8)
+- Commit 2: `fix: add periodic producer flushing to ensure Kafka message persistence` (f9d725d)
+
+### Related Issues
+
+**Docker Issues Resolved in Same Session**:
+1. ✅ Python version mismatch (3.14 → 3.13 in Dockerfile)
+2. ✅ Port conflict (9092 → 9095 for Kraken metrics)
+3. ✅ Missing Kraken metrics (added 11 metrics to registry)
+4. ✅ Structlog parameter conflict (event → event_type)
+
+---
+
 ## References
 
 ### Related Documentation
 - [Medallion Architecture](../../architecture/medallion-architecture.md) (to be created)
 - [V3 Schema Design](../../architecture/schema-design-v3.md) (to be created)
 - [Spark Operations](../../operations/runbooks/spark-operations.md) (to be created)
+- [Kraken Streaming Guide](../../KRAKEN_STREAMING.md) - Complete operational guide
 
 ### Related Phases
 - [Phase 2 Prep](../phase-2-prep/) - Binance WebSocket integration

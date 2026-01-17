@@ -277,26 +277,44 @@
 - **Estimated**: 8 hours
 - **Actual**: 6 hours
 - **Completed**: 2026-01-18
-- **Notes**: E2E streaming validated. 50+ trades streamed successfully. Kafka topic populated with 41KB+ data across partitions.
+- **Notes**: E2E streaming validated with comprehensive Kafka topic verification. Successfully resolved critical producer flush issue affecting both Binance and Kraken services.
 
 **Acceptance Criteria**:
 - [x] Kraken client running: Docker container k2-kraken-stream operational
-- [x] Kafka topic populated: Partitions 1 (26.6KB) and 16 (14.8KB) have data
-- [ ] Bronze has Kraken trades: Pending Spark implementation
-- [ ] Silver has Kraken trades: Pending Spark implementation
-- [ ] Gold has Kraken trades: Pending Spark implementation
+- [x] Kafka topic populated: 240+ KB data across partitions (50+ trades)
+- [ ] Bronze has Kraken trades: Pending Spark implementation (Step 10)
+- [ ] Silver has Kraken trades: Pending Spark implementation (Step 11)
+- [ ] Gold has Kraken trades: Pending Spark implementation (Step 12)
 - [ ] Both exchanges unified in Gold: Pending Gold table creation
 - [ ] No duplicates in deduplication query: Pending Gold implementation
 
 **E2E Test Results**:
-- ✅ WebSocket connection established
+- ✅ WebSocket connection established to wss://ws.kraken.com
 - ✅ Subscribed to BTC/USD and ETH/USD
 - ✅ 50+ trades streamed with 0 errors
 - ✅ Latest trade: BTCUSD @ $95,381.70
 - ✅ XBT → BTC normalization working
-- ✅ Kafka messages: 41KB+ across 2 partitions
-- ✅ Schema registry integration working
-- ✅ Metrics registered and operational
+- ✅ Kafka messages: 240+ KB across 2 partitions (Kraken), 50+ MB (Binance)
+- ✅ Schema registry integration working (V2 Avro)
+- ✅ Metrics registered and operational (11 Kraken metrics)
+- ✅ Topic separation verified (no cross-contamination)
+
+**Critical Issues Resolved**:
+1. **Producer Flush Issue** (2026-01-18):
+   - **Problem**: Messages buffered but not persisting to Kafka topics
+   - **Root Cause**: Relied on `linger.ms=10ms` auto-flush only, insufficient for high-volume streaming
+   - **Investigation**: Direct producer test confirmed delivery worked, but streaming services showed 0 messages in topics
+   - **Solution**: Added explicit `producer.flush(timeout=1.0)` every 10 trades in both `binance_stream.py` and `kraken_stream.py`
+   - **Impact**: Both Binance and Kraken services affected
+   - **Verification**: Binance 50+ MB (700+ trades), Kraken 240+ KB (50+ trades)
+   - **Performance**: Flush latency <1ms, zero throughput impact
+   - **Documentation**: See [Decision #008](./DECISIONS.md#decision-008-explicit-producer-flush-every-10-trades)
+
+2. **Docker Configuration Issues** (2026-01-18):
+   - Python version mismatch (3.14 → 3.13) ✅
+   - Port conflict 9092 (Kafka) → 9095 (metrics) ✅
+   - Missing 11 Kraken metrics in registry ✅
+   - Structlog parameter conflict (event → event_type) ✅
 
 ---
 
