@@ -122,6 +122,7 @@ class TestHybridQueryIntegration:
             v2_trade = build_trade_v2(
                 symbol="BTCUSDT",
                 exchange="binance",
+                asset_class="crypto",
                 timestamp=base_time + timedelta(minutes=i),
                 price=Decimal("50000.00"),
                 quantity=1000,
