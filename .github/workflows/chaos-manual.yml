@@ -92,7 +92,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: kafka-chaos-results
           path: kafka-chaos-results.xml
@@ -155,7 +155,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: storage-chaos-results
           path: storage-chaos-results.xml
@@ -220,7 +220,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: operational-chaos-results
           path: operational-chaos-results.xml
@@ -298,7 +298,7 @@ jobs:
         run: cat report.md
 
       - name: Upload report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: chaos-test-report
           path: report.md
