@@ -1,6 +1,6 @@
 # Testing Documentation
 
-**Last Updated**: 2026-01-10
+**Last Updated**: 2026-01-17
 **Stability**: Medium - evolves with system complexity
 **Target Audience**: QA Engineers, Test Automation, Developers
 
@@ -148,6 +148,205 @@ pytest --cov=src/k2 --cov-report=term-missing
 ```bash
 pytest --cov=src/k2 --cov-report=html
 open htmlcov/index.html
+```
+
+---
+
+## Prerequisites for Integration Tests
+
+### Docker Access Requirements
+
+Integration tests require Docker access to create **isolated test environments** with temporary containers. This ensures tests don't interfere with production services.
+
+**IMPORTANT**: Your user must have Docker socket access to run integration tests.
+
+### Setup Docker Permissions
+
+#### Check Current Access
+
+```bash
+# Check if you can access Docker without sudo
+docker ps
+
+# If you get "Permission denied", follow setup below
+```
+
+#### Add User to Docker Group
+
+```bash
+# 1. Add your user to the docker group
+sudo usermod -aG docker $USER
+
+# 2. Apply the group change (choose one):
+
+# Option A: Logout and login again (recommended)
+# Your desktop session will pick up the new group membership
+
+# Option B: Apply immediately in current shell
+newgrp docker
+
+# 3. Verify Docker access (should work without sudo)
+docker ps
+
+# Expected: List of running containers (no permission error)
+```
+
+#### Verify Integration Test Requirements
+
+```bash
+# Check Docker is accessible
+docker info
+
+# Check required services are running
+docker compose ps
+
+# Expected services (12 total):
+# - k2-kafka (healthy)
+# - k2-schema-registry-1, k2-schema-registry-2 (healthy)
+# - k2-minio (healthy)
+# - k2-iceberg-rest (healthy)
+# - k2-query-api (healthy)
+# - k2-postgres (healthy)
+# - k2-prometheus, k2-grafana (healthy)
+# - k2-binance-stream, k2-consumer-crypto (may be unhealthy if no data)
+# - k2-kafka-ui (healthy)
+```
+
+### Why Integration Tests Need Docker Access
+
+Integration tests use test isolation to:
+
+1. **Create temporary Kafka clusters** for each test suite
+2. **Create temporary MinIO instances** for isolated storage
+3. **Ensure test independence** - tests don't interfere with production data
+4. **Clean up automatically** - test containers removed after test completion
+
+**Example from conftest.py:**
+```python
+@pytest.fixture
+def kafka_cluster(resource_tracker):
+    """Creates temporary Kafka cluster for testing"""
+    cluster = KafkaTestCluster(config)
+    cluster.start()  # ← Requires Docker access
+    yield cluster
+    cluster.cleanup()  # ← Removes test containers
+```
+
+This pattern ensures tests are **reproducible** and **safe** to run alongside production services.
+
+### Troubleshooting Docker Permission Issues
+
+#### Issue 1: "Permission denied" when running tests
+
+**Symptom:**
+```
+PermissionError: [Errno 13] Permission denied
+.venv/lib/python3.13/site-packages/docker/transport/unixconn.py:26: in connect
+    sock.connect(self.unix_socket)
+```
+
+**Cause:** User not in docker group, cannot access `/var/run/docker.sock`
+
+**Solution:**
+```bash
+# Add to docker group and logout/login
+sudo usermod -aG docker $USER
+# Then logout and login, or run: newgrp docker
+
+# Verify access
+docker ps  # Should work without sudo
+```
+
+#### Issue 2: Tests pass but Docker services not used
+
+**Symptom:** Integration tests use mocked services instead of real Docker containers
+
+**Cause:** Docker not running or services not started
+
+**Solution:**
+```bash
+# Start all services
+docker compose up -d
+
+# Verify services healthy
+docker compose ps
+
+# Wait for services to be healthy (30-60 seconds)
+docker compose ps | grep "healthy"
+```
+
+#### Issue 3: "Docker daemon not running"
+
+**Symptom:**
+```
+docker.errors.DockerException: Error while fetching server API version
+```
+
+**Cause:** Docker daemon not started
+
+**Solution:**
+```bash
+# Start Docker daemon (Ubuntu/Debian)
+sudo systemctl start docker
+
+# Enable Docker to start on boot
+sudo systemctl enable docker
+
+# Verify Docker running
+docker info
+```
+
+#### Issue 4: Old test containers remain after failures
+
+**Symptom:** `docker ps -a` shows many stopped test containers
+
+**Cause:** Test cleanup failed due to error
+
+**Solution:**
+```bash
+# Remove all stopped containers
+docker container prune -f
+
+# Remove all test networks (k2-test-*)
+docker network prune -f
+
+# Verify cleanup
+docker ps -a | grep "k2-test"  # Should be empty
+```
+
+### Integration Test Execution
+
+Once Docker access is configured:
+
+```bash
+# Run all integration tests
+uv run pytest tests/integration/ -v
+
+# Run specific integration test
+uv run pytest tests/integration/test_api_integration.py -v
+
+# Run with parallel execution (faster)
+uv run pytest tests/integration/ -v -n auto
+
+# Run with detailed output
+uv run pytest tests/integration/ -v -s --tb=short
+```
+
+### Expected Test Behavior
+
+**Unit tests** (no Docker required):
+```bash
+uv run pytest tests/unit/ -v
+# ✅ 109 tests, ~5 seconds, no Docker needed
+```
+
+**Integration tests** (Docker required):
+```bash
+uv run pytest tests/integration/ -v
+# Creates temporary test containers
+# Runs tests against isolated infrastructure
+# Cleans up test containers automatically
+# ✅ 24 tests, ~30-60 seconds with Docker access
 ```
 
 ---
@@ -360,7 +559,10 @@ steps:
 ### Common Issues
 
 **Issue**: Integration tests fail with "Connection refused"
-**Solution**: Ensure Docker services running: `make docker-up`
+**Solution**: Ensure Docker services running: `docker compose up -d`
+
+**Issue**: Integration tests fail with "Permission denied"
+**Solution**: Add user to docker group: `sudo usermod -aG docker $USER` then logout/login
 
 **Issue**: Tests pass locally but fail in CI
 **Solution**: Check for environment-specific dependencies, hard-coded paths
@@ -399,4 +601,4 @@ steps:
 
 **Maintained By**: QA + Engineering Team
 **Review Frequency**: Monthly
-**Last Review**: 2026-01-10
+**Last Review**: 2026-01-17
