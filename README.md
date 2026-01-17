@@ -179,15 +179,25 @@ uv run python scripts/init_infra.py
 make api   # Starts FastAPI on http://localhost:8000
 ```
 
-### 5. Start Consumer Service (Optional)
+### 5. Start Streaming Services (Optional)
 
 ```bash
-# Start continuous ingestion from Kafka to Iceberg
+# Start Binance WebSocket streaming (BTC, ETH, BNB)
+docker compose up -d binance-stream
+
+# Start Kraken WebSocket streaming (BTC, ETH)
+docker compose up -d kraken-stream
+
+# Start consumer to ingest from Kafka to Iceberg
 docker compose up -d consumer-crypto
 
 # Verify data flow
 curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
   -H "X-API-Key: k2-dev-api-key-2026"
+
+# Check streaming logs
+docker logs -f k2-binance-stream   # Binance streaming logs
+docker logs -f k2-kraken-stream    # Kraken streaming logs
 ```
 
 ### 6. Run Demo (Optional)
@@ -388,19 +398,21 @@ See [Scaling Strategy](./docs/architecture/system-design.md#scaling-consideratio
 
 The platform supports both batch (historical) and streaming (live) data sources across multiple asset classes.
 
-### Live Crypto Data (Binance)
+### Live Crypto Data (Binance + Kraken)
 
-Real-time streaming cryptocurrency trades from Binance WebSocket API.
+Real-time streaming cryptocurrency trades from Binance and Kraken WebSocket APIs.
 
-| Symbol | Asset Class | Trades Ingested | Data Quality | Consumer Performance |
-|--------|-------------|-----------------|--------------|----------------------|
-| BTCUSDT | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
-| ETHUSDT | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
-| BNBUSDT | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
+| Symbol | Exchange | Asset Class | Trades Ingested | Data Quality | Consumer Performance |
+|--------|----------|-------------|-----------------|--------------|----------------------|
+| BTCUSDT | Binance | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
+| ETHUSDT | Binance | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
+| BNBUSDT | Binance | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
+| BTC/USD | Kraken | Crypto | Live | Live streaming | Available |
+| ETH/USD | Kraken | Crypto | Live | Live streaming | Available |
 
-**Data Flow**: Binance WebSocket → Kafka → Consumer → Iceberg → Query Engine
+**Data Flow**: WebSocket (Binance/Kraken) → Kafka → Consumer → Iceberg → Query Engine
 **Consumer**: Production-ready with batch processing (32 msg/s throughput)
-**Schema**: V2 multi-source schema with Binance-specific fields in `vendor_data`
+**Schema**: V2 multi-source schema with exchange-specific fields in `vendor_data`
 **Storage**: Apache Iceberg `trades_v2` table with daily partitions
 
 ```bash
@@ -409,7 +421,7 @@ curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
   -H "X-API-Key: k2-dev-api-key-2026" | jq .
 
 # Start live streaming + consumer (requires Docker services)
-docker compose up -d binance-stream consumer-crypto
+docker compose up -d binance-stream kraken-stream consumer-crypto
 
 # Manual consumer testing
 uv run python scripts/consume_crypto_trades.py --max-messages 100 --no-ui

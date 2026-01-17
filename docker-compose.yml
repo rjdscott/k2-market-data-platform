@@ -614,10 +614,82 @@ services:
           memory: 256M
 
   # ============================================================================
+  # KRAKEN STREAMING SERVICE - Real-time Kraken Trade Ingestion
+  # ============================================================================
+  # Connects to Kraken WebSocket API and streams live trades to Kafka
+  # - Subscribes to BTC/USD, ETH/USD trade streams
+  # - Converts Kraken format to v2 schema (XBT → BTC normalization)
+  # - Publishes to Kafka market.crypto.trades.kraken topic
+  # - Production-grade resilience: circuit breakers, health checks, failover
+  kraken-stream:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: k2-kraken-stream
+    hostname: kraken-stream
+    ports:
+      - "9092:9092"       # Prometheus metrics
+    environment:
+      # Kafka Configuration
+      K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      K2_KAFKA_SCHEMA_REGISTRY_URL: http://schema-registry-1:8081
+      K2_KAFKA_BATCH_SIZE: 16384
+      K2_KAFKA_LINGER_MS: 10
+      K2_KAFKA_COMPRESSION_TYPE: lz4
+      K2_KAFKA_RETRIES: 3
+      K2_KAFKA_REQUEST_TIMEOUT_MS: 30000
+      K2_KAFKA_MAX_IN_FLIGHT_REQUESTS: 5
+      K2_KAFKA_ACKS: 1
+      K2_KAFKA_IDEMPOTENCE_ENABLED: "true"
+
+      # Kraken Configuration
+      K2_KRAKEN_ENABLED: "true"
+      K2_KRAKEN_SYMBOLS: '["BTC/USD", "ETH/USD"]'
+      K2_KRAKEN_WEBSOCKET_URL: wss://ws.kraken.com
+      K2_KRAKEN_FAILOVER_URLS: '["wss://ws-auth.kraken.com"]'
+
+      # Resilience Configuration
+      K2_KRAKEN_RECONNECT_DELAY: 5
+      K2_KRAKEN_MAX_RECONNECT_ATTEMPTS: 10
+      K2_KRAKEN_HEALTH_CHECK_INTERVAL: 30
+      K2_KRAKEN_HEALTH_CHECK_TIMEOUT: 30
+
+      # Metrics Configuration
+      K2_METRICS_ENABLED: "true"
+      K2_METRICS_PORT: 9092
+
+      # Logging Configuration
+      K2_LOG_LEVEL: INFO
+      K2_LOG_FORMAT: json
+    command: python scripts/kraken_stream.py
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry-1:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9092' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ============================================================================
   # KAFKA CONSUMER - Production-Ready Consumer for Market Data Ingestion
   # ============================================================================
   # Consumes trades from Kafka and writes to Iceberg tables
-  # - Processes market.crypto.trades.binance topic
+  # - Processes market.crypto.trades.binance and market.crypto.trades.kraken topics
   # - Deserializes v2 Avro messages with Schema Registry
   # - Writes to market_data.trades Iceberg table with ACID guarantees
   # - Production-grade features: batch processing, retries, DLQ, graceful shutdown
