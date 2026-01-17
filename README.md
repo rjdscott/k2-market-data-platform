@@ -3,7 +3,7 @@
 A distributed market data lakehouse for quantitative research, compliance, and analytics.
 
 **Stack**: Kafka (KRaft) → Iceberg → DuckDB → FastAPI<br>
-**Data**: ASX equities (200K+ trades, March 2014) + Binance crypto streaming (live BTC/ETH/BNB)<br>
+**Data**: ASX equities (200K+ trades, March 2014) + Multi-exchange crypto streaming (Binance + Kraken)<br>
 **Python**: 3.13+ with uv package manager
 
 ---
@@ -47,17 +47,17 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Data Sources                             │
-│   CSV Batch (ASX equities)  │  WebSocket Stream (Binance crypto)│
-└──────────────┬──────────────┴──────────────┬────────────────────┘
-               │ Batch ingestion              │ Live streaming
-               ▼                              ▼
+│   CSV Batch (ASX)  │  WebSocket (Binance)  │  WebSocket (Kraken)│
+└──────────┬─────────┴───────────┬───────────┴─────────┬──────────┘
+           │ Batch ingestion     │ Live streaming      │
+           ▼                     ▼                     ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Ingestion Layer                             │
 │  ┌──────────────┐    ┌─────────────────┐                        │
 │  │    Kafka     │◄───│ Schema Registry │  BACKWARD compatibility│
 │  │   (KRaft)    │    │   (Avro, HA)    │                        │
 │  └──────┬───────┘    └─────────────────┘                        │
-│         │ Topics: market.{equities,crypto}.{trades,quotes}.{asx,binance}
+│         │ Topics: market.{equities,crypto}.{trades,quotes}.{asx,binance,kraken}
 │         │ Partitioning: hash(symbol)                            │
 │         │ V2 Schema: Multi-source, multi-asset class            │
 └─────────┼───────────────────────────────────────────────────────┘
@@ -506,10 +506,10 @@ See [Schema Design V2](./docs/architecture/schema-design-v2.md) for complete spe
 
 | Type | Count | Command | Duration |
 |------|-------|---------|----------|
-| Unit | **109** | `uv run pytest tests/unit/` | ~5s |
-| Integration | 40+ | `make test-integration` | ~60s |
+| Unit | **169** | `uv run pytest tests/unit/` | ~5s |
+| Integration | 46+ | `make test-integration` | ~60s |
 | E2E | 7 | `make test-integration` | ~60s |
-| **Total** | **156+** | | |
+| **Total** | **222+** | | |
 
 ### New Unit Test Infrastructure (2026-01-16)
 
@@ -523,6 +523,7 @@ See [Schema Design V2](./docs/architecture/schema-design-v2.md) for complete spe
 | **API Models** | 35 | Pydantic validation, business logic, security, serialization |
 | **Data Quality** | 26 | Market data rules, anomaly detection, consistency checks |
 | **Market Data Factory** | 16 | Realistic test data, market scenarios, time series |
+| **WebSocket Clients** | 60 | Binance & Kraken streaming, v2 schema conversion, resilience |
 | **Framework Basics** | 14 | Core infrastructure, imports, project structure |
 
 #### Key Features
@@ -548,13 +549,26 @@ tests/unit/
 ### Run Tests
 
 ```bash
-# New unit tests (focus on core validation)
+# Unit tests (focus on core validation)
 uv run pytest tests/unit/ -v                    # All 109 unit tests
 uv run pytest tests/unit/test_schemas.py       # Schema validation
 uv run pytest tests/unit/test_api_models.py    # API models & business logic
 uv run pytest tests/unit/test_data_quality.py  # Data quality & anomalies
+uv run pytest tests/unit/test_binance_client.py  # Binance WebSocket (30 tests)
+uv run pytest tests/unit/test_kraken_client.py   # Kraken WebSocket (30 tests)
 
-# Legacy integration tests
+# Integration tests (requires internet connectivity)
+uv run pytest tests/integration/test_streaming_validation.py -v  # WebSocket validation
+uv run pytest tests/integration/test_streaming_validation.py -k kraken  # Kraken only
+uv run pytest tests/integration/test_streaming_validation.py -k binance # Binance only
+
+# Streaming validation scripts (manual testing)
+python scripts/test_binance_stream.py           # Test Binance live (10 trades)
+python scripts/test_kraken_stream.py            # Test Kraken live (10 trades)
+python scripts/validate_streaming.py            # Comprehensive validation report
+python scripts/validate_streaming.py --exchange kraken  # Kraken only
+
+# Full test suite
 make test-integration   # Full integration (~60s, requires Docker)
 make coverage           # Coverage report
 ```
