@@ -43,6 +43,19 @@ Phase 8 provides comprehensive end-to-end validation of all K2 platform demo mat
 
 ---
 
+## Current Demo Materials
+
+**Active Location**: [`/demos/`](../../../demos/README.md)
+
+The demo materials validated in this phase are now maintained in:
+- **Notebooks**: [`demos/notebooks/`](../../../demos/notebooks/README.md) - Executive and technical demos
+- **Scripts**: [`demos/scripts/`](../../../demos/scripts/README.md) - Demo execution and utilities
+- **Documentation**: [`demos/docs/`](../../../demos/docs/) and [`demos/reference/`](../../../demos/reference/) - Quick-start guides and reference materials
+
+This consolidation (Phase 9) maintains all validated materials from this phase while improving organization and accessibility.
+
+---
+
 ## Implementation Steps
 
 | Step | Title | Priority | Status | Completed | Score |

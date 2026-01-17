@@ -1,5 +1,7 @@
 # K2 Platform Performance Benchmark Results
 
+> **Historical Context**: These metrics were validated in [Phase 8: E2E Demo Validation](../../docs/phases/phase-8-e2e-demo/README.md) and originally measured in [Phase 4: Demo Readiness](../../docs/phases/phase-4-demo-readiness/README.md).
+
 **Date**: 2026-01-14 22:57:12
 **Iterations per query**: 20
 
