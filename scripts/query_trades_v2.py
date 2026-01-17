@@ -70,7 +70,7 @@ for i, trade in enumerate(sample_trades[:3], 1):
         try:
             parsed = json.loads(vendor_data) if isinstance(vendor_data, str) else vendor_data
             print(f"  {json.dumps(parsed, indent=2)}")
-        except:
+        except (json.JSONDecodeError, TypeError):
             print(f"  {vendor_data}")
     else:
         print("  None")

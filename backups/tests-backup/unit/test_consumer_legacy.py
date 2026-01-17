@@ -421,7 +421,7 @@ class TestMarketDataConsumer:
         mock_dlq,
     ):
         """Test consumer subscribes to topic pattern."""
-        consumer = MarketDataConsumer(
+        _consumer = MarketDataConsumer(
             topic_pattern="market\\.equities\\..*",
             consumer_group="test-group",
             iceberg_writer=mock_iceberg_writer,
