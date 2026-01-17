@@ -11,9 +11,6 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
-
-import numpy as np
 
 
 class PerformanceBaseline:
@@ -23,10 +20,10 @@ class PerformanceBaseline:
         self.baseline_file = Path(baseline_file)
         self.baselines = self._load_baselines()
 
-    def _load_baselines(self) -> Dict[str, Dict]:
+    def _load_baselines(self) -> dict[str, dict]:
         """Load existing baselines from file."""
         if self.baseline_file.exists():
-            with open(self.baseline_file, "r") as f:
+            with open(self.baseline_file) as f:
                 return json.load(f)
         return {}
 
@@ -35,7 +32,7 @@ class PerformanceBaseline:
         with open(self.baseline_file, "w") as f:
             json.dump(self.baselines, f, indent=2)
 
-    def update_baseline(self, test_name: str, metrics: Dict[str, float]):
+    def update_baseline(self, test_name: str, metrics: dict[str, float]):
         """Update baseline with new metrics."""
         self.baselines[test_name] = {
             "timestamp": datetime.now().isoformat(),
@@ -57,9 +54,9 @@ class PerformanceBaseline:
     def check_regression(
         self,
         test_name: str,
-        current_metrics: Dict[str, float],
-        thresholds: Optional[Dict[str, float]] = None,
-    ) -> Dict[str, bool]:
+        current_metrics: dict[str, float],
+        thresholds: dict[str, float] | None = None,
+    ) -> dict[str, bool]:
         """Check for performance regression against baseline."""
         if thresholds is None:
             thresholds = {
@@ -112,11 +109,11 @@ class PerformanceBaseline:
 
         return regressions
 
-    def get_baseline(self, test_name: str) -> Optional[Dict]:
+    def get_baseline(self, test_name: str) -> dict | None:
         """Get baseline for a specific test."""
         return self.baselines.get(test_name)
 
-    def list_baselines(self) -> List[str]:
+    def list_baselines(self) -> list[str]:
         """List all available baselines."""
         return list(self.baselines.keys())
 
@@ -154,9 +151,9 @@ class PerformanceBaseline:
         return "\n".join(report)
 
 
-def load_benchmark_results(results_file: str) -> Dict[str, Dict]:
+def load_benchmark_results(results_file: str) -> dict[str, dict]:
     """Load benchmark results from pytest-benchmark."""
-    with open(results_file, "r") as f:
+    with open(results_file) as f:
         data = json.load(f)
 
     metrics = {}

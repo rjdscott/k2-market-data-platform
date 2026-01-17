@@ -60,13 +60,12 @@ import argparse
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, NoReturn
 
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from k2.common.config import config
@@ -158,8 +157,8 @@ def run_consumer_with_ui(
             stats_table = create_stats_table(consumer, start_time)
             panel = Panel(
                 stats_table,
-                title=f"[bold green]K2 Consumer[/bold green] | Topic: market.crypto.trades | "
-                f"Schema: v2",
+                title="[bold green]K2 Consumer[/bold green] | Topic: market.crypto.trades | "
+                "Schema: v2",
                 border_style="green",
             )
             live.update(panel)
@@ -235,7 +234,7 @@ Examples:
         Panel.fit(
             "[bold cyan]K2 Market Data Platform[/bold cyan]\n"
             "[white]Crypto Trades Consumer (v2 Schema)[/white]\n"
-            f"[dim]Started: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}[/dim]",
+            f"[dim]Started: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}[/dim]",
             border_style="cyan",
         )
     )

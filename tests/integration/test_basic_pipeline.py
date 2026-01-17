@@ -86,7 +86,7 @@ class TestBasicPipelineIntegration:
         # Step 4: Write to Iceberg table
         try:
             records_written = writer.write_trades(
-                records=v2_records, table_name="market_data.trades_v2"
+                records=v2_records, table_name="market_data.trades", exchange="asx"
             )
 
         except Exception as e:
@@ -96,7 +96,7 @@ class TestBasicPipelineIntegration:
         try:
             catalog = load_catalog("k2_catalog", **iceberg_config)
 
-            table = catalog.load_table("market_data.trades_v2")
+            table = catalog.load_table("market_data.trades")
             assert table is not None, "Iceberg table should exist after write"
 
         except Exception as e:
@@ -109,7 +109,7 @@ class TestBasicPipelineIntegration:
         print("✅ V2 trades pipeline test completed successfully")
         print(f"   - Produced: {len(test_trades)} trades")
         print(f"   - Written: {records_written} V2 records")
-        print("   - Table: market_data.trades_v2 exists and queryable")
+        print("   - Table: market_data.trades exists and queryable")
 
     @pytest.mark.integration
     def test_v2_quote_production_and_storage(
@@ -153,7 +153,9 @@ class TestBasicPipelineIntegration:
         writer = IcebergWriter()
 
         try:
-            records_written = writer.write_quotes(records=v2_quotes)
+            records_written = writer.write_quotes(
+                records=v2_quotes, table_name="market_data.quotes", exchange="asx"
+            )
 
         except Exception as e:
             pytest.fail(f"Iceberg quotes write failed: {e}")
@@ -162,7 +164,7 @@ class TestBasicPipelineIntegration:
         try:
             catalog = load_catalog("k2_catalog", **iceberg_config)
 
-            table = catalog.load_table("market_data.quotes_v2")
+            table = catalog.load_table("market_data.quotes")
             assert table is not None, "Iceberg quotes table should exist after write"
 
         except Exception as e:
@@ -175,7 +177,7 @@ class TestBasicPipelineIntegration:
         print("✅ V2 quotes pipeline test completed successfully")
         print(f"   - Produced: {len(test_quotes)} quotes")
         print(f"   - Written: {records_written} V2 quote records")
-        print("   - Table: market_data.quotes_v2 exists and queryable")
+        print("   - Table: market_data.quotes exists and queryable")
 
     @pytest.mark.integration
     def test_v2_schema_compliance(self, sample_market_data):

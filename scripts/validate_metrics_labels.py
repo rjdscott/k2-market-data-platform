@@ -10,12 +10,10 @@ Usage:
     python scripts/validate_metrics_labels.py src/k2/ingestion/producer.py  # Check specific file
 """
 
-import ast
 import argparse
+import ast
 import sys
 from pathlib import Path
-from typing import List, Dict, Set, Tuple, Optional
-from collections import defaultdict
 
 
 class MetricsCallExtractor(ast.NodeVisitor):
@@ -23,7 +21,7 @@ class MetricsCallExtractor(ast.NodeVisitor):
 
     def __init__(self, filepath: str):
         self.filepath = filepath
-        self.metrics_calls: List[Dict] = []
+        self.metrics_calls: list[dict] = []
 
     def visit_Call(self, node: ast.Call) -> None:
         """Visit function call nodes and extract metrics calls."""
@@ -46,25 +44,29 @@ class MetricsCallExtractor(ast.NodeVisitor):
                             # Parse labels dict
                             if isinstance(keyword.value, ast.Dict):
                                 for key, value in zip(keyword.value.keys, keyword.value.values):
-                                    if isinstance(key, ast.Constant) and isinstance(value, ast.Constant):
+                                    if isinstance(key, ast.Constant) and isinstance(
+                                        value, ast.Constant
+                                    ):
                                         labels[key.value] = value.value
 
                     if metric_name:
-                        self.metrics_calls.append({
-                            "metric_name": metric_name,
-                            "metric_type": metric_type,
-                            "labels": labels,
-                            "lineno": node.lineno,
-                            "filepath": self.filepath
-                        })
+                        self.metrics_calls.append(
+                            {
+                                "metric_name": metric_name,
+                                "metric_type": metric_type,
+                                "labels": labels,
+                                "lineno": node.lineno,
+                                "filepath": self.filepath,
+                            }
+                        )
 
         self.generic_visit(node)
 
 
-def extract_metrics_calls(filepath: Path) -> List[Dict]:
+def extract_metrics_calls(filepath: Path) -> list[dict]:
     """Extract all metrics calls from a Python file."""
     try:
-        with open(filepath, "r") as f:
+        with open(filepath) as f:
             source = f.read()
 
         tree = ast.parse(source, filename=str(filepath))
@@ -76,14 +78,14 @@ def extract_metrics_calls(filepath: Path) -> List[Dict]:
         return []
 
 
-def get_prohibited_labels() -> Dict[str, List[str]]:
+def get_prohibited_labels() -> dict[str, list[str]]:
     """Return known prohibited label combinations from bug fixes."""
     return {
         "kafka_produce_errors_total": ["data_type"],  # TD-000: data_type causes crash
     }
 
 
-def validate_metrics_calls(metrics_calls: List[Dict]) -> Tuple[List[Dict], bool]:
+def validate_metrics_calls(metrics_calls: list[dict]) -> tuple[list[dict], bool]:
     """Validate metrics calls and return issues found.
 
     Returns:
@@ -106,41 +108,47 @@ def validate_metrics_calls(metrics_calls: List[Dict]) -> Tuple[List[Dict], bool]
             forbidden = prohibited & actual
 
             if forbidden:
-                issues.append({
-                    "severity": "ERROR",
-                    "metric": metric_name,
-                    "file": filepath,
-                    "line": lineno,
-                    "message": f"Prohibited label(s) found: {forbidden}. This was fixed in TD-000.",
-                    "forbidden_labels": list(forbidden)
-                })
+                issues.append(
+                    {
+                        "severity": "ERROR",
+                        "metric": metric_name,
+                        "file": filepath,
+                        "line": lineno,
+                        "message": f"Prohibited label(s) found: {forbidden}. This was fixed in TD-000.",
+                        "forbidden_labels": list(forbidden),
+                    }
+                )
                 has_errors = True
 
         # Check 2: Labels should be dict (structural validation)
         if not isinstance(labels, dict):
-            issues.append({
-                "severity": "ERROR",
-                "metric": metric_name,
-                "file": filepath,
-                "line": lineno,
-                "message": f"Labels should be a dict, got {type(labels).__name__}",
-            })
+            issues.append(
+                {
+                    "severity": "ERROR",
+                    "metric": metric_name,
+                    "file": filepath,
+                    "line": lineno,
+                    "message": f"Labels should be a dict, got {type(labels).__name__}",
+                }
+            )
             has_errors = True
 
         # Check 3: Warning for empty labels (may be intentional)
         if not labels and call["metric_type"] in ["increment", "histogram"]:
-            issues.append({
-                "severity": "WARNING",
-                "metric": metric_name,
-                "file": filepath,
-                "line": lineno,
-                "message": "Empty labels dict. Consider adding labels for better observability.",
-            })
+            issues.append(
+                {
+                    "severity": "WARNING",
+                    "metric": metric_name,
+                    "file": filepath,
+                    "line": lineno,
+                    "message": "Empty labels dict. Consider adding labels for better observability.",
+                }
+            )
 
     return issues, has_errors
 
 
-def print_validation_report(issues: List[Dict], has_errors: bool) -> None:
+def print_validation_report(issues: list[dict], has_errors: bool) -> None:
     """Print validation report to stdout."""
     if not issues:
         print("✅ All metrics calls validated successfully!")
@@ -172,7 +180,7 @@ def print_validation_report(issues: List[Dict], has_errors: bool) -> None:
         print("\n⚠️  Validation passed with warnings.")
 
 
-def find_python_files(paths: List[Path]) -> List[Path]:
+def find_python_files(paths: list[Path]) -> list[Path]:
     """Find all Python files in the given paths."""
     python_files = []
 
@@ -189,17 +197,13 @@ def main():
     """Main entry point for metrics validation script."""
     parser = argparse.ArgumentParser(
         description="Validate metrics labels in Python code",
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "paths",
-        nargs="*",
-        help="Files or directories to validate (default: src/k2)"
+        "paths", nargs="*", help="Files or directories to validate (default: src/k2)"
     )
     parser.add_argument(
-        "--fix",
-        action="store_true",
-        help="Auto-fix simple issues (not yet implemented)"
+        "--fix", action="store_true", help="Auto-fix simple issues (not yet implemented)"
     )
 
     args = parser.parse_args()

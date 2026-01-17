@@ -29,7 +29,6 @@ Examples:
 import argparse
 import sys
 from pathlib import Path
-from typing import Set
 
 import structlog
 from confluent_kafka.admin import AdminClient, KafkaException
@@ -56,7 +55,7 @@ OLD_SCHEMA_SUBJECTS = [
 ]
 
 
-def get_existing_topics(admin: AdminClient) -> Set[str]:
+def get_existing_topics(admin: AdminClient) -> set[str]:
     """Get list of existing topics (excluding internal topics).
 
     Args:

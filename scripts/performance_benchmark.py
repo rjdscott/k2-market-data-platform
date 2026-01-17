@@ -26,7 +26,6 @@ import requests
 from rich.console import Console
 from rich.table import Table
 
-from k2.common.config import config
 from k2.query.engine import QueryEngine
 
 console = Console()
@@ -70,9 +69,7 @@ class PerformanceBenchmark:
 
                 # Verify query returned data
                 if not result or len(result) == 0:
-                    console.print(
-                        f"  [yellow]Warning: Iteration {i+1} returned 0 rows[/yellow]"
-                    )
+                    console.print(f"  [yellow]Warning: Iteration {i+1} returned 0 rows[/yellow]")
             except Exception as e:
                 console.print(f"  [red]Error in iteration {i+1}: {e}[/red]")
                 continue
@@ -180,9 +177,7 @@ class PerformanceBenchmark:
             # Query Prometheus for kafka_messages_produced_total rate
             response = requests.get(
                 "http://localhost:9090/api/v1/query",
-                params={
-                    "query": "rate(kafka_messages_produced_total[5m])"
-                },
+                params={"query": "rate(kafka_messages_produced_total[5m])"},
                 timeout=5,
             )
             data = response.json()
@@ -227,17 +222,13 @@ class PerformanceBenchmark:
         memory = psutil.virtual_memory()
         self.results["resources"]["memory_used_mb"] = memory.used / (1024 * 1024)
         self.results["resources"]["memory_percent"] = memory.percent
-        console.print(
-            f"  Memory usage: {memory.used / (1024 * 1024):.0f} MB ({memory.percent}%)"
-        )
+        console.print(f"  Memory usage: {memory.used / (1024 * 1024):.0f} MB ({memory.percent}%)")
 
         # Disk usage
         disk = psutil.disk_usage("/")
         self.results["resources"]["disk_used_gb"] = disk.used / (1024 * 1024 * 1024)
         self.results["resources"]["disk_percent"] = disk.percent
-        console.print(
-            f"  Disk usage: {disk.used / (1024 * 1024 * 1024):.1f} GB ({disk.percent}%)"
-        )
+        console.print(f"  Disk usage: {disk.used / (1024 * 1024 * 1024):.1f} GB ({disk.percent}%)")
 
         # Network I/O (snapshot)
         net_io = psutil.net_io_counters()
@@ -314,9 +305,7 @@ class PerformanceBenchmark:
                 f"{self.results['ingestion']['total_messages']:,}",
             )
 
-        summary_table.add_row(
-            "CPU Usage", f"{self.results['resources']['cpu_percent']}%"
-        )
+        summary_table.add_row("CPU Usage", f"{self.results['resources']['cpu_percent']}%")
         summary_table.add_row(
             "Memory Usage",
             f"{self.results['resources']['memory_used_mb']:.0f} MB "
@@ -365,9 +354,7 @@ class PerformanceBenchmark:
 
             # Resource usage
             f.write("\n## Resource Usage\n\n")
-            f.write(
-                f"- **CPU**: {self.results['resources']['cpu_percent']}%\n"
-            )
+            f.write(f"- **CPU**: {self.results['resources']['cpu_percent']}%\n")
             f.write(
                 f"- **Memory**: {self.results['resources']['memory_used_mb']:.0f} MB "
                 f"({self.results['resources']['memory_percent']}%)\n"
@@ -383,9 +370,7 @@ class PerformanceBenchmark:
                 f"- **Compression ratio**: {self.results['storage']['estimated_compression_ratio']}:1 (Parquet + Snappy)\n"
             )
             if "symbols_count" in self.results["storage"]:
-                f.write(
-                    f"- **Symbols stored**: {self.results['storage']['symbols_count']}\n"
-                )
+                f.write(f"- **Symbols stored**: {self.results['storage']['symbols_count']}\n")
 
             # Comparison with projections
             f.write("\n## Comparison: Measured vs Projected\n\n")

@@ -3,6 +3,7 @@
 
 This script automates the setup of:
 - Kafka topics with appropriate partitioning
+- Avro schema registration in Schema Registry (v2 schemas)
 - Iceberg namespaces
 - Iceberg tables (trades, quotes)
 - Validation of MinIO buckets
@@ -18,7 +19,6 @@ import sys
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List
 
 import boto3
 import structlog
@@ -276,7 +276,7 @@ def load_sample_data() -> None:
         logger.warning("Reference data not found", path=str(company_info_file))
         return
 
-    company_map: Dict[str, Dict[str, str]] = {}
+    company_map: dict[str, dict[str, str]] = {}
     with open(company_info_file) as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -363,6 +363,34 @@ def load_sample_data() -> None:
     logger.info("Sample data loading complete", total_records=total_records)
 
 
+def register_avro_schemas() -> None:
+    """Register Avro schemas with Schema Registry.
+
+    Registers all v2 schemas (trades, quotes, reference_data) for both
+    equities and crypto asset classes. This must be done before producers
+    can publish messages.
+
+    Subject naming: market.{asset_class}.{data_type}-value
+    Examples:
+        - market.equities.trades-value
+        - market.crypto.trades-value
+    """
+    from k2.schemas import register_schemas
+
+    logger.info("Registering Avro schemas with Schema Registry")
+
+    try:
+        schema_ids = register_schemas(version="v2")
+        logger.info(
+            "All schemas registered successfully",
+            count=len(schema_ids),
+            schemas=list(schema_ids.keys()),
+        )
+    except Exception as e:
+        logger.error("Failed to register schemas", error=str(e))
+        raise
+
+
 def main():
     """Run infrastructure initialization."""
     logger.info("Starting K2 infrastructure initialization")
@@ -371,16 +399,19 @@ def main():
         # Step 1: Create Kafka topics
         create_kafka_topics()
 
-        # Step 2: Validate MinIO buckets
+        # Step 2: Register Avro schemas
+        register_avro_schemas()
+
+        # Step 3: Validate MinIO buckets
         validate_minio_buckets()
 
-        # Step 3: Create Iceberg namespaces
+        # Step 4: Create Iceberg namespaces
         create_iceberg_namespaces()
 
-        # Step 4: Create Iceberg tables
+        # Step 5: Create Iceberg tables
         create_iceberg_tables()
 
-        # Step 5: Load sample data
+        # Step 6: Load sample data
         load_sample_data()
 
         logger.info("Infrastructure initialization complete")

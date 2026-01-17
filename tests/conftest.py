@@ -374,7 +374,54 @@ def resource_tracker() -> Generator[ResourceTracker]:
 
 @pytest.fixture(scope="session")
 def kafka_cluster(resource_tracker: ResourceTracker) -> Generator[KafkaTestCluster]:
-    """Dockerized Kafka cluster for integration testing."""
+    """Kafka cluster for integration testing.
+
+    Prefers using existing Docker Compose stack if available,
+    otherwise creates isolated test cluster.
+    """
+    # Check if Docker Compose Kafka is already running by testing connectivity
+    import socket
+
+    def is_port_open(host: str, port: int, timeout: float = 2.0) -> bool:
+        """Check if a port is open and accepting connections."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+
+    # Check if Kafka and Schema Registry are running on localhost
+    kafka_available = is_port_open("localhost", 9092)
+    schema_registry_available = is_port_open("localhost", 8081)
+
+    if kafka_available and schema_registry_available:
+        # Use existing Docker Compose stack
+        logger.info("Using existing Docker Compose Kafka stack (ports 9092/8081 available)")
+
+        # Create a mock cluster object with Docker Compose endpoints
+        class DockerComposeKafkaCluster:
+            def __init__(self):
+                self.brokers = "localhost:9092"
+                self.schema_registry_url = "http://localhost:8081"
+                self.kafka_container = None
+                self.schema_registry_container = None
+
+            def create_topics(self):
+                # Topics should already exist in Docker Compose stack
+                pass
+
+            def cleanup(self):
+                # Don't clean up Docker Compose stack
+                pass
+
+        yield DockerComposeKafkaCluster()
+        return
+
+    # Fall back to creating isolated test cluster
+    logger.info("Creating isolated Kafka test cluster (Docker Compose not detected)")
     cluster = KafkaTestCluster(TEST_CONFIG["kafka"])
 
     try:
@@ -395,7 +442,52 @@ def kafka_cluster(resource_tracker: ResourceTracker) -> Generator[KafkaTestClust
 
 @pytest.fixture(scope="session")
 def minio_backend(resource_tracker: ResourceTracker) -> Generator[MinioTestBackend]:
-    """Dockerized MinIO backend for storage testing."""
+    """MinIO backend for storage testing.
+
+    Prefers using existing Docker Compose stack if available,
+    otherwise creates isolated test backend.
+    """
+    # Check if Docker Compose MinIO is already running by testing connectivity
+    import socket
+
+    def is_port_open(host: str, port: int, timeout: float = 2.0) -> bool:
+        """Check if a port is open and accepting connections."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+
+    # Check if MinIO is running on localhost:9000
+    if is_port_open("localhost", 9000):
+        # Use existing Docker Compose stack
+        logger.info("Using existing Docker Compose MinIO stack (port 9000 available)")
+
+        # Create a mock backend object with Docker Compose endpoints
+        class DockerComposeMinioBackend:
+            def __init__(self):
+                self.endpoint_url = "http://localhost:9000"
+                self.access_key = TEST_CONFIG["minio"]["access_key"]
+                self.secret_key = TEST_CONFIG["minio"]["secret_key"]
+                self.bucket = TEST_CONFIG["minio"]["bucket"]
+                self.container = None
+
+            def create_bucket(self):
+                # Bucket should already exist in Docker Compose stack
+                pass
+
+            def cleanup(self):
+                # Don't clean up Docker Compose stack
+                pass
+
+        yield DockerComposeMinioBackend()
+        return
+
+    # Fall back to creating isolated test backend
+    logger.info("Creating isolated MinIO test backend (Docker Compose not detected)")
     backend = MinioTestBackend(TEST_CONFIG["minio"])
 
     try:
@@ -508,11 +600,9 @@ def kafka_consumer_config(kafka_cluster: KafkaTestCluster) -> dict[str, str | in
 
 @pytest.fixture(scope="function")
 def iceberg_config(minio_backend: MinioTestBackend) -> dict[str, str]:
-    """Iceberg configuration for testing."""
+    """Iceberg configuration for testing - uses REST catalog (production-like)."""
     return {
-        "warehouse": f"s3://{TEST_CONFIG['minio']['bucket']}/warehouse",
-        "catalog.backend": "jdbc",
-        "catalog.uri": "jdbc:sqlite::memory:",
+        "uri": "http://localhost:8181",  # Iceberg REST catalog
         "s3.endpoint": minio_backend.endpoint_url,
         "s3.access-key-id": TEST_CONFIG["minio"]["access_key"],
         "s3.secret-access-key": TEST_CONFIG["minio"]["secret_key"],

@@ -45,6 +45,20 @@ Principal engineer asked: "Please think hard about whether this repo and project
 
 ---
 
+## Current Demo Materials
+
+**Active Location**: [`/demos/`](../../../demos/README.md)
+
+The demo materials prepared in this phase are now maintained in:
+- **Quick Reference**: [`demos/reference/quick-reference.md`](../../../demos/reference/quick-reference.md) - One-page Q&A
+- **Architecture Decisions**: [`demos/reference/architecture-decisions.md`](../../../demos/reference/architecture-decisions.md) - "Why X vs Y" answers
+- **Contingency Plan**: [`demos/reference/contingency-plan.md`](../../../demos/reference/contingency-plan.md) - Failure recovery strategies
+- **Performance Validation**: [`demos/docs/performance-validation.md`](../../../demos/docs/performance-validation.md) - Measured benchmarks
+
+For historical context, see the [reference/](./reference/) directory in this phase.
+
+---
+
 ## Implementation Steps
 
 | Step | Title | Priority | Status | Completed |

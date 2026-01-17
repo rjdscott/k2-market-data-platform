@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Quick script to query the trades_v2 Iceberg table and validate data."""
 
-import sys
 import json
-from pathlib import Path
+import sys
 from collections import Counter
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from k2.query.engine import QueryEngine
@@ -19,7 +20,7 @@ print("Query 1: Basic Query Test (limit 1)")
 print("=" * 60)
 trades = engine.query_trades(limit=1)
 if trades:
-    print(f"✓ Found data in trades_v2 table!")
+    print("✓ Found data in trades_v2 table!")
     print(f"  Fields: {list(trades[0].keys())}\n")
 else:
     print("✗ No data found in trades_v2 table\n")
@@ -48,10 +49,10 @@ print("Query 3: Trades by Symbol (up to 5000)")
 print("=" * 60)
 all_trades = engine.query_trades(limit=5000)
 if all_trades:
-    symbols = [t.get('symbol') for t in all_trades]
+    symbols = [t.get("symbol") for t in all_trades]
     symbol_counts = Counter(symbols)
     print(f"Total trades: {len(all_trades)}")
-    print(f"\nTop symbols:")
+    print("\nTop symbols:")
     for symbol, count in symbol_counts.most_common(10):
         print(f"  {symbol}: {count}")
     print()
@@ -63,13 +64,13 @@ print("=" * 60)
 print("Query 4: Sample vendor_data Field")
 print("=" * 60)
 for i, trade in enumerate(sample_trades[:3], 1):
-    vendor_data = trade.get('vendor_data')
+    vendor_data = trade.get("vendor_data")
     print(f"\nTrade {i} vendor_data:")
     if vendor_data:
         try:
             parsed = json.loads(vendor_data) if isinstance(vendor_data, str) else vendor_data
             print(f"  {json.dumps(parsed, indent=2)}")
-        except:
+        except (json.JSONDecodeError, TypeError):
             print(f"  {vendor_data}")
     else:
         print("  None")
@@ -80,8 +81,8 @@ print("=" * 60)
 print("Query 5: Asset Classes and Exchanges")
 print("=" * 60)
 if all_trades:
-    asset_classes = [t.get('asset_class') for t in all_trades]
-    exchanges = [t.get('exchange') for t in all_trades]
+    asset_classes = [t.get("asset_class") for t in all_trades]
+    exchanges = [t.get("exchange") for t in all_trades]
 
     print("Asset Classes:")
     for asset_class, count in Counter(asset_classes).most_common():

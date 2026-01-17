@@ -467,11 +467,11 @@ docs-serve: docs ## Build and serve documentation
 
 demo: ## Run interactive platform demo
 	@echo "$(BLUE)Starting K2 Platform Demo...$(NC)"
-	@$(UV) run python scripts/demo.py
+	@$(UV) run python demos/scripts/execution/demo.py
 
 demo-quick: ## Run demo without delays (CI mode)
 	@echo "$(BLUE)Starting K2 Platform Demo (quick mode)...$(NC)"
-	@$(UV) run python scripts/demo.py --quick
+	@$(UV) run python demos/scripts/execution/demo.py --quick
 
 test-e2e: docker-up ## Run E2E integration tests
 	@echo "$(BLUE)Running E2E integration tests...$(NC)"
@@ -496,19 +496,19 @@ notebook-install: ## Install notebook dependencies
 
 demo-reset: ## Reset demo environment (full reset with confirmation)
 	@echo "$(BLUE)Starting demo reset...$(NC)"
-	@$(UV) run python scripts/reset_demo.py
+	@$(UV) run python demos/scripts/utilities/reset_demo.py
 
 demo-reset-force: ## Reset demo environment (skip confirmation)
 	@echo "$(BLUE)Force resetting demo environment...$(NC)"
-	@$(UV) run python scripts/reset_demo.py --force
+	@$(UV) run python demos/scripts/utilities/reset_demo.py --force
 
 demo-reset-dry-run: ## Preview demo reset operations
 	@echo "$(BLUE)Preview demo reset (dry run)...$(NC)"
-	@$(UV) run python scripts/reset_demo.py --dry-run
+	@$(UV) run python demos/scripts/utilities/reset_demo.py --dry-run
 
 demo-reset-custom: ## Reset with flags (KEEP_METRICS=1, KEEP_KAFKA=1, KEEP_ICEBERG=1, NO_RELOAD=1, FORCE=1)
 	@echo "$(BLUE)Custom demo reset...$(NC)"
-	@$(UV) run python scripts/reset_demo.py \
+	@$(UV) run python demos/scripts/utilities/reset_demo.py \
 		$(if $(KEEP_METRICS),--keep-metrics,) \
 		$(if $(KEEP_KAFKA),--keep-kafka,) \
 		$(if $(KEEP_ICEBERG),--keep-iceberg,) \
