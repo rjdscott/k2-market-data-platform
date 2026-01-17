@@ -11,17 +11,17 @@
 # Validate all P0/P1/P2 fixes in 60 seconds
 cd /Users/rjdscott/Documents/code/k2-market-data-platform
 
-# 1. Run metrics label tests (TD-004)
-uv run pytest tests/unit/test_metrics_labels.py -v
-# Expected: 7/7 tests passing
+# 1. Run metrics label tests-backup (TD-004)
+uv run pytest tests-backup/unit/test_metrics_labels.py -v
+# Expected: 7/7 tests-backup passing
 
 # 2. Run metrics validation script (TD-005)
 uv run python scripts/validate_metrics_labels.py
 # Expected: 0 errors, 27 warnings
 
-# 3. Run consumer validation tests (TD-001)
-uv run pytest tests/unit/test_sequence_tracker.py -v
-# Expected: 29/29 tests passing
+# 3. Run consumer validation tests-backup (TD-001)
+uv run pytest tests-backup/unit/test_sequence_tracker.py -v
+# Expected: 29/29 tests-backup passing
 
 # 4. Verify reference_data_v2.avsc exists (TD-006)
 ls -lh src/k2/schemas/reference_data_v2.avsc
@@ -61,8 +61,8 @@ producer = MarketDataProducer()
 
 **Run Tests**:
 ```bash
-uv run pytest tests/unit/test_sequence_tracker.py -v
-# Expected: 29 tests passing in ~8 seconds
+uv run pytest tests-backup/unit/test_sequence_tracker.py -v
+# Expected: 29 tests-backup passing in ~8 seconds
 ```
 
 **Test Categories**:
@@ -123,7 +123,7 @@ consumer = MarketDataConsumer()
 
 **Run Tests**:
 ```bash
-uv run pytest tests/unit/test_metrics_labels.py -v
+uv run pytest tests-backup/unit/test_metrics_labels.py -v
 ```
 
 **Expected Output**:
@@ -219,12 +219,12 @@ docker compose up -d
 sleep 30
 
 # Run full test suite
-uv run pytest tests/unit/ -v
+uv run pytest tests-backup/unit/ -v
 
-# Expected: All tests passing, including:
-# - 29 consumer validation tests
-# - 7 metrics label tests
-# - Other unit tests
+# Expected: All tests-backup passing, including:
+# - 29 consumer validation tests-backup
+# - 7 metrics label tests-backup
+# - Other unit tests-backup
 ```
 
 ---

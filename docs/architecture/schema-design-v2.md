@@ -400,13 +400,13 @@ V2 schemas are validated by 20+ unit tests:
 
 ```bash
 # Schema validation
-pytest tests/unit/test_schemas.py::TestSchemasV2 -v
+pytest tests-backup/unit/test_schemas.py::TestSchemasV2 -v
 
-# Message builder tests
-pytest tests/unit/test_message_builders.py -v
+# Message builder tests-backup
+pytest tests-backup/unit/test_message_builders.py -v
 
-# Integration tests
-pytest tests/integration/ -v -k v2
+# Integration tests-backup
+pytest tests-backup/integration/ -v -k v2
 ```
 
 **Coverage**: 77% on message_builders.py, 100% on v2 schemas

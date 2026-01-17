@@ -52,6 +52,7 @@ The interactive documentation includes:
 |-----------|------|----------|-------------|---------|
 | `symbol` | string | No | Filter by symbol | `BHP`, `BTCUSDT` |
 | `exchange` | string | No | Filter by exchange | `ASX`, `BINANCE` |
+| `table_type` | string | No | Table type to query (TRADES, QUOTES) | `TRADES` |
 | `start_time` | ISO 8601 | No | Filter trades after this time | `2026-01-13T00:00:00Z` |
 | `end_time` | ISO 8601 | No | Filter trades before this time | `2026-01-13T23:59:59Z` |
 | `limit` | integer | No | Max results to return (default: 100, max: 10000) | `1000` |
@@ -74,14 +75,22 @@ The interactive documentation includes:
 
 Query trade records with filters.
 
-**Request**:
+**Request Examples**:
 ```bash
+# Query BHP trades from ASX
 GET /api/v1/trades?symbol=BHP&exchange=ASX&start_time=2026-01-13T00:00:00Z&limit=100
+
+# Query crypto trades from Binance (consumer must be running)
+GET /api/v1/trades?symbol=BTCUSDT&exchange=BINANCE&table_type=TRADES&limit=10
+
+# Query all recent trades (works after consumer service is started)
+GET /api/v1/trades?table_type=TRADES&limit=5
 ```
 
 **Query Parameters**:
 - `symbol` (string, optional): Filter by symbol
 - `exchange` (string, optional): Filter by exchange
+- `table_type` (string, optional): Table type (TRADES, QUOTES) - use TRADES for consumer data
 - `start_time` (ISO 8601, optional): Filter trades after this timestamp
 - `end_time` (ISO 8601, optional): Filter trades before this timestamp
 - `limit` (integer, optional): Max results (default: 100, max: 10000)
@@ -135,9 +144,19 @@ GET /api/v1/trades?symbol=BHP&exchange=ASX&start_time=2026-01-13T00:00:00Z&limit
 
 Query quote (bid/ask) records with filters.
 
-**Request**:
+**Request Examples**:
 ```bash
-GET /api/v1/quotes?symbol=BHP&limit=10
+# Query ASX equities
+curl -H "X-API-Key: k2-dev-api-key-2026" \
+  "http://localhost:8000/v1/trades?symbol=BHP&limit=10"
+
+# Query crypto trades (after starting consumer service)
+curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
+  -H "X-API-Key: k2-dev-api-key-2026" | jq .
+
+# Query specific crypto symbol
+curl -s "http://localhost:8000/v1/trades?symbol=BTCUSDT&exchange=BINANCE&table_type=TRADES&limit=10" \
+  -H "X-API-Key: k2-dev-api-key-2026" | jq .
 ```
 
 **Query Parameters**: Same as `/v1/trades`

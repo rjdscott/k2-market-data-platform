@@ -305,15 +305,17 @@ class BatchLoader:
         except ValueError as e:
             raise ValueError(f"Invalid timestamp format: {row['exchange_timestamp']}") from e
 
-        # Map side to enum (buy → BUY, sell → SELL)
+        # Normalize side to lowercase, then map to uppercase for v2
+        side_lower = row["side"].lower()
+
+        # Map side to uppercase enum for v2 (buy → BUY, sell → SELL)
         side_mapping = {
             "buy": "BUY",
             "sell": "SELL",
             "sell_short": "SELL_SHORT",
             "unknown": "UNKNOWN",
         }
-        side_lower = row["side"].lower()
-        side_enum = side_mapping.get(side_lower, "UNKNOWN")
+        side_upper = side_mapping.get(side_lower, "UNKNOWN")
 
         # Use v2 builder for v2 schema
         if self.schema_version == "v2":
@@ -328,16 +330,23 @@ class BatchLoader:
                 if row.get("venue"):
                     vendor_data["venue"] = str(row["venue"])
 
+            # Validate numeric fields before conversion
+            try:
+                price = Decimal(str(row["price"]))
+                quantity = Decimal(str(row["quantity"]))
+            except (ValueError, ArithmeticError) as e:
+                raise ValueError(f"Invalid numeric value in row: {e}") from e
+
             # Build v2 trade message
             return build_trade_v2(
                 symbol=row["symbol"],
                 exchange=self.exchange.upper(),
                 asset_class=self.asset_class,
                 timestamp=timestamp,
-                price=Decimal(str(row["price"])),
-                quantity=Decimal(str(row["quantity"])),
+                price=price,
+                quantity=quantity,
                 currency=self.currency,
-                side=side_enum,
+                side=side_upper,  # Use uppercase side for v2 schema
                 trade_id=row["trade_id"],
                 message_id=str(uuid.uuid4()),
                 source_sequence=int(row["sequence_number"]),
@@ -581,7 +590,10 @@ class BatchLoader:
 
                         stats.success_count += 1
                         progress.update(
-                            task, advance=1, success=stats.success_count, errors=stats.error_count,
+                            task,
+                            advance=1,
+                            success=stats.success_count,
+                            errors=stats.error_count,
                         )
 
                         # Flush periodically
@@ -597,7 +609,10 @@ class BatchLoader:
                         # Invalid record (schema validation failure)
                         stats.error_count += 1
                         progress.update(
-                            task, advance=1, success=stats.success_count, errors=stats.error_count,
+                            task,
+                            advance=1,
+                            success=stats.success_count,
+                            errors=stats.error_count,
                         )
 
                         logger.warning(
@@ -614,7 +629,10 @@ class BatchLoader:
                         # Producer error (Kafka/network issue)
                         stats.error_count += 1
                         progress.update(
-                            task, advance=1, success=stats.success_count, errors=stats.error_count,
+                            task,
+                            advance=1,
+                            success=stats.success_count,
+                            errors=stats.error_count,
                         )
 
                         logger.error(
@@ -687,7 +705,11 @@ def print_summary(stats: LoadStats):
 @app.command()
 def load(
     csv: Path = typer.Option(
-        ..., help="Path to CSV file", exists=True, file_okay=True, dir_okay=False,
+        ...,
+        help="Path to CSV file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
     ),
     asset_class: str = typer.Option(..., help="Asset class (e.g., 'equities', 'crypto')"),
     exchange: str = typer.Option(..., help="Exchange code (e.g., 'asx', 'binance')"),

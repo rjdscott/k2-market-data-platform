@@ -31,7 +31,7 @@ def test_side_mapping():
     assert convert_binance_trade_to_v2({"m": True, ...})["side"] == "SELL"
     assert convert_binance_trade_to_v2({"m": False, ...})["side"] == "BUY"
 
-# 10+ tests total
+# 10+ tests-backup total
 ```
 
 ### 2. Manual Integration Test
@@ -48,8 +48,8 @@ python scripts/binance_stream.py
 ## Validation
 
 ```bash
-pytest tests/unit/test_binance_client.py -v
-# All tests pass
+pytest tests-backup/unit/test_binance_client.py -v
+# All tests-backup pass
 
 # Manual test
 python -c "
@@ -166,13 +166,13 @@ Related: Phase 2 Prep, Step 01.5.5
 ### Test Results:
 
 ```bash
-$ uv run pytest tests/unit/test_binance_client.py -v
+$ uv run pytest tests-backup/unit/test_binance_client.py -v
 ======================== 26 passed in 4.92s =========================
 
-$ uv run pytest tests/unit/test_circuit_breaker.py -v
+$ uv run pytest tests-backup/unit/test_circuit_breaker.py -v
 ======================== 22 passed in 4.03s =========================
 
-Total: 48 tests, 48 passed (100% pass rate)
+Total: 48 tests-backup, 48 passed (100% pass rate)
 ```
 
 ### Code Coverage:

@@ -1,5 +1,4 @@
-"""
-Degradation manager for graceful degradation under load.
+"""Degradation manager for graceful degradation under load.
 
 Implements 5-level degradation cascade based on system load metrics:
 - NORMAL: Full processing
@@ -12,11 +11,11 @@ This is a load-based degradation system, distinct from the fault-tolerance
 circuit breaker (CLOSED/OPEN/HALF_OPEN) in circuit_breaker.py.
 """
 
-from enum import IntEnum
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Optional
 import threading
+from dataclasses import dataclass
+from datetime import datetime
+from enum import IntEnum
+
 import psutil
 
 from k2.common.logging import get_logger
@@ -30,6 +29,7 @@ logger = get_logger(__name__, component="degradation_manager")
 
 class DegradationLevel(IntEnum):
     """Degradation levels from healthy to circuit break."""
+
     NORMAL = 0
     SOFT = 1
     GRACEFUL = 2
@@ -40,6 +40,7 @@ class DegradationLevel(IntEnum):
 @dataclass
 class DegradationThresholds:
     """Configurable thresholds for degradation transitions."""
+
     # Lag thresholds (message count)
     lag_soft: int = 100_000
     lag_graceful: int = 500_000
@@ -61,8 +62,7 @@ class DegradationThresholds:
 
 
 class DegradationManager:
-    """
-    Degradation manager for graceful degradation.
+    """Degradation manager for graceful degradation.
 
     Thread-safe implementation with hysteresis to prevent flapping.
 
@@ -80,19 +80,40 @@ class DegradationManager:
 
     def __init__(
         self,
-        thresholds: Optional[DegradationThresholds] = None,
-        critical_symbols: Optional[list[str]] = None,
+        thresholds: DegradationThresholds | None = None,
+        critical_symbols: list[str] | None = None,
     ):
         self.thresholds = thresholds or DegradationThresholds()
-        self.critical_symbols = set(critical_symbols or [
-            # Top ASX symbols by volume
-            'BHP', 'CBA', 'CSL', 'NAB', 'WBC', 'ANZ', 'WES', 'MQG', 'RIO', 'TLS',
-            'WOW', 'FMG', 'NCM', 'STO', 'WPL', 'AMC', 'GMG', 'TCL', 'COL', 'ALL',
-        ])
+        self.critical_symbols = set(
+            critical_symbols
+            or [
+                # Top ASX symbols by volume
+                "BHP",
+                "CBA",
+                "CSL",
+                "NAB",
+                "WBC",
+                "ANZ",
+                "WES",
+                "MQG",
+                "RIO",
+                "TLS",
+                "WOW",
+                "FMG",
+                "NCM",
+                "STO",
+                "WPL",
+                "AMC",
+                "GMG",
+                "TCL",
+                "COL",
+                "ALL",
+            ]
+        )
 
         self._level = DegradationLevel.NORMAL
         self._lock = threading.Lock()
-        self._last_degradation_time: Optional[datetime] = None
+        self._last_degradation_time: datetime | None = None
         self._degradation_history: list[tuple[datetime, DegradationLevel]] = []
 
         # Initialize metrics
@@ -108,9 +129,9 @@ class DegradationManager:
         """Initialize Prometheus metrics."""
         # Update degradation level gauge
         DEGRADATION_LEVEL.labels(
-            service='k2-platform',
-            environment='dev',
-            component='degradation_manager',
+            service="k2-platform",
+            environment="dev",
+            component="degradation_manager",
         ).set(0)
 
     @property
@@ -122,10 +143,9 @@ class DegradationManager:
     def check_and_degrade(
         self,
         lag: int,
-        heap_pct: Optional[float] = None,
+        heap_pct: float | None = None,
     ) -> DegradationLevel:
-        """
-        Check system health and update degradation level.
+        """Check system health and update degradation level.
 
         Args:
             lag: Current Kafka consumer lag (message count)
@@ -158,14 +178,13 @@ class DegradationManager:
 
         if lag >= t.lag_circuit_break or heap_pct >= t.heap_circuit_break:
             return DegradationLevel.CIRCUIT_BREAK
-        elif lag >= t.lag_aggressive or heap_pct >= t.heap_aggressive:
+        if lag >= t.lag_aggressive or heap_pct >= t.heap_aggressive:
             return DegradationLevel.AGGRESSIVE
-        elif lag >= t.lag_graceful or heap_pct >= t.heap_graceful:
+        if lag >= t.lag_graceful or heap_pct >= t.heap_graceful:
             return DegradationLevel.GRACEFUL
-        elif lag >= t.lag_soft or heap_pct >= t.heap_soft:
+        if lag >= t.lag_soft or heap_pct >= t.heap_soft:
             return DegradationLevel.SOFT
-        else:
-            return DegradationLevel.NORMAL
+        return DegradationLevel.NORMAL
 
     def _can_recover(
         self,
@@ -186,17 +205,25 @@ class DegradationManager:
         recovery_factor_heap = t.recovery_heap_factor
 
         if current_level == DegradationLevel.CIRCUIT_BREAK:
-            return (lag < t.lag_circuit_break * recovery_factor_lag and
-                    heap_pct < t.heap_circuit_break * recovery_factor_heap)
-        elif current_level == DegradationLevel.AGGRESSIVE:
-            return (lag < t.lag_aggressive * recovery_factor_lag and
-                    heap_pct < t.heap_aggressive * recovery_factor_heap)
-        elif current_level == DegradationLevel.GRACEFUL:
-            return (lag < t.lag_graceful * recovery_factor_lag and
-                    heap_pct < t.heap_graceful * recovery_factor_heap)
-        elif current_level == DegradationLevel.SOFT:
-            return (lag < t.lag_soft * recovery_factor_lag and
-                    heap_pct < t.heap_soft * recovery_factor_heap)
+            return (
+                lag < t.lag_circuit_break * recovery_factor_lag
+                and heap_pct < t.heap_circuit_break * recovery_factor_heap
+            )
+        if current_level == DegradationLevel.AGGRESSIVE:
+            return (
+                lag < t.lag_aggressive * recovery_factor_lag
+                and heap_pct < t.heap_aggressive * recovery_factor_heap
+            )
+        if current_level == DegradationLevel.GRACEFUL:
+            return (
+                lag < t.lag_graceful * recovery_factor_lag
+                and heap_pct < t.heap_graceful * recovery_factor_heap
+            )
+        if current_level == DegradationLevel.SOFT:
+            return (
+                lag < t.lag_soft * recovery_factor_lag
+                and heap_pct < t.heap_soft * recovery_factor_heap
+            )
 
         return True
 
@@ -218,18 +245,18 @@ class DegradationManager:
 
         # Update metrics
         DEGRADATION_LEVEL.labels(
-            service='k2-platform',
-            environment='dev',
-            component='degradation_manager',
+            service="k2-platform",
+            environment="dev",
+            component="degradation_manager",
         ).set(new_level.value)
 
         # Record transition metric
         try:
-            transitions_metric = get_metric('degradation_transitions_total')
+            transitions_metric = get_metric("degradation_transitions_total")
             transitions_metric.labels(
-                service='k2-platform',
-                environment='dev',
-                component='degradation_manager',
+                service="k2-platform",
+                environment="dev",
+                component="degradation_manager",
                 from_level=old_level.name.lower(),
                 to_level=new_level.name.lower(),
             ).inc()
@@ -250,8 +277,7 @@ class DegradationManager:
         )
 
     def should_process_symbol(self, symbol: str) -> bool:
-        """
-        Check if symbol should be processed at current degradation level.
+        """Check if symbol should be processed at current degradation level.
 
         At GRACEFUL and above, only critical symbols are processed.
         """
@@ -275,13 +301,14 @@ class DegradationManager:
         """Get current degradation manager status."""
         with self._lock:
             return {
-                'level': self._level.name,
-                'level_value': self._level.value,
-                'is_accepting_data': self.is_accepting_data(),
-                'critical_symbols_count': len(self.critical_symbols),
-                'last_degradation': self._last_degradation_time.isoformat()
-                    if self._last_degradation_time else None,
-                'history_count': len(self._degradation_history),
+                "level": self._level.name,
+                "level_value": self._level.value,
+                "is_accepting_data": self.is_accepting_data(),
+                "critical_symbols_count": len(self.critical_symbols),
+                "last_degradation": (
+                    self._last_degradation_time.isoformat() if self._last_degradation_time else None
+                ),
+                "history_count": len(self._degradation_history),
             }
 
     def reset(self):
@@ -292,9 +319,9 @@ class DegradationManager:
             self._last_degradation_time = None
 
             DEGRADATION_LEVEL.labels(
-                service='k2-platform',
-                environment='dev',
-                component='degradation_manager',
+                service="k2-platform",
+                environment="dev",
+                component="degradation_manager",
             ).set(0)
 
             logger.info(

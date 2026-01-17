@@ -98,7 +98,7 @@ def get_symbols(self, exchange: Optional[str] = None) -> List[str]:
 
 **Testing**:
 ```python
-# tests/unit/test_query_engine_security.py
+# tests-backup/unit/test_query_engine_security.py
 def test_sql_injection_prevention():
     """Ensure malicious exchange parameter doesn't inject SQL"""
     engine = QueryEngine(...)
@@ -133,7 +133,7 @@ def test_sql_injection_prevention():
 **Required Test Coverage**:
 
 ```python
-# tests/unit/test_sequence_tracker.py
+# tests-backup/unit/test_sequence_tracker.py
 import pytest
 from datetime import datetime, timedelta
 from k2.ingestion.sequence_tracker import SequenceTracker, SequenceEvent
@@ -381,7 +381,7 @@ async def get_trades(
 
 **Testing**:
 ```python
-# tests/unit/test_query_engine.py
+# tests-backup/unit/test_query_engine.py
 def test_query_timeout(tmp_path):
     """Test that queries timeout after configured limit"""
     engine = QueryEngine(db_path=tmp_path / "test.db")
@@ -534,7 +534,7 @@ class DeadLetterQueueWriter:
 
 **Testing**:
 ```python
-# tests/unit/test_consumer_retry.py
+# tests-backup/unit/test_consumer_retry.py
 def test_consumer_retries_transient_errors(mocker):
     """Test consumer retries S3 timeout errors"""
     writer_mock = mocker.Mock()
@@ -957,7 +957,7 @@ class QueryEngine:
 
 **Testing**:
 ```python
-# tests/unit/test_connection_pool.py
+# tests-backup/unit/test_connection_pool.py
 import pytest
 import threading
 import time
@@ -1108,7 +1108,7 @@ def main():
 
 **Testing**:
 ```python
-# tests/unit/test_producer_cleanup.py
+# tests-backup/unit/test_producer_cleanup.py
 def test_producer_flushes_on_close(kafka_mock):
     """Test producer flushes pending messages on close"""
     producer = MarketDataProducer(...)
@@ -1200,7 +1200,7 @@ app.add_middleware(
 
 **Testing**:
 ```python
-# tests/unit/test_middleware.py
+# tests-backup/unit/test_middleware.py
 def test_request_size_limit_blocks_large_requests():
     """Test middleware blocks requests > 10MB"""
     client = TestClient(app)

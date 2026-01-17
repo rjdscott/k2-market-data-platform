@@ -184,10 +184,10 @@ make docker-up
 sleep 30  # Wait for services
 make init-infra
 
-# 4. Run all tests
-pytest tests/unit/ -v
-pytest tests/integration/ -v
-pytest tests/integration/test_e2e_flow.py -v -s
+# 4. Run all tests-backup
+pytest tests-backup/unit/ -v
+pytest tests-backup/integration/ -v
+pytest tests-backup/integration/test_e2e_flow.py -v -s
 
 # 5. Run demo
 python scripts/demo.py

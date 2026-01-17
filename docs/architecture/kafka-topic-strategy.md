@@ -674,7 +674,7 @@ curl http://localhost:8081/subjects
 Run integration tests:
 
 ```bash
-pytest tests/integration/test_topic_migration.py -v
+pytest tests-backup/integration/test_topic_migration.py -v
 ```
 
 Expected results:

@@ -55,7 +55,7 @@ Key features:
 1. **Remove replay engine**:
    ```bash
    rm src/k2/query/replay.py
-   rm tests/integration/test_replay_engine.py
+   rm tests-backup/integration/test_replay_engine.py
    ```
 
 ---

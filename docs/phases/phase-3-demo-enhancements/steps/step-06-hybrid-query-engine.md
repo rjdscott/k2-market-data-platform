@@ -541,8 +541,8 @@ Create `tests/unit/test_hybrid_engine.py` with 15+ tests.
 ### Verification Commands
 
 ```bash
-# Run tests
-pytest tests/unit/test_hybrid_engine.py -v
+# Run tests-backup
+pytest tests-backup/unit/test_hybrid_engine.py -v
 
 # Test API
 curl -H "X-API-Key: k2-dev-api-key-2026" \

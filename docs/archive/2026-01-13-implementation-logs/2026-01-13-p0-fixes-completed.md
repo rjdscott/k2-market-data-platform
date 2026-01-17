@@ -341,8 +341,8 @@ With P0 complete, ready to move to P1 improvements:
 
 1. **Run Full Test Suite**:
    ```bash
-   uv run pytest tests/unit/test_sequence_tracker.py -v
-   uv run pytest tests/unit/test_query_engine_security.py -v
+   uv run pytest tests-backup/unit/test_sequence_tracker.py -v
+   uv run pytest tests-backup/unit/test_query_engine_security.py -v
    ```
 
 2. **Manual Verification**:

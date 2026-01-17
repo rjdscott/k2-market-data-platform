@@ -9,7 +9,6 @@ Metrics follow Prometheus naming conventions:
 - Descriptive help text
 """
 
-
 from prometheus_client import Counter, Gauge, Histogram, Info
 
 # ==============================================================================
@@ -115,6 +114,18 @@ SERIALIZER_ERRORS_TOTAL = Counter(
     "k2_serializer_errors_total",
     "Total Avro serializer errors",
     STANDARD_LABELS + ["component_type", "subject"],
+)
+
+SERIALIZER_CACHE_SIZE = Gauge(
+    "k2_serializer_cache_size",
+    "Current number of cached Avro serializers",
+    STANDARD_LABELS + ["component_type"],
+)
+
+SERIALIZER_CACHE_EVICTIONS_TOTAL = Counter(
+    "k2_serializer_cache_evictions_total",
+    "Total number of serializer cache evictions (LRU)",
+    STANDARD_LABELS + ["component_type"],
 )
 
 # Kafka Consumer
@@ -223,6 +234,50 @@ BINANCE_LAST_MESSAGE_TIMESTAMP_SECONDS = Gauge(
 BINANCE_RECONNECT_DELAY_SECONDS = Gauge(
     "k2_binance_reconnect_delay_seconds",
     "Current reconnection delay in seconds (exponential backoff)",
+    STANDARD_LABELS,
+)
+
+BINANCE_CONNECTION_ROTATIONS_TOTAL = Counter(
+    "k2_binance_connection_rotations_total",
+    "Total scheduled connection rotations (periodic reconnects to prevent memory leaks)",
+    STANDARD_LABELS + ["reason"],  # reason: scheduled_rotation|manual_rotation
+)
+
+BINANCE_CONNECTION_LIFETIME_SECONDS = Gauge(
+    "k2_binance_connection_lifetime_seconds",
+    "Current WebSocket connection lifetime in seconds",
+    STANDARD_LABELS,
+)
+
+# Memory monitoring metrics
+PROCESS_MEMORY_RSS_BYTES = Gauge(
+    "k2_process_memory_rss_bytes",
+    "Process Resident Set Size (RSS) memory usage in bytes",
+    STANDARD_LABELS,
+)
+
+PROCESS_MEMORY_VMS_BYTES = Gauge(
+    "k2_process_memory_vms_bytes",
+    "Process Virtual Memory Size (VMS) in bytes",
+    STANDARD_LABELS,
+)
+
+MEMORY_LEAK_DETECTION_SCORE = Gauge(
+    "k2_memory_leak_detection_score",
+    "Memory leak detection score (0-1, >0.8 indicates likely leak via linear regression)",
+    STANDARD_LABELS,
+)
+
+# WebSocket ping-pong heartbeat metrics
+BINANCE_LAST_PONG_TIMESTAMP_SECONDS = Gauge(
+    "k2_binance_last_pong_timestamp_seconds",
+    "Timestamp of last pong response received (for heartbeat health monitoring)",
+    STANDARD_LABELS,
+)
+
+BINANCE_PONG_TIMEOUTS_TOTAL = Counter(
+    "k2_binance_pong_timeouts_total",
+    "Total WebSocket pong timeouts (no response within timeout period)",
     STANDARD_LABELS,
 )
 
@@ -393,6 +448,18 @@ HTTP_REQUESTS_IN_PROGRESS = Gauge(
     STANDARD_LABELS + ["method", "endpoint"],
 )
 
+HTTP_REQUEST_SIZE_LIMIT_EXCEEDED_TOTAL = Counter(
+    "k2_http_request_size_limit_exceeded_total",
+    "Total HTTP requests rejected due to size limit exceeded",
+    STANDARD_LABELS + ["method", "endpoint"],
+)
+
+HTTP_REQUEST_SIZE_LIMIT_ERRORS_TOTAL = Counter(
+    "k2_http_request_size_limit_errors_total",
+    "Total HTTP request size limit validation errors",
+    STANDARD_LABELS + ["reason"],
+)
+
 # ==============================================================================
 # System Metrics
 # ==============================================================================
@@ -447,6 +514,8 @@ _METRIC_REGISTRY: dict[str, object] = {
     "producer_initialized_total": PRODUCER_INITIALIZED_TOTAL,
     "producer_init_errors_total": PRODUCER_INIT_ERRORS_TOTAL,
     "serializer_errors_total": SERIALIZER_ERRORS_TOTAL,
+    "serializer_cache_size": SERIALIZER_CACHE_SIZE,
+    "serializer_cache_evictions_total": SERIALIZER_CACHE_EVICTIONS_TOTAL,
     "kafka_messages_consumed_total": KAFKA_MESSAGES_CONSUMED_TOTAL,
     "kafka_consumer_lag_seconds": KAFKA_CONSUMER_LAG_SECONDS,
     "kafka_consumer_lag_messages": KAFKA_CONSUMER_LAG_MESSAGES,
@@ -464,6 +533,15 @@ _METRIC_REGISTRY: dict[str, object] = {
     "binance_connection_errors_total": BINANCE_CONNECTION_ERRORS_TOTAL,
     "binance_last_message_timestamp_seconds": BINANCE_LAST_MESSAGE_TIMESTAMP_SECONDS,
     "binance_reconnect_delay_seconds": BINANCE_RECONNECT_DELAY_SECONDS,
+    "binance_connection_rotations_total": BINANCE_CONNECTION_ROTATIONS_TOTAL,
+    "binance_connection_lifetime_seconds": BINANCE_CONNECTION_LIFETIME_SECONDS,
+    # Memory Monitoring
+    "process_memory_rss_bytes": PROCESS_MEMORY_RSS_BYTES,
+    "process_memory_vms_bytes": PROCESS_MEMORY_VMS_BYTES,
+    "memory_leak_detection_score": MEMORY_LEAK_DETECTION_SCORE,
+    # Ping-Pong Heartbeat
+    "binance_last_pong_timestamp_seconds": BINANCE_LAST_PONG_TIMESTAMP_SECONDS,
+    "binance_pong_timeouts_total": BINANCE_PONG_TIMEOUTS_TOTAL,
     # Storage
     "iceberg_rows_written_total": ICEBERG_ROWS_WRITTEN_TOTAL,
     "iceberg_write_duration_seconds": ICEBERG_WRITE_DURATION_SECONDS,
@@ -490,6 +568,8 @@ _METRIC_REGISTRY: dict[str, object] = {
     "http_request_duration_seconds": HTTP_REQUEST_DURATION_SECONDS,
     "http_request_errors_total": HTTP_REQUEST_ERRORS_TOTAL,
     "http_requests_in_progress": HTTP_REQUESTS_IN_PROGRESS,
+    "http_request_size_limit_exceeded_total": HTTP_REQUEST_SIZE_LIMIT_EXCEEDED_TOTAL,
+    "http_request_size_limit_errors_total": HTTP_REQUEST_SIZE_LIMIT_ERRORS_TOTAL,
     # System
     "circuit_breaker_state": CIRCUIT_BREAKER_STATE,
     "circuit_breaker_failures_total": CIRCUIT_BREAKER_FAILURES_TOTAL,

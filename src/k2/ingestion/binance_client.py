@@ -29,14 +29,18 @@ import json
 import ssl
 import time
 import uuid
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Any, Callable, Optional
+from typing import Any
 
+import certifi
+import psutil
 import structlog
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from k2.common.circuit_breaker import CircuitBreaker
+from k2.common.config import config
 from k2.common.metrics import create_component_metrics
 
 logger = structlog.get_logger(__name__)
@@ -44,8 +48,7 @@ metrics = create_component_metrics("binance_streaming")
 
 
 def parse_binance_symbol(symbol: str) -> tuple[str, str, str]:
-    """
-    Parse Binance symbol into base asset, quote asset, and quote currency.
+    """Parse Binance symbol into base asset, quote asset, and quote currency.
 
     Args:
         symbol: Binance symbol (e.g., BTCUSDT, ETHBTC, BNBEUR)
@@ -91,8 +94,7 @@ def parse_binance_symbol(symbol: str) -> tuple[str, str, str]:
 
 
 def _validate_binance_message(msg: dict[str, Any]) -> None:
-    """
-    Validate Binance trade message has required fields.
+    """Validate Binance trade message has required fields.
 
     Args:
         msg: Binance trade payload
@@ -111,8 +113,7 @@ def _validate_binance_message(msg: dict[str, Any]) -> None:
 
 
 def convert_binance_trade_to_v2(msg: dict[str, Any]) -> dict[str, Any]:
-    """
-    Convert Binance WebSocket trade to v2 Trade schema.
+    """Convert Binance WebSocket trade to v2 Trade schema.
 
     Args:
         msg: Binance trade payload from WebSocket
@@ -137,7 +138,7 @@ def convert_binance_trade_to_v2(msg: dict[str, Any]) -> dict[str, Any]:
 
     # Convert timestamps (Binance uses milliseconds, v2 uses microseconds)
     exchange_timestamp_micros = msg["T"] * 1000  # Trade time (T)
-    event_timestamp_micros = msg["E"] * 1000  # Event time (E)
+    msg["E"] * 1000  # Event time (E)
     ingestion_timestamp_micros = int(time.time() * 1_000_000)
 
     # Build v2 trade record
@@ -185,13 +186,13 @@ class BinanceWebSocketClient:
     def __init__(
         self,
         symbols: list[str],
-        on_message: Optional[Callable[[dict[str, Any]], None]] = None,
+        on_message: Callable[[dict[str, Any]], None] | None = None,
         url: str = "wss://stream.binance.com:9443/stream",
-        failover_urls: Optional[list[str]] = None,
+        failover_urls: list[str] | None = None,
         reconnect_delay: int = 5,
         max_reconnect_attempts: int = 10,
         health_check_interval: int = 30,
-        health_check_timeout: int = 60,
+        health_check_timeout: int = 30,
         enable_circuit_breaker: bool = True,
     ) -> None:
         """Initialize Binance WebSocket client.
@@ -217,16 +218,33 @@ class BinanceWebSocketClient:
         self.max_reconnect_attempts = max_reconnect_attempts
         self.health_check_interval = health_check_interval
         self.health_check_timeout = health_check_timeout
-        self.ws: Optional[websockets.WebSocketClientProtocol] = None
+        self.ws: websockets.WebSocketClientProtocol | None = None
         self.is_running = False
         self.reconnect_attempts = 0
 
         # Health check state
         self.last_message_time: float = time.time()
-        self.health_check_task: Optional[asyncio.Task] = None
+        self.health_check_task: asyncio.Task | None = None
+
+        # Connection rotation state (prevent memory accumulation in long-lived connections)
+        self.connection_start_time: float | None = None
+        self.connection_max_lifetime_seconds = config.binance.connection_max_lifetime_hours * 3600
+        self.rotation_task: asyncio.Task | None = None
+
+        # Memory monitoring state (detect memory leaks via linear regression)
+        self.memory_samples: list[tuple[float, int]] = []  # [(timestamp, rss_bytes)]
+        self.memory_monitor_task: asyncio.Task | None = None
+        self.memory_sample_interval_seconds = 30  # Sample memory every 30s
+        self.memory_sample_window_size = 120  # Keep last 120 samples (1 hour at 30s intervals)
+
+        # WebSocket ping-pong heartbeat state (detect silent connection drops)
+        self.last_pong_time: float | None = None  # Track when last pong was received
+        self.ping_task: asyncio.Task | None = None  # Async task for ping loop
+        self.ping_interval_seconds = config.binance.ping_interval_seconds  # Default: 180s (3 min)
+        self.ping_timeout_seconds = config.binance.ping_timeout_seconds  # Default: 10s
 
         # Circuit breaker for resilience
-        self.circuit_breaker: Optional[CircuitBreaker] = None
+        self.circuit_breaker: CircuitBreaker | None = None
         if enable_circuit_breaker:
             self.circuit_breaker = CircuitBreaker(
                 name="binance_websocket",
@@ -277,6 +295,290 @@ class BinanceWebSocketClient:
                     if self.ws:
                         await self.ws.close()
 
+    async def _connection_rotation_loop(self) -> None:
+        """Monitor connection lifetime and trigger periodic rotation.
+
+        Rotates connections every N hours to prevent memory accumulation
+        in long-lived WebSocket connections. This addresses memory leaks
+        from frame buffers and other connection state.
+        """
+        logger.info(
+            "binance_connection_rotation_enabled",
+            max_lifetime_hours=config.binance.connection_max_lifetime_hours,
+            max_lifetime_seconds=self.connection_max_lifetime_seconds,
+        )
+
+        while self.is_running:
+            await asyncio.sleep(60)  # Check every minute
+
+            if not self.is_running:
+                break
+
+            # Skip if no active connection
+            if not self.connection_start_time:
+                continue
+
+            # Calculate connection lifetime
+            lifetime = time.time() - self.connection_start_time
+
+            # Update lifetime metric
+            metrics.gauge(
+                "binance_connection_lifetime_seconds",
+                value=lifetime,
+                labels=self.metrics_labels,
+            )
+
+            # Check if rotation needed
+            if lifetime > self.connection_max_lifetime_seconds:
+                logger.info(
+                    "binance_connection_rotation_triggered",
+                    lifetime_seconds=lifetime,
+                    max_lifetime_seconds=self.connection_max_lifetime_seconds,
+                )
+
+                # Increment rotation metric
+                metrics.increment(
+                    "binance_connection_rotations_total",
+                    labels={**self.metrics_labels, "reason": "scheduled_rotation"},
+                )
+
+                # Trigger graceful reconnect by closing connection
+                # The main connect loop will automatically reconnect
+                if self.ws:
+                    await self.ws.close(code=1000, reason="Periodic rotation")
+
+    def _calculate_memory_leak_score(self) -> float:
+        """Calculate memory leak detection score using linear regression.
+
+        Analyzes memory samples over time to detect upward trend that
+        indicates a memory leak. Returns a score from 0 to 1:
+        - 0.0 = no leak detected (flat or decreasing trend)
+        - 0.5 = moderate growth
+        - 0.8+ = likely memory leak (significant upward trend)
+
+        Uses simple linear regression on (timestamp, rss_bytes) samples.
+
+        Returns:
+            float: Leak detection score (0.0 to 1.0)
+        """
+        if len(self.memory_samples) < 10:
+            # Need at least 10 samples for meaningful regression
+            return 0.0
+
+        # Extract x (time elapsed) and y (memory in MB) from samples
+        first_timestamp = self.memory_samples[0][0]
+        x_values = [(timestamp - first_timestamp) for timestamp, _ in self.memory_samples]
+        y_values = [
+            rss_bytes / (1024 * 1024) for _, rss_bytes in self.memory_samples
+        ]  # Convert to MB
+
+        # Calculate means
+        n = len(x_values)
+        x_mean = sum(x_values) / n
+        y_mean = sum(y_values) / n
+
+        # Calculate slope (beta) using least squares
+        numerator = sum((x_values[i] - x_mean) * (y_values[i] - y_mean) for i in range(n))
+        denominator = sum((x_values[i] - x_mean) ** 2 for i in range(n))
+
+        if denominator == 0:
+            return 0.0
+
+        slope = numerator / denominator
+
+        # Calculate R² (coefficient of determination) for confidence
+        y_pred = [y_mean + slope * (x_values[i] - x_mean) for i in range(n)]
+        ss_res = sum((y_values[i] - y_pred[i]) ** 2 for i in range(n))
+        ss_tot = sum((y_values[i] - y_mean) ** 2 for i in range(n))
+
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
+
+        # Calculate leak score:
+        # - If slope is negative (memory decreasing), score = 0
+        # - If slope is positive, scale based on MB/hour growth rate and R²
+        # - R² weights the score by how well the linear model fits (confidence)
+        if slope <= 0:
+            return 0.0
+
+        # Calculate growth rate in MB per hour
+        (x_values[-1] - x_values[0]) / 3600 if x_values[-1] != x_values[0] else 1
+        mb_per_hour = slope * 3600  # Convert slope from MB/s to MB/hour
+
+        # Score thresholds:
+        # - 10 MB/hour = 0.5 score (moderate)
+        # - 50 MB/hour = 1.0 score (severe)
+        raw_score = min(mb_per_hour / 50, 1.0)
+
+        # Weight by R² (confidence in linear fit)
+        # If R² is low, reduce the score (less confident it's a real leak)
+        leak_score = raw_score * r_squared
+
+        return min(leak_score, 1.0)
+
+    async def _memory_monitor_loop(self) -> None:
+        """Monitor process memory usage and detect leaks via linear regression.
+
+        Samples RSS and VMS memory every 30 seconds, maintains a sliding window
+        of samples, calculates leak detection score, and updates Prometheus metrics.
+        """
+        logger.info(
+            "binance_memory_monitor_started",
+            sample_interval_seconds=self.memory_sample_interval_seconds,
+            sample_window_size=self.memory_sample_window_size,
+        )
+
+        # Get current process
+        process = psutil.Process()
+
+        while self.is_running:
+            await asyncio.sleep(self.memory_sample_interval_seconds)
+
+            if not self.is_running:
+                break
+
+            try:
+                # Sample memory usage
+                memory_info = process.memory_info()
+                rss_bytes = memory_info.rss  # Resident Set Size (actual physical memory)
+                vms_bytes = memory_info.vms  # Virtual Memory Size (total virtual memory)
+
+                timestamp = time.time()
+
+                # Add sample to sliding window
+                self.memory_samples.append((timestamp, rss_bytes))
+
+                # Maintain sliding window (keep last N samples)
+                if len(self.memory_samples) > self.memory_sample_window_size:
+                    self.memory_samples.pop(0)
+
+                # Update memory metrics
+                metrics.gauge(
+                    "process_memory_rss_bytes",
+                    value=rss_bytes,
+                    labels=self.metrics_labels,
+                )
+
+                metrics.gauge(
+                    "process_memory_vms_bytes",
+                    value=vms_bytes,
+                    labels=self.metrics_labels,
+                )
+
+                # Calculate and update leak detection score
+                leak_score = self._calculate_memory_leak_score()
+                metrics.gauge(
+                    "memory_leak_detection_score",
+                    value=leak_score,
+                    labels=self.metrics_labels,
+                )
+
+                # Log memory stats periodically (every 10 samples = 5 minutes at 30s intervals)
+                if len(self.memory_samples) % 10 == 0:
+                    logger.info(
+                        "binance_memory_status",
+                        rss_mb=rss_bytes / (1024 * 1024),
+                        vms_mb=vms_bytes / (1024 * 1024),
+                        leak_score=leak_score,
+                        samples_count=len(self.memory_samples),
+                    )
+
+                    # Warning if leak score is high
+                    if leak_score > 0.8:
+                        logger.warning(
+                            "binance_memory_leak_detected",
+                            leak_score=leak_score,
+                            rss_mb=rss_bytes / (1024 * 1024),
+                            message="High leak detection score - consider restarting or investigating",
+                        )
+
+            except Exception as e:
+                logger.error(
+                    "binance_memory_monitor_error",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+
+    async def _ping_loop(self) -> None:
+        """Send WebSocket ping frames periodically to detect silent connection drops.
+
+        Binance requires ping every <10 minutes to keep connection alive.
+        This loop sends pings every 3 minutes (configurable) and monitors
+        for pong responses. If pong is not received within timeout (10s),
+        triggers reconnection.
+        """
+        logger.info(
+            "binance_ping_loop_started",
+            ping_interval_seconds=self.ping_interval_seconds,
+            ping_timeout_seconds=self.ping_timeout_seconds,
+        )
+
+        while self.is_running:
+            # Wait for ping interval
+            await asyncio.sleep(self.ping_interval_seconds)
+
+            if not self.is_running:
+                break
+
+            # Skip if no active connection
+            if not self.ws or self.ws.closed:
+                continue
+
+            try:
+                # Send ping frame and wait for pong with timeout
+                # The websockets library automatically handles pong responses
+                pong_waiter = await self.ws.ping()
+
+                logger.debug(
+                    "binance_ping_sent",
+                    ping_interval_seconds=self.ping_interval_seconds,
+                )
+
+                # Wait for pong with timeout
+                try:
+                    await asyncio.wait_for(pong_waiter, timeout=self.ping_timeout_seconds)
+
+                    # Pong received successfully
+                    self.last_pong_time = time.time()
+
+                    # Update last pong timestamp metric
+                    metrics.gauge(
+                        "binance_last_pong_timestamp_seconds",
+                        value=self.last_pong_time,
+                        labels=self.metrics_labels,
+                    )
+
+                    logger.debug(
+                        "binance_pong_received",
+                        last_pong_time=self.last_pong_time,
+                    )
+
+                except TimeoutError:
+                    # Pong timeout - connection is likely dead
+                    logger.warning(
+                        "binance_pong_timeout",
+                        ping_timeout_seconds=self.ping_timeout_seconds,
+                        last_pong_time=self.last_pong_time,
+                        message="No pong received within timeout - triggering reconnect",
+                    )
+
+                    # Increment pong timeout counter
+                    metrics.increment(
+                        "binance_pong_timeouts_total",
+                        labels=self.metrics_labels,
+                    )
+
+                    # Trigger reconnect by closing the websocket
+                    # The main connect loop will automatically reconnect
+                    if self.ws:
+                        await self.ws.close(code=1000, reason="Pong timeout")
+
+            except Exception as e:
+                logger.error(
+                    "binance_ping_error",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+
     async def connect(self) -> None:
         """Connect to Binance WebSocket and start receiving messages.
 
@@ -293,6 +595,29 @@ class BinanceWebSocketClient:
                 interval=self.health_check_interval,
                 timeout=self.health_check_timeout,
             )
+
+        # Start connection rotation loop
+        self.rotation_task = asyncio.create_task(self._connection_rotation_loop())
+        logger.info(
+            "binance_connection_rotation_enabled",
+            max_lifetime_hours=config.binance.connection_max_lifetime_hours,
+        )
+
+        # Start memory monitoring loop
+        self.memory_monitor_task = asyncio.create_task(self._memory_monitor_loop())
+        logger.info(
+            "binance_memory_monitor_enabled",
+            sample_interval_seconds=self.memory_sample_interval_seconds,
+            sample_window_size=self.memory_sample_window_size,
+        )
+
+        # Start ping-pong heartbeat loop
+        self.ping_task = asyncio.create_task(self._ping_loop())
+        logger.info(
+            "binance_ping_loop_enabled",
+            ping_interval_seconds=self.ping_interval_seconds,
+            ping_timeout_seconds=self.ping_timeout_seconds,
+        )
 
         while self.is_running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
@@ -364,16 +689,35 @@ class BinanceWebSocketClient:
             symbols=self.symbols,
         )
 
-        # DEMO ONLY: Disable SSL certificate verification
-        # For production, proper SSL certificates should be configured
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
+        # SSL certificate verification configuration
+        if config.binance.ssl_verify:
+            # Production: Enable SSL certificate verification
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            ssl_context.check_hostname = True
+            ssl_context.verify_mode = ssl.CERT_REQUIRED
+
+            # Optional: Load custom CA bundle for corporate proxies
+            if config.binance.custom_ca_bundle:
+                ssl_context.load_verify_locations(config.binance.custom_ca_bundle)
+                logger.info(
+                    "binance_custom_ca_loaded",
+                    ca_bundle=config.binance.custom_ca_bundle,
+                )
+        else:
+            # Development only: Disable SSL verification (NOT for production)
+            logger.warning(
+                "binance_ssl_disabled",
+                message="SSL verification disabled - NOT RECOMMENDED for production",
+            )
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
 
         async with websockets.connect(ws_url, ssl=ssl_context) as ws:
             self.ws = ws
             self.reconnect_attempts = 0  # Reset on successful connection
             self.last_message_time = time.time()  # Reset health check timer
+            self.connection_start_time = time.time()  # Track connection lifetime for rotation
 
             # Update connection status metric
             metrics.gauge(
@@ -486,7 +830,7 @@ class BinanceWebSocketClient:
             await asyncio.sleep(delay)
 
     async def disconnect(self) -> None:
-        """Gracefully disconnect from WebSocket and stop health check."""
+        """Gracefully disconnect from WebSocket and stop monitoring tasks."""
         self.is_running = False
 
         # Cancel health check task
@@ -496,6 +840,30 @@ class BinanceWebSocketClient:
                 await self.health_check_task
             except asyncio.CancelledError:
                 logger.info("binance_health_check_cancelled")
+
+        # Cancel rotation task
+        if self.rotation_task:
+            self.rotation_task.cancel()
+            try:
+                await self.rotation_task
+            except asyncio.CancelledError:
+                logger.info("binance_rotation_task_cancelled")
+
+        # Cancel memory monitor task
+        if self.memory_monitor_task:
+            self.memory_monitor_task.cancel()
+            try:
+                await self.memory_monitor_task
+            except asyncio.CancelledError:
+                logger.info("binance_memory_monitor_cancelled")
+
+        # Cancel ping task
+        if self.ping_task:
+            self.ping_task.cancel()
+            try:
+                await self.ping_task
+            except asyncio.CancelledError:
+                logger.info("binance_ping_task_cancelled")
 
         # Close WebSocket
         if self.ws:

@@ -399,3 +399,44 @@ groups:
           description: |
             Producer has exhausted retries for {{ $value }} messages.
             Potential data loss. Check Kafka broker health and network connectivity.
+
+  # ============================================================================
+  # Binance Streaming Memory Health - Memory leak detection
+  # ============================================================================
+  - name: binance_memory_alerts
+    interval: 30s
+    rules:
+      # Binance container memory > 400MB RSS indicates potential memory leak
+      # Normal operation should be 200-250MB
+      - alert: BinanceMemoryHigh
+        expr: k2_process_memory_rss_bytes{component="binance_streaming"} > 419430400
+        for: 10m
+        labels:
+          severity: high
+          component: binance_streaming
+          team: data-platform
+        annotations:
+          summary: "Binance streaming memory > 400MB RSS"
+          description: |
+            Binance WebSocket container is using {{ $value | humanize1024 }} RSS memory.
+            Normal operation is 200-250MB. Potential memory leak detected.
+            Check memory_leak_detection_score metric and consider connection rotation.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/binance-memory-recovery.md"
+          dashboard: "https://grafana.k2.local/d/binance-health"
+
+      # Memory leak detection score > 0.8 indicates likely memory leak via linear regression
+      - alert: BinanceMemoryLeakDetected
+        expr: k2_memory_leak_detection_score{component="binance_streaming"} > 0.8
+        for: 15m
+        labels:
+          severity: critical
+          component: binance_streaming
+          team: data-platform
+        annotations:
+          summary: "Binance memory leak detected (score: {{ $value | humanizePercentage }})"
+          description: |
+            Memory leak detection score is {{ $value | humanizePercentage }}.
+            Linear regression analysis indicates significant upward memory trend.
+            Container should be restarted. Check connection rotation and bounded cache settings.
+          runbook: "https://github.com/k2-platform/k2/blob/main/docs/operations/runbooks/binance-memory-recovery.md"
+          dashboard: "https://grafana.k2.local/d/binance-health"

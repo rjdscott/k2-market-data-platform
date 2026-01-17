@@ -329,7 +329,7 @@ print(f"Throughput: {stats.throughput:.2f} msg/s")
 ### Unit Tests
 
 ```bash
-pytest tests/unit/test_consumer.py -v
+pytest tests-backup/unit/test_consumer.py -v
 ```
 
 **Coverage**: 33 tests (initialization, deserialization, batch processing, shutdown)

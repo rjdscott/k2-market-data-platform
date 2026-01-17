@@ -286,11 +286,11 @@ print(f"  Messages consumed: {stats.messages_consumed}")
 
 ```bash
 # DLQ Tests
-$ uv run pytest tests/unit/test_dead_letter_queue.py -v
+$ uv run pytest tests-backup/unit/test_dead_letter_queue.py -v
 ============================== 12 passed in 4.72s ===============================
 
 # Consumer Integration Tests
-$ uv run pytest tests/unit/test_consumer.py::TestConsumerSequenceTrackerIntegration -v
+$ uv run pytest tests-backup/unit/test_consumer.py::TestConsumerSequenceTrackerIntegration -v
 ============================== 4 passed in 4.27s ===============================
 
 # E2E Validation

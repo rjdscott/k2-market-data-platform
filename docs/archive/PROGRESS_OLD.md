@@ -341,12 +341,12 @@ docker compose ps
 Once environment is properly set up, run these commands:
 
 ```bash
-# Unit tests (no Docker required)
-pytest tests/unit/test_schemas.py -v -m unit
+# Unit tests-backup (no Docker required)
+pytest tests-backup/unit/test_schemas.py -v -m unit
 
-# Integration tests (requires Docker services)
-pytest tests/integration/test_infrastructure.py -v -m integration
-pytest tests/integration/test_schema_registry.py -v -m integration
+# Integration tests-backup (requires Docker services)
+pytest tests-backup/integration/test_infrastructure.py -v -m integration
+pytest tests-backup/integration/test_schema_registry.py -v -m integration
 
 # Initialize infrastructure
 python scripts/init_infra.py

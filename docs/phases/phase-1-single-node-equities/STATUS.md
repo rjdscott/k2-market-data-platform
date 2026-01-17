@@ -356,12 +356,12 @@ All 9 services healthy:
 ## 📞 Quick Commands Reference
 
 ```bash
-# Run all unit tests
-uv run pytest tests/unit/ -v
+# Run all unit tests-backup
+uv run pytest tests-backup/unit/ -v
 
-# Run specific layer tests
-uv run pytest tests/unit/test_api_main.py -v
-uv run pytest tests/unit/test_query_engine.py -v
+# Run specific layer tests-backup
+uv run pytest tests-backup/unit/test_api_main.py -v
+uv run pytest tests-backup/unit/test_query_engine.py -v
 
 # Start API server
 make api

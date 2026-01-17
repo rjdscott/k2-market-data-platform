@@ -36,10 +36,12 @@ from structlog.types import EventDict, Processor
 # Context variables for correlation ID and request ID
 # These are thread-safe and async-friendly
 _correlation_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "correlation_id", default=None,
+    "correlation_id",
+    default=None,
 )
 _request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "request_id", default=None,
+    "request_id",
+    default=None,
 )
 
 

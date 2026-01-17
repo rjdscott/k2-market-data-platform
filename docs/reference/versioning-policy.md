@@ -390,8 +390,8 @@ curl https://k2platform.com/releases/v2.0.0/MIGRATION.md
 # 3. Test in staging environment
 kubectl --context staging apply -f k8s/v2.0.0/
 
-# 4. Run migration tests
-pytest tests/migration/v1_to_v2.py
+# 4. Run migration tests-backup
+pytest tests-backup/migration/v1_to_v2.py
 
 # 5. Deploy to production (canary rollout)
 kubectl --context production apply -f k8s/v2.0.0/

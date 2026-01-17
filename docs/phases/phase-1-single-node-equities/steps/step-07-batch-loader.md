@@ -63,7 +63,7 @@ Command: `k2-ingest load-batch --data-dir data/sample`
    ```bash
    rm src/k2/ingestion/batch_loader.py
    rm src/k2/ingestion/cli.py
-   rm tests/integration/test_batch_loader.py
+   rm tests-backup/integration/test_batch_loader.py
    ```
 
 2. **Purge loaded data from Kafka**:

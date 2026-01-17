@@ -158,7 +158,9 @@ class IcebergWriter:
 
         except Exception as e:
             logger.error(
-                "Failed to initialize Iceberg writer", error=str(e), catalog_uri=self.catalog_uri,
+                "Failed to initialize Iceberg writer",
+                error=str(e),
+                catalog_uri=self.catalog_uri,
             )
             metrics.increment(
                 "iceberg_write_errors_total",
@@ -580,16 +582,21 @@ class IcebergWriter:
                 pa.field("exchange", pa.string(), nullable=False),
                 pa.field("asset_class", pa.string(), nullable=False),  # enum stored as string
                 pa.field("timestamp", pa.timestamp("us"), nullable=False),
-                pa.field("price", pa.decimal128(18, 8), nullable=False),  # Higher precision
-                pa.field("quantity", pa.decimal128(18, 8), nullable=False),  # Decimal, not int64
+                pa.field(
+                    "price", pa.decimal128(18, 6), nullable=False
+                ),  # Match Iceberg table precision
+                pa.field(
+                    "quantity", pa.decimal128(18, 6), nullable=False
+                ),  # Match Iceberg table precision
                 pa.field("currency", pa.string(), nullable=False),
                 pa.field("side", pa.string(), nullable=False),  # enum stored as string
-                pa.field("trade_conditions", pa.string(), nullable=True),  # JSON string for compatibility
+                pa.field(
+                    "trade_conditions", pa.string(), nullable=True
+                ),  # JSON string for compatibility
                 pa.field("source_sequence", pa.int64(), nullable=True),
                 pa.field("ingestion_timestamp", pa.timestamp("us"), nullable=False),
                 pa.field("platform_sequence", pa.int64(), nullable=True),
                 pa.field("vendor_data", pa.string(), nullable=True),  # JSON string
-                pa.field("is_sample_data", pa.bool_(), nullable=False),
             ],
         )
 
@@ -629,7 +636,6 @@ class IcebergWriter:
                 "ingestion_timestamp": record["ingestion_timestamp"],  # microseconds
                 "platform_sequence": record.get("platform_sequence"),
                 "vendor_data": vendor_data_json,
-                "is_sample_data": record.get("is_sample_data", False),
             }
             converted_records.append(converted)
 

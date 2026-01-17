@@ -263,17 +263,17 @@ python scripts/demo.py --help
 ### Step T1: Run Unit Tests
 
 ```bash
-# Run all Phase 2 unit tests
-pytest tests/unit/test_circuit_breaker.py -v --tb=short
-pytest tests/unit/test_redis_sequence_tracker.py -v --tb=short
-pytest tests/unit/test_bloom_deduplicator.py -v --tb=short
-pytest tests/unit/test_hybrid_engine.py -v --tb=short
+# Run all Phase 2 unit tests-backup
+pytest tests-backup/unit/test_circuit_breaker.py -v --tb=short
+pytest tests-backup/unit/test_redis_sequence_tracker.py -v --tb=short
+pytest tests-backup/unit/test_bloom_deduplicator.py -v --tb=short
+pytest tests-backup/unit/test_hybrid_engine.py -v --tb=short
 
-# Count tests
-pytest tests/unit/test_circuit_breaker.py --collect-only | grep "test session starts"
-pytest tests/unit/test_redis_sequence_tracker.py --collect-only | grep "test session starts"
-pytest tests/unit/test_bloom_deduplicator.py --collect-only | grep "test session starts"
-pytest tests/unit/test_hybrid_engine.py --collect-only | grep "test session starts"
+# Count tests-backup
+pytest tests-backup/unit/test_circuit_breaker.py --collect-only | grep "test session starts"
+pytest tests-backup/unit/test_redis_sequence_tracker.py --collect-only | grep "test session starts"
+pytest tests-backup/unit/test_bloom_deduplicator.py --collect-only | grep "test session starts"
+pytest tests-backup/unit/test_hybrid_engine.py --collect-only | grep "test session starts"
 ```
 
 - [ ] `test_circuit_breaker.py` - 15+ tests passing
@@ -288,8 +288,8 @@ pytest tests/unit/test_hybrid_engine.py --collect-only | grep "test session star
 # Ensure Redis is running
 docker exec k2-redis redis-cli ping
 
-# Run integration tests
-pytest tests/integration/ -v -m "phase2" --tb=short
+# Run integration tests-backup
+pytest tests-backup/integration/ -v -m "phase2" --tb=short
 ```
 
 - [ ] Redis integration tests passing
@@ -301,10 +301,10 @@ pytest tests/integration/ -v -m "phase2" --tb=short
 
 ```bash
 # Run with coverage
-pytest tests/unit/test_circuit_breaker.py \
-       tests/unit/test_redis_sequence_tracker.py \
-       tests/unit/test_bloom_deduplicator.py \
-       tests/unit/test_hybrid_engine.py \
+pytest tests-backup/unit/test_circuit_breaker.py \
+       tests-backup/unit/test_redis_sequence_tracker.py \
+       tests-backup/unit/test_bloom_deduplicator.py \
+       tests-backup/unit/test_hybrid_engine.py \
        --cov=src/k2/common \
        --cov=src/k2/ingestion \
        --cov=src/k2/query \
@@ -613,7 +613,7 @@ pip install -e .
 
 ```bash
 # Run single test with verbose output
-pytest tests/unit/test_circuit_breaker.py::test_name -v -s
+pytest tests-backup/unit/test_circuit_breaker.py::test_name -v -s
 
 # Check for missing dependencies
 pip install -e ".[test]"

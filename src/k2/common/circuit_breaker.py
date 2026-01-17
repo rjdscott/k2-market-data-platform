@@ -27,8 +27,9 @@ Usage:
 """
 
 import time
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 import structlog
 
@@ -47,8 +48,6 @@ class CircuitBreakerState(Enum):
 
 class CircuitBreakerError(Exception):
     """Raised when circuit breaker is open."""
-
-    pass
 
 
 class CircuitBreaker:

@@ -89,6 +89,7 @@ See Also:
 """
 
 import time
+from collections import OrderedDict
 from typing import Any
 
 from confluent_kafka import Producer
@@ -99,17 +100,116 @@ from confluent_kafka.serialization import MessageField, SerializationContext
 from k2.common.config import config
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
-from k2.kafka import DataType, get_topic_builder
 
 # Import v2 message builders for convenience
-from k2.ingestion.message_builders import (
-    build_quote_v2,
-    build_trade_v2,
-    convert_v1_to_v2_trade,
-)
+from k2.kafka import DataType, get_topic_builder
 
 logger = get_logger(__name__, component="ingestion")
 metrics = create_component_metrics("ingestion")
+
+
+class BoundedCache:
+    """Bounded cache with LRU (Least Recently Used) eviction policy.
+
+    Prevents unbounded memory growth by limiting cache size and evicting
+    least recently used entries when the cache is full.
+
+    Attributes:
+        _cache: OrderedDict maintaining insertion/access order for LRU
+        _max_size: Maximum number of entries allowed in cache
+        _component_type: Component type for metrics labeling
+    """
+
+    def __init__(self, max_size: int = 10, component_type: str = "producer") -> None:
+        """Initialize bounded cache.
+
+        Args:
+            max_size: Maximum number of entries to cache
+            component_type: Component type for metrics labeling
+        """
+        self._cache: OrderedDict[str, Any] = OrderedDict()
+        self._max_size = max_size
+        self._component_type = component_type
+
+        logger.debug(
+            "Bounded cache initialized",
+            max_size=max_size,
+            component_type=component_type,
+        )
+
+    def get(self, key: str) -> Any | None:
+        """Get value from cache, marking it as recently used.
+
+        Args:
+            key: Cache key
+
+        Returns:
+            Cached value if exists, None otherwise
+        """
+        if key not in self._cache:
+            return None
+
+        # Move to end (mark as recently used)
+        self._cache.move_to_end(key)
+        return self._cache[key]
+
+    def set(self, key: str, value: Any) -> None:
+        """Set value in cache, evicting LRU entry if cache is full.
+
+        Args:
+            key: Cache key
+            value: Value to cache
+        """
+        if key in self._cache:
+            # Update existing entry and mark as recently used
+            self._cache.move_to_end(key)
+            self._cache[key] = value
+        else:
+            # Add new entry
+            self._cache[key] = value
+
+            # Evict LRU entry if cache exceeds max size
+            if len(self._cache) > self._max_size:
+                evicted_key, _ = self._cache.popitem(last=False)
+
+                logger.debug(
+                    "Cache LRU eviction",
+                    evicted_key=evicted_key,
+                    cache_size=len(self._cache),
+                    max_size=self._max_size,
+                )
+
+                # Increment eviction counter
+                metrics.increment(
+                    "serializer_cache_evictions_total",
+                    labels={"component_type": self._component_type},
+                )
+
+        # Update cache size gauge
+        metrics.gauge(
+            "serializer_cache_size",
+            value=len(self._cache),
+            labels={"component_type": self._component_type},
+        )
+
+    def size(self) -> int:
+        """Get current cache size.
+
+        Returns:
+            Number of entries in cache
+        """
+        return len(self._cache)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if key exists in cache.
+
+        Args:
+            key: Cache key
+
+        Returns:
+            True if key exists, False otherwise
+        """
+        return key in self._cache
 
 
 class MarketDataProducer:
@@ -191,7 +291,11 @@ class MarketDataProducer:
         self._init_producer()
 
         # Cache for Avro serializers (keyed by schema subject)
-        self._serializers: dict[str, AvroSerializer] = {}
+        # Use bounded cache with LRU eviction to prevent memory leaks
+        self._serializers = BoundedCache(
+            max_size=config.kafka.serializer_cache_max_size,
+            component_type="producer",
+        )
 
         # Statistics
         self._total_produced = 0
@@ -207,7 +311,9 @@ class MarketDataProducer:
         )
         metrics.increment(
             "producer_initialized_total",
-            labels={"component_type": "producer"},  # Removed schema_version - not in metric definition
+            labels={
+                "component_type": "producer"
+            },  # Removed schema_version - not in metric definition
         )
 
     def _init_schema_registry(self):
@@ -286,39 +392,46 @@ class MarketDataProducer:
         Raises:
             Exception: If schema cannot be loaded from Schema Registry
         """
-        if schema_subject not in self._serializers:
-            try:
-                # Fetch latest schema from Schema Registry
-                schema = self.schema_registry_client.get_latest_version(schema_subject)
+        # Check cache first
+        cached_serializer = self._serializers.get(schema_subject)
+        if cached_serializer is not None:
+            return cached_serializer
 
-                # Create Avro serializer
-                serializer = AvroSerializer(
-                    schema_registry_client=self.schema_registry_client,
-                    schema_str=schema.schema.schema_str,
-                )
+        # Not in cache - create new serializer
+        try:
+            # Fetch latest schema from Schema Registry
+            schema = self.schema_registry_client.get_latest_version(schema_subject)
 
-                self._serializers[schema_subject] = serializer
+            # Create Avro serializer
+            serializer = AvroSerializer(
+                schema_registry_client=self.schema_registry_client,
+                schema_str=schema.schema.schema_str,
+            )
 
-                logger.debug(
-                    "Avro serializer created",
-                    subject=schema_subject,
-                    schema_id=schema.schema_id,
-                    schema_version=schema.version,
-                )
+            # Add to cache (may evict LRU entry if cache is full)
+            self._serializers.set(schema_subject, serializer)
 
-            except Exception as e:
-                logger.error(
-                    "Failed to create Avro serializer",
-                    subject=schema_subject,
-                    error=str(e),
-                )
-                metrics.increment(
-                    "serializer_errors_total",
-                    labels={"component_type": "producer", "subject": schema_subject},
-                )
-                raise
+            logger.debug(
+                "Avro serializer created",
+                subject=schema_subject,
+                schema_id=schema.schema_id,
+                schema_version=schema.version,
+                cache_size=self._serializers.size(),
+            )
 
-        return self._serializers[schema_subject]
+            return serializer
+
+        except Exception as e:
+            logger.error(
+                "Failed to create Avro serializer",
+                subject=schema_subject,
+                error=str(e),
+            )
+            metrics.increment(
+                "serializer_errors_total",
+                labels={"component_type": "producer", "subject": schema_subject},
+            )
+            raise
 
     def _delivery_callback(
         self,
@@ -333,7 +446,7 @@ class MarketDataProducer:
             msg: Kafka message object
             context: Additional context (topic, partition_key, labels)
         """
-        topic = context.get("topic", "unknown")
+        context.get("topic", "unknown")
         partition_key = context.get("partition_key", "unknown")
         labels = context.get("labels", {})
 
@@ -400,7 +513,9 @@ class MarketDataProducer:
                     value=serialized_value,
                     key=key.encode("utf-8"),  # Partition key (Decision #009)
                     on_delivery=lambda err, msg: self._delivery_callback(
-                        err, msg, {"topic": topic, "partition_key": key, "labels": labels},
+                        err,
+                        msg,
+                        {"topic": topic, "partition_key": key, "labels": labels},
                     ),
                 )
 
@@ -589,7 +704,7 @@ class MarketDataProducer:
         if self.producer is None:
             raise RuntimeError(
                 "Producer has been closed and cannot be reused. "
-                "Create a new MarketDataProducer instance."
+                "Create a new MarketDataProducer instance.",
             )
         # Get topic configuration
         topic_config = self.topic_builder.get_topic_config(asset_class, data_type, exchange)

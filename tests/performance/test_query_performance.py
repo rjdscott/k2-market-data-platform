@@ -8,7 +8,7 @@ Baseline Targets:
 - Aggregation query: < 1s
 - Complex join: < 2s
 
-Run: pytest tests/performance/test_query_performance.py -v --benchmark-only
+Run: pytest tests-backup/performance/test_query_performance.py -v --benchmark-only
 """
 
 from datetime import datetime, timedelta
@@ -64,12 +64,13 @@ class TestQueryLatency:
         result = benchmark(engine.execute_query, query)
 
         stats = benchmark.stats
-        print(f"\nSimple scan - Mean: {stats['mean']*1000:.1f}ms, "
-              f"StdDev: {stats['stddev']*1000:.1f}ms")
+        print(
+            f"\nSimple scan - Mean: {stats['mean']*1000:.1f}ms, "
+            f"StdDev: {stats['stddev']*1000:.1f}ms"
+        )
 
         # Check baseline
-        assert stats['mean'] < 0.1, \
-            f"Simple query latency {stats['mean']*1000:.0f}ms exceeds 100ms"
+        assert stats["mean"] < 0.1, f"Simple query latency {stats['mean']*1000:.0f}ms exceeds 100ms"
 
     def test_filtered_query(self, benchmark, mock_query_engine):
         """Benchmark filtered query with WHERE clause.
@@ -92,8 +93,9 @@ class TestQueryLatency:
         stats = benchmark.stats
         print(f"\nFiltered query - Mean: {stats['mean']*1000:.1f}ms")
 
-        assert stats['mean'] < 0.5, \
-            f"Filtered query latency {stats['mean']*1000:.0f}ms exceeds 500ms"
+        assert (
+            stats["mean"] < 0.5
+        ), f"Filtered query latency {stats['mean']*1000:.0f}ms exceeds 500ms"
 
     def test_aggregation_query(self, benchmark, mock_query_engine):
         """Benchmark aggregation query with GROUP BY.
@@ -122,8 +124,9 @@ class TestQueryLatency:
         stats = benchmark.stats
         print(f"\nAggregation query - Mean: {stats['mean']*1000:.1f}ms")
 
-        assert stats['mean'] < 1.0, \
-            f"Aggregation query latency {stats['mean']*1000:.0f}ms exceeds 1s"
+        assert (
+            stats["mean"] < 1.0
+        ), f"Aggregation query latency {stats['mean']*1000:.0f}ms exceeds 1s"
 
     def test_time_range_query(self, benchmark, mock_query_engine):
         """Benchmark time range query (common pattern).
@@ -148,8 +151,9 @@ class TestQueryLatency:
         stats = benchmark.stats
         print(f"\nTime range query - Mean: {stats['mean']*1000:.1f}ms")
 
-        assert stats['mean'] < 0.3, \
-            f"Time range query latency {stats['mean']*1000:.0f}ms exceeds 300ms"
+        assert (
+            stats["mean"] < 0.3
+        ), f"Time range query latency {stats['mean']*1000:.0f}ms exceeds 300ms"
 
 
 @pytest.mark.performance
@@ -170,6 +174,7 @@ class TestQueryThroughput:
         """
 
         import time
+
         num_queries = 50
 
         start = time.perf_counter()
@@ -182,8 +187,7 @@ class TestQueryThroughput:
         print(f"\nSequential queries: {num_queries} in {elapsed:.2f}s")
         print(f"Throughput: {throughput:.1f} queries/sec")
 
-        assert throughput > 10, \
-            f"Query throughput {throughput:.1f} q/s below 10 q/s baseline"
+        assert throughput > 10, f"Query throughput {throughput:.1f} q/s below 10 q/s baseline"
 
     def test_different_query_patterns(self, mock_query_engine):
         """Measure throughput for mixed query patterns."""
@@ -192,18 +196,16 @@ class TestQueryThroughput:
         queries = [
             # Simple scan
             "SELECT * FROM market_data.trades_v2 LIMIT 100",
-
             # Filtered
             "SELECT * FROM market_data.trades_v2 WHERE symbol = 'BTCUSDT' LIMIT 100",
-
             # Aggregation
             "SELECT symbol, COUNT(*) FROM market_data.trades_v2 GROUP BY symbol",
-
             # Time range
             "SELECT * FROM market_data.trades_v2 WHERE timestamp >= '2025-01-13 10:00:00' LIMIT 100",
         ]
 
         import time
+
         iterations = 10  # 40 total queries
 
         start = time.perf_counter()
@@ -256,8 +258,7 @@ class TestQueryComplexity:
         stats = benchmark.stats
         print(f"\nJoin query - Mean: {stats['mean']*1000:.1f}ms")
 
-        assert stats['mean'] < 2.0, \
-            f"Join query latency {stats['mean']:.2f}s exceeds 2s"
+        assert stats["mean"] < 2.0, f"Join query latency {stats['mean']:.2f}s exceeds 2s"
 
     def test_window_function_query(self, benchmark, mock_query_engine):
         """Benchmark query with window functions.
@@ -293,8 +294,9 @@ class TestQueryComplexity:
         stats = benchmark.stats
         print(f"\nWindow function query - Mean: {stats['mean']*1000:.1f}ms")
 
-        assert stats['mean'] < 1.5, \
-            f"Window function query latency {stats['mean']:.2f}s exceeds 1.5s"
+        assert (
+            stats["mean"] < 1.5
+        ), f"Window function query latency {stats['mean']:.2f}s exceeds 1.5s"
 
     def test_subquery_performance(self, benchmark, mock_query_engine):
         """Benchmark query with subqueries.
@@ -327,8 +329,7 @@ class TestQueryComplexity:
         stats = benchmark.stats
         print(f"\nSubquery - Mean: {stats['mean']*1000:.1f}ms")
 
-        assert stats['mean'] < 1.0, \
-            f"Subquery latency {stats['mean']*1000:.0f}ms exceeds 1s"
+        assert stats["mean"] < 1.0, f"Subquery latency {stats['mean']*1000:.0f}ms exceeds 1s"
 
 
 @pytest.mark.performance
@@ -409,8 +410,7 @@ class TestQueryScaling:
         ratio = latency_10k / latency_100
         print(f"Latency ratio (10K/100): {ratio:.1f}x")
 
-        assert ratio < 100, \
-            f"Query latency doesn't scale well: {ratio:.1f}x for 100x more rows"
+        assert ratio < 100, f"Query latency doesn't scale well: {ratio:.1f}x for 100x more rows"
 
     def test_filter_selectivity_impact(self, mock_query_engine):
         """Test query performance with different filter selectivities."""
@@ -449,7 +449,7 @@ class TestQueryScaling:
 @pytest.mark.performance
 @pytest.mark.slow
 class TestQueryStress:
-    """Stress tests for query engine under load."""
+    """Stress tests-backup for query engine under load."""
 
     def test_sustained_query_load(self, mock_query_engine):
         """Test query engine under sustained load.
@@ -465,6 +465,7 @@ class TestQueryStress:
         """
 
         import time
+
         num_queries = 1000
 
         start = time.perf_counter()
@@ -484,5 +485,6 @@ class TestQueryStress:
         print(f"Average throughput: {avg_throughput:.1f} queries/sec")
 
         # Should maintain at least 8 q/s under sustained load
-        assert avg_throughput > 8, \
-            f"Sustained throughput {avg_throughput:.1f} q/s below 8 q/s baseline"
+        assert (
+            avg_throughput > 8
+        ), f"Sustained throughput {avg_throughput:.1f} q/s below 8 q/s baseline"

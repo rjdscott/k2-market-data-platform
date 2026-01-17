@@ -368,22 +368,22 @@ This guide provides step-by-step validation procedures to ensure Phase 2 Prep im
 
 - [ ] **Unit Tests Pass**
   ```bash
-  # Run producer tests
-  pytest tests/unit/test_producer.py -v
+  # Run producer tests-backup
+  pytest tests-backup/unit/test_producer.py -v
 
-  # Run consumer tests
-  pytest tests/unit/test_consumer.py -v
+  # Run consumer tests-backup
+  pytest tests-backup/unit/test_consumer.py -v
 
-  # Run query engine tests
-  pytest tests/unit/test_query_engine.py -v
+  # Run query engine tests-backup
+  pytest tests-backup/unit/test_query_engine.py -v
 
-  # All tests should pass
+  # All tests-backup should pass
   ```
 
 - [ ] **Integration Tests Pass**
   ```bash
   # Run E2E integration test
-  pytest tests/integration/test_v2_pipeline.py -v
+  pytest tests-backup/integration/test_v2_pipeline.py -v
 
   # Should test: CSV → v2 Kafka → v2 Iceberg → v2 Query
   ```
@@ -391,7 +391,7 @@ This guide provides step-by-step validation procedures to ensure Phase 2 Prep im
 - [ ] **Test Coverage**
   ```bash
   # Run coverage report
-  pytest --cov=src/k2 --cov-report=html tests/
+  pytest --cov=src/k2 --cov-report=html tests-backup/
 
   # Coverage should be > 80%
   open htmlcov/index.html
@@ -738,13 +738,13 @@ This guide provides step-by-step validation procedures to ensure Phase 2 Prep im
 
 - [ ] **Unit Tests Pass**
   ```bash
-  # Run Binance client tests
-  pytest tests/unit/test_binance_client.py -v
+  # Run Binance client tests-backup
+  pytest tests-backup/unit/test_binance_client.py -v
 
-  # Run converter tests
-  pytest tests/unit/test_binance_converter.py -v
+  # Run converter tests-backup
+  pytest tests-backup/unit/test_binance_converter.py -v
 
-  # All tests should pass
+  # All tests-backup should pass
   ```
 
 - [ ] **Manual Integration Test**
@@ -1022,8 +1022,8 @@ curl -H "X-API-Key: k2-dev-api-key-2026" "http://localhost:8000/v1/trades?symbol
 # 5. Run demo
 python scripts/demo.py
 
-# 6. Run tests
-pytest tests/ -v
+# 6. Run tests-backup
+pytest tests-backup/ -v
 
 # All should pass without errors
 ```

@@ -7,7 +7,7 @@ Baseline Targets:
 - Batch throughput: > 5,000 rows/sec
 - Large batch (10K): < 2 seconds
 
-Run: pytest tests/performance/test_writer_throughput.py -v --benchmark-only
+Run: pytest tests-backup/performance/test_writer_throughput.py -v --benchmark-only
 """
 
 from datetime import datetime
@@ -56,51 +56,59 @@ def mock_iceberg_components():
 @pytest.fixture
 def sample_trades_v1():
     """Generate sample v1 trades for benchmarking."""
+
     def _generate(count=100):
         trades = []
         for i in range(count):
-            trades.append({
-                "symbol": "BHP",
-                "company_id": 7078,
-                "exchange": "ASX",
-                "exchange_timestamp": datetime(2014, 3, 10, 10, 0, i % 60),
-                "price": Decimal("36.50"),
-                "volume": 10000 + i,
-                "qualifiers": 0,
-                "venue": "X",
-                "buyer_id": None,
-                "ingestion_timestamp": datetime.now(),
-                "sequence_number": i,
-            })
+            trades.append(
+                {
+                    "symbol": "BHP",
+                    "company_id": 7078,
+                    "exchange": "ASX",
+                    "exchange_timestamp": datetime(2014, 3, 10, 10, 0, i % 60),
+                    "price": Decimal("36.50"),
+                    "volume": 10000 + i,
+                    "qualifiers": 0,
+                    "venue": "X",
+                    "buyer_id": None,
+                    "ingestion_timestamp": datetime.now(),
+                    "sequence_number": i,
+                }
+            )
         return trades
+
     return _generate
 
 
 @pytest.fixture
 def sample_trades_v2():
     """Generate sample v2 trades for benchmarking."""
+
     def _generate(count=100):
         trades = []
         for i in range(count):
-            trades.append({
-                "message_id": f"msg-{i:06d}",
-                "trade_id": f"trade-{i:06d}",
-                "symbol": "BTCUSDT",
-                "exchange": "binance",
-                "asset_class": "crypto",
-                "timestamp": datetime(2025, 1, 13, 10, 0, i % 60),
-                "price": Decimal("45000.12345678"),
-                "quantity": Decimal(f"{1.5 + i * 0.01:.8f}"),
-                "currency": "USDT",
-                "side": "buy" if i % 2 == 0 else "sell",
-                "trade_conditions": ["regular"],
-                "source_sequence": i,
-                "ingestion_timestamp": datetime.now(),
-                "platform_sequence": i + 100000,
-                "vendor_data": {"venue": "spot", "maker": i % 2 == 0},
-                "is_sample_data": False,
-            })
+            trades.append(
+                {
+                    "message_id": f"msg-{i:06d}",
+                    "trade_id": f"trade-{i:06d}",
+                    "symbol": "BTCUSDT",
+                    "exchange": "binance",
+                    "asset_class": "crypto",
+                    "timestamp": datetime(2025, 1, 13, 10, 0, i % 60),
+                    "price": Decimal("45000.12345678"),
+                    "quantity": Decimal(f"{1.5 + i * 0.01:.8f}"),
+                    "currency": "USDT",
+                    "side": "buy" if i % 2 == 0 else "sell",
+                    "trade_conditions": ["regular"],
+                    "source_sequence": i,
+                    "ingestion_timestamp": datetime.now(),
+                    "platform_sequence": i + 100000,
+                    "vendor_data": {"venue": "spot", "maker": i % 2 == 0},
+                    "is_sample_data": False,
+                }
+            )
         return trades
+
     return _generate
 
 
@@ -127,8 +135,10 @@ class TestWriterLatency:
         assert mock_iceberg_components["table"].append.call_count > 0
 
         stats = benchmark.stats
-        print(f"\nV1 write (100 trades) - Mean: {stats['mean']*1000:.1f}ms, "
-              f"StdDev: {stats['stddev']*1000:.1f}ms")
+        print(
+            f"\nV1 write (100 trades) - Mean: {stats['mean']*1000:.1f}ms, "
+            f"StdDev: {stats['stddev']*1000:.1f}ms"
+        )
 
     def test_single_batch_write_v2(self, benchmark, mock_iceberg_components, sample_trades_v2):
         """Benchmark single batch write (100 trades, v2 schema).
@@ -147,8 +157,10 @@ class TestWriterLatency:
         assert result == 100
 
         stats = benchmark.stats
-        print(f"\nV2 write (100 trades) - Mean: {stats['mean']*1000:.1f}ms, "
-              f"StdDev: {stats['stddev']*1000:.1f}ms")
+        print(
+            f"\nV2 write (100 trades) - Mean: {stats['mean']*1000:.1f}ms, "
+            f"StdDev: {stats['stddev']*1000:.1f}ms"
+        )
 
     def test_large_batch_write(self, benchmark, mock_iceberg_components, sample_trades_v2):
         """Benchmark large batch write (10K trades).
@@ -168,12 +180,13 @@ class TestWriterLatency:
         assert result == 10_000
 
         stats = benchmark.stats
-        print(f"\nLarge batch (10K trades) - Mean: {stats['mean']:.3f}s, "
-              f"Throughput: {10_000 / stats['mean']:,.0f} rows/sec")
+        print(
+            f"\nLarge batch (10K trades) - Mean: {stats['mean']:.3f}s, "
+            f"Throughput: {10_000 / stats['mean']:,.0f} rows/sec"
+        )
 
         # Check latency baseline
-        assert stats['mean'] < 2.0, \
-            f"Large batch latency {stats['mean']:.2f}s exceeds 2s baseline"
+        assert stats["mean"] < 2.0, f"Large batch latency {stats['mean']:.2f}s exceeds 2s baseline"
 
 
 @pytest.mark.performance
@@ -190,6 +203,7 @@ class TestWriterThroughput:
         num_batches = 50  # Total 5,000 rows
 
         import time
+
         start = time.perf_counter()
 
         for i in range(num_batches):
@@ -203,8 +217,7 @@ class TestWriterThroughput:
         print(f"\nSmall batches: {total_rows:,} rows in {elapsed:.2f}s")
         print(f"Throughput: {throughput:,.0f} rows/sec")
 
-        assert throughput > 5_000, \
-            f"Throughput {throughput:,.0f} rows/sec below 5,000 baseline"
+        assert throughput > 5_000, f"Throughput {throughput:,.0f} rows/sec below 5,000 baseline"
 
     def test_throughput_large_batches(self, mock_iceberg_components, sample_trades_v2):
         """Measure throughput with large batches (10K rows).
@@ -216,6 +229,7 @@ class TestWriterThroughput:
         num_batches = 10  # Total 100K rows
 
         import time
+
         start = time.perf_counter()
 
         for i in range(num_batches):
@@ -229,8 +243,7 @@ class TestWriterThroughput:
         print(f"\nLarge batches: {total_rows:,} rows in {elapsed:.2f}s")
         print(f"Throughput: {throughput:,.0f} rows/sec")
 
-        assert throughput > 10_000, \
-            f"Throughput {throughput:,.0f} rows/sec below 10,000 baseline"
+        assert throughput > 10_000, f"Throughput {throughput:,.0f} rows/sec below 10,000 baseline"
 
 
 @pytest.mark.performance
@@ -293,8 +306,7 @@ class TestArrowConversion:
         throughput_10k = results[2][2]
 
         ratio = throughput_10k / throughput_100
-        assert 0.7 < ratio < 1.3, \
-            f"Arrow conversion doesn't scale linearly: {ratio:.2f}x"
+        assert 0.7 < ratio < 1.3, f"Arrow conversion doesn't scale linearly: {ratio:.2f}x"
 
 
 @pytest.mark.performance
@@ -311,24 +323,26 @@ class TestDecimalPrecision:
         # Generate trades with high-precision decimals
         trades = []
         for i in range(1000):
-            trades.append({
-                "message_id": f"msg-{i:06d}",
-                "trade_id": f"trade-{i:06d}",
-                "symbol": "BTCUSDT",
-                "exchange": "binance",
-                "asset_class": "crypto",
-                "timestamp": datetime(2025, 1, 13, 10, 0, 0),
-                "price": Decimal("45000.12345678"),  # 8 decimal places
-                "quantity": Decimal("1.23456789"),  # 8 decimal places
-                "currency": "USDT",
-                "side": "buy",
-                "trade_conditions": None,
-                "source_sequence": i,
-                "ingestion_timestamp": datetime.now(),
-                "platform_sequence": i + 100000,
-                "vendor_data": None,
-                "is_sample_data": False,
-            })
+            trades.append(
+                {
+                    "message_id": f"msg-{i:06d}",
+                    "trade_id": f"trade-{i:06d}",
+                    "symbol": "BTCUSDT",
+                    "exchange": "binance",
+                    "asset_class": "crypto",
+                    "timestamp": datetime(2025, 1, 13, 10, 0, 0),
+                    "price": Decimal("45000.12345678"),  # 8 decimal places
+                    "quantity": Decimal("1.23456789"),  # 8 decimal places
+                    "currency": "USDT",
+                    "side": "buy",
+                    "trade_conditions": None,
+                    "source_sequence": i,
+                    "ingestion_timestamp": datetime.now(),
+                    "platform_sequence": i + 100000,
+                    "vendor_data": None,
+                    "is_sample_data": False,
+                }
+            )
 
         result = benchmark(writer._records_to_arrow_trades_v2, trades)
 
@@ -341,7 +355,7 @@ class TestDecimalPrecision:
 @pytest.mark.performance
 @pytest.mark.slow
 class TestWriterStress:
-    """Stress tests for writer under sustained load."""
+    """Stress tests-backup for writer under sustained load."""
 
     def test_sustained_write_load(self, mock_iceberg_components, sample_trades_v2):
         """Test writer under sustained load.
@@ -353,6 +367,7 @@ class TestWriterStress:
         num_batches = 50  # Total 500K rows
 
         import time
+
         start = time.perf_counter()
 
         for i in range(num_batches):
@@ -373,10 +388,13 @@ class TestWriterStress:
         print(f"Average throughput: {avg_throughput:,.0f} rows/sec")
 
         # Should maintain at least 8K rows/sec under sustained load
-        assert avg_throughput > 8_000, \
-            f"Sustained throughput {avg_throughput:,.0f} below 8,000 baseline"
+        assert (
+            avg_throughput > 8_000
+        ), f"Sustained throughput {avg_throughput:,.0f} below 8,000 baseline"
 
-    def test_mixed_schema_performance(self, mock_iceberg_components, sample_trades_v1, sample_trades_v2):
+    def test_mixed_schema_performance(
+        self, mock_iceberg_components, sample_trades_v1, sample_trades_v2
+    ):
         """Test performance when switching between v1 and v2 schemas."""
         writer_v1 = IcebergWriter(schema_version="v1")
         writer_v2 = IcebergWriter(schema_version="v2")
@@ -400,5 +418,4 @@ class TestWriterStress:
         print(f"V2/V1 ratio: {v2_time/v1_time:.2f}x")
 
         # V2 should be within 50% of v1 performance (more complex schema acceptable)
-        assert v2_time < v1_time * 1.5, \
-            "V2 schema significantly slower than v1"
+        assert v2_time < v1_time * 1.5, "V2 schema significantly slower than v1"

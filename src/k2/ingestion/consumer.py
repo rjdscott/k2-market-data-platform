@@ -63,20 +63,20 @@ from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroDeserializer
 from confluent_kafka.serialization import MessageField, SerializationContext
 from tenacity import (
+    RetryError,
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
-    RetryError,
 )
 
 from k2.common.config import config
-from k2.common.degradation_manager import DegradationManager, DegradationLevel
+from k2.common.degradation_manager import DegradationLevel, DegradationManager
 from k2.common.load_shedder import LoadShedder
 from k2.common.logging import get_logger
 from k2.common.metrics import create_component_metrics
 from k2.ingestion.dead_letter_queue import DeadLetterQueue
-from k2.ingestion.sequence_tracker import SequenceTracker, SequenceEvent
+from k2.ingestion.sequence_tracker import SequenceEvent, SequenceTracker
 from k2.storage.writer import IcebergWriter
 
 logger = get_logger(__name__)
@@ -196,7 +196,7 @@ class MarketDataConsumer:
         # Initialize components
         self._init_schema_registry()
         self._init_consumer()
-        self.iceberg_writer = iceberg_writer or IcebergWriter(schema_version=self.schema_version)
+        self.iceberg_writer = iceberg_writer or IcebergWriter()
         self.sequence_tracker = sequence_tracker or SequenceTracker()
 
         # Initialize Dead Letter Queue for permanent failures
@@ -404,8 +404,12 @@ class MarketDataConsumer:
             # Graceful shutdown
             self._shutdown()
 
-    def _consume_batch(self):
-        """Consume a batch of messages and write to Iceberg (Decision #015)."""
+    def _consume_batch(self) -> list[dict[str, Any]]:
+        """Consume a batch of messages and write to Iceberg (Decision #015).
+
+        Returns:
+            List of successfully consumed and written records
+        """
         batch: list[dict[str, Any]] = []
         batch_start_time = time.time()
 
@@ -496,7 +500,9 @@ class MarketDataConsumer:
 
                     # Check sequence (Decision #014: Sequence gap logging)
                     # V2 schema uses "source_sequence" instead of "sequence_number"
-                    seq_field = "source_sequence" if self.schema_version == "v2" else "sequence_number"
+                    seq_field = (
+                        "source_sequence" if self.schema_version == "v2" else "sequence_number"
+                    )
                     if "symbol" in record and seq_field in record and record[seq_field] is not None:
                         # Extract timestamp (Avro logical type deserializes to datetime)
                         timestamp = record.get("timestamp")
@@ -581,7 +587,10 @@ class MarketDataConsumer:
                 self.stats.errors += 1
                 metrics.increment(
                     "consumer_errors_total",
-                    labels={"error_type": "exhausted_retries", "consumer_group": self.consumer_group},
+                    labels={
+                        "error_type": "exhausted_retries",
+                        "consumer_group": self.consumer_group,
+                    },
                 )
                 # Don't commit offsets - will reprocess after restart
                 raise
@@ -632,6 +641,9 @@ class MarketDataConsumer:
                 )
                 raise
 
+        # Return the batch for testing/monitoring purposes
+        return batch
+
     def _deserialize_message(self, msg) -> dict[str, Any] | None:
         """Deserialize Avro message from Kafka.
 
@@ -641,14 +653,41 @@ class MarketDataConsumer:
         Returns:
             Deserialized record as dictionary, or None if deserialization fails
         """
-        # Get deserializer for this topic
-        subject = f"{msg.topic()}-value"
-        deserializer = self._get_deserializer(subject)
+        # Check for message errors first
+        if msg.error():
+            if msg.error().code() == KafkaError._PARTITION_EOF:
+                # End of partition - not a real error, just return None
+                logger.debug("Reached end of partition", partition=msg.partition())
+            else:
+                # Real error - log and increment error count
+                logger.error(
+                    "Message has error",
+                    error=msg.error(),
+                    topic=msg.topic(),
+                    partition=msg.partition(),
+                )
+                self.stats.errors += 1
+            return None
 
-        # Deserialize value
-        value = deserializer(msg.value(), SerializationContext(msg.topic(), MessageField.VALUE))
+        try:
+            # Get deserializer for this topic
+            subject = f"{msg.topic()}-value"
+            deserializer = self._get_deserializer(subject)
 
-        return value
+            # Deserialize value
+            value = deserializer(msg.value(), SerializationContext(msg.topic(), MessageField.VALUE))
+
+            return value
+        except Exception as err:
+            # Deserialization failed - log and increment error count
+            logger.error(
+                "Failed to deserialize message",
+                error=str(err),
+                topic=msg.topic(),
+                partition=msg.partition(),
+            )
+            self.stats.errors += 1
+            return None
 
     @retry(
         retry=retry_if_exception_type(RETRYABLE_ERRORS),
@@ -673,7 +712,9 @@ class MarketDataConsumer:
             network timeouts) while properly handling permanent errors via DLQ.
         """
         try:
-            self.iceberg_writer.write_trades(batch)
+            self.iceberg_writer.write_trades(
+                batch, table_name="market_data.trades", exchange="binance", asset_class="crypto"
+            )
 
         except RETRYABLE_ERRORS as err:
             logger.warning(
@@ -695,7 +736,9 @@ class MarketDataConsumer:
         try:
             # Write to Iceberg (IcebergWriter handles transaction)
             # Assuming trades for now - TODO: detect message type from topic or schema
-            self.iceberg_writer.write_trades(batch)
+            self.iceberg_writer.write_trades(
+                batch, table_name="market_data.trades", exchange="binance", asset_class="crypto"
+            )
 
             # Track write duration
             duration = time.time() - start_time

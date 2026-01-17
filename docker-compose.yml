@@ -417,6 +417,93 @@ services:
           memory: 512M
 
   # ============================================================================
+  # K2 QUERY API - REST API Service for Market Data Queries
+  # ============================================================================
+  # Provides RESTful interface for:
+  # - Market data queries (trades, quotes, summaries)
+  # - Hybrid queries (Kafka + Iceberg integration)
+  # - Health monitoring and metrics
+  # - OpenAPI documentation (/docs, /redoc)
+  # Production-ready: authentication, rate limiting, correlation IDs
+  k2-query-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Install API server dependencies
+        INSTALL_API: "true"
+        # Force API dependencies installation
+        FORCE_INSTALL_API: "true"
+    container_name: k2-query-api
+    hostname: k2-query-api
+    ports:
+      - "8000:8000"       # REST API
+      - "9094:9094"       # Prometheus metrics (alternative to 9091 for API)
+    environment:
+      # FastAPI Configuration
+      K2_API_KEY: ${K2_API_KEY:-k2-dev-api-key-2026}
+      K2_API_RATE_LIMIT: ${K2_API_RATE_LIMIT:-100}
+      K2_LOG_LEVEL: ${K2_API_LOG_LEVEL:-INFO}
+      K2_LOG_FORMAT: json
+      
+      # Kafka Configuration
+      K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      K2_KAFKA_SCHEMA_REGISTRY_URL: http://schema-registry-1:8081
+      K2_KAFKA_CONSUMER_GROUP_PREFIX: k2-api
+      
+      # Iceberg Configuration
+      K2_ICEBERG_CATALOG_URI: http://iceberg-rest:8181
+      K2_ICEBERG_CATALOG_WAREHOUSE: s3://warehouse/
+      K2_ICEBERG_S3_ENDPOINT: http://minio:9000
+      K2_ICEBERG_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}
+      K2_ICEBERG_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-password}
+      K2_ICEBERG_S3_PATH_STYLE_ACCESS: "true"
+      
+      # Performance Configuration
+      K2_QUERY_MEMORY_LIMIT: 1GB
+      K2_QUERY_TIMEOUT_S: 30
+      K2_HYBRID_QUERY_MAX_MESSAGES: 1000
+      
+      # Metrics Configuration
+      K2_METRICS_ENABLED: "true"
+      K2_METRICS_PORT: 9094
+    command: >
+      python -m uvicorn k2.api.main:app 
+      --host 0.0.0.0 
+      --port 8000 
+      --workers 1 
+      --access-log 
+      --log-level info
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry-1:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    restart: unless-stopped
+
+  # ============================================================================
   # KAFKA UI - Development & Debugging Tool
   # ============================================================================
   # Provides web interface for:
@@ -468,6 +555,8 @@ services:
       dockerfile: Dockerfile
     container_name: k2-binance-stream
     hostname: binance-stream
+    ports:
+      - "9091:9091"       # Prometheus metrics
     environment:
       # Kafka Configuration
       K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
@@ -491,7 +580,7 @@ services:
       K2_BINANCE_RECONNECT_DELAY: 5
       K2_BINANCE_MAX_RECONNECT_ATTEMPTS: 10
       K2_BINANCE_HEALTH_CHECK_INTERVAL: 30
-      K2_BINANCE_HEALTH_CHECK_TIMEOUT: 60
+      K2_BINANCE_HEALTH_CHECK_TIMEOUT: 30
 
       # Metrics Configuration
       K2_METRICS_ENABLED: "true"
@@ -523,6 +612,79 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
+
+  # ============================================================================
+  # KAFKA CONSUMER - Production-Ready Consumer for Market Data Ingestion
+  # ============================================================================
+  # Consumes trades from Kafka and writes to Iceberg tables
+  # - Processes market.crypto.trades.binance topic
+  # - Deserializes v2 Avro messages with Schema Registry
+  # - Writes to market_data.trades Iceberg table with ACID guarantees
+  # - Production-grade features: batch processing, retries, DLQ, graceful shutdown
+  consumer-crypto:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Install consumer dependencies
+        INSTALL_CONSUMER: "true"
+        FORCE_INSTALL_CONSUMER: "true"
+    container_name: k2-consumer-crypto
+    hostname: k2-consumer-crypto
+    environment:
+      # Kafka Configuration
+      K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      K2_KAFKA_SCHEMA_REGISTRY_URL: http://schema-registry-1:8081
+      K2_CONSUMER_GROUP: k2-iceberg-writer-crypto-v2
+      K2_CONSUMER_BATCH_SIZE: 1000
+      K2_CONSUMER_MAX_MESSAGES: ""  # Unlimited for daemon mode
+      
+      # Iceberg Configuration
+      K2_ICEBERG_CATALOG_URI: http://iceberg-rest:8181
+      K2_ICEBERG_CATALOG_WAREHOUSE: s3://warehouse/
+      K2_ICEBERG_S3_ENDPOINT: http://minio:9000
+      K2_ICEBERG_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}
+      K2_ICEBERG_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-password}
+      K2_ICEBERG_S3_PATH_STYLE_ACCESS: "true"
+      
+      # DLQ Configuration
+      K2_DLQ_PATH: /tmp/k2-dlq
+      
+      # Logging Configuration
+      K2_LOG_LEVEL: INFO
+      K2_LOG_FORMAT: json
+    command: >
+      python scripts/consume_crypto_trades.py 
+      --no-ui 
+      --log-level INFO
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry-1:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'consume_crypto_trades.py' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
 
 # ==============================================================================
 # NETWORKS

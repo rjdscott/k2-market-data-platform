@@ -26,7 +26,6 @@ Usage:
 
 import json
 from pathlib import Path
-from typing import Dict
 
 import structlog
 from confluent_kafka.schema_registry import Schema, SchemaRegistryClient

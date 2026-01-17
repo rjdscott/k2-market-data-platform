@@ -7,7 +7,7 @@ Baseline Targets (single producer):
 - Latency p99: < 10ms
 - Memory: < 100MB for 1M messages
 
-Run: pytest tests/performance/test_producer_throughput.py -v --benchmark-only
+Run: pytest tests-backup/performance/test_producer_throughput.py -v --benchmark-only
 """
 
 from datetime import datetime
@@ -22,9 +22,11 @@ from k2.ingestion.producer import MarketDataProducer
 @pytest.fixture
 def mock_kafka_producer():
     """Mock Kafka producer to isolate benchmarking from network."""
-    with patch("k2.ingestion.producer.Producer") as mock_prod, \
-         patch("k2.ingestion.producer.SchemaRegistryClient") as mock_sr, \
-         patch("k2.ingestion.producer.get_topic_builder") as mock_builder:
+    with (
+        patch("k2.ingestion.producer.Producer") as mock_prod,
+        patch("k2.ingestion.producer.SchemaRegistryClient") as mock_sr,
+        patch("k2.ingestion.producer.get_topic_builder") as mock_builder,
+    ):
 
         # Configure mock producer
         mock_instance = Mock()
@@ -121,9 +123,11 @@ class TestProducerThroughput:
 
         # Print stats for reference
         stats = benchmark.stats
-        print(f"\nSingle trade latency - Mean: {stats['mean']*1000:.3f}ms, "
-              f"StdDev: {stats['stddev']*1000:.3f}ms, "
-              f"Min: {stats['min']*1000:.3f}ms, Max: {stats['max']*1000:.3f}ms")
+        print(
+            f"\nSingle trade latency - Mean: {stats['mean']*1000:.3f}ms, "
+            f"StdDev: {stats['stddev']*1000:.3f}ms, "
+            f"Min: {stats['min']*1000:.3f}ms, Max: {stats['max']*1000:.3f}ms"
+        )
 
     def test_single_quote_latency(self, benchmark, mock_kafka_producer, sample_quote_v2):
         """Benchmark single quote produce latency.
@@ -143,8 +147,10 @@ class TestProducerThroughput:
         assert mock_kafka_producer.produce.call_count > 0
 
         stats = benchmark.stats
-        print(f"\nSingle quote latency - Mean: {stats['mean']*1000:.3f}ms, "
-              f"StdDev: {stats['stddev']*1000:.3f}ms")
+        print(
+            f"\nSingle quote latency - Mean: {stats['mean']*1000:.3f}ms, "
+            f"StdDev: {stats['stddev']*1000:.3f}ms"
+        )
 
     def test_batch_trade_throughput(self, benchmark, mock_kafka_producer, sample_trade_v2):
         """Benchmark batch trade produce throughput.
@@ -170,13 +176,16 @@ class TestProducerThroughput:
 
         # Calculate throughput
         stats = benchmark.stats
-        throughput = batch_size / stats['mean']
-        print(f"\nBatch throughput - {throughput:,.0f} messages/sec "
-              f"(batch_size={batch_size}, time={stats['mean']:.3f}s)")
+        throughput = batch_size / stats["mean"]
+        print(
+            f"\nBatch throughput - {throughput:,.0f} messages/sec "
+            f"(batch_size={batch_size}, time={stats['mean']:.3f}s)"
+        )
 
         # Verify throughput meets baseline
-        assert throughput > 10_000, \
-            f"Throughput {throughput:,.0f} msg/sec below baseline 10,000 msg/sec"
+        assert (
+            throughput > 10_000
+        ), f"Throughput {throughput:,.0f} msg/sec below baseline 10,000 msg/sec"
 
     def test_batch_quote_throughput(self, benchmark, mock_kafka_producer, sample_quote_v2):
         """Benchmark batch quote produce throughput.
@@ -200,11 +209,10 @@ class TestProducerThroughput:
         result = benchmark(produce_batch)
 
         stats = benchmark.stats
-        throughput = batch_size / stats['mean']
+        throughput = batch_size / stats["mean"]
         print(f"\nBatch quote throughput - {throughput:,.0f} messages/sec")
 
-        assert throughput > 10_000, \
-            f"Throughput {throughput:,.0f} msg/sec below baseline"
+        assert throughput > 10_000, f"Throughput {throughput:,.0f} msg/sec below baseline"
 
     def test_producer_memory_usage(self, mock_kafka_producer, sample_trade_v2):
         """Measure producer memory footprint.
@@ -228,7 +236,7 @@ class TestProducerThroughput:
             )
 
         # Get rough memory estimate (not precise, but indicative)
-        # For precise measurement, use: pytest --memprof tests/performance/
+        # For precise measurement, use: pytest --memprof tests-backup/performance/
         memory_mb = sys.getsizeof(producer) / (1024 * 1024)
 
         print(f"\nProducer object size: ~{memory_mb:.2f}MB (rough estimate)")
@@ -250,6 +258,7 @@ class TestProducerScaling:
 
         for batch_size in batch_sizes:
             import time
+
             start = time.perf_counter()
 
             for i in range(batch_size):
@@ -273,8 +282,9 @@ class TestProducerScaling:
         throughput_10k = results[2][1]
 
         # Allow 20% degradation at larger batch sizes
-        assert throughput_10k > throughput_100 * 0.8, \
-            "Throughput degraded >20% at larger batch sizes"
+        assert (
+            throughput_10k > throughput_100 * 0.8
+        ), "Throughput degraded >20% at larger batch sizes"
 
     def test_serialization_caching(self, mock_kafka_producer, sample_trade_v2):
         """Test that serializer caching improves performance.
@@ -315,14 +325,15 @@ class TestProducerScaling:
         print(f"Speedup: {first_batch_time / second_batch_time:.2f}x")
 
         # Second batch should be at least as fast (cache helps or no impact)
-        assert second_batch_time <= first_batch_time * 1.1, \
-            "Second batch unexpectedly slower (cache not helping)"
+        assert (
+            second_batch_time <= first_batch_time * 1.1
+        ), "Second batch unexpectedly slower (cache not helping)"
 
 
 @pytest.mark.performance
 @pytest.mark.slow
 class TestProducerStress:
-    """Stress tests for producer under load."""
+    """Stress tests-backup for producer under load."""
 
     def test_sustained_load(self, mock_kafka_producer, sample_trade_v2):
         """Test producer under sustained load.
@@ -333,6 +344,7 @@ class TestProducerStress:
         message_count = 100_000
 
         import time
+
         start = time.perf_counter()
 
         for i in range(message_count):
@@ -356,5 +368,6 @@ class TestProducerStress:
         print(f"Average throughput: {throughput:,.0f} msg/sec")
 
         # Should maintain at least 5K msg/sec under sustained load
-        assert throughput > 5_000, \
-            f"Sustained throughput {throughput:,.0f} msg/sec below baseline 5,000"
+        assert (
+            throughput > 5_000
+        ), f"Sustained throughput {throughput:,.0f} msg/sec below baseline 5,000"

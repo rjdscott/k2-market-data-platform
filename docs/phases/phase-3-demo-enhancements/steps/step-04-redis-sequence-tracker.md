@@ -561,9 +561,9 @@ Create `tests/unit/test_redis_sequence_tracker.py` with 15+ tests.
 # Start Redis
 docker compose up -d redis
 
-# Run tests
-pytest tests/unit/test_redis_sequence_tracker.py -v
-pytest tests/integration/test_redis_sequence_tracker.py -v
+# Run tests-backup
+pytest tests-backup/unit/test_redis_sequence_tracker.py -v
+pytest tests-backup/integration/test_redis_sequence_tracker.py -v
 
 # Test manually
 python -c "

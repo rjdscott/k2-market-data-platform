@@ -163,7 +163,7 @@ Failed transactions log pre-failure snapshot context:
 
 **Test Execution**:
 ```bash
-uv run pytest tests/unit/test_transaction_logging.py -v
+uv run pytest tests-backup/unit/test_transaction_logging.py -v
 ================================ 8 passed in 6.07s ================================
 ```
 

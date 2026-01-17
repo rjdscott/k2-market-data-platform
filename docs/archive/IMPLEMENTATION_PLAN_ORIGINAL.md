@@ -74,7 +74,7 @@ End-to-End Testing (Step 15)
 **Test**: Create `tests/integration/test_infrastructure.py`
 
 ```python
-"""Integration tests for Docker infrastructure."""
+"""Integration tests-backup for Docker infrastructure."""
 import pytest
 import requests
 from confluent_kafka.admin import AdminClient
@@ -496,7 +496,7 @@ def register_schemas(schema_registry_url: str) -> Dict[str, int]:
 **File**: `tests/unit/test_schemas.py`
 
 ```python
-"""Unit tests for schema validation."""
+"""Unit tests-backup for schema validation."""
 import pytest
 from pathlib import Path
 import json
@@ -540,7 +540,7 @@ class TestSchemas:
 **Integration Test**: `tests/integration/test_schema_registry.py`
 
 ```python
-"""Integration tests for Schema Registry."""
+"""Integration tests-backup for Schema Registry."""
 import pytest
 from k2.schemas import register_schemas
 from confluent_kafka.schema_registry import SchemaRegistryClient
@@ -742,7 +742,7 @@ if __name__ == '__main__':
 **File**: `tests/integration/test_iceberg_catalog.py`
 
 ```python
-"""Integration tests for Iceberg catalog."""
+"""Integration tests-backup for Iceberg catalog."""
 import pytest
 from k2.storage.catalog import IcebergCatalogManager
 from pyiceberg.catalog import load_catalog
@@ -944,7 +944,7 @@ class IcebergWriter:
 **File**: `tests/unit/test_iceberg_writer.py`
 
 ```python
-"""Unit tests for Iceberg writer."""
+"""Unit tests-backup for Iceberg writer."""
 import pytest
 from datetime import datetime
 from decimal import Decimal
@@ -986,7 +986,7 @@ class TestIcebergWriter:
 **Integration Test**: `tests/integration/test_iceberg_writer.py`
 
 ```python
-"""Integration tests for Iceberg writer."""
+"""Integration tests-backup for Iceberg writer."""
 import pytest
 from datetime import datetime
 from decimal import Decimal
@@ -1166,7 +1166,7 @@ class IcebergCatalogManager:
 **File**: `tests/unit/test_config.py`
 
 ```python
-"""Unit tests for configuration."""
+"""Unit tests-backup for configuration."""
 import pytest
 import os
 from k2.common.config import K2Config, KafkaConfig
@@ -1378,7 +1378,7 @@ class AvroProducer:
 **File**: `tests/unit/test_producer.py`
 
 ```python
-"""Unit tests for Kafka producer."""
+"""Unit tests-backup for Kafka producer."""
 import pytest
 from unittest.mock import Mock, patch
 from k2.ingestion.producer import AvroProducer
@@ -1404,7 +1404,7 @@ class TestAvroProducer:
 **Integration Test**: `tests/integration/test_producer.py`
 
 ```python
-"""Integration tests for Kafka producer."""
+"""Integration tests-backup for Kafka producer."""
 import pytest
 from datetime import datetime
 from decimal import Decimal
@@ -1637,7 +1637,7 @@ if __name__ == '__main__':
 **File**: `tests/integration/test_batch_loader.py`
 
 ```python
-"""Integration tests for batch loader."""
+"""Integration tests-backup for batch loader."""
 import pytest
 from pathlib import Path
 from k2.ingestion.batch_loader import CSVBatchLoader
@@ -1896,7 +1896,7 @@ def consume(
 **File**: `tests/integration/test_consumer.py`
 
 ```python
-"""Integration tests for Kafka consumer."""
+"""Integration tests-backup for Kafka consumer."""
 import pytest
 from k2.ingestion.consumer import IcebergConsumer
 from k2.ingestion.producer import AvroProducer
@@ -2135,7 +2135,7 @@ class QueryEngine:
 **File**: `tests/integration/test_query_engine.py`
 
 ```python
-"""Integration tests for query engine."""
+"""Integration tests-backup for query engine."""
 import pytest
 from k2.query.engine import QueryEngine
 
@@ -2157,7 +2157,7 @@ class TestQueryEngine:
         """Should query trades from Iceberg table."""
         engine = QueryEngine()
 
-        # Query all trades (assuming some exist from ingestion tests)
+        # Query all trades (assuming some exist from ingestion tests-backup)
         df = engine.query_trades(limit=10)
 
         # Verify schema
@@ -2384,7 +2384,7 @@ class ReplayEngine:
 **File**: `tests/integration/test_replay_engine.py`
 
 ```python
-"""Integration tests for replay engine."""
+"""Integration tests-backup for replay engine."""
 import pytest
 from datetime import datetime
 from k2.query.replay import ReplayEngine
@@ -2741,7 +2741,7 @@ if __name__ == "__main__":
 **File**: `tests/integration/test_api.py`
 
 ```python
-"""Integration tests for REST API."""
+"""Integration tests-backup for REST API."""
 import pytest
 from fastapi.testclient import TestClient
 from k2.api.main import app
@@ -3270,7 +3270,7 @@ make docker-up
 make init-infra
 
 # Run E2E test
-pytest tests/integration/test_e2e_flow.py -v -s
+pytest tests-backup/integration/test_e2e_flow.py -v -s
 
 # Run demo
 python scripts/demo.py

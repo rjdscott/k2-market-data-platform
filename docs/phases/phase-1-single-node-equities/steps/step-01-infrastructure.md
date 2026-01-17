@@ -36,7 +36,7 @@ Ensure docker-compose environment works correctly and create initialization scri
 **Test**: Create `tests/integration/test_infrastructure.py`
 
 ```python
-"""Integration tests for Docker infrastructure."""
+"""Integration tests-backup for Docker infrastructure."""
 import pytest
 import requests
 from confluent_kafka.admin import AdminClient
@@ -208,8 +208,8 @@ None required (integration tests only for infrastructure validation).
 # Start infrastructure
 make docker-up
 
-# Run infrastructure tests
-pytest tests/integration/test_infrastructure.py -v
+# Run infrastructure tests-backup
+pytest tests-backup/integration/test_infrastructure.py -v
 
 # Initialize infrastructure
 make init-infra
@@ -258,7 +258,7 @@ If this step needs to be reverted:
 
 4. **Delete test files** (if created):
    ```bash
-   rm tests/integration/test_infrastructure.py
+   rm tests-backup/integration/test_infrastructure.py
    rm scripts/init_infra.py
    ```
 

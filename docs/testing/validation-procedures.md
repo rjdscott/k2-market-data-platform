@@ -254,7 +254,7 @@ cat /tmp/dlq/*.jsonl | jq '.'
 
 **Example Test Structure**:
 ```python
-# tests/unit/test_consumer.py
+# tests-backup/unit/test_consumer.py
 class TestConsumerSequenceTrackerIntegration:
     def test_sequence_tracker_called_with_all_required_args_v2(self):
         """Validates all 4 required arguments passed to sequence tracker."""
@@ -292,7 +292,7 @@ class TestConsumerSequenceTrackerIntegration:
 
 **Example Test**:
 ```python
-# tests/unit/test_dead_letter_queue.py
+# tests-backup/unit/test_dead_letter_queue.py
 class TestDeadLetterQueueDateTimeSerialization:
     def test_write_message_with_datetime_field(self):
         """Validates datetime serialization to JSON."""

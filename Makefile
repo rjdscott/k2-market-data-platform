@@ -1,5 +1,5 @@
 .PHONY: help setup install dev-install clean clean-venv test test-unit test-integration \
-        test-performance coverage lint format type-check quality docker-up \
+        test-e2e test-performance coverage lint format type-check quality docker-up \
         docker-down docker-logs docker-clean init-infra simulate docs \
         api api-prod api-test uv-lock uv-upgrade uv-add uv-add-dev \
         demo-reset demo-reset-force demo-reset-dry-run demo-reset-custom
@@ -101,7 +101,11 @@ clean-venv: ## Remove virtual environment (for fresh reinstall)
 docker-up: ## Start all Docker services
 	@echo "$(BLUE)Starting Docker services...$(NC)"
 	@$(DOCKER_COMPOSE) -f $(DOCKER_COMPOSE_FILE) up -d
-	@echo "$(GREEN)✓ Services started. Use 'make docker-logs' to view logs$(NC)"
+	@echo "$(BLUE)Waiting for Schema Registry to be ready...$(NC)"
+	@timeout 60 bash -c 'until curl -sf http://localhost:8081/subjects >/dev/null 2>&1; do sleep 2; done' || (echo "$(RED)Schema Registry failed to start$(NC)" && exit 1)
+	@echo "$(BLUE)Registering Avro schemas...$(NC)"
+	@$(UV) run python3 -c "from k2.schemas import register_schemas; register_schemas('http://localhost:8081')" || (echo "$(RED)Schema registration failed$(NC)" && exit 1)
+	@echo "$(GREEN)✓ Services started and schemas registered$(NC)"
 	@echo "$(YELLOW)Service URLs:$(NC)"
 	@echo "  Kafka UI:         http://localhost:8080"
 	@echo "  Schema Registry:  http://localhost:8081"
@@ -146,30 +150,136 @@ docker-rebuild: ## Rebuild and restart services
 	@$(DOCKER_COMPOSE) -f $(DOCKER_COMPOSE_FILE) up -d --build
 	@echo "$(GREEN)✓ Services rebuilt$(NC)"
 
+docker-register-schemas: ## Register Avro schemas with Schema Registry
+	@echo "$(BLUE)Registering Avro schemas...$(NC)"
+	@$(UV) run python3 -c "from k2.schemas import register_schemas; result = register_schemas('http://localhost:8081'); print(f'Registered {len(result)} schemas')"
+	@echo "$(GREEN)✓ Schemas registered successfully$(NC)"
+
 # ==============================================================================
-# Testing
+# Testing (Structured CI/CD Strategy)
 # ==============================================================================
 
-test: ## Run all tests
-	@echo "$(BLUE)Running all tests...$(NC)"
-	@$(PYTEST) tests/ -v
-	@echo "$(GREEN)✓ All tests passed$(NC)"
+test: ## Run only fast tests (unit + light integration) - DEFAULT
+	@echo "$(BLUE)Running fast tests (unit + integration, no slow/chaos/soak/operational)...$(NC)"
+	@$(PYTEST) tests/ -v -m "not slow and not chaos and not soak and not operational"
+	@echo "$(GREEN)✓ Fast tests passed$(NC)"
 
-test-unit: ## Run unit tests only (fast, no Docker required)
+test-unit: ## Run unit tests only (no Docker required)
 	@echo "$(BLUE)Running unit tests...$(NC)"
-	@$(PYTEST) tests/unit/ -v -m unit
+	@$(PYTEST) tests/unit/ -v
 	@echo "$(GREEN)✓ Unit tests passed$(NC)"
 
-test-integration: docker-up ## Run integration tests (requires Docker)
-	@echo "$(BLUE)Running integration tests...$(NC)"
+test-unit-parallel: ## Run unit tests in parallel (faster, max 8 workers to prevent OOM)
+	@echo "$(BLUE)Running unit tests in parallel...$(NC)"
+	@$(PYTEST) tests/unit/ -v -n 8
+	@echo "$(GREEN)✓ Unit tests passed$(NC)"
+
+test-integration: docker-up ## Run integration tests (excludes slow tests)
+	@echo "$(BLUE)Running integration tests (excluding slow tests)...$(NC)"
 	@sleep 5  # Wait for services to be ready
-	@$(PYTEST) tests/integration/ -v -m integration
+	@$(PYTEST) tests/integration/ -v -m "not slow"
 	@echo "$(GREEN)✓ Integration tests passed$(NC)"
+
+test-integration-all: docker-up ## Run all integration tests including slow ones
+	@echo "$(BLUE)Running all integration tests...$(NC)"
+	@sleep 5  # Wait for services to be ready
+	@$(PYTEST) tests/integration/ -v
+	@echo "$(GREEN)✓ All integration tests passed$(NC)"
 
 test-performance: docker-up ## Run performance benchmarks
 	@echo "$(BLUE)Running performance benchmarks...$(NC)"
-	@$(PYTEST) tests/performance/ -v -m performance --benchmark-only
+	@$(PYTEST) tests/performance/ -v --benchmark-only
 	@echo "$(GREEN)✓ Benchmarks complete$(NC)"
+
+test-chaos: ## Run chaos tests (DESTRUCTIVE - requires confirmation)
+	@echo "$(RED)WARNING: Chaos tests will stop/start Docker containers$(NC)"
+	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || (echo "Aborted" && exit 1)
+	@$(PYTEST) tests/chaos/ -v -m chaos --maxfail=1
+	@echo "$(GREEN)✓ Chaos tests passed$(NC)"
+
+test-operational: ## Run operational tests (DESTRUCTIVE - requires confirmation)
+	@echo "$(RED)WARNING: Operational tests will manipulate Docker services$(NC)"
+	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || (echo "Aborted" && exit 1)
+	@$(PYTEST) tests/operational/ -v -m operational
+	@echo "$(GREEN)✓ Operational tests passed$(NC)"
+
+test-e2e: docker-up ## Run end-to-end tests (requires full Docker stack)
+	@echo "$(BLUE)Running end-to-end tests (requires full Docker stack)...$(NC)"
+	@echo "$(YELLOW)NOTE: E2E tests require Docker permissions and may take several minutes$(NC)"
+	@sleep 10  # Wait for services to be fully ready
+	@$(PYTEST) tests/e2e/ -v -m e2e -n 0 --tb=short
+	@echo "$(GREEN)✓ E2E tests passed$(NC)"
+
+test-e2e-pipeline: docker-up ## Run E2E pipeline validation tests only
+	@echo "$(BLUE)Running E2E pipeline validation tests...$(NC)"
+	@sleep 10  # Wait for services to be ready
+	@$(PYTEST) tests/e2e/test_complete_pipeline.py -v -m e2e -n 0 --tb=short
+	@echo "$(GREEN)✓ E2E pipeline tests passed$(NC)"
+
+test-e2e-health: docker-up ## Run E2E Docker stack health tests only
+	@echo "$(BLUE)Running E2E Docker stack health tests...$(NC)"
+	@sleep 5  # Wait for services to be ready
+	@$(PYTEST) tests/e2e/test_docker_stack_health.py -v -m e2e -n 0 --tb=short
+	@echo "$(GREEN)✓ E2E health tests passed$(NC)"
+
+test-e2e-freshness: docker-up ## Run E2E data freshness and latency tests only
+	@echo "$(BLUE)Running E2E data freshness and latency tests...$(NC)"
+	@sleep 10  # Wait for services to be ready
+	@$(PYTEST) tests/e2e/test_data_freshness.py -v -m e2e -n 0 --tb=short
+	@echo "$(GREEN)✓ E2E freshness tests passed$(NC)"
+
+validate-pipeline: docker-up ## Validate complete pipeline health and data flow
+	@echo "$(BLUE)Validating complete K2 Market Data Pipeline...$(NC)"
+	@echo "$(YELLOW)This runs a comprehensive pipeline validation$(NC)"
+	@sleep 15  # Ensure all services are fully ready
+	@$(PYTEST) tests/e2e/ -v -m e2e -k "test_binance_to_api_pipeline or test_pipeline_data_consistency" -n 0 --tb=short
+	@echo "$(GREEN)✓ Pipeline validation complete$(NC)"
+
+test-soak-1h: ## Run 1-hour soak test
+	@echo "$(YELLOW)Starting 1-hour soak test (requires ~70 minutes)...$(NC)"
+	@$(PYTEST) tests/soak/test_binance_1h_validation.py -v -s --timeout=4000
+	@echo "$(GREEN)✓ 1-hour soak test passed$(NC)"
+
+test-soak-24h: ## ERROR: DO NOT RUN LOCALLY
+	@echo "$(RED)ERROR: 24h soak test should only run in dedicated CI environment$(NC)"
+	@echo "$(RED)This test requires 25+ hours and will consume significant resources$(NC)"
+	@exit 1
+
+test-pr: ## Run PR validation tests (fast feedback)
+	@echo "$(BLUE)Running PR validation tests (unit + lint + type)...$(NC)"
+	@make lint
+	@make type-check
+	@make test-unit-parallel
+	@echo "$(GREEN)✓ PR validation passed$(NC)"
+
+test-pr-full: docker-up ## Run full PR tests before merge
+	@echo "$(BLUE)Running full PR tests (unit + integration, no slow/chaos/soak)...$(NC)"
+	@make test-pr
+	@make test-integration
+	@echo "$(GREEN)✓ Full PR validation passed$(NC)"
+
+test-post-merge: docker-up ## Run post-merge validation (includes performance)
+	@echo "$(BLUE)Running post-merge validation...$(NC)"
+	@make test-unit-parallel
+	@make test-integration-all
+	@make test-performance
+	@echo "$(GREEN)✓ Post-merge validation passed$(NC)"
+
+test-nightly: docker-up ## Run nightly comprehensive tests (excludes soak)
+	@echo "$(BLUE)Running nightly comprehensive tests...$(NC)"
+	@make test-unit-parallel
+	@make test-integration-all
+	@make test-performance
+	@make test-chaos
+	@make test-operational
+	@echo "$(GREEN)✓ Nightly tests passed$(NC)"
+
+test-all-local: docker-up ## Run all tests except 24h soak (for local comprehensive validation)
+	@echo "$(YELLOW)Running all tests except 24h soak (this will take 2-3 hours)...$(NC)"
+	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || (echo "Aborted" && exit 1)
+	@make test-nightly
+	@make test-soak-1h
+	@echo "$(GREEN)✓ All local tests passed$(NC)"
 
 test-watch: ## Run tests in watch mode
 	@echo "$(BLUE)Running tests in watch mode...$(NC)"
@@ -177,11 +287,33 @@ test-watch: ## Run tests in watch mode
 
 coverage: ## Run tests with coverage report
 	@echo "$(BLUE)Running tests with coverage...$(NC)"
-	@$(PYTEST) tests/ --cov=src/k2 --cov-report=term-missing --cov-report=html
+	@$(PYTEST) tests/ -v \
+		-m "not slow and not chaos and not soak and not operational" \
+		--cov=src/k2 \
+		--cov-report=term-missing \
+		--cov-report=html \
+		--cov-report=xml
 	@echo "$(GREEN)✓ Coverage report generated in htmlcov/index.html$(NC)"
 
 coverage-report: ## Open coverage report in browser
 	@open htmlcov/index.html 2>/dev/null || xdg-open htmlcov/index.html 2>/dev/null || echo "Open htmlcov/index.html manually"
+
+# CI/CD Targets (match GitHub Actions workflows)
+ci-test: ## Run CI test suite (matches GitHub Actions)
+	@echo "$(BLUE)Running CI test suite...$(NC)"
+	@make test-pr-full
+	@echo "$(GREEN)✓ CI tests passed$(NC)"
+
+ci-quality: ## Run quality checks (lint + type + format-check)
+	@echo "$(BLUE)Running quality checks...$(NC)"
+	@$(RUFF) check src/ tests/
+	@$(MYPY) src/
+	@$(BLACK) --check src/ tests/
+	@$(ISORT) --check-only src/ tests/
+	@echo "$(GREEN)✓ Quality checks passed$(NC)"
+
+ci-all: ci-quality ci-test coverage ## Run all CI checks
+	@echo "$(GREEN)✓ All CI checks passed$(NC)"
 
 # ==============================================================================
 # Code Quality

@@ -852,14 +852,14 @@ k2_kafka_messages_produced_total{exchange="asx",asset_class="equities",data_type
 
 **Run Tests**:
 ```bash
-# All batch loader tests
-PYTHONPATH=src pytest tests/unit/test_batch_loader.py -v
+# All batch loader tests-backup
+PYTHONPATH=src pytest tests-backup/unit/test_batch_loader.py -v
 
 # Specific test
-PYTHONPATH=src pytest tests/unit/test_batch_loader.py::TestBatchLoader::test_load_csv_trades_success -v
+PYTHONPATH=src pytest tests-backup/unit/test_batch_loader.py::TestBatchLoader::test_load_csv_trades_success -v
 
 # With coverage
-PYTHONPATH=src pytest tests/unit/test_batch_loader.py --cov=src/k2/ingestion/batch_loader --cov-report=html
+PYTHONPATH=src pytest tests-backup/unit/test_batch_loader.py --cov=src/k2/ingestion/batch_loader --cov-report=html
 ```
 
 ### Integration Tests
@@ -874,7 +874,7 @@ sleep 30
 
 # 3. Load sample data
 python -m k2.ingestion.batch_loader load \
-    --csv tests/fixtures/sample_asx_trades.csv \
+    --csv tests-backup/fixtures/sample_asx_trades.csv \
     --asset-class equities \
     --exchange asx \
     --data-type trades

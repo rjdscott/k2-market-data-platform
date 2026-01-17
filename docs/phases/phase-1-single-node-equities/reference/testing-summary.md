@@ -136,8 +136,8 @@ class TestKafkaProducer:
 
 #### All Unit Tests (fast)
 ```bash
-pytest tests/unit/ -v
-# Expected: < 30 seconds, 100-150 tests
+pytest tests-backup/unit/ -v
+# Expected: < 30 seconds, 100-150 tests-backup
 ```
 
 #### All Integration Tests (requires Docker)
@@ -145,14 +145,14 @@ pytest tests/unit/ -v
 # Start infrastructure first
 make docker-up
 
-# Run integration tests
-pytest tests/integration/ -v
-# Expected: 2-5 minutes, 20-30 tests
+# Run integration tests-backup
+pytest tests-backup/integration/ -v
+# Expected: 2-5 minutes, 20-30 tests-backup
 ```
 
 #### Specific Test File
 ```bash
-pytest tests/integration/test_producer.py -v
+pytest tests-backup/integration/test_producer.py -v
 ```
 
 #### End-to-End Test
@@ -162,7 +162,7 @@ make docker-up
 make init-infra
 
 # Run E2E
-pytest tests/integration/test_e2e_flow.py -v -s
+pytest tests-backup/integration/test_e2e_flow.py -v -s
 # Expected: 1-2 minutes
 ```
 
@@ -171,18 +171,18 @@ pytest tests/integration/test_e2e_flow.py -v -s
 @pytest.mark.unit         # Fast, no Docker
 @pytest.mark.integration  # Requires Docker services
 @pytest.mark.slow         # Longer than 1 second
-@pytest.mark.performance  # Benchmark tests (future)
+@pytest.mark.performance  # Benchmark tests-backup (future)
 ```
 
 #### Filter by Marker
 ```bash
-# Only unit tests
+# Only unit tests-backup
 pytest -m unit
 
-# Only integration tests
+# Only integration tests-backup
 pytest -m integration
 
-# Exclude slow tests
+# Exclude slow tests-backup
 pytest -m "not slow"
 ```
 
@@ -269,7 +269,7 @@ def docker_services():
 ### Pre-Commit Checks
 ```bash
 # Run before every commit
-make test-fast  # Unit tests only
+make test-fast  # Unit tests-backup only
 
 # Full test suite
 make test-all   # Unit + Integration
@@ -279,9 +279,9 @@ make test-all   # Unit + Integration
 ```yaml
 # .github/workflows/test.yml
 steps:
-  - Unit tests (always)
-  - Integration tests (on PR)
-  - E2E tests (on main branch)
+  - Unit tests-backup (always)
+  - Integration tests-backup (on PR)
+  - E2E tests-backup (on main branch)
   - Coverage report (upload to Codecov)
 ```
 

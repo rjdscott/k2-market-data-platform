@@ -375,8 +375,8 @@ All criteria met ✅
 - [Phase 0 DECISIONS](./DECISIONS.md) - Technical decisions
 
 ### Code
-- [test_consumer_validation.py](../../../tests/unit/test_consumer_validation.py)
-- [test_metrics_labels.py](../../../tests/unit/test_metrics_labels.py)
+- [test_consumer_validation.py](../../../tests-backup/unit/test_consumer_validation.py)
+- [test_metrics_labels.py](../../../tests-backup/unit/test_metrics_labels.py)
 - [validate_metrics_labels.py](../../../scripts/validate_metrics_labels.py)
 - [dead_letter_queue.py](../../../src/k2/ingestion/dead_letter_queue.py)
 - [circuit_breaker.py](../../../src/k2/common/circuit_breaker.py)

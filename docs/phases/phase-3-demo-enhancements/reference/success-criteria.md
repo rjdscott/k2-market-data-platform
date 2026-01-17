@@ -228,14 +228,14 @@ This document defines clear, measurable success criteria for Phase 2 completion.
 ### Step 1: Automated Checks
 
 ```bash
-# Run all Phase 2 tests
-pytest tests/unit/test_circuit_breaker.py \
-       tests/unit/test_redis_sequence_tracker.py \
-       tests/unit/test_bloom_deduplicator.py \
-       tests/unit/test_hybrid_engine.py -v
+# Run all Phase 2 tests-backup
+pytest tests-backup/unit/test_circuit_breaker.py \
+       tests-backup/unit/test_redis_sequence_tracker.py \
+       tests-backup/unit/test_bloom_deduplicator.py \
+       tests-backup/unit/test_hybrid_engine.py -v
 
-# Run integration tests
-pytest tests/integration/ -v -m "phase2"
+# Run integration tests-backup
+pytest tests-backup/integration/ -v -m "phase2"
 
 # Check module imports
 python -c "

@@ -76,7 +76,7 @@ def test_env_override(monkeypatch):
 2. **Remove config files**:
    ```bash
    rm src/k2/common/config.py
-   rm tests/unit/test_config.py
+   rm tests-backup/unit/test_config.py
    rm .env.example
    ```
 
