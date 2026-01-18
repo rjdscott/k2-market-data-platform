@@ -2,11 +2,54 @@
 
 **Purpose**: Choose the right demo notebook for your audience
 
-**Last Updated**: 2026-01-17
+**Last Updated**: 2026-01-18
 
 ---
 
 ## Available Notebooks
+
+### 0. Spark + Iceberg Queries (`spark-iceberg-queries.ipynb`)
+
+**Audience**: Data Engineers, Spark/Iceberg developers
+
+**Duration**: 10-15 minutes (interactive)
+
+**Goal**: Learn how to query Bronze/Silver/Gold Iceberg tables using PySpark
+
+**When to use**:
+- Learning Spark + Iceberg integration
+- Testing Medallion architecture queries
+- Debugging data pipeline issues
+- Ad-hoc analytics development
+
+**What it covers**:
+- Spark session configuration for Iceberg REST catalog
+- Querying Bronze tables (raw Kafka data per-exchange)
+- Querying Silver tables (validated V2 trades per-exchange)
+- Querying Gold table (unified multi-exchange analytics)
+- Table schema inspection and metadata
+- Iceberg time-travel (history, snapshots)
+
+**Prerequisites**:
+```bash
+# Spark cluster running
+docker-compose up -d spark-master spark-worker-1 spark-worker-2
+
+# Jupyter with PySpark installed
+uv add jupyter pyspark==3.5.0
+
+# Run notebook
+uv run jupyter notebook demos/notebooks/spark-iceberg-queries.ipynb
+```
+
+**Example queries**:
+- Row counts by ingestion date
+- Recent trades (last 24 hours)
+- 1-minute price bars (OHLCV)
+- Cross-exchange price comparison
+- Hourly trade volume aggregation
+
+---
 
 ### 1. Executive Demo (`executive-demo.ipynb`)
 

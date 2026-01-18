@@ -36,13 +36,19 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
       KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
 
-      # Listener Configuration
-      # PLAINTEXT_HOST: External access for producers/consumers
-      # PLAINTEXT: Internal Docker network communication
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
-      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092'
-      KAFKA_LISTENERS: 'PLAINTEXT://kafka:29092,CONTROLLER://kafka:9093,PLAINTEXT_HOST://0.0.0.0:9092'
-      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      # Listener Configuration - Professional Multi-Listener Setup
+      # INTERNAL: Container-to-container communication (Spark, Schema Registry, producers)
+      # EXTERNAL: Host-based access for debugging and monitoring tools
+      # CONTROLLER: KRaft consensus protocol (controller quorum)
+      #
+      # Pattern follows Netflix/Uber/LinkedIn production standards:
+      # - Separate listeners for internal vs external clients
+      # - Client connects to one listener, receives that listener in metadata
+      # - No metadata redirection issues between container and host networks
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: 'INTERNAL://kafka:29092,EXTERNAL://localhost:9092'
+      KAFKA_LISTENERS: 'INTERNAL://0.0.0.0:29092,CONTROLLER://kafka:9093,EXTERNAL://0.0.0.0:9092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'INTERNAL'
 
       # Cluster Configuration
       CLUSTER_ID: 'k2-market-data-cluster'

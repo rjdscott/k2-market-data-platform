@@ -35,6 +35,7 @@ Usage:
 
 import sys
 from pathlib import Path
+from typing import Tuple
 
 from pyspark.sql import SparkSession
 
@@ -84,7 +85,7 @@ def create_spark_session(app_name: str) -> SparkSession:
     )
 
 
-def create_bronze_table(spark, exchange: str, namespace: str = "market_data") -> tuple[bool, str]:
+def create_bronze_table(spark, exchange: str, namespace: str = "market_data") -> Tuple[bool, str]:
     """Create Bronze Iceberg table for specific exchange.
 
     Args:
@@ -135,7 +136,7 @@ def create_bronze_table(spark, exchange: str, namespace: str = "market_data") ->
         ingestion_date DATE COMMENT 'Partition key derived from ingestion_timestamp'
     )
     USING iceberg
-    PARTITIONED BY (days(ingestion_date))
+    PARTITIONED BY (ingestion_date)
     TBLPROPERTIES (
         'format-version' = '2',
         'write.parquet.compression-codec' = 'zstd',
@@ -158,7 +159,7 @@ def create_bronze_table(spark, exchange: str, namespace: str = "market_data") ->
     # Verify table
     print("\nTable Details:")
     print("  Schema: 8 fields (message_key, avro_payload, Kafka metadata)")
-    print("  Partitioning: PARTITIONED BY (days(ingestion_date))")
+    print("  Partitioning: PARTITIONED BY (ingestion_date) - Date partitioning for Spark Streaming")
     print("  Compression: Zstd (Parquet), Gzip (metadata)")
     print(f"  Retention: {config['retention_days']} days")
     print(f"  Target File Size: {config['target_file_size_mb']} MB")

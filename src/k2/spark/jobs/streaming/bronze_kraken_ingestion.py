@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
 
 def create_spark_session(app_name: str) -> SparkSession:
-    """Create Spark session with Iceberg catalog configuration."""
+    """Create Spark session with Iceberg catalog and S3/MinIO configuration."""
     return (
         SparkSession.builder.appName(app_name)
         .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
@@ -54,6 +54,19 @@ def create_spark_session(app_name: str) -> SparkSession:
         .config("spark.sql.catalog.iceberg.s3.access-key-id", "admin")
         .config("spark.sql.catalog.iceberg.s3.secret-access-key", "password")
         .config("spark.sql.catalog.iceberg.s3.path-style-access", "true")
+        # S3/MinIO configuration (required for AWS SDK)
+        .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000")
+        .config("spark.hadoop.fs.s3a.access.key", "admin")
+        .config("spark.hadoop.fs.s3a.secret.key", "password")
+        .config("spark.hadoop.fs.s3a.path.style.access", "true")
+        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+        # Set dummy AWS region for MinIO (both Hadoop and AWS SDK v2)
+        .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1")
+        # AWS SDK v2 region configuration (for Iceberg)
+        .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
+        .config("spark.executor.extraJavaOptions", "-Daws.region=us-east-1")
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
         .config("spark.sql.streaming.checkpointLocation", "/checkpoints/bronze-kraken/")
@@ -109,6 +122,8 @@ def main():
         print("✓ Bronze schema transformation configured")
 
         # Write to Bronze table
+        # Note: Using partitionBy() instead of Iceberg's days() transform
+        # Spark Structured Streaming doesn't support partition transforms
         print("Starting Bronze writer...")
         query = (
             bronze_df.writeStream.format("iceberg")
@@ -117,12 +132,13 @@ def main():
             .option("checkpointLocation", "/checkpoints/bronze-kraken/")
             .option("path", "iceberg.market_data.bronze_kraken_trades")
             .option("fanout-enabled", "true")
+            .partitionBy("ingestion_date")
             .start()
         )
 
         print("✓ Bronze writer started")
         print("\nStreaming job running...")
-        print("  • Spark UI: http://localhost:8080")
+        print("  • Spark UI: http://localhost:8090")
         print("  • Check Bronze table: SELECT COUNT(*) FROM iceberg.market_data.bronze_kraken_trades")
         print("\nPress Ctrl+C to stop (checkpoint will be saved)\n")
 
