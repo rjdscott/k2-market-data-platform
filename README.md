@@ -64,16 +64,28 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────┐
+│              Processing Layer (Spark Streaming)                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Spark Cluster (3.5.x)                                   │   │
+│  │  • Master + 2 Workers (4 cores, 6GB total)              │   │
+│  │  • Structured Streaming (Kafka → Iceberg)               │   │
+│  │  • Medallion Architecture: Bronze → Silver → Gold       │   │
+│  │  • Adaptive Query Execution (AQE)                       │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│         │ Bronze: Raw bytes    │ Silver: Validated    │ Gold: Unified
+└─────────┼──────────────────────┼──────────────────────┼──────────┘
+          ▼                      ▼                      ▼
+┌─────────────────────────────────────────────────────────────────┐
 │                   Storage Layer (Iceberg)                       │
 │  ┌──────────────────┐        ┌────────────────┐                 │
-│  │  Apache Iceberg  │◄───────│   PostgreSQL   │  Catalog        │
+│  │  Apache Iceberg  │◄───────│   PostgreSQL   │  REST Catalog   │
 │  │  (ACID, Parquet) │        │      16        │  metadata       │
 │  └────────┬─────────┘        └────────────────┘                 │
 │           ▼                                                     │
 │  ┌──────────────────┐                                           │
 │  │  MinIO (S3 API)  │  Parquet + Zstd compression               │
-│  │                  │  Daily partitions (exchange_date)         │
-│  └──────────────────┘  Tables: trades_v2, quotes_v2             │
+│  │                  │  Hourly partitions (exchange_date, hour)  │
+│  └──────────────────┘  Medallion: bronze/silver_*/gold_*        │
 └─────────┼───────────────────────────────────────────────────────┘
           │
           ▼
@@ -105,7 +117,8 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
 
 **Key Design Decisions**:
 - **Kafka with KRaft**: Sub-1s broker failover (no ZooKeeper dependency)
-- **Iceberg ACID**: Time-travel queries, schema evolution, hidden partitioning
+- **Spark Streaming**: Medallion architecture (Bronze→Silver→Gold) for data quality layers
+- **Iceberg ACID**: Time-travel queries, schema evolution, hidden partitioning, REST catalog
 - **DuckDB Embedded**: Sub-second queries without cluster management overhead
 - **Schema Registry HA**: BACKWARD compatibility enforcement across all producers
 
@@ -225,6 +238,7 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 | Kafka UI | http://localhost:8080 | - |
 | MinIO | http://localhost:9001 | admin / password |
 | Prometheus | http://localhost:9090 | - |
+| Spark Master UI | http://localhost:8090 | - |
 
 | Kafka UI (Kafbat) | MinIO Console |
 |-------------------|---------------|
@@ -245,9 +259,10 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 |-------|------------|---------|-----------------|
 | Streaming | Apache Kafka | 3.7 (KRaft) | No ZooKeeper, sub-1s failover |
 | Schema | Confluent Schema Registry | 7.6 | BACKWARD compatibility enforcement |
+| Processing | Apache Spark | 3.5.x | Structured streaming, Medallion architecture |
 | Storage | Apache Iceberg | 1.4 | ACID + time-travel for compliance |
 | Object Store | MinIO | Latest | S3-compatible local development |
-| Catalog | PostgreSQL | 16 | Proven Iceberg metadata store |
+| Catalog | PostgreSQL | 16 | Proven Iceberg REST catalog metadata store |
 | Query | DuckDB | 0.10 | Zero-ops with connection pooling (5-50 concurrent queries) |
 | API | FastAPI | 0.111 | Async + auto-docs, Python ecosystem integration |
 | Metrics | Prometheus | 2.51 | Pull-based metrics, industry standard |
@@ -649,8 +664,12 @@ src/k2/
 ├── ingestion/           # Data ingestion (2,300 lines)
 │   ├── producer.py      # Idempotent Kafka producer
 │   ├── consumer.py      # Kafka → Iceberg writer
-│   ├── batch_loader.py  # CSV batch ingestion
+│   ├── message_builders.py  # Trade/quote V2 builders
 │   └── sequence_tracker.py  # Gap detection
+├── spark/               # Spark Streaming (NEW - Phase 10)
+│   ├── utils/           # Spark session factory with Iceberg config
+│   ├── jobs/            # Bronze/Silver/Gold transformation jobs
+│   └── schemas/         # DataFrame validation schemas
 ├── storage/             # Iceberg lakehouse (900 lines)
 │   ├── catalog.py       # Table management
 │   └── writer.py        # Batch writes
@@ -659,11 +678,11 @@ src/k2/
 │   ├── replay.py        # Time-travel queries
 │   └── cli.py           # k2-query CLI
 ├── kafka/               # Kafka utilities (800 lines)
-├── schemas/             # Avro schemas (trade, quote, reference)
+├── schemas/             # Avro schemas (trade_v2, quote_v2, reference_data_v2)
 └── common/              # Config, logging, metrics (1,300 lines)
 ```
 
-**Total**: ~8,400 lines of Python
+**Total**: ~8,500 lines of Python (+ Spark jobs pending)
 
 ---
 
