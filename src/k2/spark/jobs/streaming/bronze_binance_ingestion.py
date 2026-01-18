@@ -92,12 +92,12 @@ def main():
     spark = create_spark_session("K2-Bronze-Binance-Ingestion")
 
     try:
-        # Read from Kafka (Binance topic only)
+        # Read from Kafka (Binance RAW topic)
         print("Starting Kafka stream reader...")
         kafka_df = (
             spark.readStream.format("kafka")
             .option("kafka.bootstrap.servers", "kafka:29092")
-            .option("subscribe", "market.crypto.trades.binance")
+            .option("subscribe", "market.crypto.trades.binance.raw")
             .option("startingOffsets", "latest")
             .option("maxOffsetsPerTrigger", 10000)
             .option("failOnDataLoss", "false")
@@ -106,34 +106,71 @@ def main():
 
         print("✓ Kafka stream reader configured")
 
-        # Transform to Bronze schema (NO deserialization)
-        print("Transforming to Bronze schema (raw bytes)...")
-        bronze_df = kafka_df.select(
-            col("key").cast("string").alias("message_key"),
-            col("value").alias("avro_payload"),  # Keep as binary
-            col("topic"),
-            col("partition"),
-            col("offset"),
-            col("timestamp").alias("kafka_timestamp"),
-            current_timestamp().alias("ingestion_timestamp"),
-            to_date(current_timestamp()).alias("ingestion_date"),
+        # Deserialize Avro (with Schema Registry format handling)
+        print("Deserializing Avro from Schema Registry...")
+        from pyspark.sql.avro.functions import from_avro
+        from pyspark.sql.functions import expr
+
+        # Option: Use Schema Registry URL for automatic schema fetching
+        # from_avro can fetch schema from registry using the schema ID in the message
+        options = {"mode": "FAILFAST"}
+
+        # Alternative: Strip Schema Registry header (5 bytes: magic byte + 4-byte schema ID)
+        # and use schema string
+        print("Stripping Schema Registry header (5 bytes)...")
+        kafka_df_no_header = kafka_df.selectExpr(
+            "substring(value, 6, length(value)-5) as avro_data",
+            "topic",
+            "partition",
+            "offset",
+            "timestamp"
+        )
+
+        # Load schema
+        schema_path = "/opt/k2/src/k2/schemas/binance_raw_trade.avsc"
+        with open(schema_path) as f:
+            avro_schema = f.read()
+
+        # Deserialize plain Avro (without Schema Registry header)
+        trades_df = kafka_df_no_header.select(
+            from_avro(col("avro_data"), avro_schema, options).alias("trade")
+        )
+
+        # Debug: Print schema to see actual field names
+        print("Deserialized schema:")
+        trades_df.printSchema()
+
+        # Expand to Bronze schema
+        # Use descriptive field names from schema (Avro deserializes with schema field names)
+        print("Transforming to Bronze schema...")
+        bronze_df = trades_df.select(
+            col("trade.event_type"),
+            col("trade.event_time_ms"),
+            col("trade.symbol"),
+            col("trade.trade_id"),
+            col("trade.price"),
+            col("trade.quantity"),
+            col("trade.trade_time_ms"),
+            col("trade.is_buyer_maker"),
+            col("trade.is_best_match"),
+            col("trade.ingestion_timestamp"),
+            # Convert microseconds to date: divide by 1M to get seconds, cast to timestamp, then to date
+            to_date((col("trade.ingestion_timestamp") / 1000000).cast("timestamp")).alias("ingestion_date"),
         )
 
         print("✓ Bronze schema transformation configured")
 
         # Write to Bronze table
-        # Note: Using partitionBy() instead of Iceberg's days() transform
-        # Spark Structured Streaming doesn't support partition transforms
+        # Note: For Spark Structured Streaming, we must use table name (not path)
+        # and cannot use partitionBy() - partition spec is defined in table DDL
         print("Starting Bronze writer...")
         query = (
             bronze_df.writeStream.format("iceberg")
             .outputMode("append")
             .trigger(processingTime="10 seconds")
             .option("checkpointLocation", "/checkpoints/bronze-binance/")
-            .option("path", "iceberg.market_data.bronze_binance_trades")
             .option("fanout-enabled", "true")
-            .partitionBy("ingestion_date")
-            .start()
+            .toTable("iceberg.market_data.bronze_binance_trades")
         )
 
         print("✓ Bronze writer started")

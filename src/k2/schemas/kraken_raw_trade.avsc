@@ -1,0 +1,53 @@
+{
+  "type": "record",
+  "name": "KrakenRawTrade",
+  "namespace": "com.k2.marketdata.raw",
+  "doc": "Raw Kraken WebSocket trade message (before any transformation)",
+  "fields": [
+    {
+      "name": "channel_id",
+      "type": "long",
+      "doc": "Kraken WebSocket channel ID"
+    },
+    {
+      "name": "price",
+      "type": "string",
+      "doc": "Trade price (string to preserve precision)"
+    },
+    {
+      "name": "volume",
+      "type": "string",
+      "doc": "Trade volume (string to preserve precision)"
+    },
+    {
+      "name": "timestamp",
+      "type": "string",
+      "doc": "Trade timestamp (Kraken format: seconds.microseconds)"
+    },
+    {
+      "name": "side",
+      "type": "string",
+      "doc": "Trade side: 'b' = buy, 's' = sell"
+    },
+    {
+      "name": "order_type",
+      "type": "string",
+      "doc": "Order type: 'l' = limit, 'm' = market"
+    },
+    {
+      "name": "misc",
+      "type": "string",
+      "doc": "Miscellaneous info (often empty)"
+    },
+    {
+      "name": "pair",
+      "type": "string",
+      "doc": "Trading pair (e.g., XBT/USD)"
+    },
+    {
+      "name": "ingestion_timestamp",
+      "type": "long",
+      "doc": "Platform ingestion timestamp in microseconds (added by producer)"
+    }
+  ]
+}

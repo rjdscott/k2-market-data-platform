@@ -1,0 +1,59 @@
+{
+  "type": "record",
+  "name": "BinanceRawTrade",
+  "namespace": "com.k2.marketdata.raw",
+  "doc": "Raw Binance WebSocket trade message with descriptive field names",
+  "fields": [
+    {
+      "name": "event_type",
+      "type": "string",
+      "doc": "Event type (always 'trade') - Binance field: e"
+    },
+    {
+      "name": "event_time_ms",
+      "type": "long",
+      "doc": "Event time milliseconds since epoch - Binance field: E"
+    },
+    {
+      "name": "symbol",
+      "type": "string",
+      "doc": "Symbol (e.g., BTCUSDT) - Binance field: s"
+    },
+    {
+      "name": "trade_id",
+      "type": "long",
+      "doc": "Trade ID (Binance native) - Binance field: t"
+    },
+    {
+      "name": "price",
+      "type": "string",
+      "doc": "Price (string to preserve precision) - Binance field: p"
+    },
+    {
+      "name": "quantity",
+      "type": "string",
+      "doc": "Quantity (string to preserve precision) - Binance field: q"
+    },
+    {
+      "name": "trade_time_ms",
+      "type": "long",
+      "doc": "Trade time milliseconds since epoch - Binance field: T"
+    },
+    {
+      "name": "is_buyer_maker",
+      "type": "boolean",
+      "doc": "Is buyer maker (true = buyer was maker/passive) - Binance field: m"
+    },
+    {
+      "name": "is_best_match",
+      "type": ["null", "boolean"],
+      "default": null,
+      "doc": "Is best match (optional field) - Binance field: M"
+    },
+    {
+      "name": "ingestion_timestamp",
+      "type": "long",
+      "doc": "Platform ingestion timestamp in microseconds (added by producer)"
+    }
+  ]
+}

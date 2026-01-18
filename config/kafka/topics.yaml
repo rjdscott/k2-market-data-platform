@@ -45,8 +45,18 @@ asset_classes:
 # Data types (apply to all asset classes and exchanges)
 # Each data type defines the schema, partition strategy, and Kafka configuration
 data_types:
+  trades.raw:
+    description: "Raw trade data from exchange (Bronze layer - no transformation)"
+    partition_key: "symbol"
+    schema_name: "raw_trade"
+    config:
+      compression.type: "lz4"
+      retention.ms: "604800000"  # 7 days (in milliseconds)
+      cleanup.policy: "delete"
+    notes: "Industry best practice: Store raw exchange-native data in Bronze before transformation"
+
   trades:
-    description: "Trade execution events (filled orders)"
+    description: "Trade execution events (filled orders) - V2 unified schema"
     partition_key: "symbol"
     schema_name: "trade"
     config:

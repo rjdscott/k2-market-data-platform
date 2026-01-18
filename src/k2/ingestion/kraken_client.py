@@ -221,12 +221,13 @@ class KrakenWebSocketClient:
         health_check_interval: int = 30,
         health_check_timeout: int = 30,
         enable_circuit_breaker: bool = True,
+        raw_mode: bool = False,
     ) -> None:
         """Initialize Kraken WebSocket client.
 
         Args:
             symbols: List of symbols to stream (e.g., ["BTC/USD", "ETH/USD"])
-            on_message: Callback function for handling converted v2 trades
+            on_message: Callback function for handling converted v2 trades (or raw if raw_mode=True)
             url: Kraken WebSocket stream URL
             failover_urls: Failover URLs (tried in order if primary fails)
             reconnect_delay: Initial reconnect delay in seconds
@@ -234,9 +235,11 @@ class KrakenWebSocketClient:
             health_check_interval: Health check interval in seconds
             health_check_timeout: Max seconds without message before reconnect (0=disabled)
             enable_circuit_breaker: Enable circuit breaker protection
+            raw_mode: If True, pass raw Kraken data without V2 conversion (Bronze layer)
         """
         self.symbols = symbols
         self.on_message = on_message
+        self.raw_mode = raw_mode
         self.url = url
         self.failover_urls = failover_urls or []
         self.all_urls = [self.url] + self.failover_urls
@@ -788,18 +791,31 @@ class KrakenWebSocketClient:
 
         # Trade messages are arrays: [channelID, [...], "trade", "PAIR"]
         if isinstance(data, list) and len(data) >= 4 and data[2] == "trade":
-            # Convert to v2 schema
-            v2_trade = convert_kraken_trade_to_v2(data)
+            # Convert to v2 schema (or pass raw data if raw_mode)
+            if self.raw_mode:
+                # Raw mode: Pass Kraken native format to callback (entire array)
+                final_trade = data
+                pair = data[3] if len(data) > 3 else "UNKNOWN"
+                # For metrics, extract normalized symbol from pair if possible
+                try:
+                    base, quote = parse_kraken_pair(pair)
+                    symbol = f"{base}{quote}"
+                except:
+                    symbol = pair
+            else:
+                # V2 mode: Convert to standardized schema
+                final_trade = convert_kraken_trade_to_v2(data)
+                symbol = final_trade["symbol"]
 
-            # Update message received metric (per symbol)
+            # Update message received metric (per symbol/pair)
             metrics.increment(
                 "kraken_messages_received_total",
-                labels={**self.metrics_labels, "symbol": v2_trade["symbol"]},
+                labels={**self.metrics_labels, "symbol": symbol},
             )
 
             # Call user callback
             if self.on_message:
-                self.on_message(v2_trade)
+                self.on_message(final_trade)
 
     async def _handle_reconnect(self) -> None:
         """Handle reconnection with exponential backoff and failover rotation."""

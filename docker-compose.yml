@@ -548,12 +548,13 @@ services:
           memory: 512M
 
   # ============================================================================
-  # BINANCE STREAM - Real-time Cryptocurrency Market Data Ingestion
+  # BINANCE STREAM - Real-time Cryptocurrency Market Data Ingestion (RAW)
   # ============================================================================
-  # Streams live trades from Binance WebSocket API
+  # Streams live trades from Binance WebSocket API to Bronze layer (RAW)
   # - Connects to Binance public trade streams
-  # - Converts Binance format to v2 schema
-  # - Publishes to Kafka market.crypto.trades topic
+  # - Stores exchange-native format (NO transformation) to Bronze layer
+  # - Publishes to Kafka market.crypto.trades.binance.raw topic
+  # - V2 transformation happens in Silver Spark jobs (industry best practice)
   # - Production-grade resilience: circuit breakers, health checks, failover
   binance-stream:
     build:
@@ -578,7 +579,7 @@ services:
 
       # Binance Configuration
       K2_BINANCE_ENABLED: "true"
-      K2_BINANCE_SYMBOLS: '["BTCUSDT", "ETHUSDT", "BNBUSDT"]'
+      K2_BINANCE_SYMBOLS: '["BTCUSDT", "ETHUSDT"]'
       K2_BINANCE_WEBSOCKET_URL: wss://stream.binance.com:9443/stream
       K2_BINANCE_FAILOVER_URLS: '["wss://stream.binance.us:9443/stream"]'
 
@@ -595,7 +596,7 @@ services:
       # Logging Configuration
       K2_LOG_LEVEL: INFO
       K2_LOG_FORMAT: json
-    command: python scripts/binance_stream.py
+    command: python scripts/binance_stream_raw.py
     depends_on:
       kafka:
         condition: service_healthy
@@ -620,12 +621,13 @@ services:
           memory: 256M
 
   # ============================================================================
-  # KRAKEN STREAMING SERVICE - Real-time Kraken Trade Ingestion
+  # KRAKEN STREAMING SERVICE - Real-time Kraken Trade Ingestion (RAW)
   # ============================================================================
-  # Connects to Kraken WebSocket API and streams live trades to Kafka
+  # Connects to Kraken WebSocket API and streams RAW trades to Kafka (Bronze layer)
   # - Subscribes to BTC/USD, ETH/USD trade streams
-  # - Converts Kraken format to v2 schema (XBT → BTC normalization)
-  # - Publishes to Kafka market.crypto.trades.kraken topic
+  # - Stores exchange-native format (no transformation) to Bronze layer
+  # - Publishes to Kafka market.crypto.trades.kraken.raw topic
+  # - V2 transformation happens in Silver Spark jobs (industry best practice)
   # - Production-grade resilience: circuit breakers, health checks, failover
   kraken-stream:
     build:
@@ -667,7 +669,7 @@ services:
       # Logging Configuration
       K2_LOG_LEVEL: INFO
       K2_LOG_FORMAT: json
-    command: python scripts/kraken_stream.py
+    command: python scripts/kraken_stream_raw.py
     depends_on:
       kafka:
         condition: service_healthy
@@ -844,7 +846,7 @@ services:
       --executor-cores 2
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
-      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar
+      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
       /opt/k2/src/k2/spark/jobs/streaming/bronze_binance_ingestion.py
     deploy:
       resources:
@@ -883,7 +885,7 @@ services:
       --executor-cores 2
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
-      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar
+      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
       /opt/k2/src/k2/spark/jobs/streaming/bronze_kraken_ingestion.py
     deploy:
       resources:

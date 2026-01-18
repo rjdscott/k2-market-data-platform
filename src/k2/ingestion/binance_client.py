@@ -194,12 +194,13 @@ class BinanceWebSocketClient:
         health_check_interval: int = 30,
         health_check_timeout: int = 30,
         enable_circuit_breaker: bool = True,
+        raw_mode: bool = False,
     ) -> None:
         """Initialize Binance WebSocket client.
 
         Args:
             symbols: List of symbols to stream (e.g., ["BTCUSDT", "ETHUSDT"])
-            on_message: Callback function for handling converted v2 trades
+            on_message: Callback function for handling converted v2 trades (or raw if raw_mode=True)
             url: Binance WebSocket stream URL
             failover_urls: Failover URLs (tried in order if primary fails)
             reconnect_delay: Initial reconnect delay in seconds
@@ -207,9 +208,11 @@ class BinanceWebSocketClient:
             health_check_interval: Health check interval in seconds
             health_check_timeout: Max seconds without message before reconnect (0=disabled)
             enable_circuit_breaker: Enable circuit breaker protection
+            raw_mode: If True, pass raw Binance data without V2 conversion (Bronze layer)
         """
         self.symbols = symbols
         self.on_message = on_message
+        self.raw_mode = raw_mode
         self.url = url
         self.failover_urls = failover_urls or []
         self.all_urls = [self.url] + self.failover_urls
@@ -776,18 +779,25 @@ class BinanceWebSocketClient:
         else:
             trade_data = data
 
-        # Convert to v2 schema
-        v2_trade = convert_binance_trade_to_v2(trade_data)
+        # Convert to v2 schema (or pass raw data if raw_mode)
+        if self.raw_mode:
+            # Raw mode: Pass Binance native format to callback
+            final_trade = trade_data
+            symbol = trade_data.get("s", "UNKNOWN")
+        else:
+            # V2 mode: Convert to standardized schema
+            final_trade = convert_binance_trade_to_v2(trade_data)
+            symbol = final_trade["symbol"]
 
         # Update message received metric (per symbol)
         metrics.increment(
             "binance_messages_received_total",
-            labels={**self.metrics_labels, "symbol": v2_trade["symbol"]},
+            labels={**self.metrics_labels, "symbol": symbol},
         )
 
         # Call user callback
         if self.on_message:
-            self.on_message(v2_trade)
+            self.on_message(final_trade)
 
     async def _handle_reconnect(self) -> None:
         """Handle reconnection with exponential backoff and failover rotation."""
