@@ -38,8 +38,11 @@ from datetime import datetime
 from pyspark.sql import SparkSession
 from pyspark.sql.avro.functions import from_avro
 from pyspark.sql.functions import (
+    array,
     col,
+    concat_ws,
     current_timestamp,
+    filter as array_filter,
     lit,
     to_date,
     unix_timestamp,
@@ -197,18 +200,22 @@ def validate_trade_record(df):
         (col("trade.symbol").isNotNull()) & (col("trade.symbol") != ""),
     )
 
-    # Build validation errors string using concat function
-    from pyspark.sql.functions import concat
+    # Build validation errors array (only include actual errors)
+    df = df.withColumn(
+        "validation_errors_array",
+        array(
+            when(~col("price_valid"), lit("price_invalid")),
+            when(~col("quantity_valid"), lit("quantity_invalid")),
+            when(~col("timestamp_valid"), lit("timestamp_invalid")),
+            when(~col("message_id_valid"), lit("message_id_missing")),
+            when(~col("symbol_valid"), lit("symbol_missing")),
+        ),
+    )
 
+    # Filter out nulls and concatenate with comma separator
     df = df.withColumn(
         "validation_errors",
-        concat(
-            when(~col("price_valid"), lit("price_invalid,")).otherwise(lit("")),
-            when(~col("quantity_valid"), lit("quantity_invalid,")).otherwise(lit("")),
-            when(~col("timestamp_valid"), lit("timestamp_invalid,")).otherwise(lit("")),
-            when(~col("message_id_valid"), lit("message_id_missing,")).otherwise(lit("")),
-            when(~col("symbol_valid"), lit("symbol_missing,")).otherwise(lit("")),
-        ),
+        concat_ws(",", array_filter(col("validation_errors_array"), lambda x: x.isNotNull())),
     )
 
     # Overall validation flag
