@@ -115,9 +115,24 @@ def main():
         with open(schema_path) as f:
             avro_schema = f.read()
 
-        # Deserialize Avro value
-        trades_df = kafka_df.select(
-            from_avro(col("value"), avro_schema).alias("trade")
+        # Strip Schema Registry header (5 bytes: 1 magic byte + 4-byte schema ID)
+        # Schema Registry prepends this header to all messages, but Avro deserialization expects raw Avro data
+        print("Stripping Schema Registry header (5 bytes)...")
+        kafka_df_no_header = kafka_df.selectExpr(
+            "substring(value, 6, length(value)-5) as avro_data",
+            "topic",
+            "partition",
+            "offset",
+            "timestamp",
+            "key"
+        )
+
+        # Deserialize Avro value (now without Schema Registry header)
+        trades_df = kafka_df_no_header.select(
+            from_avro(col("avro_data"), avro_schema).alias("trade"),
+            col("topic"),
+            col("partition"),
+            col("offset")
         )
 
         # Expand to Bronze schema

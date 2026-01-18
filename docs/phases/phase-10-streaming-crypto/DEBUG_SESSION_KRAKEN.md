@@ -330,5 +330,161 @@ test-group market.crypto.trades.kraken.raw   5          219
 
 ---
 
+## Second Issue: Bronze Job Avro Deserialization (2026-01-18)
+
+**Date**: 2026-01-18 (Afternoon)
+**Issue**: Kraken data not reaching Bronze Iceberg table
+**Status**: ✅ RESOLVED
+**Duration**: ~1 hour
+
+### Problem Statement
+
+After resolving the streaming service callbacks, discovered that Kraken trade data was not appearing in the `bronze_kraken_trades` Iceberg table, despite the streaming service successfully producing messages to Kafka.
+
+**Symptoms**:
+- ✅ Kraken service producing messages (90+ trades to Kafka)
+- ✅ Kafka topic has data (partition 0: 37 offsets, partition 5: 52 offsets)
+- ✅ Bronze job connects to Kafka successfully
+- ❌ Bronze job fails with Avro deserialization error
+- ❌ Zero rows in bronze_kraken_trades table
+
+**Error**:
+```
+org.apache.avro.AvroRuntimeException: Malformed data. Length is negative: -6
+org.apache.spark.SparkException: Malformed records are detected in record parsing. Current parse Mode: FAILFAST.
+```
+
+### Root Cause
+
+The Kraken Bronze ingestion job (`src/k2/spark/jobs/streaming/bronze_kraken_ingestion.py`) was attempting to deserialize Kafka messages **without stripping the Confluent Schema Registry header**.
+
+**Technical Details**:
+- Confluent Schema Registry prepends 5 bytes to every message:
+  - 1 byte: Magic byte (0x00)
+  - 4 bytes: Schema ID (big-endian integer)
+- Avro deserialization expects raw Avro binary data, not Schema Registry format
+- The Binance Bronze job correctly strips this header
+- The Kraken Bronze job was missing this step
+
+**Code Comparison**:
+
+**Binance (Working)** - `bronze_binance_ingestion.py:121-128`:
+```python
+# Strip Schema Registry header (5 bytes: magic byte + 4-byte schema ID)
+kafka_df_no_header = kafka_df.selectExpr(
+    "substring(value, 6, length(value)-5) as avro_data",  # ✅ Strips header
+    "topic", "partition", "offset", "timestamp", "key"
+)
+
+trades_df = kafka_df_no_header.select(
+    from_avro(col("avro_data"), avro_schema).alias("trade")  # Deserializes clean data
+)
+```
+
+**Kraken (Broken)** - `bronze_kraken_ingestion.py:119-121` (before fix):
+```python
+# Missing header stripping!
+trades_df = kafka_df.select(
+    from_avro(col("value"), avro_schema).alias("trade")  # ❌ Tries to deserialize raw Kafka value
+)
+```
+
+### Solution Implementation
+
+Updated `src/k2/spark/jobs/streaming/bronze_kraken_ingestion.py` to match the Binance pattern:
+
+```python
+# Strip Schema Registry header (5 bytes: 1 magic byte + 4-byte schema ID)
+# Schema Registry prepends this header to all messages, but Avro deserialization expects raw Avro data
+print("Stripping Schema Registry header (5 bytes)...")
+kafka_df_no_header = kafka_df.selectExpr(
+    "substring(value, 6, length(value)-5) as avro_data",
+    "topic", "partition", "offset", "timestamp", "key"
+)
+
+# Deserialize Avro value (now without Schema Registry header)
+trades_df = kafka_df_no_header.select(
+    from_avro(col("avro_data"), avro_schema).alias("trade"),
+    col("topic"), col("partition"), col("offset")
+)
+```
+
+**Deployment Steps**:
+1. Updated `bronze_kraken_ingestion.py` with header stripping logic
+2. Stopped Bronze job: `docker stop k2-bronze-kraken-stream`
+3. Cleared checkpoint: `docker exec k2-spark-worker-1 rm -rf /checkpoints/bronze-kraken`
+4. Started Bronze job: `docker start k2-bronze-kraken-stream`
+
+### Verification Results
+
+```log
+Batch 1:
+  numInputRows: 6
+  numOutputRows: 6
+  Partitions processed: 0 (37→40), 5 (52→55)
+
+Batch 2:
+  numInputRows: 9
+  numOutputRows: 9
+```
+
+✅ **Avro deserialization successful**
+✅ **15+ records written to bronze_kraken_trades**
+✅ **End-to-end data flow operational**: Kraken WebSocket → Kafka → Bronze Iceberg
+
+### Key Learnings
+
+**Confluent Schema Registry Integration**:
+- Schema Registry header is 5 bytes: 1 magic byte + 4-byte schema ID
+- Must strip this header before Avro deserialization in Spark
+- Both Binance and Kraken Bronze jobs now have consistent patterns
+- This is a common pitfall when mixing Schema Registry + Spark Avro
+
+**Code Review Importance**:
+- Comparing working code (Binance) vs failing code (Kraken) immediately revealed the bug
+- Having a reference implementation accelerates debugging
+- Consistent patterns across similar components prevent bugs
+
+**Best Practice**:
+When using Confluent Schema Registry with Spark Structured Streaming:
+```python
+# ALWAYS strip Schema Registry header before from_avro()
+kafka_df_no_header = kafka_df.selectExpr(
+    "substring(value, 6, length(value)-5) as avro_data",  # Strip 5-byte header
+    # ... other columns
+)
+trades_df = kafka_df_no_header.select(
+    from_avro(col("avro_data"), avro_schema).alias("trade")  # Deserialize clean data
+)
+```
+
+---
+
+## Production Readiness Status
+
+### Kraken Pipeline (Complete)
+- [x] Service connects reliably to Kraken WebSocket
+- [x] Messages produced to Kafka with delivery confirmation
+- [x] Proper error handling and logging at all stages
+- [x] Periodic flushing prevents message loss
+- [x] Bronze job processes messages without errors
+- [x] Schema Registry integration working
+- [x] Avro deserialization successful
+- [x] Checkpoint-based recovery
+- [x] Metrics tracking (via structlog)
+
+### Binance Pipeline (Complete)
+- [x] All criteria above ✅
+
+### Next Steps
+1. **Create Silver transformation jobs**: Transform raw data to V2 schema
+2. **Create Gold aggregation job**: Union multi-exchange data
+3. **Complete E2E testing**: Data quality validation across all layers
+4. **Add observability**: Prometheus metrics, Grafana dashboards, alerts
+
+---
+
 **Resolved By**: Claude Sonnet 4.5
-**Commit**: ed8e724 - "fix(phase-10): resolve Kraken streaming service callback issue - E2E operational"
+**Commits**:
+- ed8e724 - "fix(phase-10): resolve Kraken streaming service callback issue - E2E operational"
+- (pending) - "fix(phase-10): resolve Kraken Bronze Avro deserialization - Schema Registry header stripping"
