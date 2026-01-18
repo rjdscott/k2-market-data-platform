@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import structlog
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
+from confluent_kafka.serialization import MessageField, SerializationContext
 from rich.console import Console
 from rich.table import Table
 
@@ -135,8 +136,9 @@ def test_v2_serialization(schema_registry_url: str) -> bool:
             },
         )
 
-        # Serialize
-        serialized = avro_serializer(binance_trade, None)
+        # Serialize with context
+        ctx = SerializationContext("market.crypto.trades.binance", MessageField.VALUE)
+        serialized = avro_serializer(binance_trade, ctx)
         console.print(f"✅ Binance trade serialized: {len(serialized)} bytes", style="green")
 
         # Test Kraken trade
@@ -157,7 +159,8 @@ def test_v2_serialization(schema_registry_url: str) -> bool:
             },
         )
 
-        serialized = avro_serializer(kraken_trade, None)
+        ctx = SerializationContext("market.crypto.trades.kraken", MessageField.VALUE)
+        serialized = avro_serializer(kraken_trade, ctx)
         console.print(f"✅ Kraken trade serialized: {len(serialized)} bytes", style="green")
 
         return True
@@ -198,7 +201,8 @@ def test_v2_performance(schema_registry_url: str, count: int = 1000) -> None:
             side="BUY" if i % 2 == 0 else "SELL",
         )
 
-        _ = avro_serializer(trade, None)
+        ctx = SerializationContext("market.crypto.trades.binance", MessageField.VALUE)
+        _ = avro_serializer(trade, ctx)
 
     elapsed = time.perf_counter() - start_time
     throughput = count / elapsed
