@@ -769,7 +769,7 @@ services:
 
   # SPARK MASTER - Cluster Coordinator
   spark-master:
-    image: apache/spark:latest
+    image: apache/spark:3.5.3
     container_name: k2-spark-master
     hostname: spark-master
     ports:
@@ -782,6 +782,7 @@ services:
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
       - spark-checkpoints:/checkpoints
     networks:
       - k2-network
@@ -802,7 +803,7 @@ services:
 
   # SPARK WORKER 1
   spark-worker-1:
-    image: apache/spark:latest
+    image: apache/spark:3.5.3
     container_name: k2-spark-worker-1
     hostname: spark-worker-1
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
@@ -813,6 +814,7 @@ services:
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
       - spark-checkpoints:/checkpoints
     depends_on:
       spark-master:
@@ -836,7 +838,7 @@ services:
 
   # SPARK WORKER 2
   spark-worker-2:
-    image: apache/spark:latest
+    image: apache/spark:3.5.3
     container_name: k2-spark-worker-2
     hostname: spark-worker-2
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
@@ -847,6 +849,7 @@ services:
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
       - spark-checkpoints:/checkpoints
     depends_on:
       spark-master:
