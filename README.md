@@ -3,7 +3,7 @@
 A distributed market data lakehouse for quantitative research, compliance, and analytics.
 
 **Stack**: Kafka (KRaft) → Iceberg → DuckDB → FastAPI<br>
-**Data**: ASX equities (200K+ trades, March 2014) + Multi-exchange crypto streaming (Binance + Kraken)<br>
+**Data**: Multi-exchange crypto streaming (Binance + Kraken) + Historical market data archive<br>
 **Python**: 3.13+ with uv package manager
 
 ---
@@ -47,7 +47,7 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Data Sources                             │
-│   CSV Batch (ASX)  │  WebSocket (Binance)  │  WebSocket (Kraken)│
+│   Historical Archive │  WebSocket (Binance)  │  WebSocket (Kraken)│
 └──────────┬─────────┴───────────┬───────────┴─────────┬──────────┘
            │ Batch ingestion     │ Live streaming      │
            ▼                     ▼                     ▼
@@ -57,7 +57,7 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
 │  │    Kafka     │◄───│ Schema Registry │  BACKWARD compatibility│
 │  │   (KRaft)    │    │   (Avro, HA)    │                        │
 │  └──────┬───────┘    └─────────────────┘                        │
-│         │ Topics: market.{equities,crypto}.{trades,quotes}.{asx,binance,kraken}
+│         │ Topics: market.{crypto}.{trades,quotes}.{binance,kraken}
 │         │ Partitioning: hash(symbol)                            │
 │         │ V2 Schema: Multi-source, multi-asset class            │
 └─────────┼───────────────────────────────────────────────────────┘
@@ -259,7 +259,7 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 - DuckDB vs Presto: Single-node simplicity for Phase 1, scales to ~10TB dataset
 - At-least-once vs Exactly-once: Market data duplicates acceptable, simpler implementation
 
-See [Architecture Decision Records](docs/phases/phase-1-single-node-equities/DECISIONS.md) for 26 detailed decisions.
+See [Architecture Decision Records](docs/phases/phase-1-single-node/DECISIONS.md) for 26 detailed decisions.
 
 ---
 
@@ -329,7 +329,7 @@ See [Operations Guide](./docs/operations/README.md) for current operational targ
 
 **Key Dashboards**:
 - [System Overview](http://localhost:3000) - Throughput, latency p99, error rates
-- [Per-Exchange Drill-down](http://localhost:3000) - ASX-specific metrics
+- [Per-Exchange Drill-down](http://localhost:3000) - Exchange-specific metrics
 - [Query Performance](http://localhost:3000) - Latency breakdown by query mode
 
 **Prometheus Metrics** (50+):
@@ -429,9 +429,9 @@ docker compose up -d binance-stream kraken-stream consumer-crypto
 uv run python scripts/consume_crypto_trades.py --max-messages 100 --no-ui
 ```
 
-### Historical Data (ASX Equities)
+### Historical Data Archive
 
-Sample ASX equities tick data available in `data/sample/{trades,quotes,bars-1min,reference-data}/`
+Sample historical market data available in `data/sample/{trades,quotes,bars-1min,reference-data}/`
 
 See [Data Dictionary V2](./docs/reference/data-dictionary-v2.md) for complete schema definitions.
 
@@ -439,17 +439,17 @@ See [Data Dictionary V2](./docs/reference/data-dictionary-v2.md) for complete sc
 
 ## Schema Evolution
 
-✅ **V2 Schema Operational** - Validated E2E across ASX equities (batch CSV) and Binance crypto (live streaming)
+✅ **V2 Schema Operational** - Validated E2E across multiple exchanges (Binance, Kraken) with live streaming
 
 K2 uses **industry-standard hybrid schemas** (v2) that support multiple data sources and asset classes.
 
 ### V1 → V2 Migration
 
-**V1 (Legacy ASX-specific)**:
+**V1 (Legacy exchange-specific)**:
 ```
 volume (int64)             → quantity (Decimal 18,8)
 exchange_timestamp (millis) → timestamp (micros)
-company_id, qualifiers, venue → vendor_data (map)
+exchange-specific fields   → vendor_data (map)
 ```
 
 **V2 (Multi-source standard)**:
@@ -461,7 +461,7 @@ company_id, qualifiers, venue → vendor_data (map)
 
 | Feature | V1 | V2 |
 |---------|----|----|
-| Multi-source support | ❌ ASX only | ✅ ASX, Binance, FIX |
+| Multi-source support | ❌ Single source | ✅ Binance, Kraken, FIX |
 | Asset classes | ❌ Equities only | ✅ Equities, crypto, futures |
 | Decimal precision | 18,6 | 18,8 (micro-prices) |
 | Timestamp precision | milliseconds | microseconds |
@@ -475,15 +475,15 @@ company_id, qualifiers, venue → vendor_data (map)
 from k2.ingestion.message_builders import build_trade_v2
 
 trade = build_trade_v2(
-    symbol="BHP",
-    exchange="ASX",
-    asset_class="equities",
+    symbol="BTCUSDT",
+    exchange="BINANCE",
+    asset_class="crypto",
     timestamp=datetime.utcnow(),
-    price=Decimal("45.67"),
-    quantity=Decimal("1000"),
-    currency="AUD",
+    price=Decimal("42150.50"),
+    quantity=Decimal("0.05"),
+    currency="USDT",
     side="BUY",
-    vendor_data={"company_id": "123", "qualifiers": "0"}  # ASX-specific
+    vendor_data={"is_buyer_maker": "true", "event_type": "aggTrade"}  # Binance-specific
 )
 
 # Query engine (v2 default)
@@ -491,8 +491,8 @@ engine = QueryEngine(table_version="v2")
 trades = engine.query_trades(symbol="BHP")  # Queries trades_v2 table
 
 # Batch loader (v2 default)
-loader = BatchLoader(asset_class="equities", exchange="asx",
-                      schema_version="v2", currency="AUD")
+loader = BatchLoader(asset_class="crypto", exchange="binance",
+                      schema_version="v2", currency="USDT")
 ```
 
 ### E2E Validation Results
@@ -741,7 +741,7 @@ make quality            # All checks
 
 **For Implementation**:
 - [Phase 0: Technical Debt](docs/phases/phase-0-technical-debt-resolution/) - ✅ Complete
-- [Phase 1: Single-Node](docs/phases/phase-1-single-node-equities/) - ✅ Complete
+- [Phase 1: Single-Node](docs/phases/phase-1-single-node/) - ✅ Complete
 - [Phase 2: Multi-Source Foundation](docs/phases/phase-2-prep/) - ✅ Complete (V2 schema + Binance)
 - [Phase 3: Demo Enhancements](docs/phases/phase-3-demo-enhancements/) - ✅ Complete (Platform positioning, circuit breaker, hybrid queries, cost model)
 
@@ -783,7 +783,7 @@ K2 is developed in phases, each with clear business drivers and validation crite
 - 8 REST endpoints
 - 7 CLI commands
 
-See [Phase 1 Status](docs/phases/phase-1-single-node-equities/STATUS.md) for detailed completion report.
+See [Phase 1 Status](docs/phases/phase-1-single-node/STATUS.md) for detailed completion report.
 
 ### Phase 2 Prep: Schema Evolution + Binance Streaming ✅ Complete
 
@@ -791,8 +791,8 @@ See [Phase 1 Status](docs/phases/phase-1-single-node-equities/STATUS.md) for det
 
 **Delivered** (2026-01-13):
 - ✅ V2 industry-standard schemas (hybrid approach with vendor_data map)
-- ✅ Multi-source ingestion (ASX batch CSV + Binance live WebSocket)
-- ✅ Multi-asset class support (equities + crypto)
+- ✅ Multi-source ingestion (Binance + Kraken live WebSocket)
+- ✅ Multi-asset class support (crypto + futures)
 - ✅ Binance streaming (69,666+ trades received, 5,000 written to Iceberg)
 - ✅ E2E pipeline validated (Binance → Kafka → Iceberg → Query)
 - ✅ Production-grade resilience (SSL handling, metrics, error handling)
@@ -921,7 +921,7 @@ Contributions welcome. See [Contributing Guide](./CONTRIBUTING.md) for developme
 
 - **Documentation**: See [docs/](./docs/)
 - **Issues**: [GitHub Issues](https://github.com/rjdscott/k2-market-data-platform/issues)
-- **Architecture Questions**: [Architecture Decision Records](docs/phases/phase-1-single-node-equities/DECISIONS.md)
+- **Architecture Questions**: [Architecture Decision Records](docs/phases/phase-1-single-node/DECISIONS.md)
 
 ---
 

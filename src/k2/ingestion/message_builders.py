@@ -103,8 +103,8 @@ def build_trade_v2(
     """Build a v2 Trade message conforming to TradeV2 Avro schema.
 
     Args:
-        symbol: Trading symbol (e.g., 'BHP', 'BTCUSDT')
-        exchange: Exchange code (e.g., 'ASX', 'BINANCE')
+        symbol: Trading symbol (e.g., 'BTCUSDT', 'ETHUSD')
+        exchange: Exchange code (e.g., 'BINANCE', 'KRAKEN')
         asset_class: Asset class enum ('equities', 'crypto', 'futures', 'options')
         timestamp: Exchange timestamp (datetime or microseconds since epoch)
         price: Trade price (Decimal, float, or string - will convert to Decimal)
@@ -127,19 +127,6 @@ def build_trade_v2(
     Examples:
         >>> from decimal import Decimal
         >>> from datetime import datetime
-        >>>
-        >>> # ASX equity trade
-        >>> trade = build_trade_v2(
-        ...     symbol="BHP",
-        ...     exchange="ASX",
-        ...     asset_class="equities",
-        ...     timestamp=datetime.utcnow(),
-        ...     price=Decimal("45.67"),
-        ...     quantity=Decimal("1000"),
-        ...     currency="AUD",
-        ...     side="BUY",
-        ...     vendor_data={"company_id": "123", "qualifiers": "0"}
-        ... )
         >>>
         >>> # Binance crypto trade
         >>> trade = build_trade_v2(
@@ -231,8 +218,8 @@ def build_quote_v2(
     """Build a v2 Quote message conforming to QuoteV2 Avro schema.
 
     Args:
-        symbol: Trading symbol (e.g., 'BHP', 'BTCUSDT')
-        exchange: Exchange code (e.g., 'ASX', 'BINANCE')
+        symbol: Trading symbol (e.g., 'BTCUSDT', 'ETHUSD')
+        exchange: Exchange code (e.g., 'BINANCE', 'KRAKEN')
         asset_class: Asset class enum ('equities', 'crypto', 'futures', 'options')
         timestamp: Exchange timestamp (datetime or microseconds since epoch)
         bid_price: Best bid price (Decimal, float, or string - will convert to Decimal)
@@ -256,17 +243,17 @@ def build_quote_v2(
         >>> from decimal import Decimal
         >>> from datetime import datetime
         >>>
-        >>> # ASX equity quote
+        >>> # Binance crypto quote
         >>> quote = build_quote_v2(
-        ...     symbol="BHP",
-        ...     exchange="ASX",
-        ...     asset_class="equities",
+        ...     symbol="BTCUSDT",
+        ...     exchange="BINANCE",
+        ...     asset_class="crypto",
         ...     timestamp=datetime.utcnow(),
-        ...     bid_price=Decimal("45.60"),
-        ...     bid_quantity=Decimal("1000"),
-        ...     ask_price=Decimal("45.70"),
-        ...     ask_quantity=Decimal("500"),
-        ...     currency="AUD"
+        ...     bid_price=Decimal("16500.00"),
+        ...     bid_quantity=Decimal("1.5"),
+        ...     ask_price=Decimal("16500.50"),
+        ...     ask_quantity=Decimal("2.0"),
+        ...     currency="USDT"
         ... )
     """
     # Validate enum

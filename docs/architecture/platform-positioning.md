@@ -257,7 +257,7 @@ K2 Market Data Platform is a **Research Data Platform** operating in the **Cold 
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                           │
 │  ┌─────────────┐                                                         │
-│  │  Exchanges  │ (NYSE, CME, ASX, Binance)                               │
+│  │  Exchanges  │ (Binance, Kraken, Coinbase, Bybit)                        │
 │  │   Market    │                                                         │
 │  │  Data Feeds │                                                         │
 │  └──────┬──────┘                                                         │
@@ -356,7 +356,7 @@ Exchange Feed → L1 (Execution) → L2 (Risk) → L3 (K2 Analytics)
 
 **5. Schema Evolution Expected**:
 - Vendor feeds change formats frequently
-- Need to support multiple exchanges (ASX, Binance, etc.)
+- Need to support multiple exchanges (Binance, Kraken, etc.)
 - Hybrid schema approach (core + vendor_data)
 - Backward compatibility via Iceberg schema evolution
 
@@ -388,10 +388,10 @@ Exchange Feed → L1 (Execution) → L2 (Risk) → L3 (K2 Analytics)
 
 ### Workflow 1: Quantitative Strategy Backtesting
 
-**Scenario**: Test mean-reversion strategy on 3 years of AAPL tick data
+**Scenario**: Test mean-reversion strategy on 3 years of BTC/USDT tick data
 
 **Steps**:
-1. Query historical trades from Iceberg (time-travel to avoid look-ahead bias)
+1. Query historical crypto trades from Iceberg (time-travel to avoid look-ahead bias)
 2. Generate OHLCV bars at 1-minute intervals
 3. Calculate strategy signals (mean-reversion threshold)
 4. Simulate trades and calculate P&L
@@ -431,13 +431,13 @@ Exchange Feed → L1 (Execution) → L2 (Risk) → L3 (K2 Analytics)
 
 ### Workflow 3: Market Microstructure Analysis
 
-**Scenario**: Analyze spread compression during market open for tech stocks
+**Scenario**: Analyze spread compression during market open for major crypto pairs
 
 **Steps**:
-1. Query trades and quotes for FAANG stocks during 9:30-10:00 AM
+1. Query trades and quotes for major crypto pairs during market open hours
 2. Calculate bid-ask spread evolution over time
 3. Identify liquidity events (spread compression, volume spikes)
-4. Correlate with external events (news, earnings, macro data)
+4. Correlate with external events (news, regulatory announcements, macro data)
 
 **K2 Strengths**:
 - DuckDB columnar engine optimized for time-series aggregations

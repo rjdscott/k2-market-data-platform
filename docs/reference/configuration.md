@@ -202,7 +202,7 @@ BINANCE_HEARTBEAT_INTERVAL=180
 **Example**:
 ```bash
 CONSUMER_GROUP_ID=k2-iceberg-writer-crypto-v2
-CONSUMER_TOPICS=market.crypto.trades.binance,market.equities.trades.asx
+CONSUMER_TOPICS=market.crypto.trades.binance,market.crypto.trades.kraken
 CONSUMER_AUTO_OFFSET_RESET=earliest
 ```
 

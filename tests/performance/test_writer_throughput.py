@@ -62,14 +62,14 @@ def sample_trades_v1():
         for i in range(count):
             trades.append(
                 {
-                    "symbol": "BHP",
-                    "company_id": 7078,
-                    "exchange": "ASX",
-                    "exchange_timestamp": datetime(2014, 3, 10, 10, 0, i % 60),
-                    "price": Decimal("36.50"),
-                    "volume": 10000 + i,
+                    "symbol": "BTCUSDT",
+                    "company_id": None,
+                    "exchange": "BINANCE",
+                    "exchange_timestamp": datetime(2025, 1, 10, 10, 0, i % 60),
+                    "price": Decimal("45000.50"),
+                    "volume": 1.5 + (i * 0.01),
                     "qualifiers": 0,
-                    "venue": "X",
+                    "venue": "spot",
                     "buyer_id": None,
                     "ingestion_timestamp": datetime.now(),
                     "sequence_number": i,
