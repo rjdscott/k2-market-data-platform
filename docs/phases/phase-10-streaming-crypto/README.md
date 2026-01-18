@@ -28,6 +28,64 @@ Phase 10 represents a **complete platform refactor** from mixed equity/crypto pl
 
 ---
 
+## Current Status (2026-01-18)
+
+### Completed: Bronze Streaming Infrastructure ✅
+
+The Bronze layer (Kafka → Iceberg raw ingestion) is **fully operational** with production-ready Docker services:
+
+**Services Running**:
+- `bronze-binance-stream`: Auto-managed Spark job consuming from `market.crypto.trades.binance`
+- `bronze-kraken-stream`: Auto-managed Spark job consuming from `market.crypto.trades.kraken`
+
+**Key Features**:
+- ✅ Automatic startup with `docker-compose up -d`
+- ✅ Auto-restart on failure (`restart: unless-stopped`)
+- ✅ Resource allocation: 2 cores per job (prevents starvation)
+- ✅ Checkpointing enabled for fault tolerance (`/checkpoints/bronze-{exchange}/`)
+- ✅ AWS SDK v2 region configuration for MinIO S3 compatibility
+- ✅ Health checks on dependencies (Spark, Kafka, Iceberg)
+
+**Data Flow**:
+```
+Binance Producer → Kafka (market.crypto.trades.binance) → Bronze Job → bronze_binance_trades (Iceberg)
+Kraken Producer  → Kafka (market.crypto.trades.kraken)  → Bronze Job → bronze_kraken_trades (Iceberg)
+```
+
+**Management**:
+```bash
+# Start Bronze services
+docker-compose up -d bronze-binance-stream bronze-kraken-stream
+
+# Check logs
+docker logs k2-bronze-binance-stream -f
+docker logs k2-bronze-kraken-stream -f
+
+# Monitor in Spark UI
+http://localhost:8090
+# Should show both jobs RUNNING with 2 cores each
+```
+
+**Documentation**:
+- [Bronze Streaming Troubleshooting Runbook](../../operations/runbooks/bronze-streaming-troubleshooting.md)
+- [Spark Iceberg Queries Notebook](../../../demos/notebooks/spark-iceberg-queries.ipynb)
+
+### Next Steps
+
+**Phase 5.11: Silver Transformation Job** (pending)
+- Deserialize V2 Avro from Bronze
+- Validate trade records (price > 0, timestamp valid, etc.)
+- Write to per-exchange Silver tables
+- Handle DLQ for invalid records
+
+**Phase 5.12: Gold Aggregation Job** (pending)
+- Union Silver tables (Binance + Kraken)
+- Deduplicate by message_id
+- Add derived fields (exchange_date, exchange_hour)
+- Write to Gold unified table
+
+---
+
 ## Quick Links
 
 - [Implementation Plan](./IMPLEMENTATION_PLAN.md) - Detailed 12-step implementation plan

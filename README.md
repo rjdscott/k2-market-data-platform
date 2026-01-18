@@ -195,23 +195,33 @@ make api   # Starts FastAPI on http://localhost:8000
 ### 5. Start Streaming Services (Optional)
 
 ```bash
-# Start Binance WebSocket streaming (BTC, ETH, BNB)
-docker compose up -d binance-stream
+# Start WebSocket producers (connect to exchanges)
+docker compose up -d binance-stream kraken-stream
 
-# Start Kraken WebSocket streaming (BTC, ETH)
-docker compose up -d kraken-stream
+# Start Bronze streaming jobs (Kafka → Iceberg ingestion)
+docker compose up -d bronze-binance-stream bronze-kraken-stream
 
-# Start consumer to ingest from Kafka to Iceberg
-docker compose up -d consumer-crypto
+# Verify data flow to Bronze tables
+docker exec k2-spark-master spark-sql \
+  --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar \
+  -e "SELECT 'binance', COUNT(*) FROM iceberg.market_data.bronze_binance_trades
+      UNION ALL
+      SELECT 'kraken', COUNT(*) FROM iceberg.market_data.bronze_kraken_trades;"
 
-# Verify data flow
-curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
-  -H "X-API-Key: k2-dev-api-key-2026"
+# Monitor Bronze streaming jobs
+# Spark UI: http://localhost:8090 (should show both jobs RUNNING with 2 cores each)
+docker logs k2-bronze-binance-stream -f   # Binance Bronze ingestion logs
+docker logs k2-bronze-kraken-stream -f    # Kraken Bronze ingestion logs
 
-# Check streaming logs
-docker logs -f k2-binance-stream   # Binance streaming logs
-docker logs -f k2-kraken-stream    # Kraken streaming logs
+# Check producer logs
+docker logs k2-binance-stream -f   # Binance WebSocket producer
+docker logs k2-kraken-stream -f    # Kraken WebSocket producer
 ```
+
+**Bronze Streaming Architecture**:
+- **Producers**: WebSocket clients streaming trades from exchanges → Kafka topics
+- **Bronze Jobs**: Spark Structured Streaming jobs consuming from Kafka → Iceberg Bronze tables
+- **Features**: Auto-restart, checkpointing, resource limits (2 cores each), AWS region config for MinIO
 
 ### 6. Run Demo (Optional)
 
