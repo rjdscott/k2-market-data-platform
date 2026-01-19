@@ -185,7 +185,7 @@
 4. RBAC and row-level security
 5. Auto-scaling and cost optimization
 
-See [TODO.md](../../../TODO.md) for deferred features (Redis, Bloom filters) that will be implemented in multi-node phase.
+See [TODO.md](../../TODO.md) for deferred features (Redis, Bloom filters) that will be implemented in multi-node phase.
 
 ---
 

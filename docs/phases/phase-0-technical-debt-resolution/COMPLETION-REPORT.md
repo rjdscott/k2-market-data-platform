@@ -369,7 +369,7 @@ All criteria met ✅
 ## References
 
 ### Documentation
-- [TECHNICAL_DEBT.md](../../../TECHNICAL_DEBT.md) - Master tracker with all 7 items
+- [TECHNICAL_DEBT.md](../../TECHNICAL_DEBT.md) - Master tracker with all 7 items
 - [Phase 0 README](./README.md) - Phase overview
 - [Phase 0 PROGRESS](./PROGRESS.md) - Detailed progress tracking
 - [Phase 0 DECISIONS](./DECISIONS.md) - Technical decisions
