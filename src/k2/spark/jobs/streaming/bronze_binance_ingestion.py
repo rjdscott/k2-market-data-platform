@@ -1,14 +1,25 @@
 #!/usr/bin/env python3
-"""Binance Bronze Ingestion Job - Kafka to Bronze Layer.
+"""Binance Bronze Ingestion Job - Kafka to Bronze Layer (Raw Bytes).
 
 This Spark Structured Streaming job ingests raw Kafka messages from the Binance topic
-and writes them to the bronze_binance_trades Iceberg table WITHOUT deserialization.
+and writes them to bronze_binance_trades Iceberg table as immutable raw bytes.
+
+Best Practice (Medallion Architecture):
+- Bronze: Immutable raw data landing zone (NO deserialization)
+- Silver: Validated, deserialized data (validation + schema compliance)
+- Gold: Business logic, derived columns, aggregations
 
 Architecture:
-- Source: market.crypto.trades.binance (Kafka topic)
+- Source: market.crypto.trades.binance.raw (Kafka topic)
 - Target: bronze_binance_trades (Iceberg table)
-- Pattern: Raw bytes ingestion (no Avro deserialization)
+- Pattern: Raw bytes with Schema Registry headers (5-byte header + Avro payload)
 - Checkpoint: /checkpoints/bronze-binance/
+
+Why Raw Bytes in Bronze:
+1. Replayability: Replay Bronze → Silver if schema or logic changes
+2. Schema Evolution: Bronze unchanged when schema versions evolve
+3. Debugging: Inspect exact bytes producer sent (including schema ID)
+4. Auditability: Immutable raw data for compliance
 
 Configuration:
 - Trigger: 10 seconds (high volume)
@@ -16,7 +27,6 @@ Configuration:
 - Workers: 3 (high throughput)
 
 Usage:
-    # From host
     docker exec k2-spark-master /opt/spark/bin/spark-submit \
       --master spark://spark-master:7077 \
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar \
@@ -25,11 +35,9 @@ Usage:
       --num-executors 3 \
       /opt/k2/src/k2/spark/jobs/streaming/bronze_binance_ingestion.py
 
-    # From within container
-    /opt/spark/bin/spark-submit --master spark://spark-master:7077 \
-      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar \
-      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3 \
-      /opt/k2/src/k2/spark/jobs/streaming/bronze_binance_ingestion.py
+Related:
+- Step 11: Silver transformation (deserializes Bronze raw_bytes)
+- Decision #011: Bronze stores raw bytes for replayability
 """
 
 import sys
@@ -77,13 +85,14 @@ def create_spark_session(app_name: str) -> SparkSession:
 def main():
     """Main entry point."""
     print("\n" + "=" * 70)
-    print("K2 Bronze Ingestion - Binance")
-    print("Kafka → Bronze Layer (Raw Bytes)")
+    print("K2 Bronze Ingestion - Binance (Raw Bytes)")
+    print("Kafka → Bronze Layer (Immutable Raw Data)")
     print("=" * 70)
     print("\nConfiguration:")
-    print("  • Topic: market.crypto.trades.binance")
+    print("  • Topic: market.crypto.trades.binance.raw")
     print("  • Target: bronze_binance_trades")
-    print("  • Trigger: 10 seconds (high volume)")
+    print("  • Pattern: Raw bytes (5-byte header + Avro payload)")
+    print("  • Trigger: 10 seconds")
     print("  • Max offsets per trigger: 10,000")
     print("  • Checkpoint: /checkpoints/bronze-binance/")
     print(f"\n{'=' * 70}\n")
@@ -95,7 +104,8 @@ def main():
         # Read from Kafka (Binance RAW topic)
         print("Starting Kafka stream reader...")
         kafka_df = (
-            spark.readStream.format("kafka")
+            spark.readStream
+            .format("kafka")
             .option("kafka.bootstrap.servers", "kafka:29092")
             .option("subscribe", "market.crypto.trades.binance.raw")
             .option("startingOffsets", "latest")
@@ -106,66 +116,33 @@ def main():
 
         print("✓ Kafka stream reader configured")
 
-        # Deserialize Avro (with Schema Registry format handling)
-        print("Deserializing Avro from Schema Registry...")
-        from pyspark.sql.avro.functions import from_avro
-        from pyspark.sql.functions import expr
-
-        # Option: Use Schema Registry URL for automatic schema fetching
-        # from_avro can fetch schema from registry using the schema ID in the message
-        options = {"mode": "FAILFAST"}
-
-        # Alternative: Strip Schema Registry header (5 bytes: magic byte + 4-byte schema ID)
-        # and use schema string
-        print("Stripping Schema Registry header (5 bytes)...")
-        kafka_df_no_header = kafka_df.selectExpr(
-            "substring(value, 6, length(value)-5) as avro_data",
-            "topic",
-            "partition",
-            "offset",
-            "timestamp"
+        # Transform to Bronze schema (raw bytes + metadata)
+        # NO deserialization - keep Schema Registry headers for Silver layer
+        print("Transforming to Bronze schema (raw bytes)...")
+        bronze_df = (
+            kafka_df
+            .selectExpr(
+                "value as raw_bytes",              # Full Kafka value (header + payload)
+                "topic",                           # Source topic name
+                "partition",                       # Kafka partition
+                "offset",                          # Kafka offset
+                "timestamp as kafka_timestamp"     # Kafka message timestamp
+            )
+            .withColumn("ingestion_timestamp", current_timestamp())
+            .withColumn("ingestion_date", to_date(current_timestamp()))
         )
 
-        # Load schema
-        schema_path = "/opt/k2/src/k2/schemas/binance_raw_trade.avsc"
-        with open(schema_path) as f:
-            avro_schema = f.read()
-
-        # Deserialize plain Avro (without Schema Registry header)
-        trades_df = kafka_df_no_header.select(
-            from_avro(col("avro_data"), avro_schema, options).alias("trade")
-        )
-
-        # Debug: Print schema to see actual field names
-        print("Deserialized schema:")
-        trades_df.printSchema()
-
-        # Expand to Bronze schema
-        # Use descriptive field names from schema (Avro deserializes with schema field names)
-        print("Transforming to Bronze schema...")
-        bronze_df = trades_df.select(
-            col("trade.event_type"),
-            col("trade.event_time_ms"),
-            col("trade.symbol"),
-            col("trade.trade_id"),
-            col("trade.price"),
-            col("trade.quantity"),
-            col("trade.trade_time_ms"),
-            col("trade.is_buyer_maker"),
-            col("trade.is_best_match"),
-            col("trade.ingestion_timestamp"),
-            # Convert microseconds to date: divide by 1M to get seconds, cast to timestamp, then to date
-            to_date((col("trade.ingestion_timestamp") / 1000000).cast("timestamp")).alias("ingestion_date"),
-        )
-
-        print("✓ Bronze schema transformation configured")
+        print("✓ Bronze schema configured (7 fields)")
+        print("  • raw_bytes: Full Kafka value (5-byte header + Avro)")
+        print("  • kafka_timestamp: Message timestamp from Kafka")
+        print("  • ingestion_timestamp: When ingested to Bronze")
+        print("  • ingestion_date: Partition key")
 
         # Write to Bronze table
-        # Note: For Spark Structured Streaming, we must use table name (not path)
-        # and cannot use partitionBy() - partition spec is defined in table DDL
-        print("Starting Bronze writer...")
+        print("\nStarting Bronze writer...")
         query = (
-            bronze_df.writeStream.format("iceberg")
+            bronze_df.writeStream
+            .format("iceberg")
             .outputMode("append")
             .trigger(processingTime="10 seconds")
             .option("checkpointLocation", "/checkpoints/bronze-binance/")
@@ -174,22 +151,31 @@ def main():
         )
 
         print("✓ Bronze writer started")
-        print("\nStreaming job running...")
+        print("\n" + "=" * 70)
+        print("Streaming job RUNNING - Raw bytes ingestion")
+        print("=" * 70)
+        print("\nMonitor:")
         print("  • Spark UI: http://localhost:8090")
-        print("  • Check Bronze table: SELECT COUNT(*) FROM iceberg.market_data.bronze_binance_trades")
-        print("\nPress Ctrl+C to stop (checkpoint will be saved)\n")
+        print("  • Query Bronze: SELECT COUNT(*) FROM bronze_binance_trades;")
+        print("  • Check raw_bytes: SELECT raw_bytes, length(raw_bytes) FROM bronze_binance_trades LIMIT 1;")
+        print("\nNext Step:")
+        print("  • Silver transformation will deserialize raw_bytes")
+        print("\nPress Ctrl+C to stop (checkpoint saved automatically)")
+        print("=" * 70 + "\n")
 
         # Wait for termination
         query.awaitTermination()
 
     except KeyboardInterrupt:
-        print("\n\nReceived interrupt signal, shutting down gracefully...")
+        print("\n\n" + "=" * 70)
+        print("Received interrupt signal - shutting down gracefully")
+        print("=" * 70)
         print("✓ Checkpoint saved: /checkpoints/bronze-binance/")
+        print("✓ Job can resume from last offset")
         return 0
     except Exception as e:
-        print(f"\n✗ Error: {e}")
+        print(f"\n✗ ERROR: {e}")
         import traceback
-
         traceback.print_exc()
         return 1
     finally:

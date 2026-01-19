@@ -1,14 +1,25 @@
 #!/usr/bin/env python3
-"""Kraken Bronze Ingestion Job - Kafka to Bronze Layer.
+"""Kraken Bronze Ingestion Job - Kafka to Bronze Layer (Raw Bytes).
 
 This Spark Structured Streaming job ingests raw Kafka messages from the Kraken topic
-and writes them to the bronze_kraken_trades Iceberg table WITHOUT deserialization.
+and writes them to bronze_kraken_trades Iceberg table as immutable raw bytes.
+
+Best Practice (Medallion Architecture):
+- Bronze: Immutable raw data landing zone (NO deserialization)
+- Silver: Validated, deserialized data (validation + schema compliance)
+- Gold: Business logic, derived columns, aggregations
 
 Architecture:
-- Source: market.crypto.trades.kraken (Kafka topic)
+- Source: market.crypto.trades.kraken.raw (Kafka topic)
 - Target: bronze_kraken_trades (Iceberg table)
-- Pattern: Raw bytes ingestion (no Avro deserialization)
+- Pattern: Raw bytes with Schema Registry headers (5-byte header + Avro payload)
 - Checkpoint: /checkpoints/bronze-kraken/
+
+Why Raw Bytes in Bronze:
+1. Replayability: Replay Bronze → Silver if schema or logic changes
+2. Schema Evolution: Bronze unchanged when schema versions evolve
+3. Debugging: Inspect exact bytes producer sent (including schema ID)
+4. Auditability: Immutable raw data for compliance
 
 Configuration:
 - Trigger: 30 seconds (lower volume than Binance)
@@ -16,7 +27,6 @@ Configuration:
 - Workers: 1 (lower volume)
 
 Usage:
-    # From host
     docker exec k2-spark-master /opt/spark/bin/spark-submit \
       --master spark://spark-master:7077 \
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar \
@@ -25,11 +35,9 @@ Usage:
       --num-executors 1 \
       /opt/k2/src/k2/spark/jobs/streaming/bronze_kraken_ingestion.py
 
-    # From within container
-    /opt/spark/bin/spark-submit --master spark://spark-master:7077 \
-      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar \
-      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3 \
-      /opt/k2/src/k2/spark/jobs/streaming/bronze_kraken_ingestion.py
+Related:
+- Step 11: Silver transformation (deserializes Bronze raw_bytes)
+- Decision #011: Bronze stores raw bytes for replayability
 """
 
 import sys
@@ -77,12 +85,13 @@ def create_spark_session(app_name: str) -> SparkSession:
 def main():
     """Main entry point."""
     print("\n" + "=" * 70)
-    print("K2 Bronze Ingestion - Kraken")
-    print("Kafka → Bronze Layer (Raw Bytes)")
+    print("K2 Bronze Ingestion - Kraken (Raw Bytes)")
+    print("Kafka → Bronze Layer (Immutable Raw Data)")
     print("=" * 70)
     print("\nConfiguration:")
-    print("  • Topic: market.crypto.trades.kraken")
+    print("  • Topic: market.crypto.trades.kraken.raw")
     print("  • Target: bronze_kraken_trades")
+    print("  • Pattern: Raw bytes (5-byte header + Avro payload)")
     print("  • Trigger: 30 seconds (lower volume)")
     print("  • Max offsets per trigger: 1,000")
     print("  • Checkpoint: /checkpoints/bronze-kraken/")
@@ -95,7 +104,8 @@ def main():
         # Read from Kafka (Kraken RAW topic)
         print("Starting Kafka stream reader...")
         kafka_df = (
-            spark.readStream.format("kafka")
+            spark.readStream
+            .format("kafka")
             .option("kafka.bootstrap.servers", "kafka:29092")
             .option("subscribe", "market.crypto.trades.kraken.raw")
             .option("startingOffsets", "latest")
@@ -106,59 +116,33 @@ def main():
 
         print("✓ Kafka stream reader configured")
 
-        # Deserialize Avro (using schema file)
-        print("Deserializing Avro from schema file...")
-        from pyspark.sql.avro.functions import from_avro
-
-        # Load Avro schema from file
-        schema_path = "/opt/k2/src/k2/schemas/kraken_raw_trade.avsc"
-        with open(schema_path) as f:
-            avro_schema = f.read()
-
-        # Strip Schema Registry header (5 bytes: 1 magic byte + 4-byte schema ID)
-        # Schema Registry prepends this header to all messages, but Avro deserialization expects raw Avro data
-        print("Stripping Schema Registry header (5 bytes)...")
-        kafka_df_no_header = kafka_df.selectExpr(
-            "substring(value, 6, length(value)-5) as avro_data",
-            "topic",
-            "partition",
-            "offset",
-            "timestamp",
-            "key"
+        # Transform to Bronze schema (raw bytes + metadata)
+        # NO deserialization - keep Schema Registry headers for Silver layer
+        print("Transforming to Bronze schema (raw bytes)...")
+        bronze_df = (
+            kafka_df
+            .selectExpr(
+                "value as raw_bytes",              # Full Kafka value (header + payload)
+                "topic",                           # Source topic name
+                "partition",                       # Kafka partition
+                "offset",                          # Kafka offset
+                "timestamp as kafka_timestamp"     # Kafka message timestamp
+            )
+            .withColumn("ingestion_timestamp", current_timestamp())
+            .withColumn("ingestion_date", to_date(current_timestamp()))
         )
 
-        # Deserialize Avro value (now without Schema Registry header)
-        trades_df = kafka_df_no_header.select(
-            from_avro(col("avro_data"), avro_schema).alias("trade"),
-            col("topic"),
-            col("partition"),
-            col("offset")
-        )
-
-        # Expand to Bronze schema
-        print("Transforming to Bronze schema...")
-        bronze_df = trades_df.select(
-            col("trade.channel_id"),
-            col("trade.price"),
-            col("trade.volume"),
-            col("trade.timestamp"),
-            col("trade.side"),
-            col("trade.order_type"),
-            col("trade.misc"),
-            col("trade.pair"),
-            col("trade.ingestion_timestamp"),
-            # Convert microseconds to date: divide by 1M to get seconds, cast to timestamp, then to date
-            to_date((col("trade.ingestion_timestamp") / 1000000).cast("timestamp")).alias("ingestion_date"),
-        )
-
-        print("✓ Bronze schema transformation configured")
+        print("✓ Bronze schema configured (7 fields)")
+        print("  • raw_bytes: Full Kafka value (5-byte header + Avro)")
+        print("  • kafka_timestamp: Message timestamp from Kafka")
+        print("  • ingestion_timestamp: When ingested to Bronze")
+        print("  • ingestion_date: Partition key")
 
         # Write to Bronze table
-        # Note: For Spark Structured Streaming, we must use table name (not path)
-        # and cannot use partitionBy() - partition spec is defined in table DDL
-        print("Starting Bronze writer...")
+        print("\nStarting Bronze writer...")
         query = (
-            bronze_df.writeStream.format("iceberg")
+            bronze_df.writeStream
+            .format("iceberg")
             .outputMode("append")
             .trigger(processingTime="30 seconds")
             .option("checkpointLocation", "/checkpoints/bronze-kraken/")
@@ -167,22 +151,31 @@ def main():
         )
 
         print("✓ Bronze writer started")
-        print("\nStreaming job running...")
+        print("\n" + "=" * 70)
+        print("Streaming job RUNNING - Raw bytes ingestion")
+        print("=" * 70)
+        print("\nMonitor:")
         print("  • Spark UI: http://localhost:8090")
-        print("  • Check Bronze table: SELECT COUNT(*) FROM iceberg.market_data.bronze_kraken_trades")
-        print("\nPress Ctrl+C to stop (checkpoint will be saved)\n")
+        print("  • Query Bronze: SELECT COUNT(*) FROM bronze_kraken_trades;")
+        print("  • Check raw_bytes: SELECT raw_bytes, length(raw_bytes) FROM bronze_kraken_trades LIMIT 1;")
+        print("\nNext Step:")
+        print("  • Silver transformation will deserialize raw_bytes")
+        print("\nPress Ctrl+C to stop (checkpoint saved automatically)")
+        print("=" * 70 + "\n")
 
         # Wait for termination
         query.awaitTermination()
 
     except KeyboardInterrupt:
-        print("\n\nReceived interrupt signal, shutting down gracefully...")
+        print("\n\n" + "=" * 70)
+        print("Received interrupt signal - shutting down gracefully")
+        print("=" * 70)
         print("✓ Checkpoint saved: /checkpoints/bronze-kraken/")
+        print("✓ Job can resume from last offset")
         return 0
     except Exception as e:
-        print(f"\n✗ Error: {e}")
+        print(f"\n✗ ERROR: {e}")
         import traceback
-
         traceback.print_exc()
         return 1
     finally:

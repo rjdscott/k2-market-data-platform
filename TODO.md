@@ -1,7 +1,45 @@
-# K2 Platform: Future Enhancements
+# K2 Platform: Future Enhancements & TODO
 
-**Last Updated**: 2026-01-13
-**Purpose**: Track features deferred for multi-node/distributed implementations
+**Last Updated**: 2026-01-19
+**Purpose**: Track features deferred for multi-node/distributed implementations and end-of-project reviews
+
+---
+
+## End-of-Project Reviews
+
+### Flink Evaluation Review
+**Status**: Deferred to end-of-project
+**Originally**: Evaluated in Phase 10 (ADR-003)
+**Decision**: Continue with Spark Structured Streaming (optimized)
+**Review Trigger**: End of Phase 10-12 completion
+
+**Review Criteria**:
+- [ ] Sub-second latency has become business-critical
+- [ ] Complex CEP requirements emerged (windowed joins, pattern matching)
+- [ ] Query patterns shifted to direct Bronze table queries
+- [ ] Team has hired Flink expert or gained significant Flink experience
+
+**Documentation**:
+- `docs/design/stream-processing-evaluation.md` - Comprehensive Flink vs Spark analysis
+- `docs/architecture/decisions/ADR-003-stream-processing-engine-selection.md` - Decision record
+- `docs/reference/flink-vs-spark-streaming-reference.md` - Quick reference guide
+
+**Expected Outcome**: Validate that Spark optimization (5s trigger) continues to meet requirements, or identify concrete trigger for Flink adoption.
+
+---
+
+## Integration Test Improvements (Phase 11+)
+
+**Status**: Deferred from Phase 10
+**Current**: 20/24 tests passing (83% pass rate)
+**Priority**: Medium (improve to 100% before production)
+
+**Remaining Work**:
+- [ ] Fix hybrid query timing issues (2 tests) - Kafka consumer needs polling until messages available
+- [ ] Implement rate limiting tests (currently skipped)
+- [ ] Implement CORS header tests (currently skipped)
+
+**Reference**: See archive or git history for detailed integration test status (previously in todo.md, now removed)
 
 ---
 
