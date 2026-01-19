@@ -1,6 +1,6 @@
 # Phase 10 Architectural Decisions
 
-**Last Updated**: 2026-01-18
+**Last Updated**: 2026-01-20
 **Phase**: Production Crypto Streaming Platform
 
 ---
@@ -950,6 +950,314 @@ docker exec k2-spark-master curl -s http://localhost:8080/json/
 - **Docker Compose Lifecycle**: https://docs.docker.com/compose/faq/#whats-the-difference-between-up-and-restart
 - **Spark Scheduling**: https://spark.apache.org/docs/latest/job-scheduling.html
 - **Related**: Decision #015 (Right-Sized Resource Allocation), [RESOURCE_ALLOCATION_FIX.md](./RESOURCE_ALLOCATION_FIX.md)
+
+---
+
+## Decision #017: Layered Gold Schema (Unified + Pre-Computed OHLCV)
+
+**Date**: 2026-01-20
+**Status**: Accepted
+**Type**: Tier 3 (Architectural)
+**Related Step**: Step 12
+
+### Context
+
+Gold layer design for quantitative crypto analytics requires balancing:
+1. **Query performance**: Quants need sub-second query latencies for common patterns
+2. **Storage costs**: Pre-computing all possible aggregations is expensive
+3. **Flexibility**: Ad-hoc queries require access to raw trades
+4. **Simplicity**: Complex architectures are hard to maintain
+
+Three architectural approaches considered:
+1. **Single unified table only**: `gold_crypto_trades` with no pre-computations
+2. **Star schema**: Fact tables + dimension tables (traditional data warehouse)
+3. **Layered**: Base unified table + pre-computed high-value aggregations
+
+**Usage analysis** (from quantitative analytics requirements):
+- 90% of queries: OHLCV candles (1m/5m/1h/1d)
+- 5% of queries: TWAP, cross-exchange analytics
+- 5% of queries: Custom ad-hoc aggregations
+
+### Decision
+
+**Adopt layered Gold schema**: Base unified table + pre-computed OHLCV candles (1m/5m/1h/1d).
+
+**Architecture**:
+```
+gold_crypto_trades (Base Table)
+├── 17 fields (15 V2 + exchange_date + exchange_hour)
+├── Hourly partitioning for efficient queries
+├── Unlimited retention (primary data source)
+└── Use: Custom analytics, ad-hoc queries, backfills
+
+gold_ohlcv_1m/5m/1h/1d (Pre-Computed Candles)
+├── 12 fields each (symbol, exchange, window, OHLCV, volume, count, vwap)
+├── Daily partitioning by window_date
+├── Tiered retention (90d/180d/1y/3y)
+└── Use: 90% of analyst queries (technical analysis, charting, backtesting)
+```
+
+**Rationale**:
+- **80/20 rule**: Pre-compute high-value aggregations (OHLCV = 90% of queries)
+- **Cost optimization**: Store only frequently-queried aggregations
+- **Performance**: p99 < 100ms for OHLCV queries vs 1-2s on-demand
+- **Flexibility**: Base table supports custom aggregations not pre-computed
+- **Storage efficient**: ~18 GB total for OHLCV (vs 100+ GB if all metrics pre-computed)
+
+### Consequences
+
+**Positive**:
+- ✅ **Fast queries**: p99 < 100ms for OHLCV (covers 90% of use cases)
+- ✅ **Cost efficient**: Only store high-value aggregations (~18 GB)
+- ✅ **Flexible**: Base table supports arbitrary custom analytics
+- ✅ **Simple**: 2 table types (base + OHLCV) vs 10+ in star schema
+- ✅ **Industry standard**: Pattern used by Bloomberg, Refinitiv, Databricks
+
+**Negative**:
+- On-demand queries (TWAP, cross-exchange) take 1-2s vs <100ms for pre-computed
+- **Mitigation**: 1-2s latency acceptable for <10% of queries
+
+**Neutral**:
+- Can add more pre-computed tables later if usage patterns change
+- Retention policies can be tuned based on storage/cost trade-offs
+
+### Validation
+
+- [ ] Base table created: gold_crypto_trades (17 fields, hourly partitions)
+- [ ] OHLCV tables created: gold_ohlcv_1m/5m/1h/1d (12 fields each)
+- [ ] Query latency: p99 < 100ms for OHLCV (1-hour window)
+- [ ] Storage: ~18 GB total for OHLCV tables (across all retention periods)
+- [ ] Ad-hoc queries: Can compute custom aggregations from gold_crypto_trades
+
+### Alternatives Considered
+
+1. **Single unified table only** (no pre-computations)
+   - **Pro**: Simplest, most flexible
+   - **Con**: OHLCV queries take 1-2s (too slow for 90% of queries)
+   - **Rejected**: Query performance unacceptable for primary use case
+
+2. **Star schema** (fact + dimension tables)
+   - **Pro**: Traditional data warehouse pattern, good for BI tools
+   - **Con**: 10+ tables, complex joins, higher storage (~50 GB)
+   - **Rejected**: Over-engineered for 2-exchange crypto platform
+
+3. **Pre-compute everything** (all possible metrics)
+   - **Pro**: All queries sub-100ms
+   - **Con**: 100+ GB storage, expensive, many tables rarely queried
+   - **Rejected**: Violates 80/20 rule, high cost for minimal benefit
+
+### References
+
+- **80/20 Pre-Computation Strategy**: Decision #019
+- **Hybrid Processing**: Decision #018 (streaming + batch for OHLCV generation)
+- **Industry Patterns**: Bloomberg Market Data Platform, Databricks Lakehouse Architecture
+- **Related**: [Step 12: Gold Aggregation Job](./steps/step-12-gold-aggregation.md)
+
+---
+
+## Decision #018: Hybrid Processing (Streaming + Batch)
+
+**Date**: 2026-01-20
+**Status**: Accepted
+**Type**: Tier 3 (Architectural)
+**Related Step**: Step 12
+
+### Context
+
+Gold layer requires two types of processing:
+1. **Base unified table** (`gold_crypto_trades`): Union Silver tables, deduplicate, derive partitions
+2. **OHLCV candles**: Time-window aggregations (1m/5m/1h/1d)
+
+**Processing options**:
+- **Streaming only**: All processing via Spark Structured Streaming
+- **Batch only**: All processing via scheduled Spark batch jobs
+- **Hybrid**: Streaming for base table, batch for aggregations
+
+**User requirement**: 5-minute freshness for analytics (acceptable latency)
+
+**Constraints**:
+- 2 cores available (4/6 used by Bronze + Silver jobs)
+- OHLCV requires exact window boundaries (not event-time windows)
+- Base table must support real-time queries
+
+### Decision
+
+**Adopt hybrid processing**: Streaming for base table, batch for OHLCV aggregations.
+
+**Architecture**:
+```
+Streaming (Hot Path) - 1 core always on
+└── gold_unified_streaming.py
+    - Reads: silver_binance_trades + silver_kraken_trades
+    - Processing: Union, stateful dedup (message_id), derive partition fields
+    - Writes: gold_crypto_trades
+    - Trigger: 5 minutes (matches user requirement)
+
+Batch (Scheduled) - 1 core on-demand
+├── gold_ohlcv_batch_1m.py   - Every 5 min  (10 min lookback)
+├── gold_ohlcv_batch_5m.py   - Every 15 min (15 min lookback)
+├── gold_ohlcv_batch_1h.py   - Every hour   (2 hour lookback)
+└── gold_ohlcv_batch_1d.py   - Daily 00:05  (2 day lookback)
+    - Reads: gold_crypto_trades (last N minutes/hours)
+    - Processing: Window aggregations (tumbling windows)
+    - Writes: gold_ohlcv_1m/5m/1h/1d (MERGE for late arrivals)
+```
+
+**Rationale**:
+- **Streaming for base table**: Real-time deduplication and unified view required
+- **Batch for OHLCV**: Exact window boundaries (9:00:00.000 to 9:01:00.000) easier in batch
+- **Resource efficient**: 1 core always on (streaming) + 1 core scheduled (batch <2 min/hour)
+- **Meets latency SLA**: Base table 5-min fresh, OHLCV 5-15 min fresh (acceptable)
+
+### Consequences
+
+**Positive**:
+- ✅ **Real-time base table**: gold_crypto_trades updated every 5 minutes
+- ✅ **Exact window alignment**: OHLCV candles have precise boundaries
+- ✅ **Resource efficient**: 83% utilization steady state (5/6 cores), 100% during batch (<2 min/hour)
+- ✅ **Handles late arrivals**: MERGE strategy updates existing candles
+- ✅ **Simple orchestration**: Cron-like scheduler for batch jobs
+
+**Negative**:
+- OHLCV candles lag base table by 5-15 minutes (batch schedule)
+- **Mitigation**: Acceptable for quantitative analytics (not high-frequency trading)
+- **Mitigation**: Can query gold_crypto_trades directly if <5 min freshness needed
+
+**Neutral**:
+- Two processing paradigms to maintain (streaming + batch)
+- Batch jobs run sequentially (staggered) to avoid resource contention
+
+### Validation
+
+- [ ] Streaming job running: gold_unified_streaming (1 core, 5-min trigger)
+- [ ] Batch scheduler running: 4 jobs scheduled (1m: every 5 min, 5m: every 15 min, 1h: hourly, 1d: daily)
+- [ ] Base table latency: p99 < 6 minutes (Kafka → gold_crypto_trades)
+- [ ] OHLCV latency: Candles available within 5-15 min of window end
+- [ ] Resource usage: 5/6 cores steady state, 6/6 during batch (<2 min/hour)
+- [ ] Late arrivals handled: MERGE updates existing candles correctly
+
+### Alternatives Considered
+
+1. **Streaming only** (including OHLCV via event-time windows)
+   - **Pro**: Single processing paradigm, real-time candles
+   - **Con**: Event-time windows drift (9:00:02 to 9:01:01) vs exact boundaries required
+   - **Con**: Complex watermark tuning for hourly/daily windows
+   - **Rejected**: Window alignment issues unacceptable for OHLCV
+
+2. **Batch only** (including base table)
+   - **Pro**: Simpler (single paradigm), exact window alignment
+   - **Con**: Base table not real-time (15-min batch interval minimum)
+   - **Con**: Resource inefficient (1 core unused 95% of time)
+   - **Rejected**: Doesn't meet 5-min freshness requirement
+
+3. **Streaming OHLCV + Batch backfill**
+   - **Pro**: Real-time candles + handle late arrivals
+   - **Con**: Complex dual-write pattern, risk of inconsistency
+   - **Rejected**: Over-engineered, hybrid approach simpler
+
+### References
+
+- **Layered Gold Schema**: Decision #017
+- **80/20 Pre-Computation Strategy**: Decision #019
+- **Industry Patterns**: Databricks Delta Live Tables (streaming + batch orchestration)
+- **Related**: [Step 12: Gold Aggregation Job](./steps/step-12-gold-aggregation.md)
+
+---
+
+## Decision #019: 80/20 Pre-Computation Strategy
+
+**Date**: 2026-01-20
+**Status**: Accepted
+**Type**: Tier 2 (Simplified ADR)
+**Related Step**: Step 12
+
+### Context
+
+Quantitative analytics workloads require various metrics:
+- **OHLCV candles** (1m/5m/1h/1d)
+- **Volume metrics**: VWAP, TWAP, volume profiles
+- **Cross-exchange analytics**: Price diffs, arbitrage opportunities, liquidity comparisons
+- **Spreads**: Bid-ask spreads (requires quote data)
+- **Technical indicators**: RSI, MACD, Bollinger Bands, etc.
+
+**Challenge**: Pre-computing all metrics is expensive (100+ GB storage, 10+ tables to maintain).
+
+**Usage analysis** (from quantitative user requirements):
+- **90% of queries**: OHLCV candles (standard technical analysis)
+- **5% of queries**: VWAP (included in OHLCV)
+- **3% of queries**: TWAP, cross-exchange analytics
+- **2% of queries**: Custom metrics (ad-hoc)
+
+### Decision
+
+**Apply 80/20 rule**: Pre-compute only high-value, frequently-queried metrics (OHLCV + VWAP).
+
+**Pre-Compute** (✅):
+| Metric | Rationale | Storage | Query Latency |
+|--------|-----------|---------|---------------|
+| OHLCV 1m/5m/1h/1d | 90% of queries | ~18 GB | < 100ms |
+| VWAP | Cheap to compute with OHLCV (no extra storage) | 0 GB | < 100ms |
+
+**Compute On-Demand** (❌):
+| Metric | Rationale | Query Latency |
+|--------|-----------|---------------|
+| TWAP | Complex interpolation, <5% of queries | 1-2s (acceptable) |
+| Cross-exchange | 3% of queries, simple join | <500ms (acceptable) |
+| Spreads | Requires quote data (not yet available) | N/A |
+| Technical indicators | <2% of queries, custom calculations | 2-5s (acceptable for ad-hoc) |
+
+**Rationale**:
+- **80% of value from 20% of metrics**: OHLCV covers 90% of use cases
+- **Storage optimization**: 18 GB vs 100+ GB if all metrics pre-computed
+- **Maintainability**: 5 tables (base + 4 OHLCV) vs 20+ tables
+- **Latency trade-off**: <100ms for 90% of queries, 1-5s for 10% acceptable
+
+### Consequences
+
+**Positive**:
+- ✅ **Fast common queries**: p99 < 100ms for OHLCV (90% of workload)
+- ✅ **Cost efficient**: ~18 GB storage vs 100+ GB
+- ✅ **Simple maintenance**: 5 tables vs 20+ tables
+- ✅ **Flexible**: Can add more pre-computed metrics later if usage changes
+
+**Negative**:
+- On-demand queries take 1-5s vs <100ms if pre-computed
+- **Mitigation**: Acceptable for <10% of queries (not latency-sensitive)
+
+**Neutral**:
+- Usage patterns may evolve → Monitor query logs and adjust pre-computation strategy
+
+### Validation
+
+- [ ] OHLCV query latency: p99 < 100ms (covers 90% of queries)
+- [ ] TWAP on-demand: 1-2s latency (acceptable for 5% of queries)
+- [ ] Cross-exchange on-demand: <500ms latency (acceptable for 3% of queries)
+- [ ] Storage: ~18 GB total for Gold layer (OHLCV tables)
+- [ ] Can add new pre-computed metrics: Process documented for future additions
+
+### Alternatives Considered
+
+1. **Pre-compute everything**
+   - **Pro**: All queries sub-100ms
+   - **Con**: 100+ GB storage, 20+ tables, high maintenance burden
+   - **Rejected**: Violates 80/20 rule, expensive for minimal benefit
+
+2. **No pre-computation** (all on-demand)
+   - **Pro**: Simplest, most flexible
+   - **Con**: OHLCV queries 1-2s (too slow for 90% of queries)
+   - **Rejected**: Query performance unacceptable for primary use case
+
+3. **Pre-compute OHLCV + TWAP**
+   - **Pro**: Covers 95% of queries
+   - **Con**: TWAP requires interpolation, complex to maintain, only 5% of queries
+   - **Rejected**: Low ROI for 5% of queries
+
+### References
+
+- **Layered Gold Schema**: Decision #017
+- **Hybrid Processing**: Decision #018
+- **Pareto Principle**: https://en.wikipedia.org/wiki/Pareto_principle (80/20 rule)
+- **Related**: [Step 12: Gold Aggregation Job](./steps/step-12-gold-aggregation.md)
 
 ---
 

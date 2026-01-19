@@ -1,6 +1,6 @@
 # Phase 10 Progress Tracker
 
-**Last Updated**: 2026-01-19
+**Last Updated**: 2026-01-20
 **Overall Progress**: 11/16 steps complete (68.75%)
 **Status**: 🟡 In Progress - Phase 5 Streaming Jobs (Steps 10-11 ✅ COMPLETE and production ready, Step 12 pending)
 
@@ -315,25 +315,64 @@
 ---
 
 #### Step 12: Gold Aggregation Job ⬜
-- **Status**: Not Started
-- **Estimated**: 8 hours (revised from 16h)
+- **Status**: Not Started - Comprehensive implementation plan complete
+- **Estimated**: 16-20 hours (across 2-3 weeks in 3 phases)
 - **Actual**: -
 - **Started**: -
 - **Completed**: -
-- **Notes**: Single Gold job unions both Silver tables. Simpler due to per-exchange Bronze/Silver architecture.
+- **Notes**: Professional Gold layer with layered architecture: (1) Base unified table (gold_crypto_trades), (2) Pre-computed OHLCV candles (1m/5m/1h/1d), (3) Hybrid processing (streaming + batch). Designed for quantitative analytics workloads with 80/20 optimization strategy.
 
-**Acceptance Criteria**:
-- [ ] Job starts successfully (1 job: unified)
-- [ ] Reads from Silver: Both tables (silver_binance_trades, silver_kraken_trades)
-- [ ] Union works: Both exchanges combined
-- [ ] Deduplication works: No duplicate message_ids
-- [ ] Derived fields: exchange_date, exchange_hour populated correctly
-- [ ] Partitioning: Hourly partitions created
-- [ ] Latency: <60 seconds
-- [ ] Recovery works
+**Architecture**:
+- **Phase 1** (Week 1): Base gold_crypto_trades table (streaming, 5-min trigger, 1 core)
+- **Phase 2** (Week 2): 4 OHLCV tables (batch jobs, scheduled, 1 core)
+- **Phase 3** (Week 3): Testing, validation, documentation
+
+**Acceptance Criteria - Phase 1 (Base Table)**:
+- [ ] gold_crypto_trades table exists (17 fields: 15 V2 + exchange_date + exchange_hour)
+- [ ] Streaming job running with 1 core (5/6 cores total used in cluster)
+- [ ] No duplicates: message_id unique across all exchanges
+- [ ] Both exchanges unified: BINANCE + KRAKEN visible
+- [ ] Stateful deduplication: 1-hour watermark working
+- [ ] Derived partition fields: exchange_date, exchange_hour correct
+- [ ] Latency: p99 < 6 minutes (Kafka → Gold)
+- [ ] Hourly partitions created and queryable
+- [ ] Checkpoint-based recovery works
+
+**Acceptance Criteria - Phase 2 (OHLCV)**:
+- [ ] 4 OHLCV tables created (gold_ohlcv_1m/5m/1h/1d)
+- [ ] Batch scheduler running and triggering jobs on schedule
+- [ ] OHLCV invariants: 100% pass rate (high >= open/close, low <= open/close, etc.)
+- [ ] Query latency: p99 < 100ms (1-hour window, 5m candles)
+- [ ] Completeness: No gaps in candles detected
+- [ ] Backfill complete: Last 7 days of data populated
+- [ ] Retention policies enforced (90d/180d/1y/3y)
+
+**Acceptance Criteria - Phase 3 (Testing)**:
+- [ ] Unit tests: Deduplication, aggregation, window alignment
+- [ ] Integration tests: E2E Kafka → Gold, both exchanges unified
+- [ ] Performance tests: 10K trades/hour throughput, <100ms query latency
+- [ ] Data quality tests: OHLCV invariants automated, gap detection working
 
 **Implementation Files**:
-- `src/k2/spark/jobs/streaming/gold_aggregation.py`
+- `src/k2/spark/jobs/streaming/gold_unified_streaming.py` (~250 lines)
+- `src/k2/spark/jobs/create_gold_ohlcv_tables.py` (~300 lines)
+- `src/k2/spark/jobs/batch/gold_ohlcv_batch_1m.py` (~200 lines)
+- `src/k2/spark/jobs/batch/gold_ohlcv_batch_5m.py` (~200 lines)
+- `src/k2/spark/jobs/batch/gold_ohlcv_batch_1h.py` (~200 lines)
+- `src/k2/spark/jobs/batch/gold_ohlcv_batch_1d.py` (~200 lines)
+- `src/k2/spark/jobs/batch/scheduler/gold_batch_scheduler.py` (~150 lines)
+- `configs/gold_layer_config.yaml` (~50 lines)
+- `src/k2/spark/validation/ohlcv_validation.py` (~100 lines)
+- `docker-compose.yml` (+2 services: gold-unified-stream, gold-batch-scheduler)
+
+**Resource Allocation**:
+- Gold streaming: 1 core always on (5/6 cores used in steady state)
+- Gold batch: 1 core scheduled (6/6 cores during batch, <2 min/hour, 3% duty cycle)
+
+**Related Decisions**:
+- [Decision #017](./DECISIONS.md#decision-017): Layered Gold schema (unified + pre-computed OHLCV)
+- [Decision #018](./DECISIONS.md#decision-018): Hybrid processing (streaming + batch)
+- [Decision #019](./DECISIONS.md#decision-019): 80/20 pre-computation strategy
 
 ---
 
