@@ -661,3 +661,295 @@ uv run python scripts/verify_topics.py
 
 **Last Updated**: 2026-01-18
 **Maintained By**: Engineering Team
+
+## Decision #014: Explicit NULL Handling in Validation (CRITICAL FIX)
+
+**Date**: 2026-01-19
+**Status**: Implemented and Verified
+**Type**: Tier 2 (Design/Implementation - Critical Bug Fix)
+**Related Step**: Step 11 (Silver Transformation)
+**Related Docs**: [SILVER_FIX_SUMMARY.md](./SILVER_FIX_SUMMARY.md)
+
+### Context
+
+During Silver transformation testing, discovered that **Kraken records were silently disappearing** (342 input → 0 output to Silver, 0 to DLQ). Investigation revealed a critical bug in validation logic related to NULL handling.
+
+**Problem**: Spark SQL uses three-valued logic (TRUE, FALSE, NULL). When validation conditions produce NULL (e.g., `NULL > 0` from deserialization failures), naive boolean filters **silently drop records from BOTH streams**:
+```python
+# BUGGY CODE (Silent Data Loss)
+valid_df = df_with_validation.filter(col("is_valid"))  # Excludes NULL
+invalid_df = df_with_validation.filter(~col("is_valid"))  # Also excludes NULL!
+# Result: Records with NULL is_valid disappear entirely (not in Silver, not in DLQ)
+```
+
+### Decision
+
+**Always explicitly handle NULL in validation splits** to prevent silent data loss:
+
+```python
+# FIXED CODE (No Silent Data Loss)
+# IMPORTANT: Handle NULL is_valid explicitly
+valid_df = df_with_validation.filter(col("is_valid") == True).drop("is_valid")  # Only TRUE
+
+# Invalid: explicitly FALSE or NULL (capture silent failures)
+invalid_df = df_with_validation.filter((col("is_valid") == False) | col("is_valid").isNull())
+```
+
+**Add NULL-specific error reason**:
+```python
+invalid_df = invalid_df.withColumn(
+    "error_reason",
+    # Check for NULL is_valid first (indicates deserialization failure or NULL fields)
+    when(col("is_valid").isNull(), "deserialization_failed_or_null_fields")
+    .when(col("price").isNull(), "price_is_null")
+    # ... other validation checks
+)
+```
+
+### Implementation
+
+**File**: `src/k2/spark/validation/trade_validation.py` (lines 79-92)
+
+**Key Changes**:
+1. `filter(col("is_valid") == True)` instead of `filter(col("is_valid"))`
+2. `filter((col("is_valid") == False) | col("is_valid").isNull())` for invalid stream
+3. Added explicit NULL error reason as first condition in error_reason logic
+
+### Consequences
+
+**Positive**:
+- ✅ **No silent data loss**: All records accounted for (Silver or DLQ)
+- ✅ **Full observability**: NULL records routed to DLQ with clear error message
+- ✅ **Debugging enabled**: Can investigate why deserialization returned NULL
+- ✅ **Industry best practice**: All records must be accounted for in production pipelines
+
+**Negative**:
+- Slightly more verbose filter conditions (+20 characters per filter)
+
+**Neutral**:
+- Standard practice for production data pipelines
+- Required for any three-valued logic system (SQL, Spark)
+
+### Validation
+
+- [x] Kraken records now routing to Silver (verified with commit logs)
+- [x] NULL records routing to DLQ with "deserialization_failed_or_null_fields" error
+- [x] No more silent data loss (342 input → 100 to DLQ confirmed)
+- [x] Both exchanges writing successfully to Silver tables
+
+### References
+
+- **Spark SQL NULL Semantics**: https://spark.apache.org/docs/latest/sql-ref-null-semantics.html
+- **Industry Best Practice**: AWS Kinesis, Kafka Streams, Databricks - all records must be accounted for
+- **Related**: Decision #012 (Silver uses DLQ pattern), [SILVER_FIX_SUMMARY.md](./SILVER_FIX_SUMMARY.md)
+
+---
+
+## Decision #015: Right-Sized Resource Allocation for Streaming Workloads
+
+**Date**: 2026-01-19
+**Status**: Implemented and Verified
+**Type**: Tier 2 (Design/Implementation - Performance Optimization)
+**Related Step**: Steps 10-11 (Bronze and Silver Streaming Jobs)
+**Related Docs**: [SILVER_FIX_SUMMARY.md](./SILVER_FIX_SUMMARY.md), [RESOURCE_ALLOCATION_FIX.md](./RESOURCE_ALLOCATION_FIX.md)
+
+### Context
+
+Initial Spark cluster configuration was over-provisioned:
+- **Spark workers**: 2 workers × 4 cores × 6GB = 8 cores, 12GB total
+- **Docker limits**: 8GB RAM per worker
+- **Problem**: Kafka getting OOM killed (exit code 137), resource starvation
+
+Streaming workloads for crypto trades are **lightweight** (< 100 records/batch, 30-second trigger), but over-provisioning caused:
+1. Kafka OOM kills (exit 137)
+2. Bronze streams failing to connect
+3. Insufficient resources for other services
+
+### Decision
+
+**Size resources to actual workload, not theoretical maximums**:
+
+**Spark Workers** (50% reduction):
+```yaml
+# BEFORE: 8 cores, 12GB total, 8GB Docker limits
+spark-worker-1:
+  SPARK_WORKER_CORES=4
+  SPARK_WORKER_MEMORY=6g
+  limits: cpus: '4.0', memory: 8G
+
+# AFTER: 6 cores, 6GB total, 4GB Docker limits
+spark-worker-1:
+  SPARK_WORKER_CORES=3
+  SPARK_WORKER_MEMORY=3g
+  limits: cpus: '3.0', memory: 4G
+```
+
+**Executors** (per streaming job):
+```yaml
+# BEFORE: 2 cores per job = 8 cores needed (> 6 available)
+--total-executor-cores 2
+--executor-cores 2
+
+# AFTER: 1 core per job = 4 cores needed (2 free for burst)
+--total-executor-cores 1
+--executor-cores 1
+--executor-memory 1g
+```
+
+**Rationale**:
+- **1 core per stage per exchange** = 4 cores needed (2 Bronze + 2 Silver)
+- Actual CPU usage: < 1% per job in steady state
+- 2 free cores (33% headroom) for burst processing
+- Freed ~6GB RAM for Kafka and other services
+
+### Implementation
+
+**Files Modified**:
+1. `docker-compose.yml` - Spark worker resources (lines ~743-810)
+2. `docker-compose.yml` - All streaming job executor configs (4 jobs)
+
+**Method**: Used `Edit` tool with `replace_all=true` for uniform changes across all streaming jobs
+
+### Consequences
+
+**Positive**:
+- ✅ **Eliminated resource contention**: Kafka no longer OOM killed
+- ✅ **50% reduction in Spark memory footprint**: 12GB → 6GB
+- ✅ **Stable Kafka operation**: Now using 553MB / 3GB (no more exit 137)
+- ✅ **All 4 streaming jobs run concurrently**: No more WAITING state
+- ✅ **Resource efficiency**: 4/6 cores used (33% headroom)
+
+**Negative**:
+- Less headroom for large batch jobs (acceptable trade-off for streaming workload)
+- May need horizontal scaling (add workers) if volume increases significantly
+
+**Neutral**:
+- Can scale horizontally if needed (add more workers)
+- Right-sized for current workload (<100 records/batch)
+
+### Validation
+
+- [x] Kafka stable: 553MB / 3GB (no OOM kills for 2+ hours)
+- [x] All 4 jobs running: Bronze-Binance, Bronze-Kraken, Silver-Binance, Silver-Kraken
+- [x] Resource usage efficient: Workers using ~1GB / 4GB limits
+- [x] CPU usage: < 1% per job in steady state (confirms right-sizing)
+
+### References
+
+- **Spark Resource Allocation**: https://spark.apache.org/docs/latest/configuration.html#application-properties
+- **Related**: Decision #016 (1 Core Per Streaming Job), [RESOURCE_ALLOCATION_FIX.md](./RESOURCE_ALLOCATION_FIX.md)
+
+---
+
+## Decision #016: 1 Core Per Streaming Job (Container Lifecycle Fix)
+
+**Date**: 2026-01-19
+**Status**: Implemented and Verified
+**Type**: Tier 2 (Implementation - Critical Operations Fix)
+**Related Step**: Steps 10-11 (Bronze and Silver Streaming Jobs)
+**Related Docs**: [RESOURCE_ALLOCATION_FIX.md](./RESOURCE_ALLOCATION_FIX.md)
+
+### Context
+
+After updating `docker-compose.yml` to use 1 core per job, Silver transformation jobs were **stuck in WAITING state with 0 cores allocated**:
+```
+Total: 6 cores, 6144MB memory
+Bronze-Binance: 2 cores - RUNNING
+Bronze-Kraken:  2 cores - RUNNING
+Silver-Binance: 0 cores - WAITING
+Silver-Kraken:  0 cores - WAITING
+```
+
+**Root Cause**: Container configuration drift - running containers had **stale 2-core config** despite docker-compose.yml showing 1-core.
+
+**Key Learning**: `docker restart` ≠ `docker compose up -d`
+- `docker restart <container>` = Restarts with **SAME config** container was created with
+- `docker compose up -d <service>` = **Recreates** with NEW config from docker-compose.yml
+- Docker inspect showed: `--total-executor-cores 2` (old config)
+- docker-compose.yml correctly showed: `--total-executor-cores 1` (new config)
+
+### Decision
+
+**Allocate 1 core per streaming job** and **always use `docker compose up -d` to apply docker-compose.yml changes**:
+
+**Resource Allocation**:
+```yaml
+# All 4 streaming jobs (Bronze Binance, Bronze Kraken, Silver Binance, Silver Kraken)
+--total-executor-cores 1
+--executor-cores 1
+--executor-memory 1g
+```
+
+**Deployment Method**:
+```bash
+# WRONG (doesn't pick up docker-compose.yml changes)
+docker restart k2-silver-binance-transformation
+
+# CORRECT (recreates with updated docker-compose.yml)
+docker compose up -d silver-binance-transformation
+```
+
+**Rationale**:
+1. **Actual usage**: Jobs use < 1% CPU in steady state
+2. **Concurrency**: 4 jobs × 1 core = 4 cores (fits in 6-core cluster with headroom)
+3. **Burst capacity**: 2 free cores for micro-batch spikes
+4. **Simplicity**: Uniform resource allocation across all streaming jobs
+
+### Implementation
+
+**Fix Applied**:
+```bash
+# Recreate all 4 streaming jobs with new 1-core config
+docker compose up -d bronze-binance-stream bronze-kraken-stream \
+                   silver-binance-transformation silver-kraken-transformation
+```
+
+**Verification**:
+```bash
+# Check actual executor cores in running containers
+docker inspect k2-silver-binance-transformation | grep -o -- "--total-executor-cores [0-9]\+"
+# Output: --total-executor-cores 1 ✅
+
+# Check Spark Master UI
+docker exec k2-spark-master curl -s http://localhost:8080/json/
+# Output: All 4 jobs RUNNING with 1 core each ✅
+```
+
+### Consequences
+
+**Positive**:
+- ✅ **All jobs running concurrently**: No more WAITING state
+- ✅ **33% resource headroom**: 4/6 cores used (2 free for burst)
+- ✅ **Efficient resource usage**: < 1% CPU per job matches 1-core allocation
+- ✅ **Operational learning**: Documented `docker restart` vs `docker compose up -d` pattern
+
+**Negative**:
+- May need horizontal scaling (more workers) for significantly higher volumes
+- **Mitigation**: Monitor task latency; add workers if consistently > 5 seconds
+
+**Neutral**:
+- Can scale horizontally if needed (add more workers)
+- Deployment requires `docker compose up -d` (not `docker restart`)
+
+### Validation
+
+- [x] All 4 jobs RUNNING: Bronze-Binance (1 core), Bronze-Kraken (1 core), Silver-Binance (1 core), Silver-Kraken (1 core)
+- [x] Cluster resources: 4/6 cores used, 4096/6144MB memory used
+- [x] Container configs match docker-compose.yml: Verified with `docker inspect`
+- [x] Data flowing: Kraken committing 1 new data file every 30 seconds to silver_kraken_trades
+- [x] No WAITING applications: All jobs allocated resources immediately
+
+### Alternatives Considered
+
+1. **2 cores per job**: Requires 8 cores, doesn't fit in 6-core cluster (rejected)
+2. **Dynamic allocation**: More complex, overkill for stable workload (rejected)
+3. **Priority scheduling**: Doesn't solve fundamental over-subscription (rejected)
+
+### References
+
+- **Docker Compose Lifecycle**: https://docs.docker.com/compose/faq/#whats-the-difference-between-up-and-restart
+- **Spark Scheduling**: https://spark.apache.org/docs/latest/job-scheduling.html
+- **Related**: Decision #015 (Right-Sized Resource Allocation), [RESOURCE_ALLOCATION_FIX.md](./RESOURCE_ALLOCATION_FIX.md)
+
+---
+

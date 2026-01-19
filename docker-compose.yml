@@ -747,8 +747,8 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_CORES=4
-      - SPARK_WORKER_MEMORY=6g
+      - SPARK_WORKER_CORES=3
+      - SPARK_WORKER_MEMORY=3g
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
@@ -768,11 +768,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '4.0'
-          memory: 8G
-        reservations:
-          cpus: '2.0'
+          cpus: '3.0'
           memory: 4G
+        reservations:
+          cpus: '1.5'
+          memory: 2G
 
   # SPARK WORKER 2
   spark-worker-2:
@@ -782,8 +782,8 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_CORES=4
-      - SPARK_WORKER_MEMORY=6g
+      - SPARK_WORKER_CORES=3
+      - SPARK_WORKER_MEMORY=3g
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
@@ -803,11 +803,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '4.0'
-          memory: 8G
-        reservations:
-          cpus: '2.0'
+          cpus: '3.0'
           memory: 4G
+        reservations:
+          cpus: '1.5'
+          memory: 2G
 
   # ============================================================================
   # BRONZE STREAMING JOBS - Kafka to Iceberg Raw Ingestion
@@ -842,8 +842,9 @@ services:
     command: >
       /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
-      --total-executor-cores 2
-      --executor-cores 2
+      --total-executor-cores 1
+      --executor-cores 1
+      --executor-memory 1g
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
@@ -881,12 +882,105 @@ services:
     command: >
       /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
-      --total-executor-cores 2
-      --executor-cores 2
+      --total-executor-cores 1
+      --executor-cores 1
+      --executor-memory 1g
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
       /opt/k2/src/k2/spark/jobs/streaming/bronze_kraken_ingestion.py
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # ============================================================================
+  # SILVER TRANSFORMATION JOBS - Validated Data (Medallion Architecture)
+  # ============================================================================
+  # Industry Best Practice: Silver layer validates and deserializes Bronze data
+  # - Avro deserialization with Schema Registry
+  # - Data quality validation (DLQ pattern for failures)
+  # - Metadata enrichment (validation_timestamp, schema_id)
+
+  silver-binance-transformation:
+    image: apache/spark:3.5.3
+    container_name: k2-silver-binance-transformation
+    hostname: silver-binance-transformation
+    environment:
+      - AWS_REGION=us-east-1
+    volumes:
+      - ./src:/opt/k2/src
+      - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+      bronze-binance-stream:
+        condition: service_started
+      schema-registry-1:
+        condition: service_healthy
+    networks:
+      - k2-network
+    restart: unless-stopped
+    command: >
+      /opt/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --total-executor-cores 1
+      --executor-cores 1
+      --executor-memory 1g
+      --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
+      --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
+      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
+      /opt/k2/src/k2/spark/jobs/streaming/silver_binance_transformation_v3.py
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  silver-kraken-transformation:
+    image: apache/spark:3.5.3
+    container_name: k2-silver-kraken-transformation
+    hostname: silver-kraken-transformation
+    environment:
+      - AWS_REGION=us-east-1
+    volumes:
+      - ./src:/opt/k2/src
+      - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+      bronze-kraken-stream:
+        condition: service_started
+      schema-registry-1:
+        condition: service_healthy
+    networks:
+      - k2-network
+    restart: unless-stopped
+    command: >
+      /opt/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --total-executor-cores 1
+      --executor-cores 1
+      --executor-memory 1g
+      --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
+      --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
+      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
+      /opt/k2/src/k2/spark/jobs/streaming/silver_kraken_transformation_v3.py
     deploy:
       resources:
         limits:

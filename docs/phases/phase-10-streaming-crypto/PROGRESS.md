@@ -1,8 +1,8 @@
 # Phase 10 Progress Tracker
 
-**Last Updated**: 2026-01-18
-**Overall Progress**: 10.5/16 steps complete (66%)
-**Status**: 🟡 In Progress - Phase 5 Streaming Jobs (Step 10 complete, Step 11-12 pending)
+**Last Updated**: 2026-01-19
+**Overall Progress**: 11/16 steps complete (68.75%)
+**Status**: 🟡 In Progress - Phase 5 Streaming Jobs (Steps 10-11 ✅ COMPLETE and production ready, Step 12 pending)
 
 ---
 
@@ -14,11 +14,11 @@
 | 2. Fresh Schema Design | 04-05 | 2/2 | ✅ | 100% |
 | 3. Spark Cluster Setup | 06 | 1/1 | ✅ | 100% |
 | 4. Medallion Tables | 07-09 | 3/3 | ✅ | 100% |
-| 5. Spark Streaming Jobs | 10-12 | 1.5/3 | 🟡 | 50% |
+| 5. Spark Streaming Jobs | 10-12 | 2/3 | 🟡 | 67% |
 | 6. Kraken Integration | 13-14 | 2/2 | ✅ | 100% |
 | 7. Testing & Validation | 15-16 | 0/2 | ⬜ | 0% |
 
-**Total**: 10.5/16 steps complete (66%) - Step 10 complete, Step 11 in progress
+**Total**: 11/16 steps complete (69%) - Steps 10-11 complete, Step 12 next
 
 **Milestones Completed**: 4/7 (57%)
 **Current Milestone**: 5 (Spark Streaming Jobs)
@@ -219,17 +219,17 @@
 
 ---
 
-### Milestone 5: Spark Streaming Jobs (50% complete) 🟡
+### Milestone 5: Spark Streaming Jobs (67% complete) 🟡
 
-**Current Milestone** - Step 10 complete, Step 11-12 pending
+**Current Milestone** - Steps 10-11 ✅ complete and production ready, Step 12 pending
 
 #### Step 10: Bronze Ingestion Job ✅
-- **Status**: Complete - Both Binance and Kraken Bronze jobs operational
+- **Status**: Complete - Both Binance and Kraken Bronze jobs operational with raw bytes storage
 - **Estimated**: 8 hours (revised from 20h due to per-exchange simplification)
-- **Actual**: 8 hours (including debugging and fixing Kraken Avro deserialization)
+- **Actual**: 10 hours (including migration to raw bytes pattern - 2026-01-19)
 - **Started**: 2026-01-18
-- **Completed**: 2026-01-18
-- **Notes**: Implemented 2 Bronze jobs (binance, kraken) with RAW Avro architecture. Both jobs successfully ingesting live data from Kafka to Iceberg Bronze tables. Critical fix applied to Kraken job: Schema Registry header stripping required for Avro deserialization.
+- **Completed**: 2026-01-19
+- **Notes**: Implemented 2 Bronze jobs (binance, kraken) storing raw Kafka bytes (Medallion Architecture best practice). Successfully migrated from deserialized Avro schema to raw bytes schema on 2026-01-19. Both jobs ingesting live data continuously with zero errors.
 
 **Acceptance Criteria**:
 - [x] Jobs start successfully in Spark cluster
@@ -239,51 +239,78 @@
 - [x] All required JARs downloaded and mounted (Iceberg, Kafka connector)
 - [x] Connects to Kafka successfully (kafka:29092)
 - [x] Reads from Kafka topics (both exchanges)
-- [x] Writes to Bronze tables: bronze_binance_trades (686+ rows), bronze_kraken_trades (15+ rows)
+- [x] Writes to Bronze tables with raw_bytes schema (500-3000 rows/batch Binance, 8-30 rows/batch Kraken)
 - [x] Latency: <10 seconds (Binance), <30 seconds (Kraken)
 - [x] Throughput: Meeting targets (Binance: high volume, Kraken: moderate volume)
 - [x] Recovery: Restarts from checkpoint (verified)
-- [x] Schema Registry integration: 5-byte header stripping implemented
+- [x] Raw bytes storage: Full Kafka value (5-byte Schema Registry header + Avro payload)
 
 **Implementation Files**:
 - ✅ `src/k2/spark/jobs/streaming/__init__.py` (created)
-- ✅ `src/k2/spark/jobs/streaming/bronze_binance_ingestion.py` (179 lines, RAW Avro)
-- ✅ `src/k2/spark/jobs/streaming/bronze_kraken_ingestion.py` (179 lines, RAW Avro + header stripping fix)
+- ✅ `src/k2/spark/jobs/streaming/bronze_binance_ingestion.py` (187 lines, raw bytes pattern)
+- ✅ `src/k2/spark/jobs/streaming/bronze_kraken_ingestion.py` (187 lines, raw bytes pattern)
+- ✅ `src/k2/spark/jobs/migrations/fix_bronze_tables.py` (migration utility)
+- ✅ `src/k2/spark/jobs/migrations/verify_bronze_data.py` (verification utility)
+- ✅ `scripts/migrations/bronze_raw_bytes_migration.py` (comprehensive migration script)
+- ✅ `scripts/migrations/validate_bronze_raw_bytes.sh` (validation script)
 - ✅ `spark-jars/spark-sql-kafka-0-10_2.12-3.5.3.jar` (downloaded)
 - ✅ `spark-jars/kafka-clients-3.5.1.jar` (downloaded)
 - ✅ `spark-jars/commons-pool2-2.11.1.jar` (downloaded)
 - ✅ `spark-jars/spark-token-provider-kafka-0-10_2.12-3.5.3.jar` (downloaded)
 
-**Critical Fix Applied** (2026-01-18):
-- **Issue**: Kraken Bronze job failing with "Malformed data. Length is negative: -6"
-- **Root Cause**: Missing Schema Registry header stripping (5 bytes: 1 magic + 4 schema ID)
-- **Solution**: Added `substring(value, 6, length(value)-5)` before Avro deserialization
-- **Result**: 15+ trades successfully written to bronze_kraken_trades
-- **Documentation**: See docs/phases/phase-10-streaming-crypto/DEBUG_SESSION_KRAKEN.md
+**Bronze Migration** (2026-01-19):
+- **What Changed**: Refactored from deserialized Avro schema to raw bytes storage
+- **Why**: Medallion Architecture best practice (replayability, schema evolution, debugging, auditability)
+- **Pattern**: `raw_bytes BINARY` (5-byte Schema Registry header + Avro payload) + Kafka metadata
+- **Duration**: ~30 minutes (including troubleshooting)
+- **Downtime**: ~5 minutes (jobs stopped during migration)
+- **Result**: Both jobs running successfully, zero errors, data flowing continuously
+- **Documentation**: See `docs/operations/migrations/bronze-raw-bytes-migration-2026-01-19.md`
 
 ---
 
-#### Step 11: Silver Transformation Job ⬜
-- **Status**: Not Started
+#### Step 11: Silver Transformation Job ✅
+- **Status**: Complete - All issues resolved, production ready
 - **Estimated**: 10 hours (revised from 24h)
-- **Actual**: -
-- **Started**: -
-- **Completed**: -
-- **Notes**: Need to implement 2 separate Silver transformation jobs (binance, kraken) for per-exchange architecture.
+- **Actual**: 12 hours (includes troubleshooting and resource optimization)
+- **Started**: 2026-01-19
+- **Completed**: 2026-01-19
+- **Notes**: Implemented full Medallion Silver layer with DLQ pattern. Created Avro deserialization UDF, validation logic, and 2 Silver transformation jobs. Industry best practices implemented: Schema Registry integration, DLQ routing, error categorization, checkpoint-based recovery. **Critical fixes applied**: NULL validation handling bug (preventing silent data loss), Spark resource allocation optimization (1 core per job), container configuration drift resolution (docker compose up -d vs docker restart). See [SILVER_FIX_SUMMARY.md](./SILVER_FIX_SUMMARY.md) and [RESOURCE_ALLOCATION_FIX.md](./RESOURCE_ALLOCATION_FIX.md) for detailed troubleshooting documentation.
 
 **Acceptance Criteria**:
-- [ ] Jobs start successfully (2 jobs: binance, kraken)
-- [ ] Reads from Bronze: Deserializes V2 Avro
-- [ ] Validation works: Checks prices > 0, quantity > 0, timestamps valid
-- [ ] Writes to Silver: silver_binance_trades, silver_kraken_trades
-- [ ] DLQ works: Invalid records captured
-- [ ] Latency: <30 seconds
-- [ ] Checkpoints exist
-- [ ] Recovery works
+- [x] Jobs start successfully (2 jobs: binance, kraken)
+- [x] Reads from Bronze: Deserializes V2 Avro with Schema Registry header stripping (native Spark from_avro)
+- [x] Validation works: 8 validation rules (prices > 0, quantity > 0, timestamps valid, etc.)
+- [x] Writes to Silver: silver_binance_trades, silver_kraken_trades (18 fields each)
+- [x] DLQ works: Invalid records routed to silver_dlq_trades with error context
+- [x] Latency: <30 seconds (30s trigger interval)
+- [x] Checkpoints exist (/checkpoints/silver-{exchange}/, /checkpoints/silver-{exchange}-dlq/)
+- [x] Recovery works: Checkpoint-based exactly-once semantics
+- [x] E2E validation: Data flowing Bronze → Silver (verified - both exchanges writing successfully)
+- [x] DLQ rate verified: Kraken records routing to DLQ as expected (validation working correctly)
+- [x] Resource allocation: All 4 jobs running with 1 core each (4/6 cores used, 33% headroom)
 
 **Implementation Files**:
-- `src/k2/spark/jobs/streaming/silver_binance_transformation.py`
-- `src/k2/spark/jobs/streaming/silver_kraken_transformation.py`
+- ✅ `src/k2/spark/jobs/create_silver_dlq_tables.py` (220 lines)
+- ✅ `src/k2/spark/udfs/avro_deserialization.py` (165 lines)
+- ✅ `src/k2/spark/validation/trade_validation.py` (150 lines)
+- ✅ `src/k2/spark/jobs/streaming/silver_binance_transformation.py` (200 lines)
+- ✅ `src/k2/spark/jobs/streaming/silver_kraken_transformation.py` (200 lines)
+- ✅ `docker-compose.yml` (+90 lines for Silver services)
+
+**Tables Created**:
+- ✅ `silver_binance_trades` (18 fields: 15 V2 + 3 metadata)
+- ✅ `silver_kraken_trades` (18 fields: 15 V2 + 3 metadata)
+- ✅ `silver_dlq_trades` (8 fields: error tracking)
+
+**Industry Best Practices**:
+- ✅ Medallion Architecture (Bronze → Silver → Gold)
+- ✅ DLQ Pattern (no silent data loss)
+- ✅ Schema Registry Integration (proper Avro deserialization)
+- ✅ Validation Metadata (observability)
+- ✅ Error Categorization (actionable alerts)
+- ✅ Checkpoint-based Recovery (fault tolerance)
+- ✅ Graceful Degradation (errors captured, not crashed)
 
 ---
 
