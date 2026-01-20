@@ -141,6 +141,12 @@ def create_streaming_spark_session(
         .config("spark.sql.streaming.checkpointLocation", checkpoint_location)
         .config("spark.sql.streaming.schemaInference", "true")
         .config("spark.sql.streaming.minBatchesToRetain", "10")  # Keep last 10 checkpoints
+        # S3A Configuration (Hadoop S3A for checkpoints)
+        .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000")  # MinIO endpoint
+        .config("spark.hadoop.fs.s3a.access.key", "admin")  # MinIO access key
+        .config("spark.hadoop.fs.s3a.secret.key", "password")  # MinIO secret key
+        .config("spark.hadoop.fs.s3a.path.style.access", "true")  # Path-style access
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")  # S3A implementation
         # S3/MinIO Connection Pooling (prevents connection exhaustion)
         .config("spark.hadoop.fs.s3a.connection.maximum", "50")  # Max S3 connections
         .config("spark.hadoop.fs.s3a.threads.max", "20")  # Max upload threads
