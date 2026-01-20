@@ -78,7 +78,7 @@ def main():
     # Create Spark session with production-ready configuration
     spark = create_streaming_spark_session(
         app_name="K2-Bronze-Binance-Ingestion",
-        checkpoint_location="s3://warehouse/checkpoints/bronze-binance/"
+        checkpoint_location="s3a://warehouse/checkpoints/bronze-binance/"
     )
 
     try:
@@ -130,7 +130,7 @@ def main():
             .format("iceberg")
             .outputMode("append")
             .trigger(processingTime="10 seconds")
-            .option("checkpointLocation", "s3://warehouse/checkpoints/bronze-binance/")
+            .option("checkpointLocation", "s3a://warehouse/checkpoints/bronze-binance/")
             .option("fanout-enabled", "true")
             .toTable("iceberg.market_data.bronze_binance_trades")
         )
