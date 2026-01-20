@@ -44,7 +44,7 @@ def create_spark_session(
         - S3 Endpoint: http://minio:9000 (Docker internal network)
         - Credentials: From environment or defaults (admin/password)
     """
-    return (
+    session = (
         SparkSession.builder.appName(app_name)
         .master(master)
         # Iceberg Catalog Configuration
@@ -66,7 +66,12 @@ def create_spark_session(
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
         # Get or create session
         .getOrCreate()
-    ).setLogLevel(log_level)
+    )
+
+    # Set log level on the SparkContext
+    session.sparkContext.setLogLevel(log_level)
+
+    return session
 
 
 def create_streaming_spark_session(
@@ -103,11 +108,30 @@ def create_streaming_spark_session(
         ...     .option("subscribe", "market.crypto.trades.binance") \\
         ...     .load()
     """
+    # Build session with all configurations (base + streaming) before getOrCreate()
     session = (
-        create_spark_session(app_name, master, log_level)
+        SparkSession.builder.appName(app_name)
+        .master(master)
+        # Iceberg Catalog Configuration (base configs)
+        .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
+        .config("spark.sql.catalog.iceberg.type", "rest")
+        .config("spark.sql.catalog.iceberg.uri", "http://iceberg-rest:8181")
+        .config("spark.sql.catalog.iceberg.warehouse", "s3://warehouse/")
+        # S3 Configuration (MinIO)
+        .config("spark.sql.catalog.iceberg.s3.endpoint", "http://minio:9000")
+        .config("spark.sql.catalog.iceberg.s3.access-key-id", "admin")
+        .config("spark.sql.catalog.iceberg.s3.secret-access-key", "password")
+        .config("spark.sql.catalog.iceberg.s3.path-style-access", "true")
+        # Default to Iceberg catalog for SQL queries
+        .config("spark.sql.defaultCatalog", "iceberg")
+        # Iceberg table properties
+        .config("spark.sql.catalog.iceberg.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+        # Performance tuning (base)
+        .config("spark.sql.adaptive.enabled", "true")
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
         # Memory Management (prevents OOM in long-running streams)
-        .config("spark.memory.fraction", "0.75")  # 75% heap for execution/storage (up from 60%)
-        .config("spark.memory.storageFraction", "0.3")  # 30% of memory.fraction for caching (down from 50%)
+        .config("spark.memory.fraction", "0.75")  # 75% heap for execution/storage
+        .config("spark.memory.storageFraction", "0.3")  # 30% of memory.fraction for caching
         .config("spark.executor.memoryOverhead", "384m")  # Off-heap memory for containers
         .config("spark.driver.memoryOverhead", "384m")  # Driver off-heap memory
         # Streaming Backpressure (prevents Kafka consumer lag)
@@ -126,6 +150,11 @@ def create_streaming_spark_session(
         .config("spark.sql.catalog.iceberg.write.metadata.delete-after-commit.enabled", "true")
         .config("spark.sql.catalog.iceberg.write.metadata.previous-versions-max", "5")  # Keep 5 versions
         .config("spark.sql.catalog.iceberg.write.target-file-size-bytes", "134217728")  # 128MB files
+        # Get or create session
+        .getOrCreate()
     )
+
+    # Set log level on the SparkContext
+    session.sparkContext.setLogLevel(log_level)
 
     return session
