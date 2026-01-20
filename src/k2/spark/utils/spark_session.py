@@ -64,6 +64,7 @@ def create_spark_session(
         # Performance tuning
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+        .config("spark.sql.shuffle.partitions", "20")  # Reduce from default 200 for streaming
         # Get or create session
         .getOrCreate()
     )

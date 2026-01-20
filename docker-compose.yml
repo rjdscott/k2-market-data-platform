@@ -757,8 +757,8 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_CORES=2
-      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_CORES=3
+      - SPARK_WORKER_MEMORY=4g
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
@@ -792,8 +792,8 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_CORES=2
-      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_CORES=3
+      - SPARK_WORKER_MEMORY=4g
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
@@ -1003,6 +1003,58 @@ services:
         reservations:
           cpus: '0.5'
           memory: 900M
+
+  # ============================================================================
+  # GOLD AGGREGATION JOB - Unified Analytics (Medallion Architecture)
+  # ============================================================================
+  # Industry Best Practice: Gold layer provides unified cross-exchange analytics
+  # - Union of Silver tables (multi-exchange view)
+  # - Deduplication by message_id (exactly-once semantics)
+  # - Watermarking for late data handling (5-minute grace period)
+  # - Hourly partitioning for efficient time-series queries
+
+  gold-aggregation:
+    image: apache/spark:3.5.3
+    container_name: k2-gold-aggregation
+    hostname: gold-aggregation
+    environment:
+      - AWS_REGION=us-east-1
+    volumes:
+      - ./src:/opt/k2/src
+      - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+      silver-binance-transformation:
+        condition: service_started
+      silver-kraken-transformation:
+        condition: service_started
+    networks:
+      - k2-network
+    restart: unless-stopped
+    command: >
+      /opt/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --total-executor-cores 1
+      --executor-cores 1
+      --executor-memory 1536m
+      --driver-memory 1024m
+      --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
+      --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
+      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar
+      /opt/k2/src/k2/spark/jobs/streaming/gold_aggregation.py
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3200M
+        reservations:
+          cpus: '0.5'
+          memory: 1600M
 
   # ============================================================================
   # CHECKPOINT CLEANUP SERVICE - Prevents Metadata Accumulation
