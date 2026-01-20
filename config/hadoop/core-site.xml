@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+    <!-- S3A Filesystem Implementation -->
+    <property>
+        <name>fs.s3a.impl</name>
+        <value>org.apache.hadoop.fs.s3a.S3AFileSystem</value>
+    </property>
+
+    <!-- Map s3:// scheme to S3A (for compatibility) -->
+    <property>
+        <name>fs.s3.impl</name>
+        <value>org.apache.hadoop.fs.s3a.S3AFileSystem</value>
+    </property>
+
+    <!-- MinIO Endpoint -->
+    <property>
+        <name>fs.s3a.endpoint</name>
+        <value>http://minio:9000</value>
+    </property>
+
+    <!-- S3A Credentials -->
+    <property>
+        <name>fs.s3a.access.key</name>
+        <value>minioadmin</value>
+    </property>
+
+    <property>
+        <name>fs.s3a.secret.key</name>
+        <value>minioadmin</value>
+    </property>
+
+    <!-- Path Style Access (required for MinIO) -->
+    <property>
+        <name>fs.s3a.path.style.access</name>
+        <value>true</value>
+    </property>
+
+    <!-- Disable SSL (MinIO uses HTTP) -->
+    <property>
+        <name>fs.s3a.connection.ssl.enabled</name>
+        <value>false</value>
+    </property>
+
+    <!-- Region (required for endpoint) -->
+    <property>
+        <name>fs.s3a.endpoint.region</name>
+        <value>us-east-1</value>
+    </property>
+
+    <!-- AWS Credentials Provider (use SimpleAWSCredentialsProvider for static credentials) -->
+    <property>
+        <name>fs.s3a.aws.credentials.provider</name>
+        <value>org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider</value>
+    </property>
+
+    <!-- Disable AWS SDK credential chain (prevents AWS STS calls) -->
+    <property>
+        <name>fs.s3a.signing-algorithm</name>
+        <value>S3SignerType</value>
+    </property>
+
+    <!-- S3A Performance Tuning -->
+    <property>
+        <name>fs.s3a.connection.maximum</name>
+        <value>100</value>
+    </property>
+
+    <property>
+        <name>fs.s3a.threads.max</name>
+        <value>50</value>
+    </property>
+
+    <property>
+        <name>fs.s3a.connection.establish.timeout</name>
+        <value>5000</value>
+    </property>
+
+    <property>
+        <name>fs.s3a.connection.timeout</name>
+        <value>200000</value>
+    </property>
+
+    <!-- Fast Upload Settings -->
+    <property>
+        <name>fs.s3a.fast.upload</name>
+        <value>true</value>
+    </property>
+
+    <property>
+        <name>fs.s3a.fast.upload.buffer</name>
+        <value>disk</value>
+    </property>
+
+    <property>
+        <name>fs.s3a.multipart.size</name>
+        <value>104857600</value> <!-- 100 MB -->
+    </property>
+
+    <property>
+        <name>fs.s3a.block.size</name>
+        <value>134217728</value> <!-- 128 MB -->
+    </property>
+</configuration>

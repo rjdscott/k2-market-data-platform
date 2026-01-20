@@ -54,7 +54,7 @@ class TestDockerStackHealth:
 
         # Check if Schema Registry services are available
         schema_services = [s for s in minimal_stack.keys() if "schema-registry" in s]
-        assert len(schema_services) >= 2, "Expected at least 2 Schema Registry instances"
+        assert len(schema_services) >= 1, "Expected at least 1 Schema Registry instance"
 
         # Test Schema Registry HTTP endpoints (if accessible)
         for service_name in schema_services:
@@ -232,7 +232,7 @@ class TestDockerStackHealth:
             "minio": [9000, 9001],
             "k2-kafka-ui": [8080],
             "k-schema-registry-1": [8081],
-            "k-schema-registry-2": [8082],
+            # "k-schema-registry-2": [8082],  # Removed for resource optimization
             "k-iceberg-rest": [8181],
             "k-grafana": [3000],
             "k-prometheus": [9090],
