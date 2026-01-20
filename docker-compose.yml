@@ -63,7 +63,7 @@ services:
       KAFKA_COMPRESSION_TYPE: 'lz4'              # Fast compression for market data
 
       # Resource Management
-      KAFKA_HEAP_OPTS: "-Xmx2G -Xms2G"           # Fixed heap prevents GC pauses
+      KAFKA_HEAP_OPTS: "-Xmx1G -Xms1G"           # Fixed heap prevents GC pauses
 
       # Monitoring
       KAFKA_JMX_PORT: 9997
@@ -107,11 +107,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 3G
-        reservations:
-          cpus: '1.0'
+          cpus: '1.5'
           memory: 2G
+        reservations:
+          cpus: '0.75'
+          memory: 1G
 
   # ============================================================================
   # SCHEMA REGISTRY - Schema Evolution & Data Governance (Multi-Node)
@@ -168,52 +168,60 @@ services:
           cpus: '0.5'
           memory: 768M
 
-  schema-registry-2:
-    image: confluentinc/cp-schema-registry:8.1.1
-    container_name: k2-schema-registry-2
-    hostname: schema-registry-2
-    ports:
-      - "8082:8081"
-    environment:
-      SCHEMA_REGISTRY_HOST_NAME: schema-registry-2
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
-      SCHEMA_REGISTRY_LISTENERS: 'http://0.0.0.0:8081'
-
-      # Schema Compatibility
-      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: 'BACKWARD'
-
-      # Performance
-      SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx512M -Xms512M"
-
-      # Multi-node leader election configuration (same group.id)
-      SCHEMA_REGISTRY_KAFKASTORE_GROUP_ID: "schema-registry-cluster"
-      SCHEMA_REGISTRY_LEADER_ELIGIBILITY: "true"
-
-      # Consumer group coordination timeouts
-      SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 90000
-      SCHEMA_REGISTRY_REQUEST_TIMEOUT_MS: 40000
-      SCHEMA_REGISTRY_SESSION_TIMEOUT_MS: 30000
-
-      # Topic creation settings (ensures _schemas is compacted)
-      SCHEMA_REGISTRY_KAFKASTORE_TOPIC: "_schemas"
-      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
-      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_CONFIG: "cleanup.policy=compact,segment.ms=3600000,min.cleanable.dirty.ratio=0.01"
-    depends_on:
-      kafka:
-        condition: service_healthy
-    networks:
-      - k2-network
-    healthcheck:
-      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/8081' || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 768M
+  # ============================================================================
+  # SCHEMA REGISTRY 2 - DISABLED FOR RESOURCE OPTIMIZATION
+  # ============================================================================
+  # Commented out to reduce resource usage (0.5 CPU, 768MB RAM saved)
+  # Single Schema Registry instance is sufficient for demo/dev environments
+  # Multi-node setup was designed for HA in production
+  # To re-enable: uncomment this entire block
+  # ============================================================================
+  # schema-registry-2:
+  #   image: confluentinc/cp-schema-registry:8.1.1
+  #   container_name: k2-schema-registry-2
+  #   hostname: schema-registry-2
+  #   ports:
+  #     - "8082:8081"
+  #   environment:
+  #     SCHEMA_REGISTRY_HOST_NAME: schema-registry-2
+  #     SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
+  #     SCHEMA_REGISTRY_LISTENERS: 'http://0.0.0.0:8081'
+  #
+  #     # Schema Compatibility
+  #     SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: 'BACKWARD'
+  #
+  #     # Performance
+  #     SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx512M -Xms512M"
+  #
+  #     # Multi-node leader election configuration (same group.id)
+  #     SCHEMA_REGISTRY_KAFKASTORE_GROUP_ID: "schema-registry-cluster"
+  #     SCHEMA_REGISTRY_LEADER_ELIGIBILITY: "true"
+  #
+  #     # Consumer group coordination timeouts
+  #     SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 90000
+  #     SCHEMA_REGISTRY_REQUEST_TIMEOUT_MS: 40000
+  #     SCHEMA_REGISTRY_SESSION_TIMEOUT_MS: 30000
+  #
+  #     # Topic creation settings (ensures _schemas is compacted)
+  #     SCHEMA_REGISTRY_KAFKASTORE_TOPIC: "_schemas"
+  #     SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
+  #     SCHEMA_REGISTRY_KAFKASTORE_TOPIC_CONFIG: "cleanup.policy=compact,segment.ms=3600000,min.cleanable.dirty.ratio=0.01"
+  #   depends_on:
+  #     kafka:
+  #       condition: service_healthy
+  #   networks:
+  #     - k2-network
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/8081' || exit 1"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10
+  #     start_period: 30s
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '0.5'
+  #         memory: 768M
 
   # ============================================================================
   # MINIO - S3-Compatible Object Storage for Iceberg
@@ -268,6 +276,7 @@ services:
       mc mb --ignore-existing k2minio/warehouse;
       mc mb --ignore-existing k2minio/data;
       mc mb --ignore-existing k2minio/backups;
+      mc mb --ignore-existing k2minio/flink;
       mc policy set download k2minio/warehouse;
       echo 'MinIO initialized successfully';
       "
@@ -327,7 +336,7 @@ services:
     ports:
       - "8181:8181"
     environment:
-      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_WAREHOUSE: s3a://warehouse/
       CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
       CATALOG_S3_ENDPOINT: http://minio:9000
       CATALOG_S3_ACCESS__KEY__ID: ${MINIO_ROOT_USER:-admin}
@@ -469,7 +478,7 @@ services:
       
       # Iceberg Configuration
       K2_ICEBERG_CATALOG_URI: http://iceberg-rest:8181
-      K2_ICEBERG_CATALOG_WAREHOUSE: s3://warehouse/
+      K2_ICEBERG_CATALOG_WAREHOUSE: s3a://warehouse/
       K2_ICEBERG_S3_ENDPOINT: http://minio:9000
       K2_ICEBERG_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}
       K2_ICEBERG_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-password}
@@ -573,7 +582,7 @@ services:
     container_name: k2-binance-stream
     hostname: binance-stream
     ports:
-      - "9091:9091"       # Prometheus metrics
+      - "9101:9101"       # Prometheus metrics (changed from 9091 to avoid conflict with Flink)
     environment:
       # Kafka Configuration
       K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
@@ -601,7 +610,7 @@ services:
 
       # Metrics Configuration
       K2_METRICS_ENABLED: "true"
-      K2_METRICS_PORT: 9091
+      K2_METRICS_PORT: 9101
 
       # Logging Configuration
       K2_LOG_LEVEL: INFO
@@ -616,7 +625,7 @@ services:
     networks:
       - k2-network
     healthcheck:
-      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9091' || exit 1"]
+      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9101' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -757,8 +766,8 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_CORES=6
-      - SPARK_WORKER_MEMORY=6g
+      - SPARK_WORKER_CORES=3
+      - SPARK_WORKER_MEMORY=3g
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
@@ -778,11 +787,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '6.5'
-          memory: 7G
+          cpus: '3.5'
+          memory: 4G
         reservations:
-          cpus: '2.0'
-          memory: 3G
+          cpus: '1.0'
+          memory: 2G
 
   # SPARK WORKER 2
   spark-worker-2:
@@ -792,8 +801,8 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_CORES=6
-      - SPARK_WORKER_MEMORY=6g
+      - SPARK_WORKER_CORES=3
+      - SPARK_WORKER_MEMORY=3g
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
@@ -813,20 +822,237 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '6.5'
-          memory: 7G
+          cpus: '3.5'
+          memory: 4G
         reservations:
-          cpus: '2.0'
-          memory: 3G
+          cpus: '1.0'
+          memory: 2G
 
   # ============================================================================
-  # BRONZE STREAMING JOBS - Kafka to Iceberg Raw Ingestion
+  # APACHE FLINK - Real-Time Stream Processing Cluster
   # ============================================================================
-  # These services run Spark Structured Streaming jobs that consume from Kafka
-  # and write raw Avro payloads to Bronze Iceberg tables (per-exchange).
-  # - Automatic restart on failure
-  # - Resource limits prevent cluster starvation
-  # - Checkpoints enable fault tolerance
+  # Flink cluster for Bronze layer ingestion (Kafka → Iceberg)
+  # Architecture: 1 JobManager + 2 TaskManagers (session cluster)
+  # - JobManager: Coordinates jobs, Web UI, checkpoints
+  # - TaskManager-1: Runs Binance Bronze job (2 task slots)
+  # - TaskManager-2: Runs Kraken Bronze job (2 task slots)
+  # Resources: 5 CPU, 5GB RAM total (vs Spark 13 CPU, 12GB RAM)
+
+  # ============================================================================
+  # FLINK SERVICES (DISABLED - Investigation Complete, See Phase 12 Docs)
+  # Preserved for future investigation - Do NOT delete
+  # To re-enable: uncomment lines 845-1054
+  # ============================================================================
+# 
+#   flink-jobmanager:
+#     image: flink-k2:1.18.1
+#     container_name: k2-flink-jobmanager
+#     hostname: flink-jobmanager
+#     ports:
+#       - "8082:8081"     # Flink Web UI (mapped to 8082 to avoid conflict with Schema Registry)
+#       - "6123:6123"     # RPC
+#       - "9091:9091"     # Prometheus metrics
+#     command: jobmanager
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - HADOOP_CONF_DIR=/opt/flink/conf
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     volumes:
+#       - ./config/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml
+#       - ./config/flink-sql:/opt/flink/sql:ro
+#     networks:
+#       - k2-network
+#     depends_on:
+#       kafka:
+#         condition: service_healthy
+#       schema-registry-1:
+#         condition: service_healthy
+#       iceberg-rest:
+#         condition: service_healthy
+#       minio:
+#         condition: service_healthy
+#     healthcheck:
+#       test: ["CMD-SHELL", "curl -f http://localhost:8081 || exit 1"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 40s
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '1.0'
+#           memory: 1G
+#         reservations:
+#           cpus: '0.5'
+#           memory: 512M
+# 
+#   flink-taskmanager-1:
+#     image: flink-k2:1.18.1
+#     container_name: k2-flink-taskmanager-1
+#     hostname: flink-taskmanager-1
+#     command: taskmanager
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=2
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     volumes:
+#       - ./config/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml
+#     networks:
+#       - k2-network
+#     depends_on:
+#       flink-jobmanager:
+#         condition: service_healthy
+#     healthcheck:
+#       test: ["CMD-SHELL", "pgrep -f 'org.apache.flink.runtime.taskexecutor.TaskManagerRunner' || exit 1"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 40s
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '2.0'
+#           memory: 2G
+#         reservations:
+#           cpus: '1.0'
+#           memory: 1G
+# 
+#   flink-taskmanager-2:
+#     image: flink-k2:1.18.1
+#     container_name: k2-flink-taskmanager-2
+#     hostname: flink-taskmanager-2
+#     command: taskmanager
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=2
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     volumes:
+#       - ./config/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml
+#     networks:
+#       - k2-network
+#     depends_on:
+#       flink-jobmanager:
+#         condition: service_healthy
+#     healthcheck:
+#       test: ["CMD-SHELL", "pgrep -f 'org.apache.flink.runtime.taskexecutor.TaskManagerRunner' || exit 1"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 40s
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '2.0'
+#           memory: 2G
+#         reservations:
+#           cpus: '1.0'
+#           memory: 1G
+# 
+#   # SQL Gateway for submitting SQL streaming jobs (Flink best practice)
+#   flink-sql-gateway:
+#     image: flink-k2:1.18.1
+#     container_name: k2-flink-sql-gateway
+#     hostname: flink-sql-gateway
+#     ports:
+#       - "8083:8083"  # SQL Gateway REST API
+#     command: bin/sql-gateway.sh start-foreground
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - HADOOP_CONF_DIR=/opt/flink/conf
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     volumes:
+#       - ./config/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml
+#     networks:
+#       - k2-network
+#     depends_on:
+#       flink-jobmanager:
+#         condition: service_healthy
+#     healthcheck:
+#       test: ["CMD-SHELL", "curl -f http://localhost:8083/v1/info || exit 1"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 40s
+#     restart: unless-stopped
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '0.5'
+#           memory: 512M
+# 
+#   flink-bronze-binance-job:
+#     build:
+#       context: ./flink-jobs
+#       dockerfile: Dockerfile
+#     image: k2-flink-bronze-jobs:1.0.0
+#     container_name: k2-flink-bronze-binance-job
+#     hostname: flink-bronze-binance-job
+#     command: ["com.k2.flink.bronze.BinanceBronzeJob", "bronze_binance_ingestion"]
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - HADOOP_CONF_DIR=/opt/flink/conf
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     networks:
+#       - k2-network
+#     depends_on:
+#       flink-jobmanager:
+#         condition: service_healthy
+#       flink-taskmanager-1:
+#         condition: service_healthy
+#       flink-taskmanager-2:
+#         condition: service_healthy
+#     restart: unless-stopped
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '0.5'
+#           memory: 512M
+# 
+#   flink-bronze-kraken-job:
+#     image: k2-flink-bronze-jobs:1.0.0
+#     container_name: k2-flink-bronze-kraken-job
+#     hostname: flink-bronze-kraken-job
+#     command: ["com.k2.flink.bronze.KrakenBronzeJob", "bronze_kraken_ingestion"]
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - HADOOP_CONF_DIR=/opt/flink/conf
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     networks:
+#       - k2-network
+#     depends_on:
+#       flink-jobmanager:
+#         condition: service_healthy
+#       flink-taskmanager-1:
+#         condition: service_healthy
+#       flink-taskmanager-2:
+#         condition: service_healthy
+#     restart: unless-stopped
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '0.5'
+#           memory: 512M
+# 
+#   # ============================================================================
+#   # BRONZE STREAMING JOBS - Kafka to Iceberg Raw Ingestion
+#   # ============================================================================
+#   # These services run Spark Structured Streaming jobs that consume from Kafka
+#   # and write raw Avro payloads to Bronze Iceberg tables (per-exchange).
+#   # - Automatic restart on failure
+#   # - Resource limits prevent cluster starvation
+#   # - Checkpoints enable fault tolerance
 
   bronze-binance-stream:
     image: apache/spark:3.5.3
@@ -848,14 +1074,20 @@ services:
         condition: service_healthy
     networks:
       - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'bronze_binance_ingestion.py' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
     restart: unless-stopped
     command: >
       /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
       --total-executor-cores 1
       --executor-cores 1
-      --executor-memory 768m
-      --driver-memory 768m
+      --executor-memory 1024m
+      --driver-memory 512m
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
@@ -864,10 +1096,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 1800M
+          memory: 2G
         reservations:
           cpus: '0.5'
-          memory: 900M
+          memory: 1G
 
   bronze-kraken-stream:
     image: apache/spark:3.5.3
@@ -889,14 +1121,20 @@ services:
         condition: service_healthy
     networks:
       - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'bronze_kraken_ingestion.py' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
     restart: unless-stopped
     command: >
       /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
       --total-executor-cores 1
       --executor-cores 1
-      --executor-memory 768m
-      --driver-memory 768m
+      --executor-memory 1024m
+      --driver-memory 512m
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
@@ -905,10 +1143,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 1800M
+          memory: 2G
         reservations:
           cpus: '0.5'
-          memory: 900M
+          memory: 1G
 
   # ============================================================================
   # SILVER TRANSFORMATION JOBS - Validated Data (Medallion Architecture)
@@ -935,19 +1173,25 @@ services:
       iceberg-rest:
         condition: service_healthy
       bronze-binance-stream:
-        condition: service_started
+        condition: service_healthy
       schema-registry-1:
         condition: service_healthy
     networks:
       - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'silver_binance_transformation_v3.py' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     restart: unless-stopped
     command: >
       /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
       --total-executor-cores 1
       --executor-cores 1
-      --executor-memory 768m
-      --driver-memory 768m
+      --executor-memory 1024m
+      --driver-memory 512m
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
@@ -956,10 +1200,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 1800M
+          memory: 2G
         reservations:
           cpus: '0.5'
-          memory: 900M
+          memory: 1G
 
   silver-kraken-transformation:
     image: apache/spark:3.5.3
@@ -978,19 +1222,25 @@ services:
       iceberg-rest:
         condition: service_healthy
       bronze-kraken-stream:
-        condition: service_started
+        condition: service_healthy
       schema-registry-1:
         condition: service_healthy
     networks:
       - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'silver_kraken_transformation_v3.py' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     restart: unless-stopped
     command: >
       /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
       --total-executor-cores 1
       --executor-cores 1
-      --executor-memory 768m
-      --driver-memory 768m
+      --executor-memory 1024m
+      --driver-memory 512m
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
@@ -999,10 +1249,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 1800M
+          memory: 2G
         reservations:
           cpus: '0.5'
-          memory: 900M
+          memory: 1G
 
   # ============================================================================
   # GOLD AGGREGATION JOB - Unified Analytics (Medallion Architecture)
@@ -1030,19 +1280,25 @@ services:
       iceberg-rest:
         condition: service_healthy
       silver-binance-transformation:
-        condition: service_started
+        condition: service_healthy
       silver-kraken-transformation:
-        condition: service_started
+        condition: service_healthy
     networks:
       - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'gold_aggregation.py' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
     restart: unless-stopped
     command: >
       /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
       --total-executor-cores 1
       --executor-cores 1
-      --executor-memory 1536m
-      --driver-memory 1024m
+      --executor-memory 1024m
+      --driver-memory 512m
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar
@@ -1051,10 +1307,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 3200M
+          memory: 2G
         reservations:
           cpus: '0.5'
-          memory: 1600M
+          memory: 1G
 
   # ============================================================================
   # CHECKPOINT CLEANUP SERVICE - Prevents Metadata Accumulation
