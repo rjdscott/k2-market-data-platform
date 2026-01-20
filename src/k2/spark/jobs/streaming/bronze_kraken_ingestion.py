@@ -49,7 +49,15 @@ from pyspark.sql.functions import col, current_timestamp, to_date
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from k2.spark.utils.spark_session import create_streaming_spark_session
+# Import spark_session module directly (bypasses k2 package initialization)
+import importlib.util
+spec = importlib.util.spec_from_file_location(
+    "spark_session",
+    str(Path(__file__).parent.parent.parent / "utils" / "spark_session.py")
+)
+spark_session_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(spark_session_module)
+create_streaming_spark_session = spark_session_module.create_streaming_spark_session
 
 
 def main():
