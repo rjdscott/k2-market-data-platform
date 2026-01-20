@@ -757,8 +757,8 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_CORES=3
-      - SPARK_WORKER_MEMORY=4g
+      - SPARK_WORKER_CORES=6
+      - SPARK_WORKER_MEMORY=6g
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
@@ -778,11 +778,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.5'
-          memory: 3G
+          cpus: '6.5'
+          memory: 7G
         reservations:
-          cpus: '1.0'
-          memory: 1500M
+          cpus: '2.0'
+          memory: 3G
 
   # SPARK WORKER 2
   spark-worker-2:
@@ -792,8 +792,8 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_CORES=3
-      - SPARK_WORKER_MEMORY=4g
+      - SPARK_WORKER_CORES=6
+      - SPARK_WORKER_MEMORY=6g
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
@@ -813,11 +813,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.5'
-          memory: 3G
+          cpus: '6.5'
+          memory: 7G
         reservations:
-          cpus: '1.0'
-          memory: 1500M
+          cpus: '2.0'
+          memory: 3G
 
   # ============================================================================
   # BRONZE STREAMING JOBS - Kafka to Iceberg Raw Ingestion

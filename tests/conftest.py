@@ -770,3 +770,127 @@ def memory_management():
 
     # Force garbage collection after test
     gc.collect()
+
+
+# ==============================================================================
+# Crypto Trading Data Fixtures (imported from crypto_fixtures.py)
+# ==============================================================================
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
+from crypto_fixtures import CryptoDataFactory  # noqa: E402
+
+
+@pytest.fixture(scope="function")
+def crypto_data_factory():
+    """Provide CryptoDataFactory instance."""
+    return CryptoDataFactory
+
+
+@pytest.fixture(scope="function")
+def sample_binance_raw_trade(crypto_data_factory):
+    """Single Binance raw trade (Bronze schema)."""
+    return crypto_data_factory.create_binance_raw_trade()
+
+
+@pytest.fixture(scope="function")
+def sample_kraken_raw_trade(crypto_data_factory):
+    """Single Kraken raw trade (Bronze schema)."""
+    return crypto_data_factory.create_kraken_raw_trade()
+
+
+@pytest.fixture(scope="function")
+def sample_v2_unified_trade(crypto_data_factory):
+    """Single V2 unified trade (Silver/Gold schema)."""
+    return crypto_data_factory.create_v2_unified_trade(exchange="binance")
+
+
+@pytest.fixture(scope="function")
+def binance_trade_sequence(crypto_data_factory):
+    """Sequence of 50 Binance raw trades."""
+    return crypto_data_factory.create_trade_sequence(
+        exchange="binance", symbol="BTCUSDT", count=50, schema="raw"
+    )
+
+
+@pytest.fixture(scope="function")
+def kraken_trade_sequence(crypto_data_factory):
+    """Sequence of 50 Kraken raw trades."""
+    return crypto_data_factory.create_trade_sequence(
+        exchange="kraken", symbol="BTC/USD", count=50, schema="raw"
+    )
+
+
+@pytest.fixture(scope="function")
+def v2_mixed_trades(crypto_data_factory):
+    """Mixed Binance and Kraken trades in V2 unified schema."""
+    binance_trades = crypto_data_factory.create_trade_sequence(
+        exchange="binance", symbol="BTCUSDT", count=25, schema="v2"
+    )
+    kraken_trades = crypto_data_factory.create_trade_sequence(
+        exchange="kraken", symbol="BTC/USD", count=25, schema="v2"
+    )
+
+    # Combine and sort by timestamp
+    all_trades = binance_trades + kraken_trades
+    all_trades.sort(key=lambda x: x["timestamp"])
+
+    return {
+        "binance_trades": binance_trades,
+        "kraken_trades": kraken_trades,
+        "all_trades": all_trades,
+        "total_count": len(all_trades),
+    }
+
+
+@pytest.fixture(scope="function")
+def invalid_trade_records():
+    """Trade records with validation errors (for DLQ testing)."""
+    import time
+
+    return {
+        "missing_price": {
+            "event_type": "trade",
+            "event_time_ms": int(time.time() * 1000),
+            "symbol": "BTCUSDT",
+            "trade_id": 123456789,
+            # Missing price field
+            "quantity": "0.5",
+            "trade_time_ms": int(time.time() * 1000),
+            "is_buyer_maker": False,
+            "ingestion_timestamp": int(time.time() * 1000),
+        },
+        "negative_price": {
+            "event_type": "trade",
+            "event_time_ms": int(time.time() * 1000),
+            "symbol": "ETHUSDT",
+            "trade_id": 987654321,
+            "price": "-100.50",  # Invalid negative price
+            "quantity": "1.0",
+            "trade_time_ms": int(time.time() * 1000),
+            "is_buyer_maker": True,
+            "ingestion_timestamp": int(time.time() * 1000),
+        },
+        "zero_quantity": {
+            "event_type": "trade",
+            "event_time_ms": int(time.time() * 1000),
+            "symbol": "BNBUSDT",
+            "trade_id": 555555555,
+            "price": "300.50",
+            "quantity": "0.0",  # Invalid zero quantity
+            "trade_time_ms": int(time.time() * 1000),
+            "is_buyer_maker": False,
+            "ingestion_timestamp": int(time.time() * 1000),
+        },
+        "invalid_symbol": {
+            "event_type": "trade",
+            "event_time_ms": int(time.time() * 1000),
+            "symbol": "",  # Empty symbol
+            "trade_id": 111111111,
+            "price": "50000.00",
+            "quantity": "0.1",
+            "trade_time_ms": int(time.time() * 1000),
+            "is_buyer_maker": True,
+            "ingestion_timestamp": int(time.time() * 1000),
+        },
+    }

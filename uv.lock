@@ -588,6 +588,18 @@ wheels = [
 ]
 
 [[package]]
+name = "chispa"
+version = "0.11.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "prettytable" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/13/a8/b27d253dcec4ab951f8f713e78a25dcb5ffa44d593f164c55bf18a4d0166/chispa-0.11.1.tar.gz", hash = "sha256:0fc1255cd78291381bfbc29d800fc9e6ea45ec9a0b4da723e40f6cc8dd589fb9", size = 19216, upload-time = "2025-04-12T15:35:53.281Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/58/ce0319dbe9d4933086fd4f3f09d3313edff54a04fded8ab5bc12b35159a2/chispa-0.11.1-py3-none-any.whl", hash = "sha256:a6fc103880b0ad196432dd7dcda9f904069026ec9232db60c4540fbeabca4279", size = 20307, upload-time = "2025-04-12T15:35:51.539Z" },
+]
+
+[[package]]
 name = "click"
 version = "8.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1064,6 +1076,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/20/b5/23b216d9d985a956623b6bd12d4086b60f0059b27799f23016af04a74ea1/fastjsonschema-2.21.2.tar.gz", hash = "sha256:b1eb43748041c880796cd077f1a07c3d94e93ae84bba5ed36800a33554ae05de", size = 374130, upload-time = "2025-08-14T18:49:36.666Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/a8/20d0723294217e47de6d9e2e40fd4a9d2f7c4b6ef974babd482a59743694/fastjsonschema-2.21.2-py3-none-any.whl", hash = "sha256:1c797122d0a86c5cace2e54bf4e819c36223b552017172f32c5c024a6b77e463", size = 24024, upload-time = "2025-08-14T18:49:34.776Z" },
+]
+
+[[package]]
+name = "findspark"
+version = "2.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/86/445e2b90fff1efc0858512102ff78746a04c1a4a9c1d3fa9e4650c11a000/findspark-2.0.1.tar.gz", hash = "sha256:aa10a96cb616cab329181d72e8ef13d2dc453b4babd02b5482471a0882c1195e", size = 5284, upload-time = "2022-02-11T08:02:07.669Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/cb/7d2bb508f4ca00a043fd53e8156c11767799d3f534bf451a0942211d5def/findspark-2.0.1-py2.py3-none-any.whl", hash = "sha256:e5d5415ff8ced6b173b801e12fc90c1eefca1fb6bf9c19c4fc1f235d4222e753", size = 4446, upload-time = "2022-02-11T08:02:06.567Z" },
 ]
 
 [[package]]
@@ -1856,6 +1877,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "black" },
+    { name = "chispa" },
     { name = "faker" },
     { name = "fastapi" },
     { name = "great-expectations" },
@@ -1882,6 +1904,7 @@ all = [
     { name = "pytest-benchmark" },
     { name = "pytest-cov" },
     { name = "pytest-mock" },
+    { name = "pytest-spark" },
     { name = "pytest-xdist" },
     { name = "python-jose", extra = ["cryptography"] },
     { name = "python-multipart" },
@@ -1906,6 +1929,7 @@ api = [
 ]
 dev = [
     { name = "black" },
+    { name = "chispa" },
     { name = "faker" },
     { name = "hypothesis" },
     { name = "ipdb" },
@@ -1922,6 +1946,7 @@ dev = [
     { name = "pytest-benchmark" },
     { name = "pytest-cov" },
     { name = "pytest-mock" },
+    { name = "pytest-spark" },
     { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "sphinx" },
@@ -1959,6 +1984,7 @@ requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=25.12.0" },
     { name = "boto3", specifier = ">=1.42.0" },
     { name = "certifi", specifier = ">=2024.8.30" },
+    { name = "chispa", marker = "extra == 'dev'", specifier = "==0.11.1" },
     { name = "click", specifier = ">=8.1.7" },
     { name = "confluent-kafka", extras = ["avro", "schema-registry"], specifier = ">=2.13.0" },
     { name = "docker", specifier = "==7.1.0" },
@@ -2013,6 +2039,7 @@ requires-dist = [
     { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.12.0" },
+    { name = "pytest-spark", marker = "extra == 'dev'", specifier = "==0.8.0" },
     { name = "pytest-timeout", specifier = "==2.4.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
@@ -3126,6 +3153,18 @@ wheels = [
 ]
 
 [[package]]
+name = "prettytable"
+version = "3.17.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wcwidth" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/79/45/b0847d88d6cfeb4413566738c8bbf1e1995fad3d42515327ff32cc1eb578/prettytable-3.17.0.tar.gz", hash = "sha256:59f2590776527f3c9e8cf9fe7b66dd215837cca96a9c39567414cbc632e8ddb0", size = 67892, upload-time = "2025-11-14T17:33:20.212Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ee/8c/83087ebc47ab0396ce092363001fa37c17153119ee282700c0713a195853/prettytable-3.17.0-py3-none-any.whl", hash = "sha256:aad69b294ddbe3e1f95ef8886a060ed1666a0b83018bbf56295f6f226c43d287", size = 34433, upload-time = "2025-11-14T17:33:19.093Z" },
+]
+
+[[package]]
 name = "prometheus-client"
 version = "0.23.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3670,6 +3709,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/68/14/eb014d26be205d38ad5ad20d9a80f7d201472e08167f0bb4361e251084a9/pytest_mock-3.15.1.tar.gz", hash = "sha256:1849a238f6f396da19762269de72cb1814ab44416fa73a8686deac10b0d87a0f", size = 34036, upload-time = "2025-09-16T16:37:27.081Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5a/cc/06253936f4a7fa2e0f48dfe6d851d9c56df896a9ab09ac019d70b760619c/pytest_mock-3.15.1-py3-none-any.whl", hash = "sha256:0a25e2eb88fe5168d535041d09a4529a188176ae608a6d249ee65abc0949630d", size = 10095, upload-time = "2025-09-16T16:37:25.734Z" },
+]
+
+[[package]]
+name = "pytest-spark"
+version = "0.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "findspark" },
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/79/3b/712c34be12b7ca353032ab42239e46eea769772adf633d10df7b8362f014/pytest_spark-0.8.0.tar.gz", hash = "sha256:26f57d10862fa7cd34567a217e4a3b965d6c4927bd15b196dfde1c6ee5eaf5b1", size = 7411, upload-time = "2025-05-21T03:49:29.454Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/f6/d226e99f6545890337a82bce6a044d9039756e070709bcfecb9039a67f68/pytest_spark-0.8.0-py3-none-any.whl", hash = "sha256:1c7e4e1f6dfdb842f5f651605c1ac80c6cccfff458b22ce3319fcdc26ed8e940", size = 7669, upload-time = "2025-05-21T03:49:28.158Z" },
 ]
 
 [[package]]
