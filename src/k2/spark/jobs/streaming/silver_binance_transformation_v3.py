@@ -68,6 +68,8 @@ from pyspark.sql.types import StructType, StructField, StringType, LongType, Boo
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
+from k2.spark.utils.spark_session import create_streaming_spark_session
+
 # Import validation module
 import importlib.util
 spec_validation = importlib.util.spec_from_file_location("trade_validation", str(Path(__file__).parent.parent.parent / "validation" / "trade_validation.py"))
@@ -99,37 +101,6 @@ BINANCE_RAW_SCHEMA = """
 """
 
 
-def create_spark_session(app_name: str) -> SparkSession:
-    """Create Spark session with Iceberg catalog and S3/MinIO configuration."""
-    return (
-        SparkSession.builder.appName(app_name)
-        .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
-        .config("spark.sql.catalog.iceberg.type", "rest")
-        .config("spark.sql.catalog.iceberg.uri", "http://iceberg-rest:8181")
-        .config("spark.sql.catalog.iceberg.warehouse", "s3://warehouse/")
-        .config("spark.sql.catalog.iceberg.s3.endpoint", "http://minio:9000")
-        .config("spark.sql.catalog.iceberg.s3.access-key-id", "admin")
-        .config("spark.sql.catalog.iceberg.s3.secret-access-key", "password")
-        .config("spark.sql.catalog.iceberg.s3.path-style-access", "true")
-        # S3/MinIO configuration
-        .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000")
-        .config("spark.hadoop.fs.s3a.access.key", "admin")
-        .config("spark.hadoop.fs.s3a.secret.key", "password")
-        .config("spark.hadoop.fs.s3a.path.style.access", "true")
-        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
-        .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1")
-        # AWS SDK v2 region configuration (for Iceberg)
-        .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
-        .config("spark.executor.extraJavaOptions", "-Daws.region=us-east-1")
-        .config("spark.sql.adaptive.enabled", "true")
-        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
-        .config("spark.sql.streaming.checkpointLocation", "/checkpoints/silver-binance/")
-        .getOrCreate()
-    )
-
-
 def main():
     """Main entry point."""
     print("\n" + "=" * 70)
@@ -146,8 +117,11 @@ def main():
     print("  • Checkpoint: /checkpoints/silver-binance/")
     print(f"\n{'=' * 70}\n")
 
-    # Create Spark session
-    spark = create_spark_session("K2-Silver-Binance-Transformation-V3")
+    # Create Spark session with production-ready configuration
+    spark = create_streaming_spark_session(
+        app_name="K2-Silver-Binance-Transformation-V3",
+        checkpoint_location="/checkpoints/silver-binance/"
+    )
 
     try:
         # Read from Bronze (streaming)
@@ -268,7 +242,8 @@ def main():
         print("=" * 70 + "\n")
 
         # Await termination (both streams run concurrently)
-        silver_query.awaitTermination()
+        # Use awaitAnyTermination() to detect if either stream fails
+        spark.streams.awaitAnyTermination()
 
     except KeyboardInterrupt:
         print("\n\n" + "=" * 70)

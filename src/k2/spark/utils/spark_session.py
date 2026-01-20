@@ -80,6 +80,13 @@ def create_streaming_spark_session(
     This variant includes Kafka and streaming-specific configurations
     for Bronze/Silver/Gold streaming jobs.
 
+    Production-Ready Features (2026-01-20):
+    - Memory management: Tuned fraction (0.75) and storage (0.3) for streaming
+    - Backpressure: Enabled to prevent consumer lag spikes
+    - S3 connection pooling: Prevents MinIO connection exhaustion
+    - Iceberg optimization: Auto-cleanup of old metadata (5 versions retained)
+    - Checkpoint retention: Keeps last 10 batches for recovery
+
     Args:
         app_name: Application name for Spark UI
         checkpoint_location: Base directory for streaming checkpoints
@@ -96,11 +103,29 @@ def create_streaming_spark_session(
         ...     .option("subscribe", "market.crypto.trades.binance") \\
         ...     .load()
     """
-    session = create_spark_session(app_name, master, log_level)
-
-    # Add streaming-specific configurations
-    session.conf.set("spark.sql.streaming.checkpointLocation", checkpoint_location)
-    session.conf.set("spark.sql.streaming.schemaInference", "true")
-    session.conf.set("spark.sql.streaming.stateStore.providerClass", "")
+    session = (
+        create_spark_session(app_name, master, log_level)
+        # Memory Management (prevents OOM in long-running streams)
+        .config("spark.memory.fraction", "0.75")  # 75% heap for execution/storage (up from 60%)
+        .config("spark.memory.storageFraction", "0.3")  # 30% of memory.fraction for caching (down from 50%)
+        .config("spark.executor.memoryOverhead", "384m")  # Off-heap memory for containers
+        .config("spark.driver.memoryOverhead", "384m")  # Driver off-heap memory
+        # Streaming Backpressure (prevents Kafka consumer lag)
+        .config("spark.streaming.backpressure.enabled", "true")
+        .config("spark.streaming.kafka.maxRatePerPartition", "1000")  # Max records/sec/partition
+        # Checkpoint Management
+        .config("spark.sql.streaming.checkpointLocation", checkpoint_location)
+        .config("spark.sql.streaming.schemaInference", "true")
+        .config("spark.sql.streaming.minBatchesToRetain", "10")  # Keep last 10 checkpoints
+        # S3/MinIO Connection Pooling (prevents connection exhaustion)
+        .config("spark.hadoop.fs.s3a.connection.maximum", "50")  # Max S3 connections
+        .config("spark.hadoop.fs.s3a.threads.max", "20")  # Max upload threads
+        .config("spark.hadoop.fs.s3a.connection.establish.timeout", "5000")  # 5s connect timeout
+        .config("spark.hadoop.fs.s3a.connection.timeout", "200000")  # 200s socket timeout
+        # Iceberg Write Optimization (prevents metadata bloat)
+        .config("spark.sql.catalog.iceberg.write.metadata.delete-after-commit.enabled", "true")
+        .config("spark.sql.catalog.iceberg.write.metadata.previous-versions-max", "5")  # Keep 5 versions
+        .config("spark.sql.catalog.iceberg.write.target-file-size-bytes", "134217728")  # 128MB files
+    )
 
     return session

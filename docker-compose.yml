@@ -747,8 +747,8 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_CORES=3
-      - SPARK_WORKER_MEMORY=3g
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=2g
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
@@ -768,11 +768,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '3.0'
-          memory: 4G
+          cpus: '2.5'
+          memory: 3G
         reservations:
-          cpus: '1.5'
-          memory: 2G
+          cpus: '1.0'
+          memory: 1500M
 
   # SPARK WORKER 2
   spark-worker-2:
@@ -782,8 +782,8 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_CORES=3
-      - SPARK_WORKER_MEMORY=3g
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=2g
     volumes:
       - ./src:/opt/k2/src
       - ./config:/opt/k2/config
@@ -803,11 +803,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '3.0'
-          memory: 4G
+          cpus: '2.5'
+          memory: 3G
         reservations:
-          cpus: '1.5'
-          memory: 2G
+          cpus: '1.0'
+          memory: 1500M
 
   # ============================================================================
   # BRONZE STREAMING JOBS - Kafka to Iceberg Raw Ingestion
@@ -844,7 +844,8 @@ services:
       --master spark://spark-master:7077
       --total-executor-cores 1
       --executor-cores 1
-      --executor-memory 1g
+      --executor-memory 768m
+      --driver-memory 768m
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
@@ -853,10 +854,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 2G
+          memory: 1800M
         reservations:
           cpus: '0.5'
-          memory: 1G
+          memory: 900M
 
   bronze-kraken-stream:
     image: apache/spark:3.5.3
@@ -884,7 +885,8 @@ services:
       --master spark://spark-master:7077
       --total-executor-cores 1
       --executor-cores 1
-      --executor-memory 1g
+      --executor-memory 768m
+      --driver-memory 768m
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
@@ -893,10 +895,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 2G
+          memory: 1800M
         reservations:
           cpus: '0.5'
-          memory: 1G
+          memory: 900M
 
   # ============================================================================
   # SILVER TRANSFORMATION JOBS - Validated Data (Medallion Architecture)
@@ -934,7 +936,8 @@ services:
       --master spark://spark-master:7077
       --total-executor-cores 1
       --executor-cores 1
-      --executor-memory 1g
+      --executor-memory 768m
+      --driver-memory 768m
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
@@ -943,10 +946,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 2G
+          memory: 1800M
         reservations:
           cpus: '0.5'
-          memory: 1G
+          memory: 900M
 
   silver-kraken-transformation:
     image: apache/spark:3.5.3
@@ -976,7 +979,8 @@ services:
       --master spark://spark-master:7077
       --total-executor-cores 1
       --executor-cores 1
-      --executor-memory 1g
+      --executor-memory 768m
+      --driver-memory 768m
       --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
       --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
       --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
@@ -985,10 +989,50 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 2G
+          memory: 1800M
         reservations:
           cpus: '0.5'
-          memory: 1G
+          memory: 900M
+
+  # ============================================================================
+  # CHECKPOINT CLEANUP SERVICE - Prevents Metadata Accumulation
+  # ============================================================================
+  # Lightweight service that runs daily to clean up old Spark checkpoint metadata
+  # - Removes metadata files older than 7 days
+  # - Cleans up empty directories
+  # - Prevents disk space exhaustion from checkpoint accumulation
+  # - Production recommendation: Adjust retention based on recovery requirements
+  spark-checkpoint-cleaner:
+    image: alpine:3.19
+    container_name: k2-checkpoint-cleaner
+    hostname: checkpoint-cleaner
+    volumes:
+      - spark-checkpoints:/checkpoints
+    command: >
+      sh -c '
+      echo "Checkpoint Cleaner Service Started";
+      echo "Retention policy: 7 days";
+      echo "Check interval: 24 hours";
+      while true; do
+        echo "[$(date)] Running checkpoint cleanup...";
+        find /checkpoints -type f -name "metadata" -mtime +7 -exec rm -v {} \; 2>/dev/null || true;
+        find /checkpoints -type f -name "*.compact" -mtime +7 -exec rm -v {} \; 2>/dev/null || true;
+        find /checkpoints -type d -empty -delete 2>/dev/null || true;
+        echo "[$(date)] Cleanup complete. Sleeping 24h...";
+        sleep 86400;
+      done
+      '
+    restart: unless-stopped
+    networks:
+      - k2-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
 
 # ==============================================================================
 # NETWORKS

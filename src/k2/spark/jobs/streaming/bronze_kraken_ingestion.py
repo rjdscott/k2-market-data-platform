@@ -49,37 +49,7 @@ from pyspark.sql.functions import col, current_timestamp, to_date
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-
-def create_spark_session(app_name: str) -> SparkSession:
-    """Create Spark session with Iceberg catalog and S3/MinIO configuration."""
-    return (
-        SparkSession.builder.appName(app_name)
-        .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
-        .config("spark.sql.catalog.iceberg.type", "rest")
-        .config("spark.sql.catalog.iceberg.uri", "http://iceberg-rest:8181")
-        .config("spark.sql.catalog.iceberg.warehouse", "s3://warehouse/")
-        .config("spark.sql.catalog.iceberg.s3.endpoint", "http://minio:9000")
-        .config("spark.sql.catalog.iceberg.s3.access-key-id", "admin")
-        .config("spark.sql.catalog.iceberg.s3.secret-access-key", "password")
-        .config("spark.sql.catalog.iceberg.s3.path-style-access", "true")
-        # S3/MinIO configuration (required for AWS SDK)
-        .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000")
-        .config("spark.hadoop.fs.s3a.access.key", "admin")
-        .config("spark.hadoop.fs.s3a.secret.key", "password")
-        .config("spark.hadoop.fs.s3a.path.style.access", "true")
-        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
-        # Set dummy AWS region for MinIO (both Hadoop and AWS SDK v2)
-        .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1")
-        # AWS SDK v2 region configuration (for Iceberg)
-        .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
-        .config("spark.executor.extraJavaOptions", "-Daws.region=us-east-1")
-        .config("spark.sql.adaptive.enabled", "true")
-        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
-        .config("spark.sql.streaming.checkpointLocation", "/checkpoints/bronze-kraken/")
-        .getOrCreate()
-    )
+from k2.spark.utils.spark_session import create_streaming_spark_session
 
 
 def main():
@@ -97,8 +67,11 @@ def main():
     print("  • Checkpoint: /checkpoints/bronze-kraken/")
     print(f"\n{'=' * 70}\n")
 
-    # Create Spark session
-    spark = create_spark_session("K2-Bronze-Kraken-Ingestion")
+    # Create Spark session with production-ready configuration
+    spark = create_streaming_spark_session(
+        app_name="K2-Bronze-Kraken-Ingestion",
+        checkpoint_location="/checkpoints/bronze-kraken/"
+    )
 
     try:
         # Read from Kafka (Kraken RAW topic)
@@ -111,6 +84,10 @@ def main():
             .option("startingOffsets", "latest")
             .option("maxOffsetsPerTrigger", 1000)
             .option("failOnDataLoss", "false")
+            # Consumer group configuration (prevents abandoned groups)
+            .option("kafka.group.id", "k2-bronze-kraken-ingestion")
+            .option("kafka.session.timeout.ms", "30000")
+            .option("kafka.request.timeout.ms", "40000")
             .load()
         )
 
