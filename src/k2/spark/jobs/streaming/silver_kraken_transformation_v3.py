@@ -129,7 +129,7 @@ def main():
     # Create Spark session with production-ready configuration
     spark = create_streaming_spark_session(
         app_name="K2-Silver-Kraken-Transformation-V3",
-        checkpoint_location="/checkpoints/silver-kraken/"
+        checkpoint_location="s3://warehouse/checkpoints/silver-kraken/"
     )
 
     try:
@@ -296,7 +296,7 @@ def main():
             )
             .writeStream.format("iceberg")
             .outputMode("append")
-            .option("checkpointLocation", "/checkpoints/silver-kraken/")
+            .option("checkpointLocation", "s3://warehouse/checkpoints/silver-kraken/")
             .trigger(processingTime="30 seconds")
             .toTable("iceberg.market_data.silver_kraken_trades")
         )
@@ -304,7 +304,7 @@ def main():
         # Step 6: Write invalid records to DLQ
         print("✓ Starting DLQ write stream (invalid records)...")
         dlq_query = write_to_dlq(
-            invalid_df, bronze_source="bronze_kraken_trades", checkpoint_location="/checkpoints/silver-kraken-dlq/"
+            invalid_df, bronze_source="bronze_kraken_trades", checkpoint_location="s3://warehouse/checkpoints/silver-kraken-dlq/"
         )
 
         print("\n" + "=" * 70)
