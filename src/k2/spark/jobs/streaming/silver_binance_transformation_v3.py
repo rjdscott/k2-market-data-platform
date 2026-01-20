@@ -226,7 +226,7 @@ def main():
             .writeStream.format("iceberg")
             .outputMode("append")
             .option("checkpointLocation", "s3a://warehouse/checkpoints/silver-binance/")
-            .trigger(processingTime="30 seconds")
+            .trigger(processingTime="60 seconds")
             .toTable("iceberg.market_data.silver_binance_trades")
         )
 
