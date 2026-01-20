@@ -164,7 +164,7 @@ class RawBinanceProducer:
                 topic=msg.topic(),
             )
         else:
-            logger.debug(
+            logger.info(
                 "raw_binance_message_delivered",
                 topic=msg.topic(),
                 partition=msg.partition(),

@@ -130,14 +130,23 @@ async def main() -> None:
     def on_message(raw_trade: dict) -> None:
         """Handle raw Binance trade - send directly to Kafka."""
         nonlocal message_count
+        message_count += 1
+
+        # Log every 100th message (Binance has ~20x Kraken's throughput)
+        if message_count % 100 == 0:
+            logger.info(
+                "binance_trade_received",
+                message_count=message_count,
+                symbol=raw_trade.get("s", "UNKNOWN"),
+            )
+
         try:
             producer.produce(raw_trade)
-            message_count += 1
 
-            # Flush every 100 messages to ensure messages are sent
-            if message_count % 100 == 0:
+            # Flush every 500 messages (Binance has higher throughput than Kraken)
+            if message_count % 500 == 0:
                 producer.flush(timeout=1.0)
-                logger.debug("producer_flushed", message_count=message_count)
+                logger.info("producer_flushed", message_count=message_count)
         except Exception as e:
             logger.error(
                 "raw_message_produce_failed",
