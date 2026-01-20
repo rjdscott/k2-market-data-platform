@@ -146,6 +146,11 @@ services:
       SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 90000
       SCHEMA_REGISTRY_REQUEST_TIMEOUT_MS: 40000
       SCHEMA_REGISTRY_SESSION_TIMEOUT_MS: 30000
+
+      # Topic creation settings (ensures _schemas is compacted)
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC: "_schemas"
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_CONFIG: "cleanup.policy=compact,segment.ms=3600000,min.cleanable.dirty.ratio=0.01"
     depends_on:
       kafka:
         condition: service_healthy
@@ -153,10 +158,10 @@ services:
       - k2-network
     healthcheck:
       test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/8081' || exit 1"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 60s
+      retries: 10
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -188,6 +193,11 @@ services:
       SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 90000
       SCHEMA_REGISTRY_REQUEST_TIMEOUT_MS: 40000
       SCHEMA_REGISTRY_SESSION_TIMEOUT_MS: 30000
+
+      # Topic creation settings (ensures _schemas is compacted)
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC: "_schemas"
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_CONFIG: "cleanup.policy=compact,segment.ms=3600000,min.cleanable.dirty.ratio=0.01"
     depends_on:
       kafka:
         condition: service_healthy
@@ -195,10 +205,10 @@ services:
       - k2-network
     healthcheck:
       test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/8081' || exit 1"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 60s
+      retries: 10
+      start_period: 30s
     deploy:
       resources:
         limits:
