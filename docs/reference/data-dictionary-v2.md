@@ -1,9 +1,25 @@
 # Data Dictionary - V2 Schemas
 
 **Version**: 2.0
-**Last Updated**: 2026-01-14
+**Last Updated**: 2026-01-22
 **Status**: Active (V2 schemas operational across all data sources)
 **Audience**: Data Engineers, Analysts, API Consumers
+
+---
+
+## Quick Reference
+
+| Schema | Kafka Topic | Iceberg Table | Key Fields |
+|--------|-------------|---------------|------------|
+| TradeV2 | `market.{asset_class}.trades.{exchange}` | `market_data.trades_v2` | message_id, symbol, price, quantity, timestamp |
+| QuoteV2 | `market.{asset_class}.quotes.{exchange}` | `market_data.quotes_v2` | bid_price, ask_price, bid_size, ask_size |
+| ReferenceDataV2 | `market.reference_data` | `market_data.reference_v2` | symbol, exchange, currency, lot_size |
+
+**Common Enums**:
+- `asset_class`: crypto, futures, options, forex
+- `side`: BUY, SELL, SELL_SHORT, UNKNOWN
+
+**Precision**: Decimal(18,8) for price/quantity, microsecond timestamps
 
 ---
 

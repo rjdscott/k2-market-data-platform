@@ -1,6 +1,0 @@
-confluentinc/cp-kafka:7.6.0                d87a8d474634        806MB             0B   U    
-confluentinc/cp-schema-registry:7.6.0      2d0f27af71e8       1.99GB             0B   U    
-grafana/grafana:10.2.3                     8387f19108f9        399MB             0B   U    
-prom/prometheus:v2.49.1                    2a72b385beaf        250MB             0B   U    
-provectuslabs/kafka-ui:latest              99307ab28a49        291MB             0B   U    
-tabulario/iceberg-rest:0.8.0               75622b336c6a        402MB             0B   U    

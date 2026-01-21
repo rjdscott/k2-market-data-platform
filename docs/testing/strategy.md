@@ -1,9 +1,46 @@
 # Testing Strategy
 
-**Last Updated**: 2026-01-13
+**Last Updated**: 2026-01-22
 **Owners**: Platform Team, QA Engineering
 **Status**: Implementation Plan
 **Scope**: Unit tests, integration tests, performance tests, chaos engineering
+
+---
+
+## Quick Reference
+
+```bash
+# Run all tests
+make test
+
+# Run unit tests only (fast, no Docker)
+make test-unit
+
+# Run integration tests (requires Docker)
+make test-integration
+
+# Run E2E tests
+make test-e2e
+
+# Run with coverage report
+make coverage
+
+# Test consumer service
+uv run python scripts/consume_crypto_trades.py --max-messages 100 --no-ui
+
+# Verify end-to-end data flow
+curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
+  -H "X-API-Key: k2-dev-api-key-2026" | jq .
+```
+
+**Test Organization**:
+```
+tests/
+├── unit/                      # Fast, isolated tests (no Docker) - 180+ tests
+├── integration/               # Tests requiring Docker services
+├── performance/               # Load tests and benchmarks
+└── chaos/                     # Chaos engineering tests
+```
 
 ---
 
@@ -544,11 +581,11 @@ pytest tests-backup/integration/test_e2e_full_pipeline.py -v -k "complete_pipeli
 4. **Consumer background process**: Full pipeline test requires consumer running in background
 
 **Success Metrics**:
-- ✅ 10/13 non-API tests passing (77% success rate without API server)
-- ✅ Producer throughput >100 msg/sec validated
-- ✅ Multi-asset class schema validation working
-- ✅ Iceberg storage layer functioning correctly
-- ⚠️ Some tests expose real platform bugs (good thing!)
+- [x] 10/13 non-API tests passing (77% success rate without API server)
+- [x] Producer throughput >100 msg/sec validated
+- [x] Multi-asset class schema validation working
+- [x] Iceberg storage layer functioning correctly
+- [!] Some tests expose real platform bugs (good thing!)
 
 **Future Enhancements**:
 - Add chaos injection (network partitions, broker failures)
@@ -1072,18 +1109,18 @@ Validate platform resilience to production failure scenarios through controlled 
 ### Chaos Scenarios
 
 **Kafka Resilience**:
-- ✅ Producer buffering during brief outages
-- ✅ Producer recovery after broker restart
-- ✅ Consumer timeout handling
-- ⚠️ Network partition (requires privileged container)
-- ⚠️ Latency injection (requires `tc` command)
+- [x] Producer buffering during brief outages
+- [x] Producer recovery after broker restart
+- [x] Consumer timeout handling
+- [!] Network partition (requires privileged container)
+- [!] Latency injection (requires `tc` command)
 
 **Storage Resilience**:
-- ✅ Writer failure handling (graceful degradation)
-- ✅ Query engine recovery after storage restoration
-- ✅ Data validation (schema enforcement)
-- ✅ Decimal precision handling
-- ⚠️ Catalog failure (requires PostgreSQL chaos)
+- [x] Writer failure handling (graceful degradation)
+- [x] Query engine recovery after storage restoration
+- [x] Data validation (schema enforcement)
+- [x] Decimal precision handling
+- [!] Catalog failure (requires PostgreSQL chaos)
 
 **Concurrent Failures**:
 - Multiple service outages simultaneously
@@ -1120,14 +1157,14 @@ docker ps --filter "name=k2-" --format "table {{.Names}}\t{{.Status}}"
 ### Success Criteria
 
 **Acceptable Outcomes**:
-- ✅ Platform **recovers** after failure injection
-- ✅ Platform **fails gracefully** (no crashes, data corruption)
-- ✅ Platform logs **meaningful error messages**
+- [x] Platform **recovers** after failure injection
+- [x] Platform **fails gracefully** (no crashes, data corruption)
+- [x] Platform logs **meaningful error messages**
 
 **Critical Failures**:
-- ❌ Platform **crashes** or **loses data**
-- ❌ Platform **hangs** indefinitely
-- ❌ Silent data loss (no errors logged)
+- [ ] Platform **crashes** or **loses data**
+- [ ] Platform **hangs** indefinitely
+- [ ] Silent data loss (no errors logged)
 
 ### Chaos Injection Mechanisms
 
@@ -1182,9 +1219,90 @@ See comprehensive chaos testing guide: `tests/chaos/README.md`
 
 ---
 
+## Test Data
+
+### Sample Data Location
+
+```
+data/sample/
+├── trades/
+│   ├── 7181.csv    # DVN - 231 trades (quick tests)
+│   ├── 3153.csv    # MWR - 10 trades (unit tests)
+│   ├── 7078.csv    # BHP - 91,630 trades (comprehensive)
+│   └── 7458.csv    # RIO - 108,670 trades (comprehensive)
+├── quotes/
+│   └── {company_id}.csv
+└── reference-data/
+    └── company_info.csv
+```
+
+### Company ID Mapping
+
+| Company ID | Symbol | Company | Trades | Use Case |
+|------------|--------|---------|--------|----------|
+| 7181 | DVN | Devine Ltd | 231 | Quick demos |
+| 3153 | MWR | MGM Wireless | 10 | Unit tests |
+| 7078 | BHP | BHP Billiton | 91,630 | Full tests |
+| 7458 | RIO | Rio Tinto | 108,670 | Stress tests |
+
+---
+
+## Debugging Tests
+
+### Verbose Output
+
+```bash
+# Show print statements
+.venv/bin/python -m pytest tests/unit/ -v -s
+
+# Show local variables on failure
+.venv/bin/python -m pytest tests/unit/ -v --showlocals
+
+# Stop on first failure
+.venv/bin/python -m pytest tests/unit/ -v -x
+
+# Run last failed tests
+.venv/bin/python -m pytest tests/unit/ -v --lf
+```
+
+### Debug Mode
+
+```bash
+# Drop into debugger on failure
+.venv/bin/python -m pytest tests/unit/ -v --pdb
+
+# Drop into debugger at start of test
+.venv/bin/python -m pytest tests/unit/test_query_engine.py::test_specific -v --pdb-first
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+**Tests fail with "Connection refused"**:
+- Ensure Docker services are running: `docker compose ps`
+- Wait for services to be healthy: `sleep 10`
+
+**Import errors**:
+- Ensure virtual environment is active: `source .venv/bin/activate`
+- Or use: `.venv/bin/python -m pytest`
+
+**Coverage not generated**:
+- Install coverage: `uv add pytest-cov`
+- Run with coverage flag: `pytest --cov=src/k2`
+
+**Slow tests**:
+- Use parallel execution: `pytest -n auto` (requires pytest-xdist)
+- Skip slow tests: `pytest -m "not slow"`
+
+---
+
 ## Related Documentation
 
 - [Platform Principles](./PLATFORM_PRINCIPLES.md) - Observable by default
 - [Failure & Recovery](./FAILURE_RECOVERY.md) - Failure scenarios to test
 - [Data Quality](./DATA_QUALITY.md) - Validation testing requirements
 - [Query Architecture](./QUERY_ARCHITECTURE.md) - Performance benchmarks
+- [Validation Procedures](./validation-procedures.md) - Consumer and streaming validation
