@@ -1,6 +1,6 @@
 # Operations Documentation
 
-**Last Updated**: 2026-01-15
+**Last Updated**: 2026-01-22
 **Stability**: Medium - updated after incidents
 **Target Audience**: DevOps, SREs, On-Call Engineers
 
@@ -33,7 +33,7 @@ operations/
 
 ## CI/CD Pipeline
 
-### [ci-cd-quickstart.md](./ci-cd-quickstart.md) 🚀
+### [ci-cd-quickstart.md](./ci-cd-quickstart.md)
 **Quick start for developers (5 min read)**
 
 Essential commands and workflow overview for developers:
@@ -448,6 +448,61 @@ make demo-reset-force
 
 ---
 
+## Documentation Maintenance
+
+### Maintenance Philosophy
+
+1. **Documentation is Code**: Maintain docs with same rigor as code (version control, reviews, CI/CD)
+2. **Update as You Work**: Change docs in the same commit as code changes
+3. **Ownership is Clear**: Every doc category has a clear owner
+4. **Quality Over Quantity**: Better to have 100 accurate pages than 200 stale pages
+
+### Maintenance Schedules
+
+| Frequency | Tasks | Owner |
+|-----------|-------|-------|
+| **Continuous** | Update "Last Updated" dates, fix broken links | All engineers |
+| **Daily** | Update phase PROGRESS.md, log blockers | Phase lead |
+| **Weekly** | Review phase progress, check design currency | Tech lead |
+| **Monthly** | Full validation, stale date check, cross-reference audit | Documentation team |
+| **Quarterly** | Comprehensive review, archive outdated docs, runbook testing | All category owners |
+
+### Quick Maintenance Tasks
+
+```bash
+# Validate documentation links
+bash scripts/validate-docs.sh
+
+# Find stale docs (not updated in 6 months)
+find docs -name "*.md" -mtime +180 ! -path "*/archive/*"
+
+# Check for duplicate content
+grep -r "specific phrase" docs/ --include="*.md" | wc -l
+```
+
+### Documentation Update Triggers
+
+| Change | Documentation to Update |
+|--------|------------------------|
+| API endpoint added/changed | `docs/reference/api-reference.md` |
+| Schema field added/changed | `docs/reference/data-dictionary-v2.md` |
+| Config parameter added | `docs/reference/configuration.md` |
+| New operational scenario | Create/update runbook |
+| Architectural decision | Add ADR to `DECISIONS.md` |
+
+### Ownership Matrix
+
+| Category | Primary Owner | Update Frequency |
+|----------|---------------|------------------|
+| architecture/ | Principal/Staff Engineers | Quarterly |
+| design/ | Senior Engineers | Monthly |
+| operations/ | DevOps/SRE Team | After incidents, quarterly |
+| testing/ | QA Engineers | When strategy changes |
+| phases/ | Phase Lead | Daily/weekly (active phase) |
+| reference/ | Technical Lead | When APIs/schemas change |
+
+---
+
 ## Related Documentation
 
 - **Architecture**: [../architecture/](../architecture/)
@@ -459,4 +514,4 @@ make demo-reset-force
 
 **Maintained By**: DevOps Team
 **Review Frequency**: Quarterly or after major incidents
-**Last Review**: 2026-01-10
+**Last Review**: 2026-01-22

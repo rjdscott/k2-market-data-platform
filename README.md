@@ -1,6 +1,6 @@
 # K2 Market Data Platform
 
-A distributed market data lakehouse for quantitative research, compliance, and analytics.
+A single-node market data lakehouse for quantitative research, compliance, and analytics.
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![Apache Kafka](https://img.shields.io/badge/kafka-3.7-orange.svg)](https://kafka.apache.org/)
@@ -27,7 +27,6 @@ K2 is an **L3 Cold Path Research Data Platform** optimized for analytics, compli
 | Latency | <500ms p99 | <10us (HFT) |
 | Use Case | Research, compliance, backtesting | Execution, market making |
 | Storage | Unlimited historical (S3-backed) | In-memory real-time |
-| Cost | $0.85 per million messages | Premium low-latency infra |
 
 **Target Use Cases**:
 1. Quantitative research and backtesting
@@ -43,7 +42,7 @@ For detailed positioning: [docs/architecture/platform-positioning.md](./docs/arc
 
 ## Quick Start
 
-**Prerequisites**: Docker Desktop (8GB RAM), Python 3.13+, [uv](https://docs.astral.sh/uv/)
+**Prerequisites**: Docker Desktop (12GB RAM, 16 Cores), Python 3.13+, [uv](https://docs.astral.sh/uv/)
 
 ### 1. Clone and Start Infrastructure
 

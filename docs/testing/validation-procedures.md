@@ -547,6 +547,86 @@ curl http://localhost:9000/minio/health/live
 
 ---
 
+---
+
+## WebSocket Streaming Validation
+
+This section covers validation procedures for WebSocket streaming clients (Binance, Kraken).
+
+### Quick Validation
+
+```bash
+# Test Binance (10 trades, ~30 seconds)
+python scripts/test_binance_stream.py
+
+# Test Kraken (10 trades, ~30-60 seconds)
+python scripts/test_kraken_stream.py
+
+# Comprehensive validation (both exchanges)
+python scripts/validate_streaming.py
+
+# Validate single exchange
+python scripts/validate_streaming.py --exchange binance
+python scripts/validate_streaming.py --exchange kraken
+```
+
+**Expected Output**:
+- [x] Connection successful
+- [x] 10 valid trades per exchange
+- [x] 100% v2 schema compliance
+- [x] Message rate: 0.1-100 trades/sec (depends on market activity)
+
+### Streaming Unit Tests
+
+```bash
+# All WebSocket unit tests (60 tests, ~3 seconds)
+uv run pytest tests/unit/test_binance_client.py tests/unit/test_kraken_client.py -v
+
+# Just Binance (30 tests)
+uv run pytest tests/unit/test_binance_client.py -v
+
+# Just Kraken (30 tests)
+uv run pytest tests/unit/test_kraken_client.py -v
+```
+
+### V2 Schema Requirements
+
+All trades must include:
+- `message_id` (UUID string, 36 chars)
+- `trade_id` (exchange-specific format)
+- `symbol` (e.g., "BTCUSDT", "BTCUSD")
+- `exchange` ("BINANCE" or "KRAKEN")
+- `asset_class` ("crypto")
+- `timestamp` (microseconds, int64)
+- `price` (Decimal, positive)
+- `quantity` (Decimal, positive)
+- `side` ("BUY" or "SELL")
+- `vendor_data` (dict with exchange-specific fields)
+
+### Exchange-Specific Validation
+
+**Binance**:
+- Symbol format: No separator (e.g., "BTCUSDT")
+- trade_id format: "BINANCE-{trade_id}"
+- vendor_data: `base_asset`, `quote_asset`, `is_buyer_maker`, `event_type`
+
+**Kraken**:
+- Symbol format: No separator, XBT normalized to BTC (e.g., "BTCUSD")
+- trade_id format: "KRAKEN-{timestamp}-{hash}"
+- vendor_data: `pair`, `base_asset`, `quote_asset`, `order_type`
+- XBT normalization: "XBT/USD" → symbol="BTCUSD", base_asset="BTC"
+
+### Expected Performance
+
+| Metric | Binance | Kraken |
+|--------|---------|--------|
+| Connection time | <5s | <5s |
+| Time to first trade | <10s | <30s |
+| Message rate | 1-100/sec | 0.1-10/sec |
+| Message latency | <100ms | <200ms |
+
+---
+
 **Maintained By**: QA and Platform Engineering Teams
-**Last Validated**: 2026-01-13 (5,000 messages, 0 errors, 142.21 msg/sec)
-**Next Review**: 2026-02-14 (30 days)
+**Last Validated**: 2026-01-22 (consumer + streaming validation)
+**Next Review**: 2026-02-22 (30 days)

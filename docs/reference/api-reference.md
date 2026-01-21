@@ -1,8 +1,38 @@
 # K2 API Reference
 
-**Last Updated**: 2026-01-14
+**Last Updated**: 2026-01-22
 **API Version**: v1
 **Base URL**: `http://localhost:8000/api` (local), `https://api.k2.prod` (production)
+
+---
+
+## Quick Reference
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Get trades (with auth)
+curl -H "X-API-Key: k2-dev-api-key-2026" \
+  "http://localhost:8000/api/v1/trades?symbol=BTCUSDT&limit=10"
+
+# Get symbols
+curl -H "X-API-Key: k2-dev-api-key-2026" \
+  "http://localhost:8000/api/v1/symbols"
+
+# Filter by time range
+curl -H "X-API-Key: k2-dev-api-key-2026" \
+  "http://localhost:8000/api/v1/trades?symbol=BTCUSDT&start_time=2026-01-13T00:00:00Z"
+```
+
+**Common Endpoints**:
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check (no auth) |
+| `/api/v1/trades` | GET | Query trades |
+| `/api/v1/symbols` | GET | List available symbols |
+| `/api/v1/stats` | GET | Platform statistics |
+| `/docs` | GET | Interactive Swagger UI |
 
 ---
 
