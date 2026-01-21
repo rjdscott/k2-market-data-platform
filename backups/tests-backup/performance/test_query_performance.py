@@ -65,12 +65,14 @@ class TestQueryLatency:
 
         stats = benchmark.stats
         print(
-            f"\nSimple scan - Mean: {stats['mean']*1000:.1f}ms, "
-            f"StdDev: {stats['stddev']*1000:.1f}ms"
+            f"\nSimple scan - Mean: {stats['mean'] * 1000:.1f}ms, "
+            f"StdDev: {stats['stddev'] * 1000:.1f}ms"
         )
 
         # Check baseline
-        assert stats["mean"] < 0.1, f"Simple query latency {stats['mean']*1000:.0f}ms exceeds 100ms"
+        assert stats["mean"] < 0.1, (
+            f"Simple query latency {stats['mean'] * 1000:.0f}ms exceeds 100ms"
+        )
 
     def test_filtered_query(self, benchmark, mock_query_engine):
         """Benchmark filtered query with WHERE clause.
@@ -91,11 +93,11 @@ class TestQueryLatency:
         benchmark(engine.execute_query, query)
 
         stats = benchmark.stats
-        print(f"\nFiltered query - Mean: {stats['mean']*1000:.1f}ms")
+        print(f"\nFiltered query - Mean: {stats['mean'] * 1000:.1f}ms")
 
-        assert (
-            stats["mean"] < 0.5
-        ), f"Filtered query latency {stats['mean']*1000:.0f}ms exceeds 500ms"
+        assert stats["mean"] < 0.5, (
+            f"Filtered query latency {stats['mean'] * 1000:.0f}ms exceeds 500ms"
+        )
 
     def test_aggregation_query(self, benchmark, mock_query_engine):
         """Benchmark aggregation query with GROUP BY.
@@ -122,11 +124,11 @@ class TestQueryLatency:
         benchmark(engine.execute_query, query)
 
         stats = benchmark.stats
-        print(f"\nAggregation query - Mean: {stats['mean']*1000:.1f}ms")
+        print(f"\nAggregation query - Mean: {stats['mean'] * 1000:.1f}ms")
 
-        assert (
-            stats["mean"] < 1.0
-        ), f"Aggregation query latency {stats['mean']*1000:.0f}ms exceeds 1s"
+        assert stats["mean"] < 1.0, (
+            f"Aggregation query latency {stats['mean'] * 1000:.0f}ms exceeds 1s"
+        )
 
     def test_time_range_query(self, benchmark, mock_query_engine):
         """Benchmark time range query (common pattern).
@@ -149,11 +151,11 @@ class TestQueryLatency:
         benchmark(engine.execute_query, query)
 
         stats = benchmark.stats
-        print(f"\nTime range query - Mean: {stats['mean']*1000:.1f}ms")
+        print(f"\nTime range query - Mean: {stats['mean'] * 1000:.1f}ms")
 
-        assert (
-            stats["mean"] < 0.3
-        ), f"Time range query latency {stats['mean']*1000:.0f}ms exceeds 300ms"
+        assert stats["mean"] < 0.3, (
+            f"Time range query latency {stats['mean'] * 1000:.0f}ms exceeds 300ms"
+        )
 
 
 @pytest.mark.performance
@@ -256,7 +258,7 @@ class TestQueryComplexity:
         )
 
         stats = benchmark.stats
-        print(f"\nJoin query - Mean: {stats['mean']*1000:.1f}ms")
+        print(f"\nJoin query - Mean: {stats['mean'] * 1000:.1f}ms")
 
         assert stats["mean"] < 2.0, f"Join query latency {stats['mean']:.2f}s exceeds 2s"
 
@@ -292,11 +294,11 @@ class TestQueryComplexity:
         )
 
         stats = benchmark.stats
-        print(f"\nWindow function query - Mean: {stats['mean']*1000:.1f}ms")
+        print(f"\nWindow function query - Mean: {stats['mean'] * 1000:.1f}ms")
 
-        assert (
-            stats["mean"] < 1.5
-        ), f"Window function query latency {stats['mean']:.2f}s exceeds 1.5s"
+        assert stats["mean"] < 1.5, (
+            f"Window function query latency {stats['mean']:.2f}s exceeds 1.5s"
+        )
 
     def test_subquery_performance(self, benchmark, mock_query_engine):
         """Benchmark query with subqueries.
@@ -327,9 +329,9 @@ class TestQueryComplexity:
         benchmark(engine.execute_query, query)
 
         stats = benchmark.stats
-        print(f"\nSubquery - Mean: {stats['mean']*1000:.1f}ms")
+        print(f"\nSubquery - Mean: {stats['mean'] * 1000:.1f}ms")
 
-        assert stats["mean"] < 1.0, f"Subquery latency {stats['mean']*1000:.0f}ms exceeds 1s"
+        assert stats["mean"] < 1.0, f"Subquery latency {stats['mean'] * 1000:.0f}ms exceeds 1s"
 
 
 @pytest.mark.performance
@@ -362,8 +364,8 @@ class TestQueryCaching:
         engine.execute_query(query)
         second_query_time = time.perf_counter() - start
 
-        print(f"\nFirst query (cold): {first_query_time*1000:.1f}ms")
-        print(f"Second query (warm): {second_query_time*1000:.1f}ms")
+        print(f"\nFirst query (cold): {first_query_time * 1000:.1f}ms")
+        print(f"Second query (warm): {second_query_time * 1000:.1f}ms")
 
         if second_query_time < first_query_time:
             speedup = first_query_time / second_query_time
@@ -399,7 +401,7 @@ class TestQueryScaling:
             elapsed = time.perf_counter() - start
 
             results.append((size, elapsed * 1000))
-            print(f"Result size {size:>6}: {elapsed*1000:>8.1f}ms")
+            print(f"Result size {size:>6}: {elapsed * 1000:>8.1f}ms")
 
         # Check that latency scales sub-linearly with result size
         # (DuckDB should be efficient at returning results)
@@ -441,8 +443,8 @@ class TestQueryScaling:
         engine.execute_query(query_broad)
         broad_time = time.perf_counter() - start
 
-        print(f"\nHighly selective query: {selective_time*1000:.1f}ms")
-        print(f"Broad query: {broad_time*1000:.1f}ms")
+        print(f"\nHighly selective query: {selective_time * 1000:.1f}ms")
+        print(f"Broad query: {broad_time * 1000:.1f}ms")
         print(f"Ratio: {broad_time / selective_time:.2f}x")
 
 
@@ -476,7 +478,7 @@ class TestQueryStress:
             if (i + 1) % 100 == 0:
                 elapsed = time.perf_counter() - start
                 throughput = (i + 1) / elapsed
-                print(f"Query {i+1}/{num_queries}: {throughput:.1f} q/s")
+                print(f"Query {i + 1}/{num_queries}: {throughput:.1f} q/s")
 
         total_elapsed = time.perf_counter() - start
         avg_throughput = num_queries / total_elapsed
@@ -485,6 +487,6 @@ class TestQueryStress:
         print(f"Average throughput: {avg_throughput:.1f} queries/sec")
 
         # Should maintain at least 8 q/s under sustained load
-        assert (
-            avg_throughput > 8
-        ), f"Sustained throughput {avg_throughput:.1f} q/s below 8 q/s baseline"
+        assert avg_throughput > 8, (
+            f"Sustained throughput {avg_throughput:.1f} q/s below 8 q/s baseline"
+        )

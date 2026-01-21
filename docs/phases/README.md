@@ -21,7 +21,7 @@ This directory contains phase-specific implementation documentation. Each phase 
    - P0 = Critical (same day)
    - P1 = High priority (1-2 weeks)
    - P2 = Medium priority (1 month)
-   - See: [TECHNICAL_DEBT.md](../../TECHNICAL_DEBT.md)
+   - See: [TECHNICAL_DEBT.md](../TECHNICAL_DEBT.md)
    - Tracked in: [`phase-0-technical-debt-resolution/`](./phase-0-technical-debt-resolution/)
 
 2. **Phase 2/3/4** = **Project Phases** (Sequential milestones)
@@ -266,7 +266,7 @@ docs/phases/
   - [Phase 7: End-to-End Testing](./phase-7-e2e/) - 28 E2E tests, production ready 🎉
 
 ### By Topic
-- **Technical Debt**: [Phase 0](./phase-0-technical-debt-resolution/) | [TECHNICAL_DEBT.md](../../TECHNICAL_DEBT.md)
+- **Technical Debt**: [Phase 0](./phase-0-technical-debt-resolution/) | [TECHNICAL_DEBT.md](../TECHNICAL_DEBT.md)
 - **Core Platform**: [Phase 1: Single-Node](./phase-1-single-node-equities/)
 - **Multi-Source Support**: [Phase 2: Multi-Source Foundation](./phase-2-prep/)
 - **Demo & Resilience**: [Phase 3: Demo Enhancements](./phase-3-demo-enhancements/)

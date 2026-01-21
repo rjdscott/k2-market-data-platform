@@ -69,9 +69,9 @@ class PerformanceBenchmark:
 
                 # Verify query returned data
                 if not result or len(result) == 0:
-                    console.print(f"  [yellow]Warning: Iteration {i+1} returned 0 rows[/yellow]")
+                    console.print(f"  [yellow]Warning: Iteration {i + 1} returned 0 rows[/yellow]")
             except Exception as e:
-                console.print(f"  [red]Error in iteration {i+1}: {e}[/red]")
+                console.print(f"  [red]Error in iteration {i + 1}: {e}[/red]")
                 continue
 
         if not latencies:

@@ -21,7 +21,6 @@ class TestProducerContextManager:
             patch("k2.ingestion.producer.Producer") as mock_prod,
             patch("k2.ingestion.producer.get_topic_builder") as mock_builder,
         ):
-
             # Mock Schema Registry client
             mock_sr_instance = MagicMock()
             mock_sr.return_value = mock_sr_instance
@@ -100,7 +99,6 @@ class TestProducerClose:
             patch("k2.ingestion.producer.Producer") as mock_prod,
             patch("k2.ingestion.producer.get_topic_builder") as mock_builder,
         ):
-
             mock_sr_instance = MagicMock()
             mock_sr.return_value = mock_sr_instance
 
@@ -179,7 +177,6 @@ class TestProducerAfterClose:
             patch("k2.ingestion.producer.Producer") as mock_prod,
             patch("k2.ingestion.producer.get_topic_builder"),
         ):
-
             mock_prod_instance = MagicMock()
             mock_prod_instance.flush.return_value = 0
             mock_prod.return_value = mock_prod_instance
@@ -240,7 +237,6 @@ class TestProducerResourceCleanup:
             patch("k2.ingestion.producer.Producer") as mock_prod,
             patch("k2.ingestion.producer.get_topic_builder"),
         ):
-
             mock_prod_instance = MagicMock()
             mock_prod_instance.flush.return_value = 0
             mock_prod.return_value = mock_prod_instance
@@ -262,7 +258,6 @@ class TestProducerResourceCleanup:
             patch("k2.ingestion.producer.Producer") as mock_prod,
             patch("k2.ingestion.producer.get_topic_builder"),
         ):
-
             mock_prod_instance = MagicMock()
             mock_prod_instance.flush.return_value = 0
             mock_prod.return_value = mock_prod_instance
@@ -283,7 +278,6 @@ class TestProducerResourceCleanup:
             patch("k2.ingestion.producer.Producer") as mock_prod,
             patch("k2.ingestion.producer.get_topic_builder"),
         ):
-
             mock_prod_instance = MagicMock()
             mock_prod_instance.flush.return_value = 0
             mock_prod.return_value = mock_prod_instance
@@ -315,7 +309,6 @@ class TestProducerExceptionHandling:
             patch("k2.ingestion.producer.Producer") as mock_prod,
             patch("k2.ingestion.producer.get_topic_builder"),
         ):
-
             mock_prod_instance = MagicMock()
             mock_prod_instance.flush.return_value = 0
             mock_prod.return_value = mock_prod_instance
@@ -331,7 +324,6 @@ class TestProducerExceptionHandling:
             patch("k2.ingestion.producer.Producer") as mock_prod,
             patch("k2.ingestion.producer.get_topic_builder"),
         ):
-
             # Configure flush to raise error
             mock_prod_instance = MagicMock()
             mock_prod_instance.flush.side_effect = Exception("Flush failed")
@@ -353,7 +345,6 @@ class TestProducerCleanupIntegration:
             patch("k2.ingestion.producer.Producer") as mock_prod,
             patch("k2.ingestion.producer.get_topic_builder"),
         ):
-
             mock_prod.return_value = MagicMock()
             mock_prod.return_value.flush.return_value = 0
 
@@ -381,7 +372,6 @@ class TestProducerCleanupIntegration:
             patch("k2.ingestion.producer.Producer") as mock_prod,
             patch("k2.ingestion.producer.get_topic_builder"),
         ):
-
             mock_prod.return_value = MagicMock()
             mock_prod.return_value.flush.return_value = 0
 

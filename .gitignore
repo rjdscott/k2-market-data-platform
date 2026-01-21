@@ -218,3 +218,7 @@ data/processed/
 data/temp/
 data/*.parquet
 data/*.csv
+spark-jars/
+
+# Flink JARs (large connector files, download locally)
+flink-jars/*.jar

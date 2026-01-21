@@ -3,7 +3,7 @@
 A distributed market data lakehouse for quantitative research, compliance, and analytics.
 
 **Stack**: Kafka (KRaft) → Iceberg → DuckDB → FastAPI<br>
-**Data**: ASX equities (200K+ trades, March 2014) + Binance crypto streaming (live BTC/ETH/BNB)<br>
+**Data**: Multi-exchange crypto streaming (Binance + Kraken) + Historical market data archive<br>
 **Python**: 3.13+ with uv package manager
 
 ---
@@ -47,33 +47,45 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Data Sources                             │
-│   CSV Batch (ASX equities)  │  WebSocket Stream (Binance crypto)│
-└──────────────┬──────────────┴──────────────┬────────────────────┘
-               │ Batch ingestion              │ Live streaming
-               ▼                              ▼
+│   Historical Archive │  WebSocket (Binance)  │  WebSocket (Kraken)│
+└──────────┬─────────┴───────────┬───────────┴─────────┬──────────┘
+           │ Batch ingestion     │ Live streaming      │
+           ▼                     ▼                     ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Ingestion Layer                             │
 │  ┌──────────────┐    ┌─────────────────┐                        │
 │  │    Kafka     │◄───│ Schema Registry │  BACKWARD compatibility│
 │  │   (KRaft)    │    │   (Avro, HA)    │                        │
 │  └──────┬───────┘    └─────────────────┘                        │
-│         │ Topics: market.{equities,crypto}.{trades,quotes}.{asx,binance}
+│         │ Topics: market.{crypto}.{trades,quotes}.{binance,kraken}
 │         │ Partitioning: hash(symbol)                            │
 │         │ V2 Schema: Multi-source, multi-asset class            │
 └─────────┼───────────────────────────────────────────────────────┘
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────┐
+│              Processing Layer (Spark Streaming)                 │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Spark Cluster (3.5.x)                                   │   │
+│  │  • Master + 2 Workers (4 cores, 6GB total)              │   │
+│  │  • Structured Streaming (Kafka → Iceberg)               │   │
+│  │  • Medallion Architecture: Bronze → Silver → Gold       │   │
+│  │  • Adaptive Query Execution (AQE)                       │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│         │ Bronze: Raw bytes    │ Silver: Validated    │ Gold: Unified
+└─────────┼──────────────────────┼──────────────────────┼──────────┘
+          ▼                      ▼                      ▼
+┌─────────────────────────────────────────────────────────────────┐
 │                   Storage Layer (Iceberg)                       │
 │  ┌──────────────────┐        ┌────────────────┐                 │
-│  │  Apache Iceberg  │◄───────│   PostgreSQL   │  Catalog        │
+│  │  Apache Iceberg  │◄───────│   PostgreSQL   │  REST Catalog   │
 │  │  (ACID, Parquet) │        │      16        │  metadata       │
 │  └────────┬─────────┘        └────────────────┘                 │
 │           ▼                                                     │
 │  ┌──────────────────┐                                           │
 │  │  MinIO (S3 API)  │  Parquet + Zstd compression               │
-│  │                  │  Daily partitions (exchange_date)         │
-│  └──────────────────┘  Tables: trades_v2, quotes_v2             │
+│  │                  │  Hourly partitions (exchange_date, hour)  │
+│  └──────────────────┘  Medallion: bronze/silver_*/gold_*        │
 └─────────┼───────────────────────────────────────────────────────┘
           │
           ▼
@@ -105,7 +117,8 @@ K2 is an **L3 Cold Path Research Data Platform** - optimized for analytics, comp
 
 **Key Design Decisions**:
 - **Kafka with KRaft**: Sub-1s broker failover (no ZooKeeper dependency)
-- **Iceberg ACID**: Time-travel queries, schema evolution, hidden partitioning
+- **Spark Streaming**: Medallion architecture (Bronze→Silver→Gold) for data quality layers
+- **Iceberg ACID**: Time-travel queries, schema evolution, hidden partitioning, REST catalog
 - **DuckDB Embedded**: Sub-second queries without cluster management overhead
 - **Schema Registry HA**: BACKWARD compatibility enforcement across all producers
 
@@ -179,16 +192,36 @@ uv run python scripts/init_infra.py
 make api   # Starts FastAPI on http://localhost:8000
 ```
 
-### 5. Start Consumer Service (Optional)
+### 5. Start Streaming Services (Optional)
 
 ```bash
-# Start continuous ingestion from Kafka to Iceberg
-docker compose up -d consumer-crypto
+# Start WebSocket producers (connect to exchanges)
+docker compose up -d binance-stream kraken-stream
 
-# Verify data flow
-curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
-  -H "X-API-Key: k2-dev-api-key-2026"
+# Start Bronze streaming jobs (Kafka → Iceberg ingestion)
+docker compose up -d bronze-binance-stream bronze-kraken-stream
+
+# Verify data flow to Bronze tables
+docker exec k2-spark-master spark-sql \
+  --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar \
+  -e "SELECT 'binance', COUNT(*) FROM iceberg.market_data.bronze_binance_trades
+      UNION ALL
+      SELECT 'kraken', COUNT(*) FROM iceberg.market_data.bronze_kraken_trades;"
+
+# Monitor Bronze streaming jobs
+# Spark UI: http://localhost:8090 (should show both jobs RUNNING with 2 cores each)
+docker logs k2-bronze-binance-stream -f   # Binance Bronze ingestion logs
+docker logs k2-bronze-kraken-stream -f    # Kraken Bronze ingestion logs
+
+# Check producer logs
+docker logs k2-binance-stream -f   # Binance WebSocket producer
+docker logs k2-kraken-stream -f    # Kraken WebSocket producer
 ```
+
+**Bronze Streaming Architecture**:
+- **Producers**: WebSocket clients streaming trades from exchanges → Kafka topics
+- **Bronze Jobs**: Spark Structured Streaming jobs consuming from Kafka → Iceberg Bronze tables
+- **Features**: Auto-restart, checkpointing, resource limits (2 cores each), AWS region config for MinIO
 
 ### 6. Run Demo (Optional)
 
@@ -215,6 +248,7 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 | Kafka UI | http://localhost:8080 | - |
 | MinIO | http://localhost:9001 | admin / password |
 | Prometheus | http://localhost:9090 | - |
+| Spark Master UI | http://localhost:8090 | - |
 
 | Kafka UI (Kafbat) | MinIO Console |
 |-------------------|---------------|
@@ -235,9 +269,10 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 |-------|------------|---------|-----------------|
 | Streaming | Apache Kafka | 3.7 (KRaft) | No ZooKeeper, sub-1s failover |
 | Schema | Confluent Schema Registry | 7.6 | BACKWARD compatibility enforcement |
+| Processing | Apache Spark | 3.5.x | Structured streaming, Medallion architecture |
 | Storage | Apache Iceberg | 1.4 | ACID + time-travel for compliance |
 | Object Store | MinIO | Latest | S3-compatible local development |
-| Catalog | PostgreSQL | 16 | Proven Iceberg metadata store |
+| Catalog | PostgreSQL | 16 | Proven Iceberg REST catalog metadata store |
 | Query | DuckDB | 0.10 | Zero-ops with connection pooling (5-50 concurrent queries) |
 | API | FastAPI | 0.111 | Async + auto-docs, Python ecosystem integration |
 | Metrics | Prometheus | 2.51 | Pull-based metrics, industry standard |
@@ -249,7 +284,7 @@ make demo-reset-custom KEEP_METRICS=1  # Preserve Prometheus/Grafana
 - DuckDB vs Presto: Single-node simplicity for Phase 1, scales to ~10TB dataset
 - At-least-once vs Exactly-once: Market data duplicates acceptable, simpler implementation
 
-See [Architecture Decision Records](docs/phases/phase-1-single-node-equities/DECISIONS.md) for 26 detailed decisions.
+See [Architecture Decision Records](docs/phases/phase-1-single-node/DECISIONS.md) for 26 detailed decisions.
 
 ---
 
@@ -319,7 +354,7 @@ See [Operations Guide](./docs/operations/README.md) for current operational targ
 
 **Key Dashboards**:
 - [System Overview](http://localhost:3000) - Throughput, latency p99, error rates
-- [Per-Exchange Drill-down](http://localhost:3000) - ASX-specific metrics
+- [Per-Exchange Drill-down](http://localhost:3000) - Exchange-specific metrics
 - [Query Performance](http://localhost:3000) - Latency breakdown by query mode
 
 **Prometheus Metrics** (50+):
@@ -388,20 +423,24 @@ See [Scaling Strategy](./docs/architecture/system-design.md#scaling-consideratio
 
 The platform supports both batch (historical) and streaming (live) data sources across multiple asset classes.
 
-### Live Crypto Data (Binance)
+### Live Crypto Data (Binance + Kraken)
 
-Real-time streaming cryptocurrency trades from Binance WebSocket API.
+Real-time streaming cryptocurrency trades from Binance and Kraken WebSocket APIs.
 
-| Symbol | Asset Class | Trades Ingested | Data Quality | Consumer Performance |
-|--------|-------------|-----------------|--------------|----------------------|
-| BTCUSDT | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
-| ETHUSDT | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
-| BNBUSDT | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
+| Symbol | Exchange | Asset Class | Trades Ingested | Data Quality | Consumer Performance |
+|--------|----------|-------------|-----------------|--------------|----------------------|
+| BTCUSDT | Binance | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
+| ETHUSDT | Binance | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
+| BNBUSDT | Binance | Crypto | 321K+ | Live streaming | 32 msg/s (sustained) |
+| BTCUSD | Kraken | Crypto | 50+ validated | Live streaming | 10-50 trades/min |
+| ETHUSD | Kraken | Crypto | 50+ validated | Live streaming | 10-50 trades/min |
 
-**Data Flow**: Binance WebSocket → Kafka → Consumer → Iceberg → Query Engine
+**Data Flow**: WebSocket (Binance/Kraken) → Kafka → Consumer → Iceberg → Query Engine
 **Consumer**: Production-ready with batch processing (32 msg/s throughput)
-**Schema**: V2 multi-source schema with Binance-specific fields in `vendor_data`
+**Schema**: V2 multi-source schema with exchange-specific fields in `vendor_data`
 **Storage**: Apache Iceberg `trades_v2` table with daily partitions
+
+**Kraken Integration**: See [Kraken Streaming Guide](./docs/KRAKEN_STREAMING.md) for setup, configuration, monitoring, and troubleshooting.
 
 ```bash
 # Query live crypto data (now available via API)
@@ -409,15 +448,15 @@ curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
   -H "X-API-Key: k2-dev-api-key-2026" | jq .
 
 # Start live streaming + consumer (requires Docker services)
-docker compose up -d binance-stream consumer-crypto
+docker compose up -d binance-stream kraken-stream consumer-crypto
 
 # Manual consumer testing
 uv run python scripts/consume_crypto_trades.py --max-messages 100 --no-ui
 ```
 
-### Historical Data (ASX Equities)
+### Historical Data Archive
 
-Sample ASX equities tick data available in `data/sample/{trades,quotes,bars-1min,reference-data}/`
+Sample historical market data available in `data/sample/{trades,quotes,bars-1min,reference-data}/`
 
 See [Data Dictionary V2](./docs/reference/data-dictionary-v2.md) for complete schema definitions.
 
@@ -425,17 +464,17 @@ See [Data Dictionary V2](./docs/reference/data-dictionary-v2.md) for complete sc
 
 ## Schema Evolution
 
-✅ **V2 Schema Operational** - Validated E2E across ASX equities (batch CSV) and Binance crypto (live streaming)
+✅ **V2 Schema Operational** - Validated E2E across multiple exchanges (Binance, Kraken) with live streaming
 
 K2 uses **industry-standard hybrid schemas** (v2) that support multiple data sources and asset classes.
 
 ### V1 → V2 Migration
 
-**V1 (Legacy ASX-specific)**:
+**V1 (Legacy exchange-specific)**:
 ```
 volume (int64)             → quantity (Decimal 18,8)
 exchange_timestamp (millis) → timestamp (micros)
-company_id, qualifiers, venue → vendor_data (map)
+exchange-specific fields   → vendor_data (map)
 ```
 
 **V2 (Multi-source standard)**:
@@ -447,7 +486,7 @@ company_id, qualifiers, venue → vendor_data (map)
 
 | Feature | V1 | V2 |
 |---------|----|----|
-| Multi-source support | ❌ ASX only | ✅ ASX, Binance, FIX |
+| Multi-source support | ❌ Single source | ✅ Binance, Kraken, FIX |
 | Asset classes | ❌ Equities only | ✅ Equities, crypto, futures |
 | Decimal precision | 18,6 | 18,8 (micro-prices) |
 | Timestamp precision | milliseconds | microseconds |
@@ -461,15 +500,15 @@ company_id, qualifiers, venue → vendor_data (map)
 from k2.ingestion.message_builders import build_trade_v2
 
 trade = build_trade_v2(
-    symbol="BHP",
-    exchange="ASX",
-    asset_class="equities",
+    symbol="BTCUSDT",
+    exchange="BINANCE",
+    asset_class="crypto",
     timestamp=datetime.utcnow(),
-    price=Decimal("45.67"),
-    quantity=Decimal("1000"),
-    currency="AUD",
+    price=Decimal("42150.50"),
+    quantity=Decimal("0.05"),
+    currency="USDT",
     side="BUY",
-    vendor_data={"company_id": "123", "qualifiers": "0"}  # ASX-specific
+    vendor_data={"is_buyer_maker": "true", "event_type": "aggTrade"}  # Binance-specific
 )
 
 # Query engine (v2 default)
@@ -477,8 +516,8 @@ engine = QueryEngine(table_version="v2")
 trades = engine.query_trades(symbol="BHP")  # Queries trades_v2 table
 
 # Batch loader (v2 default)
-loader = BatchLoader(asset_class="equities", exchange="asx",
-                      schema_version="v2", currency="AUD")
+loader = BatchLoader(asset_class="crypto", exchange="binance",
+                      schema_version="v2", currency="USDT")
 ```
 
 ### E2E Validation Results
@@ -506,10 +545,10 @@ See [Schema Design V2](./docs/architecture/schema-design-v2.md) for complete spe
 
 | Type | Count | Command | Duration |
 |------|-------|---------|----------|
-| Unit | **109** | `uv run pytest tests/unit/` | ~5s |
-| Integration | 40+ | `make test-integration` | ~60s |
+| Unit | **169** | `uv run pytest tests/unit/` | ~5s |
+| Integration | 46+ | `make test-integration` | ~60s |
 | E2E | 7 | `make test-integration` | ~60s |
-| **Total** | **156+** | | |
+| **Total** | **222+** | | |
 
 ### New Unit Test Infrastructure (2026-01-16)
 
@@ -523,6 +562,7 @@ See [Schema Design V2](./docs/architecture/schema-design-v2.md) for complete spe
 | **API Models** | 35 | Pydantic validation, business logic, security, serialization |
 | **Data Quality** | 26 | Market data rules, anomaly detection, consistency checks |
 | **Market Data Factory** | 16 | Realistic test data, market scenarios, time series |
+| **WebSocket Clients** | 60 | Binance & Kraken streaming, v2 schema conversion, resilience |
 | **Framework Basics** | 14 | Core infrastructure, imports, project structure |
 
 #### Key Features
@@ -548,13 +588,26 @@ tests/unit/
 ### Run Tests
 
 ```bash
-# New unit tests (focus on core validation)
+# Unit tests (focus on core validation)
 uv run pytest tests/unit/ -v                    # All 109 unit tests
 uv run pytest tests/unit/test_schemas.py       # Schema validation
 uv run pytest tests/unit/test_api_models.py    # API models & business logic
 uv run pytest tests/unit/test_data_quality.py  # Data quality & anomalies
+uv run pytest tests/unit/test_binance_client.py  # Binance WebSocket (30 tests)
+uv run pytest tests/unit/test_kraken_client.py   # Kraken WebSocket (30 tests)
 
-# Legacy integration tests
+# Integration tests (requires internet connectivity)
+uv run pytest tests/integration/test_streaming_validation.py -v  # WebSocket validation
+uv run pytest tests/integration/test_streaming_validation.py -k kraken  # Kraken only
+uv run pytest tests/integration/test_streaming_validation.py -k binance # Binance only
+
+# Streaming validation scripts (manual testing)
+python scripts/test_binance_stream.py           # Test Binance live (10 trades)
+python scripts/test_kraken_stream.py            # Test Kraken live (10 trades)
+python scripts/validate_streaming.py            # Comprehensive validation report
+python scripts/validate_streaming.py --exchange kraken  # Kraken only
+
+# Full test suite
 make test-integration   # Full integration (~60s, requires Docker)
 make coverage           # Coverage report
 ```
@@ -621,8 +674,12 @@ src/k2/
 ├── ingestion/           # Data ingestion (2,300 lines)
 │   ├── producer.py      # Idempotent Kafka producer
 │   ├── consumer.py      # Kafka → Iceberg writer
-│   ├── batch_loader.py  # CSV batch ingestion
+│   ├── message_builders.py  # Trade/quote V2 builders
 │   └── sequence_tracker.py  # Gap detection
+├── spark/               # Spark Streaming (NEW - Phase 10)
+│   ├── utils/           # Spark session factory with Iceberg config
+│   ├── jobs/            # Bronze/Silver/Gold transformation jobs
+│   └── schemas/         # DataFrame validation schemas
 ├── storage/             # Iceberg lakehouse (900 lines)
 │   ├── catalog.py       # Table management
 │   └── writer.py        # Batch writes
@@ -631,11 +688,11 @@ src/k2/
 │   ├── replay.py        # Time-travel queries
 │   └── cli.py           # k2-query CLI
 ├── kafka/               # Kafka utilities (800 lines)
-├── schemas/             # Avro schemas (trade, quote, reference)
+├── schemas/             # Avro schemas (trade_v2, quote_v2, reference_data_v2)
 └── common/              # Config, logging, metrics (1,300 lines)
 ```
 
-**Total**: ~8,400 lines of Python
+**Total**: ~8,500 lines of Python (+ Spark jobs pending)
 
 ---
 
@@ -713,7 +770,7 @@ make quality            # All checks
 
 **For Implementation**:
 - [Phase 0: Technical Debt](docs/phases/phase-0-technical-debt-resolution/) - ✅ Complete
-- [Phase 1: Single-Node](docs/phases/phase-1-single-node-equities/) - ✅ Complete
+- [Phase 1: Single-Node](docs/phases/phase-1-single-node/) - ✅ Complete
 - [Phase 2: Multi-Source Foundation](docs/phases/phase-2-prep/) - ✅ Complete (V2 schema + Binance)
 - [Phase 3: Demo Enhancements](docs/phases/phase-3-demo-enhancements/) - ✅ Complete (Platform positioning, circuit breaker, hybrid queries, cost model)
 
@@ -755,7 +812,7 @@ K2 is developed in phases, each with clear business drivers and validation crite
 - 8 REST endpoints
 - 7 CLI commands
 
-See [Phase 1 Status](docs/phases/phase-1-single-node-equities/STATUS.md) for detailed completion report.
+See [Phase 1 Status](docs/phases/phase-1-single-node/STATUS.md) for detailed completion report.
 
 ### Phase 2 Prep: Schema Evolution + Binance Streaming ✅ Complete
 
@@ -763,8 +820,8 @@ See [Phase 1 Status](docs/phases/phase-1-single-node-equities/STATUS.md) for det
 
 **Delivered** (2026-01-13):
 - ✅ V2 industry-standard schemas (hybrid approach with vendor_data map)
-- ✅ Multi-source ingestion (ASX batch CSV + Binance live WebSocket)
-- ✅ Multi-asset class support (equities + crypto)
+- ✅ Multi-source ingestion (Binance + Kraken live WebSocket)
+- ✅ Multi-asset class support (crypto + futures)
 - ✅ Binance streaming (69,666+ trades received, 5,000 written to Iceberg)
 - ✅ E2E pipeline validated (Binance → Kafka → Iceberg → Query)
 - ✅ Production-grade resilience (SSL handling, metrics, error handling)
@@ -893,7 +950,7 @@ Contributions welcome. See [Contributing Guide](./CONTRIBUTING.md) for developme
 
 - **Documentation**: See [docs/](./docs/)
 - **Issues**: [GitHub Issues](https://github.com/rjdscott/k2-market-data-platform/issues)
-- **Architecture Questions**: [Architecture Decision Records](docs/phases/phase-1-single-node-equities/DECISIONS.md)
+- **Architecture Questions**: [Architecture Decision Records](docs/phases/phase-1-single-node/DECISIONS.md)
 
 ---
 

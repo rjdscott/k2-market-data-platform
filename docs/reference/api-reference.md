@@ -24,7 +24,7 @@ The K2 Market Data Platform REST API provides programmatic access to market data
 All API requests require an API key passed via the `X-API-Key` header.
 
 ```bash
-curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v1/trades?symbol=BHP&limit=10
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v1/trades?symbol=BTCUSDT&limit=10
 ```
 
 **Note**: Phase 1-2 (localhost) does not enforce authentication. Phase 3+ will require OAuth2 + JWT tokens.
@@ -50,8 +50,8 @@ The interactive documentation includes:
 
 | Parameter | Type | Required | Description | Example |
 |-----------|------|----------|-------------|---------|
-| `symbol` | string | No | Filter by symbol | `BHP`, `BTCUSDT` |
-| `exchange` | string | No | Filter by exchange | `ASX`, `BINANCE` |
+| `symbol` | string | No | Filter by symbol | `BTCUSDT`, `ETHUSDT` |
+| `exchange` | string | No | Filter by exchange | `BINANCE`, `KRAKEN` |
 | `table_type` | string | No | Table type to query (TRADES, QUOTES) | `TRADES` |
 | `start_time` | ISO 8601 | No | Filter trades after this time | `2026-01-13T00:00:00Z` |
 | `end_time` | ISO 8601 | No | Filter trades before this time | `2026-01-13T23:59:59Z` |
@@ -77,8 +77,8 @@ Query trade records with filters.
 
 **Request Examples**:
 ```bash
-# Query BHP trades from ASX
-GET /api/v1/trades?symbol=BHP&exchange=ASX&start_time=2026-01-13T00:00:00Z&limit=100
+# Query BTC trades from Binance
+GET /api/v1/trades?symbol=BTCUSDT&exchange=BINANCE&start_time=2026-01-13T00:00:00Z&limit=100
 
 # Query crypto trades from Binance (consumer must be running)
 GET /api/v1/trades?symbol=BTCUSDT&exchange=BINANCE&table_type=TRADES&limit=10
@@ -103,9 +103,9 @@ GET /api/v1/trades?table_type=TRADES&limit=5
   "data": [
     {
       "message_id": "550e8400-e29b-41d4-a716-446655440000",
-      "trade_id": "ASX-123456",
-      "symbol": "BHP",
-      "exchange": "ASX",
+      "trade_id": "BINANCE-123456",
+      "symbol": "BTCUSDT",
+      "exchange": "BINANCE",
       "price": "45.67",
       "quantity": "1000.00",
       "trade_timestamp": "2026-01-13T14:30:00.123456Z",
@@ -114,7 +114,7 @@ GET /api/v1/trades?table_type=TRADES&limit=5
       "sequence_number": 12345,
       "venue_trade_id": "123456",
       "venue_data": {
-        "market_center_id": "ASX",
+        "market_center_id": "BINANCE",
         "participant_id": "PARTICIPANT001"
       }
     }
@@ -146,9 +146,9 @@ Query quote (bid/ask) records with filters.
 
 **Request Examples**:
 ```bash
-# Query ASX equities
+# Query crypto trades
 curl -H "X-API-Key: k2-dev-api-key-2026" \
-  "http://localhost:8000/v1/trades?symbol=BHP&limit=10"
+  "http://localhost:8000/v1/trades?symbol=BTCUSDT&limit=10"
 
 # Query crypto trades (after starting consumer service)
 curl -s "http://localhost:8000/v1/trades?table_type=TRADES&limit=5" \
@@ -167,9 +167,9 @@ curl -s "http://localhost:8000/v1/trades?symbol=BTCUSDT&exchange=BINANCE&table_t
   "data": [
     {
       "message_id": "550e8400-e29b-41d4-a716-446655440001",
-      "quote_id": "ASX-Q123456",
-      "symbol": "BHP",
-      "exchange": "ASX",
+      "quote_id": "BINANCE-Q123456",
+      "symbol": "BTCUSDT",
+      "exchange": "BINANCE",
       "bid_price": "45.66",
       "bid_size": "5000.00",
       "ask_price": "45.68",
@@ -199,7 +199,7 @@ Get daily market summary (OHLCV) for a symbol on a specific date.
 
 **Request**:
 ```bash
-GET /api/v1/summary/BHP/2026-01-13
+GET /api/v1/summary/BTCUSDT/2026-01-13
 ```
 
 **Path Parameters**:
@@ -210,8 +210,8 @@ GET /api/v1/summary/BHP/2026-01-13
 ```json
 {
   "data": {
-    "symbol": "BHP",
-    "exchange": "ASX",
+    "symbol": "BTCUSDT",
+    "exchange": "BINANCE",
     "date": "2026-01-13",
     "open": "45.50",
     "high": "46.20",
@@ -241,7 +241,7 @@ List all available symbols with exchange information.
 
 **Request**:
 ```bash
-GET /api/v1/symbols?exchange=ASX
+GET /api/v1/symbols?exchange=BINANCE
 ```
 
 **Query Parameters**:
@@ -252,18 +252,18 @@ GET /api/v1/symbols?exchange=ASX
 {
   "data": [
     {
-      "symbol": "BHP",
-      "exchange": "ASX",
-      "asset_class": "EQUITY",
+      "symbol": "BTCUSDT",
+      "exchange": "BINANCE",
+      "asset_class": "CRYPTO",
       "first_seen": "2026-01-10T00:00:00.000Z",
       "last_seen": "2026-01-13T23:59:59.999Z",
       "trade_count": 125000,
       "quote_count": 450000
     },
     {
-      "symbol": "RIO",
-      "exchange": "ASX",
-      "asset_class": "EQUITY",
+      "symbol": "ETHUSDT",
+      "exchange": "KRAKEN",
+      "asset_class": "CRYPTO",
       "first_seen": "2026-01-10T00:00:00.000Z",
       "last_seen": "2026-01-13T23:59:59.999Z",
       "trade_count": 98000,
@@ -373,8 +373,8 @@ POST /api/v1/trades/query
 Content-Type: application/json
 
 {
-  "symbols": ["BHP", "RIO", "FMG"],
-  "exchanges": ["ASX"],
+  "symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT"],
+  "exchanges": ["BINANCE", "KRAKEN"],
   "start_time": "2026-01-13T10:00:00Z",
   "end_time": "2026-01-13T16:00:00Z",
   "fields": ["symbol", "price", "quantity", "trade_timestamp", "side"],
@@ -407,7 +407,7 @@ Content-Type: application/json
 {
   "data": [
     {
-      "symbol": "BHP",
+      "symbol": "BTCUSDT",
       "price": "45.67",
       "quantity": "1000.00",
       "trade_timestamp": "2026-01-13T10:05:30.123456Z",
@@ -427,7 +427,7 @@ Content-Type: application/json
 **CSV Output** (`output_format: "csv"`):
 ```csv
 symbol,price,quantity,trade_timestamp,side
-BHP,45.67,1000.00,2026-01-13T10:05:30.123456Z,BUY
+BTCUSDT,42150.50,0.05,2026-01-13T10:05:30.123456Z,BUY
 ```
 
 **Parquet Output** (`output_format: "parquet"`):
@@ -514,7 +514,7 @@ POST /api/v1/snapshots/1234567890123456789/query
 Content-Type: application/json
 
 {
-  "symbols": ["BHP"],
+  "symbols": ["BTCUSDT"],
   "limit": 100
 }
 ```
@@ -539,8 +539,8 @@ Content-Type: application/json
 
 {
   "data_type": "trades",
-  "symbols": ["BHP", "RIO"],
-  "exchanges": ["ASX"],
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "exchanges": ["BINANCE", "KRAKEN"],
   "start_time": "2026-01-13T10:00:00Z",
   "end_time": "2026-01-13T16:00:00Z",
   "interval": "5min",
@@ -564,8 +564,8 @@ Content-Type: application/json
 {
   "data": [
     {
-      "symbol": "BHP",
-      "exchange": "ASX",
+      "symbol": "BTCUSDT",
+      "exchange": "BINANCE",
       "bucket_start": "2026-01-13T10:00:00Z",
       "bucket_end": "2026-01-13T10:05:00Z",
       "open": "45.50",
@@ -662,7 +662,7 @@ X-RateLimit-Reset: 1705228860
 
 **Request**:
 ```bash
-GET /api/v1/trades?symbol=BHP&limit=100&offset=100
+GET /api/v1/trades?symbol=BTCUSDT&limit=100&offset=100
 ```
 
 **Response**:
@@ -683,7 +683,7 @@ GET /api/v1/trades?symbol=BHP&limit=100&offset=100
 
 **Initial Request**:
 ```bash
-GET /api/v1/trades?symbol=BHP&limit=100
+GET /api/v1/trades?symbol=BTCUSDT&limit=100
 ```
 
 **Response**:
@@ -701,7 +701,7 @@ GET /api/v1/trades?symbol=BHP&limit=100
 
 **Next Page Request**:
 ```bash
-GET /api/v1/trades?symbol=BHP&limit=100&cursor=eyJwb3NpdGlvbiI6MTAwfQ==
+GET /api/v1/trades?symbol=BTCUSDT&limit=100&cursor=eyJwb3NpdGlvbiI6MTAwfQ==
 ```
 
 ---
@@ -768,7 +768,7 @@ response = requests.get(
     f"{API_BASE}/v1/trades",
     headers=headers,
     params={
-        "symbol": "BHP",
+        "symbol": "BTCUSDT",
         "limit": 100
     }
 )
@@ -776,7 +776,7 @@ trades = response.json()["data"]
 
 # Complex query
 query = {
-    "symbols": ["BHP", "RIO"],
+    "symbols": ["BTCUSDT", "ETHUSDT"],
     "start_time": "2026-01-13T00:00:00Z",
     "end_time": "2026-01-13T23:59:59Z",
     "fields": ["symbol", "price", "quantity", "trade_timestamp"],
@@ -800,7 +800,7 @@ const API_KEY = "your-api-key";
 
 // Simple query
 const response = await fetch(
-  `${API_BASE}/v1/trades?symbol=BHP&limit=100`,
+  `${API_BASE}/v1/trades?symbol=BTCUSDT&limit=100`,
   {
     headers: {
       "X-API-Key": API_KEY
@@ -811,7 +811,7 @@ const { data } = await response.json();
 
 // Complex query
 const query = {
-  symbols: ["BHP", "RIO"],
+  symbols: ["BTCUSDT", "ETHUSDT"],
   start_time: "2026-01-13T00:00:00Z",
   end_time: "2026-01-13T23:59:59Z",
   fields: ["symbol", "price", "quantity", "trade_timestamp"],
@@ -837,14 +837,14 @@ const { data: results } = await complexResponse.json();
 ```bash
 # Simple query
 curl -H "X-API-Key: your-api-key" \
-  "http://localhost:8000/api/v1/trades?symbol=BHP&limit=10"
+  "http://localhost:8000/api/v1/trades?symbol=BTCUSDT&limit=10"
 
 # Complex query
 curl -X POST \
   -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
   -d '{
-    "symbols": ["BHP"],
+    "symbols": ["BTCUSDT"],
     "start_time": "2026-01-13T00:00:00Z",
     "end_time": "2026-01-13T23:59:59Z",
     "limit": 10
@@ -856,7 +856,7 @@ curl -X POST \
   -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
   -d '{
-    "symbols": ["BHP"],
+    "symbols": ["BTCUSDT"],
     "output_format": "csv"
   }' \
   "http://localhost:8000/api/v1/trades/query" \

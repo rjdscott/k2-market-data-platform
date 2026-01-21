@@ -26,6 +26,7 @@ Examples:
     # Execute with custom Kafka bootstrap servers
     python scripts/migrate_topics.py --bootstrap-servers kafka:29092
 """
+
 import argparse
 import sys
 from pathlib import Path

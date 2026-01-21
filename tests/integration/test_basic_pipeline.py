@@ -48,7 +48,7 @@ class TestBasicPipelineIntegration:
             v2_trade = build_trade_v2(
                 symbol=trade["symbol"],
                 exchange=trade["exchange"],
-                asset_class="equities",
+                asset_class="crypto",
                 timestamp=datetime.fromisoformat(trade["timestamp"]),
                 price=Decimal(trade["price"]),
                 quantity=trade["quantity"],
@@ -57,8 +57,8 @@ class TestBasicPipelineIntegration:
 
             # Produce to Kafka - call without capturing return
             producer.produce_trade(
-                asset_class="equities",
-                exchange="asx",  # Use ASX as test exchange
+                asset_class="crypto",
+                exchange="binance",
                 record=v2_trade,
             )
 
@@ -75,7 +75,7 @@ class TestBasicPipelineIntegration:
             v2_trade = build_trade_v2(
                 symbol=trade["symbol"],
                 exchange=trade["exchange"],
-                asset_class="equities",
+                asset_class="crypto",
                 timestamp=datetime.fromisoformat(trade["timestamp"]),
                 price=Decimal(trade["price"]),
                 quantity=trade["quantity"],
@@ -86,7 +86,7 @@ class TestBasicPipelineIntegration:
         # Step 4: Write to Iceberg table
         try:
             records_written = writer.write_trades(
-                records=v2_records, table_name="market_data.trades", exchange="asx"
+                records=v2_records, table_name="market_data.trades", exchange="binance"
             )
 
         except Exception as e:
@@ -132,7 +132,7 @@ class TestBasicPipelineIntegration:
             v2_quote = build_quote_v2(
                 symbol=quote["symbol"],
                 exchange=quote["exchange"],
-                asset_class="equities",
+                asset_class="crypto",
                 timestamp=datetime.fromisoformat(quote["timestamp"]),
                 bid_price=Decimal(quote["bid_price"]),
                 bid_quantity=Decimal(quote["bid_quantity"]),
@@ -191,7 +191,7 @@ class TestBasicPipelineIntegration:
             v2_trade = build_trade_v2(
                 symbol=trade["symbol"],
                 exchange=trade["exchange"],
-                asset_class="equities",
+                asset_class="crypto",
                 timestamp=datetime.fromisoformat(trade["timestamp"]),
                 price=Decimal(trade["price"]),
                 quantity=trade["quantity"],
@@ -220,7 +220,7 @@ class TestBasicPipelineIntegration:
             v2_quote = build_quote_v2(
                 symbol=quote["symbol"],
                 exchange=quote["exchange"],
-                asset_class="equities",
+                asset_class="crypto",
                 timestamp=datetime.fromisoformat(quote["timestamp"]),
                 bid_price=Decimal(quote["bid_price"]),
                 bid_quantity=Decimal(quote["bid_quantity"]),
@@ -275,7 +275,7 @@ class TestBasicPipelineIntegration:
             v2_trade = build_trade_v2(
                 symbol=trade["symbol"],
                 exchange=trade["exchange"],
-                asset_class="equities",
+                asset_class="crypto",
                 timestamp=datetime.fromisoformat(trade["timestamp"]),
                 price=Decimal(trade["price"]),
                 quantity=trade["quantity"],

@@ -14,42 +14,6 @@
 
 # Asset classes and their exchanges
 asset_classes:
-  equities:
-    description: "Traditional equity markets (stocks, ETFs, listed securities)"
-    exchanges:
-      asx:
-        name: "Australian Securities Exchange"
-        partitions: 30
-        country: "AU"
-        timezone: "Australia/Sydney"
-        trading_hours: "10:00-16:00 AEST"
-        description: "Primary Australian equities exchange, ~2000 listed securities"
-
-      # Future exchanges (uncomment when ready):
-      # nyse:
-      #   name: "New York Stock Exchange"
-      #   partitions: 100
-      #   country: "US"
-      #   timezone: "America/New_York"
-      #   trading_hours: "09:30-16:00 EST"
-      #   description: "Largest US equities exchange, ~3000 listed securities"
-      #
-      # nasdaq:
-      #   name: "NASDAQ"
-      #   partitions: 100
-      #   country: "US"
-      #   timezone: "America/New_York"
-      #   trading_hours: "09:30-16:00 EST"
-      #   description: "US tech-focused exchange, high message volume"
-      #
-      # lse:
-      #   name: "London Stock Exchange"
-      #   partitions: 50
-      #   country: "GB"
-      #   timezone: "Europe/London"
-      #   trading_hours: "08:00-16:30 GMT"
-      #   description: "Primary UK equities exchange"
-
   crypto:
     description: "Cryptocurrency and digital asset markets (24/7 trading)"
     exchanges:
@@ -61,6 +25,14 @@ asset_classes:
         trading_hours: "24/7"
         description: "Largest crypto exchange by volume, ~1000+ trading pairs"
 
+      kraken:
+        name: "Kraken"
+        partitions: 20
+        country: "US"
+        timezone: "UTC"
+        trading_hours: "24/7"
+        description: "Established crypto exchange with EUR/USD pairs, XBT normalization"
+
       # Future exchanges (uncomment when ready):
       # coinbase:
       #   name: "Coinbase"
@@ -69,20 +41,22 @@ asset_classes:
       #   timezone: "UTC"
       #   trading_hours: "24/7"
       #   description: "Major US-based crypto exchange"
-      #
-      # kraken:
-      #   name: "Kraken"
-      #   partitions: 20
-      #   country: "US"
-      #   timezone: "UTC"
-      #   trading_hours: "24/7"
-      #   description: "Established crypto exchange with EUR pairs"
 
 # Data types (apply to all asset classes and exchanges)
 # Each data type defines the schema, partition strategy, and Kafka configuration
 data_types:
+  trades.raw:
+    description: "Raw trade data from exchange (Bronze layer - no transformation)"
+    partition_key: "symbol"
+    schema_name: "raw_trade"
+    config:
+      compression.type: "lz4"
+      retention.ms: "604800000"  # 7 days (in milliseconds)
+      cleanup.policy: "delete"
+    notes: "Industry best practice: Store raw exchange-native data in Bronze before transformation"
+
   trades:
-    description: "Trade execution events (filled orders)"
+    description: "Trade execution events (filled orders) - V2 unified schema"
     partition_key: "symbol"
     schema_name: "trade"
     config:
@@ -126,8 +100,8 @@ schema_registry:
   # Subject naming strategy: shared schemas per asset class
   # Pattern: market.{asset_class}.{data_type}-value
   # Examples:
-  #   - market.equities.trades-value (shared by ASX, NYSE, LSE, etc.)
-  #   - market.crypto.quotes-value (shared by Binance, Coinbase, etc.)
+  #   - market.crypto.trades-value (shared by Binance, Kraken, Coinbase, etc.)
+  #   - market.crypto.quotes-value (shared by all crypto exchanges)
   subject_pattern: "market.{asset_class}.{data_type}-value"
 
   # Rationale for shared schemas:

@@ -114,7 +114,7 @@
 ### Asset Classes
 
 **Equity** (*Stock*)
-: Ownership share in a company. Traded on stock exchanges (ASX, NYSE, NASDAQ).
+: Ownership share in a company. Traded on stock exchanges (NYSE, NASDAQ, LSE).
 
 **Crypto** (*Cryptocurrency, Digital Asset*)
 : Digital currency using cryptography. Traded on crypto exchanges (Binance, Coinbase).
@@ -123,7 +123,7 @@
 : Currency pairs (EUR/USD). Largest and most liquid market globally.
 
 **Fixed Income** (*Bonds*)
-: Debt securities with fixed interest payments. Less liquid than equities.
+: Debt securities with fixed interest payments. Less liquid than crypto assets.
 
 **Derivatives** (*Futures, Options*)
 : Contracts deriving value from an underlying asset.
@@ -154,7 +154,7 @@
 ### Data Pipeline
 
 **Producer**
-: Component that sends messages to Kafka (e.g., Binance client, ASX loader).
+: Component that sends messages to Kafka (e.g., Binance client, Kraken client).
 
 **Consumer**
 : Component that reads messages from Kafka and writes to Iceberg.
@@ -176,7 +176,7 @@
 : K2's second-generation quote schema.
 
 **Vendor Data** (*Exchange-Specific Fields*)
-: Flexible map field in V2 schemas for exchange-specific metadata (e.g., Binance aggregate ID, ASX participant ID).
+: Flexible map field in V2 schemas for exchange-specific metadata (e.g., Binance aggregate ID, Kraken order ID).
 
 **vendor_data**
 : JSON map field in V2 schemas. Enables schema evolution without breaking compatibility.
@@ -254,7 +254,7 @@
 : Kafka server storing and serving messages. Production clusters have 3+ brokers for HA.
 
 **Topic**
-: Named stream of messages in Kafka. K2 topics: `market.crypto.trades.binance`, `market.equities.trades.asx`.
+: Named stream of messages in Kafka. K2 topics: `market.crypto.trades.binance`, `market.crypto.trades.kraken`.
 
 **Partition**
 : Ordered, immutable sequence of messages within a topic. Enables parallelism.
@@ -501,7 +501,7 @@
 | ACID | Atomicity, Consistency, Isolation, Durability | Database transaction properties |
 | ADR | Architectural Decision Record | Document explaining why a technical choice was made |
 | API | Application Programming Interface | Programmatic interface for accessing services |
-| ASX | Australian Securities Exchange | Australian stock exchange |
+| BINANCE | Binance | Global cryptocurrency exchange |
 | BBO | Best Bid and Offer | Top of order book (best prices) |
 | FIFO | First-In-First-Out | Ordering guarantee |
 | FIX | Financial Information eXchange | Industry protocol for trading |

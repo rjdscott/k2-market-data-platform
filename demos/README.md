@@ -134,7 +134,7 @@ jupyter notebook demos/notebooks/technical-deep-dive.ipynb
 
 # Exchange-specific demos
 jupyter notebook demos/notebooks/exchange-demos/binance-crypto.ipynb
-jupyter notebook demos/notebooks/exchange-demos/asx-equities.ipynb
+jupyter notebook demos/notebooks/exchange-demos/kraken-crypto.ipynb
 ```
 
 ### Reset Demo Environment
@@ -171,7 +171,7 @@ demos/
 │   ├── technical-deep-dive.ipynb # Comprehensive technical walkthrough
 │   └── exchange-demos/
 │       ├── binance-crypto.ipynb # Live crypto streaming demo
-│       └── asx-equities.ipynb   # Historical equities analysis
+│       └── kraken-crypto.ipynb   # Kraken crypto analysis
 │
 ├── scripts/                     # Demo execution and utilities
 │   ├── README.md                # Script usage guide
@@ -213,7 +213,7 @@ demos/
 | [executive-demo.ipynb](./notebooks/executive-demo.ipynb) | CTO, VP Engineering | 12 min | Business value, key metrics, live demo |
 | [technical-deep-dive.ipynb](./notebooks/technical-deep-dive.ipynb) | Engineers, Architects | 30-40 min | Architecture, performance, implementation |
 | [binance-crypto.ipynb](./notebooks/exchange-demos/binance-crypto.ipynb) | Technical, Crypto specialists | 15-20 min | Live crypto streaming, WebSocket ingestion |
-| [asx-equities.ipynb](./notebooks/exchange-demos/asx-equities.ipynb) | Technical, Equities specialists | 15-20 min | Historical equities analysis, bulk loading |
+| [kraken-crypto.ipynb](./notebooks/exchange-demos/kraken-crypto.ipynb) | Technical, Crypto specialists | 15-20 min | Kraken crypto analysis, WebSocket streaming |
 
 **When to use which notebook**: See [Notebook Selection Guide](./notebooks/README.md)
 

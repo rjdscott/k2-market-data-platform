@@ -2,7 +2,7 @@
   "type": "record",
   "name": "ReferenceDataV2",
   "namespace": "com.k2.marketdata",
-  "doc": "Company reference data for enrichment (v2). Industry-standard reference data schema with hybrid approach: core standard fields + vendor-specific extensions. Used in compacted Kafka topic for latest-value lookup.",
+  "doc": "Instrument reference data for enrichment (v2). Industry-standard reference data schema with hybrid approach: core standard fields + vendor-specific extensions. Used in compacted Kafka topic for latest-value lookup. Supports crypto trading pairs, futures, options, and other instruments.",
   "fields": [
     {
       "name": "message_id",
@@ -12,17 +12,17 @@
     {
       "name": "company_id",
       "type": "string",
-      "doc": "Primary identifier - vendor-specific company/instrument ID. Used as Kafka message key for compaction. Examples: ASX '7078' (BHP), ISIN 'AU000000BHP4'"
+      "doc": "Primary identifier - vendor-specific instrument ID. Used as Kafka message key for compaction. Examples: Binance 'BTCUSDT', Kraken 'XBT/USD', ISIN 'US0378331005' (if applicable)"
     },
     {
       "name": "symbol",
       "type": "string",
-      "doc": "Trading symbol. Examples: 'BHP' (equities), 'BTCUSDT' (crypto), 'ESZ3' (futures)"
+      "doc": "Trading symbol. Examples: 'BTCUSDT' (crypto spot), 'ETHUSD' (crypto), 'BTCEUR' (crypto pairs)"
     },
     {
       "name": "exchange",
       "type": "string",
-      "doc": "Exchange code. Examples: 'ASX', 'BINANCE', 'NYSE', 'CME'"
+      "doc": "Exchange code. Examples: 'BINANCE', 'KRAKEN', 'COINBASE', 'BYBIT'"
     },
     {
       "name": "asset_class",
@@ -38,7 +38,7 @@
     {
       "name": "company_name",
       "type": "string",
-      "doc": "Full company or instrument name. Examples: 'BHP BILLITON LTD', 'Bitcoin', 'E-mini S&P 500'"
+      "doc": "Full instrument name. Examples: 'Bitcoin', 'Ethereum', 'Binance Coin', 'Polkadot'"
     },
     {
       "name": "isin",
@@ -100,7 +100,7 @@
         }
       ],
       "default": null,
-      "doc": "Exchange-specific reference fields as key-value pairs. Examples: ASX {'sector': 'Materials', 'industry': 'Metals & Mining'}, Binance {'base_asset': 'BTC', 'quote_asset': 'USDT', 'status': 'TRADING'}. Stored as JSON string in Iceberg."
+      "doc": "Exchange-specific reference fields as key-value pairs. Examples: Binance {'base_asset': 'BTC', 'quote_asset': 'USDT', 'status': 'TRADING', 'min_notional': '10.00'}, Kraken {'wsname': 'XBT/USD', 'lot_decimals': '8', 'pair_decimals': '1'}. Stored as JSON string in Iceberg."
     }
   ]
 }

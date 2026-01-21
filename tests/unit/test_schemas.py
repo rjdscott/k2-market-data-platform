@@ -23,23 +23,11 @@ class TestSchemaValidation:
         """Should list all .avsc files without extension."""
         schemas = list_available_schemas()
 
-        # Should find both v1 and v2 schemas
-        assert "trade" in schemas
-        assert "quote" in schemas
-        assert "reference_data" in schemas
+        # Should find v2 schemas
+        assert "trade_v2" in schemas
+        assert "quote_v2" in schemas
+        assert "reference_data_v2" in schemas
         assert len(schemas) >= 3
-
-    def test_load_v1_schemas_success(self):
-        """V1 schemas should load successfully."""
-        for schema_name in ["trade", "quote", "reference_data"]:
-            schema_str = load_avro_schema(schema_name, version="v1")
-            assert isinstance(schema_str, str)
-
-            # Should be valid JSON
-            schema_dict = json.loads(schema_str)
-            assert "name" in schema_dict
-            assert "fields" in schema_dict
-            assert isinstance(schema_dict["fields"], list)
 
     def test_load_v2_schemas_success(self):
         """V2 schemas should load successfully."""
@@ -62,27 +50,10 @@ class TestSchemaValidation:
     def test_load_schema_with_invalid_version_raises_value_error(self):
         """Invalid version should raise ValueError."""
         with pytest.raises(ValueError) as exc_info:
-            load_avro_schema("trade", version="v99")
+            load_avro_schema("trade", version="v1")
 
         assert "version" in str(exc_info.value).lower()
-        assert "v1" in str(exc_info.value) and "v2" in str(exc_info.value)
-
-    def test_trade_v1_schema_structure(self):
-        """Trade V1 schema should have expected structure."""
-        schema_str = load_avro_schema("trade", version="v1")
-        schema_dict = json.loads(schema_str)
-
-        # Schema metadata
-        assert schema_dict["name"] == "Trade"
-        assert schema_dict["namespace"] == "com.k2.market_data"
-        assert "doc" in schema_dict
-
-        # Critical fields for V1
-        field_names = [f["name"] for f in schema_dict["fields"]]
-        required_fields = ["symbol", "exchange_timestamp", "price", "volume", "sequence_number"]
-
-        for field in required_fields:
-            assert field in field_names, f"V1 trade schema missing '{field}' field"
+        assert "v2" in str(exc_info.value)
 
     def test_trade_v2_schema_structure(self):
         """Trade V2 schema should have industry-standard structure."""
@@ -111,27 +82,6 @@ class TestSchemaValidation:
 
         for field in v2_required_fields:
             assert field in field_names, f"V2 trade schema missing '{field}' field"
-
-    def test_quote_v1_vs_v2_differences(self):
-        """Quote V1 vs V2 should have different field structures."""
-        v1_str = load_avro_schema("quote", version="v1")
-        v1_dict = json.loads(v1_str)
-        v1_fields = {f["name"] for f in v1_dict["fields"]}
-
-        v2_str = load_avro_schema("quote", version="v2")
-        v2_dict = json.loads(v2_str)
-        v2_fields = {f["name"] for f in v2_dict["fields"]}
-
-        # V1 has volume, V2 has quantity
-        assert "bid_volume" in v1_fields
-        assert "ask_volume" in v1_fields
-        assert "bid_quantity" not in v1_fields
-        assert "ask_quantity" not in v1_fields
-
-        assert "bid_volume" not in v2_fields
-        assert "ask_volume" not in v2_fields
-        assert "bid_quantity" in v2_fields
-        assert "ask_quantity" in v2_fields
 
     def test_v2_timestamp_precision(self):
         """V2 schemas should use microsecond precision."""
@@ -200,50 +150,44 @@ class TestSchemaValidation:
             assert map_type["values"] == "string"
 
     def test_all_schemas_have_documentation(self):
-        """All schemas and fields should have doc strings."""
-        for version in ["v1", "v2"]:
-            for schema_name in ["trade", "quote", "reference_data"]:
-                schema_str = load_avro_schema(schema_name, version=version)
-                schema_dict = json.loads(schema_str)
+        """All V2 schemas and fields should have doc strings."""
+        for schema_name in ["trade", "quote", "reference_data"]:
+            schema_str = load_avro_schema(schema_name, version="v2")
+            schema_dict = json.loads(schema_str)
 
-                # Schema-level documentation
-                assert "doc" in schema_dict, f"{schema_name}_{version} missing schema doc"
+            # Schema-level documentation
+            assert "doc" in schema_dict, f"{schema_name}_v2 missing schema doc"
 
-                # Field-level documentation (sample check)
-                for field in schema_dict["fields"][:3]:  # Check first 3 fields
-                    assert (
-                        "doc" in field
-                    ), f"{schema_name}_{version}.{field['name']} missing field doc"
+            # Field-level documentation (sample check)
+            for field in schema_dict["fields"][:3]:  # Check first 3 fields
+                assert "doc" in field, f"{schema_name}_v2.{field['name']} missing field doc"
 
     def test_optional_fields_have_defaults(self):
-        """Optional fields should have default values."""
-        for version in ["v1", "v2"]:
-            for schema_name in ["trade", "quote"]:
-                schema_str = load_avro_schema(schema_name, version=version)
-                schema_dict = json.loads(schema_str)
+        """Optional fields in V2 schemas should have default values."""
+        for schema_name in ["trade", "quote"]:
+            schema_str = load_avro_schema(schema_name, version="v2")
+            schema_dict = json.loads(schema_str)
 
-                for field in schema_dict["fields"]:
-                    field_type = field["type"]
+            for field in schema_dict["fields"]:
+                field_type = field["type"]
 
-                    # Check if union with null (optional)
-                    if isinstance(field_type, list) and "null" in field_type:
-                        # Optional field should have default
-                        assert (
-                            "default" in field
-                        ), f"{schema_name}_{version}.{field['name']} is optional but missing default"
+                # Check if union with null (optional)
+                if isinstance(field_type, list) and "null" in field_type:
+                    # Optional field should have default
+                    assert (
+                        "default" in field
+                    ), f"{schema_name}_v2.{field['name']} is optional but missing default"
 
     def test_schema_file_naming_convention(self):
-        """Schema files should follow naming convention."""
+        """V2 schema files should follow naming convention."""
         schema_dir = Path(__file__).parent.parent.parent / "src" / "k2" / "schemas"
 
-        v1_files = list(schema_dir.glob("*.avsc"))
         v2_files = list(schema_dir.glob("*_v2.avsc"))
-
-        # Should have corresponding v1 and v2 files
-        v1_names = {f.stem for f in v1_files if not f.stem.endswith("_v2")}
         v2_names = {f.stem.replace("_v2", "") for f in v2_files}
 
-        assert v1_names == v2_names, f"Mismatch between v1 {v1_names} and v2 {v2_names} schemas"
+        # Should have all expected V2 schemas
+        expected_schemas = {"trade", "quote", "reference_data"}
+        assert v2_names == expected_schemas, f"Expected {expected_schemas}, found {v2_names}"
 
 
 @pytest.mark.unit

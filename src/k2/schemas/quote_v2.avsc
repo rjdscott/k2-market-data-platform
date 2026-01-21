@@ -12,17 +12,17 @@
     {
       "name": "quote_id",
       "type": "string",
-      "doc": "Exchange-specific quote identifier. Format: {EXCHANGE}-{quote_id} (e.g., 'ASX-123456', 'BINANCE-789012')"
+      "doc": "Exchange-specific quote identifier. Format: {EXCHANGE}-{quote_id} (e.g., 'BINANCE-789012', 'KRAKEN-1705584123')"
     },
     {
       "name": "symbol",
       "type": "string",
-      "doc": "Trading symbol. Examples: 'BHP' (equities), 'BTCUSDT' (crypto), 'ESZ3' (futures)"
+      "doc": "Trading symbol. Examples: 'BTCUSDT' (crypto spot), 'ETHUSD' (crypto), 'BTCEUR' (crypto pairs)"
     },
     {
       "name": "exchange",
       "type": "string",
-      "doc": "Exchange code. Examples: 'ASX', 'BINANCE', 'NYSE', 'CME'"
+      "doc": "Exchange code. Examples: 'BINANCE', 'KRAKEN', 'COINBASE', 'BYBIT'"
     },
     {
       "name": "asset_class",

@@ -24,7 +24,7 @@ This document provides a comprehensive visual architecture of the K2 Market Data
 ```mermaid
 graph TB
     subgraph "Data Producers"
-        A1[Market Data Feeds<br/>ASX, NYSE, Binance]
+        A1[Market Data Feeds<br/>Binance, Kraken, Coinbase]
         A2[Trading Venues]
         A3[Vendor Data<br/>Bloomberg, Refinitiv]
         A4[Internal Systems<br/>Quant Research]
@@ -110,25 +110,25 @@ graph TB
 ```mermaid
 graph LR
     subgraph "Kafka Topics - Exchange + Asset Class Architecture"
-        T1[market.equities.trades.asx<br/>30 partitions]
-        T2[market.equities.quotes.asx<br/>30 partitions]
+        T1[market.crypto.trades.binance<br/>30 partitions]
+        T2[market.crypto.quotes.binance<br/>30 partitions]
         T3[market.crypto.trades.binance<br/>40 partitions]
         T4[market.crypto.quotes.binance<br/>40 partitions]
     end
 
     subgraph "Schema Registry - Asset Class Level"
-        S1[market.equities.trades-value<br/>Avro v1]
-        S2[market.equities.quotes-value<br/>Avro v1]
+        S1[market.crypto.trades-value<br/>Avro v2]
+        S2[market.crypto.quotes-value<br/>Avro v2]
         S3[market.crypto.trades-value<br/>Avro v1]
     end
 
-    Producer1[ASX Producer] -->|symbol: BHP<br/>partition: hash| T1
+    Producer1[Binance Producer] -->|symbol: BTCUSDT<br/>partition: hash| T1
     Producer2[Binance Producer] -->|symbol: BTCUSDT<br/>partition: hash| T3
 
     T1 -.->|BACKWARD compat| S1
     T3 -.->|BACKWARD compat| S3
 
-    T1 --> Consumer1[ASX Consumer<br/>Manual Commit]
+    T1 --> Consumer1[Binance Consumer<br/>Manual Commit]
     T3 --> Consumer2[Binance Consumer<br/>Manual Commit]
 
     style T1 fill:#bbdefb
@@ -140,7 +140,7 @@ graph LR
 **Key Design Decisions**:
 - **Exchange-level topics**: Consumers subscribe only to needed exchanges (10-100x data reduction)
 - **Symbol-based partitioning**: Preserves per-symbol message ordering (required for sequence tracking)
-- **Asset-class schemas**: Shared schema evolution across exchanges (equities.trades used by ASX, NYSE, etc.)
+- **Asset-class schemas**: Shared schema evolution across exchanges (crypto.trades used by Binance, Kraken, etc.)
 - **BACKWARD compatibility**: New producers can add optional fields without breaking existing consumers
 
 **Configuration**: `config/kafka/topics.yaml`

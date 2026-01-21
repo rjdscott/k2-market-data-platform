@@ -212,24 +212,24 @@ async def test_binance_1h_validation():
 
     # Criterion 2: Average message rate >10 msg/sec
     print(f"✓ Message Rate: {avg_msg_rate:.2f} msg/sec (minimum: >10 msg/sec)")
-    assert (
-        avg_msg_rate > 10
-    ), f"FAILED: Average message rate {avg_msg_rate:.2f} msg/sec is too low (minimum: 10 msg/sec)."
+    assert avg_msg_rate > 10, (
+        f"FAILED: Average message rate {avg_msg_rate:.2f} msg/sec is too low (minimum: 10 msg/sec)."
+    )
 
     # Criterion 3: 1h continuous operation
     print(
         f"✓ Duration: {total_elapsed_minutes:.1f} minutes (target: {test_duration_hours * 60} minutes)"
     )
-    assert (
-        total_elapsed_minutes >= test_duration_hours * 60 * 0.98
-    ), f"FAILED: Test only ran for {total_elapsed_minutes:.1f} min (expected: {test_duration_hours * 60} min)"
+    assert total_elapsed_minutes >= test_duration_hours * 60 * 0.98, (
+        f"FAILED: Test only ran for {total_elapsed_minutes:.1f} min (expected: {test_duration_hours * 60} min)"
+    )
 
     # Criterion 4: Sufficient samples collected
     expected_samples = int(test_duration_hours * 3600 / memory_sample_interval_seconds)
     print(f"✓ Samples: {len(memory_samples)} (expected: ~{expected_samples})")
-    assert (
-        len(memory_samples) >= expected_samples * 0.95
-    ), f"FAILED: Only {len(memory_samples)} samples collected (expected: ~{expected_samples})"
+    assert len(memory_samples) >= expected_samples * 0.95, (
+        f"FAILED: Only {len(memory_samples)} samples collected (expected: ~{expected_samples})"
+    )
 
     print("-" * 80)
     print("✅ All validation criteria passed!")

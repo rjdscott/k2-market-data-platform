@@ -36,14 +36,12 @@ logger = structlog.get_logger()
 SCHEMA_DIR = Path(__file__).parent
 
 
-def load_avro_schema(schema_name: str, version: str = "v1") -> str:
+def load_avro_schema(schema_name: str, version: str = "v2") -> str:
     """Load Avro schema from .avsc file.
-
-    Supports both v1 (legacy ASX-specific) and v2 (industry-standard) schemas.
 
     Args:
         schema_name: Name of schema file without extension (e.g., 'trade', 'quote')
-        version: Schema version - 'v1' (default) or 'v2'
+        version: Schema version - 'v2' (default)
 
     Returns:
         Schema definition as JSON string
@@ -51,29 +49,23 @@ def load_avro_schema(schema_name: str, version: str = "v1") -> str:
     Raises:
         FileNotFoundError: If schema file doesn't exist
         json.JSONDecodeError: If schema file is not valid JSON
-        ValueError: If version is not 'v1' or 'v2'
+        ValueError: If version is not 'v2'
 
     Examples:
-        >>> # Load v1 schema (legacy)
-        >>> schema_v1 = load_avro_schema('trade', version='v1')
-        >>> # Load v2 schema (industry-standard)
+        >>> # Load v2 schema (production schema)
         >>> schema_v2 = load_avro_schema('trade', version='v2')
     """
-    if version not in ("v1", "v2"):
-        raise ValueError(f"Invalid version: {version}. Must be 'v1' or 'v2'")
+    if version != "v2":
+        raise ValueError(f"Invalid version: {version}. Only 'v2' is supported")
 
-    # Determine filename based on version
-    if version == "v2":
-        filename = f"{schema_name}_v2.avsc"
-    else:
-        filename = f"{schema_name}.avsc"
+    # V2 schemas use _v2 suffix
+    filename = f"{schema_name}_v2.avsc"
 
     schema_path = SCHEMA_DIR / filename
 
     if not schema_path.exists():
         raise FileNotFoundError(
-            f"Schema file not found: {schema_path}\n"
-            f"Available schemas: {list_available_schemas()}",
+            f"Schema file not found: {schema_path}\nAvailable schemas: {list_available_schemas()}",
         )
 
     schema_str = schema_path.read_text()
@@ -111,22 +103,22 @@ def register_schemas(schema_registry_url: str = None, version: str = "v2") -> di
 
     Schema subject naming: market.{asset_class}.{data_type}-value
     Examples:
-        - market.equities.trades-value (shared by ASX, NYSE, etc.)
-        - market.crypto.quotes-value (shared by Binance, Coinbase, etc.)
+        - market.crypto.trades-value (shared by Binance, Kraken, etc.)
+        - market.crypto.quotes-value (shared by all crypto exchanges)
 
     This approach uses shared schemas across exchanges within the same asset class,
     simplifying schema management and evolution.
 
     Args:
         schema_registry_url: Schema Registry base URL (defaults to config)
-        version: Schema version to register - 'v1' or 'v2' (default: 'v2')
+        version: Schema version to register - must be 'v2' (default: 'v2')
 
     Returns:
         Dictionary mapping subject names to schema IDs
 
     Raises:
         SchemaRegistryError: If registration fails
-        ValueError: If version is not 'v1' or 'v2'
+        ValueError: If version is not 'v2'
     """
     from k2.common.config import config
     from k2.kafka import get_topic_builder
@@ -134,8 +126,8 @@ def register_schemas(schema_registry_url: str = None, version: str = "v2") -> di
     if schema_registry_url is None:
         schema_registry_url = config.kafka.schema_registry_url
 
-    if version not in ("v1", "v2"):
-        raise ValueError(f"Invalid version: {version}. Must be 'v1' or 'v2'")
+    if version != "v2":
+        raise ValueError(f"Invalid version: {version}. Only 'v2' is supported")
 
     logger.info(
         "Registering schemas with asset-class-level subjects",

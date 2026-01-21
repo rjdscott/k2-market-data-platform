@@ -12,17 +12,17 @@
     {
       "name": "trade_id",
       "type": "string",
-      "doc": "Exchange-specific trade identifier. Format: {EXCHANGE}-{trade_id} (e.g., 'ASX-123456', 'BINANCE-789012')"
+      "doc": "Exchange-specific trade identifier. Format: {EXCHANGE}-{trade_id} (e.g., 'BINANCE-789012', 'KRAKEN-1705584123-BTC')"
     },
     {
       "name": "symbol",
       "type": "string",
-      "doc": "Trading symbol. Examples: 'BHP' (equities), 'BTCUSDT' (crypto), 'ESZ3' (futures)"
+      "doc": "Trading symbol. Examples: 'BTCUSDT' (crypto spot), 'ETHUSD' (crypto), 'BTCEUR' (crypto pairs)"
     },
     {
       "name": "exchange",
       "type": "string",
-      "doc": "Exchange code. Examples: 'ASX', 'BINANCE', 'NYSE', 'CME'"
+      "doc": "Exchange code. Examples: 'BINANCE', 'KRAKEN', 'COINBASE', 'BYBIT'"
     },
     {
       "name": "asset_class",
@@ -51,7 +51,7 @@
         "precision": 18,
         "scale": 8
       },
-      "doc": "Trade execution price. Decimal (18,8) supports both traditional equities (e.g., 45.67) and crypto (e.g., 0.00012345)"
+      "doc": "Trade execution price. Decimal (18,8) supports high-value assets (100000.00) and micro-price tokens (0.00012345)"
     },
     {
       "name": "quantity",
@@ -85,7 +85,7 @@
         "type": "array",
         "items": "string"
       },
-      "doc": "Array of trade condition codes (exchange-specific). Examples: ASX ['0'] (normal), ['C'] (cash trade), ['X'] (crossing). Empty array if no conditions."
+      "doc": "Array of trade condition codes (exchange-specific). Empty array for most crypto trades. Some exchanges may use condition codes for special trade types."
     },
     {
       "name": "source_sequence",
@@ -117,7 +117,7 @@
         }
       ],
       "default": null,
-      "doc": "Exchange-specific fields as key-value pairs. Examples: ASX {'company_id': '123', 'qualifiers': '0', 'venue': 'X'}, Binance {'is_buyer_maker': 'true', 'event_type': 'trade'}. Stored as JSON string in Iceberg."
+      "doc": "Exchange-specific fields as key-value pairs. Examples: Binance {'is_buyer_maker': 'true', 'event_type': 'aggTrade', 'base_asset': 'BTC'}, Kraken {'pair': 'XBT/USD', 'order_type': 'l'}. Stored as JSON string in Iceberg."
     }
   ]
 }

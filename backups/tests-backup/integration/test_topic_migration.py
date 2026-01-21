@@ -50,16 +50,16 @@ class TestTopicCreation:
         # Check ASX trades
         asx_trades = metadata.topics.get("market.equities.trades.asx")
         if asx_trades:
-            assert (
-                len(asx_trades.partitions) == 30
-            ), f"Expected 30 partitions, got {len(asx_trades.partitions)}"
+            assert len(asx_trades.partitions) == 30, (
+                f"Expected 30 partitions, got {len(asx_trades.partitions)}"
+            )
 
         # Check ASX quotes
         asx_quotes = metadata.topics.get("market.equities.quotes.asx")
         if asx_quotes:
-            assert (
-                len(asx_quotes.partitions) == 30
-            ), f"Expected 30 partitions, got {len(asx_quotes.partitions)}"
+            assert len(asx_quotes.partitions) == 30, (
+                f"Expected 30 partitions, got {len(asx_quotes.partitions)}"
+            )
 
     def test_topic_partition_counts_binance(self, kafka_admin):
         """Binance topics should have 40 partitions (except reference_data)."""
@@ -68,16 +68,16 @@ class TestTopicCreation:
         # Check Binance trades
         binance_trades = metadata.topics.get("market.crypto.trades.binance")
         if binance_trades:
-            assert (
-                len(binance_trades.partitions) == 40
-            ), f"Expected 40 partitions, got {len(binance_trades.partitions)}"
+            assert len(binance_trades.partitions) == 40, (
+                f"Expected 40 partitions, got {len(binance_trades.partitions)}"
+            )
 
         # Check Binance quotes
         binance_quotes = metadata.topics.get("market.crypto.quotes.binance")
         if binance_quotes:
-            assert (
-                len(binance_quotes.partitions) == 40
-            ), f"Expected 40 partitions, got {len(binance_quotes.partitions)}"
+            assert len(binance_quotes.partitions) == 40, (
+                f"Expected 40 partitions, got {len(binance_quotes.partitions)}"
+            )
 
     def test_reference_data_topics_have_one_partition(self, kafka_admin):
         """Reference data topics should have 1 partition."""
@@ -86,16 +86,16 @@ class TestTopicCreation:
         # Check ASX reference data
         asx_ref = metadata.topics.get("market.equities.reference_data.asx")
         if asx_ref:
-            assert (
-                len(asx_ref.partitions) == 1
-            ), f"Reference data should have 1 partition, got {len(asx_ref.partitions)}"
+            assert len(asx_ref.partitions) == 1, (
+                f"Reference data should have 1 partition, got {len(asx_ref.partitions)}"
+            )
 
         # Check Binance reference data
         binance_ref = metadata.topics.get("market.crypto.reference_data.binance")
         if binance_ref:
-            assert (
-                len(binance_ref.partitions) == 1
-            ), f"Reference data should have 1 partition, got {len(binance_ref.partitions)}"
+            assert len(binance_ref.partitions) == 1, (
+                f"Reference data should have 1 partition, got {len(binance_ref.partitions)}"
+            )
 
     def test_all_expected_topics_exist(self, kafka_admin):
         """All expected topics from config should exist."""
@@ -193,9 +193,9 @@ class TestTopicConfiguration:
         retention = config_result.get("retention.ms")
         if retention:
             # Should be 7 days (604800000 ms)
-            assert (
-                retention.value == "604800000"
-            ), f"Expected 7-day retention, got {retention.value}"
+            assert retention.value == "604800000", (
+                f"Expected 7-day retention, got {retention.value}"
+            )
 
     def test_reference_data_topic_is_compacted(self, kafka_admin):
         """Reference data topics should use log compaction."""
@@ -207,9 +207,9 @@ class TestTopicConfiguration:
 
         cleanup_policy = config_result.get("cleanup.policy")
         if cleanup_policy:
-            assert (
-                "compact" in cleanup_policy.value
-            ), f"Reference data should use compaction, got {cleanup_policy.value}"
+            assert "compact" in cleanup_policy.value, (
+                f"Reference data should use compaction, got {cleanup_policy.value}"
+            )
 
 
 @pytest.mark.integration
@@ -228,9 +228,9 @@ class TestMigrationVerification:
         ]
 
         for old_topic in old_topics:
-            assert (
-                old_topic not in existing_topics
-            ), f"Old topic {old_topic} should have been deleted"
+            assert old_topic not in existing_topics, (
+                f"Old topic {old_topic} should have been deleted"
+            )
 
     def test_topic_count_matches_expectation(self, kafka_admin):
         """Total number of topics should match expected count."""
@@ -244,9 +244,9 @@ class TestMigrationVerification:
         # Should have 6 topics: 2 exchanges × 3 data types
         # (ASX: trades, quotes, ref_data) + (Binance: trades, quotes, ref_data)
         expected_min = 6
-        assert (
-            len(user_topics) >= expected_min
-        ), f"Expected at least {expected_min} topics, got {len(user_topics)}: {user_topics}"
+        assert len(user_topics) >= expected_min, (
+            f"Expected at least {expected_min} topics, got {len(user_topics)}: {user_topics}"
+        )
 
 
 @pytest.mark.integration
@@ -278,17 +278,17 @@ class TestTopicNameBuilder:
         config = builder.get_topic_config("equities", DataType.TRADES, "asx")
         if config.topic_name in metadata.topics:
             actual_partitions = len(metadata.topics[config.topic_name].partitions)
-            assert (
-                config.partitions == actual_partitions
-            ), f"Config says {config.partitions} partitions, Kafka has {actual_partitions}"
+            assert config.partitions == actual_partitions, (
+                f"Config says {config.partitions} partitions, Kafka has {actual_partitions}"
+            )
 
         # Check Binance quotes
         config = builder.get_topic_config("crypto", DataType.QUOTES, "binance")
         if config.topic_name in metadata.topics:
             actual_partitions = len(metadata.topics[config.topic_name].partitions)
-            assert (
-                config.partitions == actual_partitions
-            ), f"Config says {config.partitions} partitions, Kafka has {actual_partitions}"
+            assert config.partitions == actual_partitions, (
+                f"Config says {config.partitions} partitions, Kafka has {actual_partitions}"
+            )
 
 
 @pytest.mark.integration

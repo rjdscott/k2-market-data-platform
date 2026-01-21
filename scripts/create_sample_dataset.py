@@ -278,7 +278,7 @@ To add more data:
 ## Data Provenance
 
 - **Original Source**: Raw Australian equity sample data
-- **Extraction Date**: {datetime.now().strftime('%Y-%m-%d')}
+- **Extraction Date**: {datetime.now().strftime("%Y-%m-%d")}
 - **Extraction Method**: `scripts/create_sample_dataset.py`
 - **License**: Same as project (MIT)
 

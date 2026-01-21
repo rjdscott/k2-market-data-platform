@@ -39,6 +39,8 @@ dependencies = [
     # Query engine
     "duckdb>=1.4.0",  # Latest: 1.4.3 (2025-12-09)
     "pyarrow>=22.0.0",  # Latest: 22.0.0 (2025-10-24) - Columnar data format
+    # Spark distributed processing
+    "pyspark==3.5.0",  # Spark 3.5.0 for Medallion architecture (Iceberg 1.4.0 compatible)
     # Data processing
     "pandas>=2.3.0",  # Latest: 2.3.3 (2025-09-29), Python 3.14 support
     "polars>=1.36.0",  # Latest: 1.36.1 (2026-01), Modern fast dataframe library
@@ -72,6 +74,9 @@ dependencies = [
     "httpx>=0.28.1",
     "pytest-asyncio>=1.3.0",
     "pyasn1==0.6.2",
+    "jupyter>=1.1.1",
+    # Workflow orchestration
+    "prefect>=3.1.0",  # Latest: 3.1.11 (2026), Lightweight workflow orchestration for OHLCV jobs
 ]
 
 [project.optional-dependencies]
@@ -98,6 +103,8 @@ dev = [
     "pytest-mock>=3.12.0",
     "hypothesis>=6.98.0",  # Property-based testing
     "faker>=22.6.0",  # Test data generation
+    "pytest-spark==0.8.0",  # PySpark test fixtures - Latest: 0.8.0 (2026)
+    "chispa==0.11.1",  # PySpark DataFrame comparison - Latest: 0.11.1 (2026)
 
     # Code quality
     "black>=25.12.0",  # Latest: 25.12.0 (2025-12), Python 3.10+ required
@@ -216,6 +223,7 @@ select = [
 ]
 ignore = [
     "E501",    # Line too long (handled by formatter)
+    "I001",    # Import block unsorted (delegated to isort)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -295,6 +303,17 @@ module = [
     "websockets.*",
 ]
 ignore_missing_imports = true
+
+# Ignore type checking for files with Avro deserialization patterns
+# These files work with dynamic Avro record types that mypy cannot infer
+[[tool.mypy.overrides]]
+module = [
+    "k2.spark.udfs.raw_to_v2_transformation",
+    "k2.spark.udfs.avro_deserialization",
+    "k2.spark.validation.trade_validation",
+    "k2.ingestion.kraken_client",
+]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 minversion = "9.0"

@@ -28,7 +28,7 @@ Common terms used throughout the K2 platform:
 | Term | Definition |
 |------|------------|
 | **Sequence Number** | Per-symbol monotonic counter for detecting gaps |
-| **Exchange Timestamp** | Original timestamp from data source (ASX, NYSE, etc.) |
+| **Exchange Timestamp** | Original timestamp from data source (Binance, Kraken, etc.) |
 | **Ingestion Timestamp** | When K2 received the message |
 | **Partition** | Data subdivision (daily by exchange_timestamp) |
 | **Symbol** | Stock ticker (e.g., BHP, DVN, AAPL) |
@@ -45,37 +45,37 @@ Common terms used throughout the K2 platform:
 
 ### Trade Schema
 
-**Avro Schema**: `src/k2/schemas/trade.avsc`
+**Avro Schema**: `src/k2/schemas/trade_v2.avsc`
 
 | Field | Type | Description | Example |
 |-------|------|-------------|---------|
-| `symbol` | string | Stock ticker | "BHP" |
-| `company_id` | long | Unique company identifier | 7078 |
-| `exchange` | string | Trading exchange | "ASX" |
-| `exchange_timestamp` | long (timestamp-millis) | Original trade timestamp | 1704067200000 |
-| `price` | string (decimal) | Trade price | "36.50" |
-| `volume` | long | Trade volume | 10000 |
+| `symbol` | string | Trading pair | "BTCUSDT" |
+| `trade_id` | string | Unique trade identifier | "BINANCE-123456" |
+| `exchange` | string | Trading exchange | "BINANCE" |
+| `timestamp` | long (timestamp-micros) | Original trade timestamp | 1704067200000000 |
+| `price` | string (decimal) | Trade price | "42150.50" |
+| `quantity` | string (decimal) | Trade quantity | "0.05" |
 | `sequence_number` | long | Per-symbol sequence | 12345 |
-| `currency` | string | Price currency | "AUD" |
-| `isin` | string (optional) | ISIN code | "AU000000BHP4" |
+| `currency` | string | Price currency | "USDT" |
+| `trade_conditions` | array | Exchange conditions | [] |
 
 **Partition Key**: `day(exchange_timestamp)`
 **Sort Order**: `symbol, exchange_timestamp`
 
 ### Quote Schema
 
-**Avro Schema**: `src/k2/schemas/quote.avsc`
+**Avro Schema**: `src/k2/schemas/quote_v2.avsc`
 
 | Field | Type | Description | Example |
 |-------|------|-------------|---------|
-| `symbol` | string | Stock ticker | "BHP" |
-| `company_id` | long | Unique company identifier | 7078 |
-| `exchange` | string | Trading exchange | "ASX" |
-| `exchange_timestamp` | long (timestamp-millis) | Quote timestamp | 1704067200000 |
-| `bid_price` | string (decimal) | Bid price | "36.48" |
-| `ask_price` | string (decimal) | Ask price | "36.52" |
-| `bid_size` | long | Bid volume | 5000 |
-| `ask_size` | long | Ask volume | 3000 |
+| `symbol` | string | Trading pair | "BTCUSDT" |
+| `quote_id` | string | Unique quote identifier | "BINANCE-456789" |
+| `exchange` | string | Trading exchange | "BINANCE" |
+| `timestamp` | long (timestamp-micros) | Quote timestamp | 1704067200000000 |
+| `bid_price` | string (decimal) | Bid price | "42150.25" |
+| `ask_price` | string (decimal) | Ask price | "42150.75" |
+| `bid_quantity` | string (decimal) | Bid volume | "1.25" |
+| `ask_quantity` | string (decimal) | Ask volume | "0.875" |
 | `sequence_number` | long | Per-symbol sequence | 12346 |
 
 **Partition Key**: `day(exchange_timestamp)`
@@ -83,18 +83,18 @@ Common terms used throughout the K2 platform:
 
 ### Reference Data Schema
 
-**Avro Schema**: `src/k2/schemas/reference.avsc`
+**Avro Schema**: `src/k2/schemas/reference_data_v2.avsc`
 
 | Field | Type | Description | Example |
 |-------|------|-------------|---------|
-| `symbol` | string | Stock ticker | "BHP" |
-| `company_id` | long | Unique company identifier | 7078 |
-| `company_name` | string | Full company name | "BHP Group Limited" |
-| `isin` | string | ISIN code | "AU000000BHP4" |
-| `exchange` | string | Primary exchange | "ASX" |
-| `sector` | string | Industry sector | "Materials" |
-| `currency` | string | Trading currency | "AUD" |
-| `effective_date` | long (timestamp-millis) | When data effective | 1704067200000 |
+| `symbol` | string | Trading pair | "BTCUSDT" |
+| `company_id` | string | Unique identifier | "BTCUSDT" |
+| `company_name` | string | Full name | "Bitcoin Tether" |
+| `isin` | string | ISIN code | null |
+| `exchange` | string | Primary exchange | "BINANCE" |
+| `asset_class` | string | Asset class | "crypto" |
+| `currency` | string | Trading currency | "USDT" |
+| `listing_date` | long (timestamp-micros) | When data effective | 1502947200000000 |
 
 ---
 

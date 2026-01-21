@@ -14,7 +14,7 @@ K2 uses **industry-standard hybrid schemas (V2)** that support multiple data sou
 **Schema Design Philosophy**:
 - **Core Standard Fields**: Common fields across all data sources (symbol, exchange, timestamp, price, quantity)
 - **Vendor Extensions**: Exchange-specific fields stored in `vendor_data` map
-- **Multi-Asset Support**: Single schema for equities, crypto, futures, options via `asset_class` enum
+- **Multi-Asset Support**: Single schema for crypto, futures, options, forex via `asset_class` enum
 - **High Precision**: Decimal (18,8) for price/quantity, microsecond timestamps
 - **BACKWARD Compatible**: Schema evolution supported via Confluent Schema Registry
 
@@ -30,7 +30,7 @@ K2 uses **industry-standard hybrid schemas (V2)** that support multiple data sou
 **Purpose**: Trade execution event (tick data)
 **Namespace**: `com.k2.marketdata.TradeV2`
 **Schema File**: `src/k2/schemas/trade_v2.avsc`
-**Kafka Topic**: `market.{asset_class}.trades.{exchange}` (e.g., `market.equities.trades.asx`)
+**Kafka Topic**: `market.{asset_class}.trades.{exchange}` (e.g., `market.crypto.trades.binance`)
 **Iceberg Table**: `market_data.trades_v2`
 
 ### Core Fields
@@ -38,16 +38,16 @@ K2 uses **industry-standard hybrid schemas (V2)** that support multiple data sou
 | Field | Type | Required | Description | Example |
 |-------|------|----------|-------------|---------|
 | `message_id` | string | Yes | UUID v4 for deduplication (generated at ingestion) | `"550e8400-e29b-41d4-a716-446655440000"` |
-| `trade_id` | string | Yes | Exchange-specific trade ID. Format: `{EXCHANGE}-{id}` | `"ASX-123456"`, `"BINANCE-789012"` |
-| `symbol` | string | Yes | Trading symbol | `"BHP"`, `"BTCUSDT"`, `"ESZ3"` |
-| `exchange` | string | Yes | Exchange code | `"ASX"`, `"BINANCE"`, `"NYSE"`, `"CME"` |
-| `asset_class` | enum | Yes | Asset class: `equities`, `crypto`, `futures`, `options` | `"equities"`, `"crypto"` |
+| `trade_id` | string | Yes | Exchange-specific trade ID. Format: `{EXCHANGE}-{id}` | `"BINANCE-789012"`, `"KRAKEN-123456"` |
+| `symbol` | string | Yes | Trading symbol | `"BTCUSDT"`, `"ETHUSDT"`, `"BTC-PERP"` |
+| `exchange` | string | Yes | Exchange code | `"BINANCE"`, `"KRAKEN"`, `"COINBASE"`, `"BYBIT"` |
+| `asset_class` | enum | Yes | Asset class: `crypto`, `futures`, `options`, `forex` | `"crypto"`, `"futures"` |
 | `timestamp` | long (micros) | Yes | Exchange-reported execution time (UTC, microseconds) | `1705228800000000` (2024-01-14 12:00:00 UTC) |
-| `price` | decimal(18,8) | Yes | Execution price | `45.67000000` (equities), `0.00012345` (crypto) |
-| `quantity` | decimal(18,8) | Yes | Trade quantity (shares, contracts, tokens) | `1000.00000000`, `0.05000000` (fractional BTC) |
-| `currency` | string | Yes | Currency code (ISO 4217 or crypto ticker) | `"AUD"`, `"USD"`, `"USDT"`, `"BTC"` |
+| `price` | decimal(18,8) | Yes | Execution price | `42150.50000000` (BTC), `0.00012345` (altcoins) |
+| `quantity` | decimal(18,8) | Yes | Trade quantity (contracts, tokens) | `0.05000000` (fractional BTC), `1000.00000000` (altcoins) |
+| `currency` | string | Yes | Currency code (ISO 4217 or crypto ticker) | `"USD"`, `"USDT"`, `"BTC"`, `"ETH"` |
 | `side` | enum | Yes | Trade side: `BUY`, `SELL`, `SELL_SHORT`, `UNKNOWN` | `"BUY"`, `"SELL"` |
-| `trade_conditions` | array[string] | Yes | Exchange-specific condition codes (empty if none) | `["0"]` (ASX normal), `["C"]` (cash trade), `[]` |
+| `trade_conditions` | array[string] | Yes | Exchange-specific condition codes (empty if none) | `["normal"]` (standard trade), `["liquidation"]` (forced sale), `[]` |
 
 ### Platform Fields
 
@@ -63,12 +63,12 @@ K2 uses **industry-standard hybrid schemas (V2)** that support multiple data sou
 |-------|------|----------|-------------|
 | `vendor_data` | map[string, string] (nullable) | No | Exchange-specific fields as key-value pairs. Stored as JSON in Iceberg. |
 
-**ASX vendor_data Example**:
+**Kraken vendor_data Example**:
 ```json
 {
-  "company_id": "7078",
-  "qualifiers": "0",
-  "venue": "X"
+  "trade_type": "market",
+  "maker": "false",
+  "post_order_id": "O623RT-ABCDE-FGHKL"
 }
 ```
 
@@ -85,7 +85,7 @@ K2 uses **industry-standard hybrid schemas (V2)** that support multiple data sou
 ### Field Constraints
 
 - **Price/Quantity Precision**: Decimal (18,8) = 18 total digits, 8 after decimal point
-  - Supports traditional equities: `45.67` → `45.67000000`
+  - Supports large crypto values: `42150.50` → `42150.50000000`
   - Supports crypto: `0.00012345` → `0.00012345`
   - Max value: `9999999999.99999999`
 - **Timestamp Precision**: Microseconds (1μs = 0.000001 seconds)
@@ -99,27 +99,26 @@ K2 uses **industry-standard hybrid schemas (V2)** that support multiple data sou
 
 ### Example Records
 
-**ASX Equity Trade**:
+**Binance Crypto Trade**:
 ```json
 {
-  "message_id": "550e8400-e29b-41d4-a716-446655440000",
-  "trade_id": "ASX-123456",
-  "symbol": "BHP",
-  "exchange": "ASX",
-  "asset_class": "equities",
-  "timestamp": 1705228800000000,
-  "price": "45.67000000",
-  "quantity": "1000.00000000",
-  "currency": "AUD",
-  "side": "BUY",
-  "trade_conditions": ["0"],
-  "source_sequence": 12345678,
-  "ingestion_timestamp": 1705228800123456,
-  "platform_sequence": 9876543,
+  "message_id": "661e9511-f39c-52e5-b827-557766551111",
+  "trade_id": "BINANCE-789012",
+  "symbol": "BTCUSDT",
+  "exchange": "BINANCE",
+  "asset_class": "crypto",
+  "timestamp": 1705228805000000,
+  "price": "42150.50000000",
+  "quantity": "0.05000000",
+  "currency": "USDT",
+  "side": "SELL",
+  "trade_conditions": [],
+  "source_sequence": null,
+  "ingestion_timestamp": 1705228805012345,
+  "platform_sequence": 9876544,
   "vendor_data": {
-    "company_id": "7078",
-    "qualifiers": "0",
-    "venue": "X"
+    "is_buyer_maker": "true",
+    "event_type": "aggTrade"
   }
 }
 ```
@@ -155,7 +154,7 @@ K2 uses **industry-standard hybrid schemas (V2)** that support multiple data sou
 **Purpose**: Best bid/ask quote snapshot
 **Namespace**: `com.k2.marketdata.QuoteV2`
 **Schema File**: `src/k2/schemas/quote_v2.avsc`
-**Kafka Topic**: `market.{asset_class}.quotes.{exchange}` (e.g., `market.equities.quotes.asx`)
+**Kafka Topic**: `market.{asset_class}.quotes.{exchange}` (e.g., `market.crypto.quotes.binance`)
 **Iceberg Table**: `market_data.quotes_v2`
 
 ### Core Fields
@@ -163,16 +162,16 @@ K2 uses **industry-standard hybrid schemas (V2)** that support multiple data sou
 | Field | Type | Required | Description | Example |
 |-------|------|----------|-------------|---------|
 | `message_id` | string | Yes | UUID v4 for deduplication | `"550e8400-e29b-41d4-a716-446655440001"` |
-| `quote_id` | string | Yes | Exchange-specific quote ID. Format: `{EXCHANGE}-{id}` | `"ASX-456789"`, `"BINANCE-123456"` |
-| `symbol` | string | Yes | Trading symbol | `"BHP"`, `"BTCUSDT"` |
-| `exchange` | string | Yes | Exchange code | `"ASX"`, `"BINANCE"` |
-| `asset_class` | enum | Yes | Asset class: `equities`, `crypto`, `futures`, `options` | `"equities"`, `"crypto"` |
+| `quote_id` | string | Yes | Exchange-specific quote ID. Format: `{EXCHANGE}-{id}` | `"BINANCE-456789"`, `"KRAKEN-123456"` |
+| `symbol` | string | Yes | Trading symbol | `"BTCUSDT"`, `"ETHUSDT"` |
+| `exchange` | string | Yes | Exchange code | `"BINANCE"`, `"KRAKEN"` |
+| `asset_class` | enum | Yes | Asset class: `crypto`, `futures`, `options`, `forex` | `"crypto"`, `"futures"` |
 | `timestamp` | long (micros) | Yes | Exchange-reported quote time (UTC, microseconds) | `1705228800000000` |
 | `bid_price` | decimal(18,8) | Yes | Best bid price | `45.66000000` |
 | `bid_quantity` | decimal(18,8) | Yes | Quantity at best bid | `5000.00000000` |
 | `ask_price` | decimal(18,8) | Yes | Best ask price | `45.68000000` |
 | `ask_quantity` | decimal(18,8) | Yes | Quantity at best ask | `3000.00000000` |
-| `currency` | string | Yes | Currency code | `"AUD"`, `"USDT"` |
+| `currency` | string | Yes | Currency code | `"USDT"`, `"USD"`, `"BTC"` |
 
 ### Platform Fields
 
@@ -203,17 +202,17 @@ Mid Price = 45.67
 ```json
 {
   "message_id": "550e8400-e29b-41d4-a716-446655440001",
-  "quote_id": "ASX-456789",
-  "symbol": "BHP",
-  "exchange": "ASX",
-  "asset_class": "equities",
+  "quote_id": "BINANCE-456789",
+  "symbol": "BTCUSDT",
+  "exchange": "BINANCE",
+  "asset_class": "crypto",
   "timestamp": 1705228800000000,
-  "bid_price": "45.66000000",
-  "bid_quantity": "5000.00000000",
-  "ask_price": "45.68000000",
-  "ask_quantity": "3000.00000000",
-  "currency": "AUD",
-  "source_sequence": 12345679,
+  "bid_price": "42150.25000000",
+  "bid_quantity": "1.25000000",
+  "ask_price": "42150.75000000",
+  "ask_quantity": "0.87500000",
+  "currency": "USDT",
+  "source_sequence": null,
   "ingestion_timestamp": 1705228800123456,
   "platform_sequence": 9876545,
   "vendor_data": null
@@ -235,13 +234,13 @@ Mid Price = 45.67
 | Field | Type | Required | Description | Example |
 |-------|------|----------|-------------|---------|
 | `message_id` | string | Yes | UUID v4 for deduplication | `"550e8400-e29b-41d4-a716-446655440002"` |
-| `company_id` | string | Yes | Primary identifier (Kafka message key for compaction) | `"7078"` (ASX), `"AU000000BHP4"` (ISIN) |
-| `symbol` | string | Yes | Trading symbol | `"BHP"`, `"BTCUSDT"` |
-| `exchange` | string | Yes | Exchange code | `"ASX"`, `"BINANCE"` |
-| `asset_class` | enum | Yes | Asset class | `"equities"`, `"crypto"` |
+| `company_id` | string | Yes | Primary identifier (Kafka message key for compaction) | `"BTCUSDT"` (pair), `"ETHUSDT"` (ISIN) |
+| `symbol` | string | Yes | Trading symbol | `"BTCUSDT"`, `"ETHUSDT"` |
+| `exchange` | string | Yes | Exchange code | `"BINANCE"`, `"KRAKEN"` |
+| `asset_class` | enum | Yes | Asset class | `"crypto"`, `"futures"` |
 | `company_name` | string | Yes | Full company/instrument name | `"BHP BILLITON LTD"`, `"Bitcoin"` |
 | `isin` | string (nullable) | No | ISIN (ISO 6166). Null for crypto/derivatives | `"AU000000BHP4"`, `null` |
-| `currency` | string (nullable) | No | Primary trading currency | `"AUD"`, `"USDT"`, `null` |
+| `currency` | string (nullable) | No | Primary trading currency | `"USDT"`, `"USD"`, `"BTC"`, `null` |
 | `listing_date` | long (micros, nullable) | No | Listing/activation date (UTC) | `946684800000000`, `null` |
 | `delisting_date` | long (micros, nullable) | No | Delisting/deactivation date (UTC) | `null` (active) |
 | `is_active` | boolean | Yes | Currently active for trading | `true`, `false` |
@@ -255,13 +254,14 @@ Mid Price = 45.67
 
 ### Vendor Data Examples
 
-**ASX Equities**:
+**Binance Crypto**:
 ```json
 {
-  "sector": "Materials",
-  "industry": "Metals & Mining",
-  "gics_code": "151010",
-  "market_cap_aud": "180000000000"
+  "base_asset": "BTC",
+  "quote_asset": "USDT",
+  "status": "TRADING",
+  "min_notional": "10.00000000",
+  "tick_size": "0.01000000"
 }
 ```
 
@@ -281,21 +281,21 @@ Mid Price = 45.67
 ```json
 {
   "message_id": "550e8400-e29b-41d4-a716-446655440002",
-  "company_id": "7078",
-  "symbol": "BHP",
-  "exchange": "ASX",
-  "asset_class": "equities",
-  "company_name": "BHP BILLITON LTD",
-  "isin": "AU000000BHP4",
-  "currency": "AUD",
-  "listing_date": 946684800000000,
+  "company_id": "BTCUSDT",
+  "symbol": "BTCUSDT",
+  "exchange": "BINANCE",
+  "asset_class": "crypto",
+  "company_name": "Bitcoin Tether",
+  "isin": null,
+  "currency": "USDT",
+  "listing_date": 1502947200000000,
   "delisting_date": null,
   "is_active": true,
   "ingestion_timestamp": 1705228800000000,
   "vendor_data": {
-    "sector": "Materials",
-    "industry": "Metals & Mining",
-    "gics_code": "151010"
+    "base_asset": "BTC",
+    "quote_asset": "USDT",
+    "status": "TRADING"
   }
 }
 ```
@@ -308,10 +308,10 @@ Mid Price = 45.67
 
 | Value | Description | Examples |
 |-------|-------------|----------|
-| `equities` | Stocks, shares, equity securities | ASX stocks, NYSE equities |
 | `crypto` | Cryptocurrencies, digital assets | BTC, ETH, BNB |
-| `futures` | Futures contracts | E-mini S&P 500 (ES), Crude Oil (CL) |
-| `options` | Options contracts | SPX options, equity options |
+| `futures` | Futures contracts | Bitcoin futures, Ether futures |
+| `options` | Options contracts | Bitcoin options, crypto options |
+| `forex` | Foreign exchange pairs | EUR/USD, GBP/JPY |
 
 ### TradeSide (TradeV2 only)
 
@@ -319,7 +319,7 @@ Mid Price = 45.67
 |-------|-------------|-----------|
 | `BUY` | Aggressor bought (market order that lifted the offer) | Buyer initiated trade |
 | `SELL` | Aggressor sold (market order that hit the bid) | Seller initiated trade |
-| `SELL_SHORT` | Short sale | Short selling (equities) |
+| `SELL_SHORT` | Short sale | Short selling or leverage trading |
 | `UNKNOWN` | Side not determinable | Missing/ambiguous side information |
 
 ---
@@ -333,14 +333,14 @@ Mid Price = 45.67
 **Range**: `-9,999,999,999.99999999` to `9,999,999,999.99999999`
 
 **Usage**:
-- **Prices**: Supports both large (equities) and small (crypto) values
-- **Quantities**: Supports fractional crypto (0.05 BTC) and large share counts (1,000,000)
+- **Prices**: Supports both large (BTC) and small (altcoins) values
+- **Quantities**: Supports fractional crypto (0.05 BTC) and large token amounts (1,000,000)
 
 **Examples**:
 ```
-45.67       → 45.67000000   (ASX equity price)
+42150.50    → 42150.50000000 (BTC price)
 0.00012345  → 0.00012345    (altcoin price)
-1000        → 1000.00000000 (share quantity)
+1000        → 1000.00000000 (token quantity)
 0.05        → 0.05000000    (fractional BTC)
 ```
 
@@ -449,7 +449,7 @@ SELECT
   COUNT(*) as num_trades,
   SUM(CAST(quantity AS DOUBLE)) as total_volume
 FROM market_data.trades_v2
-WHERE symbol = 'BHP'
+WHERE symbol = 'BTCUSDT'
   AND exchange_date = '2024-01-14'
 GROUP BY symbol;
 ```
@@ -475,7 +475,7 @@ SELECT
   vendor_data->>'company_id' as company_id,
   vendor_data->>'sector' as sector
 FROM market_data.reference_data_v2
-WHERE exchange = 'ASX' AND is_active = true;
+WHERE exchange = 'BINANCE' AND is_active = true;
 ```
 
 ---
@@ -522,7 +522,7 @@ All V2 tables partitioned by:
 - [Iceberg Table Maintenance](../operations/runbooks/iceberg-table-maintenance.md)
 
 ### Integration Guides
-- [ASX Integration](../integrations/asx-equities.md) - ASX-specific vendor_data fields
+- [Binance Integration](../integrations/binance-crypto.md) - Binance-specific vendor_data fields
 - [Binance Integration](../integrations/binance-crypto.md) - Binance-specific vendor_data fields
 
 ---

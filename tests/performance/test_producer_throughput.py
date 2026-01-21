@@ -27,7 +27,6 @@ def mock_kafka_producer():
         patch("k2.ingestion.producer.SchemaRegistryClient") as mock_sr,
         patch("k2.ingestion.producer.get_topic_builder") as mock_builder,
     ):
-
         # Configure mock producer
         mock_instance = Mock()
         mock_instance.produce = Mock(return_value=None)
@@ -124,9 +123,9 @@ class TestProducerThroughput:
         # Print stats for reference
         stats = benchmark.stats
         print(
-            f"\nSingle trade latency - Mean: {stats['mean']*1000:.3f}ms, "
-            f"StdDev: {stats['stddev']*1000:.3f}ms, "
-            f"Min: {stats['min']*1000:.3f}ms, Max: {stats['max']*1000:.3f}ms"
+            f"\nSingle trade latency - Mean: {stats['mean'] * 1000:.3f}ms, "
+            f"StdDev: {stats['stddev'] * 1000:.3f}ms, "
+            f"Min: {stats['min'] * 1000:.3f}ms, Max: {stats['max'] * 1000:.3f}ms"
         )
 
     def test_single_quote_latency(self, benchmark, mock_kafka_producer, sample_quote_v2):
@@ -148,8 +147,8 @@ class TestProducerThroughput:
 
         stats = benchmark.stats
         print(
-            f"\nSingle quote latency - Mean: {stats['mean']*1000:.3f}ms, "
-            f"StdDev: {stats['stddev']*1000:.3f}ms"
+            f"\nSingle quote latency - Mean: {stats['mean'] * 1000:.3f}ms, "
+            f"StdDev: {stats['stddev'] * 1000:.3f}ms"
         )
 
     def test_batch_trade_throughput(self, benchmark, mock_kafka_producer, sample_trade_v2):

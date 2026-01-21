@@ -36,13 +36,19 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
       KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
 
-      # Listener Configuration
-      # PLAINTEXT_HOST: External access for producers/consumers
-      # PLAINTEXT: Internal Docker network communication
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
-      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092'
-      KAFKA_LISTENERS: 'PLAINTEXT://kafka:29092,CONTROLLER://kafka:9093,PLAINTEXT_HOST://0.0.0.0:9092'
-      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      # Listener Configuration - Professional Multi-Listener Setup
+      # INTERNAL: Container-to-container communication (Spark, Schema Registry, producers)
+      # EXTERNAL: Host-based access for debugging and monitoring tools
+      # CONTROLLER: KRaft consensus protocol (controller quorum)
+      #
+      # Pattern follows Netflix/Uber/LinkedIn production standards:
+      # - Separate listeners for internal vs external clients
+      # - Client connects to one listener, receives that listener in metadata
+      # - No metadata redirection issues between container and host networks
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: 'INTERNAL://kafka:29092,EXTERNAL://localhost:9092'
+      KAFKA_LISTENERS: 'INTERNAL://0.0.0.0:29092,CONTROLLER://kafka:9093,EXTERNAL://0.0.0.0:9092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'INTERNAL'
 
       # Cluster Configuration
       CLUSTER_ID: 'k2-market-data-cluster'
@@ -57,7 +63,7 @@ services:
       KAFKA_COMPRESSION_TYPE: 'lz4'              # Fast compression for market data
 
       # Resource Management
-      KAFKA_HEAP_OPTS: "-Xmx2G -Xms2G"           # Fixed heap prevents GC pauses
+      KAFKA_HEAP_OPTS: "-Xmx1G -Xms1G"           # Fixed heap prevents GC pauses
 
       # Monitoring
       KAFKA_JMX_PORT: 9997
@@ -101,11 +107,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 3G
-        reservations:
-          cpus: '1.0'
+          cpus: '1.5'
           memory: 2G
+        reservations:
+          cpus: '0.75'
+          memory: 1G
 
   # ============================================================================
   # SCHEMA REGISTRY - Schema Evolution & Data Governance (Multi-Node)
@@ -140,6 +146,11 @@ services:
       SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 90000
       SCHEMA_REGISTRY_REQUEST_TIMEOUT_MS: 40000
       SCHEMA_REGISTRY_SESSION_TIMEOUT_MS: 30000
+
+      # Topic creation settings (ensures _schemas is compacted)
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC: "_schemas"
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_CONFIG: "cleanup.policy=compact,segment.ms=3600000,min.cleanable.dirty.ratio=0.01"
     depends_on:
       kafka:
         condition: service_healthy
@@ -147,57 +158,70 @@ services:
       - k2-network
     healthcheck:
       test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/8081' || exit 1"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 60s
+      retries: 10
+      start_period: 30s
     deploy:
       resources:
         limits:
           cpus: '0.5'
           memory: 768M
 
-  schema-registry-2:
-    image: confluentinc/cp-schema-registry:8.1.1
-    container_name: k2-schema-registry-2
-    hostname: schema-registry-2
-    ports:
-      - "8082:8081"
-    environment:
-      SCHEMA_REGISTRY_HOST_NAME: schema-registry-2
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
-      SCHEMA_REGISTRY_LISTENERS: 'http://0.0.0.0:8081'
-
-      # Schema Compatibility
-      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: 'BACKWARD'
-
-      # Performance
-      SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx512M -Xms512M"
-
-      # Multi-node leader election configuration (same group.id)
-      SCHEMA_REGISTRY_KAFKASTORE_GROUP_ID: "schema-registry-cluster"
-      SCHEMA_REGISTRY_LEADER_ELIGIBILITY: "true"
-
-      # Consumer group coordination timeouts
-      SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 90000
-      SCHEMA_REGISTRY_REQUEST_TIMEOUT_MS: 40000
-      SCHEMA_REGISTRY_SESSION_TIMEOUT_MS: 30000
-    depends_on:
-      kafka:
-        condition: service_healthy
-    networks:
-      - k2-network
-    healthcheck:
-      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/8081' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 768M
+  # ============================================================================
+  # SCHEMA REGISTRY 2 - DISABLED FOR RESOURCE OPTIMIZATION
+  # ============================================================================
+  # Commented out to reduce resource usage (0.5 CPU, 768MB RAM saved)
+  # Single Schema Registry instance is sufficient for demo/dev environments
+  # Multi-node setup was designed for HA in production
+  # To re-enable: uncomment this entire block
+  # ============================================================================
+  # schema-registry-2:
+  #   image: confluentinc/cp-schema-registry:8.1.1
+  #   container_name: k2-schema-registry-2
+  #   hostname: schema-registry-2
+  #   ports:
+  #     - "8082:8081"
+  #   environment:
+  #     SCHEMA_REGISTRY_HOST_NAME: schema-registry-2
+  #     SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
+  #     SCHEMA_REGISTRY_LISTENERS: 'http://0.0.0.0:8081'
+  #
+  #     # Schema Compatibility
+  #     SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: 'BACKWARD'
+  #
+  #     # Performance
+  #     SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx512M -Xms512M"
+  #
+  #     # Multi-node leader election configuration (same group.id)
+  #     SCHEMA_REGISTRY_KAFKASTORE_GROUP_ID: "schema-registry-cluster"
+  #     SCHEMA_REGISTRY_LEADER_ELIGIBILITY: "true"
+  #
+  #     # Consumer group coordination timeouts
+  #     SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 90000
+  #     SCHEMA_REGISTRY_REQUEST_TIMEOUT_MS: 40000
+  #     SCHEMA_REGISTRY_SESSION_TIMEOUT_MS: 30000
+  #
+  #     # Topic creation settings (ensures _schemas is compacted)
+  #     SCHEMA_REGISTRY_KAFKASTORE_TOPIC: "_schemas"
+  #     SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
+  #     SCHEMA_REGISTRY_KAFKASTORE_TOPIC_CONFIG: "cleanup.policy=compact,segment.ms=3600000,min.cleanable.dirty.ratio=0.01"
+  #   depends_on:
+  #     kafka:
+  #       condition: service_healthy
+  #   networks:
+  #     - k2-network
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/8081' || exit 1"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10
+  #     start_period: 30s
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '0.5'
+  #         memory: 768M
 
   # ============================================================================
   # MINIO - S3-Compatible Object Storage for Iceberg
@@ -252,6 +276,7 @@ services:
       mc mb --ignore-existing k2minio/warehouse;
       mc mb --ignore-existing k2minio/data;
       mc mb --ignore-existing k2minio/backups;
+      mc mb --ignore-existing k2minio/flink;
       mc policy set download k2minio/warehouse;
       echo 'MinIO initialized successfully';
       "
@@ -311,7 +336,7 @@ services:
     ports:
       - "8181:8181"
     environment:
-      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_WAREHOUSE: s3a://warehouse/
       CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
       CATALOG_S3_ENDPOINT: http://minio:9000
       CATALOG_S3_ACCESS__KEY__ID: ${MINIO_ROOT_USER:-admin}
@@ -453,7 +478,7 @@ services:
       
       # Iceberg Configuration
       K2_ICEBERG_CATALOG_URI: http://iceberg-rest:8181
-      K2_ICEBERG_CATALOG_WAREHOUSE: s3://warehouse/
+      K2_ICEBERG_CATALOG_WAREHOUSE: s3a://warehouse/
       K2_ICEBERG_S3_ENDPOINT: http://minio:9000
       K2_ICEBERG_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}
       K2_ICEBERG_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-password}
@@ -542,12 +567,13 @@ services:
           memory: 512M
 
   # ============================================================================
-  # BINANCE STREAM - Real-time Cryptocurrency Market Data Ingestion
+  # BINANCE STREAM - Real-time Cryptocurrency Market Data Ingestion (RAW)
   # ============================================================================
-  # Streams live trades from Binance WebSocket API
+  # Streams live trades from Binance WebSocket API to Bronze layer (RAW)
   # - Connects to Binance public trade streams
-  # - Converts Binance format to v2 schema
-  # - Publishes to Kafka market.crypto.trades topic
+  # - Stores exchange-native format (NO transformation) to Bronze layer
+  # - Publishes to Kafka market.crypto.trades.binance.raw topic
+  # - V2 transformation happens in Silver Spark jobs (industry best practice)
   # - Production-grade resilience: circuit breakers, health checks, failover
   binance-stream:
     build:
@@ -556,7 +582,7 @@ services:
     container_name: k2-binance-stream
     hostname: binance-stream
     ports:
-      - "9091:9091"       # Prometheus metrics
+      - "9101:9101"       # Prometheus metrics (changed from 9091 to avoid conflict with Flink)
     environment:
       # Kafka Configuration
       K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
@@ -572,7 +598,7 @@ services:
 
       # Binance Configuration
       K2_BINANCE_ENABLED: "true"
-      K2_BINANCE_SYMBOLS: '["BTCUSDT", "ETHUSDT", "BNBUSDT"]'
+      K2_BINANCE_SYMBOLS: '["BTCUSDT", "ETHUSDT"]'
       K2_BINANCE_WEBSOCKET_URL: wss://stream.binance.com:9443/stream
       K2_BINANCE_FAILOVER_URLS: '["wss://stream.binance.us:9443/stream"]'
 
@@ -584,12 +610,12 @@ services:
 
       # Metrics Configuration
       K2_METRICS_ENABLED: "true"
-      K2_METRICS_PORT: 9091
+      K2_METRICS_PORT: 9101
 
       # Logging Configuration
       K2_LOG_LEVEL: INFO
       K2_LOG_FORMAT: json
-    command: python scripts/binance_stream.py
+    command: python scripts/binance_stream_raw.py
     depends_on:
       kafka:
         condition: service_healthy
@@ -599,7 +625,80 @@ services:
     networks:
       - k2-network
     healthcheck:
-      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9091' || exit 1"]
+      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9101' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ============================================================================
+  # KRAKEN STREAMING SERVICE - Real-time Kraken Trade Ingestion (RAW)
+  # ============================================================================
+  # Connects to Kraken WebSocket API and streams RAW trades to Kafka (Bronze layer)
+  # - Subscribes to BTC/USD, ETH/USD trade streams
+  # - Stores exchange-native format (no transformation) to Bronze layer
+  # - Publishes to Kafka market.crypto.trades.kraken.raw topic
+  # - V2 transformation happens in Silver Spark jobs (industry best practice)
+  # - Production-grade resilience: circuit breakers, health checks, failover
+  kraken-stream:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: k2-kraken-stream
+    hostname: kraken-stream
+    ports:
+      - "9095:9095"       # Prometheus metrics
+    environment:
+      # Kafka Configuration
+      K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      K2_KAFKA_SCHEMA_REGISTRY_URL: http://schema-registry-1:8081
+      K2_KAFKA_BATCH_SIZE: 16384
+      K2_KAFKA_LINGER_MS: 10
+      K2_KAFKA_COMPRESSION_TYPE: lz4
+      K2_KAFKA_RETRIES: 3
+      K2_KAFKA_REQUEST_TIMEOUT_MS: 30000
+      K2_KAFKA_MAX_IN_FLIGHT_REQUESTS: 5
+      K2_KAFKA_ACKS: 1
+      K2_KAFKA_IDEMPOTENCE_ENABLED: "true"
+
+      # Kraken Configuration
+      K2_KRAKEN_ENABLED: "true"
+      K2_KRAKEN_SYMBOLS: '["BTC/USD", "ETH/USD"]'
+      K2_KRAKEN_WEBSOCKET_URL: wss://ws.kraken.com
+      K2_KRAKEN_FAILOVER_URLS: '["wss://ws-auth.kraken.com"]'
+
+      # Resilience Configuration
+      K2_KRAKEN_RECONNECT_DELAY: 5
+      K2_KRAKEN_MAX_RECONNECT_ATTEMPTS: 10
+      K2_KRAKEN_HEALTH_CHECK_INTERVAL: 30
+      K2_KRAKEN_HEALTH_CHECK_TIMEOUT: 30
+
+      # Metrics Configuration
+      K2_METRICS_ENABLED: "true"
+      K2_METRICS_PORT: 9095
+
+      # Logging Configuration
+      K2_LOG_LEVEL: INFO
+      K2_LOG_FORMAT: json
+    command: python scripts/kraken_stream_raw.py
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry-1:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9095' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -616,75 +715,718 @@ services:
   # ============================================================================
   # KAFKA CONSUMER - Production-Ready Consumer for Market Data Ingestion
   # ============================================================================
-  # Consumes trades from Kafka and writes to Iceberg tables
-  # - Processes market.crypto.trades.binance topic
-  # - Deserializes v2 Avro messages with Schema Registry
-  # - Writes to market_data.trades Iceberg table with ACID guarantees
-  # - Production-grade features: batch processing, retries, DLQ, graceful shutdown
-  consumer-crypto:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        # Install consumer dependencies
-        INSTALL_CONSUMER: "true"
-        FORCE_INSTALL_CONSUMER: "true"
-    container_name: k2-consumer-crypto
-    hostname: k2-consumer-crypto
+  # ============================================================================
+  # SPARK CLUSTER - Distributed Processing for Medallion Architecture
+  # ============================================================================
+  # Spark cluster for implementing Bronze → Silver → Gold transformations
+  # - Reads from Kafka (structured streaming)
+  # - Writes to Iceberg tables (ACID transactions)
+  # - Implements data quality validation
+  # - Supports real-time aggregations
+
+  # SPARK MASTER - Cluster Coordinator
+  spark-master:
+    image: apache/spark:3.5.3
+    container_name: k2-spark-master
+    hostname: spark-master
+    ports:
+      - "8090:8080"       # Spark Web UI (changed from 8080 to avoid Kafka UI conflict)
+      - "7077:7077"       # Spark master port
+      - "4040:4040"       # Spark driver UI
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     environment:
-      # Kafka Configuration
-      K2_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      K2_KAFKA_SCHEMA_REGISTRY_URL: http://schema-registry-1:8081
-      K2_CONSUMER_GROUP: k2-iceberg-writer-crypto-v2
-      K2_CONSUMER_BATCH_SIZE: 1000
-      K2_CONSUMER_MAX_MESSAGES: ""  # Unlimited for daemon mode
-      
-      # Iceberg Configuration
-      K2_ICEBERG_CATALOG_URI: http://iceberg-rest:8181
-      K2_ICEBERG_CATALOG_WAREHOUSE: s3://warehouse/
-      K2_ICEBERG_S3_ENDPOINT: http://minio:9000
-      K2_ICEBERG_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}
-      K2_ICEBERG_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-password}
-      K2_ICEBERG_S3_PATH_STYLE_ACCESS: "true"
-      
-      # DLQ Configuration
-      K2_DLQ_PATH: /tmp/k2-dlq
-      
-      # Logging Configuration
-      K2_LOG_LEVEL: INFO
-      K2_LOG_FORMAT: json
-    command: >
-      python scripts/consume_crypto_trades.py 
-      --no-ui 
-      --log-level INFO
-    depends_on:
-      kafka:
-        condition: service_healthy
-      schema-registry-1:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      iceberg-rest:
-        condition: service_healthy
-    restart: unless-stopped
+      - SPARK_NO_DAEMONIZE=true
+    volumes:
+      - ./src:/opt/k2/src
+      - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
+      - spark-checkpoints:/checkpoints
     networks:
       - k2-network
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'consume_crypto_trades.py' || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+  # SPARK WORKER 1
+  spark-worker-1:
+    image: apache/spark:3.5.3
+    container_name: k2-spark-worker-1
+    hostname: spark-worker-1
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - SPARK_WORKER_CORES=3
+      - SPARK_WORKER_MEMORY=3g
+    volumes:
+      - ./src:/opt/k2/src
+      - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'org.apache.spark.deploy.worker.Worker' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '3.5'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+
+  # SPARK WORKER 2
+  spark-worker-2:
+    image: apache/spark:3.5.3
+    container_name: k2-spark-worker-2
+    hostname: spark-worker-2
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - SPARK_WORKER_CORES=3
+      - SPARK_WORKER_MEMORY=3g
+    volumes:
+      - ./src:/opt/k2/src
+      - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'org.apache.spark.deploy.worker.Worker' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '3.5'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+
+  # ============================================================================
+  # APACHE FLINK - Real-Time Stream Processing Cluster
+  # ============================================================================
+  # Flink cluster for Bronze layer ingestion (Kafka → Iceberg)
+  # Architecture: 1 JobManager + 2 TaskManagers (session cluster)
+  # - JobManager: Coordinates jobs, Web UI, checkpoints
+  # - TaskManager-1: Runs Binance Bronze job (2 task slots)
+  # - TaskManager-2: Runs Kraken Bronze job (2 task slots)
+  # Resources: 5 CPU, 5GB RAM total (vs Spark 13 CPU, 12GB RAM)
+
+  # ============================================================================
+  # FLINK SERVICES (DISABLED - Investigation Complete, See Phase 12 Docs)
+  # Preserved for future investigation - Do NOT delete
+  # To re-enable: uncomment lines 845-1054
+  # ============================================================================
+# 
+#   flink-jobmanager:
+#     image: flink-k2:1.18.1
+#     container_name: k2-flink-jobmanager
+#     hostname: flink-jobmanager
+#     ports:
+#       - "8082:8081"     # Flink Web UI (mapped to 8082 to avoid conflict with Schema Registry)
+#       - "6123:6123"     # RPC
+#       - "9091:9091"     # Prometheus metrics
+#     command: jobmanager
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - HADOOP_CONF_DIR=/opt/flink/conf
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     volumes:
+#       - ./config/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml
+#       - ./config/flink-sql:/opt/flink/sql:ro
+#     networks:
+#       - k2-network
+#     depends_on:
+#       kafka:
+#         condition: service_healthy
+#       schema-registry-1:
+#         condition: service_healthy
+#       iceberg-rest:
+#         condition: service_healthy
+#       minio:
+#         condition: service_healthy
+#     healthcheck:
+#       test: ["CMD-SHELL", "curl -f http://localhost:8081 || exit 1"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 40s
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '1.0'
+#           memory: 1G
+#         reservations:
+#           cpus: '0.5'
+#           memory: 512M
+# 
+#   flink-taskmanager-1:
+#     image: flink-k2:1.18.1
+#     container_name: k2-flink-taskmanager-1
+#     hostname: flink-taskmanager-1
+#     command: taskmanager
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=2
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     volumes:
+#       - ./config/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml
+#     networks:
+#       - k2-network
+#     depends_on:
+#       flink-jobmanager:
+#         condition: service_healthy
+#     healthcheck:
+#       test: ["CMD-SHELL", "pgrep -f 'org.apache.flink.runtime.taskexecutor.TaskManagerRunner' || exit 1"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 40s
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '2.0'
+#           memory: 2G
+#         reservations:
+#           cpus: '1.0'
+#           memory: 1G
+# 
+#   flink-taskmanager-2:
+#     image: flink-k2:1.18.1
+#     container_name: k2-flink-taskmanager-2
+#     hostname: flink-taskmanager-2
+#     command: taskmanager
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=2
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     volumes:
+#       - ./config/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml
+#     networks:
+#       - k2-network
+#     depends_on:
+#       flink-jobmanager:
+#         condition: service_healthy
+#     healthcheck:
+#       test: ["CMD-SHELL", "pgrep -f 'org.apache.flink.runtime.taskexecutor.TaskManagerRunner' || exit 1"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 40s
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '2.0'
+#           memory: 2G
+#         reservations:
+#           cpus: '1.0'
+#           memory: 1G
+# 
+#   # SQL Gateway for submitting SQL streaming jobs (Flink best practice)
+#   flink-sql-gateway:
+#     image: flink-k2:1.18.1
+#     container_name: k2-flink-sql-gateway
+#     hostname: flink-sql-gateway
+#     ports:
+#       - "8083:8083"  # SQL Gateway REST API
+#     command: bin/sql-gateway.sh start-foreground
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - HADOOP_CONF_DIR=/opt/flink/conf
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     volumes:
+#       - ./config/flink/flink-conf.yaml:/opt/flink/conf/flink-conf.yaml
+#     networks:
+#       - k2-network
+#     depends_on:
+#       flink-jobmanager:
+#         condition: service_healthy
+#     healthcheck:
+#       test: ["CMD-SHELL", "curl -f http://localhost:8083/v1/info || exit 1"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 40s
+#     restart: unless-stopped
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '0.5'
+#           memory: 512M
+# 
+#   flink-bronze-binance-job:
+#     build:
+#       context: ./flink-jobs
+#       dockerfile: Dockerfile
+#     image: k2-flink-bronze-jobs:1.0.0
+#     container_name: k2-flink-bronze-binance-job
+#     hostname: flink-bronze-binance-job
+#     command: ["com.k2.flink.bronze.BinanceBronzeJob", "bronze_binance_ingestion"]
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - HADOOP_CONF_DIR=/opt/flink/conf
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     networks:
+#       - k2-network
+#     depends_on:
+#       flink-jobmanager:
+#         condition: service_healthy
+#       flink-taskmanager-1:
+#         condition: service_healthy
+#       flink-taskmanager-2:
+#         condition: service_healthy
+#     restart: unless-stopped
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '0.5'
+#           memory: 512M
+# 
+#   flink-bronze-kraken-job:
+#     image: k2-flink-bronze-jobs:1.0.0
+#     container_name: k2-flink-bronze-kraken-job
+#     hostname: flink-bronze-kraken-job
+#     command: ["com.k2.flink.bronze.KrakenBronzeJob", "bronze_kraken_ingestion"]
+#     environment:
+#       - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+#       - HADOOP_CONF_DIR=/opt/flink/conf
+#       - AWS_REGION=us-east-1
+#       - AWS_ACCESS_KEY_ID=minioadmin
+#       - AWS_SECRET_ACCESS_KEY=minioadmin
+#     networks:
+#       - k2-network
+#     depends_on:
+#       flink-jobmanager:
+#         condition: service_healthy
+#       flink-taskmanager-1:
+#         condition: service_healthy
+#       flink-taskmanager-2:
+#         condition: service_healthy
+#     restart: unless-stopped
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '0.5'
+#           memory: 512M
+# 
+#   # ============================================================================
+#   # BRONZE STREAMING JOBS - Kafka to Iceberg Raw Ingestion
+#   # ============================================================================
+#   # These services run Spark Structured Streaming jobs that consume from Kafka
+#   # and write raw Avro payloads to Bronze Iceberg tables (per-exchange).
+#   # - Automatic restart on failure
+#   # - Resource limits prevent cluster starvation
+#   # - Checkpoints enable fault tolerance
+
+  bronze-binance-stream:
+    image: apache/spark:3.5.3
+    container_name: k2-bronze-binance-stream
+    hostname: bronze-binance-stream
+    environment:
+      - AWS_REGION=us-east-1
+    volumes:
+      - ./src:/opt/k2/src
+      - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'bronze_binance_ingestion.py' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+    command: >
+      /opt/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --total-executor-cores 1
+      --executor-cores 1
+      --executor-memory 1024m
+      --driver-memory 512m
+      --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
+      --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
+      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
+      /opt/k2/src/k2/spark/jobs/streaming/bronze_binance_ingestion.py
     deploy:
       resources:
         limits:
           cpus: '1.0'
-          memory: 1G
+          memory: 2G
         reservations:
           cpus: '0.5'
+          memory: 1G
+
+  bronze-kraken-stream:
+    image: apache/spark:3.5.3
+    container_name: k2-bronze-kraken-stream
+    hostname: bronze-kraken-stream
+    environment:
+      - AWS_REGION=us-east-1
+    volumes:
+      - ./src:/opt/k2/src
+      - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'bronze_kraken_ingestion.py' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+    command: >
+      /opt/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --total-executor-cores 1
+      --executor-cores 1
+      --executor-memory 1024m
+      --driver-memory 512m
+      --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
+      --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
+      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar,/opt/spark/jars-extra/spark-sql-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/kafka-clients-3.5.1.jar,/opt/spark/jars-extra/commons-pool2-2.11.1.jar,/opt/spark/jars-extra/spark-token-provider-kafka-0-10_2.12-3.5.3.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
+      /opt/k2/src/k2/spark/jobs/streaming/bronze_kraken_ingestion.py
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # ============================================================================
+  # SILVER TRANSFORMATION JOBS - Validated Data (Medallion Architecture)
+  # ============================================================================
+  # Industry Best Practice: Silver layer validates and deserializes Bronze data
+  # - Avro deserialization with Schema Registry
+  # - Data quality validation (DLQ pattern for failures)
+  # - Metadata enrichment (validation_timestamp, schema_id)
+
+  silver-binance-transformation:
+    image: apache/spark:3.5.3
+    container_name: k2-silver-binance-transformation
+    hostname: silver-binance-transformation
+    environment:
+      - AWS_REGION=us-east-1
+    volumes:
+      - ./src:/opt/k2/src
+      - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+      bronze-binance-stream:
+        condition: service_healthy
+      schema-registry-1:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'silver_binance_transformation_v3.py' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+    command: >
+      /opt/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --total-executor-cores 1
+      --executor-cores 1
+      --executor-memory 1024m
+      --driver-memory 512m
+      --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
+      --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
+      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
+      /opt/k2/src/k2/spark/jobs/streaming/silver_binance_transformation_v3.py
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  silver-kraken-transformation:
+    image: apache/spark:3.5.3
+    container_name: k2-silver-kraken-transformation
+    hostname: silver-kraken-transformation
+    environment:
+      - AWS_REGION=us-east-1
+    volumes:
+      - ./src:/opt/k2/src
+      - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+      bronze-kraken-stream:
+        condition: service_healthy
+      schema-registry-1:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'silver_kraken_transformation_v3.py' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+    command: >
+      /opt/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --total-executor-cores 1
+      --executor-cores 1
+      --executor-memory 1024m
+      --driver-memory 512m
+      --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
+      --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
+      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar,/opt/spark/jars-extra/spark-avro_2.12-3.5.3.jar
+      /opt/k2/src/k2/spark/jobs/streaming/silver_kraken_transformation_v3.py
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # ============================================================================
+  # GOLD AGGREGATION JOB - Unified Analytics (Medallion Architecture)
+  # ============================================================================
+  # Industry Best Practice: Gold layer provides unified cross-exchange analytics
+  # - Union of Silver tables (multi-exchange view)
+  # - Deduplication by message_id (exactly-once semantics)
+  # - Watermarking for late data handling (5-minute grace period)
+  # - Hourly partitioning for efficient time-series queries
+
+  gold-aggregation:
+    image: apache/spark:3.5.3
+    container_name: k2-gold-aggregation
+    hostname: gold-aggregation
+    environment:
+      - AWS_REGION=us-east-1
+    volumes:
+      - ./src:/opt/k2/src
+      - ./config:/opt/k2/config
+      - ./spark-jars:/opt/spark/jars-extra
+      - spark-checkpoints:/checkpoints
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+      silver-binance-transformation:
+        condition: service_healthy
+      silver-kraken-transformation:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'gold_aggregation.py' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    restart: unless-stopped
+    command: >
+      /opt/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --total-executor-cores 1
+      --executor-cores 1
+      --executor-memory 1024m
+      --driver-memory 512m
+      --conf spark.driver.extraJavaOptions='-Daws.region=us-east-1'
+      --conf spark.executor.extraJavaOptions='-Daws.region=us-east-1'
+      --jars /opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar,/opt/spark/jars-extra/iceberg-aws-1.4.0.jar,/opt/spark/jars-extra/bundle-2.20.18.jar,/opt/spark/jars-extra/url-connection-client-2.20.18.jar,/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar
+      /opt/k2/src/k2/spark/jobs/streaming/gold_aggregation.py
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # ============================================================================
+  # CHECKPOINT CLEANUP SERVICE - Prevents Metadata Accumulation
+  # ============================================================================
+  # Lightweight service that runs daily to clean up old Spark checkpoint metadata
+  # - Removes metadata files older than 7 days
+  # - Cleans up empty directories
+  # - Prevents disk space exhaustion from checkpoint accumulation
+  # - Production recommendation: Adjust retention based on recovery requirements
+  spark-checkpoint-cleaner:
+    image: alpine:3.19
+    container_name: k2-checkpoint-cleaner
+    hostname: checkpoint-cleaner
+    volumes:
+      - spark-checkpoints:/checkpoints
+    command: >
+      sh -c '
+      echo "Checkpoint Cleaner Service Started";
+      echo "Retention policy: 7 days";
+      echo "Check interval: 24 hours";
+      while true; do
+        echo "[$(date)] Running checkpoint cleanup...";
+        find /checkpoints -type f -name "metadata" -mtime +7 -exec rm -v {} \; 2>/dev/null || true;
+        find /checkpoints -type f -name "*.compact" -mtime +7 -exec rm -v {} \; 2>/dev/null || true;
+        find /checkpoints -type d -empty -delete 2>/dev/null || true;
+        echo "[$(date)] Cleanup complete. Sleeping 24h...";
+        sleep 86400;
+      done
+      '
+    restart: unless-stopped
+    networks:
+      - k2-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+
+  # ============================================================================
+  # PREFECT SERVER - Workflow Orchestration for OHLCV Batch Jobs
+  # ============================================================================
+  # Prefect server for orchestrating OHLCV aggregation jobs
+  # - Provides API for flow management and scheduling
+  # - Web UI at http://localhost:4200
+  # - Stores flow run history and logs
+  # - Lightweight alternative to Airflow for 5 batch jobs
+  prefect-server:
+    image: prefecthq/prefect:3-python3.12
+    container_name: k2-prefect-server
+    hostname: prefect-server
+    ports:
+      - "4200:4200"       # Prefect UI & API
+    environment:
+      PREFECT_API_URL: http://localhost:4200/api
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      PREFECT_UI_ENABLED: "true"
+    command: prefect server start --host 0.0.0.0
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:4200/api/health\")' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
           memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    restart: unless-stopped
+
+  # ============================================================================
+  # PREFECT AGENT - Executes OHLCV Aggregation Flows
+  # ============================================================================
+  # Prefect agent for executing scheduled OHLCV aggregation flows
+  # - Polls Prefect server for scheduled work
+  # - Runs spark-submit commands for OHLCV jobs
+  # - Sequential execution prevents resource contention
+  # - Access to Docker socket for Spark job submission
+  prefect-agent:
+    image: prefecthq/prefect:3-python3.12
+    container_name: k2-prefect-agent
+    hostname: prefect-agent
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+    command: prefect agent start --pool default-agent-pool
+    volumes:
+      - ./src:/opt/k2/src
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'prefect agent' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    restart: unless-stopped
 
 # ==============================================================================
 # NETWORKS
@@ -711,4 +1453,6 @@ volumes:
   prometheus-data:
     driver: local
   grafana-data:
+    driver: local
+  spark-checkpoints:
     driver: local

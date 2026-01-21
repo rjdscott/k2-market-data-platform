@@ -983,6 +983,6 @@ We've done **excellent foundational work**. The platform demonstrates **Staff-le
 ### Related Documentation
 - [Phase 0 Completion Report](../phases/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
 - [Phase 2 Completion Report](../phases/phase-2-prep/COMPLETION-REPORT.md)
-- [Technical Debt Tracker](../../TECHNICAL_DEBT.md)
+- [Technical Debt Tracker](../TECHNICAL_DEBT.md)
 - [Architecture Documentation](../architecture/)
 - [Operational Runbooks](../operations/runbooks/)
