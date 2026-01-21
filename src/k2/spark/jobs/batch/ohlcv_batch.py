@@ -81,17 +81,13 @@ from pyspark.sql.functions import (
     first,
     from_unixtime,
     last,
+)
+from pyspark.sql.functions import max as spark_max
+from pyspark.sql.functions import min as spark_min
+from pyspark.sql.functions import sum as spark_sum
+from pyspark.sql.functions import (
     to_date,
     window,
-)
-from pyspark.sql.functions import (
-    max as spark_max,
-)
-from pyspark.sql.functions import (
-    min as spark_min,
-)
-from pyspark.sql.functions import (
-    sum as spark_sum,
 )
 
 spark_session_path = Path(__file__).parent.parent.parent / "utils" / "spark_session.py"

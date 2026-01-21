@@ -21,17 +21,15 @@ from pyspark.sql.functions import (
     count,
     first,
     last,
+)
+from pyspark.sql.functions import max as spark_max
+from pyspark.sql.functions import min as spark_min
+from pyspark.sql.functions import (
     struct,
+)
+from pyspark.sql.functions import sum as spark_sum
+from pyspark.sql.functions import (
     window,
-)
-from pyspark.sql.functions import (
-    max as spark_max,
-)
-from pyspark.sql.functions import (
-    min as spark_min,
-)
-from pyspark.sql.functions import (
-    sum as spark_sum,
 )
 from pyspark.sql.types import (
     DecimalType,
