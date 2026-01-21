@@ -1352,6 +1352,82 @@ services:
           cpus: '0.05'
           memory: 64M
 
+  # ============================================================================
+  # PREFECT SERVER - Workflow Orchestration for OHLCV Batch Jobs
+  # ============================================================================
+  # Prefect server for orchestrating OHLCV aggregation jobs
+  # - Provides API for flow management and scheduling
+  # - Web UI at http://localhost:4200
+  # - Stores flow run history and logs
+  # - Lightweight alternative to Airflow for 5 batch jobs
+  prefect-server:
+    image: prefecthq/prefect:3-python3.12
+    container_name: k2-prefect-server
+    hostname: prefect-server
+    ports:
+      - "4200:4200"       # Prefect UI & API
+    environment:
+      PREFECT_API_URL: http://localhost:4200/api
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      PREFECT_UI_ENABLED: "true"
+    command: prefect server start --host 0.0.0.0
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:4200/api/health\")' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    restart: unless-stopped
+
+  # ============================================================================
+  # PREFECT AGENT - Executes OHLCV Aggregation Flows
+  # ============================================================================
+  # Prefect agent for executing scheduled OHLCV aggregation flows
+  # - Polls Prefect server for scheduled work
+  # - Runs spark-submit commands for OHLCV jobs
+  # - Sequential execution prevents resource contention
+  # - Access to Docker socket for Spark job submission
+  prefect-agent:
+    image: prefecthq/prefect:3-python3.12
+    container_name: k2-prefect-agent
+    hostname: prefect-agent
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+    command: prefect agent start --pool default-agent-pool
+    volumes:
+      - ./src:/opt/k2/src
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    networks:
+      - k2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'prefect agent' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    restart: unless-stopped
+
 # ==============================================================================
 # NETWORKS
 # ==============================================================================

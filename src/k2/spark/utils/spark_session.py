@@ -59,8 +59,7 @@ def create_spark_session(
         .config("spark.sql.catalog.iceberg.s3.path-style-access", "true")
         # Default to Iceberg catalog for SQL queries
         .config("spark.sql.defaultCatalog", "iceberg")
-        # Iceberg table properties
-        .config("spark.sql.catalog.iceberg.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+        # Iceberg table properties (io-impl auto-detected from REST catalog)
         # Performance tuning
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
@@ -125,8 +124,7 @@ def create_streaming_spark_session(
         .config("spark.sql.catalog.iceberg.s3.path-style-access", "true")
         # Default to Iceberg catalog for SQL queries
         .config("spark.sql.defaultCatalog", "iceberg")
-        # Iceberg table properties
-        .config("spark.sql.catalog.iceberg.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+        # Iceberg table properties (io-impl auto-detected from REST catalog)
         # Performance tuning (base)
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
