@@ -15,12 +15,10 @@ Requirements:
 Run with: pytest tests/integration/test_ohlcv_pipeline.py -v --docker
 """
 
-import pytest
 import subprocess
 import time
-from datetime import datetime, timedelta
-from decimal import Decimal
-from pathlib import Path
+
+import pytest
 
 # Mark all tests in this module as integration tests
 pytestmark = pytest.mark.integration
@@ -30,7 +28,11 @@ pytestmark = pytest.mark.integration
 def spark_submit_base():
     """Base spark-submit command configuration."""
     return [
-        "docker", "exec", "k2-spark-master", "bash", "-c",
+        "docker",
+        "exec",
+        "k2-spark-master",
+        "bash",
+        "-c",
         "cd /opt/k2 && /opt/spark/bin/spark-submit "
         "--master spark://spark-master:7077 "
         "--total-executor-cores 1 "
@@ -44,7 +46,7 @@ def spark_submit_base():
         "/opt/spark/jars-extra/bundle-2.20.18.jar,"
         "/opt/spark/jars-extra/url-connection-client-2.20.18.jar,"
         "/opt/spark/jars-extra/hadoop-aws-3.3.4.jar,"
-        "/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar "
+        "/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar ",
     ]
 
 
@@ -64,7 +66,9 @@ def check_docker_infrastructure():
             text=True,
         )
         if container not in result.stdout:
-            pytest.skip(f"Required container {container} not running. Start with: docker-compose up -d")
+            pytest.skip(
+                f"Required container {container} not running. Start with: docker-compose up -d"
+            )
 
 
 class TestIncrementalOHLCVJobs:
@@ -73,7 +77,9 @@ class TestIncrementalOHLCVJobs:
     def test_1m_incremental_job_execution(self, spark_submit_base, check_docker_infrastructure):
         """Test that 1m incremental job executes successfully."""
         cmd = spark_submit_base.copy()
-        cmd[-1] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 1m --lookback-minutes 1440"  # 1 day lookback
+        cmd[
+            -1
+        ] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 1m --lookback-minutes 1440"  # 1 day lookback
 
         result = subprocess.run(
             cmd,
@@ -90,7 +96,9 @@ class TestIncrementalOHLCVJobs:
     def test_5m_incremental_job_execution(self, spark_submit_base, check_docker_infrastructure):
         """Test that 5m incremental job executes successfully."""
         cmd = spark_submit_base.copy()
-        cmd[-1] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 5m --lookback-minutes 1440"
+        cmd[
+            -1
+        ] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 5m --lookback-minutes 1440"
 
         result = subprocess.run(
             cmd,
@@ -104,7 +112,9 @@ class TestIncrementalOHLCVJobs:
     def test_1m_job_idempotency(self, spark_submit_base, check_docker_infrastructure):
         """Test that running 1m job twice produces consistent results."""
         cmd = spark_submit_base.copy()
-        cmd[-1] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 1m --lookback-minutes 60"
+        cmd[
+            -1
+        ] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 1m --lookback-minutes 60"
 
         # Run job first time
         result1 = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
@@ -242,8 +252,14 @@ class TestEndToEndWorkflow:
     def test_full_pipeline_sequence(self, spark_submit_base, check_docker_infrastructure):
         """Test running all OHLCV jobs in sequence."""
         jobs = [
-            ("1m", "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 1m --lookback-minutes 60"),
-            ("5m", "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 5m --lookback-minutes 120"),
+            (
+                "1m",
+                "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 1m --lookback-minutes 60",
+            ),
+            (
+                "5m",
+                "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 5m --lookback-minutes 120",
+            ),
             ("30m", "src/k2/spark/jobs/batch/ohlcv_batch.py --timeframe 30m --lookback-hours 24"),
             ("1h", "src/k2/spark/jobs/batch/ohlcv_batch.py --timeframe 1h --lookback-hours 48"),
             ("1d", "src/k2/spark/jobs/batch/ohlcv_batch.py --timeframe 1d --lookback-days 7"),
@@ -267,7 +283,9 @@ class TestEndToEndWorkflow:
         """Test validation after running full pipeline."""
         # First run a job to ensure data exists
         cmd = spark_submit_base.copy()
-        cmd[-1] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 1m --lookback-minutes 1440"
+        cmd[
+            -1
+        ] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 1m --lookback-minutes 1440"
         subprocess.run(cmd, capture_output=True, timeout=120)
 
         # Then run validation
@@ -308,10 +326,14 @@ class TestRetentionEnforcement:
 class TestJobConfiguration:
     """Test job configuration and argument parsing."""
 
-    def test_incremental_job_invalid_timeframe(self, spark_submit_base, check_docker_infrastructure):
+    def test_incremental_job_invalid_timeframe(
+        self, spark_submit_base, check_docker_infrastructure
+    ):
         """Test that incremental job rejects invalid timeframes."""
         cmd = spark_submit_base.copy()
-        cmd[-1] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 30m --lookback-minutes 60"
+        cmd[
+            -1
+        ] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 30m --lookback-minutes 60"
 
         result = subprocess.run(
             cmd,
@@ -322,7 +344,9 @@ class TestJobConfiguration:
 
         # Should fail with error about invalid timeframe (argparse writes to stdout)
         assert result.returncode != 0
-        assert "invalid choice: '30m'" in result.stdout or ("1m" in result.stdout and "5m" in result.stdout)
+        assert "invalid choice: '30m'" in result.stdout or (
+            "1m" in result.stdout and "5m" in result.stdout
+        )
 
     def test_batch_job_invalid_timeframe(self, spark_submit_base, check_docker_infrastructure):
         """Test that batch job rejects invalid timeframes."""
@@ -338,7 +362,9 @@ class TestJobConfiguration:
 
         # Should fail with error about invalid timeframe (argparse writes to stdout)
         assert result.returncode != 0
-        assert "invalid choice: '1m'" in result.stdout or ("30m" in result.stdout and "1h" in result.stdout and "1d" in result.stdout)
+        assert "invalid choice: '1m'" in result.stdout or (
+            "30m" in result.stdout and "1h" in result.stdout and "1d" in result.stdout
+        )
 
 
 @pytest.mark.slow
@@ -348,7 +374,9 @@ class TestPerformance:
     def test_1m_job_performance(self, spark_submit_base, check_docker_infrastructure):
         """Test that 1m job completes within expected time."""
         cmd = spark_submit_base.copy()
-        cmd[-1] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 1m --lookback-minutes 60"
+        cmd[
+            -1
+        ] += "src/k2/spark/jobs/batch/ohlcv_incremental.py --timeframe 1m --lookback-minutes 60"
 
         start = time.time()
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
@@ -377,5 +405,7 @@ class TestPerformance:
 # Pytest configuration
 def pytest_configure(config):
     """Register custom markers."""
-    config.addinivalue_line("markers", "integration: integration tests requiring Docker infrastructure")
+    config.addinivalue_line(
+        "markers", "integration: integration tests requiring Docker infrastructure"
+    )
     config.addinivalue_line("markers", "slow: slow tests (performance benchmarks)")

@@ -11,27 +11,34 @@ These tests validate the core aggregation logic without requiring live
 Spark/Iceberg infrastructure.
 """
 
-import pytest
 from datetime import datetime, timedelta
 from decimal import Decimal
+
+import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
-    window,
+    count,
     first,
     last,
-    min as spark_min,
-    max as spark_max,
-    sum as spark_sum,
-    count,
     struct,
+    window,
+)
+from pyspark.sql.functions import (
+    max as spark_max,
+)
+from pyspark.sql.functions import (
+    min as spark_min,
+)
+from pyspark.sql.functions import (
+    sum as spark_sum,
 )
 from pyspark.sql.types import (
-    StructType,
-    StructField,
-    StringType,
-    LongType,
     DecimalType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
     TimestampType,
 )
 
@@ -40,8 +47,7 @@ from pyspark.sql.types import (
 def spark():
     """Create a local Spark session for testing."""
     spark = (
-        SparkSession.builder
-        .master("local[1]")
+        SparkSession.builder.master("local[1]")
         .appName("test-ohlcv-aggregation")
         .config("spark.sql.shuffle.partitions", "1")  # Minimize overhead
         .getOrCreate()
@@ -54,13 +60,15 @@ def spark():
 @pytest.fixture
 def trades_schema():
     """Schema for gold_crypto_trades table."""
-    return StructType([
-        StructField("symbol", StringType(), nullable=False),
-        StructField("exchange", StringType(), nullable=False),
-        StructField("timestamp", LongType(), nullable=False),  # microseconds
-        StructField("price", DecimalType(18, 8), nullable=False),
-        StructField("quantity", DecimalType(18, 8), nullable=False),
-    ])
+    return StructType(
+        [
+            StructField("symbol", StringType(), nullable=False),
+            StructField("exchange", StringType(), nullable=False),
+            StructField("timestamp", LongType(), nullable=False),  # microseconds
+            StructField("price", DecimalType(18, 8), nullable=False),
+            StructField("quantity", DecimalType(18, 8), nullable=False),
+        ]
+    )
 
 
 def microseconds_from_dt(dt: datetime) -> int:
@@ -76,18 +84,20 @@ class TestOHLCBasicAggregation:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("100.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
         # Aggregate into 1-minute OHLCV
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             first(struct("timestamp_ts", "price")).getField("price").alias("open_price"),
             spark_max("price").alias("high_price"),
             spark_min("price").alias("low_price"),
@@ -113,20 +123,40 @@ class TestOHLCBasicAggregation:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("100.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=10)), Decimal("101.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=20)), Decimal("102.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=30)), Decimal("103.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=10)),
+                Decimal("101.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=20)),
+                Decimal("102.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=30)),
+                Decimal("103.00"),
+                Decimal("1.0"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             first(struct("timestamp_ts", "price")).getField("price").alias("open_price"),
             spark_max("price").alias("high_price"),
             spark_min("price").alias("low_price"),
@@ -150,20 +180,40 @@ class TestOHLCBasicAggregation:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("103.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=10)), Decimal("102.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=20)), Decimal("101.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=30)), Decimal("100.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("103.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=10)),
+                Decimal("102.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=20)),
+                Decimal("101.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=30)),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             first(struct("timestamp_ts", "price")).getField("price").alias("open_price"),
             spark_max("price").alias("high_price"),
             spark_min("price").alias("low_price"),
@@ -187,19 +237,33 @@ class TestOHLCBasicAggregation:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("100.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=10)), Decimal("110.00"), Decimal("1.0")),  # Spike
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=20)), Decimal("101.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=10)),
+                Decimal("110.00"),
+                Decimal("1.0"),
+            ),  # Spike
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=20)),
+                Decimal("101.00"),
+                Decimal("1.0"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             first(struct("timestamp_ts", "price")).getField("price").alias("open_price"),
             spark_max("price").alias("high_price"),
             spark_min("price").alias("low_price"),
@@ -227,18 +291,26 @@ class TestVWAPCalculation:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("100.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=10)), Decimal("102.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=10)),
+                Decimal("102.00"),
+                Decimal("1.0"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             (spark_sum(col("price") * col("quantity")) / spark_sum("quantity")).alias("vwap"),
         )
 
@@ -252,18 +324,26 @@ class TestVWAPCalculation:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("100.00"), Decimal("1.0")),  # 100 * 1 = 100
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=10)), Decimal("110.00"), Decimal("3.0")),  # 110 * 3 = 330
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),  # 100 * 1 = 100
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=10)),
+                Decimal("110.00"),
+                Decimal("3.0"),
+            ),  # 110 * 3 = 330
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             (spark_sum(col("price") * col("quantity")) / spark_sum("quantity")).alias("vwap"),
         )
 
@@ -277,19 +357,33 @@ class TestVWAPCalculation:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("100.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=10)), Decimal("110.00"), Decimal("2.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=20)), Decimal("105.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=10)),
+                Decimal("110.00"),
+                Decimal("2.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=20)),
+                Decimal("105.00"),
+                Decimal("1.0"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             spark_min("price").alias("low_price"),
             spark_max("price").alias("high_price"),
             (spark_sum(col("price") * col("quantity")) / spark_sum("quantity")).alias("vwap"),
@@ -309,20 +403,34 @@ class TestWindowAggregation:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("100.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=30)), Decimal("101.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=30)),
+                Decimal("101.00"),
+                Decimal("1.0"),
+            ),
             # Next minute
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(minutes=1)), Decimal("102.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(minutes=1)),
+                Decimal("102.00"),
+                Decimal("1.0"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             count("*").alias("trade_count"),
         )
 
@@ -340,21 +448,41 @@ class TestWindowAggregation:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("100.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(minutes=2)), Decimal("101.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(minutes=4)), Decimal("102.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(minutes=2)),
+                Decimal("101.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(minutes=4)),
+                Decimal("102.00"),
+                Decimal("1.0"),
+            ),
             # Next 5-minute window
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(minutes=5)), Decimal("103.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(minutes=5)),
+                Decimal("103.00"),
+                Decimal("1.0"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "5 minutes")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "5 minutes")).agg(
             count("*").alias("trade_count"),
         )
 
@@ -368,20 +496,34 @@ class TestWindowAggregation:
         base_time = datetime(2026, 1, 21, 0, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("100.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(hours=12)), Decimal("101.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(hours=12)),
+                Decimal("101.00"),
+                Decimal("1.0"),
+            ),
             # Next day
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(days=1)), Decimal("102.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(days=1)),
+                Decimal("102.00"),
+                Decimal("1.0"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 day")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 day")).agg(
             count("*").alias("trade_count"),
         )
 
@@ -399,20 +541,32 @@ class TestMultiExchangeAggregation:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("100.00"), Decimal("1.0")),
-            ("BTCUSDT", "KRAKEN", microseconds_from_dt(base_time), Decimal("100.50"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "KRAKEN",
+                microseconds_from_dt(base_time),
+                Decimal("100.50"),
+                Decimal("1.0"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
-            first(struct("timestamp_ts", "price")).getField("price").alias("open_price"),
-        ).orderBy("exchange")
+        ohlcv = (
+            df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute"))
+            .agg(
+                first(struct("timestamp_ts", "price")).getField("price").alias("open_price"),
+            )
+            .orderBy("exchange")
+        )
 
         results = ohlcv.collect()
 
@@ -441,11 +595,7 @@ class TestEdgeCases:
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             spark_min("price").alias("low_price"),
             spark_max("price").alias("high_price"),
             count("*").alias("trade_count"),
@@ -463,18 +613,26 @@ class TestEdgeCases:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("1.00"), Decimal("1.0")),
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=10)), Decimal("100000.00"), Decimal("1.0")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("1.00"),
+                Decimal("1.0"),
+            ),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=10)),
+                Decimal("100000.00"),
+                Decimal("1.0"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             spark_min("price").alias("low_price"),
             spark_max("price").alias("high_price"),
         )
@@ -493,20 +651,40 @@ class TestDataQualityInvariants:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("102.00"), Decimal("1.0")),  # Open
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=10)), Decimal("105.00"), Decimal("1.0")),  # High
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=20)), Decimal("100.00"), Decimal("1.0")),  # Low
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time + timedelta(seconds=30)), Decimal("103.00"), Decimal("1.0")),  # Close
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("102.00"),
+                Decimal("1.0"),
+            ),  # Open
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=10)),
+                Decimal("105.00"),
+                Decimal("1.0"),
+            ),  # High
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=20)),
+                Decimal("100.00"),
+                Decimal("1.0"),
+            ),  # Low
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time + timedelta(seconds=30)),
+                Decimal("103.00"),
+                Decimal("1.0"),
+            ),  # Close
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             first(struct("timestamp_ts", "price")).getField("price").alias("open_price"),
             spark_max("price").alias("high_price"),
             spark_min("price").alias("low_price"),
@@ -526,17 +704,19 @@ class TestDataQualityInvariants:
         base_time = datetime(2026, 1, 21, 12, 0, 0)
 
         data = [
-            ("BTCUSDT", "BINANCE", microseconds_from_dt(base_time), Decimal("100.00"), Decimal("1.5")),
+            (
+                "BTCUSDT",
+                "BINANCE",
+                microseconds_from_dt(base_time),
+                Decimal("100.00"),
+                Decimal("1.5"),
+            ),
         ]
 
         df = spark.createDataFrame(data, schema=trades_schema)
         df = df.withColumn("timestamp_ts", (col("timestamp") / 1_000_000).cast(TimestampType()))
 
-        ohlcv = df.groupBy(
-            "symbol",
-            "exchange",
-            window("timestamp_ts", "1 minute")
-        ).agg(
+        ohlcv = df.groupBy("symbol", "exchange", window("timestamp_ts", "1 minute")).agg(
             spark_sum("quantity").alias("volume"),
             count("*").alias("trade_count"),
         )

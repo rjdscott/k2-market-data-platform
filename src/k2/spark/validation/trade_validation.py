@@ -30,19 +30,18 @@ Usage:
     write_to_dlq(invalid_df, "bronze_binance_trades")
 """
 
-from typing import Tuple
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import (
     col,
-    when,
-    lit,
     current_timestamp,
+    lit,
     to_date,
     unix_timestamp,
+    when,
 )
 
 
-def validate_trade_record(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
+def validate_trade_record(df: DataFrame) -> tuple[DataFrame, DataFrame]:
     """Apply validation rules and split into valid/invalid streams.
 
     Args:
@@ -79,10 +78,10 @@ def validate_trade_record(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     # Split streams
     # IMPORTANT: Handle NULL is_valid explicitly (from_avro returning NULL causes NULL is_valid)
     # NULL is_valid records must go to DLQ (not disappear silently)
-    valid_df = df_with_validation.filter(col("is_valid") == True).drop("is_valid")
+    valid_df = df_with_validation.filter(col("is_valid")).drop("is_valid")
 
     # Invalid: explicitly FALSE or NULL (capture silent failures from NULL fields)
-    invalid_df = df_with_validation.filter((col("is_valid") == False) | col("is_valid").isNull())
+    invalid_df = df_with_validation.filter((~col("is_valid")) | col("is_valid").isNull())
 
     # Add error reason to invalid records (first failing condition)
     # Industry best practice: Provide clear, actionable error messages
@@ -97,7 +96,9 @@ def validate_trade_record(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
         .when(col("symbol").isNull(), "symbol_required")
         .when(~col("side").isin(["BUY", "SELL"]), "invalid_side")
         .when(col("timestamp") >= current_time_micros, "timestamp_in_future")
-        .when(col("timestamp") <= (current_time_micros - 86400 * 365 * 1000000), "timestamp_too_old")
+        .when(
+            col("timestamp") <= (current_time_micros - 86400 * 365 * 1000000), "timestamp_too_old"
+        )
         .when(col("message_id").isNull(), "message_id_required")
         .when(col("asset_class") != "crypto", "invalid_asset_class")
         .otherwise("unknown_validation_error"),
@@ -138,17 +139,15 @@ def write_to_dlq(invalid_df: DataFrame, bronze_source: str, checkpoint_location:
     """
     # Prepare DLQ records
     # Capture: raw_bytes, error details, lineage metadata
-    dlq_df = (
-        invalid_df.select(
-            col("raw_bytes").alias("raw_record"),  # Original Bronze raw_bytes
-            col("error_reason"),  # Specific validation failure
-            col("error_type"),  # Error category
-            current_timestamp().alias("error_timestamp"),  # When validation failed
-            lit(bronze_source).alias("bronze_source"),  # Source Bronze table
-            col("offset").alias("kafka_offset"),  # Bronze Kafka offset
-            col("schema_id"),  # Schema Registry ID (nullable)
-            to_date(current_timestamp()).alias("dlq_date"),  # Partition key
-        )
+    dlq_df = invalid_df.select(
+        col("raw_bytes").alias("raw_record"),  # Original Bronze raw_bytes
+        col("error_reason"),  # Specific validation failure
+        col("error_type"),  # Error category
+        current_timestamp().alias("error_timestamp"),  # When validation failed
+        lit(bronze_source).alias("bronze_source"),  # Source Bronze table
+        col("offset").alias("kafka_offset"),  # Bronze Kafka offset
+        col("schema_id"),  # Schema Registry ID (nullable)
+        to_date(current_timestamp()).alias("dlq_date"),  # Partition key
     )
 
     # Write to DLQ table

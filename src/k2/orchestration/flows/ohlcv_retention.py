@@ -43,18 +43,17 @@ Related:
 - Retention Policy: Storage Efficiency section
 """
 
-import sys
-import logging
-import json
 import argparse
-from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Dict, List
-
-from pyspark.sql import SparkSession
 
 # Import spark_session module directly without adding k2 to path
 import importlib.util
+import json
+import logging
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from pyspark.sql import SparkSession
 
 # Path: /opt/k2/src/k2/orchestration/flows/ohlcv_retention.py -> /opt/k2/src/k2/spark/utils/spark_session.py
 spark_session_path = Path(__file__).parent.parent.parent / "spark" / "utils" / "spark_session.py"
@@ -118,7 +117,7 @@ def parse_args():
 
 def get_expired_partitions(
     spark: SparkSession, table: str, retention_days: int, dry_run: bool
-) -> List[str]:
+) -> list[str]:
     """Get list of expired partitions for a table.
 
     Args:
@@ -155,7 +154,7 @@ def delete_expired_partitions(
     timeframe: str,
     retention_days: int,
     dry_run: bool,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """Delete expired partitions from OHLCV table.
 
     Args:
@@ -211,9 +210,7 @@ def delete_expired_partitions(
             spark.sql(delete_query)
             deleted_count += 1
         except Exception as e:
-            logger.error(
-                f"Failed to delete partition {partition_date} from {table}: {e}"
-            )
+            logger.error(f"Failed to delete partition {partition_date} from {table}: {e}")
 
     print(f"✓ Deleted {deleted_count}/{len(expired_partitions)} partitions")
     logger.info(
@@ -240,10 +237,12 @@ def main():
     print("K2 OHLCV Retention Enforcement")
     print("Automated Partition Deletion")
     print("=" * 70)
-    print(f"\nConfiguration:")
-    print(f"  • Mode: {'DRY-RUN (preview only)' if args.dry_run else 'EXECUTE (delete partitions)'}")
+    print("\nConfiguration:")
+    print(
+        f"  • Mode: {'DRY-RUN (preview only)' if args.dry_run else 'EXECUTE (delete partitions)'}"
+    )
     print(f"  • Namespace: {args.namespace}")
-    print(f"\nRetention Policies:")
+    print("\nRetention Policies:")
     for timeframe, days in RETENTION_POLICIES.items():
         print(f"  • {timeframe}: {days} days")
     print(f"\n{'=' * 70}\n")

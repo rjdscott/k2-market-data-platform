@@ -43,17 +43,16 @@ Related:
 import sys
 from pathlib import Path
 
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, current_timestamp, to_date
+from pyspark.sql.functions import current_timestamp, to_date
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
 # Import spark_session module directly (bypasses k2 package initialization)
 import importlib.util
+
 spec = importlib.util.spec_from_file_location(
-    "spark_session",
-    str(Path(__file__).parent.parent.parent / "utils" / "spark_session.py")
+    "spark_session", str(Path(__file__).parent.parent.parent / "utils" / "spark_session.py")
 )
 spark_session_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(spark_session_module)
@@ -78,15 +77,14 @@ def main():
     # Create Spark session with production-ready configuration
     spark = create_streaming_spark_session(
         app_name="K2-Bronze-Binance-Ingestion",
-        checkpoint_location="s3a://warehouse/checkpoints/bronze-binance/"
+        checkpoint_location="s3a://warehouse/checkpoints/bronze-binance/",
     )
 
     try:
         # Read from Kafka (Binance RAW topic)
         print("Starting Kafka stream reader...")
         kafka_df = (
-            spark.readStream
-            .format("kafka")
+            spark.readStream.format("kafka")
             .option("kafka.bootstrap.servers", "kafka:29092")
             .option("subscribe", "market.crypto.trades.binance.raw")
             .option("startingOffsets", "latest")
@@ -105,13 +103,12 @@ def main():
         # NO deserialization - keep Schema Registry headers for Silver layer
         print("Transforming to Bronze schema (raw bytes)...")
         bronze_df = (
-            kafka_df
-            .selectExpr(
-                "value as raw_bytes",              # Full Kafka value (header + payload)
-                "topic",                           # Source topic name
-                "partition",                       # Kafka partition
-                "offset",                          # Kafka offset
-                "timestamp as kafka_timestamp"     # Kafka message timestamp
+            kafka_df.selectExpr(
+                "value as raw_bytes",  # Full Kafka value (header + payload)
+                "topic",  # Source topic name
+                "partition",  # Kafka partition
+                "offset",  # Kafka offset
+                "timestamp as kafka_timestamp",  # Kafka message timestamp
             )
             .withColumn("ingestion_timestamp", current_timestamp())
             .withColumn("ingestion_date", to_date(current_timestamp()))
@@ -126,8 +123,7 @@ def main():
         # Write to Bronze table
         print("\nStarting Bronze writer...")
         query = (
-            bronze_df.writeStream
-            .format("iceberg")
+            bronze_df.writeStream.format("iceberg")
             .outputMode("append")
             .trigger(processingTime="10 seconds")
             .option("checkpointLocation", "s3a://warehouse/checkpoints/bronze-binance/")
@@ -142,7 +138,9 @@ def main():
         print("\nMonitor:")
         print("  • Spark UI: http://localhost:8090")
         print("  • Query Bronze: SELECT COUNT(*) FROM bronze_binance_trades;")
-        print("  • Check raw_bytes: SELECT raw_bytes, length(raw_bytes) FROM bronze_binance_trades LIMIT 1;")
+        print(
+            "  • Check raw_bytes: SELECT raw_bytes, length(raw_bytes) FROM bronze_binance_trades LIMIT 1;"
+        )
         print("\nNext Step:")
         print("  • Silver transformation will deserialize raw_bytes")
         print("\nPress Ctrl+C to stop (checkpoint saved automatically)")
@@ -161,6 +159,7 @@ def main():
     except Exception as e:
         print(f"\n✗ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
     finally:

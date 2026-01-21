@@ -11,6 +11,7 @@ This module provides the foundational testing infrastructure including:
 import gc
 import logging
 import os
+import sys
 import uuid
 from collections.abc import Generator
 from datetime import datetime, timedelta
@@ -776,7 +777,6 @@ def memory_management():
 # Crypto Trading Data Fixtures (imported from crypto_fixtures.py)
 # ==============================================================================
 
-import sys
 sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
 from crypto_fixtures import CryptoDataFactory  # noqa: E402
 

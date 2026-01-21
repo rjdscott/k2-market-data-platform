@@ -86,8 +86,7 @@ def create_bronze_table(spark, exchange: str, namespace: str = "market_data"):
         pass
 
     target_file_size = config["bronze_file_size_mb"] * 1024 * 1024
-    spark.sql(
-        f"""
+    spark.sql(f"""
     CREATE TABLE IF NOT EXISTS {table_name} (
         message_key STRING,
         avro_payload BINARY,
@@ -107,8 +106,7 @@ def create_bronze_table(spark, exchange: str, namespace: str = "market_data"):
         'write.target-file-size-bytes' = '{target_file_size}'
     )
     COMMENT 'Bronze: Raw {exchange.capitalize()} Kafka data ({config["bronze_retention_days"]}-day retention)'
-    """
-    )
+    """)
 
     print(f"      ✓ Bronze {exchange.capitalize()} table created")
     return True
@@ -129,8 +127,7 @@ def create_silver_table(spark, exchange: str, namespace: str = "market_data"):
         pass
 
     target_file_size = config["silver_file_size_mb"] * 1024 * 1024
-    spark.sql(
-        f"""
+    spark.sql(f"""
     CREATE TABLE IF NOT EXISTS {table_name} (
         message_id STRING,
         trade_id STRING,
@@ -158,8 +155,7 @@ def create_silver_table(spark, exchange: str, namespace: str = "market_data"):
         'write.target-file-size-bytes' = '{target_file_size}'
     )
     COMMENT 'Silver: Validated {exchange.capitalize()} trades ({config["silver_retention_days"]}-day retention)'
-    """
-    )
+    """)
 
     print(f"      ✓ Silver {exchange.capitalize()} table created")
     return True
@@ -177,8 +173,7 @@ def create_gold_table(spark, namespace: str = "market_data"):
     except Exception:
         pass
 
-    spark.sql(
-        f"""
+    spark.sql(f"""
     CREATE TABLE IF NOT EXISTS {table_name} (
         message_id STRING,
         trade_id STRING,
@@ -208,8 +203,7 @@ def create_gold_table(spark, namespace: str = "market_data"):
         'write.distribution-mode' = 'hash'
     )
     COMMENT 'Gold: Unified multi-exchange trades (unlimited retention)'
-    """
-    )
+    """)
 
     print("      ✓ Gold table created")
     return True

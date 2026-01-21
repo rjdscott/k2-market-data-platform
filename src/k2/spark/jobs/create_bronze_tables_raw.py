@@ -45,7 +45,10 @@ def create_spark_session(app_name: str) -> SparkSession:
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+        .config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+        )
         .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1")
         # AWS SDK v2 region configuration
         .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
@@ -103,14 +106,15 @@ def create_bronze_binance_table(spark: SparkSession, namespace: str = "market_da
     try:
         spark.sql(create_ddl)
         print(f"✓ Table created: {table_name}")
-        print(f"  Partitioning: days(ingestion_date)")
-        print(f"  Retention: 7 days")
-        print(f"  Compression: Zstd")
-        print(f"  Target file size: 128 MB")
+        print("  Partitioning: days(ingestion_date)")
+        print("  Retention: 7 days")
+        print("  Compression: Zstd")
+        print("  Target file size: 128 MB")
         return True
     except Exception as e:
         print(f"✗ Table creation failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -161,14 +165,15 @@ def create_bronze_kraken_table(spark: SparkSession, namespace: str = "market_dat
     try:
         spark.sql(create_ddl)
         print(f"✓ Table created: {table_name}")
-        print(f"  Partitioning: days(ingestion_date)")
-        print(f"  Retention: 7 days")
-        print(f"  Compression: Zstd")
-        print(f"  Target file size: 128 MB")
+        print("  Partitioning: days(ingestion_date)")
+        print("  Retention: 7 days")
+        print("  Compression: Zstd")
+        print("  Target file size: 128 MB")
         return True
     except Exception as e:
         print(f"✗ Table creation failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -214,6 +219,7 @@ def main():
     except Exception as e:
         print(f"\n✗ Error: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
     finally:

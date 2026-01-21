@@ -64,33 +64,35 @@ Related:
 - Decision #022: Direct Rollup (no chaining)
 """
 
-import sys
-import logging
-import json
 import argparse
-from pathlib import Path
-from datetime import datetime
-
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import (
-    col,
-    current_timestamp,
-    expr,
-    first,
-    last,
-    max as spark_max,
-    min as spark_min,
-    sum as spark_sum,
-    count,
-    window,
-    to_date,
-    from_unixtime,
-    struct,
-    lit,
-)
 
 # Import spark_session module directly without adding k2 to path
 import importlib.util
+import json
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+
+from pyspark.sql.functions import (
+    col,
+    count,
+    current_timestamp,
+    first,
+    from_unixtime,
+    last,
+    to_date,
+    window,
+)
+from pyspark.sql.functions import (
+    max as spark_max,
+)
+from pyspark.sql.functions import (
+    min as spark_min,
+)
+from pyspark.sql.functions import (
+    sum as spark_sum,
+)
 
 spark_session_path = Path(__file__).parent.parent.parent / "utils" / "spark_session.py"
 spec = importlib.util.spec_from_file_location("spark_session", spark_session_path)
@@ -240,10 +242,10 @@ def main():
     print("\nConfiguration:")
     print(f"  • Timeframe: {args.timeframe}")
     print(f"  • Lookback: {lookback_period}")
-    print(f"  • Source: gold_crypto_trades")
+    print("  • Source: gold_crypto_trades")
     print(f"  • Target: gold_ohlcv_{args.timeframe}")
-    print(f"  • Update Mode: INSERT OVERWRITE (partition replacement)")
-    print(f"  • Pattern: Window Aggregation → INSERT OVERWRITE")
+    print("  • Update Mode: INSERT OVERWRITE (partition replacement)")
+    print("  • Pattern: Window Aggregation → INSERT OVERWRITE")
     print(f"\n{'=' * 70}\n")
 
     logger.info(
@@ -324,9 +326,11 @@ def main():
 
         # Write with INSERT OVERWRITE (partition replacement)
         # This replaces all data in affected partitions
-        ohlcv_df.writeTo(target_table).using("iceberg").partitionedBy("window_date").overwritePartitions()
+        ohlcv_df.writeTo(target_table).using("iceberg").partitionedBy(
+            "window_date"
+        ).overwritePartitions()
 
-        print(f"✓ INSERT OVERWRITE completed successfully")
+        print("✓ INSERT OVERWRITE completed successfully")
         logger.info("INSERT OVERWRITE completed", extra={"partitions": len(affected_dates_list)})
 
         # Step 4: Verification

@@ -84,9 +84,9 @@ class TestCompleteDataPipeline:
             consistency_results = await data_validator.validate_data_consistency(minimal_stack)
 
             # Validate results
-            assert "error" not in consistency_results, (
-                f"Consistency validation error: {consistency_results.get('error')}"
-            )
+            assert (
+                "error" not in consistency_results
+            ), f"Consistency validation error: {consistency_results.get('error')}"
 
             # Check if all stages have consistent data
             if consistency_results.get("consistent", False):
@@ -125,9 +125,9 @@ class TestCompleteDataPipeline:
             compliance_results = await data_validator.validate_schema_compliance(minimal_stack)
 
             # Validate results
-            assert "error" not in compliance_results, (
-                f"Schema compliance error: {compliance_results.get('error')}"
-            )
+            assert (
+                "error" not in compliance_results
+            ), f"Schema compliance error: {compliance_results.get('error')}"
 
             # Check overall compliance
             overall_compliance = compliance_results.get("overall_compliance", False)
@@ -287,28 +287,28 @@ class TestCompleteDataPipeline:
 
                 # Check data types and formats
                 if "symbol" in trade:
-                    assert isinstance(trade["symbol"], str), (
-                        f"Symbol should be string: {trade['symbol']}"
-                    )
+                    assert isinstance(
+                        trade["symbol"], str
+                    ), f"Symbol should be string: {trade['symbol']}"
                     assert len(trade["symbol"]) > 0, "Symbol should not be empty"
 
                 if "price" in trade:
                     assert trade["price"] > 0, f"Price should be positive: {trade['price']}"
 
                 if "quantity" in trade:
-                    assert trade["quantity"] > 0, (
-                        f"Quantity should be positive: {trade['quantity']}"
-                    )
+                    assert (
+                        trade["quantity"] > 0
+                    ), f"Quantity should be positive: {trade['quantity']}"
 
                 if "timestamp" in trade:
-                    assert isinstance(trade["timestamp"], str), (
-                        f"Timestamp should be string: {trade['timestamp']}"
-                    )
+                    assert isinstance(
+                        trade["timestamp"], str
+                    ), f"Timestamp should be string: {trade['timestamp']}"
 
                 if "trade_id" in trade:
-                    assert isinstance(trade["trade_id"], str), (
-                        f"Trade ID should be string: {trade['trade_id']}"
-                    )
+                    assert isinstance(
+                        trade["trade_id"], str
+                    ), f"Trade ID should be string: {trade['trade_id']}"
                     assert len(trade["trade_id"]) > 0, "Trade ID should not be empty"
 
             logger.info(f"Data quality validation PASSED: validated {len(data)} records")

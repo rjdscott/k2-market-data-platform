@@ -47,42 +47,36 @@ Related:
 import sys
 from pathlib import Path
 
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
+    array,
     col,
+    concat,
     current_timestamp,
     expr,
-    substring,
-    concat,
     lit,
-    when,
-    to_date,
-    from_json,
-    struct,
-    array,
     regexp_replace,
-    coalesce,
-    split,
-    md5,
+    substring,
+    when,
 )
-from pyspark.sql.types import StructType, StructField, StringType, LongType, BooleanType
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
 # Import spark_session module directly (bypasses k2 package initialization)
 import importlib.util
+
 spec_spark = importlib.util.spec_from_file_location(
-    "spark_session",
-    str(Path(__file__).parent.parent.parent / "utils" / "spark_session.py")
+    "spark_session", str(Path(__file__).parent.parent.parent / "utils" / "spark_session.py")
 )
 spark_session_module = importlib.util.module_from_spec(spec_spark)
 spec_spark.loader.exec_module(spark_session_module)
 create_streaming_spark_session = spark_session_module.create_streaming_spark_session
 
 # Import validation module
-import importlib.util
-spec_validation = importlib.util.spec_from_file_location("trade_validation", str(Path(__file__).parent.parent.parent / "validation" / "trade_validation.py"))
+spec_validation = importlib.util.spec_from_file_location(
+    "trade_validation",
+    str(Path(__file__).parent.parent.parent / "validation" / "trade_validation.py"),
+)
 validation_module = importlib.util.module_from_spec(spec_validation)
 spec_validation.loader.exec_module(validation_module)
 validate_trade_record = validation_module.validate_trade_record
@@ -129,7 +123,7 @@ def main():
     # Create Spark session with production-ready configuration
     spark = create_streaming_spark_session(
         app_name="K2-Silver-Kraken-Transformation-V3",
-        checkpoint_location="s3a://warehouse/checkpoints/silver-kraken/"
+        checkpoint_location="s3a://warehouse/checkpoints/silver-kraken/",
     )
 
     try:
@@ -139,28 +133,29 @@ def main():
 
         # Step 1: Strip Schema Registry header (5 bytes: 1 magic + 4 schema_id)
         print("✓ Stripping Schema Registry header...")
-        bronze_with_payload = bronze_df.withColumn(
-            "avro_payload", substring(col("raw_bytes"), 6, 999999)  # Skip first 5 bytes
-        ).withColumn(
-            "schema_id",
-            # Extract schema_id from bytes 2-5 (big-endian int32)
-            expr("cast(conv(hex(substring(raw_bytes, 2, 4)), 16, 10) as int)")
-        ).withColumn(
-            "debug_raw_bytes_length", expr("length(raw_bytes)")
-        ).withColumn(
-            "debug_payload_length", expr("length(avro_payload)")
+        bronze_with_payload = (
+            bronze_df.withColumn(
+                "avro_payload", substring(col("raw_bytes"), 6, 999999)  # Skip first 5 bytes
+            )
+            .withColumn(
+                "schema_id",
+                # Extract schema_id from bytes 2-5 (big-endian int32)
+                expr("cast(conv(hex(substring(raw_bytes, 2, 4)), 16, 10) as int)"),
+            )
+            .withColumn("debug_raw_bytes_length", expr("length(raw_bytes)"))
+            .withColumn("debug_payload_length", expr("length(avro_payload)"))
         )
 
         # Step 2: Deserialize Kraken raw Avro using Spark's from_avro
         print("✓ Deserializing Kraken raw Avro...")
         from pyspark.sql.avro.functions import from_avro
 
-        deserialized_df = bronze_with_payload.withColumn(
-            "kraken_raw", from_avro(col("avro_payload"), KRAKEN_RAW_SCHEMA)
-        ).withColumn(
-            "debug_kraken_raw_is_null", col("kraken_raw").isNull()
-        ).withColumn(
-            "debug_schema_id", col("schema_id")
+        deserialized_df = (
+            bronze_with_payload.withColumn(
+                "kraken_raw", from_avro(col("avro_payload"), KRAKEN_RAW_SCHEMA)
+            )
+            .withColumn("debug_kraken_raw_is_null", col("kraken_raw").isNull())
+            .withColumn("debug_schema_id", col("schema_id"))
         )
 
         # Debug: Write foreachBatch to log sample records
@@ -174,13 +169,17 @@ def main():
             if count > 0:
                 # Show sample raw data
                 print("\n--- Sample Record (first row) ---")
-                sample = batch_df.select(
-                    "debug_raw_bytes_length",
-                    "debug_payload_length",
-                    "debug_schema_id",
-                    "debug_kraken_raw_is_null",
-                    "kraken_raw"
-                ).limit(1).collect()
+                sample = (
+                    batch_df.select(
+                        "debug_raw_bytes_length",
+                        "debug_payload_length",
+                        "debug_schema_id",
+                        "debug_kraken_raw_is_null",
+                        "kraken_raw",
+                    )
+                    .limit(1)
+                    .collect()
+                )
 
                 if sample:
                     row = sample[0]
@@ -216,12 +215,14 @@ def main():
                 lit("KRAKEN-"),
                 col("kraken_raw.timestamp"),
                 lit("-"),
-                expr("substring(md5(concat(kraken_raw.timestamp, kraken_raw.pair, kraken_raw.price)), 1, 8)")
+                expr(
+                    "substring(md5(concat(kraken_raw.timestamp, kraken_raw.pair, kraken_raw.price)), 1, 8)"
+                ),
             ).alias("trade_id"),
             # Normalize symbol: XBT/USD → BTCUSD, ETH/USD → ETHUSD
-            regexp_replace(
-                regexp_replace(col("kraken_raw.pair"), "XBT", "BTC"), "/", ""
-            ).alias("symbol"),
+            regexp_replace(regexp_replace(col("kraken_raw.pair"), "XBT", "BTC"), "/", "").alias(
+                "symbol"
+            ),
             lit("KRAKEN").alias("exchange"),
             lit("crypto").alias("asset_class"),
             # Parse timestamp: "1705584123.123456" → microseconds (cast to double, multiply by 1M, cast to long)
@@ -234,15 +235,13 @@ def main():
                 regexp_replace(
                     expr("substring_index(kraken_raw.pair, '/', -1)"),  # Get part after /
                     "XBT",
-                    "BTC"
-                )
+                    "BTC",
+                ),
             )
             .otherwise(lit("USD"))
             .alias("currency"),
             # Side: 'b' = buy, 's' = sell
-            when(col("kraken_raw.side") == "b", lit("BUY"))
-            .otherwise(lit("SELL"))
-            .alias("side"),
+            when(col("kraken_raw.side") == "b", lit("BUY")).otherwise(lit("SELL")).alias("side"),
             # Trade conditions: order type (limit/market)
             array(
                 when(col("kraken_raw.order_type") == "l", lit("limit"))
@@ -271,7 +270,7 @@ def main():
 
         # Step 5: Write valid records to Silver
         print("✓ Starting Silver write stream (valid records)...")
-        silver_query = (
+        _silver_query = (
             valid_df.select(
                 # V2 Avro Fields (15 fields)
                 "message_id",
@@ -303,8 +302,10 @@ def main():
 
         # Step 6: Write invalid records to DLQ
         print("✓ Starting DLQ write stream (invalid records)...")
-        dlq_query = write_to_dlq(
-            invalid_df, bronze_source="bronze_kraken_trades", checkpoint_location="s3a://warehouse/checkpoints/silver-kraken-dlq/"
+        _dlq_query = write_to_dlq(
+            invalid_df,
+            bronze_source="bronze_kraken_trades",
+            checkpoint_location="s3a://warehouse/checkpoints/silver-kraken-dlq/",
         )
 
         print("\n" + "=" * 70)
@@ -313,7 +314,9 @@ def main():
         print("\nMonitoring:")
         print("  • Spark UI: http://localhost:8090")
         print("  • Silver records: SELECT COUNT(*) FROM silver_kraken_trades;")
-        print("  • DLQ records: SELECT COUNT(*) FROM silver_dlq_trades WHERE bronze_source='bronze_kraken_trades';")
+        print(
+            "  • DLQ records: SELECT COUNT(*) FROM silver_dlq_trades WHERE bronze_source='bronze_kraken_trades';"
+        )
         print("\nMetrics:")
         print("  • DLQ Rate: (DLQ count / (Silver count + DLQ count)) * 100")
         print("  • Target: DLQ rate < 0.1% (alert if > 1%)")

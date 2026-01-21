@@ -35,7 +35,6 @@ Usage:
 
 import sys
 from pathlib import Path
-from typing import Tuple
 
 from pyspark.sql import SparkSession
 
@@ -85,7 +84,7 @@ def create_spark_session(app_name: str) -> SparkSession:
     )
 
 
-def create_bronze_table(spark, exchange: str, namespace: str = "market_data") -> Tuple[bool, str]:
+def create_bronze_table(spark, exchange: str, namespace: str = "market_data") -> tuple[bool, str]:
     """Create Bronze Iceberg table for specific exchange.
 
     Args:

@@ -18,7 +18,6 @@ Benefits:
 - Complete audit trail
 """
 
-import json
 import time
 from typing import Any
 
@@ -26,7 +25,7 @@ import structlog
 from confluent_kafka import Producer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
-from confluent_kafka.serialization import SerializationContext, MessageField
+from confluent_kafka.serialization import MessageField, SerializationContext
 
 from k2.common.config import config
 from k2.common.metrics import create_component_metrics
@@ -64,6 +63,7 @@ class RawBinanceProducer:
 
         # Load raw Binance schema
         from pathlib import Path
+
         schema_path = Path(__file__).parent.parent / "schemas" / "binance_raw_trade.avsc"
         with open(schema_path) as f:
             schema_str = f.read()
@@ -76,13 +76,15 @@ class RawBinanceProducer:
         )
 
         # Create Kafka producer
-        self.producer = Producer({
-            "bootstrap.servers": self.kafka_bootstrap_servers,
-            "compression.type": "lz4",
-            "linger.ms": 10,
-            "batch.size": 32768,
-            "acks": "1",
-        })
+        self.producer = Producer(
+            {
+                "bootstrap.servers": self.kafka_bootstrap_servers,
+                "compression.type": "lz4",
+                "linger.ms": 10,
+                "batch.size": 32768,
+                "acks": "1",
+            }
+        )
 
         logger.info(
             "raw_binance_producer_initialized",
@@ -113,8 +115,7 @@ class RawBinanceProducer:
         try:
             # Serialize with Avro
             serialized_value = self.avro_serializer(
-                mapped_message,
-                SerializationContext(self.topic, MessageField.VALUE)
+                mapped_message, SerializationContext(self.topic, MessageField.VALUE)
             )
 
             # Produce to Kafka
@@ -209,6 +210,7 @@ class RawKrakenProducer:
 
         # Load raw Kraken schema
         from pathlib import Path
+
         schema_path = Path(__file__).parent.parent / "schemas" / "kraken_raw_trade.avsc"
         with open(schema_path) as f:
             schema_str = f.read()
@@ -221,13 +223,15 @@ class RawKrakenProducer:
         )
 
         # Create Kafka producer
-        self.producer = Producer({
-            "bootstrap.servers": self.kafka_bootstrap_servers,
-            "compression.type": "lz4",
-            "linger.ms": 10,
-            "batch.size": 32768,
-            "acks": "1",
-        })
+        self.producer = Producer(
+            {
+                "bootstrap.servers": self.kafka_bootstrap_servers,
+                "compression.type": "lz4",
+                "linger.ms": 10,
+                "batch.size": 32768,
+                "acks": "1",
+            }
+        )
 
         logger.info(
             "raw_kraken_producer_initialized",
@@ -267,8 +271,7 @@ class RawKrakenProducer:
         try:
             # Serialize with Avro
             serialized_value = self.avro_serializer(
-                flattened,
-                SerializationContext(self.topic, MessageField.VALUE)
+                flattened, SerializationContext(self.topic, MessageField.VALUE)
             )
 
             # Produce to Kafka

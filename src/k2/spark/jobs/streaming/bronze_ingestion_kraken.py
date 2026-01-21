@@ -23,7 +23,7 @@ import sys
 
 from pyspark.sql import SparkSession
 from pyspark.sql.avro.functions import from_avro
-from pyspark.sql.functions import col, current_timestamp, to_date
+from pyspark.sql.functions import col, to_date
 
 
 def create_spark_session(app_name: str) -> SparkSession:
@@ -45,7 +45,10 @@ def create_spark_session(app_name: str) -> SparkSession:
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+        .config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+        )
         .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1")
         # AWS SDK v2 region configuration
         .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
@@ -56,7 +59,9 @@ def create_spark_session(app_name: str) -> SparkSession:
     )
 
 
-def fetch_avro_schema_from_registry(schema_name: str, schema_registry_url: str = "http://schema-registry-1:8081") -> str:
+def fetch_avro_schema_from_registry(
+    schema_name: str, schema_registry_url: str = "http://schema-registry-1:8081"
+) -> str:
     """Fetch Avro schema from Schema Registry.
 
     Args:
@@ -110,22 +115,21 @@ def main():
 
         # Read from Kafka
         print("Reading from Kafka...")
-        kafka_df = spark.readStream \
-            .format("kafka") \
-            .option("kafka.bootstrap.servers", "kafka:9092") \
-            .option("subscribe", "market.crypto.trades.kraken.raw") \
-            .option("startingOffsets", "latest") \
-            .option("maxOffsetsPerTrigger", 10000) \
-            .option("failOnDataLoss", "false") \
+        kafka_df = (
+            spark.readStream.format("kafka")
+            .option("kafka.bootstrap.servers", "kafka:9092")
+            .option("subscribe", "market.crypto.trades.kraken.raw")
+            .option("startingOffsets", "latest")
+            .option("maxOffsetsPerTrigger", 10000)
+            .option("failOnDataLoss", "false")
             .load()
+        )
 
         print("✓ Kafka stream reader configured")
 
         # Deserialize Avro payloads
         print("Deserializing Avro payloads...")
-        trades_df = kafka_df.select(
-            from_avro(col("value"), avro_schema).alias("trade")
-        )
+        trades_df = kafka_df.select(from_avro(col("value"), avro_schema).alias("trade"))
 
         print("✓ Avro deserialization configured")
 
@@ -174,6 +178,7 @@ def main():
     except Exception as e:
         print(f"\n✗ Error: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
     finally:

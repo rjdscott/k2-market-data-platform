@@ -33,7 +33,6 @@ Usage:
 """
 
 import sys
-from datetime import datetime
 
 from pyspark.sql import SparkSession
 from pyspark.sql.avro.functions import from_avro
@@ -41,12 +40,13 @@ from pyspark.sql.functions import (
     array,
     col,
     concat_ws,
-    current_timestamp,
-    filter as array_filter,
     lit,
     to_date,
     unix_timestamp,
     when,
+)
+from pyspark.sql.functions import (
+    filter as array_filter,
 )
 
 
@@ -69,7 +69,10 @@ def create_spark_session(app_name: str) -> SparkSession:
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+        .config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+        )
         .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1")
         # AWS SDK v2 region configuration
         .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
@@ -80,7 +83,9 @@ def create_spark_session(app_name: str) -> SparkSession:
     )
 
 
-def fetch_v2_schema_from_registry(exchange: str, schema_registry_url: str = "http://schema-registry-1:8081") -> str:
+def fetch_v2_schema_from_registry(
+    exchange: str, schema_registry_url: str = "http://schema-registry-1:8081"
+) -> str:
     """Fetch V2 schema from Schema Registry.
 
     This ensures we use the exact same schema that producers are using,
@@ -249,9 +254,9 @@ def main(exchange: str):
     print("\nConfiguration:")
     print(f"  • Source: bronze_{exchange}_trades")
     print(f"  • Target: silver_{exchange}_trades")
-    print(f"  • Partitioning: (exchange_date, symbol) for optimal queries")
-    print(f"  • Trigger: 30 seconds")
-    print(f"  • Mode: PERMISSIVE (handles malformed Avro gracefully)")
+    print("  • Partitioning: (exchange_date, symbol) for optimal queries")
+    print("  • Trigger: 30 seconds")
+    print("  • Mode: PERMISSIVE (handles malformed Avro gracefully)")
     print(f"  • Checkpoint: /checkpoints/silver-{exchange}/")
     print(f"\n{'=' * 70}\n")
 
@@ -292,11 +297,11 @@ def main(exchange: str):
         print("✓ Validation configured")
 
         # Log validation failures (future: write to DLQ table)
-        invalid_trades = validated_df.filter(col("is_valid") == False)
+        _invalid_trades = validated_df.filter(~col("is_valid"))
         # TODO: Write invalid_trades to DLQ table for monitoring
 
         # Filter valid records for Silver
-        valid_trades = validated_df.filter(col("is_valid") == True).select(
+        valid_trades = validated_df.filter(col("is_valid")).select(
             col("trade.message_id"),
             col("trade.trade_id"),
             col("trade.symbol"),
@@ -343,8 +348,8 @@ def main(exchange: str):
         print("\nStreaming job running...")
         print("  • Spark UI: http://localhost:8090")
         print(f"  • Check Silver table: SELECT COUNT(*) FROM {silver_table}")
-        print(f"  • Partitioning: exchange_date + symbol for efficient queries")
-        print(f"  • Schema: Fetched from Schema Registry (exact producer match)")
+        print("  • Partitioning: exchange_date + symbol for efficient queries")
+        print("  • Schema: Fetched from Schema Registry (exact producer match)")
         print("\nPress Ctrl+C to stop (checkpoint will be saved)\n")
 
         # Wait for termination

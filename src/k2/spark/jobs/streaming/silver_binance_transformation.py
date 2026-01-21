@@ -55,13 +55,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
 # Import directly to avoid loading k2/__init__.py (which imports structlog, etc.)
 import importlib.util
-spec_udfs = importlib.util.spec_from_file_location("raw_to_v2_transformation", str(Path(__file__).parent.parent.parent / "udfs" / "raw_to_v2_transformation.py"))
+
+spec_udfs = importlib.util.spec_from_file_location(
+    "raw_to_v2_transformation",
+    str(Path(__file__).parent.parent.parent / "udfs" / "raw_to_v2_transformation.py"),
+)
 avro_module = importlib.util.module_from_spec(spec_udfs)
 spec_udfs.loader.exec_module(avro_module)
 deserialize_binance_raw_to_v2 = avro_module.deserialize_binance_raw_to_v2
 extract_schema_id_udf = avro_module.extract_schema_id_udf
 
-spec_validation = importlib.util.spec_from_file_location("trade_validation", str(Path(__file__).parent.parent.parent / "validation" / "trade_validation.py"))
+spec_validation = importlib.util.spec_from_file_location(
+    "trade_validation",
+    str(Path(__file__).parent.parent.parent / "validation" / "trade_validation.py"),
+)
 validation_module = importlib.util.module_from_spec(spec_validation)
 spec_validation.loader.exec_module(validation_module)
 validate_trade_record = validation_module.validate_trade_record
@@ -87,7 +94,10 @@ def create_spark_session(app_name: str) -> SparkSession:
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+        .config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+        )
         .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1")
         # AWS SDK v2 region configuration (for Iceberg)
         .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
@@ -174,8 +184,10 @@ def main():
 
         # Write invalid records to DLQ
         print("✓ Starting DLQ write stream (invalid records)...")
-        dlq_query = write_to_dlq(
-            invalid_df, bronze_source="bronze_binance_trades", checkpoint_location="/checkpoints/silver-binance-dlq/"
+        _dlq_query = write_to_dlq(
+            invalid_df,
+            bronze_source="bronze_binance_trades",
+            checkpoint_location="/checkpoints/silver-binance-dlq/",
         )
 
         print("\n" + "=" * 70)
@@ -184,7 +196,9 @@ def main():
         print("\nMonitoring:")
         print("  • Spark UI: http://localhost:8090")
         print("  • Silver records: SELECT COUNT(*) FROM silver_binance_trades;")
-        print("  • DLQ records: SELECT COUNT(*) FROM silver_dlq_trades WHERE bronze_source='bronze_binance_trades';")
+        print(
+            "  • DLQ records: SELECT COUNT(*) FROM silver_dlq_trades WHERE bronze_source='bronze_binance_trades';"
+        )
         print("\nMetrics:")
         print("  • DLQ Rate: (DLQ count / (Silver count + DLQ count)) * 100")
         print("  • Target: DLQ rate < 0.1% (alert if > 1%)")

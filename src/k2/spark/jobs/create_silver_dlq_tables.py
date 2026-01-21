@@ -19,6 +19,7 @@ Usage:
 
 import sys
 from pathlib import Path
+
 from pyspark.sql import SparkSession
 
 # Add src to path for imports
@@ -43,7 +44,10 @@ def create_spark_session(app_name: str) -> SparkSession:
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+        .config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+        )
         .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1")
         .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
         .config("spark.executor.extraJavaOptions", "-Daws.region=us-east-1")
@@ -109,9 +113,9 @@ def create_silver_table(spark, exchange: str):
     try:
         spark.sql(create_ddl)
         print(f"✓ Table created: {table_name}")
-        print(f"  • Schema: 18 fields (15 V2 + 3 metadata)")
-        print(f"  • Partitioning: days(validation_timestamp)")
-        print(f"  • Target file size: 64 MB")
+        print("  • Schema: 18 fields (15 V2 + 3 metadata)")
+        print("  • Partitioning: days(validation_timestamp)")
+        print("  • Target file size: 64 MB")
     except Exception as e:
         print(f"✗ Table creation failed: {e}")
         return False
@@ -169,10 +173,10 @@ def create_dlq_table(spark):
     try:
         spark.sql(create_ddl)
         print(f"✓ Table created: {table_name}")
-        print(f"  • Schema: 8 fields (raw_record + error tracking)")
-        print(f"  • Partitioning: days(dlq_date)")
-        print(f"  • Target file size: 32 MB (smaller, DLQ should be rare)")
-        print(f"  • Purpose: Track validation failures for observability")
+        print("  • Schema: 8 fields (raw_record + error tracking)")
+        print("  • Partitioning: days(dlq_date)")
+        print("  • Target file size: 32 MB (smaller, DLQ should be rare)")
+        print("  • Purpose: Track validation failures for observability")
     except Exception as e:
         print(f"✗ Table creation failed: {e}")
         return False
@@ -244,6 +248,7 @@ def main():
     except Exception as e:
         print(f"\n✗ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
     finally:

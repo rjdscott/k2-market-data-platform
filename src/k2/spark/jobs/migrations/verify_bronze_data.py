@@ -22,7 +22,10 @@ def create_spark_session() -> SparkSession:
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+        .config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+        )
         .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1")
         .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
         .config("spark.executor.extraJavaOptions", "-Daws.region=us-east-1")
@@ -61,10 +64,12 @@ def main():
                     FROM {full_table_name}
                 """)
                 length_row = length_df.collect()[0]
-                print(f"  raw_bytes length (min/avg/max): {length_row['min_len']}/{int(length_row['avg_len'])}/{length_row['max_len']} bytes")
+                print(
+                    f"  raw_bytes length (min/avg/max): {length_row['min_len']}/{int(length_row['avg_len'])}/{length_row['max_len']} bytes"
+                )
 
                 # Sample record
-                print(f"\n  Sample record:")
+                print("\n  Sample record:")
                 sample_df = spark.sql(f"""
                     SELECT
                         topic,
@@ -79,12 +84,12 @@ def main():
                 sample_df.show(truncate=False)
 
                 # Check if raw_bytes > 5 (has Schema Registry header)
-                if length_row['min_len'] > 5:
-                    print(f"  ✓ raw_bytes includes Schema Registry header (5 bytes)")
+                if length_row["min_len"] > 5:
+                    print("  ✓ raw_bytes includes Schema Registry header (5 bytes)")
                 else:
-                    print(f"  ✗ raw_bytes too short (missing header?)")
+                    print("  ✗ raw_bytes too short (missing header?)")
             else:
-                print(f"  ⚠ No data yet (jobs may still be starting)")
+                print("  ⚠ No data yet (jobs may still be starting)")
 
         print("\n" + "=" * 70)
         print("✓ Bronze verification complete!")
@@ -93,6 +98,7 @@ def main():
     except Exception as e:
         print(f"\n✗ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
     finally:
@@ -103,4 +109,5 @@ def main():
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(main())

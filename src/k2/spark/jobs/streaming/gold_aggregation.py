@@ -43,22 +43,18 @@ Related:
 - Decision #014: Gold Layer Architecture
 """
 
-import sys
-import logging
 import json
-from pathlib import Path
+import logging
+import sys
 from datetime import datetime
+from pathlib import Path
 
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
     current_timestamp,
-    expr,
+    from_unixtime,
     hour,
     to_date,
-    from_unixtime,
-    lit,
-    unix_timestamp,
 )
 
 # Add src to path for imports
@@ -145,13 +141,11 @@ def main():
         # Convert timestamp from microseconds to timestamp type for watermarking
         # Note: from_unixtime() returns STRING, must cast to TIMESTAMP for watermarking
         binance_df = binance_df.withColumn(
-            "event_timestamp",
-            from_unixtime(col("timestamp") / 1000000).cast("timestamp")
+            "event_timestamp", from_unixtime(col("timestamp") / 1000000).cast("timestamp")
         ).withWatermark("event_timestamp", "5 minutes")
 
         kraken_df = kraken_df.withColumn(
-            "event_timestamp",
-            from_unixtime(col("timestamp") / 1000000).cast("timestamp")
+            "event_timestamp", from_unixtime(col("timestamp") / 1000000).cast("timestamp")
         ).withWatermark("event_timestamp", "5 minutes")
 
         logger.info(
@@ -164,9 +158,7 @@ def main():
         print("✓ Unioning both Silver streams...")
         all_trades_df = binance_df.union(kraken_df)
 
-        logger.info(
-            "Stream union completed", extra={"sources": ["binance", "kraken"]}
-        )
+        logger.info("Stream union completed", extra={"sources": ["binance", "kraken"]})
 
         # Step 4: Deduplication by message_id (TEMPORARILY DISABLED)
         # DECISION 2026-01-20: Deduplication disabled due to OOM issues with large initial batches
@@ -257,10 +249,14 @@ def main():
         print("\nMonitoring:")
         print("  • Spark UI: http://localhost:8090")
         print("  • Gold records: SELECT COUNT(*) FROM gold_crypto_trades;")
-        print("  • Exchange breakdown: SELECT exchange, COUNT(*) FROM gold_crypto_trades GROUP BY exchange;")
+        print(
+            "  • Exchange breakdown: SELECT exchange, COUNT(*) FROM gold_crypto_trades GROUP BY exchange;"
+        )
         print("  • Hourly partitions: SHOW PARTITIONS gold_crypto_trades;")
         print("\nData Quality Checks:")
-        print("  • Deduplication: SELECT message_id, COUNT(*) FROM gold_crypto_trades GROUP BY message_id HAVING COUNT(*) > 1;")
+        print(
+            "  • Deduplication: SELECT message_id, COUNT(*) FROM gold_crypto_trades GROUP BY message_id HAVING COUNT(*) > 1;"
+        )
         print("  • Expected: 0 duplicates (idempotent writes)")
         print("\nLatency Target:")
         print("  • Silver → Gold: <60 seconds (p99)")

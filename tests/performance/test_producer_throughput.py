@@ -182,9 +182,9 @@ class TestProducerThroughput:
         )
 
         # Verify throughput meets baseline
-        assert throughput > 10_000, (
-            f"Throughput {throughput:,.0f} msg/sec below baseline 10,000 msg/sec"
-        )
+        assert (
+            throughput > 10_000
+        ), f"Throughput {throughput:,.0f} msg/sec below baseline 10,000 msg/sec"
 
     def test_batch_quote_throughput(self, benchmark, mock_kafka_producer, sample_quote_v2):
         """Benchmark batch quote produce throughput.
@@ -281,9 +281,9 @@ class TestProducerScaling:
         throughput_10k = results[2][1]
 
         # Allow 20% degradation at larger batch sizes
-        assert throughput_10k > throughput_100 * 0.8, (
-            "Throughput degraded >20% at larger batch sizes"
-        )
+        assert (
+            throughput_10k > throughput_100 * 0.8
+        ), "Throughput degraded >20% at larger batch sizes"
 
     def test_serialization_caching(self, mock_kafka_producer, sample_trade_v2):
         """Test that serializer caching improves performance.
@@ -324,9 +324,9 @@ class TestProducerScaling:
         print(f"Speedup: {first_batch_time / second_batch_time:.2f}x")
 
         # Second batch should be at least as fast (cache helps or no impact)
-        assert second_batch_time <= first_batch_time * 1.1, (
-            "Second batch unexpectedly slower (cache not helping)"
-        )
+        assert (
+            second_batch_time <= first_batch_time * 1.1
+        ), "Second batch unexpectedly slower (cache not helping)"
 
 
 @pytest.mark.performance
@@ -367,6 +367,6 @@ class TestProducerStress:
         print(f"Average throughput: {throughput:,.0f} msg/sec")
 
         # Should maintain at least 5K msg/sec under sustained load
-        assert throughput > 5_000, (
-            f"Sustained throughput {throughput:,.0f} msg/sec below baseline 5,000"
-        )
+        assert (
+            throughput > 5_000
+        ), f"Sustained throughput {throughput:,.0f} msg/sec below baseline 5,000"

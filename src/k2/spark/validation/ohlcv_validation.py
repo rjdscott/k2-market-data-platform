@@ -38,19 +38,18 @@ Related:
 - Data Quality Plan: Invariant checks section
 """
 
-import sys
-import logging
-import json
 import argparse
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any
-
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, count, min as spark_min, max as spark_max
 
 # Import spark_session module directly without adding k2 to path
 import importlib.util
+import json
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from pyspark.sql import SparkSession
 
 # Path: /opt/k2/src/k2/spark/validation/ohlcv_validation.py -> /opt/k2/src/k2/spark/utils/spark_session.py
 spark_session_path = Path(__file__).parent.parent / "utils" / "spark_session.py"
@@ -109,7 +108,9 @@ def parse_args():
     return parser.parse_args()
 
 
-def validate_price_relationships(spark: SparkSession, table: str, lookback_days: int) -> Dict[str, Any]:
+def validate_price_relationships(
+    spark: SparkSession, table: str, lookback_days: int
+) -> dict[str, Any]:
     """Invariant 1: Validate price relationships (OHLC consistency).
 
     Rules:
@@ -149,7 +150,7 @@ def validate_price_relationships(spark: SparkSession, table: str, lookback_days:
     }
 
 
-def validate_vwap_bounds(spark: SparkSession, table: str, lookback_days: int) -> Dict[str, Any]:
+def validate_vwap_bounds(spark: SparkSession, table: str, lookback_days: int) -> dict[str, Any]:
     """Invariant 2: Validate VWAP is within price bounds.
 
     Rules:
@@ -182,7 +183,9 @@ def validate_vwap_bounds(spark: SparkSession, table: str, lookback_days: int) ->
     }
 
 
-def validate_positive_metrics(spark: SparkSession, table: str, lookback_days: int) -> Dict[str, Any]:
+def validate_positive_metrics(
+    spark: SparkSession, table: str, lookback_days: int
+) -> dict[str, Any]:
     """Invariant 3: Validate positive metrics (volume, trade_count > 0).
 
     Rules:
@@ -215,7 +218,9 @@ def validate_positive_metrics(spark: SparkSession, table: str, lookback_days: in
     }
 
 
-def validate_window_alignment(spark: SparkSession, table: str, lookback_days: int) -> Dict[str, Any]:
+def validate_window_alignment(
+    spark: SparkSession, table: str, lookback_days: int
+) -> dict[str, Any]:
     """Invariant 4: Validate window time alignment.
 
     Rules:
@@ -249,7 +254,7 @@ def validate_window_alignment(spark: SparkSession, table: str, lookback_days: in
 
 def validate_table(
     spark: SparkSession, timeframe: str, namespace: str, lookback_days: int
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Run all invariant checks on a single OHLCV table.
 
     Args:
@@ -278,7 +283,7 @@ def validate_table(
     WHERE window_date >= current_date() - INTERVAL {lookback_days} DAYS
     """
     stats = spark.sql(stats_query).collect()[0]
-    print(f"\nTable Statistics:")
+    print("\nTable Statistics:")
     print(f"  Total rows: {stats['total_rows']:,}")
     print(f"  Unique dates: {stats['unique_dates']}")
     print(f"  Earliest candle: {stats['earliest_candle']}")
@@ -286,7 +291,7 @@ def validate_table(
 
     # Run all invariant checks
     results = []
-    print(f"\nRunning Invariant Checks:")
+    print("\nRunning Invariant Checks:")
 
     # Invariant 1: Price relationships
     result = validate_price_relationships(spark, table, lookback_days)
@@ -323,7 +328,7 @@ def main():
     print("K2 OHLCV Data Quality Validation")
     print("Invariant-Based Quality Checks")
     print("=" * 70)
-    print(f"\nConfiguration:")
+    print("\nConfiguration:")
     print(f"  • Timeframe: {args.timeframe}")
     print(f"  • Lookback: {args.lookback_days} days")
     print(f"  • Namespace: {args.namespace}")

@@ -29,24 +29,22 @@ Usage:
     df = bronze_df.withColumn("trade", deserialize_kraken_raw_to_v2(col("raw_bytes")))
 """
 
-import struct
 import json
+import struct
 import uuid
 from decimal import Decimal
-from typing import Optional
 from io import BytesIO
 
 from pyspark.sql.functions import udf
 from pyspark.sql.types import (
-    StructType,
-    StructField,
-    StringType,
-    LongType,
-    DecimalType,
     ArrayType,
+    DecimalType,
     IntegerType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
 )
-
 
 # V2 Unified Trade Schema (Target Schema for Silver Layer)
 TRADE_V2_SCHEMA = StructType(
@@ -84,7 +82,9 @@ def extract_schema_id(raw_bytes: bytes) -> int:
         ValueError: If magic byte invalid or bytes too short
     """
     if not raw_bytes or len(raw_bytes) < 5:
-        raise ValueError(f"raw_bytes too short: {len(raw_bytes) if raw_bytes else 0} bytes (need ≥5)")
+        raise ValueError(
+            f"raw_bytes too short: {len(raw_bytes) if raw_bytes else 0} bytes (need ≥5)"
+        )
 
     magic_byte = raw_bytes[0]
     if magic_byte != 0x00:
@@ -104,7 +104,9 @@ def get_avro_payload(raw_bytes: bytes) -> bytes:
         Avro payload bytes (without header)
     """
     if not raw_bytes or len(raw_bytes) < 6:
-        raise ValueError(f"raw_bytes too short: {len(raw_bytes) if raw_bytes else 0} bytes (need ≥6)")
+        raise ValueError(
+            f"raw_bytes too short: {len(raw_bytes) if raw_bytes else 0} bytes (need ≥6)"
+        )
 
     # Validate magic byte
     extract_schema_id(raw_bytes)  # Will raise if invalid
@@ -113,7 +115,7 @@ def get_avro_payload(raw_bytes: bytes) -> bytes:
 
 
 @udf(returnType=TRADE_V2_SCHEMA)
-def deserialize_binance_raw_to_v2(raw_bytes: bytes) -> Optional[tuple]:
+def deserialize_binance_raw_to_v2(raw_bytes: bytes) -> tuple | None:
     """Deserialize Binance raw trade and transform to V2 unified schema.
 
     Binance Raw Schema:
@@ -155,8 +157,6 @@ def deserialize_binance_raw_to_v2(raw_bytes: bytes) -> Optional[tuple]:
         ValueError: On deserialization failure (caught by validation logic)
     """
     try:
-        import avro.schema
-        import avro.io
 
         # Extract schema ID and payload
         schema_id = extract_schema_id(raw_bytes)
@@ -166,7 +166,6 @@ def deserialize_binance_raw_to_v2(raw_bytes: bytes) -> Optional[tuple]:
         # Schema is hardcoded since we know the structure
         # In production, fetch from Schema Registry
         bytes_reader = BytesIO(avro_payload)
-        decoder = avro.io.BinaryDecoder(bytes_reader)
 
         # For now, use raw reader (schema-less)
         # TODO: Fetch schema from registry for proper validation
@@ -240,7 +239,7 @@ def deserialize_binance_raw_to_v2(raw_bytes: bytes) -> Optional[tuple]:
 
 
 @udf(returnType=TRADE_V2_SCHEMA)
-def deserialize_kraken_raw_to_v2(raw_bytes: bytes) -> Optional[tuple]:
+def deserialize_kraken_raw_to_v2(raw_bytes: bytes) -> tuple | None:
     """Deserialize Kraken raw trade and transform to V2 unified schema.
 
     Kraken Raw Schema:
@@ -281,8 +280,6 @@ def deserialize_kraken_raw_to_v2(raw_bytes: bytes) -> Optional[tuple]:
         ValueError: On deserialization failure
     """
     try:
-        import avro.schema
-        import avro.io
         import hashlib
 
         # Extract schema ID and payload
@@ -303,7 +300,9 @@ def deserialize_kraken_raw_to_v2(raw_bytes: bytes) -> Optional[tuple]:
         # Generate trade_id (Kraken doesn't provide one)
         timestamp_str = record["timestamp"]
         pair = record["pair"]
-        trade_id_hash = hashlib.md5(f"{timestamp_str}:{pair}:{record['price']}".encode()).hexdigest()[:8]
+        trade_id_hash = hashlib.md5(
+            f"{timestamp_str}:{pair}:{record['price']}".encode()
+        ).hexdigest()[:8]
         trade_id = f"KRAKEN-{timestamp_str}-{trade_id_hash}"
 
         # Normalize symbol: XBT/USD → BTCUSD, ETH/USD → ETHUSD
@@ -371,7 +370,7 @@ def deserialize_kraken_raw_to_v2(raw_bytes: bytes) -> Optional[tuple]:
 
 # Helper UDF to extract schema ID without full deserialization (for DLQ)
 @udf(returnType=IntegerType())
-def extract_schema_id_udf(raw_bytes: bytes) -> Optional[int]:
+def extract_schema_id_udf(raw_bytes: bytes) -> int | None:
     """Extract Schema Registry schema ID from raw bytes (for DLQ tracking).
 
     Args:

@@ -105,8 +105,7 @@ class CryptoDataFactory:
             "is_buyer_maker": kwargs.get("is_buyer_maker", random.choice([True, False])),
             "is_best_match": kwargs.get("is_best_match", True),
             "ingestion_timestamp": kwargs.get(
-                "ingestion_timestamp",
-                int(datetime.now().timestamp() * 1000)
+                "ingestion_timestamp", int(datetime.now().timestamp() * 1000)
             ),
         }
 
@@ -156,8 +155,7 @@ class CryptoDataFactory:
             "order_type": kwargs.get("order_type", random.choice(["market", "limit"])),
             "misc": kwargs.get("misc", ""),
             "ingestion_timestamp": kwargs.get(
-                "ingestion_timestamp",
-                int(datetime.now().timestamp() * 1000)
+                "ingestion_timestamp", int(datetime.now().timestamp() * 1000)
             ),
         }
 
@@ -225,10 +223,15 @@ class CryptoDataFactory:
         trade_time = kwargs.get("trade_time", datetime.now())
         timestamp_us = int(trade_time.timestamp() * 1_000_000)
         ingestion_ts = kwargs.get("ingestion_timestamp", timestamp_us)
-        validation_ts = kwargs.get("validation_timestamp", int(datetime.now().timestamp() * 1_000_000))
+        validation_ts = kwargs.get(
+            "validation_timestamp", int(datetime.now().timestamp() * 1_000_000)
+        )
 
         return {
-            "message_id": kwargs.get("message_id", f"{exchange}-{trade_time.strftime('%Y%m%d')}-{random.randint(1000000, 9999999)}"),
+            "message_id": kwargs.get(
+                "message_id",
+                f"{exchange}-{trade_time.strftime('%Y%m%d')}-{random.randint(1000000, 9999999)}",
+            ),
             "exchange": exchange,
             "symbol": raw_symbol,
             "base_currency": base_currency,
@@ -247,12 +250,7 @@ class CryptoDataFactory:
 
     @classmethod
     def create_trade_sequence(
-        cls,
-        exchange: str,
-        symbol: str,
-        count: int,
-        duration_minutes: int = 60,
-        schema: str = "raw"
+        cls, exchange: str, symbol: str, count: int, duration_minutes: int = 60, schema: str = "raw"
     ) -> list[dict[str, Any]]:
         """Create sequence of trades with realistic price movement.
 
@@ -287,22 +285,15 @@ class CryptoDataFactory:
             if schema == "raw":
                 if exchange == "binance":
                     trade = cls.create_binance_raw_trade(
-                        symbol=symbol,
-                        trade_time=trade_time,
-                        base_price=current_price
+                        symbol=symbol, trade_time=trade_time, base_price=current_price
                     )
                 else:
                     trade = cls.create_kraken_raw_trade(
-                        symbol=symbol,
-                        trade_time=trade_time,
-                        base_price=current_price
+                        symbol=symbol, trade_time=trade_time, base_price=current_price
                     )
             else:  # v2 unified
                 trade = cls.create_v2_unified_trade(
-                    exchange=exchange,
-                    symbol=symbol,
-                    trade_time=trade_time,
-                    price=current_price
+                    exchange=exchange, symbol=symbol, trade_time=trade_time, price=current_price
                 )
 
             trades.append(trade)
@@ -343,10 +334,7 @@ def sample_v2_unified_trade(crypto_data_factory):
 def binance_trade_sequence(crypto_data_factory):
     """Sequence of 50 Binance raw trades."""
     return crypto_data_factory.create_trade_sequence(
-        exchange="binance",
-        symbol="BTCUSDT",
-        count=50,
-        schema="raw"
+        exchange="binance", symbol="BTCUSDT", count=50, schema="raw"
     )
 
 
@@ -354,10 +342,7 @@ def binance_trade_sequence(crypto_data_factory):
 def kraken_trade_sequence(crypto_data_factory):
     """Sequence of 50 Kraken raw trades."""
     return crypto_data_factory.create_trade_sequence(
-        exchange="kraken",
-        symbol="BTC/USD",
-        count=50,
-        schema="raw"
+        exchange="kraken", symbol="BTC/USD", count=50, schema="raw"
     )
 
 
@@ -365,16 +350,10 @@ def kraken_trade_sequence(crypto_data_factory):
 def v2_mixed_trades(crypto_data_factory):
     """Mixed Binance and Kraken trades in V2 unified schema."""
     binance_trades = crypto_data_factory.create_trade_sequence(
-        exchange="binance",
-        symbol="BTCUSDT",
-        count=25,
-        schema="v2"
+        exchange="binance", symbol="BTCUSDT", count=25, schema="v2"
     )
     kraken_trades = crypto_data_factory.create_trade_sequence(
-        exchange="kraken",
-        symbol="BTC/USD",
-        count=25,
-        schema="v2"
+        exchange="kraken", symbol="BTC/USD", count=25, schema="v2"
     )
 
     # Combine and sort by timestamp
@@ -450,11 +429,7 @@ def crypto_test_data_dir(tmp_path_factory):
 def binance_trades_json_file(crypto_test_data_dir, crypto_data_factory):
     """Generate Binance trades JSON file for testing."""
     trades = crypto_data_factory.create_trade_sequence(
-        exchange="binance",
-        symbol="BTCUSDT",
-        count=100,
-        duration_minutes=60,
-        schema="raw"
+        exchange="binance", symbol="BTCUSDT", count=100, duration_minutes=60, schema="raw"
     )
 
     file_path = crypto_test_data_dir / "binance_trades_sample.json"
@@ -468,11 +443,7 @@ def binance_trades_json_file(crypto_test_data_dir, crypto_data_factory):
 def kraken_trades_json_file(crypto_test_data_dir, crypto_data_factory):
     """Generate Kraken trades JSON file for testing."""
     trades = crypto_data_factory.create_trade_sequence(
-        exchange="kraken",
-        symbol="BTC/USD",
-        count=100,
-        duration_minutes=60,
-        schema="raw"
+        exchange="kraken", symbol="BTC/USD", count=100, duration_minutes=60, schema="raw"
     )
 
     file_path = crypto_test_data_dir / "kraken_trades_sample.json"

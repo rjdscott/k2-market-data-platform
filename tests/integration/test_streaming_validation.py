@@ -110,9 +110,9 @@ async def test_binance_streaming_validation():
         pytest.fail(f"Client error: {e}")
 
     # Validate results
-    assert len(trades_received) >= target_trades, (
-        f"Expected at least {target_trades} trades, got {len(trades_received)}"
-    )
+    assert (
+        len(trades_received) >= target_trades
+    ), f"Expected at least {target_trades} trades, got {len(trades_received)}"
     assert len(validation_errors) == 0, f"Schema validation errors: {validation_errors}"
 
     # Validate exchange-specific fields
@@ -172,9 +172,9 @@ async def test_kraken_streaming_validation():
         pytest.fail(f"Client error: {e}")
 
     # Validate results
-    assert len(trades_received) >= target_trades, (
-        f"Expected at least {target_trades} trades, got {len(trades_received)}"
-    )
+    assert (
+        len(trades_received) >= target_trades
+    ), f"Expected at least {target_trades} trades, got {len(trades_received)}"
     assert len(validation_errors) == 0, f"Schema validation errors: {validation_errors}"
 
     # Validate exchange-specific fields

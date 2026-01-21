@@ -39,7 +39,10 @@ def create_spark_session(app_name: str) -> SparkSession:
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+        .config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+        )
         .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1")
         # AWS SDK v2 region configuration
         .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
@@ -101,9 +104,9 @@ def recreate_silver_table(spark, exchange: str, namespace: str = "market_data"):
     try:
         spark.sql(create_ddl)
         print(f"✓ Table created: {table_name}")
-        print(f"  Partitioning: (exchange_date, partition_symbol)")
-        print(f"  Target file size: 128 MB")
-        print(f"  Compression: Zstd")
+        print("  Partitioning: (exchange_date, partition_symbol)")
+        print("  Target file size: 128 MB")
+        print("  Compression: Zstd")
         return True
     except Exception as e:
         print(f"✗ Table creation failed: {e}")

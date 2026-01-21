@@ -38,16 +38,12 @@ Usage:
 
 import json
 import sys
-from datetime import datetime
 
 from pyspark.sql import SparkSession
 from pyspark.sql.avro.functions import from_avro
 from pyspark.sql.functions import (
     col,
-    current_timestamp,
-    hour,
     lit,
-    struct,
     to_date,
     unix_timestamp,
     when,
@@ -73,7 +69,10 @@ def create_spark_session(app_name: str) -> SparkSession:
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
+        .config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+        )
         .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1")
         # AWS SDK v2 region configuration
         .config("spark.driver.extraJavaOptions", "-Daws.region=us-east-1")
@@ -207,7 +206,7 @@ def main(exchange: str):
     print("\nConfiguration:")
     print(f"  • Source: bronze_{exchange}_trades")
     print(f"  • Target: silver_{exchange}_trades")
-    print(f"  • Trigger: 30 seconds")
+    print("  • Trigger: 30 seconds")
     print(f"  • Checkpoint: /checkpoints/silver-{exchange}/")
     print(f"\n{'=' * 70}\n")
 
@@ -242,7 +241,7 @@ def main(exchange: str):
         print("✓ Validation configured")
 
         # Filter valid records for Silver
-        valid_trades = validated_df.filter(col("is_valid") == True).select(
+        valid_trades = validated_df.filter(col("is_valid")).select(
             col("trade.message_id"),
             col("trade.trade_id"),
             col("trade.symbol"),
@@ -285,7 +284,7 @@ def main(exchange: str):
         print("\nStreaming job running...")
         print("  • Spark UI: http://localhost:8090")
         print(f"  • Check Silver table: SELECT COUNT(*) FROM {silver_table}")
-        print(f"  • Validation: All records validated before Silver ingestion")
+        print("  • Validation: All records validated before Silver ingestion")
         print("\nPress Ctrl+C to stop (checkpoint will be saved)\n")
 
         # Wait for termination

@@ -390,9 +390,9 @@ class TestWriterStress:
         print(f"Average throughput: {avg_throughput:,.0f} rows/sec")
 
         # Should maintain at least 8K rows/sec under sustained load
-        assert avg_throughput > 8_000, (
-            f"Sustained throughput {avg_throughput:,.0f} below 8,000 baseline"
-        )
+        assert (
+            avg_throughput > 8_000
+        ), f"Sustained throughput {avg_throughput:,.0f} below 8,000 baseline"
 
     def test_mixed_schema_performance(
         self, mock_iceberg_components, sample_trades_v1, sample_trades_v2

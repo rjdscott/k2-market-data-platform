@@ -145,7 +145,9 @@ def create_streaming_spark_session(
         .config("spark.hadoop.fs.s3a.access.key", "admin")  # MinIO access key
         .config("spark.hadoop.fs.s3a.secret.key", "password")  # MinIO secret key
         .config("spark.hadoop.fs.s3a.path.style.access", "true")  # Path-style access
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")  # S3A implementation
+        .config(
+            "spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem"
+        )  # S3A implementation
         # S3/MinIO Connection Pooling (prevents connection exhaustion)
         .config("spark.hadoop.fs.s3a.connection.maximum", "50")  # Max S3 connections
         .config("spark.hadoop.fs.s3a.threads.max", "20")  # Max upload threads
@@ -153,8 +155,12 @@ def create_streaming_spark_session(
         .config("spark.hadoop.fs.s3a.connection.timeout", "200000")  # 200s socket timeout
         # Iceberg Write Optimization (prevents metadata bloat)
         .config("spark.sql.catalog.iceberg.write.metadata.delete-after-commit.enabled", "true")
-        .config("spark.sql.catalog.iceberg.write.metadata.previous-versions-max", "5")  # Keep 5 versions
-        .config("spark.sql.catalog.iceberg.write.target-file-size-bytes", "134217728")  # 128MB files
+        .config(
+            "spark.sql.catalog.iceberg.write.metadata.previous-versions-max", "5"
+        )  # Keep 5 versions
+        .config(
+            "spark.sql.catalog.iceberg.write.target-file-size-bytes", "134217728"
+        )  # 128MB files
         # Get or create session
         .getOrCreate()
     )

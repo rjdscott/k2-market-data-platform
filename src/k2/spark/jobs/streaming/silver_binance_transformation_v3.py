@@ -47,40 +47,35 @@ Related:
 import sys
 from pathlib import Path
 
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
+    array,
     col,
+    concat,
     current_timestamp,
     expr,
-    substring,
-    concat,
     lit,
+    substring,
     when,
-    to_date,
-    from_json,
-    struct,
-    array,
-    regexp_replace,
-    coalesce,
 )
-from pyspark.sql.types import StructType, StructField, StringType, LongType, BooleanType
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
 # Import spark_session module directly (bypasses k2 package initialization)
 import importlib.util
+
 spec_spark = importlib.util.spec_from_file_location(
-    "spark_session",
-    str(Path(__file__).parent.parent.parent / "utils" / "spark_session.py")
+    "spark_session", str(Path(__file__).parent.parent.parent / "utils" / "spark_session.py")
 )
 spark_session_module = importlib.util.module_from_spec(spec_spark)
 spec_spark.loader.exec_module(spark_session_module)
 create_streaming_spark_session = spark_session_module.create_streaming_spark_session
 
 # Import validation module
-import importlib.util
-spec_validation = importlib.util.spec_from_file_location("trade_validation", str(Path(__file__).parent.parent.parent / "validation" / "trade_validation.py"))
+spec_validation = importlib.util.spec_from_file_location(
+    "trade_validation",
+    str(Path(__file__).parent.parent.parent / "validation" / "trade_validation.py"),
+)
 validation_module = importlib.util.module_from_spec(spec_validation)
 spec_validation.loader.exec_module(validation_module)
 validate_trade_record = validation_module.validate_trade_record
@@ -128,7 +123,7 @@ def main():
     # Create Spark session with production-ready configuration
     spark = create_streaming_spark_session(
         app_name="K2-Silver-Binance-Transformation-V3",
-        checkpoint_location="s3a://warehouse/checkpoints/silver-binance/"
+        checkpoint_location="s3a://warehouse/checkpoints/silver-binance/",
     )
 
     try:
@@ -143,7 +138,7 @@ def main():
         ).withColumn(
             "schema_id",
             # Extract schema_id from bytes 2-5 (big-endian int32)
-            expr("cast(conv(hex(substring(raw_bytes, 2, 4)), 16, 10) as int)")
+            expr("cast(conv(hex(substring(raw_bytes, 2, 4)), 16, 10) as int)"),
         )
 
         # Step 2: Deserialize Binance raw Avro using Spark's from_avro
@@ -174,7 +169,7 @@ def main():
             .otherwise(expr("substring(binance_raw.symbol, -4, 4)"))
             .alias("currency"),
             # Side: is_buyer_maker = true → aggressor was seller → SELL
-            when(col("binance_raw.is_buyer_maker") == True, lit("SELL"))
+            when(col("binance_raw.is_buyer_maker"), lit("SELL"))
             .otherwise(lit("BUY"))
             .alias("side"),
             array().cast("array<string>").alias("trade_conditions"),  # Empty for crypto
@@ -200,7 +195,7 @@ def main():
 
         # Step 5: Write valid records to Silver
         print("✓ Starting Silver write stream (valid records)...")
-        silver_query = (
+        _silver_query = (
             valid_df.select(
                 # V2 Avro Fields (15 fields)
                 "message_id",
@@ -232,8 +227,10 @@ def main():
 
         # Step 6: Write invalid records to DLQ
         print("✓ Starting DLQ write stream (invalid records)...")
-        dlq_query = write_to_dlq(
-            invalid_df, bronze_source="bronze_binance_trades", checkpoint_location="s3a://warehouse/checkpoints/silver-binance-dlq/"
+        _dlq_query = write_to_dlq(
+            invalid_df,
+            bronze_source="bronze_binance_trades",
+            checkpoint_location="s3a://warehouse/checkpoints/silver-binance-dlq/",
         )
 
         print("\n" + "=" * 70)
@@ -242,7 +239,9 @@ def main():
         print("\nMonitoring:")
         print("  • Spark UI: http://localhost:8090")
         print("  • Silver records: SELECT COUNT(*) FROM silver_binance_trades;")
-        print("  • DLQ records: SELECT COUNT(*) FROM silver_dlq_trades WHERE bronze_source='bronze_binance_trades';")
+        print(
+            "  • DLQ records: SELECT COUNT(*) FROM silver_dlq_trades WHERE bronze_source='bronze_binance_trades';"
+        )
         print("\nMetrics:")
         print("  • DLQ Rate: (DLQ count / (Silver count + DLQ count)) * 100")
         print("  • Target: DLQ rate < 0.1% (alert if > 1%)")

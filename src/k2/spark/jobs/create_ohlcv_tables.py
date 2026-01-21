@@ -28,9 +28,9 @@ Usage:
       /opt/k2/src/k2/spark/jobs/create_ohlcv_tables.py
 """
 
+import importlib.util
 import sys
 from pathlib import Path
-import importlib.util
 
 # Import spark_session module directly without adding k2 to path
 spark_session_path = Path(__file__).parent.parent / "utils" / "spark_session.py"

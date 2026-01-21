@@ -19,21 +19,19 @@ Usage:
     df = bronze_df.withColumn("trade", deserialize_trade_avro(col("raw_bytes")))
 """
 
-import struct
 import json
-from typing import Dict, Optional
+import struct
 from io import BytesIO
 
-from pyspark.sql.functions import udf, pandas_udf
+from pyspark.sql.functions import udf
 from pyspark.sql.types import (
-    StructType,
-    StructField,
-    StringType,
-    LongType,
-    DecimalType,
     ArrayType,
+    DecimalType,
     IntegerType,
-    BinaryType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
 )
 
 # V2 Trade Schema (matches trade_v2.avsc)
@@ -67,7 +65,7 @@ class SchemaRegistryClient:
     """
 
     _instance = None
-    _cache: Dict[int, str] = {}  # schema_id → schema_json
+    _cache: dict[int, str] = {}  # schema_id → schema_json
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -93,7 +91,7 @@ class SchemaRegistryClient:
 
 
 @udf(returnType=TRADE_V2_SCHEMA)
-def deserialize_trade_avro(raw_bytes: bytes) -> Optional[tuple]:
+def deserialize_trade_avro(raw_bytes: bytes) -> tuple | None:
     """Deserialize Avro trade from raw bytes with Schema Registry header.
 
     Args:
@@ -107,7 +105,9 @@ def deserialize_trade_avro(raw_bytes: bytes) -> Optional[tuple]:
         ValueError: If magic byte invalid or payload too short
     """
     if not raw_bytes or len(raw_bytes) < 6:
-        raise ValueError(f"raw_bytes too short: {len(raw_bytes) if raw_bytes else 0} bytes (need ≥6)")
+        raise ValueError(
+            f"raw_bytes too short: {len(raw_bytes) if raw_bytes else 0} bytes (need ≥6)"
+        )
 
     # Parse Schema Registry header (5 bytes)
     magic_byte = raw_bytes[0]
@@ -119,8 +119,8 @@ def deserialize_trade_avro(raw_bytes: bytes) -> Optional[tuple]:
 
     # Deserialize Avro using avro-python3 library
     try:
-        import avro.schema
         import avro.io
+        import avro.schema
 
         # Fetch schema from registry (cached)
         client = SchemaRegistryClient(url="http://schema-registry-1:8081")
@@ -167,7 +167,7 @@ def deserialize_trade_avro(raw_bytes: bytes) -> Optional[tuple]:
 # Binary helper UDF to extract schema_id without full deserialization
 # Useful for DLQ error tracking when deserialization fails
 @udf(returnType=IntegerType())
-def extract_schema_id(raw_bytes: bytes) -> Optional[int]:
+def extract_schema_id(raw_bytes: bytes) -> int | None:
     """Extract Schema Registry schema ID from raw bytes header.
 
     Args:

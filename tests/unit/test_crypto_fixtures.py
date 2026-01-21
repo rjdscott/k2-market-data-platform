@@ -1,8 +1,5 @@
 """Tests for crypto fixtures to verify they generate valid data."""
 
-import pytest
-from decimal import Decimal
-
 
 class TestCryptoFixtures:
     """Verify crypto fixtures generate valid test data."""

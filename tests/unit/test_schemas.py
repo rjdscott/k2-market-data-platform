@@ -174,9 +174,9 @@ class TestSchemaValidation:
                 # Check if union with null (optional)
                 if isinstance(field_type, list) and "null" in field_type:
                     # Optional field should have default
-                    assert "default" in field, (
-                        f"{schema_name}_v2.{field['name']} is optional but missing default"
-                    )
+                    assert (
+                        "default" in field
+                    ), f"{schema_name}_v2.{field['name']} is optional but missing default"
 
     def test_schema_file_naming_convention(self):
         """V2 schema files should follow naming convention."""

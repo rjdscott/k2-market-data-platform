@@ -41,12 +41,8 @@ Related:
 """
 
 import subprocess
-import sys
-from pathlib import Path
-from datetime import timedelta
 
-from prefect import flow, task, serve
-
+from prefect import flow, serve, task
 
 # Spark cluster configuration (matches k2-gold-aggregation container)
 SPARK_MASTER = "spark://spark-master:7077"
@@ -54,14 +50,16 @@ SPARK_CORES = 1
 SPARK_MEMORY = "1024m"
 SPARK_DRIVER_MEMORY = "512m"
 # Include all Iceberg + AWS JARs (same as gold_aggregation.py)
-JARS = ",".join([
-    "/opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar",
-    "/opt/spark/jars-extra/iceberg-aws-1.4.0.jar",
-    "/opt/spark/jars-extra/bundle-2.20.18.jar",
-    "/opt/spark/jars-extra/url-connection-client-2.20.18.jar",
-    "/opt/spark/jars-extra/hadoop-aws-3.3.4.jar",
-    "/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar",
-])
+JARS = ",".join(
+    [
+        "/opt/spark/jars-extra/iceberg-spark-runtime-3.5_2.12-1.4.0.jar",
+        "/opt/spark/jars-extra/iceberg-aws-1.4.0.jar",
+        "/opt/spark/jars-extra/bundle-2.20.18.jar",
+        "/opt/spark/jars-extra/url-connection-client-2.20.18.jar",
+        "/opt/spark/jars-extra/hadoop-aws-3.3.4.jar",
+        "/opt/spark/jars-extra/aws-java-sdk-bundle-1.12.262.jar",
+    ]
+)
 
 
 @task(name="spark-submit", retries=2, retry_delay_seconds=60, timeout_seconds=300)

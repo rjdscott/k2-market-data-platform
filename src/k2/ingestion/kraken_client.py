@@ -800,7 +800,7 @@ class KrakenWebSocketClient:
                 try:
                     base, quote = parse_kraken_pair(pair)
                     symbol = f"{base}{quote}"
-                except:
+                except (ValueError, KeyError):
                     symbol = pair
             else:
                 # V2 mode: Convert to standardized schema
