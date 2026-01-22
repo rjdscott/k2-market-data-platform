@@ -606,24 +606,24 @@ class QueryEngine:
                     result = conn.execute(query, params).fetchdf()
                     rows = result.to_dict(orient="records")
 
-                # Reset circuit breaker on success
-                self._record_success()
+                    # Reset circuit breaker on success (inside with block)
+                    self._record_success()
 
-                logger.debug(
-                    "OHLCV query completed",
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    exchange=exchange,
-                    row_count=len(rows),
-                )
+                    logger.debug(
+                        "OHLCV query completed",
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        exchange=exchange,
+                        row_count=len(rows),
+                    )
 
-                metrics.histogram(
-                    "query_rows_scanned",
-                    len(rows),
-                    labels={"query_type": QueryType.OHLCV.value, "timeframe": timeframe},
-                )
+                    metrics.histogram(
+                        "query_rows_scanned",
+                        len(rows),
+                        labels={"query_type": QueryType.OHLCV.value, "timeframe": timeframe},
+                    )
 
-                return rows
+                    return rows
 
             except Exception as e:
                 # Record failure for circuit breaker

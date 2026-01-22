@@ -21,7 +21,7 @@ Usage:
 import base64
 import io
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -247,7 +247,7 @@ def format_response(
     filtered_data = _apply_field_selection(data, fields)
 
     # Generate timestamp for filename
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     filename = f"{resource_name}_{timestamp}"
 
     logger.debug(

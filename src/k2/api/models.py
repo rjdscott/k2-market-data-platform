@@ -9,7 +9,7 @@ Models follow trading firm conventions:
 - Clear field descriptions for API consumers
 """
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any
 
@@ -421,7 +421,7 @@ class OHLCVResponse(APIResponse):
     timeframe: str = Field(..., description="Timeframe of returned candles")
     symbol: str = Field(..., description="Symbol queried")
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc), description="Response timestamp"
+        default_factory=lambda: datetime.now(UTC), description="Response timestamp"
     )
 
 
@@ -559,7 +559,7 @@ class HealthResponse(BaseModel):
 
     status: HealthStatus = Field(description="Overall health status")
     version: str = Field(description="API version")
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     dependencies: list[DependencyHealth] = Field(
         default_factory=list,
         description="Dependency health checks",

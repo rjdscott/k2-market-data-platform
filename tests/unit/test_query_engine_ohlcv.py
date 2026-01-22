@@ -9,7 +9,7 @@ Tests critical security and functionality aspects:
 """
 
 import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime
 from unittest.mock import Mock, MagicMock, patch
 import pandas as pd
 
@@ -65,7 +65,7 @@ class TestOHLCVQueryValidation:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         # Should successfully coerce string to int
         result = engine.query_ohlcv(symbol="BTCUSDT", timeframe="1h", limit="100")  # type: ignore
@@ -95,7 +95,7 @@ class TestOHLCVQueryValidation:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         valid_timeframes = ["1m", "5m", "30m", "1h", "1d"]
 
@@ -115,8 +115,8 @@ class TestOHLCVQueryValidation:
             {
                 "symbol": ["BTCUSDT"],
                 "exchange": ["BINANCE"],
-                "window_start": [datetime.now(timezone.utc)],
-                "window_end": [datetime.now(timezone.utc)],
+                "window_start": [datetime.now(UTC)],
+                "window_end": [datetime.now(UTC)],
                 "window_date": ["2026-01-22"],
                 "open_price": [42000.0],
                 "high_price": [42500.0],
@@ -125,12 +125,12 @@ class TestOHLCVQueryValidation:
                 "volume": [100.0],
                 "trade_count": [500],
                 "vwap": [42150.0],
-                "created_at": [datetime.now(timezone.utc)],
-                "updated_at": [datetime.now(timezone.utc)],
+                "created_at": [datetime.now(UTC)],
+                "updated_at": [datetime.now(UTC)],
             }
         )
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=mock_result)))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         # Test lowercase symbol
         result = engine.query_ohlcv(symbol="btcusdt", timeframe="1h")
@@ -158,7 +158,7 @@ class TestCircuitBreaker:
         # Mock pool to simulate failures
         mock_conn = Mock()
         mock_conn.execute = Mock(side_effect=Exception("Database connection failed"))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         # Cause 3 failures to open circuit
         for i in range(3):
@@ -184,7 +184,7 @@ class TestCircuitBreaker:
             return Mock(fetchdf=Mock(return_value=pd.DataFrame()))
 
         mock_conn.execute = Mock(side_effect=mock_execute)
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         # Cause 2 failures
         for i in range(2):
@@ -203,7 +203,7 @@ class TestCircuitBreaker:
         # Mock pool to simulate failures
         mock_conn = Mock()
         mock_conn.execute = Mock(side_effect=Exception("Database connection failed"))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         # Open circuit
         for i in range(2):
@@ -230,11 +230,9 @@ class TestErrorHandling:
         engine = QueryEngine()
 
         # Mock pool to simulate timeout
-        from threading import Timeout
+        engine.pool.acquire = Mock(side_effect=TimeoutError("Connection pool exhausted"))
 
-        engine.pool.acquire = Mock(side_effect=Timeout("Connection pool exhausted"))
-
-        with pytest.raises(Exception, match="Connection pool exhausted"):
+        with pytest.raises(TimeoutError, match="Connection pool exhausted"):
             engine.query_ohlcv(symbol="BTCUSDT", timeframe="1h")
 
     def test_query_ohlcv_empty_result(self):
@@ -244,7 +242,7 @@ class TestErrorHandling:
         # Mock empty result
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         result = engine.query_ohlcv(symbol="INVALID_SYMBOL", timeframe="1h")
         assert result == []
@@ -256,7 +254,7 @@ class TestErrorHandling:
         # Mock database error
         mock_conn = Mock()
         mock_conn.execute = Mock(side_effect=Exception("Table not found: gold_ohlcv_1h"))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         with pytest.raises(Exception, match="Table not found"):
             engine.query_ohlcv(symbol="BTCUSDT", timeframe="1h")
@@ -275,15 +273,15 @@ class TestParameterizedQueries:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         # Call with all parameters
         engine.query_ohlcv(
             symbol="BTCUSDT",
             timeframe="1h",
             exchange="BINANCE",
-            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            end_time=datetime(2026, 1, 31, tzinfo=timezone.utc),
+            start_time=datetime(2026, 1, 1, tzinfo=UTC),
+            end_time=datetime(2026, 1, 31, tzinfo=UTC),
             limit=100,
         )
 
@@ -310,7 +308,7 @@ class TestParameterizedQueries:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         malicious_symbols = [
             "BTCUSDT'; DROP TABLE gold_ohlcv_1h; --",
@@ -344,7 +342,7 @@ class TestMetrics:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         engine.query_ohlcv(symbol="BTCUSDT", timeframe="1h")
 
@@ -361,7 +359,7 @@ class TestMetrics:
         mock_conn = Mock()
         mock_result = pd.DataFrame({"symbol": ["BTCUSDT"]})
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=mock_result)))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         engine.query_ohlcv(symbol="BTCUSDT", timeframe="1h")
 
@@ -387,7 +385,7 @@ class TestTableMapping:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock()))
+        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
 
         timeframe_mapping = {
             "1m": "gold_ohlcv_1m",

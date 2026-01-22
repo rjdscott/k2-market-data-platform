@@ -29,7 +29,7 @@ Environment Variables:
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -297,7 +297,7 @@ async def health_check(request: Request) -> HealthResponse:
     return HealthResponse(
         status=overall_status,
         version="1.0.0",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         dependencies=dependencies,
     )
 

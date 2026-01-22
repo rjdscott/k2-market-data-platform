@@ -25,10 +25,10 @@ All endpoints:
 """
 
 import asyncio
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 
 from k2.api.deps import get_hybrid_engine, get_query_engine, get_replay_engine
 from k2.api.formatters import decode_cursor, encode_cursor, format_response
@@ -42,6 +42,7 @@ from k2.api.models import (  # POST request models
     AggregationResponse,
     DataType,
     MarketSummaryData,
+    OHLCVBatchResult,
     OHLCVCandle,
     OHLCVQueryRequest,
     OHLCVResponse,
@@ -64,6 +65,7 @@ from k2.api.models import (  # POST request models
     TradeQueryRequest,
     TradesResponse,
 )
+from k2.common import metrics
 from k2.common.logging import get_logger
 from k2.query.engine import QueryEngine
 from k2.query.hybrid_engine import HybridQueryEngine
@@ -83,7 +85,7 @@ def _get_meta() -> dict:
     """Get standard metadata for response."""
     return {
         "correlation_id": correlation_id_var.get() or "unknown",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
 
@@ -264,7 +266,7 @@ async def get_recent_trades(
     """
     try:
         # Calculate time range
-        end_time = datetime.now(timezone.utc)
+        end_time = datetime.now(UTC)
         start_time = end_time - timedelta(minutes=window_minutes)
 
         logger.debug(
@@ -550,6 +552,7 @@ async def get_market_summary(
     },
 )
 async def get_ohlcv_candles(
+    request: Request,
     timeframe: str = Path(
         ...,
         description="Timeframe (1m, 5m, 30m, 1h, 1d)",
@@ -600,7 +603,7 @@ async def get_ohlcv_candles(
             ),
             timeframe=timeframe,
             symbol=symbol.upper(),
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             meta=_get_meta(),
         )
 
@@ -657,6 +660,7 @@ async def get_ohlcv_candles(
     },
 )
 async def get_ohlcv_batch(
+    request: Request,
     requests: list[OHLCVQueryRequest],
     engine: QueryEngine = Depends(get_query_engine),
 ) -> dict[str, OHLCVBatchResult]:
@@ -777,7 +781,7 @@ async def get_ohlcv_batch(
 
         return results
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error(
             "Batch query timeout",
             num_requests=len(requests),
@@ -864,9 +868,9 @@ async def get_ohlcv_health(
                     last_update = last_update_str
 
                 # Calculate age in minutes
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 if last_update.tzinfo is None:
-                    last_update = last_update.replace(tzinfo=timezone.utc)
+                    last_update = last_update.replace(tzinfo=UTC)
 
                 age_minutes = (now - last_update).total_seconds() / 60
 
@@ -918,7 +922,7 @@ async def get_ohlcv_health(
     return {
         "overall_status": overall_status,
         "tables": health_results,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "checks_performed": len(freshness_thresholds),
     }
 
