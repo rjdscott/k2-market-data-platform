@@ -21,6 +21,8 @@ K2 is an **L3 Cold Path Research Data Platform** optimized for analytics, compli
 - ACID-compliant storage with time-travel queries via Apache Iceberg
 - Sub-second analytical queries (point: <100ms, aggregations: 200-500ms)
 - Pre-computed OHLCV analytics across 5 timeframes (1m, 5m, 30m, 1h, 1d)
+- Production-grade security (SQL injection protection, rate limiting, circuit breakers)
+- Comprehensive observability (50+ Prometheus metrics, health checks, distributed tracing)
 
 | Aspect | K2 IS | K2 is NOT |
 |--------|-------|-----------|
@@ -261,9 +263,19 @@ gold_crypto_trades
 curl -H "X-API-Key: k2-dev-api-key-2026" \
   "http://localhost:8000/v1/trades?symbol=BTCUSDT&limit=100"
 
-# Get OHLCV summary
+# Get OHLCV summary (daily)
 curl -H "X-API-Key: k2-dev-api-key-2026" \
   "http://localhost:8000/v1/summary/BTCUSDT/2026-01-20"
+
+# Get OHLCV candles (hourly, last 24 hours)
+curl -H "X-API-Key: k2-dev-api-key-2026" \
+  "http://localhost:8000/v1/ohlcv/1h?symbol=BTCUSDT&limit=24"
+
+# Batch query multiple timeframes
+curl -X POST -H "X-API-Key: k2-dev-api-key-2026" \
+  -H "Content-Type: application/json" \
+  "http://localhost:8000/v1/ohlcv/batch" \
+  -d '[{"symbol": "BTCUSDT", "timeframe": "1h", "limit": 24}]'
 ```
 
 ### Workflow 4: Historical Replay (Time-Travel)
@@ -291,10 +303,34 @@ curl -X POST -H "X-API-Key: k2-dev-api-key-2026" \
 |--------|----------|-------------|
 | GET | `/v1/trades` | Query trades by symbol, exchange, time range |
 | GET | `/v1/quotes` | Query quotes (bid/ask) |
-| GET | `/v1/summary/{symbol}/{date}` | OHLCV daily summary |
+| GET | `/v1/summary/{symbol}/{date}` | OHLCV daily summary (optimized with pre-computed tables) |
 | GET | `/v1/symbols` | List available symbols |
 | GET | `/v1/stats` | Database statistics |
 | GET | `/v1/snapshots` | List Iceberg snapshots |
+
+### OHLCV Analytics Endpoints (New - Phase 13)
+
+| Method | Endpoint | Description | Rate Limit |
+|--------|----------|-------------|------------|
+| GET | `/v1/ohlcv/{timeframe}` | Query pre-computed OHLCV candles (1m, 5m, 30m, 1h, 1d) | 100/min |
+| POST | `/v1/ohlcv/batch` | Batch query multiple timeframes in single request | 20/min |
+| GET | `/v1/ohlcv/health` | Health check for all OHLCV tables | - |
+
+**Example**:
+```bash
+# Get last 24 hourly candles for BTCUSDT
+curl -H "X-API-Key: k2-dev-api-key-2026" \
+  "http://localhost:8000/v1/ohlcv/1h?symbol=BTCUSDT&limit=24"
+
+# Batch query multiple timeframes
+curl -X POST -H "X-API-Key: k2-dev-api-key-2026" \
+  "http://localhost:8000/v1/ohlcv/batch" \
+  -H "Content-Type: application/json" \
+  -d '[
+    {"symbol": "BTCUSDT", "timeframe": "1m", "limit": 60},
+    {"symbol": "BTCUSDT", "timeframe": "1h", "limit": 24}
+  ]'
+```
 
 ### Advanced Query Endpoints
 

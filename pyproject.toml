@@ -77,6 +77,7 @@ dependencies = [
     "jupyter>=1.1.1",
     # Workflow orchestration
     "prefect>=3.1.0",  # Latest: 3.1.11 (2026), Lightweight workflow orchestration for OHLCV jobs
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]

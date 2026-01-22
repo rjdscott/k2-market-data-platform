@@ -93,32 +93,52 @@
 
 **Path**:
 1. **API Overview** (5 min): [API Documentation](http://localhost:8000/docs) (Swagger UI)
-   - Available endpoints
+   - Available endpoints (trades, quotes, OHLCV analytics)
    - Request/response schemas
-   - Authentication (currently localhost-only, Phase 2 will add OAuth2)
+   - Authentication via X-API-Key header
 
 2. **Query Trades** (5 min): GET /api/v1/trades
    ```bash
+   # Authentication required
+   export API_KEY="k2-dev-api-key-2026"
+
    # Get recent BTC trades
-   curl "http://localhost:8000/api/v1/trades?symbol=BTCUSDT&limit=100"
+   curl -H "X-API-Key: $API_KEY" \
+     "http://localhost:8000/v1/trades?symbol=BTCUSDT&limit=100"
 
    # Get trades in time range
-   curl "http://localhost:8000/api/v1/trades?symbol=BTCUSDT&start_time=2026-01-13T00:00:00Z&end_time=2026-01-13T23:59:59Z"
-
-   # Get trades with aggregation
-   curl "http://localhost:8000/api/v1/trades/ohlcv?symbol=ETHUSDT&interval=1m&limit=60"
+   curl -H "X-API-Key: $API_KEY" \
+     "http://localhost:8000/v1/trades?symbol=BTCUSDT&start_time=2026-01-13T00:00:00Z"
    ```
 
-3. **Understand the Data** (5 min): [Data Dictionary V2](./reference/data-dictionary-v2.md)
+3. **Query OHLCV Analytics** ⭐ NEW (5 min): GET /v1/ohlcv/{timeframe}
+   ```bash
+   # Get 1-hour candles (last 24 hours)
+   curl -H "X-API-Key: $API_KEY" \
+     "http://localhost:8000/v1/ohlcv/1h?symbol=BTCUSDT&limit=24"
+
+   # Batch query multiple timeframes
+   curl -X POST -H "X-API-Key: $API_KEY" \
+     -H "Content-Type: application/json" \
+     "http://localhost:8000/v1/ohlcv/batch" \
+     -d '[{"symbol": "BTCUSDT", "timeframe": "1h", "limit": 24}]'
+
+   # Check OHLCV data health
+   curl "http://localhost:8000/v1/ohlcv/health"
+   ```
+   See: [API Reference - OHLCV Endpoints](./reference/api-reference.md#ohlcv-endpoints)
+
+4. **Understand the Data** (5 min): [Data Dictionary V2](./reference/data-dictionary-v2.md)
    - TradeV2 schema (line 15-88)
    - Field types and precision (Decimal 18,8)
    - Vendor-specific data (vendor_data map)
    - Example records (line 90-150)
 
-4. **Rate Limiting & Performance** (5 min):
-   - Rate Limits: 100 req/min per IP (configurable)
+5. **Security & Rate Limits** (5 min): [Security Features](./reference/security-features.md)
+   - Rate Limits: 100 req/min for OHLCV, 20 req/min for batch (per API key)
    - Max response size: 10,000 rows per query
    - Timeout: 30 seconds
+   - SQL injection protection, circuit breakers
    - Pagination: Use `offset` and `limit` parameters
 
 **SDKs & Examples**:

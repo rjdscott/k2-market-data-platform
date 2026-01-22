@@ -29,13 +29,13 @@ Environment Variables:
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from k2.api.deps import get_query_engine, shutdown_engines, startup_engines
@@ -44,8 +44,8 @@ from k2.api.middleware import (
     CorrelationIdMiddleware,
     RequestLoggingMiddleware,
     RequestSizeLimitMiddleware,
-    get_api_key_for_limit,
 )
+from k2.api.rate_limit import limiter
 from k2.api.models import DependencyHealth, HealthResponse, HealthStatus
 from k2.api.v1 import router as v1_router
 from k2.common.config import config
@@ -54,13 +54,6 @@ from k2.common.metrics import create_component_metrics, initialize_metrics
 
 logger = get_logger(__name__, component="api")
 metrics = create_component_metrics("api")
-
-# =============================================================================
-# Rate Limiter Setup
-# =============================================================================
-
-# Rate limit per API key (falls back to IP)
-limiter = Limiter(key_func=get_api_key_for_limit)
 
 # =============================================================================
 # Application Lifespan
@@ -304,7 +297,7 @@ async def health_check(request: Request) -> HealthResponse:
     return HealthResponse(
         status=overall_status,
         version="1.0.0",
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         dependencies=dependencies,
     )
 
