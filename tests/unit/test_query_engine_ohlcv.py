@@ -65,7 +65,11 @@ class TestOHLCVQueryValidation:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         # Should successfully coerce string to int
         result = engine.query_ohlcv(symbol="BTCUSDT", timeframe="1h", limit="100")  # type: ignore
@@ -95,7 +99,11 @@ class TestOHLCVQueryValidation:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         valid_timeframes = ["1m", "5m", "30m", "1h", "1d"]
 
@@ -130,7 +138,11 @@ class TestOHLCVQueryValidation:
             }
         )
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=mock_result)))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         # Test lowercase symbol
         result = engine.query_ohlcv(symbol="btcusdt", timeframe="1h")
@@ -158,7 +170,11 @@ class TestCircuitBreaker:
         # Mock pool to simulate failures
         mock_conn = Mock()
         mock_conn.execute = Mock(side_effect=Exception("Database connection failed"))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         # Cause 3 failures to open circuit
         for i in range(3):
@@ -184,7 +200,11 @@ class TestCircuitBreaker:
             return Mock(fetchdf=Mock(return_value=pd.DataFrame()))
 
         mock_conn.execute = Mock(side_effect=mock_execute)
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         # Cause 2 failures
         for i in range(2):
@@ -203,7 +223,11 @@ class TestCircuitBreaker:
         # Mock pool to simulate failures
         mock_conn = Mock()
         mock_conn.execute = Mock(side_effect=Exception("Database connection failed"))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         # Open circuit
         for i in range(2):
@@ -242,7 +266,11 @@ class TestErrorHandling:
         # Mock empty result
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         result = engine.query_ohlcv(symbol="INVALID_SYMBOL", timeframe="1h")
         assert result == []
@@ -254,7 +282,11 @@ class TestErrorHandling:
         # Mock database error
         mock_conn = Mock()
         mock_conn.execute = Mock(side_effect=Exception("Table not found: gold_ohlcv_1h"))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         with pytest.raises(Exception, match="Table not found"):
             engine.query_ohlcv(symbol="BTCUSDT", timeframe="1h")
@@ -273,7 +305,11 @@ class TestParameterizedQueries:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         # Call with all parameters
         engine.query_ohlcv(
@@ -308,7 +344,11 @@ class TestParameterizedQueries:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         malicious_symbols = [
             "BTCUSDT'; DROP TABLE gold_ohlcv_1h; --",
@@ -342,7 +382,11 @@ class TestMetrics:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         engine.query_ohlcv(symbol="BTCUSDT", timeframe="1h")
 
@@ -359,7 +403,11 @@ class TestMetrics:
         mock_conn = Mock()
         mock_result = pd.DataFrame({"symbol": ["BTCUSDT"]})
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=mock_result)))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         engine.query_ohlcv(symbol="BTCUSDT", timeframe="1h")
 
@@ -385,7 +433,11 @@ class TestTableMapping:
         # Mock the pool and connection
         mock_conn = Mock()
         mock_conn.execute = Mock(return_value=Mock(fetchdf=Mock(return_value=pd.DataFrame())))
-        engine.pool.acquire = MagicMock(return_value=Mock(__enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)))
+        engine.pool.acquire = MagicMock(
+            return_value=Mock(
+                __enter__=Mock(return_value=mock_conn), __exit__=Mock(return_value=None)
+            )
+        )
 
         timeframe_mapping = {
             "1m": "gold_ohlcv_1m",
@@ -401,4 +453,6 @@ class TestTableMapping:
             # Verify correct table was used in query
             call_args = mock_conn.execute.call_args
             query = call_args[0][0]
-            assert expected_table in query, f"Expected table {expected_table} not found in query for timeframe {timeframe}"
+            assert (
+                expected_table in query
+            ), f"Expected table {expected_table} not found in query for timeframe {timeframe}"

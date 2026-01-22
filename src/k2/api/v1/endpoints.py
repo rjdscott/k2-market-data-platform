@@ -722,7 +722,8 @@ async def get_ohlcv_batch(
 
                 # Convert to Pydantic models (validates price relationships)
                 candle_models = [
-                    OHLCVCandle(**{**candle, "timeframe": query_req.timeframe}) for candle in candles
+                    OHLCVCandle(**{**candle, "timeframe": query_req.timeframe})
+                    for candle in candles
                 ]
 
                 # Success result
@@ -839,10 +840,10 @@ async def get_ohlcv_health(
 
     # Freshness thresholds (in minutes)
     freshness_thresholds = {
-        "1m": 10,    # 1-minute candles updated every 5 minutes
-        "5m": 20,    # 5-minute candles updated every 15 minutes
-        "30m": 60,   # 30-minute candles updated every 30 minutes
-        "1h": 120,   # 1-hour candles updated every hour
+        "1m": 10,  # 1-minute candles updated every 5 minutes
+        "5m": 20,  # 5-minute candles updated every 15 minutes
+        "30m": 60,  # 30-minute candles updated every 30 minutes
+        "1h": 120,  # 1-hour candles updated every hour
         "1d": 1500,  # 1-day candles updated daily
     }
 

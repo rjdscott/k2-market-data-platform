@@ -446,7 +446,9 @@ class OHLCVBatchResult(BaseModel):
 
     success: bool = Field(..., description="Whether query succeeded")
     data: list[OHLCVCandle] | None = Field(None, description="OHLCV candles (null on error)")
-    pagination: PaginationMeta | None = Field(None, description="Pagination metadata (null on error)")
+    pagination: PaginationMeta | None = Field(
+        None, description="Pagination metadata (null on error)"
+    )
     timeframe: str = Field(..., description="Timeframe queried")
     symbol: str = Field(..., description="Symbol queried")
     error: str | None = Field(None, description="Error message (null on success)")
