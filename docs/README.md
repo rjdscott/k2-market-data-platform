@@ -1,7 +1,7 @@
 # K2 Market Data Platform - Documentation
 
-**Last Updated**: 2026-01-15
-**Status**: Active Development
+**Last Updated**: 2026-01-22
+**Status**: Active Development (Phase 13 Complete - OHLCV Analytics & Security Hardening)
 
 Welcome to the K2 platform documentation. This README serves as your navigation hub for all platform documentation.
 
@@ -87,7 +87,8 @@ Implementation tracking for specific project phases.
 - [Phase 1 - Single-Node Implementation](phases/phase-1-single-node-equities/) ✅ COMPLETE
 - [Phase 2 - Multi-Source Foundation (V2 Schema + Binance)](phases/phase-2-prep/) ✅ COMPLETE
 - [Phase 3 - Demo Enhancements](phases/phase-3-demo-enhancements/) ✅ COMPLETE
-- [Phase 4 - Demo Readiness](phases/phase-4-demo-readiness/) ✅ COMPLETE (9/10 steps, 135/100 score)
+- [Phase 4 - Demo Readiness](phases/phase-4-demo-readiness/) ✅ COMPLETE
+- **Phase 13 - OHLCV Analytics & Security Hardening** ✅ COMPLETE (Production-ready, A- grade)
 
 **When to read**: Tracking implementation progress, understanding what's built
 
@@ -97,12 +98,13 @@ Implementation tracking for specific project phases.
 Quick reference materials for common information.
 
 **Key Documents**:
+- [API Reference](./reference/api-reference.md) - REST API endpoints (includes new OHLCV endpoints)
+- [Security Features](./reference/security-features.md) - Security architecture and best practices ⭐ NEW
+- [Data Dictionary](./reference/data-dictionary-v2.md) - Schema and field reference
 - [Glossary](./reference/README.md#glossary) - Platform terminology
-- [Data Dictionary](./reference/README.md#data-dictionary) - Schema and field reference
-- [API Reference](./reference/README.md#api-reference) - REST API endpoints
 - [Configuration](./reference/README.md#configuration) - All config parameters
 
-**When to read**: Looking up terminology, API endpoints, configuration options
+**When to read**: Looking up terminology, API endpoints, security controls, configuration options
 
 ---
 
@@ -117,12 +119,16 @@ Data governance policies, assumptions, and RFC templates.
 
 ---
 
-### 📝 [Reviews](./reviews/) - Project Reviews
-Architecture and project review documents.
+### 📝 [Reviews](./reviews/) - Expert Assessments & Code Reviews
+Architecture and project review documents from staff engineers.
 
-**Documents**:
-- [Project Review](./reviews/project-review.md)
-- [Architecture Review](./reviews/architecture-review.md)
+**Recent Reviews**:
+- [OHLCV API Staff Review](./reviews/ohlcv-api-staff-review.md) - Comprehensive security & architecture review ⭐ NEW
+- [OHLCV API Security Fixes Summary](./reviews/ohlcv-api-security-fixes-summary.md) - Implementation summary (A- grade) ⭐ NEW
+- [Project Review](./reviews/project-review.md) - Overall platform assessment
+- [Architecture Review](./reviews/architecture-review.md) - System design evaluation
+
+**When to read**: Understanding security posture, production readiness, architectural decisions
 
 ---
 

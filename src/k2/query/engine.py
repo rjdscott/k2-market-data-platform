@@ -46,6 +46,7 @@ class QueryType(str, Enum):
 
     TRADES = "trades"
     QUOTES = "quotes"
+    OHLCV = "ohlcv"
     SUMMARY = "summary"
     HISTORICAL = "historical"
     REALTIME = "realtime"
@@ -104,8 +105,10 @@ class QueryEngine:
         s3_secret_key: str | None = None,
         warehouse_path: str | None = None,
         pool_size: int = 5,
+        circuit_breaker_threshold: int = 5,
+        circuit_breaker_timeout: int = 60,
     ):
-        """Initialize DuckDB query engine with connection pooling.
+        """Initialize DuckDB query engine with connection pooling and circuit breaker.
 
         Args:
             s3_endpoint: S3/MinIO endpoint (defaults to config)
@@ -115,6 +118,8 @@ class QueryEngine:
             pool_size: Number of connections in pool (default: 5)
                 - Demo/dev: 5 connections
                 - Production: 20-50 connections depending on load
+            circuit_breaker_threshold: Number of consecutive failures before opening circuit (default: 5)
+            circuit_breaker_timeout: Seconds before attempting to close circuit (default: 60)
         """
         self.s3_endpoint = s3_endpoint or config.iceberg.s3_endpoint
         self.s3_access_key = s3_access_key or config.iceberg.s3_access_key
@@ -124,6 +129,12 @@ class QueryEngine:
 
         # Initialize table resolver for dynamic table name resolution
         self.table_resolver = get_table_resolver()
+
+        # Circuit breaker state (prevents cascade failures)
+        self._consecutive_failures = 0
+        self._circuit_breaker_threshold = circuit_breaker_threshold
+        self._circuit_breaker_timeout = circuit_breaker_timeout
+        self._circuit_open_time: datetime | None = None
 
         # Remove http(s):// prefix for DuckDB endpoint
         self._s3_endpoint_host = self.s3_endpoint.replace("http://", "").replace("https://", "")
@@ -137,10 +148,12 @@ class QueryEngine:
         )
 
         logger.info(
-            "Query engine initialized with connection pool",
+            "Query engine initialized with connection pool and circuit breaker",
             s3_endpoint=self.s3_endpoint,
             warehouse_path=self.warehouse_path,
             pool_size=pool_size,
+            circuit_breaker_threshold=circuit_breaker_threshold,
+            circuit_breaker_timeout=circuit_breaker_timeout,
         )
 
     def _get_table_path(self, table_name: str) -> str:
@@ -182,6 +195,78 @@ class QueryEngine:
         finally:
             duration = (datetime.now() - start_time).total_seconds()
             metrics.histogram("query_duration_seconds", duration, labels={"query_type": query_type})
+
+    def _is_circuit_open(self) -> bool:
+        """Check if circuit breaker is currently open.
+
+        Circuit opens after consecutive failures exceed threshold.
+        Circuit automatically attempts to close after timeout period.
+
+        Returns:
+            True if circuit is open (requests should be rejected)
+        """
+        # If circuit was never opened, it's closed
+        if self._circuit_open_time is None:
+            return False
+
+        # Check if timeout period has elapsed (auto-recovery)
+        time_since_open = (datetime.now() - self._circuit_open_time).total_seconds()
+        if time_since_open >= self._circuit_breaker_timeout:
+            logger.info(
+                "Circuit breaker timeout elapsed, attempting recovery",
+                timeout_seconds=self._circuit_breaker_timeout,
+                consecutive_failures=self._consecutive_failures,
+            )
+            # Reset to half-open state (will close on next success or re-open on failure)
+            self._circuit_open_time = None
+            self._consecutive_failures = max(0, self._consecutive_failures - 2)
+            return False
+
+        # Circuit is still open
+        logger.warning(
+            "Circuit breaker is open, rejecting request",
+            consecutive_failures=self._consecutive_failures,
+            time_since_open=time_since_open,
+        )
+        metrics.increment("circuit_breaker_rejections_total", labels={"pool": "duckdb"})
+        return True
+
+    def _record_success(self) -> None:
+        """Record successful query execution for circuit breaker."""
+        if self._consecutive_failures > 0:
+            logger.info(
+                "Query succeeded, resetting circuit breaker",
+                previous_failures=self._consecutive_failures,
+            )
+        self._consecutive_failures = 0
+        self._circuit_open_time = None
+
+        metrics.gauge(
+            "circuit_breaker_consecutive_failures",
+            0,
+            labels={"pool": "duckdb"},
+        )
+
+    def _record_failure(self) -> None:
+        """Record failed query execution for circuit breaker."""
+        self._consecutive_failures += 1
+
+        metrics.gauge(
+            "circuit_breaker_consecutive_failures",
+            self._consecutive_failures,
+            labels={"pool": "duckdb"},
+        )
+
+        # Open circuit if threshold exceeded
+        if self._consecutive_failures >= self._circuit_breaker_threshold:
+            if self._circuit_open_time is None:
+                self._circuit_open_time = datetime.now()
+                logger.error(
+                    "Circuit breaker opened due to consecutive failures",
+                    consecutive_failures=self._consecutive_failures,
+                    threshold=self._circuit_breaker_threshold,
+                )
+                metrics.increment("circuit_breaker_opened_total", labels={"pool": "duckdb"})
 
     def query_trades(
         self,
@@ -284,7 +369,7 @@ class QueryEngine:
                 metrics.histogram(
                     "query_rows_scanned",
                     len(rows),
-                    labels={"query_type": QueryType.TRADES.value},
+                    labels={"query_type": QueryType.TRADES.value, "timeframe": "n/a"},
                 )
 
                 return rows
@@ -390,7 +475,7 @@ class QueryEngine:
                 metrics.histogram(
                     "query_rows_scanned",
                     len(rows),
-                    labels={"query_type": QueryType.QUOTES.value},
+                    labels={"query_type": QueryType.QUOTES.value, "timeframe": "n/a"},
                 )
 
                 return rows
@@ -402,6 +487,154 @@ class QueryEngine:
                     exchange=exchange,
                     table_name=table_name,
                     error=str(e),
+                )
+                raise
+
+    def query_ohlcv(
+        self,
+        symbol: str,
+        timeframe: str,
+        exchange: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Query pre-computed OHLCV candles from gold_ohlcv_* tables.
+
+        Args:
+            symbol: Trading pair (e.g., "BTCUSDT")
+            timeframe: Candle timeframe ("1m", "5m", "30m", "1h", "1d")
+            exchange: Optional exchange filter
+            start_time: Filter candles after this time
+            end_time: Filter candles before this time
+            limit: Maximum candles to return (default: 1000)
+
+        Returns:
+            List of OHLCV candle dictionaries
+
+        Raises:
+            ValueError: If timeframe or limit is invalid
+            ConnectionError: If circuit breaker is open
+
+        Example:
+            candles = engine.query_ohlcv(
+                symbol="BTCUSDT",
+                timeframe="1h",
+                start_time=datetime(2026, 1, 20),
+                limit=24
+            )
+        """
+        # Normalize symbol (uppercase, strip whitespace)
+        symbol = symbol.upper().strip()
+
+        # Validate timeframe
+        table_map = {
+            "1m": "gold_ohlcv_1m",
+            "5m": "gold_ohlcv_5m",
+            "30m": "gold_ohlcv_30m",
+            "1h": "gold_ohlcv_1h",
+            "1d": "gold_ohlcv_1d",
+        }
+
+        if timeframe not in table_map:
+            raise ValueError(
+                f"Invalid timeframe: {timeframe}. Must be one of: {list(table_map.keys())}"
+            )
+
+        # SQL Injection Protection: Explicit limit validation
+        # CRITICAL: Must validate before string interpolation
+        if not isinstance(limit, int):
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"Invalid limit: {limit}. Must be an integer") from e
+
+        if not (1 <= limit <= 10000):
+            raise ValueError(f"Invalid limit: {limit}. Must be between 1 and 10,000")
+
+        table_name = table_map[timeframe]
+        table_path = self._get_table_path(table_name)
+
+        # Build WHERE clause with parameterized queries
+        conditions = ["symbol = ?"]
+        params = [symbol]
+
+        if exchange:
+            conditions.append("exchange = ?")
+            params.append(exchange.upper().strip())
+        if start_time:
+            conditions.append("window_start >= ?")
+            params.append(start_time.isoformat())
+        if end_time:
+            conditions.append("window_start <= ?")
+            params.append(end_time.isoformat())
+
+        where_clause = "WHERE " + " AND ".join(conditions)
+
+        # Safe to use limit in string interpolation after validation
+        query = f"""
+            SELECT
+                symbol,
+                exchange,
+                window_start,
+                window_end,
+                window_date,
+                open_price,
+                high_price,
+                low_price,
+                close_price,
+                volume,
+                trade_count,
+                vwap,
+                created_at,
+                updated_at
+            FROM iceberg_scan('{table_path}')
+            {where_clause}
+            ORDER BY window_start DESC
+            LIMIT {limit}
+        """
+
+        with self._query_timer(QueryType.OHLCV.value):
+            try:
+                # Check circuit breaker before acquiring connection
+                if self._is_circuit_open():
+                    raise ConnectionError(
+                        "Query engine circuit breaker is open. Service temporarily unavailable."
+                    )
+
+                with self.pool.acquire(timeout=10.0) as conn:  # Reduced from 30s to 10s
+                    result = conn.execute(query, params).fetchdf()
+                    rows = result.to_dict(orient="records")
+
+                    # Reset circuit breaker on success (inside with block)
+                    self._record_success()
+
+                    logger.debug(
+                        "OHLCV query completed",
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        exchange=exchange,
+                        row_count=len(rows),
+                    )
+
+                    metrics.histogram(
+                        "query_rows_scanned",
+                        len(rows),
+                        labels={"query_type": QueryType.OHLCV.value, "timeframe": timeframe},
+                    )
+
+                    return rows
+
+            except Exception as e:
+                # Record failure for circuit breaker
+                self._record_failure()
+
+                logger.error(
+                    "OHLCV query failed",
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    error=str(e),
+                    circuit_breaker_failures=self._consecutive_failures,
                 )
                 raise
 

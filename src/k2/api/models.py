@@ -9,11 +9,11 @@ Models follow trading firm conventions:
 - Clear field descriptions for API consumers
 """
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # =============================================================================
 # Enums
@@ -262,6 +262,199 @@ class SummaryResponse(APIResponse):
 
 
 # =============================================================================
+# OHLCV Models
+# =============================================================================
+
+
+class OHLCVCandle(BaseModel):
+    """Single OHLCV candle from pre-computed tables."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "symbol": "BTCUSDT",
+                "exchange": "BINANCE",
+                "timeframe": "1h",
+                "window_start": "2026-01-22T10:00:00Z",
+                "window_end": "2026-01-22T11:00:00Z",
+                "open_price": 42150.50,
+                "high_price": 42380.25,
+                "low_price": 42050.00,
+                "close_price": 42280.75,
+                "volume": 125.45,
+                "trade_count": 1453,
+                "vwap": 42215.33,
+                "created_at": "2026-01-22T11:05:00Z",
+                "updated_at": "2026-01-22T11:05:00Z",
+            },
+        },
+        arbitrary_types_allowed=True,
+    )
+
+    symbol: str = Field(..., description="Trading pair (e.g., BTCUSDT)")
+    exchange: str = Field(..., description="Exchange code (BINANCE, KRAKEN)")
+    timeframe: str = Field(..., description="Candle timeframe (1m, 5m, 30m, 1h, 1d)")
+    window_start: Any = Field(..., description="Candle start time (inclusive)")
+    window_end: Any = Field(..., description="Candle end time (exclusive)")
+
+    open_price: float = Field(..., description="First trade price in window", ge=0)
+    high_price: float = Field(..., description="Highest trade price in window", ge=0)
+    low_price: float = Field(..., description="Lowest trade price in window", ge=0)
+    close_price: float = Field(..., description="Last trade price in window", ge=0)
+
+    volume: float = Field(..., description="Total traded volume", ge=0)
+    trade_count: int = Field(..., description="Number of trades in candle", ge=0)
+    vwap: float = Field(..., description="Volume-weighted average price", ge=0)
+
+    created_at: Any = Field(..., description="Record creation timestamp")
+    updated_at: Any = Field(..., description="Last update timestamp")
+
+    @field_validator("window_start", "window_end", "created_at", "updated_at", mode="before")
+    @classmethod
+    def convert_timestamp(cls, v: Any) -> Any:
+        """Convert Pandas Timestamp to ISO string for JSON serialization."""
+        if v is None:
+            return None
+        if hasattr(v, "isoformat"):
+            return v.isoformat()
+        return str(v)
+
+    @model_validator(mode="after")
+    def validate_price_relationships(self) -> "OHLCVCandle":
+        """Ensure OHLCV price invariants hold.
+
+        Validates that:
+        - high_price >= open_price, close_price
+        - low_price <= open_price, close_price
+        - volume >= 0
+        - trade_count > 0
+
+        Raises:
+            ValueError: If price relationships are invalid
+        """
+        if self.high_price < self.open_price:
+            raise ValueError(
+                f"Invalid OHLCV candle: high_price ({self.high_price}) < open_price ({self.open_price})"
+            )
+        if self.high_price < self.close_price:
+            raise ValueError(
+                f"Invalid OHLCV candle: high_price ({self.high_price}) < close_price ({self.close_price})"
+            )
+        if self.low_price > self.open_price:
+            raise ValueError(
+                f"Invalid OHLCV candle: low_price ({self.low_price}) > open_price ({self.open_price})"
+            )
+        if self.low_price > self.close_price:
+            raise ValueError(
+                f"Invalid OHLCV candle: low_price ({self.low_price}) > close_price ({self.close_price})"
+            )
+        if self.volume < 0:
+            raise ValueError(f"Invalid OHLCV candle: volume ({self.volume}) < 0")
+        if self.trade_count <= 0:
+            raise ValueError(f"Invalid OHLCV candle: trade_count ({self.trade_count}) <= 0")
+
+        return self
+
+
+class OHLCVQueryRequest(BaseModel):
+    """Request parameters for OHLCV query."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "symbol": "BTCUSDT",
+                "timeframe": "1h",
+                "exchange": "BINANCE",
+                "start_time": "2026-01-20T00:00:00Z",
+                "limit": 24,
+            },
+        },
+    )
+
+    symbol: str = Field(..., description="Trading pair (e.g., BTCUSDT)")
+    timeframe: str = Field(
+        ...,
+        description="Candle timeframe",
+        pattern="^(1m|5m|30m|1h|1d)$",
+    )
+    exchange: str | None = Field(None, description="Optional exchange filter")
+    start_time: datetime | None = Field(None, description="Start time (inclusive)")
+    end_time: datetime | None = Field(None, description="End time (inclusive)")
+    limit: int = Field(1000, description="Maximum candles to return", ge=1, le=10000)
+
+
+class OHLCVResponse(APIResponse):
+    """Response containing OHLCV candles."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "success": True,
+                "data": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "exchange": "BINANCE",
+                        "timeframe": "1h",
+                        "window_start": "2026-01-22T10:00:00Z",
+                        "window_end": "2026-01-22T11:00:00Z",
+                        "open_price": 42150.50,
+                        "high_price": 42380.25,
+                        "low_price": 42050.00,
+                        "close_price": 42280.75,
+                        "volume": 125.45,
+                        "trade_count": 1453,
+                        "vwap": 42215.33,
+                        "created_at": "2026-01-22T11:05:00Z",
+                        "updated_at": "2026-01-22T11:05:00Z",
+                    }
+                ],
+                "pagination": {"total": 24, "limit": 24, "offset": 0},
+                "timeframe": "1h",
+                "symbol": "BTCUSDT",
+                "timestamp": "2026-01-22T15:30:00Z",
+            },
+        },
+    )
+
+    data: list[OHLCVCandle] = Field(..., description="List of OHLCV candles")
+    pagination: PaginationMeta = Field(..., description="Pagination metadata")
+    timeframe: str = Field(..., description="Timeframe of returned candles")
+    symbol: str = Field(..., description="Symbol queried")
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), description="Response timestamp"
+    )
+
+
+class OHLCVBatchResult(BaseModel):
+    """Single result in a batch OHLCV query response.
+
+    Can represent either a successful query or an error.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "success": True,
+                "data": [{"symbol": "BTCUSDT", "open_price": 42150.50}],
+                "pagination": {"total": 24, "limit": 24, "offset": 0},
+                "timeframe": "1h",
+                "symbol": "BTCUSDT",
+                "error": None,
+            },
+        },
+    )
+
+    success: bool = Field(..., description="Whether query succeeded")
+    data: list[OHLCVCandle] | None = Field(None, description="OHLCV candles (null on error)")
+    pagination: PaginationMeta | None = Field(
+        None, description="Pagination metadata (null on error)"
+    )
+    timeframe: str = Field(..., description="Timeframe queried")
+    symbol: str = Field(..., description="Symbol queried")
+    error: str | None = Field(None, description="Error message (null on success)")
+
+
+# =============================================================================
 # Symbols Models
 # =============================================================================
 
@@ -368,7 +561,7 @@ class HealthResponse(BaseModel):
 
     status: HealthStatus = Field(description="Overall health status")
     version: str = Field(description="API version")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     dependencies: list[DependencyHealth] = Field(
         default_factory=list,
         description="Dependency health checks",

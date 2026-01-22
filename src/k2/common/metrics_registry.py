@@ -432,7 +432,7 @@ QUERY_DURATION_SECONDS = Histogram(
 QUERY_ROWS_SCANNED = Histogram(
     "k2_query_rows_scanned",
     "Number of rows scanned by query",
-    STANDARD_LABELS + ["query_type"],
+    STANDARD_LABELS + ["query_type", "timeframe"],
     buckets=[100, 1000, 10000, 100000, 1000000, 10000000],
 )
 
@@ -546,6 +546,24 @@ CIRCUIT_BREAKER_FAILURES_TOTAL = Counter(
     STANDARD_LABELS + ["breaker_name"],
 )
 
+CIRCUIT_BREAKER_CONSECUTIVE_FAILURES = Gauge(
+    "k2_circuit_breaker_consecutive_failures",
+    "Consecutive failures before circuit opens",
+    STANDARD_LABELS + ["pool"],
+)
+
+CIRCUIT_BREAKER_REJECTIONS_TOTAL = Counter(
+    "k2_circuit_breaker_rejections_total",
+    "Total requests rejected due to open circuit",
+    STANDARD_LABELS + ["pool"],
+)
+
+CIRCUIT_BREAKER_OPENED_TOTAL = Counter(
+    "k2_circuit_breaker_opened_total",
+    "Total times circuit breaker opened",
+    STANDARD_LABELS + ["pool"],
+)
+
 BACKPRESSURE_EVENTS_TOTAL = Counter(
     "k2_backpressure_events_total",
     "Total backpressure events",
@@ -655,6 +673,9 @@ _METRIC_REGISTRY: dict[str, object] = {
     # System
     "circuit_breaker_state": CIRCUIT_BREAKER_STATE,
     "circuit_breaker_failures_total": CIRCUIT_BREAKER_FAILURES_TOTAL,
+    "circuit_breaker_consecutive_failures": CIRCUIT_BREAKER_CONSECUTIVE_FAILURES,
+    "circuit_breaker_rejections_total": CIRCUIT_BREAKER_REJECTIONS_TOTAL,
+    "circuit_breaker_opened_total": CIRCUIT_BREAKER_OPENED_TOTAL,
     "backpressure_events_total": BACKPRESSURE_EVENTS_TOTAL,
     "degradation_level": DEGRADATION_LEVEL,
     "degradation_transitions_total": DEGRADATION_TRANSITIONS_TOTAL,

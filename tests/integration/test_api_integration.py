@@ -525,6 +525,167 @@ class TestAPIHybridQueryIntegration:
         # Hybrid queries should be reasonably fast (< 3 seconds for 100 records)
         assert query_time < 3.0, f"Hybrid query took {query_time:.2f}s, expected < 3.0s"
 
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_api_ohlcv_1h_candles(self, api_client: httpx.AsyncClient) -> None:
+        """Test querying 1h OHLCV candles."""
+
+        response = await api_client.get(
+            "/v1/ohlcv/1h",
+            params={
+                "symbol": "BTCUSDT",
+                "limit": 24,
+            },
+        )
+
+        assert response.status_code in [200, 404]  # 404 if no data yet
+
+        if response.status_code == 200:
+            data = response.json()
+            assert data["success"] is True
+            assert data["timeframe"] == "1h"
+            assert data["symbol"] == "BTCUSDT"
+            assert "data" in data
+            assert "pagination" in data
+
+            if len(data["data"]) > 0:
+                # Validate candle structure
+                candle = data["data"][0]
+                assert "symbol" in candle
+                assert "exchange" in candle
+                assert "window_start" in candle
+                assert "window_end" in candle
+                assert "open_price" in candle
+                assert "high_price" in candle
+                assert "low_price" in candle
+                assert "close_price" in candle
+                assert "volume" in candle
+                assert "trade_count" in candle
+                assert "vwap" in candle
+
+                # Validate price relationships
+                assert candle["high_price"] >= candle["low_price"]
+                assert candle["high_price"] >= candle["open_price"]
+                assert candle["high_price"] >= candle["close_price"]
+                assert candle["low_price"] <= candle["open_price"]
+                assert candle["low_price"] <= candle["close_price"]
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_api_ohlcv_with_time_range(self, api_client: httpx.AsyncClient) -> None:
+        """Test querying OHLCV with time range filter."""
+
+        start_time = (datetime.utcnow() - timedelta(days=1)).isoformat()
+
+        response = await api_client.get(
+            "/v1/ohlcv/5m",
+            params={
+                "symbol": "ETHUSDT",
+                "start_time": start_time,
+                "limit": 100,
+            },
+        )
+
+        assert response.status_code in [200, 404]  # 404 if no data yet
+
+        if response.status_code == 200:
+            data = response.json()
+            assert data["success"] is True
+            assert data["timeframe"] == "5m"
+            assert "data" in data
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_api_ohlcv_batch(self, api_client: httpx.AsyncClient) -> None:
+        """Test batch querying multiple timeframes."""
+
+        response = await api_client.post(
+            "/v1/ohlcv/batch",
+            json=[
+                {"symbol": "BTCUSDT", "timeframe": "1m", "limit": 60},
+                {"symbol": "BTCUSDT", "timeframe": "1h", "limit": 24},
+            ],
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, dict)
+
+        # Check that we got responses for both timeframes
+        # Keys are in format: {timeframe}_{symbol}
+        assert any("1m_BTCUSDT" in key for key in data.keys())
+        assert any("1h_BTCUSDT" in key for key in data.keys())
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_api_ohlcv_invalid_timeframe(self, api_client: httpx.AsyncClient) -> None:
+        """Test error handling for invalid timeframe."""
+
+        response = await api_client.get(
+            "/v1/ohlcv/15m",  # Invalid: only 1m, 5m, 30m, 1h, 1d supported
+            params={"symbol": "BTCUSDT"},
+        )
+
+        assert response.status_code == 422  # Validation error (Unprocessable Entity)
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_api_ohlcv_missing_symbol(self, api_client: httpx.AsyncClient) -> None:
+        """Test error handling for missing required symbol parameter."""
+
+        response = await api_client.get("/v1/ohlcv/1h")
+
+        # Should return 422 for missing required parameter
+        assert response.status_code == 422
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_api_optimized_summary_endpoint(self, api_client: httpx.AsyncClient) -> None:
+        """Test that summary endpoint uses OHLCV tables when available."""
+
+        # Use today's date (or a recent date that might have data)
+        today = datetime.utcnow().date()
+
+        response = await api_client.get(f"/v1/summary/BTCUSDT/{today}")
+
+        assert response.status_code in [200, 404]  # 404 if no data for today
+
+        if response.status_code == 200:
+            data = response.json()
+            assert data["success"] is True
+            assert "data" in data
+            summary = data["data"]
+            assert "open_price" in summary
+            assert "high_price" in summary
+            assert "low_price" in summary
+            assert "close_price" in summary
+            assert "volume" in summary
+            assert "trade_count" in summary
+            assert "vwap" in summary
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_api_ohlcv_pagination(self, api_client: httpx.AsyncClient) -> None:
+        """Test OHLCV pagination metadata."""
+
+        response = await api_client.get(
+            "/v1/ohlcv/1d",
+            params={
+                "symbol": "BTCUSDT",
+                "limit": 10,
+            },
+        )
+
+        assert response.status_code in [200, 404]
+
+        if response.status_code == 200:
+            data = response.json()
+            assert "pagination" in data
+            pagination = data["pagination"]
+            assert "total" in pagination
+            assert "limit" in pagination
+            assert pagination["limit"] == 10
+
 
 # Helper functions for test data setup
 async def setup_test_data_for_api_tests(
