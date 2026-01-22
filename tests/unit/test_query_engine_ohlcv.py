@@ -8,10 +8,11 @@ Tests critical security and functionality aspects:
 - Symbol normalization
 """
 
-import pytest
 from datetime import UTC, datetime
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
+
 import pandas as pd
+import pytest
 
 from k2.query.engine import QueryEngine
 

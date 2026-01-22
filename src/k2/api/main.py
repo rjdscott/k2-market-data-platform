@@ -45,8 +45,8 @@ from k2.api.middleware import (
     RequestLoggingMiddleware,
     RequestSizeLimitMiddleware,
 )
-from k2.api.rate_limit import limiter
 from k2.api.models import DependencyHealth, HealthResponse, HealthStatus
+from k2.api.rate_limit import limiter
 from k2.api.v1 import router as v1_router
 from k2.common.config import config
 from k2.common.logging import get_logger

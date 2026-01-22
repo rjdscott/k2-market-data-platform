@@ -33,7 +33,6 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Res
 from k2.api.deps import get_hybrid_engine, get_query_engine, get_replay_engine
 from k2.api.formatters import decode_cursor, encode_cursor, format_response
 from k2.api.middleware import correlation_id_var, verify_api_key
-from k2.api.rate_limit import limiter
 from k2.api.models import (  # POST request models
     AggregationBucket,
     AggregationInterval,
@@ -65,6 +64,7 @@ from k2.api.models import (  # POST request models
     TradeQueryRequest,
     TradesResponse,
 )
+from k2.api.rate_limit import limiter
 from k2.common import metrics
 from k2.common.logging import get_logger
 from k2.query.engine import QueryEngine
