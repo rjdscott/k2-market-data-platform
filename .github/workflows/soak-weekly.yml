@@ -343,7 +343,7 @@ jobs:
 
     steps:
       - name: Send notification
-        uses: dawidd6/action-send-mail@v7
+        uses: dawidd6/action-send-mail@v8
         with:
           server_address: smtp.gmail.com
           server_port: 465
