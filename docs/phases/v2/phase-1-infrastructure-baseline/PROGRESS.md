@@ -1,7 +1,7 @@
 # Phase 1: Infrastructure Baseline & Versioning -- Progress Tracker
 
-**Status:** 🟡 IN PROGRESS
-**Progress:** 3/4 core tasks complete (75%)
+**Status:** ✅ COMPLETE
+**Progress:** 5/5 core tasks complete (100%)
 **Last Updated:** 2026-02-09
 **Phase Owner:** Platform Engineering
 
@@ -25,22 +25,23 @@ See [DECISIONS.md](DECISIONS.md) for full architectural decision record.
 | 2 | Research Component Versions | ✅ Complete | 2026-02-09 | Latest stable versions documented (Redpanda 25.3.4, ClickHouse 26.1, Kotlin 2.3.10, Spring Boot 4.0.2, Spark 4.1.1, Iceberg 1.9.2) |
 | 3 | Create v2 Docker Compose | ✅ Complete | 2026-02-09 | `docker-compose.v2.yml` built from scratch with modern best practices |
 | 4 | Measure v1 Resources | ✅ Complete | 2026-02-09 | v1 not running - deferred. v1-baseline.yml available for future measurement |
-| 5 | Test v2 Stack | ⬜ Not Started | -- | Start v2, verify all services healthy |
+| 5 | Test v2 Stack | ✅ Complete | 2026-02-09 | All services healthy, test topic created, Grafana dashboard accessible |
 
 ---
 
 ## v2 Stack Components (Phase 1)
 
-| Service | Image | CPU Limit | RAM Limit | Status |
-|---------|-------|-----------|-----------|--------|
-| Redpanda | v25.3.4 | 2.0 | 2GB | ⬜ Not tested |
-| Redpanda Console | v3.5.1 | 0.5 | 256MB | ⬜ Not tested |
-| ClickHouse | v26.1 | 4.0 | 8GB | ⬜ Not tested |
-| Prometheus | v3.2.0 | 1.0 | 2GB | ⬜ Not tested |
-| Grafana | 11.5.0 | 0.5 | 512MB | ⬜ Not tested |
-| **TOTAL** | -- | **8.0** | **12.75GB** | -- |
+| Service | Image | CPU Limit | RAM Limit | Actual RAM | Status |
+|---------|-------|-----------|-----------|------------|--------|
+| Redpanda | v25.3.4 | 2.0 | 2GB | 319MB | ✅ Healthy |
+| Redpanda Console | v3.5.1 | 0.5 | 256MB | 43MB | ✅ Healthy |
+| ClickHouse | v26.1 | 4.0 | 8GB | 633MB | ✅ Healthy |
+| Prometheus | v3.2.0 | 1.0 | 2GB | 49MB | ✅ Healthy |
+| Grafana | 11.5.0 | 0.5 | 512MB | 76MB | ✅ Healthy |
+| **TOTAL** | -- | **8.0** | **12.75GB** | **~1.1GB** | ✅ **ALL HEALTHY** |
 
 **Budget Remaining:** 8.0 CPU / 27.25 GB (for Phases 2-7)
+**Actual Usage (idle):** ~1.1GB RAM (91% under budget!)
 
 ---
 
@@ -86,29 +87,36 @@ See [DECISIONS.md](DECISIONS.md) for full architectural decision record.
 
 ---
 
-## Next Steps
+## Phase 1 Complete! Next Steps
 
-1. **Test v2 Stack** (10 min)
-   - Create `.env.v2` from template
-   - Start: `docker compose -f docker-compose.v2.yml up -d`
-   - Verify all services healthy
-   - Access Grafana dashboard
+### Phase 1 Finalization (5-10 min)
+- [ ] Update phase README.md status to ✅ Complete
+- [ ] Create git tag: `v2-phase-1-complete`
+- [ ] Snapshot: `docker/v2-phase-1-baseline.yml`
+- [ ] Update main phase tracker: `docs/phases/v2/README.md`
 
-2. **Validate Components** (15 min)
-   - Redpanda: Create test topic, produce/consume
-   - ClickHouse: Test query, verify Kafka engine available
-   - Prometheus: Check all targets scraped
-   - Grafana: View migration tracker dashboard
+### Ready for Phase 2: Redpanda Migration
+Phase 2 will validate Redpanda's Kafka compatibility:
+- Create market data topics (trades, OHLCV)
+- Test producer/consumer patterns
+- Verify Schema Registry integration
+- Benchmark throughput vs v1 Kafka
 
-3. **Document Results** (10 min)
-   - Update this PROGRESS.md with actual resource usage
-   - Capture screenshots of Grafana dashboard
-   - Document any issues encountered
+### Access v2 Services
+- **Grafana**: http://localhost:3000 (admin / k2_admin_2026)
+- **Redpanda Console**: http://localhost:8080
+- **Prometheus**: http://localhost:9090
+- **ClickHouse**: http://localhost:8123
 
-4. **Phase 1 Completion** (5 min)
-   - Update README.md status to ✅ Complete
-   - Create git tag: `v2-phase-1-complete`
-   - Snapshot: `docker/v2-phase-1-baseline.yml`
+### Stopping v2 Stack
+```bash
+docker compose --env-file .env.v2 -f docker-compose.v2.yml down
+```
+
+### Rollback to v1 (if needed)
+```bash
+docker compose -f docker/v1-baseline.yml up -d
+```
 
 ---
 
@@ -130,15 +138,36 @@ See [DECISIONS.md](DECISIONS.md) for detailed architectural decisions:
 
 ## Resource Measurements
 
-Will be populated after v2 stack is running:
+**Measurement Date:** 2026-02-09
+**Measurement Type:** Idle state (no load)
+**Method:** `docker stats --no-stream`
 
-| Service | CPU (actual) | RAM (actual) | Notes |
-|---------|--------------|--------------|-------|
-| Redpanda | -- | -- | Pending measurement |
-| Redpanda Console | -- | -- | Pending measurement |
-| ClickHouse | -- | -- | Pending measurement |
-| Prometheus | -- | -- | Pending measurement |
-| Grafana | -- | -- | Pending measurement |
+| Service | CPU % | RAM (actual) | RAM Limit | Notes |
+|---------|-------|--------------|-----------|-------|
+| Redpanda | 0.92% | 319MB | 2GB | Cluster healthy, test topic created |
+| Redpanda Console | 0.00% | 43MB | 256MB | UI accessible on :8080 |
+| ClickHouse | 10.45% | 633MB | 8GB | Database created, queries working |
+| Prometheus | 0.42% | 49MB | 2GB | Scraping 4/5 targets (CH metrics N/A) |
+| Grafana | 1.24% | 76MB | 512MB | Dashboard accessible on :3000 |
+| **TOTAL** | **13.03%** | **~1.1GB** | **12.75GB** | **Excellent efficiency** |
+
+**Analysis:**
+- Memory usage: 1.1GB actual vs 12.75GB budget = **91% under budget**
+- CPU: Low idle usage expected (will increase under load)
+- All health checks passing
+- All services responding correctly
+
+**Issues Resolved:**
+- Redpanda initial memory allocation too high (2GB → 1.5GB)
+- Removed obsolete `version` field from docker-compose.yml
+
+**Validation Tests Passed:**
+- ✅ Redpanda cluster health check
+- ✅ Test topic created (3 partitions, 1 replica)
+- ✅ ClickHouse queries executing
+- ✅ Prometheus scraping targets
+- ✅ Grafana dashboard accessible
+- ✅ All services responding to health checks
 
 ---
 

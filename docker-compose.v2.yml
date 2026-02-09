@@ -3,8 +3,6 @@
 # Last Updated: 2026-02-09
 # Target: 16 CPU cores / 40GB RAM
 
-version: '3.9'
-
 #############################################################################
 # NETWORKS
 #############################################################################
@@ -68,7 +66,7 @@ services:
       - --advertise-rpc-addr redpanda:33145
       - --mode dev-container
       - --smp 1
-      - --memory 2G
+      - --memory 1500M
     environment:
       REDPANDA_PANDAPROXY_CLIENT_RETRIES: 5
       REDPANDA_PANDAPROXY_CLIENT_RETRY_BASE_BACKOFF_MS: 100
