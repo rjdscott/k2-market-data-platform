@@ -1,0 +1,47 @@
+{
+  "phase": "phase-1-baseline",
+  "timestamp": "2026-02-09T19:40:00Z",
+  "status": "complete",
+  "measurement_type": "idle",
+  "budget": {
+    "cpu_cores": 8.0,
+    "memory_gb": 12.75
+  },
+  "actual": {
+    "memory_total_mb": 1120,
+    "memory_total_gb": 1.09,
+    "efficiency_pct": 91
+  },
+  "services": [
+    {
+      "container": "k2-grafana",
+      "cpu": "1.08%",
+      "memory": "89.38MiB / 512MiB",
+      "memory_pct": "17.46%"
+    },
+    {
+      "container": "k2-redpanda-console",
+      "cpu": "0.00%",
+      "memory": "31.73MiB / 256MiB",
+      "memory_pct": "12.39%"
+    },
+    {
+      "container": "k2-clickhouse",
+      "cpu": "9.48%",
+      "memory": "1.291GiB / 7.648GiB",
+      "memory_pct": "16.88%"
+    },
+    {
+      "container": "k2-prometheus",
+      "cpu": "0.03%",
+      "memory": "51.3MiB / 2GiB",
+      "memory_pct": "2.50%"
+    },
+    {
+      "container": "k2-redpanda",
+      "cpu": "0.36%",
+      "memory": "320.8MiB / 2GiB",
+      "memory_pct": "15.67%"
+    }
+  ]
+}
