@@ -70,13 +70,13 @@ SELECT
     -- ═══════════════════════════════════════════════════════════════════════
     -- Timestamps (convert Kraken "seconds.microseconds" → DateTime64(6))
     -- ═══════════════════════════════════════════════════════════════════════
-    fromUnixTimestamp64Micro(toUnixTimestamp64Micro(toFloat64(timestamp) * 1000000)) AS timestamp,
+    fromUnixTimestamp64Micro(toUInt64(toFloat64(timestamp) * 1000000)) AS timestamp,
     ingestion_timestamp AS ingestion_timestamp,
 
     -- ═══════════════════════════════════════════════════════════════════════
     -- Sequencing
     -- ═══════════════════════════════════════════════════════════════════════
-    toUnixTimestamp64Micro(toFloat64(timestamp) * 1000000) AS source_sequence,
+    toUInt64(toFloat64(timestamp) * 1000000) AS source_sequence,
     CAST(NULL AS Nullable(UInt64)) AS platform_sequence,
 
     -- ═══════════════════════════════════════════════════════════════════════
