@@ -47,18 +47,32 @@ suspend fun main() {
         schemaPath = schemaPath
     )
 
-    // Create WebSocket client
-    val wsClient = BinanceWebSocketClient(
-        config = config.getConfig("binance"),
-        producer = producer,
-        symbols = symbols
-    )
-
     // Structured concurrency: all child coroutines cancel when parent cancels
     coroutineScope {
         // Launch WebSocket connection (auto-reconnect)
-        val wsJob = launch(CoroutineName("binance-websocket")) {
-            wsClient.connect()
+        val wsJob = launch(CoroutineName("$exchange-websocket")) {
+            when (exchange.lowercase()) {
+                "binance" -> {
+                    val wsClient = BinanceWebSocketClient(
+                        config = config.getConfig("binance"),
+                        producer = producer,
+                        symbols = symbols
+                    )
+                    wsClient.connect()
+                }
+                "kraken" -> {
+                    val wsClient = KrakenWebSocketClient(
+                        config = config.getConfig("kraken"),
+                        producer = producer,
+                        symbols = symbols
+                    )
+                    wsClient.connect()
+                }
+                else -> {
+                    logger.error { "Unknown exchange: $exchange" }
+                    exitProcess(1)
+                }
+            }
         }
 
         // Launch metrics logger

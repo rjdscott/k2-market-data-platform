@@ -1,6 +1,6 @@
 # Platform v2 — Implementation Phases
 
-**Status:** ⬜ NOT STARTED
+**Status:** 🟡 IN PROGRESS (Phase 3 Complete, Phase 4 Starting)
 **Target:** 16 CPU / 40GB RAM single Docker Compose cluster
 **Estimated Duration:** 8-10 weeks (Phases 1-7), +2-3 weeks optional Phase 8
 **Last Updated:** 2026-02-09
@@ -44,7 +44,7 @@ Baseline     Redpanda    ClickHouse   Streaming   Cold Tier   Kotlin      Harden
 |-------|------|----------|-------|--------------|------|
 | [1](phase-1-infrastructure-baseline/README.md) | Infrastructure Baseline & Versioning | 1 week | 4 | ~38 CPU (no change) | Docker Compose v1 tagged and tested |
 | [2](phase-2-redpanda-migration/README.md) | Redpanda Migration | 1 week | 5 | ~35 CPU (-3) | Kafka fully replaced, all consumers verified |
-| [3](phase-3-clickhouse-foundation/README.md) | ClickHouse Foundation | 1-2 weeks | 5 | ~37 CPU (+2 for CH) | Raw + Bronze tables ingesting, queries working |
+| [3](phase-3-clickhouse-foundation/README.md) | ClickHouse Foundation | 1-2 weeks | 5 | ~1.2 CPU (actual) | ✅ **COMPLETE** - Bronze/Silver/Gold operational |
 | [4](phase-4-streaming-pipeline/README.md) | Streaming Pipeline Migration | 2 weeks | 7 | ~19 CPU (-18) | Spark Streaming + Prefect decommissioned |
 | [5](phase-5-cold-tier-restructure/README.md) | Cold Tier Restructure | 1-2 weeks | 5 | ~17.5 CPU (-1.5) | Four-layer Iceberg, hourly offload running |
 | [6](phase-6-kotlin-feed-handlers/README.md) | Kotlin Feed Handlers | 2 weeks | 5 | ~15.5 CPU (-2) | Python handlers decommissioned |
