@@ -114,18 +114,18 @@ Phase 0: Technical Debt Resolution
 ## Documentation
 
 ### Phase Documentation
-- [PROGRESS.md](./PROGRESS.md) - Detailed progress tracking for all TD items
-- [STATUS.md](./STATUS.md) - Current completion status snapshot
-- [DECISIONS.md](./DECISIONS.md) - Technical decisions made during fixes
-- [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md) - How to validate technical debt fixes
+- [PROGRESS.md](PROGRESS.md) - Detailed progress tracking for all TD items
+- [STATUS.md](STATUS.md) - Current completion status snapshot
+- [DECISIONS.md](DECISIONS.md) - Technical decisions made during fixes
+- [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md) - How to validate technical debt fixes
 
 ### Priority-Specific Documentation
-- [P0 Critical Fixes](./p0-critical/README.md) - TD-000 details
-- [P1 Operational Readiness](./p1-operational/README.md) - TD-001, TD-002, TD-003 details
-- [P2 Testing & Quality](./p2-testing-quality/README.md) - TD-004, TD-005, TD-006 details
+- [P0 Critical Fixes](p0-critical/README.md) - TD-000 details
+- [P1 Operational Readiness](p1-operational/README.md) - TD-001, TD-002, TD-003 details
+- [P2 Testing & Quality](p2-testing-quality/README.md) - TD-004, TD-005, TD-006 details
 
 ### Root Document
-- [TECHNICAL_DEBT.md](../../TECHNICAL_DEBT.md) - Master technical debt tracker
+- [TECHNICAL_DEBT.md](../../../TECHNICAL_DEBT.md) - Master technical debt tracker
 
 ---
 
@@ -236,15 +236,15 @@ Phase 1: Single-Node Implementation
 ## Quick Links
 
 **Documentation**:
-- [TECHNICAL_DEBT.md](../../TECHNICAL_DEBT.md) - Master tracker
-- [PROGRESS.md](./PROGRESS.md) - Detailed progress
-- [STATUS.md](./STATUS.md) - Current status
-- [DECISIONS.md](./DECISIONS.md) - Technical decisions
+- [TECHNICAL_DEBT.md](../../../TECHNICAL_DEBT.md) - Master tracker
+- [PROGRESS.md](PROGRESS.md) - Detailed progress
+- [STATUS.md](STATUS.md) - Current status
+- [DECISIONS.md](DECISIONS.md) - Technical decisions
 
 **Code**:
 - [tests/unit/test_metrics_labels.py](../../../tests-backup/unit/test_metrics_labels.py) - Metrics tests (TD-004)
-- [scripts/validate_metrics_labels.py](../../../scripts/validate_metrics_labels.py) - Validation script (TD-005)
-- [src/k2/schemas/reference_data_v2.avsc](../../../src/k2/schemas/reference_data_v2.avsc) - V2 schema (TD-006)
+- [scripts/validate_metrics_labels.py](../../../../scripts/validate_metrics_labels.py) - Validation script (TD-005)
+- [src/k2/schemas/reference_data_v2.avsc](../../../../src/k2/schemas/reference_data_v2.avsc) - V2 schema (TD-006)
 
 **Related Phases**:
 - [Phase 1: Single-Node Implementation](../phase-1-single-node-equities/)

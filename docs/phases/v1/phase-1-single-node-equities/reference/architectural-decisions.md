@@ -305,9 +305,9 @@ See [DECISIONS.md](../DECISIONS.md) for complete records. Summary:
 ## References
 
 - [Full ADR Log](../DECISIONS.md)
-- [Testing Strategy](./testing-summary.md)
-- [Success Criteria](./success-criteria.md)
-- [Verification Checklist](./verification-checklist.md)
+- [Testing Strategy](testing-summary.md)
+- [Success Criteria](success-criteria.md)
+- [Verification Checklist](verification-checklist.md)
 
 ---
 

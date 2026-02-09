@@ -109,8 +109,8 @@ No current issues.
 
 ## Related Links
 
-- [Phase 9 README](./README.md) - Phase overview
-- [Progress Tracking](./PROGRESS.md) - Detailed progress notes
+- [Phase 9 README](README.md) - Phase overview
+- [Progress Tracking](PROGRESS.md) - Detailed progress notes
 - [Implementation Plan](../../../.claude/plans/partitioned-mixing-phoenix.md) - Full technical plan
 
 ---

@@ -532,8 +532,8 @@ docker exec spark-master spark-sql \
 
 ---
 
-**For implementation details**, see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
-**For current status**, see [STATUS.md](./STATUS.md).
+**For implementation details**, see [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+**For current status**, see [STATUS.md](STATUS.md).
 
 ---
 

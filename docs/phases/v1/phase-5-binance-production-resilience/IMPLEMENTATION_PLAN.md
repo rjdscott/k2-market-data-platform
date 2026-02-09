@@ -294,8 +294,8 @@ docker compose stop binance-stream-2   # Stop green
 ---
 
 **For detailed step-by-step guides**, see [steps/](./steps/) directory.
-**For validation procedures**, see [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md).
-**For current status**, see [STATUS.md](./STATUS.md) and [PROGRESS.md](./PROGRESS.md).
+**For validation procedures**, see [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md).
+**For current status**, see [STATUS.md](STATUS.md) and [PROGRESS.md](PROGRESS.md).
 
 ---
 

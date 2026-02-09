@@ -36,24 +36,24 @@ Principal engineer asked: "Please think hard about whether this repo and project
 
 ## Quick Links
 
-- [STATUS.md](./STATUS.md) - Current snapshot with 100/100 scoring
-- [PROGRESS.md](./PROGRESS.md) - Detailed step-by-step progress
-- [DECISIONS.md](./DECISIONS.md) - Architectural decisions for this phase
-- [SUCCESS_CRITERIA.md](./SUCCESS_CRITERIA.md) - Detailed 100/100 scoring rubric
-- [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md) - How to validate each step
+- [STATUS.md](STATUS.md) - Current snapshot with 100/100 scoring
+- [PROGRESS.md](PROGRESS.md) - Detailed step-by-step progress
+- [DECISIONS.md](DECISIONS.md) - Architectural decisions for this phase
+- [SUCCESS_CRITERIA.md](SUCCESS_CRITERIA.md) - Detailed 100/100 scoring rubric
+- [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md) - How to validate each step
 - [Plan File](/Users/rjdscott/.claude/plans/fizzy-wibbling-snowglobe.md) - Complete implementation plan
 
 ---
 
 ## Current Demo Materials
 
-**Active Location**: [`/demos/`](../../../demos/README.md)
+**Active Location**: [`/demos/`](../../../../demos/README.md)
 
 The demo materials prepared in this phase are now maintained in:
-- **Quick Reference**: [`demos/reference/quick-reference.md`](../../../demos/reference/quick-reference.md) - One-page Q&A
-- **Architecture Decisions**: [`demos/reference/architecture-decisions.md`](../../../demos/reference/architecture-decisions.md) - "Why X vs Y" answers
-- **Contingency Plan**: [`demos/reference/contingency-plan.md`](../../../demos/reference/contingency-plan.md) - Failure recovery strategies
-- **Performance Validation**: [`demos/docs/performance-validation.md`](../../../demos/docs/performance-validation.md) - Measured benchmarks
+- **Quick Reference**: [`demos/reference/quick-reference.md`](../../../../demos/reference/quick-reference.md) - One-page Q&A
+- **Architecture Decisions**: [`demos/reference/architecture-decisions.md`](../../../../demos/reference/architecture-decisions.md) - "Why X vs Y" answers
+- **Contingency Plan**: [`demos/reference/contingency-plan.md`](../../../../demos/reference/contingency-plan.md) - Failure recovery strategies
+- **Performance Validation**: [`demos/docs/performance-validation.md`](../../../../demos/docs/performance-validation.md) - Measured benchmarks
 
 For historical context, see the [reference/](./reference/) directory in this phase.
 
@@ -178,10 +178,10 @@ docker logs k2-binance-stream --follow
 ```
 
 **Progress Tracking**:
-- Update [STATUS.md](./STATUS.md) after each step
-- Mark steps complete in [PROGRESS.md](./PROGRESS.md)
-- Document decisions in [DECISIONS.md](./DECISIONS.md)
-- Validate using commands in [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md)
+- Update [STATUS.md](STATUS.md) after each step
+- Mark steps complete in [PROGRESS.md](PROGRESS.md)
+- Document decisions in [DECISIONS.md](DECISIONS.md)
+- Validate using commands in [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md)
 
 ---
 

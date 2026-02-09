@@ -551,4 +551,4 @@ docker logs k2-binance-stream | grep -i "reconnect\|closed\|timeout"
 
 **Last Updated**: 2026-01-15
 **Maintained By**: Engineering Team
-**Questions?**: See [STATUS.md](./STATUS.md) or [README.md](./README.md)
+**Questions?**: See [STATUS.md](STATUS.md) or [README.md](README.md)

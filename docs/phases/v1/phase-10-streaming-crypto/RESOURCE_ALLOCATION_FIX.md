@@ -347,9 +347,9 @@ grep -A2 "silver-kraken-transformation:" docker-compose.yml | \
 
 ## Related Documentation
 
-- [SILVER_FIX_SUMMARY.md](./SILVER_FIX_SUMMARY.md) - NULL validation fix
-- [SILVER_TRANSFORMATION_STATUS.md](./SILVER_TRANSFORMATION_STATUS.md) - Original investigation
-- [step-11-silver-transformation.md](./steps/step-11-silver-transformation.md) - Implementation plan
+- [SILVER_FIX_SUMMARY.md](SILVER_FIX_SUMMARY.md) - NULL validation fix
+- [SILVER_TRANSFORMATION_STATUS.md](SILVER_TRANSFORMATION_STATUS.md) - Original investigation
+- [step-11-silver-transformation.md](steps/step-11-silver-transformation.md) - Implementation plan
 
 ---
 

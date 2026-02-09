@@ -284,10 +284,10 @@ docker logs k2-silver-kraken-transformation | grep "numOutputRows"
 
 ## Related Documentation
 
-- [Step 11: Silver Transformation](./steps/step-11-silver-transformation.md)
-- [Decision #011: Bronze Stores Raw Bytes](./DECISIONS.md#decision-011)
-- [Decision #012: Silver Uses DLQ Pattern](./DECISIONS.md#decision-012)
-- [Phase 10 Progress](./PROGRESS.md)
+- [Step 11: Silver Transformation](steps/step-11-silver-transformation.md)
+- [Decision #011: Bronze Stores Raw Bytes](DECISIONS.md#decision-011)
+- [Decision #012: Silver Uses DLQ Pattern](DECISIONS.md#decision-012)
+- [Phase 10 Progress](PROGRESS.md)
 
 ---
 

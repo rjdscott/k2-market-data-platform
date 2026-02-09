@@ -254,8 +254,8 @@ All files exceed target line counts but provide comprehensive, practical documen
 
 ## Related Links
 
-- [Phase 9 README](./README.md)
-- [Phase 9 STATUS](./STATUS.md)
+- [Phase 9 README](README.md)
+- [Phase 9 STATUS](STATUS.md)
 - [Implementation Plan](../../../.claude/plans/partitioned-mixing-phoenix.md)
 
 ---

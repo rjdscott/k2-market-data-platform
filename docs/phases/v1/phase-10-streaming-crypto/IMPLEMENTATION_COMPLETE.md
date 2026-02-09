@@ -724,11 +724,11 @@ Both approaches are valid depending on business requirements (real-time vs near-
 
 ### Documentation
 
-- [Gold Layer Implementation Guide](./GOLD_LAYER_IMPLEMENTATION.md)
-- [Architectural Decisions](./DECISIONS.md)
-- [Bronze/Silver Review](./BRONZE_SILVER_REVIEW_COMPLETE.md)
-- [Operational Runbooks](../../operations/runbooks/streaming-pipeline-operations.md)
-- [Monitoring Specification](../../operations/STREAMING_MONITORING_SPEC.md)
+- [Gold Layer Implementation Guide](GOLD_LAYER_IMPLEMENTATION.md)
+- [Architectural Decisions](DECISIONS.md)
+- [Bronze/Silver Review](BRONZE_SILVER_REVIEW_COMPLETE.md)
+- [Operational Runbooks](../../../operations/runbooks/streaming-pipeline-operations.md)
+- [Monitoring Specification](../../../operations/STREAMING_MONITORING_SPEC.md)
 
 ### Code
 

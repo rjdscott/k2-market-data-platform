@@ -530,8 +530,8 @@ All V2 tables partitioned by:
 - [Platform Principles](../architecture/platform-principles.md#schema-design) - Schema design philosophy
 
 ### Implementation
-- Phase 2 Prep: [V2 Schema Implementation](../phases/phase-2-prep/COMPLETION-REPORT.md)
-- Phase 2 Prep: [Schema Evolution Decisions](../phases/phase-2-prep/DECISIONS.md)
+- Phase 2 Prep: [V2 Schema Implementation](../phases/v1/phase-2-prep/COMPLETION-REPORT.md)
+- Phase 2 Prep: [Schema Evolution Decisions](../phases/v1/phase-2-prep/DECISIONS.md)
 
 ### Operations
 - [Schema Registry Operations](../operations/runbooks/schema-registry-operations.md)

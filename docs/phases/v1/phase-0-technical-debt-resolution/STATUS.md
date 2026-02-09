@@ -231,16 +231,16 @@ After P2:       86/100 (maintained, quality improvements)
 ## References
 
 ### Documentation
-- [README.md](./README.md) - Phase overview
-- [PROGRESS.md](./PROGRESS.md) - Detailed progress tracking
-- [DECISIONS.md](./DECISIONS.md) - Technical decisions
-- [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md) - Validation procedures
-- [TECHNICAL_DEBT.md](../../TECHNICAL_DEBT.md) - Master tracker
+- [README.md](README.md) - Phase overview
+- [PROGRESS.md](PROGRESS.md) - Detailed progress tracking
+- [DECISIONS.md](DECISIONS.md) - Technical decisions
+- [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md) - Validation procedures
+- [TECHNICAL_DEBT.md](../../../TECHNICAL_DEBT.md) - Master tracker
 
 ### Code
 - [tests/unit/test_metrics_labels.py](../../../tests-backup/unit/test_metrics_labels.py) - TD-004
-- [scripts/validate_metrics_labels.py](../../../scripts/validate_metrics_labels.py) - TD-005
-- [src/k2/schemas/reference_data_v2.avsc](../../../src/k2/schemas/reference_data_v2.avsc) - TD-006
+- [scripts/validate_metrics_labels.py](../../../../scripts/validate_metrics_labels.py) - TD-005
+- [src/k2/schemas/reference_data_v2.avsc](../../../../src/k2/schemas/reference_data_v2.avsc) - TD-006
 
 ### Related Phases
 - [Phase 1: Single-Node Implementation](../phase-1-single-node-equities/) - Foundation

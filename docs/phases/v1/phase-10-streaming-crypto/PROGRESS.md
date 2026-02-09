@@ -275,7 +275,7 @@
 - **Actual**: 12 hours (includes troubleshooting and resource optimization)
 - **Started**: 2026-01-19
 - **Completed**: 2026-01-19
-- **Notes**: Implemented full Medallion Silver layer with DLQ pattern. Created Avro deserialization UDF, validation logic, and 2 Silver transformation jobs. Industry best practices implemented: Schema Registry integration, DLQ routing, error categorization, checkpoint-based recovery. **Critical fixes applied**: NULL validation handling bug (preventing silent data loss), Spark resource allocation optimization (1 core per job), container configuration drift resolution (docker compose up -d vs docker restart). See [SILVER_FIX_SUMMARY.md](./SILVER_FIX_SUMMARY.md) and [RESOURCE_ALLOCATION_FIX.md](./RESOURCE_ALLOCATION_FIX.md) for detailed troubleshooting documentation.
+- **Notes**: Implemented full Medallion Silver layer with DLQ pattern. Created Avro deserialization UDF, validation logic, and 2 Silver transformation jobs. Industry best practices implemented: Schema Registry integration, DLQ routing, error categorization, checkpoint-based recovery. **Critical fixes applied**: NULL validation handling bug (preventing silent data loss), Spark resource allocation optimization (1 core per job), container configuration drift resolution (docker compose up -d vs docker restart). See [SILVER_FIX_SUMMARY.md](SILVER_FIX_SUMMARY.md) and [RESOURCE_ALLOCATION_FIX.md](RESOURCE_ALLOCATION_FIX.md) for detailed troubleshooting documentation.
 
 **Acceptance Criteria**:
 - [x] Jobs start successfully (2 jobs: binance, kraken)
@@ -370,9 +370,9 @@
 - Gold batch: 1 core scheduled (6/6 cores during batch, <2 min/hour, 3% duty cycle)
 
 **Related Decisions**:
-- [Decision #017](./DECISIONS.md#decision-017): Layered Gold schema (unified + pre-computed OHLCV)
-- [Decision #018](./DECISIONS.md#decision-018): Hybrid processing (streaming + batch)
-- [Decision #019](./DECISIONS.md#decision-019): 80/20 pre-computation strategy
+- [Decision #017](DECISIONS.md#decision-017): Layered Gold schema (unified + pre-computed OHLCV)
+- [Decision #018](DECISIONS.md#decision-018): Hybrid processing (streaming + batch)
+- [Decision #019](DECISIONS.md#decision-019): 80/20 pre-computation strategy
 
 ---
 
@@ -435,7 +435,7 @@
    - **Impact**: Both Binance and Kraken services affected
    - **Verification**: Binance 50+ MB (700+ trades), Kraken 240+ KB (50+ trades)
    - **Performance**: Flush latency <1ms, zero throughput impact
-   - **Documentation**: See [Decision #008](./DECISIONS.md#decision-008-explicit-producer-flush-every-10-trades)
+   - **Documentation**: See [Decision #008](DECISIONS.md#decision-008-explicit-producer-flush-every-10-trades)
 
 2. **Docker Configuration Issues** (2026-01-18):
    - Python version mismatch (3.14 → 3.13) ✅
@@ -553,6 +553,6 @@
 
 ---
 
-**For implementation details**, see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
-**For current status**, see [STATUS.md](./STATUS.md).
-**For next steps**, see [PHASE-5-NEXT-STEPS.md](./PHASE-5-NEXT-STEPS.md).
+**For implementation details**, see [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+**For current status**, see [STATUS.md](STATUS.md).
+**For next steps**, see [PHASE-5-NEXT-STEPS.md](PHASE-5-NEXT-STEPS.md).

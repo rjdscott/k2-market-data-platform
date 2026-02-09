@@ -719,6 +719,6 @@ ls -la /checkpoints/bronze-binance/
 
 ---
 
-**For progress tracking**, see [PROGRESS.md](./PROGRESS.md).
-**For current status**, see [STATUS.md](./STATUS.md).
-**For architectural context**, see [PHASE-4-BRONZE-REFACTOR-COMPLETE.md](./PHASE-4-BRONZE-REFACTOR-COMPLETE.md).
+**For progress tracking**, see [PROGRESS.md](PROGRESS.md).
+**For current status**, see [STATUS.md](STATUS.md).
+**For architectural context**, see [PHASE-4-BRONZE-REFACTOR-COMPLETE.md](PHASE-4-BRONZE-REFACTOR-COMPLETE.md).

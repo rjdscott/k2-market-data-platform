@@ -13,17 +13,17 @@
 
 | Step | Title | Status | Completed | Duration | Score |
 |------|-------|--------|-----------|---------|
-| [01](./steps/step-01-environment-validation.md) | Environment Validation | ✅ Complete | 2026-01-17 | 95/100 |
-| [02](./steps/step-02-demo-script-validation.md) | Demo Script Validation | ✅ Complete | 2026-01-17 | 98/100 |
-| [03](./steps/step-03-jupyter-validation.md) | Jupyter Notebook Validation | ✅ Complete | 2026-01-17 | 100/100 |
+| [01](steps/step-01-environment-validation.md) | Environment Validation | ✅ Complete | 2026-01-17 | 95/100 |
+| [02](steps/step-02-demo-script-validation.md) | Demo Script Validation | ✅ Complete | 2026-01-17 | 98/100 |
+| [03](steps/step-03-jupyter-validation.md) | Jupyter Notebook Validation | ✅ Complete | 2026-01-17 | 100/100 |
 
 ### ✅ COMPLETED STEPS (CONTINUED)
 
 | Step | Title | Status | Completed | Duration | Score |
 |------|-------|--------|-----------|---------|
-| [04](./steps/step-04-executive-flow-validation.md) | Executive Demo Flow Validation | ✅ Complete | 2026-01-17 | 100/100 |
-| [05](./steps/step-05-contingency-testing.md) | Contingency Testing | ✅ Complete | 2026-01-17 | 98/100 |
-| [06](./steps/step-06-performance-validation.md) | Performance Validation | ✅ Complete | 2026-01-17 | 96/100 |
+| [04](steps/step-04-executive-flow-validation.md) | Executive Demo Flow Validation | ✅ Complete | 2026-01-17 | 100/100 |
+| [05](steps/step-05-contingency-testing.md) | Contingency Testing | ✅ Complete | 2026-01-17 | 98/100 |
+| [06](steps/step-06-performance-validation.md) | Performance Validation | ✅ Complete | 2026-01-17 | 96/100 |
 
 **Overall Progress**: 6/6 steps complete (100%) 🎉
 

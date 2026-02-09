@@ -656,8 +656,8 @@ git log --oneline | head -5
 ### For Team Adoption
 
 1. **Share Documentation**:
-   - Point team to [ci-cd-quickstart.md](../../operations/ci-cd-quickstart.md)
-   - Review [ci-cd-pipeline.md](../../operations/ci-cd-pipeline.md) together
+   - Point team to [ci-cd-quickstart.md](../../../operations/ci-cd-quickstart.md)
+   - Review [ci-cd-pipeline.md](../../../operations/ci-cd-pipeline.md) together
 
 2. **Training Session**:
    - Walk through PR workflow

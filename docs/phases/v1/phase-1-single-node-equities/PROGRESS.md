@@ -286,7 +286,7 @@
 
 ## Decision Log (Quick Reference)
 
-See [DECISIONS.md](./DECISIONS.md) for complete architectural decision records.
+See [DECISIONS.md](DECISIONS.md) for complete architectural decision records.
 
 ### Decisions Logged
 - None yet (implementation not started)

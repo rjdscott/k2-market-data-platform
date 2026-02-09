@@ -515,10 +515,10 @@ docker restart k2-gold-aggregation
 
 ## Related Documentation
 
-- [Decision #014: Gold Layer Architecture](./DECISIONS.md#decision-014-gold-layer-architecture)
-- [Bronze/Silver Review Complete](./BRONZE_SILVER_REVIEW_COMPLETE.md)
-- [Streaming Pipeline Operations Runbook](../../operations/runbooks/streaming-pipeline-operations.md)
-- [Streaming Monitoring Specification](../../operations/STREAMING_MONITORING_SPEC.md)
+- [Decision #014: Gold Layer Architecture](DECISIONS.md#decision-014-gold-layer-architecture)
+- [Bronze/Silver Review Complete](BRONZE_SILVER_REVIEW_COMPLETE.md)
+- [Streaming Pipeline Operations Runbook](../../../operations/runbooks/streaming-pipeline-operations.md)
+- [Streaming Monitoring Specification](../../../operations/STREAMING_MONITORING_SPEC.md)
 
 ---
 

@@ -43,8 +43,8 @@ Phase 9 consolidates all demo materials (6 notebooks, 8 scripts, 31+ documentati
 
 ## Quick Links
 
-- [STATUS.md](./STATUS.md) - Current implementation status and blockers
-- [PROGRESS.md](./PROGRESS.md) - Real-time step-by-step progress tracking
+- [STATUS.md](STATUS.md) - Current implementation status and blockers
+- [PROGRESS.md](PROGRESS.md) - Real-time step-by-step progress tracking
 - [Plan File](../../../.claude/plans/partitioned-mixing-phoenix.md) - Detailed implementation plan
 
 **Step Files**:
@@ -266,13 +266,13 @@ python scripts/pre_demo_check.py
 - [Phase 3: Demo Enhancements](../phase-3-demo-enhancements/README.md) - COMPLETED
 
 **Architecture**:
-- [Platform Positioning](../../architecture/platform-positioning.md) - L3 Cold Path strategy
-- [System Design](../../architecture/system-design.md) - Component architecture
-- [Platform Principles](../../architecture/platform-principles.md) - Core philosophy
+- [Platform Positioning](../../../architecture/platform-positioning.md) - L3 Cold Path strategy
+- [System Design](../../../architecture/system-design.md) - Component architecture
+- [Platform Principles](../../../architecture/platform-principles.md) - Core philosophy
 
 **Operations**:
-- [Cost Model](../../operations/cost-model.md) - Economic analysis
-- [CI/CD Pipeline](../../operations/ci-cd-pipeline.md) - Deployment automation
+- [Cost Model](../../../operations/cost-model.md) - Economic analysis
+- [CI/CD Pipeline](../../../operations/ci-cd-pipeline.md) - Deployment automation
 
 ---
 

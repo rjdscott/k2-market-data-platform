@@ -3,7 +3,7 @@
 **Status**: In Progress (50% - 3/6 steps complete, 2 steps deferred to multi-node)
 **Target**: Principal Data Engineer Demo Review Ready
 **Last Updated**: 2026-01-13
-**Source**: [Principal Data Engineer Demo Review](../../reviews/2026-01-11-principal-data-engineer-demo-review.md)
+**Source**: [Principal Data Engineer Demo Review](../../../reviews/2026-01-11-principal-data-engineer-demo-review.md)
 
 ---
 
@@ -24,11 +24,11 @@ Phase 2 addresses the 7 key issues identified in the Principal Data Engineer dem
 
 ## Quick Links
 
-- [Implementation Plan](./IMPLEMENTATION_PLAN.md) - Full 9-step implementation plan
-- [Progress Tracker](./PROGRESS.md) - Detailed progress and timeline
-- [Decision Log](./DECISIONS.md) - Architectural decision records
-- [Validation Guide](./VALIDATION_GUIDE.md) - How to validate phase-2
-- [Success Criteria](./reference/success-criteria.md) - Demo review readiness
+- [Implementation Plan](IMPLEMENTATION_PLAN.md) - Full 9-step implementation plan
+- [Progress Tracker](PROGRESS.md) - Detailed progress and timeline
+- [Decision Log](DECISIONS.md) - Architectural decision records
+- [Validation Guide](VALIDATION_GUIDE.md) - How to validate phase-2
+- [Success Criteria](reference/success-criteria.md) - Demo review readiness
 
 ---
 

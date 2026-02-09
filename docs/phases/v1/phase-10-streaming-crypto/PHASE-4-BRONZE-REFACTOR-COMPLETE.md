@@ -345,8 +345,8 @@ src/k2/spark/jobs/streaming/
 
 1. [ADR-002: Bronze Layer Per-Exchange Architecture](../../architecture/decisions/ADR-002-bronze-per-exchange.md)
 2. [Databricks Medallion Architecture Guide](https://www.databricks.com/glossary/medallion-architecture)
-3. [Phase 10 Implementation Plan](./README.md)
-4. [Spark Setup Documentation](./PHASE-3-SPARK-SETUP-COMPLETE.md)
+3. [Phase 10 Implementation Plan](README.md)
+4. [Spark Setup Documentation](PHASE-3-SPARK-SETUP-COMPLETE.md)
 
 ---
 

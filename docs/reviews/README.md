@@ -100,7 +100,7 @@
 - Technical roadmap planning
 
 **Cross-References**:
-- [Phase 0 Completion Report](../phases/phase-0-technical-debt-resolution/COMPLETION-REPORT.md) - Implements recommendation #3 (sequence tracking)
+- [Phase 0 Completion Report](../phases/v1/phase-0-technical-debt-resolution/COMPLETION-REPORT.md) - Implements recommendation #3 (sequence tracking)
 - [Phase 2 Prep Assessment](#phase-2-prep-assessment) - Implements recommendation #2 (partial)
 
 ---
@@ -202,12 +202,12 @@
 - Stakeholder updates on progress
 
 **Cross-References**:
-- [Phase 0 Completion Report](../phases/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
+- [Phase 0 Completion Report](../phases/v1/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
 - [Principal Demo Review](#principal-data-engineer-demo-review) (recommendations tracker)
 
 ---
 
-#### [Phase 0 Completion Report](../phases/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
+#### [Phase 0 Completion Report](../phases/v1/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
 **Scope**: Technical debt resolution (7 items: TD-000 through TD-006)
 **Platform Score**: 78 → 86 (+8 points)
 **Duration**: 18.5 hours (110% efficiency)
@@ -390,9 +390,9 @@ cat docs/archive/2026-01-13-implementation-logs/README.md
 - [Testing Strategy](../testing/strategy.md)
 
 **Phases**:
-- [Phase 0 Completion](../phases/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
+- [Phase 0 Completion](../phases/v1/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
 - [Phase 1 Single-Node](../phases/phase-1-single-node-implementation/)
-- [Phase 2 Prep](../phases/phase-2-prep/)
+- [Phase 2 Prep](../phases/v1/phase-2-prep/)
 
 ---
 

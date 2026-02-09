@@ -50,7 +50,7 @@ Core technology decisions with trade-offs and replacement guidance:
 - **At-least-once vs Exactly-once**: Market data duplicates acceptable, simpler implementation
 - **Self-hosted vs Managed**: More control vs less operational overhead (current: self-hosted Kafka/Schema Registry)
 
-**Decision Log**: See [Phase 1 DECISIONS.md](../phases/phase-1-single-node-equities/DECISIONS.md)
+**Decision Log**: See [Phase 1 DECISIONS.md](../phases/v1/phase-1-single-node-equities/DECISIONS.md)
 
 ### [Alternative Architectures](./alternatives.md)
 Architectures we considered and why we rejected them:
@@ -213,7 +213,7 @@ Architectures we considered and why we rejected them:
 ## Related Documentation
 
 - **Detailed Design**: [../design/](../design/)
-- **Implementation Plan**: [../phases/phase-1-single-node-implementation/IMPLEMENTATION_PLAN.md](../phases/phase-1-single-node-equities/IMPLEMENTATION_PLAN.md)
+- **Implementation Plan**: [../phases/phase-1-single-node-implementation/IMPLEMENTATION_PLAN.md](../phases/v1/phase-1-single-node-equities/IMPLEMENTATION_PLAN.md)
 - **Operations**: [../operations/](../operations/)
 - **Testing**: [../testing/](../testing/)
 

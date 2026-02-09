@@ -24,7 +24,7 @@ Welcome to the K2 platform documentation. This README serves as your navigation 
 ### AI Assistants (Claude Code)
 - **Start Here**: [CLAUDE.md](./CLAUDE.md) - Comprehensive AI assistant guidance
 - **Current Version**: v0.1.0 - [Release Notes](../RELEASE-NOTES-v0.1.md) | [Changelog](../CHANGELOG.md) | [Known Issues](../KNOWN-ISSUES.md)
-- **Current Phase**: [Phase 13 OHLCV Analytics](phases/phase-13-ohlcv-analytics/) 🟡 Preview (70%)
+- **Current Phase**: [Phase 13 OHLCV Analytics](phases/v1/phase-13-ohlcv-analytics/) 🟡 Preview (70%)
 - **All Phases**: [Phase Guide](phases/PHASE-GUIDE.md) - Complete overview of 14 phases (0-13)
 
 ---
@@ -89,26 +89,26 @@ Implementation tracking for specific project phases across 14 development phases
 **📘 Complete Phase Guide**: [phases/PHASE-GUIDE.md](phases/PHASE-GUIDE.md) - Comprehensive overview of all 14 phases
 
 **Foundation (Phases 0-3)**: ✅ Complete
-- [Phase 0 - Technical Debt Resolution](phases/phase-0-technical-debt-resolution/)
-- [Phase 1 - Single-Node Implementation](phases/phase-1-single-node-equities/)
-- [Phase 2 - Multi-Source Foundation](phases/phase-2-prep/)
-- [Phase 3 - Demo Enhancements](phases/phase-3-demo-enhancements/)
+- [Phase 0 - Technical Debt Resolution](phases/v1/phase-0-technical-debt-resolution/)
+- [Phase 1 - Single-Node Implementation](phases/v1/phase-1-single-node-equities/)
+- [Phase 2 - Multi-Source Foundation](phases/v1/phase-2-prep/)
+- [Phase 3 - Demo Enhancements](phases/v1/phase-3-demo-enhancements/)
 
 **Operations (Phases 4-7)**: ✅ Complete
-- [Phase 4 - Demo Readiness](phases/phase-4-demo-readiness/)
-- [Phase 5 - Binance Production Resilience](phases/phase-5-binance-production-resilience/)
-- [Phase 6 - CI/CD Infrastructure](phases/phase-6-cicd/)
-- [Phase 7 - End-to-End Testing](phases/phase-7-e2e/)
+- [Phase 4 - Demo Readiness](phases/v1/phase-4-demo-readiness/)
+- [Phase 5 - Binance Production Resilience](phases/v1/phase-5-binance-production-resilience/)
+- [Phase 6 - CI/CD Infrastructure](phases/v1/phase-6-cicd/)
+- [Phase 7 - End-to-End Testing](phases/v1/phase-7-e2e/)
 
 **Streaming (Phases 8-12)**: ✅ Complete
-- [Phase 8 - E2E Demo Validation](phases/phase-8-e2e-demo/)
-- [Phase 9 - Demo Consolidation](phases/phase-9-demo-consolidation/)
-- [Phase 10 - Streaming Crypto Platform](phases/phase-10-streaming-crypto/)
-- [Phase 11 - Production Readiness](phases/phase-11-production-readiness/)
-- [Phase 12 - Flink Bronze Implementation](phases/phase-12-flink-bronze-implementation/)
+- [Phase 8 - E2E Demo Validation](phases/v1/phase-8-e2e-demo/)
+- [Phase 9 - Demo Consolidation](phases/v1/phase-9-demo-consolidation/)
+- [Phase 10 - Streaming Crypto Platform](phases/v1/phase-10-streaming-crypto/)
+- [Phase 11 - Production Readiness](phases/v1/phase-11-production-readiness/)
+- [Phase 12 - Flink Bronze Implementation](phases/v1/phase-12-flink-bronze-implementation/)
 
 **Analytics (Phase 13)**: 🟡 Preview (70% - Security fixes needed for v0.2)
-- [Phase 13 - OHLCV Analytics](phases/phase-13-ohlcv-analytics/) - ⚠️ Known security issues
+- [Phase 13 - OHLCV Analytics](phases/v1/phase-13-ohlcv-analytics/) - ⚠️ Known security issues
 
 **When to read**: Tracking implementation progress, understanding what's built, planning next phases
 
@@ -175,8 +175,8 @@ Architecture and project review documents from staff engineers.
 ## Common Tasks
 
 ### Starting New Work
-1. Check [Current Phase Status](phases/phase-1-single-node-equities/STATUS.md)
-2. Review relevant [Implementation Step](phases/phase-1-single-node-equities/steps/)
+1. Check [Current Phase Status](phases/v1/phase-1-single-node-equities/STATUS.md)
+2. Review relevant [Implementation Step](phases/v1/phase-1-single-node-equities/steps/)
 3. Read related [Design Docs](./design/)
 4. Understand [Testing Requirements](./testing/strategy.md)
 
@@ -189,7 +189,7 @@ Architecture and project review documents from staff engineers.
 ### Making Architectural Changes
 1. Review [Platform Principles](./architecture/platform-principles.md)
 2. Check existing [Technology Decisions](./architecture/README.md#technology-stack)
-3. Create ADR in [DECISIONS.md](phases/phase-1-single-node-equities/DECISIONS.md)
+3. Create ADR in [DECISIONS.md](phases/v1/phase-1-single-node-equities/DECISIONS.md)
 4. Update architecture and design docs
 5. Update reference materials if needed
 

@@ -6,7 +6,7 @@ This directory contains implementation progress tracking and validation guides f
 
 ## 📄 Documents
 
-### [PROGRESS.md](./PROGRESS.md)
+### [PROGRESS.md](PROGRESS.md)
 **Purpose**: Tracks implementation progress, completed work, design decisions, and blockers
 
 **Current Status**: Steps 1-3 Complete (Code), Partial Validation Complete (2026-01-10)
@@ -20,7 +20,7 @@ This directory contains implementation progress tracking and validation guides f
 - Architecture patterns established
 - Next steps
 
-### [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md)
+### [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md)
 **Purpose**: Step-by-step instructions to validate Steps 1-2
 
 **Current Status**: Ready to execute once environment is configured
@@ -187,7 +187,7 @@ open http://localhost:8080
 - [Implementation Plan](../../.claude/plans/rippling-yawning-duckling.md) - Full 16-step plan
 - [Platform Principles](../PLATFORM_PRINCIPLES.md) - Core design philosophy
 - [Market Data Guarantees](../MARKET_DATA_GUARANTEES.md) - Ordering and replay semantics
-- [Main README](../../README.md) - Platform overview
+- [Main README](../../../README.md) - Platform overview
 
 ### Key Design Decisions
 1. **Avro for Schemas**: Binary serialization, schema evolution, type safety
@@ -201,11 +201,11 @@ open http://localhost:8080
 ## 🚀 How to Proceed
 
 ### For First-Time Setup
-1. Read [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md) completely
+1. Read [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md) completely
 2. Install Python 3.13+ following guide instructions
 3. Follow validation steps sequentially
 4. Check off validation checklist
-5. Update [PROGRESS.md](./PROGRESS.md) with results
+5. Update [PROGRESS.md](PROGRESS.md) with results
 6. Commit completed work
 
 ### For Continuing Implementation
@@ -221,9 +221,9 @@ open http://localhost:8080
 ## ❓ Need Help?
 
 ### Common Issues
-- **Python version**: See [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md#issue-python-version-too-old)
-- **Docker unhealthy**: See [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md#issue-docker-service-unhealthy)
-- **Port conflicts**: See [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md#issue-port-already-in-use)
+- **Python version**: See [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md#issue-python-version-too-old)
+- **Docker unhealthy**: See [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md#issue-docker-service-unhealthy)
+- **Port conflicts**: See [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md#issue-port-already-in-use)
 
 ### Troubleshooting Resources
 - Docker logs: `docker logs <service-name>`
@@ -232,7 +232,7 @@ open http://localhost:8080
 - Clean restart: `docker compose down -v && docker compose up -d`
 
 ### Getting Support
-- Check troubleshooting sections in [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md)
+- Check troubleshooting sections in [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md)
 - Review service logs for specific error messages
 - Verify all prerequisites are met
 - Ensure Docker Desktop has sufficient resources (8GB RAM minimum)

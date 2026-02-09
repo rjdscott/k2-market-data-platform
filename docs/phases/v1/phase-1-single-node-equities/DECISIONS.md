@@ -2599,7 +2599,7 @@ None yet.
 2. Add to index table
 3. Use template above
 4. Link from relevant step file's "Notes & Decisions" section
-5. Update [PROGRESS.md](./PROGRESS.md) with decision reference
+5. Update [PROGRESS.md](PROGRESS.md) with decision reference
 
 ### Decision Lifecycle
 

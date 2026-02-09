@@ -170,7 +170,7 @@
 
 #### Part 3: Implementation (10 min)
 1. [Phase Guide](./phases/PHASE-GUIDE.md) - What's been built in each phase
-2. [Phase 2 Completion Report](./phases/phase-2-prep/COMPLETION-REPORT.md) - Recent work (V2 schema + Binance)
+2. [Phase 2 Completion Report](phases/v1/phase-2-prep/COMPLETION-REPORT.md) - Recent work (V2 schema + Binance)
 3. [Streaming Sources Architecture](./architecture/streaming-sources.md) - How to add new data sources
    - Generic pattern (line 15-200)
    - Binance reference implementation (line 202-400)
@@ -264,11 +264,11 @@ How we ensure correctness
 What's been built and when
 
 - [Phase Guide](./phases/PHASE-GUIDE.md) - Visual timeline and FAQ
-- [Phase 0 - Technical Debt Resolution](./phases/phase-0-technical-debt-resolution/) COMPLETE
-- [Phase 1 - Single-Node Implementation](./phases/phase-1-single-node-equities/) COMPLETE
-- [Phase 2 - Multi-Source Foundation](./phases/phase-2-prep/) COMPLETE (V2 Schema + Binance)
-- [Phase 3 - Demo Enhancements](./phases/phase-3-demo-enhancements/) COMPLETE (Circuit breaker, Hybrid queries, Cost model)
-- [Phase 4 - Demo Readiness](./phases/phase-4-demo-readiness/) COMPLETE (9/10 steps, 135/100 score)
+- [Phase 0 - Technical Debt Resolution](phases/v1/phase-0-technical-debt-resolution/) COMPLETE
+- [Phase 1 - Single-Node Implementation](phases/v1/phase-1-single-node-equities/) COMPLETE
+- [Phase 2 - Multi-Source Foundation](phases/v1/phase-2-prep/) COMPLETE (V2 Schema + Binance)
+- [Phase 3 - Demo Enhancements](phases/v1/phase-3-demo-enhancements/) COMPLETE (Circuit breaker, Hybrid queries, Cost model)
+- [Phase 4 - Demo Readiness](phases/v1/phase-4-demo-readiness/) COMPLETE (9/10 steps, 135/100 score)
 
 ### Reference (Quick Lookup)
 Field definitions, APIs, configuration

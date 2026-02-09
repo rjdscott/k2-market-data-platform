@@ -24,11 +24,11 @@ Phase 5 addresses critical production readiness issues in the Binance streaming 
 
 ## Quick Links
 
-- [Implementation Plan](./IMPLEMENTATION_PLAN.md) - Full 9-step implementation plan
-- [Progress Tracker](./PROGRESS.md) - Detailed progress and timeline
-- [Status](./STATUS.md) - Current blockers and status
-- [Validation Guide](./VALIDATION_GUIDE.md) - How to validate Phase 5
-- [Success Criteria](./reference/success-criteria.md) - Production readiness checklist
+- [Implementation Plan](IMPLEMENTATION_PLAN.md) - Full 9-step implementation plan
+- [Progress Tracker](PROGRESS.md) - Detailed progress and timeline
+- [Status](STATUS.md) - Current blockers and status
+- [Validation Guide](VALIDATION_GUIDE.md) - How to validate Phase 5
+- [Success Criteria](reference/success-criteria.md) - Production readiness checklist
 
 ---
 
@@ -199,7 +199,7 @@ Week 3: Deployment & Validation
 ## Reference
 
 ### Related Documentation
-- [Binance Streaming Runbook](../../operations/runbooks/binance-streaming.md)
+- [Binance Streaming Runbook](../../../operations/runbooks/binance-streaming.md)
 - [Circuit Breaker](../../architecture/circuit-breaker.md)
 - [Prometheus Metrics](../../operations/monitoring/prometheus-metrics.md)
 

@@ -257,7 +257,7 @@ If v2 migration fails:
 ## References
 
 - [Avro Schema Evolution](https://avro.apache.org/docs/current/spec.html#Schema+Resolution)
-- [v2 Schema Specification](./v2-schema-spec.md)
+- [v2 Schema Specification](v2-schema-spec.md)
 - [FIX Protocol Field Names](https://www.fixtrading.org/standards/)
 
 ---

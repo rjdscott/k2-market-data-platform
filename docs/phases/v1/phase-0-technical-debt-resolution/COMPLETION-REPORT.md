@@ -369,17 +369,17 @@ All criteria met ✅
 ## References
 
 ### Documentation
-- [TECHNICAL_DEBT.md](../../TECHNICAL_DEBT.md) - Master tracker with all 7 items
-- [Phase 0 README](./README.md) - Phase overview
-- [Phase 0 PROGRESS](./PROGRESS.md) - Detailed progress tracking
-- [Phase 0 DECISIONS](./DECISIONS.md) - Technical decisions
+- [TECHNICAL_DEBT.md](../../../TECHNICAL_DEBT.md) - Master tracker with all 7 items
+- [Phase 0 README](README.md) - Phase overview
+- [Phase 0 PROGRESS](PROGRESS.md) - Detailed progress tracking
+- [Phase 0 DECISIONS](DECISIONS.md) - Technical decisions
 
 ### Code
 - [test_consumer_validation.py](../../../tests-backup/unit/test_consumer_validation.py)
 - [test_metrics_labels.py](../../../tests-backup/unit/test_metrics_labels.py)
-- [validate_metrics_labels.py](../../../scripts/validate_metrics_labels.py)
-- [dead_letter_queue.py](../../../src/k2/ingestion/dead_letter_queue.py)
-- [circuit_breaker.py](../../../src/k2/common/circuit_breaker.py)
+- [validate_metrics_labels.py](../../../../scripts/validate_metrics_labels.py)
+- [dead_letter_queue.py](../../../../src/k2/ingestion/dead_letter_queue.py)
+- [circuit_breaker.py](../../../../src/k2/common/circuit_breaker.py)
 
 ### Related Phases
 - [Phase 1: Single-Node Implementation](../phase-1-single-node-equities/) - Foundation

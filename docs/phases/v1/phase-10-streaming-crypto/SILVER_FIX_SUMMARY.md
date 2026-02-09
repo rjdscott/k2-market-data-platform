@@ -299,9 +299,9 @@ Size resources to actual workload:
 
 ## Related Documentation
 
-- [SILVER_TRANSFORMATION_STATUS.md](./SILVER_TRANSFORMATION_STATUS.md) - Original investigation
-- [DECISIONS.md](./DECISIONS.md) - Architectural decisions
-- [step-11-silver-transformation.md](./steps/step-11-silver-transformation.md) - Implementation plan
+- [SILVER_TRANSFORMATION_STATUS.md](SILVER_TRANSFORMATION_STATUS.md) - Original investigation
+- [DECISIONS.md](DECISIONS.md) - Architectural decisions
+- [step-11-silver-transformation.md](steps/step-11-silver-transformation.md) - Implementation plan
 
 ---
 

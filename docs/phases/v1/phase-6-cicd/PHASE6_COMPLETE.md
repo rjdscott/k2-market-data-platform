@@ -667,10 +667,10 @@ make test-soak-1h            # 1-hour soak test
 ```
 
 ### Documentation Links
-- [CI/CD Pipeline](../../operations/ci-cd-pipeline.md) - Comprehensive reference
-- [Quick Start Guide](../../operations/ci-cd-quickstart.md) - 5-minute read
-- [Troubleshooting](../../operations/runbooks/ci-cd-troubleshooting.md) - 15+ scenarios
-- [Validation Checklist](./VALIDATION_CHECKLIST.md) - End-to-end verification
+- [CI/CD Pipeline](../../../operations/ci-cd-pipeline.md) - Comprehensive reference
+- [Quick Start Guide](../../../operations/ci-cd-quickstart.md) - 5-minute read
+- [Troubleshooting](../../../operations/runbooks/ci-cd-troubleshooting.md) - 15+ scenarios
+- [Validation Checklist](VALIDATION_CHECKLIST.md) - End-to-end verification
 
 ### Workflow Files
 - [PR Validation](.github/workflows/pr-validation.yml)

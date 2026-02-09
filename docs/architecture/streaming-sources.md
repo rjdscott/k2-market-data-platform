@@ -557,7 +557,7 @@ async def batch_produce(self):
 - [Schema Design V2](./schema-design-v2.md) - V2 hybrid schema approach
 
 ### Implementation
-- [Phase 2 Prep Completion Report](../phases/phase-2-prep/COMPLETION-REPORT.md) - Binance integration details
+- [Phase 2 Prep Completion Report](../phases/v1/phase-2-prep/COMPLETION-REPORT.md) - Binance integration details
 - [Data Dictionary V2](../reference/data-dictionary-v2.md) - V2 schema field reference
 
 ### Operations

@@ -445,7 +445,7 @@ To validate Step 3 implementation:
 - Replay engine
 - Query CLI
 
-See [`PROGRESS.md`](./PROGRESS.md) for full implementation roadmap.
+See [`PROGRESS.md`](PROGRESS.md) for full implementation roadmap.
 
 ---
 

@@ -67,8 +67,8 @@ http://localhost:8090
 ```
 
 **Documentation**:
-- [Bronze Streaming Troubleshooting Runbook](../../operations/runbooks/bronze-streaming-troubleshooting.md)
-- [Spark Iceberg Queries Notebook](../../../demos/notebooks/spark-iceberg-queries.ipynb)
+- [Bronze Streaming Troubleshooting Runbook](../../../operations/runbooks/bronze-streaming-troubleshooting.md)
+- [Spark Iceberg Queries Notebook](../../../../demos/notebooks/spark-iceberg-queries.ipynb)
 
 ### Next Steps
 
@@ -88,11 +88,11 @@ http://localhost:8090
 
 ## Quick Links
 
-- [Implementation Plan](./IMPLEMENTATION_PLAN.md) - Detailed 12-step implementation plan
-- [Progress Tracker](./PROGRESS.md) - Step-by-step progress tracking
-- [Status](./STATUS.md) - Current blockers and status
-- [Validation Guide](./VALIDATION_GUIDE.md) - Acceptance criteria and validation
-- [Decisions Log](./DECISIONS.md) - Key architectural decisions
+- [Implementation Plan](IMPLEMENTATION_PLAN.md) - Detailed 12-step implementation plan
+- [Progress Tracker](PROGRESS.md) - Step-by-step progress tracking
+- [Status](STATUS.md) - Current blockers and status
+- [Validation Guide](VALIDATION_GUIDE.md) - Acceptance criteria and validation
+- [Decisions Log](DECISIONS.md) - Key architectural decisions
 
 ---
 

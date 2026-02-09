@@ -59,7 +59,7 @@ Phase 10 represents a complete platform refactor to transform the K2 Market Data
 
 ## Recent Decisions
 
-See [DECISIONS.md](./DECISIONS.md) for detailed decisions.
+See [DECISIONS.md](DECISIONS.md) for detailed decisions.
 
 **Key Decisions**:
 - Use Spark Streaming (not Python consumers)
@@ -136,12 +136,12 @@ Once implementation begins, will track:
 
 ## Reference Links
 
-- [README](./README.md) - Phase overview
-- [Implementation Plan](./IMPLEMENTATION_PLAN.md) - Detailed steps
-- [Progress Tracker](./PROGRESS.md) - Step-by-step progress
-- [Validation Guide](./VALIDATION_GUIDE.md) - Acceptance criteria
+- [README](README.md) - Phase overview
+- [Implementation Plan](IMPLEMENTATION_PLAN.md) - Detailed steps
+- [Progress Tracker](PROGRESS.md) - Step-by-step progress
+- [Validation Guide](VALIDATION_GUIDE.md) - Acceptance criteria
 
 ---
 
 **For updates**, modify this file as work progresses.
-**For detailed progress**, see [PROGRESS.md](./PROGRESS.md).
+**For detailed progress**, see [PROGRESS.md](PROGRESS.md).

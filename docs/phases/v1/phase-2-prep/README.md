@@ -30,11 +30,11 @@ Phase 2 Prep establishes the architectural foundation required for Phase 2 Demo 
 
 ## Quick Links
 
-- [Implementation Plan](./IMPLEMENTATION_PLAN.md) - Full 15-step implementation plan
-- [Progress Tracker](./PROGRESS.md) - Detailed progress with % complete
-- [Decision Log](./DECISIONS.md) - Architectural decision records
-- [Validation Guide](./VALIDATION_GUIDE.md) - How to validate phase completion
-- [Status Snapshot](./STATUS.md) - Current status and blockers
+- [Implementation Plan](IMPLEMENTATION_PLAN.md) - Full 15-step implementation plan
+- [Progress Tracker](PROGRESS.md) - Detailed progress with % complete
+- [Decision Log](DECISIONS.md) - Architectural decision records
+- [Validation Guide](VALIDATION_GUIDE.md) - How to validate phase completion
+- [Status Snapshot](STATUS.md) - Current status and blockers
 
 ---
 
@@ -172,10 +172,10 @@ pytest tests-backup/integration/ -v
 
 ### Start Implementation
 
-1. **Read the plan**: Review [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)
+1. **Read the plan**: Review [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
 2. **Start with Step 00.1**: [Design v2 Schemas](./steps/step-00.1-design-v2-schemas.md)
-3. **Track progress**: Update [PROGRESS.md](./PROGRESS.md) after each substep
-4. **Log decisions**: Document in [DECISIONS.md](./DECISIONS.md)
+3. **Track progress**: Update [PROGRESS.md](PROGRESS.md) after each substep
+4. **Log decisions**: Document in [DECISIONS.md](DECISIONS.md)
 5. **Commit per substep**: Use format `feat(schema): <description>`
 
 ---
@@ -194,10 +194,10 @@ pytest tests-backup/integration/ -v
 
 ## Reference Documentation
 
-- [Schema Evolution Guide](./reference/schema-evolution-guide.md) - Migration patterns and best practices
-- [Binance API Reference](./reference/binance-api-reference.md) - WebSocket API documentation
-- [v2 Schema Specification](./reference/v2-schema-spec.md) - Field-by-field v2 schema docs
-- [Testing Guide](./reference/testing-guide.md) - Test patterns for Phase 2 Prep
+- [Schema Evolution Guide](reference/schema-evolution-guide.md) - Migration patterns and best practices
+- [Binance API Reference](reference/binance-api-reference.md) - WebSocket API documentation
+- [v2 Schema Specification](reference/v2-schema-spec.md) - Field-by-field v2 schema docs
+- [Testing Guide](reference/testing-guide.md) - Test patterns for Phase 2 Prep
 
 ---
 

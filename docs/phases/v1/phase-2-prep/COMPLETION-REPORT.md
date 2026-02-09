@@ -559,16 +559,16 @@ All criteria met ✅
 ## References
 
 ### Documentation
-- [Phase 2 README](./README.md) - Phase overview
-- [Phase 2 PROGRESS](./PROGRESS.md) - Detailed progress tracking
-- [Phase 2 DECISIONS](./DECISIONS.md) - All 7 ADRs
-- [V2 Schema Specification](./reference/v2-schema-spec.md)
-- [Binance API Reference](./reference/binance-api-reference.md)
+- [Phase 2 README](README.md) - Phase overview
+- [Phase 2 PROGRESS](PROGRESS.md) - Detailed progress tracking
+- [Phase 2 DECISIONS](DECISIONS.md) - All 7 ADRs
+- [V2 Schema Specification](reference/v2-schema-spec.md)
+- [Binance API Reference](reference/binance-api-reference.md)
 
 ### Code
-- [binance_client.py](../../../src/k2/ingestion/binance_client.py)
-- [message_builders.py](../../../src/k2/ingestion/message_builders.py)
-- [trade_v2.avsc](../../../src/k2/schemas/trade_v2.avsc)
+- [binance_client.py](../../../../src/k2/ingestion/binance_client.py)
+- [message_builders.py](../../../../src/k2/ingestion/message_builders.py)
+- [trade_v2.avsc](../../../../src/k2/schemas/trade_v2.avsc)
 - [test_binance_client.py](../../../tests-backup/unit/test_binance_client.py)
 
 ### Related Phases

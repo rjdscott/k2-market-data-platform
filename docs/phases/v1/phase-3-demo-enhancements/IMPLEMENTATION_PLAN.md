@@ -9,16 +9,16 @@
 
 ## Quick Links
 
-- [Progress Tracker](./PROGRESS.md) - Detailed progress
-- [Decision Log](./DECISIONS.md) - Architectural decision records
-- [Verification Checklist](./reference/verification-checklist.md) - Final validation criteria
-- [Success Criteria](./reference/success-criteria.md) - Demo review readiness
+- [Progress Tracker](PROGRESS.md) - Detailed progress
+- [Decision Log](DECISIONS.md) - Architectural decision records
+- [Verification Checklist](reference/verification-checklist.md) - Final validation criteria
+- [Success Criteria](reference/success-criteria.md) - Demo review readiness
 
 ---
 
 ## Executive Summary
 
-Phase 2 transforms the K2 platform from a solid Staff Engineer portfolio piece to a compelling Principal Engineer demonstration. Based on the [Principal Data Engineer Demo Review](../../reviews/2026-01-11-principal-data-engineer-demo-review.md), we address 7 key issues:
+Phase 2 transforms the K2 platform from a solid Staff Engineer portfolio piece to a compelling Principal Engineer demonstration. Based on the [Principal Data Engineer Demo Review](../../../reviews/2026-01-11-principal-data-engineer-demo-review.md), we address 7 key issues:
 
 **Core Enhancements**:
 - **Platform Positioning**: Clear articulation of what K2 IS and ISN'T
@@ -184,7 +184,7 @@ Final Validation (Step 9)
 
 ## Architectural Decisions (Summary)
 
-See [DECISIONS.md](./DECISIONS.md) for complete decision records.
+See [DECISIONS.md](DECISIONS.md) for complete decision records.
 
 ### Anticipated Decisions
 1. **Redis vs RocksDB for Sequence Tracker** - Redis for operational simplicity
@@ -224,18 +224,18 @@ See [DECISIONS.md](./DECISIONS.md) for complete decision records.
 Phase 2 not yet started. Begin with **Step 01: Platform Positioning**.
 
 ### Development Workflow
-1. Update [PROGRESS.md](./PROGRESS.md) as each step completes
-2. Log decisions in [DECISIONS.md](./DECISIONS.md)
-3. Verify against [Verification Checklist](./reference/verification-checklist.md)
+1. Update [PROGRESS.md](PROGRESS.md) as each step completes
+2. Log decisions in [DECISIONS.md](DECISIONS.md)
+3. Verify against [Verification Checklist](reference/verification-checklist.md)
 
 ---
 
 ## See Also
 
 - [Phase 1 Implementation Plan](../phase-1-single-node-equities/IMPLEMENTATION_PLAN.md)
-- [Principal Data Engineer Demo Review](../../reviews/2026-01-11-principal-data-engineer-demo-review.md)
-- [Platform Principles](../../architecture/platform-principles.md)
-- [Testing Strategy](./reference/testing-summary.md)
+- [Principal Data Engineer Demo Review](../../../reviews/2026-01-11-principal-data-engineer-demo-review.md)
+- [Platform Principles](../../../architecture/platform-principles.md)
+- [Testing Strategy](reference/testing-summary.md)
 
 ---
 

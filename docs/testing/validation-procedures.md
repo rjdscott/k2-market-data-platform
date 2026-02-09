@@ -536,7 +536,7 @@ curl http://localhost:9000/minio/health/live
 
 ### Reviews
 - [Consumer Validation Complete](../reviews/2026-01-13-consumer-validation-complete.md)
-- [Phase 0 Completion Report](../phases/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
+- [Phase 0 Completion Report](../phases/v1/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
 - [Phase 2 Prep Assessment](../reviews/2026-01-13-phase-2-prep-assessment.md)
 
 ### Related Documentation

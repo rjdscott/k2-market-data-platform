@@ -358,8 +358,8 @@ Acceptance Criteria:
 - Netflix Flink Usage: [Netflix Tech Blog](https://netflixtechblog.com)
 
 ### Internal Context
-- [Phase 10 Progress](../../phases/phase-10-streaming-crypto/PROGRESS.md) - Current status
-- [Phase 10 Decisions](../../phases/phase-10-streaming-crypto/DECISIONS.md) - Recent ADRs
+- [Phase 10 Progress](../../phases/v1/phase-10-streaming-crypto/PROGRESS.md) - Current status
+- [Phase 10 Decisions](../../phases/v1/phase-10-streaming-crypto/DECISIONS.md) - Recent ADRs
 - [Bronze Binance Job](../../../src/k2/spark/jobs/streaming/bronze_binance_ingestion.py) - Implementation
 
 ---

@@ -1050,7 +1050,7 @@ Total: 50+ MB, 700+ trades
   - Solution: Added explicit `producer.flush()` every 10 trades
   - Impact: Both Binance and Kraken services affected
   - Result: 100% delivery rate, flush latency <1ms
-  - See [Decision #008](./DECISIONS.md#decision-008-explicit-producer-flush-every-10-trades) for details
+  - See [Decision #008](DECISIONS.md#decision-008-explicit-producer-flush-every-10-trades) for details
 
 **Time Estimate**: 8 hours
 **Actual Time**: 6 hours
@@ -1251,8 +1251,8 @@ def test_checkpoint_recovery():
 ---
 
 **For detailed step-by-step guides**, see [steps/](./steps/) directory.
-**For validation procedures**, see [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md).
-**For current status**, see [STATUS.md](./STATUS.md) and [PROGRESS.md](./PROGRESS.md).
+**For validation procedures**, see [VALIDATION_GUIDE.md](VALIDATION_GUIDE.md).
+**For current status**, see [STATUS.md](STATUS.md) and [PROGRESS.md](PROGRESS.md).
 
 ---
 

@@ -248,7 +248,7 @@ Configs: cleanup.policy=compact,segment.ms=3600000,min.cleanable.dirty.ratio=0.0
 - Increase Silver Binance trigger: 30s → 60s (immediate)
 - Add watermarking for late data (Gold layer)
 
-**Documentation**: [STREAMING_PIPELINE_ANSWERS.md](../../operations/STREAMING_PIPELINE_ANSWERS.md#1-data-volume--performance-expectations)
+**Documentation**: [STREAMING_PIPELINE_ANSWERS.md](../../../operations/STREAMING_PIPELINE_ANSWERS.md#1-data-volume--performance-expectations)
 
 ---
 
@@ -280,7 +280,7 @@ Configs: cleanup.policy=compact,segment.ms=3600000,min.cleanable.dirty.ratio=0.0
 2. **Before Production**: Prometheus + Grafana setup
 3. **Production**: Alert rules + PagerDuty integration
 
-**Documentation**: [STREAMING_MONITORING_SPEC.md](../../operations/STREAMING_MONITORING_SPEC.md)
+**Documentation**: [STREAMING_MONITORING_SPEC.md](../../../operations/STREAMING_MONITORING_SPEC.md)
 
 ---
 
@@ -317,7 +317,7 @@ ORDER BY occurrence_count DESC;
 - Archive to cold storage after 30 days
 - Purge after 90 days
 
-**Documentation**: [Operational Runbook](../../operations/runbooks/streaming-pipeline-operations.md#incident-3-high-dlq-rate-data-quality-issue)
+**Documentation**: [Operational Runbook](../../../operations/runbooks/streaming-pipeline-operations.md#incident-3-high-dlq-rate-data-quality-issue)
 
 ---
 
@@ -352,7 +352,7 @@ docker exec k2-producer-binance python -m k2.producers.binance_websocket --rate 
 watch -n 30 'docker stats --no-stream | grep -E "bronze|silver"'
 ```
 
-**Documentation**: [STREAMING_PIPELINE_ANSWERS.md](../../operations/STREAMING_PIPELINE_ANSWERS.md#4-resource-allocation-verification)
+**Documentation**: [STREAMING_PIPELINE_ANSWERS.md](../../../operations/STREAMING_PIPELINE_ANSWERS.md#4-resource-allocation-verification)
 
 ---
 
@@ -494,7 +494,7 @@ silver_kraken_trades ──┘
 
 **Estimated Time**: 8 hours (per Phase 5 plan)
 
-**Reference**: [PHASE-5-NEXT-STEPS.md](./PHASE-5-NEXT-STEPS.md#step-12-gold-aggregation-job-8-hours)
+**Reference**: [PHASE-5-NEXT-STEPS.md](PHASE-5-NEXT-STEPS.md#step-12-gold-aggregation-job-8-hours)
 
 ---
 
@@ -540,8 +540,8 @@ silver_kraken_trades ──┘
 
 ## Related Documentation
 
-- [Performance Analysis](../../operations/STREAMING_PIPELINE_ANSWERS.md)
-- [Operational Runbook](../../operations/runbooks/streaming-pipeline-operations.md)
-- [Monitoring Specification](../../operations/STREAMING_MONITORING_SPEC.md)
-- [Architectural Decisions](./DECISIONS.md)
-- [Gold Layer Implementation Plan](./PHASE-5-NEXT-STEPS.md#step-12-gold-aggregation-job-8-hours)
+- [Performance Analysis](../../../operations/STREAMING_PIPELINE_ANSWERS.md)
+- [Operational Runbook](../../../operations/runbooks/streaming-pipeline-operations.md)
+- [Monitoring Specification](../../../operations/STREAMING_MONITORING_SPEC.md)
+- [Architectural Decisions](DECISIONS.md)
+- [Gold Layer Implementation Plan](PHASE-5-NEXT-STEPS.md#step-12-gold-aggregation-job-8-hours)

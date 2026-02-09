@@ -35,8 +35,8 @@ Phase 8 provides comprehensive end-to-end validation of all K2 platform demo mat
 
 ## Quick Links
 
-- [STATUS.md](./STATUS.md) - Current validation metrics and completion status
-- [PROGRESS.md](./PROGRESS.md) - Real-time step-by-step progress tracking  
+- [STATUS.md](STATUS.md) - Current validation metrics and completion status
+- [PROGRESS.md](PROGRESS.md) - Real-time step-by-step progress tracking  
 - [VALIDATION_GUIDE.md](./VALIDATION_GUIDE.md) - Success criteria and validation methods
 - [EXECUTIVE_RUNBOOK.md](./EXECUTIVE_RUNBOOK.md) - 12-minute demo sequence
 - [PERFORMANCE_VALIDATION.md](./PERFORMANCE_VALIDATION.md) - Evidence-based performance results
@@ -45,11 +45,11 @@ Phase 8 provides comprehensive end-to-end validation of all K2 platform demo mat
 
 ## Current Demo Materials
 
-**Active Location**: [`/demos/`](../../../demos/README.md)
+**Active Location**: [`/demos/`](../../../../demos/README.md)
 
 The demo materials validated in this phase are now maintained in:
-- **Notebooks**: [`demos/notebooks/`](../../../demos/notebooks/README.md) - Executive and technical demos
-- **Scripts**: [`demos/scripts/`](../../../demos/scripts/README.md) - Demo execution and utilities
+- **Notebooks**: [`demos/notebooks/`](../../../../demos/notebooks/README.md) - Executive and technical demos
+- **Scripts**: [`demos/scripts/`](../../../../demos/scripts/README.md) - Demo execution and utilities
 - **Documentation**: [`demos/docs/`](../../../demos/docs/) and [`demos/reference/`](../../../demos/reference/) - Quick-start guides and reference materials
 
 This consolidation (Phase 9) maintains all validated materials from this phase while improving organization and accessibility.
@@ -60,12 +60,12 @@ This consolidation (Phase 9) maintains all validated materials from this phase w
 
 | Step | Title | Priority | Status | Completed | Score |
 |------|-------|----------|--------|-----------|-------|
-| | [01](./steps/step-01-environment-validation.md) | Environment Validation | 🔴 CRITICAL | ✅ Complete | 2026-01-17 | 95/100 |
-| | [02](./steps/step-02-demo-script-validation.md) | Demo Script Validation | 🔴 CRITICAL | ✅ Complete | 2026-01-17 | 100/100 |
-| | [03](./steps/step-03-jupyter-validation.md) | Jupyter Notebook Validation | 🔴 CRITICAL | ✅ Complete | 2026-01-17 | 98/100 |
-| | [04](./steps/step-04-executive-flow-validation.md) | Executive Demo Flow Validation | 🟡 HIGH | ✅ Complete | 2026-01-17 | 100/100 |
-| | [05](./steps/step-05-contingency-testing.md) | Contingency Testing | 🟡 HIGH | ✅ Complete | 2026-01-17 | 98/100 |
-| | [06](./steps/step-06-performance-validation.md) | Performance Validation | 🟡 HIGH | ✅ Complete | 2026-01-17 | 96/100 |
+| | [01](steps/step-01-environment-validation.md) | Environment Validation | 🔴 CRITICAL | ✅ Complete | 2026-01-17 | 95/100 |
+| | [02](steps/step-02-demo-script-validation.md) | Demo Script Validation | 🔴 CRITICAL | ✅ Complete | 2026-01-17 | 100/100 |
+| | [03](steps/step-03-jupyter-validation.md) | Jupyter Notebook Validation | 🔴 CRITICAL | ✅ Complete | 2026-01-17 | 98/100 |
+| | [04](steps/step-04-executive-flow-validation.md) | Executive Demo Flow Validation | 🟡 HIGH | ✅ Complete | 2026-01-17 | 100/100 |
+| | [05](steps/step-05-contingency-testing.md) | Contingency Testing | 🟡 HIGH | ✅ Complete | 2026-01-17 | 98/100 |
+| | [06](steps/step-06-performance-validation.md) | Performance Validation | 🟡 HIGH | ✅ Complete | 2026-01-17 | 96/100 |
 
 **Day 1**: ✅ COMPLETED Steps 01-03 (Environment, Scripts, Jupyter) - 7 hours
 **Day 1**: ✅ COMPLETED Steps 04-06 (Executive Flow, Contingency, Performance) - 7 hours
@@ -168,8 +168,8 @@ uv run pytest tests/e2e/ -v
 ```
 
 **Progress Tracking**:
-- Update [PROGRESS.md](./PROGRESS.md) after each step completion
-- Record validation results in [STATUS.md](./STATUS.md)
+- Update [PROGRESS.md](PROGRESS.md) after each step completion
+- Record validation results in [STATUS.md](STATUS.md)
 - Document any issues encountered in step-specific files
 
 ---

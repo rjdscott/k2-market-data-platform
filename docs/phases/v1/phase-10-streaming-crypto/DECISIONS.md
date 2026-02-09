@@ -39,7 +39,7 @@ Deserialization happens at Silver layer using Spark's native from_avro().
 ### References
 
 - [Medallion Architecture Best Practices](https://www.databricks.com/glossary/medallion-architecture)
-- [Operational Runbook](../../operations/runbooks/streaming-pipeline-operations.md)
+- [Operational Runbook](../../../operations/runbooks/streaming-pipeline-operations.md)
 
 ---
 
@@ -205,8 +205,8 @@ annotations:
 
 ### References
 
-- [Bronze/Silver Review](./BRONZE_SILVER_REVIEW_COMPLETE.md#3-performance-tuning)
-- [Operational Runbook](../../operations/runbooks/streaming-pipeline-operations.md#incident-2-silver-job-falling-behind)
+- [Bronze/Silver Review](BRONZE_SILVER_REVIEW_COMPLETE.md#3-performance-tuning)
+- [Operational Runbook](../../../operations/runbooks/streaming-pipeline-operations.md#incident-2-silver-job-falling-behind)
 
 ---
 
@@ -412,8 +412,8 @@ Rejected because:
 - [Medallion Architecture Best Practices](https://www.databricks.com/glossary/medallion-architecture)
 - [Decision #010: Bronze Layer Raw Bytes Pattern](#decision-010-bronze-layer-raw-bytes-pattern)
 - [Decision #011: Silver Validation with DLQ](#decision-011-silver-validation-with-dead-letter-queue)
-- [Gold Aggregation Job](../../../src/k2/spark/jobs/streaming/gold_aggregation.py)
-- [Operational Runbook](../../operations/runbooks/streaming-pipeline-operations.md)
+- [Gold Aggregation Job](../../../../src/k2/spark/jobs/streaming/gold_aggregation.py)
+- [Operational Runbook](../../../operations/runbooks/streaming-pipeline-operations.md)
 
 ---
 

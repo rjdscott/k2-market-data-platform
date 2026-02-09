@@ -10,10 +10,10 @@
 
 ## Quick Links
 
-- [📊 Progress Tracker](./PROGRESS.md) - Detailed progress and timeline
-- [📝 Decision Log](./DECISIONS.md) - Architectural decision records
-- [✅ Verification Checklist](./reference/verification-checklist.md) - Final validation criteria
-- [🎯 Success Criteria](./reference/success-criteria.md) - Portfolio review readiness
+- [📊 Progress Tracker](PROGRESS.md) - Detailed progress and timeline
+- [📝 Decision Log](DECISIONS.md) - Architectural decision records
+- [✅ Verification Checklist](reference/verification-checklist.md) - Final validation criteria
+- [🎯 Success Criteria](reference/success-criteria.md) - Portfolio review readiness
 
 ---
 
@@ -210,7 +210,7 @@ Documentation (Step 16)
 
 ## Architectural Decisions (Summary)
 
-See [DECISIONS.md](./DECISIONS.md) for complete decision records.
+See [DECISIONS.md](DECISIONS.md) for complete decision records.
 
 ### Key Decisions
 1. **DuckDB over Spark** - Embedded simplicity, sub-second queries, no cluster management
@@ -224,7 +224,7 @@ See [DECISIONS.md](./DECISIONS.md) for complete decision records.
 
 ## Testing Strategy
 
-See [Testing Summary](./reference/testing-summary.md) for complete strategy.
+See [Testing Summary](reference/testing-summary.md) for complete strategy.
 
 ### Coverage Targets
 - **Unit tests**: 80%+ coverage for business logic
@@ -271,18 +271,18 @@ See [Phase 2: Demo Enhancements](../phase-3-demo-enhancements/) for the next imp
 - Cost model documentation
 
 ### Development Workflow
-1. Update [PROGRESS.md](./PROGRESS.md) as each step completes
-2. Log decisions in [DECISIONS.md](./DECISIONS.md)
-3. Verify against [Verification Checklist](./reference/verification-checklist.md)
+1. Update [PROGRESS.md](PROGRESS.md) as each step completes
+2. Log decisions in [DECISIONS.md](DECISIONS.md)
+3. Verify against [Verification Checklist](reference/verification-checklist.md)
 
 ---
 
 ## See Also
 
-- [📋 Verification Checklist](./reference/verification-checklist.md) - Final validation before review
-- [📈 Testing Strategy](./reference/testing-summary.md) - Comprehensive testing approach
-- [🏗️ Architectural Decisions](./reference/architectural-decisions.md) - Trade-offs and rationale
-- [🎯 Success Criteria](./reference/success-criteria.md) - Portfolio review readiness
+- [📋 Verification Checklist](reference/verification-checklist.md) - Final validation before review
+- [📈 Testing Strategy](reference/testing-summary.md) - Comprehensive testing approach
+- [🏗️ Architectural Decisions](reference/architectural-decisions.md) - Trade-offs and rationale
+- [🎯 Success Criteria](reference/success-criteria.md) - Portfolio review readiness
 
 ---
 

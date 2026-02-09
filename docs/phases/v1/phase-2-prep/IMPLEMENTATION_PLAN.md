@@ -489,10 +489,10 @@ Add live cryptocurrency data streaming to demonstrate:
 ## Reference Links
 
 - [Full Implementation Plan](/Users/rjdscott/.claude/plans/joyful-crafting-orbit.md)
-- [Progress Tracking](./PROGRESS.md)
-- [Decision Log](./DECISIONS.md)
-- [Validation Guide](./VALIDATION_GUIDE.md)
-- [Status Snapshot](./STATUS.md)
+- [Progress Tracking](PROGRESS.md)
+- [Decision Log](DECISIONS.md)
+- [Validation Guide](VALIDATION_GUIDE.md)
+- [Status Snapshot](STATUS.md)
 
 ---
 
