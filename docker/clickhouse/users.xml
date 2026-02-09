@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<!--
+  K2 Market Data Platform v2 - ClickHouse Users
+-->
+<clickhouse>
+    <users>
+        <!-- Default user (internal) -->
+        <default>
+            <password></password>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+        </default>
+
+        <!-- K2 application user -->
+        <k2_user>
+            <!-- Password set via environment variable CLICKHOUSE_PASSWORD -->
+            <password></password>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>1</access_management>
+        </k2_user>
+    </users>
+
+    <quotas>
+        <default>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </default>
+    </quotas>
+</clickhouse>

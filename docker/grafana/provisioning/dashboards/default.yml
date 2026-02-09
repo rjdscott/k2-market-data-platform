@@ -1,0 +1,14 @@
+# K2 Market Data Platform v2 - Grafana Dashboard Provisioning
+apiVersion: 1
+
+providers:
+  - name: 'K2 v2 Dashboards'
+    orgId: 1
+    folder: 'K2 Platform v2'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: true
