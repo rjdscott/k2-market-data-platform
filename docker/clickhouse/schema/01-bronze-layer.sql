@@ -7,7 +7,7 @@
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 -- ============================================================================
--- Step 1: Kafka Engine Consumer (from NORMALIZED topics)
+-- Step 1: Kafka Engine Consumer (from RAW topics - JSON format)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS k2.trades_normalized_queue (
@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS k2.trades_normalized_queue (
 ) ENGINE = Kafka()
 SETTINGS
     kafka_broker_list = 'redpanda:9092',
-    kafka_topic_list = 'market.crypto.trades.binance,market.crypto.trades.kraken',
+    kafka_topic_list = 'market.crypto.trades.binance.raw,market.crypto.trades.kraken.raw',
     kafka_group_name = 'clickhouse_bronze_consumer',
     kafka_format = 'JSONAsString',
     kafka_num_consumers = 2,
@@ -24,9 +24,9 @@ SETTINGS
     kafka_flush_interval_ms = 7500;
 
 -- Notes:
--- - Ingests from NORMALIZED topics (canonical schema)
+-- - Ingests from RAW topics (JSON format, not Avro)
 -- - JSONAsString: Treat entire message as single string column
--- - 2 consumers: One per exchange topic (binance, kraken)
+-- - 2 consumers: One per exchange topic (binance.raw, kraken.raw)
 -- - Batch size: 10k messages for efficiency
 -- - Flush interval: 7.5s max latency
 
@@ -105,43 +105,48 @@ SETTINGS index_granularity = 8192;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS k2.bronze_trades_mv TO k2.bronze_trades AS
 SELECT
-    -- Parse normalized JSON
-    JSONExtractString(message, 'exchange') AS exchange,
-    JSONExtractString(message, 'symbol') AS symbol,
-    JSONExtractString(message, 'canonical_symbol') AS canonical_symbol,
+    -- Exchange: 'binance' (hardcoded, since this is from binance.raw topic)
+    'binance' AS exchange,
 
-    -- Sequence number from metadata (or 0 if not present)
-    coalesce(
-        JSONExtractUInt(message, 'metadata', 'sequence_number'),
-        0
-    ) AS sequence_number,
+    -- Symbol: Extract from 's' field (e.g., 'BTCUSDT')
+    JSONExtractString(message, 's') AS symbol,
 
-    -- Trade data (preserve precision with string → decimal conversion)
-    JSONExtractString(message, 'trade_id') AS trade_id,
-    toDecimal64(JSONExtractString(message, 'price'), 8) AS price,
-    toDecimal64(JSONExtractString(message, 'quantity'), 8) AS quantity,
-    toDecimal64(JSONExtractString(message, 'quote_volume'), 8) AS quote_volume,
+    -- Canonical symbol: Convert BTCUSDT → BTC/USDT
+    concat(
+        substring(JSONExtractString(message, 's'), 1, length(JSONExtractString(message, 's')) - 4),
+        '/',
+        substring(JSONExtractString(message, 's'), -4)
+    ) AS canonical_symbol,
 
-    -- Side (map string to enum)
-    CAST(JSONExtractString(message, 'side') AS Enum8('buy' = 1, 'sell' = 2)) AS side,
+    -- Sequence number: Use trade ID as sequence
+    JSONExtractUInt(message, 't') AS sequence_number,
 
-    -- Timestamps (ISO8601 → DateTime64)
-    parseDateTime64BestEffort(JSONExtractString(message, 'exchange_timestamp'), 3) AS exchange_timestamp,
-    parseDateTime64BestEffort(JSONExtractString(message, 'timestamp'), 3) AS platform_timestamp,
+    -- Trade data
+    toString(JSONExtractUInt(message, 't')) AS trade_id,  -- 't' field
+    toDecimal64(JSONExtractString(message, 'p'), 8) AS price,  -- 'p' field
+    toDecimal64(JSONExtractString(message, 'q'), 8) AS quantity,  -- 'q' field
+    toDecimal64(toFloat64(JSONExtractString(message, 'p')) * toFloat64(JSONExtractString(message, 'q')), 8) AS quote_volume,
+
+    -- Side: 'm' field (true = buyer is maker = sell, false = buyer is taker = buy)
+    CAST(if(JSONExtractBool(message, 'm'), 'sell', 'buy') AS Enum8('buy' = 1, 'sell' = 2)) AS side,
+
+    -- Timestamps
+    fromUnixTimestamp64Milli(JSONExtractUInt(message, 'T')) AS exchange_timestamp,  -- 'T' field
+    now64() AS platform_timestamp,
 
     -- Schema version
-    JSONExtractString(message, 'schema_version') AS schema_version,
+    '1.0.0' AS schema_version,
 
-    -- Preserve metadata as JSON string
-    JSONExtractString(message, 'metadata') AS metadata,
+    -- Metadata: preserve original message
+    message AS metadata,
 
-    -- Version (always 1 for initial inserts)
+    -- Version
     1 AS _version
 
 FROM k2.trades_normalized_queue
 WHERE message != ''
-  AND JSONExtractString(message, 'exchange') != ''
-  AND JSONExtractString(message, 'canonical_symbol') != '';
+  AND JSONExtractString(message, 's') != ''
+  AND JSONExtractString(message, 'e') = 'trade';
 
 -- Materialized View Logic:
 --
