@@ -12,7 +12,7 @@
 # ------------------------------------------------------------------------------
 # Stage 1: Base Image with UV Package Manager
 # ------------------------------------------------------------------------------
-FROM python:3.13-slim AS base
+FROM python:3.14-slim AS base
 
 # Set environment variables for Python behavior
 ENV PYTHONUNBUFFERED=1 \
