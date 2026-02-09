@@ -128,19 +128,28 @@ class BinanceWebSocketClient(
      */
     private suspend fun handleMessage(text: String) {
         try {
-            // Skip subscription confirmation and error messages
+            // IMPORTANT: Check for special messages BEFORE attempting deserialization
+
+            // Skip subscription confirmation
             if (text.contains("\"result\":null")) {
                 logger.debug { "Subscription confirmed" }
                 return
             }
+
+            // Skip error messages (prevents deserialization errors)
             if (text.contains("\"error\"")) {
-                logger.warn { "Binance API error: $text" }
+                logger.error { "Binance API error: $text" }
                 return
             }
 
-            // Parse combined stream message and extract trade event
-            val combined = json.decodeFromString<BinanceCombinedStreamMessage>(text)
-            val event = combined.data
+            // Skip ping/pong messages
+            if (text.contains("\"ping\"") || text.contains("\"pong\"")) {
+                logger.debug { "Heartbeat message" }
+                return
+            }
+
+            // Parse trade event
+            val event = json.decodeFromString<BinanceTradeEvent>(text)
 
             // Produce to both raw and normalized topics concurrently
             coroutineScope {
