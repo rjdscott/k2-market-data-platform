@@ -1,7 +1,8 @@
-# Decision 013: Spark Resource Optimization & Memory Leak Fixes
+# ADR-001: Spark Resource Optimization & Memory Leak Fixes (Platform v1)
 
 **Date:** 2026-01-20
 **Status:** Implemented
+**Platform:** v1
 **Context:** Resource leak analysis and production hardening
 **Decider:** Staff Data Engineer (Resource Audit)
 
