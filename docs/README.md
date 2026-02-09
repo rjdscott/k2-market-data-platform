@@ -1,9 +1,12 @@
 # K2 Market Data Platform - Documentation
 
-**Last Updated**: 2026-01-22
-**Status**: Active Development (Phase 13 Complete - OHLCV Analytics & Security Hardening)
+**Last Updated**: 2026-02-09
+**Version**: v0.1.0 (Preview Release)
+**Status**: ⚠️ **Preview** - Phase 13 at 70% (Known security issues documented)
 
 Welcome to the K2 platform documentation. This README serves as your navigation hub for all platform documentation.
+
+> **⚠️ Important**: v0.1.0 is a preview release with [known security vulnerabilities](../KNOWN-ISSUES.md). Use for development/testing only. Production deployment requires v0.2 (target: 2026-02-20).
 
 ---
 
@@ -20,8 +23,9 @@ Welcome to the K2 platform documentation. This README serves as your navigation 
 
 ### AI Assistants (Claude Code)
 - **Start Here**: [CLAUDE.md](./CLAUDE.md) - Comprehensive AI assistant guidance
-- **Current Phase**: [Phase 4 Demo Readiness](phases/phase-4-demo-readiness/) ✅ COMPLETE
-- **Recent Work**: [Phase 4 Completion](phases/phase-4-demo-readiness/STATUS.md)
+- **Current Version**: v0.1.0 - [Release Notes](../RELEASE-NOTES-v0.1.md) | [Changelog](../CHANGELOG.md) | [Known Issues](../KNOWN-ISSUES.md)
+- **Current Phase**: [Phase 13 OHLCV Analytics](phases/phase-13-ohlcv-analytics/) 🟡 Preview (70%)
+- **All Phases**: [Phase Guide](phases/PHASE-GUIDE.md) - Complete overview of 14 phases (0-13)
 
 ---
 
@@ -80,17 +84,33 @@ How we ensure correctness, quality, and performance.
 ---
 
 ### 📦 [Phases](./phases/) - Phase-Specific Implementation
-Implementation tracking for specific project phases.
+Implementation tracking for specific project phases across 14 development phases.
 
-**Completed Phases**:
-- [Phase 0 - Technical Debt Resolution](phases/phase-0-technical-debt-resolution/) ✅ COMPLETE
-- [Phase 1 - Single-Node Implementation](phases/phase-1-single-node-equities/) ✅ COMPLETE
-- [Phase 2 - Multi-Source Foundation (V2 Schema + Binance)](phases/phase-2-prep/) ✅ COMPLETE
-- [Phase 3 - Demo Enhancements](phases/phase-3-demo-enhancements/) ✅ COMPLETE
-- [Phase 4 - Demo Readiness](phases/phase-4-demo-readiness/) ✅ COMPLETE
-- **Phase 13 - OHLCV Analytics & Security Hardening** ✅ COMPLETE (Production-ready, A- grade)
+**📘 Complete Phase Guide**: [phases/PHASE-GUIDE.md](phases/PHASE-GUIDE.md) - Comprehensive overview of all 14 phases
 
-**When to read**: Tracking implementation progress, understanding what's built
+**Foundation (Phases 0-3)**: ✅ Complete
+- [Phase 0 - Technical Debt Resolution](phases/phase-0-technical-debt-resolution/)
+- [Phase 1 - Single-Node Implementation](phases/phase-1-single-node-equities/)
+- [Phase 2 - Multi-Source Foundation](phases/phase-2-prep/)
+- [Phase 3 - Demo Enhancements](phases/phase-3-demo-enhancements/)
+
+**Operations (Phases 4-7)**: ✅ Complete
+- [Phase 4 - Demo Readiness](phases/phase-4-demo-readiness/)
+- [Phase 5 - Binance Production Resilience](phases/phase-5-binance-production-resilience/)
+- [Phase 6 - CI/CD Infrastructure](phases/phase-6-cicd/)
+- [Phase 7 - End-to-End Testing](phases/phase-7-e2e/)
+
+**Streaming (Phases 8-12)**: ✅ Complete
+- [Phase 8 - E2E Demo Validation](phases/phase-8-e2e-demo/)
+- [Phase 9 - Demo Consolidation](phases/phase-9-demo-consolidation/)
+- [Phase 10 - Streaming Crypto Platform](phases/phase-10-streaming-crypto/)
+- [Phase 11 - Production Readiness](phases/phase-11-production-readiness/)
+- [Phase 12 - Flink Bronze Implementation](phases/phase-12-flink-bronze-implementation/)
+
+**Analytics (Phase 13)**: 🟡 Preview (70% - Security fixes needed for v0.2)
+- [Phase 13 - OHLCV Analytics](phases/phase-13-ohlcv-analytics/) - ⚠️ Known security issues
+
+**When to read**: Tracking implementation progress, understanding what's built, planning next phases
 
 ---
 

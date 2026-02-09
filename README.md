@@ -2,13 +2,18 @@
 
 A single-node market data lakehouse for quantitative research, compliance, and analytics.
 
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](./RELEASE-NOTES-v0.1.md)
+[![Release](https://img.shields.io/badge/release-preview-orange.svg)](./KNOWN-ISSUES.md)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![Apache Kafka](https://img.shields.io/badge/kafka-3.7-orange.svg)](https://kafka.apache.org/)
 [![Apache Spark](https://img.shields.io/badge/spark-3.5-yellow.svg)](https://spark.apache.org/)
 [![Apache Iceberg](https://img.shields.io/badge/iceberg-1.4-green.svg)](https://iceberg.apache.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+> **⚠️ v0.1.0 Preview Release**: This release contains [known security vulnerabilities](./KNOWN-ISSUES.md) (SQL injection, resource exhaustion). **Use for development/testing only**. Production deployment requires v0.2 security fixes (target: 2026-02-20).
+
 **Documentation Hub**: [docs/NAVIGATION.md](./docs/NAVIGATION.md) - Role-based paths to find any doc in under 2 minutes
+**Release Notes**: [RELEASE-NOTES-v0.1.md](./RELEASE-NOTES-v0.1.md) | **Changelog**: [CHANGELOG.md](./CHANGELOG.md) | **Known Issues**: [KNOWN-ISSUES.md](./KNOWN-ISSUES.md)
 
 ---
 
@@ -21,7 +26,7 @@ K2 is an **L3 Cold Path Research Data Platform** optimized for analytics, compli
 - ACID-compliant storage with time-travel queries via Apache Iceberg
 - Sub-second analytical queries (point: <100ms, aggregations: 200-500ms)
 - Pre-computed OHLCV analytics across 5 timeframes (1m, 5m, 30m, 1h, 1d)
-- Production-grade security (SQL injection protection, rate limiting, circuit breakers)
+- Security features (⚠️ v0.1: Known vulnerabilities - see [KNOWN-ISSUES.md](./KNOWN-ISSUES.md))
 - Comprehensive observability (50+ Prometheus metrics, health checks, distributed tracing)
 
 | Aspect | K2 IS | K2 is NOT |
