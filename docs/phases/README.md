@@ -316,6 +316,34 @@ Foundation (0-3)   Operations (4-7)   Streaming (8-12)    Analytics (13)
 
 ---
 
+## Platform v2 — Architecture Upgrade
+
+**Status:** ⬜ NOT STARTED
+**Target:** 16 CPU / 40GB RAM single Docker Compose cluster
+**Estimated Duration:** 8-10 weeks (Phases 1-7), +2-3 weeks optional Phase 8
+**Documentation:** [`v2/`](./v2/)
+
+The v2 platform upgrade replaces the current Python + Kafka + Spark Streaming stack with **Kotlin + Redpanda + ClickHouse**, reducing resource consumption from **35-40 CPU / 45-50GB** to **15.5 CPU / 19.5GB** while improving end-to-end latency by **1000x**.
+
+| Phase | Name | Duration | Budget After | Status |
+|-------|------|----------|-------------|--------|
+| [1](v2/phase-1-infrastructure-baseline/README.md) | Infrastructure Baseline | 1 week | ~38 CPU (no change) | ⬜ |
+| [2](v2/phase-2-redpanda-migration/README.md) | Redpanda Migration | 1 week | ~35 CPU (-3) | ⬜ |
+| [3](v2/phase-3-clickhouse-foundation/README.md) | ClickHouse Foundation | 1-2 weeks | ~37 CPU (+2 for CH) | ⬜ |
+| [4](v2/phase-4-streaming-pipeline/README.md) | Streaming Pipeline Migration | 2 weeks | ~19 CPU (-18) | ⬜ |
+| [5](v2/phase-5-cold-tier-restructure/README.md) | Cold Tier Restructure | 1-2 weeks | ~17.5 CPU (-1.5) | ⬜ |
+| [6](v2/phase-6-kotlin-feed-handlers/README.md) | Kotlin Feed Handlers | 2 weeks | ~15.5 CPU (-2) | ⬜ |
+| [7](v2/phase-7-integration-hardening/README.md) | Integration & Hardening | 1-2 weeks | **15.5 CPU** ✓ | ⬜ |
+| [8](v2/phase-8-api-migration/README.md) | API Migration (OPTIONAL) | 2-3 weeks | ~16 CPU | ⬜ |
+
+**Related:**
+- [v2 Phase Map](v2/README.md) — Full overview with budget checkpoints
+- [Architecture v2](../decisions/platform-v2/ARCHITECTURE-V2.md) — Architecture overview
+- [Investment Analysis](../decisions/platform-v2/INVESTMENT-ANALYSIS.md) — Risk/reward ranking
+- [Infrastructure Versioning](v2/INFRASTRUCTURE-VERSIONING.md) — Docker Compose rollback strategy
+
+---
+
 ## Documentation Standards
 
 Each phase directory contains:
@@ -345,6 +373,6 @@ Each phase directory contains:
 
 ---
 
-**Last Updated**: 2026-01-15
+**Last Updated**: 2026-02-09
 **Maintained By**: Engineering Team
 **Questions**: See [Phase Navigation Guide](../NAVIGATION.md) or create an issue
