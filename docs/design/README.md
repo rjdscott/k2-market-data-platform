@@ -242,7 +242,7 @@ Used in: Query engine, API layer
 ## Related Documentation
 
 - **Architecture**: [../architecture/](../architecture/)
-- **Implementation**: [../phases/phase-1-single-node-implementation/](../phases/phase-1-single-node-equities/)
+- **Implementation**: [../phases/phase-1-single-node-implementation/](../phases/v1/phase-1-single-node-equities/)
 - **Operations**: [../operations/](../operations/)
 - **Testing**: [../testing/](../testing/)
 

@@ -711,8 +711,8 @@ flink_taskmanager_Status_JVM_Memory_Heap_Used{job="bronze_binance"} < 12GB
 - [ADR-002: Bronze Per Exchange](../architecture/decisions/ADR-002-bronze-per-exchange.md) - Per-exchange design
 
 ### Phase 10 Context
-- [Phase 10 Progress](../phases/phase-10-streaming-crypto/PROGRESS.md) - Current implementation status
-- [Phase 10 Decisions](../phases/phase-10-streaming-crypto/DECISIONS.md) - Recent ADRs
+- [Phase 10 Progress](../phases/v1/phase-10-streaming-crypto/PROGRESS.md) - Current implementation status
+- [Phase 10 Decisions](../phases/v1/phase-10-streaming-crypto/DECISIONS.md) - Recent ADRs
 - [Bronze Binance Job](../../src/k2/spark/jobs/streaming/bronze_binance_ingestion.py) - Current Spark implementation
 
 ---

@@ -3,7 +3,7 @@
 **Status**: Active
 **Last Updated**: 2026-01-15
 **Maintained By**: Engineering Team
-**Related Phase**: [Phase 6: CI/CD & Test Infrastructure](../phases/phase-6-cicd/)
+**Related Phase**: [Phase 6: CI/CD & Test Infrastructure](../phases/v1/phase-6-cicd/)
 
 ---
 
@@ -741,7 +741,7 @@ gh api repos/<username>/k2-market-data-platform/packages/container/k2-market-dat
 
 ## Related Documentation
 
-- [Phase 6: CI/CD Implementation Plan](../phases/phase-6-cicd/README.md)
+- [Phase 6: CI/CD Implementation Plan](../phases/v1/phase-6-cicd/README.md)
 - [Testing Strategy](../testing/strategy.md) (future)
 - [Runbook: CI/CD Troubleshooting](./runbooks/ci-cd-troubleshooting.md)
 - [Makefile Test Targets](../../Makefile)

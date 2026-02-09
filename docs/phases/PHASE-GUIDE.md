@@ -60,7 +60,7 @@ Foundation (Phases 0-3)    Demo & Ops (4-7)      Streaming (8-12)      Analytics
 - 36 tests added (29 consumer + 7 metrics)
 - Pre-commit hook validates 83 metrics calls
 
-**Documentation**: [`phase-0-technical-debt-resolution/`](./phase-0-technical-debt-resolution/)
+**Documentation**: [`phase-0-technical-debt-resolution/`](v1/phase-0-technical-debt-resolution/)
 
 ---
 
@@ -87,7 +87,7 @@ CSV Data → Batch Loader → Kafka → Consumer → Iceberg Tables
                                               FastAPI REST
 ```
 
-**Documentation**: [`phase-1-single-node-equities/`](./phase-1-single-node-equities/)
+**Documentation**: [`phase-1-single-node-equities/`](v1/phase-1-single-node-equities/)
 
 ---
 
@@ -109,7 +109,7 @@ CSV Data → Batch Loader → Kafka → Consumer → Iceberg Tables
 - **V1**: ASX-specific fields (legacy)
 - **V2**: Core standard fields + vendor_data map (flexible)
 
-**Documentation**: [`phase-2-prep/`](./phase-2-prep/)
+**Documentation**: [`phase-2-prep/`](v1/phase-2-prep/)
 
 ---
 
@@ -129,7 +129,7 @@ CSV Data → Batch Loader → Kafka → Consumer → Iceberg Tables
 
 **Platform Maturity**: 86 → 92 (+6 points)
 
-**Documentation**: [`phase-3-demo-enhancements/`](./phase-3-demo-enhancements/)
+**Documentation**: [`phase-3-demo-enhancements/`](v1/phase-3-demo-enhancements/)
 
 ---
 
@@ -147,7 +147,7 @@ CSV Data → Batch Loader → Kafka → Consumer → Iceberg Tables
 - V2 schema migration complete (63/63 API tests passing)
 - Binance demo notebook enhanced with resilience section
 
-**Documentation**: [`phase-4-demo-readiness/`](./phase-4-demo-readiness/)
+**Documentation**: [`phase-4-demo-readiness/`](v1/phase-4-demo-readiness/)
 
 ---
 
@@ -165,7 +165,7 @@ CSV Data → Batch Loader → Kafka → Consumer → Iceberg Tables
 - Circuit breaker integration (5-level degradation)
 - Zero-downtime deployments
 
-**Documentation**: [`phase-5-binance-production-resilience/`](./phase-5-binance-production-resilience/)
+**Documentation**: [`phase-5-binance-production-resilience/`](v1/phase-5-binance-production-resilience/)
 
 ---
 
@@ -185,7 +185,7 @@ CSV Data → Batch Loader → Kafka → Consumer → Iceberg Tables
 
 **Final Score**: 18/18 success criteria (100%)
 
-**Documentation**: [`phase-6-cicd/`](./phase-6-cicd/)
+**Documentation**: [`phase-6-cicd/`](v1/phase-6-cicd/)
 
 ---
 
@@ -201,7 +201,7 @@ CSV Data → Batch Loader → Kafka → Consumer → Iceberg Tables
 - Production-ready validation
 - All critical paths covered
 
-**Documentation**: [`phase-7-e2e/`](./phase-7-e2e/)
+**Documentation**: [`phase-7-e2e/`](v1/phase-7-e2e/)
 
 ---
 
@@ -220,7 +220,7 @@ CSV Data → Batch Loader → Kafka → Consumer → Iceberg Tables
 
 **Overall Score**: 97.8/100 - Staff engineer quality standards
 
-**Documentation**: [`phase-8-e2e-demo/`](./phase-8-e2e-demo/)
+**Documentation**: [`phase-8-e2e-demo/`](v1/phase-8-e2e-demo/)
 
 ---
 
@@ -235,7 +235,7 @@ CSV Data → Batch Loader → Kafka → Consumer → Iceberg Tables
 - Cross-reference validation
 - Consistent formatting across all demo materials
 
-**Documentation**: [`phase-9-demo-consolidation/`](./phase-9-demo-consolidation/)
+**Documentation**: [`phase-9-demo-consolidation/`](v1/phase-9-demo-consolidation/)
 
 ---
 
@@ -262,7 +262,7 @@ Binance/Kraken → Kafka → Bronze (raw) → Silver (validated) → Gold (unifi
 **Silver Layer**: Validation + schema normalization
 **Gold Layer**: Cross-exchange unified `gold_crypto_trades` table
 
-**Documentation**: [`phase-10-streaming-crypto/`](./phase-10-streaming-crypto/)
+**Documentation**: [`phase-10-streaming-crypto/`](v1/phase-10-streaming-crypto/)
 
 ---
 
@@ -278,7 +278,7 @@ Binance/Kraken → Kafka → Bronze (raw) → Silver (validated) → Gold (unifi
 - Monitoring dashboard validation
 - Performance benchmarking
 
-**Documentation**: [`phase-11-production-readiness/`](./phase-11-production-readiness/)
+**Documentation**: [`phase-11-production-readiness/`](v1/phase-11-production-readiness/)
 
 ---
 
@@ -303,7 +303,7 @@ Binance/Kraken → Kafka → Bronze (raw) → Silver (validated) → Gold (unifi
 - 2 TaskManagers (2 CPU, 2GB each) - Execute jobs
 - Total: 5 CPU, 5GB RAM
 
-**Documentation**: [`phase-12-flink-bronze-implementation/`](./phase-12-flink-bronze-implementation/)
+**Documentation**: [`phase-12-flink-bronze-implementation/`](v1/phase-12-flink-bronze-implementation/)
 
 ---
 
@@ -359,7 +359,7 @@ See [KNOWN-ISSUES.md](../../KNOWN-ISSUES.md) for complete details:
 
 **Recommendation**: Use Phase 13 for development/testing only. Wait for v0.2 security fixes before production deployment.
 
-**Documentation**: [`phase-13-ohlcv-analytics/`](./phase-13-ohlcv-analytics/)
+**Documentation**: [`phase-13-ohlcv-analytics/`](v1/phase-13-ohlcv-analytics/)
 
 ---
 
@@ -463,20 +463,20 @@ Analytics
 ## Documentation Quick Links
 
 ### By Phase
-- [Phase 0: Technical Debt](./phase-0-technical-debt-resolution/)
-- [Phase 1: Single-Node](./phase-1-single-node-equities/)
-- [Phase 2: Multi-Source Foundation](./phase-2-prep/)
-- [Phase 3: Demo Enhancements](./phase-3-demo-enhancements/)
-- [Phase 4: Demo Readiness](./phase-4-demo-readiness/)
-- [Phase 5: Binance Resilience](./phase-5-binance-production-resilience/)
-- [Phase 6: CI/CD Infrastructure](./phase-6-cicd/)
-- [Phase 7: E2E Testing](./phase-7-e2e/)
-- [Phase 8: E2E Demo Validation](./phase-8-e2e-demo/)
-- [Phase 9: Demo Consolidation](./phase-9-demo-consolidation/)
-- [Phase 10: Streaming Crypto](./phase-10-streaming-crypto/)
-- [Phase 11: Production Readiness](./phase-11-production-readiness/)
-- [Phase 12: Flink Bronze](./phase-12-flink-bronze-implementation/)
-- [Phase 13: OHLCV Analytics](./phase-13-ohlcv-analytics/)
+- [Phase 0: Technical Debt](v1/phase-0-technical-debt-resolution/)
+- [Phase 1: Single-Node](v1/phase-1-single-node-equities/)
+- [Phase 2: Multi-Source Foundation](v1/phase-2-prep/)
+- [Phase 3: Demo Enhancements](v1/phase-3-demo-enhancements/)
+- [Phase 4: Demo Readiness](v1/phase-4-demo-readiness/)
+- [Phase 5: Binance Resilience](v1/phase-5-binance-production-resilience/)
+- [Phase 6: CI/CD Infrastructure](v1/phase-6-cicd/)
+- [Phase 7: E2E Testing](v1/phase-7-e2e/)
+- [Phase 8: E2E Demo Validation](v1/phase-8-e2e-demo/)
+- [Phase 9: Demo Consolidation](v1/phase-9-demo-consolidation/)
+- [Phase 10: Streaming Crypto](v1/phase-10-streaming-crypto/)
+- [Phase 11: Production Readiness](v1/phase-11-production-readiness/)
+- [Phase 12: Flink Bronze](v1/phase-12-flink-bronze-implementation/)
+- [Phase 13: OHLCV Analytics](v1/phase-13-ohlcv-analytics/)
 
 ### By Topic
 - **Architecture**: [../architecture/](../architecture/)

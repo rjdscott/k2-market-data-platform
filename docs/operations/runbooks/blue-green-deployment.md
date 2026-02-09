@@ -3,7 +3,7 @@
 **Severity**: High (Production Deployment)
 **Last Updated**: 2026-01-15
 **Maintained By**: Engineering Team
-**Related Phase**: [Phase 5 - Binance Production Resilience](../../phases/phase-5-binance-production-resilience/)
+**Related Phase**: [Phase 5 - Binance Production Resilience](../../phases/v1/phase-5-binance-production-resilience/)
 
 ---
 
@@ -213,7 +213,7 @@ watch -n 60 './scripts/validate_deployment.sh k2-market-data-platform-binance-st
 
 ### Extended Validation (Next 24 hours)
 
-See [Step 09 - Production Validation](../../phases/phase-5-binance-production-resilience/steps/step-09-validation.md) for the full 24-hour validation procedure.
+See [Step 09 - Production Validation](../../phases/v1/phase-5-binance-production-resilience/steps/step-09-validation.md) for the full 24-hour validation procedure.
 
 Key metrics to monitor:
 - Memory growth: <50MB over 24h
@@ -374,7 +374,7 @@ After successful deployment:
 2. **Document deployment**
    - Record deployment time and version
    - Note any issues encountered
-   - Update [Phase 5 PROGRESS.md](../../phases/phase-5-binance-production-resilience/PROGRESS.md)
+   - Update [Phase 5 PROGRESS.md](../../phases/v1/phase-5-binance-production-resilience/PROGRESS.md)
 
 3. **Notify stakeholders**
    - Deployment complete
@@ -382,7 +382,7 @@ After successful deployment:
    - Monitoring ongoing
 
 4. **Begin 24h validation** (Step 09)
-   - See [Production Validation Guide](../../phases/phase-5-binance-production-resilience/steps/step-09-validation.md)
+   - See [Production Validation Guide](../../phases/v1/phase-5-binance-production-resilience/steps/step-09-validation.md)
 
 5. **Clean up old images** (after 7 days)
    ```bash
@@ -394,9 +394,9 @@ After successful deployment:
 
 ## Related Documentation
 
-- [Phase 5 Implementation Plan](../../phases/phase-5-binance-production-resilience/IMPLEMENTATION_PLAN.md)
-- [Step 08 - Blue-Green Deployment](../../phases/phase-5-binance-production-resilience/steps/step-08-deployment.md)
-- [Step 09 - Production Validation](../../phases/phase-5-binance-production-resilience/steps/step-09-validation.md)
+- [Phase 5 Implementation Plan](../../phases/v1/phase-5-binance-production-resilience/IMPLEMENTATION_PLAN.md)
+- [Step 08 - Blue-Green Deployment](../../phases/v1/phase-5-binance-production-resilience/steps/step-08-deployment.md)
+- [Step 09 - Production Validation](../../phases/v1/phase-5-binance-production-resilience/steps/step-09-validation.md)
 - [Binance Streaming Runbook](./binance-streaming.md)
 
 ---

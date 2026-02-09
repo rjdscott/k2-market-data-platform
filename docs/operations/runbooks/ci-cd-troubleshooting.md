@@ -854,7 +854,7 @@ See [On-Call Procedures](../README.md#on-call-procedures)
 - [CI/CD Pipeline Overview](../ci-cd-pipeline.md)
 - [Testing Strategy](../../testing/strategy.md) (future)
 - [Makefile Targets](../../../Makefile)
-- [Phase 6: CI/CD Implementation](../../phases/phase-6-cicd/)
+- [Phase 6: CI/CD Implementation](../../phases/v1/phase-6-cicd/)
 
 ---
 

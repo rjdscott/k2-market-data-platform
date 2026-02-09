@@ -1,0 +1,71 @@
+# K2 Market Data Platform v2 - Prometheus Configuration
+# Scrapes metrics from all v2 services
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'k2-v2'
+    environment: 'development'
+
+# Alertmanager configuration (future)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Load rules (future: alerting rules)
+rule_files:
+  # - "rules/*.yml"
+
+# Scrape configurations
+scrape_configs:
+
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          tier: 'observability'
+
+  # Redpanda metrics
+  - job_name: 'redpanda'
+    static_configs:
+      - targets: ['redpanda:9644']
+        labels:
+          service: 'redpanda'
+          tier: 'streaming'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # ClickHouse metrics
+  - job_name: 'clickhouse'
+    static_configs:
+      - targets: ['clickhouse:8123']
+        labels:
+          service: 'clickhouse'
+          tier: 'warm-storage'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  # Grafana
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+        labels:
+          service: 'grafana'
+          tier: 'observability'
+    metrics_path: '/metrics'
+
+  # Future: Spring Boot API (actuator metrics)
+  # - job_name: 'k2-api'
+  #   static_configs:
+  #     - targets: ['k2-api:8081']
+  #   metrics_path: '/actuator/prometheus'
+
+  # Future: Kotlin feed handlers
+  # - job_name: 'feed-handlers'
+  #   static_configs:
+  #     - targets: ['feed-handlers:8082']
+  #   metrics_path: '/metrics'

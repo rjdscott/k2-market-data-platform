@@ -261,12 +261,12 @@ Print-ready reference materials for demos:
 
 This demo consolidation builds on validated materials from previous phases:
 
-- **Phase 8**: [E2E Demo Validation](../docs/phases/phase-8-e2e-demo/README.md) - 97.8/100 score
+- **Phase 8**: [E2E Demo Validation](../docs/phases/v1/phase-8-e2e-demo/README.md) - 97.8/100 score
   - Validated 12-minute executive demo sequence
   - Performance benchmarking and validation
   - Resilience testing
 
-- **Phase 4**: [Demo Readiness](../docs/phases/phase-4-demo-readiness/README.md) - 135/100 score
+- **Phase 4**: [Demo Readiness](../docs/phases/v1/phase-4-demo-readiness/README.md) - 135/100 score
   - Quick reference materials created
   - Architecture decision documentation
   - Contingency planning
@@ -275,7 +275,7 @@ This demo consolidation builds on validated materials from previous phases:
   - Platform positioning and narrative
   - Demo execution improvements
 
-**For historical implementation details**: See [Phase 9 Documentation](../docs/phases/phase-9-demo-consolidation/README.md)
+**For historical implementation details**: See [Phase 9 Documentation](../docs/phases/v1/phase-9-demo-consolidation/README.md)
 
 ---
 

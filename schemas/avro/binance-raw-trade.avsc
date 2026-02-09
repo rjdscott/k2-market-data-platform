@@ -1,0 +1,63 @@
+{
+  "type": "record",
+  "name": "BinanceRawTrade",
+  "namespace": "com.k2.marketdata.crypto.binance",
+  "doc": "Raw Binance trade event (WebSocket payload)",
+  "fields": [
+    {
+      "name": "e",
+      "type": "string",
+      "doc": "Event type (always 'trade')"
+    },
+    {
+      "name": "E",
+      "type": "long",
+      "doc": "Event time (milliseconds)"
+    },
+    {
+      "name": "s",
+      "type": "string",
+      "doc": "Symbol (e.g., 'BTCUSDT')"
+    },
+    {
+      "name": "t",
+      "type": "long",
+      "doc": "Trade ID"
+    },
+    {
+      "name": "p",
+      "type": "string",
+      "doc": "Price"
+    },
+    {
+      "name": "q",
+      "type": "string",
+      "doc": "Quantity"
+    },
+    {
+      "name": "b",
+      "type": "long",
+      "doc": "Buyer order ID"
+    },
+    {
+      "name": "a",
+      "type": "long",
+      "doc": "Seller order ID"
+    },
+    {
+      "name": "T",
+      "type": "long",
+      "doc": "Trade time (milliseconds)"
+    },
+    {
+      "name": "m",
+      "type": "boolean",
+      "doc": "Is buyer maker"
+    },
+    {
+      "name": "M",
+      "type": "boolean",
+      "doc": "Ignore (always true)"
+    }
+  ]
+}

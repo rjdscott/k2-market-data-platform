@@ -561,7 +561,7 @@ docker stats --no-stream > docker-stats.txt
 ## Related Documentation
 
 - [Spark Iceberg Queries Notebook](../../../demos/notebooks/spark-iceberg-queries.ipynb)
-- [Phase 10: Streaming Crypto Architecture](../../phases/phase-10-streaming-crypto/README.md)
+- [Phase 10: Streaming Crypto Architecture](../../phases/v1/phase-10-streaming-crypto/README.md)
 - [Binance Streaming Runbook](./binance-streaming.md)
 - [Kafka Checkpoint Corruption Recovery](./kafka-checkpoint-corruption-recovery.md)
 

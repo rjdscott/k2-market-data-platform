@@ -1,6 +1,6 @@
 # K2 Platform - Demo Quick Reference
 
-> **Historical Context**: This reference was created in [Phase 4: Demo Readiness](../../docs/phases/phase-4-demo-readiness/README.md) and validated in [Phase 8: E2E Demo Validation](../../docs/phases/phase-8-e2e-demo/README.md).
+> **Historical Context**: This reference was created in [Phase 4: Demo Readiness](../../docs/phases/v1/phase-4-demo-readiness/README.md) and validated in [Phase 8: E2E Demo Validation](../../docs/phases/v1/phase-8-e2e-demo/README.md).
 
 **Date**: 2026-01-14
 **Version**: Phase 4 Demo Readiness

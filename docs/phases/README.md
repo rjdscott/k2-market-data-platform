@@ -25,7 +25,7 @@ This directory contains phase-specific implementation documentation. Each phase 
    - P1 = High priority (1-2 weeks)
    - P2 = Medium priority (1 month)
    - See: [TECHNICAL_DEBT.md](../TECHNICAL_DEBT.md)
-   - Tracked in: [`phase-0-technical-debt-resolution/`](./phase-0-technical-debt-resolution/)
+   - Tracked in: [`phase-0-technical-debt-resolution/`](v1/phase-0-technical-debt-resolution/)
 
 2. **Phase 2/3/4** = **Project Phases** (Sequential milestones)
    - Phase 0, 1, 2, 3... = Sequential project phases
@@ -72,7 +72,7 @@ docs/phases/
 - 36 tests added (29 consumer + 7 metrics)
 - Pre-commit hook validates 83 metrics calls
 
-**Documentation**: [`phase-0-technical-debt-resolution/`](./phase-0-technical-debt-resolution/)
+**Documentation**: [`phase-0-technical-debt-resolution/`](v1/phase-0-technical-debt-resolution/)
 
 ---
 
@@ -89,7 +89,7 @@ docs/phases/
 - REST API with authentication
 - Prometheus + Grafana monitoring
 
-**Documentation**: [`phase-1-single-node-equities/`](./phase-1-single-node-equities/)
+**Documentation**: [`phase-1-single-node-equities/`](v1/phase-1-single-node-equities/)
 
 ---
 
@@ -106,7 +106,7 @@ docs/phases/
 - E2E pipeline validated
 - 138 msg/s throughput, sub-second queries
 
-**Documentation**: [`phase-2-prep/`](./phase-2-prep/)
+**Documentation**: [`phase-2-prep/`](v1/phase-2-prep/)
 
 **Note**: Previously located in `phase-3-crypto/` directory (renamed 2026-01-14 for clarity).
 
@@ -132,7 +132,7 @@ docs/phases/
 - Redis Sequence Tracker (over-engineering for single-node)
 - Bloom Filter Deduplication (in-memory dict sufficient for demo)
 
-**Documentation**: [`phase-3-demo-enhancements/`](./phase-3-demo-enhancements/)
+**Documentation**: [`phase-3-demo-enhancements/`](v1/phase-3-demo-enhancements/)
 
 **Prerequisites**: ✅ Phase 2 complete, ✅ P0/P1/P2 technical debt resolved
 
@@ -172,7 +172,7 @@ docs/phases/
 - V2 schema migration complete (63/63 API tests passing)
 - Binance demo notebook enhanced with resilience section
 
-**Documentation**: [`phase-4-demo-readiness/`](./phase-4-demo-readiness/)
+**Documentation**: [`phase-4-demo-readiness/`](v1/phase-4-demo-readiness/)
 
 **Prerequisites**: ✅ Phase 3 Demo Enhancements complete
 
@@ -199,7 +199,7 @@ docs/phases/
 - Resource leak prevention
 - Validated 24h stability
 
-**Documentation**: [`phase-5-binance-production-resilience/`](./phase-5-binance-production-resilience/)
+**Documentation**: [`phase-5-binance-production-resilience/`](v1/phase-5-binance-production-resilience/)
 
 **Prerequisites**: ✅ Phase 4 Demo Readiness complete
 
@@ -232,7 +232,7 @@ docs/phases/
 - CI/CD Pipeline: 6/6 ✅
 - Documentation: 6/6 ✅
 
-**Documentation**: [`phase-6-cicd/`](./phase-6-cicd/)
+**Documentation**: [`phase-6-cicd/`](v1/phase-6-cicd/)
 
 **Prerequisites**: ✅ Phase 5 Binance Production Resilience complete
 
@@ -268,23 +268,23 @@ docs/phases/
 
 ### By Status
 - ✅ **Complete Phases (13/14)**:
-  - **Foundation**: [Phase 0](./phase-0-technical-debt-resolution/) | [Phase 1](./phase-1-single-node-equities/) | [Phase 2](./phase-2-prep/) | [Phase 3](./phase-3-demo-enhancements/)
-  - **Operations**: [Phase 4](./phase-4-demo-readiness/) | [Phase 5](./phase-5-binance-production-resilience/) | [Phase 6](./phase-6-cicd/) | [Phase 7](./phase-7-e2e/)
-  - **Streaming**: [Phase 8](./phase-8-e2e-demo/) | [Phase 9](./phase-9-demo-consolidation/) | [Phase 10](./phase-10-streaming-crypto/) | [Phase 11](./phase-11-production-readiness/) | [Phase 12](./phase-12-flink-bronze-implementation/)
+  - **Foundation**: [Phase 0](v1/phase-0-technical-debt-resolution/) | [Phase 1](v1/phase-1-single-node-equities/) | [Phase 2](v1/phase-2-prep/) | [Phase 3](v1/phase-3-demo-enhancements/)
+  - **Operations**: [Phase 4](v1/phase-4-demo-readiness/) | [Phase 5](v1/phase-5-binance-production-resilience/) | [Phase 6](v1/phase-6-cicd/) | [Phase 7](v1/phase-7-e2e/)
+  - **Streaming**: [Phase 8](v1/phase-8-e2e-demo/) | [Phase 9](v1/phase-9-demo-consolidation/) | [Phase 10](v1/phase-10-streaming-crypto/) | [Phase 11](v1/phase-11-production-readiness/) | [Phase 12](v1/phase-12-flink-bronze-implementation/)
 
 - 🟡 **Preview/Beta (1)**:
-  - **Analytics**: [Phase 13: OHLCV Analytics](./phase-13-ohlcv-analytics/) - ⚠️ Security fixes needed
+  - **Analytics**: [Phase 13: OHLCV Analytics](v1/phase-13-ohlcv-analytics/) - ⚠️ Security fixes needed
 
 ### By Topic
-- **Technical Debt**: [Phase 0](./phase-0-technical-debt-resolution/) | [TECHNICAL_DEBT.md](../TECHNICAL_DEBT.md)
-- **Core Platform**: [Phase 1: Single-Node](./phase-1-single-node-equities/)
-- **Multi-Source**: [Phase 2: Multi-Source Foundation](./phase-2-prep/)
-- **Demo & Resilience**: [Phase 3: Enhancements](./phase-3-demo-enhancements/) | [Phase 4: Readiness](./phase-4-demo-readiness/)
-- **Production**: [Phase 5: Binance Resilience](./phase-5-binance-production-resilience/)
-- **CI/CD**: [Phase 6: CI/CD Infrastructure](./phase-6-cicd/)
-- **Testing**: [Phase 7: E2E Testing](./phase-7-e2e/) | [Phase 8: Demo Validation](./phase-8-e2e-demo/)
-- **Streaming**: [Phase 10: Streaming Crypto](./phase-10-streaming-crypto/) | [Phase 12: Flink Bronze](./phase-12-flink-bronze-implementation/)
-- **Analytics**: [Phase 13: OHLCV Analytics](./phase-13-ohlcv-analytics/)
+- **Technical Debt**: [Phase 0](v1/phase-0-technical-debt-resolution/) | [TECHNICAL_DEBT.md](../TECHNICAL_DEBT.md)
+- **Core Platform**: [Phase 1: Single-Node](v1/phase-1-single-node-equities/)
+- **Multi-Source**: [Phase 2: Multi-Source Foundation](v1/phase-2-prep/)
+- **Demo & Resilience**: [Phase 3: Enhancements](v1/phase-3-demo-enhancements/) | [Phase 4: Readiness](v1/phase-4-demo-readiness/)
+- **Production**: [Phase 5: Binance Resilience](v1/phase-5-binance-production-resilience/)
+- **CI/CD**: [Phase 6: CI/CD Infrastructure](v1/phase-6-cicd/)
+- **Testing**: [Phase 7: E2E Testing](v1/phase-7-e2e/) | [Phase 8: Demo Validation](v1/phase-8-e2e-demo/)
+- **Streaming**: [Phase 10: Streaming Crypto](v1/phase-10-streaming-crypto/) | [Phase 12: Flink Bronze](v1/phase-12-flink-bronze-implementation/)
+- **Analytics**: [Phase 13: OHLCV Analytics](v1/phase-13-ohlcv-analytics/)
 
 ### Quick Links
 - **Phase Guide**: [PHASE-GUIDE.md](./PHASE-GUIDE.md) - Complete overview of all 14 phases

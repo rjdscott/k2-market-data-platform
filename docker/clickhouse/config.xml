@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<!--
+  K2 Market Data Platform v2 - ClickHouse Configuration
+  Optimized for market data workloads: high-frequency inserts, time-series queries
+-->
+<clickhouse>
+    <!-- Logging -->
+    <logger>
+        <level>information</level>
+        <log>/var/log/clickhouse-server/clickhouse-server.log</log>
+        <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
+        <size>1000M</size>
+        <count>3</count>
+    </logger>
+
+    <!-- Network -->
+    <listen_host>0.0.0.0</listen_host>
+    <http_port>8123</http_port>
+    <tcp_port>9000</tcp_port>
+    <interserver_http_port>9009</interserver_http_port>
+
+    <!-- Performance -->
+    <max_concurrent_queries>100</max_concurrent_queries>
+    <max_server_memory_usage_to_ram_ratio>0.9</max_server_memory_usage_to_ram_ratio>
+    <max_thread_pool_size>10000</max_thread_pool_size>
+
+    <!-- Market data optimizations -->
+    <background_pool_size>16</background_pool_size>
+    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+
+    <!-- Kafka Engine settings for Redpanda integration -->
+    <kafka>
+        <max_poll_interval_ms>300000</max_poll_interval_ms>
+        <session_timeout_ms>30000</session_timeout_ms>
+    </kafka>
+
+    <!-- Compression (market data compresses well) -->
+    <compression>
+        <case>
+            <method>lz4</method>
+        </case>
+    </compression>
+
+    <!-- Query settings -->
+    <profiles>
+        <default>
+            <max_memory_usage>10000000000</max_memory_usage>
+            <use_uncompressed_cache>1</use_uncompressed_cache>
+            <load_balancing>random</load_balancing>
+        </default>
+    </profiles>
+
+    <!-- Users defined in users.xml -->
+    <users_config>users.xml</users_config>
+
+    <!-- Timezone -->
+    <timezone>UTC</timezone>
+</clickhouse>

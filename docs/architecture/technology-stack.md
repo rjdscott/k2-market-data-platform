@@ -679,7 +679,7 @@ alerting: via Alertmanager (PagerDuty integration)
 ## Related Documentation
 
 - [Platform Principles](./platform-principles.md) - Why we chose "boring technology"
-- [Phase 1 DECISIONS.md](../phases/phase-1-single-node-equities/DECISIONS.md) - Implementation ADRs
+- [Phase 1 DECISIONS.md](../phases/v1/phase-1-single-node-equities/DECISIONS.md) - Implementation ADRs
 - [Cost Model](../operations/cost-model.md) - Cost implications of technology choices
 - [Alternative Architectures](./alternatives.md) - Rejected architectures
 

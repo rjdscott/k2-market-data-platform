@@ -3,7 +3,7 @@
 **Severity**: High
 **Last Updated**: 2026-01-19
 **Maintained By**: Data Engineering Team
-**Related**: [SILVER_FIX_SUMMARY.md](../../phases/phase-10-streaming-crypto/SILVER_FIX_SUMMARY.md), [RESOURCE_ALLOCATION_FIX.md](../../phases/phase-10-streaming-crypto/RESOURCE_ALLOCATION_FIX.md)
+**Related**: [SILVER_FIX_SUMMARY.md](../../phases/v1/phase-10-streaming-crypto/SILVER_FIX_SUMMARY.md), [RESOURCE_ALLOCATION_FIX.md](../../phases/v1/phase-10-streaming-crypto/RESOURCE_ALLOCATION_FIX.md)
 
 ---
 
@@ -451,11 +451,11 @@ Expected: DLQ count < 0.1% of Silver record count in normal operation
 
 ## Related Documentation
 
-- [Decision #014: Explicit NULL Handling](../../phases/phase-10-streaming-crypto/DECISIONS.md#decision-014)
-- [Decision #015: Right-Sized Resource Allocation](../../phases/phase-10-streaming-crypto/DECISIONS.md#decision-015)
-- [Decision #016: 1 Core Per Streaming Job](../../phases/phase-10-streaming-crypto/DECISIONS.md#decision-016)
-- [SILVER_FIX_SUMMARY.md](../../phases/phase-10-streaming-crypto/SILVER_FIX_SUMMARY.md)
-- [RESOURCE_ALLOCATION_FIX.md](../../phases/phase-10-streaming-crypto/RESOURCE_ALLOCATION_FIX.md)
+- [Decision #014: Explicit NULL Handling](../../phases/v1/phase-10-streaming-crypto/DECISIONS.md#decision-014)
+- [Decision #015: Right-Sized Resource Allocation](../../phases/v1/phase-10-streaming-crypto/DECISIONS.md#decision-015)
+- [Decision #016: 1 Core Per Streaming Job](../../phases/v1/phase-10-streaming-crypto/DECISIONS.md#decision-016)
+- [SILVER_FIX_SUMMARY.md](../../phases/v1/phase-10-streaming-crypto/SILVER_FIX_SUMMARY.md)
+- [RESOURCE_ALLOCATION_FIX.md](../../phases/v1/phase-10-streaming-crypto/RESOURCE_ALLOCATION_FIX.md)
 
 ---
 

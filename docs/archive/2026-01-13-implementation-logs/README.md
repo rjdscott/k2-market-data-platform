@@ -31,7 +31,7 @@ These files are preserved for historical reference but should NOT be used as pri
 8. `2026-01-13-day3-complete.md` - Final Day 3 summary
 
 **Consolidated Into**:
-→ [Phase 0 Completion Report](../../phases/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
+→ [Phase 0 Completion Report](../../phases/v1/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
 - Single authoritative source for Phase 0 work
 - Executive summary with all 7 technical debt items resolved
 - 36 tests added, platform score 78→86
@@ -88,7 +88,7 @@ These files are preserved for historical reference but should NOT be used as pri
 ### Phase 0 (Technical Debt Resolution)
 
 **For**: Technical debt resolution details, tests added, P0/P1/P2 fixes
-**Use**: [Phase 0 Completion Report](../../phases/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
+**Use**: [Phase 0 Completion Report](../../phases/v1/phase-0-technical-debt-resolution/COMPLETION-REPORT.md)
 
 **Sections**:
 - Executive Summary

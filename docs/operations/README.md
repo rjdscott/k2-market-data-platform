@@ -1,6 +1,6 @@
 # Operations Documentation
 
-**Last Updated**: 2026-01-22
+**Last Updated**: 2026-02-09
 **Stability**: Medium - updated after incidents
 **Target Audience**: DevOps, SREs, On-Call Engineers
 
@@ -11,11 +11,44 @@ This directory contains operational procedures, runbooks, monitoring configurati
 ## Overview
 
 Operations documentation helps you:
+- **Inspect live data** flowing through the platform
 - **Respond to incidents** using step-by-step runbooks
 - **Monitor system health** via dashboards and alerts
 - **Optimize performance** using tuning guides
 - **Prevent future issues** through post-incident reviews
 - **Maintain CI/CD pipeline** with automated testing and deployment
+
+---
+
+## Quick Start (v2 Platform)
+
+### [QUICK-REFERENCE.md](./QUICK-REFERENCE.md) 🆕
+**Essential commands cheat sheet (2 min read)**
+
+One-page reference for the most common operations:
+- Stack management (start/stop/restart)
+- Web UI URLs and credentials
+- Redpanda quick commands (topics, consumers, schemas)
+- ClickHouse quick queries (data inspection, metrics)
+- Feed handler commands (logs, metrics, troubleshooting)
+- Health checks and monitoring
+- Emergency procedures
+
+**Perfect for**: Quick lookups during operations or troubleshooting
+
+### [DATA-INSPECTION.md](./DATA-INSPECTION.md) 🆕
+**Comprehensive data inspection guide**
+
+Deep dive into viewing and inspecting data at every layer:
+- Redpanda Topics - Browse messages, check consumer lag, view schemas
+- Schema Registry - List schemas, check compatibility, manage versions
+- Feed Handler Logs - Monitor metrics, debug connections, check errors
+- ClickHouse Data - Query bronze/silver/gold layers, export data, performance
+- Web UIs - Redpanda Console, Grafana dashboards, Prometheus metrics
+- Troubleshooting - Common issues and solutions
+- Data Quality - Validation checks, gap detection, schema verification
+
+**Perfect for**: Understanding data flow, debugging pipeline issues, quality assurance
 
 ---
 

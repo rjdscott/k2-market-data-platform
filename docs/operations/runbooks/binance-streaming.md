@@ -600,7 +600,7 @@ curl http://localhost:8001/health
 ### Documentation
 - [Streaming Sources Architecture](../../architecture/streaming-sources.md) - Generic patterns
 - [Data Dictionary V2](../../reference/data-dictionary-v2.md) - V2 schema reference
-- [Phase 2 Completion Report](../../phases/phase-2-prep/COMPLETION-REPORT.md) - Integration details
+- [Phase 2 Completion Report](../../phases/v1/phase-2-prep/COMPLETION-REPORT.md) - Integration details
 
 ### External
 - [Binance WebSocket API](https://binance-docs.github.io/apidocs/spot/en/#websocket-market-streams)

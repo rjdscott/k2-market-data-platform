@@ -30,11 +30,11 @@ This document tracks known technical debt, deferred fixes, and improvement oppor
 📁 **Documentation Location**: [`docs/phases/phase-0-technical-debt-resolution/`](docs/phases/phase-0-technical-debt-resolution/)
 
 **Quick Links**:
-- [📊 README - Overview](phases/phase-0-technical-debt-resolution/README.md) - Phase overview, achievements, impact metrics
-- [📈 PROGRESS - Detailed Tracking](phases/phase-0-technical-debt-resolution/PROGRESS.md) - All 7 TD items with resolution details
-- [📸 STATUS - Current Snapshot](phases/phase-0-technical-debt-resolution/STATUS.md) - Quick status, completion metrics
-- [📝 DECISIONS - ADRs](phases/phase-0-technical-debt-resolution/DECISIONS.md) - Technical decisions made during fixes
-- [✅ VALIDATION GUIDE](phases/phase-0-technical-debt-resolution/VALIDATION_GUIDE.md) - How to validate all fixes
+- [📊 README - Overview](phases/v1/phase-0-technical-debt-resolution/README.md) - Phase overview, achievements, impact metrics
+- [📈 PROGRESS - Detailed Tracking](phases/v1/phase-0-technical-debt-resolution/PROGRESS.md) - All 7 TD items with resolution details
+- [📸 STATUS - Current Snapshot](phases/v1/phase-0-technical-debt-resolution/STATUS.md) - Quick status, completion metrics
+- [📝 DECISIONS - ADRs](phases/v1/phase-0-technical-debt-resolution/DECISIONS.md) - Technical decisions made during fixes
+- [✅ VALIDATION GUIDE](phases/v1/phase-0-technical-debt-resolution/VALIDATION_GUIDE.md) - How to validate all fixes
 
 **Resolution Summary**:
 - ✅ P0 Critical: 1/1 resolved (TD-000)
