@@ -119,6 +119,30 @@ class KafkaProducerService(private val kafkaConfig: Config, private val schemaPa
     }
 
     /**
+     * Produce raw JSON string to exchange-specific topic
+     *
+     * Used for exchanges like Kraken that need custom JSON serialization
+     */
+    suspend fun produceRawJson(exchange: String, json: String) {
+        try {
+            val topic = "market.crypto.trades.$exchange.raw"
+            val record = ProducerRecord(topic, exchange, json)
+
+            rawProducer.send(record) { metadata, exception ->
+                if (exception != null) {
+                    logger.error(exception) { "Failed to produce raw JSON to $topic" }
+                    errors.incrementAndGet()
+                } else {
+                    rawMessagesProduced.incrementAndGet()
+                }
+            }
+        } catch (e: Exception) {
+            logger.error(e) { "Error producing raw JSON message" }
+            errors.incrementAndGet()
+        }
+    }
+
+    /**
      * Produce normalized trade (Avro) to normalized topic
      */
     suspend fun produceNormalized(trade: NormalizedTrade) {
