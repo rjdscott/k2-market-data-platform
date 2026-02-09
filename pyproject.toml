@@ -40,7 +40,7 @@ dependencies = [
     "duckdb>=1.4.0",  # Latest: 1.4.3 (2025-12-09)
     "pyarrow>=22.0.0",  # Latest: 22.0.0 (2025-10-24) - Columnar data format
     # Spark distributed processing
-    "pyspark==3.5.0",  # Spark 3.5.0 for Medallion architecture (Iceberg 1.4.0 compatible)
+    "pyspark==4.1.1",  # Spark 3.5.0 for Medallion architecture (Iceberg 1.4.0 compatible)
     # Data processing
     "pandas>=2.3.0",  # Latest: 2.3.3 (2025-09-29), Python 3.14 support
     "polars>=1.36.0",  # Latest: 1.36.1 (2026-01), Modern fast dataframe library
