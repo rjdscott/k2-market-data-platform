@@ -1,0 +1,108 @@
+{
+  "type": "record",
+  "name": "NormalizedTrade",
+  "namespace": "com.k2.marketdata.crypto",
+  "doc": "Canonical normalized trade format for crypto markets",
+  "fields": [
+    {
+      "name": "schema_version",
+      "type": "string",
+      "doc": "Schema version (semantic versioning)",
+      "default": "1.0.0"
+    },
+    {
+      "name": "exchange",
+      "type": "string",
+      "doc": "Exchange identifier (lowercase, e.g., 'binance', 'kraken')"
+    },
+    {
+      "name": "symbol",
+      "type": "string",
+      "doc": "Exchange-specific symbol (e.g., 'BTCUSDT' for Binance)"
+    },
+    {
+      "name": "canonical_symbol",
+      "type": "string",
+      "doc": "Normalized symbol across exchanges (e.g., 'BTC/USDT')"
+    },
+    {
+      "name": "trade_id",
+      "type": "string",
+      "doc": "Exchange trade ID (unique per exchange)"
+    },
+    {
+      "name": "price",
+      "type": "string",
+      "doc": "Trade price as string to preserve precision (e.g., '42150.50')"
+    },
+    {
+      "name": "quantity",
+      "type": "string",
+      "doc": "Trade quantity/size as string to preserve precision (e.g., '0.015')"
+    },
+    {
+      "name": "quote_volume",
+      "type": "string",
+      "doc": "Quote volume (price × quantity) as string"
+    },
+    {
+      "name": "side",
+      "type": {
+        "type": "enum",
+        "name": "TradeSide",
+        "symbols": ["BUY", "SELL"]
+      },
+      "doc": "Trade side from taker perspective"
+    },
+    {
+      "name": "timestamp",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Platform timestamp when trade was normalized (milliseconds since epoch)"
+    },
+    {
+      "name": "exchange_timestamp",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Exchange original timestamp (milliseconds since epoch)"
+    },
+    {
+      "name": "metadata",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "TradeMetadata",
+          "fields": [
+            {
+              "name": "sequence_number",
+              "type": ["null", "long"],
+              "doc": "Exchange sequence number if available",
+              "default": null
+            },
+            {
+              "name": "is_buyer_maker",
+              "type": ["null", "boolean"],
+              "doc": "Whether buyer is maker (Binance-specific)",
+              "default": null
+            },
+            {
+              "name": "buyer_order_id",
+              "type": ["null", "long"],
+              "doc": "Buyer order ID (Binance-specific)",
+              "default": null
+            },
+            {
+              "name": "seller_order_id",
+              "type": ["null", "long"],
+              "doc": "Seller order ID (Binance-specific)",
+              "default": null
+            }
+          ]
+        }
+      ],
+      "doc": "Exchange-specific metadata",
+      "default": null
+    }
+  ]
+}

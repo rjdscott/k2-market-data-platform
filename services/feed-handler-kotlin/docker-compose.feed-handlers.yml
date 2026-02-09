@@ -1,0 +1,94 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# K2 Feed Handlers - One container per exchange (easy debugging)
+# Usage: docker compose -f docker-compose.v2.yml -f services/feed-handler-kotlin/docker-compose.feed-handlers.yml up -d
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+services:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Binance Feed Handler
+  # ───────────────────────────────────────────────────────────────────────────
+  feed-handler-binance:
+    build:
+      context: .
+      dockerfile: services/feed-handler-kotlin/Dockerfile
+    container_name: k2-feed-handler-binance
+    hostname: feed-handler-binance
+    networks:
+      - k2-net
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    environment:
+      # JVM settings
+      - JAVA_OPTS=-Xmx512m -Xms256m
+
+      # Feed handler configuration (matches application.conf env var names)
+      - K2_EXCHANGE=binance
+      - K2_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT
+      - K2_SCHEMA_PATH=/app/schemas
+
+      # Kafka/Redpanda configuration
+      - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
+    volumes:
+      # Logs volume for debugging (schemas are baked into image)
+      - ./logs/binance:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    restart: unless-stopped
+    labels:
+      com.k2.service: "feed-handler"
+      com.k2.exchange: "binance"
+      com.k2.version: "v2"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Kraken Feed Handler (future)
+  # ───────────────────────────────────────────────────────────────────────────
+  # feed-handler-kraken:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: k2-feed-handler-kraken
+  #   hostname: feed-handler-kraken
+  #   networks:
+  #     - k2-v2_k2-net
+  #   depends_on:
+  #     k2-redpanda:
+  #       condition: service_healthy
+  #   environment:
+  #     - JAVA_OPTS=-Xmx512m -Xms256m
+  #     - K2_EXCHANGE=kraken
+  #     - K2_SYMBOLS=XBT/USDT,ETH/USDT
+  #     - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+  #     - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
+  #   volumes:
+  #     - ./logs/kraken:/app/logs
+  #     - ../../schemas:/app/schemas:ro
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '0.5'
+  #         memory: 512M
+  #   restart: unless-stopped
+  #   labels:
+  #     com.k2.service: "feed-handler"
+  #     com.k2.exchange: "kraken"
+  #     com.k2.version: "v2"
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Resource Summary (Feed Handlers)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Service                    | CPU Limit | Memory Limit |
+# ---------------------------|-----------|--------------|
+# feed-handler-binance       | 0.5       | 512M         |
+# feed-handler-kraken        | 0.5       | 512M         | (future)
+# ---------------------------|-----------|--------------|
+# TOTAL (active)             | 0.5 CPU   | 512M         |
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
