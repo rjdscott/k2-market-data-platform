@@ -1,9 +1,9 @@
 # Platform v2 — Implementation Phases
 
-**Status:** 🟡 IN PROGRESS (Phase 3 Complete, Phase 4 Starting)
+**Status:** 🟡 IN PROGRESS (Phase 3 Complete, Phase 6 In Progress)
 **Target:** 16 CPU / 40GB RAM single Docker Compose cluster
 **Estimated Duration:** 8-10 weeks (Phases 1-7), +2-3 weeks optional Phase 8
-**Last Updated:** 2026-02-09
+**Last Updated:** 2026-02-10
 
 ---
 
@@ -47,7 +47,7 @@ Baseline     Redpanda    ClickHouse   Streaming   Cold Tier   Kotlin      Harden
 | [3](phase-3-clickhouse-foundation/README.md) | ClickHouse Foundation | 1-2 weeks | 5 | ~1.2 CPU (actual) | ✅ **COMPLETE** - Bronze/Silver/Gold operational |
 | [4](phase-4-streaming-pipeline/README.md) | Streaming Pipeline Migration | 2 weeks | 7 | ~19 CPU (-18) | Spark Streaming + Prefect decommissioned |
 | [5](phase-5-cold-tier-restructure/README.md) | Cold Tier Restructure | 1-2 weeks | 5 | ~17.5 CPU (-1.5) | Four-layer Iceberg, hourly offload running |
-| [6](phase-6-kotlin-feed-handlers/README.md) | Kotlin Feed Handlers | 2 weeks | 5 | ~15.5 CPU (-2) | Python handlers decommissioned |
+| [6](phase-6-kotlin-feed-handlers/README.md) | Kotlin Feed Handlers | 2 weeks | 5 | ~15.5 CPU (-2) | 🟡 **IN PROGRESS** - Kraken integrated, validation pending |
 | [7](phase-7-integration-hardening/README.md) | Integration & Hardening | 1-2 weeks | 5 | **15.5 CPU ✓** | Full validation, monitoring, runbooks |
 | [8](phase-8-api-migration/README.md) | API Migration (OPTIONAL) | 2-3 weeks | 5 | ~16 CPU | Spring Boot API serving production traffic |
 
@@ -111,7 +111,9 @@ This section is updated as issues arise during implementation. Each entry should
 
 | Phase | Date | Issue | Root Cause | Resolution | Lesson |
 |-------|------|-------|------------|------------|--------|
-| — | — | — | — | — | — |
+| 6 | 2026-02-10 | Docker build not reflecting code changes | Cached Docker layers | Use `--no-cache` flag | Always rebuild with --no-cache when code changes |
+| 6 | 2026-02-10 | Branch confusion (v2-phase01 vs platform-review-feb26) | Inconsistent branch naming | Reset v2-phase01 to match platform-review-feb26, merged both | Establish working branch early and stick to it |
+| 6 | 2026-02-10 | PR merge conflicts | Multiple PRs from same source branch | Use git merge -X ours, rebase or merge strategy | Coordinate PRs from feature branches to avoid conflicts |
 
 ---
 
@@ -124,6 +126,6 @@ This section is updated as issues arise during implementation. Each entry should
 
 ---
 
-**Last Updated:** 2026-02-09
+**Last Updated:** 2026-02-10
 **Phase Owner:** Platform Engineering
-**Next Review:** At Phase 1 kickoff
+**Next Review:** Phase 6 completion (v2-phase-6-complete)
