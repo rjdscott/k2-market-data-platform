@@ -55,7 +55,7 @@ Successfully migrated ClickHouse Silver layer to align with `trade_v2.avsc` sche
 Bronze Layer
     ↓
     ├─→ bronze_trades_mv (v1) → silver_trades (v1)
-    └─→ bronze_trades_mv_v2    → silver_trades_v2  ← NEW
+    └─→ bronze_trades_mv_v2    → silver_trades  ← NEW
             ↓
         Gold Layer (6 OHLCV timeframes)
 ```
@@ -104,7 +104,7 @@ platform_sequence Nullable(UInt64)-- Platform sequence
 
 ### 3. Gold Layer OHLCV Update
 
-**Changed**: All 6 OHLCV MVs now read from `silver_trades_v2`
+**Changed**: All 6 OHLCV MVs now read from `silver_trades`
 - Uses `timestamp` (microseconds) instead of `exchange_timestamp`
 - No other changes required - aggregation logic identical
 
@@ -167,7 +167,7 @@ Executed `docker/clickhouse/schema/07-v2-cutover.sql` on **2026-02-09 13:04 UTC*
 
 1. ✅ **Dropped v1 MV**: `DROP VIEW k2.bronze_trades_mv` (stopped dual-write)
 2. ✅ **Archived v1**: `RENAME silver_trades → silver_trades_v1_archive`
-3. ✅ **Promoted v2**: `RENAME silver_trades_v2 → silver_trades`
+3. ✅ **Promoted v2**: `RENAME silver_trades → silver_trades`
 4. ✅ **Renamed MV**: `RENAME bronze_trades_mv_v2 → bronze_trades_mv`
 5. ✅ **Cleanup**: `DROP TABLE silver_trades_v1_archive`
 
@@ -244,7 +244,7 @@ INSERT INTO silver_trades (
 
 | File | Purpose |
 |------|---------|
-| `05-silver-v2-migration.sql` | Create silver_trades_v2 + MV |
+| `05-silver-v2-migration.sql` | Create silver_trades + MV |
 | `06-gold-layer-v2-migration.sql` | Update OHLCV MVs to read v2 |
 | `07-v2-cutover.sql` | Cutover script + rollback |
 

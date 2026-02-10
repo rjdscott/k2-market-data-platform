@@ -1,106 +1,109 @@
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- Silver Layer: Kraken → Unified v2 Schema
--- Purpose: Normalize Kraken native format to multi-exchange schema
+-- Silver Layer: Binance → Unified Schema
+-- Purpose: Normalize Binance native format to multi-exchange schema
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- Normalizations performed:
--- - XBT → BTC (canonical_symbol, symbol)
--- - Timestamp: "seconds.microseconds" → DateTime64(6)
--- - Side: 'b'/'s' → BUY/SELL enum
--- - Trade ID: Generated deterministic hash (Kraken doesn't provide)
--- - vendor_data: Preserves original Kraken format
+-- - Timestamp: milliseconds → DateTime64(6) microseconds
+-- - Side: buy/sell → BUY/SELL enum
+-- - Trade ID: Prefixed with BINANCE-
+-- - vendor_data: Preserves original Binance metadata
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS k2.bronze_kraken_to_silver_mv
+CREATE MATERIALIZED VIEW IF NOT EXISTS k2.bronze_binance_to_silver_mv
 TO k2.silver_trades AS
 SELECT
     -- ═══════════════════════════════════════════════════════════════════════
     -- Identity & Deduplication
     -- ═══════════════════════════════════════════════════════════════════════
     generateUUIDv4() AS message_id,
-
-    -- Generate deterministic trade_id (Kraken doesn't provide)
-    -- Format: KRAKEN-{timestamp_micros}-{hash}
-    concat(
-        'KRAKEN-',
-        toString(toUInt64(toFloat64(timestamp) * 1000000)),
-        '-',
-        substring(hex(MD5(concat(pair, price, volume))), 1, 8)
-    ) AS trade_id,
+    concat('BINANCE-', toString(trade_id)) AS trade_id,
 
     -- ═══════════════════════════════════════════════════════════════════════
-    -- Asset Classification (Normalize XBT → BTC here!)
+    -- Asset Classification
     -- ═══════════════════════════════════════════════════════════════════════
-    'kraken' AS exchange,
+    'binance' AS exchange,
+    symbol,
 
-    -- Symbol: Remove slash (XBT/USD → XBTUSD), normalize XBT → BTC
+    -- Canonical symbol: Add slash (BTCUSDT → BTC/USDT)
     concat(
-        if(splitByChar('/', pair)[1] = 'XBT', 'BTC', splitByChar('/', pair)[1]),
-        splitByChar('/', pair)[2]
-    ) AS symbol,
-
-    -- Canonical symbol: Keep slash, normalize XBT → BTC
-    concat(
-        if(splitByChar('/', pair)[1] = 'XBT', 'BTC', splitByChar('/', pair)[1]),
+        if(startsWith(symbol, 'BTC'), 'BTC',
+        if(startsWith(symbol, 'ETH'), 'ETH',
+        if(startsWith(symbol, 'BNB'), 'BNB',
+        symbol))),
         '/',
-        splitByChar('/', pair)[2]
+        if(endsWith(symbol, 'USDT'), 'USDT',
+        if(endsWith(symbol, 'BUSD'), 'BUSD',
+        if(endsWith(symbol, 'BTC'), 'BTC',
+        if(endsWith(symbol, 'ETH'), 'ETH',
+        'UNKNOWN'))))
     ) AS canonical_symbol,
 
     'crypto' AS asset_class,
 
-    -- Currency: Quote asset (USD, USDT, EUR)
-    splitByChar('/', pair)[2] AS currency,
+    -- Currency: Quote asset (USDT, BUSD, BTC, ETH)
+    if(endsWith(symbol, 'USDT'), 'USDT',
+    if(endsWith(symbol, 'BUSD'), 'BUSD',
+    if(endsWith(symbol, 'BTC'), 'BTC',
+    if(endsWith(symbol, 'ETH'), 'ETH',
+    'UNKNOWN')))) AS currency,
 
     -- ═══════════════════════════════════════════════════════════════════════
-    -- Trade Data (convert strings → Decimal128)
+    -- Trade Data (Bronze already has correct types)
     -- ═══════════════════════════════════════════════════════════════════════
-    CAST(toDecimal64(price, 8) AS Decimal128(8)) AS price,
-    CAST(toDecimal64(volume, 8) AS Decimal128(8)) AS quantity,
-    CAST(toDecimal64(toFloat64(price) * toFloat64(volume), 8) AS Decimal128(8)) AS quote_volume,
+    CAST(price AS Decimal128(8)) AS price,
+    CAST(quantity AS Decimal128(8)) AS quantity,
+    CAST(quote_volume AS Decimal128(8)) AS quote_volume,
 
-    -- Side: 'b' → BUY, 's' → SELL
+    -- Side: buy/sell → BUY/SELL
     CAST(
         CASE toString(side)
-            WHEN 'b' THEN 'BUY'
-            WHEN 's' THEN 'SELL'
+            WHEN 'buy' THEN 'BUY'
+            WHEN 'sell' THEN 'SELL'
+            ELSE 'UNKNOWN'
         END AS Enum8('BUY' = 1, 'SELL' = 2, 'SELL_SHORT' = 3, 'UNKNOWN' = 4)
     ) AS side,
 
     CAST([] AS Array(String)) AS trade_conditions,
 
     -- ═══════════════════════════════════════════════════════════════════════
-    -- Timestamps (convert Kraken "seconds.microseconds" → DateTime64(6))
+    -- Timestamps (convert milliseconds → microseconds)
     -- ═══════════════════════════════════════════════════════════════════════
-    fromUnixTimestamp64Micro(toUInt64(toFloat64(timestamp) * 1000000)) AS timestamp,
-    ingestion_timestamp AS ingestion_timestamp,
+    fromUnixTimestamp64Micro(toUnixTimestamp64Milli(exchange_timestamp) * 1000) AS timestamp,
+    fromUnixTimestamp64Micro(toUnixTimestamp64Milli(platform_timestamp) * 1000) AS ingestion_timestamp,
 
     -- ═══════════════════════════════════════════════════════════════════════
     -- Sequencing
     -- ═══════════════════════════════════════════════════════════════════════
-    toUInt64(toFloat64(timestamp) * 1000000) AS source_sequence,
+    trade_id AS source_sequence,
     CAST(NULL AS Nullable(UInt64)) AS platform_sequence,
 
     -- ═══════════════════════════════════════════════════════════════════════
-    -- Vendor Data (preserve Kraken-specific fields)
+    -- Vendor Data (preserve Binance-specific fields from metadata)
     -- ═══════════════════════════════════════════════════════════════════════
-    map(
-        'pair', pair,                      -- Original XBT/USD
-        'order_type', toString(order_type), -- 'l' or 'm'
-        'misc', misc,
-        'channel_id', toString(channel_id),
-        'raw_timestamp', timestamp         -- Original "seconds.microseconds"
+    if(
+        length(metadata) > 0,
+        map(
+            'event_type', JSONExtractString(metadata, 'e'),
+            'event_time', toString(JSONExtractUInt(metadata, 'E')),
+            'is_buyer_maker', toString(JSONExtractBool(metadata, 'm')),
+            'is_best_match', toString(JSONExtractBool(metadata, 'M')),
+            'buyer_order_id', toString(JSONExtractUInt(metadata, 'b')),
+            'seller_order_id', toString(JSONExtractUInt(metadata, 'a'))
+        ),
+        map()
     ) AS vendor_data,
 
     -- ═══════════════════════════════════════════════════════════════════════
     -- Validation
     -- ═══════════════════════════════════════════════════════════════════════
-    (toFloat64(price) > 0 AND toFloat64(volume) > 0) AS is_valid,
+    (toFloat64(price) > 0 AND toFloat64(quantity) > 0) AS is_valid,
 
     arrayConcat(
         if(toFloat64(price) <= 0, ['invalid_price'], []),
-        if(toFloat64(volume) <= 0, ['invalid_volume'], [])
+        if(toFloat64(quantity) <= 0, ['invalid_volume'], [])
     ) AS validation_errors
 
-FROM k2.bronze_trades_kraken;
+FROM k2.bronze_trades_binance;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Comments & Verification
@@ -110,16 +113,14 @@ FROM k2.bronze_trades_kraken;
 -- SELECT
 --     exchange,
 --     canonical_symbol,
---     vendor_data['pair'] as original_pair,
 --     count() as trades
 -- FROM k2.silver_trades
--- WHERE exchange = 'kraken'
--- GROUP BY exchange, canonical_symbol, original_pair;
--- Expected: canonical_symbol = "BTC/USD", vendor_data['pair'] = "XBT/USD"
+-- WHERE exchange = 'binance'
+-- GROUP BY exchange, canonical_symbol;
 
 -- Sample record:
 -- SELECT * FROM k2.silver_trades
--- WHERE exchange = 'kraken'
+-- WHERE exchange = 'binance'
 -- ORDER BY timestamp DESC LIMIT 1 FORMAT Vertical;
 
 -- Cross-exchange verification (Gold layer should aggregate both):
@@ -130,6 +131,6 @@ FROM k2.bronze_trades_kraken;
 --     close_price,
 --     trade_count
 -- FROM k2.ohlcv_1m
--- WHERE canonical_symbol = 'BTC/USD'
+-- WHERE canonical_symbol IN ('BTC/USD', 'BTC/USDT')
 -- ORDER BY window_start DESC, exchange
 -- LIMIT 20;

@@ -134,7 +134,7 @@ ORDER BY window_start DESC;
 ✅ XBT → BTC normalization working correctly
 ✅ vendor_data preserves all original Kraken fields
 ✅ Unified schema (canonical_symbol, BUY/SELL enums, DateTime64)
-✅ Both exchanges coexist in single silver_trades_v2 table
+✅ Both exchanges coexist in single silver_trades table
 ✅ Trade IDs generated deterministically for Kraken
 
 ### Gold Layer Validation

@@ -160,7 +160,7 @@ _version:            1
 
 ```sql
 CREATE MATERIALIZED VIEW k2.bronze_kraken_to_silver_v2_mv
-TO k2.silver_trades_v2 AS
+TO k2.silver_trades AS
 SELECT
     -- ═══════════════════════════════════════════════════════════════════════
     -- Identity & Deduplication
@@ -252,7 +252,7 @@ FROM k2.bronze_trades_kraken;
 ### 4.3 Silver Example
 
 ```sql
-SELECT * FROM k2.silver_trades_v2
+SELECT * FROM k2.silver_trades
 WHERE exchange = 'kraken'
 ORDER BY timestamp DESC
 LIMIT 1
@@ -546,7 +546,7 @@ SELECT
     canonical_symbol,
     vendor_data['pair'] as original_kraken_pair,
     count() as trades
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
 GROUP BY canonical_symbol, vendor_data['pair'];
 
@@ -562,7 +562,7 @@ SELECT
     vendor_data['raw_timestamp'] as kraken_native,
     timestamp as normalized,
     toUnixTimestamp64Micro(timestamp) as micros
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
 LIMIT 5;
 ```
@@ -574,7 +574,7 @@ SELECT
     canonical_symbol,
     count() as trades,
     round(avg(toFloat64(price)), 2) as avg_price
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE canonical_symbol IN ('BTC/USD', 'BTC/USDT')
 GROUP BY exchange, canonical_symbol;
 

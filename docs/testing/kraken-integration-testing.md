@@ -25,7 +25,7 @@ This guide covers testing the Kraken exchange integration following the multi-ex
 │ SILVER LAYER (Unified Multi-Exchange Schema)                       │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  silver_trades_v2 (normalized)                                      │
+│  silver_trades (normalized)                                      │
 │  ├─ exchange: "binance" / "kraken"                                 │
 │  ├─ canonical_symbol: "BTC/USD" ← Normalized from XBT              │
 │  ├─ vendor_data: {"pair": "XBT/USD", ...} ← Original preserved     │
@@ -172,7 +172,7 @@ SELECT
     canonical_symbol,
     vendor_data['pair'] as original_pair,
     count() as trades
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
 GROUP BY exchange, canonical_symbol, original_pair;
 
@@ -188,7 +188,7 @@ GROUP BY exchange, canonical_symbol, original_pair;
 ```sql
 -- Verify side mapping (b/s → BUY/SELL)
 SELECT side, count() as trades
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
 GROUP BY side;
 
@@ -207,7 +207,7 @@ SELECT
     vendor_data['raw_timestamp'] as original_timestamp,
     timestamp,
     toTypeName(timestamp) as timestamp_type
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
 ORDER BY timestamp DESC LIMIT 3;
 
@@ -229,7 +229,7 @@ SELECT
     side,
     timestamp,
     vendor_data
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
 ORDER BY timestamp DESC LIMIT 1
 FORMAT Vertical;
@@ -271,7 +271,7 @@ SELECT
     count() as trades,
     min(timestamp) as earliest,
     max(timestamp) as latest
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE canonical_symbol LIKE 'BTC/%'
 GROUP BY exchange, canonical_symbol;
 
@@ -367,7 +367,7 @@ ORDER BY event_time DESC LIMIT 10;
 SELECT
     exchange,
     round(count() / dateDiff('second', min(timestamp), max(timestamp)), 2) as trades_per_sec
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE timestamp >= now() - INTERVAL 5 MINUTE
 GROUP BY exchange;
 
@@ -377,7 +377,7 @@ SELECT
     quantile(0.5)(toUnixTimestamp64Milli(ingestion_timestamp) - toUnixTimestamp64Milli(timestamp)) as p50_ms,
     quantile(0.95)(toUnixTimestamp64Milli(ingestion_timestamp) - toUnixTimestamp64Milli(timestamp)) as p95_ms,
     quantile(0.99)(toUnixTimestamp64Milli(ingestion_timestamp) - toUnixTimestamp64Milli(timestamp)) as p99_ms
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE timestamp >= now() - INTERVAL 5 MINUTE
 GROUP BY exchange;
 ```

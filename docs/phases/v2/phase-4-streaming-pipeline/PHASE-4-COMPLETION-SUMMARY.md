@@ -63,7 +63,7 @@ Exchange WebSocket → Kotlin Feed Handler → Redpanda (raw + normalized topics
 - Preserves native Kraken format (XBT/USD, 'b'/'s' side codes)
 
 **Silver Layer** (Normalized Multi-Exchange):
-- `silver_trades_v2` (MergeTree)
+- `silver_trades` (MergeTree)
 - Materialized View: `bronze_kraken_to_silver_v2_mv`
 - Normalizations:
   - XBT → BTC (canonical_symbol)
@@ -153,7 +153,7 @@ Gold OHLCV (1d)          2+           ✅ Aggregating
 
 ### Manual Fixes Applied
 - Fixed timestamp conversion: `toUnixTimestamp64Micro` → `toUInt64`
-- Renamed `silver_trades` → `silver_trades_v2` for consistency
+- Renamed `silver_trades` → `silver_trades` for consistency
 - Created `bronze_kraken_to_silver_v2_mv` Materialized View
 
 ---
@@ -192,8 +192,8 @@ Gold OHLCV (1d)          2+           ✅ Aggregating
 **Cost**: Less flexibility for complex transformations (acceptable for current use case)
 **Alternative**: Build Kotlin Silver Processor (rejected - unnecessary complexity)
 
-### Decision 2026-02-10: Rename silver_trades to silver_trades_v2 (Tier 1)
-**Reason**: Gold MVs expect silver_trades_v2, data was in silver_trades
+### Decision 2026-02-10: Rename silver_trades to silver_trades (Tier 1)
+**Reason**: Gold MVs expect silver_trades, data was in silver_trades
 **Cost**: Minor naming inconsistency with old docs
 **Alternative**: Recreate all Gold MVs (rejected - too much rework)
 
@@ -231,7 +231,7 @@ Original Phase 4 success criteria (adapted for ClickHouse-native approach):
 
 2. **Historical data backfill pending**
    - **Impact**: Low - only affects historical queries
-   - **Fix**: Run manual INSERT INTO silver_trades_v2 SELECT FROM bronze_trades_kraken
+   - **Fix**: Run manual INSERT INTO silver_trades SELECT FROM bronze_trades_kraken
    - **Priority**: Low (can be done anytime)
 
 3. **No Binance Bronze → Silver MV**
@@ -273,7 +273,7 @@ Original Phase 4 success criteria (adapted for ClickHouse-native approach):
 
 ### What Could Be Improved 🔄
 1. **Schema execution order**: Should have tested MVs immediately after table creation
-2. **Naming consistency**: silver_trades vs silver_trades_v2 caused confusion
+2. **Naming consistency**: silver_trades vs silver_trades caused confusion
 3. **Binance integration incomplete**: Should have validated both exchanges simultaneously
 
 ### What to Watch 👀
@@ -324,7 +324,7 @@ Original Phase 4 success criteria (adapted for ClickHouse-native approach):
 │  ├──────────────────────────────────────────────────────────┤  │
 │  │ bronze_kraken_to_silver_v2_mv (Materialized View)        │  │
 │  │   ↓                                                       │  │
-│  │ silver_trades_v2 (MergeTree)                             │  │
+│  │ silver_trades (MergeTree)                             │  │
 │  │   - XBT → BTC normalization                              │  │
 │  │   - Side: 'b'/'s' → BUY/SELL                             │  │
 │  │   - Unified schema (Binance + Kraken)                    │  │
