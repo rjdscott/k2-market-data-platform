@@ -86,7 +86,7 @@ Captured during Step 4 (2026-02-09 12:22 UTC) and Kraken integration (2026-02-10
 |-------|---------------|-------------|-------|-------|
 | bronze_trades (Binance) | ~30k+ | 30,652 | ✅ | BTC/ETH/BNB from Binance |
 | bronze_trades_kraken | ~8k+ | 8,125 | ✅ | XBT/ETH from Kraken (native format) |
-| silver_trades_v2 | ~39k+ | 40,122 | ✅ | Multi-exchange normalized |
+| silver_trades | ~39k+ | 40,122 | ✅ | Multi-exchange normalized |
 | ohlcv_1m | ~10+ | 15+ | ✅ | 1-minute candles for both exchanges |
 
 ---

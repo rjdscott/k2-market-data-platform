@@ -18,11 +18,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import docker
 import pytest
 from docker.errors import DockerException
 from docker.models.containers import Container
 from pytest_mock import MockerFixture
+
+import docker
 
 # Configure logging for test execution
 logging.basicConfig(

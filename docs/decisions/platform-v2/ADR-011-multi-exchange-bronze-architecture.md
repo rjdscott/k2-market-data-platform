@@ -36,7 +36,7 @@ As we expand from Binance-only to multi-exchange support (Kraken, potentially ot
 ┌─────────────────────────────────────────────────────────────────────┐
 │ SILVER LAYER (Unified Multi-Exchange Schema)                       │
 ├─────────────────────────────────────────────────────────────────────┤
-│  silver_trades_v2 (normalized)                                      │
+│  silver_trades (normalized)                                      │
 │  ├─ exchange: "binance" / "kraken"                                 │
 │  ├─ canonical_symbol: "BTC/USD" ← Normalized from XBT              │
 │  ├─ vendor_data: {"pair": "XBT/USD", ...} ← Original preserved     │
@@ -83,7 +83,7 @@ ORDER BY (pair, timestamp, price);
 **Silver Materialized View**:
 ```sql
 CREATE MATERIALIZED VIEW k2.bronze_kraken_to_silver_v2_mv
-TO k2.silver_trades_v2 AS
+TO k2.silver_trades AS
 SELECT
     'kraken' AS exchange,
 
@@ -156,7 +156,7 @@ Previous v1 approach attempted single `bronze_trades` table:
 
 2. **Extensibility**: Adding Coinbase/Bitfinex/etc. is straightforward:
    - Add `bronze_trades_coinbase` table
-   - Add MV to `silver_trades_v2`
+   - Add MV to `silver_trades`
    - Gold layer "just works"
 
 3. **Data Quality**: Easy to verify Bronze vs exchange docs
@@ -173,12 +173,12 @@ Previous v1 approach attempted single `bronze_trades` table:
 
 **For existing Binance data** (optional refactor):
 - Current `bronze_trades` table → rename to `bronze_trades_binance`
-- Update MV to target `silver_trades_v2`
+- Update MV to target `silver_trades`
 - Backward compatible: Can keep current table if needed
 
 **For new exchanges**:
 - Always create exchange-specific Bronze table
-- Always write MV to unified `silver_trades_v2`
+- Always write MV to unified `silver_trades`
 
 ## Validation
 
@@ -193,7 +193,7 @@ SELECT pair FROM k2.bronze_trades_kraken;
 ✅ **Silver normalizes**:
 ```sql
 SELECT canonical_symbol, vendor_data['pair']
-FROM k2.silver_trades_v2 WHERE exchange = 'kraken';
+FROM k2.silver_trades WHERE exchange = 'kraken';
 -- Returns: canonical_symbol = "BTC/USD", vendor_data['pair'] = "XBT/USD"
 ```
 

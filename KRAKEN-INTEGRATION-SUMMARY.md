@@ -33,7 +33,7 @@ Successfully implemented Kraken exchange integration following the new **Multi-E
 │ SILVER LAYER (Unified Multi-Exchange Schema)                       │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  silver_trades_v2 (normalized)                                      │
+│  silver_trades (normalized)                                      │
 │  ├─ exchange: "binance" / "kraken"                                 │
 │  ├─ canonical_symbol: "BTC/USD" ← Normalized from XBT              │
 │  ├─ trade_id: "KRAKEN-1737118158321597-3a4f9c2d"                   │
@@ -343,7 +343,7 @@ docker exec k2-clickhouse clickhouse-client --multiquery < docker/clickhouse/val
 Adding Coinbase/Bitfinex/etc. is now straightforward:
 1. Create `{Exchange}WebSocketClient.kt`
 2. Create `bronze_trades_{exchange}` table
-3. Create normalization MV to `silver_trades_v2`
+3. Create normalization MV to `silver_trades`
 4. Gold layer "just works"
 
 ### 3. Data Quality

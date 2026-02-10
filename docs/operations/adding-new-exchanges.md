@@ -151,7 +151,7 @@ WHERE message != '';
 
 ```sql
 CREATE MATERIALIZED VIEW IF NOT EXISTS k2.bronze_{exchange}_to_silver_v2_mv
-TO k2.silver_trades_v2 AS
+TO k2.silver_trades AS
 SELECT
     generateUUIDv4() AS message_id,
 
@@ -321,7 +321,7 @@ SELECT
     canonical_symbol,
     vendor_data,
     count()
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = '{exchange}'
 GROUP BY exchange, canonical_symbol, vendor_data;
 ```

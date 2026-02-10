@@ -9,22 +9,22 @@
 -- ============================================================================
 
 -- 1. Verify v2 has recent data:
--- SELECT max(timestamp) FROM k2.silver_trades_v2;
+-- SELECT max(timestamp) FROM k2.silver_trades;
 -- -- Should be within last minute
 
 -- 2. Compare v1 vs v2 counts for same window:
 -- SELECT 'v1' as v, count() FROM k2.silver_trades WHERE exchange_timestamp > now() - INTERVAL 5 MINUTE
 -- UNION ALL
--- SELECT 'v2', count() FROM k2.silver_trades_v2 WHERE timestamp > now() - INTERVAL 5 MINUTE;
+-- SELECT 'v2', count() FROM k2.silver_trades WHERE timestamp > now() - INTERVAL 5 MINUTE;
 -- -- Counts should match
 
 -- 3. Verify Gold layer is using v2:
 -- SELECT table, create_table_query FROM system.tables
--- WHERE database='k2' AND name LIKE 'ohlcv%mv' AND create_table_query LIKE '%silver_trades_v2%';
+-- WHERE database='k2' AND name LIKE 'ohlcv%mv' AND create_table_query LIKE '%silver_trades%';
 -- -- Should return 6 MVs
 
 -- 4. Check v2 schema correctness:
--- SELECT * FROM k2.silver_trades_v2 ORDER BY timestamp DESC LIMIT 1 FORMAT Vertical;
+-- SELECT * FROM k2.silver_trades ORDER BY timestamp DESC LIMIT 1 FORMAT Vertical;
 -- -- Verify: message_id (UUID), asset_class (crypto), currency (USDT), vendor_data populated
 
 -- ============================================================================
@@ -38,7 +38,7 @@ DROP VIEW IF EXISTS k2.bronze_trades_mv;
 RENAME TABLE k2.silver_trades TO k2.silver_trades_v1_archive;
 
 -- Step 3: Rename v2 to become the primary Silver table
-RENAME TABLE k2.silver_trades_v2 TO k2.silver_trades;
+RENAME TABLE k2.silver_trades TO k2.silver_trades;
 
 -- Step 4: Rename v2 MV to become the primary MV
 RENAME TABLE k2.bronze_trades_mv_v2 TO k2.bronze_trades_mv;
@@ -74,7 +74,7 @@ RENAME TABLE k2.bronze_trades_mv_v2 TO k2.bronze_trades_mv;
 -- ============================================================================
 
 -- 1. Restore v1 as primary:
--- RENAME TABLE k2.silver_trades TO k2.silver_trades_v2;
+-- RENAME TABLE k2.silver_trades TO k2.silver_trades;
 -- RENAME TABLE k2.silver_trades_v1_archive TO k2.silver_trades;
 
 -- 2. Recreate v1 MV (use 02-silver-gold-layers.sql)

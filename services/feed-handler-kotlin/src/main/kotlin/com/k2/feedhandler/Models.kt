@@ -5,6 +5,9 @@ import kotlinx.serialization.SerialName
 
 /**
  * Combined stream wrapper (wss://stream.binance.com:9443/stream)
+ *
+ * Note: Not used with /ws endpoint (subscription-based approach)
+ * Only needed if using /stream endpoint with streams in URL
  */
 @Serializable
 data class BinanceCombinedStreamMessage(

@@ -8,7 +8,7 @@
 -- Step 1: Create Silver Trades V2 Table (Multi-Asset Schema)
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS k2.silver_trades_v2 (
+CREATE TABLE IF NOT EXISTS k2.silver_trades (
     -- Identity & Deduplication
     message_id UUID,
     trade_id String,
@@ -62,7 +62,7 @@ SETTINGS index_granularity = 8192;
 -- Step 2: Create Bronze → Silver V2 Materialized View
 -- ============================================================================
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS k2.bronze_trades_mv_v2 TO k2.silver_trades_v2 AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS k2.bronze_trades_mv_v2 TO k2.silver_trades AS
 SELECT
     -- Identity & Deduplication
     generateUUIDv4() AS message_id,
@@ -150,27 +150,27 @@ FROM k2.bronze_trades;
 -- ============================================================================
 
 -- Check v2 table has data:
--- SELECT count() FROM k2.silver_trades_v2;
+-- SELECT count() FROM k2.silver_trades;
 
 -- Compare v1 vs v2 counts:
 -- SELECT 'v1' as version, count() FROM k2.silver_trades
 -- UNION ALL
--- SELECT 'v2', count() FROM k2.silver_trades_v2;
+-- SELECT 'v2', count() FROM k2.silver_trades;
 
 -- View sample v2 record:
--- SELECT * FROM k2.silver_trades_v2 ORDER BY timestamp DESC LIMIT 1 FORMAT Vertical;
+-- SELECT * FROM k2.silver_trades ORDER BY timestamp DESC LIMIT 1 FORMAT Vertical;
 
 -- Check vendor_data parsing:
 -- SELECT
 --     trade_id,
 --     vendor_data['event_type'] as event_type,
 --     vendor_data['is_buyer_maker'] as is_buyer_maker
--- FROM k2.silver_trades_v2
+-- FROM k2.silver_trades
 -- WHERE vendor_data != map()
 -- LIMIT 5;
 
 -- Validate asset_class distribution:
--- SELECT asset_class, count() FROM k2.silver_trades_v2 GROUP BY asset_class;
+-- SELECT asset_class, count() FROM k2.silver_trades GROUP BY asset_class;
 
 -- Check currency extraction:
--- SELECT currency, count() FROM k2.silver_trades_v2 GROUP BY currency ORDER BY count() DESC;
+-- SELECT currency, count() FROM k2.silver_trades GROUP BY currency ORDER BY count() DESC;

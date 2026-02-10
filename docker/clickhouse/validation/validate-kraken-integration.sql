@@ -59,12 +59,12 @@ SELECT '═══ 2. SILVER LAYER: Normalization ═══' AS section;
 
 -- Verify XBT → BTC normalization
 SELECT
-    'silver_trades_v2 (Kraken)' AS table_name,
+    'silver_trades (Kraken)' AS table_name,
     exchange,
     canonical_symbol,
     vendor_data['pair'] as original_pair,
     count() as trades
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
 GROUP BY exchange, canonical_symbol, original_pair
 ORDER BY canonical_symbol;
@@ -82,7 +82,7 @@ SELECT
     side,
     timestamp,
     ingestion_timestamp
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
 ORDER BY timestamp DESC LIMIT 1
 FORMAT Vertical;
@@ -92,7 +92,7 @@ SELECT
     '  Side Enum Mapping' AS check_name,
     side,
     count() as trades
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
 GROUP BY side;
 
@@ -110,7 +110,7 @@ SELECT
     count() as trades,
     min(timestamp) as earliest,
     max(timestamp) as latest
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE canonical_symbol IN ('BTC/USD', 'BTC/USDT', 'ETH/USD', 'ETH/USDT')
 GROUP BY exchange, canonical_symbol
 ORDER BY canonical_symbol, exchange;
@@ -125,7 +125,7 @@ SELECT
     round(max(toFloat64(price)), 2) as max_price,
     round(avg(toFloat64(price)), 2) as avg_price,
     count() as trades
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE canonical_symbol LIKE 'BTC/%'
 GROUP BY exchange, canonical_symbol, currency
 ORDER BY exchange, canonical_symbol;
@@ -181,7 +181,7 @@ SELECT
     is_valid,
     validation_errors,
     count() as trades
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
 GROUP BY exchange, is_valid, validation_errors;
 
@@ -191,7 +191,7 @@ SELECT
     exchange,
     if(mapKeys(vendor_data) = [], 'EMPTY', 'OK') as vendor_data_status,
     count() as trades
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
 GROUP BY exchange, vendor_data_status;
 
@@ -202,7 +202,7 @@ SELECT
     round(quantile(0.5)(toUnixTimestamp64Milli(ingestion_timestamp) - toUnixTimestamp64Milli(timestamp)), 2) as p50_latency_ms,
     round(quantile(0.95)(toUnixTimestamp64Milli(ingestion_timestamp) - toUnixTimestamp64Milli(timestamp)), 2) as p95_latency_ms,
     round(quantile(0.99)(toUnixTimestamp64Milli(ingestion_timestamp) - toUnixTimestamp64Milli(timestamp)), 2) as p99_latency_ms
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE exchange = 'kraken'
   AND timestamp >= now() - INTERVAL 1 HOUR;
 

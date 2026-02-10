@@ -1,6 +1,6 @@
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- K2 Market Data Platform - Gold Layer V2 Migration
--- Purpose: Update OHLCV MVs to read from silver_trades_v2
+-- Purpose: Update OHLCV MVs to read from silver_trades
 -- Changes: timestamp (microseconds), asset_class partition
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -16,7 +16,7 @@ DROP VIEW IF EXISTS k2.ohlcv_1h_mv;
 DROP VIEW IF EXISTS k2.ohlcv_1d_mv;
 
 -- ============================================================================
--- Step 2: Recreate OHLCV MVs reading from silver_trades_v2
+-- Step 2: Recreate OHLCV MVs reading from silver_trades
 -- ============================================================================
 
 -- ────────────────────────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ SELECT
     sum(quote_volume) AS quote_volume,
     count() AS trade_count
 
-FROM k2.silver_trades_v2  -- Changed from silver_trades
+FROM k2.silver_trades  -- Changed from silver_trades
 WHERE is_valid = true
 GROUP BY exchange, canonical_symbol, window_start;
 
@@ -62,7 +62,7 @@ SELECT
     sum(quantity) AS volume,
     sum(quote_volume) AS quote_volume,
     count() AS trade_count
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE is_valid = true
 GROUP BY exchange, canonical_symbol, window_start;
 
@@ -84,7 +84,7 @@ SELECT
     sum(quantity) AS volume,
     sum(quote_volume) AS quote_volume,
     count() AS trade_count
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE is_valid = true
 GROUP BY exchange, canonical_symbol, window_start;
 
@@ -106,7 +106,7 @@ SELECT
     sum(quantity) AS volume,
     sum(quote_volume) AS quote_volume,
     count() AS trade_count
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE is_valid = true
 GROUP BY exchange, canonical_symbol, window_start;
 
@@ -128,7 +128,7 @@ SELECT
     sum(quantity) AS volume,
     sum(quote_volume) AS quote_volume,
     count() AS trade_count
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE is_valid = true
 GROUP BY exchange, canonical_symbol, window_start;
 
@@ -150,7 +150,7 @@ SELECT
     sum(quantity) AS volume,
     sum(quote_volume) AS quote_volume,
     count() AS trade_count
-FROM k2.silver_trades_v2
+FROM k2.silver_trades
 WHERE is_valid = true
 GROUP BY exchange, canonical_symbol, window_start;
 
