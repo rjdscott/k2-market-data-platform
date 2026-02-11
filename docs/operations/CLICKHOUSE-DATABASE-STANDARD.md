@@ -1,68 +1,75 @@
 # ClickHouse Database Standard
 
 **Status**: ✅ Active
-**Last Updated**: 2026-02-12
-**Decision**: Use `default` database for all K2 platform data
+**Last Updated**: 2026-02-12 (Migrated to k2)
+**Decision**: Use `k2` database for all K2 platform data
 
-## Standard Database: `default`
+## Standard Database: `k2`
 
-All K2 Market Data Platform tables reside in the `default` ClickHouse database.
+All K2 Market Data Platform tables reside in the `k2` ClickHouse database.
 
 ### Active Tables (default database)
 
 **Bronze Layer** (Raw data from Kafka):
 ```sql
-default.bronze_trades_binance       -- Binance raw trades
-default.bronze_trades_binance_queue -- Kafka consumer (Binance)
+k2.bronze_trades_binance       -- Binance raw trades
+k2.bronze_trades_binance_queue -- Kafka consumer (Binance)
 default.bronze_trades_kraken        -- Kraken raw trades
 default.bronze_trades_kraken_queue  -- Kafka consumer (Kraken)
 ```
 
 **Silver Layer** (Normalized & unified):
 ```sql
-default.silver_trades               -- Unified normalized trades
-default.silver_trades_binance_mv    -- Materialized view (Binance)
-default.silver_trades_kraken_mv     -- Materialized view (Kraken)
+k2.silver_trades               -- Unified normalized trades
+k2.silver_trades_binance_mv    -- Materialized view (Binance)
+k2.silver_trades_kraken_mv     -- Materialized view (Kraken)
 ```
 
 **Gold Layer** (OHLCV aggregations):
 ```sql
-default.ohlcv_1m / ohlcv_1m_mv     -- 1-minute candles
-default.ohlcv_5m / ohlcv_5m_mv     -- 5-minute candles
-default.ohlcv_1h / ohlcv_1h_mv     -- 1-hour candles
-default.ohlcv_1d / ohlcv_1d_mv     -- 1-day candles
+k2.ohlcv_1m / ohlcv_1m_mv     -- 1-minute candles
+k2.ohlcv_5m / ohlcv_5m_mv     -- 5-minute candles
+k2.ohlcv_1h / ohlcv_1h_mv     -- 1-hour candles
+k2.ohlcv_1d / ohlcv_1d_mv     -- 1-day candles
 ```
 
 ## Historical Context
 
-### Why `default` instead of `k2`?
+### Migration from `default` to `k2` (2026-02-12)
 
-**Original Plan**: Use dedicated `k2` database for isolation
+**Initial State**: All data in `default` database (1.1M+ trades)
 
-**What Happened**:
-- Implementation naturally went to `default` database
-- All production data accumulated in `default`
-- No issues or limitations encountered
-- `k2` database only had one orphaned table (no data flow)
+**Why Migrate**:
+- **Best Practice**: Named database for isolation and security
+- **Production Ready**: Dedicated database = clear ownership
+- **Security**: Easier to set database-level permissions
+- **Organization**: Clear boundary for K2 platform data
 
-**Decision (2026-02-12)**:
-- Standardize on `default` database
-- Drop `k2` database entirely
-- Update all documentation to reflect reality
+**Migration Process**:
+1. Created `k2` database
+2. Paused feed handlers (zero downtime approach)
+3. Renamed all data tables: `default.*` → `k2.*`
+4. Recreated Kafka consumers and materialized views in `k2`
+5. Updated docker-compose configuration
+6. Resumed feed handlers
+7. Verified end-to-end pipeline
 
-### Benefits of `default`
+**Result**: Clean migration with all 1.1M+ records preserved, pipeline operational
 
-1. **Simplicity**: Standard ClickHouse convention
-2. **No Migration Needed**: Data already there (800K+ trades)
-3. **Proven**: Working pipeline validated over weeks
-4. **Less Confusion**: One database, clear ownership
+### Benefits of `k2` Database
+
+1. **Isolation**: Clear boundary for K2 platform data
+2. **Security**: Database-level permissions and access control
+3. **Organization**: Intent is obvious (`k2` = K2 platform)
+4. **Best Practice**: Aligns with production standards
+5. **Backup/Restore**: Granular control (`BACKUP DATABASE k2`)
 
 ## Usage in Queries
 
 ### ✅ Correct
 ```sql
 -- Always use default. prefix or implicit default
-SELECT * FROM default.silver_trades;
+SELECT * FROM k2.silver_trades;
 SELECT * FROM silver_trades;  -- implicit default
 ```
 
@@ -84,7 +91,7 @@ When documenting ClickHouse queries:
 **Python/Application Code**:
 ```python
 # Explicit database in queries
-query = "SELECT * FROM default.silver_trades WHERE ..."
+query = "SELECT * FROM k2.silver_trades WHERE ..."
 
 # Or configure default database in connection
 client = clickhouse_connect.get_client(
@@ -104,10 +111,10 @@ environment:
 ## Migration from Legacy Docs
 
 If you find documentation referencing `k2.` tables:
-1. Replace `k2.bronze_trades` → `default.bronze_trades_binance` or `default.bronze_trades_kraken`
-2. Replace `k2.silver_trades` → `default.silver_trades`
-3. Replace `k2.ohlcv_*` → `default.ohlcv_*`
-4. Replace `k2.bronze_trades_mv` → `default.bronze_trades_binance_mv`
+1. Replace `k2.bronze_trades` → `k2.bronze_trades_binance` or `default.bronze_trades_kraken`
+2. Replace `k2.silver_trades` → `k2.silver_trades`
+3. Replace `k2.ohlcv_*` → `k2.ohlcv_*`
+4. Replace `k2.bronze_trades_mv` → `k2.bronze_trades_binance_mv`
 
 ## Schema Files
 

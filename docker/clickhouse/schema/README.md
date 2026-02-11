@@ -1,8 +1,8 @@
 # ClickHouse Schema Files
 
-**Status**: ⚠️ **Historical Reference Only**
-**Last Updated**: 2026-02-12
-**Active Implementation**: Uses `default` database (see note below)
+**Status**: ✅ **Active - Uses `k2` Database**
+**Last Updated**: 2026-02-12 (Migrated to k2)
+**Active Implementation**: Uses `k2` database (production standard)
 
 ## Important Note on Database Usage
 
@@ -14,25 +14,26 @@ These schema files were originally designed to use a `k2` database in ClickHouse
 
 **Active Pipeline** (✅ Production):
 ```
-Database: default
+Database: k2
 Tables:
-  - bronze_trades_binance (Binance raw data)
-  - bronze_trades_kraken (Kraken raw data)
-  - silver_trades (unified normalized trades)
-  - ohlcv_1m/5m/1h/1d (OHLCV aggregations)
+  - bronze_trades_binance (Binance raw data) - 1.1M+ records
+  - bronze_trades_kraken (Kraken raw data) - 6K+ records
+  - silver_trades (unified normalized trades) - 1.0M+ records
+  - ohlcv_1m/5m/1h/1d (OHLCV aggregations) - 300+ candles
 ```
 
 **Schema Files in This Directory**:
-- Reference the `k2` database (historical design)
-- NOT used for container initialization
+- Originally designed for `k2` database
+- Briefly implemented in `default` database
+- **Now**: Migrated back to `k2` database (2026-02-12)
 - Kept for reference and understanding design evolution
 
-### Actual Implementation Files
+### Actual Implementation
 
 The working implementation uses:
-- **Bronze/Silver/Gold layers**: Created manually via clickhouse-client
-- **Location**: `default` database in ClickHouse
-- **Initialization**: DDL files in `/docker/clickhouse/ddl/` (only offload-watermarks.sql)
+- **Bronze/Silver/Gold layers**: Created via clickhouse-client
+- **Location**: `k2` database in ClickHouse (✅ Production standard)
+- **Initialization**: Tables created during migration, DDL files reference only
 
 ## File Reference
 
@@ -58,13 +59,13 @@ The working implementation uses:
 ## Usage Guidelines
 
 **For New Development**:
-1. Use `default` database in all queries
-2. Reference `-fixed.sql` files for table structures
-3. Do NOT create tables in `k2` database
+1. Use `k2` database in all queries
+2. Reference `-fixed.sql` files for table structures (update to use k2 prefix)
+3. Always use explicit `k2.table_name` syntax
 
 **For Documentation**:
-1. All docs should reference `default` database
-2. Update any references to `k2.table_name` → `default.table_name`
+1. All docs should reference `k2` database
+2. Update any references to `default.table_name` → `k2.table_name`
 
 **For Historical Reference**:
 1. Original `k2` database files show initial design intent
@@ -78,7 +79,8 @@ The working implementation uses:
 
 ## Decision Record
 
-**Decision 2026-02-12**: Standardize on `default` database
-**Reason**: All production data already in `default`, no benefit to `k2` database
-**Cost**: Need to update documentation references
-**Alternative**: Migrate to `k2` database (rejected - unnecessary work, no benefit)
+**Decision 2026-02-12**: Migrate to `k2` database
+**Reason**: Production best practice, isolation, security, organization
+**Cost**: 30-minute migration, documentation updates
+**Alternative**: Stay with `default` (rejected - not production-ready)
+**Result**: 1.1M records migrated successfully, pipeline operational

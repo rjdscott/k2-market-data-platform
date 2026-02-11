@@ -257,7 +257,7 @@ Type `exit` or press `Ctrl+D` to quit.
 ### One-liner queries
 
 ```bash
-docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM default.bronze_trades_binance"
+docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM k2.bronze_trades_binance"
 ```
 
 ### Useful queries
@@ -270,7 +270,7 @@ SELECT
     count(*) as trades,
     min(exchange_timestamp) as earliest,
     max(exchange_timestamp) as latest
-FROM default.bronze_trades_binance
+FROM k2.bronze_trades_binance
 GROUP BY exchange
 "
 ```
@@ -282,7 +282,7 @@ SELECT
     exchange,
     canonical_symbol,
     count(*) as trades
-FROM default.silver_trades
+FROM k2.silver_trades
 WHERE is_valid = true
 GROUP BY exchange, canonical_symbol
 ORDER BY trades DESC
@@ -300,7 +300,7 @@ SELECT
     quantity,
     side,
     exchange_timestamp
-FROM default.silver_trades
+FROM k2.silver_trades
 ORDER BY exchange_timestamp DESC
 LIMIT 100
 FORMAT Pretty
@@ -320,7 +320,7 @@ SELECT
     close_price,
     volume,
     trade_count
-FROM default.ohlcv_1m
+FROM k2.ohlcv_1m
 WHERE window_start >= now() - INTERVAL 1 HOUR
 ORDER BY window_start DESC
 LIMIT 20
@@ -361,7 +361,7 @@ FORMAT Pretty
 
 ```bash
 docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM default.silver_trades LIMIT 1000
+SELECT * FROM k2.silver_trades LIMIT 1000
 FORMAT CSV
 " > trades.csv
 ```
@@ -370,7 +370,7 @@ FORMAT CSV
 
 ```bash
 docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM default.silver_trades LIMIT 100
+SELECT * FROM k2.silver_trades LIMIT 100
 FORMAT JSONEachRow
 " > trades.json
 ```
@@ -467,14 +467,14 @@ SELECT * FROM system.kafka_consumers FORMAT Pretty
 **Check materialized views:**
 ```bash
 docker exec k2-clickhouse clickhouse-client --query "
-SHOW CREATE TABLE default.bronze_trades_binance_mv
+SHOW CREATE TABLE k2.bronze_trades_binance_mv
 "
 ```
 
 **Manually trigger materialized view:**
 ```bash
 docker exec k2-clickhouse clickhouse-client --query "
-SYSTEM START VIEW default.bronze_trades_binance_mv
+SYSTEM START VIEW k2.bronze_trades_binance_mv
 "
 ```
 
@@ -602,7 +602,7 @@ SELECT
     exchange,
     trade_id,
     count(*) as occurrences
-FROM default.bronze_trades_binance
+FROM k2.bronze_trades_binance
 GROUP BY exchange, trade_id
 HAVING count(*) > 1
 ORDER BY occurrences DESC
@@ -622,7 +622,7 @@ SELECT
     count(*) as trades,
     min(exchange_timestamp) as first_trade,
     max(exchange_timestamp) as last_trade
-FROM default.silver_trades
+FROM k2.silver_trades
 WHERE exchange_timestamp >= now() - INTERVAL 1 HOUR
 GROUP BY exchange, canonical_symbol, minute
 ORDER BY exchange, canonical_symbol, minute
@@ -639,7 +639,7 @@ SELECT
     count(*) as trades,
     min(exchange_timestamp) as first_seen,
     max(exchange_timestamp) as last_seen
-FROM default.bronze_trades_binance
+FROM k2.bronze_trades_binance
 GROUP BY schema_version
 FORMAT Pretty
 "
@@ -653,14 +653,14 @@ FORMAT Pretty
 
 ```bash
 docker exec k2-clickhouse clickhouse-client --query "SHOW CREATE DATABASE k2" > backup/schema_k2_database.sql
-docker exec k2-clickhouse clickhouse-client --query "SHOW CREATE TABLE default.bronze_trades_binance" > backup/schema_bronze_trades.sql
+docker exec k2-clickhouse clickhouse-client --query "SHOW CREATE TABLE k2.bronze_trades_binance" > backup/schema_bronze_trades.sql
 ```
 
 ### Backup ClickHouse data
 
 ```bash
 docker exec k2-clickhouse clickhouse-client --query "
-BACKUP TABLE default.bronze_trades_binance TO Disk('backups', 'bronze_trades_backup.zip')
+BACKUP TABLE k2.bronze_trades_binance TO Disk('backups', 'bronze_trades_backup.zip')
 "
 ```
 

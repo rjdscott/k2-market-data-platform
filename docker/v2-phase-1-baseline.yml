@@ -151,7 +151,7 @@ services:
       - ./docker/clickhouse/config.xml:/etc/clickhouse-server/config.d/k2-config.xml:ro
       - ./docker/clickhouse/users.xml:/etc/clickhouse-server/users.d/k2-users.xml:ro
     environment:
-      CLICKHOUSE_DB: default
+      CLICKHOUSE_DB: k2
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1

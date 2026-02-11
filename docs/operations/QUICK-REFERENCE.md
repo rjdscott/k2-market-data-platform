@@ -96,21 +96,21 @@ docker exec -it k2-clickhouse clickhouse-client
 docker exec k2-clickhouse clickhouse-client --query "<SQL>"
 
 # Show tables
-docker exec k2-clickhouse clickhouse-client --query "SHOW TABLES FROM default"
+docker exec k2-clickhouse clickhouse-client --query "SHOW TABLES FROM k2"
 
 # Count trades (Binance)
 docker exec k2-clickhouse clickhouse-client --query "
-SELECT exchange, count(*) FROM default.bronze_trades_binance GROUP BY exchange
+SELECT exchange, count(*) FROM k2.bronze_trades_binance GROUP BY exchange
 "
 
 # Recent trades
 docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM default.silver_trades ORDER BY processed_at DESC LIMIT 10 FORMAT Pretty
+SELECT * FROM k2.silver_trades ORDER BY processed_at DESC LIMIT 10 FORMAT Pretty
 "
 
 # OHLCV bars
 docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM default.ohlcv_1m WHERE window_start >= now() - INTERVAL 1 HOUR
+SELECT * FROM k2.ohlcv_1m WHERE window_start >= now() - INTERVAL 1 HOUR
 ORDER BY window_start DESC LIMIT 20 FORMAT Pretty
 "
 
@@ -122,7 +122,7 @@ SELECT * FROM system.kafka_consumers FORMAT Pretty
 # Table sizes
 docker exec k2-clickhouse clickhouse-client --query "
 SELECT table, formatReadableSize(sum(bytes)) as size, sum(rows) as rows
-FROM system.parts WHERE database = 'default' AND active
+FROM system.parts WHERE database = 'k2' AND active
 GROUP BY table ORDER BY sum(bytes) DESC FORMAT Pretty
 "
 ```
@@ -169,7 +169,7 @@ docker exec k2-redpanda rpk topic list | grep "market.crypto.trades"
 docker exec k2-redpanda rpk topic describe market.crypto.trades.binance -a
 
 # ClickHouse receiving data?
-docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM default.bronze_trades_binance"
+docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM k2.bronze_trades_binance"
 
 # Redpanda Console accessible?
 curl -s http://localhost:8080 | grep -q "redpanda" && echo "✓ Console OK" || echo "✗ Console down"
@@ -209,17 +209,17 @@ docker exec k2-redpanda rpk cluster info
 ```bash
 # Export trades to CSV
 docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM default.silver_trades LIMIT 10000 FORMAT CSV
+SELECT * FROM k2.silver_trades LIMIT 10000 FORMAT CSV
 " > trades.csv
 
 # Export trades to JSON
 docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM default.silver_trades LIMIT 10000 FORMAT JSONEachRow
+SELECT * FROM k2.silver_trades LIMIT 10000 FORMAT JSONEachRow
 " > trades.json
 
 # Export OHLCV to CSV
 docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM default.ohlcv_1m WHERE window_start >= now() - INTERVAL 1 DAY FORMAT CSV
+SELECT * FROM k2.ohlcv_1m WHERE window_start >= now() - INTERVAL 1 DAY FORMAT CSV
 " > ohlcv_1d.csv
 
 # Backup topic sample
@@ -239,7 +239,7 @@ watch -n 1 'docker exec k2-redpanda rpk topic describe market.crypto.trades.bina
 watch -n 5 'docker logs --since 70s k2-feed-handler-binance 2>&1 | grep "Metrics" | tail -1'
 
 # Watch ClickHouse row count
-watch -n 5 'docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM default.bronze_trades_binance"'
+watch -n 5 'docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM k2.bronze_trades_binance"'
 
 # Watch consumer lag
 watch -n 2 'docker exec k2-redpanda rpk group describe clickhouse_bronze_consumer'
@@ -272,7 +272,7 @@ docker compose -p k2-v2 -f docker-compose.v2.yml \
 docker exec k2-clickhouse clickhouse-client --query "SELECT * FROM system.kafka_consumers FORMAT Pretty"
 
 # Restart materialized views
-docker exec k2-clickhouse clickhouse-client --query "SYSTEM START VIEW default.bronze_trades_binance_mv"
+docker exec k2-clickhouse clickhouse-client --query "SYSTEM START VIEW k2.bronze_trades_binance_mv"
 
 # Check for errors
 docker logs k2-clickhouse 2>&1 | grep -i "error" | tail -20
@@ -323,10 +323,10 @@ docker logs --since 60s k2-feed-handler-binance | grep "Metrics"
 docker exec k2-redpanda rpk topic describe market.crypto.trades.binance -a
 
 # 3. ClickHouse ingesting?
-docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM default.bronze_trades_binance"
+docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM k2.bronze_trades_binance"
 
 # 4. OHLCV aggregations working?
-docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM default.ohlcv_1m"
+docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM k2.ohlcv_1m"
 ```
 
 ### Debugging schema issues
