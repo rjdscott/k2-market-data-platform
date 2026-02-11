@@ -148,7 +148,7 @@ def offload_table(
         "--conf", "spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse",
         "--conf", "spark.sql.catalog.demo.io-impl=org.apache.iceberg.hadoop.HadoopFileIO",
         "--conf", "spark.sql.defaultCatalog=demo",
-        "--packages", "com.clickhouse:clickhouse-jdbc:0.4.6:all",
+        "--packages", "com.clickhouse:clickhouse-jdbc:0.4.6",
         str(pyspark_script),
         "--source-table", source_table,
         "--target-table", target_table,
