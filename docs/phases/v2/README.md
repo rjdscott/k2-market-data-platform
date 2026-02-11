@@ -3,7 +3,7 @@
 **Status:** 🟡 IN PROGRESS (Phases 1-4, 6 Complete; Phase 5 Next)
 **Target:** 16 CPU / 40GB RAM single Docker Compose cluster
 **Actual Progress:** 5 of 8 phases complete (62.5%) - **On track, ahead of schedule**
-**Last Updated:** 2026-02-11
+**Last Updated:** 2026-02-12
 
 ---
 
@@ -117,6 +117,18 @@ This section is updated as issues arise during implementation. Each entry should
 | 6 | 2026-02-10 | Docker build not reflecting code changes | Cached Docker layers | Use `--no-cache` flag | Always rebuild with --no-cache when code changes |
 | 6 | 2026-02-10 | Branch confusion (v2-phase01 vs platform-review-feb26) | Inconsistent branch naming | Reset v2-phase01 to match platform-review-feb26, merged both | Establish working branch early and stick to it |
 | All | 2026-02-11 | Documentation out of sync with implementation | Architectural pivots not reflected in phase docs | Updated PHASE-ADAPTATION.md and all phase status docs | Update documentation immediately after architectural decisions |
+| All | 2026-02-12 | Docker compose file proliferation | Multiple compose files caused configuration drift | Consolidated all services into single docker-compose.v2.yml | Single source of truth prevents inconsistencies, easier to maintain |
+| 3-4 | 2026-02-12 | Using `default` database in ClickHouse | Dev convenience led to non-production pattern | Migrated 1.1M+ records to `k2` database | Use production patterns from day 1, even in dev; avoids costly migrations later |
+
+---
+
+## Session Handoffs
+
+Detailed session-by-session progress logs capturing work completed, decisions made, and database state.
+
+- [2026-02-12 Handoff](HANDOFF-2026-02-12.md) — Docker consolidation, k2 database migration, OHLCV window_end, PyCharm guide
+- [2026-02-10 Evening Handoff](HANDOFF-2026-02-10-EVENING.md) — Schema cleanup, silver_trades_v2 → silver_trades migration
+- [2026-02-10 Handoff](HANDOFF-2026-02-10.md) — Phase 3-4 completion, Bronze/Silver/Gold operational
 
 ---
 
@@ -129,6 +141,6 @@ This section is updated as issues arise during implementation. Each entry should
 
 ---
 
-**Last Updated:** 2026-02-10
+**Last Updated:** 2026-02-12
 **Phase Owner:** Platform Engineering
-**Next Review:** Phase 6 completion (v2-phase-6-complete)
+**Next Review:** Phase 5 completion (cold tier operational)
