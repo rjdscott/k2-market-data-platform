@@ -452,7 +452,7 @@ services:
   # Production-ready: authentication, rate limiting, correlation IDs
   k2-query-api:
     build:
-      context: .
+      context: ../../../docker
       dockerfile: Dockerfile
       args:
         # Install API server dependencies
@@ -577,7 +577,7 @@ services:
   # - Production-grade resilience: circuit breakers, health checks, failover
   binance-stream:
     build:
-      context: .
+      context: ../../../docker
       dockerfile: Dockerfile
     container_name: k2-binance-stream
     hostname: binance-stream
@@ -650,7 +650,7 @@ services:
   # - Production-grade resilience: circuit breakers, health checks, failover
   kraken-stream:
     build:
-      context: .
+      context: ../../../docker
       dockerfile: Dockerfile
     container_name: k2-kraken-stream
     hostname: kraken-stream
