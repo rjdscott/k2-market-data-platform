@@ -137,28 +137,33 @@ def offload_table(
     logger.info(f"Starting offload: {source_table} → {target_table}")
     start_time = datetime.now()
 
-    # Build PySpark job command
-    pyspark_script = SPARK_SCRIPT_DIR / "offload_generic.py"
+    # Build PySpark job command (executed in Spark container via docker exec)
+    spark_container = "k2-spark-iceberg"
+    pyspark_script = "/home/iceberg/offload/offload_generic.py"
 
-    cmd = [
-        SPARK_SUBMIT_CMD,
-        "--master", "local[2]",
-        "--conf", "spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog",
-        "--conf", "spark.sql.catalog.demo.type=hadoop",
-        "--conf", "spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse",
-        "--conf", "spark.sql.catalog.demo.io-impl=org.apache.iceberg.hadoop.HadoopFileIO",
-        "--conf", "spark.sql.defaultCatalog=demo",
-        "--packages", "com.clickhouse:clickhouse-jdbc:0.4.6",
-        str(pyspark_script),
-        "--source-table", source_table,
-        "--target-table", target_table,
-        "--timestamp-col", timestamp_col,
-        "--sequence-col", sequence_col,
-        "--layer", layer,
-    ]
+    # Build the spark-submit command to run inside the Spark container
+    spark_cmd = (
+        f"/opt/spark/bin/spark-submit "
+        f"--master local[2] "
+        f"--conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog "
+        f"--conf spark.sql.catalog.demo.type=hadoop "
+        f"--conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse "
+        f"--conf spark.sql.catalog.demo.io-impl=org.apache.iceberg.hadoop.HadoopFileIO "
+        f"--conf spark.sql.defaultCatalog=demo "
+        f"--packages com.clickhouse:clickhouse-jdbc:0.4.6 "
+        f"{pyspark_script} "
+        f"--source-table {source_table} "
+        f"--target-table {target_table} "
+        f"--timestamp-col {timestamp_col} "
+        f"--sequence-col {sequence_col} "
+        f"--layer {layer}"
+    )
+
+    # Docker exec command to run spark-submit in the Spark container
+    cmd = ["docker", "exec", spark_container, "bash", "-c", spark_cmd]
 
     try:
-        # Execute PySpark job
+        # Execute PySpark job via docker exec
         result = subprocess.run(
             cmd,
             capture_output=True,

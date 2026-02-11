@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ClickHouse Connection
 CLICKHOUSE_HOST = "clickhouse"
 CLICKHOUSE_PORT = "8123"
-CLICKHOUSE_DATABASE = "default"
+CLICKHOUSE_DATABASE = "k2"  # Updated from 'default' to 'k2' (production database)
 CLICKHOUSE_URL = f"jdbc:clickhouse://{CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/{CLICKHOUSE_DATABASE}"
 
 # Iceberg Catalog Configuration (Hadoop catalog from ADR-013)
@@ -154,7 +154,7 @@ def run_generic_offload(
             properties={
                 "driver": "com.clickhouse.jdbc.ClickHouseDriver",
                 "user": "default",
-                "password": ""
+                "password": "clickhouse"  # from CLICKHOUSE_PASSWORD env var
             }
         )
 

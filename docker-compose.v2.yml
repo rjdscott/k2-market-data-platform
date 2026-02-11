@@ -148,7 +148,7 @@ services:
   # ClickHouse - OLAP database for real-time analytics
   # ───────────────────────────────────────────────────────────────────────
   clickhouse:
-    image: clickhouse/clickhouse-server:26.1
+    image: clickhouse/clickhouse-server:24.3-alpine
     container_name: k2-clickhouse
     hostname: clickhouse
     networks:
@@ -161,7 +161,7 @@ services:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
       - ./docker/clickhouse/config.xml:/etc/clickhouse-server/config.d/k2-config.xml:ro
-      - ./docker/clickhouse/users.xml:/etc/clickhouse-server/users.d/k2-users.xml:ro
+      # - ./docker/clickhouse/users.xml:/etc/clickhouse-server/users.d/k2-users.xml:ro  # Removed: using default auth with CLICKHOUSE_PASSWORD env var
       - ./docker/clickhouse/ddl:/docker-entrypoint-initdb.d:ro
     environment:
       CLICKHOUSE_DB: k2
@@ -419,9 +419,14 @@ services:
         ipv4_address: 172.28.0.32
     volumes:
       - ./docker/prefect:/root/.prefect
+      - ./docker/offload:/opt/prefect/offload
+      - ./docker/offload/flows:/opt/prefect/flows
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for container orchestration
     environment:
       PREFECT_API_URL: http://prefect-server:4200/api
-    command: prefect agent start -q iceberg-offload
+      PYTHONPATH: /opt/prefect
+      DOCKER_API_VERSION: "1.44"
+    command: sh -c "apt-get update && apt-get install -y docker.io && pip install psycopg2-binary==2.9.11 && prefect agent start -q iceberg-offload"
     depends_on:
       prefect-server:
         condition: service_healthy
