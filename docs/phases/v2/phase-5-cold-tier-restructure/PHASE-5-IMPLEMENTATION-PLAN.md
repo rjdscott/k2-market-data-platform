@@ -1,9 +1,39 @@
 # Phase 5: Cold Tier Restructure - Implementation Plan
 
-**Date:** 2026-02-11
+**Date:** 2026-02-11 (Updated: 2026-02-12)
 **Engineer:** Platform Engineering (Staff Level)
 **Duration Estimate:** 1-2 weeks
-**Status:** 🟡 Planning
+**Status:** 🟡 In Progress - Prototype Validated
+
+---
+
+## Progress Update (2026-02-12)
+
+**Status**: 🟡 Step 2 Prototype Validated ✅
+
+**Completed Today**:
+- ✅ Generic PySpark offload script (`offload_generic.py`) - working
+- ✅ PostgreSQL watermark management - exactly-once semantics validated
+- ✅ ClickHouse → Spark JDBC connectivity - resolved compatibility (24.3 LTS)
+- ✅ Iceberg atomic writes - Hadoop catalog tested
+- ✅ End-to-end testing - initial + incremental loads (zero duplicates)
+- ✅ Comprehensive test report - 560+ lines documenting 13 debug iterations
+- ✅ ClickHouse downgrade decision - ADR-015 created
+
+**Next Session**:
+1. Create production Iceberg tables (9 tables) with appropriate partitioning
+2. Build per-table offload scripts (bronze_binance, bronze_kraken, silver, gold_*)
+3. Configure Prefect flows for 15-minute scheduled execution
+4. Add monitoring/alerting for offload metrics
+
+**Key Decisions Made**:
+- **Decision 2026-02-12**: Downgrade ClickHouse from 26.1 to 24.3 LTS for JDBC compatibility ([DECISION-015](../../../decisions/platform-v2/DECISION-015-clickhouse-lts-downgrade.md))
+- **Decision 2026-02-11**: Use Spark (not Kotlin) for offload ([ADR-014](../../../decisions/platform-v2/ADR-014-spark-based-iceberg-offload.md))
+
+**Documentation Created**:
+- [Offload Pipeline Test Report](../../../testing/offload-pipeline-test-report-2026-02-12.md)
+- [Evening Session Handoff](HANDOFF-2026-02-12-EVENING.md)
+- [ClickHouse LTS Downgrade Decision](../../../decisions/platform-v2/DECISION-015-clickhouse-lts-downgrade.md)
 
 ---
 

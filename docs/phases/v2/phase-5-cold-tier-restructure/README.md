@@ -1,11 +1,12 @@
 # Phase 5: Cold Tier Restructure
 
-**Status:** 🟡 IN PROGRESS (Planning Complete, Ready for Implementation)
+**Status:** 🟡 IN PROGRESS (Prototype Validated, Production Implementation Starting)
 **Duration:** 1-2 weeks (2 weeks estimated, 10 working days)
 **Steps:** 5
-**Last Updated:** 2026-02-11
+**Last Updated:** 2026-02-12
 **Phase Owner:** Platform Engineering
 **Planning Completed:** 2026-02-11
+**Prototype Validated:** 2026-02-12
 
 ---
 
@@ -21,9 +22,9 @@ This phase reduces Iceberg infrastructure resources by 50% since it now handles 
 
 | # | Step | Status | Description |
 |---|------|--------|-------------|
-| 1 | [Create Four-Layer Iceberg DDL](steps/step-01-iceberg-ddl.md) | ⬜ Not Started | Create `cold.raw_trades`, `cold.bronze_trades`, `cold.silver_trades`, `cold.gold_ohlcv_{1m,5m,15m,30m,1h,1d}` tables via Iceberg REST catalog. Partitioned by hour/day/month + exchange |
-| 2 | [Implement Kotlin Iceberg Writer](steps/step-02-kotlin-iceberg-writer.md) | ⬜ Not Started | Hourly offload using Apache Iceberg Java SDK. SELECT from ClickHouse (last hour), write Parquet + Zstd to MinIO, update Iceberg catalog. Embedded in API service or standalone |
-| 3 | [Configure Hourly Offload Schedule](steps/step-03-hourly-offload.md) | ⬜ Not Started | Schedule: :05 raw, :06 bronze, :07 silver, :09 gold. Spring @Scheduled or Kotlin coroutine timer. Monitor offload duration + row counts |
+| 1 | [Create Four-Layer Iceberg DDL](steps/step-01-iceberg-ddl.md) | ⬜ Not Started | Create `cold.raw_trades`, `cold.bronze_trades`, `cold.silver_trades`, `cold.gold_ohlcv_{1m,5m,15m,30m,1h,1d}` tables via Iceberg catalog. Partitioned by hour/day/month + exchange |
+| 2 | [Implement Spark Iceberg Offload](steps/step-02-spark-iceberg-offload.md) | 🟡 In Progress | **Prototype validated 2026-02-12**: Generic PySpark offload working with watermark management, JDBC connectivity, incremental loads. See [Test Report](../../../testing/offload-pipeline-test-report-2026-02-12.md). Production: Create per-table scripts + Prefect orchestration |
+| 3 | [Configure Scheduled Offload](steps/step-03-scheduled-offload.md) | ⬜ Not Started | Schedule: 15-minute intervals for Bronze/Silver/Gold. Prefect flows orchestrating Spark jobs. Monitor offload duration + row counts |
 | 4 | [Configure Spark Daily Maintenance](steps/step-04-spark-daily-maintenance.md) | ⬜ Not Started | 02:00 UTC compaction (merge small Parquet files), 02:20 snapshot expiry (7d), 02:30 data quality audit (row count verification across layers). Spark exits after completion |
 | 5 | [Validate Warm-Cold Consistency](steps/step-05-validate-consistency.md) | ⬜ Not Started | Verify row counts match between ClickHouse and Iceberg at each layer. Test ClickHouse federated queries across warm+cold. Reduce Iceberg infra resources to 50%. Tag `v2-phase-5-complete` |
 
@@ -41,8 +42,10 @@ This phase reduces Iceberg infrastructure resources by 50% since it now handles 
 
 ## Success Criteria
 
-- [ ] 9 Iceberg tables created mirroring the ClickHouse four-layer medallion
-- [ ] Kotlin Iceberg writer offloading data hourly (~6 min/hour total)
+- [ ] 9 Iceberg tables created mirroring the ClickHouse medallion architecture
+- [x] **Prototype validated**: Generic PySpark offload + watermark management + exactly-once semantics (2026-02-12)
+- [x] **JDBC resolved**: ClickHouse 24.3 LTS compatible with Spark JDBC driver 0.4.6 (2026-02-12)
+- [ ] Spark offload jobs operational for all layers (Bronze, Silver, Gold)
 - [ ] Row counts match between ClickHouse and Iceberg at each layer
 - [ ] ClickHouse federated queries working across warm + cold tiers
 - [ ] Spark daily compaction + snapshot expiry running at 02:00 UTC
@@ -92,6 +95,40 @@ Daily (02:00 UTC): Spark compaction + snapshot expiry + audit
 
 ---
 
+## Progress Notes
+
+### 2026-02-12: Prototype Validation Complete ✅
+
+**Achievement**: Validated Spark-based offload pipeline with exactly-once semantics
+
+**What was tested**:
+- Generic PySpark offload script (`offload_generic.py`)
+- PostgreSQL watermark management for incremental loads
+- ClickHouse → Spark JDBC connectivity (resolved compatibility issues)
+- Iceberg atomic writes (Hadoop catalog)
+- Initial load: 5 rows in 3s
+- Incremental load: 3 rows in 6s (only new data read via watermark)
+- Zero duplicates, zero data loss
+
+**Key technical resolutions**:
+- **JDBC Compatibility**: Downgraded ClickHouse from 26.1 to 24.3 LTS per [DECISION-015](../../../decisions/platform-v2/DECISION-015-clickhouse-lts-downgrade.md)
+- **ClickHouse JDBC Driver**: `com.clickhouse:clickhouse-jdbc:0.4.6` (stable with 24.3 LTS)
+- **Catalog Strategy**: Hadoop catalog (local filesystem) validated; REST catalog for production
+- **Authentication**: Environment-based auth (removed custom users.xml)
+
+**Next steps**:
+1. Create production Iceberg tables (9 tables with REST catalog)
+2. Create per-table offload scripts (bronze_binance, bronze_kraken, silver, gold_*)
+3. Set up Prefect orchestration for 15-minute scheduled offloads
+4. Add monitoring/alerting for offload pipeline
+
+**Documentation**:
+- [Full Test Report](../../../testing/offload-pipeline-test-report-2026-02-12.md) (560+ lines)
+- [Evening Handoff](HANDOFF-2026-02-12-EVENING.md) (418 lines)
+- [ClickHouse LTS Decision](../../../decisions/platform-v2/DECISION-015-clickhouse-lts-downgrade.md)
+
+---
+
 ## Risks & Mitigations
 
 | Risk | Impact | Mitigation |
@@ -132,6 +169,7 @@ Daily (02:00 UTC): Spark compaction + snapshot expiry + audit
 
 ---
 
-**Last Updated:** 2026-02-09
+**Last Updated:** 2026-02-12
 **Phase Owner:** Platform Engineering
-**Next Review:** After Phase 4 completion
+**Prototype Validated:** 2026-02-12 (Step 2 offload pipeline)
+**Next Review:** After production offload deployment
