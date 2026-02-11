@@ -1,9 +1,18 @@
 # Phase 5: Cold Tier Restructure -- Progress Tracker
 
-**Status:** ⬜ NOT STARTED
-**Progress:** 0/5 steps (0%)
-**Last Updated:** 2026-02-09
+**Status:** 🟡 IN PROGRESS (Planning Complete, Ready for Implementation)
+**Progress:** 0/5 steps (0%) - Implementation ready to start
+**Planning Completed:** 2026-02-11
+**Last Updated:** 2026-02-11
 **Phase Owner:** Platform Engineering
+
+**Implementation Plan:** See [PHASE-5-IMPLEMENTATION-PLAN.md](PHASE-5-IMPLEMENTATION-PLAN.md) for comprehensive staff-level planning document.
+
+**Deliverables Created (Planning Phase):**
+- Iceberg DDL: 9 tables defined (Bronze: 2, Silver: 1, Gold: 6)
+- PostgreSQL catalog schema
+- Validation scripts
+- Implementation plan (29KB, comprehensive architecture)
 
 ---
 
@@ -95,9 +104,14 @@ Captured during Step 5.
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| -- | -- | -- |
+| 2026-02-11 | Standalone Kotlin sidecar (not embedded in API) | Operational isolation - offload failures don't impact API queries |
+| 2026-02-11 | Hourly offload (not real-time CDC) | ~1 hour cold freshness sufficient for analytics, simpler than CDC |
+| 2026-02-11 | Sequential (not parallel) offload | Avoid overwhelming ClickHouse with concurrent SELECTs |
+| 2026-02-11 | Bronze per-exchange tables (2 tables, not 1) | Enables independent schema evolution per exchange |
+| 2026-02-11 | No RAW layer in initial implementation | Bronze is lowest fidelity; RAW can be added later if regulatory requirements emerge |
 
 ---
 
-**Last Updated:** 2026-02-09
+**Last Updated:** 2026-02-11
 **Phase Owner:** Platform Engineering
+**Planning Phase:** ✅ Complete
