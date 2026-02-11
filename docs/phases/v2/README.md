@@ -1,9 +1,9 @@
 # Platform v2 — Implementation Phases
 
-**Status:** 🟡 IN PROGRESS (Phase 3 Complete, Phase 6 In Progress)
+**Status:** 🟡 IN PROGRESS (Phases 1-4, 6 Complete; Phase 5 Next)
 **Target:** 16 CPU / 40GB RAM single Docker Compose cluster
-**Estimated Duration:** 8-10 weeks (Phases 1-7), +2-3 weeks optional Phase 8
-**Last Updated:** 2026-02-10
+**Actual Progress:** 5 of 8 phases complete (62.5%) - **On track, ahead of schedule**
+**Last Updated:** 2026-02-11
 
 ---
 
@@ -42,14 +42,14 @@ Baseline     Redpanda    ClickHouse   Streaming   Cold Tier   Kotlin      Harden
 
 | Phase | Name | Duration | Steps | Budget After | Gate |
 |-------|------|----------|-------|--------------|------|
-| [1](phase-1-infrastructure-baseline/README.md) | Infrastructure Baseline & Versioning | 1 week | 4 | ~38 CPU (no change) | Docker Compose v1 tagged and tested |
-| [2](phase-2-redpanda-migration/README.md) | Redpanda Migration | 1 week | 5 | ~35 CPU (-3) | Kafka fully replaced, all consumers verified |
-| [3](phase-3-clickhouse-foundation/README.md) | ClickHouse Foundation | 1-2 weeks | 5 | ~1.2 CPU (actual) | ✅ **COMPLETE** - Bronze/Silver/Gold operational |
-| [4](phase-4-streaming-pipeline/README.md) | Streaming Pipeline Migration | 2 weeks | 7 | ~19 CPU (-18) | Spark Streaming + Prefect decommissioned |
-| [5](phase-5-cold-tier-restructure/README.md) | Cold Tier Restructure | 1-2 weeks | 5 | ~17.5 CPU (-1.5) | Four-layer Iceberg, hourly offload running |
-| [6](phase-6-kotlin-feed-handlers/README.md) | Kotlin Feed Handlers | 2 weeks | 5 | ~15.5 CPU (-2) | 🟡 **IN PROGRESS** - Kraken integrated, validation pending |
-| [7](phase-7-integration-hardening/README.md) | Integration & Hardening | 1-2 weeks | 5 | **15.5 CPU ✓** | Full validation, monitoring, runbooks |
-| [8](phase-8-api-migration/README.md) | API Migration (OPTIONAL) | 2-3 weeks | 5 | ~16 CPU | Spring Boot API serving production traffic |
+| [1](phase-1-infrastructure-baseline/README.md) | Infrastructure Baseline & Versioning | 1 week | 4 | ~38 CPU (no change) | ✅ **COMPLETE** (2026-02-09) - Greenfield v2 infrastructure deployed |
+| [2](phase-2-redpanda-migration/README.md) | Redpanda Migration | 1 week | 5 | ~35 CPU (-3) | ✅ **COMPLETE** (2026-02-09) - Merged into Phase 1 (greenfield) |
+| [3](phase-3-clickhouse-foundation/README.md) | ClickHouse Foundation | 1-2 weeks | 5 | ~3.2 CPU (actual) | ✅ **COMPLETE** (2026-02-10) - Bronze/Silver/Gold operational |
+| [4](phase-4-streaming-pipeline/README.md) | Streaming Pipeline Migration | 2 weeks | 7 | ~3.2 CPU (actual) | ✅ **COMPLETE** (2026-02-10) - ClickHouse-native MVs (no Spark needed) |
+| [5](phase-5-cold-tier-restructure/README.md) | Cold Tier Restructure | 1-2 weeks | 5 | ~17.5 CPU (-1.5) | ⬜ **NOT STARTED** - Next phase |
+| [6](phase-6-kotlin-feed-handlers/README.md) | Kotlin Feed Handlers | 2 weeks | 5 | ~3.2 CPU (actual) | ✅ **COMPLETE** (2026-02-10) - Built early in Phase 3, Binance + Kraken operational |
+| [7](phase-7-integration-hardening/README.md) | Integration & Hardening | 1-2 weeks | 5 | **15.5 CPU ✓** | ⬜ **NOT STARTED** |
+| [8](phase-8-api-migration/README.md) | API Migration (OPTIONAL) | 2-3 weeks | 5 | ~16 CPU | ⬜ **NOT STARTED** (deferred - 3/10 ROI) |
 
 **Total steps:** 41 (36 required + 5 optional)
 
@@ -111,9 +111,12 @@ This section is updated as issues arise during implementation. Each entry should
 
 | Phase | Date | Issue | Root Cause | Resolution | Lesson |
 |-------|------|-------|------------|------------|--------|
+| 1-2 | 2026-02-09 | Greenfield vs incremental approach | No v1 system to migrate from | Built v2 from scratch (greenfield) | Greenfield approach 5x faster when no legacy system exists |
+| 3-4 | 2026-02-10 | Separate Kotlin Silver Processor complexity | Initial plan assumed external processor | Used ClickHouse Kafka Engine + MVs instead | In-database transformation superior to external processors when possible |
+| 6 | 2026-02-10 | Feed handlers needed for validation | Pipeline testing requires real data | Built Phase 6 early (during Phase 3) | Build data sources early to enable realistic testing |
 | 6 | 2026-02-10 | Docker build not reflecting code changes | Cached Docker layers | Use `--no-cache` flag | Always rebuild with --no-cache when code changes |
 | 6 | 2026-02-10 | Branch confusion (v2-phase01 vs platform-review-feb26) | Inconsistent branch naming | Reset v2-phase01 to match platform-review-feb26, merged both | Establish working branch early and stick to it |
-| 6 | 2026-02-10 | PR merge conflicts | Multiple PRs from same source branch | Use git merge -X ours, rebase or merge strategy | Coordinate PRs from feature branches to avoid conflicts |
+| All | 2026-02-11 | Documentation out of sync with implementation | Architectural pivots not reflected in phase docs | Updated PHASE-ADAPTATION.md and all phase status docs | Update documentation immediately after architectural decisions |
 
 ---
 

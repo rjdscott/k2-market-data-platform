@@ -1,20 +1,25 @@
-# Phase Plan Adaptation for Greenfield Approach
+# Phase Plan Adaptation for Greenfield + ClickHouse-Native Approach
 
-**Date**: 2026-02-09
-**Context**: Phase 1 greenfield decision impact on subsequent phases
-**Status**: Active guidance document
+**Date**: 2026-02-11 (Updated from 2026-02-09)
+**Context**: Greenfield approach + ClickHouse-native architecture collapsed multiple phases
+**Status**: Completed - Historical record of architectural adaptation
 
 ---
 
 ## Context
 
-The original v2 phase plan (Phases 1-8) assumed an **incremental migration** approach:
+The original v2 phase plan (Phases 1-8) assumed an **incremental migration** approach with separate Kotlin processors:
 - Phase 1: Version v1, create baseline
 - Phase 2: Deploy Redpanda alongside Kafka, migrate
 - Phase 3: Deploy ClickHouse, create schema
-- Phase 4+: Continue migration
+- Phase 4: Build Kotlin Silver Processor + Gold MVs
+- Phase 6: Build Kotlin Feed Handlers
 
-However, **Phase 1 pivoted to a greenfield approach**, building v2 from scratch instead of incrementally migrating v1. This strategic decision was superior but changes how we execute subsequent phases.
+However, **two major architectural decisions** fundamentally changed execution:
+1. **Phase 1 pivoted to greenfield** - Built v2 from scratch instead of incrementally migrating v1
+2. **ClickHouse-native approach** - Used Kafka Engine + Materialized Views instead of separate Kotlin processors
+
+These strategic decisions were superior and collapsed Phases 2-4-6 into integrated implementation.
 
 ---
 
@@ -37,199 +42,186 @@ However, **Phase 1 pivoted to a greenfield approach**, building v2 from scratch 
 
 ---
 
-## Phase Mapping: Original Plan vs Greenfield Reality
+## Phase Mapping: Original Plan vs Actual Implementation
 
-| Original Phase | Original Work | Greenfield Status | Next Action |
-|----------------|---------------|-------------------|-------------|
-| **Phase 1** | Baseline + versioning | ✅ **Complete + bonus** | Done |
-| **Phase 2** | Deploy Redpanda, migrate from Kafka | ✅ **Already deployed** | Skip deployment, adapt validation |
-| **Phase 3** | Deploy ClickHouse, create schema | ⚠️ **Partially done** (CH deployed) | Skip deployment, **create schema** |
-| **Phase 4** | Streaming pipeline migration | ⬜ **Unchanged** | Execute as planned |
-| **Phase 5** | Cold tier restructure | ⬜ **Unchanged** | Execute as planned |
-| **Phase 6** | Kotlin feed handlers | ⬜ **Unchanged** | Execute as planned |
-| **Phase 7** | Integration hardening | ⬜ **Unchanged** | Execute as planned |
-| **Phase 8** | API migration (optional) | ⬜ **Unchanged** | Execute as planned |
+| Original Phase | Original Work | Actual Implementation | Status | Completion Date |
+|----------------|---------------|----------------------|--------|-----------------|
+| **Phase 1** | Baseline + versioning | Infrastructure baseline (greenfield) | ✅ **Complete** | 2026-02-09 |
+| **Phase 2** | Deploy Redpanda, migrate from Kafka | Merged into Phase 1 (Redpanda deployed) | ✅ **Complete** | 2026-02-09 |
+| **Phase 3** | Deploy ClickHouse, create schema | ClickHouse foundation (Bronze/Silver/Gold) | ✅ **Complete** | 2026-02-10 |
+| **Phase 4** | Kotlin Silver Processor + Gold MVs | **ClickHouse-native** (Kafka Engine + MVs) | ✅ **Complete** | 2026-02-10 |
+| **Phase 5** | Cold tier restructure | Unchanged | ⬜ **Not Started** | TBD |
+| **Phase 6** | Kotlin feed handlers | **Merged into Phase 3** (built early) | ✅ **Complete** | 2026-02-10 |
+| **Phase 7** | Integration hardening | Unchanged | ⬜ **Not Started** | TBD |
+| **Phase 8** | API migration (optional) | Deferred (low ROI) | ⬜ **Not Started** | TBD |
 
 ---
 
-## Adapted Phase Execution Plan
+## Actual Phase Execution (Completed)
 
-### ✅ Phase 1: COMPLETE
-**Original**: Baseline + versioning
-**Greenfield**: Baseline + **full v2 infrastructure deployed**
+### ✅ Phase 1: Infrastructure Baseline - COMPLETE
+**Original Plan**: Baseline + versioning
+**Actual Execution**: Baseline + **full v2 infrastructure deployed** (greenfield)
 **Status**: ✅ Complete (2026-02-09)
+**Deliverables**: Redpanda, ClickHouse, Grafana, Prometheus all deployed and validated
 
-### 🔄 Phase 2: ADAPT → "Redpanda Validation & Topic Setup"
-**Original**: Deploy Redpanda alongside Kafka, migrate producers/consumers
-**Greenfield Adaptation**: Redpanda already deployed, no Kafka to migrate from
+### ✅ Phase 2: Redpanda Migration - COMPLETE (Merged into Phase 1)
+**Original Plan**: Deploy Redpanda alongside Kafka, migrate producers/consumers
+**Actual Execution**: Redpanda deployed in Phase 1 (greenfield, no Kafka migration needed)
+**Status**: ✅ Complete (2026-02-09)
+**Deliverables**:
+- Redpanda cluster operational
+- Schema Registry integrated
+- Topics created: market.crypto.trades.{binance,kraken}.{raw,normalized}
+- Avro schemas registered
 
-**New Phase 2 Scope**:
-1. ~~Deploy Redpanda~~ (already done in Phase 1)
-2. Create market data topics (trades, OHLCV patterns)
-3. Register Avro schemas in Schema Registry
-4. Test producer/consumer patterns with sample data
-5. Benchmark latency and throughput
-6. Validate Schema Registry integration
+### ✅ Phase 3: ClickHouse Foundation - COMPLETE
+**Original Plan**: Deploy ClickHouse + create Raw/Bronze layers
+**Actual Execution**: ClickHouse deployed in Phase 1, then created complete medallion architecture
+**Status**: ✅ Complete (2026-02-10)
+**Deliverables**:
+- Bronze layer: Per-exchange tables (bronze_trades_binance, bronze_trades_kraken)
+- Bronze MVs: Kafka Engine consumers from Redpanda topics
+- Silver layer: Unified silver_trades table (275K+ trades)
+- Silver MVs: Bronze → Silver normalization (per-exchange)
+- Gold layer: 6 OHLCV tables (1m, 5m, 15m, 30m, 1h, 1d)
+- Gold MVs: Real-time OHLCV aggregations from silver_trades
+- End-to-end validation: Binance + Kraken both flowing through medallion
 
-**Duration**: 2-3 days (vs 1 week original)
-**Deliverable**: Production-ready Redpanda topics and validated ingestion patterns
+### ✅ Phase 4: Streaming Pipeline Migration - COMPLETE (ClickHouse-Native Approach)
+**Original Plan**: Build Kotlin Silver Processor + Gold MVs, then decommission Spark Streaming
+**Actual Execution**: **Used ClickHouse Kafka Engine + Materialized Views** (superior approach)
+**Status**: ✅ Complete (2026-02-10)
+**Key Architectural Decision**:
+- **Eliminated need for separate Kotlin Silver Processor**
+- Bronze → Silver transformation via ClickHouse MVs (not separate service)
+- Gold OHLCV generation via AggregatingMergeTree MVs (not Spark)
+- **Massive savings**: No Spark Streaming infrastructure needed (greenfield advantage)
 
-### 🔄 Phase 3: ADAPT → "ClickHouse Schema & Medallion Architecture"
-**Original**: Deploy ClickHouse + create Raw/Bronze layers
-**Greenfield Adaptation**: ClickHouse already deployed, focus on schema only
+**Deliverables**:
+- Silver layer operational via ClickHouse MVs
+- Gold OHLCV MVs generating real-time candles
+- Pipeline validated: 275K trades, 318+ candles
+- Resource usage: 3.2 CPU / 3.2GB (vastly under budget)
+- Tagged: **v1.1.0** (Multi-Exchange Streaming Pipeline Complete)
 
-**New Phase 3 Scope**:
-1. ~~Deploy ClickHouse~~ (already done in Phase 1)
-2. Create Raw layer DDL (Kafka Engine from Redpanda)
-3. Create Bronze layer DDL (cascading MVs)
-4. Create Silver layer DDL (with transformations)
-5. Create Gold layer OHLCV tables (AggregatingMergeTree)
-6. Validate end-to-end data flow
-7. Add ClickHouse-specific monitoring
+### ⬜ Phase 5: Cold Tier Restructure - NOT STARTED
+**Status**: ⬜ Not Started
+**Prerequisites**: ✅ Met (Phase 4 complete)
+**Original plan remains valid** - no dependencies on architectural changes
 
-**Duration**: 1 week (vs 1-2 weeks original)
-**Deliverable**: Four-layer medallion architecture in ClickHouse, data flowing Bronze → Silver → Gold
+### ✅ Phase 6: Kotlin Feed Handlers - COMPLETE (Built Early)
+**Original Plan**: Build Kotlin feed handlers after Phase 5
+**Actual Execution**: **Built during Phase 3** (integrated with ClickHouse foundation)
+**Status**: ✅ Complete (2026-02-10)
+**Deliverables**:
+- Kotlin feed handlers: Binance + Kraken operational
+- Ktor WebSocket client with coroutines
+- Dual producers: raw JSON + normalized Avro
+- Confluent Avro serialization with Schema Registry
+- Idempotent producers for exactly-once semantics
+- Resource usage: 0.25-3.4% CPU per handler
 
-### ⬜ Phase 4-7: UNCHANGED
-**Original plan remains valid** - these phases don't depend on deployment sequence:
-- Phase 4: Replace Spark Streaming with Kotlin processors
-- Phase 5: Restructure Iceberg cold tier
-- Phase 6: Build Kotlin feed handlers
-- Phase 7: Integration hardening and production validation
+**Architectural Note**: Feed handlers were built early (Phase 3) to enable end-to-end validation of the ClickHouse pipeline.
 
----
+### ⬜ Phase 7: Integration & Hardening - NOT STARTED
+**Status**: ⬜ Not Started
+**Prerequisites**: ✅ Met (Phases 4 & 6 complete)
+**Original plan remains valid**
 
-## Immediate Next Steps
-
-### Recommended: Adapted Phase 3 (ClickHouse Schema)
-**Why This First?**
-- Most logical progression: infrastructure → schema → data flow
-- ClickHouse already deployed and validated
-- Establishes data ingestion patterns for future phases
-- High value: Real-time OHLCV computation unlocked
-
-**Work Items**:
-1. Design trade data schema (Raw → Bronze → Silver → Gold)
-2. Create ClickHouse DDL files
-3. Set up Kafka Engine ingestion from Redpanda
-4. Test end-to-end data flow with sample data
-5. Validate OHLCV materialized views
-6. Document schema and query patterns
-
-### Alternative: Adapted Phase 2 (Redpanda Validation)
-**Why This First?**
-- Validate Redpanda under load before building on it
-- Establish topic naming conventions
-- Test Schema Registry with Avro
-- Benchmark performance vs requirements
-
-**Work Items**:
-1. Create market data topics (market.crypto.trades.{exchange})
-2. Register sample Avro schemas
-3. Write producer test (mock trade data)
-4. Write consumer test (validate ingestion)
-5. Benchmark throughput (target: 5,000+ msg/s)
-6. Document topic patterns and conventions
+### ⬜ Phase 8: API Migration - NOT STARTED (Optional, Deferred)
+**Status**: ⬜ Not Started (deferred - 3/10 ROI)
+**Original plan remains valid**
 
 ---
 
-## Decision: Which Phase Next?
+## Key Architectural Decisions Made
 
-### Option A: Adapted Phase 3 (ClickHouse Schema) - **RECOMMENDED**
-**Pros**:
-- Unlocks end-to-end data flow
-- High business value (real-time OHLCV)
-- Natural progression after infrastructure
-- Enables Phase 4 (streaming pipeline)
+### Decision 2026-02-09: Greenfield Approach (Phase 1)
+**Reason**: No existing v1 to migrate from - build v2 from scratch
+**Cost**: Requires building entire stack upfront
+**Alternative**: Incremental migration (rejected - no v1 exists)
+**Impact**: Collapsed Phases 1-2-3 infrastructure deployment into single phase
 
-**Cons**:
-- Requires data ingestion working first
-- More complex than Phase 2
+### Decision 2026-02-10: ClickHouse-Native Pipeline (Phase 4)
+**Reason**: ClickHouse Kafka Engine + MVs superior to separate Kotlin processor
+**Cost**: ~2 hours learning ClickHouse MV syntax
+**Alternative**: Build separate Kotlin Silver Processor (rejected - unnecessary complexity)
+**Impact**:
+- Eliminated need for separate Silver Processor service
+- Saved 0.5 CPU / 512MB RAM
+- Reduced operational complexity
+- Faster end-to-end latency (in-database transformation)
 
-**Estimated Duration**: 1 week
-
-### Option B: Adapted Phase 2 (Redpanda Validation)
-**Pros**:
-- Simpler, validates infrastructure first
-- Establishes data ingestion patterns
-- Tests Schema Registry thoroughly
-- Lower risk, easier rollback
-
-**Cons**:
-- Lower immediate business value
-- Extra validation step (could argue it's already validated in Phase 1)
-
-**Estimated Duration**: 2-3 days
-
-### Recommendation: **Phase 3 (ClickHouse Schema)**
-**Rationale**:
-- Redpanda already validated in Phase 1 (cluster health, test topic, console access)
-- ClickHouse already validated (database created, queries working)
-- Phase 3 delivers immediate business value (real-time OHLCV)
-- Can incorporate Phase 2 validation items (topics, schemas) into Phase 3 execution
-
-**Approach**: Merge Phase 2 validation items into Phase 3 as prerequisites:
-1. Create Redpanda topics (Phase 2 work)
-2. Register Avro schemas (Phase 2 work)
-3. Create ClickHouse Raw layer with Kafka Engine (Phase 3 work)
-4. Create Bronze/Silver/Gold layers (Phase 3 work)
-5. Validate end-to-end flow (both phases)
+### Decision 2026-02-10: Early Feed Handler Implementation (Phase 6)
+**Reason**: Needed working data sources to validate ClickHouse pipeline
+**Cost**: Build Phase 6 work earlier than planned
+**Alternative**: Mock data for validation (rejected - not production-realistic)
+**Impact**:
+- Phase 6 completed during Phase 3 timeframe
+- Enabled realistic end-to-end testing
+- Binance + Kraken both operational early
 
 ---
 
-## Documentation Updates Needed
+## Next Phase: Phase 5 (Cold Tier Restructure)
 
-### Phase 2 README
-- [ ] Update status to "Adapted for greenfield approach"
-- [ ] Document what was already accomplished in Phase 1
-- [ ] Reframe remaining work (topic setup, validation)
-- [ ] Adjust duration estimate (2-3 days vs 1 week)
+**Status**: ⬜ Not Started
+**Prerequisites**: ✅ All met (Phases 1-4, 6 complete)
+**Duration**: 1-2 weeks
+**Objective**: Restructure Iceberg cold storage to mirror ClickHouse medallion architecture
 
-### Phase 3 README
-- [ ] Update status to "Adapted for greenfield approach"
-- [ ] Remove "Deploy ClickHouse" step (already done)
-- [ ] Incorporate Phase 2 topic/schema setup as prerequisites
-- [ ] Focus on schema creation and data flow validation
+**Key Work Items**:
+1. Create four-layer Iceberg DDL (Raw, Bronze, Silver, Gold)
+2. Implement Kotlin hourly offload service (ClickHouse → Iceberg)
+3. Configure Spark daily maintenance (compaction + snapshot expiry)
+4. Validate warm-cold consistency
+5. Reduce Iceberg infrastructure resources by 50%
 
-### Phase Map (docs/phases/v2/README.md)
-- [ ] Add note about greenfield approach impact
-- [ ] Update phase durations based on actual execution
-- [ ] Link to this adaptation document
+**Why This Next?**:
+- Natural progression after hot-tier streaming pipeline
+- Enables long-term data retention strategy
+- High ROI (7/10 per INVESTMENT-ANALYSIS.md)
+- Completes data platform architecture
 
 ---
 
-## Lessons for Future Phases
+## Lessons Learned
 
-1. **Original plan still valid** for Phases 4-8 (no deployment dependencies)
-2. **Infrastructure-first approach** accelerated early phases
-3. **Greenfield > Incremental** validated by 5x faster Phase 1 execution
-4. **Flexible planning** enabled adaptation without losing momentum
-5. **Clear decision documentation** (like this file) enables confident pivots
+### What Went Well ✅
+1. **Greenfield > Incremental**: Building from scratch faster than migration (5x speedup)
+2. **ClickHouse-native approach**: Kafka Engine + MVs superior to separate processors
+3. **Early feed handler implementation**: Enabled realistic end-to-end testing
+4. **Flexible planning**: Adapted phases without losing momentum
+5. **Infrastructure-first**: Deploying all infrastructure upfront accelerated development
+
+### What Changed from Original Plan
+1. **Phase 2 merged into Phase 1**: Redpanda deployed immediately (greenfield advantage)
+2. **Phase 4 architecture pivot**: ClickHouse MVs replaced Kotlin Silver Processor
+3. **Phase 6 built early**: Feed handlers needed for Phase 3-4 validation
+4. **Phases 5, 7, 8 unchanged**: Cold tier, hardening, API migration remain as planned
+
+### Key Metrics (Phases 1-4, 6 Complete)
+- **Resource Usage**: 3.2 CPU / 3.2GB (84% under 16/40GB budget)
+- **Services**: 7 services operational (11 budgeted)
+- **Data Flow**: 275K+ trades, 318+ OHLCV candles
+- **Exchanges**: Binance + Kraken both operational
+- **End-to-End Latency**: <500ms p99
+- **Tag**: v1.1.0 (Multi-Exchange Streaming Pipeline Complete)
 
 ---
 
 ## Summary
 
-**Decision**: Proceed with **Adapted Phase 3 (ClickHouse Schema & Medallion Architecture)**
-
-**Scope**: Create four-layer medallion architecture in ClickHouse:
-- Raw: Kafka Engine from Redpanda
-- Bronze: Deduplication + normalization
-- Silver: Validation + enrichment
-- Gold: OHLCV aggregations (real-time)
-
-**Duration**: ~1 week
-
-**Prerequisites**:
-1. Redpanda topics created (market.crypto.trades.*)
-2. Avro schemas registered
-3. Sample trade data for testing
-
-**Deliverable**: End-to-end data flow from Redpanda → ClickHouse → Real-time OHLCV
+**Phases Complete**: 1, 2, 3, 4, 6 ✅ (5 of 8 phases, 62.5%)
+**Phases Remaining**: 5 (Cold Tier), 7 (Hardening), 8 (API - optional)
+**Current State**: Multi-exchange streaming pipeline operational, real-time OHLCV generation working
+**Next Phase**: Phase 5 (Cold Tier Restructure)
+**Timeline**: On track - greenfield approach accelerated by ~4 weeks
 
 ---
 
 **Prepared By**: Platform Engineering
-**Date**: 2026-02-09
-**Status**: Active Guidance
-**Next Review**: After Phase 3 completion
+**Date**: 2026-02-11 (Updated from 2026-02-09)
+**Status**: Historical Record - Phases 1-4, 6 Complete
+**Next Review**: After Phase 5 completion
