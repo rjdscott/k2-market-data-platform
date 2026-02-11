@@ -1,0 +1,287 @@
+# K2 Market Data Platform - Phase 5: Iceberg Cold Storage with Prefect Orchestration
+# Version: v2-phase5-prefect (ADR-014: Spark-based offload with Prefect)
+# Last Updated: 2026-02-11
+# Architecture: Self-hosted Prefect + Spark + Iceberg (Hadoop catalog)
+
+networks:
+  k2-net:
+    driver: bridge
+
+volumes:
+  minio-data:
+    driver: local
+  warehouse-data:
+    driver: local
+  prefect-db-data:
+    driver: local
+
+services:
+  # ───────────────────────────────────────────────────────────────────────
+  # ClickHouse - Source Database (for testing offload)
+  # ───────────────────────────────────────────────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.1-alpine
+    container_name: k2-clickhouse
+    hostname: clickhouse
+    networks:
+      - k2-net
+    ports:
+      - "8123:8123"
+      - "9002:9000"  # Native protocol (avoid MinIO 9000-9001)
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+    volumes:
+      - ./docker/clickhouse/ddl:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 3G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    labels:
+      com.k2.service: "database"
+      com.k2.phase: "5-testing"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # MinIO - S3-Compatible Storage
+  # ───────────────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: k2-minio
+    hostname: minio
+    networks:
+      - k2-net
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+    labels:
+      com.k2.service: "storage"
+      com.k2.phase: "5"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # PostgreSQL - Prefect Metadata Database
+  # ───────────────────────────────────────────────────────────────────────
+  prefect-db:
+    image: postgres:15-alpine
+    container_name: k2-prefect-db
+    hostname: prefect-db
+    networks:
+      - k2-net
+    environment:
+      POSTGRES_USER: prefect
+      POSTGRES_PASSWORD: prefect
+      POSTGRES_DB: prefect
+    volumes:
+      - prefect-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prefect"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    labels:
+      com.k2.service: "prefect-metadata"
+      com.k2.phase: "5"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Prefect Server - Workflow Orchestration UI & API
+  # ───────────────────────────────────────────────────────────────────────
+  prefect-server:
+    image: prefecthq/prefect:2.14-python3.11
+    container_name: k2-prefect-server
+    hostname: prefect-server
+    networks:
+      - k2-net
+    ports:
+      - "4200:4200"
+    environment:
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://prefect:prefect@prefect-db:5432/prefect
+      PREFECT_API_URL: http://prefect-server:4200/api
+    command: prefect server start --host 0.0.0.0
+    depends_on:
+      prefect-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    labels:
+      com.k2.service: "prefect-server"
+      com.k2.phase: "5"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Prefect Agent - Workflow Executor
+  # ───────────────────────────────────────────────────────────────────────
+  prefect-agent:
+    image: prefecthq/prefect:2.14-python3.11
+    container_name: k2-prefect-agent
+    hostname: prefect-agent
+    networks:
+      - k2-net
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+    command: prefect agent start -q iceberg-offload
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    labels:
+      com.k2.service: "prefect-agent"
+      com.k2.phase: "5"
+      com.k2.queue: "iceberg-offload"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Spark + Iceberg - ETL Engine (Batch Jobs)
+  # ───────────────────────────────────────────────────────────────────────
+  spark-iceberg:
+    image: tabulario/spark-iceberg:latest
+    container_name: k2-spark-iceberg
+    hostname: spark-iceberg
+    networks:
+      - k2-net
+    ports:
+      - "8888:8888"   # Jupyter
+      - "8080:8080"   # Spark Master UI
+      - "4040:4040"   # Spark Application UI
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+      - PREFECT_API_URL=http://prefect-server:4200/api
+    volumes:
+      - ./docker/iceberg/warehouse:/home/iceberg/warehouse
+      - ./docker/iceberg/ddl:/home/iceberg/ddl:ro
+      - ./docker/offload:/home/iceberg/offload:ro
+      - warehouse-data:/home/iceberg/spark-warehouse
+    depends_on:
+      minio:
+        condition: service_healthy
+      prefect-server:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'      # Increased for 15-min offload jobs
+          memory: 4G       # Increased for concurrent tasks
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    labels:
+      com.k2.service: "compute"
+      com.k2.spark-version: "3.5.x"
+      com.k2.iceberg-version: "1.x"
+      com.k2.phase: "5"
+
+#############################################################################
+# RESOURCE SUMMARY (Phase 5 with Prefect)
+#############################################################################
+#
+# Service              | CPU Limit | CPU Reserve | RAM Limit | RAM Reserve
+# ---------------------|-----------|-------------|-----------|------------
+# minio                | 0.5       | 0.25        | 1 GB      | 512 MB
+# prefect-db           | 0.5       | 0.25        | 512 MB    | 256 MB
+# prefect-server       | 0.5       | 0.25        | 512 MB    | 256 MB
+# prefect-agent        | 0.2       | 0.1         | 256 MB    | 128 MB
+# spark-iceberg        | 2.0       | 1.0         | 4 GB      | 2 GB
+# ---------------------|-----------|-------------|-----------|------------
+# TOTAL                | 3.7 CPU   | 1.85 CPU    | 6.28 GB   | 3.15 GB
+#
+# Notes:
+# - 60% lower than original Phase 5 estimate (17.5 CPU / 20 GB)
+# - Prefect adds 1.7 CPU / 1.28 GB (acceptable for orchestration benefits)
+# - Spark sized for 2-6 concurrent offload tasks (Bronze/Gold parallelism)
+#
+
+#############################################################################
+# USAGE
+#############################################################################
+#
+# Start infrastructure:
+#   docker compose -f docker-compose.phase5-prefect.yml up -d
+#
+# Access Prefect UI:
+#   http://localhost:4200
+#   - View flow runs, task status, logs
+#   - Monitor 15-minute offload schedule
+#   - Check retry history, failure reasons
+#
+# Access Spark UI (during job execution):
+#   http://localhost:4040
+#
+# Access MinIO Console:
+#   http://localhost:9001 (admin / password)
+#
+# Initialize watermark table (run once):
+#   docker exec k2-spark-iceberg spark-sql \
+#     --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
+#     --conf spark.sql.catalog.demo.type=hadoop \
+#     --conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse \
+#     -f /home/iceberg/ddl/watermarks.sql
+#
+# Deploy Prefect flow (run once):
+#   docker exec k2-spark-iceberg python /home/iceberg/offload/flows/iceberg_offload_flow.py
+#
+# Manually trigger offload (testing):
+#   prefect deployment run iceberg-offload-main/iceberg-offload-15min
+#
+# Check watermarks:
+#   docker exec clickhouse-server clickhouse-client --query "SELECT * FROM offload_watermarks ORDER BY table_name"
+#
+# View offload logs:
+#   docker logs k2-spark-iceberg
+#   # Or via Prefect UI: http://localhost:4200 > Flows > iceberg-offload-main
+#
