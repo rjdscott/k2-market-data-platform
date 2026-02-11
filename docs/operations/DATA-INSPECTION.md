@@ -314,6 +314,7 @@ SELECT
     exchange,
     canonical_symbol,
     window_start,
+    window_end,
     open_price,
     high_price,
     low_price,

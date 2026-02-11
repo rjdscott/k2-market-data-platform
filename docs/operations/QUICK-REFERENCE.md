@@ -110,7 +110,9 @@ SELECT * FROM k2.silver_trades ORDER BY processed_at DESC LIMIT 10 FORMAT Pretty
 
 # OHLCV bars
 docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM k2.ohlcv_1m WHERE window_start >= now() - INTERVAL 1 HOUR
+SELECT exchange, canonical_symbol, window_start, window_end,
+       open_price, high_price, low_price, close_price, volume, trade_count
+FROM k2.ohlcv_1m WHERE window_start >= now() - INTERVAL 1 HOUR
 ORDER BY window_start DESC LIMIT 20 FORMAT Pretty
 "
 
