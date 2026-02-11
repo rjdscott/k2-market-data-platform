@@ -6,7 +6,7 @@
 **Technical Story:** [Phase 10 - Streaming Crypto] Stream processing evaluation for Kafka → Bronze ingestion
 **Related Documents:**
 - [Stream Processing Evaluation](../../design/stream-processing-evaluation.md)
-- [ADR-002: Bronze Per Exchange](./ADR-002-bronze-per-exchange.md)
+- [ADR-002: Bronze Per Exchange](ADR-002-bronze-per-exchange.md)
 - [Platform Principles](../platform-principles.md)
 
 ---
@@ -334,7 +334,7 @@ Acceptance Criteria:
 
 ### Past Decisions
 - [ADR-001: Technology Stack](./ADR-001-technology-stack.md) - Kafka + Spark selected
-- [ADR-002: Bronze Per Exchange](./ADR-002-bronze-per-exchange.md) - Isolation pattern
+- [ADR-002: Bronze Per Exchange](ADR-002-bronze-per-exchange.md) - Isolation pattern
 
 ### Future Decisions
 - **ADR-004: Flink Adoption (Conditional)** - If sub-second latency becomes required
@@ -347,7 +347,7 @@ Acceptance Criteria:
 ### Technical Documentation
 1. [Stream Processing Evaluation](../../design/stream-processing-evaluation.md) - Comprehensive analysis
 2. [Platform Principles](../platform-principles.md) - Boring technology, idempotency
-3. [Latency Budgets](../../operations/performance/latency-budgets.md) - 500ms p99 breakdown
+3. [Latency Budgets](../../../../operations/performance/latency-budgets.md) - 500ms p99 breakdown
 4. [Query Architecture](../../design/query-architecture.md) - Kafka tail + Iceberg pattern
 5. [Consistency Model](../../design/data-guarantees/consistency-model.md) - At-least-once
 
@@ -358,9 +358,9 @@ Acceptance Criteria:
 - Netflix Flink Usage: [Netflix Tech Blog](https://netflixtechblog.com)
 
 ### Internal Context
-- [Phase 10 Progress](../../phases/v1/phase-10-streaming-crypto/PROGRESS.md) - Current status
-- [Phase 10 Decisions](../../phases/v1/phase-10-streaming-crypto/DECISIONS.md) - Recent ADRs
-- [Bronze Binance Job](../../../src/k2/spark/jobs/streaming/bronze_binance_ingestion.py) - Implementation
+- [Phase 10 Progress](../../../../phases/v1/phase-10-streaming-crypto/PROGRESS.md) - Current status
+- [Phase 10 Decisions](../../../../phases/v1/phase-10-streaming-crypto/DECISIONS.md) - Recent ADRs
+- [Bronze Binance Job](../../../../../src/k2/spark/jobs/streaming/bronze_binance_ingestion.py) - Implementation
 
 ---
 

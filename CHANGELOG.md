@@ -247,7 +247,7 @@ No breaking changes. This is the first tagged release.
 
 - **Repository**: https://github.com/rjdscott/k2-market-data-platform
 - **Documentation**: [docs/NAVIGATION.md](./docs/NAVIGATION.md)
-- **Known Issues**: [KNOWN-ISSUES.md](./KNOWN-ISSUES.md)
+- **Known Issues**: [KNOWN-ISSUES.md](docs/archive/v1-platform/KNOWN-ISSUES.md)
 - **Security**: [docs/reference/security-features.md](./docs/reference/security-features.md)
 - **API Docs**: http://localhost:8000/docs (when running)
 

@@ -1,0 +1,86 @@
+{
+  "format-version" : 2,
+  "table-uuid" : "08ddcd5e-b5f9-419e-94df-0535276859b4",
+  "location" : "/home/iceberg/warehouse/cold/trades_test",
+  "last-sequence-number" : 1,
+  "last-updated-ms" : 1770798119474,
+  "last-column-id" : 3,
+  "current-schema-id" : 0,
+  "schemas" : [ {
+    "type" : "struct",
+    "schema-id" : 0,
+    "fields" : [ {
+      "id" : 1,
+      "name" : "trade_id",
+      "required" : false,
+      "type" : "long"
+    }, {
+      "id" : 2,
+      "name" : "symbol",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 3,
+      "name" : "price",
+      "required" : false,
+      "type" : "double"
+    } ]
+  } ],
+  "default-spec-id" : 0,
+  "partition-specs" : [ {
+    "spec-id" : 0,
+    "fields" : [ ]
+  } ],
+  "last-partition-id" : 999,
+  "default-sort-order-id" : 0,
+  "sort-orders" : [ {
+    "order-id" : 0,
+    "fields" : [ ]
+  } ],
+  "properties" : {
+    "owner" : "root",
+    "write.parquet.compression-codec" : "zstd"
+  },
+  "current-snapshot-id" : 1116539608799933257,
+  "refs" : {
+    "main" : {
+      "snapshot-id" : 1116539608799933257,
+      "type" : "branch"
+    }
+  },
+  "snapshots" : [ {
+    "sequence-number" : 1,
+    "snapshot-id" : 1116539608799933257,
+    "timestamp-ms" : 1770798119474,
+    "summary" : {
+      "operation" : "append",
+      "spark.app.id" : "local-1770798117192",
+      "added-data-files" : "1",
+      "added-records" : "1",
+      "added-files-size" : "1004",
+      "changed-partition-count" : "1",
+      "total-records" : "1",
+      "total-files-size" : "1004",
+      "total-data-files" : "1",
+      "total-delete-files" : "0",
+      "total-position-deletes" : "0",
+      "total-equality-deletes" : "0",
+      "engine-version" : "3.5.5",
+      "app-id" : "local-1770798117192",
+      "engine-name" : "spark",
+      "iceberg-version" : "Apache Iceberg 1.8.1 (commit 9ce0fcf0af7becf25ad9fc996c3bad2afdcfd33d)"
+    },
+    "manifest-list" : "/home/iceberg/warehouse/cold/trades_test/metadata/snap-1116539608799933257-1-68aa9e49-90ed-4aa2-bc2e-d4770721b771.avro",
+    "schema-id" : 0
+  } ],
+  "statistics" : [ ],
+  "partition-statistics" : [ ],
+  "snapshot-log" : [ {
+    "timestamp-ms" : 1770798119474,
+    "snapshot-id" : 1116539608799933257
+  } ],
+  "metadata-log" : [ {
+    "timestamp-ms" : 1770798118150,
+    "metadata-file" : "/home/iceberg/warehouse/cold/trades_test/metadata/v1.metadata.json"
+  } ]
+}

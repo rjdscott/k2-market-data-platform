@@ -398,7 +398,7 @@ See [SECURITY.md](./SECURITY.md) for complete vulnerability reporting policy.
 
 - **Staff Review**: [docs/reviews/ohlcv-api-staff-review.md](./docs/reviews/ohlcv-api-staff-review.md)
 - **Security Features**: [docs/reference/security-features.md](./docs/reference/security-features.md)
-- **Phase 13 Status**: [docs/phases/phase-13-ohlcv-analytics/STATUS.md](docs/phases/v1/phase-13-ohlcv-analytics/STATUS.md)
+- **Phase 13 Status**: [docs/phases/phase-13-ohlcv-analytics/STATUS.md](../../phases/v1/phase-13-ohlcv-analytics/STATUS.md)
 
 ---
 

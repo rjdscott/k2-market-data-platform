@@ -97,17 +97,17 @@ RUN useradd --create-home --shell /bin/bash k2user && \
 # Switch to non-root user
 USER k2user
 
-# Expose ports (documentation only, actual ports configured in docker-compose.yml)
+# Expose ports (documentation only, actual ports configured in docker-compose.v1.yml)
 # 9091: Prometheus metrics endpoint (binance-stream)
 # 8000: FastAPI REST API (if running API server)
 EXPOSE 9091 8000
 
-# Health check (override in docker-compose.yml for specific services)
+# Health check (override in docker-compose.v1.yml for specific services)
 # This is a default health check that can be customized per service
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:9091/metrics || exit 1
 
-# Default command (override in docker-compose.yml for specific services)
+# Default command (override in docker-compose.v1.yml for specific services)
 # This serves as documentation and a fallback if no command is specified
 CMD ["python", "scripts/binance_stream.py"]
 

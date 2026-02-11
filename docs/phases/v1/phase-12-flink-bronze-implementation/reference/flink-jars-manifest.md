@@ -163,7 +163,7 @@ chmod +x scripts/download_flink_jars.sh
 JARs must be mounted into Flink containers at `/opt/flink/lib/`:
 
 ```yaml
-# docker-compose.yml
+# docker-compose.v1.yml
 services:
   flink-jobmanager:
     image: flink:1.19.1-scala_2.12-java11

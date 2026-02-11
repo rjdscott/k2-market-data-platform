@@ -41,7 +41,6 @@ CREATE TABLE IF NOT EXISTS cold.gold_ohlcv_1m (
 )
 USING iceberg
 PARTITIONED BY (months(window_start), exchange)
-LOCATION 's3a://k2-data/warehouse/cold/gold/gold_ohlcv_1m'
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',
@@ -72,7 +71,6 @@ CREATE TABLE IF NOT EXISTS cold.gold_ohlcv_5m (
 )
 USING iceberg
 PARTITIONED BY (months(window_start), exchange)
-LOCATION 's3a://k2-data/warehouse/cold/gold/gold_ohlcv_5m'
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',
@@ -103,7 +101,6 @@ CREATE TABLE IF NOT EXISTS cold.gold_ohlcv_15m (
 )
 USING iceberg
 PARTITIONED BY (months(window_start), exchange)
-LOCATION 's3a://k2-data/warehouse/cold/gold/gold_ohlcv_15m'
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',
@@ -134,7 +131,6 @@ CREATE TABLE IF NOT EXISTS cold.gold_ohlcv_30m (
 )
 USING iceberg
 PARTITIONED BY (months(window_start), exchange)
-LOCATION 's3a://k2-data/warehouse/cold/gold/gold_ohlcv_30m'
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',
@@ -165,7 +161,6 @@ CREATE TABLE IF NOT EXISTS cold.gold_ohlcv_1h (
 )
 USING iceberg
 PARTITIONED BY (months(window_start), exchange)
-LOCATION 's3a://k2-data/warehouse/cold/gold/gold_ohlcv_1h'
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',
@@ -196,7 +191,6 @@ CREATE TABLE IF NOT EXISTS cold.gold_ohlcv_1d (
 )
 USING iceberg
 PARTITIONED BY (months(window_start), exchange)
-LOCATION 's3a://k2-data/warehouse/cold/gold/gold_ohlcv_1d'
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',

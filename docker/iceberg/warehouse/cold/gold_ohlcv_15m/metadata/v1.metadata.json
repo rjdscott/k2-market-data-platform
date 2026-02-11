@@ -1,0 +1,113 @@
+{
+  "format-version" : 2,
+  "table-uuid" : "02d0f73c-d613-4062-8239-58af3d8c102b",
+  "location" : "/home/iceberg/warehouse/cold/gold_ohlcv_15m",
+  "last-sequence-number" : 0,
+  "last-updated-ms" : 1770798654952,
+  "last-column-id" : 12,
+  "current-schema-id" : 0,
+  "schemas" : [ {
+    "type" : "struct",
+    "schema-id" : 0,
+    "fields" : [ {
+      "id" : 1,
+      "name" : "exchange",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 2,
+      "name" : "canonical_symbol",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 3,
+      "name" : "window_start",
+      "required" : false,
+      "type" : "timestamptz",
+      "doc" : "Candle window start (UTC, truncated to 15 minutes)"
+    }, {
+      "id" : 4,
+      "name" : "open_time",
+      "required" : false,
+      "type" : "timestamptz"
+    }, {
+      "id" : 5,
+      "name" : "open_price",
+      "required" : false,
+      "type" : "decimal(38, 8)"
+    }, {
+      "id" : 6,
+      "name" : "close_time",
+      "required" : false,
+      "type" : "timestamptz"
+    }, {
+      "id" : 7,
+      "name" : "close_price",
+      "required" : false,
+      "type" : "decimal(38, 8)"
+    }, {
+      "id" : 8,
+      "name" : "high_price",
+      "required" : false,
+      "type" : "decimal(38, 8)"
+    }, {
+      "id" : 9,
+      "name" : "low_price",
+      "required" : false,
+      "type" : "decimal(38, 8)"
+    }, {
+      "id" : 10,
+      "name" : "volume",
+      "required" : false,
+      "type" : "decimal(38, 8)"
+    }, {
+      "id" : 11,
+      "name" : "quote_volume",
+      "required" : false,
+      "type" : "decimal(38, 8)"
+    }, {
+      "id" : 12,
+      "name" : "trade_count",
+      "required" : false,
+      "type" : "long"
+    } ]
+  } ],
+  "default-spec-id" : 0,
+  "partition-specs" : [ {
+    "spec-id" : 0,
+    "fields" : [ {
+      "name" : "window_start_month",
+      "transform" : "month",
+      "source-id" : 3,
+      "field-id" : 1000
+    }, {
+      "name" : "exchange",
+      "transform" : "identity",
+      "source-id" : 1,
+      "field-id" : 1001
+    } ]
+  } ],
+  "last-partition-id" : 1001,
+  "default-sort-order-id" : 0,
+  "sort-orders" : [ {
+    "order-id" : 0,
+    "fields" : [ ]
+  } ],
+  "properties" : {
+    "owner" : "root",
+    "write.metadata.metrics.column.canonical_symbol" : "counts",
+    "history.expire.max-snapshot-age-ms" : "604800000",
+    "write.format.default" : "parquet",
+    "write.parquet.compression-codec" : "zstd",
+    "write.parquet.compression-level" : "3",
+    "comment" : "15-minute OHLCV candles for historical charting",
+    "write.metadata.metrics.default" : "full"
+  },
+  "current-snapshot-id" : -1,
+  "refs" : { },
+  "snapshots" : [ ],
+  "statistics" : [ ],
+  "partition-statistics" : [ ],
+  "snapshot-log" : [ ],
+  "metadata-log" : [ ]
+}

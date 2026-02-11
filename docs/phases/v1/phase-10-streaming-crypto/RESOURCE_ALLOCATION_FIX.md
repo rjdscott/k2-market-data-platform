@@ -61,7 +61,7 @@ Silver-Kraken:  0 cores - WAITING
 Confirmed all streaming jobs configured for 1 core:
 
 ```bash
-$ grep "total-executor-cores" docker-compose.yml
+$ grep "total-executor-cores" docker-compose.v1.yml
 --total-executor-cores 1  # bronze-binance-stream
 --total-executor-cores 1  # bronze-kraken-stream
 --total-executor-cores 1  # silver-binance-transformation
@@ -325,7 +325,7 @@ open http://localhost:8080  # or curl -s http://localhost:8080
 
 ### Recreate Service with New Config
 ```bash
-# Wrong (doesn't pick up docker-compose.yml changes)
+# Wrong (doesn't pick up docker-compose.v1.yml changes)
 docker restart k2-silver-kraken-transformation
 
 # Correct
@@ -338,8 +338,8 @@ docker compose up -d silver-kraken-transformation
 docker inspect k2-silver-kraken-transformation | \
   grep -o -- "--total-executor-cores [0-9]\+"
 
-# Compare with docker-compose.yml
-grep -A2 "silver-kraken-transformation:" docker-compose.yml | \
+# Compare with docker-compose.v1.yml
+grep -A2 "silver-kraken-transformation:" docker-compose.v1.yml | \
   grep "executor-cores"
 ```
 

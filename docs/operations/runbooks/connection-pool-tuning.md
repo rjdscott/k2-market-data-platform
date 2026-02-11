@@ -269,7 +269,7 @@ export K2_QUERY_ENGINE_POOL_SIZE=10
 export K2_QUERY_ENGINE_MEMORY_LIMIT=2GB
 
 # Option 3: Add resource limits to Docker
-# docker-compose.yml:
+# docker-compose.v1.yml:
 services:
   api:
     mem_limit: 4g

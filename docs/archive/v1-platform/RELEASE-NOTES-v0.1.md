@@ -119,7 +119,7 @@ curl http://localhost:8000/health
 
 ## ⚠️ Known Issues (Production Blockers)
 
-This preview release contains **critical security vulnerabilities** that must be addressed before production use. See [KNOWN-ISSUES.md](./KNOWN-ISSUES.md) for full details.
+This preview release contains **critical security vulnerabilities** that must be addressed before production use. See [KNOWN-ISSUES.md](KNOWN-ISSUES.md) for full details.
 
 ### Critical (HIGH Severity)
 1. **SQL Injection Vulnerability** in OHLCV LIMIT clause
@@ -170,14 +170,14 @@ This preview release contains **critical security vulnerabilities** that must be
 ## 📚 Documentation
 
 ### New to K2?
-Start here: [docs/NAVIGATION.md](./docs/NAVIGATION.md) - Role-based paths to find any doc in <2 minutes
+Start here: [docs/NAVIGATION.md](../../NAVIGATION.md) - Role-based paths to find any doc in <2 minutes
 
 ### Key Documents
-- **Architecture**: [docs/architecture/platform-principles.md](./docs/architecture/platform-principles.md)
+- **Architecture**: [docs/architecture/platform-principles.md](../../architecture/platform-principles.md)
 - **API Reference**: [docs/reference/api-reference.md](./docs/reference/api-reference.md)
 - **Security Features**: [docs/reference/security-features.md](./docs/reference/security-features.md)
 - **Operations**: [docs/operations/runbooks/](./docs/operations/runbooks/)
-- **Testing**: [docs/testing/strategy.md](./docs/testing/strategy.md)
+- **Testing**: [docs/testing/strategy.md](../../testing/strategy.md)
 
 ---
 
@@ -198,7 +198,7 @@ K2 is **NOT** designed for:
 - Market making or arbitrage
 - In-memory tick data processing
 
-See [docs/architecture/platform-positioning.md](./docs/architecture/platform-positioning.md) for detailed positioning.
+See [docs/architecture/platform-positioning.md](../../architecture/platform-positioning.md) for detailed positioning.
 
 ---
 
@@ -219,14 +219,14 @@ Special thanks to the engineering team for thorough code reviews, architectural 
 
 - **Issues**: https://github.com/rjdscott/k2-market-data-platform/issues
 - **Discussions**: https://github.com/rjdscott/k2-market-data-platform/discussions
-- **Documentation**: [docs/NAVIGATION.md](./docs/NAVIGATION.md)
+- **Documentation**: [docs/NAVIGATION.md](../../NAVIGATION.md)
 - **Security**: See [SECURITY.md](./SECURITY.md) for vulnerability reporting
 
 ---
 
 ## 📄 License
 
-MIT License - See [LICENSE](./LICENSE) for details
+MIT License - See [LICENSE](../../../LICENSE) for details
 
 ---
 

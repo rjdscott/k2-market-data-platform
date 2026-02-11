@@ -228,7 +228,7 @@ End-to-end validation and demo rehearsal.
 
 ### 1. Add Redis to Infrastructure (15 minutes)
 ```yaml
-# docker-compose.yml
+# docker-compose.v1.yml
 redis:
   image: redis:7-alpine
   container_name: k2-redis

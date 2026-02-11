@@ -57,7 +57,6 @@ CREATE TABLE IF NOT EXISTS cold.silver_trades (
 )
 USING iceberg
 PARTITIONED BY (days(timestamp), exchange, asset_class)
-LOCATION 's3a://k2-data/warehouse/cold/silver/silver_trades'
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',

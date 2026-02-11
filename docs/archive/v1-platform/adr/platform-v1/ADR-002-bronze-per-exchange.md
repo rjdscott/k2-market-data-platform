@@ -289,7 +289,7 @@ This decision aligns with:
 2. [Netflix Data Platform Blog - Isolation Patterns](https://netflixtechblog.com)
 3. [Uber Engineering - Data Platform Architecture](https://eng.uber.com)
 4. [Airbnb Engineering - Data Infrastructure](https://medium.com/airbnb-engineering)
-5. [K2 Platform - Phase 10 Implementation Plan](../../phases/v1/phase-10-streaming-crypto/README.md)
+5. [K2 Platform - Phase 10 Implementation Plan](../../../../phases/v1/phase-10-streaming-crypto/README.md)
 
 ## Revision History
 

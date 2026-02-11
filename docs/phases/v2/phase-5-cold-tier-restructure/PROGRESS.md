@@ -1,8 +1,9 @@
 # Phase 5: Cold Tier Restructure -- Progress Tracker
 
-**Status:** 🟡 IN PROGRESS (Planning Complete, Ready for Implementation)
-**Progress:** 0/5 steps (0%) - Implementation ready to start
+**Status:** 🟡 IN PROGRESS (Milestone M1 Complete - Iceberg Infrastructure Operational)
+**Progress:** 1/5 steps (20%) - Cold tier infrastructure ready, data offload next
 **Planning Completed:** 2026-02-11
+**Step 1 Completed:** 2026-02-11
 **Last Updated:** 2026-02-11
 **Phase Owner:** Platform Engineering
 
@@ -20,9 +21,20 @@
 
 | Step | Title | Status | Started | Completed | Notes |
 |------|-------|--------|---------|-----------|-------|
-| 1 | Create Four-Layer Iceberg DDL | ⬜ Not Started | -- | -- | -- |
+| 1 | Create Four-Layer Iceberg DDL | ✅ Complete | 2026-02-11 | 2026-02-11 | 9 tables created via Hadoop catalog + tabulario image. See ADR-013 for pragmatic version strategy (Spark 3.5.5 + Iceberg 1.x). Total implementation: ~45 min after pivot from bleeding-edge versions. |
 
-**Milestone Status:** ⬜ Not Started
+**Milestone Status:** ✅ Complete
+
+**Implementation Details:**
+- **Image**: `tabulario/spark-iceberg:latest` (Spark 3.5.5 + Iceberg 1.x)
+- **Catalog**: Hadoop catalog (file-based, zero dependencies)
+- **FileIO**: HadoopFileIO (local filesystem at `/home/iceberg/warehouse/`)
+- **Tables Created**: 9/9 successful (Bronze: 2, Silver: 1, Gold: 6)
+- **Partitioning**: Days (Bronze/Silver), Months (Gold) ✅
+- **Compression**: Zstd level 3 ✅
+- **DDL Execution Time**: ~15 seconds total
+- **Docker Compose**: `docker-compose.phase5-iceberg.yml` (2 services: MinIO + Spark)
+- **Related ADRs**: [ADR-012](../../../decisions/platform-v2/ADR-012-spark-iceberg-version-upgrade.md) (Superseded), [ADR-013](../../../decisions/platform-v2/ADR-013-pragmatic-iceberg-version-strategy.md) (Accepted)
 
 ---
 
@@ -109,6 +121,9 @@ Captured during Step 5.
 | 2026-02-11 | Sequential (not parallel) offload | Avoid overwhelming ClickHouse with concurrent SELECTs |
 | 2026-02-11 | Bronze per-exchange tables (2 tables, not 1) | Enables independent schema evolution per exchange |
 | 2026-02-11 | No RAW layer in initial implementation | Bronze is lowest fidelity; RAW can be added later if regulatory requirements emerge |
+| 2026-02-11 | **Pragmatic version strategy (ADR-013)** | After 4+ hours troubleshooting Spark 4.1.1 + Iceberg 1.10.1, pivoted to proven Apache tabulario image (Spark 3.5.5 + Iceberg 1.x). Unblocked Phase 5 in <1 hour. |
+| 2026-02-11 | **Hadoop catalog (not REST/JDBC)** | Simplest working configuration for POC. File-based catalog requires zero dependencies (no PostgreSQL, no Hive Metastore). Production can migrate to JDBC/REST later. |
+| 2026-02-11 | **Remove LOCATION clauses from DDL** | Hadoop catalog enforces path-based table locations. Custom LOCATION clauses cause "Invalid path-based table" errors. Tables auto-located at `/home/iceberg/warehouse/cold/<table_name>/`. |
 
 ---
 

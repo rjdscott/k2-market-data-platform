@@ -168,7 +168,7 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "spark|bronze"
 
 ### Check Flink Services Commented in docker-compose
 ```bash
-grep -A 2 "FLINK SERVICES (DISABLED" docker-compose.yml
+grep -A 2 "FLINK SERVICES (DISABLED" docker-compose.v1.yml
 # Expected: Comment header visible
 ```
 
@@ -186,7 +186,7 @@ If you need to re-enable Flink in the future:
 
 ### Step 1: Uncomment Flink Services
 ```bash
-# Edit docker-compose.yml lines 845-1054
+# Edit docker-compose.v1.yml lines 845-1054
 # Remove the '#' prefix from all Flink service lines
 ```
 

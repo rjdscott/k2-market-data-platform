@@ -350,7 +350,7 @@ gold_crypto_trades (source)
 - 30m/1h/1d: Awaiting scheduled runs
 
 **⚠️ Known Issues** (Production Blockers):
-See [KNOWN-ISSUES.md](../../KNOWN-ISSUES.md) for complete details:
+See [KNOWN-ISSUES.md](../archive/v1-platform/KNOWN-ISSUES.md) for complete details:
 - 🔴 **CRITICAL**: SQL injection vulnerability in LIMIT clause
 - 🔴 **HIGH**: Resource exhaustion in batch endpoint
 - 🟡 **MEDIUM**: Missing rate limiting on OHLCV endpoints
@@ -483,8 +483,8 @@ Analytics
 - **Operations**: [../operations/runbooks/](../operations/runbooks/)
 - **Testing**: [../testing/strategy.md](../testing/strategy.md)
 - **Main README**: [../../README.md](../../README.md)
-- **v0.1 Release Notes**: [../../RELEASE-NOTES-v0.1.md](../../RELEASE-NOTES-v0.1.md)
-- **Known Issues**: [../../KNOWN-ISSUES.md](../../KNOWN-ISSUES.md)
+- **v0.1 Release Notes**: [../../RELEASE-NOTES-v0.1.md](../archive/v1-platform/RELEASE-NOTES-v0.1.md)
+- **Known Issues**: [../../KNOWN-ISSUES.md](../archive/v1-platform/KNOWN-ISSUES.md)
 
 ---
 
@@ -500,7 +500,7 @@ Analytics
 **A**: Phase 13 OHLCV analytics has critical security vulnerabilities (SQL injection, resource exhaustion) discovered in staff review (2026-01-22). Core functionality works, but it's marked as **Preview/Beta** pending v0.2 security fixes. Use for development/testing only.
 
 ### Q: When will v0.2 be released with security fixes?
-**A**: **Target: 2026-02-20** (2 weeks from v0.1). See [KNOWN-ISSUES.md](../../KNOWN-ISSUES.md) for tracked fixes.
+**A**: **Target: 2026-02-20** (2 weeks from v0.1). See [KNOWN-ISSUES.md](../archive/v1-platform/KNOWN-ISSUES.md) for tracked fixes.
 
 ### Q: Can I use v0.1 in production?
 **A**: ⚠️ **Not recommended**. Use v0.1 for development, testing, and evaluation only. Wait for v0.2 security fixes before production deployment.

@@ -43,7 +43,7 @@ tail -f logs/binance_client.log | grep "Connected"
 ### Docker Compose (Production)
 
 ```yaml
-# docker-compose.yml
+# docker-compose.v1.yml
 services:
   binance-client:
     image: k2-platform:latest

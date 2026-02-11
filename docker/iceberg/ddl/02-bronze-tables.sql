@@ -53,7 +53,6 @@ CREATE TABLE IF NOT EXISTS cold.bronze_trades_binance (
 )
 USING iceberg
 PARTITIONED BY (days(exchange_timestamp), exchange)
-LOCATION 's3a://k2-data/warehouse/cold/bronze/bronze_trades_binance'
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',
@@ -95,7 +94,6 @@ CREATE TABLE IF NOT EXISTS cold.bronze_trades_kraken (
 )
 USING iceberg
 PARTITIONED BY (days(exchange_timestamp), exchange)
-LOCATION 's3a://k2-data/warehouse/cold/bronze/bronze_trades_kraken'
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',

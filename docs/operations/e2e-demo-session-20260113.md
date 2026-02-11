@@ -293,7 +293,7 @@ print(df[['symbol', 'timestamp', 'price', 'quantity', 'side']].head())
 
 1. **Fix Metrics Issue**:
    ```python
-   # Option A: Disable metrics in docker-compose.yml
+   # Option A: Disable metrics in docker-compose.v1.yml
    K2_METRICS_ENABLED: "false"
 
    # Option B: Fix metric labels in metrics_registry.py

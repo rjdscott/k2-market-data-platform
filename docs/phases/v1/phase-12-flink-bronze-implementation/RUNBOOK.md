@@ -378,7 +378,7 @@ execution.checkpointing.interval: 5s  # Decrease from 10s
 
 **3. Increase Resources**
 ```yaml
-# docker-compose.yml
+# docker-compose.v1.yml
 taskmanager.memory.process.size: 3072m  # Increase from 2048m
 ```
 

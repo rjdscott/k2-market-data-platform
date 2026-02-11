@@ -299,10 +299,10 @@ invalid_df = df.filter((col("is_valid") == False) | col("is_valid").isNull())  #
 
 **Correct Deployment**:
 ```bash
-# WRONG (doesn't pick up docker-compose.yml changes)
+# WRONG (doesn't pick up docker-compose.v1.yml changes)
 docker restart k2-silver-binance-transformation
 
-# CORRECT (recreates with new docker-compose.yml)
+# CORRECT (recreates with new docker-compose.v1.yml)
 docker compose up -d silver-binance-transformation
 ```
 

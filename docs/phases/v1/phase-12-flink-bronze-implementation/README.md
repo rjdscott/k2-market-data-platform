@@ -211,7 +211,7 @@ docker-compose stop flink-bronze-binance-job flink-bronze-kraken-job
 docker-compose up -d bronze-binance-stream bronze-kraken-stream
 
 # 3. Revert Silver layer to read from Spark Bronze
-# Edit docker-compose.yml: change source table back to bronze_binance_trades
+# Edit docker-compose.v1.yml: change source table back to bronze_binance_trades
 docker-compose up -d silver-binance-transformation silver-kraken-transformation
 
 # 4. Verify pipeline working

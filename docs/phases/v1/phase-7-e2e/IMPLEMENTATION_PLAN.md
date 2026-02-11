@@ -70,7 +70,7 @@ tests/e2e/
 **Key Functions**:
 ```python
 class E2EDockerManager:
-    def __init__(self, compose_file: str = "docker-compose.yml"):
+    def __init__(self, compose_file: str = "docker-compose.v1.yml"):
         """Initialize Docker manager with compose file."""
         
     async def start_minimal_stack(self) -> Dict[str, str]:

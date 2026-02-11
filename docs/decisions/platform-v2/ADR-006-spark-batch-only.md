@@ -148,7 +148,7 @@ class IcebergOffloadScheduler(
 ### Spark Daily Maintenance
 
 ```yaml
-# docker-compose.yml
+# docker-compose.v1.yml
 spark-batch:
   image: k2/spark-batch:latest
   profiles: ["batch"]  # Only starts when explicitly invoked

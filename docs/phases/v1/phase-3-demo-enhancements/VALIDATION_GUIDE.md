@@ -33,7 +33,7 @@ docker compose ps
 
 ### Redis Service (Steps 4-5)
 ```bash
-# Add Redis to docker-compose.yml (if not already present)
+# Add Redis to docker-compose.v1.yml (if not already present)
 # Then:
 docker compose up -d redis
 

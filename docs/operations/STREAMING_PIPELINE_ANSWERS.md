@@ -99,7 +99,7 @@ bronze_df = bronze_df.withWatermark("kafka_timestamp", "5 minutes")
 
 **Option A: Prometheus + Grafana (Recommended)**
 ```yaml
-# Add to docker-compose.yml
+# Add to docker-compose.v1.yml
 prometheus:
   image: prom/prometheus:latest
   volumes:

@@ -326,8 +326,8 @@ pytest tests-backup/unit/test_circuit_breaker.py \
 ### Step I1: Redis Service
 
 ```bash
-# Check Redis is in docker-compose.yml
-grep -A 10 "redis:" docker-compose.yml
+# Check Redis is in docker-compose.v1.yml
+grep -A 10 "redis:" docker-compose.v1.yml
 
 # Verify Redis is running
 docker compose ps | grep redis

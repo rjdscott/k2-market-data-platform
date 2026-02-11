@@ -69,8 +69,8 @@ Actual Problem: 4-8/6 cores used (jobs requesting more cores than available)
 # Check actual executor cores in running container
 docker inspect k2-silver-binance-transformation | grep -o -- "--total-executor-cores [0-9]\+"
 
-# Check docker-compose.yml
-grep -A2 "silver-binance-transformation:" docker-compose.yml | grep "executor-cores"
+# Check docker-compose.v1.yml
+grep -A2 "silver-binance-transformation:" docker-compose.v1.yml | grep "executor-cores"
 ```
 
 If they don't match → Container configuration drift!
@@ -85,10 +85,10 @@ If they don't match → Container configuration drift!
 
 **Step 1**: Recreate containers with updated config
 ```bash
-# WRONG (doesn't pick up docker-compose.yml changes)
+# WRONG (doesn't pick up docker-compose.v1.yml changes)
 docker restart k2-silver-binance-transformation
 
-# CORRECT (recreates with new docker-compose.yml)
+# CORRECT (recreates with new docker-compose.v1.yml)
 docker compose up -d bronze-binance-stream bronze-kraken-stream \
                    silver-binance-transformation silver-kraken-transformation
 ```
@@ -155,7 +155,7 @@ Over-provisioned Spark resources leaving insufficient memory for Kafka and other
 
 **Step 1**: Reduce Spark worker resources (if over-provisioned)
 ```yaml
-# Edit docker-compose.yml
+# Edit docker-compose.v1.yml
 spark-worker-1:
   environment:
     - SPARK_WORKER_CORES=3  # Reduced from 4
@@ -169,7 +169,7 @@ spark-worker-1:
 
 **Step 2**: Reduce executor resources per streaming job
 ```yaml
-# Edit docker-compose.yml (all 4 streaming jobs)
+# Edit docker-compose.v1.yml (all 4 streaming jobs)
 --total-executor-cores 1  # Reduced from 2
 --executor-cores 1  # Reduced from 2
 --executor-memory 1g  # Added explicit limit

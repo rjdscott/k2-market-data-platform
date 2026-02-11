@@ -114,7 +114,7 @@ The notebook contains 6 main demonstration sections:
 
 1. **Start K2 API Service**
    ```bash
-   # Check if API is defined in docker-compose.yml or needs separate start
+   # Check if API is defined in docker-compose.v1.yml or needs separate start
    uv run python -m k2.api.main
    # OR
    uvicorn k2.api.main:app --host 0.0.0.0 --port 8000

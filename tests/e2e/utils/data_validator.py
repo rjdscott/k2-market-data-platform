@@ -163,7 +163,7 @@ class DataValidator:
             cmd = [
                 "docker-compose",
                 "-f",
-                "docker-compose.yml",
+                "docker-compose.v1.yml",
                 "exec",
                 "kafka",
                 "kafka-run-class.sh",

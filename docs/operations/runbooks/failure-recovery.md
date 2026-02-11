@@ -687,7 +687,7 @@ docker exec postgres pg_isready
 
 1. **Add PostgreSQL read replicas**:
    ```yaml
-   # docker-compose.yml
+   # docker-compose.v1.yml
    postgres-replica:
      image: postgres:16
      environment:

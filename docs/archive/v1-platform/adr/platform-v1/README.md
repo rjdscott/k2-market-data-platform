@@ -91,7 +91,7 @@ See [`../platform-v2/`](../platform-v2/) for v2 architecture and decisions.
 - Design: `docs/design/` (v1 system design)
 
 ### Platform v2 Documentation
-- v2 Architecture: [`../platform-v2/ARCHITECTURE-V2.md`](../platform-v2/ARCHITECTURE-V2.md)
+- v2 Architecture: [`../platform-v2/ARCHITECTURE-V2.md`](../../../../decisions/platform-v2/ARCHITECTURE-V2.md)
 - v2 ADRs: [`../platform-v2/`](../platform-v2/)
 - v2 Phases: `docs/phases/v2/` (new implementation plan)
 

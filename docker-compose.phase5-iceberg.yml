@@ -1,0 +1,95 @@
+# K2 Market Data Platform - Phase 5: Iceberg Cold Storage (Minimal Viable)
+# Version: v2-phase5-mvp (ADR-013: Pragmatic - Simplest Working Config)
+# Last Updated: 2026-02-11
+# Approach: Use tabulario defaults (Hive Metastore + Derby) - KISS principle
+
+networks:
+  k2-net:
+    driver: bridge
+
+volumes:
+  minio-data:
+    driver: local
+  warehouse-data:
+    driver: local
+
+services:
+  # ───────────────────────────────────────────────────────────────────────
+  # MinIO - S3-Compatible Storage
+  # ───────────────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: k2-minio
+    hostname: minio
+    networks:
+      - k2-net
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    labels:
+      com.k2.service: "storage"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Spark + Iceberg (Apache Proven Image with Defaults)
+  # ───────────────────────────────────────────────────────────────────────
+  spark-iceberg:
+    image: tabulario/spark-iceberg:latest
+    container_name: k2-spark-iceberg
+    hostname: spark-iceberg
+    networks:
+      - k2-net
+    ports:
+      - "8888:8888"   # Jupyter
+      - "8080:8080"   # Spark Master UI
+      - "10000:10000" # Thrift server
+      - "10001:10001" # Thrift HTTP
+    environment:
+      # Use tabulario's built-in defaults (Hive + Derby)
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+    volumes:
+      - ./docker/iceberg/warehouse:/home/iceberg/warehouse
+      - ./docker/iceberg/ddl:/home/iceberg/ddl:ro
+      - warehouse-data:/home/iceberg/spark-warehouse
+    depends_on:
+      minio:
+        condition: service_healthy
+    labels:
+      com.k2.service: "compute"
+      com.k2.spark-version: "3.5.x"
+      com.k2.iceberg-version: "1.x"
+
+#############################################################################
+# USAGE
+#############################################################################
+#
+# Start:
+#   docker compose -f docker-compose.phase5-iceberg.yml up -d
+#
+# Access Jupyter (includes Spark + Iceberg pre-configured):
+#   http://localhost:8888 (token in logs: docker logs k2-spark-iceberg)
+#
+# Spark SQL Shell:
+#   docker exec -it k2-spark-iceberg spark-sql
+#
+# Create tables interactively:
+#   docker exec -it k2-spark-iceberg spark-sql \
+#     --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
+#     --conf spark.sql.catalog.demo.type=hadoop \
+#     --conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse
+#
+# MinIO Console:
+#   http://localhost:9001 (admin / password)
+#

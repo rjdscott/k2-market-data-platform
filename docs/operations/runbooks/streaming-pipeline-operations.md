@@ -253,7 +253,7 @@ docker compose up -d --force-recreate silver-binance-transformation
 
 **Medium-term fix: Increase resources**
 ```yaml
-# Edit: docker-compose.yml
+# Edit: docker-compose.v1.yml
 silver-binance-transformation:
   deploy:
     resources:

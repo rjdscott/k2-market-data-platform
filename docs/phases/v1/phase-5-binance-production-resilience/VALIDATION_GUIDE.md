@@ -293,7 +293,7 @@ docker logs k2-binance-stream | grep -i "ping\|pong"
 grep "health_check_timeout" src/k2/common/config.py
 
 # Check docker-compose env
-grep "HEALTH_CHECK_TIMEOUT" docker-compose.yml
+grep "HEALTH_CHECK_TIMEOUT" docker-compose.v1.yml
 
 # Simulate no messages (stop Binance WebSocket, verify reconnect after 30s)
 ```

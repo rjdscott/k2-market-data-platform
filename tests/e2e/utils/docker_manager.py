@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class E2EDockerManager:
     """Manage Docker Compose for E2E tests with proper lifecycle management."""
 
-    def __init__(self, compose_file: str = "docker-compose.yml"):
+    def __init__(self, compose_file: str = "docker-compose.v1.yml"):
         """Initialize Docker manager with compose file path."""
         self.compose_file = Path(compose_file)
         self.docker_client = docker.from_env()

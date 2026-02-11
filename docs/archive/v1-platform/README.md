@@ -250,7 +250,7 @@ docker compose -f docker/v1-baseline.yml up -d
 
 **Trade-off**: Heavy resource footprint (9 brokers, replication)
 
-See: [ADR-001: Spark Streaming](../../decisions/platform-v1/ADR-001-spark-streaming-optimization.md)
+See: [ADR-001: Spark Streaming](adr/platform-v1/ADR-001-spark-streaming-optimization.md)
 
 ### Why Spark Streaming?
 
@@ -264,7 +264,7 @@ See: [ADR-001: Spark Streaming](../../decisions/platform-v1/ADR-001-spark-stream
 
 **Trade-off**: 13.5 CPU / 19.75GB for simple transforms (overkill)
 
-See: [ADR-003: Stream Processing Engine](../../decisions/platform-v1/ADR-003-stream-processing-engine-selection.md)
+See: [ADR-003: Stream Processing Engine](adr/platform-v1/ADR-003-stream-processing-engine-selection.md)
 
 ### Why Bronze Per Exchange?
 
@@ -278,7 +278,7 @@ See: [ADR-003: Stream Processing Engine](../../decisions/platform-v1/ADR-003-str
 
 **Trade-off**: More topics, more storage
 
-See: [ADR-002: Bronze Per Exchange](../../decisions/platform-v1/ADR-002-bronze-per-exchange.md)
+See: [ADR-002: Bronze Per Exchange](adr/platform-v1/ADR-002-bronze-per-exchange.md)
 
 ---
 
@@ -339,7 +339,7 @@ For current (v2) operational procedures, see: `docs/operations/`
 ### V1 Documentation
 
 - [V1 Phase Documentation](../../phases/v1/)
-- [V1 Architecture Decisions](../../decisions/platform-v1/)
+- [V1 Architecture Decisions](adr/platform-v1/)
 - [V1 Operations](../../operations/) (v1-specific runbooks)
 
 ### V2 Documentation

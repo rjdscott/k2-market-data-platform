@@ -137,7 +137,7 @@ All 6 V2 schemas are registered with asset-class-level subjects:
 Could add schema verification to Docker health checks:
 
 ```yaml
-# docker-compose.yml
+# docker-compose.v1.yml
 schema-registry:
   healthcheck:
     test: ["CMD", "curl", "-f", "http://localhost:8081/subjects/market.crypto.trades-value"]

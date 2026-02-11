@@ -292,8 +292,8 @@ docs/phases/
 - **Operations Runbooks**: [../operations/runbooks/](../operations/runbooks/)
 - **Testing Strategy**: [../testing/strategy.md](../testing/strategy.md)
 - **Main README**: [../../README.md](../../README.md)
-- **v0.1 Release**: [../../RELEASE-NOTES-v0.1.md](../../RELEASE-NOTES-v0.1.md)
-- **Known Issues**: [../../KNOWN-ISSUES.md](../../KNOWN-ISSUES.md)
+- **v0.1 Release**: [../../RELEASE-NOTES-v0.1.md](../archive/v1-platform/RELEASE-NOTES-v0.1.md)
+- **Known Issues**: [../../KNOWN-ISSUES.md](../archive/v1-platform/KNOWN-ISSUES.md)
 
 ---
 

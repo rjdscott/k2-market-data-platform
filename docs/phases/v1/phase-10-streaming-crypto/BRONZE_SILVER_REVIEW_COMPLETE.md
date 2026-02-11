@@ -185,7 +185,7 @@ docker start k2-bronze-binance-stream
 
 **Recommendations for Production:**
 ```yaml
-# docker-compose.yml
+# docker-compose.v1.yml
 deploy:
   resources:
     limits:

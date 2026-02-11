@@ -259,7 +259,7 @@ All changes have been validated through comprehensive testing:
 
 1. **Revert docker-compose.yml:**
    ```bash
-   git checkout HEAD~1 docker-compose.yml
+   git checkout HEAD~1 docker-compose.v1.yml
    ```
 
 2. **Restart cluster:**

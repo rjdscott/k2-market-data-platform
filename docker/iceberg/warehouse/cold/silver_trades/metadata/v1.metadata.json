@@ -1,0 +1,196 @@
+{
+  "format-version" : 2,
+  "table-uuid" : "8bc3a4b3-38ff-4aee-9a02-b06601bf8f55",
+  "location" : "/home/iceberg/warehouse/cold/silver_trades",
+  "last-sequence-number" : 0,
+  "last-updated-ms" : 1770798652525,
+  "last-column-id" : 24,
+  "current-schema-id" : 0,
+  "schemas" : [ {
+    "type" : "struct",
+    "schema-id" : 0,
+    "fields" : [ {
+      "id" : 1,
+      "name" : "message_id",
+      "required" : false,
+      "type" : "string",
+      "doc" : "UUID for deduplication across sources"
+    }, {
+      "id" : 2,
+      "name" : "trade_id",
+      "required" : false,
+      "type" : "string",
+      "doc" : "Prefixed trade ID (e.g., BINANCE-123456)"
+    }, {
+      "id" : 3,
+      "name" : "exchange",
+      "required" : false,
+      "type" : "string",
+      "doc" : "Exchange name (binance, kraken, etc.)"
+    }, {
+      "id" : 4,
+      "name" : "symbol",
+      "required" : false,
+      "type" : "string",
+      "doc" : "Exchange-native symbol (BTCUSDT, XBT/USD)"
+    }, {
+      "id" : 5,
+      "name" : "canonical_symbol",
+      "required" : false,
+      "type" : "string",
+      "doc" : "Normalized symbol (BTC/USDT, BTC/USD)"
+    }, {
+      "id" : 6,
+      "name" : "asset_class",
+      "required" : false,
+      "type" : "string",
+      "doc" : "Asset class: crypto, equities, futures, options"
+    }, {
+      "id" : 7,
+      "name" : "currency",
+      "required" : false,
+      "type" : "string",
+      "doc" : "Quote currency (USDT, USD, BTC, ETH)"
+    }, {
+      "id" : 8,
+      "name" : "price",
+      "required" : false,
+      "type" : "decimal(38, 8)",
+      "doc" : "Trade price (8 decimal places)"
+    }, {
+      "id" : 9,
+      "name" : "quantity",
+      "required" : false,
+      "type" : "decimal(38, 8)",
+      "doc" : "Trade quantity (base asset)"
+    }, {
+      "id" : 10,
+      "name" : "quote_volume",
+      "required" : false,
+      "type" : "decimal(38, 8)",
+      "doc" : "Quote volume (price * quantity)"
+    }, {
+      "id" : 11,
+      "name" : "side",
+      "required" : false,
+      "type" : "string",
+      "doc" : "Trade side: BUY, SELL, SELL_SHORT, UNKNOWN"
+    }, {
+      "id" : 12,
+      "name" : "trade_conditions",
+      "required" : false,
+      "type" : {
+        "type" : "list",
+        "element-id" : 21,
+        "element" : "string",
+        "element-required" : false
+      },
+      "doc" : "Exchange-specific trade condition codes"
+    }, {
+      "id" : 13,
+      "name" : "timestamp",
+      "required" : false,
+      "type" : "timestamptz",
+      "doc" : "Trade timestamp (exchange-reported, UTC)"
+    }, {
+      "id" : 14,
+      "name" : "ingestion_timestamp",
+      "required" : false,
+      "type" : "timestamptz",
+      "doc" : "K2 platform ingestion timestamp (UTC)"
+    }, {
+      "id" : 15,
+      "name" : "processed_at",
+      "required" : false,
+      "type" : "timestamptz",
+      "doc" : "Silver processing timestamp (UTC)"
+    }, {
+      "id" : 16,
+      "name" : "source_sequence",
+      "required" : false,
+      "type" : "long",
+      "doc" : "Exchange sequence number"
+    }, {
+      "id" : 17,
+      "name" : "platform_sequence",
+      "required" : false,
+      "type" : "long",
+      "doc" : "K2 platform sequence number (future)"
+    }, {
+      "id" : 18,
+      "name" : "vendor_data",
+      "required" : false,
+      "type" : {
+        "type" : "map",
+        "key-id" : 22,
+        "key" : "string",
+        "value-id" : 23,
+        "value" : "string",
+        "value-required" : false
+      },
+      "doc" : "Exchange-specific metadata (key-value pairs)"
+    }, {
+      "id" : 19,
+      "name" : "is_valid",
+      "required" : false,
+      "type" : "boolean",
+      "doc" : "Validation status (price > 0, quantity > 0, etc.)"
+    }, {
+      "id" : 20,
+      "name" : "validation_errors",
+      "required" : false,
+      "type" : {
+        "type" : "list",
+        "element-id" : 24,
+        "element" : "string",
+        "element-required" : false
+      },
+      "doc" : "Validation error messages (if is_valid = false)"
+    } ]
+  } ],
+  "default-spec-id" : 0,
+  "partition-specs" : [ {
+    "spec-id" : 0,
+    "fields" : [ {
+      "name" : "timestamp_day",
+      "transform" : "day",
+      "source-id" : 13,
+      "field-id" : 1000
+    }, {
+      "name" : "exchange",
+      "transform" : "identity",
+      "source-id" : 3,
+      "field-id" : 1001
+    }, {
+      "name" : "asset_class",
+      "transform" : "identity",
+      "source-id" : 6,
+      "field-id" : 1002
+    } ]
+  } ],
+  "last-partition-id" : 1002,
+  "default-sort-order-id" : 0,
+  "sort-orders" : [ {
+    "order-id" : 0,
+    "fields" : [ ]
+  } ],
+  "properties" : {
+    "owner" : "root",
+    "write.metadata.metrics.column.canonical_symbol" : "counts",
+    "history.expire.max-snapshot-age-ms" : "604800000",
+    "write.format.default" : "parquet",
+    "write.parquet.compression-codec" : "zstd",
+    "write.metadata.metrics.column.asset_class" : "counts",
+    "write.parquet.compression-level" : "3",
+    "write.metadata.metrics.column.exchange" : "counts",
+    "comment" : "Unified normalized trades across all exchanges - validated and canonical",
+    "write.metadata.metrics.default" : "full"
+  },
+  "current-snapshot-id" : -1,
+  "refs" : { },
+  "snapshots" : [ ],
+  "statistics" : [ ],
+  "partition-statistics" : [ ],
+  "snapshot-log" : [ ],
+  "metadata-log" : [ ]
+}

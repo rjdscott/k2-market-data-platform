@@ -224,7 +224,7 @@ Platform v1 remains running during v2 development. Cutover happens in Phase 7 af
 - [INVESTMENT-ANALYSIS.md](INVESTMENT-ANALYSIS.md) - ROI analysis
 
 ### v1 Reference
-- [Platform v1 ADRs](../platform-v1/) - Historical v1 decisions
+- [Platform v1 ADRs](../../archive/v1-platform/adr/platform-v1/) - Historical v1 decisions
 - v1 Phases: `../../phases/phase-0` through `phase-13`
 
 ---

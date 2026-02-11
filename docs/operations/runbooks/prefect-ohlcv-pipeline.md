@@ -201,8 +201,8 @@ curl http://localhost:4200/api/health
 
 **Step 1**: Verify PREFECT_API_URL configuration
 ```bash
-# Check docker-compose.yml
-grep -A 5 "prefect-server:" docker-compose.yml
+# Check docker-compose.v1.yml
+grep -A 5 "prefect-server:" docker-compose.v1.yml
 
 # Should show:
 # environment:

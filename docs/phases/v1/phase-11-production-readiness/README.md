@@ -47,7 +47,7 @@ By end of Week 4:
 
 **Configuration Changes**:
 ```yaml
-# docker-compose.yml
+# docker-compose.v1.yml
 spark-worker-1:
   environment:
     - SPARK_WORKER_CORES=6

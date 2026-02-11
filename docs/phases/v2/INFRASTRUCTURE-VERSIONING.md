@@ -73,7 +73,7 @@ k2/spark-batch:v2                   # Spark batch-only config
 docker compose down
 
 # Revert to previous phase
-cp docker/v2-phase-{N-1}-*.yml docker-compose.yml
+cp docker/v2-phase-{N-1}-*.yml docker-compose.v1.yml
 cp docker/.env.{version} .env
 
 # Start previous version
@@ -91,7 +91,7 @@ docker compose logs --tail=50
 docker compose down
 
 # Restore v1 baseline
-cp docker/v1-baseline.yml docker-compose.yml
+cp docker/v1-baseline.yml docker-compose.v1.yml
 cp docker/.env.v1 .env
 
 # Start v1
