@@ -1,86 +1,64 @@
 {
   "format-version" : 2,
-  "table-uuid" : "e0404952-8c33-425a-9643-26a4d8b39a08",
+  "table-uuid" : "812f8b28-5edc-43cb-994b-965ea7a2099f",
   "location" : "/home/iceberg/warehouse/cold/bronze_trades_kraken",
   "last-sequence-number" : 0,
-  "last-updated-ms" : 1770798650396,
-  "last-column-id" : 12,
+  "last-updated-ms" : 1770880452372,
+  "last-column-id" : 10,
   "current-schema-id" : 0,
   "schemas" : [ {
     "type" : "struct",
     "schema-id" : 0,
     "fields" : [ {
       "id" : 1,
-      "name" : "trade_id",
+      "name" : "exchange_timestamp",
       "required" : false,
-      "type" : "string",
-      "doc" : "Kraken trade ID"
+      "type" : "timestamptz"
     }, {
       "id" : 2,
-      "name" : "exchange",
+      "name" : "sequence_number",
       "required" : false,
-      "type" : "string",
-      "doc" : "Exchange name (always \"kraken\")"
+      "type" : "long"
     }, {
       "id" : 3,
       "name" : "symbol",
       "required" : false,
-      "type" : "string",
-      "doc" : "Kraken raw symbol (e.g., XBT/USD)"
+      "type" : "string"
     }, {
       "id" : 4,
-      "name" : "canonical_symbol",
-      "required" : false,
-      "type" : "string",
-      "doc" : "Normalized symbol (e.g., BTC/USD)"
-    }, {
-      "id" : 5,
       "name" : "price",
       "required" : false,
-      "type" : "decimal(38, 8)",
-      "doc" : "Trade price (8 decimal places)"
+      "type" : "decimal(18, 8)"
     }, {
-      "id" : 6,
+      "id" : 5,
       "name" : "quantity",
       "required" : false,
-      "type" : "decimal(38, 8)",
-      "doc" : "Trade quantity (base asset)"
+      "type" : "decimal(18, 8)"
     }, {
-      "id" : 7,
+      "id" : 6,
       "name" : "quote_volume",
       "required" : false,
-      "type" : "decimal(38, 8)",
-      "doc" : "Quote volume (price * quantity)"
+      "type" : "decimal(18, 8)"
+    }, {
+      "id" : 7,
+      "name" : "event_time",
+      "required" : false,
+      "type" : "timestamptz"
     }, {
       "id" : 8,
-      "name" : "side",
+      "name" : "kafka_offset",
       "required" : false,
-      "type" : "string",
-      "doc" : "Trade side: buy or sell"
+      "type" : "long"
     }, {
       "id" : 9,
-      "name" : "exchange_timestamp",
+      "name" : "kafka_partition",
       "required" : false,
-      "type" : "timestamptz",
-      "doc" : "Exchange-reported timestamp (UTC)"
+      "type" : "int"
     }, {
       "id" : 10,
-      "name" : "platform_timestamp",
+      "name" : "ingestion_timestamp",
       "required" : false,
-      "type" : "timestamptz",
-      "doc" : "K2 platform ingestion timestamp (UTC)"
-    }, {
-      "id" : 11,
-      "name" : "sequence_number",
-      "required" : false,
-      "type" : "long",
-      "doc" : "Kraken sequence number"
-    }, {
-      "id" : 12,
-      "name" : "metadata",
-      "required" : false,
-      "type" : "string",
-      "doc" : "Original Kraken WebSocket message (JSON)"
+      "type" : "timestamptz"
     } ]
   } ],
   "default-spec-id" : 0,
@@ -89,16 +67,11 @@
     "fields" : [ {
       "name" : "exchange_timestamp_day",
       "transform" : "day",
-      "source-id" : 9,
+      "source-id" : 1,
       "field-id" : 1000
-    }, {
-      "name" : "exchange",
-      "transform" : "identity",
-      "source-id" : 2,
-      "field-id" : 1001
     } ]
   } ],
-  "last-partition-id" : 1001,
+  "last-partition-id" : 1000,
   "default-sort-order-id" : 0,
   "sort-orders" : [ {
     "order-id" : 0,
@@ -106,20 +79,14 @@
   } ],
   "properties" : {
     "owner" : "root",
-    "history.expire.max-snapshot-age-ms" : "604800000",
-    "write.format.default" : "parquet",
-    "write.metadata.metrics.column.symbol" : "counts",
-    "write.metadata.metrics.column.trade_id" : "counts",
-    "write.parquet.compression-codec" : "zstd",
     "write.parquet.compression-level" : "3",
-    "comment" : "Kraken bronze trades - preserved exchange-native format",
-    "write.metadata.metrics.default" : "full"
+    "write.format.default" : "parquet",
+    "write.parquet.compression-codec" : "zstd"
   },
   "current-snapshot-id" : -1,
   "refs" : { },
   "snapshots" : [ ],
   "statistics" : [ ],
-  "partition-statistics" : [ ],
   "snapshot-log" : [ ],
   "metadata-log" : [ ]
 }

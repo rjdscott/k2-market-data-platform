@@ -13,10 +13,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 import subprocess
 
-from prefect import flow, task
+from prefect import flow, task, serve
 from prefect.task_runners import ConcurrentTaskRunner
-from prefect.deployments import Deployment
-from prefect.server.schemas.schedules import CronSchedule
 
 # Add offload scripts to Python path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -407,25 +405,15 @@ def iceberg_offload_main() -> Dict[str, any]:
 # ============================================================================
 
 if __name__ == "__main__":
-    # Create deployment for 15-minute schedule
-    deployment = Deployment.build_from_flow(
-        flow=iceberg_offload_main,
+    # Deploy flow with 15-minute schedule using new Prefect 2.14+ API
+    iceberg_offload_main.serve(
         name="iceberg-offload-15min",
-        version="1.0.0",
-        schedule=CronSchedule(cron="*/15 * * * *", timezone="UTC"),
-        work_queue_name="iceberg-offload",
+        cron="*/15 * * * *",
         tags=["iceberg", "offload", "production"],
         description="ClickHouse → Iceberg offload pipeline (runs every 15 minutes)",
         parameters={},
+        pause_on_shutdown=False,
     )
-
-    deployment.apply()
-    print("✓ Deployment created: iceberg-offload-15min")
-    print("  Schedule: Every 15 minutes (*/15 * * * *)")
-    print("  Work queue: iceberg-offload")
-    print("")
-    print("To start the agent:")
-    print("  prefect agent start -q iceberg-offload")
 
 
 # ============================================================================

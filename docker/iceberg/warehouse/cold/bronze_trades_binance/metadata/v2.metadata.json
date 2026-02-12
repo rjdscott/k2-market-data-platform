@@ -1,86 +1,64 @@
 {
   "format-version" : 2,
-  "table-uuid" : "2f1be110-c9b5-49b9-84ee-238bf7434e65",
+  "table-uuid" : "e6dccc68-3806-44fc-95d4-0f741d25d3eb",
   "location" : "/home/iceberg/warehouse/cold/bronze_trades_binance",
   "last-sequence-number" : 1,
-  "last-updated-ms" : 1770813033896,
-  "last-column-id" : 12,
+  "last-updated-ms" : 1770879862156,
+  "last-column-id" : 10,
   "current-schema-id" : 0,
   "schemas" : [ {
     "type" : "struct",
     "schema-id" : 0,
     "fields" : [ {
       "id" : 1,
-      "name" : "trade_id",
+      "name" : "exchange_timestamp",
       "required" : false,
-      "type" : "string",
-      "doc" : "Binance trade ID (numeric string)"
+      "type" : "timestamptz"
     }, {
       "id" : 2,
-      "name" : "exchange",
+      "name" : "sequence_number",
       "required" : false,
-      "type" : "string",
-      "doc" : "Exchange name (always \"binance\")"
+      "type" : "long"
     }, {
       "id" : 3,
       "name" : "symbol",
       "required" : false,
-      "type" : "string",
-      "doc" : "Binance raw symbol (e.g., BTCUSDT)"
+      "type" : "string"
     }, {
       "id" : 4,
-      "name" : "canonical_symbol",
-      "required" : false,
-      "type" : "string",
-      "doc" : "Normalized symbol (e.g., BTC/USDT)"
-    }, {
-      "id" : 5,
       "name" : "price",
       "required" : false,
-      "type" : "decimal(38, 8)",
-      "doc" : "Trade price (8 decimal places)"
+      "type" : "decimal(18, 8)"
     }, {
-      "id" : 6,
+      "id" : 5,
       "name" : "quantity",
       "required" : false,
-      "type" : "decimal(38, 8)",
-      "doc" : "Trade quantity (base asset)"
+      "type" : "decimal(18, 8)"
     }, {
-      "id" : 7,
+      "id" : 6,
       "name" : "quote_volume",
       "required" : false,
-      "type" : "decimal(38, 8)",
-      "doc" : "Quote volume (price * quantity)"
+      "type" : "decimal(18, 8)"
+    }, {
+      "id" : 7,
+      "name" : "event_time",
+      "required" : false,
+      "type" : "timestamptz"
     }, {
       "id" : 8,
-      "name" : "side",
+      "name" : "kafka_offset",
       "required" : false,
-      "type" : "string",
-      "doc" : "Trade side: buy or sell"
+      "type" : "long"
     }, {
       "id" : 9,
-      "name" : "exchange_timestamp",
+      "name" : "kafka_partition",
       "required" : false,
-      "type" : "timestamptz",
-      "doc" : "Exchange-reported timestamp (UTC)"
+      "type" : "int"
     }, {
       "id" : 10,
-      "name" : "platform_timestamp",
+      "name" : "ingestion_timestamp",
       "required" : false,
-      "type" : "timestamptz",
-      "doc" : "K2 platform ingestion timestamp (UTC)"
-    }, {
-      "id" : 11,
-      "name" : "sequence_number",
-      "required" : false,
-      "type" : "long",
-      "doc" : "Binance sequence number"
-    }, {
-      "id" : 12,
-      "name" : "metadata",
-      "required" : false,
-      "type" : "string",
-      "doc" : "Original Binance WebSocket message (JSON)"
+      "type" : "timestamptz"
     } ]
   } ],
   "default-spec-id" : 0,
@@ -89,16 +67,11 @@
     "fields" : [ {
       "name" : "exchange_timestamp_day",
       "transform" : "day",
-      "source-id" : 9,
+      "source-id" : 1,
       "field-id" : 1000
-    }, {
-      "name" : "exchange",
-      "transform" : "identity",
-      "source-id" : 2,
-      "field-id" : 1001
     } ]
   } ],
-  "last-partition-id" : 1001,
+  "last-partition-id" : 1000,
   "default-sort-order-id" : 0,
   "sort-orders" : [ {
     "order-id" : 0,
@@ -106,55 +79,45 @@
   } ],
   "properties" : {
     "owner" : "root",
-    "history.expire.max-snapshot-age-ms" : "604800000",
-    "write.format.default" : "parquet",
-    "write.metadata.metrics.column.symbol" : "counts",
-    "write.metadata.metrics.column.trade_id" : "counts",
-    "write.parquet.compression-codec" : "zstd",
     "write.parquet.compression-level" : "3",
-    "comment" : "Binance bronze trades - preserved exchange-native format",
-    "write.metadata.metrics.default" : "full"
+    "write.format.default" : "parquet",
+    "write.parquet.compression-codec" : "zstd"
   },
-  "current-snapshot-id" : 7280844147181626708,
+  "current-snapshot-id" : 7883203038708135884,
   "refs" : {
     "main" : {
-      "snapshot-id" : 7280844147181626708,
+      "snapshot-id" : 7883203038708135884,
       "type" : "branch"
     }
   },
   "snapshots" : [ {
     "sequence-number" : 1,
-    "snapshot-id" : 7280844147181626708,
-    "timestamp-ms" : 1770813033896,
+    "snapshot-id" : 7883203038708135884,
+    "timestamp-ms" : 1770879862156,
     "summary" : {
       "operation" : "append",
-      "spark.app.id" : "local-1770813030887",
-      "added-data-files" : "1",
-      "added-records" : "5",
-      "added-files-size" : "4692",
-      "changed-partition-count" : "1",
-      "total-records" : "5",
-      "total-files-size" : "4692",
-      "total-data-files" : "1",
+      "spark.app.id" : "local-1770879846308",
+      "added-data-files" : "2",
+      "added-records" : "3777490",
+      "added-files-size" : "28289832",
+      "changed-partition-count" : "2",
+      "total-records" : "3777490",
+      "total-files-size" : "28289832",
+      "total-data-files" : "2",
       "total-delete-files" : "0",
       "total-position-deletes" : "0",
-      "total-equality-deletes" : "0",
-      "engine-version" : "3.5.5",
-      "app-id" : "local-1770813030887",
-      "engine-name" : "spark",
-      "iceberg-version" : "Apache Iceberg 1.8.1 (commit 9ce0fcf0af7becf25ad9fc996c3bad2afdcfd33d)"
+      "total-equality-deletes" : "0"
     },
-    "manifest-list" : "/home/iceberg/warehouse/cold/bronze_trades_binance/metadata/snap-7280844147181626708-1-7613a4f9-d7fb-4d03-9d79-dd9130f7ea33.avro",
+    "manifest-list" : "/home/iceberg/warehouse/cold/bronze_trades_binance/metadata/snap-7883203038708135884-1-8f0a740a-1165-4a56-b6d0-bf59ea957f97.avro",
     "schema-id" : 0
   } ],
   "statistics" : [ ],
-  "partition-statistics" : [ ],
   "snapshot-log" : [ {
-    "timestamp-ms" : 1770813033896,
-    "snapshot-id" : 7280844147181626708
+    "timestamp-ms" : 1770879862156,
+    "snapshot-id" : 7883203038708135884
   } ],
   "metadata-log" : [ {
-    "timestamp-ms" : 1770798650256,
+    "timestamp-ms" : 1770879717960,
     "metadata-file" : "/home/iceberg/warehouse/cold/bronze_trades_binance/metadata/v1.metadata.json"
   } ]
 }

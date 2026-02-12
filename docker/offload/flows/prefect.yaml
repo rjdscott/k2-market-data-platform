@@ -1,0 +1,25 @@
+# Prefect deployment configuration for Iceberg offload pipeline
+name: k2-iceberg-offload
+prefect-version: 2.14.9
+
+# Pull step (no need to clone, files are local)
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /home/rjdscott/Documents/projects/k2-market-data-platform/docker/offload/flows
+
+# Deployments
+deployments:
+  - name: iceberg-offload-15min
+    version: "1.0.0"
+    tags:
+      - iceberg
+      - offload
+      - production
+      - phase-5
+    description: "ClickHouse → Iceberg offload pipeline (all 9 tables, runs every 15 minutes)"
+    entrypoint: iceberg_offload_flow.py:iceberg_offload_main
+    work_pool:
+      name: default
+    schedule:
+      cron: "*/15 * * * *"
+      timezone: "UTC"
