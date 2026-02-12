@@ -1,9 +1,9 @@
 # Platform v2 — Implementation Phases
 
-**Status:** 🟡 IN PROGRESS (Phases 1-4, 6 Complete; Phase 5 Next)
+**Status:** 🟡 IN PROGRESS (Phases 1-4, 6 Complete; Phase 5 Active @ 20%)
 **Target:** 16 CPU / 40GB RAM single Docker Compose cluster
-**Actual Progress:** 5 of 8 phases complete (62.5%) - **On track, ahead of schedule**
-**Last Updated:** 2026-02-12
+**Actual Progress:** 5.2 of 8 phases complete (65%) - **On track, ahead of schedule**
+**Last Updated:** 2026-02-12 (Afternoon)
 
 ---
 
@@ -46,7 +46,7 @@ Baseline     Redpanda    ClickHouse   Streaming   Cold Tier   Kotlin      Harden
 | [2](phase-2-redpanda-migration/README.md) | Redpanda Migration | 1 week | 5 | ~35 CPU (-3) | ✅ **COMPLETE** (2026-02-09) - Merged into Phase 1 (greenfield) |
 | [3](phase-3-clickhouse-foundation/README.md) | ClickHouse Foundation | 1-2 weeks | 5 | ~3.2 CPU (actual) | ✅ **COMPLETE** (2026-02-10) - Bronze/Silver/Gold operational |
 | [4](phase-4-streaming-pipeline/README.md) | Streaming Pipeline Migration | 2 weeks | 7 | ~3.2 CPU (actual) | ✅ **COMPLETE** (2026-02-10) - ClickHouse-native MVs (no Spark needed) |
-| [5](phase-5-cold-tier-restructure/README.md) | Cold Tier Restructure | 1-2 weeks | 5 | ~17.5 CPU (-1.5) | ⬜ **NOT STARTED** - Next phase |
+| [5](phase-5-cold-tier-restructure/README.md) | Cold Tier Restructure | 1-2 weeks | 5 | ~17.5 CPU (-1.5) | 🟡 **IN PROGRESS (20%)** - P1 & P2 complete: 3.78M rows @ 236K/s, 2-table parallel @ 80.9% |
 | [6](phase-6-kotlin-feed-handlers/README.md) | Kotlin Feed Handlers | 2 weeks | 5 | ~3.2 CPU (actual) | ✅ **COMPLETE** (2026-02-10) - Built early in Phase 3, Binance + Kraken operational |
 | [7](phase-7-integration-hardening/README.md) | Integration & Hardening | 1-2 weeks | 5 | **15.5 CPU ✓** | ⬜ **NOT STARTED** |
 | [8](phase-8-api-migration/README.md) | API Migration (OPTIONAL) | 2-3 weeks | 5 | ~16 CPU | ⬜ **NOT STARTED** (deferred - 3/10 ROI) |

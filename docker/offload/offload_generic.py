@@ -80,6 +80,7 @@ def run_generic_offload(
     try:
         spark = SparkSession.builder \
             .appName(f"K2-Offload-{source_table}") \
+            .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,com.clickhouse:clickhouse-jdbc:0.4.6,org.apache.httpcomponents.client5:httpclient5:5.1.3") \
             .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog") \
             .config("spark.sql.catalog.demo.type", "hadoop") \
             .config("spark.sql.catalog.demo.warehouse", ICEBERG_WAREHOUSE) \

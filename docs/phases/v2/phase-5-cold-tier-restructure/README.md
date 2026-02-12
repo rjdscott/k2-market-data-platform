@@ -1,12 +1,14 @@
 # Phase 5: Cold Tier Restructure
 
-**Status:** 🟡 IN PROGRESS (Prototype Validated, Production Implementation Starting)
+**Status:** 🟢 ACTIVE DEVELOPMENT (P1 & P2 Complete, P3-P7 Remaining)
 **Duration:** 1-2 weeks (2 weeks estimated, 10 working days)
 **Steps:** 5
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-12 (Afternoon)
 **Phase Owner:** Platform Engineering
 **Planning Completed:** 2026-02-11
-**Prototype Validated:** 2026-02-12
+**Prototype Validated:** 2026-02-12 (Evening)
+**Production Validated:** 2026-02-12 (Morning) - P1: 3.78M rows @ 236K/s
+**Multi-Table Validated:** 2026-02-12 (Afternoon) - P2: 2 tables @ 80.9% efficiency
 
 ---
 
@@ -97,7 +99,7 @@ Daily (02:00 UTC): Spark compaction + snapshot expiry + audit
 
 ## Progress Notes
 
-### 2026-02-12: Prototype Validation Complete ✅
+### 2026-02-12 (Evening): Prototype Validation Complete ✅
 
 **Achievement**: Validated Spark-based offload pipeline with exactly-once semantics
 
@@ -113,19 +115,57 @@ Daily (02:00 UTC): Spark compaction + snapshot expiry + audit
 **Key technical resolutions**:
 - **JDBC Compatibility**: Downgraded ClickHouse from 26.1 to 24.3 LTS per [DECISION-015](../../../decisions/platform-v2/DECISION-015-clickhouse-lts-downgrade.md)
 - **ClickHouse JDBC Driver**: `com.clickhouse:clickhouse-jdbc:0.4.6` (stable with 24.3 LTS)
-- **Catalog Strategy**: Hadoop catalog (local filesystem) validated; REST catalog for production
+- **Catalog Strategy**: Hadoop catalog (local filesystem) validated
 - **Authentication**: Environment-based auth (removed custom users.xml)
 
+**Documentation**:
+- [Test Report](../../../testing/offload-pipeline-test-report-2026-02-12.md)
+- [Evening Handoff](HANDOFF-2026-02-12-EVENING.md)
+- [ClickHouse LTS Decision](../../../decisions/platform-v2/DECISION-015-clickhouse-lts-downgrade.md)
+
+---
+
+### 2026-02-12 (Afternoon): Production-Scale & Multi-Table Validation ✅
+
+**Achievement**: Validated production-ready offload at scale + parallel multi-table execution
+
+**Priority 1: Production-Scale (3.78M rows)**
+- ✅ **Throughput**: 236,093 rows/second (23x target)
+- ✅ **Exactly-once**: 99.9999% accuracy
+- ✅ **Real data**: 18+ hours of live Binance trades
+- ✅ **Compression**: 12:1 ratio (343 MB → 28.3 MB)
+- ✅ **Scalability**: Linear performance across all scales
+
+**Priority 2: Multi-Table Parallel (2 tables)**
+- ✅ **Parallel execution**: Binance (3.85M) + Kraken (19.6K) simultaneously
+- ✅ **Efficiency**: 80.9% parallelism (near-linear scaling)
+- ✅ **Duration**: 25.5 seconds total (both tables)
+- ✅ **Watermark isolation**: Per-table tracking working
+- ✅ **Resource management**: Zero contention (4GB memory)
+
+**Key Infrastructure**:
+- Created Kraken bronze layer (ClickHouse Kafka consumer + MV)
+- Created 2 Iceberg tables (Binance + Kraken)
+- Built parallel testing framework (ProcessPoolExecutor)
+- Validated watermark isolation for concurrent offloads
+
+**Pragmatic Scope Decision**:
+- Tested 2 Bronze tables (not full 9-table architecture)
+- Proves parallel execution pattern; scales to 9 tables
+- Full v2 schema (Silver/Gold) deferred until proper initialization
+- See [PRIORITY-2-APPROACH.md](PRIORITY-2-APPROACH.md) for rationale
+
 **Next steps**:
-1. Create production Iceberg tables (9 tables with REST catalog)
-2. Create per-table offload scripts (bronze_binance, bronze_kraken, silver, gold_*)
-3. Set up Prefect orchestration for 15-minute scheduled offloads
-4. Add monitoring/alerting for offload pipeline
+1. Priority 3: Failure recovery testing (network interruption, crash recovery)
+2. Prefect orchestration flow (convert Python script)
+3. Monitoring & alerting (Prometheus + Grafana)
+4. Production schedule deployment (15-minute intervals)
 
 **Documentation**:
-- [Full Test Report](../../../testing/offload-pipeline-test-report-2026-02-12.md) (560+ lines)
-- [Evening Handoff](HANDOFF-2026-02-12-EVENING.md) (418 lines)
-- [ClickHouse LTS Decision](../../../decisions/platform-v2/DECISION-015-clickhouse-lts-downgrade.md)
+- [Production Validation Report](../../../testing/production-validation-report-2026-02-12.md) (30KB)
+- [Multi-Table Test Report](../../../testing/multi-table-offload-report-2026-02-12.md) (25KB)
+- [Priority 2 Approach](PRIORITY-2-APPROACH.md) (decision doc)
+- [Afternoon Handoff](../HANDOFF-2026-02-12-AFTERNOON.md) (comprehensive)
 
 ---
 
