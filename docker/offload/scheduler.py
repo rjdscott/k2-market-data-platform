@@ -19,6 +19,22 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Import Prometheus metrics
+try:
+    from metrics import (
+        start_metrics_server,
+        record_offload_success,
+        record_offload_failure,
+        record_cycle_complete,
+        update_offload_lag,
+        set_configured_tables,
+        set_pipeline_info
+    )
+    METRICS_ENABLED = True
+except ImportError:
+    logger.warning("Prometheus metrics module not available, metrics disabled")
+    METRICS_ENABLED = False
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -113,6 +129,15 @@ def run_offload_for_table(table_config: dict) -> dict:
 
         logger.info(f"✓ Offload completed: {source} ({rows_written:,} rows in {duration:.1f}s)")
 
+        # Record metrics
+        if METRICS_ENABLED:
+            record_offload_success(
+                table=source,
+                layer="bronze",
+                rows=rows_written,
+                duration=duration
+            )
+
         return {
             "table": source,
             "status": "success",
@@ -124,6 +149,16 @@ def run_offload_for_table(table_config: dict) -> dict:
     except subprocess.TimeoutExpired:
         duration = time.time() - start_time
         logger.error(f"✗ Offload timeout: {source} (>10 minutes)")
+
+        # Record metrics
+        if METRICS_ENABLED:
+            record_offload_failure(
+                table=source,
+                layer="bronze",
+                error_type="timeout",
+                duration=duration
+            )
+
         return {
             "table": source,
             "status": "timeout",
@@ -136,6 +171,16 @@ def run_offload_for_table(table_config: dict) -> dict:
         logger.error(f"✗ Offload failed: {source}")
         logger.error(f"  Exit code: {e.returncode}")
         logger.error(f"  Stderr: {e.stderr[:500]}")
+
+        # Record metrics
+        if METRICS_ENABLED:
+            record_offload_failure(
+                table=source,
+                layer="bronze",
+                error_type="process_error",
+                duration=duration
+            )
+
         return {
             "table": source,
             "status": "failed",
@@ -184,6 +229,18 @@ def run_offload_cycle():
     logger.info(f"Success: {successful}, Failed: {failed}, Timeout: {timeout}")
     logger.info(f"Total rows offloaded: {total_rows:,}")
     logger.info("=" * 80)
+
+    # Record cycle metrics
+    if METRICS_ENABLED:
+        status = "success" if failed == 0 and timeout == 0 else "partial" if successful > 0 else "failed"
+        record_cycle_complete(
+            status=status,
+            duration=cycle_duration,
+            tables_processed=len(results),
+            successful=successful,
+            failed=failed,
+            total_rows=total_rows
+        )
 
     return {
         "cycle_duration": cycle_duration,
@@ -234,6 +291,23 @@ def main():
     logger.info(f"Tables: {len(BRONZE_TABLES)} Bronze tables")
     logger.info(f"Log file: /tmp/iceberg-offload-scheduler.log")
     logger.info("=" * 80)
+
+    # Start Prometheus metrics server
+    if METRICS_ENABLED:
+        if start_metrics_server(port=8000):
+            logger.info("Prometheus metrics enabled on port 8000")
+            # Set initial metrics
+            set_configured_tables(len(BRONZE_TABLES))
+            table_names = [t["source"] for t in BRONZE_TABLES]
+            set_pipeline_info(
+                version="1.0.0",
+                schedule_minutes=SCHEDULE_INTERVAL_MINUTES,
+                tables=table_names
+            )
+        else:
+            logger.warning("Failed to start metrics server")
+    else:
+        logger.info("Prometheus metrics disabled")
 
     # Run first cycle immediately
     logger.info("Running initial offload cycle...")

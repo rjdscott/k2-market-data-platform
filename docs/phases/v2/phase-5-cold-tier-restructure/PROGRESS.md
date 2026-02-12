@@ -1,7 +1,7 @@
 # Phase 5: Cold Tier Restructure -- Progress Tracker
 
-**Status:** 🟢 PRODUCTION SCHEDULE DEPLOYED (Priorities 1-4 Complete)
-**Progress:** 1/5 steps (20%) - P1-P4 ✅ | P5-P7 remaining
+**Status:** 🟢 MONITORING & ALERTING DEPLOYED (Priorities 1-5 Complete)
+**Progress:** 1/5 steps (20%) - P1-P5 ✅ | P6-P7 remaining
 **Planning Completed:** 2026-02-11
 **Step 1 Completed:** 2026-02-11
 **Prototype Validated:** 2026-02-12 (Evening)
@@ -9,7 +9,8 @@
 **Multi-Table Validated:** 2026-02-12 (Afternoon) - See multi-table-offload-report-2026-02-12.md
 **Failure Recovery Validated:** 2026-02-12 (Evening) - See failure-recovery-report-2026-02-12.md
 **Production Schedule Deployed:** 2026-02-12 (Night) - 15-minute scheduler operational
-**Next Priority:** P5 - Monitoring & Alerting (Prometheus + Grafana)
+**Monitoring & Alerting Deployed:** 2026-02-12 (Night) - Prometheus + Grafana + comprehensive docs
+**Next Priority:** P6 - Operational Runbooks (Incident response procedures)
 **Last Updated:** 2026-02-12 (Night)
 **Phase Owner:** Platform Engineering
 
@@ -84,7 +85,16 @@
 - ✅ **Comprehensive docs**: Configuration, monitoring, troubleshooting guide
 - ✅ **Resource efficient**: <1 CPU, <256MB memory
 
-**Next:** P5 - Monitoring & Alerting (Prometheus metrics + Grafana dashboards)
+**Priority 5: Monitoring & Alerting ✅**
+- ✅ **Prometheus metrics**: Comprehensive metrics module (250+ lines)
+- ✅ **Scheduler integration**: Metrics recording on all offload events
+- ✅ **Grafana dashboard**: 9-panel production dashboard created
+- ✅ **Alert rules**: 9 alert rules (4 critical, 4 warning, 1 info)
+- ✅ **Comprehensive documentation**: 35KB monitoring guide with troubleshooting
+- ✅ **Metric types**: Counters, Gauges, Histograms, Summary, Info
+- ✅ **SLO definitions**: Success rate >95%, lag <30min, cycle <10min
+
+**Next:** P6 - Operational Runbooks (5 incident response procedures)
 
 ---
 

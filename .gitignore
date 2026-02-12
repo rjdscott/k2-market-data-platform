@@ -228,3 +228,4 @@ docker/iceberg/warehouse/
 
 # ClickHouse backup files
 docker/clickhouse/*.backup
+docker/prefect/storage/*
