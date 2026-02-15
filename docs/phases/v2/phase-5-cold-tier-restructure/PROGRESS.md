@@ -1,7 +1,7 @@
 # Phase 5: Cold Tier Restructure -- Progress Tracker
 
-**Status:** 🟢 OPERATIONAL RUNBOOKS COMPLETE (Priorities 1-6 Complete)
-**Progress:** 1/5 steps (20%) - P1-P6 ✅ | P7 remaining
+**Status:** 🟢 PRODUCTION OPERATIONAL (Prefect 3.x Migration Complete)
+**Progress:** 1/5 steps (20%) - P1-P6 ✅ | Prefect 3.x ✅ | P7 remaining (optional)
 **Planning Completed:** 2026-02-11
 **Step 1 Completed:** 2026-02-11
 **Prototype Validated:** 2026-02-12 (Evening)
@@ -11,8 +11,10 @@
 **Production Schedule Deployed:** 2026-02-12 (Night) - 15-minute scheduler operational
 **Monitoring & Alerting Deployed:** 2026-02-12 (Night) - Prometheus + Grafana + comprehensive docs
 **Operational Runbooks Complete:** 2026-02-12 (Night) - 5 runbooks + index, staff-level rigor
+**Prefect 3.x Migration:** 2026-02-14 - Upgraded to Prefect 3.6.12, removed simple scheduler
+**Data Integrity Verified:** 2026-02-15 - 21.94M rows in ClickHouse, 33.19M in Iceberg, 99.9%+ consistency
 **Next Priority:** P7 - Performance Optimization (Optional - parallel offload)
-**Last Updated:** 2026-02-12 (Night)
+**Last Updated:** 2026-02-15
 **Phase Owner:** Platform Engineering
 
 **Implementation Plan:** See [PHASE-5-IMPLEMENTATION-PLAN.md](PHASE-5-IMPLEMENTATION-PLAN.md) for comprehensive staff-level planning document.
@@ -106,6 +108,26 @@
 
 **Next:** P7 - Performance Optimization (Optional - parallel offload, resource tuning)
 
+**Priority 7: Prefect 3.x Migration ✅ (2026-02-14)**
+- ✅ **Upgraded Prefect**: 2.14.9 → 3.6.12 (server + worker)
+- ✅ **Workers not Agents**: Prefect 3.x architecture (process-based worker)
+- ✅ **Work Pool Created**: `iceberg-offload` dedicated pool
+- ✅ **Deployment Active**: `iceberg-offload-main/iceberg-offload-15min` (*/15 * * * *)
+- ✅ **Flow Updated**: v3.0 with Prometheus metrics integration
+- ✅ **Simple Scheduler Removed**: Deleted scheduler.py + systemd service (350+ lines)
+- ✅ **Documentation**: Comprehensive migration guide (20KB)
+- ✅ **Production Tested**: Flow completed successfully (75.77s, 29,860 rows)
+- ✅ **Benefits**: Full UI observability, automatic retries, industry-standard orchestration
+
+**Priority 8: Data Integrity Verification ✅ (2026-02-15)**
+- ✅ **Redpanda**: 21.93M messages verified
+- ✅ **ClickHouse**: 21.94M rows (Bronze layer)
+- ✅ **Iceberg**: 33.19M rows (cumulative cold storage)
+- ✅ **Consistency**: 99.9%+ across all layers
+- ✅ **Offload Lag**: 9 minutes (within 15-min SLO)
+- ✅ **Pipeline Health**: Zero failures, watermarks advancing correctly
+- ✅ **Documentation**: Comprehensive data integrity report (15KB)
+
 ---
 
 ## Milestone M3: Maintenance + Validation (Steps 4-5)
@@ -188,6 +210,9 @@ Captured during Step 5.
 | 2026-02-12 | **Prefect orchestration (not cron)** | Better observability, built-in retries, task dependencies, monitoring dashboard. Overhead justified by production-grade features. |
 | 2026-02-12 | **15-minute intervals (not hourly)** | Faster cold tier freshness (15 min vs 60 min), smaller batches, better resource distribution. Startup overhead negligible. |
 | 2026-02-12 | **Production readiness: 7 priorities over 4-5 days** | Pragmatic approach: validation → multi-table → failure recovery → schedule → monitoring → runbooks → optimization |
+| 2026-02-14 | **Prefect 3.x migration (from 2.14.9)** | Upgraded server + worker to 3.6.12. Removed simple Python scheduler. Industry-standard workflow orchestration with full UI observability. |
+| 2026-02-14 | **Prefect Workers (not Agents)** | Prefect 3.x uses workers instead of agents. Created dedicated work pool: `iceberg-offload` (process type). |
+| 2026-02-15 | **Data integrity verification** | Verified 21.94M rows in ClickHouse, 33.19M in Iceberg (cumulative). 99.9%+ consistency across all layers. |
 
 ---
 
