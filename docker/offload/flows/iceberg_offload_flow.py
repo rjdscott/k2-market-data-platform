@@ -3,8 +3,8 @@ K2 Market Data Platform - Prefect Iceberg Offload Flow
 Purpose: Orchestrate ClickHouse → Iceberg offload for all tables
 Frequency: Every 15 minutes
 Architecture: Bronze (parallel) → Silver → Gold (parallel)
-Version: v2.0 (ADR-014)
-Last Updated: 2026-02-11
+Version: v3.0 (Prefect 3.x migration)
+Last Updated: 2026-02-14
 """
 
 import sys
@@ -13,8 +13,24 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 import subprocess
 
-from prefect import flow, task, serve
+from prefect import flow, task
 from prefect.task_runners import ConcurrentTaskRunner
+
+# Import Prometheus metrics (optional - graceful degradation)
+try:
+    sys.path.insert(0, '/opt/prefect/offload')
+    from metrics import (
+        record_offload_success,
+        record_offload_failure,
+        record_cycle_complete,
+        set_configured_tables,
+        set_pipeline_info,
+        start_metrics_server,
+    )
+    METRICS_ENABLED = True
+except ImportError:
+    METRICS_ENABLED = False
+    print("Warning: Prometheus metrics module not available")
 
 # Add offload scripts to Python path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -102,9 +118,10 @@ SPARK_SUBMIT_CMD = "/opt/spark/bin/spark-submit"
 @task(
     name="offload-table",
     description="Offload single table from ClickHouse to Iceberg",
-    retries=3,
-    retry_delay_seconds=60,
-    tags=["iceberg", "offload"]
+    retries=2,
+    retry_delay_seconds=30,
+    tags=["iceberg", "offload"],
+    log_prints=True,
 )
 def offload_table(
     source_table: str,
@@ -135,30 +152,16 @@ def offload_table(
     logger.info(f"Starting offload: {source_table} → {target_table}")
     start_time = datetime.now()
 
-    # Build PySpark job command (executed in Spark container via docker exec)
-    spark_container = "k2-spark-iceberg"
-    pyspark_script = "/home/iceberg/offload/offload_generic.py"
-
-    # Build the spark-submit command to run inside the Spark container
-    spark_cmd = (
-        f"/opt/spark/bin/spark-submit "
-        f"--master local[2] "
-        f"--conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog "
-        f"--conf spark.sql.catalog.demo.type=hadoop "
-        f"--conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse "
-        f"--conf spark.sql.catalog.demo.io-impl=org.apache.iceberg.hadoop.HadoopFileIO "
-        f"--conf spark.sql.defaultCatalog=demo "
-        f"--packages com.clickhouse:clickhouse-jdbc:0.4.6 "
-        f"{pyspark_script} "
-        f"--source-table {source_table} "
-        f"--target-table {target_table} "
-        f"--timestamp-col {timestamp_col} "
-        f"--sequence-col {sequence_col} "
-        f"--layer {layer}"
-    )
-
-    # Docker exec command to run spark-submit in the Spark container
-    cmd = ["docker", "exec", spark_container, "bash", "-c", spark_cmd]
+    # Simplified command - uses the existing offload_generic.py script
+    cmd = [
+        "docker", "exec", "k2-spark-iceberg",
+        "python3", "/home/iceberg/offload/offload_generic.py",
+        "--source-table", source_table,
+        "--target-table", target_table,
+        "--timestamp-col", timestamp_col,
+        "--sequence-col", sequence_col,
+        "--layer", layer
+    ]
 
     try:
         # Execute PySpark job via docker exec
@@ -172,15 +175,34 @@ def offload_table(
 
         duration = (datetime.now() - start_time).total_seconds()
 
+        # Parse rows from output
+        rows_written = 0
+        for line in result.stdout.split('\n'):
+            if "Rows offloaded:" in line:
+                try:
+                    rows_written = int(line.split(':')[1].strip().replace(',', ''))
+                except Exception:
+                    pass
+
         logger.info(f"✓ Offload completed: {source_table}")
         logger.info(f"  Duration: {duration:.2f}s")
-        logger.info(f"  Stdout: {result.stdout[-500:]}")  # Last 500 chars
+        logger.info(f"  Rows: {rows_written:,}")
+
+        # Record Prometheus metrics
+        if METRICS_ENABLED:
+            record_offload_success(
+                table=source_table,
+                layer=layer,
+                rows=rows_written,
+                duration=duration
+            )
 
         return {
             "table": source_table,
             "status": "success",
+            "rows": rows_written,
             "duration_seconds": duration,
-            "stdout": result.stdout,
+            "timestamp": datetime.now().isoformat(),
         }
 
     except subprocess.CalledProcessError as e:
@@ -190,10 +212,30 @@ def offload_table(
         logger.error(f"  Exit code: {e.returncode}")
         logger.error(f"  Stderr: {e.stderr}")
 
+        # Record Prometheus metrics
+        if METRICS_ENABLED:
+            record_offload_failure(
+                table=source_table,
+                layer=layer,
+                error_type="process_error",
+                duration=duration
+            )
+
         raise RuntimeError(f"Offload failed for {source_table}: {e.stderr}")
 
     except subprocess.TimeoutExpired as e:
+        duration = (datetime.now() - start_time).total_seconds()
         logger.error(f"✗ Offload timeout: {source_table} (exceeded 10 minutes)")
+
+        # Record Prometheus metrics
+        if METRICS_ENABLED:
+            record_offload_failure(
+                table=source_table,
+                layer=layer,
+                error_type="timeout",
+                duration=duration
+            )
+
         raise
 
 
@@ -231,6 +273,7 @@ def check_watermark(source_table: str) -> bool:
     task_runner=ConcurrentTaskRunner(),
     retries=1,
     retry_delay_seconds=300,
+    log_prints=True,
 )
 def offload_bronze_layer() -> List[Dict]:
     """
@@ -248,20 +291,15 @@ def offload_bronze_layer() -> List[Dict]:
 
     results = []
     for table_config in TABLE_CONFIG["bronze"]:
-        # Check if new data available (future optimization)
-        has_new_data = check_watermark(table_config["source"])
-
-        if has_new_data:
-            result = offload_table(
-                source_table=table_config["source"],
-                target_table=table_config["target"],
-                timestamp_col=table_config["timestamp_col"],
-                sequence_col=table_config["sequence_col"],
-                layer="bronze"
-            )
-            results.append(result)
-        else:
-            logger.info(f"Skipping {table_config['source']} (no new data)")
+        # Submit tasks - Prefect handles parallel execution
+        result = offload_table(
+            source_table=table_config["source"],
+            target_table=table_config["target"],
+            timestamp_col=table_config["timestamp_col"],
+            sequence_col=table_config["sequence_col"],
+            layer="bronze"
+        )
+        results.append(result)
 
     logger.info(f"✓ Bronze layer offload complete ({len(results)} tables)")
     return results
@@ -340,17 +378,19 @@ def offload_gold_layer() -> List[Dict]:
 
 @flow(
     name="iceberg-offload-main",
-    description="Main orchestration: Bronze → Silver → Gold offload pipeline",
-    version="1.0.0",
+    description="Main orchestration: Bronze layer offload pipeline (Phase 5 MVP)",
+    version="3.0.0",
+    log_prints=True,
 )
 def iceberg_offload_main() -> Dict[str, any]:
     """
     Main orchestration flow for ClickHouse → Iceberg offload.
 
+    Phase 5 MVP: Bronze layer only (2 tables)
+    Future: Will expand to Silver → Gold when those layers are populated
+
     Execution Order:
-    1. Bronze layer (2 tables in parallel)
-    2. Silver layer (1 table, depends on Bronze)
-    3. Gold layer (6 tables in parallel, depends on Silver)
+    1. Bronze layer (2 tables in parallel: binance + kraken)
 
     Returns:
         Dict with summary metrics
@@ -362,58 +402,81 @@ def iceberg_offload_main() -> Dict[str, any]:
 
     logger.info("╔" + "=" * 78 + "╗")
     logger.info("║" + " " * 20 + "K2 ICEBERG OFFLOAD PIPELINE" + " " * 31 + "║")
-    logger.info("║" + " " * 15 + "ClickHouse → Iceberg (All 9 Tables)" + " " * 28 + "║")
+    logger.info("║" + " " * 15 + "ClickHouse → Iceberg (Bronze Layer)" + " " * 28 + "║")
     logger.info("╚" + "=" * 78 + "╝")
     logger.info("")
 
     # Step 1: Offload Bronze layer (parallel)
     bronze_results = offload_bronze_layer()
 
-    # Step 2: Offload Silver layer (depends on Bronze)
-    silver_results = offload_silver_layer()
-
-    # Step 3: Offload Gold layer (parallel, depends on Silver)
-    gold_results = offload_gold_layer()
+    # TODO: Add Silver and Gold layers when they are populated in ClickHouse
+    # silver_results = offload_silver_layer()
+    # gold_results = offload_gold_layer()
 
     # Summary
     total_duration = (datetime.now() - start_time).total_seconds()
-    total_tables = len(bronze_results) + len(silver_results) + len(gold_results)
+    total_tables = len(bronze_results)
+
+    # Calculate totals
+    successful = sum(1 for r in bronze_results if r["status"] == "success")
+    failed = len(bronze_results) - successful
+    total_rows = sum(r.get("rows", 0) for r in bronze_results if r["status"] == "success")
 
     logger.info("")
     logger.info("╔" + "=" * 78 + "╗")
     logger.info("║" + " " * 30 + "OFFLOAD COMPLETE" + " " * 32 + "║")
     logger.info("╚" + "=" * 78 + "╝")
-    logger.info(f"  Total tables offloaded: {total_tables}/9")
+    logger.info(f"  Total tables offloaded: {successful}/{total_tables}")
+    logger.info(f"  Total rows: {total_rows:,}")
     logger.info(f"  Total duration: {total_duration:.2f}s")
     logger.info(f"  Bronze: {len(bronze_results)} tables")
-    logger.info(f"  Silver: {len(silver_results)} tables")
-    logger.info(f"  Gold: {len(gold_results)} tables")
     logger.info("")
+
+    # Record cycle metrics
+    if METRICS_ENABLED:
+        status = "success" if failed == 0 else "partial" if successful > 0 else "failed"
+        record_cycle_complete(
+            status=status,
+            duration=total_duration,
+            tables_processed=total_tables,
+            successful=successful,
+            failed=failed,
+            total_rows=total_rows
+        )
 
     return {
         "total_tables": total_tables,
+        "successful": successful,
+        "failed": failed,
+        "total_rows": total_rows,
         "total_duration_seconds": total_duration,
         "bronze_results": bronze_results,
-        "silver_results": silver_results,
-        "gold_results": gold_results,
         "timestamp": start_time.isoformat(),
     }
 
 
 # ============================================================================
-# Deployment Configuration
+# Deployment Configuration (Prefect 3.x)
 # ============================================================================
 
 if __name__ == "__main__":
-    # Deploy flow with 15-minute schedule using new Prefect 2.14+ API
-    iceberg_offload_main.serve(
-        name="iceberg-offload-15min",
-        cron="*/15 * * * *",
-        tags=["iceberg", "offload", "production"],
-        description="ClickHouse → Iceberg offload pipeline (runs every 15 minutes)",
-        parameters={},
-        pause_on_shutdown=False,
-    )
+    # For local testing - run the flow once
+    print("Running iceberg offload flow (local test mode)...")
+
+    # Start Prometheus metrics server if running standalone
+    if METRICS_ENABLED:
+        if start_metrics_server(port=8000):
+            print("Prometheus metrics enabled on port 8000")
+            set_configured_tables(len(TABLE_CONFIG["bronze"]))
+            table_names = [t["source"] for t in TABLE_CONFIG["bronze"]]
+            set_pipeline_info(
+                version="3.0.0",
+                schedule_minutes=15,
+                tables=table_names
+            )
+
+    # Run flow
+    iceberg_offload_main()
 
 
 # ============================================================================
