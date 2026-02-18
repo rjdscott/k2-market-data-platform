@@ -45,10 +45,19 @@ from watermark_pg import WatermarkManager
 
 # Explicit column lists prevent schema drift: ClickHouse additions are ignored
 # until intentionally added here AND to the corresponding Iceberg DDL.
-# Bronze binance + kraken share the same schema.
+# Bronze binance + kraken + coinbase share the same v2 schema.
 _BRONZE_TRADES_COLUMNS = (
     "exchange_timestamp,sequence_number,symbol,price,quantity,"
     "quote_volume,event_time,kafka_offset,kafka_partition,ingestion_timestamp"
+)
+
+# Silver: excludes Array(String) and Map(String,String) columns — Spark JDBC
+# cannot deserialize these ClickHouse types. Iceberg cold.silver_trades has had
+# these columns dropped to match. Analytical queries don't need them.
+_SILVER_TRADES_COLUMNS = (
+    "message_id,trade_id,exchange,symbol,canonical_symbol,asset_class,currency,"
+    "price,quantity,quote_volume,side,timestamp,ingestion_timestamp,processed_at,"
+    "source_sequence,platform_sequence,is_valid"
 )
 
 # Table Configuration: All ClickHouse tables to offload
@@ -81,7 +90,8 @@ TABLE_CONFIG = {
             "source": "silver_trades",
             "target": "cold.silver_trades",
             "timestamp_col": "timestamp",
-            "sequence_col": "platform_sequence",
+            "sequence_col": "source_sequence",  # platform_sequence is always NULL; source_sequence has values
+            "columns": _SILVER_TRADES_COLUMNS,
         },
     ],
     "gold": [
@@ -89,37 +99,37 @@ TABLE_CONFIG = {
             "source": "ohlcv_1m",
             "target": "cold.gold_ohlcv_1m",
             "timestamp_col": "window_start",
-            "sequence_col": "window_start",  # No sequence for OHLCV, use timestamp
+            "sequence_col": "trade_count",  # UInt32 → BIGINT-compatible; window_start is timestamp
         },
         {
             "source": "ohlcv_5m",
             "target": "cold.gold_ohlcv_5m",
             "timestamp_col": "window_start",
-            "sequence_col": "window_start",
+            "sequence_col": "trade_count",
         },
         {
             "source": "ohlcv_15m",
             "target": "cold.gold_ohlcv_15m",
             "timestamp_col": "window_start",
-            "sequence_col": "window_start",
+            "sequence_col": "trade_count",
         },
         {
             "source": "ohlcv_30m",
             "target": "cold.gold_ohlcv_30m",
             "timestamp_col": "window_start",
-            "sequence_col": "window_start",
+            "sequence_col": "trade_count",
         },
         {
             "source": "ohlcv_1h",
             "target": "cold.gold_ohlcv_1h",
             "timestamp_col": "window_start",
-            "sequence_col": "window_start",
+            "sequence_col": "trade_count",
         },
         {
             "source": "ohlcv_1d",
             "target": "cold.gold_ohlcv_1d",
             "timestamp_col": "window_start",
-            "sequence_col": "window_start",
+            "sequence_col": "trade_count",
         },
     ],
 }
@@ -399,19 +409,20 @@ def offload_gold_layer() -> List[Dict]:
 
 @flow(
     name="iceberg-offload-main",
-    description="Main orchestration: Bronze layer offload pipeline (Phase 5 MVP)",
-    version="3.0.0",
+    description="Main orchestration: Full medallion offload pipeline (Bronze → Silver → Gold)",
+    version="3.1.0",
     log_prints=True,
 )
 def iceberg_offload_main() -> Dict[str, any]:
     """
     Main orchestration flow for ClickHouse → Iceberg offload.
 
-    Phase 5 MVP: Bronze layer only (2 tables)
-    Future: Will expand to Silver → Gold when those layers are populated
+    Full medallion pipeline: Bronze (parallel) → Silver → Gold (parallel)
 
     Execution Order:
-    1. Bronze layer (2 tables in parallel: binance + kraken)
+    1. Bronze layer (3 tables in parallel: binance + kraken + coinbase)
+    2. Silver layer (1 table: silver_trades, sequential — depends on Bronze)
+    3. Gold layer (6 OHLCV tables in parallel — depends on Silver)
 
     Returns:
         Dict with summary metrics
@@ -423,25 +434,28 @@ def iceberg_offload_main() -> Dict[str, any]:
 
     logger.info("╔" + "=" * 78 + "╗")
     logger.info("║" + " " * 20 + "K2 ICEBERG OFFLOAD PIPELINE" + " " * 31 + "║")
-    logger.info("║" + " " * 11 + "ClickHouse → Iceberg (Bronze Layer, 3 exchanges)" + " " * 19 + "║")
+    logger.info("║" + " " * 8 + "ClickHouse → Iceberg (Bronze → Silver → Gold)" + " " * 25 + "║")
     logger.info("╚" + "=" * 78 + "╝")
     logger.info("")
 
     # Step 1: Offload Bronze layer (parallel)
     bronze_results = offload_bronze_layer()
 
-    # TODO: Add Silver and Gold layers when they are populated in ClickHouse
-    # silver_results = offload_silver_layer()
-    # gold_results = offload_gold_layer()
+    # Step 2: Offload Silver layer (sequential — aggregates Bronze)
+    silver_results = offload_silver_layer()
+
+    # Step 3: Offload Gold layer (parallel — aggregates Silver)
+    gold_results = offload_gold_layer()
 
     # Summary
     total_duration = (datetime.now() - start_time).total_seconds()
-    total_tables = len(bronze_results)
+    all_results = bronze_results + silver_results + gold_results
+    total_tables = len(all_results)
 
     # Calculate totals
-    successful = sum(1 for r in bronze_results if r["status"] == "success")
-    failed = len(bronze_results) - successful
-    total_rows = sum(r.get("rows", 0) for r in bronze_results if r["status"] == "success")
+    successful = sum(1 for r in all_results if r["status"] == "success")
+    failed = total_tables - successful
+    total_rows = sum(r.get("rows", 0) for r in all_results if r["status"] == "success")
 
     logger.info("")
     logger.info("╔" + "=" * 78 + "╗")
@@ -450,7 +464,7 @@ def iceberg_offload_main() -> Dict[str, any]:
     logger.info(f"  Total tables offloaded: {successful}/{total_tables}")
     logger.info(f"  Total rows: {total_rows:,}")
     logger.info(f"  Total duration: {total_duration:.2f}s")
-    logger.info(f"  Bronze: {len(bronze_results)} tables")
+    logger.info(f"  Bronze: {len(bronze_results)} tables | Silver: {len(silver_results)} | Gold: {len(gold_results)} tables")
     logger.info("")
 
     # Record cycle metrics
@@ -472,6 +486,8 @@ def iceberg_offload_main() -> Dict[str, any]:
         "total_rows": total_rows,
         "total_duration_seconds": total_duration,
         "bronze_results": bronze_results,
+        "silver_results": silver_results,
+        "gold_results": gold_results,
         "timestamp": start_time.isoformat(),
     }
 
