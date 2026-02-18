@@ -540,11 +540,11 @@ if __name__ == "__main__":
 
 # Parallelism:
 # ────────────
-# Bronze: 2 concurrent tasks (binance || kraken)
+# Bronze: 3 concurrent tasks (binance || kraken || coinbase)
 # Gold: 6 concurrent tasks (all OHLCV timeframes)
 #
-# Resource impact: 2-6 concurrent Spark jobs
-# Peak memory: 2-6 * 500 MB = 1-3 GB
+# Resource impact: 3-6 concurrent Spark jobs
+# Peak memory: 3-6 * 500 MB = 1.5-3 GB
 
 # Monitoring:
 # ───────────
