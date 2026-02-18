@@ -1,7 +1,7 @@
 # K2 v2 — Current Platform State
 
 **Date**: 2026-02-18
-**Branch**: `phase-5-prefect-iceberg-offload`
+**Branch**: `main`
 **Status**: Production-operational — all 3 exchanges live, full medallion pipeline + daily maintenance running
 
 > This is the "read-first" snapshot for new engineers. It is updated at the end of each major
@@ -98,18 +98,17 @@
 | Phase 4 | Streaming Pipeline (Kotlin handlers) | ✅ Complete |
 | Phase 5 | Cold Tier / Iceberg Offload | ✅ Complete — offload + maintenance deployed, audit validated |
 | Phase 6 | Kotlin Feed Handlers (v2 refactor) | ✅ Complete |
-| Phase 7 | Integration Hardening | ✅ Complete |
+| Phase 7 | Integration Hardening | ⬜ Not Started |
 | Phase 8 | API Migration | ⬜ Not started |
 
 ---
 
-## Pending Work (Phase 7)
+## Pending Work
 
 | Item | Priority | Notes |
 |------|---------|-------|
-| Tag `v2-phase-5-complete` | Low | Git tag after branch merged to main |
-| Open PR: `phase-5-prefect-iceberg-offload` → `main` | High | Phase 5 complete |
-| Phase 7 Integration Hardening | Medium | Load testing, SLO validation, end-to-end health checks |
+| Tag `v2-phase-5-complete` | Low | Git tag pending (branch merged to main via PR #47) |
+| Phase 7 Integration Hardening | High | Latency benchmarks, resource validation, failure mode testing, monitoring, runbooks |
 
 ---
 
