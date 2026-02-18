@@ -64,7 +64,9 @@ class KafkaProducerService(private val kafkaConfig: Config, private val schemaPa
                 ProducerConfig.BATCH_SIZE_CONFIG to kafkaConfig.getInt("producer.batch-size"),
                 ProducerConfig.COMPRESSION_TYPE_CONFIG to kafkaConfig.getString("producer.compression-type"),
                 ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION to kafkaConfig.getInt("producer.max-in-flight-requests-per-connection"),
-                ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG to kafkaConfig.getBoolean("producer.enable-idempotence")
+                ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG to kafkaConfig.getBoolean("producer.enable-idempotence"),
+                // Topics are managed by redpanda-init; suppress auto-create on metadata requests
+                "allow.auto.create.topics" to false
             )
         )
 
@@ -81,7 +83,9 @@ class KafkaProducerService(private val kafkaConfig: Config, private val schemaPa
                 ProducerConfig.BATCH_SIZE_CONFIG to kafkaConfig.getInt("producer.batch-size"),
                 ProducerConfig.COMPRESSION_TYPE_CONFIG to kafkaConfig.getString("producer.compression-type"),
                 ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION to kafkaConfig.getInt("producer.max-in-flight-requests-per-connection"),
-                ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG to kafkaConfig.getBoolean("producer.enable-idempotence")
+                ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG to kafkaConfig.getBoolean("producer.enable-idempotence"),
+                // Topics are managed by redpanda-init; suppress auto-create on metadata requests
+                "allow.auto.create.topics" to false
             )
         )
 

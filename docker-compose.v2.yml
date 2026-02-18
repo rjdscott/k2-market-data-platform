@@ -41,9 +41,6 @@ volumes:
   minio-data:
     driver: local
 
-  # Iceberg warehouse
-  iceberg-warehouse:
-    driver: local
 
 #############################################################################
 # SERVICES - STREAMING BACKBONE
@@ -166,7 +163,7 @@ services:
     environment:
       CLICKHOUSE_DB: k2
       CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     deploy:
       resources:
@@ -208,8 +205,8 @@ services:
     volumes:
       - minio-data:/data
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     command: server /data --console-address ":9001"
     deploy:
       resources:
@@ -293,7 +290,7 @@ services:
       - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
       GF_INSTALL_PLUGINS: ""
       GF_AUTH_ANONYMOUS_ENABLED: false
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
@@ -341,9 +338,9 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./docker/postgres/ddl:/docker-entrypoint-initdb.d:ro
     environment:
-      POSTGRES_USER: prefect
-      POSTGRES_PASSWORD: prefect
-      POSTGRES_DB: prefect
+      POSTGRES_USER: ${PREFECT_DB_USER}
+      POSTGRES_PASSWORD: ${PREFECT_DB_PASSWORD}
+      POSTGRES_DB: ${PREFECT_DB_NAME}
     deploy:
       resources:
         limits:
@@ -353,7 +350,7 @@ services:
           cpus: '0.5'
           memory: 512M
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U prefect"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -381,7 +378,7 @@ services:
     environment:
       PREFECT_SERVER_API_HOST: 0.0.0.0
       PREFECT_API_URL: http://prefect-server:4200/api
-      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://prefect:prefect@prefect-db:5432/prefect
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/${PREFECT_DB_NAME}
     command: prefect server start --host 0.0.0.0
     depends_on:
       prefect-db:
@@ -465,13 +462,12 @@ services:
       - "4040:4040"     # Spark Application UI
       - "8888:8888"     # Jupyter (if needed)
     volumes:
-      - iceberg-warehouse:/home/iceberg/warehouse
       - ./docker/iceberg/warehouse:/home/iceberg/warehouse
       - ./docker/offload:/home/iceberg/offload
       - ./docker/offload/flows:/home/iceberg/offload/flows
     environment:
-      - AWS_ACCESS_KEY_ID=minioadmin
-      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
       - AWS_REGION=us-east-1
       - AWS_S3_ENDPOINT=http://minio:9000
     depends_on:
@@ -514,10 +510,10 @@ services:
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        rpk topic create market.crypto.trades.binance.raw --partitions 40 --brokers redpanda:9092 --if-not-exists &&
-        rpk topic create market.crypto.trades.binance     --partitions 40 --brokers redpanda:9092 --if-not-exists &&
-        rpk topic create market.crypto.trades.kraken.raw  --partitions 20 --brokers redpanda:9092 --if-not-exists &&
-        rpk topic create market.crypto.trades.kraken      --partitions 20 --brokers redpanda:9092 --if-not-exists &&
+        rpk topic describe market.crypto.trades.binance.raw --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.binance.raw --partitions 40 --brokers redpanda:9092
+        rpk topic describe market.crypto.trades.binance     --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.binance     --partitions 40 --brokers redpanda:9092
+        rpk topic describe market.crypto.trades.kraken.raw  --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.kraken.raw  --partitions 20 --brokers redpanda:9092
+        rpk topic describe market.crypto.trades.kraken      --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.kraken      --partitions 20 --brokers redpanda:9092
         echo "✅ All topics initialized"
     restart: "no"
     labels:
