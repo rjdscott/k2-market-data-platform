@@ -1,0 +1,54 @@
+# config/instruments.yaml — Single source of truth for all instrument subscriptions
+#
+# Feed handlers load this file at startup when K2_INSTRUMENTS_FILE env var is set.
+# Fallback chain: instruments.yaml → K2_SYMBOLS env var → application.conf defaults
+#
+# Exchange notes:
+# - Binance: USDT-margined pairs (most liquid spot pairs as of Feb 2026)
+# - Kraken: Uses XBT (not BTC) for Bitcoin; TradeNormalizer handles normalization
+#
+# Last updated: 2026-02-18
+
+instruments:
+  binance:
+    symbols:
+      - BTCUSDT
+      - ETHUSDT
+      - BNBUSDT
+      - SOLUSDT
+      - XRPUSDT
+      - ADAUSDT
+      - DOTUSDT
+      - LINKUSDT
+      - DOGEUSDT
+      - LTCUSDT
+      - AVAXUSDT
+      - ATOMUSDT
+
+  kraken:
+    symbols:
+      - XBT/USD
+      - ETH/USD
+      - SOL/USD
+      - XRP/USD
+      - ADA/USD
+      - DOT/USD
+      - LINK/USD
+      - XDG/USD    # Kraken canonical for Dogecoin (alias DOGE/USD maps here)
+      - LTC/USD
+      - AVAX/USD
+      - ATOM/USD
+
+  coinbase:
+    symbols:
+      - BTC-USD
+      - ETH-USD
+      - SOL-USD
+      - XRP-USD
+      - ADA-USD
+      - DOT-USD
+      - LINK-USD
+      - DOGE-USD   # DOGE (not XDG — Coinbase uses standard ticker)
+      - LTC-USD
+      - AVAX-USD
+      - ATOM-USD

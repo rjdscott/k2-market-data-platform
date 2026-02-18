@@ -1,0 +1,50 @@
+# Prefect deployment configuration for Iceberg offload + maintenance pipelines
+name: k2-iceberg-pipelines
+prefect-version: 3.6.12
+
+# Pull step (code is mounted at /opt/prefect/flows in worker container)
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /opt/prefect/flows
+
+# Deployments
+deployments:
+
+  # ── Offload pipeline (every 15 min) ───────────────────────────────────────
+  - name: iceberg-offload-15min
+    version: "3.1.0"
+    tags:
+      - iceberg
+      - offload
+      - production
+      - phase-5
+    description: "ClickHouse → Iceberg offload: Bronze (parallel) → Silver → Gold (parallel)"
+    entrypoint: iceberg_offload_flow.py:iceberg_offload_main
+    work_pool:
+      name: iceberg-offload
+      work_queue_name: default
+    schedule:
+      cron: "*/15 * * * *"
+      timezone: "UTC"
+
+  # ── Maintenance pipeline (daily 02:00 UTC) ────────────────────────────────
+  - name: iceberg-maintenance-daily
+    version: "1.0.0"
+    tags:
+      - iceberg
+      - maintenance
+      - production
+      - phase-5
+    description: "Daily Iceberg maintenance: compact → expire → audit (02:00 UTC)"
+    entrypoint: iceberg_maintenance_flow.py:iceberg_maintenance_main
+    work_pool:
+      name: iceberg-offload
+      work_queue_name: default
+    schedule:
+      cron: "0 2 * * *"
+      timezone: "UTC"
+    parameters:
+      target_file_size_mb: 128
+      snapshot_max_age_hours: 168   # 7 days
+      snapshot_retain_last: 3
+      audit_window_hours: 24

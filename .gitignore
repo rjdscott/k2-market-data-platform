@@ -222,3 +222,10 @@ spark-jars/
 
 # Flink JARs (large connector files, download locally)
 flink-jars/*.jar
+
+# Iceberg warehouse data
+docker/iceberg/warehouse/
+
+# ClickHouse backup files
+docker/clickhouse/*.backup
+docker/prefect/storage/*

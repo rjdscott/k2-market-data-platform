@@ -1,0 +1,255 @@
+# K2 Market Data Platform v2 - Iceberg Offload Alert Rules
+# Purpose: Alert on offload pipeline failures, lag, and performance issues
+# Last Updated: 2026-02-12
+
+groups:
+  - name: iceberg_offload_critical
+    interval: 30s
+    rules:
+
+      # CRITICAL: Offload failures
+      - alert: IcebergOffloadConsecutiveFailures
+        expr: |
+          sum(increase(offload_errors_total[15m])) by (table) >= 3
+        for: 5m
+        labels:
+          severity: critical
+          component: iceberg-scheduler
+          tier: cold-storage
+        annotations:
+          summary: "Iceberg offload failing repeatedly for {{ $labels.table }}"
+          description: |
+            Table {{ $labels.table }} has failed {{ $value }} times in the last 15 minutes.
+            This indicates a persistent issue with the offload pipeline.
+
+            **Immediate Actions:**
+            1. Check scheduler logs: `tail -100 /tmp/iceberg-offload-scheduler.log`
+            2. Verify ClickHouse connectivity: `docker exec k2-clickhouse clickhouse-client -q "SELECT 1"`
+            3. Check Spark container health: `docker ps | grep spark-iceberg`
+            4. Review watermark table for corruption
+
+            **Runbook:** docs/operations/runbooks/iceberg-offload-failure.md
+
+      # CRITICAL: Offload lag exceeds acceptable window
+      - alert: IcebergOffloadLagCritical
+        expr: offload_lag_minutes > 30
+        for: 5m
+        labels:
+          severity: critical
+          component: iceberg-scheduler
+          tier: cold-storage
+        annotations:
+          summary: "Iceberg offload lag critical for {{ $labels.table }}"
+          description: |
+            Table {{ $labels.table }} has not been offloaded for {{ $value }} minutes.
+            This exceeds the 30-minute SLO and may indicate scheduler or pipeline failure.
+
+            **Impact:** Cold tier data is stale; queries may return incomplete results.
+
+            **Check:**
+            - Scheduler running: `systemctl status iceberg-offload-scheduler`
+            - Recent cycles: `grep COMPLETED /tmp/iceberg-offload-scheduler.log | tail -5`
+
+            **Runbook:** docs/operations/runbooks/iceberg-offload-lag.md
+
+      # CRITICAL: Cycle duration exceeds schedule interval
+      - alert: IcebergOffloadCycleTooSlow
+        expr: offload_cycle_duration_seconds > 600
+        for: 2m
+        labels:
+          severity: critical
+          component: iceberg-scheduler
+          tier: cold-storage
+        annotations:
+          summary: "Iceberg offload cycle taking too long"
+          description: |
+            Last offload cycle took {{ $value }}s (>10 minutes).
+            This exceeds 2/3 of the 15-minute schedule interval.
+
+            **Risk:** Offload cycles may start overlapping, causing resource contention.
+
+            **Investigate:**
+            - Data volume spike: Check ClickHouse row counts
+            - Spark performance: Check executor logs
+            - Network issues: Check latency between services
+
+            **Runbook:** docs/operations/runbooks/iceberg-offload-performance.md
+
+      # CRITICAL: Watermark timestamp stale (pipeline hung)
+      - alert: IcebergOffloadWatermarkStale
+        expr: |
+          (time() - watermark_timestamp_seconds) > 3600
+        for: 5m
+        labels:
+          severity: critical
+          component: iceberg-scheduler
+          tier: cold-storage
+        annotations:
+          summary: "Iceberg offload watermark not updating for {{ $labels.table }}"
+          description: |
+            Watermark for {{ $labels.table }} has not updated in {{ $value | humanizeDuration }}.
+            This indicates the offload pipeline is hung or failing silently.
+
+            **Actions:**
+            1. Check if scheduler is running
+            2. Review last cycle status in logs
+            3. Manually inspect watermark table
+            4. Consider restarting scheduler if hung
+
+            **Runbook:** docs/operations/runbooks/iceberg-offload-watermark-recovery.md
+
+  - name: iceberg_offload_warning
+    interval: 1m
+    rules:
+
+      # WARNING: Success rate degraded
+      - alert: IcebergOffloadSuccessRateLow
+        expr: |
+          (
+            rate(offload_cycles_total{status="success"}[15m])
+            /
+            rate(offload_cycles_total[15m])
+          ) < 0.95
+        for: 10m
+        labels:
+          severity: warning
+          component: iceberg-scheduler
+          tier: cold-storage
+        annotations:
+          summary: "Iceberg offload success rate below 95%"
+          description: |
+            Success rate over last 15 minutes: {{ $value | humanizePercentage }}.
+            Target: >95%. Some offload operations are failing intermittently.
+
+            **Impact:** Minor - cold tier may have small gaps, but not critical yet.
+
+            **Actions:**
+            - Review error types: `grep ERROR /tmp/iceberg-offload-scheduler.log | tail -20`
+            - Check for transient network issues
+            - Monitor for escalation to critical threshold
+
+      # WARNING: Offload lag elevated
+      - alert: IcebergOffloadLagElevated
+        expr: offload_lag_minutes > 20 and offload_lag_minutes <= 30
+        for: 10m
+        labels:
+          severity: warning
+          component: iceberg-scheduler
+          tier: cold-storage
+        annotations:
+          summary: "Iceberg offload lag elevated for {{ $labels.table }}"
+          description: |
+            Table {{ $labels.table }} offload lag: {{ $value }} minutes (target: <15 minutes).
+            Not critical yet (threshold: 30 minutes), but trending upward.
+
+            **Possible Causes:**
+            - Scheduler delayed or skipped a cycle
+            - Data volume spike
+            - Temporary Spark/ClickHouse slowness
+
+            **Monitor:** Watch for escalation to critical alert.
+
+      # WARNING: Throughput degraded
+      - alert: IcebergOffloadThroughputLow
+        expr: |
+          rate(offload_rows_total[5m]) < 10000
+        for: 15m
+        labels:
+          severity: warning
+          component: iceberg-scheduler
+          tier: cold-storage
+        annotations:
+          summary: "Iceberg offload throughput degraded"
+          description: |
+            Offload throughput: {{ $value | humanize }} rows/second (target: >10K rows/sec).
+            This may indicate performance degradation in Spark or ClickHouse.
+
+            **Check:**
+            - Spark executor logs for slowness
+            - ClickHouse query performance
+            - Network latency between services
+
+      # WARNING: Cycle duration elevated
+      - alert: IcebergOffloadCycleSlow
+        expr: offload_cycle_duration_seconds > 300 and offload_cycle_duration_seconds <= 600
+        for: 10m
+        labels:
+          severity: warning
+          component: iceberg-scheduler
+          tier: cold-storage
+        annotations:
+          summary: "Iceberg offload cycle duration elevated"
+          description: |
+            Cycle duration: {{ $value }}s (5-10 minutes, target: <30s).
+            Not critical yet but trending upward. Monitor for further degradation.
+
+  - name: iceberg_offload_info
+    interval: 5m
+    rules:
+
+      # INFO: Scheduler health check
+      - alert: IcebergOffloadSchedulerDown
+        expr: up{job="iceberg-scheduler"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: iceberg-scheduler
+          tier: cold-storage
+        annotations:
+          summary: "Iceberg offload scheduler is down"
+          description: |
+            Prometheus cannot scrape metrics from the scheduler (port 8000).
+
+            **Possible Causes:**
+            - Scheduler process crashed
+            - Scheduler not started
+            - Metrics server failed to start
+            - Network connectivity issue
+
+            **Actions:**
+            1. Check scheduler status: `systemctl status iceberg-offload-scheduler`
+            2. Check scheduler logs: `tail -50 /tmp/iceberg-offload-scheduler.log`
+            3. Restart if needed: `systemctl restart iceberg-offload-scheduler`
+
+            **Runbook:** docs/operations/runbooks/iceberg-scheduler-recovery.md
+
+      # INFO: First cycle after scheduler start
+      - record: iceberg_offload:cycle_count:5m
+        expr: rate(offload_cycles_total[5m]) * 300
+
+      # INFO: Average offload duration by table
+      - record: iceberg_offload:duration_avg:5m
+        expr: |
+          rate(offload_duration_seconds_sum[5m])
+          /
+          rate(offload_duration_seconds_count[5m])
+
+      # INFO: Total rows offloaded (5-minute rate)
+      - record: iceberg_offload:rows_rate:5m
+        expr: rate(offload_rows_total[5m])
+
+# Alert Severity Guide:
+# ----------------------
+# CRITICAL: Immediate action required
+#   - Data loss risk
+#   - SLO violation
+#   - Service down
+#   - Page on-call engineer
+#
+# WARNING: Action required within business hours
+#   - Degraded performance
+#   - Approaching SLO violation
+#   - Intermittent failures
+#   - Send Slack notification
+#
+# INFO: Informational only
+#   - Recording rules
+#   - Health checks
+#   - No action required
+
+# SLO Definitions:
+# ----------------
+# - Offload Lag: <15 minutes (target), <30 minutes (SLO)
+# - Success Rate: >99% (target), >95% (SLO)
+# - Cycle Duration: <30 seconds (target), <10 minutes (SLO)
+# - Throughput: >100K rows/sec (target), >10K rows/sec (SLO)

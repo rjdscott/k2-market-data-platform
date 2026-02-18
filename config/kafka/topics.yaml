@@ -10,7 +10,8 @@
 # - Failure isolation (exchange outages don't affect others)
 # - Easy to add new exchanges (config-only, no code changes)
 #
-# Last updated: 2026-01-10
+# Last updated: 2026-02-18
+# Instrument configuration: see config/instruments.yaml
 
 # Asset classes and their exchanges
 asset_classes:

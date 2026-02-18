@@ -1,9 +1,9 @@
 # Platform v2 — Implementation Phases
 
-**Status:** 🟡 IN PROGRESS (Phases 1-4, 6 Complete; Phase 5 Next)
+**Status:** 🟢 PRODUCTION OPERATIONAL (3 exchanges live; Phase 5 @ 95%)
 **Target:** 16 CPU / 40GB RAM single Docker Compose cluster
-**Actual Progress:** 5 of 8 phases complete (62.5%) - **On track, ahead of schedule**
-**Last Updated:** 2026-02-11
+**Actual Progress:** 5.8 of 8 phases complete (73%) - **On track, ahead of schedule**
+**Last Updated:** 2026-02-18
 
 ---
 
@@ -46,7 +46,7 @@ Baseline     Redpanda    ClickHouse   Streaming   Cold Tier   Kotlin      Harden
 | [2](phase-2-redpanda-migration/README.md) | Redpanda Migration | 1 week | 5 | ~35 CPU (-3) | ✅ **COMPLETE** (2026-02-09) - Merged into Phase 1 (greenfield) |
 | [3](phase-3-clickhouse-foundation/README.md) | ClickHouse Foundation | 1-2 weeks | 5 | ~3.2 CPU (actual) | ✅ **COMPLETE** (2026-02-10) - Bronze/Silver/Gold operational |
 | [4](phase-4-streaming-pipeline/README.md) | Streaming Pipeline Migration | 2 weeks | 7 | ~3.2 CPU (actual) | ✅ **COMPLETE** (2026-02-10) - ClickHouse-native MVs (no Spark needed) |
-| [5](phase-5-cold-tier-restructure/README.md) | Cold Tier Restructure | 1-2 weeks | 5 | ~17.5 CPU (-1.5) | ⬜ **NOT STARTED** - Next phase |
+| [5](phase-5-cold-tier-restructure/README.md) | Cold Tier Restructure | 1-2 weeks | 5 | ~17.5 CPU (-1.5) | ✅ **COMPLETE** (2026-02-18) - Offload + maintenance deployed, audit validated, all 10 tables operational |
 | [6](phase-6-kotlin-feed-handlers/README.md) | Kotlin Feed Handlers | 2 weeks | 5 | ~3.2 CPU (actual) | ✅ **COMPLETE** (2026-02-10) - Built early in Phase 3, Binance + Kraken operational |
 | [7](phase-7-integration-hardening/README.md) | Integration & Hardening | 1-2 weeks | 5 | **15.5 CPU ✓** | ⬜ **NOT STARTED** |
 | [8](phase-8-api-migration/README.md) | API Migration (OPTIONAL) | 2-3 weeks | 5 | ~16 CPU | ⬜ **NOT STARTED** (deferred - 3/10 ROI) |
@@ -117,6 +117,24 @@ This section is updated as issues arise during implementation. Each entry should
 | 6 | 2026-02-10 | Docker build not reflecting code changes | Cached Docker layers | Use `--no-cache` flag | Always rebuild with --no-cache when code changes |
 | 6 | 2026-02-10 | Branch confusion (v2-phase01 vs platform-review-feb26) | Inconsistent branch naming | Reset v2-phase01 to match platform-review-feb26, merged both | Establish working branch early and stick to it |
 | All | 2026-02-11 | Documentation out of sync with implementation | Architectural pivots not reflected in phase docs | Updated PHASE-ADAPTATION.md and all phase status docs | Update documentation immediately after architectural decisions |
+| All | 2026-02-12 | Docker compose file proliferation | Multiple compose files caused configuration drift | Consolidated all services into single docker-compose.v2.yml | Single source of truth prevents inconsistencies, easier to maintain |
+| 3-4 | 2026-02-12 | Using `default` database in ClickHouse | Dev convenience led to non-production pattern | Migrated 1.1M+ records to `k2` database | Use production patterns from day 1, even in dev; avoids costly migrations later |
+| 5 | 2026-02-14 | Prefect version mismatch (2.x vs 3.x) | Client 3.6.12 incompatible with server 2.14.9 | Upgraded both to 3.6.12 simultaneously | Always verify client/server version alignment; Prefect 2.x and 3.x are not compatible |
+| 5 | 2026-02-14 | Simple scheduler pragmatism trap | Version mismatch led to building custom scheduler | Migrated to proper Prefect 3.x orchestration | Invest time to fix root cause rather than building workarounds; industry-standard tools provide better long-term value |
+| 5 | 2026-02-15 | Iceberg > ClickHouse row counts | Confusion about cumulative cold storage | Verified 33.19M in Iceberg vs 21.94M in ClickHouse is expected | Cold storage accumulates all historical data; hot storage may have TTL or cleanup policies |
+
+---
+
+## Session Handoffs
+
+Detailed session-by-session progress logs capturing work completed, decisions made, and database state.
+
+**Start here** — [CURRENT-STATE.md](CURRENT-STATE.md) — as-of-today platform snapshot (replaces reading all handoffs)
+
+Recent handoffs (most recent first):
+- [2026-02-18 Handoff](HANDOFF-2026-02-18.md) — Coinbase aligned to v2 schema, full offload pipeline, Kotlin tests 16/16
+- [2026-02-16 Handoff](HANDOFF-2026-02-16.md) — Previous session
+- [2026-02-15 Handoff](HANDOFF-2026-02-15.md) — Iceberg row counts, data integrity report
 
 ---
 
@@ -129,6 +147,6 @@ This section is updated as issues arise during implementation. Each entry should
 
 ---
 
-**Last Updated:** 2026-02-10
+**Last Updated:** 2026-02-18
 **Phase Owner:** Platform Engineering
-**Next Review:** Phase 6 completion (v2-phase-6-complete)
+**Next Review:** Phase 5 completion (Prefect schedule deployment + consistency validation)

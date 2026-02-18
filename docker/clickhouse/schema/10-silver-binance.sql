@@ -1,136 +1,70 @@
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- Silver Layer: Binance → Unified Schema
--- Purpose: Normalize Binance native format to multi-exchange schema
+-- Silver Layer: Binance → Unified Schema (v2 pattern)
+-- Source: k2.bronze_trades_binance (v2 normalized schema)
+-- Target: k2.silver_trades (unified multi-exchange schema)
+-- Pattern: identical to bronze_kraken_to_silver_mv / bronze_coinbase_to_silver_mv
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- Normalizations performed:
--- - Timestamp: milliseconds → DateTime64(6) microseconds
--- - Side: buy/sell → BUY/SELL enum
--- - Trade ID: Prefixed with BINANCE-
--- - vendor_data: Preserves original Binance metadata
+-- - symbol: "BTCUSDT" → canonical_symbol="BTC/USDT" (strip last 4 chars = "USDT")
+-- - price/quantity: Decimal(18,8) → Decimal128(8) for higher precision
+-- - ingestion_timestamp: DateTime → DateTime64(6, 'UTC')
+-- - vendor_data: kafka offset/partition preserved
+-- - side: UNKNOWN (v2 bronze does not carry side; dropped from raw topic)
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS k2.bronze_binance_to_silver_mv
 TO k2.silver_trades AS
 SELECT
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Identity & Deduplication
-    -- ═══════════════════════════════════════════════════════════════════════
     generateUUIDv4() AS message_id,
-    concat('BINANCE-', toString(trade_id)) AS trade_id,
-
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Asset Classification
-    -- ═══════════════════════════════════════════════════════════════════════
+    concat('BINANCE-', toString(sequence_number)) AS trade_id,
     'binance' AS exchange,
     symbol,
-
-    -- Canonical symbol: Add slash (BTCUSDT → BTC/USDT)
-    concat(
-        if(startsWith(symbol, 'BTC'), 'BTC',
-        if(startsWith(symbol, 'ETH'), 'ETH',
-        if(startsWith(symbol, 'BNB'), 'BNB',
-        symbol))),
-        '/',
-        if(endsWith(symbol, 'USDT'), 'USDT',
-        if(endsWith(symbol, 'BUSD'), 'BUSD',
-        if(endsWith(symbol, 'BTC'), 'BTC',
-        if(endsWith(symbol, 'ETH'), 'ETH',
-        'UNKNOWN'))))
-    ) AS canonical_symbol,
-
+    -- Canonical: BTCUSDT → BTC/USDT (last 4 chars = "USDT")
+    concat(substring(symbol, 1, length(symbol) - 4), '/USDT') AS canonical_symbol,
     'crypto' AS asset_class,
-
-    -- Currency: Quote asset (USDT, BUSD, BTC, ETH)
-    if(endsWith(symbol, 'USDT'), 'USDT',
-    if(endsWith(symbol, 'BUSD'), 'BUSD',
-    if(endsWith(symbol, 'BTC'), 'BTC',
-    if(endsWith(symbol, 'ETH'), 'ETH',
-    'UNKNOWN')))) AS currency,
-
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Trade Data (Bronze already has correct types)
-    -- ═══════════════════════════════════════════════════════════════════════
+    'USDT' AS currency,
     CAST(price AS Decimal128(8)) AS price,
     CAST(quantity AS Decimal128(8)) AS quantity,
     CAST(quote_volume AS Decimal128(8)) AS quote_volume,
-
-    -- Side: buy/sell → BUY/SELL
-    CAST(
-        CASE toString(side)
-            WHEN 'buy' THEN 'BUY'
-            WHEN 'sell' THEN 'SELL'
-            ELSE 'UNKNOWN'
-        END AS Enum8('BUY' = 1, 'SELL' = 2, 'SELL_SHORT' = 3, 'UNKNOWN' = 4)
-    ) AS side,
-
+    -- Note: side not available in v2 bronze (raw topic doesn't carry it through)
+    CAST('UNKNOWN' AS Enum8('BUY' = 1, 'SELL' = 2, 'SELL_SHORT' = 3, 'UNKNOWN' = 4)) AS side,
     CAST([] AS Array(String)) AS trade_conditions,
-
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Timestamps (convert milliseconds → microseconds)
-    -- ═══════════════════════════════════════════════════════════════════════
     fromUnixTimestamp64Micro(toUnixTimestamp64Milli(exchange_timestamp) * 1000) AS timestamp,
-    fromUnixTimestamp64Micro(toUnixTimestamp64Milli(platform_timestamp) * 1000) AS ingestion_timestamp,
-
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Sequencing
-    -- ═══════════════════════════════════════════════════════════════════════
-    trade_id AS source_sequence,
+    toDateTime64(ingestion_timestamp, 6, 'UTC') AS ingestion_timestamp,
+    sequence_number AS source_sequence,
     CAST(NULL AS Nullable(UInt64)) AS platform_sequence,
-
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Vendor Data (preserve Binance-specific fields from metadata)
-    -- ═══════════════════════════════════════════════════════════════════════
-    if(
-        length(metadata) > 0,
-        map(
-            'event_type', JSONExtractString(metadata, 'e'),
-            'event_time', toString(JSONExtractUInt(metadata, 'E')),
-            'is_buyer_maker', toString(JSONExtractBool(metadata, 'm')),
-            'is_best_match', toString(JSONExtractBool(metadata, 'M')),
-            'buyer_order_id', toString(JSONExtractUInt(metadata, 'b')),
-            'seller_order_id', toString(JSONExtractUInt(metadata, 'a'))
-        ),
-        map()
+    map(
+        'kafka_offset',    toString(kafka_offset),
+        'kafka_partition', toString(kafka_partition)
     ) AS vendor_data,
-
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Validation
-    -- ═══════════════════════════════════════════════════════════════════════
-    (toFloat64(price) > 0 AND toFloat64(quantity) > 0) AS is_valid,
-
+    (price > 0 AND quantity > 0) AS is_valid,
     arrayConcat(
-        if(toFloat64(price) <= 0, ['invalid_price'], []),
-        if(toFloat64(quantity) <= 0, ['invalid_volume'], [])
+        if(price <= 0, ['invalid_price'],  []),
+        if(quantity <= 0, ['invalid_volume'], [])
     ) AS validation_errors
-
 FROM k2.bronze_trades_binance;
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- Comments & Verification
+-- Verification Queries
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- Verify Silver normalization:
--- SELECT
---     exchange,
---     canonical_symbol,
---     count() as trades
+-- Verify normalization:
+-- SELECT exchange, canonical_symbol, count() AS trades
 -- FROM k2.silver_trades
 -- WHERE exchange = 'binance'
--- GROUP BY exchange, canonical_symbol;
+-- GROUP BY exchange, canonical_symbol
+-- ORDER BY canonical_symbol;
 
--- Sample record:
--- SELECT * FROM k2.silver_trades
--- WHERE exchange = 'binance'
--- ORDER BY timestamp DESC LIMIT 1 FORMAT Vertical;
+-- Cross-exchange BTC price comparison:
+-- SELECT exchange, canonical_symbol, max(timestamp) AS latest, argMax(price, timestamp) AS last_price
+-- FROM k2.silver_trades
+-- WHERE canonical_symbol IN ('BTC/USDT', 'BTC/USD')
+-- GROUP BY exchange, canonical_symbol
+-- ORDER BY exchange;
 
--- Cross-exchange verification (Gold layer should aggregate both):
--- SELECT
---     exchange,
---     canonical_symbol,
---     window_start,
---     close_price,
---     trade_count
+-- OHLCV cross-exchange check:
+-- SELECT exchange, canonical_symbol, window_start, close_price, trade_count
 -- FROM k2.ohlcv_1m
--- WHERE canonical_symbol IN ('BTC/USD', 'BTC/USDT')
+-- WHERE canonical_symbol = 'BTC/USDT'
 -- ORDER BY window_start DESC, exchange
--- LIMIT 20;
+-- LIMIT 12;

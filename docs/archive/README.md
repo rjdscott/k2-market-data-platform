@@ -1,47 +1,51 @@
 # Documentation Archive
 
-**Purpose**: Historical documentation files that have been superseded by newer versions.
+> **Everything in this directory describes the v1 platform (Python / Kafka / Spark Streaming /
+> DuckDB / FastAPI). It is preserved for historical reference only.**
+>
+> The active platform is **v2** (Kotlin / Redpanda / ClickHouse / Iceberg / Spark batch).
+> Start with the [root README](../../README.md) or [docs/NAVIGATION.md](../NAVIGATION.md).
 
-**Last Updated**: 2026-01-10
-
----
-
-## Archived Files
-
-### Phase 1 Implementation Documentation
-
-| File | Archived Date | Reason | Replaced By |
-|------|---------------|--------|-------------|
-| `IMPLEMENTATION_PLAN_ORIGINAL.md` | 2026-01-10 | Superseded by refined implementation plan | `../phases/phase-1-single-node-implementation/IMPLEMENTATION_PLAN.md` |
-| `PROGRESS_OLD.md` | 2026-01-10 | Superseded by updated progress tracking | `../phases/phase-1-single-node-implementation/PROGRESS.md` |
+**Last Updated**: 2026-02-18
 
 ---
 
-## Why Archive Instead of Delete?
+## Contents
 
-These files are archived rather than deleted to:
-1. **Preserve history** - Track how the implementation plan evolved
-2. **Reference decisions** - Understand why approaches changed
-3. **Audit trail** - Maintain complete project documentation lineage
+### `v1-phases/` — v1 Implementation Phase Documentation
+
+All phase documentation from the original Python-based v1 platform:
+
+| Directory | Description |
+|-----------|-------------|
+| `phase-0-technical-debt-resolution/` | v1 technical debt cleanup |
+| `phase-1-single-node-equities/` | v1 single-node equities implementation |
+| `phase-2-prep/` | v1 multi-source foundation (V2 schema) |
+| `phase-3-demo-enhancements/` | v1 platform positioning & demo enhancements |
+| `phase-4-demo-readiness/` | v1 final demo preparation |
+| `phase-5-binance-production-resilience/` | v1 Binance production hardening |
+| `phase-6-cicd/` | v1 CI/CD pipeline |
+| `phase-7-e2e/` | v1 end-to-end testing |
+| `phase-8-e2e-demo/` | v1 E2E demo execution |
+| `phase-9-demo-consolidation/` | v1 demo consolidation |
+| `phase-10-streaming-crypto/` | v1 streaming crypto integration |
+| `phase-11-production-readiness/` | v1 production readiness |
+| `phase-12-flink-bronze-implementation/` | v1 Flink bronze layer |
+| `phase-13-ohlcv-analytics/` | v1 OHLCV analytics layer |
+
+### Other Historical Content
+
+- `2026-01-13-implementation-logs/` — Implementation session logs from v1 active development
+- `docker-compose-history/` — Historical Docker Compose configurations
+- `phase-steps/` — v1 phase step files
+- `reviews-historical/` — Historical expert assessments of v1 platform
+- `V1-ARCHIVAL-PLAN.md` — Original v1 archival decision
+- `v1-platform/` — v1 platform reference docs
 
 ---
 
-## Accessing Archived Documentation
+## Archive Policy
 
-Archived documentation is **read-only** and should not be updated. If you need information from an archived file:
-1. Check if the current version has the information you need
-2. If historical context is required, reference the archived file but cite the archive location
-3. Never link to archived files from active documentation
-
----
-
-## Archive Retention Policy
-
-- **Keep**: All archived documentation (disk space is cheap)
-- **Review**: Annually to ensure archive is still relevant
-- **Delete**: Only with approval from Platform Lead
-
----
-
-**Maintained By**: Documentation Team
-**Questions**: Create GitHub issue with label `documentation-archive`
+- **Read-only**: Do not update archived files
+- **Do not link** from active v2 documentation to archived files
+- **Retention**: Keep indefinitely (disk is cheap)

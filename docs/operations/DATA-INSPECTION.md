@@ -257,7 +257,7 @@ Type `exit` or press `Ctrl+D` to quit.
 ### One-liner queries
 
 ```bash
-docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM k2.bronze_trades"
+docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM k2.bronze_trades_binance"
 ```
 
 ### Useful queries
@@ -270,7 +270,7 @@ SELECT
     count(*) as trades,
     min(exchange_timestamp) as earliest,
     max(exchange_timestamp) as latest
-FROM k2.bronze_trades
+FROM k2.bronze_trades_binance
 GROUP BY exchange
 "
 ```
@@ -314,6 +314,7 @@ SELECT
     exchange,
     canonical_symbol,
     window_start,
+    window_end,
     open_price,
     high_price,
     low_price,
@@ -467,14 +468,14 @@ SELECT * FROM system.kafka_consumers FORMAT Pretty
 **Check materialized views:**
 ```bash
 docker exec k2-clickhouse clickhouse-client --query "
-SHOW CREATE TABLE k2.bronze_trades_mv
+SHOW CREATE TABLE k2.bronze_trades_binance_mv
 "
 ```
 
 **Manually trigger materialized view:**
 ```bash
 docker exec k2-clickhouse clickhouse-client --query "
-SYSTEM START VIEW k2.bronze_trades_mv
+SYSTEM START VIEW k2.bronze_trades_binance_mv
 "
 ```
 
@@ -602,7 +603,7 @@ SELECT
     exchange,
     trade_id,
     count(*) as occurrences
-FROM k2.bronze_trades
+FROM k2.bronze_trades_binance
 GROUP BY exchange, trade_id
 HAVING count(*) > 1
 ORDER BY occurrences DESC
@@ -639,7 +640,7 @@ SELECT
     count(*) as trades,
     min(exchange_timestamp) as first_seen,
     max(exchange_timestamp) as last_seen
-FROM k2.bronze_trades
+FROM k2.bronze_trades_binance
 GROUP BY schema_version
 FORMAT Pretty
 "
@@ -653,14 +654,14 @@ FORMAT Pretty
 
 ```bash
 docker exec k2-clickhouse clickhouse-client --query "SHOW CREATE DATABASE k2" > backup/schema_k2_database.sql
-docker exec k2-clickhouse clickhouse-client --query "SHOW CREATE TABLE k2.bronze_trades" > backup/schema_bronze_trades.sql
+docker exec k2-clickhouse clickhouse-client --query "SHOW CREATE TABLE k2.bronze_trades_binance" > backup/schema_bronze_trades.sql
 ```
 
 ### Backup ClickHouse data
 
 ```bash
 docker exec k2-clickhouse clickhouse-client --query "
-BACKUP TABLE k2.bronze_trades TO Disk('backups', 'bronze_trades_backup.zip')
+BACKUP TABLE k2.bronze_trades_binance TO Disk('backups', 'bronze_trades_backup.zip')
 "
 ```
 

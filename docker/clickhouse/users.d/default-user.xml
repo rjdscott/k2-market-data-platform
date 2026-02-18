@@ -1,0 +1,15 @@
+    <clickhouse>
+      <!-- Docs: <https://clickhouse.com/docs/en/operations/settings/settings_users/> -->
+      <users>
+        <default>
+          <profile>default</profile>
+          <networks>
+            <ip>::/0</ip>
+          </networks>
+          <!-- Password: clickhouse (plaintext for development) -->
+          <password>clickhouse</password>
+          <quota>default</quota>
+          <access_management>1</access_management>
+        </default>
+      </users>
+    </clickhouse>

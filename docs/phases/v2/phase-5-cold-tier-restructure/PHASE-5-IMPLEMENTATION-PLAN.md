@@ -1,9 +1,39 @@
 # Phase 5: Cold Tier Restructure - Implementation Plan
 
-**Date:** 2026-02-11
+**Date:** 2026-02-11 (Updated: 2026-02-12)
 **Engineer:** Platform Engineering (Staff Level)
 **Duration Estimate:** 1-2 weeks
-**Status:** 🟡 Planning
+**Status:** 🟡 In Progress - Prototype Validated
+
+---
+
+## Progress Update (2026-02-12)
+
+**Status**: 🟡 Step 2 Prototype Validated ✅
+
+**Completed Today**:
+- ✅ Generic PySpark offload script (`offload_generic.py`) - working
+- ✅ PostgreSQL watermark management - exactly-once semantics validated
+- ✅ ClickHouse → Spark JDBC connectivity - resolved compatibility (24.3 LTS)
+- ✅ Iceberg atomic writes - Hadoop catalog tested
+- ✅ End-to-end testing - initial + incremental loads (zero duplicates)
+- ✅ Comprehensive test report - 560+ lines documenting 13 debug iterations
+- ✅ ClickHouse downgrade decision - ADR-015 created
+
+**Next Session**:
+1. Create production Iceberg tables (9 tables) with appropriate partitioning
+2. Build per-table offload scripts (bronze_binance, bronze_kraken, silver, gold_*)
+3. Configure Prefect flows for 15-minute scheduled execution
+4. Add monitoring/alerting for offload metrics
+
+**Key Decisions Made**:
+- **Decision 2026-02-12**: Downgrade ClickHouse from 26.1 to 24.3 LTS for JDBC compatibility ([DECISION-015](../../../decisions/platform-v2/DECISION-015-clickhouse-lts-downgrade.md))
+- **Decision 2026-02-11**: Use Spark (not Kotlin) for offload ([ADR-014](../../../decisions/platform-v2/ADR-014-spark-based-iceberg-offload.md))
+
+**Documentation Created**:
+- [Offload Pipeline Test Report](../../../testing/offload-pipeline-test-report-2026-02-12.md)
+- [Evening Session Handoff](HANDOFF-2026-02-12-EVENING.md)
+- [ClickHouse LTS Downgrade Decision](../../../decisions/platform-v2/DECISION-015-clickhouse-lts-downgrade.md)
 
 ---
 
@@ -174,38 +204,49 @@ Total: ~60 min/day
 
 ---
 
-### Step 2: Implement Kotlin Hourly Offload Service (3-4 days)
+### Step 2: Implement Spark 15-Minute Offload Jobs (1 day) ⚡ **UPDATED - ADR-014**
+
+**Decision**: Use Spark (not Kotlin service) for ClickHouse → Iceberg offload. See [ADR-014](../../../decisions/platform-v2/ADR-014-spark-based-iceberg-offload.md) for full rationale.
+
+**Rationale**: Spark provides native Iceberg integration (already validated in Step 1). Building custom Kotlin service would duplicate functionality and add 3-4 days of development for no business value.
 
 **Objectives:**
-1. Create Kotlin service using Iceberg Java SDK
-2. Implement hourly SELECT from ClickHouse
-3. Implement Parquet write to MinIO
-4. Implement catalog update via Iceberg REST
-5. Add error handling, retries, metrics
+1. Create PySpark offload jobs for each layer (Bronze, Silver, Gold)
+2. Implement exactly-once semantics (watermark table + idempotent writes)
+3. Configure 15-minute cron schedule (faster freshness than 1-hour)
+4. Implement incremental reads from ClickHouse (avoid full table scans)
+5. Add monitoring, error handling, retry safety
 
 **Deliverables:**
-- `services/iceberg-offload-kotlin/` (Kotlin service)
-  - `OffloadScheduler.kt` (hourly cron scheduler)
-  - `IcebergWriter.kt` (Parquet write + catalog update)
-  - `ClickHouseReader.kt` (hourly partition SELECT)
-  - `OffloadMetrics.kt` (Prometheus metrics)
-  - `application.yml` (config: ClickHouse, MinIO, Iceberg REST)
-- `docker/docker-compose.iceberg-offload.yml` (service definition)
-- `docs/operations/iceberg-offload-monitoring.md` (runbook)
+- `docker/offload/offload-bronze-binance.py` (PySpark job - Bronze Binance)
+- `docker/offload/offload-bronze-kraken.py` (PySpark job - Bronze Kraken)
+- `docker/offload/offload-silver.py` (PySpark job - Silver trades)
+- `docker/offload/offload-gold.py` (PySpark job - 6 OHLCV tables in parallel)
+- `docker/offload/watermark.py` (Watermark utility - exactly-once semantics)
+- `docker/offload-cron/15min/offload-all.sh` (Cron wrapper script)
+- `docker/clickhouse/ddl/watermarks.sql` (Watermark table DDL)
+- `docker-compose.phase5-offload.yml` (Updated: Spark resources + cron scheduler)
+- `docs/operations/runbooks/iceberg-offload-monitoring.md` (Runbook)
 
 **Acceptance Criteria:**
-- [ ] Service connects to ClickHouse, MinIO, Iceberg REST
-- [ ] Hourly cron triggers successfully
+- [ ] PySpark jobs read incrementally from ClickHouse (watermark-based)
+- [ ] Iceberg writes are atomic (all-or-nothing commits)
+- [ ] Watermark table prevents duplicate reads
+- [ ] Exactly-once semantics validated (run job twice, verify no duplicates)
+- [ ] 15-minute cron schedule triggers successfully (`*/15 * * * *`)
 - [ ] Bronze/Silver/Gold data offloaded correctly
-- [ ] Parquet files compressed with Zstd
-- [ ] Row counts match ClickHouse source
-- [ ] Prometheus metrics exported (rows_offloaded, offload_duration_seconds)
-- [ ] Error handling: retry logic for transient failures
-- [ ] Logs structured JSON (exchange, table, hour, row_count)
+- [ ] Parquet files compressed with Zstd level 3
+- [ ] Row counts match ClickHouse source (audit query)
+- [ ] Failed jobs can retry without duplicates (watermark not updated on failure)
+- [ ] Spark resource limits enforced (2 CPU / 4 GB)
+- [ ] Jobs complete in <10 minutes (before next 15-minute interval)
+- [ ] Logs capture success/failure, row counts, duration
 
 ---
 
-### Step 3: Implement Spark Daily Maintenance (2 days)
+### Step 3: Implement Spark Daily Maintenance (1 day) ⚡ **SIMPLIFIED**
+
+**Note**: With Spark already handling 15-minute offload (Step 2), daily maintenance jobs reuse same infrastructure.
 
 **Objectives:**
 1. Create Spark batch jobs (Scala/Python)

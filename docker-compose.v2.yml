@@ -1,6 +1,6 @@
-# K2 Market Data Platform v2 - Greenfield Architecture
-# Version: 2.0.0-phase1
-# Last Updated: 2026-02-09
+# K2 Market Data Platform v2 - Consolidated Architecture
+# Version: 2.0.0-consolidated
+# Last Updated: 2026-02-12
 # Target: 16 CPU cores / 40GB RAM
 
 #############################################################################
@@ -32,6 +32,15 @@ volumes:
     driver: local
   grafana-data:
     driver: local
+
+  # Orchestration data
+  postgres-data:
+    driver: local
+
+  # Object storage data
+  minio-data:
+    driver: local
+
 
 #############################################################################
 # SERVICES - STREAMING BACKBONE
@@ -136,7 +145,7 @@ services:
   # ClickHouse - OLAP database for real-time analytics
   # ───────────────────────────────────────────────────────────────────────
   clickhouse:
-    image: clickhouse/clickhouse-server:26.1
+    image: clickhouse/clickhouse-server:24.3-alpine
     container_name: k2-clickhouse
     hostname: clickhouse
     networks:
@@ -144,16 +153,17 @@ services:
         ipv4_address: 172.28.0.20
     ports:
       - "8123:8123"     # HTTP interface
-      - "9000:9000"     # Native protocol
+      - "9002:9000"     # Native protocol (9002 to avoid MinIO conflict)
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
       - ./docker/clickhouse/config.xml:/etc/clickhouse-server/config.d/k2-config.xml:ro
-      - ./docker/clickhouse/users.xml:/etc/clickhouse-server/users.d/k2-users.xml:ro
+      # - ./docker/clickhouse/users.xml:/etc/clickhouse-server/users.d/k2-users.xml:ro  # Removed: using default auth with CLICKHOUSE_PASSWORD env var
+      - ./docker/clickhouse/ddl:/docker-entrypoint-initdb.d:ro
     environment:
       CLICKHOUSE_DB: k2
-      CLICKHOUSE_USER: k2_user
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-changeme}
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     deploy:
       resources:
@@ -177,6 +187,45 @@ services:
     labels:
       com.k2.service: "storage"
       com.k2.tier: "warm"
+      com.k2.version: "v2"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # MinIO - S3-compatible object storage for Iceberg
+  # ───────────────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2024-01-18T22-51-28Z
+    container_name: k2-minio
+    hostname: minio
+    networks:
+      k2-net:
+        ipv4_address: 172.28.0.21
+    ports:
+      - "9000:9000"     # API
+      - "9001:9001"     # Console
+    volumes:
+      - minio-data:/data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "storage"
+      com.k2.tier: "cold"
       com.k2.version: "v2"
 
 #############################################################################
@@ -241,7 +290,7 @@ services:
       - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
       GF_INSTALL_PLUGINS: ""
       GF_AUTH_ANONYMOUS_ENABLED: false
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
@@ -269,6 +318,227 @@ services:
       com.k2.tier: "observability"
       com.k2.version: "v2"
 
+#############################################################################
+# SERVICES - ORCHESTRATION LAYER
+#############################################################################
+
+  # ───────────────────────────────────────────────────────────────────────
+  # PostgreSQL - Prefect metadata + watermarks
+  # ───────────────────────────────────────────────────────────────────────
+  prefect-db:
+    image: postgres:15-alpine
+    container_name: k2-prefect-db
+    hostname: prefect-db
+    networks:
+      k2-net:
+        ipv4_address: 172.28.0.30
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/ddl:/docker-entrypoint-initdb.d:ro
+    environment:
+      POSTGRES_USER: ${PREFECT_DB_USER}
+      POSTGRES_PASSWORD: ${PREFECT_DB_PASSWORD}
+      POSTGRES_DB: ${PREFECT_DB_NAME}
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "orchestration"
+      com.k2.tier: "control-plane"
+      com.k2.version: "v2"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Prefect Server - Workflow orchestration UI/API (v3.x)
+  # ───────────────────────────────────────────────────────────────────────
+  prefect-server:
+    image: prefecthq/prefect:3-python3.12
+    container_name: k2-prefect-server
+    hostname: prefect-server
+    networks:
+      k2-net:
+        ipv4_address: 172.28.0.31
+    ports:
+      - "4200:4200"
+    volumes:
+      - ./docker/prefect:/root/.prefect
+    environment:
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      PREFECT_API_URL: http://prefect-server:4200/api
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/${PREFECT_DB_NAME}
+    command: prefect server start --host 0.0.0.0
+    depends_on:
+      prefect-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "orchestration"
+      com.k2.tier: "control-plane"
+      com.k2.version: "v2"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Prefect Worker - Workflow executor (v3.x uses workers not agents)
+  # ───────────────────────────────────────────────────────────────────────
+  prefect-worker:
+    build:
+      context: .
+      dockerfile: docker/prefect/Dockerfile
+    image: k2-prefect-worker:3-python3.12  # local tag after build
+    container_name: k2-prefect-worker
+    hostname: prefect-worker
+    networks:
+      k2-net:
+        ipv4_address: 172.28.0.32
+    volumes:
+      - ./docker/prefect:/root/.prefect
+      - ./docker/offload:/opt/prefect/offload
+      - ./docker/offload/flows:/opt/prefect/flows
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for container orchestration
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+      PYTHONPATH: /opt/prefect
+      DOCKER_API_VERSION: "1.44"
+    command: prefect worker start --pool iceberg-offload --type process
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    restart: unless-stopped
+    labels:
+      com.k2.service: "orchestration"
+      com.k2.tier: "control-plane"
+      com.k2.version: "v2"
+
+#############################################################################
+# SERVICES - ETL / OFFLOAD LAYER
+#############################################################################
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Spark + Iceberg - ETL engine for cold tier offload
+  # ───────────────────────────────────────────────────────────────────────
+  spark-iceberg:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    image: k2-spark-iceberg:3.5.0_1.4.2  # local tag after build
+    container_name: k2-spark-iceberg
+    hostname: spark-iceberg
+    networks:
+      k2-net:
+        ipv4_address: 172.28.0.40
+    ports:
+      - "18080:8080"    # Spark Master UI (mapped to 18080 to avoid conflict)
+      - "4040:4040"     # Spark Application UI
+      - "8888:8888"     # Jupyter (if needed)
+    volumes:
+      - ./docker/iceberg/warehouse:/home/iceberg/warehouse
+      - ./docker/offload:/home/iceberg/offload
+      - ./docker/offload/flows:/home/iceberg/offload/flows
+    environment:
+      # MinIO / S3 credentials (Iceberg cold storage)
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+      - AWS_REGION=us-east-1
+      - AWS_S3_ENDPOINT=http://minio:9000
+      # ClickHouse credentials (read by offload_generic.py via os.environ)
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      # PostgreSQL / watermark credentials (read by offload_generic.py via os.environ)
+      - PREFECT_DB_HOST=prefect-db
+      - PREFECT_DB_PORT=5432
+      - PREFECT_DB_NAME=${PREFECT_DB_NAME}
+      - PREFECT_DB_USER=${PREFECT_DB_USER}
+      - PREFECT_DB_PASSWORD=${PREFECT_DB_PASSWORD}
+    depends_on:
+      minio:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      prefect-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    restart: unless-stopped
+    labels:
+      com.k2.service: "etl"
+      com.k2.tier: "cold"
+      com.k2.version: "v2"
+
+#############################################################################
+# SERVICES - TOPIC INITIALIZATION
+#############################################################################
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Redpanda Init - One-shot service to create topics with explicit partitions
+  # Runs once at startup; feed handlers depend on service_completed_successfully
+  # ───────────────────────────────────────────────────────────────────────
+  redpanda-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.3.4
+    container_name: k2-redpanda-init
+    networks:
+      - k2-net
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        rpk topic describe market.crypto.trades.binance.raw --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.binance.raw --partitions 40 --brokers redpanda:9092
+        rpk topic describe market.crypto.trades.binance     --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.binance     --partitions 40 --brokers redpanda:9092
+        rpk topic describe market.crypto.trades.kraken.raw  --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.kraken.raw  --partitions 20 --brokers redpanda:9092
+        rpk topic describe market.crypto.trades.kraken      --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.kraken      --partitions 20 --brokers redpanda:9092
+        rpk topic describe market.crypto.trades.coinbase.raw --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.coinbase.raw --partitions 20 --brokers redpanda:9092
+        rpk topic describe market.crypto.trades.coinbase     --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.coinbase     --partitions 20 --brokers redpanda:9092
+        echo "✅ All topics initialized"
+    restart: "no"
+    labels:
+      com.k2.service: "init"
+      com.k2.tier: "hot"
+      com.k2.version: "v2"
+
+#############################################################################
+# SERVICES - FEED HANDLERS (DATA INGESTION)
+#############################################################################
+
   # ───────────────────────────────────────────────────────────────────────
   # Binance Feed Handler - Kotlin/Coroutines WebSocket client
   # ───────────────────────────────────────────────────────────────────────
@@ -279,19 +549,25 @@ services:
     container_name: k2-feed-handler-binance
     hostname: feed-handler-binance
     networks:
-      - k2-net
+      k2-net:
+        ipv4_address: 172.28.0.50
     depends_on:
       redpanda:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
     environment:
       - JAVA_OPTS=-Xmx512m -Xms256m
       - K2_EXCHANGE=binance
-      - K2_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT
+      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
       - K2_SCHEMA_PATH=/app/schemas
       - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
       - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
     volumes:
-      - ./services/feed-handler-kotlin/logs/binance:/app/logs
+      - ./logs/binance:/app/logs
+      - ./config/instruments.yaml:/app/config/instruments.yaml:ro
     deploy:
       resources:
         limits:
@@ -322,19 +598,25 @@ services:
     container_name: k2-feed-handler-kraken
     hostname: feed-handler-kraken
     networks:
-      - k2-net
+      k2-net:
+        ipv4_address: 172.28.0.51
     depends_on:
       redpanda:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
     environment:
       - JAVA_OPTS=-Xmx512m -Xms256m
       - K2_EXCHANGE=kraken
-      - K2_SYMBOLS=XBT/USD,ETH/USD
+      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
       - K2_SCHEMA_PATH=/app/schemas
       - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
       - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
     volumes:
-      - ./services/feed-handler-kotlin/logs/kraken:/app/logs
+      - ./logs/kraken:/app/logs
+      - ./config/instruments.yaml:/app/config/instruments.yaml:ro
     deploy:
       resources:
         limits:
@@ -355,21 +637,80 @@ services:
       com.k2.exchange: "kraken"
       com.k2.version: "v2"
 
+  # ───────────────────────────────────────────────────────────────────────
+  # Coinbase Feed Handler - Kotlin/Coroutines WebSocket client
+  # ───────────────────────────────────────────────────────────────────────
+  feed-handler-coinbase:
+    build:
+      context: .
+      dockerfile: services/feed-handler-kotlin/Dockerfile
+    container_name: k2-feed-handler-coinbase
+    hostname: feed-handler-coinbase
+    networks:
+      k2-net:
+        ipv4_address: 172.28.0.52
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+    environment:
+      - JAVA_OPTS=-Xmx512m -Xms256m
+      - K2_EXCHANGE=coinbase
+      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
+      - K2_SCHEMA_PATH=/app/schemas
+      - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
+    volumes:
+      - ./logs/coinbase:/app/logs
+      - ./config/instruments.yaml:/app/config/instruments.yaml:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "java"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "feed-handler"
+      com.k2.exchange: "coinbase"
+      com.k2.version: "v2"
+
 #############################################################################
-# RESOURCE SUMMARY (Phase 6 - With Feed Handlers)
+# RESOURCE SUMMARY (Consolidated - Full Platform)
 #############################################################################
-# Service              | CPU Limit | Memory Limit | Purpose
-# ---------------------|-----------|--------------|---------------------------
-# redpanda             | 2.0       | 2G           | Streaming backbone
-# redpanda-console     | 0.5       | 256M         | Streaming UI
-# clickhouse           | 4.0       | 8G           | Warm storage OLAP
-# prometheus           | 1.0       | 2G           | Metrics collection
-# grafana              | 0.5       | 512M         | Visualization
-# feed-handler-binance | 0.5       | 512M         | Binance WebSocket client
-# feed-handler-kraken  | 0.5       | 512M         | Kraken WebSocket client
-# ---------------------|-----------|--------------|---------------------------
-# TOTAL                | 9.0 CPU   | 13.75 GB     | Phase 6 with feed handlers
+# Service               | CPU Limit | Memory Limit | Purpose
+# ----------------------|-----------|--------------|---------------------------
+# redpanda              | 2.0       | 2G           | Streaming backbone
+# redpanda-init         | -         | -            | One-shot topic init (exits)
+# redpanda-console      | 0.5       | 256M         | Streaming UI
+# clickhouse            | 4.0       | 8G           | Warm storage OLAP
+# minio                 | 1.0       | 1G           | S3-compatible storage
+# prometheus            | 1.0       | 2G           | Metrics collection
+# grafana               | 0.5       | 512M         | Visualization
+# prefect-db            | 1.0       | 1G           | Metadata + watermarks
+# prefect-server        | 1.0       | 1G           | Orchestration UI/API (v3.x)
+# prefect-worker        | 0.5       | 512M         | Workflow executor (v3.x)
+# spark-iceberg         | 2.0       | 4G           | ETL engine
+# feed-handler-binance  | 0.5       | 512M         | Binance ingestion (12 pairs)
+# feed-handler-kraken   | 0.5       | 512M         | Kraken ingestion (11 pairs)
+# feed-handler-coinbase | 0.5       | 512M         | Coinbase ingestion (11 pairs)
+# ----------------------|-----------|--------------|---------------------------
+# TOTAL                 | 15.5 CPU  | 21.75 GB     | Full consolidated platform
 #
-# Remaining budget: 7.0 CPU / 26.25 GB for future phases
+# Remaining budget: 0.5 CPU / 18.25 GB for future expansion
 # Target: 16 CPU / 40 GB total
+#
+# Instrument config: see config/instruments.yaml (single source of truth)
+# Last updated: 2026-02-18
 #############################################################################

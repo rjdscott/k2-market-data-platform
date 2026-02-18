@@ -1,19 +1,25 @@
 # Architecture Documentation
 
-**Last Updated**: 2026-01-10
+**Last Updated**: 2026-02-18
 **Stability**: High - changes require RFC and team review
 **Target Audience**: Principal/Staff Engineers, Architects
 
 This directory contains permanent architectural decisions that transcend individual implementation phases.
+
+> **v2 Pivot (2026-02)**: The platform has migrated from Python/Kafka/Spark Streaming to
+> Kotlin/Redpanda/ClickHouse. The documents below reflect original v1 architectural principles —
+> most are still valid. For the v2 architecture, see
+> [docs/decisions/platform-v2/ARCHITECTURE-V2.md](../decisions/platform-v2/ARCHITECTURE-V2.md)
+> and the ADR-001 through ADR-010 series.
 
 ---
 
 ## Overview
 
 The K2 Market Data Platform is a lakehouse-based streaming analytics platform designed for:
-- **Real-time ingestion** of market data via Apache Kafka
-- **ACID storage** in Apache Iceberg lakehouse
-- **Sub-second queries** using DuckDB (Phase 1) with path to Presto/Trino
+- **Real-time ingestion** of market data via Kotlin feed handlers → Redpanda (v2) / Kafka (v1)
+- **Hot analytics** in ClickHouse with Bronze/Silver/Gold medallion layers (v2)
+- **ACID cold storage** in Apache Iceberg lakehouse (both versions)
 - **Observability** via Prometheus + Grafana
 
 **Architecture Philosophy**: Pragmatic over perfect, boring technology, graceful degradation
