@@ -6,19 +6,19 @@ from pyspark.sql import SparkSession
 spark = (
     SparkSession.builder.appName("CreateBronzeTable")
     .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0")
-    .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
-    .config("spark.sql.catalog.demo.type", "hadoop")
-    .config("spark.sql.catalog.demo.warehouse", "/home/iceberg/warehouse")
-    .config("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO")
+    .config("spark.sql.catalog.k2", "org.apache.iceberg.spark.SparkCatalog")
+    .config("spark.sql.catalog.k2.type", "hadoop")
+    .config("spark.sql.catalog.k2.warehouse", "/home/iceberg/warehouse")
+    .config("spark.sql.catalog.k2.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO")
     .getOrCreate()
 )
 
 # Drop and recreate
-spark.sql("DROP TABLE IF EXISTS demo.cold.bronze_trades_binance")
+spark.sql("DROP TABLE IF EXISTS k2.cold.bronze_trades_binance")
 print("✅ Dropped old table")
 
 spark.sql("""
-CREATE TABLE demo.cold.bronze_trades_binance (
+CREATE TABLE k2.cold.bronze_trades_binance (
     exchange_timestamp TIMESTAMP,
     sequence_number BIGINT,
     symbol STRING,
@@ -39,10 +39,10 @@ TBLPROPERTIES (
 )
 """)
 
-print("✅ Created table: demo.cold.bronze_trades_binance")
+print("✅ Created table: k2.cold.bronze_trades_binance")
 
 # Verify
-result = spark.sql("DESCRIBE TABLE demo.cold.bronze_trades_binance")
+result = spark.sql("DESCRIBE TABLE k2.cold.bronze_trades_binance")
 print("\nTable schema:")
 result.show(truncate=False)
 

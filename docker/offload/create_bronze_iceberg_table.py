@@ -19,15 +19,15 @@ from pyspark.sql.types import (
 spark = (
     SparkSession.builder.appName("CreateBronzeIcebergTable")
     .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0")
-    .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
-    .config("spark.sql.catalog.demo.type", "hadoop")
-    .config("spark.sql.catalog.demo.warehouse", "/home/iceberg/warehouse")
-    .config("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO")
+    .config("spark.sql.catalog.k2", "org.apache.iceberg.spark.SparkCatalog")
+    .config("spark.sql.catalog.k2.type", "hadoop")
+    .config("spark.sql.catalog.k2.warehouse", "/home/iceberg/warehouse")
+    .config("spark.sql.catalog.k2.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO")
     .getOrCreate()
 )
 
 # Drop existing table if it exists
-spark.sql("DROP TABLE IF EXISTS demo.cold.bronze_trades_binance")
+spark.sql("DROP TABLE IF EXISTS k2.cold.bronze_trades_binance")
 print("✅ Dropped existing table (if any)")
 
 # Create schema matching ClickHouse bronze_trades_binance
@@ -50,7 +50,7 @@ schema = StructType(
 df = spark.createDataFrame([], schema)
 
 # Write to create table with partitioning by day
-df.writeTo("demo.cold.bronze_trades_binance").using("iceberg").partitionedBy(
+df.writeTo("k2.cold.bronze_trades_binance").using("iceberg").partitionedBy(
     "days(exchange_timestamp)"
 ).tableProperty("write.format.default", "parquet").tableProperty(
     "write.parquet.compression-codec", "zstd"
@@ -58,13 +58,13 @@ df.writeTo("demo.cold.bronze_trades_binance").using("iceberg").partitionedBy(
     "write.parquet.compression-level", "3"
 ).create()
 
-print("✅ Created Iceberg table: demo.cold.bronze_trades_binance")
+print("✅ Created Iceberg table: k2.cold.bronze_trades_binance")
 
 # Verify table exists
-spark.sql("DESCRIBE TABLE demo.cold.bronze_trades_binance").show(truncate=False)
+spark.sql("DESCRIBE TABLE k2.cold.bronze_trades_binance").show(truncate=False)
 
 # Show table properties
 print("\nTable properties:")
-spark.sql("SHOW TBLPROPERTIES demo.cold.bronze_trades_binance").show(truncate=False)
+spark.sql("SHOW TBLPROPERTIES k2.cold.bronze_trades_binance").show(truncate=False)
 
 spark.stop()

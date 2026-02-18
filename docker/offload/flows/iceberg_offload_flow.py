@@ -43,6 +43,14 @@ from watermark_pg import WatermarkManager
 # Configuration
 # ============================================================================
 
+# Explicit column lists prevent schema drift: ClickHouse additions are ignored
+# until intentionally added here AND to the corresponding Iceberg DDL.
+# Bronze binance + kraken share the same schema.
+_BRONZE_TRADES_COLUMNS = (
+    "exchange_timestamp,sequence_number,symbol,price,quantity,"
+    "quote_volume,event_time,kafka_offset,kafka_partition,ingestion_timestamp"
+)
+
 # Table Configuration: All ClickHouse tables to offload
 TABLE_CONFIG = {
     "bronze": [
@@ -51,18 +59,21 @@ TABLE_CONFIG = {
             "target": "cold.bronze_trades_binance",
             "timestamp_col": "exchange_timestamp",
             "sequence_col": "sequence_number",
+            "columns": _BRONZE_TRADES_COLUMNS,
         },
         {
             "source": "bronze_trades_kraken",
             "target": "cold.bronze_trades_kraken",
             "timestamp_col": "exchange_timestamp",
             "sequence_col": "sequence_number",
+            "columns": _BRONZE_TRADES_COLUMNS,
         },
         {
             "source": "bronze_trades_coinbase",
             "target": "cold.bronze_trades_coinbase",
             "timestamp_col": "exchange_timestamp",
             "sequence_col": "sequence_num",  # Coinbase field name differs from binance/kraken
+            # TODO: add "columns" once Coinbase schema is confirmed
         },
     ],
     "silver": [
@@ -135,7 +146,8 @@ def offload_table(
     target_table: str,
     timestamp_col: str,
     sequence_col: str,
-    layer: str
+    layer: str,
+    columns: str = "*"
 ) -> Dict[str, any]:
     """
     Offload a single table from ClickHouse to Iceberg.
@@ -159,7 +171,6 @@ def offload_table(
     logger.info(f"Starting offload: {source_table} → {target_table}")
     start_time = datetime.now()
 
-    # Simplified command - uses the existing offload_generic.py script
     cmd = [
         "docker", "exec", "k2-spark-iceberg",
         "python3", "/home/iceberg/offload/offload_generic.py",
@@ -167,7 +178,8 @@ def offload_table(
         "--target-table", target_table,
         "--timestamp-col", timestamp_col,
         "--sequence-col", sequence_col,
-        "--layer", layer
+        "--layer", layer,
+        "--columns", columns,
     ]
 
     try:
@@ -182,14 +194,13 @@ def offload_table(
 
         duration = (datetime.now() - start_time).total_seconds()
 
-        # Parse rows from output
+        # Parse row count from offload_generic.py log output.
+        # Regex is more robust than split(':') since the log line format is stable
+        # and handles varying amounts of whitespace or comma-formatting in the number.
         rows_written = 0
-        for line in result.stdout.split('\n'):
-            if "Rows offloaded:" in line:
-                try:
-                    rows_written = int(line.split(':')[1].strip().replace(',', ''))
-                except Exception:
-                    pass
+        match = re.search(r'Rows offloaded:\s*([\d,]+)', result.stdout)
+        if match:
+            rows_written = int(match.group(1).replace(',', ''))
 
         logger.info(f"✓ Offload completed: {source_table}")
         logger.info(f"  Duration: {duration:.2f}s")
@@ -304,7 +315,8 @@ def offload_bronze_layer() -> List[Dict]:
             target_table=table_config["target"],
             timestamp_col=table_config["timestamp_col"],
             sequence_col=table_config["sequence_col"],
-            layer="bronze"
+            layer="bronze",
+            columns=table_config.get("columns", "*"),
         )
         results.append(result)
 
@@ -339,7 +351,8 @@ def offload_silver_layer() -> List[Dict]:
             target_table=table_config["target"],
             timestamp_col=table_config["timestamp_col"],
             sequence_col=table_config["sequence_col"],
-            layer="silver"
+            layer="silver",
+            columns=table_config.get("columns", "*"),
         )
         results.append(result)
 
@@ -375,7 +388,8 @@ def offload_gold_layer() -> List[Dict]:
             target_table=table_config["target"],
             timestamp_col=table_config["timestamp_col"],
             sequence_col=table_config["sequence_col"],
-            layer="gold"
+            layer="gold",
+            columns=table_config.get("columns", "*"),
         )
         results.append(result)
 
