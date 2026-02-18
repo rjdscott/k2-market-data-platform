@@ -20,10 +20,10 @@ import subprocess
 import pytest
 from unittest.mock import patch, MagicMock
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _fake_completed(stdout: str = "", returncode: int = 0) -> MagicMock:
     """Build a fake subprocess.CompletedProcess."""
@@ -41,6 +41,7 @@ def _fake_failed(returncode: int = 1, stderr: str = "Spark error") -> subprocess
 # ─────────────────────────────────────────────────────────────────────────────
 # compact_table
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestCompactTableTask:
     def test_success_returns_success_status(self):
@@ -90,12 +91,14 @@ class TestCompactTableTask:
     def test_task_has_retry_configuration(self):
         """compact_table task is configured with at least 1 retry."""
         from iceberg_maintenance_flow import compact_table
+
         assert compact_table.retries >= 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # expire_snapshots
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestExpireSnapshotsTask:
     def test_success_returns_success_status(self):
@@ -138,19 +141,11 @@ class TestExpireSnapshotsTask:
 # run_audit
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestRunAuditTask:
-    _CLEAN_AUDIT_STDOUT = (
-        "AUDIT SUMMARY\n"
-        "OK=10  WARNING=0  MISSING=0  ERROR=0\n"
-    )
-    _PARTIAL_AUDIT_STDOUT = (
-        "AUDIT SUMMARY\n"
-        "OK=8  WARNING=1  MISSING=1  ERROR=0\n"
-    )
-    _ERROR_AUDIT_STDOUT = (
-        "AUDIT SUMMARY\n"
-        "OK=9  WARNING=0  MISSING=0  ERROR=1\n"
-    )
+    _CLEAN_AUDIT_STDOUT = "AUDIT SUMMARY\n" "OK=10  WARNING=0  MISSING=0  ERROR=0\n"
+    _PARTIAL_AUDIT_STDOUT = "AUDIT SUMMARY\n" "OK=8  WARNING=1  MISSING=1  ERROR=0\n"
+    _ERROR_AUDIT_STDOUT = "AUDIT SUMMARY\n" "OK=9  WARNING=0  MISSING=0  ERROR=1\n"
 
     def test_clean_audit_returns_zero_issues(self):
         from iceberg_maintenance_flow import run_audit
@@ -193,7 +188,9 @@ class TestRunAuditTask:
     def test_audit_command_includes_window_flag(self):
         from iceberg_maintenance_flow import run_audit
 
-        with patch("subprocess.run", return_value=_fake_completed(self._CLEAN_AUDIT_STDOUT)) as mock_run:
+        with patch(
+            "subprocess.run", return_value=_fake_completed(self._CLEAN_AUDIT_STDOUT)
+        ) as mock_run:
             run_audit.fn(audit_window_hours=48)
 
         cmd = mock_run.call_args[0][0]
@@ -205,11 +202,13 @@ class TestRunAuditTask:
 # compact_all_tables (sub-flow)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestCompactAllTablesFlow:
     def test_processes_all_ten_tables(self):
         """compact_all_tables calls compact_table once per table (10 tables)."""
         from iceberg_maintenance_flow import (
-            compact_all_tables, _ALL_TABLES,
+            compact_all_tables,
+            _ALL_TABLES,
         )
 
         call_count = 0
@@ -244,25 +243,31 @@ class TestCompactAllTablesFlow:
             nonlocal call_count
             call_count += 1
             if call_count == len(_ALL_TABLES):  # Last table fails
-                return {"table": table, "status": "failed",
-                        "error": "simulated failure", "timestamp": "2026-02-18T02:00:00"}
+                return {
+                    "table": table,
+                    "status": "failed",
+                    "error": "simulated failure",
+                    "timestamp": "2026-02-18T02:00:00",
+                }
             return {"table": table, "status": "success", "timestamp": "2026-02-18T02:00:00"}
 
         with patch("iceberg_maintenance_flow.compact_table", side_effect=fake_compact):
             results = compact_all_tables.fn()
 
         statuses = [r["status"] for r in results]
-        assert "failed" in statuses                    # At least one failed
-        assert statuses.count("success") >= 9          # Others still succeeded
+        assert "failed" in statuses  # At least one failed
+        assert statuses.count("success") >= 9  # Others still succeeded
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # iceberg_maintenance_main (parent flow)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _make_compact_results(n_fail: int = 0):
     """Build compact result list with n_fail failures at the end."""
     from iceberg_maintenance_flow import _ALL_TABLES
+
     results = []
     for i, t in enumerate(_ALL_TABLES):
         status = "failed" if i >= (len(_ALL_TABLES) - n_fail) else "success"
@@ -276,6 +281,7 @@ def _make_compact_results(n_fail: int = 0):
 def _make_expire_results(n_fail: int = 0):
     """Build expire result list with n_fail failures at the end."""
     from iceberg_maintenance_flow import _ALL_TABLES
+
     results = []
     for i, t in enumerate(_ALL_TABLES):
         status = "failed" if i >= (len(_ALL_TABLES) - n_fail) else "success"
@@ -298,23 +304,40 @@ class TestMaintenanceMainFlow:
     logic that iceberg_maintenance_main actually owns.
     """
 
-    _CLEAN_AUDIT  = {"status": "success", "missing_count": 0, "error_count": 0,
-                     "timestamp": "2026-02-18T02:00:00"}
-    _FAILED_AUDIT = {"status": "failed", "missing_count": 0, "error_count": 1,
-                     "error": "audit crashed", "timestamp": "2026-02-18T02:00:00"}
-    _MISSING_AUDIT = {"status": "success", "missing_count": 1, "error_count": 0,
-                      "timestamp": "2026-02-18T02:00:00"}
+    _CLEAN_AUDIT = {
+        "status": "success",
+        "missing_count": 0,
+        "error_count": 0,
+        "timestamp": "2026-02-18T02:00:00",
+    }
+    _FAILED_AUDIT = {
+        "status": "failed",
+        "missing_count": 0,
+        "error_count": 1,
+        "error": "audit crashed",
+        "timestamp": "2026-02-18T02:00:00",
+    }
+    _MISSING_AUDIT = {
+        "status": "success",
+        "missing_count": 1,
+        "error_count": 0,
+        "timestamp": "2026-02-18T02:00:00",
+    }
 
     def test_all_success_returns_summary(self):
         """Full success path returns a dict with overall_status=success."""
         from iceberg_maintenance_flow import iceberg_maintenance_main
 
-        with patch("iceberg_maintenance_flow.compact_all_tables",
-                   return_value=_make_compact_results(0)), \
-             patch("iceberg_maintenance_flow.expire_all_snapshots",
-                   return_value=_make_expire_results(0)), \
-             patch("iceberg_maintenance_flow.run_audit",
-                   return_value=self._CLEAN_AUDIT):
+        with (
+            patch(
+                "iceberg_maintenance_flow.compact_all_tables", return_value=_make_compact_results(0)
+            ),
+            patch(
+                "iceberg_maintenance_flow.expire_all_snapshots",
+                return_value=_make_expire_results(0),
+            ),
+            patch("iceberg_maintenance_flow.run_audit", return_value=self._CLEAN_AUDIT),
+        ):
             result = iceberg_maintenance_main.fn()
 
         assert result["overall_status"] == "success"
@@ -328,12 +351,16 @@ class TestMaintenanceMainFlow:
         """When compaction fails for some tables, overall_status = 'partial'."""
         from iceberg_maintenance_flow import iceberg_maintenance_main
 
-        with patch("iceberg_maintenance_flow.compact_all_tables",
-                   return_value=_make_compact_results(1)), \
-             patch("iceberg_maintenance_flow.expire_all_snapshots",
-                   return_value=_make_expire_results(0)), \
-             patch("iceberg_maintenance_flow.run_audit",
-                   return_value=self._CLEAN_AUDIT):
+        with (
+            patch(
+                "iceberg_maintenance_flow.compact_all_tables", return_value=_make_compact_results(1)
+            ),
+            patch(
+                "iceberg_maintenance_flow.expire_all_snapshots",
+                return_value=_make_expire_results(0),
+            ),
+            patch("iceberg_maintenance_flow.run_audit", return_value=self._CLEAN_AUDIT),
+        ):
             result = iceberg_maintenance_main.fn()
 
         assert result["overall_status"] == "partial"
@@ -344,12 +371,16 @@ class TestMaintenanceMainFlow:
         """When audit reports missing_data, the flow raises RuntimeError."""
         from iceberg_maintenance_flow import iceberg_maintenance_main
 
-        with patch("iceberg_maintenance_flow.compact_all_tables",
-                   return_value=_make_compact_results(0)), \
-             patch("iceberg_maintenance_flow.expire_all_snapshots",
-                   return_value=_make_expire_results(0)), \
-             patch("iceberg_maintenance_flow.run_audit",
-                   return_value=self._MISSING_AUDIT):
+        with (
+            patch(
+                "iceberg_maintenance_flow.compact_all_tables", return_value=_make_compact_results(0)
+            ),
+            patch(
+                "iceberg_maintenance_flow.expire_all_snapshots",
+                return_value=_make_expire_results(0),
+            ),
+            patch("iceberg_maintenance_flow.run_audit", return_value=self._MISSING_AUDIT),
+        ):
             with pytest.raises(RuntimeError, match="missing_data=1"):
                 iceberg_maintenance_main.fn()
 
@@ -357,12 +388,16 @@ class TestMaintenanceMainFlow:
         """When the audit task itself errors, the flow raises RuntimeError."""
         from iceberg_maintenance_flow import iceberg_maintenance_main
 
-        with patch("iceberg_maintenance_flow.compact_all_tables",
-                   return_value=_make_compact_results(0)), \
-             patch("iceberg_maintenance_flow.expire_all_snapshots",
-                   return_value=_make_expire_results(0)), \
-             patch("iceberg_maintenance_flow.run_audit",
-                   return_value=self._FAILED_AUDIT):
+        with (
+            patch(
+                "iceberg_maintenance_flow.compact_all_tables", return_value=_make_compact_results(0)
+            ),
+            patch(
+                "iceberg_maintenance_flow.expire_all_snapshots",
+                return_value=_make_expire_results(0),
+            ),
+            patch("iceberg_maintenance_flow.run_audit", return_value=self._FAILED_AUDIT),
+        ):
             with pytest.raises(RuntimeError):
                 iceberg_maintenance_main.fn()
 
@@ -370,12 +405,16 @@ class TestMaintenanceMainFlow:
         """Summary always includes total_duration_seconds."""
         from iceberg_maintenance_flow import iceberg_maintenance_main
 
-        with patch("iceberg_maintenance_flow.compact_all_tables",
-                   return_value=_make_compact_results(0)), \
-             patch("iceberg_maintenance_flow.expire_all_snapshots",
-                   return_value=_make_expire_results(0)), \
-             patch("iceberg_maintenance_flow.run_audit",
-                   return_value=self._CLEAN_AUDIT):
+        with (
+            patch(
+                "iceberg_maintenance_flow.compact_all_tables", return_value=_make_compact_results(0)
+            ),
+            patch(
+                "iceberg_maintenance_flow.expire_all_snapshots",
+                return_value=_make_expire_results(0),
+            ),
+            patch("iceberg_maintenance_flow.run_audit", return_value=self._CLEAN_AUDIT),
+        ):
             result = iceberg_maintenance_main.fn()
 
         assert result["total_duration_seconds"] >= 0
@@ -385,6 +424,7 @@ class TestMaintenanceMainFlow:
 # iceberg_maintenance.py — unit tests (no Spark, no PG)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestMaintenanceScriptHelpers:
     """
     Tests for the pure-Python helpers in iceberg_maintenance.py that can be
@@ -393,6 +433,7 @@ class TestMaintenanceScriptHelpers:
 
     def test_audit_status_ok_within_tolerance(self):
         from iceberg_maintenance import _audit_status
+
         status, pct, notes = _audit_status(ch_count=1000, iceberg_count=1005)
         assert status == "ok"
         assert pct is not None
@@ -400,12 +441,14 @@ class TestMaintenanceScriptHelpers:
 
     def test_audit_status_ok_when_ch_count_zero(self):
         from iceberg_maintenance import _audit_status
+
         status, pct, notes = _audit_status(ch_count=0, iceberg_count=0)
         assert status == "ok"
         assert pct is None
 
     def test_audit_status_warning_moderate_delta(self):
         from iceberg_maintenance import _audit_status
+
         # 3% delta — above warning threshold (1%) but below missing (5%)
         status, pct, notes = _audit_status(ch_count=1000, iceberg_count=970)
         assert status == "warning"
@@ -413,6 +456,7 @@ class TestMaintenanceScriptHelpers:
 
     def test_audit_status_missing_data_large_gap(self):
         from iceberg_maintenance import _audit_status
+
         # Iceberg has 10% fewer rows than ClickHouse — missing data
         status, pct, notes = _audit_status(ch_count=1000, iceberg_count=890)
         assert status == "missing_data"
@@ -420,6 +464,7 @@ class TestMaintenanceScriptHelpers:
     def test_audit_status_iceberg_higher_is_ok(self):
         """Iceberg > ClickHouse is fine (cold accumulates all history)."""
         from iceberg_maintenance import _audit_status
+
         # Iceberg has 0.5% more — normal for accumulated historical data
         status, pct, notes = _audit_status(ch_count=1000, iceberg_count=1005)
         assert status == "ok"
@@ -427,11 +472,13 @@ class TestMaintenanceScriptHelpers:
     def test_compact_default_args(self):
         """action_compact accepts optional target_file_size_mb."""
         from iceberg_maintenance import action_compact
+
         # dry_run=True means no Spark session is opened — safe to call directly
         action_compact(table="cold.bronze_trades_binance", target_file_size_mb=64, dry_run=True)
 
     def test_expire_default_args(self):
         from iceberg_maintenance import action_expire
+
         action_expire(
             table="cold.silver_trades",
             max_age_hours=72,
@@ -445,7 +492,7 @@ class TestMaintenanceScriptHelpers:
         from iceberg_maintenance_flow import _ALL_TABLES
 
         audit_targets = {cfg["iceberg_table"] for cfg in _AUDIT_TABLE_CONFIG}
-        flow_targets  = set(_ALL_TABLES)
+        flow_targets = set(_ALL_TABLES)
         assert audit_targets == flow_targets, (
             f"Mismatch between audit config and flow table list:\n"
             f"  In audit only : {audit_targets - flow_targets}\n"
