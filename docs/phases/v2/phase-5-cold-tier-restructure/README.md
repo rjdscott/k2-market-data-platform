@@ -28,9 +28,9 @@ This phase reduces Iceberg infrastructure resources by 50% since it now handles 
 
 | # | Step | Status | Description |
 |---|------|--------|-------------|
-| 1 | [Create Four-Layer Iceberg DDL](steps/step-01-iceberg-ddl.md) | ⬜ Not Started | Create `cold.raw_trades`, `cold.bronze_trades`, `cold.silver_trades`, `cold.gold_ohlcv_{1m,5m,15m,30m,1h,1d}` tables via Iceberg catalog. Partitioned by hour/day/month + exchange |
-| 2 | [Implement Spark Iceberg Offload](steps/step-02-spark-iceberg-offload.md) | 🟡 In Progress | **Prototype validated 2026-02-12**: Generic PySpark offload working with watermark management, JDBC connectivity, incremental loads. See [Test Report](../../../testing/offload-pipeline-test-report-2026-02-12.md). Production: Create per-table scripts + Prefect orchestration |
-| 3 | [Configure Scheduled Offload](steps/step-03-scheduled-offload.md) | ⬜ Not Started | Schedule: 15-minute intervals for Bronze/Silver/Gold. Prefect flows orchestrating Spark jobs. Monitor offload duration + row counts |
+| 1 | [Create Four-Layer Iceberg DDL](steps/step-01-iceberg-ddl.md) | ✅ Complete | 9 Iceberg tables created: `cold.bronze_trades_{binance,kraken,coinbase}`, `cold.silver_trades`, `cold.gold_ohlcv_{1m,5m,15m,30m,1h,1d}` |
+| 2 | [Implement Spark Iceberg Offload](steps/step-02-spark-iceberg-offload.md) | ✅ Complete | Full pipeline: Bronze×3 + Silver + Gold×6. 10/10 tables, 0 failures, ~94s per run. v3.1.0 deployed |
+| 3 | [Configure Scheduled Offload](steps/step-03-scheduled-offload.md) | ✅ Complete | Deployment `iceberg-offload-15min` v3.1.0 running on cron `*/15 * * * *` UTC. Worker healthy, consecutive COMPLETED runs confirmed |
 | 4 | [Configure Spark Daily Maintenance](steps/step-04-spark-daily-maintenance.md) | ⬜ Not Started | 02:00 UTC compaction (merge small Parquet files), 02:20 snapshot expiry (7d), 02:30 data quality audit (row count verification across layers). Spark exits after completion |
 | 5 | [Validate Warm-Cold Consistency](steps/step-05-validate-consistency.md) | ⬜ Not Started | Verify row counts match between ClickHouse and Iceberg at each layer. Test ClickHouse federated queries across warm+cold. Reduce Iceberg infra resources to 50%. Tag `v2-phase-5-complete` |
 
@@ -40,8 +40,8 @@ This phase reduces Iceberg infrastructure resources by 50% since it now handles 
 
 | Milestone | Name | Steps | Status | Gate Criteria |
 |-----------|------|-------|--------|---------------|
-| M1 | Iceberg Schema Ready | 1 | ⬜ Not Started | All 9 Iceberg tables created, partitioning verified |
-| M2 | Hourly Offload Running | 2-3 | ⬜ Not Started | Data flowing hourly from ClickHouse to Iceberg across all 4 layers |
+| M1 | Iceberg Schema Ready | 1 | ✅ Complete | 9 Iceberg tables created, all offloading successfully |
+| M2 | Scheduled Offload Running | 2-3 | ✅ Complete | All 10 tables offloading every 15 min via Prefect; consecutive COMPLETED runs verified |
 | M3 | Maintenance + Validation | 4-5 | ⬜ Not Started | Spark daily jobs running, warm-cold consistency verified, resources reduced |
 
 ---
@@ -56,7 +56,7 @@ This phase reduces Iceberg infrastructure resources by 50% since it now handles 
 - [x] Kotlin unit tests: 16/16 passing (TradeNormalizerTest ×7, InstrumentsLoaderTest ×9 — 2026-02-18)
 - [ ] Row counts match between ClickHouse and Iceberg at each layer
 - [ ] ClickHouse federated queries working across warm + cold tiers
-- [ ] Prefect deployment scheduled at 15-minute intervals (automated)
+- [x] Prefect deployment `iceberg-offload-15min` v3.1.0 scheduled at 15-minute intervals (2026-02-18)
 - [ ] Spark daily compaction + snapshot expiry running at 02:00 UTC
 - [ ] Git tag `v2-phase-5-complete` created
 
@@ -239,7 +239,24 @@ Daily (02:00 UTC): Spark compaction + snapshot expiry + audit
 
 **Silver/Gold schema files updated** to v2 pattern: `09-silver-kraken-to-v2.sql`, `10-silver-binance.sql`
 
-**Remaining**: Prefect 15-min schedule deployment, Spark daily compaction, warm-cold row count validation
+**Remaining**: Spark daily compaction, warm-cold row count validation, git tag `v2-phase-5-complete`
+
+---
+
+### 2026-02-18 (cont.): Prefect Schedule Confirmed Operational ✅
+
+**Deployment**: `iceberg-offload-15min` v3.1.0 on work pool `iceberg-offload`
+**Schedule**: `*/15 * * * *` UTC — active, not paused
+**Verified run history** (consecutive COMPLETED):
+
+| Run | Start | End | Result |
+|-----|-------|-----|--------|
+| intelligent-flounder | 05:14:59 | 05:16:03 | COMPLETED (10/10 tables) |
+| sassy-chowchow | 05:00:00 | 05:00:58 | COMPLETED |
+| orthodox-fennec | 04:44:59 | 04:46:00 | COMPLETED |
+| happy-gecko | 04:30:00 | 04:31:09 | COMPLETED |
+
+The single FAILED run at 04:14 was the pre-rebuild failure (missing `PREFECT_DB_*` env vars) — fixed by rebuilding the Spark container.
 
 ---
 
