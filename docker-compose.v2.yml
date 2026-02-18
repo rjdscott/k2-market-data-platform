@@ -451,7 +451,10 @@ services:
   # Spark + Iceberg - ETL engine for cold tier offload
   # ───────────────────────────────────────────────────────────────────────
   spark-iceberg:
-    image: tabulario/spark-iceberg:3.5.0_1.4.2
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    image: k2-spark-iceberg:3.5.0_1.4.2  # local tag after build
     container_name: k2-spark-iceberg
     hostname: spark-iceberg
     networks:
@@ -493,6 +496,36 @@ services:
       com.k2.version: "v2"
 
 #############################################################################
+# SERVICES - TOPIC INITIALIZATION
+#############################################################################
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Redpanda Init - One-shot service to create topics with explicit partitions
+  # Runs once at startup; feed handlers depend on service_completed_successfully
+  # ───────────────────────────────────────────────────────────────────────
+  redpanda-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.3.4
+    container_name: k2-redpanda-init
+    networks:
+      - k2-net
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        rpk topic create market.crypto.trades.binance.raw --partitions 40 --brokers redpanda:9092 --if-not-exists &&
+        rpk topic create market.crypto.trades.binance     --partitions 40 --brokers redpanda:9092 --if-not-exists &&
+        rpk topic create market.crypto.trades.kraken.raw  --partitions 20 --brokers redpanda:9092 --if-not-exists &&
+        rpk topic create market.crypto.trades.kraken      --partitions 20 --brokers redpanda:9092 --if-not-exists &&
+        echo "✅ All topics initialized"
+    restart: "no"
+    labels:
+      com.k2.service: "init"
+      com.k2.tier: "hot"
+      com.k2.version: "v2"
+
+#############################################################################
 # SERVICES - FEED HANDLERS (DATA INGESTION)
 #############################################################################
 
@@ -513,15 +546,18 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
     environment:
       - JAVA_OPTS=-Xmx512m -Xms256m
       - K2_EXCHANGE=binance
-      - K2_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT
+      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
       - K2_SCHEMA_PATH=/app/schemas
       - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
       - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
     volumes:
       - ./logs/binance:/app/logs
+      - ./config/instruments.yaml:/app/config/instruments.yaml:ro
     deploy:
       resources:
         limits:
@@ -559,15 +595,18 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
     environment:
       - JAVA_OPTS=-Xmx512m -Xms256m
       - K2_EXCHANGE=kraken
-      - K2_SYMBOLS=XBT/USD,ETH/USD
+      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
       - K2_SCHEMA_PATH=/app/schemas
       - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
       - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
     volumes:
       - ./logs/kraken:/app/logs
+      - ./config/instruments.yaml:/app/config/instruments.yaml:ro
     deploy:
       resources:
         limits:
@@ -594,6 +633,7 @@ services:
 # Service              | CPU Limit | Memory Limit | Purpose
 # ---------------------|-----------|--------------|---------------------------
 # redpanda             | 2.0       | 2G           | Streaming backbone
+# redpanda-init        | -         | -            | One-shot topic init (exits)
 # redpanda-console     | 0.5       | 256M         | Streaming UI
 # clickhouse           | 4.0       | 8G           | Warm storage OLAP
 # minio                | 1.0       | 1G           | S3-compatible storage
@@ -603,11 +643,14 @@ services:
 # prefect-server       | 1.0       | 1G           | Orchestration UI/API (v3.x)
 # prefect-worker       | 0.5       | 512M         | Workflow executor (v3.x)
 # spark-iceberg        | 2.0       | 4G           | ETL engine
-# feed-handler-binance | 0.5       | 512M         | Binance ingestion
-# feed-handler-kraken  | 0.5       | 512M         | Kraken ingestion
+# feed-handler-binance | 0.5       | 512M         | Binance ingestion (12 pairs)
+# feed-handler-kraken  | 0.5       | 512M         | Kraken ingestion (11 pairs)
 # ---------------------|-----------|--------------|---------------------------
 # TOTAL                | 15.0 CPU  | 21.25 GB     | Full consolidated platform
 #
 # Remaining budget: 1.0 CPU / 18.75 GB for future expansion
 # Target: 16 CPU / 40 GB total
+#
+# Instrument config: see config/instruments.yaml (single source of truth)
+# Last updated: 2026-02-18
 #############################################################################

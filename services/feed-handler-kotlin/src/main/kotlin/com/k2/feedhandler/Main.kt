@@ -27,18 +27,33 @@ suspend fun main() {
     val config = ConfigFactory.load().getConfig("k2.feed-handler")
     val exchange = config.getString("exchange")
 
-    // Parse symbols - handle both list format and comma-separated string from env var
-    val symbols = try {
-        config.getStringList("symbols")
-    } catch (e: Exception) {
-        // If env var is comma-separated string, parse it
-        config.getString("symbols").split(",").map { it.trim() }
+    // Symbol loading priority:
+    // 1. K2_INSTRUMENTS_FILE → instruments.yaml for this exchange
+    // 2. K2_SYMBOLS / application.conf → comma-separated or list fallback
+    val symbols: List<String> = run {
+        val instrumentsFile = System.getenv("K2_INSTRUMENTS_FILE")
+        if (!instrumentsFile.isNullOrBlank()) {
+            val loaded = InstrumentsLoader(instrumentsFile).loadForExchange(exchange)
+            if (loaded.isNotEmpty()) return@run loaded
+            logger.warn { "instruments.yaml returned no symbols for '$exchange', falling back to K2_SYMBOLS" }
+        }
+        // Fallback: HOCON list or comma-separated K2_SYMBOLS env var
+        try {
+            config.getStringList("symbols")
+        } catch (e: Exception) {
+            config.getString("symbols").split(",").map { it.trim() }
+        }
+    }
+
+    if (symbols.isEmpty()) {
+        logger.error { "No symbols configured for exchange '$exchange' — check instruments.yaml or K2_SYMBOLS" }
+        exitProcess(1)
     }
 
     val schemaPath = config.getString("schema-path")
 
     logger.info { "Exchange: $exchange" }
-    logger.info { "Symbols: ${symbols.joinToString(", ")}" }
+    logger.info { "Symbols (${symbols.size}): ${symbols.joinToString(", ")}" }
     logger.info { "Schema path: $schemaPath" }
 
     // Initialize Kafka producer

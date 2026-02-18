@@ -36,6 +36,9 @@ dependencies {
     // Configuration
     implementation("com.typesafe:config:1.4.3")
 
+    // YAML config support (for instruments.yaml)
+    implementation("com.charleskorn.kaml:kaml:0.67.0")
+
     // Testing
     testImplementation(kotlin("test"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")
