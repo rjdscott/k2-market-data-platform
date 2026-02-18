@@ -18,8 +18,7 @@ docker-sdk PyPI package already used in tests/conftest.py.
 
 import subprocess
 import pytest
-from unittest.mock import patch, MagicMock, call
-from datetime import datetime
+from unittest.mock import patch, MagicMock
 
 
 # ─────────────────────────────────────────────────────────────────────────────
