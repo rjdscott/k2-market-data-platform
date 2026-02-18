@@ -72,8 +72,8 @@ TABLE_CONFIG = {
             "source": "bronze_trades_coinbase",
             "target": "cold.bronze_trades_coinbase",
             "timestamp_col": "exchange_timestamp",
-            "sequence_col": "sequence_num",  # Coinbase field name differs from binance/kraken
-            # TODO: add "columns" once Coinbase schema is confirmed
+            "sequence_col": "sequence_number",
+            "columns": _BRONZE_TRADES_COLUMNS,  # Same v2 schema as binance/kraken
         },
     ],
     "silver": [
@@ -304,7 +304,7 @@ def offload_bronze_layer() -> List[Dict]:
     logger = get_run_logger()
 
     logger.info("=" * 80)
-    logger.info("Starting Bronze Layer Offload (3 tables in parallel)")
+    logger.info("Starting Bronze Layer Offload (3 tables in parallel: binance + kraken + coinbase)")
     logger.info("=" * 80)
 
     results = []

@@ -1,19 +1,12 @@
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- Bronze Layer: Coinbase Native Schema
--- Purpose: Preserve Coinbase's native data format (minimal transformation)
--- Source: market.crypto.trades.coinbase.raw (Redpanda topic)
--- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- Architecture: Exchange-native schemas in Bronze → Normalize in Silver
---
--- Key Principles:
--- - Preserve product_id (BTC-USD, not BTCUSD) for native format fidelity
--- - Parse ISO8601 time → DateTime64(3) for efficient time-range queries
--- - Preserve side as 'BUY'/'SELL' (Coinbase already taker-perspective)
--- - sequence_num is message-level (envelope), not trade-level
+-- Bronze Layer: Coinbase (v2 schema — consistent with Binance/Kraken)
+-- Source: market.crypto.trades.coinbase.raw (raw JSON)
+-- Pattern: raw queue → normalizing MV → bronze table (Decimal types)
+-- Same schema as bronze_trades_binance / bronze_trades_kraken
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- Kafka Engine: Consume from Redpanda raw topic
+-- Kafka Engine: Consume raw JSON from Redpanda
 -- ═══════════════════════════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS k2.trades_coinbase_queue (
@@ -30,76 +23,50 @@ SETTINGS
     kafka_flush_interval_ms = 7500;
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- Bronze Table: Coinbase Native Format
+-- Bronze Table: v2 Normalized Schema (matches binance/kraken)
 -- ═══════════════════════════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS k2.bronze_trades_coinbase (
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Coinbase Identity (preserves native format)
-    -- ═══════════════════════════════════════════════════════════════════════
-    trade_id      String,                                -- Coinbase trade ID string
-    product_id    String,                                -- "BTC-USD" (native Coinbase format)
-
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Trade Data (preserve as strings for precision)
-    -- ═══════════════════════════════════════════════════════════════════════
-    price         String,                                -- "21921.73"
-    size          String,                                -- "0.00099853" (Coinbase term for quantity)
-    side          Enum8('BUY' = 1, 'SELL' = 2),         -- Taker perspective (BUY/SELL)
-
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Timestamps
-    -- ═══════════════════════════════════════════════════════════════════════
-    exchange_timestamp DateTime64(3, 'UTC'),              -- Parsed from ISO8601 "time" field
-    sequence_num  UInt64,                                -- Message-level sequence number
-
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Platform metadata
-    -- ═══════════════════════════════════════════════════════════════════════
-    ingested_at   DateTime64(6, 'UTC') DEFAULT now64(6),
-
-    -- ═══════════════════════════════════════════════════════════════════════
-    -- Deduplication
-    -- ═══════════════════════════════════════════════════════════════════════
-    _version      UInt64 DEFAULT 1
-
-) ENGINE = ReplacingMergeTree(_version)
+    exchange_timestamp  DateTime64(3),
+    sequence_number     UInt64,
+    symbol              String,          -- BTCUSD (dash removed from product_id)
+    price               Decimal(18, 8),
+    quantity            Decimal(18, 8),
+    quote_volume        Decimal(18, 8),
+    event_time          DateTime64(3),   -- same as exchange_timestamp for Coinbase
+    kafka_offset        UInt64,
+    kafka_partition     UInt16,
+    ingestion_timestamp DateTime DEFAULT now()
+) ENGINE = MergeTree()
 PARTITION BY toYYYYMMDD(exchange_timestamp)
-ORDER BY (product_id, exchange_timestamp, trade_id)
+ORDER BY (symbol, exchange_timestamp, sequence_number)
 TTL toDateTime(exchange_timestamp) + INTERVAL 7 DAY
 SETTINGS index_granularity = 8192;
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- Materialized View: Parse Coinbase JSON → Bronze Table
+-- Materialized View: Parse raw Coinbase JSON → v2 normalized bronze
+-- Coinbase raw: {"trade_id":"..","product_id":"BTC-USD","price":"67269.8",
+--               "size":"0.001","side":"SELL","time":"2026-02-18T..Z","sequence_num":13}
 -- ═══════════════════════════════════════════════════════════════════════════
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS k2.bronze_trades_coinbase_mv
 TO k2.bronze_trades_coinbase AS
 SELECT
-    -- Identity
-    JSONExtractString(message, 'trade_id')                                          AS trade_id,
-    JSONExtractString(message, 'product_id')                                        AS product_id,
-
-    -- Trade Data
-    JSONExtractString(message, 'price')                                             AS price,
-    JSONExtractString(message, 'size')                                              AS size,
-
-    -- Side (cast to enum; Coinbase sends "BUY"/"SELL")
-    CAST(JSONExtractString(message, 'side') AS Enum8('BUY' = 1, 'SELL' = 2))       AS side,
-
-    -- Timestamp: parse ISO8601 string → DateTime64(3)
-    parseDateTimeBestEffort(JSONExtractString(message, 'time'))                      AS exchange_timestamp,
-
-    -- Sequence number
-    JSONExtractUInt(message, 'sequence_num')                                        AS sequence_num,
-
-    -- Deduplication version
-    1                                                                               AS _version
-
+    parseDateTimeBestEffort(JSONExtractString(message, 'time'))                 AS exchange_timestamp,
+    JSONExtractUInt(message, 'sequence_num')                                    AS sequence_number,
+    replaceAll(JSONExtractString(message, 'product_id'), '-', '')               AS symbol,
+    toDecimal64(JSONExtractString(message, 'price'), 8)                         AS price,
+    toDecimal64(JSONExtractString(message, 'size'),  8)                         AS quantity,
+    toDecimal64(
+        toString(toFloat64(JSONExtractString(message, 'price')) *
+                 toFloat64(JSONExtractString(message, 'size'))), 8)             AS quote_volume,
+    parseDateTimeBestEffort(JSONExtractString(message, 'time'))                 AS event_time,
+    0                                                                           AS kafka_offset,
+    0                                                                           AS kafka_partition
 FROM k2.trades_coinbase_queue
-WHERE message != ''
-  AND JSONExtractString(message, 'trade_id') != ''
-  AND JSONExtractString(message, 'product_id') != '';
+WHERE message <> ''
+  AND JSONExtractString(message, 'trade_id') <> ''
+  AND JSONExtractString(message, 'product_id') <> '';
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Verification Queries
@@ -109,14 +76,12 @@ WHERE message != ''
 -- SELECT * FROM system.kafka_consumers WHERE table = 'trades_coinbase_queue';
 
 -- Sample recent records:
--- SELECT * FROM k2.bronze_trades_coinbase ORDER BY ingested_at DESC LIMIT 10;
+-- SELECT * FROM k2.bronze_trades_coinbase ORDER BY exchange_timestamp DESC LIMIT 10;
 
--- Check trade counts by product:
--- SELECT product_id, count() AS trades
--- FROM k2.bronze_trades_coinbase
--- GROUP BY product_id
--- ORDER BY trades DESC;
+-- Count by symbol:
+-- SELECT symbol, count() AS trades FROM k2.bronze_trades_coinbase GROUP BY symbol ORDER BY trades DESC;
 
--- Verify native format preserved:
--- SELECT product_id, side FROM k2.bronze_trades_coinbase LIMIT 5;
--- Expected: "BTC-USD", "BUY"/"SELL" (not "BTCUSD" or "b"/"s")
+-- Compare counts across exchanges (should all be growing):
+-- SELECT 'binance' AS ex, count() FROM k2.bronze_trades_binance
+-- UNION ALL SELECT 'kraken', count() FROM k2.bronze_trades_kraken
+-- UNION ALL SELECT 'coinbase', count() FROM k2.bronze_trades_coinbase;

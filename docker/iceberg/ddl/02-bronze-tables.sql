@@ -28,123 +28,87 @@
 -- ────────────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS cold.bronze_trades_binance (
-    trade_id STRING COMMENT 'Binance trade ID (numeric string)',
-    exchange STRING COMMENT 'Exchange name (always "binance")',
-    symbol STRING COMMENT 'Binance raw symbol (e.g., BTCUSDT)',
-    canonical_symbol STRING COMMENT 'Normalized symbol (e.g., BTC/USDT)',
-
-    -- Trade data (Decimal for precision)
-    price DECIMAL(38, 8) COMMENT 'Trade price (8 decimal places)',
-    quantity DECIMAL(38, 8) COMMENT 'Trade quantity (base asset)',
-    quote_volume DECIMAL(38, 8) COMMENT 'Quote volume (price * quantity)',
-
-    -- Trade metadata
-    side STRING COMMENT 'Trade side: buy or sell',
-
-    -- Timestamps (microsecond precision mapped to Spark TIMESTAMP)
-    exchange_timestamp TIMESTAMP COMMENT 'Exchange-reported timestamp (UTC)',
-    platform_timestamp TIMESTAMP COMMENT 'K2 platform ingestion timestamp (UTC)',
-
-    -- Sequencing
-    sequence_number BIGINT COMMENT 'Binance sequence number',
-
-    -- Exchange-native metadata (JSON string)
-    metadata STRING COMMENT 'Original Binance WebSocket message (JSON)'
+    -- Columns must exactly match ClickHouse bronze_trades_binance for direct offload
+    exchange_timestamp  TIMESTAMP COMMENT 'Exchange-reported trade timestamp (UTC)',
+    sequence_number     BIGINT    COMMENT 'Binance trade sequence number',
+    symbol              STRING    COMMENT 'Binance raw symbol (e.g., BTCUSDT)',
+    price               DECIMAL(38, 8) COMMENT 'Trade price',
+    quantity            DECIMAL(38, 8) COMMENT 'Trade quantity (base asset)',
+    quote_volume        DECIMAL(38, 8) COMMENT 'Quote volume (price * quantity)',
+    event_time          TIMESTAMP COMMENT 'Exchange event timestamp',
+    kafka_offset        BIGINT    COMMENT 'Redpanda partition offset',
+    kafka_partition     INT       COMMENT 'Redpanda partition number',
+    ingestion_timestamp TIMESTAMP COMMENT 'Platform ingestion timestamp'
 )
 USING iceberg
-PARTITIONED BY (days(exchange_timestamp), exchange)
+PARTITIONED BY (days(exchange_timestamp))
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',
     'write.parquet.compression-level' = '3',
     'write.metadata.metrics.default' = 'full',
-    'write.metadata.metrics.column.trade_id' = 'counts',
     'write.metadata.metrics.column.symbol' = 'counts',
     'history.expire.max-snapshot-age-ms' = '604800000'  -- 7 days
 )
-COMMENT 'Binance bronze trades - preserved exchange-native format';
+COMMENT 'Binance bronze trades - v2 normalized schema (matches ClickHouse bronze)';
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- Bronze Kraken Trades
 -- ────────────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS cold.bronze_trades_kraken (
-    trade_id STRING COMMENT 'Kraken trade ID',
-    exchange STRING COMMENT 'Exchange name (always "kraken")',
-    symbol STRING COMMENT 'Kraken raw symbol (e.g., XBT/USD)',
-    canonical_symbol STRING COMMENT 'Normalized symbol (e.g., BTC/USD)',
-
-    -- Trade data (Decimal for precision)
-    price DECIMAL(38, 8) COMMENT 'Trade price (8 decimal places)',
-    quantity DECIMAL(38, 8) COMMENT 'Trade quantity (base asset)',
-    quote_volume DECIMAL(38, 8) COMMENT 'Quote volume (price * quantity)',
-
-    -- Trade metadata
-    side STRING COMMENT 'Trade side: buy or sell',
-
-    -- Timestamps (microsecond precision mapped to Spark TIMESTAMP)
-    exchange_timestamp TIMESTAMP COMMENT 'Exchange-reported timestamp (UTC)',
-    platform_timestamp TIMESTAMP COMMENT 'K2 platform ingestion timestamp (UTC)',
-
-    -- Sequencing
-    sequence_number BIGINT COMMENT 'Kraken sequence number',
-
-    -- Exchange-native metadata (JSON string)
-    metadata STRING COMMENT 'Original Kraken WebSocket message (JSON)'
+    -- Columns must exactly match ClickHouse bronze_trades_kraken for direct offload
+    exchange_timestamp  TIMESTAMP COMMENT 'Exchange-reported trade timestamp (UTC)',
+    sequence_number     BIGINT    COMMENT 'Kraken sequence number',
+    symbol              STRING    COMMENT 'Kraken symbol (XBT normalized to BTC, e.g., BTCUSD)',
+    price               DECIMAL(38, 8) COMMENT 'Trade price',
+    quantity            DECIMAL(38, 8) COMMENT 'Trade quantity (base asset)',
+    quote_volume        DECIMAL(38, 8) COMMENT 'Quote volume (price * quantity)',
+    event_time          TIMESTAMP COMMENT 'Exchange event timestamp',
+    kafka_offset        BIGINT    COMMENT 'Redpanda partition offset',
+    kafka_partition     INT       COMMENT 'Redpanda partition number',
+    ingestion_timestamp TIMESTAMP COMMENT 'Platform ingestion timestamp'
 )
 USING iceberg
-PARTITIONED BY (days(exchange_timestamp), exchange)
+PARTITIONED BY (days(exchange_timestamp))
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',
     'write.parquet.compression-level' = '3',
     'write.metadata.metrics.default' = 'full',
-    'write.metadata.metrics.column.trade_id' = 'counts',
     'write.metadata.metrics.column.symbol' = 'counts',
     'history.expire.max-snapshot-age-ms' = '604800000'  -- 7 days
 )
-COMMENT 'Kraken bronze trades - preserved exchange-native format';
+COMMENT 'Kraken bronze trades - v2 normalized schema (matches ClickHouse bronze)';
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- Bronze Coinbase Trades
 -- ────────────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS cold.bronze_trades_coinbase (
-    trade_id STRING COMMENT 'Coinbase trade ID',
-    exchange STRING COMMENT 'Exchange name (always "coinbase")',
-    symbol STRING COMMENT 'Coinbase raw symbol without dash (e.g., BTCUSD)',
-    canonical_symbol STRING COMMENT 'Normalized symbol (e.g., BTC/USD)',
-
-    -- Trade data (Decimal for precision)
-    price DECIMAL(38, 8) COMMENT 'Trade price (8 decimal places)',
-    quantity DECIMAL(38, 8) COMMENT 'Trade quantity / size (base asset)',
-    quote_volume DECIMAL(38, 8) COMMENT 'Quote volume (price * quantity)',
-
-    -- Trade metadata
-    side STRING COMMENT 'Trade side: BUY or SELL',
-
-    -- Timestamps (microsecond precision mapped to Spark TIMESTAMP)
-    exchange_timestamp TIMESTAMP COMMENT 'Exchange-reported timestamp (UTC)',
-    platform_timestamp TIMESTAMP COMMENT 'K2 platform ingestion timestamp (UTC)',
-
-    -- Sequencing
-    sequence_number BIGINT COMMENT 'Coinbase message-level sequence number',
-
-    -- Exchange-native metadata (JSON string)
-    metadata STRING COMMENT 'Original Coinbase WebSocket message (JSON)'
+    -- Columns must exactly match ClickHouse bronze_trades_coinbase for direct offload
+    exchange_timestamp  TIMESTAMP COMMENT 'Exchange-reported trade timestamp (UTC)',
+    sequence_number     BIGINT    COMMENT 'Coinbase message-level sequence number',
+    symbol              STRING    COMMENT 'Symbol without dash (e.g., BTCUSD)',
+    price               DECIMAL(38, 8) COMMENT 'Trade price',
+    quantity            DECIMAL(38, 8) COMMENT 'Trade quantity / size (base asset)',
+    quote_volume        DECIMAL(38, 8) COMMENT 'Quote volume (price * quantity)',
+    event_time          TIMESTAMP COMMENT 'Exchange event timestamp (same as exchange_timestamp)',
+    kafka_offset        BIGINT    COMMENT 'Redpanda partition offset',
+    kafka_partition     INT       COMMENT 'Redpanda partition number',
+    ingestion_timestamp TIMESTAMP COMMENT 'Platform ingestion timestamp'
 )
 USING iceberg
-PARTITIONED BY (days(exchange_timestamp), exchange)
+PARTITIONED BY (days(exchange_timestamp))
 TBLPROPERTIES (
     'write.format.default' = 'parquet',
     'write.parquet.compression-codec' = 'zstd',
     'write.parquet.compression-level' = '3',
     'write.metadata.metrics.default' = 'full',
-    'write.metadata.metrics.column.trade_id' = 'counts',
     'write.metadata.metrics.column.symbol' = 'counts',
     'history.expire.max-snapshot-age-ms' = '604800000'  -- 7 days
 )
-COMMENT 'Coinbase bronze trades - preserved exchange-native format';
+COMMENT 'Coinbase bronze trades - v2 normalized schema (matches ClickHouse bronze)';
 
 -- ============================================================================
 -- Verification Queries
