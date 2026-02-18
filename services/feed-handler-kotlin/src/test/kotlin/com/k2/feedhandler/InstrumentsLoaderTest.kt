@@ -110,14 +110,11 @@ class InstrumentsLoaderTest {
 
     @Test
     fun `loads all 12 binance pairs from canonical instruments yaml`() {
-        val canonicalYaml = File(
-            System.getProperty("user.dir")
-                .let { dir ->
-                    // Walk up from service dir to find config/instruments.yaml
-                    File(dir).parentFile?.parentFile?.resolve("config/instruments.yaml")
-                        ?: File(dir, "config/instruments.yaml")
-                }
-        )
+        // Walk up from service dir (feed-handler-kotlin) to project root, then config/
+        val canonicalYaml = System.getProperty("user.dir").let { dir ->
+            File(dir).parentFile?.parentFile?.resolve("config/instruments.yaml")
+                ?: File(dir, "config/instruments.yaml")
+        }
 
         // Skip if running outside of project (CI environments)
         if (!canonicalYaml.exists()) return
@@ -149,13 +146,10 @@ class InstrumentsLoaderTest {
 
     @Test
     fun `loads all 11 coinbase pairs from canonical instruments yaml`() {
-        val canonicalYaml = File(
-            System.getProperty("user.dir")
-                .let { dir ->
-                    File(dir).parentFile?.parentFile?.resolve("config/instruments.yaml")
-                        ?: File(dir, "config/instruments.yaml")
-                }
-        )
+        val canonicalYaml = System.getProperty("user.dir").let { dir ->
+            File(dir).parentFile?.parentFile?.resolve("config/instruments.yaml")
+                ?: File(dir, "config/instruments.yaml")
+        }
 
         // Skip if running outside of project (CI environments)
         if (!canonicalYaml.exists()) return
