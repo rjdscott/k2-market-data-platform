@@ -105,6 +105,47 @@ TBLPROPERTIES (
 )
 COMMENT 'Kraken bronze trades - preserved exchange-native format';
 
+-- ────────────────────────────────────────────────────────────────────────────
+-- Bronze Coinbase Trades
+-- ────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS cold.bronze_trades_coinbase (
+    trade_id STRING COMMENT 'Coinbase trade ID',
+    exchange STRING COMMENT 'Exchange name (always "coinbase")',
+    symbol STRING COMMENT 'Coinbase raw symbol without dash (e.g., BTCUSD)',
+    canonical_symbol STRING COMMENT 'Normalized symbol (e.g., BTC/USD)',
+
+    -- Trade data (Decimal for precision)
+    price DECIMAL(38, 8) COMMENT 'Trade price (8 decimal places)',
+    quantity DECIMAL(38, 8) COMMENT 'Trade quantity / size (base asset)',
+    quote_volume DECIMAL(38, 8) COMMENT 'Quote volume (price * quantity)',
+
+    -- Trade metadata
+    side STRING COMMENT 'Trade side: BUY or SELL',
+
+    -- Timestamps (microsecond precision mapped to Spark TIMESTAMP)
+    exchange_timestamp TIMESTAMP COMMENT 'Exchange-reported timestamp (UTC)',
+    platform_timestamp TIMESTAMP COMMENT 'K2 platform ingestion timestamp (UTC)',
+
+    -- Sequencing
+    sequence_number BIGINT COMMENT 'Coinbase message-level sequence number',
+
+    -- Exchange-native metadata (JSON string)
+    metadata STRING COMMENT 'Original Coinbase WebSocket message (JSON)'
+)
+USING iceberg
+PARTITIONED BY (days(exchange_timestamp), exchange)
+TBLPROPERTIES (
+    'write.format.default' = 'parquet',
+    'write.parquet.compression-codec' = 'zstd',
+    'write.parquet.compression-level' = '3',
+    'write.metadata.metrics.default' = 'full',
+    'write.metadata.metrics.column.trade_id' = 'counts',
+    'write.metadata.metrics.column.symbol' = 'counts',
+    'history.expire.max-snapshot-age-ms' = '604800000'  -- 7 days
+)
+COMMENT 'Coinbase bronze trades - preserved exchange-native format';
+
 -- ============================================================================
 -- Verification Queries
 -- ============================================================================

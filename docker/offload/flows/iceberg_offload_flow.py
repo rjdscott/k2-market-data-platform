@@ -7,6 +7,7 @@ Version: v3.0 (Prefect 3.x migration)
 Last Updated: 2026-02-14
 """
 
+import re
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -56,6 +57,12 @@ TABLE_CONFIG = {
             "target": "cold.bronze_trades_kraken",
             "timestamp_col": "exchange_timestamp",
             "sequence_col": "sequence_number",
+        },
+        {
+            "source": "bronze_trades_coinbase",
+            "target": "cold.bronze_trades_coinbase",
+            "timestamp_col": "exchange_timestamp",
+            "sequence_col": "sequence_num",  # Coinbase field name differs from binance/kraken
         },
     ],
     "silver": [
@@ -286,7 +293,7 @@ def offload_bronze_layer() -> List[Dict]:
     logger = get_run_logger()
 
     logger.info("=" * 80)
-    logger.info("Starting Bronze Layer Offload (2 tables in parallel)")
+    logger.info("Starting Bronze Layer Offload (3 tables in parallel)")
     logger.info("=" * 80)
 
     results = []
@@ -402,7 +409,7 @@ def iceberg_offload_main() -> Dict[str, any]:
 
     logger.info("╔" + "=" * 78 + "╗")
     logger.info("║" + " " * 20 + "K2 ICEBERG OFFLOAD PIPELINE" + " " * 31 + "║")
-    logger.info("║" + " " * 15 + "ClickHouse → Iceberg (Bronze Layer)" + " " * 28 + "║")
+    logger.info("║" + " " * 11 + "ClickHouse → Iceberg (Bronze Layer, 3 exchanges)" + " " * 19 + "║")
     logger.info("╚" + "=" * 78 + "╝")
     logger.info("")
 

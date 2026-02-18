@@ -38,3 +38,17 @@ instruments:
       - LTC/USD
       - AVAX/USD
       - ATOM/USD
+
+  coinbase:
+    symbols:
+      - BTC-USD
+      - ETH-USD
+      - SOL-USD
+      - XRP-USD
+      - ADA-USD
+      - DOT-USD
+      - LINK-USD
+      - DOGE-USD   # DOGE (not XDG — Coinbase uses standard ticker)
+      - LTC-USD
+      - AVAX-USD
+      - ATOM-USD

@@ -53,7 +53,8 @@ def run_generic_offload(
     target_table: str,
     timestamp_col: str,
     sequence_col: str,
-    layer: str
+    layer: str,
+    columns: str = "*"
 ):
     """
     Generic offload function for any ClickHouse table → Iceberg table.
@@ -64,6 +65,8 @@ def run_generic_offload(
         timestamp_col: Timestamp column for incremental reads
         sequence_col: Sequence column for ordering/deduplication
         layer: Data layer (bronze, silver, gold) - for logging only
+        columns: Explicit comma-separated column list or "*". Prefer explicit list
+                 to avoid schema drift between ClickHouse and Iceberg.
     """
     start_time = datetime.now()
     logger.info("=" * 80)
@@ -110,6 +113,10 @@ def run_generic_offload(
     )
 
     try:
+        # Recover any stale 'running' status from a previous run that was killed.
+        # Must happen BEFORE mark_offload_running so monitoring doesn't see a
+        # false-positive 'running' row from a dead process.
+        wm.recover_stale_running(source_table)
         wm.mark_offload_running(source_table)
         last_timestamp, last_sequence = wm.get_watermark(source_table)
         logger.info(f"✓ Watermark: timestamp={last_timestamp}, sequence={last_sequence}")
@@ -147,11 +154,16 @@ def run_generic_offload(
             timestamp_column=timestamp_col,
             sequence_column=sequence_col,
             start_time=window_start,
-            end_time=window_end
+            end_time=window_end,
+            columns=columns
         )
 
         logger.info(f"Reading incremental data from ClickHouse...")
 
+        # Cache the DataFrame so ClickHouse is scanned exactly once.
+        # Without cache: count() + max() + writeTo() each re-execute the JDBC read
+        # (3 full network fetches). With cache: one scan fills Spark memory/disk;
+        # all subsequent actions (max, write, count) read from cache.
         clickhouse_df = spark.read.jdbc(
             url=CLICKHOUSE_URL,
             table=incremental_query,
@@ -160,21 +172,22 @@ def run_generic_offload(
                 "user": "default",
                 "password": os.environ["CLICKHOUSE_PASSWORD"]
             }
-        )
+        ).cache()
 
-        row_count = clickhouse_df.count()
-        logger.info(f"✓ Read {row_count:,} rows from ClickHouse")
-
-        if row_count == 0:
-            logger.info("No new rows to offload. Exiting cleanly.")
-            spark.stop()
-            sys.exit(0)
-
-        # Get max timestamp and sequence for watermark update
+        # Use max() as the empty-check — one action fills the cache and gives us
+        # the watermark values in a single pass. A separate count() before write
+        # would scan ClickHouse a second time unnecessarily.
         max_row = clickhouse_df.select(
             spark_max(col(timestamp_col)).alias("max_timestamp"),
             spark_max(col(sequence_col)).alias("max_sequence")
         ).first()
+
+        if max_row['max_timestamp'] is None:
+            logger.info("No new rows to offload. Exiting cleanly.")
+            clickhouse_df.unpersist()
+            wm.close()
+            spark.stop()
+            sys.exit(0)
 
         max_timestamp = max_row['max_timestamp']
         max_sequence = max_row['max_sequence']
@@ -193,9 +206,10 @@ def run_generic_offload(
     # ────────────────────────────────────────────────────────────────────────
 
     try:
-        logger.info(f"Writing {row_count:,} rows to Iceberg: {target_table}")
+        logger.info(f"Writing rows to Iceberg: {target_table}")
 
-        # Append to Iceberg table (atomic commit)
+        # Append to Iceberg table (atomic commit).
+        # clickhouse_df is still cached from Step 4; no second ClickHouse scan.
         clickhouse_df.writeTo(target_table) \
             .using("iceberg") \
             .option("write-format", "parquet") \
@@ -203,10 +217,15 @@ def run_generic_offload(
             .option("compression-level", "3") \
             .append()
 
+        # count() from cache — O(1), no re-scan of ClickHouse
+        row_count = clickhouse_df.count()
+        clickhouse_df.unpersist()
+
         logger.info(f"✓ Successfully wrote {row_count:,} rows to Iceberg")
 
     except Exception as e:
         logger.error(f"Failed to write to Iceberg: {e}")
+        clickhouse_df.unpersist()
         wm.mark_offload_failed(source_table, str(e))
         wm.close()
         spark.stop()
@@ -286,6 +305,13 @@ def main():
         choices=["bronze", "silver", "gold"],
         help="Data layer (for logging/monitoring)"
     )
+    parser.add_argument(
+        "--columns",
+        default="*",
+        help="Explicit comma-separated column list for the ClickHouse SELECT. "
+             "Use '*' (default) only when the Iceberg target schema matches ClickHouse exactly. "
+             "Prefer an explicit list to prevent schema drift from silently flowing into Iceberg."
+    )
 
     args = parser.parse_args()
 
@@ -295,7 +321,8 @@ def main():
             target_table=args.target_table,
             timestamp_col=args.timestamp_col,
             sequence_col=args.sequence_col,
-            layer=args.layer
+            layer=args.layer,
+            columns=args.columns
         )
         sys.exit(0)
 

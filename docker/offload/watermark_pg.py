@@ -6,11 +6,25 @@ Version: v2.0 (ADR-014)
 Last Updated: 2026-02-11
 """
 
+import re
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Tuple, Optional
 import logging
+
+# Validates that a name is a safe SQL identifier (letters, digits, underscores only).
+# Applied to table_name and column names before embedding in JDBC query strings.
+# These values come from TABLE_CONFIG (not user input) but defence-in-depth costs nothing.
+_SAFE_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _validate_identifier(name: str, label: str) -> None:
+    """Raise ValueError if name is not a safe SQL identifier."""
+    if not _SAFE_IDENTIFIER_RE.match(name):
+        raise ValueError(
+            f"Unsafe {label} {name!r}: only letters, digits, and underscores are allowed."
+        )
 
 logging.basicConfig(
     level=logging.INFO,
@@ -240,6 +254,59 @@ class WatermarkManager:
             logger.warning(f"Failed to mark offload failed for {table_name}: {e}")
             # Non-critical, error already logged
 
+    def recover_stale_running(
+        self,
+        table_name: str,
+        stale_threshold_minutes: int = 30
+    ) -> None:
+        """
+        Reset a stuck 'running' status to 'failed' before starting a new job run.
+
+        Problem: if offload_generic.py is SIGKILL'd (OOM, Docker timeout, host reboot),
+        mark_offload_failed() never executes and the row stays in 'running' forever.
+        Monitoring alerts fire continuously and the next run is blocked from making
+        any sense of the state.
+
+        Call this at the START of each job run, BEFORE mark_offload_running(). Any
+        'running' row older than stale_threshold_minutes is reset to 'failed' with an
+        explanatory error message so that monitoring surfaces it exactly once.
+
+        Args:
+            table_name: Source table name
+            stale_threshold_minutes: Minutes after which 'running' is considered stale
+        """
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_threshold_minutes)
+
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE offload_watermarks
+                        SET
+                            status = 'failed',
+                            last_error_message = 'Interrupted: process was killed before completion '
+                                                 '(OOM / SIGKILL / timeout). Watermark not advanced; '
+                                                 'next run will re-process the same window.',
+                            failure_count = failure_count + 1,
+                            updated_at = NOW()
+                        WHERE table_name = %s
+                          AND status = 'running'
+                          AND updated_at < %s
+                    """, (table_name, stale_cutoff))
+
+                    if cur.rowcount > 0:
+                        logger.warning(
+                            f"Recovered stale 'running' status for {table_name} "
+                            f"(stuck for >{stale_threshold_minutes}m). "
+                            "Previous run was likely killed (OOM/timeout/SIGKILL)."
+                        )
+
+                    conn.commit()
+
+        except Exception as e:
+            logger.warning(f"Failed to recover stale running status for {table_name}: {e}")
+            # Non-critical: if this fails the job still proceeds normally
+
     def get_incremental_window(
         self,
         last_watermark: datetime,
@@ -278,32 +345,42 @@ def create_incremental_query(
     timestamp_column: str,
     sequence_column: str,
     start_time: datetime,
-    end_time: datetime
+    end_time: datetime,
+    columns: str = "*"
 ) -> str:
     """
-    Generate incremental SELECT query for ClickHouse.
+    Generate incremental SELECT query for ClickHouse (used as a Spark JDBC subquery).
 
     Args:
-        table_name: ClickHouse table name
+        table_name: ClickHouse source table name
         timestamp_column: Timestamp column for filtering (e.g., 'exchange_timestamp')
         sequence_column: Sequence column for ordering (e.g., 'sequence_number')
         start_time: Start of time window (exclusive)
         end_time: End of time window (inclusive)
+        columns: Explicit comma-separated column list or "*". Prefer explicit list
+                 so schema additions to ClickHouse don't silently flow into Iceberg
+                 and cause write failures on schema mismatch.
 
     Returns:
-        SQL query string for Spark JDBC read
-
-    Design:
-    - Read only new data since last watermark
-    - Order by timestamp + sequence for deterministic processing
-    - Use explicit column list (avoid SELECT * for schema evolution safety)
+        SQL subquery string for spark.read.jdbc(table=...)
     """
-    # Format timestamps for ClickHouse (no timezone suffix needed)
+    # Validate identifiers — defence-in-depth even though values come from TABLE_CONFIG
+    _validate_identifier(table_name, "table_name")
+    _validate_identifier(timestamp_column, "timestamp_column")
+    _validate_identifier(sequence_column, "sequence_column")
+
+    if columns != "*":
+        for col in (c.strip() for c in columns.split(",")):
+            _validate_identifier(col, "column")
+
+    # Timestamps are Python datetime objects from psycopg2 (never user input).
+    # PostgreSQL returns TIMESTAMPTZ values as UTC-aware datetimes; we strip tz
+    # before formatting because ClickHouse expects naive UTC timestamp strings.
     start_str = start_time.strftime('%Y-%m-%d %H:%M:%S.%f')
     end_str = end_time.strftime('%Y-%m-%d %H:%M:%S.%f')
 
     query = f"""
-        (SELECT *
+        (SELECT {columns}
          FROM {table_name}
          WHERE {timestamp_column} > '{start_str}'
          AND {timestamp_column} <= '{end_str}'
@@ -311,7 +388,7 @@ def create_incremental_query(
     """
 
     logger.info(f"Generated incremental query for {table_name}: "
-                f"{start_time} to {end_time}")
+                f"{start_time} to {end_time} (columns: {columns})")
 
     return query
 

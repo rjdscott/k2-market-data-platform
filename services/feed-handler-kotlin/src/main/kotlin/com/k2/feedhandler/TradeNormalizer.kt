@@ -1,6 +1,7 @@
 package com.k2.feedhandler
 
 import java.math.BigDecimal
+import java.time.Instant
 
 /**
  * Normalizes exchange-specific trade data to canonical format
@@ -82,6 +83,57 @@ object TradeNormalizer {
             metadata = TradeMetadata(
                 sequenceNumber = channelId,
                 isBuyerMaker = null,  // Kraken doesn't provide this
+                buyerOrderId = null,
+                sellerOrderId = null
+            )
+        )
+    }
+
+    /**
+     * Normalize Coinbase trade to canonical format
+     *
+     * Coinbase format:
+     * - productId: "BTC-USD" → symbol="BTCUSD", canonicalSymbol="BTC/USD"
+     * - side: "BUY"/"SELL" (already taker perspective)
+     * - time: ISO8601 string (nanosecond precision) → epoch millis via java.time.Instant
+     * - sequenceNum: message-level sequence number from the envelope
+     */
+    fun normalizeCoinbase(
+        tradeId: String,
+        productId: String,
+        price: String,
+        size: String,
+        side: String,
+        time: String,       // ISO8601, e.g. "2023-02-09T20:32:57.609931067Z"
+        sequenceNum: Long
+    ): NormalizedTrade {
+        val priceDecimal = BigDecimal(price)
+        val quantityDecimal = BigDecimal(size)
+        val quoteVolume = priceDecimal.multiply(quantityDecimal)
+
+        val canonicalSymbol = productId.replace("-", "/")   // BTC/USD
+        val symbol = productId.replace("-", "")             // BTCUSD
+
+        val exchangeTimestampMs = Instant.parse(time).toEpochMilli()
+
+        return NormalizedTrade(
+            exchange = "coinbase",
+            symbol = symbol,
+            canonicalSymbol = canonicalSymbol,
+            tradeId = tradeId,
+            price = price,
+            quantity = size,
+            quoteVolume = quoteVolume.toPlainString(),
+            side = when (side.uppercase()) {
+                "BUY" -> TradeSide.BUY
+                "SELL" -> TradeSide.SELL
+                else -> throw IllegalArgumentException("Unknown Coinbase side: $side")
+            },
+            timestamp = System.currentTimeMillis(),
+            exchangeTimestamp = exchangeTimestampMs,
+            metadata = TradeMetadata(
+                sequenceNumber = sequenceNum,
+                isBuyerMaker = null,
                 buyerOrderId = null,
                 sellerOrderId = null
             )

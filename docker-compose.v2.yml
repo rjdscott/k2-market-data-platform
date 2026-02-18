@@ -526,6 +526,8 @@ services:
         rpk topic describe market.crypto.trades.binance     --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.binance     --partitions 40 --brokers redpanda:9092
         rpk topic describe market.crypto.trades.kraken.raw  --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.kraken.raw  --partitions 20 --brokers redpanda:9092
         rpk topic describe market.crypto.trades.kraken      --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.kraken      --partitions 20 --brokers redpanda:9092
+        rpk topic describe market.crypto.trades.coinbase.raw --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.coinbase.raw --partitions 20 --brokers redpanda:9092
+        rpk topic describe market.crypto.trades.coinbase     --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.coinbase     --partitions 20 --brokers redpanda:9092
         echo "✅ All topics initialized"
     restart: "no"
     labels:
@@ -635,28 +637,78 @@ services:
       com.k2.exchange: "kraken"
       com.k2.version: "v2"
 
+  # ───────────────────────────────────────────────────────────────────────
+  # Coinbase Feed Handler - Kotlin/Coroutines WebSocket client
+  # ───────────────────────────────────────────────────────────────────────
+  feed-handler-coinbase:
+    build:
+      context: .
+      dockerfile: services/feed-handler-kotlin/Dockerfile
+    container_name: k2-feed-handler-coinbase
+    hostname: feed-handler-coinbase
+    networks:
+      k2-net:
+        ipv4_address: 172.28.0.52
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+    environment:
+      - JAVA_OPTS=-Xmx512m -Xms256m
+      - K2_EXCHANGE=coinbase
+      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
+      - K2_SCHEMA_PATH=/app/schemas
+      - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
+    volumes:
+      - ./logs/coinbase:/app/logs
+      - ./config/instruments.yaml:/app/config/instruments.yaml:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "java"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "feed-handler"
+      com.k2.exchange: "coinbase"
+      com.k2.version: "v2"
+
 #############################################################################
 # RESOURCE SUMMARY (Consolidated - Full Platform)
 #############################################################################
-# Service              | CPU Limit | Memory Limit | Purpose
-# ---------------------|-----------|--------------|---------------------------
-# redpanda             | 2.0       | 2G           | Streaming backbone
-# redpanda-init        | -         | -            | One-shot topic init (exits)
-# redpanda-console     | 0.5       | 256M         | Streaming UI
-# clickhouse           | 4.0       | 8G           | Warm storage OLAP
-# minio                | 1.0       | 1G           | S3-compatible storage
-# prometheus           | 1.0       | 2G           | Metrics collection
-# grafana              | 0.5       | 512M         | Visualization
-# prefect-db           | 1.0       | 1G           | Metadata + watermarks
-# prefect-server       | 1.0       | 1G           | Orchestration UI/API (v3.x)
-# prefect-worker       | 0.5       | 512M         | Workflow executor (v3.x)
-# spark-iceberg        | 2.0       | 4G           | ETL engine
-# feed-handler-binance | 0.5       | 512M         | Binance ingestion (12 pairs)
-# feed-handler-kraken  | 0.5       | 512M         | Kraken ingestion (11 pairs)
-# ---------------------|-----------|--------------|---------------------------
-# TOTAL                | 15.0 CPU  | 21.25 GB     | Full consolidated platform
+# Service               | CPU Limit | Memory Limit | Purpose
+# ----------------------|-----------|--------------|---------------------------
+# redpanda              | 2.0       | 2G           | Streaming backbone
+# redpanda-init         | -         | -            | One-shot topic init (exits)
+# redpanda-console      | 0.5       | 256M         | Streaming UI
+# clickhouse            | 4.0       | 8G           | Warm storage OLAP
+# minio                 | 1.0       | 1G           | S3-compatible storage
+# prometheus            | 1.0       | 2G           | Metrics collection
+# grafana               | 0.5       | 512M         | Visualization
+# prefect-db            | 1.0       | 1G           | Metadata + watermarks
+# prefect-server        | 1.0       | 1G           | Orchestration UI/API (v3.x)
+# prefect-worker        | 0.5       | 512M         | Workflow executor (v3.x)
+# spark-iceberg         | 2.0       | 4G           | ETL engine
+# feed-handler-binance  | 0.5       | 512M         | Binance ingestion (12 pairs)
+# feed-handler-kraken   | 0.5       | 512M         | Kraken ingestion (11 pairs)
+# feed-handler-coinbase | 0.5       | 512M         | Coinbase ingestion (11 pairs)
+# ----------------------|-----------|--------------|---------------------------
+# TOTAL                 | 15.5 CPU  | 21.75 GB     | Full consolidated platform
 #
-# Remaining budget: 1.0 CPU / 18.75 GB for future expansion
+# Remaining budget: 0.5 CPU / 18.25 GB for future expansion
 # Target: 16 CPU / 40 GB total
 #
 # Instrument config: see config/instruments.yaml (single source of truth)

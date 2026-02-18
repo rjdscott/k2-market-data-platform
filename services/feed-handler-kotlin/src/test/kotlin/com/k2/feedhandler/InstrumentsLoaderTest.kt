@@ -128,4 +128,42 @@ class InstrumentsLoaderTest {
         assertTrue(symbols.contains("SOLUSDT"))
         assertTrue(symbols.contains("XRPUSDT"))
     }
+
+    @Test
+    fun `loads coinbase symbols from valid yaml`() {
+        val path = writeYaml(
+            """
+            instruments:
+              coinbase:
+                symbols:
+                  - BTC-USD
+                  - ETH-USD
+                  - SOL-USD
+            """.trimIndent()
+        )
+
+        val symbols = InstrumentsLoader(path).loadForExchange("coinbase")
+
+        assertEquals(listOf("BTC-USD", "ETH-USD", "SOL-USD"), symbols)
+    }
+
+    @Test
+    fun `loads all 11 coinbase pairs from canonical instruments yaml`() {
+        val canonicalYaml = File(
+            System.getProperty("user.dir")
+                .let { dir ->
+                    File(dir).parentFile?.parentFile?.resolve("config/instruments.yaml")
+                        ?: File(dir, "config/instruments.yaml")
+                }
+        )
+
+        // Skip if running outside of project (CI environments)
+        if (!canonicalYaml.exists()) return
+
+        val symbols = InstrumentsLoader(canonicalYaml.absolutePath).loadForExchange("coinbase")
+        assertEquals(11, symbols.size, "Expected 11 Coinbase pairs")
+        assertTrue(symbols.contains("BTC-USD"))
+        assertTrue(symbols.contains("ETH-USD"))
+        assertTrue(symbols.contains("DOGE-USD"))
+    }
 }

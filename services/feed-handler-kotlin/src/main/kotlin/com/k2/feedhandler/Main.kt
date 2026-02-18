@@ -83,6 +83,14 @@ suspend fun main() {
                     )
                     wsClient.connect()
                 }
+                "coinbase" -> {
+                    val wsClient = CoinbaseWebSocketClient(
+                        config = config.getConfig("coinbase"),
+                        producer = producer,
+                        symbols = symbols
+                    )
+                    wsClient.connect()
+                }
                 else -> {
                     logger.error { "Unknown exchange: $exchange" }
                     exitProcess(1)

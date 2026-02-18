@@ -68,6 +68,11 @@ INSERT INTO offload_watermarks (table_name, last_offload_timestamp, last_offload
 VALUES ('bronze_trades_kraken', '1970-01-01 00:00:00+00', 0, 'initialized')
 ON CONFLICT (table_name) DO NOTHING;
 
+-- Bronze Layer: Coinbase Trades
+INSERT INTO offload_watermarks (table_name, last_offload_timestamp, last_offload_max_sequence, status)
+VALUES ('bronze_trades_coinbase', '1970-01-01 00:00:00+00', 0, 'initialized')
+ON CONFLICT (table_name) DO NOTHING;
+
 -- Silver Layer: Unified Trades
 INSERT INTO offload_watermarks (table_name, last_offload_timestamp, last_offload_max_sequence, status)
 VALUES ('silver_trades', '1970-01-01 00:00:00+00', 0, 'initialized')
