@@ -58,7 +58,7 @@ This phase reduces Iceberg infrastructure resources by 50% since it now handles 
 - [x] ClickHouse federated queries working across warm + cold tiers (2026-02-18)
 - [x] Prefect deployment `iceberg-offload-15min` v3.1.0 scheduled at 15-minute intervals (2026-02-18)
 - [x] Spark daily compaction + snapshot expiry running at 02:00 UTC (2026-02-18)
-- [ ] Git tag `v2-phase-5-complete` created (pending)
+- [x] Git tag `v2-phase-5-complete` created (2026-02-18)
 
 ---
 
