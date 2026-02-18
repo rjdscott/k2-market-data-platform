@@ -3,7 +3,7 @@
 **Severity:** 🔴 Critical
 **Alert:** `IcebergOffloadWatermarkStale`
 **Response Time:** Immediate (<15 minutes)
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-18
 **Maintained By:** Platform Engineering
 
 ---
@@ -74,22 +74,23 @@ docker exec k2-prefect-db psql -U prefect -d prefect -c \
 - **Entry count:** Should have regular entries (every 15 min)
 - **Gaps:** Missing entries indicate offload not running or failing
 
-### Step 3: Check Scheduler Status
+### Step 3: Check Orchestration Status
 
 ```bash
-# Verify scheduler is running
-systemctl status iceberg-offload-scheduler
+# Verify Prefect worker is running
+docker ps --filter name=k2-prefect-worker --format "table {{.Names}}\t{{.Status}}"
 
-# Check recent cycle activity
-tail -50 /tmp/iceberg-offload-scheduler.log | grep -E "CYCLE|watermark"
+# Check recent flow runs for watermark-related failures
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api prefect flow-run ls --limit 10"
 
-# Check for watermark errors
-grep -i "watermark" /tmp/iceberg-offload-scheduler.log | tail -20
+# Check worker logs for watermark errors
+docker logs k2-prefect-worker --tail=50 | grep -i watermark
 ```
 
-**Expected:** Scheduler running, cycles completing, no watermark errors
+**Expected:** Worker running, recent flow runs in COMPLETED state, no watermark errors
 
-**If scheduler not running:** Jump to [Scenario 1: Scheduler Not Running](#scenario-1-scheduler-not-running)
+**If worker not running:** Jump to [Scenario 1: Worker Not Running](#scenario-1-scheduler-not-running)
 
 ### Step 4: Check PostgreSQL Health
 
@@ -131,23 +132,26 @@ Determine which scenario applies:
 
 ## Resolution
 
-### Scenario 1: Scheduler Not Running
+### Scenario 1: Worker Not Running
 
-**Symptoms:** Scheduler process not found, systemd shows "inactive"
+**Symptoms:** `k2-prefect-worker` not in `docker ps`, or shows "Exited"
 
-**See:** [iceberg-scheduler-recovery.md](iceberg-scheduler-recovery.md) for detailed scheduler recovery
+**See:** [iceberg-scheduler-recovery.md](iceberg-scheduler-recovery.md) for detailed recovery procedures.
 
 **Quick Resolution:**
 
 ```bash
-# Start scheduler
-sudo systemctl start iceberg-offload-scheduler
+# Start the worker
+docker start k2-prefect-worker
+sleep 10
 
-# Verify startup
-systemctl status iceberg-offload-scheduler
+# Verify running
+docker ps --filter name=k2-prefect-worker
 
-# Watch for watermark update (wait up to 15 minutes for next cycle)
-tail -f /tmp/iceberg-offload-scheduler.log
+# Trigger immediate run (don't wait 15 min for next scheduled run)
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api \
+   prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
 ```
 
 **Verify watermark updates:**
@@ -156,7 +160,7 @@ tail -f /tmp/iceberg-offload-scheduler.log
 docker exec k2-prefect-db psql -U prefect -d prefect -c \
   "SELECT * FROM offload_watermarks ORDER BY created_at DESC LIMIT 3"
 
-# Expected: New entry within 15 minutes
+# Expected: New entry within ~2 minutes of run completing
 ```
 
 ---
@@ -229,13 +233,16 @@ docker exec k2-prefect-db psql -U prefect -d prefect -c \
    docker network connect k2-network k2-spark-iceberg
    ```
 
-4. **Test scheduler can connect:**
+4. **Test worker can connect after PostgreSQL recovery:**
    ```bash
-   # Restart scheduler to establish new connection
-   sudo systemctl restart iceberg-offload-scheduler
+   # Restart worker to establish fresh connection
+   docker restart k2-prefect-worker
+   sleep 10
 
-   # Watch logs for connection success
-   tail -f /tmp/iceberg-offload-scheduler.log
+   # Trigger a run to verify watermark writes succeed
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api \
+      prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
    ```
 
 ---
@@ -316,8 +323,7 @@ docker exec k2-prefect-db psql -U prefect -d prefect -c \
    # Next scheduler cycle will offload last 24 hours
    # This may take longer than usual (more data)
 
-   # Monitor progress
-   tail -f /tmp/iceberg-offload-scheduler.log
+   # Monitor progress via Prefect UI: http://localhost:4200
    ```
 
 ---
@@ -405,12 +411,15 @@ docker exec k2-prefect-db psql -U prefect -d prefect -c \
    # Delete all existing, insert one safe entry per table
    ```
 
-6. **Restart scheduler with clean watermarks:**
+6. **Restart worker and trigger a run to verify clean watermarks:**
    ```bash
-   sudo systemctl restart iceberg-offload-scheduler
+   docker restart k2-prefect-worker
+   sleep 10
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api \
+      prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
 
-   # Monitor for correct watermark progression
-   tail -f /tmp/iceberg-offload-scheduler.log
+   # Monitor via Prefect UI: http://localhost:4200
    ```
 
 ---
@@ -425,8 +434,8 @@ docker exec k2-prefect-db psql -U prefect -d prefect -c \
 
 1. **Check cycle outcomes:**
    ```bash
-   # Look for "0 rows" offloads
-   grep "Offload completed:" /tmp/iceberg-offload-scheduler.log | tail -20
+   # Check recent flow run logs for "0 rows" in Prefect UI
+   # http://localhost:4200 → Flow Runs → select recent run → Logs tab → search "Rows offloaded"
 
    # If all show "0 rows": No data being offloaded despite success
    ```
@@ -467,29 +476,27 @@ docker exec k2-prefect-db psql -U prefect -d prefect -c \
    - May need code fix (escalate to engineering)
 
 5. **Temporary workaround (manual offload):**
+
+   If the Prefect flow has a logic bug, trigger offloads directly bypassing orchestration:
    ```bash
-   # Stop scheduler to prevent confusion
-   sudo systemctl stop iceberg-offload-scheduler
+   # Run offload manually via Spark (bypasses Prefect watermark logic)
+   docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
+     --source-table bronze_trades_binance \
+     --target-table cold.bronze_trades_binance \
+     --timestamp-col exchange_timestamp \
+     --sequence-col sequence_number \
+     --layer bronze
 
-   # Run manual offload every 15 minutes (cron or tmux loop)
-   while true; do
-     docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
-       --source-table bronze_trades_binance \
-       --target-table cold.bronze_trades_binance \
-       --timestamp-col exchange_timestamp \
-       --sequence-col sequence_number \
-       --layer bronze
-
-     docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
-       --source-table bronze_trades_kraken \
-       --target-table cold.bronze_trades_kraken \
-       --timestamp-col exchange_timestamp \
-       --sequence-col sequence_number \
-       --layer bronze
-
-     sleep 900  # 15 minutes
-   done
+   docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
+     --source-table bronze_trades_kraken \
+     --target-table cold.bronze_trades_kraken \
+     --timestamp-col exchange_timestamp \
+     --sequence-col sequence_number \
+     --layer bronze
    ```
+
+   **Note:** This does not go through Prefect. Escalate to engineering for the root cause fix.
+
 
 ---
 
@@ -577,7 +584,8 @@ docker exec k2-prefect-db psql -U prefect -d prefect -c \
 - **Related:** `IcebergOffloadLagCritical` (may fire simultaneously)
 
 ### Logs
-- **Scheduler:** `/tmp/iceberg-offload-scheduler.log` (grep "watermark")
+- **Flow run logs:** http://localhost:4200 → Flow Runs → select run → Logs tab
+- **Worker logs:** `docker logs k2-prefect-worker --tail=100`
 - **PostgreSQL:** `docker logs k2-prefect-db`
 
 ---
@@ -641,28 +649,31 @@ curl -s 'http://localhost:9090/api/v1/query?query=(time()-watermark_timestamp_se
 docker exec k2-prefect-db psql -U prefect -d prefect -c \
   "SELECT * FROM offload_watermarks ORDER BY created_at DESC LIMIT 5"
 
-# 3. Check scheduler status (5 seconds)
-systemctl status iceberg-offload-scheduler
+# 3. Check worker status (5 seconds)
+docker ps --filter name=k2-prefect-worker --format "table {{.Names}}\t{{.Status}}"
 
-# 4. If scheduler issue, restart (30 seconds)
-sudo systemctl restart iceberg-offload-scheduler
+# 4. If worker issue, restart (15 seconds)
+docker restart k2-prefect-worker
 
 # 5. If corruption, backup and clean (2 minutes)
 docker exec k2-prefect-db pg_dump -U prefect -d prefect -t offload_watermarks > /tmp/watermark_backup.sql
-# Then run cleanup SQL
+# Then run cleanup SQL (see Scenario 4)
 
-# 6. Verify recovery (15 minutes)
-tail -f /tmp/iceberg-offload-scheduler.log
+# 6. Trigger run and verify recovery
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api \
+   prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
+# Check http://localhost:4200 for run status
 ```
 
 **Total MTTR:** 15-30 minutes (most scenarios), up to 60 minutes (corruption + validation)
 
 ---
 
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-18
 **Maintained By:** Platform Engineering
-**Version:** 1.0
+**Version:** 2.0 (Prefect 3.x update)
 **Related Runbooks:**
 - [iceberg-offload-failure.md](iceberg-offload-failure.md) - General failures
 - [iceberg-offload-lag.md](iceberg-offload-lag.md) - High lag (caused by stale watermark)
-- [iceberg-scheduler-recovery.md](iceberg-scheduler-recovery.md) - Scheduler issues
+- [iceberg-scheduler-recovery.md](iceberg-scheduler-recovery.md) - Worker/orchestration issues

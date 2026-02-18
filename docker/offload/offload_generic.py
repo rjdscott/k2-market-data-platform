@@ -7,6 +7,7 @@ Version: v2.0 (ADR-014)
 Last Updated: 2026-02-11
 """
 
+import os
 import sys
 import argparse
 import logging
@@ -80,14 +81,15 @@ def run_generic_offload(
     try:
         spark = SparkSession.builder \
             .appName(f"K2-Offload-{source_table}") \
-            .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0,com.clickhouse:clickhouse-jdbc:0.4.6,org.apache.httpcomponents.client5:httpclient5:5.1.3") \
-            .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog") \
-            .config("spark.sql.catalog.demo.type", "hadoop") \
-            .config("spark.sql.catalog.demo.warehouse", ICEBERG_WAREHOUSE) \
-            .config("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO") \
-            .config("spark.sql.defaultCatalog", "demo") \
+            .config("spark.sql.catalog.k2", "org.apache.iceberg.spark.SparkCatalog") \
+            .config("spark.sql.catalog.k2.type", "hadoop") \
+            .config("spark.sql.catalog.k2.warehouse", ICEBERG_WAREHOUSE) \
+            .config("spark.sql.catalog.k2.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO") \
+            .config("spark.sql.defaultCatalog", "k2") \
             .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
             .getOrCreate()
+        # spark.jars.packages removed: Iceberg runtime is pre-installed in the tabulario/spark-iceberg
+        # base image (1.4.2) and the ClickHouse JDBC driver is baked into docker/spark/Dockerfile.
 
         logger.info("✓ Spark session initialized")
 
@@ -100,11 +102,11 @@ def run_generic_offload(
     # ────────────────────────────────────────────────────────────────────────
 
     wm = WatermarkManager(
-        pg_host="prefect-db",
-        pg_port=5432,
-        pg_database="prefect",
-        pg_user="prefect",
-        pg_password="prefect"
+        pg_host=os.environ.get("PREFECT_DB_HOST", "prefect-db"),
+        pg_port=int(os.environ.get("PREFECT_DB_PORT", "5432")),
+        pg_database=os.environ["PREFECT_DB_NAME"],
+        pg_user=os.environ["PREFECT_DB_USER"],
+        pg_password=os.environ["PREFECT_DB_PASSWORD"]
     )
 
     try:
@@ -115,6 +117,7 @@ def run_generic_offload(
     except Exception as e:
         logger.error(f"Failed to get watermark: {e}")
         wm.mark_offload_failed(source_table, str(e))
+        wm.close()
         spark.stop()
         sys.exit(1)
 
@@ -155,7 +158,7 @@ def run_generic_offload(
             properties={
                 "driver": "com.clickhouse.jdbc.ClickHouseDriver",
                 "user": "default",
-                "password": "clickhouse"  # from CLICKHOUSE_PASSWORD env var
+                "password": os.environ["CLICKHOUSE_PASSWORD"]
             }
         )
 
@@ -181,6 +184,7 @@ def run_generic_offload(
     except Exception as e:
         logger.error(f"Failed to read from ClickHouse: {e}")
         wm.mark_offload_failed(source_table, str(e))
+        wm.close()
         spark.stop()
         sys.exit(1)
 
@@ -204,6 +208,7 @@ def run_generic_offload(
     except Exception as e:
         logger.error(f"Failed to write to Iceberg: {e}")
         wm.mark_offload_failed(source_table, str(e))
+        wm.close()
         spark.stop()
         sys.exit(1)
 
@@ -234,6 +239,7 @@ def run_generic_offload(
     # Step 7: Cleanup and Summary
     # ────────────────────────────────────────────────────────────────────────
 
+    wm.close()
     spark.stop()
 
     logger.info("=" * 80)

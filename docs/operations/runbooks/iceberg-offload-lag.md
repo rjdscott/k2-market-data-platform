@@ -3,7 +3,7 @@
 **Severity:** 🔴 Critical (>30 min) | 🟡 Warning (20-30 min)
 **Alerts:** `IcebergOffloadLagCritical`, `IcebergOffloadLagElevated`
 **Response Time:** Critical: Immediate | Warning: Business hours
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-18
 **Maintained By:** Platform Engineering
 
 ---
@@ -55,35 +55,31 @@ curl -s http://localhost:8000/metrics | grep offload_lag_minutes
 
 **Note:** Lag is calculated as `(current_time - last_successful_offload_time)`
 
-### Step 2: Check Scheduler Cycle Frequency
+### Step 2: Check Flow Run Frequency
 
 ```bash
-# Check recent cycles (should be every 15 minutes)
-grep "CYCLE STARTED" /tmp/iceberg-offload-scheduler.log | tail -10
-
-# Count cycles in last hour (should be ~4)
-grep "CYCLE STARTED" /tmp/iceberg-offload-scheduler.log | \
-  grep "$(date +%Y-%m-%d)" | \
-  grep "$(date +%H)" | wc -l
+# Check recent flow runs (should be ~4 per hour)
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api prefect flow-run ls --limit 10"
 ```
 
-**Expected:** 4 cycles per hour (one every 15 minutes)
+Or check http://localhost:4200 → Flow Runs — runs should appear every ~15 minutes.
 
-**If <4 cycles:** Scheduler is skipping cycles → [Scenario 1: Scheduler Skipping Cycles](#scenario-1-scheduler-skipping-cycles)
+**Expected:** 4 completed runs per hour
+
+**If <4 runs in last hour:** Scheduler skipping cycles → [Scenario 1: Scheduler Skipping Cycles](#scenario-1-scheduler-skipping-cycles)
 
 ### Step 3: Check Recent Cycle Outcomes
 
 ```bash
-# Check last 5 cycle completions
-grep "COMPLETED" /tmp/iceberg-offload-scheduler.log | tail -5
-
-# Check for failures in last hour
-grep "✗ Offload failed" /tmp/iceberg-offload-scheduler.log | \
-  grep "$(date +%Y-%m-%d)" | \
-  grep "$(date +%H)"
+# Check last 5 flow run states
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api prefect flow-run ls --limit 5"
 ```
 
-**Expected:** All cycles complete successfully
+Check for FAILED or CRASHED states. Click into a failed run at http://localhost:4200 to see the error.
+
+**Expected:** All recent runs in COMPLETED state
 
 **If failures present:** See [iceberg-offload-failure.md](iceberg-offload-failure.md)
 
@@ -134,70 +130,61 @@ docker exec k2-clickhouse clickhouse-client -q \
 
 ### Scenario 1: Scheduler Skipping Cycles
 
-**Symptoms:** Fewer than 4 cycles per hour, scheduler running but not executing
+**Symptoms:** Fewer than 4 flow runs per hour, worker running but not executing
 
-**Root Cause:** Scheduler hung, infinite loop, or waiting on blocked operation
+**Root Cause:** Worker hung, Spark job stuck, or Prefect schedule paused
 
 **Steps:**
 
-1. **Check scheduler process state:**
+1. **Check worker container health:**
    ```bash
-   # Get scheduler PID
-   PID=$(pgrep -f scheduler.py)
-
-   # Check process state (should be "S" = sleeping between cycles)
-   ps -o pid,stat,command -p $PID
-
-   # If state is "R" (running) or "D" (uninterruptible sleep): Hung
+   docker ps --filter name=k2-prefect-worker --format "table {{.Names}}\t{{.Status}}"
+   docker logs k2-prefect-worker --tail=50
    ```
 
-2. **Check if scheduler is in a cycle:**
+2. **Check if a flow run is stuck:**
+
+   Check http://localhost:4200 → Flow Runs — look for a run in RUNNING state for >15 minutes.
+
+   Also check for stuck Spark jobs:
    ```bash
-   # Look for recent "CYCLE STARTED" without "COMPLETED"
-   tail -50 /tmp/iceberg-offload-scheduler.log | grep -E "CYCLE STARTED|COMPLETED"
-
-   # If last entry is "STARTED" without "COMPLETED": Cycle hung
-   ```
-
-3. **Check for deadlock indicators:**
-   ```bash
-   # Check for stuck Docker commands
-   ps aux | grep "docker exec k2-spark-iceberg"
-
    # Check Spark job status
    docker exec k2-spark-iceberg ps aux | grep python3
    ```
 
-4. **Resolution: Restart scheduler**
+3. **Check for deadlock indicators:**
+   ```bash
+   # Check for stuck Docker exec commands
+   ps aux | grep "docker exec k2-spark-iceberg"
+   ```
 
-   **IMPORTANT:** Only restart if scheduler is truly hung (not just in a long cycle)
+4. **Resolution: Restart the worker**
+
+   **IMPORTANT:** Only restart if worker is truly hung (not just in a long-running cycle)
 
    ```bash
-   # Graceful restart (allows current cycle to complete)
-   sudo systemctl stop iceberg-offload-scheduler
-   sleep 5  # Wait for graceful shutdown
-   sudo systemctl start iceberg-offload-scheduler
+   docker restart k2-prefect-worker
+   sleep 10
 
-   # If graceful restart fails (after 30 seconds):
-   # Force kill
-   sudo systemctl kill -s SIGKILL iceberg-offload-scheduler
-   sudo systemctl start iceberg-offload-scheduler
+   # Verify worker back online
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api prefect worker ls"
    ```
 
 5. **Verify recovery:**
    ```bash
-   # Watch for next cycle
-   tail -f /tmp/iceberg-offload-scheduler.log
+   # Trigger immediate run
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api \
+      prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
 
-   # Expected within 15 minutes: "CYCLE STARTED" → "COMPLETED"
+   # Check completion at http://localhost:4200
    ```
 
 6. **Monitor lag recovery:**
    ```bash
-   # Watch lag metric decrease
    watch -n 10 'curl -s http://localhost:8000/metrics | grep offload_lag_minutes'
-
-   # Expected: Lag decreases after next successful cycle
+   # Expected: Lag decreases after next successful run
    ```
 
 ---
@@ -212,8 +199,8 @@ docker exec k2-clickhouse clickhouse-client -q \
 
 1. **Check recent cycle row counts:**
    ```bash
-   # Check how many rows were offloaded recently
-   grep "Rows offloaded:" /tmp/iceberg-offload-scheduler.log | tail -10
+   # Check rows offloaded in recent flow runs via Prefect UI logs
+   # http://localhost:4200 → Flow Runs → select run → Logs tab → search "Rows offloaded"
 
    # Expected: Non-zero row counts
    # If all "0 rows": No new data in ClickHouse
@@ -240,8 +227,8 @@ docker exec k2-clickhouse clickhouse-client -q \
 
    **Check watermark update logic:**
    ```bash
-   # Check for watermark update errors in scheduler logs
-   grep "watermark" /tmp/iceberg-offload-scheduler.log | tail -20
+   # Check for watermark update errors in worker logs
+   docker logs k2-prefect-worker --tail=100 | grep -i watermark
 
    # Check PostgreSQL logs for errors
    docker logs k2-prefect-db --tail=50 | grep -i error
@@ -276,13 +263,12 @@ docker exec k2-clickhouse clickhouse-client -q \
 
 5. **Trigger immediate offload cycle:**
    ```bash
-   # Force scheduler to run next cycle immediately
-   # Method: Send SIGUSR1 (if implemented) or restart scheduler
+   # Trigger a manual flow run immediately
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api \
+      prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
 
-   sudo systemctl restart iceberg-offload-scheduler
-
-   # Watch logs for immediate cycle
-   tail -f /tmp/iceberg-offload-scheduler.log
+   # Check http://localhost:4200 for run status
    ```
 
 ---
@@ -332,8 +318,8 @@ docker exec k2-clickhouse clickhouse-client -q \
 
 3. **Monitor cycle duration:**
    ```bash
-   # Check recent cycle durations
-   grep "Duration:" /tmp/iceberg-offload-scheduler.log | tail -10
+   # Check recent flow run durations via Prefect UI
+   # http://localhost:4200 → Flow Runs — "Duration" column shows each run's elapsed time
 
    # Expected: <30 seconds normally
    # If >5 minutes during spike: Normal (will catch up)
@@ -354,19 +340,19 @@ docker exec k2-clickhouse clickhouse-client -q \
 
 ### Scenario 4: Manual Catch-Up Offload
 
-**Symptoms:** Lag >45 minutes, scheduler unable to catch up in reasonable time
+**Symptoms:** Lag >45 minutes, normal flow run cadence unable to catch up
 
-**Root Cause:** Sustained high volume or scheduler behind schedule
+**Root Cause:** Sustained high volume or extended worker downtime
 
 **WARNING:** This is an advanced procedure. Use only when lag is critical (>45 min).
 
 **Steps:**
 
-1. **Verify scheduler is still running:**
+1. **Verify the worker is running:**
    ```bash
-   systemctl status iceberg-offload-scheduler
+   docker ps --filter name=k2-prefect-worker --format "{{.Status}}"
 
-   # Do NOT proceed if scheduler is down - fix scheduler first
+   # Do NOT proceed if worker is down — fix it first (see iceberg-scheduler-recovery.md)
    ```
 
 2. **Calculate catch-up window:**
@@ -484,7 +470,8 @@ docker exec k2-clickhouse clickhouse-client -q \
 - **Related:** `IcebergOffloadCycleTooSlow` (may cause lag)
 
 ### Logs
-- **Scheduler:** `/tmp/iceberg-offload-scheduler.log`
+- **Flow run logs:** http://localhost:4200 → Flow Runs → select run → Logs tab
+- **Worker logs:** `docker logs k2-prefect-worker --tail=100`
 - **Watermark DB:** `docker logs k2-prefect-db`
 
 ---
@@ -542,19 +529,17 @@ docker exec k2-clickhouse clickhouse-client -q \
 # 1. Check current lag (5 seconds)
 curl -s http://localhost:8000/metrics | grep offload_lag_minutes
 
-# 2. Check recent cycles (10 seconds)
-grep "COMPLETED" /tmp/iceberg-offload-scheduler.log | tail -5
+# 2. Check recent flow runs (10 seconds)
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api prefect flow-run ls --limit 5"
 
-# 3. If scheduler hung, restart (30 seconds)
-sudo systemctl restart iceberg-offload-scheduler
+# 3. If worker hung, restart (15 seconds)
+docker restart k2-prefect-worker
 
-# 4. If catch-up needed, run manual offload (5 minutes)
-docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
-  --source-table bronze_trades_binance \
-  --target-table cold.bronze_trades_binance \
-  --timestamp-col exchange_timestamp \
-  --sequence-col sequence_number \
-  --layer bronze
+# 4. If catch-up needed, trigger immediate run (5 minutes to complete)
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api \
+   prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
 
 # 5. Verify recovery (15 minutes)
 watch -n 60 'curl -s http://localhost:8000/metrics | grep offload_lag_minutes'
@@ -577,10 +562,10 @@ watch -n 60 'curl -s http://localhost:8000/metrics | grep offload_lag_minutes'
 
 ---
 
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-18
 **Maintained By:** Platform Engineering
-**Version:** 1.0
+**Version:** 2.0 (Prefect 3.x update)
 **Related Runbooks:**
 - [iceberg-offload-failure.md](iceberg-offload-failure.md) - Consecutive failures
 - [iceberg-offload-performance.md](iceberg-offload-performance.md) - Slow cycles
-- [iceberg-scheduler-recovery.md](iceberg-scheduler-recovery.md) - Scheduler down
+- [iceberg-scheduler-recovery.md](iceberg-scheduler-recovery.md) - Worker/orchestration down

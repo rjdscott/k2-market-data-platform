@@ -38,7 +38,7 @@ class WatermarkManager:
 
     def __init__(self, pg_host: str = "prefect-db", pg_port: int = 5432,
                  pg_database: str = "prefect", pg_user: str = "prefect",
-                 pg_password: str = "prefect"):
+                 pg_password: str = ""):
         """
         Initialize watermark manager with PostgreSQL connection.
 
@@ -47,23 +47,48 @@ class WatermarkManager:
             pg_port: PostgreSQL port (default: 5432)
             pg_database: Database name (default: prefect)
             pg_user: Username (default: prefect)
-            pg_password: Password (default: prefect)
+            pg_password: Password — always pass explicitly via os.environ["PREFECT_DB_PASSWORD"]
         """
         self.pg_host = pg_host
         self.pg_port = pg_port
         self.pg_database = pg_database
         self.pg_user = pg_user
         self.pg_password = pg_password
+        self._conn = None  # Lazy-connected; reused across all calls in a single job run
 
     def _get_connection(self):
-        """Get PostgreSQL connection."""
-        return psycopg2.connect(
-            host=self.pg_host,
-            port=self.pg_port,
-            database=self.pg_database,
-            user=self.pg_user,
-            password=self.pg_password
-        )
+        """
+        Return a cached PostgreSQL connection, reconnecting if the connection was closed.
+
+        One-shot jobs (offload_generic.py) make 3-4 sequential calls; opening a new
+        TCP connection per call is wasteful. A single cached connection is the correct
+        pattern here — no pool needed for a single-threaded script.
+
+        Note: psycopg2's `with conn:` context manager manages transactions (commit /
+        rollback), NOT connection lifetime, so the cached connection stays open after
+        each `with conn:` block exits.
+        """
+        if self._conn is None or self._conn.closed:
+            logger.debug(f"Opening PostgreSQL connection to {self.pg_host}:{self.pg_port}/{self.pg_database}")
+            self._conn = psycopg2.connect(
+                host=self.pg_host,
+                port=self.pg_port,
+                database=self.pg_database,
+                user=self.pg_user,
+                password=self.pg_password
+            )
+        return self._conn
+
+    def close(self) -> None:
+        """Explicitly close the PostgreSQL connection. Call at end of job."""
+        if self._conn and not self._conn.closed:
+            self._conn.close()
+            logger.debug("PostgreSQL connection closed")
+        self._conn = None
+
+    def __del__(self):
+        """Safety net: close connection if caller forgets to call close()."""
+        self.close()
 
     def get_watermark(self, table_name: str) -> Tuple[datetime, int]:
         """
@@ -292,13 +317,15 @@ def create_incremental_query(
 
 
 # Example usage (for testing):
+# PREFECT_DB_PASSWORD=prefect python3 watermark_pg.py
 if __name__ == "__main__":
+    import os
     wm = WatermarkManager(
-        pg_host="localhost",  # Change to "prefect-db" in Docker
-        pg_port=5432,
-        pg_database="prefect",
-        pg_user="prefect",
-        pg_password="prefect"
+        pg_host=os.environ.get("PREFECT_DB_HOST", "localhost"),
+        pg_port=int(os.environ.get("PREFECT_DB_PORT", "5432")),
+        pg_database=os.environ.get("PREFECT_DB_NAME", "prefect"),
+        pg_user=os.environ.get("PREFECT_DB_USER", "prefect"),
+        pg_password=os.environ["PREFECT_DB_PASSWORD"]
     )
 
     # Test: Get watermark

@@ -1,24 +1,30 @@
-# Runbook: Iceberg Scheduler Recovery
+# Runbook: Iceberg Offload Orchestration Recovery
 
 **Severity:** 🔴 Critical
 **Alert:** `IcebergOffloadSchedulerDown`
 **Response Time:** Immediate (<10 minutes)
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-18
 **Maintained By:** Platform Engineering
+
+> **v2 Migration Note:** The old Python `scheduler.py` + systemd service was replaced with
+> Prefect 3.x in February 2026. All `systemctl` commands have been removed. See
+> `PREFECT-3-MIGRATION-2026-02-14.md` for migration details.
 
 ---
 
 ## Summary
 
-This runbook covers recovery procedures when the Iceberg offload scheduler process crashes, stops, or becomes unreachable. The scheduler is the core orchestrator for cold tier offloads - when down, no offloads occur and lag accumulates.
+This runbook covers recovery when the Iceberg offload pipeline stops executing — either because
+the Prefect worker container is down, the Prefect server is unreachable, or the deployment
+schedule has stopped triggering flow runs.
 
 **Alert Trigger:** `up{job="iceberg-scheduler"} == 0` (Prometheus cannot scrape metrics)
 
-**Scheduler Role:**
-- Orchestrates offload cycles every 15 minutes
-- Manages watermark progression
-- Exports Prometheus metrics on port 8000
-- Runs as systemd service: `iceberg-offload-scheduler.service`
+**Orchestration Stack:**
+- **Prefect Server:** `k2-prefect-server` — API + UI (http://localhost:4200)
+- **Prefect Worker:** `k2-prefect-worker` — executes flow runs on `iceberg-offload` pool
+- **Deployment:** `iceberg-offload-main/iceberg-offload-15min` — 15-min cron schedule
+- **Metrics:** port 8000 on the worker container (Prometheus scrape target)
 
 ---
 
@@ -28,517 +34,280 @@ This runbook covers recovery procedures when the Iceberg offload scheduler proce
 
 - **Prometheus Alert:** `IcebergOffloadSchedulerDown` firing
 - **Grafana Dashboard:** All panels empty ("No data")
-- **Metrics Endpoint:** `curl http://localhost:8000/metrics` fails
-- **Systemd:** `systemctl status iceberg-offload-scheduler` shows "inactive" or "failed"
-- **Impact:** No offloads occurring, lag increasing
+- **Metrics Endpoint:** `curl http://localhost:8000/metrics` fails or returns stale data
+- **Prefect UI:** http://localhost:4200 — no recent flow runs, worker shows offline
+- **Impact:** No offloads occurring, cold tier lag increasing
 
 ### User Impact
 
 - **Immediate:** Cold tier stops updating
 - **Extended (>30 min):** SLO violation, stale cold tier data
 - **Extended (>24h):** Risk of data loss if ClickHouse TTL triggers
-- **Severity:** Critical - complete pipeline outage
+- **Severity:** Critical — complete pipeline outage
 
 ---
 
 ## Diagnosis
 
-### Step 1: Verify Scheduler Status
+### Step 1: Check Container Health
 
 ```bash
-# Check systemd service
-systemctl status iceberg-offload-scheduler
+# Check all Prefect containers
+docker ps --filter name=k2-prefect --format "table {{.Names}}\t{{.Status}}"
 
-# Expected statuses:
-# - "active (running)" = Healthy
-# - "inactive (dead)" = Not started
-# - "failed" = Crashed
+# Expected:
+# k2-prefect-server    Up X hours (healthy)
+# k2-prefect-worker    Up X hours
+# k2-prefect-db        Up X hours (healthy)
 
-# If active but alert firing: Check metrics endpoint
+# If any container is missing/exited: see scenarios below
+```
+
+### Step 2: Check Recent Flow Runs
+
+```bash
+# List last 5 flow runs (run from host)
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api prefect flow-run ls --limit 5"
+
+# Expected: Recent runs within the last 15 minutes with state COMPLETED
+# If no runs: Deployment not triggering
+# If runs show FAILED/CRASHED: Flow execution errors (see iceberg-offload-failure.md)
+```
+
+Or check visually at **http://localhost:4200** → Flow Runs.
+
+### Step 3: Check Metrics Endpoint
+
+```bash
+# Test Prometheus metrics scrape target
 curl -s http://localhost:8000/metrics | head -20
 
-# If curl fails: Scheduler running but metrics server crashed
+# Expected: Lines like offload_info{...} 1
+# If connection refused: Worker container down or metrics not started
 ```
 
-### Step 2: Check Scheduler Process
+### Step 4: Check Deployment Schedule
 
 ```bash
-# Find scheduler process
-ps aux | grep scheduler.py | grep -v grep
+# Verify deployment exists and schedule is active
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api prefect deployment ls"
 
-# Expected: Process running as root or service user
-
-# If no process: Scheduler not running
-# If process exists but metrics fail: Metrics server issue
-```
-
-### Step 3: Check Recent Logs
-
-```bash
-# View last 100 log lines
-tail -100 /tmp/iceberg-offload-scheduler.log
-
-# Check for errors
-grep -E "ERROR|CRITICAL|Traceback" /tmp/iceberg-offload-scheduler.log | tail -20
-
-# Check last activity
-tail -20 /tmp/iceberg-offload-scheduler.log | grep -E "CYCLE|COMPLETED"
-```
-
-**Common error patterns:**
-- Python exception/traceback → Code error
-- "Connection refused" → Database/ClickHouse unreachable
-- "Port 8000 already in use" → Metrics server conflict
-- "Permission denied" → File/directory permissions
-- Silent (no recent logs) → Hung or deadlocked
-
-### Step 4: Check System Resources
-
-```bash
-# Check disk space (logs can fill disk)
-df -h /tmp
-
-# Check if log file is huge
-ls -lh /tmp/iceberg-offload-scheduler.log
-
-# Check memory
-free -h
-
-# Check for resource exhaustion
-dmesg | tail -20 | grep -i "out of memory"
+# Expected: iceberg-offload-main/iceberg-offload-15min with active schedule
 ```
 
 ---
 
 ## Resolution
 
-### Scenario 1: Scheduler Not Started
+### Scenario 1: Prefect Worker Down
 
-**Symptoms:** `systemctl status` shows "inactive (dead)", no recent logs
-
-**Steps:**
-
-1. **Start scheduler:**
-   ```bash
-   sudo systemctl start iceberg-offload-scheduler
-
-   # Wait 5 seconds for startup
-   sleep 5
-
-   # Verify status
-   systemctl status iceberg-offload-scheduler
-   ```
-
-2. **Check startup logs:**
-   ```bash
-   # View startup messages
-   journalctl -u iceberg-offload-scheduler -n 50 --no-pager
-
-   # Check scheduler log
-   tail -30 /tmp/iceberg-offload-scheduler.log
-   ```
-
-3. **Verify metrics server started:**
-   ```bash
-   # Test metrics endpoint
-   curl -s http://localhost:8000/metrics | grep offload_info
-
-   # Expected: Metrics with version="1.0.0"
-   ```
-
-4. **Wait for first cycle (up to 15 minutes):**
-   ```bash
-   # Watch logs for cycle start
-   tail -f /tmp/iceberg-offload-scheduler.log
-
-   # Expected within 15 min: "CYCLE STARTED" → "COMPLETED"
-   ```
-
-**If start fails:** Check journal logs for specific error → See [Scenario 5: Persistent Start Failures](#scenario-5-persistent-start-failures)
-
----
-
-### Scenario 2: Scheduler Crashed
-
-**Symptoms:** `systemctl status` shows "failed", traceback in logs
+**Symptoms:** `k2-prefect-worker` not in `docker ps` output, or shows "Exited"
 
 **Steps:**
 
-1. **Identify crash reason:**
+1. **Check why the worker stopped:**
    ```bash
-   # View systemd failure logs
-   journalctl -u iceberg-offload-scheduler -n 100 --no-pager | grep -A 10 "failed"
-
-   # Check Python traceback
-   tail -200 /tmp/iceberg-offload-scheduler.log | grep -A 20 "Traceback"
+   docker logs k2-prefect-worker --tail=100
    ```
 
-2. **Common crash causes:**
-
-   **Cause 2a: Python exception (code bug)**
+2. **Restart the worker:**
    ```bash
-   # Check for specific exception
-   grep "Exception" /tmp/iceberg-offload-scheduler.log | tail -10
+   docker start k2-prefect-worker
 
-   # If repeatable crash: Requires code fix (escalate)
-   # If one-time: Restart and monitor
-   ```
-
-   **Cause 2b: Dependency failure (DB, Docker)**
-   ```bash
-   # Check if ClickHouse/Spark/PostgreSQL are running
-   docker ps | grep -E "clickhouse|spark|prefect-db"
-
-   # If service down: Start it first
-   docker start k2-clickhouse k2-spark-iceberg k2-prefect-db
-
-   # Wait for services to be ready (30 seconds)
-   sleep 30
-   ```
-
-   **Cause 2c: Out of memory (OOM)**
-   ```bash
-   # Check for OOM kill
-   dmesg | grep -i "killed process" | grep scheduler
-
-   # If OOM: Increase system memory or optimize scheduler
-   # Short-term: Clear caches and restart
-   sync; echo 3 > /proc/sys/vm/drop_caches
-   ```
-
-3. **Clear fault state and restart:**
-   ```bash
-   # Reset failed state
-   sudo systemctl reset-failed iceberg-offload-scheduler
-
-   # Restart service
-   sudo systemctl restart iceberg-offload-scheduler
-
-   # Verify startup
-   systemctl status iceberg-offload-scheduler
-   ```
-
-4. **Monitor for repeated crashes:**
-   ```bash
-   # Watch for 30 minutes
-   watch -n 60 'systemctl is-active iceberg-offload-scheduler'
-
-   # If crashes again: Escalate to engineering
-   ```
-
----
-
-### Scenario 3: Scheduler Hung (Not Responsive)
-
-**Symptoms:** Process running but no recent activity, cycles not completing
-
-**Steps:**
-
-1. **Check process state:**
-   ```bash
-   # Get scheduler PID
-   PID=$(pgrep -f scheduler.py)
-
-   # Check process state
-   ps -o pid,stat,etime,command -p $PID
-
-   # States:
-   # S = Sleeping (normal between cycles)
-   # R = Running (normal during cycle)
-   # D = Uninterruptible sleep (hung, bad)
-   # Z = Zombie (crashed but not reaped)
-   ```
-
-2. **Check if cycle is stuck:**
-   ```bash
-   # Look for "CYCLE STARTED" without "COMPLETED"
-   tail -100 /tmp/iceberg-offload-scheduler.log | \
-     grep -E "CYCLE STARTED|COMPLETED" | tail -5
-
-   # If last entry is "STARTED" >15 min ago: Hung
-   ```
-
-3. **Check for deadlock indicators:**
-   ```bash
-   # Check for stuck subprocess (Docker exec)
-   ps aux | grep "docker exec k2-spark-iceberg"
-
-   # If found: Spark job may be hung
-   # Check Spark container
-   docker exec k2-spark-iceberg ps aux | grep python3
-   ```
-
-4. **Graceful restart attempt:**
-   ```bash
-   # Send SIGTERM (graceful shutdown)
-   sudo systemctl stop iceberg-offload-scheduler
-
-   # Wait up to 30 seconds for graceful shutdown
-   for i in {1..30}; do
-     if ! pgrep -f scheduler.py > /dev/null; then
-       echo "Graceful shutdown successful"
-       break
-     fi
-     sleep 1
-   done
-   ```
-
-5. **Force kill if graceful fails:**
-   ```bash
-   # If still running after 30 seconds:
-   if pgrep -f scheduler.py > /dev/null; then
-     echo "Forcing kill..."
-     sudo systemctl kill -s SIGKILL iceberg-offload-scheduler
-     sleep 2
-   fi
-
-   # Start fresh
-   sudo systemctl start iceberg-offload-scheduler
-   ```
-
-6. **Verify recovery:**
-   ```bash
-   # Check process started
-   pgrep -f scheduler.py
-
-   # Watch logs for activity
-   tail -f /tmp/iceberg-offload-scheduler.log
-   ```
-
----
-
-### Scenario 4: Metrics Server Failure
-
-**Symptoms:** Scheduler process running, cycles completing, but metrics endpoint unreachable
-
-**Steps:**
-
-1. **Test metrics endpoint:**
-   ```bash
-   # Try to connect
-   curl -v http://localhost:8000/metrics
-
-   # Error patterns:
-   # "Connection refused" = Server not listening
-   # "Connection timed out" = Firewall or port conflict
-   # HTTP 500 = Server running but erroring
-   ```
-
-2. **Check port 8000 usage:**
-   ```bash
-   # See what's using port 8000
-   lsof -i :8000
-
-   # Or with netstat
-   netstat -tlnp | grep 8000
-   ```
-
-3. **Common metrics server issues:**
-
-   **Issue 4a: Port conflict**
-   ```bash
-   # Another process using port 8000
-   lsof -i :8000
-
-   # If conflict: Kill other process or change scheduler port
-   # To change port: Edit scheduler.py, change start_metrics_server(port=8000) to 8001
-   # Then update Prometheus scrape config
-   ```
-
-   **Issue 4b: Prometheus client module missing**
-   ```bash
-   # Check if module installed
-   docker exec k2-spark-iceberg python3 -c "import prometheus_client"
-
-   # If fails: Install module
-   # (Should be installed in Spark container already)
-   ```
-
-   **Issue 4c: Metrics server crashed but scheduler continues**
-   ```bash
-   # Check scheduler logs for metrics errors
-   grep -i "metrics" /tmp/iceberg-offload-scheduler.log | tail -20
-
-   # If "metrics disabled" or import error: Metrics module issue
-   ```
-
-4. **Restart scheduler to reinitialize metrics:**
-   ```bash
-   sudo systemctl restart iceberg-offload-scheduler
-
-   # Wait 10 seconds
+   # Wait 10 seconds for startup
    sleep 10
 
-   # Test metrics endpoint
-   curl http://localhost:8000/metrics | head -20
+   # Verify running
+   docker ps --filter name=k2-prefect-worker
+   ```
+
+3. **Verify worker registered with server:**
+   ```bash
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api prefect worker ls"
+
+   # Expected: Worker listed with status ONLINE
+   ```
+
+4. **Trigger an immediate flow run to confirm recovery:**
+   ```bash
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api \
+      prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
+   ```
+
+5. **Watch the run complete:**
+
+   Check http://localhost:4200 → Flow Runs, or:
+   ```bash
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api prefect flow-run ls --limit 3"
    ```
 
 ---
 
-### Scenario 5: Persistent Start Failures
+### Scenario 2: Prefect Server Down
 
-**Symptoms:** Scheduler fails to start repeatedly, systemctl start fails
+**Symptoms:** `k2-prefect-server` not running; worker logs show "connection refused to http://prefect-server:4200"
 
 **Steps:**
 
-1. **Check detailed failure reason:**
+1. **Restart the server (and its database if needed):**
    ```bash
-   # View full systemd logs
-   journalctl -u iceberg-offload-scheduler -n 200 --no-pager
+   docker start k2-prefect-db
+   sleep 5
+   docker start k2-prefect-server
+   sleep 15  # Server needs time to initialize
 
-   # Check for specific errors
-   journalctl -u iceberg-offload-scheduler -n 200 --no-pager | grep -i error
+   # Verify server healthy
+   docker ps --filter name=k2-prefect-server
+   curl -s http://localhost:4200/api/health | jq .status
+   # Expected: "healthy"
    ```
 
-2. **Common start failure causes:**
-
-   **Cause 5a: Python interpreter not found**
+2. **Restart worker so it reconnects:**
    ```bash
-   # Check Python path in service file
-   cat /etc/systemd/system/iceberg-offload-scheduler.service | grep ExecStart
-
-   # Verify Python exists
-   which python3
-   /usr/bin/python3 --version
-
-   # If path mismatch: Update service file
+   docker restart k2-prefect-worker
+   sleep 10
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api prefect worker ls"
    ```
 
-   **Cause 5b: Script not found or not executable**
+3. **Verify the deployment schedule is still active:**
    ```bash
-   # Check script exists
-   ls -la /home/rjdscott/Documents/projects/k2-market-data-platform/docker/offload/scheduler.py
-
-   # Check executable permission
-   # Note: Not needed for Python scripts, but check anyway
-   chmod +x /home/rjdscott/Documents/projects/k2-market-data-platform/docker/offload/scheduler.py
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api prefect deployment ls"
    ```
 
-   **Cause 5c: Missing dependencies**
+   If the deployment is missing (server lost state), re-deploy:
    ```bash
-   # Try to run scheduler manually
-   cd /home/rjdscott/Documents/projects/k2-market-data-platform/docker/offload
-   python3 scheduler.py
-
-   # If ImportError: Install missing modules
-   pip install <missing-module>
+   docker exec k2-prefect-worker bash -c \
+     "cd /opt/prefect/flows && \
+      PREFECT_API_URL=http://prefect-server:4200/api \
+      python deploy_production.py"
    ```
 
-   **Cause 5d: Permission denied (log file)**
+---
+
+### Scenario 3: Worker Running But No Flow Runs Executing
+
+**Symptoms:** Worker container up, deployment exists, but no runs in the last 30+ minutes
+
+**Steps:**
+
+1. **Verify deployment schedule:**
    ```bash
-   # Check log file permissions
-   ls -la /tmp/iceberg-offload-scheduler.log
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api prefect deployment inspect \
+      'iceberg-offload-main/iceberg-offload-15min'"
 
-   # If permission issue:
-   sudo chown $(whoami) /tmp/iceberg-offload-scheduler.log
-
-   # Or delete and let scheduler recreate
-   sudo rm /tmp/iceberg-offload-scheduler.log
+   # Check "schedules" section — should show active cron
    ```
 
-3. **Manual start for debugging:**
+2. **Trigger a manual run to verify the worker can execute:**
    ```bash
-   # Run scheduler in foreground (terminal)
-   cd /home/rjdscott/Documents/projects/k2-market-data-platform/docker/offload
-   python3 scheduler.py
-
-   # Watch for errors (Ctrl+C to stop)
-   # If works manually but not via systemd: Service file issue
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api \
+      prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
    ```
 
-4. **Fix service file if needed:**
+3. **If manual run works:** Schedule may have been paused. Resume it via Prefect UI:
+   - Navigate to http://localhost:4200 → Deployments → `iceberg-offload-main/iceberg-offload-15min`
+   - Check if schedule is paused; click Resume
+
+4. **If manual run fails:** Flow execution error — see [iceberg-offload-failure.md](iceberg-offload-failure.md)
+
+---
+
+### Scenario 4: Metrics Endpoint Unreachable
+
+**Symptoms:** Worker running and executing flows, but `curl http://localhost:8000/metrics` fails;
+Prometheus alert fires even though data is flowing.
+
+**Steps:**
+
+1. **Verify worker container exposes port 8000:**
    ```bash
-   # View current service file
-   cat /etc/systemd/system/iceberg-offload-scheduler.service
-
-   # Edit if needed
-   sudo vi /etc/systemd/system/iceberg-offload-scheduler.service
-
-   # Reload systemd after changes
-   sudo systemctl daemon-reload
-
-   # Try start again
-   sudo systemctl start iceberg-offload-scheduler
+   docker inspect k2-prefect-worker | jq '.[0].NetworkSettings.Ports'
+   # Expected: "8000/tcp" mapped to host
    ```
+
+2. **Check if metrics server started inside the worker:**
+   ```bash
+   docker exec k2-prefect-worker bash -c \
+     "curl -s http://localhost:8000/metrics | head -5"
+
+   # If this works but host curl fails: Port mapping issue
+   # If this fails too: Metrics module not loaded
+   ```
+
+3. **Restart the worker to reinitialize metrics:**
+   ```bash
+   docker restart k2-prefect-worker
+   sleep 15
+   curl -s http://localhost:8000/metrics | grep offload_info
+   ```
+
+4. **If port conflict on host:**
+   ```bash
+   # Check what's using port 8000 on host
+   lsof -i :8000
+
+   # Resolve conflict or update Prometheus scrape config to use different port
+   ```
+
+---
+
+### Scenario 5: Full Stack Restart
+
+Use when the above scenarios don't resolve, or after a host reboot.
+
+```bash
+# Bring up all Prefect components in correct order
+docker start k2-prefect-db
+sleep 5
+
+docker start k2-prefect-server
+sleep 15
+
+docker start k2-prefect-worker
+sleep 10
+
+# Verify all running
+docker ps --filter name=k2-prefect --format "table {{.Names}}\t{{.Status}}"
+
+# Verify worker online
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api prefect worker ls"
+
+# Trigger immediate run to confirm
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api \
+   prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
+```
 
 ---
 
 ## Prevention
 
-### Proactive Measures
-
-1. **Enable auto-restart on failure:**
-
-   Already configured in service file:
-   ```ini
-   [Service]
-   Restart=on-failure
-   RestartSec=30s
+1. **Auto-restart on failure** — Already configured in `docker-compose.v2.yml`:
+   ```yaml
+   restart: unless-stopped
    ```
+   All three Prefect containers restart automatically on crash.
 
-   This automatically restarts scheduler if it crashes.
+2. **Health monitoring:** The existing `IcebergOffloadSchedulerDown` Prometheus alert covers
+   this. No additional cron/scripts needed — Docker handles restarts.
 
-2. **Monitor scheduler health:**
+3. **Weekly validation:**
    ```bash
-   # Create health check script
-   cat > /usr/local/bin/scheduler-health-check.sh <<'EOF'
-   #!/bin/bash
-   if ! systemctl is-active iceberg-offload-scheduler &> /dev/null; then
-     echo "WARNING: Scheduler is not running"
-     sudo systemctl start iceberg-offload-scheduler
-   fi
-   EOF
-
-   chmod +x /usr/local/bin/scheduler-health-check.sh
-
-   # Add to cron (check every 5 minutes)
-   (crontab -l; echo "*/5 * * * * /usr/local/bin/scheduler-health-check.sh") | crontab -
-   ```
-
-3. **Log rotation (prevent disk full):**
-   ```bash
-   # Create logrotate config
-   sudo tee /etc/logrotate.d/iceberg-scheduler <<'EOF'
-   /tmp/iceberg-offload-scheduler.log {
-       daily
-       rotate 7
-       compress
-       delaycompress
-       missingok
-       notifempty
-       create 0644 root root
-       postrotate
-           systemctl reload iceberg-offload-scheduler > /dev/null 2>&1 || true
-       endscript
-   }
-   EOF
-   ```
-
-4. **Set up Prometheus alerting (already configured):**
-   - Alert: `IcebergOffloadSchedulerDown`
-   - Threshold: 2 minutes of unreachability
-   - Action: Immediate response
-
-5. **Weekly scheduler validation:**
-   ```bash
-   # Check scheduler has been running continuously
-   cat > /usr/local/bin/scheduler-uptime-check.sh <<'EOF'
-   #!/bin/bash
-   UPTIME=$(systemctl show iceberg-offload-scheduler -p ActiveEnterTimestamp --value)
-   echo "Scheduler uptime since: $UPTIME"
-
-   RESTARTS=$(journalctl -u iceberg-offload-scheduler --since "7 days ago" | grep -c "Started")
-   echo "Restarts in last 7 days: $RESTARTS"
-
-   if [ $RESTARTS -gt 5 ]; then
-     echo "WARNING: Scheduler restarted $RESTARTS times (threshold: 5)"
-   fi
-   EOF
-
-   chmod +x /usr/local/bin/scheduler-uptime-check.sh
-
-   # Add to cron (weekly Monday 9am)
-   (crontab -l; echo "0 9 * * 1 /usr/local/bin/scheduler-uptime-check.sh | mail -s 'Scheduler Uptime Report' platform-team@company.com") | crontab -
+   # Confirm last 7 days of flow runs are healthy
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api prefect flow-run ls --limit 50" \
+   | grep -c COMPLETED
+   # Expected: ~672 (96 runs/day × 7 days)
    ```
 
 ---
@@ -546,143 +315,82 @@ dmesg | tail -20 | grep -i "out of memory"
 ## Related Monitoring
 
 ### Dashboards
-- **Primary:** [Iceberg Offload Pipeline](http://localhost:3000/d/iceberg-offload)
-  - All panels depend on scheduler being up
+- **Prefect UI:** http://localhost:4200 — flow run history, task status, logs
+- **Grafana:** http://localhost:3000/d/iceberg-offload — pipeline metrics
 
 ### Metrics
-- `up{job="iceberg-scheduler"}` - 1 if scheduler reachable, 0 if down
-- `offload_info` - Metadata metric (includes scheduler start time)
+- `up{job="iceberg-scheduler"}` — 1 if metrics endpoint reachable, 0 if down
+- `offload_info` — metadata metric with pipeline version and start time
 
 ### Alerts
 - **This Alert:** `IcebergOffloadSchedulerDown` (Critical)
-- **Related:** All other offload alerts will eventually fire if scheduler down
+- **Related:** All other offload alerts will eventually fire if worker is down
 
 ### Logs
-- **Scheduler:** `/tmp/iceberg-offload-scheduler.log`
-- **Systemd:** `journalctl -u iceberg-offload-scheduler`
+- **Worker logs:** `docker logs k2-prefect-worker --tail=100`
+- **Server logs:** `docker logs k2-prefect-server --tail=100`
+- **Flow run logs:** http://localhost:4200 → Flow Runs → select run → Logs tab
 
 ---
 
 ## Post-Incident
 
-### After Resolution
-
-1. **Verify scheduler stability:**
+1. **Verify pipeline stability (watch 4 cycles):**
    ```bash
-   # Watch for 1 hour (4 cycles)
-   for i in {1..4}; do
-     sleep 900  # 15 minutes
-     if systemctl is-active iceberg-offload-scheduler &> /dev/null; then
-       echo "$(date): Scheduler running ✓"
-     else
-       echo "$(date): Scheduler DOWN ✗"
-     fi
-   done
+   # Check Prefect UI for 4 consecutive COMPLETED runs (covers 1 hour)
+   docker exec k2-prefect-worker bash -c \
+     "PREFECT_API_URL=http://prefect-server:4200/api prefect flow-run ls --limit 4"
    ```
 
 2. **Verify metrics exporting:**
    ```bash
-   # Check metrics endpoint accessible
    curl -s http://localhost:8000/metrics | grep offload_info
-
-   # Check Prometheus scraping
    curl -s 'http://localhost:9090/api/v1/query?query=up{job="iceberg-scheduler"}' | \
      jq '.data.result[0].value[1]'
-
-   # Expected: "1" (up)
+   # Expected: "1"
    ```
 
 3. **Check for data gaps (if downtime >30 min):**
    ```bash
-   # Check offload lag
    curl -s http://localhost:8000/metrics | grep offload_lag_minutes
-
    # If lag >30 min: See iceberg-offload-lag.md for catch-up procedures
    ```
 
-4. **Root cause analysis:**
-   - Why did scheduler stop/crash?
-   - Was it preventable?
-   - Document findings in incident log
-   - Update this runbook if new failure mode
-
-### Escalation
-
-**Escalate to Engineering Lead if:**
-- Scheduler crashes repeatedly (>3 times in 24 hours)
-- Root cause is code bug requiring fix
-- Persistent start failures despite troubleshooting
-- Resource exhaustion requires infrastructure changes
-
-**Contact:** Platform Engineering Team
+4. **Root cause:** Document why the container stopped and whether the `restart: unless-stopped`
+   policy failed to recover it automatically.
 
 ---
 
 ## Quick Reference
 
-### Fastest Recovery Path
-
 ```bash
-# 1. Check status (5 seconds)
-systemctl status iceberg-offload-scheduler
+# 1. Check all Prefect containers (5s)
+docker ps --filter name=k2-prefect --format "table {{.Names}}\t{{.Status}}"
 
-# 2. If inactive, start (10 seconds)
-sudo systemctl start iceberg-offload-scheduler
+# 2. Restart worker (most common fix) (15s)
+docker restart k2-prefect-worker
 
-# 3. If failed, reset and restart (15 seconds)
-sudo systemctl reset-failed iceberg-offload-scheduler
-sudo systemctl restart iceberg-offload-scheduler
+# 3. Verify worker online (5s)
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api prefect worker ls"
 
-# 4. If hung, force kill and restart (30 seconds)
-sudo systemctl kill -s SIGKILL iceberg-offload-scheduler
-sudo systemctl start iceberg-offload-scheduler
+# 4. Trigger immediate run to confirm (30s)
+docker exec k2-prefect-worker bash -c \
+  "PREFECT_API_URL=http://prefect-server:4200/api \
+   prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
 
-# 5. Verify recovery (30 seconds)
-systemctl status iceberg-offload-scheduler
-curl http://localhost:8000/metrics | head -10
-tail -f /tmp/iceberg-offload-scheduler.log
+# 5. Verify metrics endpoint (5s)
+curl -s http://localhost:8000/metrics | grep offload_info
 ```
 
 **Total MTTR:** 2-5 minutes (most scenarios)
 
 ---
 
-## Scheduler State Diagram
-
-```
-                    START
-                      ↓
-            [systemctl start]
-                      ↓
-             ┌────────────────┐
-             │   STARTING     │
-             │  (Loading...)  │
-             └────────┬───────┘
-                      │
-                      ↓
-             ┌────────────────┐
-             │    ACTIVE      │←─────────┐
-             │  (Running)     │          │
-             └────┬───────┬───┘          │
-                  │       │              │
-        Success   │       │   Cycle      │
-                  │       │   Complete   │
-                  │       └──────────────┘
-                  │
-                  │   Crash/Stop
-                  ↓
-             ┌────────────────┐
-             │    FAILED      │
-             │ (Needs restart)│
-             └────────────────┘
-```
-
----
-
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-18
 **Maintained By:** Platform Engineering
-**Version:** 1.0
+**Version:** 2.0 (Prefect 3.x rewrite)
 **Related Runbooks:**
-- [iceberg-offload-failure.md](iceberg-offload-failure.md) - Offload failures (often after scheduler recovery)
-- [iceberg-offload-lag.md](iceberg-offload-lag.md) - High lag (caused by scheduler downtime)
-- [iceberg-offload-watermark-recovery.md](iceberg-offload-watermark-recovery.md) - Watermark issues
+- [iceberg-offload-failure.md](iceberg-offload-failure.md) — Offload failures (often after worker recovery)
+- [iceberg-offload-lag.md](iceberg-offload-lag.md) — High lag (caused by worker downtime)
+- [iceberg-offload-watermark-recovery.md](iceberg-offload-watermark-recovery.md) — Watermark issues
