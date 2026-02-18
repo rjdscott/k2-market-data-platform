@@ -73,6 +73,20 @@ Platform v2 is a complete architectural overhaul, not an incremental migration. 
 
 ---
 
+## Phase 5 Decisions (Implementation)
+
+| Decision | Title | Status | Date |
+|----------|-------|--------|------|
+| [ADR-011](ADR-011-multi-exchange-bronze-architecture.md) | Multi-Exchange Bronze Architecture | Accepted | 2026-02-12 |
+| [ADR-012](ADR-012-spark-iceberg-version-upgrade.md) | Spark + Iceberg Version Strategy | Accepted | 2026-02-12 |
+| [ADR-013](ADR-013-pragmatic-iceberg-version-strategy.md) | Pragmatic Iceberg Version Strategy | Accepted | 2026-02-12 |
+| [ADR-014](ADR-014-spark-based-iceberg-offload.md) | Spark-Based Iceberg Offload | Accepted | 2026-02-12 |
+| [DECISION-015](DECISION-015-clickhouse-lts-downgrade.md) | ClickHouse 24.3 LTS (JDBC compat) | Accepted | 2026-02-14 |
+| [DECISION-016](DECISION-016-add-coinbase-exchange.md) | Add Coinbase as 3rd Exchange | Accepted | 2026-02-18 |
+| [DECISION-017](DECISION-017-iceberg-maintenance-pipeline.md) | Iceberg Daily Maintenance Pipeline | Accepted | 2026-02-18 |
+
+---
+
 ## Supporting Documents
 
 | Document | Description |

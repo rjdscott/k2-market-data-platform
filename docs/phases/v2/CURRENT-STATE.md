@@ -2,7 +2,7 @@
 
 **Date**: 2026-02-18
 **Branch**: `phase-5-prefect-iceberg-offload`
-**Status**: Production-operational — all 3 exchanges live, full medallion pipeline running
+**Status**: Production-operational — all 3 exchanges live, full medallion pipeline + daily maintenance running
 
 > This is the "read-first" snapshot for new engineers. It is updated at the end of each major
 > session. For the full session narrative, see the most recent HANDOFF-*.md file.
@@ -65,14 +65,25 @@
 
 ---
 
-## Offload Schedule
+## Offload & Maintenance Schedules
 
+### Offload (15-min)
 - **Mechanism**: Prefect flow → Spark batch → Iceberg (MinIO)
 - **Script**: `docker/offload/offload_generic.py`
 - **Flow**: `docker/offload/flows/iceberg_offload_flow.py` (v3.1.0)
-- **Schedule**: 15-minute intervals (deployment pending — see Pending Work)
-- **Watermarks**: PostgreSQL `offload_watermarks` table (all 10 tables in `success` state)
-- **Pattern**: Incremental — only rows newer than last watermark are offloaded
+- **Cron**: `*/15 * * * *` — deployment pending, see Pending Work
+- **Watermarks**: PostgreSQL `offload_watermarks` table (all 10 tables seeded)
+- **Pattern**: Incremental — only rows newer than last watermark offloaded
+- **Parallelism**: Bronze 3 concurrent (binance ‖ kraken ‖ coinbase) → Silver sequential → Gold 6 concurrent
+
+### Daily Maintenance (02:00 UTC)
+- **Mechanism**: Prefect flow → `docker exec k2-spark-iceberg` per table
+- **Script**: `docker/offload/iceberg_maintenance.py`
+- **Flow**: `docker/offload/flows/iceberg_maintenance_flow.py` (v1.0)
+- **Cron**: `0 2 * * *` — deployment pending, see Pending Work
+- **Execution order**: compact_all_tables (binpack, 128 MB) → expire_all_snapshots (7-day) → run_audit (24h window)
+- **Audit log**: PostgreSQL `maintenance_audit_log` (auto-created on first run)
+- **Failure policy**: table failures log-and-continue; audit MISSING/ERROR raises RuntimeError → Prefect marks Failed
 
 ---
 
@@ -84,7 +95,7 @@
 | Phase 2 | Redpanda Migration | ✅ Complete |
 | Phase 3 | ClickHouse Foundation | ✅ Complete |
 | Phase 4 | Streaming Pipeline (Kotlin handlers) | ✅ Complete |
-| Phase 5 | Cold Tier / Iceberg Offload | 🟡 80% — offload working, schedule pending |
+| Phase 5 | Cold Tier / Iceberg Offload | 🟢 95% — offload + maintenance complete, Prefect schedule deployment pending |
 | Phase 6 | Kotlin Feed Handlers (v2 refactor) | ✅ Complete |
 | Phase 7 | Integration Hardening | ✅ Complete |
 | Phase 8 | API Migration | ⬜ Not started |
@@ -95,10 +106,10 @@
 
 | Item | Priority | Notes |
 |------|---------|-------|
-| Deploy Prefect 15-min schedule | High | `prefect deployment build/apply` or via UI |
-| Spark daily maintenance job | Medium | Compaction (02:00), expiry (02:20), audit (02:30) |
-| Warm-cold consistency validation | Medium | Row count parity check ClickHouse vs Iceberg |
-| Tag `v2-phase-5-complete` + PR | Low | After consistency validated |
+| Deploy Prefect offload schedule | High | `python docker/offload/flows/deploy_production.py` in prefect-worker container |
+| Deploy Prefect maintenance schedule | High | `python docker/offload/flows/deploy_maintenance.py` in prefect-worker container |
+| Warm-cold consistency validation | Medium | Run manual audit: `docker exec k2-spark-iceberg python3 /home/iceberg/offload/iceberg_maintenance.py audit` |
+| Tag `v2-phase-5-complete` + PR | Low | After schedule deployed and first audit cycle clean |
 
 ---
 
