@@ -22,6 +22,8 @@ Design:
   - Exit code 0 = success, 1 = failure (matches offload_generic.py convention).
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import argparse
