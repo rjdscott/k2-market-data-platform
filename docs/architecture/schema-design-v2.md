@@ -1,9 +1,16 @@
 # Schema Design V2: Industry-Standard Hybrid Approach
 
-**Status**: Implemented
+**Status**: Implemented (v1 hybrid schema)
 **Created**: 2026-01-13
-**Last Updated**: 2026-01-13
+**Last Updated**: 2026-02-18
 **Author**: Rob Scott
+
+> **[v2 Note]** The platform now uses **ClickHouse-native schemas** rather than Avro/Iceberg directly.
+> The v2 bronze schema (all 3 exchanges) is:
+> `exchange_timestamp, sequence_number, symbol, price Decimal(18,8), quantity, quote_volume, event_time, kafka_offset, kafka_partition, ingestion_timestamp`
+> See [ADR-009](../decisions/platform-v2/ADR-009-medallion-in-clickhouse.md) for the medallion
+> design and `docker/clickhouse/schema/` for the DDL files. The hybrid approach described below
+> informed the v2 design but the implementation differs.
 
 ---
 

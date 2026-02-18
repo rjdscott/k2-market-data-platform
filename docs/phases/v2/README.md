@@ -1,9 +1,9 @@
 # Platform v2 — Implementation Phases
 
-**Status:** 🟢 PRODUCTION OPERATIONAL (Phases 1-6 Complete; Phase 5 @ 80%)
+**Status:** 🟢 PRODUCTION OPERATIONAL (3 exchanges live; Phase 5 @ 80%)
 **Target:** 16 CPU / 40GB RAM single Docker Compose cluster
 **Actual Progress:** 5.8 of 8 phases complete (73%) - **On track, ahead of schedule**
-**Last Updated:** 2026-02-15
+**Last Updated:** 2026-02-18
 
 ---
 
@@ -129,9 +129,12 @@ This section is updated as issues arise during implementation. Each entry should
 
 Detailed session-by-session progress logs capturing work completed, decisions made, and database state.
 
-- [2026-02-12 Handoff](HANDOFF-2026-02-12.md) — Docker consolidation, k2 database migration, OHLCV window_end, PyCharm guide
-- [2026-02-10 Evening Handoff](HANDOFF-2026-02-10-EVENING.md) — Schema cleanup, silver_trades_v2 → silver_trades migration
-- [2026-02-10 Handoff](HANDOFF-2026-02-10.md) — Phase 3-4 completion, Bronze/Silver/Gold operational
+**Start here** — [CURRENT-STATE.md](CURRENT-STATE.md) — as-of-today platform snapshot (replaces reading all handoffs)
+
+Recent handoffs (most recent first):
+- [2026-02-18 Handoff](HANDOFF-2026-02-18.md) — Coinbase aligned to v2 schema, full offload pipeline, Kotlin tests 16/16
+- [2026-02-16 Handoff](HANDOFF-2026-02-16.md) — Previous session
+- [2026-02-15 Handoff](HANDOFF-2026-02-15.md) — Iceberg row counts, data integrity report
 
 ---
 
@@ -144,6 +147,6 @@ Detailed session-by-session progress logs capturing work completed, decisions ma
 
 ---
 
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-18
 **Phase Owner:** Platform Engineering
-**Next Review:** Phase 5 completion (cold tier operational)
+**Next Review:** Phase 5 completion (Prefect schedule deployment + consistency validation)

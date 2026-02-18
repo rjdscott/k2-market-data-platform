@@ -1,8 +1,30 @@
 # Technology Stack - Detailed Rationale
 
-**Last Updated**: 2026-01-14
+**Last Updated**: 2026-02-18
 **Stability**: High - changes require RFC and technical review
 **Target Audience**: Principal/Staff Engineers, Architects
+
+> **[v2 — Current Stack]** The platform migrated to v2 in February 2026. See the current stack
+> table below. The v1 rationale that follows remains valid for understanding trade-off history.
+
+## v2 Current Stack (as of 2026-02-18)
+
+| Layer | Technology | Version | Notes |
+|-------|------------|---------|-------|
+| **Message broker** | Redpanda | 25.3 | Kafka-compatible, no JVM overhead |
+| **Feed handlers** | Kotlin + Spring Boot | Kotlin 2.0 | Replaces Python WebSocket clients |
+| **Hot OLAP** | ClickHouse | 24.3 LTS | Bronze/Silver/Gold via Materialized Views |
+| **Batch processing** | Apache Spark | 3.5 | Offload only (no streaming) |
+| **Cold storage** | Apache Iceberg | 1.4 | Object-store backed (MinIO) |
+| **Object storage** | MinIO | latest | Iceberg warehouse |
+| **Orchestration** | Prefect | 3.x | 15-min offload schedule |
+| **Observability** | Prometheus + Grafana | — | Unchanged from v1 |
+| **Language (infra)** | Python / uv | 3.12+ | Offload scripts + tests |
+
+**Resource budget**: 15.5 CPU / 21.75 GB RAM (13 services)
+**ADR references**: ADR-001 through ADR-010 in [docs/decisions/platform-v2/](../decisions/platform-v2/)
+
+---
 
 ---
 

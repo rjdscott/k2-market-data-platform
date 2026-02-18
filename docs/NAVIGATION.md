@@ -1,7 +1,10 @@
 # K2 Documentation Navigation Guide
 
-**Last Updated**: 2026-01-22
+**Last Updated**: 2026-02-18
 **Purpose**: Role-based documentation paths to help you find what you need in <2 minutes
+
+> **Platform is v2** (Kotlin / Redpanda / ClickHouse / Iceberg). The v1 Python/Kafka/Spark Streaming
+> stack is archived in [docs/archive/](./archive/). Start with the v2 Quick Start below.
 
 ---
 
@@ -9,40 +12,40 @@
 
 ### New Engineer (30-minute onboarding path)
 
-**Goal**: Understand what K2 is, how it works, and get your first query running
+**Goal**: Understand what K2 v2 is, how it works, and get your first query running
 
 **Path**:
 1. **Start Here** (5 min): [README.md](../README.md)
-   - Platform overview and positioning (L3 Cold Path)
-   - Technology stack at a glance
-   - Quick setup commands
+   - Platform overview and positioning
+   - v2 technology stack at a glance
+   - Quick Start command
 
-2. **Understand the Architecture** (10 min): [docs/architecture/platform-principles.md](./architecture/platform-principles.md)
+2. **Current State** (5 min): [docs/phases/v2/CURRENT-STATE.md](./phases/v2/CURRENT-STATE.md)
+   - All 13 services and health status
+   - Data counts (ClickHouse hot + Iceberg cold)
+   - Pending work and known issues
+
+3. **Understand the Architecture** (10 min): [docs/architecture/platform-principles.md](./architecture/platform-principles.md)
    - 6 core principles (replayability, schema-first, boring technology, etc.)
-   - Why K2 makes certain trade-offs
-   - What makes this different from HFT platforms
+   - Then read [ARCHITECTURE-V2.md](./decisions/platform-v2/ARCHITECTURE-V2.md) for the v2 design
 
-3. **See It Work** (5 min): [demo notebooks](../notebooks/)
-   - Run the Binance demo notebook
-   - See real-time crypto trades flowing through the platform
-   - Query 69,666+ validated messages
-
-4. **Run Your First Query** (5 min): Query the database
+4. **Run Your First Query** (5 min):
    ```bash
    # Start the platform
-   docker compose up -d
+   docker compose -f docker-compose.v2.yml up -d
 
-   # Run a query
-   docker compose exec api curl "http://localhost:8000/api/v1/trades?symbol=BTCUSDT&limit=10"
+   # Query ClickHouse
+   docker exec -it k2-clickhouse clickhouse-client \
+     --query "SELECT count() FROM k2.silver_trades"
    ```
 
-5. **Explore the Code** (5 min): Key files to understand
-   - [src/k2/ingestion/binance_client.py](../src/k2/ingestion/binance_client.py) - How we ingest real-time data
-   - [src/k2/ingestion/consumer.py](../src/k2/ingestion/consumer.py) - How we write to Iceberg
-   - [src/k2/query/engine.py](../src/k2/query/engine.py) - How we query with DuckDB
+5. **Explore the Code** (5 min): Key v2 paths
+   - `services/feed-handler-kotlin/` — Kotlin WebSocket handlers (Spring Boot)
+   - `docker/clickhouse/schema/` — Bronze/Silver/Gold ClickHouse schema SQL
+   - `docker/offload/` — Spark/Iceberg offload scripts (Prefect flows)
 
 **Next Steps**:
-- Read [Phase Guide](./phases/PHASE-GUIDE.md) to understand what's been built
+- Read [docs/phases/v2/README.md](./phases/v2/README.md) to understand the 8-phase migration
 - Explore [Testing Strategy](./testing/strategy.md) to understand quality standards
 
 ---
@@ -53,33 +56,29 @@
 
 **Critical Runbooks**:
 1. [Binance Streaming Issues](./operations/runbooks/binance-streaming.md)
-   - Connection drops → Page 209-260 (4 troubleshooting scenarios)
-   - Messages not reaching Kafka → Line 262-320
-   - High latency (>500ms) → Line 322-382
-   - Parsing errors → Line 384-445
+   - Connection drops, parsing errors, high latency
 
-2. [Connection Pool Issues](./operations/runbooks/connection-pool-tuning.md)
-   - Pool exhaustion → Line 85-140
-   - Connection leaks → Line 142-198
-   - High query latency → Line 200-256
+2. [Kraken Streaming Issues](./operations/runbooks/kraken-streaming.md)
+   - WebSocket reconnection, consumer lag
 
-3. [Failure Recovery](./operations/runbooks/failure-recovery.md)
-   - Kafka consumer lag recovery
-   - Iceberg write failures
-   - Query timeout handling
+3. [Redpanda Operations](./operations/runbooks/redpanda-runbook.md)
+   - Topic management, consumer lag, disk issues
+
+4. [Failure Recovery](./operations/runbooks/failure-recovery.md)
+   - Iceberg write failures, watermark resets
 
 **Monitoring Dashboards**:
-- Grafana: http://localhost:3000 (default credentials in README)
+- Grafana: http://localhost:3000 (admin/admin)
 - Prometheus: http://localhost:9090
+- Redpanda Console: http://localhost:8080
 - Key Metrics:
-  - `binance_connection_state` - Connection health (1 = connected)
-  - `kafka_messages_produced_total` - Messages flowing to Kafka
-  - `iceberg_write_errors_total` - Write failures
-  - `connection_pool_active` - Active query connections
+  - Feed handler connection state per exchange
+  - Redpanda consumer lag per topic
+  - ClickHouse insert rate
+  - Iceberg offload success/failure
 
 **Alerting**:
 - [Alerting Rules](./operations/monitoring/alerting-rules.yml) - All configured alerts
-- Critical alerts: BinanceDisconnected, KafkaConsumerLag, IcebergWriteFailures
 
 **Emergency Contacts**:
 - Platform Team: #k2-platform-alerts (Slack)
@@ -263,12 +262,13 @@ How we ensure correctness
 ### Phases (Implementation Progress)
 What's been built and when
 
-- [Phase Guide](./phases/PHASE-GUIDE.md) - Visual timeline and FAQ
-- [Phase 0 - Technical Debt Resolution](phases/v1/phase-0-technical-debt-resolution/) COMPLETE
-- [Phase 1 - Single-Node Implementation](phases/v1/phase-1-single-node-equities/) COMPLETE
-- [Phase 2 - Multi-Source Foundation](phases/v1/phase-2-prep/) COMPLETE (V2 Schema + Binance)
-- [Phase 3 - Demo Enhancements](phases/v1/phase-3-demo-enhancements/) COMPLETE (Circuit breaker, Hybrid queries, Cost model)
-- [Phase 4 - Demo Readiness](phases/v1/phase-4-demo-readiness/) COMPLETE (9/10 steps, 135/100 score)
+**v2 phases (active)**:
+- [v2 Phase Overview](./phases/v2/README.md) - 8-phase migration map
+- [Current State](./phases/v2/CURRENT-STATE.md) - As-of-today platform snapshot ⭐
+- [Latest Handoff](./phases/v2/HANDOFF-2026-02-18.md) - Most recent session narrative
+
+**v1 phases (archived)**:
+- [docs/archive/v1-phases/](./archive/v1-phases/) - All 14 v1 phase directories (historical)
 
 ### Reference (Quick Lookup)
 Field definitions, APIs, configuration
@@ -302,14 +302,11 @@ What experts said about the platform
 ### "What are the data quality guarantees?"
 → [Data Guarantees](./design/data-guarantees/) - Consistency, ordering, quality models
 
-### "When should I replace DuckDB with Presto?"
-→ [Technology Stack](./architecture/technology-stack.md#4-query-engine-duckdb-010--presto-migration-planned) - >10TB or >100 concurrent users
-
-### "What's the difference between TradeV1 and TradeV2?"
-→ [Data Dictionary V2](./reference/data-dictionary-v2.md) - V2 uses hybrid schema with vendor_data map
+### "What's the v2 ClickHouse schema?"
+→ [ADR-009](./decisions/platform-v2/ADR-009-medallion-in-clickhouse.md) + `docker/clickhouse/schema/` for DDL files
 
 ### "How do I run the platform locally?"
-→ [README.md](../README.md#quick-start) - Docker Compose setup
+→ [README.md](../README.md#quick-start) — `docker compose -f docker-compose.v2.yml up -d`
 
 ### "Where are the API docs?"
 → http://localhost:8000/docs (Swagger UI when platform is running)
@@ -363,5 +360,5 @@ What experts said about the platform
 **Update Frequency**: After major documentation changes
 **Feedback**: #k2-platform (Slack) or create GitHub issue
 
-**Last Updated**: 2026-01-22
-**Next Review**: 2026-02-22 (monthly)
+**Last Updated**: 2026-02-18
+**Next Review**: After Phase 5 completion

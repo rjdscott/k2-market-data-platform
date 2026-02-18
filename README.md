@@ -1,499 +1,132 @@
 # K2 Market Data Platform
 
-A single-node market data lakehouse for quantitative research, compliance, and analytics.
+A production cryptocurrency market data lakehouse for quantitative research, compliance, and analytics.
+Ingests live trades from 3 exchanges, stores 33M+ rows across ClickHouse (hot) and Iceberg (cold), and
+serves sub-second analytical queries.
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](./RELEASE-NOTES-v0.1.md)
-[![Release](https://img.shields.io/badge/release-preview-orange.svg)](./KNOWN-ISSUES.md)
-[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
-[![Apache Kafka](https://img.shields.io/badge/kafka-3.7-orange.svg)](https://kafka.apache.org/)
+[![Redpanda](https://img.shields.io/badge/redpanda-25.3-red.svg)](https://redpanda.com/)
+[![ClickHouse](https://img.shields.io/badge/clickhouse-24.3_LTS-yellow.svg)](https://clickhouse.com/)
+[![Kotlin](https://img.shields.io/badge/kotlin-2.0-purple.svg)](https://kotlinlang.org/)
 [![Apache Spark](https://img.shields.io/badge/spark-3.5-yellow.svg)](https://spark.apache.org/)
 [![Apache Iceberg](https://img.shields.io/badge/iceberg-1.4-green.svg)](https://iceberg.apache.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **⚠️ v0.1.0 Preview Release**: This release contains [known security vulnerabilities](./KNOWN-ISSUES.md) (SQL injection, resource exhaustion). **Use for development/testing only**. Production deployment requires v0.2 security fixes (target: 2026-02-20).
-
-**Documentation Hub**: [docs/NAVIGATION.md](./docs/NAVIGATION.md) - Role-based paths to find any doc in under 2 minutes
-**Release Notes**: [RELEASE-NOTES-v0.1.md](./RELEASE-NOTES-v0.1.md) | **Changelog**: [CHANGELOG.md](./CHANGELOG.md) | **Known Issues**: [KNOWN-ISSUES.md](./KNOWN-ISSUES.md)
+**Documentation Hub**: [docs/NAVIGATION.md](./docs/NAVIGATION.md) — role-based paths to any doc in < 2 min
 
 ---
 
-## What is K2?
+## Quick Start (v2)
 
-K2 is an **L3 Cold Path Research Data Platform** optimized for analytics, compliance, and historical research rather than real-time execution.
-
-**Key Capabilities**:
-- High-throughput ingestion (1M+ msg/sec at scale)
-- ACID-compliant storage with time-travel queries via Apache Iceberg
-- Sub-second analytical queries (point: <100ms, aggregations: 200-500ms)
-- Pre-computed OHLCV analytics across 5 timeframes (1m, 5m, 30m, 1h, 1d)
-- Security features (⚠️ v0.1: Known vulnerabilities - see [KNOWN-ISSUES.md](./KNOWN-ISSUES.md))
-- Comprehensive observability (50+ Prometheus metrics, health checks, distributed tracing)
-
-| Aspect | K2 IS | K2 is NOT |
-|--------|-------|-----------|
-| Latency | <500ms p99 | <10us (HFT) |
-| Use Case | Research, compliance, backtesting | Execution, market making |
-| Storage | Unlimited historical (S3-backed) | In-memory real-time |
-
-**Target Use Cases**:
-1. Quantitative research and backtesting
-2. Regulatory compliance and audits (FINRA, SEC, MiFID II)
-3. Market microstructure analysis
-4. Performance attribution and TCA
-5. Multi-vendor data reconciliation
-6. Historical research and ad-hoc analytics
-
-For detailed positioning: [docs/architecture/platform-positioning.md](./docs/architecture/platform-positioning.md)
-
----
-
-## Quick Start
-
-**Prerequisites**: Docker Desktop (12GB RAM, 16 Cores), Python 3.13+, [uv](https://docs.astral.sh/uv/)
-
-### 1. Clone and Start Infrastructure
+**Prerequisites**: Docker (16GB RAM, 16 Cores recommended)
 
 ```bash
 git clone https://github.com/rjdscott/k2-market-data-platform.git
 cd k2-market-data-platform
-
-# Option A: Start core infrastructure only (lighter, for exploration)
-docker compose up -d kafka schema-registry-1 minio postgres iceberg-rest \
-  prometheus grafana kafka-ui spark-master spark-worker-1 spark-worker-2 prefect-server
-
-# Option B: Start full stack including API, streaming, and all jobs
-docker compose up -d
+docker compose -f docker-compose.v2.yml up -d
 ```
 
-### 2. Set Up Python Environment
+Services take ~30 seconds to initialize. Verify:
 
 ```bash
-# Install uv if needed
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install dependencies
-uv sync --all-extras
-```
-
-### 3. Initialize Platform
-
-```bash
-uv run python scripts/init_infra.py
-```
-
-### 4. Verify Services
-
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| API Server | http://localhost:8000/docs | `X-API-Key: k2-dev-api-key-2026` |
-| Grafana | http://localhost:3000 | admin / admin |
-| Kafka UI | http://localhost:8080 | - |
-| MinIO Console | http://localhost:9001 | admin / password |
-| Prometheus | http://localhost:9090 | - |
-| Spark Master UI | http://localhost:8090 | - |
-| Prefect UI | http://localhost:4200 | - |
-
-### 5. Start API Server (Development Mode)
-
-The API server runs in a container with `docker compose up -d`. For local development with hot-reload:
-
-```bash
-# Stop container API first to free port 8000
-docker compose stop k2-query-api
-
-# Run locally with hot-reload
-make api
-```
-
-### 6. Start Streaming Services
-
-If you used Option A (core infrastructure only), start the streaming pipeline:
-
-```bash
-# Start WebSocket producers (connect to Binance + Kraken)
-docker compose up -d binance-stream kraken-stream
-
-# Start Bronze streaming jobs (Kafka to Iceberg ingestion)
-docker compose up -d bronze-binance-stream bronze-kraken-stream
-
-# Start Silver transformation jobs (validation + schema conversion)
-docker compose up -d silver-binance-transformation silver-kraken-transformation
-
-# Start Gold aggregation job (cross-exchange unified view)
-docker compose up -d gold-aggregation
-```
-
-Verify streaming is working:
-```bash
-# Check Spark UI for running jobs
-open http://localhost:8090
-
-# Check Kafka UI for message flow
-open http://localhost:8080
-```
-
-### 7. Run Demo (Optional)
-
-```bash
-make demo-quick   # Interactive CLI demo
-make notebook     # Jupyter notebook exploration
+docker compose -f docker-compose.v2.yml ps
 ```
 
 ---
 
-## Architecture Overview
+## Architecture (v2)
 
 ```
-                              Data Sources
-    Historical Archive   |   Binance WebSocket   |   Kraken WebSocket
-           |                      |                       |
-           v                      v                       v
-    +-----------------------------------------------------------------+
-    |                     Ingestion Layer                             |
-    |   Kafka (KRaft 3.7)  <-->  Schema Registry (Avro, BACKWARD)     |
-    |   Topics: market.crypto.trades.{binance,kraken}.raw             |
-    +-----------------------------------------------------------------+
-                                  |
-                                  v
-    +-----------------------------------------------------------------+
-    |               Processing Layer (Spark Streaming 3.5)            |
-    |                                                                 |
-    |   Bronze Layer          Silver Layer           Gold Layer       |
-    |   (Raw Ingestion)  -->  (Validated)    -->   (Unified)          |
-    |   Per-exchange          Schema-validated     Cross-exchange     |
-    |   Raw Avro bytes        V2 trade schema      Deduplicated       |
-    +-----------------------------------------------------------------+
-                                  |
-                                  v
-    +-----------------------------------------------------------------+
-    |                    Storage Layer (Iceberg)                      |
-    |                                                                 |
-    |   PostgreSQL 16         MinIO (S3 API)        Parquet + Zstd    |
-    |   (REST Catalog)        (Object Storage)      Hourly partitions |
-    |                                                                 |
-    |   Tables:                                                       |
-    |   - bronze_binance_trades    - silver_binance_trades            |
-    |   - bronze_kraken_trades     - silver_kraken_trades             |
-    |   - gold_crypto_trades       - gold_ohlcv_{1m,5m,30m,1h,1d}     |
-    +-----------------------------------------------------------------+
-                                  |
-                                  v
-    +-----------------------------------------------------------------+
-    |                       Query Layer                               |
-    |   DuckDB (OLAP)  -->  FastAPI REST  -->  JSON/CSV/Parquet       |
-    |   Connection pooling   API key auth      Time-travel queries    |
-    +-----------------------------------------------------------------+
-                                  |
-                                  v
-    +-----------------------------------------------------------------+
-    |                      Observability                              |
-    |   Prometheus (50+ metrics)  -->  Grafana (15-panel dashboard)   |
-    |   Structured logging (structlog) with correlation IDs           |
-    |   Circuit breaker + graceful degradation (5 levels)             |
-    +-----------------------------------------------------------------+
+Exchange APIs (Binance, Kraken, Coinbase)
+        │
+        ▼
+Kotlin Feed Handlers (Spring Boot, 1 per exchange)
+        │  WebSocket → normalized JSON
+        ▼
+Redpanda  (Kafka-compatible, 3 topics: 40/20/20 partitions)
+        │
+        ▼
+ClickHouse — Kafka Engine → Bronze tables
+        │      Materialized Views → Silver (silver_trades)
+        │      Materialized Views → Gold (OHLCV 1m/5m/15m/30m/1h/1d)
+        │
+        ▼ (Spark batch offload, every 15 min via Prefect)
+Iceberg (cold tier, MinIO-backed, cold.bronze_trades_*, cold.silver_trades, cold.gold_ohlcv_*)
 ```
 
-### Medallion Architecture
-
-K2 implements a three-layer medallion architecture for data quality:
-
-| Layer | Purpose | Tables | Update Frequency |
-|-------|---------|--------|------------------|
-| **Bronze** | Raw ingestion | `bronze_{binance,kraken}_trades` | Real-time streaming |
-| **Silver** | Validated, schema-compliant | `silver_{binance,kraken}_trades` | Real-time streaming |
-| **Gold** | Unified, deduplicated | `gold_crypto_trades`, `gold_ohlcv_*` | Real-time + batch |
-
-### OHLCV Analytics (Phase 13)
-
-Pre-computed OHLCV candles across 5 timeframes, orchestrated by Prefect:
-
-| Timeframe | Table | Schedule | Retention |
-|-----------|-------|----------|-----------|
-| 1 minute | `gold_ohlcv_1m` | Every 5 min | 90 days |
-| 5 minutes | `gold_ohlcv_5m` | Every 15 min | 180 days |
-| 30 minutes | `gold_ohlcv_30m` | Every 30 min | 1 year |
-| 1 hour | `gold_ohlcv_1h` | Hourly | 3 years |
-| 1 day | `gold_ohlcv_1d` | Daily 00:05 | 5 years |
-
-### Technology Choices
-
-| Component | Technology | Version | Rationale |
-|-----------|------------|---------|-----------|
-| Streaming | Apache Kafka | 3.7 (KRaft) | No ZooKeeper, sub-1s failover |
-| Schema | Schema Registry | 8.1.1 | BACKWARD compatibility enforcement |
-| Processing | Apache Spark | 3.5 | Structured streaming, medallion architecture |
-| Storage | Apache Iceberg | 1.4 | ACID + time-travel for compliance |
-| Object Store | MinIO | Latest | S3-compatible local development |
-| Catalog | PostgreSQL | 16 | Proven Iceberg REST catalog metadata |
-| Query | DuckDB | 1.4 | Zero-ops, connection pooling (5-50 concurrent) |
-| API | FastAPI | 0.128 | Async + auto-docs |
-| Orchestration | Prefect | 3.1 | Lightweight batch job scheduling |
-| Metrics | Prometheus | 3.9 | Pull-based, industry standard |
-| Dashboards | Grafana | 12.3 | Visualization + alerting |
+**Medallion layers**:
+- **Bronze** — raw normalized trades (Decimal types, per-exchange tables)
+- **Silver** — unified `silver_trades` view across all 3 exchanges
+- **Gold** — pre-computed OHLCV candles (6 timeframes)
+- **Cold** — Iceberg tables for historical depth beyond ClickHouse TTL
 
 ---
 
-## End-to-End Workflows
+## Services
 
-### Workflow 1: Real-Time Crypto Ingestion
+| Service | Purpose | URL |
+|---------|---------|-----|
+| `feed-handler-binance` | Kotlin WebSocket → Redpanda | internal |
+| `feed-handler-kraken` | Kotlin WebSocket → Redpanda | internal |
+| `feed-handler-coinbase` | Kotlin WebSocket → Redpanda | internal |
+| `redpanda` | Kafka-compatible message broker | broker:9092 |
+| `redpanda-console` | Topic browser / consumer lag | http://localhost:8080 |
+| `clickhouse` | OLAP database (hot tier) | http://localhost:8123 |
+| `spark-iceberg` | Batch offload jobs | http://localhost:8090 |
+| `prefect-server` | Orchestration (offload schedule) | http://localhost:4200 |
+| `prefect-worker` | Executes Prefect flows | internal |
+| `prefect-db` | Prefect metadata (PostgreSQL) | internal |
+| `minio` | Object storage (Iceberg warehouse) | http://localhost:9001 |
+| `prometheus` | Metrics collection | http://localhost:9090 |
+| `grafana` | Dashboards | http://localhost:3000 (admin/admin) |
 
-```
-Binance/Kraken WebSocket
-    --> Kafka (market.crypto.trades.{exchange}.raw)
-    --> Spark Bronze Job (raw bytes to Iceberg)
-    --> Spark Silver Job (validate, deserialize to V2 schema)
-    --> Spark Gold Job (union, deduplicate)
-    --> gold_crypto_trades table
-```
-
-**Exchanges Supported**:
-- Binance: BTCUSDT, ETHUSDT
-- Kraken: BTC/USD, ETH/USD
-
-### Workflow 2: OHLCV Analytics
-
-```
-gold_crypto_trades
-    --> Prefect scheduled jobs
-    --> Spark batch aggregation
-    --> gold_ohlcv_{1m,5m,30m,1h,1d} tables
-```
-
-**Features**: VWAP, trade count, automatic retention enforcement
-
-### Workflow 3: Query via API
-
-```bash
-# Get recent trades
-curl -H "X-API-Key: k2-dev-api-key-2026" \
-  "http://localhost:8000/v1/trades?symbol=BTCUSDT&limit=100"
-
-# Get OHLCV summary (daily)
-curl -H "X-API-Key: k2-dev-api-key-2026" \
-  "http://localhost:8000/v1/summary/BTCUSDT/2026-01-20"
-
-# Get OHLCV candles (hourly, last 24 hours)
-curl -H "X-API-Key: k2-dev-api-key-2026" \
-  "http://localhost:8000/v1/ohlcv/1h?symbol=BTCUSDT&limit=24"
-
-# Batch query multiple timeframes
-curl -X POST -H "X-API-Key: k2-dev-api-key-2026" \
-  -H "Content-Type: application/json" \
-  "http://localhost:8000/v1/ohlcv/batch" \
-  -d '[{"symbol": "BTCUSDT", "timeframe": "1h", "limit": 24}]'
-```
-
-### Workflow 4: Historical Replay (Time-Travel)
-
-```bash
-# List available snapshots
-curl -H "X-API-Key: k2-dev-api-key-2026" \
-  "http://localhost:8000/v1/snapshots"
-
-# Query at specific snapshot
-curl -X POST -H "X-API-Key: k2-dev-api-key-2026" \
-  "http://localhost:8000/v1/snapshots/{snapshot_id}/query" \
-  -d '{"symbol": "BTCUSDT", "limit": 100}'
-```
+**Resource budget**: ~15.5 CPU / ~21.75 GB RAM (13 active services)
 
 ---
 
-## API Reference
+## Technology Stack
 
-**Base URL**: `http://localhost:8000` | **Auth**: `X-API-Key: k2-dev-api-key-2026`
-
-### Read Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/v1/trades` | Query trades by symbol, exchange, time range |
-| GET | `/v1/quotes` | Query quotes (bid/ask) |
-| GET | `/v1/summary/{symbol}/{date}` | OHLCV daily summary (optimized with pre-computed tables) |
-| GET | `/v1/symbols` | List available symbols |
-| GET | `/v1/stats` | Database statistics |
-| GET | `/v1/snapshots` | List Iceberg snapshots |
-
-### OHLCV Analytics Endpoints (New - Phase 13)
-
-| Method | Endpoint | Description | Rate Limit |
-|--------|----------|-------------|------------|
-| GET | `/v1/ohlcv/{timeframe}` | Query pre-computed OHLCV candles (1m, 5m, 30m, 1h, 1d) | 100/min |
-| POST | `/v1/ohlcv/batch` | Batch query multiple timeframes in single request | 20/min |
-| GET | `/v1/ohlcv/health` | Health check for all OHLCV tables | - |
-
-**Example**:
-```bash
-# Get last 24 hourly candles for BTCUSDT
-curl -H "X-API-Key: k2-dev-api-key-2026" \
-  "http://localhost:8000/v1/ohlcv/1h?symbol=BTCUSDT&limit=24"
-
-# Batch query multiple timeframes
-curl -X POST -H "X-API-Key: k2-dev-api-key-2026" \
-  "http://localhost:8000/v1/ohlcv/batch" \
-  -H "Content-Type: application/json" \
-  -d '[
-    {"symbol": "BTCUSDT", "timeframe": "1m", "limit": 60},
-    {"symbol": "BTCUSDT", "timeframe": "1h", "limit": 24}
-  ]'
-```
-
-### Advanced Query Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/v1/trades/query` | Multi-symbol, field selection, CSV/Parquet output |
-| POST | `/v1/quotes/query` | Multi-symbol quotes with format options |
-| POST | `/v1/replay` | Historical replay with cursor pagination |
-| POST | `/v1/snapshots/{id}/query` | Point-in-time (time-travel) query |
-| POST | `/v1/aggregations` | VWAP, TWAP, OHLCV buckets |
-
-### System Endpoints (No Auth)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Liveness check |
-| GET | `/metrics` | Prometheus exposition format |
-| GET | `/docs` | OpenAPI documentation |
-
-Full API documentation: [docs/reference/api-reference.md](./docs/reference/api-reference.md)
+| Component | Technology | Version |
+|-----------|-----------|---------|
+| Message broker | Redpanda | 25.3 |
+| OLAP / hot tier | ClickHouse | 24.3 LTS |
+| Feed handlers | Kotlin + Spring Boot | Kotlin 2.0 |
+| Batch processing | Apache Spark | 3.5 |
+| Cold storage format | Apache Iceberg | 1.4 |
+| Object storage | MinIO | latest |
+| Orchestration | Prefect | 3.x |
+| Observability | Prometheus + Grafana | — |
+| Python env | uv | — |
 
 ---
 
-## Project Structure
+## Key Capabilities
 
-```
-src/k2/
-|-- api/                 # REST API (FastAPI)
-|   |-- main.py          # App entry point, middleware stack
-|   |-- v1/endpoints.py  # All /v1/ routes
-|   |-- middleware.py    # Auth, rate limiting, CORS
-|   +-- models.py        # Pydantic request/response models
-|-- ingestion/           # Data ingestion
-|   |-- producer.py      # Idempotent Kafka producer
-|   |-- consumer.py      # Kafka to Iceberg writer
-|   |-- binance_client.py # Binance WebSocket client
-|   +-- kraken_client.py # Kraken WebSocket client
-|-- spark/               # Spark Streaming jobs
-|   |-- jobs/streaming/  # Bronze/Silver/Gold jobs
-|   +-- jobs/batch/      # OHLCV aggregation jobs
-|-- storage/             # Iceberg lakehouse
-|   |-- catalog.py       # Table management
-|   +-- writer.py        # Batch writes
-|-- query/               # Query engine
-|   |-- engine.py        # DuckDB + Iceberg connector
-|   +-- replay.py        # Time-travel queries
-|-- schemas/             # Avro schemas (trade_v2, quote_v2)
-+-- common/              # Config, logging, metrics
-```
+- **3 live exchanges**: Binance (12 pairs), Kraken (11 pairs), Coinbase (11 pairs)
+- **33M+ rows** in Iceberg cold tier; continuous hot tier in ClickHouse
+- **OHLCV analytics**: 6 timeframes computed via ClickHouse MVs (no batch jobs)
+- **Automatic offload**: Prefect schedules Spark every 15 minutes → Iceberg
+- **Sub-second queries**: ClickHouse point queries < 100ms, aggregations < 500ms
+- **ACID cold storage**: Iceberg with time-travel support
 
-**Key Entry Points**:
-- `src/k2/api/main.py` - FastAPI application
-- `src/k2/spark/jobs/streaming/` - Streaming transformation jobs
-- `scripts/init_infra.py` - Infrastructure initialization
-
----
-
-## Development
-
-### Running Tests
-
-| Type | Count | Command | Duration |
-|------|-------|---------|----------|
-| Unit | 169 | `uv run pytest tests/unit/` | ~5s |
-| Integration | 46+ | `make test-integration` | ~60s |
-| E2E | 7 | `make test-e2e` | ~60s |
-| **Total** | **222+** | | |
-
-```bash
-# Unit tests only (fast)
-uv run pytest tests/unit/ -v
-
-# Full test suite (requires Docker)
-make test-integration
-
-# Coverage report
-make coverage
-```
-
-### Code Quality
-
-```bash
-make quality   # Format + lint + type-check
-
-# Individual commands
-make format    # Black + isort
-make lint      # Ruff
-make type-check # Mypy
-```
-
-### Make Targets Summary
-
-```bash
-# Infrastructure
-make docker-up          # Start all services
-make docker-down        # Stop services
-make init-infra         # Initialize Kafka, schemas, Iceberg
-
-# Development
-make api                # Start API (dev mode with reload)
-make demo-quick         # Run demo (CI-friendly)
-make notebook           # Jupyter notebook
-
-# Testing
-make test-unit          # Unit tests only
-make test-integration   # Integration tests (requires Docker)
-make test-pr            # PR validation (lint + type + unit)
-make coverage           # Coverage report
-
-# Quality
-make format             # Black + isort
-make lint-fix           # Ruff with auto-fix
-make quality            # All checks
-```
+For platform positioning and use-case fit: [docs/architecture/platform-positioning.md](./docs/architecture/platform-positioning.md)
 
 ---
 
 ## Documentation
 
-**Start Here**: [docs/NAVIGATION.md](./docs/NAVIGATION.md) - Role-based documentation paths
+Role-based navigation: **[docs/NAVIGATION.md](./docs/NAVIGATION.md)**
 
-### Quick Paths
-
-| Role | Time | Link |
-|------|------|------|
-| New Engineer | 30 min | [Onboarding Path](./docs/NAVIGATION.md#-new-engineer-30-minute-onboarding-path) |
-| On-Call Engineer | 15 min | [Emergency Runbooks](./docs/NAVIGATION.md#-operatoron-call-engineer-15-minute-emergency-path) |
-| API Consumer | 20 min | [Integration Guide](./docs/NAVIGATION.md#-api-consumer-20-minute-integration-path) |
-| Contributor | 45 min | [Deep Dive Path](./docs/NAVIGATION.md#-contributordeveloper-45-minute-deep-dive-path) |
-
-### Documentation Categories
-
-| Category | Description | Key Docs |
-|----------|-------------|----------|
-| **Architecture** | System design, principles | [platform-principles.md](./docs/architecture/platform-principles.md), [system-design.md](./docs/architecture/system-design.md) |
-| **Operations** | Runbooks, monitoring | [operations/README.md](./docs/operations/README.md) |
-| **Reference** | API, schemas, config | [api-reference.md](./docs/reference/api-reference.md), [data-dictionary-v2.md](./docs/reference/data-dictionary-v2.md) |
-| **Phases** | Implementation history | [phases/README.md](./docs/phases/README.md) |
-
-### Documentation Health
-
-- Zero broken links (376 validated)
-- 12 comprehensive reference docs
-- 8 operational runbooks
-- Run `bash scripts/validate-docs.sh` to verify
+| Area | Path |
+|------|------|
+| Architecture decisions (ADRs) | [docs/decisions/platform-v2/](./docs/decisions/platform-v2/) |
+| Current platform state | [docs/phases/v2/CURRENT-STATE.md](./docs/phases/v2/CURRENT-STATE.md) |
+| Operations & runbooks | [docs/operations/](./docs/operations/) |
+| Testing strategy | [docs/testing/](./docs/testing/) |
+| Adding a new exchange | [docs/operations/adding-new-exchanges.md](./docs/operations/adding-new-exchanges.md) |
 
 ---
 
-## License
+## v1 (legacy)
 
-MIT License - see [LICENSE](./LICENSE) for details.
-
-## Contributing
-
-Contributions welcome. See the [Development](#development) section for setup and the documentation at [docs/](./docs/) for guidelines.
-
-## Questions?
-
-- **Documentation**: [docs/](./docs/)
-- **Issues**: [GitHub Issues](https://github.com/rjdscott/k2-market-data-platform/issues)
-- **Architecture**: [Architecture Decision Records](./docs/phases/)
+The original v1 platform (Python / Kafka / Spark Streaming / DuckDB / FastAPI) is archived in
+[docs/archive/](./docs/archive/). It is preserved for historical reference and is no longer active.

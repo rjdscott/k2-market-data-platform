@@ -1,9 +1,14 @@
 # Streaming Data Sources Architecture
 
-**Last Updated**: 2026-01-14
-**Status**: Active (Binance operational, extensible for additional sources)
+**Last Updated**: 2026-02-18
+**Status**: Active — 3 exchanges live (Binance, Kraken, Coinbase)
 **Audience**: Staff/Principal Engineers, Integration Developers
 **Purpose**: Generic architecture for integrating real-time streaming data sources
+
+> **[v2 Note]** Feed handlers are now **Kotlin/Spring Boot** services (not Python clients).
+> The generic integration pattern below is still correct. For adding a new exchange in v2,
+> see [docs/operations/adding-new-exchanges.md](../operations/adding-new-exchanges.md).
+> The Kotlin implementation lives in `services/feed-handler-kotlin/`.
 
 ---
 
