@@ -169,6 +169,7 @@ docker exec k2-spark-iceberg spark-sql --conf spark.sql.extensions=org.apache.ic
 
 - [ARCHITECTURE-V2.md](../../decisions/platform-v2/ARCHITECTURE-V2.md) — Full v2 architectural overview
 - [docs/decisions/platform-v2/](../../decisions/platform-v2/) — All 20 ADRs + decisions
-- [HANDOFF-2026-02-18.md](./HANDOFF-2026-02-18.md) — Latest session narrative
+- [HANDOFF-2026-02-19.md](./HANDOFF-2026-02-19.md) — Tomorrow's start brief (Phase 7 execution)
+- [HANDOFF-2026-02-18.md](./HANDOFF-2026-02-18.md) — Full 2026-02-18 session narrative
 - [docs/operations/adding-new-exchanges.md](../../operations/adding-new-exchanges.md) — How to add exchange #4
 - [docs/operations/prefect-schedule-config.md](../../operations/prefect-schedule-config.md) — Prefect schedule setup

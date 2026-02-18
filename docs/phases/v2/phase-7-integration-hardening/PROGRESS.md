@@ -1,8 +1,8 @@
 # Phase 7: Integration & Hardening -- Progress Tracker
 
-**Status:** ⬜ NOT STARTED
-**Progress:** 0/5 steps (0%)
-**Last Updated:** 2026-02-09
+**Status:** 🟢 ACTIVE DEVELOPMENT
+**Progress:** 0/5 steps (0%) — planning complete, execution starts 2026-02-19
+**Last Updated:** 2026-02-18
 **Phase Owner:** Platform Engineering
 
 ---
@@ -57,22 +57,24 @@ Captured during Step 1.
 
 ## Resource Budget Validation (24h Burn-In)
 
-Captured during Step 2.
+Captured during Step 2. Actual v2 services (13 total; redpanda-init is one-shot, not shown).
 
 | Service | Target CPU | Actual CPU | Target RAM | Actual RAM | Status |
 |---------|-----------|-----------|-----------|-----------|--------|
-| Redpanda | 2.0 | -- | 2GB | -- | ⬜ Pending |
-| ClickHouse | 4.0 | -- | 8GB | -- | ⬜ Pending |
-| Kotlin Feed Handler | 1.0 | -- | 1GB | -- | ⬜ Pending |
-| Silver Processor | 0.5 | -- | 512MB | -- | ⬜ Pending |
-| MinIO | 0.5 | -- | 1GB | -- | ⬜ Pending |
-| PostgreSQL | 0.5 | -- | 512MB | -- | ⬜ Pending |
-| Iceberg REST | 0.5 | -- | 512MB | -- | ⬜ Pending |
-| Spark (batch) | 4.0 | -- | 4GB | -- | ⬜ Pending |
-| FastAPI | 1.0 | -- | 512MB | -- | ⬜ Pending |
-| Grafana | 0.5 | -- | 256MB | -- | ⬜ Pending |
-| Prometheus | 0.5 | -- | 512MB | -- | ⬜ Pending |
-| **Total** | **15.5** | -- | **19.5GB** | -- | ⬜ Pending |
+| `feed-handler-binance` | 0.5 | -- | 256MB | -- | ⬜ Pending |
+| `feed-handler-kraken` | 0.5 | -- | 256MB | -- | ⬜ Pending |
+| `feed-handler-coinbase` | 0.5 | -- | 256MB | -- | ⬜ Pending |
+| `redpanda` | 2.0 | -- | 4GB | -- | ⬜ Pending |
+| `clickhouse` | 4.0 | -- | 8GB | -- | ⬜ Pending |
+| `spark-iceberg` | 2.0 | -- | 4GB | -- | ⬜ Pending |
+| `prefect-server` | 0.5 | -- | 512MB | -- | ⬜ Pending |
+| `prefect-worker` | 0.5 | -- | 512MB | -- | ⬜ Pending |
+| `prefect-db` | 0.5 | -- | 512MB | -- | ⬜ Pending |
+| `minio` | 0.5 | -- | 1GB | -- | ⬜ Pending |
+| `iceberg-rest` | 0.5 | -- | 512MB | -- | ⬜ Pending |
+| `prometheus` | 0.5 | -- | 512MB | -- | ⬜ Pending |
+| `grafana` | 0.5 | -- | 256MB | -- | ⬜ Pending |
+| **Total** | **~15.5** | -- | **~21.75GB** | -- | ⬜ Pending |
 
 ---
 
@@ -107,5 +109,5 @@ Captured during Step 3.
 
 ---
 
-**Last Updated:** 2026-02-09
+**Last Updated:** 2026-02-18
 **Phase Owner:** Platform Engineering
