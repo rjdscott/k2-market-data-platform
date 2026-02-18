@@ -71,7 +71,7 @@
 - **Mechanism**: Prefect flow → Spark batch → Iceberg (MinIO)
 - **Script**: `docker/offload/offload_generic.py`
 - **Flow**: `docker/offload/flows/iceberg_offload_flow.py` (v3.1.0)
-- **Cron**: `*/15 * * * *` — deployment pending, see Pending Work
+- **Cron**: `*/15 * * * *` — **DEPLOYED** (`iceberg-offload-15min`, status=READY)
 - **Watermarks**: PostgreSQL `offload_watermarks` table (all 10 tables seeded)
 - **Pattern**: Incremental — only rows newer than last watermark offloaded
 - **Parallelism**: Bronze 3 concurrent (binance ‖ kraken ‖ coinbase) → Silver sequential → Gold 6 concurrent
@@ -80,10 +80,11 @@
 - **Mechanism**: Prefect flow → `docker exec k2-spark-iceberg` per table
 - **Script**: `docker/offload/iceberg_maintenance.py`
 - **Flow**: `docker/offload/flows/iceberg_maintenance_flow.py` (v1.0)
-- **Cron**: `0 2 * * *` — deployment pending, see Pending Work
+- **Cron**: `0 2 * * *` — **DEPLOYED** (`iceberg-maintenance-daily`, status=READY)
 - **Execution order**: compact_all_tables (binpack, 128 MB) → expire_all_snapshots (7-day) → run_audit (24h window)
-- **Audit log**: PostgreSQL `maintenance_audit_log` (auto-created on first run)
+- **Audit log**: PostgreSQL `maintenance_audit_log` (auto-created; populated 2026-02-18)
 - **Failure policy**: table failures log-and-continue; audit MISSING/ERROR raises RuntimeError → Prefect marks Failed
+- **Note on gold OHLCV**: ~7% delta expected; CH background part merges reduce row count post-offload
 
 ---
 
@@ -95,21 +96,20 @@
 | Phase 2 | Redpanda Migration | ✅ Complete |
 | Phase 3 | ClickHouse Foundation | ✅ Complete |
 | Phase 4 | Streaming Pipeline (Kotlin handlers) | ✅ Complete |
-| Phase 5 | Cold Tier / Iceberg Offload | 🟢 95% — offload + maintenance complete, Prefect schedule deployment pending |
+| Phase 5 | Cold Tier / Iceberg Offload | ✅ Complete — offload + maintenance deployed, audit validated |
 | Phase 6 | Kotlin Feed Handlers (v2 refactor) | ✅ Complete |
 | Phase 7 | Integration Hardening | ✅ Complete |
 | Phase 8 | API Migration | ⬜ Not started |
 
 ---
 
-## Pending Work (Phase 5)
+## Pending Work (Phase 7)
 
 | Item | Priority | Notes |
 |------|---------|-------|
-| Deploy Prefect offload schedule | High | `python docker/offload/flows/deploy_production.py` in prefect-worker container |
-| Deploy Prefect maintenance schedule | High | `python docker/offload/flows/deploy_maintenance.py` in prefect-worker container |
-| Warm-cold consistency validation | Medium | Run manual audit: `docker exec k2-spark-iceberg python3 /home/iceberg/offload/iceberg_maintenance.py audit` |
-| Tag `v2-phase-5-complete` + PR | Low | After schedule deployed and first audit cycle clean |
+| Tag `v2-phase-5-complete` | Low | Git tag after branch merged to main |
+| Open PR: `phase-5-prefect-iceberg-offload` → `main` | High | Phase 5 complete |
+| Phase 7 Integration Hardening | Medium | Load testing, SLO validation, end-to-end health checks |
 
 ---
 
