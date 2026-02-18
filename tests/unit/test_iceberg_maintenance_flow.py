@@ -17,8 +17,9 @@ docker-sdk PyPI package already used in tests/conftest.py.
 """
 
 import subprocess
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -207,8 +208,8 @@ class TestCompactAllTablesFlow:
     def test_processes_all_ten_tables(self):
         """compact_all_tables calls compact_table once per table (10 tables)."""
         from iceberg_maintenance_flow import (
-            compact_all_tables,
             _ALL_TABLES,
+            compact_all_tables,
         )
 
         call_count = 0
@@ -235,7 +236,7 @@ class TestCompactAllTablesFlow:
         triggering Prefect's retry machinery (which would add a 120s wait per
         retry and require extra mock responses for each retry attempt).
         """
-        from iceberg_maintenance_flow import compact_all_tables, _ALL_TABLES
+        from iceberg_maintenance_flow import _ALL_TABLES, compact_all_tables
 
         call_count = 0
 
