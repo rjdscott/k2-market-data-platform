@@ -1,0 +1,120 @@
+# K2 Market Data Platform v2 - ClickHouse Alert Rules
+# Purpose: Alert on ClickHouse pipeline, MV processing, and resource issues
+# Last Updated: 2026-02-19
+
+groups:
+  - name: clickhouse_critical
+    interval: 30s
+    rules:
+
+      # CRITICAL: ClickHouse is unreachable
+      - alert: ClickHouseDown
+        expr: up{job="clickhouse"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: clickhouse
+          tier: warm-storage
+        annotations:
+          summary: "ClickHouse is unreachable"
+          description: |
+            Prometheus cannot scrape ClickHouse metrics. The server may be down
+            or the Prometheus listener failed to start.
+
+            **Impact:** All bronze/silver/gold writes are failing. Data is buffering
+            in Redpanda (limited to Redpanda retention window).
+
+            **Immediate Actions:**
+            1. Check status: `docker compose -f docker-compose.v2.yml ps clickhouse`
+            2. Check logs: `docker logs k2-clickhouse --tail 100`
+            3. Restart: `docker compose -f docker-compose.v2.yml restart clickhouse`
+
+            **Runbook:** docs/operations/runbooks/clickhouse-recovery.md
+
+      # CRITICAL: ClickHouse memory near limit (>90% of limit)
+      - alert: ClickHouseHighMemoryUsage
+        expr: |
+          ClickHouseAsynchronousMetrics_MemoryResident
+          / ClickHouseAsynchronousMetrics_OSMemoryTotal > 0.85
+        for: 5m
+        labels:
+          severity: critical
+          component: clickhouse
+          tier: warm-storage
+        annotations:
+          summary: "ClickHouse memory usage critical (>85% of system RAM)"
+          description: |
+            ClickHouse is using {{ $value | humanizePercentage }} of system RAM.
+            Risk of OOM kill or query failures.
+
+            **Actions:**
+            1. Check top consumers: `docker exec k2-clickhouse clickhouse-client -q "SELECT * FROM system.processes ORDER BY memory_usage DESC LIMIT 10"`
+            2. Consider reducing max_memory_usage in config
+            3. If near OOM: restart with `docker compose restart clickhouse`
+
+      # CRITICAL: Too many failed queries
+      - alert: ClickHouseQueryFailureRateHigh
+        expr: |
+          rate(ClickHouseProfileEvents_FailedQuery[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: critical
+          component: clickhouse
+          tier: warm-storage
+        annotations:
+          summary: "High ClickHouse query failure rate"
+          description: |
+            ClickHouse is failing {{ $value | humanize }} queries/sec.
+            This may indicate memory pressure, disk issues, or misconfiguration.
+
+  - name: clickhouse_warning
+    interval: 1m
+    rules:
+
+      # WARNING: Kafka Engine not consuming (consumer lag proxy)
+      # Note: Direct consumer lag not directly exposed; use insert rate as proxy
+      - alert: ClickHouseBronzeInsertRateLow
+        expr: |
+          rate(ClickHouseProfileEvents_InsertedRows[5m]) < 0.5
+        for: 10m
+        labels:
+          severity: warning
+          component: clickhouse
+          tier: warm-storage
+        annotations:
+          summary: "ClickHouse bronze insert rate very low"
+          description: |
+            ClickHouse is inserting fewer than 0.5 rows/sec over 10 minutes.
+            This may indicate feed handlers are down or Kafka Engine stalled.
+
+            **Note:** Low trading volumes during off-peak hours can trigger this
+            alert. Check if feed handlers are actually producing data.
+
+            **Check:**
+            1. Feed handler logs: `docker logs k2-feed-handler-binance --tail 20`
+            2. Kafka consumers: `docker exec k2-clickhouse clickhouse-client -q "SELECT table, num_messages_read, last_poll_time FROM system.kafka_consumers WHERE database='k2'"`
+
+      # WARNING: Large number of background merges queued
+      - alert: ClickHouseMergeQueueLarge
+        expr: |
+          ClickHouseMetrics_BackgroundMergesAndMutationsPoolTask > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: clickhouse
+          tier: warm-storage
+        annotations:
+          summary: "ClickHouse merge queue building up"
+          description: |
+            {{ $value }} background merge tasks queued. This may indicate
+            the insert rate exceeds merge throughput, which can degrade query performance.
+
+  - name: clickhouse_recording
+    rules:
+      # Insert rate per 5 minutes
+      - record: clickhouse:insert_rate:5m
+        expr: rate(ClickHouseProfileEvents_InsertedRows[5m])
+
+      # Query duration p99 (5-min window)
+      - record: clickhouse:query_duration_p99:5m
+        expr: histogram_quantile(0.99, rate(ClickHouseProfileEvents_RealTimeMicroseconds_bucket[5m])) / 1e6

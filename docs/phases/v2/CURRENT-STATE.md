@@ -1,8 +1,8 @@
 # K2 v2 — Current Platform State
 
-**Date**: 2026-02-18
+**Date**: 2026-02-19
 **Branch**: `main`
-**Status**: Production-operational — all 3 exchanges live, full medallion pipeline + daily maintenance running
+**Status**: Production-operational — all 3 exchanges live, full medallion pipeline + daily maintenance running. Phase 7 integration hardening 60% complete.
 
 > This is the "read-first" snapshot for new engineers. It is updated at the end of each major
 > session. For the full session narrative, see the most recent HANDOFF-*.md file.
@@ -98,7 +98,7 @@
 | Phase 4 | Streaming Pipeline (Kotlin handlers) | ✅ Complete |
 | Phase 5 | Cold Tier / Iceberg Offload | ✅ Complete — offload + maintenance deployed, audit validated |
 | Phase 6 | Kotlin Feed Handlers (v2 refactor) | ✅ Complete |
-| Phase 7 | Integration Hardening | ⬜ Not Started |
+| Phase 7 | Integration Hardening | 🟡 In Progress — Steps 1 ✅, 2 🟡, 3 ✅, 4 🟡 |
 | Phase 8 | API Migration | ⬜ Not started |
 
 ---
@@ -108,7 +108,9 @@
 | Item | Priority | Notes |
 |------|---------|-------|
 | Tag `v2-phase-5-complete` | Low | Git tag pending (branch merged to main via PR #47) |
-| Phase 7 Integration Hardening | High | Latency benchmarks, resource validation, failure mode testing, monitoring, runbooks |
+| Step 2: 24h resource burn-in | High | Sampling loop running (PID 107291, /tmp/k2-burn-in.csv). Collect results 2026-02-20 morning. |
+| Step 4: Alert testing + Alertmanager | Medium | Alert rules live in Prometheus. FeedHandlerDown fire test pending. Alertmanager optional. |
+| Step 5: Runbooks + docs finalisation | High | 5 runbooks to write, ARCHITECTURE-V2.md update, v2-phase-7-complete git tag |
 
 ---
 
@@ -119,6 +121,8 @@
 | Iceberg silver excludes `trade_conditions`, `vendor_data`, `validation_errors` | Low | JDBC can't handle `Array(String)` / `Map(String,String)` types; columns omitted from cold schema |
 | Docker bind mount inode staleness | Medium | After editing `instruments.yaml`, run `docker compose up -d --force-recreate --no-deps <service>` — NOT `docker restart` |
 | ClickHouse DateTime64 TTL must use `toDateTime()` cast | Low | `TTL toDateTime(timestamp) + INTERVAL 30 DAY` — required for silver_trades |
+| prefect-worker startup RAM spike | Low | Uses ~488MiB briefly at start (init), settles to ~100MiB. Limit is 512MiB — increase to 768MiB if OOM observed. |
+| Coinbase normalized trades not flowing | Medium | Schema registration race condition on startup — coinbase `producer-2` stuck in permanent retry loop. Raw topic fine. Fix: `docker compose -f docker-compose.v2.yml up -d --force-recreate --no-deps feed-handler-coinbase`. Binance + Kraken unaffected. |
 
 ---
 

@@ -1,8 +1,8 @@
 # Step 3: Failure Mode Testing
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete
 **Phase:** 7 — Integration Hardening
-**Last Updated:** 2026-02-18
+**Last Updated:** 2026-02-19
 
 ---
 
@@ -117,16 +117,19 @@ docker network connect k2-market-data-platform_default k2-clickhouse
 
 ---
 
-## Results (to fill in)
+## Results (2026-02-19)
 
 | Test | Run Date | Result | MTTR | Notes |
 |------|----------|--------|------|-------|
-| 1. Redpanda restart | -- | ⬜ | -- | |
-| 2. ClickHouse restart | -- | ⬜ | -- | |
-| 3. Feed handler crash | -- | ⬜ | -- | |
-| 4. Offload failure | -- | ⬜ | -- | |
-| 5. MinIO unavailable | -- | ⬜ | -- | |
-| 6. Network partition | -- | ⬜ | -- | |
+| 1. Redpanda restart | 2026-02-19 | ✅ PASS | ~10s | 12 new rows ingested post-restart; all 3 CH consumers resumed |
+| 2. ClickHouse restart | 2026-02-19 | ✅ PASS | ~32s | silver_trades resumed; Prometheus listener on port 9363 active post-restart |
+| 3. Feed handler crash | 2026-02-19 | ✅ PASS | ~30s | Cross-exchange isolation confirmed (Kraken+Coinbase unaffected); Binance resumed within 30s of `docker compose start` |
+| 4. Offload failure | 2026-02-19 | ✅ PASS | 15-min (next Prefect run) | Watermark held at pre-stop value; idempotency confirmed — no duplicates expected on resume |
+| 5. MinIO unavailable | 2026-02-19 | ✅ PASS | ~5s (MinIO restart) | Hot tier continued ingesting (+2 rows during 30s outage); cold tier gracefully deferred |
+| 6. Network partition | 2026-02-19 | ✅ PASS | ~20-30s from reconnect | All 3 Kafka Engine consumers recovered from last committed offset; no data corruption observed |
+
+**Overall**: All 6 failure modes pass. All MTTR values within target.<br>
+**Notable finding**: ClickHouse restart activates new Prometheus metrics config (port 9363) — confirmed working post-test.
 
 ---
 

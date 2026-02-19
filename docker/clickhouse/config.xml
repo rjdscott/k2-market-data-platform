@@ -55,4 +55,14 @@
 
     <!-- Timezone -->
     <timezone>UTC</timezone>
+
+    <!-- Prometheus metrics endpoint on port 9363 -->
+    <prometheus>
+        <endpoint>/metrics</endpoint>
+        <port>9363</port>
+        <metrics>true</metrics>
+        <events>true</events>
+        <asynchronous_metrics>true</asynchronous_metrics>
+        <errors_in_output_allowed>false</errors_in_output_allowed>
+    </prometheus>
 </clickhouse>

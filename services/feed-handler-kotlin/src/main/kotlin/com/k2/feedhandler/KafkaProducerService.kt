@@ -3,6 +3,7 @@ package com.k2.feedhandler
 import com.typesafe.config.Config
 import io.confluent.kafka.serializers.KafkaAvroSerializer
 import io.github.oshai.kotlinlogging.KotlinLogging
+import io.micrometer.core.instrument.Counter
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.apache.avro.Schema
@@ -13,7 +14,6 @@ import org.apache.kafka.clients.producer.ProducerConfig
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.apache.kafka.common.serialization.StringSerializer
 import java.io.File
-import java.util.concurrent.atomic.AtomicLong
 
 private val logger = KotlinLogging.logger {}
 
@@ -24,9 +24,13 @@ private val logger = KotlinLogging.logger {}
  * - Idempotent producer (exactly-once semantics)
  * - Avro schema registry integration
  * - Separate raw (JSON) and normalized (Avro) topics
- * - Metrics tracking
+ * - Prometheus metrics via Micrometer (exchange tag on all counters)
  */
-class KafkaProducerService(private val kafkaConfig: Config, private val schemaPath: String) {
+class KafkaProducerService(
+    private val kafkaConfig: Config,
+    private val schemaPath: String,
+    private val exchange: String = "unknown"
+) {
 
     private val rawTopic = kafkaConfig.getString("topics.raw")
     private val normalizedTopic = kafkaConfig.getString("topics.normalized")
@@ -41,10 +45,28 @@ class KafkaProducerService(private val kafkaConfig: Config, private val schemaPa
     // Avro schemas
     private val normalizedSchema: Schema
 
-    // Metrics
-    private val rawMessagesProduced = AtomicLong(0)
-    private val normalizedMessagesProduced = AtomicLong(0)
-    private val errors = AtomicLong(0)
+    // Metrics — Micrometer counters with exchange label
+    private val rawMessagesProduced: Counter = Counter.builder("feed_handler_trades_produced_total")
+        .tag("exchange", exchange)
+        .tag("type", "raw")
+        .description("Total raw trade messages produced to Kafka")
+        .register(metricsRegistry)
+
+    private val normalizedMessagesProduced: Counter = Counter.builder("feed_handler_trades_produced_total")
+        .tag("exchange", exchange)
+        .tag("type", "normalized")
+        .description("Total normalized trade messages produced to Kafka")
+        .register(metricsRegistry)
+
+    private val errors: Counter = Counter.builder("feed_handler_errors_total")
+        .tag("exchange", exchange)
+        .description("Total Kafka produce errors")
+        .register(metricsRegistry)
+
+    private val reconnects: Counter = Counter.builder("feed_handler_reconnects_total")
+        .tag("exchange", exchange)
+        .description("Total WebSocket reconnect attempts")
+        .register(metricsRegistry)
 
     init {
         logger.info { "Initializing Kafka producer..." }
@@ -111,14 +133,14 @@ class KafkaProducerService(private val kafkaConfig: Config, private val schemaPa
             rawProducer.send(record) { metadata, exception ->
                 if (exception != null) {
                     logger.error(exception) { "Failed to produce raw message: ${event.symbol}" }
-                    errors.incrementAndGet()
+                    errors.increment()
                 } else {
-                    rawMessagesProduced.incrementAndGet()
+                    rawMessagesProduced.increment()
                 }
             }
         } catch (e: Exception) {
             logger.error(e) { "Error producing raw message" }
-            errors.incrementAndGet()
+            errors.increment()
         }
     }
 
@@ -135,14 +157,14 @@ class KafkaProducerService(private val kafkaConfig: Config, private val schemaPa
             rawProducer.send(record) { metadata, exception ->
                 if (exception != null) {
                     logger.error(exception) { "Failed to produce raw JSON to $topic" }
-                    errors.incrementAndGet()
+                    errors.increment()
                 } else {
-                    rawMessagesProduced.incrementAndGet()
+                    rawMessagesProduced.increment()
                 }
             }
         } catch (e: Exception) {
             logger.error(e) { "Error producing raw JSON message" }
-            errors.incrementAndGet()
+            errors.increment()
         }
     }
 
@@ -157,14 +179,14 @@ class KafkaProducerService(private val kafkaConfig: Config, private val schemaPa
             normalizedProducer.send(record) { metadata, exception ->
                 if (exception != null) {
                     logger.error(exception) { "Failed to produce normalized message: ${trade.symbol}" }
-                    errors.incrementAndGet()
+                    errors.increment()
                 } else {
-                    normalizedMessagesProduced.incrementAndGet()
+                    normalizedMessagesProduced.increment()
                 }
             }
         } catch (e: Exception) {
             logger.error(e) { "Error producing normalized message" }
-            errors.incrementAndGet()
+            errors.increment()
         }
     }
 
@@ -205,10 +227,22 @@ class KafkaProducerService(private val kafkaConfig: Config, private val schemaPa
     }
 
     /**
-     * Log metrics
+     * Increment reconnect counter (called by WebSocket clients on reconnect)
+     */
+    fun recordReconnect() {
+        reconnects.increment()
+    }
+
+    /**
+     * Log metrics summary (also visible via /metrics Prometheus endpoint)
      */
     fun logMetrics() {
-        logger.info { "📊 Metrics: Raw=${rawMessagesProduced.get()}, Normalized=${normalizedMessagesProduced.get()}, Errors=${errors.get()}" }
+        logger.info {
+            "📊 Metrics [$exchange]: Raw=${rawMessagesProduced.count().toLong()}, " +
+            "Normalized=${normalizedMessagesProduced.count().toLong()}, " +
+            "Errors=${errors.count().toLong()}, " +
+            "Reconnects=${reconnects.count().toLong()}"
+        }
     }
 
     /**

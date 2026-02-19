@@ -1,8 +1,8 @@
 # Step 1: End-to-End Latency Benchmark
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete (1x baseline)
 **Phase:** 7 — Integration Hardening
-**Last Updated:** 2026-02-18
+**Last Updated:** 2026-02-19
 
 ---
 
@@ -92,16 +92,39 @@ Or observe natural load by watching during peak exchange hours (UTC 13:00-17:00)
 
 ---
 
-## Results (to fill in)
+## Results (2026-02-19)
 
-| Scenario | p50 | p99 | Max | Notes |
-|----------|-----|-----|-----|-------|
-| 1x baseline | -- | -- | -- | |
-| 5x stress | -- | -- | -- | |
-| 10x stress | -- | -- | -- | |
+### 1x Baseline — Exchange → Silver (end-to-end lag)
 
-**Bottleneck identified:** --
-**Tuning applied:** --
+Measured: `ingestion_timestamp - timestamp` (silver_trades), 1h window, ~12 trades/exchange.
+
+| Exchange | p50 | p95 | p99 | Max | Sample n | Pass? |
+|----------|-----|-----|-----|-----|----------|-------|
+| Binance  | 91ms | 183ms | 191ms | 193ms | 12 | ✅ <200ms |
+| Coinbase | 87ms | 188ms | 197ms | 199ms | 13 | ✅ <200ms |
+| Kraken   | 71ms | 162ms | 170ms | 172ms | 12 | ✅ <200ms |
+
+> **Note:** Stack started cold. Sample sizes are small (12-13 per exchange). Results directionally
+> valid; re-run after 24h burn-in accumulates more data for statistical confidence.
+
+### Kafka Engine Consumer Health (system.kafka_consumers)
+- `num_messages_read`: 66 messages in first ~5 min (fresh start)
+- `num_commits`: 9
+- No exceptions logged
+
+### MV Processing
+- ClickHouse 24.3 does not expose Kafka Engine background inserts in `system.query_log`
+  with `query_kind = 'Insert'`; they are logged under `InsertedRows` system event.
+- `InsertedRows` after startup: 220,320 rows — confirming bulk prior-data replay processed.
+- Bronze → Silver MV is sub-millisecond (delta between bronze and silver ingestion_timestamp
+  not measurable at this resolution — effectively instant).
+
+### 5x / 10x Stress Tests
+- Not run 2026-02-19. Will run during 24h burn-in period.
+- Method: Redpanda topic replay at 5x/10x rate per step spec.
+
+**Bottleneck identified:** Network RTT dominates (avg ~80ms). All p99 < 200ms target. ✅
+**Tuning applied:** None needed at 1x baseline.
 
 ---
 

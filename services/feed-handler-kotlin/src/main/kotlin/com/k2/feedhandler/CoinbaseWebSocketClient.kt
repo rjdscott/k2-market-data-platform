@@ -87,6 +87,7 @@ class CoinbaseWebSocketClient(
                 }
 
                 logger.warn { "WebSocket connection lost, reconnecting in ${reconnectDelay}ms..." }
+                producer.recordReconnect()
 
             } catch (e: CancellationException) {
                 logger.info { "WebSocket client cancelled, shutting down..." }

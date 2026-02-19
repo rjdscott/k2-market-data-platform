@@ -1,0 +1,289 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "id": 100,
+      "title": "🟢 Stack Health",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [{"options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}, "type": "value"}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 3, "w": 4, "x": 0, "y": 1},
+      "id": 1,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name"},
+      "pluginVersion": "9.0.0",
+      "title": "Service Health",
+      "type": "stat",
+      "targets": [
+        {"expr": "up{job=~\"feed-handler-binance|feed-handler-kraken|feed-handler-coinbase|redpanda|clickhouse|prometheus\"}", "legendFormat": "{{job}}", "refId": "A"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "rps"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 3, "w": 20, "x": 4, "y": 1},
+      "id": 2,
+      "options": {"legend": {"calcs": ["mean", "lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi"}},
+      "pluginVersion": "9.0.0",
+      "title": "Total Trade Ingestion Rate (all exchanges)",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum by (exchange) (rate(feed_handler_trades_produced_total{type=\"raw\"}[1m]))", "legendFormat": "{{exchange}}", "refId": "A"}
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 4},
+      "id": 101,
+      "title": "📡 Feed Handlers",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "rps"},
+        "overrides": []
+      },
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 5},
+      "id": 10,
+      "options": {"legend": {"calcs": ["mean", "lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "pluginVersion": "9.0.0",
+      "title": "Trade Messages / sec per Exchange (raw)",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "rate(feed_handler_trades_produced_total{type=\"raw\"}[1m])", "legendFormat": "{{exchange}}", "refId": "A"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "short"},
+        "overrides": []
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 5},
+      "id": 11,
+      "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "pluginVersion": "9.0.0",
+      "title": "WebSocket Reconnects (last 15m)",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "increase(feed_handler_reconnects_total[15m])", "legendFormat": "{{exchange}}", "refId": "A"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "rps"},
+        "overrides": []
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 5},
+      "id": 12,
+      "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "pluginVersion": "9.0.0",
+      "title": "Kafka Produce Errors / sec",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "rate(feed_handler_errors_total[5m])", "legendFormat": "{{exchange}}", "refId": "A"}
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 11},
+      "id": 102,
+      "title": "🗄️ ClickHouse Pipeline",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "rps"},
+        "overrides": []
+      },
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 12},
+      "id": 20,
+      "options": {"legend": {"calcs": ["mean", "lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "pluginVersion": "9.0.0",
+      "title": "ClickHouse Row Insert Rate (rows/sec)",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "rate(ClickHouseProfileEvents_InsertedRows[1m])", "legendFormat": "inserts/sec", "refId": "A"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5368709120}, {"color": "red", "value": 7516192768}]},
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 12},
+      "id": 21,
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "pluginVersion": "9.0.0",
+      "title": "ClickHouse Memory Usage",
+      "type": "stat",
+      "targets": [
+        {"expr": "ClickHouseAsynchronousMetrics_MemoryResident", "legendFormat": "RAM", "refId": "A"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 15}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 12},
+      "id": 22,
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "pluginVersion": "9.0.0",
+      "title": "Background Merge Queue Depth",
+      "type": "stat",
+      "targets": [
+        {"expr": "ClickHouseMetrics_BackgroundMergesAndMutationsPoolTask", "legendFormat": "merge tasks", "refId": "A"}
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 18},
+      "id": 103,
+      "title": "🧊 Iceberg Offload (Cold Tier)",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 20}, {"color": "red", "value": 30}]},
+          "unit": "m"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 19},
+      "id": 30,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "pluginVersion": "9.0.0",
+      "title": "Offload Lag per Table (minutes)",
+      "type": "stat",
+      "targets": [
+        {"expr": "offload_lag_minutes", "legendFormat": "{{table}}", "refId": "A"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "s"},
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 8, "x": 8, "y": 19},
+      "id": 31,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi"}},
+      "pluginVersion": "9.0.0",
+      "title": "Offload Cycle Duration",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "offload_cycle_duration_seconds", "legendFormat": "duration", "refId": "A"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "rps"},
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 19},
+      "id": 32,
+      "options": {"legend": {"calcs": ["mean"], "displayMode": "table", "placement": "right"}, "tooltip": {"mode": "multi"}},
+      "pluginVersion": "9.0.0",
+      "title": "Rows Offloaded / sec",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "rate(offload_rows_total[5m])", "legendFormat": "{{table}}", "refId": "A"}
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 23},
+      "id": 104,
+      "title": "📶 Redpanda",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "Bps"},
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 12, "x": 0, "y": 24},
+      "id": 40,
+      "options": {"legend": {"calcs": ["mean", "lastNotNull"], "displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "pluginVersion": "9.0.0",
+      "title": "Redpanda Kafka Produced Bytes / sec",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(rate(vectorized_kafka_produced_bytes[1m]))", "legendFormat": "produced bytes/sec", "refId": "A"}
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 8}, {"color": "red", "value": 20}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 24},
+      "id": 41,
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
+      "pluginVersion": "9.0.0",
+      "title": "Redpanda Active Connections",
+      "type": "stat",
+      "targets": [
+        {"expr": "sum(vectorized_kafka_rpc_active_connections)", "legendFormat": "connections", "refId": "A"}
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["k2", "pipeline", "overview"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "K2 Pipeline Overview",
+  "uid": "k2-pipeline-overview",
+  "version": 1,
+  "weekStart": ""
+}

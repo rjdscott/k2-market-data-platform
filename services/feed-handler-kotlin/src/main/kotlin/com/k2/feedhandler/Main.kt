@@ -51,15 +51,20 @@ suspend fun main() {
     }
 
     val schemaPath = config.getString("schema-path")
+    val metricsPort = config.getInt("metrics.port")
 
     logger.info { "Exchange: $exchange" }
     logger.info { "Symbols (${symbols.size}): ${symbols.joinToString(", ")}" }
     logger.info { "Schema path: $schemaPath" }
 
-    // Initialize Kafka producer
+    // Start Prometheus metrics HTTP server
+    startMetricsServer(port = metricsPort)
+
+    // Initialize Kafka producer (with exchange tag for metrics)
     val producer = KafkaProducerService(
         kafkaConfig = config.getConfig("kafka"),
-        schemaPath = schemaPath
+        schemaPath = schemaPath,
+        exchange = exchange
     )
 
     // Structured concurrency: all child coroutines cancel when parent cancels

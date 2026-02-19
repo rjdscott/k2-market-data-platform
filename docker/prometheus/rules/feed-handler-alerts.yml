@@ -1,0 +1,103 @@
+# K2 Market Data Platform v2 - Feed Handler Alert Rules
+# Purpose: Alert on ingestion pipeline failures and degraded trade flow
+# Last Updated: 2026-02-19
+
+groups:
+  - name: feed_handler_critical
+    interval: 30s
+    rules:
+
+      # CRITICAL: No trades from an exchange for >2 minutes
+      - alert: FeedHandlerDown
+        expr: |
+          (time() - feed_handler_last_message_timestamp_seconds) > 120
+        for: 2m
+        labels:
+          severity: critical
+          component: feed-handler
+          tier: ingestion
+        annotations:
+          summary: "Feed handler producing no trades for {{ $labels.exchange }}"
+          description: |
+            Exchange {{ $labels.exchange }} has not produced a trade message in
+            {{ $value | humanizeDuration }}. This likely means the WebSocket connection
+            is down or the feed handler has crashed.
+
+            **Immediate Actions:**
+            1. Check container: `docker logs k2-feed-handler-{{ $labels.exchange }} --tail 50`
+            2. Check container status: `docker compose ps feed-handler-{{ $labels.exchange }}`
+            3. Restart if crashed: `docker compose -f docker-compose.v2.yml restart feed-handler-{{ $labels.exchange }}`
+
+            **Runbook:** docs/operations/runbooks/feed-handler-recovery.md
+
+      # CRITICAL: Error rate spike on a feed handler
+      - alert: FeedHandlerHighErrorRate
+        expr: |
+          rate(feed_handler_errors_total[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: critical
+          component: feed-handler
+          tier: ingestion
+        annotations:
+          summary: "High Kafka produce error rate for {{ $labels.exchange }}"
+          description: |
+            Feed handler for {{ $labels.exchange }} is producing errors at
+            {{ $value | humanize }} errors/sec. Messages may be lost.
+
+            **Immediate Actions:**
+            1. Check Kafka connectivity: `docker logs k2-feed-handler-{{ $labels.exchange }}`
+            2. Check Redpanda health: `docker exec k2-redpanda rpk cluster health`
+            3. Check topic exists: `docker exec k2-redpanda rpk topic list`
+
+  - name: feed_handler_warning
+    interval: 1m
+    rules:
+
+      # WARNING: Reconnect rate elevated (>3 reconnects per exchange in 15 min)
+      - alert: FeedHandlerFrequentReconnects
+        expr: |
+          increase(feed_handler_reconnects_total[15m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+          component: feed-handler
+          tier: ingestion
+        annotations:
+          summary: "Frequent WebSocket reconnects for {{ $labels.exchange }}"
+          description: |
+            Feed handler for {{ $labels.exchange }} has reconnected
+            {{ $value }} times in the last 15 minutes.
+
+            This may indicate network instability or exchange API issues.
+            Trade data may have brief gaps during reconnects.
+
+            **Check:**
+            - Feed handler logs for reconnect reasons
+            - Exchange API status page
+            - Network latency between container and exchange
+
+      # INFO: Feed handler metrics server down
+      - alert: FeedHandlerMetricsDown
+        expr: up{job=~"feed-handler-.+"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          component: feed-handler
+          tier: ingestion
+        annotations:
+          summary: "Prometheus cannot scrape {{ $labels.job }} metrics"
+          description: |
+            The /metrics endpoint on {{ $labels.job }} is unreachable.
+            This does NOT necessarily mean the feed handler is down — it may
+            just mean the metrics HTTP server failed.
+
+            **Check:**
+            1. Container health: `docker compose ps {{ $labels.job }}`
+            2. Port 8082 accessible: `docker exec k2-{{ $labels.job }} curl http://localhost:8082/health`
+
+  - name: feed_handler_recording
+    rules:
+      # Trade rate per exchange over 5 minutes
+      - record: feed_handler:trade_rate:5m
+        expr: rate(feed_handler_trades_produced_total{type="raw"}[5m])

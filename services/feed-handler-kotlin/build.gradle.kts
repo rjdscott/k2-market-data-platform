@@ -39,6 +39,11 @@ dependencies {
     // YAML config support (for instruments.yaml)
     implementation("com.charleskorn.kaml:kaml:0.67.0")
 
+    // Metrics — Micrometer Prometheus registry + Ktor HTTP server for /metrics endpoint
+    implementation("io.micrometer:micrometer-registry-prometheus:1.14.5")
+    implementation("io.ktor:ktor-server-core:3.1.0")
+    implementation("io.ktor:ktor-server-netty:3.1.0")
+
     // Testing
     testImplementation(kotlin("test"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")
