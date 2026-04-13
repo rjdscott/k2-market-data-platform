@@ -56,7 +56,7 @@ dependencies = [
     "pyyaml>=6.0.0",  # YAML configuration file parsing
     # Logging & Observability
     "structlog>=25.5.0",  # Latest: 25.5.0 (2025) - Enhanced async logging
-    "prometheus-client>=0.23.0",  # Latest: 0.23.1 (2025-09) - Metrics
+    "prometheus-client>=0.25.0",  # Latest: 0.23.1 (2025-09) - Metrics
     "opentelemetry-api>=1.22.0",  # Distributed tracing
     "opentelemetry-sdk>=1.22.0",
     "opentelemetry-instrumentation-kafka-python>=0.43b0",
