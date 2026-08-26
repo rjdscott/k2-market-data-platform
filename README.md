@@ -182,8 +182,10 @@ produce errors/stalled, resync storm, ingress latency, book depth, precision los
 failed, audit failed, unresolvable schema id, ingest lag, bronze commit age, compaction stale, exporter
 down/stalled, scrape errors, disk high/critical). The 3 feed-handler rules and
 `ClickHouseBronzeInsertRateLow` retired with the handlers (ADR-019) and are archived in
-[`legacy/v2-kotlin/runbooks/`](./legacy/v2-kotlin/runbooks/); the 9 Iceberg-offload rules went with the
-offload path they watched, archived in [`legacy/v2-offload/runbooks/`](./legacy/v2-offload/runbooks/).
+[`legacy/v2-kotlin/runbooks/`](./legacy/v2-kotlin/runbooks/); the 9 Iceberg-offload rules were deleted
+outright with the offload path they watched — they described a component that no longer exists, so there
+was nothing to keep. Its six runbooks are archived in
+[`legacy/v2-offload/runbooks/`](./legacy/v2-offload/runbooks/).
 Capture exposes Prometheus metrics on `:8082/metrics`, ClickHouse its own on `:9363`, and the lake
 exporter on `lake-metrics:8000`. Details: [`docs/operations/observability.md`](./docs/operations/observability.md).
 
@@ -211,7 +213,7 @@ tests remain on the roadmap.
 
 | Suite | Count | Run |
 |---|---|---|
-| Rust capture | 58 (48 lib unit + 4 in the binary + 6 replay integration) | `make test-rust` |
+| Rust capture | 59 (49 lib unit + 4 in the binary + 6 replay integration) | `make test-rust` |
 | Python — v3 data contracts, parity, lake offsets, wire format | 164 (41 contracts + 65 parity + 26 lake offsets + 32 wire format) | `make test-python` |
 | Archived v2 Kotlin (reference only) | 20 (`TradeNormalizer` 7, `InstrumentsLoader` 13) | `make test-legacy-kotlin` |
 | Legacy v1 (reference only) | ~180 unit | `cd legacy/v1 && uv run pytest` |

@@ -626,3 +626,12 @@ file, and `kraken.rs` held a two-row alias table to bridge it. Both are gone, so
 `native` is once again exactly the bytes on the wire with nothing mapping it.
 That was a hidden cost of running the two tiers side by side, and it is only
 visible as a saving now that one of them is gone.
+
+**2026-08-27 — the sequencing above held.** The Phase D PR deleted `docker/offload/` and
+with it `docker/prometheus/rules/iceberg-offload-alerts.yml`, so the four `IcebergOffload*`
+rules named in the table above — and the five others in that file — are no longer loaded.
+They were deleted rather than archived, for the reason this Outcome gives: unlike
+`ClickHouseBronzeInsertRateLow` they described a component that no longer exists. The six
+runbooks they pointed at are archived at `legacy/v2-offload/runbooks/`. Alert rules go from
+23 to **25** (4 v2 ClickHouse + 10 v3 capture + 11 v3 lake); the "Revisit when" above is
+closed, and it closed the way this Outcome predicted.

@@ -537,3 +537,67 @@ and the watermark table.
 
 Numbers from `DOCKER_CONTEXT=default docker compose --env-file .env.example config` summed
 over `deploy.resources.limits`, 2026-08-27.
+
+## Outcome addendum (Phase D rebased onto the Kotlin retirement, 2026-08-27)
+
+The two addenda above were written while `feed-handler-{binance,kraken,coinbase}` were
+still in `docker-compose.yml`. They land after the retirement
+([ADR-019](ADR-019-rust-capture-tier.md)), not before it, so their steady-state rows are
+superseded rather than wrong when written: both cutovers are now done in the same compose
+file — the Kotlin handlers are gone, and so is `docker/offload/`.
+
+| Metric | Phase D cutover, as budgeted above | As built, on the retired capture tier |
+|--------|------------------------------------|----------------------------------------|
+| CPU limits (steady state) | 16.10 | **14.60** |
+| RAM limits (steady state) | 23.125 GiB | **21.625 GiB** |
+| Long-running services | 18 | **15** |
+| One-shot services | 4 | **4** — `redpanda-init`, `lakekeeper-migrate`, `lake-init`, `lake-ddl` |
+| CPU / RAM at bootstrap peak | 17.60 / 24.625 GiB across 22 | **16.10 / 23.125 GiB across 19** |
+| Headroom vs 16 CPU / 40 GB | −0.6% CPU / 42% RAM | **+8.8% CPU / 46% RAM** |
+
+**No parallel run is being paid for any more.** Both overlaps the Phase B, C and D addenda
+budgeted for have ended: the capture comparison ended when the handlers retired, and the
+lake comparison never ran because `docker/offload/` was deleted rather than compared. The
+bootstrap peak is still 0.10 CPU over the 16-core target for the length of a bootstrap, on
+the same ceiling-not-reservation argument every addendum above makes.
+
+Provenance — sum of `deploy.resources.limits` over the rendered compose file, split by
+whether a service is a one-shot (`restart: "no"`), 2026-08-27:
+
+```bash
+DOCKER_CONTEXT=default docker compose --env-file .env.example config --format json \
+  | python3 -c 'import json,sys
+s=json.load(sys.stdin)["services"]
+def lim(v):
+    r=v.get("deploy",{}).get("resources",{}).get("limits",{})
+    return float(r.get("cpus",0) or 0), int(r.get("memory",0) or 0)
+g={"steady":[],"one-shot":[]}
+for n,v in s.items(): g["one-shot" if v.get("restart")=="no" else "steady"].append((n,)+lim(v))
+for k in ("steady","one-shot",):
+    c=sum(r[1] for r in g[k]); m=sum(r[2] for r in g[k])
+    print("%-9s %2d services  %6.2f CPU  %7.3f GiB" % (k,len(g[k]),c,m/1024**3))
+a=g["steady"]+g["one-shot"]
+print("%-9s %2d services  %6.2f CPU  %7.3f GiB" % ("TOTAL",len(a),sum(r[1] for r in a),sum(r[2] for r in a)/1024**3))'
+```
+
+```
+steady    15 services   14.60 CPU   21.625 GiB
+one-shot   4 services    1.50 CPU    1.500 GiB
+TOTAL     19 services   16.10 CPU   23.125 GiB
+```
+
+**Alert rules go from 23 to 25** — the nine `IcebergOffload*` rules went with
+`docker/offload/`, and eleven v3 lake rules replaced them. Composition is 4 v2 ClickHouse +
+10 v3 capture + 11 v3 lake:
+
+```bash
+for f in docker/prometheus/rules/*.yml; do
+  printf '%-50s %2d\n' "$f" "$(grep -c '^[[:space:]]*- alert:' "$f")"
+done
+```
+
+```
+docker/prometheus/rules/capture-alerts.yml         10
+docker/prometheus/rules/clickhouse-alerts.yml       4
+docker/prometheus/rules/lake-alerts.yml            11
+```

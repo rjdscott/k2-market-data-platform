@@ -16,14 +16,14 @@ make test-rust     # capture unit + replay integration tests (runs in rust:1-boo
 
 | Suite | Count | Location | What it covers |
 |-------|------:|----------|----------------|
-| Rust — capture lib unit | 48 | [`services/capture-rust/src/`](../../services/capture-rust/src/) | `decimal`, `record`, `config`, `ws`, `book`, `sink`, `metrics`, `exchanges/{binance,kraken,coinbase}` — fixed-point conversion, book state, per-exchange framing |
+| Rust — capture lib unit | 49 | [`services/capture-rust/src/`](../../services/capture-rust/src/) | `decimal`, `record`, `config`, `ws`, `book`, `sink`, `metrics`, `exchanges/{binance,kraken,coinbase}` — fixed-point conversion, book state, per-exchange framing |
 | Rust — capture binary unit | 4 | [`services/capture-rust/src/main.rs`](../../services/capture-rust/src/main.rs) | The healthcheck's staleness parsing and per-stream bounds — the "green while the primary feed is dead" bug and its opposite |
 | Rust — capture replay integration | 6 | [`services/capture-rust/tests/`](../../services/capture-rust/tests/) | `replay.rs` (2), `replay_binance.rs` (2), `replay_coinbase.rs` (2) — golden-fixture replay through the same `handle_frame()` path live capture runs |
 | Python — v3 data contracts | 41 | [`tests/test_contracts.py`](../../tests/test_contracts.py) | Structural checks on `schemas/avro/*.avsc` and `config/instruments.yaml` — sibling `logicalType`, fixed-point prices, nullable defaults, duplicate/malformed canonical symbols |
 | Python — parity comparator | 65 | [`tests/test_parity.py`](../../tests/test_parity.py) | `scripts/parity/compare_trades.py` — the tolerance boundary, Kraken's no-trade-id join, string → fixed-point conversion. This is the evidence the Kotlin retirement rested on ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) |
 | Python — lake offsets | 26 | [`tests/test_lake_offsets.py`](../../tests/test_lake_offsets.py) | `docker/lake/offsets.py`: the exactly-once bookkeeping written into the Iceberg snapshot summary — encode/decode round-trips, next-offset arithmetic, gap detection (ADR-022) |
 | Python — wire format | 32 | [`tests/test_wire_format.py`](../../tests/test_wire_format.py) | `docker/lake/wire.py` plus the contract between `schemas/avro/*.avsc` and `docker/lake/ddl/lake.sql` — CLAUDE.md's schema-change rule, executable |
-| **Total (Rust + Python)** | **222** | | |
+| **Total (Rust + Python)** | **223** | | |
 | Archived v2 Kotlin | 20 | [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md) | `TradeNormalizerTest` (7), `InstrumentsLoaderTest` (13). `make test-legacy-kotlin` runs them; deliberately **not** part of `make test` and not run in CI |
 | Legacy v1 | 180 | [`legacy/v1/tests/unit/`](../../legacy/v1/tests/unit/) | Archived. Kept for reference; not run in CI |
 
@@ -32,7 +32,7 @@ make test-rust     # capture unit + replay integration tests (runs in rust:1-boo
 ### Rust
 
 ```bash
-make test-rust      # cargo test --locked in rust:1-bookworm — 58 tests
+make test-rust      # cargo test --locked in rust:1-bookworm — 59 tests
 ```
 
 No local toolchain needed. For a tight loop use the pre-built builder image and the named
@@ -68,7 +68,7 @@ tests `legacy/v2-kotlin/`.
 
 | Job | What it does |
 |-----|--------------|
-| **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain — runs the 58 tests |
+| **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain — runs the 59 tests |
 | **Python (lake + tests)** | `ruff check` then `pytest tests -q` under `uv` — runs the 164 tests |
 | **Docker build** | 3-way matrix: Prefect worker, Spark, capture, with GHA layer caching. Every leg builds from the repo root. Catches broken build contexts, not runtime behaviour |
 | **Compose (config validation)** | `docker compose --env-file .env.example config -q`, then a check that every service declares `deploy.resources.limits` — a service with no limit escapes the ADR-010 budget and nothing else would notice |

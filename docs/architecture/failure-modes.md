@@ -27,11 +27,12 @@ unchallenged. Three honest states appear in that column:
 |---|---|
 | a test path | the assertion runs today, in `make test` or CI |
 | `scripts/chaos/<name>.sh — run <date>, <measurement>` | the injection was executed against the live stack on that date and the numbers in the row come from it. The raw log is `scripts/chaos/results/<date>.tsv`, committed |
-| `scripts/chaos/<name>.sh (written; not yet run)` | the injection exists and has never been executed. One row is still in this state, and the cell says why |
+| `scripts/chaos/<name>.sh (written; not yet run)` | the injection exists and has never been executed. One capture row is still in this state, and every Lake tier row is — each cell says why |
 | a stated reason it is not injectable | the fault cannot be induced locally without proving something other than the fault — the cell says which, and what stands in for it |
 
 **Recovery times on this page are measured, as of 2026-08-26.** The first `make chaos`
-run (16:40–16:57Z, binary `v3-phase-b-33-gf808d87`) injected five of the six scripts and
+run (16:40–16:57Z, binary `v3-phase-b-33-gf808d87`) injected five of the six capture-tier
+scripts — the four `lake-*.sh` scripts were written afterwards and are unrun — and
 appended [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv);
 its numbers are hand-copied into the recovery and proof columns below, dated, per
 [`scripts/chaos/README.md`](../../scripts/chaos/README.md). Rows whose fault was not

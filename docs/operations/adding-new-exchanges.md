@@ -358,10 +358,9 @@ with [`11-bronze-coinbase.sql`](../../docker/clickhouse/schema/11-bronze-coinbas
 cleanest worked pair. The design is [ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md);
 the last exchange added through it is [ADR-016](../adr/ADR-016-add-coinbase-exchange.md).
 
-The same applies to the Iceberg cold tier: `cold.bronze_trades_*` and the offload
-`TABLE_CONFIG` in
-[`docker/offload/flows/iceberg_offload_flow.py`](../../docker/offload/flows/iceberg_offload_flow.py)
-mirror the frozen v2 schema and gain nothing from a new venue.
+The v2 Iceberg cold tier that mirrored it is gone: `docker/offload/` and the `cold.*` tables
+were deleted in Phase D ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The
+lake that replaced them needs nothing per venue — see the lake step in the checklist above.
 
 ---
 

@@ -80,8 +80,10 @@ recording rules for this tier.
 runbook link; the tables below are the index. The three `FeedHandler*` rules retired with
 the Kotlin handlers ([ADR-019](../adr/ADR-019-rust-capture-tier.md)); their file is
 archived at [`legacy/v2-kotlin/runbooks/feed-handler-alerts.yml`](../../legacy/v2-kotlin/runbooks/feed-handler-alerts.yml)
-and `capture-alerts.yml` below is what replaced them. The nine `IcebergOffload*` rules went
-with the v2 offload path they watched, archived at
+and `capture-alerts.yml` below is what replaced them. The nine `IcebergOffload*` rules were
+deleted outright with the v2 offload path they watched — they described a component that no
+longer exists ([ADR-019](../adr/ADR-019-rust-capture-tier.md) Outcome said they would go
+with it, and they did). Its six runbooks are archived at
 [`legacy/v2-offload/runbooks/`](../../legacy/v2-offload/runbooks/).
 
 ### `clickhouse-alerts.yml` — warm tier (4)
@@ -111,9 +113,12 @@ Recording rule: `clickhouse:query_duration_mean:5m`. (`clickhouse:insert_rate:5m
 | `CaptureBookDepthDegraded` | warning | `max_over_time(k2_capture_book_depth[10m]) < 20` for 10m — the gauge is total levels across **both** sides, so 20 is 10 a side |
 | `CapturePrecisionLoss` | warning | A venue quoted finer than the fixed-point 1e-8 scale in the last hour |
 
-These are evaluated against live series, but **not one has yet been shown to fire on the
-fault it names** — `make chaos` is what proves that and the recovery cost, and it has not
-run (`scripts/chaos/results/` does not exist). Thresholds move then, not before.
+These are evaluated against live series. **Two of the ten have been shown to fire on the
+fault they name**: `make chaos` ran for the first time on 2026-08-26 and `CaptureDown`
+(119–165 s) and `CaptureProduceErrors` (256 s) both fired, with recovery 0–14 s
+([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)). The
+other eight are unproven against a real fault; thresholds move when a run says so, not
+before.
 `CaptureFeedStale`, `CaptureProduceStalled` and `CaptureBookDepthDegraded` additionally
 carry `promtool` unit tests in
 [`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml)
@@ -200,7 +205,7 @@ Sanity-check the exporter's summary-parsing logic offline, with no catalog, with
 | Lake ingest lag (newest `kafka_ts` in `raw.messages`) | <5 min | <15 min (`LakeIngestLagHigh`) | not yet measured — Phase D burn-in |
 | `raw.messages` commit freshness | <5 min | <30 min (`LakeIngestFailed`) | not yet measured — Phase D burn-in |
 | Nightly audit failed checks | 0 | 0 (`LakeAuditFailed` on any) | not yet measured — Phase D burn-in |
-| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 modes tested 2026-02-19 on the v2 stack — see [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md). **Unmeasured for the capture and lake tiers**: `make chaos` has never run |
+| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 modes tested 2026-02-19 on the v2 stack — see [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md). **Capture tier, 2026-08-26**: recovery 0–14 s across five injected faults ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)). **Unmeasured for the lake tier**: the four `lake-*.sh` scripts ship unrun |
 
 ## Not wired up
 
