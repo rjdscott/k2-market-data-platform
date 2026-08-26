@@ -219,6 +219,7 @@ total). Budget and reasoning: [ADR-010](../adr/ADR-010-resource-budget.md),
 
 | Forward look | [capacity-model.md](capacity-model.md) — msg/s per core, bytes/day per topic and lake table, and headroom against 16 CPU / 40 GB once the v3 capture tier lands. Predictions only, written before the burn-in that scores them. |
 |---|---|
+| Scale-out | [scale-out-path.md](scale-out-path.md) — every tier's AWS equivalent at TB/PB, what changes versus what does not, and the partition/file/manifest arithmetic redone at 400×. Labelled *designed, not exercised*: nothing in it has been deployed. |
 | Failure modes | [failure-modes.md](failure-modes.md) — FMEA over the v3 capture tier and Redpanda as capture sees it: each failure's detection signal, what it loses versus delays, its runbook, and the [`scripts/chaos/`](../../scripts/chaos/README.md) script that proves it. Lake and hot-tier rows land with Phases D and E. |
 
 ---
@@ -267,6 +268,51 @@ flowchart TB
   RP --> LK
 ```
 
+### Phase D — the lake tier (this branch)
+
+Phase D is where "the lake is the system of record" stops being a sentence in an ADR and
+becomes four Iceberg tables. Spark reads Redpanda **by offset range** — not as a stream —
+lands every frame verbatim in `raw.messages`, then decodes that archive into `bronze.*`.
+Nothing reads ClickHouse; the JDBC offload that made the v2 lake a copy of a serving
+database is deleted with `docker/offload/`.
+
+```mermaid
+flowchart TB
+  RP[("Redpanda · 9 v3 topics<br/>raw 48h · derived 7d")]
+  ING["Spark ingest · every 5 min<br/>offsets in the snapshot summary"]
+  RAW[("raw.messages · verbatim<br/>days(kafka_ts), topic · never expired")]
+  BR[("bronze.trades · book_snapshots_l2<br/>exchange, days(ts) · rebuildable")]
+  Q["DuckDB + PyIceberg · notebooks<br/>ClickHouse hot tier · Phase E"]
+  RP --> ING --> RAW --> BR --> Q
+  BR -.->|"audit.checks"| Q
+```
+
+Four things about this diagram are decisions rather than drawing:
+
+- **The arrow from Redpanda is batch, by offset range.** Exactly-once comes from writing
+  the consumed offsets into the Iceberg snapshot summary of the same commit that wrote the
+  rows, so there is no watermark table and no second store to disagree with
+  ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The PostgreSQL
+  `offload_watermarks` table goes away.
+- **`raw.messages` has no outbound TTL and never will.** It is the system of record, kept
+  forever, and the honest cost is that host disk becomes the platform's first binding
+  constraint — on a calendar, not at a load multiple
+  ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md),
+  [capacity model §7](capacity-model.md#7-bottleneck-prediction)).
+- **`bronze.*` is unified across all three venues**, not one table per exchange as v2's
+  ClickHouse Bronze is — the native shape is preserved by the archive rather than by a
+  table shape ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md), which
+  supersedes [ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md) for the lake
+  only).
+- **The catalog is Lakekeeper over MinIO**, not the Hadoop catalog on a bind mount: a
+  file-based catalog has no atomic commit, no multi-writer, and cannot be read by
+  ClickHouse ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)).
+
+The four tables, with per-column commentary, are in
+[`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql); their partition specs and the
+rejected alternatives are in [partitioning-strategy.md](partitioning-strategy.md); the AWS
+mapping — *designed, not exercised* — is in [scale-out-path.md](scale-out-path.md).
+
 **Target (Phase F, end state):**
 
 ```mermaid
@@ -313,3 +359,8 @@ The full set is in [docs/adr/](../adr/). The ones that shaped this diagram:
 | [ADR-016](../adr/ADR-016-add-coinbase-exchange.md) | Coinbase as the third exchange |
 | [ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md) | Daily compaction + snapshot expiry |
 | [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) | **Proposed** — v3: lake-first, Rust capture tier |
+| [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md) | **Proposed** — `raw.messages` is the system of record, kept forever |
+| [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) | **Proposed** — Kafka offsets in the Iceberg snapshot summary; the watermark table goes |
+| [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md) | **Proposed** — Lakekeeper REST catalog on MinIO, replacing the Hadoop catalog |
+| [ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md) | **Proposed** — unified bronze in the lake, partitioned by exchange |
+| [ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md) | **Proposed** — ClickHouse derived and rebuildable; reload by pull through `iceberg()` |

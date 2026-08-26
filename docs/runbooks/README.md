@@ -1,7 +1,7 @@
 # Runbooks
 
-Incident procedures for the running v2 stack, plus the v3 capture tier being built
-alongside it. Runbooks record *how*; ADRs record *why* (`../adr/`). Every Prometheus
+Incident procedures for the running v2 stack, plus the v3 capture and lake tiers being
+built alongside it. Runbooks record *how*; ADRs record *why* (`../adr/`). Every Prometheus
 alert annotation points at one of these; start from the alert that fired, or from the
 "when to use" column below.
 
@@ -57,6 +57,22 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 > not measurements — which is exactly the distinction this directory's conventions
 > exist to protect.
 
+### v3 lake tier (Phase D — written alongside the code; see the note below)
+
+| Runbook | When to use | Triggering alert |
+|---------|-------------|------------------|
+| [lake-recovery.md](./lake-recovery.md) | Rebuilding ClickHouse from the lake, Redpanda replay as a cold start, Lakekeeper down, MinIO down, an ingest killed mid-run | `ClickHouseDown`, `LakeIngestLagHigh`, `LakeExporterDown` |
+| [lake-disk-usage-high.md](./lake-disk-usage-high.md) | Host disk at 80 % or 90 %. The archive is kept forever, so this is a capacity decision with a lead time — **never** a TTL | `LakeDiskUsageHigh`, `LakeDiskUsageCritical` |
+| [lake-ingest-lag.md](./lake-ingest-lag.md) | Ingest behind cadence, scheduler stopped, `failOnDataLoss`, small files accumulating | `LakeIngestLagHigh`, `LakeCommitAgeHigh`, `LakeIngestFailed`, `LakeSmallFiles` |
+| [lake-audit-failed.md](./lake-audit-failed.md) | The nightly audit failed: offset continuity, duplicate identifiers, or venue sequence gaps | `LakeAuditFailed` |
+
+> **Two of the lake failures are investigations, not repairs**, and the runbooks say so on
+> the row: a real offset gap and a venue sequence gap are unrecoverable — public feeds do
+> not replay — so the deliverable is a *recorded* window in `lake.audit.checks`, not a
+> restart. The one rule that spans all four:
+> [`iceberg()` only, the `s3()` glob is banned](./lake-recovery.md#the-one-rule-on-this-page),
+> because the glob returns plausible wrong numbers after any compaction.
+
 ## Triage
 
 ```bash
@@ -90,10 +106,19 @@ Then:
 - **Hot tier affected** (no trades arriving, ClickHouse down) → [failure-recovery.md](./failure-recovery.md)
 - **Cold tier only** (hot tier healthy, offload behind or failing) → the `iceberg-*` runbooks
 - **Broker-level** (topics, partitions, schema registry) → [redpanda.md](./redpanda.md)
+- **v3 lake** (ingest behind, audit failed, catalog or object store down, disk filling) →
+  the `lake-*` runbooks
 
 Hot-tier problems are user-visible and take priority. Cold-tier problems are recoverable
 by design — the watermark makes every offload idempotent, so lag is annoying rather than
 dangerous.
+
+The v3 lake inverts that priority, and it is worth knowing before triaging one. The lake
+is the system of record ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)), so
+lake lag is a **countdown against Redpanda's 48 h raw retention** rather than an
+inconvenience, while the v3 hot tier is derived and rebuildable
+([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)) — losing it costs a restore,
+not data. Once Phase E lands, "hot tier first" stops being the right instinct.
 
 ## Escalation
 

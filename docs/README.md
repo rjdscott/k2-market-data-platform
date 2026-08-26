@@ -35,11 +35,11 @@ research/  →  adr/  →  plans/  →  audits/
 | Surface | Holds | Conventions |
 |---------|-------|-------------|
 | [research/](research/) | Analysis before a decision, dated. Allowed to be wrong in hindsight | [README](research/README.md) |
-| [adr/](adr/) | 21 ADRs. Immutable once accepted; divergence recorded in an `Outcome` section | [README](adr/README.md) · [template](adr/template.md) |
+| [adr/](adr/) | 26 ADRs. Immutable once accepted; divergence recorded in an `Outcome` section | [README](adr/README.md) · [template](adr/template.md) |
 | [plans/](plans/) | Multi-phase design documents with exit criteria per phase | [README](plans/README.md) |
 | [audits/](audits/) | Point-in-time sweeps of one surface, with a findings table | [README](audits/README.md) |
 | [benchmarks/](benchmarks/) | Dated measurement snapshots. Every published number traces here | [README](benchmarks/README.md) |
-| [runbooks/](runbooks/) | 13 incident procedures (8 v2 + 5 v3 capture), one per alert family, with measured MTTR | [README](runbooks/README.md) · [template](runbooks/template.md) |
+| [runbooks/](runbooks/) | 17 incident procedures (8 v2 + 5 v3 capture + 4 v3 lake), one per alert family, with measured MTTR | [README](runbooks/README.md) · [template](runbooks/template.md) |
 
 ## Reference
 
@@ -50,7 +50,10 @@ The system as built, for readers who want the detail rather than the argument.
 | [architecture/README.md](architecture/README.md) | As-built system: diagram, tiers, data model, lifecycle, footprint, known gaps |
 | [architecture/technology-stack.md](architecture/technology-stack.md) | Every component, its version, its job, and the ADR that chose it |
 | [architecture/schema-design.md](architecture/schema-design.md) | Bronze / Silver / Gold columns, the Avro normalized-trade contract, precision choices |
-| [architecture/partitioning-strategy.md](architecture/partitioning-strategy.md) | Redpanda partitions, ClickHouse partition and sort keys, Iceberg partition specs |
+| [architecture/partitioning-strategy.md](architecture/partitioning-strategy.md) | Redpanda keys and partition counts, Iceberg partition specs and sort orders, and why symbol is in neither. The ClickHouse section lands with Phase E |
+| [architecture/scale-out-path.md](architecture/scale-out-path.md) | Every tier's AWS equivalent at TB/PB, what changes vs what does not, and the partition/file/manifest arithmetic at 400×. *Designed, not exercised* |
+| [architecture/capacity-model.md](architecture/capacity-model.md) | Predicted msg/s, bytes/day and headroom for the v3 capture and lake tiers, each row naming its assumption |
+| [architecture/failure-modes.md](architecture/failure-modes.md) | FMEA: one row per component × failure, with its detection signal, blast radius, recovery step and proof |
 | [architecture/streaming-sources.md](architecture/streaming-sources.md) | How a capture process works, the per-venue dialects, and what a fourth exchange costs |
 | [architecture/platform-principles.md](architecture/platform-principles.md) | The handful of rules the design is actually held to |
 | [architecture/positioning.md](architecture/positioning.md) | What this platform is for — and the workloads it is deliberately wrong for |
