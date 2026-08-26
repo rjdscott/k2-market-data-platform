@@ -58,7 +58,7 @@ scrape_configs:
           tier: 'observability'
     metrics_path: '/metrics'
 
-  # Future: Spring Boot API (actuator metrics)
+  # Future: query API metrics (Phase 8)
   # - job_name: 'k2-api'
   #   static_configs:
   #     - targets: ['k2-api:8081']

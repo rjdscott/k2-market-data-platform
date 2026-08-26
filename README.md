@@ -110,8 +110,9 @@ cp .env.example .env      # set CLICKHOUSE_PASSWORD, MINIO_*, GRAFANA_PASSWORD, 
 docker compose up -d      # or: make up
 ```
 
-<!-- TIMING -->
-First run builds three images including a Gradle build — expect several minutes; subsequent starts, under a minute.
+First run builds three images (Gradle + two Python images — about a minute on a fast machine, plus
+image pulls); all 13 services report healthy roughly three minutes after `up`. Subsequent starts take
+under a minute. Measured on a clean clone, 2026-08-26.
 
 **Verify it's flowing:**
 

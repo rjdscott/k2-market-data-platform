@@ -10,14 +10,14 @@ groups:
       # CRITICAL: No trades from an exchange for >2 minutes
       - alert: FeedHandlerDown
         expr: |
-          (time() - feed_handler_last_message_timestamp_seconds) > 120
+          up{job=~"feed-handler-.*"} == 0
         for: 2m
         labels:
           severity: critical
           component: feed-handler
           tier: ingestion
         annotations:
-          summary: "Feed handler producing no trades for {{ $labels.exchange }}"
+          summary: "Feed handler for {{ $labels.exchange }} is down (metrics endpoint unreachable)"
           description: |
             Exchange {{ $labels.exchange }} has not produced a trade message in
             {{ $value | humanizeDuration }}. This likely means the WebSocket connection

@@ -8,7 +8,7 @@
 
 -- Prerequisites:
 -- 1. Spark 3.5+ with Iceberg extension loaded
--- 2. Iceberg REST catalog configured (http://iceberg-rest:8181)
+-- 2. Iceberg Hadoop catalog (warehouse /home/iceberg/warehouse) — see docker/offload/offload_generic.py
 -- 3. MinIO S3 credentials configured
 -- 4. 'cold' catalog registered in Spark SQL
 
