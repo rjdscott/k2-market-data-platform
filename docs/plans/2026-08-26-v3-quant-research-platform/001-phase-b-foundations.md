@@ -19,3 +19,5 @@ S1 Kraken checksum test from doc example (`3310070434`) — red test first. S2 K
 ## Verification
 
 - Every phase: `make test` (rust/python/clickhouse-schema), CI green, `docker compose up -d --build` from clean clone → all services healthy.
+
+_Phase B landed 2026-08-26 — commit a726eb0, tag v3-phase-b._
