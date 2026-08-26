@@ -309,7 +309,7 @@ Coinbase 512 M limit exists for I3, not for the steady state — and if Phase F 
 | **Bootstrap peak, predicted** | **16.10** | **23.125 GB** | sum |
 | vs the current 16.85 / 23.625 GiB peak | **−0.75 CPU** | **−0.50 GB** | `16.85 − 16.10` |
 
-> **Scored, 2026-08-27.** Phase C landed and the Kotlin handlers are out of
+> **Scored, 2026-08-26.** Phase C landed and the Kotlin handlers are out of
 > `docker-compose.yml`. The measured declaration is **14.60 CPU / 21.625 GiB across
 > 15 steady services**, bootstrap peak **16.10 CPU / 23.125 GiB across 19** — both
 > predictions exact, because every term in them is a declared limit rather than an
