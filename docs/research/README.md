@@ -18,4 +18,5 @@ benchmarks (`../benchmarks/`) hold the measurements that settled it.
 
 | Document | Question | Outcome |
 |----------|----------|---------|
+| [2026-08-26-v3-requirements-clarification.md](./2026-08-26-v3-requirements-clarification.md) | Four requirements ADR-018 left open — replay scope, estimation discipline, fault injection, SLOs — asked and answered before the v3 phase plan was amended | Rust `k2-replay` through the live adapters; predicted-then-measured capacity model; local `make chaos`; three SLOs with error budgets. Carried into Phases C–G and ADR-029 |
 | [2026-02-09-v2-investment-analysis.md](./2026-02-09-v2-investment-analysis.md) | Which v2 changes are worth doing, ranked by risk against reward, before any code is written? | Produced ADR-001 … ADR-010. Predictions scored in [`../MIGRATION-JOURNEY.md`](../MIGRATION-JOURNEY.md) — the misses were all in the same direction: underestimating what orchestration is worth |

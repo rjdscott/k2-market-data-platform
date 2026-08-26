@@ -163,7 +163,7 @@ ADRs below — the v2 reasoning stays on the record unedited.
 
 **Risks:** Lakekeeper ↔ Iceberg client version compatibility, ClickHouse 24.3's
 `AvroConfluent` handling of arrays and Kafka virtual columns, Coinbase's
-unverified WS rate limits, and `icebergS3()` on 24.3 for the rebuild path. Each
+unverified WS rate limits, and `iceberg()` on 24.3 for the rebuild path. Each
 is a verify-first spike in Phase B of the plan, with a named fallback; none is
 allowed to start Phase C unanswered. Two unchanged non-risks worth stating: no
 HA (still one broker, one ClickHouse, one host), and Prefect + Spark are
