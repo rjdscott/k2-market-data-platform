@@ -49,12 +49,15 @@ docker exec k2-redpanda rpk cluster health
 docker exec k2-redpanda rpk topic list
 docker exec k2-redpanda rpk topic describe market.crypto.v3.trades.binance -p
 
-# Peek at the live feed (the six market.crypto.trades.* v2 topics are frozen — no producer)
-docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.binance --num 5 --format '%v\n'
+# Peek at the live feed (the six market.crypto.trades.* v2 topics are frozen — no producer).
+# v3 values are Confluent-framed Avro, so print the key, not the value; Console decodes values.
+docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance -n 3 -f '%p %o %k\n'
 
-# Consumer groups (ClickHouse Kafka Engine)
+# Consumer groups (ClickHouse Kafka Engine, all on frozen v2 topics — lag should sit at 0).
+# The names do not match the exchanges: Binance's group is `clickhouse_bronze_offload_test`.
+# See docs/runbooks/redpanda.md for the mapping.
 docker exec k2-redpanda rpk group list
-docker exec k2-redpanda rpk group describe clickhouse_bronze_binance_consumer
+docker exec k2-redpanda rpk group describe clickhouse_bronze_offload_test
 
 # Schema registry
 docker exec k2-redpanda curl -s localhost:8081/subjects | jq

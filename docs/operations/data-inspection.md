@@ -32,25 +32,31 @@ Spark's JDBC reader cannot deserialize ClickHouse `Array(String)` / `Map(String,
 
 ```bash
 docker exec k2-redpanda rpk topic list
-docker exec k2-redpanda rpk topic describe market.crypto.trades.binance.raw -p
 
-# Raw JSON straight off the wire
+# LIVE — the v3 topics. Values are Confluent-framed Avro, so rpk prints binary;
+# the key is the useful thing here (canonical symbol on trades/book, wire symbol on raw).
+docker exec k2-redpanda rpk topic describe market.crypto.v3.trades.binance -p
+docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance -n 3 -f '%p %o %k\n'
+
+# To read a v3 VALUE, use Redpanda Console (http://localhost:8080) — it resolves the
+# schema id against the registry. rpk will not. Or read the schema itself:
+docker exec k2-redpanda curl -s localhost:8081/subjects | jq
+docker exec k2-redpanda curl -s \
+  localhost:8081/subjects/market.crypto.v3.trades.binance-value/versions/latest \
+  | jq -r '.schema | fromjson'
+
+# FROZEN v2 — retained data only, no producer since 2026-08-26 (ADR-019). Still readable,
+# and still plain JSON, which is why these are the easy ones to eyeball:
 docker exec k2-redpanda rpk topic consume market.crypto.trades.binance.raw \
   --num 3 --format '%v\n' | jq
-
-# With partition/offset metadata
 docker exec k2-redpanda rpk topic consume market.crypto.trades.kraken.raw \
   --num 3 --format 'p=%p o=%o t=%d %v\n'
 
-# Normalized topics carry Avro — bytes without a deserializer. Read the schema instead:
-docker exec k2-redpanda curl -s localhost:8081/subjects | jq
-docker exec k2-redpanda curl -s \
-  localhost:8081/subjects/market.crypto.trades.binance-value/versions/latest \
-  | jq -r '.schema | fromjson'
-
-# Consumer groups (one per ClickHouse Kafka Engine table)
+# Consumer groups (one per ClickHouse Kafka Engine table, all on frozen v2 topics).
+# The names do not match the exchanges — Binance's is `clickhouse_bronze_offload_test`;
+# docs/runbooks/redpanda.md has the mapping.
 docker exec k2-redpanda rpk group list
-docker exec k2-redpanda rpk group describe clickhouse_bronze_binance_consumer
+docker exec k2-redpanda rpk group describe clickhouse_bronze_offload_test
 ```
 
 ## Bronze — per-exchange ingest
@@ -200,7 +206,8 @@ $CH -q "SELECT table, formatReadableSize(sum(bytes)) AS size, sum(rows) AS rows
 $CH -q "SELECT * FROM k2.ohlcv_1h WHERE window_start > now() - INTERVAL 7 DAY FORMAT CSVWithNames" > ohlcv_1h.csv
 $CH -q "SELECT * FROM k2.silver_trades LIMIT 1000 FORMAT JSONEachRow" > trades.jsonl
 
-# Sample a topic to disk
+# Sample a topic to disk. The v2 raw topics are frozen but retained, and they are the only
+# ones whose values are plain JSON — a v3 sample needs an Avro-aware reader.
 docker exec k2-redpanda rpk topic consume market.crypto.trades.binance.raw \
   --num 10000 --format '%v\n' > binance_raw_sample.jsonl
 ```
