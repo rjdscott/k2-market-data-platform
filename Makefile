@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps test test-kotlin test-python
+.PHONY: help up down logs ps test test-kotlin test-python test-rust
 .DEFAULT_GOAL := help
 
 help:  ## Show available targets
@@ -16,7 +16,7 @@ logs:  ## Tail all service logs
 ps:  ## Show service status
 	docker compose ps
 
-test: test-kotlin test-python  ## Run all unit tests
+test: test-kotlin test-python test-rust  ## Run all unit tests
 
 test-kotlin:  ## Feed handler unit tests (runs in the JDK 21 build image; no local JDK needed)
 	docker run --rm -v "$(CURDIR)":/project -w /project/services/feed-handler-kotlin \
@@ -24,3 +24,7 @@ test-kotlin:  ## Feed handler unit tests (runs in the JDK 21 build image; no loc
 
 test-python:  ## Iceberg offload flow unit tests (needs uv)
 	uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q
+
+test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo needed)
+	docker run --rm -v "$(CURDIR)/services/capture-rust":/w -w /w rust:1-bookworm \
+	  sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang libclang-dev >/dev/null && cargo test'

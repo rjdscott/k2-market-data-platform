@@ -368,3 +368,22 @@ volume, not sizing.
 containers and retires three JVM feed handlers (1.5 CPU / 1.5 GB); ADR-018 budgets the
 Rust tier at under 1.5 CPU combined, so the swap should be net-neutral to net-positive.
 If it is not, this Outcome gets a second addendum before Phase D.
+
+## Outcome addendum (v3 Phase C, 2026-08-26)
+
+The Rust capture tier landed at exactly the 0.75 CPU / 1 GB predicted above:
+`capture-binance` and `capture-kraken` at 0.25 CPU / 256M each, `capture-coinbase` at
+0.25 CPU / 512M (its full-depth `BTreeMap` book is the larger resident structure of the
+three). It runs **alongside**, not instead of, the three Kotlin feed handlers for the
+labelled 2-hour parity window ([ADR-019](ADR-019-rust-capture-tier.md) — the plan's
+original 24h figure was superseded by the maintainer's 2026-08-26 decision to run a
+labelled 2-hour sample instead, with a 24-hour continuous soak kept as a later revisit
+trigger), so the swap is not yet net-neutral — it is net-additive until Kotlin retires.
+Steady state moves from 15.35 to **16.10 CPU / 23.125 GB across 18 long-running
+services**, 0.10 CPU over the 16-core target. This is accepted, not a budget miss: it is
+the explicit, temporary cost of running two producers side by side to compare per-symbol
+counts before trusting the new one, and it retraces the same "ceiling not reservation"
+argument the Phase B bootstrap-peak overcommit made above. Retiring
+`feed-handler-{binance,kraken,coinbase}` once the parity check is clean gives back 1.5
+CPU / 1.5 GB, landing steady state at 14.60 CPU / 21.625 GB — better headroom than the
+v2 baseline. [ADR-019](ADR-019-rust-capture-tier.md) records that retirement.

@@ -41,6 +41,34 @@ jobs:
           path: services/feed-handler-kotlin/build/reports/tests/test
           retention-days: 7
 
+  rust:
+    name: Rust (capture)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: services/capture-rust
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/capture-rust
+
+      # rdkafka's cmake build and zstd-sys both need a C toolchain.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq cmake clang libclang-dev
+
+      - run: cargo fmt --check
+
+      - run: cargo clippy --all-targets -- -D warnings
+
+      - run: cargo test
+
   python:
     name: Python (offload + tests)
     runs-on: ubuntu-latest
@@ -71,16 +99,21 @@ jobs:
             dockerfile: docker/prefect/Dockerfile
           - name: spark
             dockerfile: docker/spark/Dockerfile
+          - name: capture
+            dockerfile: services/capture-rust/Dockerfile
+            context: services/capture-rust
 
     steps:
       - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v4
 
-      # All three Dockerfiles COPY from repo root, so context is `.` (matches docker-compose.yml).
+      # Kotlin/Prefect/Spark COPY from repo root, so their context is `.` (matches
+      # docker-compose.yml). capture-rust is a standalone crate with its own
+      # context — matrix.context overrides the default per entry.
       - uses: docker/build-push-action@v7
         with:
-          context: .
+          context: ${{ matrix.context || '.' }}
           file: ${{ matrix.dockerfile }}
           push: false
           cache-from: type=gha,scope=${{ matrix.name }}
