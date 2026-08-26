@@ -135,6 +135,94 @@ the SLO document says so instead of implying a redundancy that does not exist.
 
 ---
 
+## Q5 — Cutover authority: who signs off on the destructive steps?
+
+**Asked.** Three steps in the plan are destructive and not reversible from git
+alone: retiring Kotlin to `legacy/v2-kotlin/`, removing `docker/offload/` plus
+the hadoop warehouse bind mount, and dropping the `k2` database and deleting
+the `.raw` JSON topics. Does each of these need a human yes per step, or is
+one authorization enough to run the plan unattended?
+
+**Answered: once, now.** Conditional on the plan's own comparison gates for
+each step — parity counts, audits green, CI green — the maintainer authorizes
+all three cutovers in advance, each landing in its own PR with the comparison
+evidence pasted into the PR body. No further approval is sought once a gate
+is met.
+
+**Rejected: per-step approval.** It blocks unattended execution for a
+decision that was already made — the gates exist precisely so the yes/no is
+mechanical, not judgment-per-step. **Rejected: never cut over, run v2 beside
+v3 through Phase G.** ADR-010's Outcome section already shows the budget is
+tight: steady-state v2 sits at 15.35 CPU, and adding capture (+0.75 CPU) for
+a parallel run brings it to 16.10 CPU — over the 16 CPU budget documented
+there. Running both stacks side by side through Phase G is not an option this
+host has room for; the gated, once-now authorization is what makes a
+16 CPU/40 GB single host survive the migration at all.
+
+**Lands in:** Phase C (Kotlin retirement), Phase D (`docker/offload/` +
+warehouse removal), Phase E (drop `k2`, delete `.raw` topics) — each cutover
+its own PR, comparison evidence pasted, ADR-010 Outcome cited.
+
+---
+
+## Q6 — Burn-in windows: real wall-clock duration, or shortened?
+
+**Asked.** The plan as drafted specifies 24 h per exchange for the Phase C
+capture burn-in and 3 days of lake audits for Phase D. Run those for real, or
+shorten them for unattended execution?
+
+**Answered: 2 h windows, every published number labelled with its window.**
+Every burn-in and audit window across the plan becomes 2 h, and every number
+that comes out of one states the window explicitly in the document that
+publishes it — "over 2 h on 2026-08-27", never "per day" or a bare rate that
+implies a longer observation. The phase files are amended in place to say
+2 h rather than 24 h/3 days.
+
+**Rejected: real 24 h windows.** Wall-clock-bound execution with nothing to
+verify in between means roughly a week sitting idle waiting on burn-ins
+across Phases C–D alone. **Rejected: 24 h for Phase C only, shortened
+elsewhere.** A window that changes meaning phase to phase is worse than one
+that is short everywhere and says so everywhere — consistency here is what
+lets a reader trust the label instead of re-deriving what each number covers.
+
+**Second-order consequences accepted.** Tail behaviour is not observed in any
+Phase C/D number: the 23 h Binance scheduled reconnect, daily compaction
+seams, and overnight liquidity patterns fall outside a 2 h window by
+construction, and every document that publishes a number from these windows
+must say so rather than imply completeness. The Phase F SLO error budgets
+built on this data are therefore provisional, not final, until a longer
+window exists. **Revisit when:** the first 24 h continuous run is performed —
+that is the trigger, not a calendar date.
+
+**Lands in:** `002-phase-c-rust-capture.md`, `003-phase-d-lake-tier.md`,
+`005-phase-f-notebooks-numbers-docs.md`, this plan's `README.md` (each
+burn-in/audit window reduced to 2 h, labelled); the "Revisit when" trigger
+carries into `docs/operations/slos.md` when Phase F writes it.
+
+---
+
+## Q7 — v2 data: migrate the existing ClickHouse and Iceberg data into the lake?
+
+**Asked.** v2's `k2` ClickHouse database and its bind-mounted Iceberg
+warehouse hold real captured trades. Is that data worth carrying into the v3
+lake, or does the lake start empty?
+
+**Answered: disposable, no migration.** v3's lake starts from nothing;
+nothing from v2's `k2` database or its Iceberg warehouse is copied forward.
+
+**Rejected: migrating v2 bronze/silver into the v3 lake.** v2's data was
+written by a JDBC offload with no `recv_ts_ns` and no sequence/gap detection
+— it is a lossy copy of a lossy copy. Importing it would plant rows in
+`raw.messages` that look like the verbatim archive the rest of the platform
+is built to trust, while actually carrying none of its provenance guarantees.
+That pollutes the one property the lake exists to have — every row traceable
+to the exact frame that produced it — for the sake of keeping data that was
+never captured to the v3 standard in the first place.
+
+**Lands in:** Phase D (lake starts empty, no v2 import step in scope).
+
+---
+
 ## Non-goals, reaffirmed
 
 Unchanged from ADR-018 and restated here because every answer above was given

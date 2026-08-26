@@ -2,7 +2,7 @@
 
 **Depends on:** Phase B
 **Delivers:** Replaces the Kotlin feed handlers with a Rust `k2-capture` binary per exchange doing trades + L2 book, run in parallel and verified before Kotlin retires.
-**Exit:** 3 exchanges × 24h clean (gaps=0 or explained, checksum failures=0), limits measured and cut.
+**Exit:** 3 exchanges × 2 h window clean (labelled; 24 h continuous run is a Phase F+ revisit trigger; gaps=0 or explained, checksum failures=0), limits measured and cut.
 
 ## Scope
 
@@ -14,7 +14,7 @@ Single crate `k2-capture` (split to workspace only when a second binary needs `b
 - Tests: `decimal.rs` table; `book.rs` apply/remove/top_n; Kraken checksum doc example; parser fixture tests; proptest invariants (best_bid<best_ask, no zero levels, monotonic top_n); `tests/replay.rs` over recorded sessions. CI `rust` job (fmt, clippy -D warnings, test, Swatinem cache) + docker matrix entry.
 - Dockerfile: cargo-chef + `gcr.io/distroless/cc-debian12:nonroot`, `[profile.release] lto="thin", codegen-units=1, panic="abort", strip=true`; target ~40 MB. Compose ×3 `capture-{ex}` 0.25 CPU / 256M (coinbase 512M), `cpuset` pinned away from CH/Spark, depends on redpanda-init only; Prometheus jobs `capture-{ex}`; `capture-alerts.yml` (CaptureDown, SequenceGaps, ChecksumFailure, ResyncStorm, FeedStale per stream, IngressLatencyHigh, BookDepthDegraded, ProduceErrors); dashboard `k2-l2-capture.json`.
 - **Capacity model, predicted first.** Create `docs/architecture/capacity-model.md` **before** the first burn-in sample, with a `predicted` column only: msg/s per stream per exchange, msg/s per core sustained by one capture container, bytes/day per topic and per lake table (record size × rate × compression assumption), and the headroom arithmetic against 16 CPU / 40 GB. Each row states the assumption it rests on and is labelled a prediction. Phase F fills `measured` and `error %` in the same table; predictions are never edited to match the measurement.
-- **Parity & retirement:** run Rust trades alongside Kotlin for 24h; compare per-symbol counts/ids in ClickHouse and lake; then `git mv services/feed-handler-kotlin legacy/v2-kotlin/` with README, remove from compose/CI; ADR records why (one connection per exchange, one language for capture, 3 JVMs gone).
+- **Parity & retirement:** run Rust trades alongside Kotlin for a 2 h window (maintainer decision 2026-08-26, Q6), labelled; compare per-symbol counts/ids in ClickHouse and lake; then `git mv services/feed-handler-kotlin legacy/v2-kotlin/` with README, remove from compose/CI; ADR records why (one connection per exchange, one language for capture, 3 JVMs gone).
 
 ## Verification
 

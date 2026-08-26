@@ -2,7 +2,7 @@
 
 **Depends on:** Phase C
 **Delivers:** Replaces `docker/offload/` with a lake-first Spark ingest into Iceberg (raw/bronze) via Lakekeeper, with maintenance, metrics, and audits.
-**Exit:** two consecutive ingests, second adds 0; kill mid-run → no dupes/gaps; audits pass 3 days.
+**Exit:** two consecutive ingests, second adds 0; kill mid-run → no dupes/gaps; audits pass over a 2 h window (maintainer decision 2026-08-26, Q6), labelled.
 
 ## Scope
 
@@ -16,7 +16,7 @@
 - **Failure modes as an FMEA.** New `docs/architecture/failure-modes.md`: one row per `component × failure`, columns `detection signal` (the exact metric or alert name), `blast radius` (what is lost vs delayed vs unaffected), `recovery step` (linking the runbook), `proof` (the test or `make chaos` target that demonstrates it). Capture and lake rows land here: capture killed / paused (`kill -STOP`) / producing to a full queue; Redpanda broker down and topic truncation; Lakekeeper down mid-commit; MinIO down; ingest killed mid-run; corrupt Avro payload; clock skew on `recv_ts_ns`. Blank cells are not allowed — a row without a proof column is a row that does not ship.
 - **`make chaos`.** `scripts/chaos/*.sh` plus a `chaos` Makefile target running them serially against the local stack: kill and pause each capture container, `docker stop` Redpanda, `docker pause` ClickHouse, stop Lakekeeper mid-ingest, corrupt a frame via the fixture path. Each script prints the alert it expects to fire and measures time-to-recovery (`k2_capture_last_message_ts_seconds` / lake commit age returning under threshold); the measured recovery time is written into the `failure-modes.md` row. Local only — the CI runner (7 GB) cannot host the stack, so this is a maintainer-run gate, not a nightly job (`docs/research/2026-08-26-v3-requirements-clarification.md`, Q3).
 - **Noisy-neighbour experiment (resource isolation, measured).** With capture pinned by `cpuset` away from Spark and ClickHouse, run `docker/lake/maintenance.py` compaction over a full day of `raw.messages` while sampling `k2_capture_exchange_to_recv_seconds` p99 and `k2_capture_messages_total` rate; compare against a quiet-period baseline of the same duration. Record both numbers, the delta, and the cpuset layout in `capacity-model.md` with the commands. A p99 regression beyond the noise band means the pinning is wrong, and that is a finding, not a rerun.
-- Delete: `docker/offload/*` (offload_generic, watermark_pg, create_*, generate/verify, old maintenance/flows), `docker/postgres/ddl/offload-watermarks.sql`, `docker/iceberg/ddl/0{2,3,4}-*.sql`, warehouse bind mount, `spark-jars/`. Parallel-run old offload vs new ingest for 24h before deletion.
+- Delete: `docker/offload/*` (offload_generic, watermark_pg, create_*, generate/verify, old maintenance/flows), `docker/postgres/ddl/offload-watermarks.sql`, `docker/iceberg/ddl/0{2,3,4}-*.sql`, warehouse bind mount, `spark-jars/`. Parallel-run old offload vs new ingest for a 2 h window (maintainer decision 2026-08-26, Q6), labelled, before deletion.
 
 ## Verification
 

@@ -136,7 +136,7 @@ Each lands in the same PR as the code it describes; none is a status log.
 |---|---|---|---|
 | `000-phase-a-ship-v2-public.md` | A | Ship v2 public now (this week) | Fresh-clone quickstart green; links and grep sweep clean |
 | `001-phase-b-foundations.md` | B | v3 foundations (P0/P1, ~1 week) | Registry + schemas registered; Lakekeeper works; v2 still green |
-| `002-phase-c-rust-capture.md` | C | Rust capture tier (services/capture-rust/, ~2 weeks) | 3 exchanges clean 24h; limits measured and cut |
+| `002-phase-c-rust-capture.md` | C | Rust capture tier (services/capture-rust/, ~2 weeks) | 3 exchanges × 2 h window clean (labelled; 24 h continuous run is a Phase F+ revisit trigger); limits measured and cut |
 | `003-phase-d-lake-tier.md` | D | Lake tier (docker/lake/, ~1.5 weeks; replaces docker/offload/) | Two ingests, second adds 0; no dupes/gaps; audits pass |
 | `004-phase-e-hot-tier.md` | E | Hot tier (ClickHouse, ~1 week) | Dashboards on hot tier; hot.ohlcv matches DuckDB-over-Iceberg |
 | `005-phase-f-notebooks-numbers-docs.md` | F | Notebooks, audits, numbers, docs (~1 week) | v3.0.0 tagged; numbers table published and traceable |
