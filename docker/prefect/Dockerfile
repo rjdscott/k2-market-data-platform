@@ -3,11 +3,12 @@ FROM prefecthq/prefect:3-python3.12
 # ─────────────────────────────────────────────────────────────────────────────
 # System dependencies
 # ─────────────────────────────────────────────────────────────────────────────
-# docker.io: the worker orchestrates offload jobs via `docker exec k2-spark-iceberg`.
+# docker-cli: the worker orchestrates offload jobs via `docker exec k2-spark-iceberg`.
+# (Debian 13 splits the CLI out of docker.io; we only need the client.)
 # Installing here (build time) instead of the command: entrypoint (runtime) avoids
 # a ~60s apt-get run on every container restart.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends docker.io \
+    && apt-get install -y --no-install-recommends docker-cli \
     && rm -rf /var/lib/apt/lists/*
 
 # ─────────────────────────────────────────────────────────────────────────────
