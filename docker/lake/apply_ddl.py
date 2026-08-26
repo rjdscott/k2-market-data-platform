@@ -76,6 +76,22 @@ def remap(sql: str, mapping: dict[str, str]) -> str:
     return sql
 
 
+def namespaces(stmts: list[str]) -> list[str]:
+    """Every `<catalog>.<ns>.` namespace the statements reference, in order.
+
+    `docker/lake/init-lake.sh` creates raw/bronze/audit over the REST API before
+    this runs, so the real path never needs these. `--namespace-map` does: a
+    throwaway namespace has nothing to create it, and the documented
+    scratch-namespace workflow failed on the very first CREATE TABLE without
+    this.
+    """
+    seen = []
+    for ns in re.findall(rf"\b{re.escape(CATALOG)}\.(\w+)\.", "\n".join(stmts)):
+        if ns not in seen:
+            seen.append(ns)
+    return seen
+
+
 def _parse_map(raw: str) -> dict[str, str]:
     if not raw:
         return {}
@@ -93,12 +109,16 @@ def main() -> int:
     stmts = statements(sql)
 
     if args.dry_run:
+        for ns in namespaces(stmts):
+            print(f"CREATE NAMESPACE IF NOT EXISTS {CATALOG}.{ns};")
         for i, stmt in enumerate(stmts, 1):
             print(f"-- [{i}/{len(stmts)}]\n{stmt};\n")
         return 0
 
     spark = lake_session("k2-lake-ddl")
     try:
+        for ns in namespaces(stmts):
+            spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {CATALOG}.{ns}")
         for i, stmt in enumerate(stmts, 1):
             head = " ".join(stmt.split())[:90]
             print(f"[{i}/{len(stmts)}] {head}", flush=True)

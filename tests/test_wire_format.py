@@ -104,13 +104,77 @@ class TestFramingExpressions:
     def test_magic_check_reads_the_first_byte(self):
         assert wire.MAGIC_OK_SQL.format(col="value") == "hex(substring(value, 1, 1)) = '00'"
 
+    @pytest.mark.parametrize(
+        "frame,why",
+        [
+            (b"\x00\x00\x01", "shorter than the 5-byte header"),
+            (b"\x00\x00\x00\x00\x00body", "schema id 0"),
+            (b"\x7b\x22\x61\x22\x3a", "magic 0x7b, not framed at all"),
+        ],
+    )
+    def test_the_guard_rejects_everything_parse_confluent_rejects(self, frame, why):
+        # The two readers have to agree, and this is the list they disagreed on.
+        # The SQL guard used to check the magic byte alone, so `00 00 01` came
+        # back with a FABRICATED schema id of 1 and an empty body — which
+        # `parse_confluent` calls a BadFrame, `stage_bronze` sent to the
+        # registry, and the registry answered 404 to. Permanently: the record is
+        # in raw.messages, never expired, and re-read every cycle.
+        with pytest.raises(wire.BadFrame):
+            wire.parse_confluent(frame)
+
+        guard = wire.schema_id_guarded_expr("value")
+        # The SQL cannot be executed here (no Spark in this suite), so the
+        # assertion is that the guard tests all three conditions the parser does.
+        assert f"length(value) >= {wire.HEADER_BYTES}" in guard, why
+        assert wire.MAGIC_OK_SQL.format(col="value") in guard, why
+        assert "> 0" in guard, why
+
+    def test_the_guard_yields_null_rather_than_a_value_for_a_bad_frame(self):
+        # CASE WHEN with no ELSE is NULL, which is what raw.messages.schema_id
+        # is nullable for and what stage 2's `schema_id IS NOT NULL` filters on.
+        guard = wire.schema_id_guarded_expr("value")
+        assert guard.startswith("CASE WHEN") and "ELSE" not in guard
+
 
 class TestFixedPoint:
     def test_divides_by_ten_to_the_scale(self):
         assert "/ 100000000" in wire.fixed_point_expr("price")
 
     def test_casts_to_the_declared_decimal_type(self):
-        assert wire.fixed_point_expr("d.price").count("DECIMAL(28,10)") == 2
+        assert wire.fixed_point_expr("d.price").endswith("AS DECIMAL(28,10))")
+
+    def test_the_intermediate_cast_holds_the_whole_int64_range(self):
+        # THE test this file got wrong. The old version asserted on the RESULT
+        # type (~9.22e10, 11 integer digits, comfortably inside DECIMAL(28,10))
+        # and never looked at the intermediate. The bug was in the intermediate:
+        # `CAST(v AS DECIMAL(28,10))` before the divide has 18 integer digits and
+        # int64 max needs 19, so with ansi off every |v| >= 1e18 became NULL —
+        # into bronze.trades.qty, which is NOT NULL. At 1e-8 that is 1e10 units,
+        # an ordinary meme-coin quantity.
+        #
+        # Measured in k2-spark-iceberg on 2026-08-26:
+        #   DECIMAL(28,10) intermediate: 9223372036854775807 -> NULL
+        #   DECIMAL(38,0)  intermediate: -> 92233720368.5477580000  (2 digits lost)
+        #   DECIMAL(38,10) intermediate: -> 92233720368.5477580700  (exact)
+        expr = wire.fixed_point_expr("qty")
+        inner = re.search(r"CAST\(qty AS DECIMAL\((\d+),(\d+)\)\)", expr)
+        assert inner, f"the intermediate cast is no longer a plain DECIMAL: {expr}"
+        precision, scale = int(inner.group(1)), int(inner.group(2))
+
+        int64_digits = len(str(2**63 - 1))  # 19
+        assert precision - scale >= int64_digits, (
+            f"DECIMAL({precision},{scale}) holds {precision - scale} integer digits; "
+            f"int64 needs {int64_digits}. |v| >= 10**{precision - scale} casts to NULL "
+            "and lands in a NOT NULL column"
+        )
+        # And the quotient's scale must survive the divide: DECIMAL(38,0) is
+        # wide enough for the input and still loses the bottom two digits,
+        # because Spark caps the quotient's precision at 38 and takes it out of
+        # the scale.
+        assert scale >= wire.FIXED_POINT_SCALE, (
+            f"an intermediate scale of {scale} truncates the fixed-point digits "
+            "before the divide can use them"
+        )
 
     def test_decimal_28_10_holds_the_whole_int64_range(self):
         # The wire is int64 at 1e-8 (schemas/avro/trade.avsc). Shrinking either

@@ -41,12 +41,18 @@ JOB_INGEST = "ingest"
 JOB_DECODE = "decode"
 JOB_MAINTENANCE = "maintenance"
 
-# Every v3 topic is created with 12 partitions (docker/redpanda/init.sh). The
-# count matters because a partition that has never carried a record produces no
-# row, so it never appears in a committed offset map — and a startingOffsets
-# JSON that omits a partition leaves where it starts up to Spark. Filling the
-# gap with EARLIEST makes it explicit and correct for an append-only archive.
-DEFAULT_PARTITIONS = 12
+# The partition count per topic is read from the broker, not configured — see
+# `ingest.topic_partitions`. It matters because a partition that has never
+# carried a record produces no row, so it never appears in a committed offset
+# map, and a startingOffsets JSON that omits a partition leaves where it starts
+# up to Spark. Filling the gap with EARLIEST makes it explicit and correct for
+# an append-only archive.
+#
+# It used to be a `--partitions` flag defaulting to 12. A value below the real
+# count silently dropped every committed offset above it and restarted those
+# partitions at EARLIEST — a full re-ingest, i.e. duplicates, from one wrong
+# number on a command line. The broker knows the answer; nothing else should
+# be asked.
 
 
 def encode(offsets: dict) -> str:
@@ -69,12 +75,10 @@ def decode(raw: str) -> dict:
     }
 
 
-def next_starting_offsets(
-    committed: dict,
-    topics: list,
-    partitions: int = DEFAULT_PARTITIONS,
-) -> dict:
+def next_starting_offsets(committed: dict, partition_counts: dict) -> dict:
     """Where the next run starts, given what the last one committed.
+
+    `partition_counts` is `{topic: partitions}` as the broker reports it.
 
     `committed` holds *end* offsets — exclusive, in Kafka's convention — so the
     next start is that same number with no arithmetic. Getting this wrong by one
@@ -85,11 +89,19 @@ def next_starting_offsets(
     Any (topic, partition) the committed map does not mention starts at
     EARLIEST: for an archive that is never expired, the beginning of the topic is
     always the right place to start reading a partition nothing has read yet.
+
+    A committed offset is never dropped, even for a partition outside
+    `range(partitions)`. The count is written *under* the committed map rather
+    than over it, so a count that is somehow short cannot rewind a partition to
+    EARLIEST and re-ingest it — the failure mode that made this a broker lookup
+    rather than a flag.
     """
-    return {
-        topic: {p: committed.get(topic, {}).get(p, EARLIEST) for p in range(partitions)}
-        for topic in topics
-    }
+    out = {}
+    for topic, partitions in partition_counts.items():
+        starts = {p: EARLIEST for p in range(int(partitions))}
+        starts.update(committed.get(topic, {}))
+        out[topic] = starts
+    return out
 
 
 def end_offsets(rows: list) -> dict:

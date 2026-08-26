@@ -30,25 +30,34 @@ class TestNextStartingOffsets:
         # Kafka's endingOffsets are exclusive, so the next start is a copy. Any
         # arithmetic here is a duplicate (-1) or a hole (+1) on every cycle.
         committed = {"t": {0: 100, 1: 250}}
-        start = O.next_starting_offsets(committed, ["t"], partitions=2)
+        start = O.next_starting_offsets(committed, {"t": 2})
         assert start == {"t": {0: 100, 1: 250}}
 
     def test_unseen_partitions_start_at_earliest(self):
         # A partition that has never carried a record produces no row and so no
         # committed offset. For an archive that is never expired, the start of
         # the topic is the correct place to begin.
-        start = O.next_starting_offsets({"t": {0: 100}}, ["t"], partitions=3)
+        start = O.next_starting_offsets({"t": {0: 100}}, {"t": 3})
         assert start == {"t": {0: 100, 1: O.EARLIEST, 2: O.EARLIEST}}
 
     def test_a_brand_new_topic_starts_at_earliest_everywhere(self):
-        start = O.next_starting_offsets({}, ["a", "b"], partitions=2)
+        start = O.next_starting_offsets({}, {"a": 2, "b": 2})
         assert start == {"a": {0: -2, 1: -2}, "b": {0: -2, 1: -2}}
 
     def test_every_declared_partition_is_present(self):
         # The map must be complete: Spark decides for itself where a partition
         # absent from the JSON begins, and "Spark decides" is not a contract.
-        start = O.next_starting_offsets({}, ["t"], partitions=O.DEFAULT_PARTITIONS)
+        start = O.next_starting_offsets({}, {"t": 12})
         assert sorted(start["t"]) == list(range(12))
+
+    def test_a_short_partition_count_cannot_drop_a_committed_offset(self):
+        # The bug that made this a broker lookup instead of a `--partitions`
+        # flag. Building the map from `range(count)` alone dropped every
+        # committed offset above the count, and Spark then restarted those
+        # partitions at EARLIEST — a full silent re-ingest, i.e. duplicates,
+        # from one wrong number on a command line.
+        start = O.next_starting_offsets({"t": {0: 100, 5: 900}}, {"t": 2})
+        assert start == {"t": {0: 100, 1: O.EARLIEST, 5: 900}}
 
 
 class TestEndOffsets:
@@ -146,7 +155,7 @@ def test_a_full_cycle_neither_skips_nor_repeats(partitions):
     per_cycle = 7
 
     for cycle in range(4):
-        start = O.next_starting_offsets(committed, ["t"], partitions)
+        start = O.next_starting_offsets(committed, {"t": partitions})
         produced_rows = []
         for partition in range(partitions):
             first = 0 if start["t"][partition] == O.EARLIEST else start["t"][partition]

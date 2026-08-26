@@ -65,6 +65,24 @@ def lake_session(app_name: str) -> SparkSession:
         .config(f"spark.sql.catalog.{CATALOG}.s3.secret-access-key", secret_key)
         .config(f"spark.sql.catalog.{CATALOG}.s3.region", S3_REGION)
         .config("spark.sql.defaultCatalog", CATALOG)
+        # Pinned, not inherited from the image's TZ. Two places read it and
+        # disagree if it moves: maintenance.expire() builds `older_than =>
+        # TIMESTAMP '...'` from a UTC datetime and Spark interprets it in the
+        # session zone, while the compaction predicate uses
+        # `timestamp_seconds(<epoch>)`, which is absolute. One non-UTC session
+        # zone and expiry silently shifts by the offset while compaction does
+        # not. metrics._epoch reads `k2.max-kafka-ts` as UTC-naive for the same
+        # reason. The image happens to be Etc/UTC today; this makes it a
+        # contract instead of a coincidence.
+        .config("spark.sql.session.timeZone", "UTC")
+        # LAST_WIN, not the default EXCEPTION. `map_from_entries` over Kafka
+        # headers throws on a duplicate key, and it throws on the *archive*
+        # write — so one foreign producer sending two headers of the same name
+        # would block raw.messages at that offset forever, which is precisely
+        # what lake.sql promises cannot happen. capture sets exactly one header
+        # (services/capture-rust/src/sink.rs); keeping the last of a duplicate
+        # pair loses nothing we wrote and costs nothing we did.
+        .config("spark.sql.mapKeyDedupPolicy", "LAST_WIN")
         .getOrCreate()
     )
 

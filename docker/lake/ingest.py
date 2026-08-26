@@ -29,20 +29,29 @@ why that is not a stylistic choice.
 Re-running with no new data is a no-op: stage 1 reads an empty offset range and
 commits nothing, stage 2 reads an empty snapshot range and commits nothing. That
 is what `scripts/lake-verify.sh` asserts.
+
+**One at a time.** Exactly-once is a property of a *sequence* of runs, not of a
+pair of concurrent ones: two appends racing each other both commit (Iceberg
+retries the loser onto the new base) and the second one's offsets overwrite the
+first's. An exclusive `flock` at the top of `main()` makes that unrepresentable
+on every dispatch path — cron, Prefect, runbook, chaos script — rather than only
+on the one Prefect's `concurrency_limit=1` covers.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from functools import reduce
 
 from pyspark import StorageLevel
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, Row
 from pyspark.sql import functions as F
 from pyspark.sql.avro.functions import from_avro
 
@@ -53,6 +62,22 @@ from spark_conf import CATALOG, KAFKA_BROKERS, SCHEMA_REGISTRY_URL, lake_session
 RAW_TABLE = f"{CATALOG}.raw.messages"
 TRADES_TABLE = f"{CATALOG}.bronze.trades"
 BOOK_TABLE = f"{CATALOG}.bronze.book_snapshots_l2"
+CHECKS_TABLE = f"{CATALOG}.audit.checks"
+
+# One ingest at a time, per container, on every dispatch path.
+#
+# Prefect's `concurrency_limit=1` only gates runs Prefect launched, and the
+# runbooks, the chaos scripts and `make lake-verify` all dispatch by hand while
+# the */5 cron is armed. Two concurrent `writeTo(...).append()` calls do NOT
+# conflict: measured on a scratch table with this DDL's
+# `commit.retry.num-retries=10`, the loser raised CatalogCommitConflicts,
+# Iceberg re-applied it on the new base, and BOTH landed — 10 rows from two
+# identical 5-row appends. The offsets live in the snapshot summary, so the
+# second commit also overwrites the first one's bookkeeping.
+#
+# An exclusive non-blocking flock is the whole guard: the second run exits
+# non-zero immediately instead of duplicating the first one's work.
+LOCK_PATH = os.environ.get("K2_LAKE_LOCK", "/tmp/k2-lake-ingest.lock")  # noqa: S108
 
 # Same three names, same prefix and same default as docker/redpanda/init.sh.
 EXCHANGES = os.environ.get("K2_EXCHANGES", "binance,kraken,coinbase").split(",")
@@ -78,10 +103,45 @@ def snapshot_history(spark, table: str) -> list:
 
 
 def current_snapshot_id(spark, table: str):
+    """The snapshot the `main` branch points at — the authoritative pointer.
+
+    Not `ORDER BY committed_at DESC LIMIT 1`: `<table>.snapshots` lists every
+    snapshot in the metadata, and the newest by commit time is not necessarily
+    the current one after a rollback, a cherry-pick or a branch write.
+    `<table>.refs` is where Iceberg records which one is live.
+    """
     rows = spark.sql(
-        f"SELECT snapshot_id FROM {table}.snapshots ORDER BY committed_at DESC LIMIT 1"
+        f"SELECT snapshot_id FROM {table}.refs WHERE name = 'main'"
     ).collect()
     return rows[0][0] if rows else None
+
+
+def topic_partitions(spark, topic_list: list) -> dict:
+    """`{topic: partition count}` straight from the broker.
+
+    Over the Kafka AdminClient already on the Spark classpath
+    (kafka-clients-3.4.1.jar, pulled in by spark-sql-kafka-0-10), through the
+    driver's JVM gateway — no new Python dependency for one metadata call.
+
+    This used to be a `--partitions` flag. See docker/lake/offsets.py for why a
+    number on a command line is the wrong place for it.
+    """
+    jvm = spark._jvm
+    props = jvm.java.util.Properties()
+    props.put("bootstrap.servers", KAFKA_BROKERS)
+    admin = jvm.org.apache.kafka.clients.admin.AdminClient.create(props)
+    try:
+        names = jvm.java.util.ArrayList()
+        for topic in topic_list:
+            names.add(topic)
+        described = admin.describeTopics(names).all().get()
+        return {topic: described.get(topic).partitions().size() for topic in topic_list}
+    finally:
+        admin.close()
+
+
+class UnresolvableSchema(Exception):
+    """The registry does not serve this schema id."""
 
 
 def fetch_schema(schema_id: int) -> str:
@@ -93,14 +153,22 @@ def fetch_schema(schema_id: int) -> str:
     succeed at it, which is the silent-corruption path Avro's id exists to close.
     """
     url = "{}/schemas/ids/{}".format(SCHEMA_REGISTRY_URL.rstrip("/"), schema_id)
-    with urllib.request.urlopen(url, timeout=15) as response:  # noqa: S310 - fixed internal host
-        return json.load(response)["schema"]
+    try:
+        with urllib.request.urlopen(url, timeout=15) as response:  # noqa: S310 - fixed internal host
+            return json.load(response)["schema"]
+    except urllib.error.HTTPError as exc:
+        # 404 is a real state, not a bug: a record framed with an id this
+        # registry has never held. Raising it as its own type is what lets
+        # stage 2 skip that id and file an audit row instead of dying on every
+        # cycle for as long as the record stays in the archive — which, since
+        # raw.messages is never expired, is forever.
+        raise UnresolvableSchema(f"schema id {schema_id}: {exc}") from exc
 
 
 # ── stage 1: Kafka -> raw.messages ──────────────────────────────────────────
 
 
-def stage_raw(spark, ingest_ts: datetime, end_timestamp: str, partitions: int) -> int:
+def stage_raw(spark, ingest_ts: datetime, end_timestamp: str) -> int:
     """Append one bounded Kafka batch to `raw.messages`. Returns rows written."""
     committed = {}
     previous = O.latest_summary(snapshot_history(spark, RAW_TABLE), O.JOB_INGEST)
@@ -110,7 +178,7 @@ def stage_raw(spark, ingest_ts: datetime, end_timestamp: str, partitions: int) -
     else:
         print("no prior ingest snapshot — starting from the beginning of every topic")
 
-    starting = O.next_starting_offsets(committed, ALL_TOPICS, partitions)
+    starting = O.next_starting_offsets(committed, topic_partitions(spark, ALL_TOPICS))
 
     reader = (
         spark.read.format("kafka")
@@ -124,12 +192,39 @@ def stage_raw(spark, ingest_ts: datetime, end_timestamp: str, partitions: int) -
         # leaves a gap the continuity audit then reports days later.
         .option("failOnDataLoss", "true")
     )
+    end_ms = _epoch_ms(end_timestamp) if end_timestamp else 0
     if end_timestamp:
-        reader = reader.option("endingTimestamp", str(_epoch_ms(end_timestamp)))
+        reader = reader.option("endingTimestamp", str(end_ms))
     else:
         reader = reader.option("endingOffsets", "latest")
 
-    rows = reader.load().select(
+    loaded = reader.load()
+    if end_timestamp:
+        # `endingTimestamp` is a REQUEST, not a bound. Spark's
+        # `fetchSpecificTimestampBasedOffsets(..., isStartingOffsets=false)`
+        # falls through to `KafkaOffsetRangeLimit.LATEST` for any partition with
+        # no offset at or after the instant, and `latest` moves. Measured on
+        # market.crypto.v3.trades.kraken with one FIXED window whose end was 10
+        # minutes in the future: the same read returned 696 rows, then 888 rows
+        # 45 seconds later.
+        #
+        # In that particular case the extra records were all still older than
+        # the requested instant — `latest` is at or below the request precisely
+        # when the fallback fires — so the read was unpinned rather than wrong.
+        # What it leaves open is the plan-time gap: Spark resolves the timestamp
+        # first and the LATEST sentinel second, so a record arriving between the
+        # two lands past the requested instant, its offset is committed, and the
+        # next run with the same `--end-timestamp` starts beyond the end it
+        # resolves. This filter closes that for one line and makes
+        # `--end-timestamp` mean the same thing on every partition regardless of
+        # what Kafka resolved.
+        #
+        # `endingTimestamp` stays: it is what keeps a backlog slice from reading
+        # to `latest` on the partitions it *can* bound. The filter alone would
+        # be correct and would read the whole topic to discard most of it.
+        loaded = loaded.where(F.col("timestamp") <= F.timestamp_millis(F.lit(end_ms)))
+
+    rows = loaded.select(
         F.col("topic"),
         F.col("partition"),
         F.col("offset"),
@@ -140,15 +235,17 @@ def stage_raw(spark, ingest_ts: datetime, end_timestamp: str, partitions: int) -
         # the bytes are archived either way and stage 2 skips them, so a foreign
         # producer on a v3 topic shows up as an audit finding rather than as a
         # crashed ingest that blocks every following run on the same record.
-        F.when(
-            F.expr(wire.MAGIC_OK_SQL.format(col="value")),
-            F.expr(wire.schema_id_expr("value")),
-        ).alias("schema_id"),
+        #
+        # The guard lives in wire.py so this and `wire.parse_confluent` reject
+        # the same three things. It used to check the magic byte only, which
+        # let a 3-byte frame through with a fabricated schema id.
+        F.expr(wire.schema_id_guarded_expr("value")).alias("schema_id"),
         F.col("value").alias("payload"),
-        # ponytail: map_from_entries throws on a duplicate header key. capture
-        # sets exactly one header (recv_ts_ns, services/capture-rust/src/sink.rs),
-        # so a duplicate means a producer this lake does not know about — worth
-        # failing on rather than silently keeping one of the two.
+        # A duplicate header key would throw here under Spark's default
+        # mapKeyDedupPolicy, on the *archive* write — one foreign producer and
+        # raw.messages is blocked at that offset forever. spark_conf.py sets
+        # LAST_WIN; capture sets exactly one header (recv_ts_ns,
+        # services/capture-rust/src/sink.rs) so there is nothing of ours to lose.
         F.map_from_entries(
             F.expr("transform(headers, h -> struct(h.key AS key, h.value AS value))")
         ).alias("headers"),
@@ -179,6 +276,10 @@ def stage_raw(spark, ingest_ts: datetime, end_timestamp: str, partitions: int) -
         max_kafka_ts = max(r["max_kafka_ts"] for r in bounds)
         written = sum(r["n"] for r in bounds)
 
+        # Printed before the commit, not after, and scripts/chaos/
+        # lake-ingest-kill.sh greps for it: a SIGKILL that lands before this
+        # line killed a Kafka read and proves nothing about the commit.
+        print(f"stage 1: committing {written} rows", flush=True)
         (
             rows.writeTo(RAW_TABLE)
             .option(f"snapshot-property.{O.JOB}", O.JOB_INGEST)
@@ -279,7 +380,7 @@ BRONZE = (
 )
 
 
-def stage_bronze(spark, raw_snapshot_id) -> int:
+def stage_bronze(spark, raw_snapshot_id, run_ts: datetime) -> int:
     """Decode the new `raw.messages` snapshots into `bronze.*`. Returns rows written."""
     if raw_snapshot_id is None:
         print("stage 2: raw.messages has no snapshots yet")
@@ -314,32 +415,67 @@ def stage_bronze(spark, raw_snapshot_id) -> int:
         source = reader.load(RAW_TABLE).where(
             F.col("topic").isin(topics(kind)) & F.col("schema_id").isNotNull()
         )
+        # Three passes read this otherwise — the distinct() below, the count()
+        # and the append() — each one a full scan of the incremental range.
+        source = source.persist(StorageLevel.DISK_ONLY)
+        try:
+            total += _decode_into(spark, source, table, project, raw_snapshot_id, run_ts)
+        finally:
+            source.unpersist()
+    return total
 
-        schema_ids = [r[0] for r in source.select("schema_id").distinct().collect()]
-        if not schema_ids:
-            print(f"stage 2: nothing new for {table}")
+
+def _decode_into(spark, source, table: str, project, raw_snapshot_id, run_ts) -> int:
+    schema_ids = [r[0] for r in source.select("schema_id").distinct().collect()]
+    if not schema_ids:
+        print(f"stage 2: nothing new for {table}")
+        return 0
+
+    # One decode per writer schema, then union. Today every subject has one
+    # version so this loop runs once; it is a loop because the day a schema
+    # evolves, a batch spans both versions and decoding it with either one
+    # alone is wrong.
+    parts, unresolvable = [], []
+    for schema_id in sorted(schema_ids):
+        try:
+            schema = fetch_schema(schema_id)
+        except UnresolvableSchema as exc:
+            # Skip the id, keep the rest of the batch, and leave the reason in
+            # audit.checks. Raising here would kill this run and every run
+            # after it: the record is already in raw.messages and stage 2
+            # re-reads the same snapshot range until it succeeds, so one
+            # unregistered id would be a permanent outage.
+            print(f"stage 2: SKIPPING {exc} — filing an audit row")
+            unresolvable.append((schema_id, str(exc)))
             continue
+        decoded = source.where(F.col("schema_id") == schema_id).withColumn(
+            "d",
+            from_avro(
+                F.expr(wire.body_expr("payload")),
+                schema,
+                # FAILFAST: a body that does not decode is corruption, and a
+                # PERMISSIVE null row would put a silently empty trade into
+                # a table whose whole purpose is to be trustworthy.
+                {"mode": "FAILFAST"},
+            ),
+        )
+        parts.append(project(decoded))
 
-        # One decode per writer schema, then union. Today every subject has one
-        # version so this loop runs once; it is a loop because the day a schema
-        # evolves, a batch spans both versions and decoding it with either one
-        # alone is wrong.
-        parts = []
-        for schema_id in sorted(schema_ids):
-            decoded = source.where(F.col("schema_id") == schema_id).withColumn(
-                "d",
-                from_avro(
-                    F.expr(wire.body_expr("payload")),
-                    fetch_schema(schema_id),
-                    # FAILFAST: a body that does not decode is corruption, and a
-                    # PERMISSIVE null row would put a silently empty trade into
-                    # a table whose whole purpose is to be trustworthy.
-                    {"mode": "FAILFAST"},
-                ),
-            )
-            parts.append(project(decoded))
+    for schema_id, detail in unresolvable:
+        write_audit_row(
+            spark,
+            run_ts,
+            "unresolvable_schema_id",
+            f"{table}/schema_id={schema_id}",
+            passed=False,
+            observed=schema_id,
+            detail=detail,
+        )
+    if not parts:
+        return 0
 
-        out = reduce(DataFrame.unionByName, parts)
+    out = reduce(DataFrame.unionByName, parts).persist(StorageLevel.DISK_ONLY)
+    try:
         written = out.count()
         (
             out.writeTo(table)
@@ -347,11 +483,42 @@ def stage_bronze(spark, raw_snapshot_id) -> int:
             .option(f"snapshot-property.{O.SRC_SNAPSHOT_ID}", str(raw_snapshot_id))
             .append()
         )
-        print(
-            f"stage 2: {written} rows -> {table} (schema ids {sorted(schema_ids)}, src snapshot {raw_snapshot_id})"
+    finally:
+        out.unpersist()
+    print(
+        f"stage 2: {written} rows -> {table} (schema ids {sorted(schema_ids)}, src snapshot {raw_snapshot_id})"
+    )
+    return written
+
+
+def write_audit_row(spark, run_ts, check_name, scope, passed, observed, detail) -> None:
+    """One row into `audit.checks`, from a job that is not the nightly audit.
+
+    Same table, `job='ingest'`, so "what did the pipeline find and when" stays
+    one query. Best-effort: a finding that cannot be recorded must not become a
+    second failure on top of the one it was reporting.
+    """
+    try:
+        (
+            spark.createDataFrame(
+                [
+                    Row(
+                        run_ts=run_ts,
+                        job="ingest",
+                        check_name=check_name,
+                        scope=scope,
+                        passed=passed,
+                        observed=int(observed),
+                        detail=detail,
+                    )
+                ]
+            )
+            .writeTo(CHECKS_TABLE)
+            .option(f"snapshot-property.{O.JOB}", "ingest")
+            .append()
         )
-        total += written
-    return total
+    except Exception as exc:  # noqa: BLE001 - the finding already printed above
+        print(f"stage 2: could not write the audit row ({exc})")
 
 
 # ── probe ───────────────────────────────────────────────────────────────────
@@ -408,6 +575,20 @@ def probe(spark, window_seconds: int = 120) -> int:
     return 1 if bad else 0
 
 
+def _acquire_lock(path: str):
+    """Exclusive, non-blocking. Returns the held handle, or None if another
+    ingest holds it. The handle is returned so the caller keeps it open — the
+    lock dies with the file descriptor, and with the process, so a SIGKILL
+    releases it without leaving a stale lock behind."""
+    handle = open(path, "w")  # noqa: SIM115 - held for the life of the run
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=("all", "raw", "bronze"), default="all")
@@ -416,26 +597,35 @@ def main() -> int:
         default="",
         help="stop stage 1 at this instant (ISO-8601 or epoch ms) instead of at latest",
     )
-    parser.add_argument(
-        "--partitions",
-        type=int,
-        default=O.DEFAULT_PARTITIONS,
-        help="partitions per v3 topic; must match docker/redpanda/init.sh",
-    )
     parser.add_argument("--probe", action="store_true", help="report topic framing, write nothing")
     args = parser.parse_args()
 
     ingest_ts = datetime.now(timezone.utc)
+
+    # --probe writes nothing, so it does not contend with a running ingest.
+    lock = None
+    if not args.probe:
+        lock = _acquire_lock(LOCK_PATH)
+        if lock is None:
+            print(
+                f"another ingest holds {LOCK_PATH} — refusing to run a second one.\n"
+                "Two concurrent appends both commit and both write offsets; see LOCK_PATH above.",
+                file=sys.stderr,
+            )
+            return 2
+
     spark = lake_session("k2-lake-ingest")
     try:
         if args.probe:
             return probe(spark)
         if args.stage in ("all", "raw"):
-            stage_raw(spark, ingest_ts, args.end_timestamp, args.partitions)
+            stage_raw(spark, ingest_ts, args.end_timestamp)
         if args.stage in ("all", "bronze"):
-            stage_bronze(spark, current_snapshot_id(spark, RAW_TABLE))
+            stage_bronze(spark, current_snapshot_id(spark, RAW_TABLE), ingest_ts)
     finally:
         spark.stop()
+        if lock is not None:
+            lock.close()
     return 0
 
 
