@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  kotlin:
+    name: Kotlin (feed handler)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: services/feed-handler-kotlin
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      # `build` runs compile + test. fatJar is only needed by the Docker build.
+      - run: ./gradlew build --no-daemon
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: kotlin-test-report
+          path: services/feed-handler-kotlin/build/reports/tests/test
+          retention-days: 7
+
+  python:
+    name: Python (offload + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+
+      - name: Ruff
+        run: uv run --no-project --with ruff ruff check docker/offload tests
+
+      - name: Pytest
+        run: uv run --no-project --with prefect --with pytest pytest tests -q
+
+  docker:
+    name: Docker build (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: feed-handler
+            dockerfile: services/feed-handler-kotlin/Dockerfile
+          - name: prefect
+            dockerfile: docker/prefect/Dockerfile
+          - name: spark
+            dockerfile: docker/spark/Dockerfile
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # All three Dockerfiles COPY from repo root, so context is `.` (matches docker-compose.yml).
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  security:
+    name: Security (Trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          skip-dirs: legacy
+          severity: CRITICAL,HIGH
+          format: sarif
+          output: trivy-results.sarif
+
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
