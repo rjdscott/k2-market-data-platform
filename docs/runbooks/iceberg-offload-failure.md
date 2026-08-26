@@ -7,16 +7,6 @@
 **Maintained By:** Platform Engineering
 
 
-> **Metrics caveat (read first).** The `offload_*` metrics used below are exported by
-> `docker/offload/metrics.py`, which only starts its HTTP server on port 8000 when the
-> flow is run standalone. Under the Prefect worker no exporter runs and the
-> `iceberg-scheduler` scrape job is commented out in `docker/prometheus/prometheus.yml`,
-> so `curl localhost:8000/metrics` will fail and the Prometheus alerts named here cannot
-> fire. Until that is wired up, substitute the ground-truth sources: the watermark table
-> in PostgreSQL, Prefect run history (`prefect flow-run ls`), and
-> `docker logs k2-prefect-worker` / `docker logs k2-spark-iceberg`. See
-> [../observability.md](../observability.md#iceberg-offload-alertsyml--cold-tier-9).
-
 ---
 
 ## Summary
@@ -75,7 +65,7 @@ Or check visually at **http://localhost:4200** → Flow Runs.
 - Recent flow runs in COMPLETED state
 - Any FAILED runs will show error details in Prefect UI
 
-**If worker is not running:** Jump to [Resolution: Worker Not Running](#scenario-1-scheduler-not-running)
+**If worker is not running:** Jump to [Resolution: Worker Not Running](#scenario-1-worker-not-running)
 
 ### Step 3: Identify Error Type
 

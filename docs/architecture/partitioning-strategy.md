@@ -46,7 +46,7 @@ Cold-tier partitioning solves a different problem — not eviction (nothing is e
 
 All ten tables: Parquet, zstd level 3, `write.target-file-size-bytes = 134217728` (128 MB). Measured compression on real Binance trade data is ~12:1.
 
-The offload runs every 15 minutes, which means each cycle writes small files into the current day's partition. That is what the daily maintenance flow exists for: at 02:00 UTC it runs binpack compaction toward the 128 MB target, then expires snapshots older than 7 days ([ADR-017](../decisions/ADR-017-iceberg-maintenance-pipeline.md)). Without compaction, a 15-minute cadence produces ~96 files per partition per day.
+The offload runs every 15 minutes, which means each cycle writes small files into the current day's partition. That is what the daily maintenance flow exists for: at 02:00 UTC it runs binpack compaction toward the 128 MB target, then expires snapshots older than 7 days ([ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md)). Without compaction, a 15-minute cadence produces ~96 files per partition per day.
 
 **No symbol in any Iceberg partition spec.** Symbol is the obvious candidate and it is deliberately absent: `days × exchange × ~30 symbols` on Silver would be ~90 partitions per day, most of them holding a few hundred rows. Symbol is the sort key inside each file instead, so predicate pushdown still prunes row groups. Iceberg supports partition evolution, so `ADD PARTITION FIELD symbol` is available without rewriting data if the query pattern ever justifies it.
 

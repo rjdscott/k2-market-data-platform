@@ -209,4 +209,4 @@ docker exec k2-redpanda rpk topic consume market.crypto.trades.binance.raw \
 
 - [quick-reference.md](./quick-reference.md) — the short version of this page
 - [observability.md](./observability.md) — metrics and alerts rather than row-level data
-- [runbooks/failure-recovery.md](./runbooks/failure-recovery.md) — when inspection shows a gap
+- [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md) — when inspection shows a gap

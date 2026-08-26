@@ -228,7 +228,7 @@ docker exec k2-redpanda rpk group list
 
 ## Related
 
-- [ADR-001: Replace Kafka with Redpanda](../../decisions/ADR-001-replace-kafka-with-redpanda.md)
+- [ADR-001: Replace Kafka with Redpanda](../adr/ADR-001-replace-kafka-with-redpanda.md)
 - [Feed handler failure recovery](./failure-recovery.md#3-feed-handler-crash)
-- [Adding a new exchange](../adding-new-exchanges.md)
-- [ClickHouse consumer issues](../../decisions/ADR-009-medallion-in-clickhouse.md)
+- [Adding a new exchange](../operations/adding-new-exchanges.md)
+- [ClickHouse consumer issues](../adr/ADR-009-medallion-in-clickhouse.md)

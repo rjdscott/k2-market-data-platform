@@ -11,8 +11,8 @@ day-to-day operations see [../docs/operations/README.md](../docs/operations/READ
 docker/
 ├── clickhouse/           # ClickHouse server config + DDL bootstrap + schema history
 │   ├── config.xml        # Server config (Kafka Engine, compression, Prometheus exporter)
-│   ├── ddl/              # offload-watermarks table DDL
-│   └── schema/           # Ordered schema migration history (bronze/silver/gold)
+│   ├── ddl/              # ClickHouse medallion bootstrap (01-k2-schema.sql), auto-run on init
+│   └── schema/           # Historical schema migration trail (not run)
 ├── iceberg/
 │   ├── ddl/              # Iceberg catalog + bronze/silver/gold table DDL
 │   ├── validation/       # Table validation SQL
@@ -26,7 +26,7 @@ docker/
 ├── spark/                # Spark image (Dockerfile, bundles ClickHouse JDBC driver)
 ├── grafana/
 │   ├── provisioning/     # Auto-provisioned datasource (Prometheus) + dashboard loader
-│   └── dashboards/       # Dashboard JSON (pipeline overview, ClickHouse, Iceberg offload)
+│   └── dashboards/       # Dashboard JSON (pipeline overview, ClickHouse, Iceberg offload, v2-migration-tracker)
 ├── prometheus/
 │   ├── prometheus.yml    # Scrape configs
 │   └── rules/            # Alerting rules (ClickHouse, feed handlers, Iceberg offload)
@@ -80,5 +80,5 @@ docker compose logs prefect-worker --tail 100
 - Validate rules: `docker run --rm -v $PWD/docker/prometheus/rules:/r --entrypoint promtool prom/prometheus:v3.2.0 check rules /r/*.yml`
 
 **Iceberg offload stuck**
-- See [../docs/operations/runbooks/iceberg-offload-failure.md](../docs/operations/runbooks/iceberg-offload-failure.md)
-  and [../docs/operations/runbooks/iceberg-offload-lag.md](../docs/operations/runbooks/iceberg-offload-lag.md)
+- See [../docs/runbooks/iceberg-offload-failure.md](../docs/runbooks/iceberg-offload-failure.md)
+  and [../docs/runbooks/iceberg-offload-lag.md](../docs/runbooks/iceberg-offload-lag.md)

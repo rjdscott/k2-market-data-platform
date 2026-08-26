@@ -1,6 +1,6 @@
 # Migration Journey — v1 to v2
 
-This is the honest version: what was predicted, what shipped, what was quietly abandoned, and what the numbers actually came out as. The as-built system is described in [architecture/README.md](architecture/README.md); the reasoning behind each move is in [decisions/](decisions/).
+This is the honest version: what was predicted, what shipped, what was quietly abandoned, and what the numbers actually came out as. The as-built system is described in [architecture/README.md](architecture/README.md); the reasoning behind each move is in [decisions/](adr/).
 
 ---
 
@@ -41,14 +41,14 @@ timeline
 
 | # | Phase | Shipped | Outcome | ADRs |
 |---|---|---|---|---|
-| 1 | Infrastructure baseline | Compose skeleton, Redpanda + Console, Prometheus, Grafana, health checks | ✅ Done in 1 day against a 1-week estimate. 1.09 GB idle vs a 12.75 GB budget | [001](decisions/ADR-001-replace-kafka-with-redpanda.md), [010](decisions/ADR-010-resource-budget.md) |
-| 2 | Redpanda migration | Single-broker Redpanda v25.3.4, built-in schema registry, explicit topic init | ✅ Kafka + Confluent Schema Registry both deleted; startup 15–30 s → 2–5 s | [001](decisions/ADR-001-replace-kafka-with-redpanda.md) |
-| 3 | ClickHouse foundation | Kafka-engine queues, bronze/silver/gold DDL, Kraken added as second exchange | ✅ 30k+ trades through all layers, 0 errors over 90 min | [003](decisions/ADR-003-clickhouse-warm-storage.md), [009](decisions/ADR-009-medallion-in-clickhouse.md), [011](decisions/ADR-011-multi-exchange-bronze-architecture.md) |
-| 4 | Streaming pipeline | Bronze → Silver → Gold entirely as materialized views | ✅ **The planned Kotlin Silver Processor was never built** — MVs made it unnecessary, saving a service | [004](decisions/ADR-004-eliminate-spark-streaming.md), [009](decisions/ADR-009-medallion-in-clickhouse.md) |
-| 5 | Cold tier / Iceberg | 10 Iceberg tables, Spark offload with PostgreSQL watermarks, Prefect 3 deployments, daily compaction + audit | ✅ 3.78M rows in 16 s (236k rows/s), 12:1 zstd compression, 99.9%+ warm/cold consistency | [006](decisions/ADR-006-spark-batch-only.md), [007](decisions/ADR-007-iceberg-cold-storage.md), [013](decisions/ADR-013-pragmatic-iceberg-version-strategy.md), [014](decisions/ADR-014-spark-based-iceberg-offload.md), [017](decisions/ADR-017-iceberg-maintenance-pipeline.md) |
-| 6 | Kotlin feed handlers | Ktor WebSocket clients, dual raw+Avro producers, shared instrument registry | ✅ Built early, during Phase 3, to unblock end-to-end validation. 0.034 CPU / 134 MiB measured for Binance | [002](decisions/ADR-002-kotlin-feed-handlers.md) |
-| 7 | Integration hardening | Latency benchmark ✅, resource burn-in 🟡, failure-mode testing ✅, monitoring 🟡, runbooks ⬜ | 🟡 3 of 5 steps complete | [015](decisions/ADR-015-clickhouse-lts-downgrade.md), [016](decisions/ADR-016-add-coinbase-exchange.md) |
-| 8 | Query API | — | ⬜ Not started | [005](decisions/ADR-005-kotlin-spring-boot-api.md) |
+| 1 | Infrastructure baseline | Compose skeleton, Redpanda + Console, Prometheus, Grafana, health checks | ✅ Done in 1 day against a 1-week estimate. 1.09 GB idle vs a 12.75 GB budget | [001](adr/ADR-001-replace-kafka-with-redpanda.md), [010](adr/ADR-010-resource-budget.md) |
+| 2 | Redpanda migration | Single-broker Redpanda v25.3.4, built-in schema registry, explicit topic init | ✅ Kafka + Confluent Schema Registry both deleted; startup 15–30 s → 2–5 s | [001](adr/ADR-001-replace-kafka-with-redpanda.md) |
+| 3 | ClickHouse foundation | Kafka-engine queues, bronze/silver/gold DDL, Kraken added as second exchange | ✅ 30k+ trades through all layers, 0 errors over 90 min | [003](adr/ADR-003-clickhouse-warm-storage.md), [009](adr/ADR-009-medallion-in-clickhouse.md), [011](adr/ADR-011-multi-exchange-bronze-architecture.md) |
+| 4 | Streaming pipeline | Bronze → Silver → Gold entirely as materialized views | ✅ **The planned Kotlin Silver Processor was never built** — MVs made it unnecessary, saving a service | [004](adr/ADR-004-eliminate-spark-streaming.md), [009](adr/ADR-009-medallion-in-clickhouse.md) |
+| 5 | Cold tier / Iceberg | 10 Iceberg tables, Spark offload with PostgreSQL watermarks, Prefect 3 deployments, daily compaction + audit | ✅ 3.78M rows in 16 s (236k rows/s), 12:1 zstd compression, 99.9%+ warm/cold consistency | [006](adr/ADR-006-spark-batch-only.md), [007](adr/ADR-007-iceberg-cold-storage.md), [013](adr/ADR-013-pragmatic-iceberg-version-strategy.md), [014](adr/ADR-014-spark-based-iceberg-offload.md), [017](adr/ADR-017-iceberg-maintenance-pipeline.md) |
+| 6 | Kotlin feed handlers | Ktor WebSocket clients, dual raw+Avro producers, shared instrument registry | ✅ Built early, during Phase 3, to unblock end-to-end validation. 0.034 CPU / 134 MiB measured for Binance | [002](adr/ADR-002-kotlin-feed-handlers.md) |
+| 7 | Integration hardening | Latency benchmark ✅, resource burn-in 🟡, failure-mode testing ✅, monitoring ✅, runbooks ✅ (8: failure-recovery, iceberg-offload-{failure,lag,performance,monitoring,watermark-recovery}, iceberg-scheduler-recovery, redpanda) | 🟡 4 of 5 steps complete; remaining: 24 h burn-in, 5×/10× load test, Alertmanager routing | [015](adr/ADR-015-clickhouse-lts-downgrade.md), [016](adr/ADR-016-add-coinbase-exchange.md) |
+| 8 | Query API | — | ⬜ Not started | [005](adr/ADR-005-kotlin-spring-boot-api.md) |
 
 ---
 
@@ -58,14 +58,14 @@ timeline
 
 | | v1 | v2 as-built | Change |
 |---|---|---|---|
-| CPU limits | 35–40 cores | **15.0** | −57 to −63% |
-| RAM limits | 45–50 GB | **21.75 GB** | −52 to −57% |
-| Long-lived services | 18–20 | **13** | −28 to −35% |
+| CPU limits | 35–40 cores | **15.1** | −57 to −63% |
+| RAM limits | 45–50 GB | **21.875 GB** | −52 to −56% |
+| Long-lived services | 18–20 | **14** (+2 one-shot) | −22 to −30% |
 | Always-on Spark | 14 CPU / 20 GB | 0 (batch only) | −100% |
 | Python processes | 4 | 0 in the data path | Prefect remains, control plane only |
 | Trade → queryable | 5–15 min | **<200 ms p99** | >1000x |
 
-Fits the mandate on both axes, with 1.0 CPU and 18.25 GB of headroom.
+Fits the mandate on both axes, with 0.9 CPU and 18.1 GB of headroom.
 
 ### Latency
 
@@ -107,15 +107,15 @@ The v2 investment analysis and ADRs were written on 2026-02-09, before any code.
 | 5,000+ msg/s per feed handler (36x) | Handlers run at 100–200 trades/s because that is what the exchanges send; headroom untested | ❓ Unverified |
 | Feed handler p99 2 ms, broker p99 5 ms | Only end-to-end was instrumented | ❓ Unverified per-segment |
 | Cold tier freshness 24 h → ~1 h | 15-minute offload cadence | ✅ Beaten by 4x |
-| Prefect eliminated ([ADR-008](decisions/ADR-008-eliminate-prefect-orchestration.md)) | **Retained** — 3 containers, 2.5 CPU / 2.5 GB. It stopped scheduling OHLCV (MVs took that) and started scheduling the Iceberg offload, a job that genuinely needs retries, run history and a work pool | ❌ Reversed, correctly |
+| Prefect eliminated ([ADR-008](adr/ADR-008-eliminate-prefect-orchestration.md)) | **Retained** — 3 containers, 2.5 CPU / 2.5 GB. It stopped scheduling OHLCV (MVs took that) and started scheduling the Iceberg offload, a job that genuinely needs retries, run history and a work pool | ❌ Reversed, correctly |
 | Kotlin Silver Processor (1.0 CPU / 512 MB) | Never built. A materialized view did the same transform in-database, sub-millisecond | ❌ Deleted from the plan mid-Phase-4 |
-| A Kotlin JVM API replaces the v1 FastAPI service ([ADR-005](decisions/ADR-005-kotlin-spring-boot-api.md)) | Never built. The analysis itself ranked it 3/10 ROI and noted it *costs* +0.5 CPU | ❌ Correctly skipped |
+| A Kotlin JVM API replaces the v1 FastAPI service ([ADR-005](adr/ADR-005-kotlin-spring-boot-api.md)) | Never built. The analysis itself ranked it 3/10 ROI and noted it *costs* +0.5 CPU | ❌ Correctly skipped |
 | Four-layer medallion: Raw → Bronze → Silver → Gold | Three layers. The Kafka-engine queue holds raw in flight but nothing persists it | ❌ Scoped down |
-| Iceberg REST catalog + PostgreSQL metadata | Hadoop file catalog on a bind mount. REST cost a day of version fights and bought nothing on one node ([ADR-013](decisions/ADR-013-pragmatic-iceberg-version-strategy.md)) | ❌ Simplified |
+| Iceberg REST catalog + PostgreSQL metadata | Hadoop file catalog on a bind mount. REST cost a day of version fights and bought nothing on one node ([ADR-013](adr/ADR-013-pragmatic-iceberg-version-strategy.md)) | ❌ Simplified |
 | One feed-handler service | Three containers, one per exchange, from a single image | ❌ Changed — cross-exchange blast-radius isolation was worth 2 extra containers, and the failure test proved it |
-| 15.5 CPU / 19.5 GB across 11 services | 15.0 CPU / 21.75 GB across 13 services | ~ CPU came in under; RAM over by 2.25 GB, mostly Prometheus and the third exchange |
-| Two exchanges (Binance, Kraken) | Three — Coinbase added in Phase 7 ([ADR-016](decisions/ADR-016-add-coinbase-exchange.md)) | ✅ Scope grew, budget held |
-| ClickHouse 26.1 (latest) | 24.3 LTS — 26.1 broke Spark JDBC ([ADR-015](decisions/ADR-015-clickhouse-lts-downgrade.md)) | ❌ Newest lost to compatible |
+| 15.5 CPU / 19.5 GB across 11 services | 15.1 CPU / 21.875 GB across 14 services (+2 one-shot) | ~ CPU came in under; RAM over by 2.375 GB, mostly Prometheus and the third exchange |
+| Two exchanges (Binance, Kraken) | Three — Coinbase added in Phase 7 ([ADR-016](adr/ADR-016-add-coinbase-exchange.md)) | ✅ Scope grew, budget held |
+| ClickHouse 26.1 (latest) | 24.3 LTS — 26.1 broke Spark JDBC ([ADR-015](adr/ADR-015-clickhouse-lts-downgrade.md)) | ❌ Newest lost to compatible |
 
 Pattern in the misses: **every prediction that was wrong was wrong in the direction of over-building.** Nothing that got cut turned out to be needed. Two of the three services that were planned and never written (Silver Processor, JVM query API) were replaced by features already present in components that were already running.
 
@@ -125,7 +125,7 @@ Pattern in the misses: **every prediction that was wrong was wrong in the direct
 
 **Phase 7 — hardening (in progress)**
 - 24-hour resource burn-in: sampling loop ran, results never collected. Without it the latency figures stay caveated and the resource numbers stay limits-on-paper rather than observed steady state.
-- Alert fire test: 18 rules are loaded and none has been triggered on purpose. The 9 Iceberg-offload rules cannot fire at all — the exporter listens on `:8000` in `prefect-worker` but the Prometheus scrape job is commented out.
+- Alert fire test: 17 rules are loaded and none has been triggered on purpose.
 - 5 operational runbooks and doc finalisation.
 
 **Phase 8 — query API (not started)**
@@ -142,11 +142,11 @@ Single broker, single ClickHouse node, single host, no replication. Iceberg on a
 
 2. **A database that already consumes Kafka does not need a service in front of it.** ClickHouse Kafka-engine tables plus materialized views replaced five Spark jobs *and* the Kotlin Silver Processor that was supposed to replace two of them. The best service is the one you notice you don't have to write.
 
-3. **Constraints beat intentions.** "Reduce resource usage" produces tuning. "16 cores, 40 GB, one host" produces architecture. The budget in [ADR-010](decisions/ADR-010-resource-budget.md) was checked at every phase boundary, which is why the answer at the end was 15.0 and not 22.
+3. **Constraints beat intentions.** "Reduce resource usage" produces tuning. "16 cores, 40 GB, one host" produces architecture. The budget in [ADR-010](adr/ADR-010-resource-budget.md) was checked at every phase boundary, which is why the answer at the end was 15.0 and not 22.
 
-4. **Deleting a tool and repurposing it are different decisions.** [ADR-008](decisions/ADR-008-eliminate-prefect-orchestration.md) argued Prefect was two services and a UI for what amounted to five cron jobs. That was true — of the OHLCV workload. Once MVs absorbed that, the offload job appeared, and it wanted retries, run history, watermark safety and a work pool. Prefect stayed for a better reason than it was originally there for. The ADR is kept as written, unamended.
+4. **Deleting a tool and repurposing it are different decisions.** [ADR-008](adr/ADR-008-eliminate-prefect-orchestration.md) argued Prefect was two services and a UI for what amounted to five cron jobs. That was true — of the OHLCV workload. Once MVs absorbed that, the offload job appeared, and it wanted retries, run history, watermark safety and a work pool. Prefect stayed for a better reason than it was originally there for. The ADR is kept as written, unamended.
 
-5. **Latest is not a version strategy.** ClickHouse 26.1 broke the Spark JDBC driver and cost a downgrade to 24.3 LTS; the Iceberg REST catalog cost a day before the file-based Hadoop catalog worked in ten minutes. Both are recorded ([ADR-015](decisions/ADR-015-clickhouse-lts-downgrade.md), [ADR-013](decisions/ADR-013-pragmatic-iceberg-version-strategy.md)) rather than quietly fixed.
+5. **Latest is not a version strategy.** ClickHouse 26.1 broke the Spark JDBC driver and cost a downgrade to 24.3 LTS; the Iceberg REST catalog cost a day before the file-based Hadoop catalog worked in ten minutes. Both are recorded ([ADR-015](adr/ADR-015-clickhouse-lts-downgrade.md), [ADR-013](adr/ADR-013-pragmatic-iceberg-version-strategy.md)) rather than quietly fixed.
 
 6. **Idempotency is cheaper than exactly-once.** Watermarks in PostgreSQL, advanced only after a successful Iceberg append, made "kill Spark mid-run" a non-event. No transactions, no two-phase commit, no coordination — just a number that moves last.
 

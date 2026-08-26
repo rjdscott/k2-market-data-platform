@@ -307,7 +307,7 @@ offload-cron:
 5. `docker/offload/watermark.py` (Watermark utility functions)
 6. `docker/offload-cron/15min/offload-all.sh` (Cron wrapper script)
 7. `docker-compose.phase5-offload.yml` (Add cron + updated Spark resources)
-8. `docs/operations/runbooks/iceberg-offload-monitoring.md` (Runbook)
+8. `docs/runbooks/iceberg-offload-monitoring.md` (Runbook)
 
 **Acceptance Criteria**:
 - [ ] Spark jobs read incrementally from ClickHouse (using watermarks)

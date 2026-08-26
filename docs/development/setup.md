@@ -7,7 +7,7 @@ code once it is.
 
 | Tool | Needed for | Notes |
 |------|-----------|-------|
-| Docker Engine + Compose v2 | everything | Budget 16 CPU / 24 GB available to Docker. The stack declares 15.0 CPU / 21.75 GB of limits |
+| Docker Engine + Compose v2 | everything | Budget 16 CPU / 24 GB available to Docker. The stack declares 15.1 CPU / 21.875 GB of limits |
 | JDK 21 | running Kotlin tests or a handler outside Docker | Only that; `./gradlew` bootstraps Gradle itself |
 | [`uv`](https://docs.astral.sh/uv/) | Python offload-flow tests | Nothing else uses Python locally |
 | `jq`, `psql` | the diagnostic one-liners in the ops docs | optional |
@@ -30,21 +30,10 @@ password.
 
 ### Applying the ClickHouse schema
 
-**Known rough edge.** Only `docker/clickhouse/ddl/` is mounted into
-`/docker-entrypoint-initdb.d`, so a fresh volume gets the `k2` database and the watermark
-table — but **not** the bronze, silver or gold tables. There is no bootstrap script yet;
-apply the DDL from [`docker/clickhouse/schema/`](../../docker/clickhouse/schema/) by hand:
-
-```bash
-set -a && . ./.env && set +a
-docker exec -i k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --multiquery \
-  < docker/clickhouse/schema/11-bronze-coinbase.sql
-```
-
-The numbered files accumulated variants as the schema evolved — some target `default`,
-some have a `-fixed` twin. The `k2.`-qualified ones are what production runs. See
-[../operations/clickhouse-database-standard.md](../operations/clickhouse-database-standard.md)
-before picking files, and `SHOW TABLES FROM k2` to confirm what actually landed.
+The full schema (25 objects: `k2` database, watermark table, bronze/silver/gold) auto-applies
+from [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql) on
+a fresh volume via `/docker-entrypoint-initdb.d`. `docker/clickhouse/schema/` is the historical
+migration trail and is not run.
 
 ## Verifying data is flowing
 

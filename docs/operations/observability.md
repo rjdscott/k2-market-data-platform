@@ -1,6 +1,6 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 18 alert rules cover the three
+Prometheus scrapes the stack, Grafana renders it, and 17 alert rules cover the three
 things that actually break: ingestion stops, ClickHouse struggles, the cold-tier offload
 falls behind.
 
@@ -21,6 +21,7 @@ container start, no click-ops.
 | `clickhouse` | `clickhouse:9363` | 15s | `<prometheus>` block in [`docker/clickhouse/config.xml`](../../docker/clickhouse/config.xml) |
 | `grafana` | `grafana:3000` | 15s | Grafana internal metrics |
 | `feed-handler-{binance,kraken,coinbase}` | `feed-handler-<x>:8082` | 10s | Micrometer, see below |
+| `iceberg-scheduler` | `iceberg-metrics:8000` | 15s | `docker/offload/metrics.py --serve`, see below |
 
 Port 8082 is **not published to the host** — reach it through the container:
 
@@ -45,11 +46,6 @@ into a shared Micrometer registry, served by
 Plus the JVM/process metrics Micrometer registers by default. Recording rule
 `feed_handler:trade_rate:5m` pre-computes the raw trade rate per exchange.
 
-**Known gap:** `FeedHandlerDown` is written against
-`feed_handler_last_message_timestamp_seconds`, which the handler does not currently
-emit — that alert cannot fire. Use `FeedHandlerMetricsDown` (target-based) or the
-container healthcheck until the gauge is added.
-
 ## Dashboards
 
 | Dashboard | UID | What it shows |
@@ -59,24 +55,20 @@ container healthcheck until the gauge is added.
 | Iceberg Offload Pipeline | `iceberg-offload` | Offload lag, success rate, rows/sec, duration quantiles, error rate, cycle status |
 | K2 Platform v2 — Migration Tracker | `k2-v2-migration` | Total CPU/RAM gauges against the 16-core budget, service up/down, Redpanda and ClickHouse rates |
 
-<!-- screenshot: docs/images/grafana-pipeline-overview.png (localhost:3000/d/k2-pipeline-overview, last 6h) -->
-<!-- screenshot: docs/images/grafana-clickhouse.png (localhost:3000/d/clickhouse-v2, last 6h) -->
-<!-- screenshot: docs/images/grafana-iceberg-offload.png (localhost:3000/d/iceberg-offload, last 24h) -->
-<!-- screenshot: docs/images/prometheus-alerts.png (localhost:9090/alerts) -->
+![Redpanda topics](../images/redpanda-console-topics.jpg)
 
 ## Alert rules
 
-18 rules across three files. Every annotation carries the diagnostic commands and a
+17 rules across three files. Every annotation carries the diagnostic commands and a
 runbook link; the tables below are the index.
 
-### `feed-handler-alerts.yml` — ingestion (4)
+### `feed-handler-alerts.yml` — ingestion (3)
 
 | Alert | Severity | Fires when |
 |-------|----------|-----------|
-| `FeedHandlerDown` | critical | No trade produced for >120s (see known gap above) |
+| `FeedHandlerDown` | critical | Metrics endpoint / scrape target down for 2m |
 | `FeedHandlerHighErrorRate` | critical | `rate(feed_handler_errors_total[5m]) > 0.1` for 3m |
 | `FeedHandlerFrequentReconnects` | warning | More than 3 reconnects in 15m, sustained 5m |
-| `FeedHandlerMetricsDown` | warning | Prometheus cannot scrape a handler's `/metrics` for 2m |
 
 ### `clickhouse-alerts.yml` — warm tier (5)
 
@@ -85,10 +77,10 @@ runbook link; the tables below are the index.
 | `ClickHouseDown` | critical | `up{job="clickhouse"} == 0` for 2m |
 | `ClickHouseHighMemoryUsage` | critical | Resident memory >85% of system RAM for 5m |
 | `ClickHouseQueryFailureRateHigh` | critical | `rate(FailedQuery[5m]) > 0.1` for 3m |
-| `ClickHouseBronzeInsertRateLow` | warning | <0.5 rows/sec inserted over 10m — expect off-peak false positives |
+| `ClickHouseBronzeInsertRateLow` | warning | Server-wide inserted rows < 0.5/s over 5m |
 | `ClickHouseMergeQueueLarge` | warning | >10 background merge tasks queued for 5m |
 
-Recording rules: `clickhouse:insert_rate:5m`, `clickhouse:query_duration_p99:5m`.
+Recording rules: `clickhouse:insert_rate:5m`, `clickhouse:query_duration_mean:5m`.
 
 ### `iceberg-offload-alerts.yml` — cold tier (9)
 
@@ -156,7 +148,7 @@ Sanity-check the exporter's counting logic offline with
 | Offload success rate | >99% | >95% | no failures observed to date |
 | Offload cycle duration | <30 s | <10 min | 5–7 s per table (2026-08-26) |
 | Warm/cold consistency | 100% | >99% | 99.9%+ (2026-02-15, 2026-02-18) |
-| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 tested modes — see [runbooks/failure-recovery.md](./runbooks/failure-recovery.md) |
+| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 tested modes — see [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md) |
 
 ## Not wired up
 
@@ -164,15 +156,14 @@ Honest gaps, in priority order:
 
 1. **No Alertmanager.** `alerting.alertmanagers.targets` is empty — alerts are visible in
    the Prometheus UI and Grafana but nothing routes to a pager or Slack.
-2. **`FeedHandlerDown` references a metric that does not exist** (above).
-3. **No exporters for MinIO, PostgreSQL or Spark.** Their health is only observable via
+2. **No exporters for MinIO, PostgreSQL or Spark.** Their health is only observable via
    `docker compose ps` and container logs.
-4. **No query-latency percentiles for ClickHouse.** Its Prometheus endpoint exposes
+3. **No query-latency percentiles for ClickHouse.** Its Prometheus endpoint exposes
    counters only — no native histograms — so `clickhouse:query_duration_mean:5m` is a mean,
    not a p99.
 
 ## Related
 
 - [quick-reference.md](./quick-reference.md) — health-check one-liners
-- [runbooks/failure-recovery.md](./runbooks/failure-recovery.md) — what to do when one of these fires
+- [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md) — what to do when one of these fires
 - [latency-budgets.md](./latency-budgets.md) — the latency targets behind the SLO table

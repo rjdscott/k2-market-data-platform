@@ -1,142 +1,133 @@
-# Claude Code Instructions — Pragmatic Edition (2025/2026)
+# CLAUDE.md
 
-## Core Philosophy
-"Make it work. Make it clean. Make it fast. In that order."  
-Prefer forward progress over theoretical perfection.
+The working contract for this repo. K2 is a single-host crypto market data
+platform: Kotlin feed handlers → Redpanda → ClickHouse (medallion via
+materialized views) → Iceberg on MinIO, Spark batch offload under Prefect.
+v2 is at the repo root; v1 is archived unmodified in `legacy/v1/`.
+Read this before writing code or docs. Architecture: `ARCHITECTURE-V2.md`.
 
-## Main Goals (priority)
-1. Working & correct implementation (passes realistic tests/use-cases)  
-2. Understandable code (next dev can figure it out in <15 min)  
-3. Maintainable structure (evolves without heroic effort)  
-4. Good performance (apply 80/20)  
-5. Nice abstractions (only when low cost)
-6. Best documentation (after code works)
-7. Always research latest documentation for any libraries / frameworks used
+## Branch + PR discipline
 
----
+- **Don't push to `main`.** Branch + PR, one PR per logical change.
+- **Branch naming:** `feat/<slug>`, `fix/<slug>`, `chore/<slug>`, `docs/<slug>`.
+- **Conventional commits**, as in `CONTRIBUTING.md`: `feat(scope): …`,
+  `fix(scope): …`, `docs: …`, `chore: …`, `ci: …`.
 
-## Practical Workflow Guidelines
+**None of this is enforced.** `main` is unprotected — this is a solo-maintainer
+portfolio repo and a required-review gate on a repo with one reviewer costs more
+than it catches. A push straight to `main` will succeed, so don't. A second
+contributor is the trigger to turn protection on. `CONTRIBUTING.md` states the
+conventions for outsiders; `SECURITY.md` states what to do with a vulnerability.
+What *is* enforced is CI (`.github/workflows/ci.yml`) on every PR.
 
-### 1) Task & Progress Tracking (very important)
-Place a short status block at the top of PRs / responses.
+## Skills
 
-Example
-```text
-Current status:
-• [x] authentication endpoints & basic JWT
-• [x] user profile basic model + CRUD
-• [ ] email verification flow
-• [ ] rate limiting + security headers
-• [ ] CI pipeline with tests
-```
-Keep these updated and concise.
+One skill per doc surface. Each reads its surface's `README.md` first, so the
+conventions live next to the artifact rather than in this file.
 
-### 2) Token & Presentation Rules
-- Never repeat large code blocks unless they changed.
-- Prefer diffs / changed functions / short file refs (e.g., src/auth/routes.py).
-- When showing context → max 30–40 lines.
-- After an architecture decision → summarize in 3–6 bullets.
+| Skill | Use when |
+|-------|----------|
+| `/adr` | a decision would cost more than a day to unwind |
+| `/plan` | multi-phase work needs a design doc with phase exit criteria |
+| `/audit` | sweeping a whole surface at a point in time (not a single diff) |
+| `/runbook` | a repeatable operation, or an incident worth teaching |
+| `/schema-change` | a data contract moves: Avro, ClickHouse DDL, Iceberg DDL |
+| `/benchmark-report` | publishing measured numbers anyone will quote |
+| `/release-check` | before tagging: fresh-clone gate |
+| `/code-review` | a single diff or PR. This is not an audit |
 
-### 3) Anti-Overengineering Checklist (ask silently)
-- Is this solving today's concrete problem?
-- Will I regret not having this in 3 months?
-- Is complexity < 2× the value?
-- Can 80% value be delivered with 20% code?
-- Would I be embarrassed to show this to a senior engineer?
+Invoke the skill rather than hand-rolling the document; the numbering, index
+updates, and gates are in there.
 
-If you fail more than one → consider simpler approach.
+## Documentation pipeline
 
-### 4) Decision & Doc Conventions
-Non-trivial choices get a short block in the PR/response:
-```text
-Decision YYYY-MM-DD: <short title>
-Reason: <one-line>
-Cost: <one-line>
-Alternative considered: <one-line>
-```
+Doc surfaces, adopted by tier. This repo is public, so it earns Tier 2.
 
-Durable decisions become an ADR in `docs/decisions/` (`ADR-NNN-kebab-title.md`, next number wins).
-Amend or supersede an ADR rather than rewriting history — a reversed decision is worth more than a
-tidy one. Docs live in `docs/{architecture,decisions,operations,development}/`; **never commit session
-logs, handoffs, progress trackers, or phase status files** — they rot. Diagrams are Mermaid, not ASCII.
+| Tier | Surfaces | Purpose |
+|------|----------|---------|
+| 0 | `docs/adr/`, `docs/runbooks/` | why, and how. Always. |
+| 1 | `docs/plans/` | multi-phase work: design + phase gates |
+| 2 | `docs/audits/`, `docs/benchmarks/`, `docs/research/` | dated snapshots: claims vs reality, numbers vs commands, analysis before a decision |
 
-### 5) Repo Layout, Environments & Tests
-v2 (the live platform) is at the repo root; v1 is archived, unmodified, in `legacy/v1/`.
-`docker-compose.yml` at the root runs the whole stack (`make up` / `make down`).
+Each surface's `README.md` carries its own conventions and index; `docs/README.md`
+is the map. Reference material lives in `docs/{architecture,operations,development}/`
+and updates in the same PR as the change it describes. ADRs record *why*, runbooks
+record *how*, benchmarks record *what it measured*, research records *what was
+considered before committing*.
 
-Python uses `uv`. The root has no `pyproject.toml`, so root tests run against ad-hoc deps:
-- `make test-python` → `uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests`
-- Lint: `uv run --no-project --with ruff ruff check docker/offload tests`
-- Legacy v1 is a real uv project: `cd legacy/v1 && uv sync --all-extras && uv run pytest`
+### Verification habits
 
-Kotlin feed handler (`services/feed-handler-kotlin/`, JDK 21):
-- `make test-kotlin` → `./gradlew test --no-daemon`
-- No local JDK 21? `docker run --rm -v "$PWD":/project -w /project/services/feed-handler-kotlin \`
-  `-e GRADLE_USER_HOME=/tmp/.gradle gradle:8.12-jdk21 gradle test --no-daemon`
+- **Verify or drop.** A claim you can't demonstrate does not ship. That applies
+  to findings, runbook steps, README numbers, and ADR consequences alike.
+- **Verify commands before writing them down.** Run it against the stack, paste
+  what it printed. A runbook nobody ran is fiction.
+- **"Revisit when" is a concrete trigger** — a metric, a date, or an event.
+  Never "if needed".
+- **`make test` before every PR**, plus the verification commands of whatever
+  you touched. CI runs kotlin / python / docker / security; keep it green.
 
-CI (`.github/workflows/ci.yml`) runs kotlin / python / docker / security on every PR — keep it green.
+### Immutability
 
-**Package Installation Best Practice:**
-When adding new Python packages, always research the latest stable version first:
-- Check PyPI, GitHub releases, or official docs for current stable version
-- Use explicit version pinning when adding: `uv add package==x.y.z`
-- Document version choice if non-obvious (e.g., compatibility constraints)
-- Avoid using `latest` or unpinned versions in production dependencies
+- An Accepted ADR is never edited. The only permitted changes: the status line
+  (`Superseded by ADR-NNN`), and an appended `## Outcome` section when reality
+  diverged from the design. The original reasoning stays as written — a
+  recorded wrong prediction is the most valuable thing in `docs/adr/`.
+- Audits and benchmarks are dated snapshots. Append `Resolved in <commit>`
+  lines; never rewrite a published finding or number.
 
-### 6) TDD — Pragmatic Variant
-Recommended flow:
-1. Write a happy-path test → minimal implementation.  
-2. Add one important edge/error case.  
-3. Make them good but also make sure they pass.  
-4. Refactor only when readability or duplication hurts.  
-5. Repeat for next important test.
+### Doc conventions
 
-Writing a few good tests early is fine; avoid 15 unit tests before any logic.
+- ADRs: `ADR-NNN-kebab-title.md`, next number wins, never reused or renumbered.
+- **Never commit session logs, handoffs, progress trackers, or phase status
+  files.** They rot. Status is expressed by ADR statuses, git tags, and CI.
+- Diagrams are Mermaid, not ASCII.
 
-### 7) Output Style Guide
-Preferred structure for responses:
-- Status (Done / In progress / Next)  
-- Decisions made (if any)  
-- Changed files (short diff summary)  
-- Next suggested steps
+## Project guardrails
 
-Example "Changed files" snippet:
-```text
-Changed files
-- src/auth/service.py  (+40 -12): added token refresh helper
-- tests/test_auth_service.py: new meaningful tests
-```
+- **Every published number needs a provenance** — the command or file that
+  produced it. README, architecture docs and ADR outcomes cite the latest
+  `docs/benchmarks/<date>.md`; that file carries the command per row.
+  `/benchmark-report` enforces this.
+- **Schema changes move together or not at all**: Avro (`schemas/avro/*.avsc`)
+  + ClickHouse DDL (`docker/clickhouse/ddl/01-k2-schema.sql`) + Iceberg DDL
+  (`docker/iceberg/ddl/*.sql`) + offload `--columns` lists + docs
+  (`docs/architecture/schema-design.md`, `partitioning-strategy.md`) + tests,
+  in one PR. Use `/schema-change`; a half-migrated contract fails silently at
+  the offload boundary, not at build time.
+- **Resource-limit changes** update the ADR-010 Outcome section *and* the
+  summary comment in `docker-compose.yml`. The 16 CPU / 40 GB single-host
+  budget is a stated constraint of the project, not an accident.
+- **Bind-mount gotcha:** file-level bind mounts pin the inode. Editing
+  `config/instruments.yaml` in place needs
+  `docker compose up -d --force-recreate --no-deps <service>`; `docker restart`
+  does not pick it up.
 
----
+## Tests
 
-## Short Examples & Templates
-
-Decision example:
-```text
-Decision 2025-01-10: Use context managers + DI instead of global DB session
-Reason: Better testability and clearer lifetime
-Cost: ~15% more verbose
-Alternative: FastAPI Depends + global session (rejected)
+```bash
+make test          # kotlin + python
+make test-kotlin   # gradle:8.12-jdk21 container; no local JDK needed
+make test-python   # uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests
 ```
 
-Changed-files example (concise):
-```text
-**src/auth/service.py**
-# +40 -12
-Added refresh token rotation helper.
+- Kotlin (`services/feed-handler-kotlin/`, JDK 21) runs in Docker because
+  Gradle 8.12 does not run on newer JDKs. `./gradlew test` directly works if
+  you have JDK 21 locally.
+- Python has no root `pyproject.toml` — root tests run against ad-hoc `uv`
+  deps, as above. Lint: `uv run --no-project --with ruff ruff check docker/offload tests`.
+- Legacy v1 is a real uv project: `cd legacy/v1 && uv sync --all-extras && uv run pytest`.
+- New Python deps: pin the version (`uv add pkg==x.y.z`), check the current
+  stable release first, note the choice if it's constrained by compatibility.
+- **Tests are part of the change.** Non-trivial logic lands with a test that
+  would fail if the logic broke. No placeholder or tautological tests.
 
-**tests/test_auth_service.py**
-Added tests for token rotation and failure cases.
-```
+## Style
 
----
-
-## Summary — Core Mantra
-- Progress > Purity  
-- Clarity > Cleverness  
-- Enough tests > Maximal coverage  
-- Working today > Perfect tomorrow
-- Always update documentation after changes
-- You are a principal/staff data engineer
-
-Keep momentum. Make small, verifiable improvements; prefer readable, maintainable code.
+- Working and correct first, readable second, fast third — in that order.
+- Simplest thing that solves today's problem. No abstraction with one
+  implementation, no config for a value that never changes.
+- Diffs and file refs in responses, not re-pasted files. Max ~40 lines of
+  quoted context.
+- **Cut order under time pressure:** visual polish first, then new exchanges,
+  then extra timeframes/aggregations. Never cut the failure-mode tests,
+  the runbooks, or the provenance of a published number.

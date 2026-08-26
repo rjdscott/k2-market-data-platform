@@ -84,7 +84,7 @@ Micrometer on `:8082/metrics`, scraped by Prometheus as `feed-handler-{binance,k
 | `feed_handler_trades_produced_total` | Tagged `type="raw"` / `type="normalized"` — divergence between the two means one producer is stuck |
 | `feed_handler_errors_total` | Drives `FeedHandlerHighErrorRate` |
 | `feed_handler_reconnects_total` | Drives `FeedHandlerFrequentReconnects` |
-| `up{job=~"feed-handler-.+"}` | Drives `FeedHandlerDown` and `FeedHandlerMetricsDown` |
+| `up{job=~"feed-handler-.+"}` | Drives `FeedHandlerDown` |
 
 `:8082/health` backs the Compose healthcheck. Alert definitions: `docker/prometheus/rules/feed-handler-alerts.yml`.
 
@@ -92,7 +92,7 @@ Micrometer on `:8082/metrics`, scraped by Prometheus as `feed-handler-{binance,k
 
 ## Adding a fourth exchange
 
-Coinbase was added this way in Phase 7 ([ADR-016](../decisions/ADR-016-add-coinbase-exchange.md)). The full procedure is [operations/adding-new-exchanges.md](../operations/adding-new-exchanges.md); the shape of it:
+Coinbase was added this way in Phase 7 ([ADR-016](../adr/ADR-016-add-coinbase-exchange.md)). The full procedure is [operations/adding-new-exchanges.md](../operations/adding-new-exchanges.md); the shape of it:
 
 1. Add the exchange and its symbols to `config/instruments.yaml`.
 2. Add a `<Exchange>WebSocketClient.kt` and its payload models; add a `normalize<Exchange>` to `TradeNormalizer` plus tests for the symbol mapping.
@@ -110,4 +110,4 @@ Two traps, both hit for real:
 
 ## Deliberately absent
 
-No dead-letter queue, no producer batching layer, no backpressure signalling, no order-book or quote ingestion, no authenticated/private channels. Every handler subscribes to public trade streams only, and a message that fails to parse is logged and dropped. At three exchanges and ~30 instruments this has not cost anything; at a hundred instruments across ten venues, the DLQ is the first thing to add.
+No dead-letter queue, no producer batching layer, no backpressure signalling, no order-book or quote ingestion, no authenticated/private channels. Every handler subscribes to public trade streams only, and a message that fails to parse is logged and dropped. At three exchanges and 34 instruments this has not cost anything; at a hundred instruments across ten venues, the DLQ is the first thing to add.

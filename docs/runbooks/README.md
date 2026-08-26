@@ -1,15 +1,30 @@
 # Runbooks
 
-Incident procedures for the v2 stack. Every Prometheus alert annotation points at one of
-these; start from the alert that fired, or from the "when to use" column below.
+Incident procedures for the v2 stack. Runbooks record *how*; ADRs record *why*
+(`../adr/`). Every Prometheus alert annotation points at one of these; start from the
+alert that fired, or from the "when to use" column below.
 
 Load secrets before running any command here: `set -a && . ./.env && set +a`
+
+## Conventions
+
+- One task per file, `<slug>.md`. Updating an existing runbook beats a near-duplicate.
+- Shape: **symptom → detection (name the alert) → expected behaviour → recovery commands
+  → measured MTTR**. [`template.md`](./template.md) is that shape, empty.
+- Exact copy-pasteable commands, never paraphrases. Verify them before writing them down;
+  a runbook nobody ran is fiction.
+- MTTR is measured by inducing the failure, not estimated.
+- No decision rationale here — link the ADR.
+- A PR that invalidates a runbook's steps updates it and its index row in the same PR.
+- Every alert in `docker/prometheus/rules/` names a runbook in its annotations, and that
+  path must resolve.
+- Write it with the `/runbook` skill.
 
 ## Index
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
-| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, feed-handler crash, offload failure, MinIO down, network partition | `ClickHouseDown`, `FeedHandlerMetricsDown`, `FeedHandlerHighErrorRate` |
+| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, feed-handler crash, offload failure, MinIO down, network partition | `ClickHouseDown`, `FeedHandlerDown`, `FeedHandlerHighErrorRate` |
 | [redpanda.md](./redpanda.md) | Topic, partition, consumer-group or schema-registry problems; broker health | `FeedHandlerHighErrorRate` |
 | [iceberg-offload-failure.md](./iceberg-offload-failure.md) | Offload runs erroring — ClickHouse unreachable, Spark crash, JDBC or timeout errors | `IcebergOffloadConsecutiveFailures` |
 | [iceberg-offload-lag.md](./iceberg-offload-lag.md) | Cold tier behind the 15-minute SLO and you need to catch up | `IcebergOffloadLagCritical`, `IcebergOffloadLagElevated` |
@@ -54,17 +69,11 @@ dangerous.
 | Recovery not achieved within the runbook's MTTR + 30 min | Escalate to the platform owner |
 | Root cause is a code bug | Open an issue, link the runbook section that failed |
 | More than 3 occurrences in 24 h | Stop restarting; find the cause |
-| Data loss suspected | Escalate immediately — reconcile hot vs cold using [../data-inspection.md](../data-inspection.md#warm-vs-cold-reconciliation) before taking any destructive action |
-
-## Writing a new runbook
-
-Keep the shape consistent with the ones above: **symptom → detection (name the alert) →
-expected behaviour → recovery commands → measured MTTR**. A runbook whose commands have
-never been run is a liability; induce the failure and record what actually happened.
+| Data loss suspected | Escalate immediately — reconcile hot vs cold using [../operations/data-inspection.md](../operations/data-inspection.md#warm-vs-cold-reconciliation) before taking any destructive action |
 
 ## v1 runbooks
 
 The 14 archived v1 runbooks — Kafka, Spark Streaming, Prefect OHLCV pipeline, blue-green
 deploys, checkpoint corruption — are kept for reference in
-[`legacy/v1/docs/runbooks/`](../../../legacy/v1/docs/runbooks/). They describe an
+[`legacy/v1/docs/runbooks/`](../../legacy/v1/docs/runbooks/). They describe an
 architecture that no longer exists; do not follow them against the v2 stack.

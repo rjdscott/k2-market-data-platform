@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide provides a step-by-step checklist for adding new exchange integrations following the multi-exchange bronze architecture pattern ([ADR-011](../decisions/ADR-011-multi-exchange-bronze-architecture.md)).
+This guide provides a step-by-step checklist for adding new exchange integrations following the multi-exchange bronze architecture pattern ([ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md)).
 
 **Architecture**: Exchange-Native Bronze → Unified Silver → Aggregated Gold
 
@@ -103,7 +103,7 @@ val wsClient = when (exchange.lowercase()) {
 
 ### 4. Bronze Layer Schema
 
-**File**: `docker/clickhouse/schema/XX-bronze-{exchange}.sql`
+**File**: append to [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql) (auto-applied on a fresh volume)
 
 - [ ] Create Kafka Engine table:
 
@@ -166,7 +166,7 @@ columns need it.
 
 ### 5. Silver Layer Normalization
 
-**File**: `docker/clickhouse/schema/XX-silver-{exchange}-to-v2.sql`
+**File**: append to [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql) (auto-applied on a fresh volume)
 
 - [ ] Create Materialized View to normalize Bronze → Silver:
 
@@ -321,9 +321,10 @@ feed-handler-{exchange}:
 # Build and start the new handler
 docker compose up -d --build feed-handler-{exchange}
 
-# Apply the new bronze + silver DDL
+# Apply the new bronze + silver DDL (already appended to docker/clickhouse/ddl/01-k2-schema.sql,
+# which only auto-runs on a fresh volume — apply by hand against an existing one)
 docker exec -i k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
-  --multiquery < docker/clickhouse/schema/XX-bronze-{exchange}.sql
+  --multiquery < docker/clickhouse/ddl/01-k2-schema.sql
 ```
 
 ### 2. Verify Feed Handler
@@ -439,8 +440,8 @@ docker exec k2-clickhouse clickhouse-client --multiquery < \
 
 ## References
 
-- [ADR-011 — multi-exchange bronze architecture](../decisions/ADR-011-multi-exchange-bronze-architecture.md) — the pattern this checklist implements
-- [ADR-016 — adding Coinbase](../decisions/ADR-016-add-coinbase-exchange.md) — the most recent worked example, end to end
+- [ADR-011 — multi-exchange bronze architecture](../adr/ADR-011-multi-exchange-bronze-architecture.md) — the pattern this checklist implements
+- [ADR-016 — adding Coinbase](../adr/ADR-016-add-coinbase-exchange.md) — the most recent worked example, end to end
 - [Schema design](../architecture/schema-design.md) — the v2 canonical trade schema
 - [Streaming sources](../architecture/streaming-sources.md) — per-exchange protocol notes
 - [ClickHouse cascading materialized views](https://clickhouse.com/docs/en/guides/developer/cascading-materialized-views)
@@ -451,7 +452,7 @@ docker exec k2-clickhouse clickhouse-client --multiquery < \
 
 - [ ] Add the exchange to the offload `TABLE_CONFIG` in [`docker/offload/flows/iceberg_offload_flow.py`](../../docker/offload/flows/iceberg_offload_flow.py)
 - [ ] Create the matching `cold.bronze_trades_{exchange}` Iceberg table and seed its watermark row
-- [ ] Update [docker-resources.md](./docker-resources.md) and [ADR-010](../decisions/ADR-010-resource-budget.md)
+- [ ] Update [docker-resources.md](./docker-resources.md) and [ADR-010](../adr/ADR-010-resource-budget.md)
 - [ ] Add the exchange to the feed-handler panels in [`docker/grafana/dashboards/k2-pipeline-overview.json`](../../docker/grafana/dashboards/k2-pipeline-overview.json)
 - [ ] Add a `TradeNormalizerTest` case for the new symbol format
 - [ ] Update the exchange counts in the root `README.md`

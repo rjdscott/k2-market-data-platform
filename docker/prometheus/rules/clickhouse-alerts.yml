@@ -29,7 +29,7 @@ groups:
             2. Check logs: `docker logs k2-clickhouse --tail 100`
             3. Restart: `docker compose restart clickhouse`
 
-            **Runbook:** docs/operations/runbooks/failure-recovery.md
+            **Runbook:** docs/runbooks/failure-recovery.md
 
       # CRITICAL: ClickHouse memory near limit (>90% of limit)
       - alert: ClickHouseHighMemoryUsage

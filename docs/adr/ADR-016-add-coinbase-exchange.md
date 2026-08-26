@@ -57,7 +57,7 @@ Both provide global/non-US perspective. Adding a US-regulated exchange creates e
 |------|---------|
 | `services/feed-handler-kotlin/src/.../CoinbaseWebSocketClient.kt` | WebSocket client (mirrors KrakenWebSocketClient pattern) |
 | `docker/clickhouse/schema/11-bronze-coinbase.sql` | Kafka Engine queue + bronze table + MV |
-| `docs/decisions/ADR-016-add-coinbase-exchange.md` | This file |
+| `docs/adr/ADR-016-add-coinbase-exchange.md` | This file |
 
 ### Modified Files
 | File | Change |
@@ -84,9 +84,10 @@ Both provide global/non-US perspective. Adding a US-regulated exchange creates e
 
 ```
 Before: 15.0 CPU / 21.25 GB RAM (12 services)
-After:  15.5 CPU / 21.75 GB RAM (13 services)
-Delta:  +0.5 CPU / +0.5 GB RAM
-Budget: 0.5 CPU / 18.25 GB remaining (target: 16 CPU / 40 GB)
+After:  15.1 CPU / 21.875 GB RAM (14 services, +2 one-shot)
+Delta:  +0.5 CPU / +0.5 GB RAM from Coinbase; +0.1 CPU / +0.125 GB RAM later from the
+        iceberg-metrics exporter (not part of this ADR's change)
+Budget: 0.9 CPU / 18.1 GB remaining (target: 16 CPU / 40 GB)
 ```
 
 ---
@@ -106,7 +107,7 @@ LINK-USD, DOGE-USD, LTC-USD, AVAX-USD, ATOM-USD
 
 - [ ] `./gradlew test` passes (new `TradeNormalizerTest` + `InstrumentsLoaderTest`)
 - [ ] `./gradlew build` compiles without errors
-- [ ] `docker compose up -d` starts all 13 services
+- [ ] `docker compose up -d` starts all 14 services
 - [ ] `rpk topic list | grep coinbase` shows 2 topics
 - [ ] `docker logs feed-handler-coinbase` shows "Subscription confirmed"
 - [ ] `rpk topic consume market.crypto.trades.coinbase.raw --num 5` shows trade JSON

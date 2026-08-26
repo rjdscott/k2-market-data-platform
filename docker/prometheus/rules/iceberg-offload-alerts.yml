@@ -28,7 +28,7 @@ groups:
             3. Check Spark container health: `docker ps | grep spark-iceberg`
             4. Review watermark table for corruption
 
-            **Runbook:** docs/operations/runbooks/iceberg-offload-failure.md
+            **Runbook:** docs/runbooks/iceberg-offload-failure.md
 
       # CRITICAL: Offload lag exceeds acceptable window
       - alert: IcebergOffloadLagCritical
@@ -53,7 +53,7 @@ groups:
             - Deployments registered: `docker exec k2-prefect-worker prefect deployment ls`
             - Recent cycles: `docker compose logs prefect-worker --tail 100`
 
-            **Runbook:** docs/operations/runbooks/iceberg-offload-lag.md
+            **Runbook:** docs/runbooks/iceberg-offload-lag.md
 
       # CRITICAL: Cycle duration exceeds schedule interval
       - alert: IcebergOffloadCycleTooSlow
@@ -76,7 +76,7 @@ groups:
             - Spark performance: Check executor logs
             - Network issues: Check latency between services
 
-            **Runbook:** docs/operations/runbooks/iceberg-offload-performance.md
+            **Runbook:** docs/runbooks/iceberg-offload-performance.md
 
       # CRITICAL: Watermark timestamp stale (pipeline hung)
       - alert: IcebergOffloadWatermarkStale
@@ -100,7 +100,7 @@ groups:
             3. Manually inspect watermark table
             4. Restart worker if hung: `docker compose restart prefect-worker`
 
-            **Runbook:** docs/operations/runbooks/iceberg-offload-watermark-recovery.md
+            **Runbook:** docs/runbooks/iceberg-offload-watermark-recovery.md
 
   - name: iceberg_offload_warning
     interval: 1m
@@ -217,7 +217,7 @@ groups:
             2. Check logs: `docker compose logs iceberg-metrics --tail 50`
             3. Restart if needed: `docker compose restart iceberg-metrics`
 
-            **Runbook:** docs/operations/runbooks/iceberg-scheduler-recovery.md
+            **Runbook:** docs/runbooks/iceberg-scheduler-recovery.md
 
       # INFO: First cycle after scheduler start
       - record: iceberg_offload:cycle_count:5m

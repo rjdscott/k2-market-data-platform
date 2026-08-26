@@ -77,9 +77,8 @@ outage window rather than assuming it.
 
 **Symptom** — one exchange stops appearing in `silver_trades`; the other two are fine.
 
-**Detection** — `FeedHandlerMetricsDown` for that exchange, or the container healthcheck
-flipping to unhealthy. (`FeedHandlerDown` is currently non-functional — see
-[observability.md](../observability.md#feed-handler-metrics).)
+**Detection** — `FeedHandlerDown` for that exchange (scrape target down for 2m), or the
+container healthcheck flipping to unhealthy.
 
 **Expected behaviour** — full cross-exchange isolation. The Redpanda topic stays alive,
 other handlers are untouched, and the crashed handler resumes on start.
@@ -107,10 +106,9 @@ throughout.
 
 **Symptom** — a Prefect flow run is marked Failed; cold-tier row counts stop advancing.
 
-**Detection** — `IcebergOffloadConsecutiveFailures`, `IcebergOffloadWatermarkStale`
-(both currently blind — see the offload-metrics gap in
-[observability.md](../observability.md#iceberg-offload-alertsyml--cold-tier-9); use Prefect
-run history in the meantime).
+**Detection** — `IcebergOffloadConsecutiveFailures`, `IcebergOffloadWatermarkStale` (see
+[observability.md](../operations/observability.md#iceberg-offload-alertsyml--cold-tier-9)); also
+visible in Prefect run history.
 
 **Expected behaviour** — the watermark is only advanced *after* a successful Iceberg
 write, so a failed run leaves it untouched and the next scheduled run re-reads the same
@@ -159,7 +157,7 @@ confirming ingest was never in the blast radius.
 
 **Symptom** — one container's consumers stall while everything else keeps running.
 
-**Detection** — `FeedHandlerMetricsDown` or `ClickHouseDown` depending on which container
+**Detection** — `FeedHandlerDown` or `ClickHouseDown` depending on which container
 is isolated.
 
 **Expected behaviour** — the isolated container reconnects when the partition heals and
@@ -188,6 +186,6 @@ count before and after, and confirm continuity across the outage window rather t
 
 ## Related
 
-- [../observability.md](../observability.md) — the alerts referenced above
-- [../latency-budgets.md](../latency-budgets.md) — why lag rather than loss is the failure mode
+- [../operations/observability.md](../operations/observability.md) — the alerts referenced above
+- [../operations/latency-budgets.md](../operations/latency-budgets.md) — why lag rather than loss is the failure mode
 - [README.md](./README.md) — full runbook index

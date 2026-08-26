@@ -20,7 +20,7 @@ Eleven milliseconds of processing inside a 200 ms end-to-end budget. The remaini
 is network round-trip to the exchange, which is not ours to optimise — it dominates, and
 that is the expected shape for a platform running outside a colocation facility.
 
-The design that makes this possible is [ADR-004](../decisions/ADR-004-eliminate-spark-streaming.md):
+The design that makes this possible is [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md):
 v1 spent 5–15 **minutes** here because every hop went through a Spark Structured
 Streaming micro-batch. Replacing those with ClickHouse materialized views moved the whole
 transform chain in-process.
@@ -29,9 +29,9 @@ transform chain in-process.
 
 | Scenario | Rate | Target p99 | Pass criteria |
 |----------|------|-----------|---------------|
-| 1× baseline | ~50 msg/s | <200 ms | No degradation |
-| 5× | ~250 msg/s | <500 ms | All MVs keeping pace |
-| 10× stress | ~500 msg/s | <1 s | No data loss |
+| 1× baseline | ~150 msg/s (100–200) | <200 ms | No degradation |
+| 5× | ~750 msg/s | <500 ms | All MVs keeping pace |
+| 10× stress | ~1500 msg/s | <1 s | No data loss |
 
 ## Measured (2026-02-19)
 
@@ -102,11 +102,11 @@ which is the right trade at this scale:
 
 Nothing here drops data silently. The failure mode at every level is *lag*, not loss,
 which is what the failure-mode testing in
-[runbooks/failure-recovery.md](./runbooks/failure-recovery.md) confirms.
+[../runbooks/failure-recovery.md](../runbooks/failure-recovery.md) confirms.
 
 ## Related
 
 - [observability.md](./observability.md) — the alerts that watch these thresholds
 - [data-inspection.md](./data-inspection.md) — the lag query used above
-- [ADR-004](../decisions/ADR-004-eliminate-spark-streaming.md) — why the budget is milliseconds and not minutes
-- [ADR-001](../decisions/ADR-001-replace-kafka-with-redpanda.md) — Redpanda's p99 vs Kafka's on segment 3
+- [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md) — why the budget is milliseconds and not minutes
+- [ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md) — Redpanda's p99 vs Kafka's on segment 3

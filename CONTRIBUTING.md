@@ -32,4 +32,4 @@ CI (`.github/workflows/ci.yml`) runs the same two suites plus a Docker build of 
 
 - Conventional commits: `feat(scope): …`, `fix(scope): …`, `docs: …`, `chore: …`, `ci: …`
 - Python: `ruff check` / `ruff format` must pass on `docker/offload` and `tests`
-- Architecture decisions go in `docs/decisions/` as a new `ADR-NNN-*.md`; update the index in `docs/decisions/README.md`
+- Architecture decisions go in `docs/adr/` as a new `ADR-NNN-*.md` (conventions and template in `docs/adr/README.md`); update the index there in the same PR
