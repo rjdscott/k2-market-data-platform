@@ -132,7 +132,7 @@ docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
 docker exec k2-prefect-server prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'
 
 # Unit tests (mocked subprocess — no stack needed)
-uv run --no-project --with prefect --with pytest pytest tests -q
+uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q
 ```
 
 After changing a flow's schedule or parameters, redeploy it:

@@ -23,4 +23,4 @@ test-kotlin:  ## Feed handler unit tests (runs in the JDK 21 build image; no loc
 	  -e GRADLE_USER_HOME=/tmp/.gradle gradle:8.12-jdk21 ./gradlew test --no-daemon
 
 test-python:  ## Iceberg offload flow unit tests (needs uv)
-	uv run --no-project --with prefect --with pytest pytest tests -q
+	uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q

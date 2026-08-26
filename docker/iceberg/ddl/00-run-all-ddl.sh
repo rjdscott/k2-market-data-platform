@@ -1,105 +1,47 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# K2 Market Data Platform - Run All Iceberg DDL
-# Purpose: Execute all Iceberg DDL scripts in order
-# Version: Final Working Configuration (ADR-013)
-# Catalog: Hadoop (file-based, zero dependencies)
-# FileIO: HadoopFileIO (local filesystem)
-# Last Updated: 2026-02-11 (after 3+ hours troubleshooting)
+# K2 Market Data Platform - Bootstrap Iceberg cold-tier tables
+#
+# Run by the one-shot `iceberg-init` compose service before prefect-worker
+# starts, so the first offload never hits TABLE_OR_VIEW_NOT_FOUND.
+#
+# Idempotent: every statement is CREATE ... IF NOT EXISTS, so re-running on an
+# existing warehouse is a no-op. Exits non-zero if any statement fails.
+#
+# Catalog config must stay in sync with docker/offload/offload_generic.py.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-set -e  # Exit on error
+set -euo pipefail
+
+DDL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WAREHOUSE="${ICEBERG_WAREHOUSE:-/home/iceberg/warehouse}"
+
+# ponytail: one spark-sql JVM for all files instead of one per file — startup
+# dominates the runtime (~20s vs ~2s of actual DDL).
+BUNDLE="$(mktemp /tmp/k2-iceberg-ddl.XXXXXX.sql)"
+trap 'rm -f "$BUNDLE"' EXIT
+
+cat "$DDL_DIR"/01-catalog-schema.sql \
+    "$DDL_DIR"/02-bronze-tables.sql \
+    "$DDL_DIR"/03-silver-table.sql \
+    "$DDL_DIR"/04-gold-tables.sql > "$BUNDLE"
+echo "SHOW TABLES IN cold;" >> "$BUNDLE"
 
 echo "=========================================="
-echo "K2 Iceberg DDL Execution"
-echo "Spark 3.5.5 + Iceberg 1.x (tabulario)"
-echo "Hadoop Catalog (file-based)"
+echo "K2 Iceberg DDL bootstrap"
+echo "  catalog:   k2 (hadoop)"
+echo "  warehouse: $WAREHOUSE"
 echo "=========================================="
 
-# Spark SQL command (bundled in tabulario image)
-SPARK_SQL="spark-sql"
+spark-sql \
+  --driver-memory 512m \
+  --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+  --conf spark.sql.catalog.k2=org.apache.iceberg.spark.SparkCatalog \
+  --conf spark.sql.catalog.k2.type=hadoop \
+  --conf "spark.sql.catalog.k2.warehouse=$WAREHOUSE" \
+  --conf spark.sql.catalog.k2.io-impl=org.apache.iceberg.hadoop.HadoopFileIO \
+  --conf spark.sql.defaultCatalog=k2 \
+  --conf spark.ui.enabled=false \
+  -f "$BUNDLE"
 
-# Working configuration (Hadoop catalog + HadoopFileIO)
-CATALOG_CONF="--conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog"
-CATALOG_CONF="$CATALOG_CONF --conf spark.sql.catalog.demo.type=hadoop"
-CATALOG_CONF="$CATALOG_CONF --conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse"
-CATALOG_CONF="$CATALOG_CONF --conf spark.sql.catalog.demo.io-impl=org.apache.iceberg.hadoop.HadoopFileIO"
-CATALOG_CONF="$CATALOG_CONF --conf spark.sql.defaultCatalog=demo"
-
-echo ""
-echo "Step 0: Creating 'cold' database namespace..."
-$SPARK_SQL $CATALOG_CONF -e "CREATE DATABASE IF NOT EXISTS demo.cold; SHOW DATABASES IN demo;"
-echo "✓ cold database created"
-
-echo ""
-echo "Step 1: Creating Bronze Tables (2 tables)..."
-$SPARK_SQL $CATALOG_CONF -f /home/iceberg/ddl/02-bronze-tables.sql
-echo "✓ Bronze tables created"
-
-echo ""
-echo "Step 2: Creating Silver Table (1 table)..."
-$SPARK_SQL $CATALOG_CONF -f /home/iceberg/ddl/03-silver-table.sql
-echo "✓ Silver table created"
-
-echo ""
-echo "Step 3: Creating Gold Tables (6 tables)..."
-$SPARK_SQL $CATALOG_CONF -f /home/iceberg/ddl/04-gold-tables.sql
-echo "✓ Gold tables created"
-
-echo ""
-echo "=========================================="
-echo "All Iceberg tables created successfully!"
-echo "=========================================="
-echo ""
-echo "Verifying tables..."
-$SPARK_SQL $CATALOG_CONF -e "SHOW TABLES IN demo.cold;"
-echo ""
-echo "Table details:"
-$SPARK_SQL $CATALOG_CONF -e "
-  SELECT
-    'bronze_trades_binance' as table_name,
-    COUNT(*) as row_count
-  FROM demo.cold.bronze_trades_binance
-  UNION ALL
-  SELECT
-    'bronze_trades_kraken' as table_name,
-    COUNT(*) as row_count
-  FROM demo.cold.bronze_trades_kraken
-  UNION ALL
-  SELECT
-    'silver_trades' as table_name,
-    COUNT(*) as row_count
-  FROM demo.cold.silver_trades
-  UNION ALL
-  SELECT
-    'gold_ohlcv_1m' as table_name,
-    COUNT(*) as row_count
-  FROM demo.cold.gold_ohlcv_1m
-  UNION ALL
-  SELECT
-    'gold_ohlcv_5m' as table_name,
-    COUNT(*) as row_count
-  FROM demo.cold.gold_ohlcv_5m
-  UNION ALL
-  SELECT
-    'gold_ohlcv_15m' as table_name,
-    COUNT(*) as row_count
-  FROM demo.cold.gold_ohlcv_15m
-  UNION ALL
-  SELECT
-    'gold_ohlcv_30m' as table_name,
-    COUNT(*) as row_count
-  FROM demo.cold.gold_ohlcv_30m
-  UNION ALL
-  SELECT
-    'gold_ohlcv_1h' as table_name,
-    COUNT(*) as row_count
-  FROM demo.cold.gold_ohlcv_1h
-  UNION ALL
-  SELECT
-    'gold_ohlcv_1d' as table_name,
-    COUNT(*) as row_count
-  FROM demo.cold.gold_ohlcv_1d;
-"
-echo ""
-echo "Done!"
+echo "✓ Iceberg cold-tier tables ready"

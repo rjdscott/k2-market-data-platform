@@ -427,6 +427,8 @@ services:
     depends_on:
       prefect-server:
         condition: service_healthy
+      iceberg-init:
+        condition: service_completed_successfully
     deploy:
       resources:
         limits:
@@ -495,6 +497,34 @@ services:
           cpus: '1.0'
           memory: 2G
     restart: unless-stopped
+    labels:
+      com.k2.service: "etl"
+      com.k2.tier: "cold"
+      com.k2.version: "v2"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Iceberg Init - One-shot service to create the cold.* Iceberg tables
+  # Runs once at startup; prefect-worker depends on service_completed_successfully
+  # so the first offload can never hit TABLE_OR_VIEW_NOT_FOUND on a clean clone.
+  # Idempotent (CREATE ... IF NOT EXISTS) — safe to re-run on an existing warehouse.
+  # ───────────────────────────────────────────────────────────────────────
+  iceberg-init:
+    image: k2-spark-iceberg:3.5.0_1.4.2  # built by the spark-iceberg service
+    container_name: k2-iceberg-init
+    networks:
+      - k2-net
+    volumes:
+      - ./docker/iceberg/warehouse:/home/iceberg/warehouse
+      - ./docker/iceberg/ddl:/home/iceberg/ddl:ro
+    entrypoint: ["/bin/bash", "/home/iceberg/ddl/00-run-all-ddl.sh"]
+    depends_on:
+      - spark-iceberg
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+    restart: "no"
     labels:
       com.k2.service: "etl"
       com.k2.tier: "cold"

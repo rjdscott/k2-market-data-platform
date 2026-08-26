@@ -6,16 +6,17 @@ Version: v1.0
 Last Updated: 2026-02-12
 """
 
+import logging
+from datetime import datetime
+
 from prometheus_client import (
     Counter,
     Gauge,
     Histogram,
-    Summary,
     Info,
+    Summary,
     start_http_server,
 )
-from datetime import datetime
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -135,9 +136,7 @@ def record_offload_success(
 
     # Gauge metrics
     if watermark_timestamp:
-        watermark_timestamp_seconds.labels(table=table).set(
-            watermark_timestamp.timestamp()
-        )
+        watermark_timestamp_seconds.labels(table=table).set(watermark_timestamp.timestamp())
 
     logger.info(f"Recorded offload success: {table} ({rows:,} rows in {duration:.1f}s)")
 
@@ -158,9 +157,7 @@ def record_offload_failure(table: str, layer: str, error_type: str, duration: fl
     # Histogram metrics (record duration even on failure)
     offload_duration_seconds.labels(table=table, layer=layer).observe(duration)
 
-    logger.warning(
-        f"Recorded offload failure: {table} ({error_type}) after {duration:.1f}s"
-    )
+    logger.warning(f"Recorded offload failure: {table} ({error_type}) after {duration:.1f}s")
 
 
 def record_cycle_start():

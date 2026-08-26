@@ -56,13 +56,9 @@ def deploy_maintenance_schedule() -> None:
     print("📋 Next steps:")
     print("   1. Verify in Prefect UI: http://localhost:4200")
     print("   2. Run a test cycle manually:")
-    print(
-        "      prefect deployment run 'iceberg-maintenance-main/iceberg-maintenance-daily'"
-    )
+    print("      prefect deployment run 'iceberg-maintenance-main/iceberg-maintenance-daily'")
     print("   3. Check maintenance_audit_log in PostgreSQL:")
-    print(
-        "      SELECT * FROM maintenance_audit_log ORDER BY run_timestamp DESC LIMIT 10;"
-    )
+    print("      SELECT * FROM maintenance_audit_log ORDER BY run_timestamp DESC LIMIT 10;")
     print()
     print("=" * 70)
 

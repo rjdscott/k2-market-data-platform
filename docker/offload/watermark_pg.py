@@ -6,12 +6,12 @@ Version: v2.0 (ADR-014)
 Last Updated: 2026-02-11
 """
 
+import logging
 import re
+from datetime import UTC, datetime, timedelta
+
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from datetime import datetime, timedelta, timezone
-from typing import Tuple
-import logging
 
 # Validates that a name is a safe SQL identifier (letters, digits, underscores only).
 # Applied to table_name and column names before embedding in JDBC query strings.
@@ -111,7 +111,7 @@ class WatermarkManager:
         """Safety net: close connection if caller forgets to call close()."""
         self.close()
 
-    def get_watermark(self, table_name: str) -> Tuple[datetime, int]:
+    def get_watermark(self, table_name: str) -> tuple[datetime, int]:
         """
         Get last successfully offloaded watermark for a table.
 
@@ -283,9 +283,7 @@ class WatermarkManager:
             logger.warning(f"Failed to mark offload failed for {table_name}: {e}")
             # Non-critical, error already logged
 
-    def recover_stale_running(
-        self, table_name: str, stale_threshold_minutes: int = 30
-    ) -> None:
+    def recover_stale_running(self, table_name: str, stale_threshold_minutes: int = 30) -> None:
         """
         Reset a stuck 'running' status to 'failed' before starting a new job run.
 
@@ -302,9 +300,7 @@ class WatermarkManager:
             table_name: Source table name
             stale_threshold_minutes: Minutes after which 'running' is considered stale
         """
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(
-            minutes=stale_threshold_minutes
-        )
+        stale_cutoff = datetime.now(UTC) - timedelta(minutes=stale_threshold_minutes)
 
         try:
             with self._get_connection() as conn:
@@ -336,14 +332,12 @@ class WatermarkManager:
                     conn.commit()
 
         except Exception as e:
-            logger.warning(
-                f"Failed to recover stale running status for {table_name}: {e}"
-            )
+            logger.warning(f"Failed to recover stale running status for {table_name}: {e}")
             # Non-critical: if this fails the job still proceeds normally
 
     def get_incremental_window(
         self, last_watermark: datetime, buffer_minutes: int = 5
-    ) -> Tuple[datetime, datetime]:
+    ) -> tuple[datetime, datetime]:
         """
         Calculate time window for incremental read.
 
@@ -362,8 +356,7 @@ class WatermarkManager:
         end_time = datetime.now(start_time.tzinfo) - timedelta(minutes=buffer_minutes)
 
         logger.info(
-            f"Incremental window: {start_time} to {end_time} "
-            f"(buffer: {buffer_minutes} minutes)"
+            f"Incremental window: {start_time} to {end_time} (buffer: {buffer_minutes} minutes)"
         )
 
         if end_time <= start_time:

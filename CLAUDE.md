@@ -65,7 +65,7 @@ v2 (the live platform) is at the repo root; v1 is archived, unmodified, in `lega
 `docker-compose.yml` at the root runs the whole stack (`make up` / `make down`).
 
 Python uses `uv`. The root has no `pyproject.toml`, so root tests run against ad-hoc deps:
-- `make test-python` → `uv run --no-project --with prefect --with pytest pytest tests`
+- `make test-python` → `uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests`
 - Lint: `uv run --no-project --with ruff ruff check docker/offload tests`
 - Legacy v1 is a real uv project: `cd legacy/v1 && uv sync --all-extras && uv run pytest`
 

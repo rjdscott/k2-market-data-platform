@@ -7,13 +7,15 @@ Version: v2.0 (ADR-014)
 Last Updated: 2026-02-11
 """
 
-import os
-import sys
 import argparse
 import logging
+import os
+import sys
 from datetime import datetime
+
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, max as spark_max
+from pyspark.sql.functions import col
+from pyspark.sql.functions import max as spark_max
 
 # Add watermark utilities to path
 sys.path.append("/home/iceberg/offload")
@@ -34,9 +36,7 @@ logger = logging.getLogger(__name__)
 CLICKHOUSE_HOST = "clickhouse"
 CLICKHOUSE_PORT = "8123"
 CLICKHOUSE_DATABASE = "k2"  # Updated from 'default' to 'k2' (production database)
-CLICKHOUSE_URL = (
-    f"jdbc:clickhouse://{CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/{CLICKHOUSE_DATABASE}"
-)
+CLICKHOUSE_URL = f"jdbc:clickhouse://{CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/{CLICKHOUSE_DATABASE}"
 
 # Iceberg Catalog Configuration (Hadoop catalog from ADR-013)
 ICEBERG_WAREHOUSE = "/home/iceberg/warehouse"
@@ -89,9 +89,7 @@ def run_generic_offload(
             .config("spark.sql.catalog.k2", "org.apache.iceberg.spark.SparkCatalog")
             .config("spark.sql.catalog.k2.type", "hadoop")
             .config("spark.sql.catalog.k2.warehouse", ICEBERG_WAREHOUSE)
-            .config(
-                "spark.sql.catalog.k2.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO"
-            )
+            .config("spark.sql.catalog.k2.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO")
             .config("spark.sql.defaultCatalog", "k2")
             .config(
                 "spark.sql.extensions",
@@ -127,9 +125,7 @@ def run_generic_offload(
         wm.recover_stale_running(source_table)
         wm.mark_offload_running(source_table)
         last_timestamp, last_sequence = wm.get_watermark(source_table)
-        logger.info(
-            f"✓ Watermark: timestamp={last_timestamp}, sequence={last_sequence}"
-        )
+        logger.info(f"✓ Watermark: timestamp={last_timestamp}, sequence={last_sequence}")
 
     except Exception as e:
         logger.error(f"Failed to get watermark: {e}")
@@ -180,6 +176,15 @@ def run_generic_offload(
                 "driver": "com.clickhouse.jdbc.ClickHouseDriver",
                 "user": "default",
                 "password": os.environ["CLICKHOUSE_PASSWORD"],
+                # Columns declared with an explicit timezone — silver_trades uses
+                # DateTime64(6, 'UTC') — are reported by the driver as JDBC type
+                # 2014 (TIMESTAMP_WITH_TIMEZONE), which Spark 3.5 cannot resolve
+                # ([UNRECOGNIZED_SQL_TYPE]). Forcing DateTime64 to LocalDateTime
+                # makes the driver report plain TIMESTAMP (93) instead.
+                # Safe: ClickHouse stores DateTime64 as a UTC instant and both the
+                # container and spark.sql.session.timeZone are UTC, so no shift.
+                # No-op for DateTime64 columns without a timezone (bronze/gold).
+                "typeMappings": "DateTime64=java.time.LocalDateTime",
             },
         ).cache()
 
@@ -284,9 +289,7 @@ def run_generic_offload(
 
 def main():
     """Parse CLI arguments and run offload job."""
-    parser = argparse.ArgumentParser(
-        description="Generic ClickHouse → Iceberg offload job"
-    )
+    parser = argparse.ArgumentParser(description="Generic ClickHouse → Iceberg offload job")
 
     parser.add_argument(
         "--source-table",

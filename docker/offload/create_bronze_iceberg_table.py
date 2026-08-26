@@ -6,21 +6,19 @@ Schema matches the ClickHouse bronze_trades_binance table structure.
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import (
-    StructType,
-    StructField,
-    TimestampType,
-    LongType,
-    StringType,
     DecimalType,
     IntegerType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
 )
 
 # Initialize Spark with Iceberg
 spark = (
     SparkSession.builder.appName("CreateBronzeIcebergTable")
-    .config(
-        "spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0"
-    )
+    .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0")
     .config("spark.sql.catalog.k2", "org.apache.iceberg.spark.SparkCatalog")
     .config("spark.sql.catalog.k2.type", "hadoop")
     .config("spark.sql.catalog.k2.warehouse", "/home/iceberg/warehouse")

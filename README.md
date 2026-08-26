@@ -80,7 +80,7 @@ offload does not write to it yet ([ADR-013](./docs/decisions/ADR-013-pragmatic-i
 | | v1 | v2 |
 |---|---|---|
 | CPU / RAM (limits) | 35–40 cores / 45–50 GB | **15.0 cores / 21.75 GB** |
-| Services | 18–20 | **13** (+1 one-shot init) |
+| Services | 18–20 | **13** (+2 one-shot init containers) |
 | Always-on Spark | 5 streaming jobs, ~14 CPU / 20 GB | **none** — batch only |
 | Trade → queryable | 5–15 min | **p99 170–197 ms** |
 | Stack | Python · Kafka · Spark Streaming · DuckDB · FastAPI | Kotlin/Ktor · Redpanda · ClickHouse · Spark batch · Iceberg |

@@ -45,7 +45,7 @@ JUnit XML: `build/test-results/test/`.
 ### Python
 
 ```bash
-uv run --no-project --with prefect --with pytest pytest tests -q
+uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q
 ```
 
 `--no-project` keeps the run isolated from the repo's own virtualenv, so the only

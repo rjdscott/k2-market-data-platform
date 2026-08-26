@@ -49,13 +49,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.0.1
 
       - name: Ruff
         run: uv run --no-project --with ruff ruff check docker/offload tests
 
       - name: Pytest
-        run: uv run --no-project --with prefect --with pytest pytest tests -q
+        run: uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q
 
   docker:
     name: Docker build (${{ matrix.name }})
@@ -92,6 +92,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read          # upload-sarif reads the workflow run
       security-events: write
 
     steps:

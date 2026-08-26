@@ -16,9 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from iceberg_offload_flow import iceberg_offload_main
 
 # Set Prefect API URL (points to Prefect server)
-os.environ["PREFECT_API_URL"] = os.getenv(
-    "PREFECT_API_URL", "http://localhost:4200/api"
-)
+os.environ["PREFECT_API_URL"] = os.getenv("PREFECT_API_URL", "http://localhost:4200/api")
 
 
 def deploy_production_schedule():
@@ -49,6 +47,7 @@ def deploy_production_schedule():
         name="iceberg-offload-15min",
         work_pool_name="iceberg-offload",  # Work pool for Prefect 3.x workers
         cron="*/15 * * * *",  # Every 15 minutes
+        concurrency_limit=1,  # a slow cycle must not overlap the next one
         tags=["iceberg", "offload", "production", "phase-5"],
         description="ClickHouse → Iceberg offload pipeline (Bronze layer, runs every 15 minutes)",
         version="3.0.0",
@@ -68,9 +67,7 @@ def deploy_production_schedule():
     print()
     print("🔧 Useful commands:")
     print("   - List deployments: prefect deployment ls")
-    print(
-        "   - Run manually: prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
-    )
+    print("   - Run manually: prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'")
     print(
         "   - Pause schedule: prefect deployment set-schedule iceberg-offload-main/iceberg-offload-15min --paused"
     )

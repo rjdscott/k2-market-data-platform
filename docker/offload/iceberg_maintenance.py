@@ -24,13 +24,18 @@ Design:
 
 from __future__ import annotations
 
-import os
-import sys
 import argparse
 import logging
+import os
+import sys
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
+
 import psycopg2
-from datetime import datetime, timedelta, timezone
-from pyspark.sql import SparkSession
+
+if TYPE_CHECKING:
+    from pyspark.sql import SparkSession
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -52,9 +57,7 @@ ICEBERG_WAREHOUSE = "/home/iceberg/warehouse"
 CLICKHOUSE_HOST = "clickhouse"
 CLICKHOUSE_PORT = "8123"
 CLICKHOUSE_DATABASE = "k2"
-CLICKHOUSE_URL = (
-    f"jdbc:clickhouse://{CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/{CLICKHOUSE_DATABASE}"
-)
+CLICKHOUSE_URL = f"jdbc:clickhouse://{CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/{CLICKHOUSE_DATABASE}"
 
 # Defaults — overridable via CLI flags.
 DEFAULT_TARGET_FILE_SIZE_MB = 128
@@ -142,6 +145,8 @@ MISSING_DATA_PCT_THRESHOLD = 5.0
 
 
 def _build_spark(app_name: str) -> SparkSession:
+    from pyspark.sql import SparkSession  # lazy: unit tests exercise helpers without Spark
+
     """
     Build a SparkSession with the same Hadoop/Iceberg catalog config used by
     offload_generic.py so that CALL statements and table references resolve
@@ -152,9 +157,7 @@ def _build_spark(app_name: str) -> SparkSession:
         .config("spark.sql.catalog.k2", "org.apache.iceberg.spark.SparkCatalog")
         .config("spark.sql.catalog.k2.type", "hadoop")
         .config("spark.sql.catalog.k2.warehouse", ICEBERG_WAREHOUSE)
-        .config(
-            "spark.sql.catalog.k2.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO"
-        )
+        .config("spark.sql.catalog.k2.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO")
         .config("spark.sql.defaultCatalog", "k2")
         .config(
             "spark.sql.extensions",
@@ -268,7 +271,7 @@ def action_expire(
         retain_last: Minimum number of snapshots to keep (default 3).
         dry_run: If True, log the plan but do not execute the CALL statement.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
     cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
 
     logger.info("=" * 70)
@@ -314,7 +317,7 @@ def action_expire(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _pg_connection() -> "psycopg2.connection":
+def _pg_connection() -> psycopg2.connection:
     """Open a PostgreSQL connection using the standard PREFECT_DB_* env vars."""
     return psycopg2.connect(
         host=os.environ.get("PREFECT_DB_HOST", "prefect-db"),
@@ -466,7 +469,7 @@ def action_audit(audit_window_hours: int) -> None:
     the Prefect flow decides whether to raise an alert based on the summary
     counts it parses from stdout.
     """
-    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
     window_end = now_utc
     window_start = window_end - timedelta(hours=audit_window_hours)
 
@@ -483,7 +486,7 @@ def action_audit(audit_window_hours: int) -> None:
     conn = _pg_connection()
     _ensure_audit_table(conn)
 
-    run_timestamp = datetime.now(timezone.utc)
+    run_timestamp = datetime.now(UTC)
     results = []
 
     try:
@@ -593,14 +596,9 @@ def action_audit(audit_window_hours: int) -> None:
     for r in results:
         label = r["iceberg_table"].replace("cold.", "")
         status_tag = r["status"].upper()
-        print(
-            f"  {label:<40}  {r['ch_count']:>10,}  "
-            f"{r['iceberg_count']:>10,}  [{status_tag}]"
-        )
+        print(f"  {label:<40}  {r['ch_count']:>10,}  {r['iceberg_count']:>10,}  [{status_tag}]")
     print("  " + "-" * 66)
-    print(
-        f"  OK={ok_count}  WARNING={warning_count}  MISSING={missing_count}  ERROR={error_count}"
-    )
+    print(f"  OK={ok_count}  WARNING={warning_count}  MISSING={missing_count}  ERROR={error_count}")
     print("=" * 70 + "\n")
 
     if missing_count > 0 or error_count > 0:

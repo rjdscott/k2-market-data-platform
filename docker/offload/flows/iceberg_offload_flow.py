@@ -8,11 +8,10 @@ Last Updated: 2026-02-14
 """
 
 import re
-import sys
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, List
 import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
 
 from prefect import flow, task
 from prefect.task_runners import ConcurrentTaskRunner
@@ -21,9 +20,9 @@ from prefect.task_runners import ConcurrentTaskRunner
 try:
     sys.path.insert(0, "/opt/prefect/offload")
     from metrics import (
-        record_offload_success,
-        record_offload_failure,
         record_cycle_complete,
+        record_offload_failure,
+        record_offload_success,
         set_configured_tables,
         set_pipeline_info,
         start_metrics_server,
@@ -158,7 +157,7 @@ def offload_table(
     sequence_col: str,
     layer: str,
     columns: str = "*",
-) -> Dict[str, any]:
+) -> dict[str, any]:
     """
     Offload a single table from ClickHouse to Iceberg.
 
@@ -256,7 +255,7 @@ def offload_table(
                 duration=duration,
             )
 
-        raise RuntimeError(f"Offload failed for {source_table}: {e.stderr}")
+        raise RuntimeError(f"Offload failed for {source_table}: {e.stderr}") from e
 
     except subprocess.TimeoutExpired:
         duration = (datetime.now() - start_time).total_seconds()
@@ -309,7 +308,7 @@ def check_watermark(source_table: str) -> bool:
     retry_delay_seconds=300,
     log_prints=True,
 )
-def offload_bronze_layer() -> List[Dict]:
+def offload_bronze_layer() -> list[dict]:
     """
     Offload all Bronze tables from ClickHouse to Iceberg in parallel.
 
@@ -321,9 +320,7 @@ def offload_bronze_layer() -> List[Dict]:
     logger = get_run_logger()
 
     logger.info("=" * 80)
-    logger.info(
-        "Starting Bronze Layer Offload (3 tables in parallel: binance + kraken + coinbase)"
-    )
+    logger.info("Starting Bronze Layer Offload (3 tables in parallel: binance + kraken + coinbase)")
     logger.info("=" * 80)
 
     results = []
@@ -349,7 +346,7 @@ def offload_bronze_layer() -> List[Dict]:
     retries=1,
     retry_delay_seconds=300,
 )
-def offload_silver_layer() -> List[Dict]:
+def offload_silver_layer() -> list[dict]:
     """
     Offload Silver table from ClickHouse to Iceberg.
 
@@ -387,7 +384,7 @@ def offload_silver_layer() -> List[Dict]:
     retries=1,
     retry_delay_seconds=300,
 )
-def offload_gold_layer() -> List[Dict]:
+def offload_gold_layer() -> list[dict]:
     """
     Offload all Gold OHLCV tables from ClickHouse to Iceberg in parallel.
 
@@ -424,7 +421,7 @@ def offload_gold_layer() -> List[Dict]:
     version="3.1.0",
     log_prints=True,
 )
-def iceberg_offload_main() -> Dict[str, any]:
+def iceberg_offload_main() -> dict[str, any]:
     """
     Main orchestration flow for ClickHouse → Iceberg offload.
 
@@ -446,9 +443,7 @@ def iceberg_offload_main() -> Dict[str, any]:
 
     logger.info("╔" + "=" * 78 + "╗")
     logger.info("║" + " " * 20 + "K2 ICEBERG OFFLOAD PIPELINE" + " " * 31 + "║")
-    logger.info(
-        "║" + " " * 8 + "ClickHouse → Iceberg (Bronze → Silver → Gold)" + " " * 25 + "║"
-    )
+    logger.info("║" + " " * 8 + "ClickHouse → Iceberg (Bronze → Silver → Gold)" + " " * 25 + "║")
     logger.info("╚" + "=" * 78 + "╝")
     logger.info("")
 

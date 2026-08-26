@@ -5,9 +5,7 @@ from pyspark.sql import SparkSession
 
 spark = (
     SparkSession.builder.appName("VerifyIceberg")
-    .config(
-        "spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0"
-    )
+    .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0")
     .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
     .config("spark.sql.catalog.demo.type", "hadoop")
     .config("spark.sql.catalog.demo.warehouse", "/home/iceberg/warehouse")

@@ -23,7 +23,7 @@ make ps
 ```bash
 make test                # Kotlin + Python unit tests
 make test-kotlin         # ./gradlew test inside gradle:8.12-jdk21
-make test-python         # uv run --no-project --with prefect --with pytest pytest tests
+make test-python         # uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same two suites plus a Docker build of every image and a Trivy scan.

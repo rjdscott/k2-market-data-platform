@@ -33,9 +33,7 @@ def generate_trade_row(sequence: int, base_timestamp: datetime) -> dict:
     }
 
     min_price, max_price = price_ranges[symbol]
-    price = Decimal(str(random.uniform(min_price, max_price))).quantize(
-        Decimal("0.00000001")
-    )
+    price = Decimal(str(random.uniform(min_price, max_price))).quantize(Decimal("0.00000001"))
 
     quantity = Decimal(str(random.uniform(0.01, 10.0))).quantize(Decimal("0.00000001"))
     quote_volume = price * quantity
@@ -109,9 +107,7 @@ def insert_test_data(
             print(f"  Inserted {total_inserted:,} / {num_rows:,} rows...")
 
     # Verify insertion
-    result = client.query(
-        f"SELECT count() as cnt, max(sequence_number) as max_seq FROM {table}"
-    )
+    result = client.query(f"SELECT count() as cnt, max(sequence_number) as max_seq FROM {table}")
     total_count, max_sequence = result.first_row
 
     print("\n✅ Success!")
