@@ -369,6 +369,47 @@ def test_ids_present_on_only_one_side_are_counted_per_side():
     assert not s.passed  # 3 and 4 both exceed the floor of 2
 
 
+def test_a_duplicate_record_does_not_move_the_delta():
+    """
+    Venues re-send trades. Measured 2026-08-26: Coinbase re-sent trade_id
+    69662829 (`time` 15:31:09.261488Z) on the SAME connection at 15:52:58.890Z,
+    raw frame `sequence_num` 1017853 — both tiers wrote it twice. Counting
+    records makes that look like a producer inventing a trade; counting unique
+    IDs is the honest comparison, and the copies get their own column.
+    """
+    v2 = [trade(tid="1"), trade(tid="1"), trade(tid="2")]
+    v3 = [trade(tid="1"), trade(tid="2")]
+    s = run(v2, v3)
+    assert (s.count_v2, s.count_v3, s.count_delta) == (2, 2, 0), "counts are unique IDs"
+    assert (s.dup_v2, s.dup_v3) == (1, 0)
+    assert (s.only_v2, s.only_v3) == (0, 0)
+    assert s.passed
+
+
+def test_a_duplicate_that_disagrees_with_its_first_copy_fails():
+    """
+    A re-sent trade is the venue repeating itself; a re-sent trade with a
+    different price is a capture that mangled one of the copies. Deduplicating
+    on ID alone would silently keep whichever arrived first, so the disagreement
+    is counted and sinks the symbol.
+    """
+    v2 = [trade(tid="1"), trade(tid="1", price=999_00000000)]
+    s = run(v2, [trade(tid="1")])
+    assert s.dup_v2 == 1
+    assert s.dup_inconsistent == 1
+    assert (s.count_delta, s.only_v2, s.only_v3, s.mismatched) == (0, 0, 0, 0)
+    assert not s.passed, "everything else agrees; the two copies of trade 1 do not"
+
+
+def test_a_duplicate_never_counts_as_a_one_sided_trade():
+    """The failure mode this replaces: 300 v2 copies read as 300 missing v3 trades."""
+    v2 = [trade(tid="1")] * 300 + [trade(tid="2")]
+    s = run(v2, [trade(tid="1"), trade(tid="2")])
+    assert (s.count_v2, s.count_v3) == (2, 2)
+    assert s.dup_v2 == 299
+    assert (s.only_v2, s.only_v3) == (0, 0) and s.passed
+
+
 def test_ts_delta_is_measured_over_matched_ids_only():
     v2 = [trade(tid="1", ts_us=1_000_000), trade(tid="2", ts_us=9_000_000)]
     v3 = [trade(tid="1", ts_us=1_000_750)]
@@ -514,6 +555,41 @@ def test_kraken_counts_still_gate():
     assert not run(v2, v3, exchange="kraken").passed
 
 
+def test_kraken_v3_is_deduped_on_its_real_trade_id():
+    """
+    v3's Kraken id is the venue's own integer, so v3 CAN be reduced to unique
+    trades even where v2 cannot. Measured 2026-08-26: 0 of 29,167 v3 records
+    repeated an id across two involuntary reconnects, so this is currently a
+    no-op — which is exactly why it needs a test. A future replay on resubscribe
+    would otherwise land in the multiset as a v3 surplus and read as v2 dropping.
+    """
+    v2 = [trade(tid="KRAKEN-a", price=100), trade(tid="KRAKEN-b", price=101)]
+    v3 = [trade(tid="7", price=100), trade(tid="7", price=100), trade(tid="8", price=101)]
+    s = run(v2, v3, exchange="kraken")
+    assert (s.count_v2, s.count_v3) == (2, 2), "v2 counts records, v3 counts unique real ids"
+    assert (s.dup_v2, s.dup_v3) == (0, 1)
+    assert (s.only_v2, s.only_v3) == (0, 0)
+    assert s.passed
+
+
+def test_kraken_v2_id_collisions_are_reported_not_deduplicated():
+    """
+    `KRAKEN-<ms>-<hash>` collides by construction, so its repeats are DIFFERENT
+    trades and must stay in the count. Measured 2026-08-26 over 2 h: BTC/USD
+    9,093 v2 records carried only 3,923 distinct synthesised ids — deduplicating
+    them would have deleted 57% of the symbol's trades. The column reports the
+    collision; the comparison ignores it.
+    """
+    v2 = [trade(tid="KRAKEN-1", price=100), trade(tid="KRAKEN-1", price=101),
+          trade(tid="KRAKEN-1", price=102)]
+    v3 = [trade(tid="7", price=100), trade(tid="8", price=101), trade(tid="9", price=102)]
+    s = run(v2, v3, exchange="kraken")
+    assert (s.count_v2, s.count_v3) == (3, 3), "all three v2 trades survive"
+    assert s.dup_v2 == 2, "reported as ID collisions"
+    assert s.dup_inconsistent == 0, "colliding synthesised ids are not a capture defect"
+    assert (s.only_v2, s.only_v3) == (0, 0) and s.passed
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Rendering — the artefact that is pasted into the PR
 # ─────────────────────────────────────────────────────────────────────────────
@@ -539,9 +615,24 @@ def _header(exchange="binance", **over):
 def test_markdown_table_has_the_agreed_columns_and_an_overall_verdict():
     stats = compare([trade(tid="1")], [trade(tid="1")], exchange="binance")
     out = render_markdown(stats, _header())
-    assert "| symbol | v2 | v3 | Δ | only-v2 | only-v3 | px/qty/side mismatch | verdict |" in out
+    assert (
+        "| symbol | v2 | v3 | Δ | dup-v2 | dup-v3 | only-v2 | only-v3 |"
+        " px/qty/side mismatch | verdict |"
+    ) in out
     assert "**OVERALL: PASS** — 1/1 symbols" in out
     assert "labelled sample, not a soak" in out
+
+
+def test_markdown_says_the_counts_are_unique_ids_and_duplicates_are_separate():
+    """
+    The header is the only place a reader learns that Δ is not a record delta.
+    Without it the dup column looks like decoration and the table over-claims.
+    """
+    v2 = [trade(tid="1"), trade(tid="1")]
+    out = render_markdown(compare(v2, [trade(tid="1")], exchange="coinbase"), _header("coinbase"))
+    assert "unique `trade_id`" in out
+    assert "never folded into Δ" in out
+    assert "| 1 | 1 | +0 | 1 | 0 | 0 | 0 | 0 | PASS |" in out
 
 
 def test_markdown_marks_failures_and_the_overall_verdict_follows():
@@ -595,6 +686,27 @@ def test_markdown_states_the_kraken_carve_out_in_the_header():
     out = render_markdown(stats, _header("kraken"))
     assert "carve-out" in out
     assert "never at the 0.1%" in out
+
+
+def test_markdown_says_only_the_v3_side_of_kraken_can_be_deduplicated():
+    """
+    The asymmetry is the whole Kraken story: v3 counts unique venue ids, v2
+    counts records because its ids collide. A table that printed both columns
+    without saying so would invite the reader to subtract them.
+    """
+    stats = compare([trade(tid="KRAKEN-1")], [trade(tid="7")], exchange="kraken")
+    out = render_markdown(stats, _header("kraken"))
+    assert "v2 side cannot be deduplicated" in out
+    assert "collision" in out
+
+
+def test_markdown_calls_out_an_inconsistent_duplicate():
+    """A dup column of 3 and a dup column of 3-with-one-mangled must not look alike."""
+    v2 = [trade(tid="1"), trade(tid="1", price=9)]
+    out = render_markdown(compare(v2, [trade(tid="1")], exchange="binance"), _header())
+    assert "**Inconsistent duplicates**" in out
+    assert "BTC/USD (1)" in out, "the note must name the symbol and the count"
+    assert "**OVERALL: FAIL**" in out
 
 
 # ─────────────────────────────────────────────────────────────────────────────

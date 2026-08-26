@@ -43,6 +43,23 @@ inversion as the hazard. A tier that flipped it would emit the same id, price,
 quantity and timestamp for every trade, so counts, the ID join and px/qty would
 all stay green — side is the only column that can see it.
 
+── Counts are unique trade IDs, not records ─────────────────────────────────
+
+Venues re-send trades. Measured on the 2026-08-26T14:15Z→16:15Z window:
+Coinbase re-sent trade_id 69662829 — `time` 15:31:09.261488Z — on the SAME
+connection (no reconnect) in raw frame `sequence_num` 1017853 at 15:52:58.890Z,
+21 minutes stale, and BOTH tiers wrote it to their topic a second time. Over
+that window 2,533 v3 and 1,538 v2 Coinbase ids arrived more than once. Neither
+tier invented anything, but a record-count comparison read those copies as
+thousands of trades one tier had missed.
+
+So counts, and the delta, are over the set of unique `trade_id`s. Duplicate
+records get their own `dup-v2` / `dup-v3` column and are never folded into Δ —
+a duplicate is a fact about the feed, not a divergence between the tiers. What
+IS a divergence is a duplicate that disagrees with its own first copy: same id,
+different price, quantity, side or timestamp means one of the copies was
+mangled, so `dup_inconsistent` fails the symbol.
+
 ── Why a tolerance at all ───────────────────────────────────────────────────
 
 The window is cut on the Kafka record timestamp of each topic independently, and
@@ -65,6 +82,16 @@ against v3's real integer `trade_id` is not merely unavailable — it would be
 meaningless, and a green result from it would be a lie. For Kraken the ID
 comparison is skipped and the verdict rests on counts plus a multiset
 comparison of `(price, qty, exchange_ts)` instead.
+
+That cuts one way only. v3's Kraken id is the venue's own integer, so the v3
+side IS reduced to unique ids before the multiset is built — a replay on
+resubscribe would otherwise show up as a v3 surplus and read as v2 dropping
+trades. The v2 side cannot be: its colliding ids belong to DIFFERENT trades, so
+deduplicating them would delete real trades. Measured 2026-08-26 over 2 h,
+BTC/USD: 9,093 v2 records carried 3,923 distinct synthesised ids — a dedupe
+would have thrown away 57% of the symbol. `dup-v2` therefore reports ID
+COLLISIONS on the Kraken path and duplicate RECORDS everywhere else; the
+rendered header says which.
 
 That multiset is keyed on (price, qty, side, exchange_ts@ms) — truncated to
 MILLISECONDS because v2 cannot represent anything finer: the v2 schema stores
@@ -246,12 +273,15 @@ def normalise_v3(record: dict) -> Norm:
 @dataclass
 class SymbolStats:
     symbol: str
-    count_v2: int
+    count_v2: int  # unique trade IDs; RECORDS on the kraken v2 side (see module doc)
     count_v3: int
     only_v2: int
     only_v3: int
     mismatched: int | None  # None = ID join skipped (synthesised v2 IDs)
     max_ts_delta_us: int | None  # None = nothing pairable to measure across
+    dup_v2: int = 0  # records beyond the first per id; ID COLLISIONS on kraken v2
+    dup_v3: int = 0
+    dup_inconsistent: int = 0  # a repeat that disagrees with its own first copy
 
     @property
     def count_delta(self) -> int:
@@ -288,6 +318,12 @@ class SymbolStats:
         # happened, which an ungated printed number would let a reader wave away.
         if self.max_ts_delta_us is not None and self.max_ts_delta_us >= MAX_TS_DELTA_US:
             return False
+        # A venue re-sending a trade is expected and gets its own column. A tier
+        # emitting the same id twice with a different price, quantity, side or
+        # timestamp mangled one of the copies, and deduplicating on the id alone
+        # would keep whichever arrived first and hide it.
+        if self.dup_inconsistent:
+            return False
         return (
             abs(self.count_delta) <= self.tolerance
             and self.only_v2 <= self.side_allowance
@@ -310,45 +346,77 @@ def _ms_bucket_key(n: Norm) -> tuple[int, int, str, int]:
     return (n.price, n.qty, n.side, n.exchange_ts_us // 1000)
 
 
-def compare_symbol(v2: list[Norm], v3: list[Norm], *, join_on_id: bool) -> tuple:
-    """
-    Returns (only_v2, only_v3, mismatched, max_ts_delta_us) for one symbol.
+def _comparable(n: Norm) -> tuple[int, int, str]:
+    """What two tiers must agree on for a trade they both saw. Zero tolerance."""
+    return (n.price, n.qty, n.side)
 
-    `join_on_id=False` is the Kraken path: no ID join is possible, so the two
-    sides are compared as multisets of (price, qty, side, exchange_ts@ms) and
-    there is no such thing as "same trade, different price" to count.
+
+def _dedupe_by_id(rows: list[Norm]) -> tuple[dict[str, Norm], int, int]:
     """
+    (first copy per trade_id, repeats dropped, repeats that disagreed).
+
+    First-wins, but not silently: a repeat whose price, quantity, side or
+    timestamp differs from the copy already held is counted, because that is a
+    tier contradicting itself rather than a venue repeating itself.
+    """
+    by_id: dict[str, Norm] = {}
+    dup = inconsistent = 0
+    for n in rows:
+        first = by_id.get(n.trade_id)
+        if first is None:
+            by_id[n.trade_id] = n
+            continue
+        dup += 1
+        if (_comparable(first), first.exchange_ts_us) != (_comparable(n), n.exchange_ts_us):
+            inconsistent += 1
+    return by_id, dup, inconsistent
+
+
+def compare_symbol(symbol: str, v2: list[Norm], v3: list[Norm], *, join_on_id: bool) -> SymbolStats:
+    """
+    One symbol's row.
+
+    `join_on_id=False` is the Kraken path: v2's ids are synthesised and collide,
+    so the two sides are compared as multisets of (price, qty, side,
+    exchange_ts@ms) and there is no such thing as "same trade, different price"
+    to count. Only the v3 side is deduplicated there — its ids are real.
+    """
+    by3, dup3, inc3 = _dedupe_by_id(v3)
+
     if not join_on_id:
-        c2, c3 = Counter(map(_ms_bucket_key, v2)), Counter(map(_ms_bucket_key, v3))
-        return sum((c2 - c3).values()), sum((c3 - c2).values()), None, None
+        # v2 keeps every record: `KRAKEN-<ms>-<hash>` repeats are different
+        # trades, so dropping them would delete trades. The collision count is
+        # reported instead, and it is not an inconsistency — by construction.
+        v3u = list(by3.values())
+        c2, c3 = Counter(map(_ms_bucket_key, v2)), Counter(map(_ms_bucket_key, v3u))
+        return SymbolStats(
+            symbol=symbol,
+            count_v2=len(v2),
+            count_v3=len(v3u),
+            only_v2=sum((c2 - c3).values()),
+            only_v3=sum((c3 - c2).values()),
+            mismatched=None,
+            max_ts_delta_us=None,
+            dup_v2=len(v2) - len({n.trade_id for n in v2}),
+            dup_v3=dup3,
+            dup_inconsistent=inc3,
+        )
 
-    # ponytail: first-wins on a duplicate ID. A real duplicate on binance or
-    # coinbase would be a capture bug, and it still shows up here — as a count
-    # delta the verdict catches — just not broken out into its own column.
-    by_id_v2 = {}
-    for n in v2:
-        by_id_v2.setdefault(n.trade_id, n)
-    by_id_v3 = {}
-    for n in v3:
-        by_id_v3.setdefault(n.trade_id, n)
-
-    common = by_id_v2.keys() & by_id_v3.keys()
-
-    def comparable(n: Norm) -> tuple[int, int, str]:
-        return (n.price, n.qty, n.side)
-
-    mismatched = sum(
-        1 for tid in common if comparable(by_id_v2[tid]) != comparable(by_id_v3[tid])
-    )
-    max_delta = max(
-        (abs(by_id_v2[tid].exchange_ts_us - by_id_v3[tid].exchange_ts_us) for tid in common),
-        default=None,
-    )
-    return (
-        len(by_id_v2.keys() - by_id_v3.keys()),
-        len(by_id_v3.keys() - by_id_v2.keys()),
-        mismatched,
-        max_delta,
+    by2, dup2, inc2 = _dedupe_by_id(v2)
+    common = by2.keys() & by3.keys()
+    return SymbolStats(
+        symbol=symbol,
+        count_v2=len(by2),
+        count_v3=len(by3),
+        only_v2=len(by2.keys() - by3.keys()),
+        only_v3=len(by3.keys() - by2.keys()),
+        mismatched=sum(1 for t in common if _comparable(by2[t]) != _comparable(by3[t])),
+        max_ts_delta_us=max(
+            (abs(by2[t].exchange_ts_us - by3[t].exchange_ts_us) for t in common), default=None
+        ),
+        dup_v2=dup2,
+        dup_v3=dup3,
+        dup_inconsistent=inc2 + inc3,
     )
 
 
@@ -363,22 +431,12 @@ def compare(v2: Iterable[Norm], v3: Iterable[Norm], *, exchange: str) -> list[Sy
     for n in v3:
         right[n.canonical_symbol].append(n)
 
-    stats = []
-    for symbol in sorted(left.keys() | right.keys()):
-        a, b = left.get(symbol, []), right.get(symbol, [])
-        only_v2, only_v3, mismatched, max_delta = compare_symbol(a, b, join_on_id=join_on_id)
-        stats.append(
-            SymbolStats(
-                symbol=symbol,
-                count_v2=len(a),
-                count_v3=len(b),
-                only_v2=only_v2,
-                only_v3=only_v3,
-                mismatched=mismatched,
-                max_ts_delta_us=max_delta,
-            )
+    return [
+        compare_symbol(
+            symbol, left.get(symbol, []), right.get(symbol, []), join_on_id=join_on_id
         )
-    return stats
+        for symbol in sorted(left.keys() | right.keys())
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -403,6 +461,14 @@ def render_markdown(stats: list[SymbolStats], header: dict) -> str:
             "- **join:** exchange `trade_id`. only-v2/only-v3 carry the same"
             " tolerance as the count delta."
         )
+        lines.append(
+            "- **counts are unique `trade_id`s, not records.** Venues re-send"
+            " trades — measured 2026-08-26, Coinbase re-sent one 21 minutes"
+            " stale on an unbroken connection and both tiers wrote it twice."
+            " Repeat records are reported in `dup-v2`/`dup-v3` and are"
+            " **never folded into Δ**. A repeat that disagrees with its own"
+            " first copy is a different thing and fails the symbol."
+        )
     else:
         lines.append(
             "- **join:** ID comparison **skipped** — v2 Kraken IDs are synthesised"
@@ -417,17 +483,26 @@ def render_markdown(stats: list[SymbolStats], header: dict) -> str:
             " slope — a divergence inside that cap is not distinguishable here"
             " from a boundary trade."
         )
+        lines.append(
+            "- **only the v3 side is deduplicated.** v3 carries Kraken's own"
+            " integer id, so `v3` counts unique trades; the **v2 side cannot be"
+            " deduplicated** — its synthesised ids belong to different trades,"
+            " so `v2` counts records and `dup-v2` reports that ID **collision**"
+            " rather than repeat records. Measured 2026-08-26 over 2 h, BTC/USD:"
+            " 9,093 v2 records, 3,923 distinct synthesised ids."
+        )
     if header["notes"]:
         lines += [f"- **note:** {n}" for n in header["notes"]]
     lines += [
         "",
-        "| symbol | v2 | v3 | Δ | only-v2 | only-v3 | px/qty/side mismatch | verdict |",
-        "|---|---:|---:|---:|---:|---:|---:|---|",
+        "| symbol | v2 | v3 | Δ | dup-v2 | dup-v3 | only-v2 | only-v3 |"
+        " px/qty/side mismatch | verdict |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for s in stats:
         lines.append(
             f"| {s.symbol} | {s.count_v2:,} | {s.count_v3:,} | {s.count_delta:+,} |"
-            f" {s.only_v2:,} | {s.only_v3:,} |"
+            f" {s.dup_v2:,} | {s.dup_v3:,} | {s.only_v2:,} | {s.only_v3:,} |"
             f" {'n/a' if s.mismatched is None else f'{s.mismatched:,}'} |"
             f" {'PASS' if s.passed else '**FAIL**'} |"
         )
@@ -437,6 +512,16 @@ def render_markdown(stats: list[SymbolStats], header: dict) -> str:
     lines += ["", f"**OVERALL: {'PASS' if overall else 'FAIL'}**"
               f" — {passed}/{len(stats)} symbols"
               + (" (read truncated — not evidence)" if header.get("truncated") else "")]
+
+    inconsistent = [s for s in stats if s.dup_inconsistent]
+    if inconsistent:
+        lines.append(
+            "\n**Inconsistent duplicates** — one tier emitted the same"
+            " `trade_id` twice with a different price, quantity, side or"
+            " timestamp. That is not a venue re-send; it fails the symbol: "
+            + ", ".join(f"{s.symbol} ({s.dup_inconsistent:,})" for s in inconsistent)
+            + "."
+        )
 
     deltas = [s.max_ts_delta_us for s in stats if s.max_ts_delta_us is not None]
     if deltas:

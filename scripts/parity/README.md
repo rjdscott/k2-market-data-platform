@@ -99,9 +99,32 @@ reason.
 ## What PASS means — and what it does not
 
 **PASS means:** over this window, for every canonical symbol, the two tiers agree on
-how many trades there were to within the stated tolerance, on which trades they were,
-and — with no tolerance at all — on the price, quantity and **taker side** of every
-trade both tiers saw, and on when it happened to within v2's millisecond resolution.
+how many **distinct trades** there were to within the stated tolerance, on which
+trades they were, and — with no tolerance at all — on the price, quantity and **taker
+side** of every trade both tiers saw, and on when it happened to within v2's
+millisecond resolution.
+
+### Counts are unique trade IDs, not records
+
+Venues re-send trades, and a record count reads that as one tier inventing them.
+Measured on the 2026-08-26T14:15Z→16:15Z window, Coinbase re-sent trade `69662829`
+— exchange `time` `15:31:09.261488Z` — in raw frame `sequence_num` 1017853 at
+`15:52:58.890Z`, 21 minutes stale, on the **same connection** (`conn_id`
+`8e980ee6-…`, zero `k2_capture_reconnects_total`). Both tiers wrote it to their topic
+again: `market.crypto.v3.trades.coinbase` p1@4345 and p1@4784/4785,
+`market.crypto.trades.coinbase` p3@51157 and p3@52885. Over that window 2,533 v3 and
+1,538 v2 Coinbase IDs arrived more than once, and every copy was byte-identical to
+its first.
+
+So the `v2` / `v3` / `Δ` columns count **unique `trade_id`s**. Repeat records get
+their own `dup-v2` / `dup-v3` columns and are **never folded into Δ** — a re-send is
+a fact about the feed, not a divergence between the tiers.
+
+What *is* a divergence is a repeat that disagrees with its own first copy: same ID,
+different price, quantity, side or timestamp means one tier mangled one of the
+copies. That is counted separately and **fails the symbol**, with the symbol named
+under the table. Deduplicating on the ID alone would have kept whichever copy
+arrived first and printed a green row.
 
 Side is in that list deliberately. Both tiers derive the Binance taker side by
 inverting the same `is_buyer_maker` boolean (`TradeNormalizer.kt:27`,
@@ -123,6 +146,29 @@ column is named `px/qty/side mismatch`.
 - **Anything about `recv_ts_ns`, gaps, checksums or resyncs.** Those are v3-only
   properties with no v2 counterpart; they are gated by the capture tier's own metrics
   and alerts.
+- **That either tier stayed connected for the whole window.** A tier that drops its
+  WebSocket loses every trade until it is back, and that arrives as a one-sided
+  `only-` deficit the tool cannot attribute to a cause. It is not a tool artefact —
+  the trades really are missing from one topic — but it is a statement about
+  *availability*, not about normalisation. **Read both tiers' logs before reading a
+  red row as a defect.** On 2026-08-26T14:15Z→16:15Z the v2 Kotlin tier reconnected
+  four times inside the window and v3 twice:
+
+  | tier | exchange | lost at | back at | blind |
+  |---|---|---|---|---:|
+  | v2 | coinbase | 15:02:13.728 | 15:02:20.174 | 6.4 s |
+  | v2 | kraken | 14:54:12.117 | 14:54:19.064 | 6.9 s |
+  | v2 | kraken | 15:43:59.701 | 15:44:06.209 | 6.5 s |
+  | v2 | kraken | 16:11:07.403 | 16:11:13.894 | 6.5 s |
+  | v3 | kraken | 15:01:55.617 | 15:01:57.576 | 2.0 s |
+  | v3 | kraken | 15:55:48.305 | 15:55:50.287 | 2.0 s |
+
+  `docker logs k2-feed-handler-{coinbase,kraken}` and `docker logs k2-capture-kraken`.
+  Every one of those windows is legible in the table: 415 of Coinbase's 451 `only-v3`
+  IDs carry an exchange timestamp inside minute `15:02`, and Kraken's `only-v3`
+  clusters at `14:54`, `15:44` and `16:11` — not at v3's `15:01` or `15:55`, where
+  the two-second v3 gaps show up as the `only-v2` counts of 1–2 instead. v2's fixed
+  5-second reconnect backoff is why its gaps are ~3× v3's.
 
 ### The tolerance, and why it is not zero
 
@@ -144,15 +190,21 @@ boundary trades expected and meaningless. The floor of 2 absorbs that on a quiet
 symbol; the 0.1% scales it on a busy one; neither is large enough to hide a producer
 that is actually dropping messages.
 
-**The floor of 2 is a prediction, not a measurement.** `EDGE_ALLOWANCE = 2` says a
-window edge can move at most one trade per edge per symbol, and nothing has yet run a
-full window through both tiers to check it. Until that first run, a symbol failing by
-1 or 2 is as likely to be this number being wrong as it is to be a producer dropping
-records: read the first full-window run's near-misses before treating a small delta as
-a finding, and if the edges routinely move more than 2 the fix is this constant with
-the measurement written next to it — not a wider proportional tolerance, which would
-also loosen the busy symbols where the floor never binds. Revisit at the first
-full-window comparison against a v3 tier that has been producing for the whole window.
+**The floor of 2 was a prediction; it has now been measured once.** `EDGE_ALLOWANCE
+= 2` says a window edge can move at most one trade per edge per symbol. First
+full-window check, 2026-08-26T14:15Z→16:15Z: Binance came back **12/12 symbols with
+`only-v2` and `only-v3` both exactly 0** over 1,569,505 records on each side —
+1.57 M trades and not one landed on opposite sides of a boundary. The edges moved
+nothing at all, so on that evidence the floor of 2 is loose rather than tight.
+
+That is one window on one venue, and it is the venue that stamps `exchange_ts` from
+its own `E`/`T` fields on both tiers. Kraken and Coinbase could not test it: both had
+a tier reconnect inside the window (see the availability table above), which swamps
+any edge effect. **Revisit** when a window runs with zero reconnects on both tiers
+for all three exchanges — if the edges still move nothing there, this constant can go
+to 0 and the tool gets strictly sharper. If they routinely move more than 2, the fix
+is this constant with the measurement written next to it, not a wider proportional
+tolerance, which would also loosen the busy symbols where the floor never binds.
 
 One thing the tolerance explicitly does **not** cover: a symbol that one tier saw and
 the other did not see at all. That is never a window edge, so a symbol with a zero on
@@ -175,6 +227,23 @@ would be meaningless, and a green result from it would be a lie. So for Kraken:
   represent anything finer — the v2 schema stores millis and Kraken publishes micros.
   Comparing at microsecond granularity would fail on every trade for a reason that has
   nothing to do with parity.
+
+#### Only the v3 side can be deduplicated
+
+The unique-ID rule above cuts one way on Kraken. v3 carries the venue's own integer
+`trade_id`, so the v3 side **is** reduced to unique IDs before the multiset is built:
+a replay on resubscribe would otherwise arrive as a v3 surplus and read as v2
+dropping trades. The v2 side is **not**, and cannot be — `KRAKEN-<ms>-<hash>` repeats
+are *different* trades, so deduplicating them would delete real ones. Measured
+2026-08-26 over 2 h, BTC/USD: **9,093 v2 records carrying 3,923 distinct synthesised
+IDs**; a dedupe would have thrown away 57% of the symbol.
+
+So on the Kraken row, `v2` counts records, `v3` counts unique trades, and `dup-v2`
+reports **ID collisions** rather than repeat records. The rendered header says so.
+`dup-v3` there is a v3 replay detector: it read **0 across all 29,167 records** over
+that window, spanning two involuntary reconnects (`15:01:55Z`, `15:55:48Z`), which is
+the evidence that `"snapshot": false` on the `trade` subscription
+(`services/capture-rust/src/exchanges/kraken.rs:176`) does what it says.
 
 #### The carve-out this costs
 
@@ -211,22 +280,16 @@ produced `XDG/USD` and `DOGE/USD` as two different instruments in v2"). The scri
 does not fold the two together: hiding a divergence to make a table green is the
 opposite of what this directory is for. Explain it in the PR next to the table.
 
-Observed on a 2-minute two-sided Kraken window, 2026-08-26T12:20:59Z → 12:22:59Z,
-with both tiers up for the whole of it (214 records consumed on each side):
+Observed on the 2-hour labelled window, 2026-08-26T14:15Z → 16:15Z:
 
-| symbol | v2 | v3 | Δ | only-v2 | only-v3 | px/qty/side mismatch | verdict |
-|---|---:|---:|---:|---:|---:|---:|---|
-| ADA/USD | 28 | 28 | +0 | 0 | 0 | n/a | PASS |
-| BTC/USD | 98 | 98 | +0 | 0 | 0 | n/a | PASS |
-| DOGE/USD | 0 | 4 | -4 | 0 | 4 | n/a | **FAIL** |
-| XDG/USD | 4 | 0 | +4 | 4 | 0 | n/a | **FAIL** |
-| … | | | | | | | |
+| symbol | v2 | v3 | Δ | dup-v2 | dup-v3 | only-v2 | only-v3 | px/qty/side mismatch | verdict |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| DOGE/USD | 0 | 1,322 | -1,322 | 0 | 0 | 0 | 1,322 | n/a | **FAIL** |
+| XDG/USD | 1,320 | 0 | +1,320 | 593 | 0 | 1,320 | 0 | n/a | **FAIL** |
 
-Eight of ten symbols matched with `only-v2` and `only-v3` both exactly 0 — the
-multiset path agreeing trade-for-trade, not merely on counts. The two red rows are
-the same four Dogecoin trades counted under two different canonical names. **This is
-a 2-minute sample used to validate the tool, not parity evidence** — the retirement
-PR needs the 2-hour labelled window.
+The same ~1,321 Dogecoin trades under two canonical names. The 2-trade difference is
+v2's `14:54` reconnect, and `dup-v2 = 593` is the synthesised-ID collision on the v2
+side of it — neither is a second bug.
 
 ---
 
@@ -252,6 +315,11 @@ the tables:
 - the Kraken `n/a` column explained by the synthesised-ID paragraph above, **and**
   its carve-out stated — a Kraken table cannot assert the zero-tolerance px/qty/side
   guarantee that binance and coinbase tables can;
+- **both tiers' reconnect logs for the window.** A red row caused by a tier being
+  disconnected is a different finding from a red row caused by a tier mis-normalising,
+  and the table cannot tell them apart. `docker logs k2-feed-handler-<ex> | grep -i
+  reconnect` and `docker logs k2-capture-<ex> | grep -i reconnect`. If either tier
+  reconnected, say so, or run a cleaner window;
 - a link back to this README for what PASS does not mean.
 
 If the tables are green, the ADR's retirement trigger is met and
