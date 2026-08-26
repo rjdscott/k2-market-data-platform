@@ -41,8 +41,15 @@ test-python:  ## Iceberg offload flow unit tests (needs uv)
 # contract in with `include_str!("../../../schemas/avro/trade.avsc")` and the
 # replay tests load `../../config/instruments.yaml`. Mounting only the crate is
 # an include_str! *compile* error, not a skipped test.
+# Registry and target live in named volumes, not under the repo: the container
+# runs as root, so a bind-mounted target/ ends up root-owned on the host and the
+# next run (or the IDE) fails with EACCES on .cargo-build-lock. The volumes also
+# keep a rebuild at seconds instead of minutes (librdkafka and rustls compile
+# from source).
 test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo needed)
-	docker run --rm -v "$(CURDIR)":/repo -w /repo/services/capture-rust rust:1-bookworm \
+	docker run --rm -v "$(CURDIR)":/repo -w /repo/services/capture-rust \
+	  -v k2-capture-cargo:/usr/local/cargo/registry \
+	  -v k2-capture-target:/repo/services/capture-rust/target rust:1-bookworm \
 	  sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang libclang-dev >/dev/null && cargo test --locked'
 
 build-capture:  ## Build k2-capture:v3 from the repo root, stamping the git sha
