@@ -6,13 +6,23 @@ K2 v3 lake ingest — Redpanda to Iceberg, in two stages, in one Spark session.
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --stage raw
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
         --end-timestamp 2026-08-27T02:00:00Z          # backlog, one slice at a time
+    docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
+        --max-offsets-per-partition 200000            # drain a backlog faster
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
 
 **Stage 1 — Kafka to `raw.messages`.** Every one of the nine v3 topics, read as a
-bounded batch from the offsets the last ingest committed to `endingOffsets=latest`.
-The Kafka value is stored byte for byte, Confluent framing included. Nothing is
-parsed, reformatted or validated on the way in; that is what makes this the
-system of record rather than a view of one (ADR-018).
+batch whose offsets are pinned on both ends before the read: from what the last
+ingest committed, to `min(latest, start + --max-offsets-per-partition)` per
+partition. The Kafka value is stored byte for byte, Confluent framing included.
+Nothing is parsed, reformatted or validated on the way in; that is what makes
+this the system of record rather than a view of one (ADR-018).
+
+**Bounded, and nothing payload-bearing is cached.** Both properties are the same
+fix. An unbounded first run over a 48-hour retention put 41.5 M records through a
+`persist(DISK_ONLY)` — which serialises via the in-memory columnar cache — and
+the driver died on `java.lang.OutOfMemoryError` (2026-08-26). Pinning the end
+offsets in pure code (`offsets.bounded_offsets`) means nothing has to be cached
+to know what a run consumed, and it caps what one run can pull.
 
 **Stage 2 — `raw.messages` to `bronze.*`.** An Iceberg incremental read of the
 snapshots stage 1 just added, the Confluent header stripped, the Avro body
@@ -50,7 +60,6 @@ import urllib.request
 from datetime import datetime, timezone
 from functools import reduce
 
-from pyspark import StorageLevel
 from pyspark.sql import DataFrame, Row
 from pyspark.sql import functions as F
 from pyspark.sql.avro.functions import from_avro
@@ -78,6 +87,26 @@ CHECKS_TABLE = f"{CATALOG}.audit.checks"
 # An exclusive non-blocking flock is the whole guard: the second run exits
 # non-zero immediately instead of duplicating the first one's work.
 LOCK_PATH = os.environ.get("K2_LAKE_LOCK", "/tmp/k2-lake-ingest.lock")  # noqa: S108
+
+# How far past its start offset one run may read each partition. The ceiling on
+# what a single ingest can pull, and therefore on how long it runs and how much
+# it writes — 108 partitions x this, not "however much arrived".
+#
+# It exists because a first run has no other bound. With the offsets committed
+# by the previous run there is nothing to read but five minutes of arrivals; with
+# no prior snapshot the range is the whole retention, which on 2026-08-26 was
+# 41.5 M records / 9.5 GB across the nine v3 topics, and the run died. The drain
+# is now deterministic: each run takes at most this many offsets per partition
+# and commits them, so a backlog empties over a predictable number of runs
+# instead of in one that cannot finish.
+#
+# 50,000 x 108 partitions is ~5.4 M records upper bound per run; the live
+# measurement of what that costs in driver RSS and wall time is in
+# docker/lake/README.md. Lower it if a run cannot finish inside
+# `INGEST_TIMEOUT_S`; raise it to drain a backlog faster on an idle host. 0
+# disables the bound entirely, which is only ever right when a person is
+# watching it.
+MAX_OFFSETS_PER_PARTITION = int(os.environ.get("K2_LAKE_MAX_OFFSETS_PER_PARTITION", "50000"))
 
 # Same three names, same prefix and same default as docker/redpanda/init.sh.
 EXCHANGES = os.environ.get("K2_EXCHANGES", "binance,kraken,coinbase").split(",")
@@ -116,28 +145,83 @@ def current_snapshot_id(spark, table: str):
     return rows[0][0] if rows else None
 
 
-def topic_partitions(spark, topic_list: list) -> dict:
-    """`{topic: partition count}` straight from the broker.
+def broker_offsets(spark, topic_list: list, at_timestamp_ms: int = 0) -> tuple:
+    """`(earliest, latest, until)` as the broker reports them, per partition.
+
+    Each is `{topic: {partition: offset}}`; `until` is None unless
+    `at_timestamp_ms` is given, in which case it holds the offset of the first
+    record at or after that instant (Kafka's -1 where there is none).
 
     Over the Kafka AdminClient already on the Spark classpath
     (kafka-clients-3.4.1.jar, pulled in by spark-sql-kafka-0-10), through the
-    driver's JVM gateway — no new Python dependency for one metadata call.
+    driver's JVM gateway — no new Python dependency for three metadata calls.
+
+    **The offsets a run will consume are decided from this, before Spark reads a
+    byte.** That is what lets `bounded_offsets` pin `endingOffsets` instead of
+    resolving `latest` inside the read, and a pinned range is what removed the
+    `persist(DISK_ONLY)` that killed the driver — see docker/lake/offsets.py.
 
     This used to be a `--partitions` flag. See docker/lake/offsets.py for why a
     number on a command line is the wrong place for it.
     """
     jvm = spark._jvm
+    admin_pkg = jvm.org.apache.kafka.clients.admin
     props = jvm.java.util.Properties()
     props.put("bootstrap.servers", KAFKA_BROKERS)
-    admin = jvm.org.apache.kafka.clients.admin.AdminClient.create(props)
+    admin = admin_pkg.AdminClient.create(props)
     try:
         names = jvm.java.util.ArrayList()
         for topic in topic_list:
             names.add(topic)
         described = admin.describeTopics(names).all().get()
-        return {topic: described.get(topic).partitions().size() for topic in topic_list}
+        counts = {topic: described.get(topic).partitions().size() for topic in topic_list}
+
+        def list_offsets(spec) -> dict:
+            """One `listOffsets` round trip for every partition, under one spec."""
+            request = jvm.java.util.HashMap()
+            for topic, count in counts.items():
+                for partition in range(count):
+                    request.put(jvm.org.apache.kafka.common.TopicPartition(topic, partition), spec())
+            answer = admin.listOffsets(request).all().get()
+            return {
+                topic: {
+                    partition: answer.get(
+                        jvm.org.apache.kafka.common.TopicPartition(topic, partition)
+                    ).offset()
+                    for partition in range(count)
+                }
+                for topic, count in counts.items()
+            }
+
+        return (
+            list_offsets(admin_pkg.OffsetSpec.earliest),
+            list_offsets(admin_pkg.OffsetSpec.latest),
+            list_offsets(lambda: admin_pkg.OffsetSpec.forTimestamp(at_timestamp_ms))
+            if at_timestamp_ms
+            else None,
+        )
     finally:
         admin.close()
+
+
+def added_records(spark, table: str) -> int:
+    """Rows the table's current snapshot added, from Iceberg's own summary.
+
+    Not `df.count()`. A count on the DataFrame that was just written is a second
+    full evaluation of it — for stage 1 a second read of every Kafka record, for
+    stage 2 a second Avro decode of the whole range — and the reflex fix for
+    that (cache it first) is what put gigabytes of 5.2 MB payload rows into the
+    driver heap. Iceberg already counted the rows while committing them; the
+    number is a metadata read away and it describes the commit rather than the
+    plan that produced it.
+    """
+    snapshot_id = current_snapshot_id(spark, table)
+    if snapshot_id is None:
+        return 0
+    rows = spark.sql(
+        f"SELECT summary FROM {table}.snapshots WHERE snapshot_id = {snapshot_id}"
+    ).collect()
+    return int((rows[0][0] or {}).get("added-records", 0)) if rows else 0
 
 
 class UnresolvableSchema(Exception):
@@ -168,7 +252,7 @@ def fetch_schema(schema_id: int) -> str:
 # ── stage 1: Kafka -> raw.messages ──────────────────────────────────────────
 
 
-def stage_raw(spark, ingest_ts: datetime, end_timestamp: str) -> int:
+def stage_raw(spark, ingest_ts: datetime, end_timestamp: str, max_per_partition: int) -> int:
     """Append one bounded Kafka batch to `raw.messages`. Returns rows written."""
     committed = {}
     previous = O.latest_summary(snapshot_history(spark, RAW_TABLE), O.JOB_INGEST)
@@ -178,61 +262,54 @@ def stage_raw(spark, ingest_ts: datetime, end_timestamp: str) -> int:
     else:
         print("no prior ingest snapshot — starting from the beginning of every topic")
 
-    starting = O.next_starting_offsets(committed, topic_partitions(spark, ALL_TOPICS))
+    end_ms = _epoch_ms(end_timestamp) if end_timestamp else 0
+    earliest, latest, until = broker_offsets(spark, ALL_TOPICS, end_ms)
+    starting = O.next_starting_offsets(committed, {t: len(p) for t, p in earliest.items()})
+    starts, ends, backlog = O.bounded_offsets(starting, earliest, latest, max_per_partition, until)
 
-    reader = (
+    # What this run is choosing NOT to read, per topic. On a caught-up 5-minute
+    # cycle every number is 0; on a cold start it is the drain, and it has to
+    # fall on every run or the bound is too small for the arrival rate. The same
+    # numbers ride on the commit as `k2.kafka-backlog` and come back out as
+    # `k2_lake_ingest_backlog_offsets`.
+    for topic in sorted(backlog):
+        print(f"stage 1: {topic} backlog remaining {backlog[topic]}")
+
+    # Decided in arithmetic, before Spark opens a connection: an empty range on
+    # every partition is "no new records", and there is nothing to read, plan or
+    # commit. scripts/lake-verify.sh asserts this line on its second cycle.
+    if starts == ends:
+        print("stage 1: no new records")
+        return 0
+
+    loaded = (
         spark.read.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_BROKERS)
         .option("subscribe", ",".join(ALL_TOPICS))
-        .option("startingOffsets", O.encode(starting))
+        .option("startingOffsets", O.encode(starts))
+        # Explicit on both ends, never `latest` and never `endingTimestamp`.
+        # Both of those resolve *inside* the read, so the range a second
+        # evaluation sees is not the range the first one saw — which is why the
+        # offsets used to have to be derived from the rows, why the rows had to
+        # be cached to derive them, and ultimately why the driver ran out of
+        # heap. Pinned offsets make the plan reproducible, so anything can be
+        # evaluated twice and the committed offsets still describe exactly what
+        # was written.
+        #
+        # `--end-timestamp` is resolved to offsets by the broker in
+        # `broker_offsets` instead. That also closes a hole `endingTimestamp`
+        # had: Kafka timestamps are not monotonic within a partition, so
+        # filtering by timestamp dropped records under a committed end offset
+        # and never archived them. An offset range keeps every record it spans.
+        .option("endingOffsets", O.encode(ends))
         .option("includeHeaders", "true")
         # A committed offset the broker no longer holds means the topic was
         # truncated past what the lake ingested — a permanent hole. Failing is
         # the only honest response: the alternative silently skips forward and
         # leaves a gap the continuity audit then reports days later.
         .option("failOnDataLoss", "true")
+        .load()
     )
-    end_ms = _epoch_ms(end_timestamp) if end_timestamp else 0
-    if end_timestamp:
-        reader = reader.option("endingTimestamp", str(end_ms))
-    else:
-        reader = reader.option("endingOffsets", "latest")
-
-    loaded = reader.load()
-    if end_timestamp:
-        # `endingTimestamp` is a REQUEST, not a bound. Spark's
-        # `fetchSpecificTimestampBasedOffsets(..., isStartingOffsets=false)`
-        # falls through to `KafkaOffsetRangeLimit.LATEST` for any partition with
-        # no offset at or after the instant, and `latest` moves. Measured on
-        # market.crypto.v3.trades.kraken with one FIXED window whose end was 10
-        # minutes in the future: the same read returned 696 rows, then 888 rows
-        # 45 seconds later.
-        #
-        # In that particular case the extra records were all still older than
-        # the requested instant — `latest` is at or below the request precisely
-        # when the fallback fires — so the read was unpinned rather than wrong.
-        # What it leaves open is the plan-time gap: Spark resolves the timestamp
-        # first and the LATEST sentinel second, so a record arriving between the
-        # two lands past the requested instant, its offset is committed, and the
-        # next run with the same `--end-timestamp` starts beyond the end it
-        # resolves. This filter closes that for one line and makes
-        # `--end-timestamp` mean the same thing on every partition regardless of
-        # what Kafka resolved.
-        #
-        # `endingTimestamp` stays: it is what keeps a backlog slice from reading
-        # to `latest` on the partitions it *can* bound. The filter alone would
-        # be correct and would read the whole topic to discard most of it.
-        #
-        # What it does NOT close: Kafka timestamps are not monotonic within a
-        # partition, so a record past the bound sitting between two records
-        # under it is dropped here while the committed end offset is the max of
-        # the ones kept — the next run starts beyond it and that record is never
-        # archived. Only `--end-timestamp` is exposed to it (the scheduled path
-        # reads to `latest` and keeps everything), it needs out-of-order writes
-        # across the exact instant chosen, and the nightly `offset_continuity`
-        # audit reports it as a gap — so it is recorded here rather than fixed
-        # with a second pass over the range.
-        loaded = loaded.where(F.col("timestamp") <= F.timestamp_millis(F.lit(end_ms)))
 
     rows = loaded.select(
         F.col("topic"),
@@ -261,46 +338,62 @@ def stage_raw(spark, ingest_ts: datetime, end_timestamp: str) -> int:
         ).alias("headers"),
     )
 
-    # DISK_ONLY, not a second Kafka read. The end offsets have to describe
-    # exactly the records that got written, and `endingOffsets=latest` resolves
-    # afresh on every read — so re-reading to compute them would resolve a later
-    # `latest` than the one that was written and commit offsets for records that
-    # are not in the table.
-    rows = rows.persist(StorageLevel.DISK_ONLY)
-    try:
-        bounds = (
-            rows.groupBy("topic", "partition")
-            .agg(
-                F.max("offset").alias("max_offset"),
-                F.max("kafka_ts").alias("max_kafka_ts"),
-                F.count(F.lit(1)).alias("n"),
-            )
-            .collect()
-        )
-        if not bounds:
-            print("stage 1: no new records")
-            return 0
+    # NOTHING payload-bearing is cached here, and that is the whole memory
+    # story. `persist(DISK_ONLY)` is not the cheap spill it reads as: Spark
+    # serialises through the in-memory columnar cache first, 10,000 rows to a
+    # batch, and a batch of 10,000 Coinbase level2 frames at up to 5.2 MB each is
+    # tens of gigabytes of heap before a single byte reaches disk. That is the
+    # OutOfMemoryError the first cold start died on
+    # (BasicColumnBuilder.appendFrom, 2026-08-26).
+    #
+    # Two things replaced it. The offsets come from `bounded_offsets` above
+    # rather than from the rows, and the row count comes from the commit's own
+    # summary rather than from a `count()` — so the only thing that ever walks
+    # the payload column is the write itself.
+    #
+    # The newest record's timestamp is the exception that could not be got any
+    # other way: it rides on the commit, so it has to be known before the commit,
+    # and the broker has no API for "the timestamp at this offset". So it is a
+    # second pass over the same PINNED range — safe precisely because the range
+    # is pinned, which is the whole point of deciding the offsets up front. It
+    # reads `loaded`, not `rows`, and projects the one column: neither the
+    # payload nor the header map is planned at all. (`timestamp` is the Kafka
+    # source's own name for what `rows` renames to `kafka_ts`.)
+    #
+    # ponytail: that second pass re-fetches the batch's bytes from Redpanda,
+    # which is I/O, not heap, and local — ~16 MB at a 5-minute cadence. If the
+    # double read ever shows up in the ingest duration, read only the last
+    # offset of each partition instead (`ends[p] - 1`) and accept a max that is
+    # off by the partition's timestamp disorder.
+    max_kafka_ts = loaded.select(F.max("timestamp").alias("m")).collect()[0]["m"]
+    if max_kafka_ts is None:
+        # A non-empty offset range that yields no record. `failOnDataLoss=true`
+        # normally raises before this, so reaching it means something stranger
+        # than truncation — say the range is entirely transaction markers.
+        # Committing would advance past records nothing archived; not
+        # committing costs one wasted run and leaves the same range for the next.
+        print(f"stage 1: {sum(len(p) for p in ends.values())} partitions in range "
+              "returned no records — not committing")
+        return 0
 
-        produced = O.end_offsets([(r["topic"], r["partition"], r["max_offset"]) for r in bounds])
-        merged = O.merge_committed(committed, produced)
-        max_kafka_ts = max(r["max_kafka_ts"] for r in bounds)
-        written = sum(r["n"] for r in bounds)
-
-        # Printed before the commit, not after, and scripts/chaos/
-        # lake-ingest-kill.sh greps for it: a SIGKILL that lands before this
-        # line killed a Kafka read and proves nothing about the commit.
-        print(f"stage 1: committing {written} rows", flush=True)
-        (
-            rows.writeTo(RAW_TABLE)
-            .option(f"snapshot-property.{O.JOB}", O.JOB_INGEST)
-            .option(f"snapshot-property.{O.KAFKA_OFFSETS}", O.encode(merged))
-            .option(f"snapshot-property.{O.MAX_KAFKA_TS}", max_kafka_ts.isoformat())
-            .append()
-        )
-        print(f"stage 1: {written} rows -> {RAW_TABLE} (max kafka_ts {max_kafka_ts})")
-        return written
-    finally:
-        rows.unpersist()
+    # Printed before the commit, not after, and scripts/chaos/
+    # lake-ingest-kill.sh greps for it: a SIGKILL that lands before this line
+    # killed a Kafka read and proves nothing about the commit. The count is not
+    # known yet — Iceberg reports it after the append — so what is printed is
+    # the range, which is the thing that was decided up front anyway.
+    spanned = sum(ends[t][p] - starts[t][p] for t in ends for p in ends[t])
+    print(f"stage 1: committing {spanned} offsets", flush=True)
+    (
+        rows.writeTo(RAW_TABLE)
+        .option(f"snapshot-property.{O.JOB}", O.JOB_INGEST)
+        .option(f"snapshot-property.{O.KAFKA_OFFSETS}", O.encode(O.merge_committed(committed, ends)))
+        .option(f"snapshot-property.{O.KAFKA_BACKLOG}", json.dumps(backlog, separators=(",", ":")))
+        .option(f"snapshot-property.{O.MAX_KAFKA_TS}", max_kafka_ts.isoformat())
+        .append()
+    )
+    written = added_records(spark, RAW_TABLE)
+    print(f"stage 1: {written} rows -> {RAW_TABLE} (max kafka_ts {max_kafka_ts})")
+    return written
 
 
 def _epoch_ms(value: str) -> int:
@@ -425,13 +518,13 @@ def stage_bronze(spark, raw_snapshot_id, run_ts: datetime) -> int:
         source = reader.load(RAW_TABLE).where(
             F.col("topic").isin(topics(kind)) & F.col("schema_id").isNotNull()
         )
-        # Three passes read this otherwise — the distinct() below, the count()
-        # and the append() — each one a full scan of the incremental range.
-        source = source.persist(StorageLevel.DISK_ONLY)
-        try:
-            total += _decode_into(spark, source, table, project, raw_snapshot_id, run_ts)
-        finally:
-            source.unpersist()
+        # Not cached. This DataFrame carries `payload`, and caching a payload
+        # column is what killed stage 1 (see `stage_raw`). What the cache was
+        # buying — one scan instead of three — is bought instead by making the
+        # other two passes cheap: the schema-id probe below projects a single
+        # int column, which Parquet prunes to, and the row count comes from the
+        # commit summary rather than from a `count()` over the decode.
+        total += _decode_into(spark, source, table, project, raw_snapshot_id, run_ts)
     return total
 
 
@@ -496,17 +589,19 @@ def _decode_into(spark, source, table: str, project, raw_snapshot_id, run_ts) ->
     if not parts:
         return 0
 
-    out = reduce(DataFrame.unionByName, parts).persist(StorageLevel.DISK_ONLY)
-    try:
-        written = out.count()
-        (
-            out.writeTo(table)
-            .option(f"snapshot-property.{O.JOB}", O.JOB_DECODE)
-            .option(f"snapshot-property.{O.SRC_SNAPSHOT_ID}", str(raw_snapshot_id))
-            .append()
-        )
-    finally:
-        out.unpersist()
+    # Written once, counted afterwards from Iceberg's own summary. The `count()`
+    # that used to precede this was a full second Avro decode of the range, and
+    # the `persist(DISK_ONLY)` that made it cheaper serialised decoded book
+    # snapshots — 100 levels of two struct arrays per row — through the
+    # in-memory columnar cache. Same failure as stage 1, one table downstream.
+    out = reduce(DataFrame.unionByName, parts)
+    (
+        out.writeTo(table)
+        .option(f"snapshot-property.{O.JOB}", O.JOB_DECODE)
+        .option(f"snapshot-property.{O.SRC_SNAPSHOT_ID}", str(raw_snapshot_id))
+        .append()
+    )
+    written = added_records(spark, table)
     print(
         f"stage 2: {written} rows -> {table} (schema ids {sorted(schema_ids)}, src snapshot {raw_snapshot_id})"
     )
@@ -621,6 +716,12 @@ def main() -> int:
         default="",
         help="stop stage 1 at this instant (ISO-8601 or epoch ms) instead of at latest",
     )
+    parser.add_argument(
+        "--max-offsets-per-partition",
+        type=int,
+        default=MAX_OFFSETS_PER_PARTITION,
+        help="stop each partition this many offsets past where it started (0 = read to latest)",
+    )
     parser.add_argument("--probe", action="store_true", help="report topic framing, write nothing")
     args = parser.parse_args()
 
@@ -643,7 +744,7 @@ def main() -> int:
         if args.probe:
             return probe(spark)
         if args.stage in ("all", "raw"):
-            stage_raw(spark, ingest_ts, args.end_timestamp)
+            stage_raw(spark, ingest_ts, args.end_timestamp, args.max_offsets_per_partition)
         if args.stage in ("all", "bronze"):
             stage_bronze(spark, current_snapshot_id(spark, RAW_TABLE), ingest_ts)
     finally:

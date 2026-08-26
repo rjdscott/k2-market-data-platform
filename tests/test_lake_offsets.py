@@ -60,13 +60,94 @@ class TestNextStartingOffsets:
         assert start == {"t": {0: 100, 1: O.EARLIEST, 5: 900}}
 
 
-class TestEndOffsets:
-    def test_max_offset_becomes_the_exclusive_end(self):
-        assert O.end_offsets([("t", 0, 99)]) == {"t": {0: 100}}
+class TestBoundedOffsets:
+    """The per-run bound. This is what makes a cold start survivable.
 
-    def test_groups_by_topic_and_partition(self):
-        rows = [("a", 0, 9), ("a", 1, 4), ("b", 0, 0)]
-        assert O.end_offsets(rows) == {"a": {0: 10, 1: 5}, "b": {0: 1}}
+    Before it, run 1 read every partition to `latest` — 41.5 M records / 9.5 GB
+    on the live stack — and the driver died with an OutOfMemoryError. The end
+    offsets are now decided here, in arithmetic, before Spark reads anything.
+    """
+
+    EARLIEST = {"t": {0: 0, 1: 500}}
+    LATEST = {"t": {0: 1_000_000, 1: 900}}
+
+    def test_the_bound_caps_the_end_at_start_plus_n(self):
+        starts, ends, _ = O.bounded_offsets(
+            {"t": {0: 100, 1: 500}}, self.EARLIEST, self.LATEST, 1000
+        )
+        assert starts == {"t": {0: 100, 1: 500}}
+        assert ends == {"t": {0: 1100, 1: 900}}
+
+    def test_zero_means_unbounded(self):
+        # The escape hatch, and the pre-bound behaviour: read to latest.
+        _, ends, backlog = O.bounded_offsets({"t": {0: 100, 1: 500}}, self.EARLIEST, self.LATEST, 0)
+        assert ends == self.LATEST
+        assert backlog == {"t": 0}
+
+    def test_the_earliest_sentinel_is_resolved_before_the_arithmetic(self):
+        # The bug this test exists for: EARLIEST is -2, and -2 + 1000 = 998 is
+        # an offset, not a bound. On a partition whose log starts at 500 that
+        # end is BELOW the start, and the run either reads nothing forever or
+        # commits an end that silently skips the first 500 records.
+        starts, ends, _ = O.bounded_offsets(
+            {"t": {0: O.EARLIEST, 1: O.EARLIEST}}, self.EARLIEST, self.LATEST, 1000
+        )
+        assert starts == {"t": {0: 0, 1: 500}}
+        assert ends == {"t": {0: 1000, 1: 900}}
+
+    def test_the_end_never_runs_past_latest(self):
+        _, ends, backlog = O.bounded_offsets(
+            {"t": {0: 999_500, 1: 500}}, self.EARLIEST, self.LATEST, 1000
+        )
+        assert ends == {"t": {0: 1_000_000, 1: 900}}
+        assert backlog == {"t": 0}
+
+    def test_backlog_is_what_this_run_leaves_behind(self):
+        _, _, backlog = O.bounded_offsets({"t": {0: 100, 1: 500}}, self.EARLIEST, self.LATEST, 1000)
+        # partition 0: 1_000_000 - 1100 left; partition 1 drained.
+        assert backlog == {"t": 998_900}
+
+    def test_an_end_can_never_rewind_below_the_start(self):
+        # Committed offsets past `latest` mean the topic was recreated under the
+        # lake (ADR-022 "Risks"). An end below the start would be a negative
+        # range Spark rejects, and a negative backlog on the gauge; the honest
+        # answer is an empty read, which `failOnDataLoss` then reports.
+        starts, ends, backlog = O.bounded_offsets(
+            {"t": {0: 2_000_000}}, self.EARLIEST, self.LATEST, 1000
+        )
+        assert ends == starts
+        assert backlog == {"t": 0}
+
+    def test_caught_up_makes_starts_and_ends_equal(self):
+        # How `stage_raw` decides "no new records" without touching Kafka.
+        starts, ends, _ = O.bounded_offsets(
+            {"t": {0: 1_000_000, 1: 900}}, self.EARLIEST, self.LATEST, 1000
+        )
+        assert starts == ends
+
+    def test_until_bounds_the_end_and_stays_in_the_backlog(self):
+        # `--end-timestamp`, resolved to offsets by the broker rather than
+        # handed to Spark as `endingTimestamp`. Records past the instant are
+        # still a backlog, not a hole.
+        _, ends, backlog = O.bounded_offsets(
+            {"t": {0: 100, 1: 500}}, self.EARLIEST, self.LATEST, 0, until={"t": {0: 400, 1: 700}}
+        )
+        assert ends == {"t": {0: 400, 1: 700}}
+        assert backlog == {"t": (1_000_000 - 400) + (900 - 700)}
+
+    def test_until_minus_one_means_no_record_at_or_after_the_instant(self):
+        # Kafka's answer for "nothing at or after that timestamp" is -1, and it
+        # means the whole partition is older than the bound — read all of it.
+        _, ends, _ = O.bounded_offsets(
+            {"t": {0: 100, 1: 500}}, self.EARLIEST, self.LATEST, 0, until={"t": {0: -1, 1: -1}}
+        )
+        assert ends == self.LATEST
+
+    def test_the_bound_still_applies_under_until(self):
+        _, ends, _ = O.bounded_offsets(
+            {"t": {0: 100}}, self.EARLIEST, self.LATEST, 50, until={"t": {0: 400}}
+        )
+        assert ends == {"t": {0: 150}}
 
 
 class TestMergeCommitted:
@@ -143,32 +224,35 @@ class TestOffsetGaps:
 
 
 @pytest.mark.parametrize("partitions", [1, 12, 40])
-def test_a_full_cycle_neither_skips_nor_repeats(partitions):
-    """One cycle end to end: read, commit ends, resume — no overlap, no hole.
+def test_a_bounded_cold_start_drains_without_skipping_or_repeating(partitions):
+    """A backlog, drained over successive runs: no overlap, no hole, ends at 0.
 
     This is the property the whole module exists for, so it is asserted against
-    the real functions in sequence rather than one at a time. `read` below is
-    the only stub, standing in for the Kafka source.
+    the real functions in sequence rather than one at a time. The broker is the
+    only stub — a topic holding `total` records per partition, none expiring.
     """
-    committed = {}
-    consumed = {p: [] for p in range(partitions)}
-    per_cycle = 7
+    total, per_run = 100, 7
+    earliest = {"t": {p: 0 for p in range(partitions)}}
+    latest = {"t": {p: total for p in range(partitions)}}
 
-    for cycle in range(4):
-        start = O.next_starting_offsets(committed, {"t": partitions})
-        produced_rows = []
+    committed, consumed, runs = {}, {p: [] for p in range(partitions)}, 0
+    while True:
+        starting = O.next_starting_offsets(committed, {"t": partitions})
+        starts, ends, backlog = O.bounded_offsets(starting, earliest, latest, per_run)
+        if starts == ends:  # what stage_raw calls "no new records"
+            break
+        runs += 1
         for partition in range(partitions):
-            first = 0 if start["t"][partition] == O.EARLIEST else start["t"][partition]
-            offsets = list(range(first, first + per_cycle))
-            consumed[partition].extend(offsets)
-            produced_rows.append(("t", partition, offsets[-1]))
-        committed = O.merge_committed(committed, O.end_offsets(produced_rows))
+            consumed[partition].extend(range(starts["t"][partition], ends["t"][partition]))
+        committed = O.merge_committed(committed, ends)
+        # The gauge has to fall monotonically, or "draining" is not what it says.
+        assert backlog["t"] == partitions * (total - min(runs * per_run, total))
+        assert runs <= total, "the bound is not advancing — this would loop forever"
 
-        expected = per_cycle * (cycle + 1)
-        for partition in range(partitions):
-            seen = consumed[partition]
-            assert seen == list(range(expected)), f"partition {partition} cycle {cycle}"
+    assert backlog["t"] == 0
+    for partition in range(partitions):
+        assert consumed[partition] == list(range(total)), f"partition {partition}"
 
-    # And the continuity audit agrees with the run it just produced.
+    # And the continuity audit agrees with the run sequence it just produced.
     rows = [("t", p, len(o), min(o), max(o)) for p, o in consumed.items()]
     assert O.offset_gaps(rows) == []

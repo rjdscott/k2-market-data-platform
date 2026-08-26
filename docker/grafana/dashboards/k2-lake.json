@@ -421,7 +421,7 @@
       "description": "Rows the most recent commit added, per table. A flat line at 0 on bronze while raw keeps moving is stage 2 failing on its own \u2014 the split LakeCommitAgeHigh alert exists for exactly that shape.",
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 6
       },
@@ -491,8 +491,8 @@
       "description": "Sawtooth is healthy: each tooth is one 5-minute ingest. A rising line that does not reset is a table that has stopped committing. audit.checks resets once a day by design, not every five minutes.",
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 8,
         "y": 6
       },
       "fieldConfig": {
@@ -547,6 +547,76 @@
           "expr": "time() - k2_lake_last_commit_ts_seconds",
           "refId": "A",
           "legendFormat": "{{table}}"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "id": 20,
+      "type": "timeseries",
+      "title": "Ingest backlog by topic",
+      "description": "Records the last ingest left unread on each topic, because --max-offsets-per-partition capped the run. 0 on every topic is a caught-up lake. A cold start starts high and must fall on every commit; a line that rises is the bound set below the arrival rate, and the fix is to raise it (docker/lake/README.md).",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "mappings": [],
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "pointSize": 5,
+            "gradientMode": "none"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "k2_lake_ingest_backlog_offsets",
+          "refId": "A",
+          "legendFormat": "{{topic}}"
         }
       ]
     },

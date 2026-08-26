@@ -7,7 +7,7 @@
 ## Scope
 
 - Tables (`docker/lake/ddl/lake.sql`): `raw.messages` (topic, partition, offset, kafka_ts, ingest_ts, key, schema_id, payload BINARY verbatim, headers; `PARTITIONED BY days(kafka_ts), topic`; zstd; metrics on offset/kafka_ts/partition; never expired); `bronze.trades` (unified, `exchange` partition field, DECIMAL(28,10), `src_{topic,partition,offset}` lineage, identifier fields exchange,symbol,trade_id); `bronze.book_snapshots_l2` (arrays of struct px/sz, `seq`, lineage; metrics none except event_ts/symbol/seq); `audit.checks`. No gold in lake; no `book_deltas` (raw holds them). `write.distribution-mode=hash`, 128–256 MB targets, sort orders. Schema-evolution policy: add nullable only; vendor map for exchange extras; `raw.messages` frozen.
-- Ingest `docker/lake/ingest.py` (+ pure `offsets.py`, `spark_conf.py`): one Spark session, two stages: (1) Kafka → `raw.messages`, `startingOffsets` from latest ingest snapshot summary property `k2.kafka-offsets` (skip compaction snapshots), `endingOffsets=latest`, `failOnDataLoss=true`, commit with `snapshot-property.k2.kafka-offsets` + `k2.max-kafka-ts`; (2) `raw.messages` incremental read (`start-snapshot-id`→new) → decode (`substring(payload,6)` + `from_avro` with schema fetched by id from registry, FAILFAST) → `bronze.*`, commit with `k2.src-snapshot-id`. `--end-timestamp` for backlog slicing. Prefect deployments `lake-ingest-5min` (concurrency 1), `lake-maintenance-daily`; keep `docker exec k2-spark-iceberg` dispatch.
+- Ingest `docker/lake/ingest.py` (+ pure `offsets.py`, `spark_conf.py`): one Spark session, two stages: (1) Kafka → `raw.messages`, `startingOffsets` from latest ingest snapshot summary property `k2.kafka-offsets` (skip compaction snapshots), `endingOffsets` pinned per partition at `min(latest, start + --max-offsets-per-partition)`, `failOnDataLoss=true`, commit with `snapshot-property.k2.kafka-offsets` + `k2.max-kafka-ts` + `k2.kafka-backlog`; (2) `raw.messages` incremental read (`start-snapshot-id`→new) → decode (`substring(payload,6)` + `from_avro` with schema fetched by id from registry, FAILFAST) → `bronze.*`, commit with `k2.src-snapshot-id`. `--end-timestamp` for backlog slicing. Prefect deployments `lake-ingest-5min` (concurrency 1), `lake-maintenance-daily`; keep `docker exec k2-spark-iceberg` dispatch.
 - Maintenance `docker/lake/maintenance.py` (~180 lines): binpack compaction raw, sort rewrite bronze (last 2 days), expire snapshots; audits → `audit.checks`: offset continuity per topic/partition (+cross-day seam), duplicates on identifier fields, sequence gaps (lag over seq); fail → non-zero exit → Prefect fail → alert.
 - Metrics `docker/lake/metrics.py` via PyIceberg snapshot summaries (`k2_lake_ingest_lag_seconds`, `last_commit_age`, `rows_total`, `files_total`, `added_records`, `audit_failures`) + `clickhouse_active_parts{table}` gauge; `lake-alerts.yml` (LagHigh, AuditFailed, SmallFiles, ExporterDown); dashboard `k2-lake.json` replaces iceberg-offload.
 - Recovery runbook `docs/runbooks/lake-recovery.md`: CH rebuild via `iceberg()` — no glob fallback — `iceberg()` only; if it ever fails, that is a stop-the-line bug; Redpanda replay = cold start.
@@ -71,11 +71,37 @@ cannot be met by code alone, so they are named here rather than quietly dropped.
   `docs/operations/docker-resources.md`:
 
   ```bash
-  # not yet run — Phase D cutover. Peak DURING an ingest is the number; RSS in
-  # kB, one row per JVM and Python driver, so the baseline is visible alongside.
+  # Peak DURING an ingest is the number; RSS in kB, one row per JVM and Python
+  # driver, so the baseline is visible alongside. Sampled every 2 s for the whole
+  # run — one reading taken between stages is not a peak.
   docker exec k2-spark-iceberg ps -o rss,cmd
   docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.CPUPerc}}' k2-spark-iceberg
   ```
+
+  **Measured 2026-08-27, gate satisfied.** Four hand-run ingests against the live
+  41.5 M-record backlog with `lake-ingest-5min` paused, sampled every 2 s:
+
+  | Run | `--max-offsets-per-partition` | Offsets committed | raw rows | Wall | Peak driver RSS | Peak container |
+  |---|---|---|---|---|---|---|
+  | smoke | 1,000 | 77,542 | 77,542 | 17 s | 1,122 MiB | 1.97 GiB |
+  | 1 | 50,000 | 2,721,812 | 2,721,812 | 92 s | 1,243 MiB | 2.13 GiB |
+  | 2 | 50,000 | 1,770,914 | 1,770,914 | 57 s | 1,227 MiB | 1.94 GiB |
+  | 3 | 50,000 | 1,564,334 | 1,564,334 | 49 s | 1,221 MiB | 1.92 GiB |
+
+  **Peak driver RSS 1,243 MiB**, peak container 2.13 GiB of 4 GiB over the
+  633 MiB idle baseline — inside the `768 + ~550` this arithmetic assumed, so two
+  concurrent drivers still fit and the 768m stands. 35× the batch moved the peak
+  11%: with nothing payload-bearing cached, peak RSS is a function of the heap
+  setting rather than of arrival volume, so a backlog drain at a higher bound
+  does not re-open this gate.
+
+  The revisit trigger below **fired once, on 2026-08-26**, and the cause was not
+  the heap: the first cron run had no prior snapshot, read all 108 partitions to
+  `latest`, and died on `java.lang.OutOfMemoryError` inside a
+  `persist(DISK_ONLY)` over 5.2 MB payload rows. The fix was to bound the run
+  (`--max-offsets-per-partition`, default 50,000) and stop caching payloads, not
+  to raise the heap — `docker/lake/README.md`, "What one run may read, and why
+  nothing is cached".
 
   Revisit trigger for the 768m itself: raise it back to `1g` if
   `lake-ingest-5min` fails with an OOM-kill or `java.lang.OutOfMemoryError` in

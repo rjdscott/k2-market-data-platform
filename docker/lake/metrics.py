@@ -69,6 +69,7 @@ JOB = "k2.job"
 JOB_INGEST = "ingest"
 JOB_MAINTENANCE = "maintenance"
 MAX_KAFKA_TS = "k2.max-kafka-ts"
+KAFKA_BACKLOG = "k2.kafka-backlog"
 AUDIT_FAILURES = "k2.audit-failures"
 
 # ── timestamps, not ages ────────────────────────────────────────────────────
@@ -89,6 +90,12 @@ max_kafka_ts = Gauge(
     "k2_lake_max_kafka_ts_seconds",
     "Unix time of the newest Kafka record in raw.messages, from the latest ingest snapshot. "
     "Lag is time() - this",
+)
+ingest_backlog = Gauge(
+    "k2_lake_ingest_backlog_offsets",
+    "Kafka records the last ingest deliberately left unread on this topic, summed over its "
+    "partitions — what --max-offsets-per-partition capped off, not what the ingest is behind by",
+    ["topic"],
 )
 last_compaction_ts = Gauge(
     "k2_lake_last_compaction_ts_seconds",
@@ -177,10 +184,12 @@ REWRITE_OPERATIONS = {"replace", "overwrite"}
 
 def latest_compaction_ts(snapshots: list) -> float:
     """Unix time of the newest file-rewrite snapshot, or 0 if there is none."""
-    for snapshot in reversed(snapshots):
-        if snapshot.get("summary", {}).get("operation") in REWRITE_OPERATIONS:
-            return snapshot["timestamp-ms"] / 1000.0
-    return 0.0
+    stamps = [
+        s.get("timestamp-ms", 0)
+        for s in snapshots
+        if s.get("summary", {}).get("operation") in REWRITE_OPERATIONS
+    ]
+    return max(stamps, default=0) / 1000.0
 
 
 # How long the newest `k2.job=ingest` summary on audit.checks is taken to still
@@ -202,11 +211,21 @@ def latest_job_snapshot(snapshots: list, job: str) -> dict:
     files its count under `k2.job=maintenance`, so a current-snapshot read lets
     an ingest row zero a firing LakeAuditFailed with no audit having passed.
     Both gauges therefore name the job whose number they claim to be.
+
+    **Newest by `timestamp-ms`, not by position in the array.** This used to walk
+    the list backwards, on the assumption that a metadata array is in commit
+    order. Lakekeeper 0.13.3 does not promise that and does not deliver it:
+    against `raw.messages` with five ingest snapshots, two successive REST
+    loadTable calls minutes apart returned them in two different orders, and the
+    gauges read a run that was two commits stale — `k2_lake_max_kafka_ts_seconds`
+    reported lag that had already been closed. Same rule as
+    docker/lake/offsets.py's `latest_summary`, which was always written this way
+    because the Spark side had `committed_at` in front of it.
     """
-    for snapshot in reversed(snapshots):
-        if snapshot.get("summary", {}).get(JOB) == job:
-            return snapshot
-    return {}
+    matching = [s for s in snapshots if s.get("summary", {}).get(JOB) == job]
+    if not matching:
+        return {}
+    return max(matching, key=lambda s: s.get("timestamp-ms", 0))
 
 
 def latest_job_summary(snapshots: list, job: str) -> dict:
@@ -285,9 +304,12 @@ def refresh(prefix: str, now: float) -> int:
             last_compaction_ts.labels(table=label).set(compacted)
 
         if label == INGEST_TABLE:
-            stamp = latest_job_summary(snapshots, JOB_INGEST).get(MAX_KAFKA_TS)
+            ingest_summary = latest_job_summary(snapshots, JOB_INGEST)
+            stamp = ingest_summary.get(MAX_KAFKA_TS)
             if stamp:
                 max_kafka_ts.set(_epoch(stamp))
+            for topic, remaining in _backlog(ingest_summary).items():
+                ingest_backlog.labels(topic=topic).set(remaining)
         if label == CHECKS_TABLE:
             # Two writers, two gauges, neither read off `current`. The nightly
             # audit's count is the one LakeAuditFailed watches and only a later
@@ -314,6 +336,26 @@ def refresh(prefix: str, now: float) -> int:
     # would move either.
     last_refresh_ts.set(now)
     return errors
+
+
+def _backlog(summary: dict) -> dict:
+    """`k2.kafka-backlog` as `{topic: records}`, or `{}`.
+
+    Only ingest commits carry it, and only runs that committed something: a
+    caught-up cycle writes no snapshot at all, so the gauge holds the last
+    committing run's numbers. That is the honest reading — the backlog has not
+    changed if nothing was ingested — and "the ingest stopped running" is
+    `k2_lake_max_kafka_ts_seconds` ageing, which is where it belongs.
+
+    Tolerant of a missing or malformed value for the same reason `_num` is: this
+    is a metadata string nothing type-checks, and an exporter must not go dark
+    over one bad property.
+    """
+    try:
+        return {str(t): float(n) for t, n in json.loads(summary.get(KAFKA_BACKLOG, "{}")).items()}
+    except (TypeError, ValueError, AttributeError):
+        logger.warning("unparseable %s: %r", KAFKA_BACKLOG, summary.get(KAFKA_BACKLOG))
+        return {}
 
 
 def _epoch(stamp: str) -> float:
@@ -375,6 +417,7 @@ def _self_check() -> None:
             "operation": "append",
             JOB: JOB_INGEST,
             MAX_KAFKA_TS: "2026-08-26T12:50:00.289000",
+            KAFKA_BACKLOG: '{"market.crypto.v3.raw.kraken":22189954,"market.crypto.v3.book.kraken":0}',
             "total-records": "2895643",
             "total-data-files": "9",
             "total-files-size": "143178703",
@@ -399,6 +442,21 @@ def _self_check() -> None:
     )
     assert latest_job_summary([compaction], JOB_INGEST) == {}
     assert latest_job_summary([], JOB_INGEST) == {}
+
+    # Array order is not commit order. Lakekeeper returned five ingest snapshots
+    # in a different sequence on two successive loadTable calls (2026-08-26), and
+    # walking the list backwards read a two-commit-stale run — a lag gauge
+    # reporting a backlog that had already been drained. Newest by timestamp-ms.
+    older = {
+        "snapshot-id": 555,
+        "timestamp-ms": ingest["timestamp-ms"] - 60_000,
+        "summary": {"operation": "append", JOB: JOB_INGEST, MAX_KAFKA_TS: "2026-08-26T12:49:00"},
+    }
+    assert latest_job_summary([ingest, older], JOB_INGEST)[MAX_KAFKA_TS] == ingest["summary"][MAX_KAFKA_TS]
+    assert latest_job_summary([older, ingest], JOB_INGEST)[MAX_KAFKA_TS] == ingest["summary"][MAX_KAFKA_TS]
+    # And the same for the compaction gauge, which read the array the same way.
+    early_rewrite = {"snapshot-id": 666, "timestamp-ms": 1, "summary": {"operation": "replace"}}
+    assert latest_compaction_ts([compaction, early_rewrite]) == 1787750304.280
 
     # The audit.checks regression: an ingest-written unresolvable_schema_id row
     # commits AFTER a failing maintenance run, so it is the current snapshot.
@@ -438,6 +496,18 @@ def _self_check() -> None:
     assert _num(latest_job_summary(checks, JOB_MAINTENANCE), AUDIT_FAILURES) == 2.0
     # No ingest row has ever been filed: 0, not an exception.
     assert fresh_ingest_failures([audit_run], filed) == 0.0
+
+    # The backlog gauge. A drained topic must report 0 rather than vanish from
+    # the map — an absent series and a zero one read very differently on a
+    # dashboard, and "no backlog" is the answer we want stated.
+    backlog = _backlog(ingest["summary"])
+    assert backlog["market.crypto.v3.raw.kraken"] == 22189954.0
+    assert backlog["market.crypto.v3.book.kraken"] == 0.0
+    # A compaction summary carries no backlog, and a malformed one is not fatal:
+    # the property is an unchecked string in a metadata map.
+    assert _backlog(compaction["summary"]) == {}
+    assert _backlog({KAFKA_BACKLOG: "not json"}) == {}
+    assert _backlog({KAFKA_BACKLOG: "[1, 2]"}) == {}
 
     assert _epoch("2026-08-26T12:50:00.289000") == 1787748600.289
     assert _epoch("2026-08-26T12:50:00.289000+00:00") == 1787748600.289

@@ -166,7 +166,12 @@ Every `k2_lake_*` series comes from the **`lake-metrics`** service, which runs
 **Nothing here is an in-process counter.** Each refresh loads the four lake tables from the
 Lakekeeper REST catalog and reads their current snapshot summary — the same property bag
 the ingest and maintenance jobs write their position into
-([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). Prefect runs each flow in
+([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The gauges that name a
+job (`max_kafka_ts`, `ingest_backlog`, the two audit counts) take the **newest snapshot by
+`timestamp-ms` carrying that `k2.job`**, never the last entry of the metadata array:
+Lakekeeper 0.13.3 returned the same five snapshots in two different orders on two
+successive `loadTable` calls (2026-08-26), and reading by position reported a lag that had
+already been closed. Prefect runs each flow in
 a short-lived subprocess that exits long before Prometheus scrapes it, so a counter inside
 the job was never observable; the committed snapshot is the durable record of what ran.
 
@@ -178,6 +183,7 @@ catch.
 |--------|------|--------|
 | `k2_lake_last_commit_ts_seconds{table}` | gauge | `committed_at` of the table's current snapshot |
 | `k2_lake_max_kafka_ts_seconds` | gauge | `k2.max-kafka-ts` on the newest ingest snapshot of `raw.messages` |
+| `k2_lake_ingest_backlog_offsets{topic}` | gauge | `k2.kafka-backlog` on that same snapshot — records the run left unread because `--max-offsets-per-partition` capped it. 0 on every topic is a caught-up lake |
 | `k2_lake_last_compaction_ts_seconds{table}` | gauge | newest snapshot whose Iceberg `operation` is a file rewrite |
 | `k2_lake_last_refresh_ts_seconds` | gauge | set last, and only on a refresh that completed |
 | `k2_lake_rows_total{table}` | gauge | `total-records` |

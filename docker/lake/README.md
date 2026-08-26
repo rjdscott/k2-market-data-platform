@@ -64,6 +64,10 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --stage bronze
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
     --end-timestamp 2026-08-27T02:00:00Z
 
+# or drain it faster than the 50,000-offset default, with someone watching
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
+    --max-offsets-per-partition 200000
+
 # what is on the topics, without a table or a commit
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
 
@@ -88,7 +92,7 @@ add no logic; see `flows/lake_flows.py` for why.
 
 **The offsets a run consumed are written into the Iceberg snapshot summary by
 the same commit that writes the data.** Stage 1 commits with
-`k2.kafka-offsets`, `k2.max-kafka-ts` and `k2.job=ingest`; stage 2 commits with
+`k2.kafka-offsets`, `k2.max-kafka-ts`, `k2.kafka-backlog` and `k2.job=ingest`; stage 2 commits with
 `k2.src-snapshot-id` and `k2.job=decode`. Resuming is "read the latest ingest
 snapshot's summary".
 
@@ -137,6 +141,88 @@ Reading back skips compaction and expiry snapshots by the `k2.job` property the
 jobs set — not by Iceberg's own `operation` field. After a nightly rewrite the
 newest snapshot on `raw.messages` carries no offsets, and a job that took it
 would restart from the beginning of every topic.
+
+---
+
+## What one run may read, and why nothing is cached
+
+**Every ingest is bounded before it starts.** `--max-offsets-per-partition`
+(default 50,000, `K2_LAKE_MAX_OFFSETS_PER_PARTITION`) caps each partition at
+`min(latest, start + N)`, and those end offsets are computed in pure code
+(`offsets.bounded_offsets`) from what the broker reports, *before* Spark opens a
+connection. A caught-up 5-minute cycle never reaches the cap — there is only
+five minutes of arrivals to read. A cold start does, and drains the backlog over
+successive runs instead of dying in one.
+
+**No payload-bearing DataFrame is ever cached.** These two facts are the same
+fix. The first scheduled run after the Phase D cutover had no prior snapshot, so
+it read every partition to `latest` — 41.5 M records / 9.5 GB across 108
+partitions — through a `persist(DISK_ONLY)`, and the driver died with
+`java.lang.OutOfMemoryError` at `BasicColumnBuilder.appendFrom`. `DISK_ONLY` is
+not the cheap spill it reads as: Spark builds an in-memory columnar batch of
+`spark.sql.inMemoryColumnarStorage.batchSize` rows (10,000 by default) and
+writes it out whole, so a batch of Coinbase level2 frames at up to 5.2 MB each is
+tens of gigabytes of heap before a byte reaches disk.
+
+The cache was there to answer two questions about the batch. Both are now
+answered without walking the payload:
+
+| Question | Was | Is |
+|---|---|---|
+| which offsets did this run consume? | `max(offset)` over the written rows, which needed the same `latest` twice, which needed the cache | `bounded_offsets` decides them up front; the read is pinned on both ends |
+| how many rows did it write? | `df.count()` — a second full evaluation | `added-records` from the commit's own snapshot summary |
+
+What is left is one pass for the write and one single-column pass for
+`max(kafka_ts)`, which has to be known *before* the commit because it rides on
+it. `spark.sql.inMemoryColumnarStorage.batchSize` is pinned to 256 as a backstop
+against the mistake being reintroduced, not because anything caches today.
+
+### Measured, on the live backlog
+
+Four hand-run cycles against 41.5 M queued records, `lake-ingest-5min` paused
+(2026-08-26; peak RSS sampled every 2 s with `docker stats --no-stream` and
+`docker exec k2-spark-iceberg ps -o rss=,cmd= -A`):
+
+| Run | Bound | Offsets committed | raw rows | Wall | Peak driver RSS | Peak container |
+|---|---|---|---|---|---|---|
+| smoke | 1,000 | 77,542 | 77,542 | 17 s | 1,122 MiB | 1.97 GiB |
+| 1 | 50,000 | 2,721,812 | 2,721,812 | 92 s | 1,243 MiB | 2.13 GiB |
+| 2 | 50,000 | 1,770,914 | 1,770,914 | 57 s | 1,227 MiB | 1.94 GiB |
+| 3 | 50,000 | 1,564,334 | 1,564,334 | 49 s | 1,221 MiB | 1.92 GiB |
+
+**35× the batch, 11% more memory.** That is the property worth having: peak RSS
+is now a function of the driver heap and Spark's own overhead, not of how much
+arrived. 1,243 MiB against a 4 GiB container with a 633 MiB idle baseline is the
+number `spark_conf.py`'s sizing comment now carries; the previous entry was
+arithmetic, not a measurement.
+
+Offsets committed equals rows written on every run — the ranges are dense, so
+the bookkeeping and the data agree exactly.
+
+Backlog draining across the three runs, `market.crypto.v3.raw.kraken`:
+23,175,551 → 22,823,351 → 22,541,125 → 22,193,385, about 347 k per run against
+its ~6 non-empty partitions. Book topics and `trades.kraken` reached 0. At that
+rate the deepest topic needs roughly 64 more cycles (~5.3 h at the 5-minute
+cadence); `--max-offsets-per-partition 200000` on a hand-run drains it faster
+while a person is watching.
+
+**No alert on the backlog, deliberately.** A rising gauge is the only shape worth
+paging on, and it is indistinguishable from a legitimate cold-start drain that
+has not reached its knee yet — the first alert would have fired on the recovery
+above, which was working correctly. The gauge and the dashboard panel are for a
+person watching a drain; the thing that must page is the lake falling behind,
+which `LakeIngestLag` already does off `k2_lake_max_kafka_ts_seconds`, and that
+gauge does not care why.
+
+A run with nothing to do costs 5.7 s and touches Kafka only for metadata:
+
+```bash
+# every partition already at or past the requested instant
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
+    --end-timestamp 2026-08-25T00:00:00Z
+# stage 1: no new records
+# stage 2: lake.bronze.trades is level with raw.messages, nothing to decode
+```
 
 ---
 
@@ -251,6 +337,7 @@ pointing this lake at real S3 must be a config change, not a rewrite).
 | `K2_SCHEMA_REGISTRY_URL` | `http://redpanda:8081` | `ingest.py` |
 | `K2_V3_PREFIX` | `market.crypto.v3` | `ingest.py` |
 | `K2_LAKE_DISK_PATH` | `/minio-data` | `metrics.py` |
+| `K2_LAKE_MAX_OFFSETS_PER_PARTITION` | `50000` | `ingest.py`, same as `--max-offsets-per-partition` |
 
 `spark_conf.py` and `init-lake.sh` must agree: that script creates what these
 jobs connect to, so overriding one side alone points every job at a catalog

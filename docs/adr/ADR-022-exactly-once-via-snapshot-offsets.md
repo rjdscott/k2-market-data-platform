@@ -199,6 +199,69 @@ error and needs a real answer.
 
 ---
 
-## Outcome
+## Outcome so far
 
-_To be appended after the Phase D burn-in._
+_2026-08-27, after the first scheduled runs. The ADR is still Proposed; this
+records what the mechanism did on contact with the live stack, ahead of the
+burn-in that will close it._
+
+**The offsets were right. The first read was unbounded, and that was the bug.**
+The first cron run (20:51 UTC, 2026-08-26) found no prior ingest snapshot, which
+is the correct reading of an empty table, and did exactly what this ADR says:
+resumed from EARLIEST on every partition. What the design never bounded was how
+much "from EARLIEST" is — 41.5 M records / 9.5 GB across 108 partitions of a
+48-hour retention. The driver died on `java.lang.OutOfMemoryError` in
+`BasicColumnBuilder.appendFrom` and took the py4j gateway with it.
+
+The proximate cause was a `persist(DISK_ONLY)` on the payload DataFrame, added so
+that the *end offsets could be derived from the rows that were written* — a
+consequence of pairing `endingOffsets=latest` with this ADR's requirement that
+the committed offsets describe exactly the committed data. `latest` resolves
+afresh on every evaluation, so the batch had to be pinned somehow, and caching it
+was the obvious way. It is also the wrong way: `DISK_ONLY` serialises through an
+in-memory columnar cache 10,000 rows at a time, and 10,000 Coinbase level2 frames
+at up to 5.2 MB each never reach the disk they are nominally spilling to.
+
+**The fix keeps the decision and removes the guess.** End offsets are now decided
+in pure code before the read — `min(latest, start + --max-offsets-per-partition)`
+per partition, from broker metadata (`offsets.bounded_offsets`, default 50,000,
+unit-tested) — so the range is pinned by construction and nothing has to be
+cached to know what a run consumed. Row counts come from the commit's own
+`added-records`. `--end-timestamp` resolves to offsets through the broker instead
+of Spark's `endingTimestamp`, which also closed a real hole: Kafka timestamps are
+not monotonic within a partition, so the old timestamp filter could drop a record
+sitting under a committed end offset and never archive it.
+
+Three consequences for this ADR's own claims:
+
+- **"Re-running an ingest that did not commit is a no-op" survived its first real
+  test.** The OOM run committed nothing and the next run read the same range —
+  the behaviour the consequence table predicts for "crash before the Iceberg
+  commit": orphan files, no snapshot, no duplicates. Across four hand-run cycles
+  the offsets committed equalled the rows written on every one (2,721,812 /
+  1,770,914 / 1,564,334).
+- **A cold start is now a sequence, not an event.** Draining is deterministic and
+  idempotent, one bounded slice per run, with `k2.kafka-backlog` committed
+  alongside the offsets and exported as `k2_lake_ingest_backlog_offsets{topic}`.
+  The decision being tested here paid for that: the backlog is one more property
+  on a commit that was already atomic, not a second thing to keep in step.
+- **Reading a summary back by array position is not safe.** The exporter took
+  "newest snapshot with `k2.job=ingest`" to mean the last matching entry of the
+  metadata array. Lakekeeper 0.13.3 returned the same five snapshots in two
+  different orders on two successive `loadTable` calls, and the lag gauge read a
+  two-commit-stale run. `offsets.latest_summary` was always ordered by
+  `committed_at` and was unaffected; `metrics.latest_job_snapshot` now orders by
+  `timestamp-ms`. **The `k2.job` rule in the Rationale is necessary and was not
+  sufficient** — the property identifies the writer; the timestamp is what
+  identifies the newest.
+
+**Measured, 2026-08-27:** peak ingest driver RSS 1,243 MiB against a 768m heap in
+a 4 GiB container, and 35× the batch size moved that peak by 11%. Numbers,
+commands and the backlog drain are in
+[`../../docker/lake/README.md`](../../docker/lake/README.md) under "What one run
+may read, and why nothing is cached", and in the Phase D deployment gate.
+
+**Still open for the burn-in:** whether the nightly `offset_continuity` audit
+reports a non-abutting range once compaction and expiry have run against a table
+built by a bounded, many-run cold start. The "Revisit when" trigger above is
+unchanged.

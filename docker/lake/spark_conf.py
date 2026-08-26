@@ -68,13 +68,32 @@ KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 # asks for the last page — which reads as a random ingest failure rather than
 # as a memory problem.
 #
-# **This is a first sizing, not a measurement.** No ingest has run under 768m
-# against real tables; the number is arithmetic over a measured baseline, not
-# an observed peak. Revisit trigger: raise it back to `1g` if
-# `lake-ingest-5min` fails with an OOM-kill or `java.lang.OutOfMemoryError`
-# in the first week after the Phase D cutover. The deployment gate in
-# docs/plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md
-# carries the command that replaces the estimate with a peak RSS.
+# **Measured, 2026-08-27.** The estimate above held. Four hand-run ingests
+# against the live 41.5 M-record backlog, sampled every 2 s with `docker stats`
+# and `ps -o rss=,cmd= -A` in the container:
+#
+#     bound 1,000   77,542 rows   17 s   peak driver RSS 1,122 MiB
+#     bound 50,000  2,721,812     92 s   peak driver RSS 1,243 MiB  <- the number
+#     bound 50,000  1,770,914     57 s   peak driver RSS 1,227 MiB
+#     bound 50,000  1,564,334     49 s   peak driver RSS 1,221 MiB
+#
+# Peak container memory was 2.13 GiB of 4 GiB at the worst of those, over a
+# 633 MiB idle baseline. 1,243 MiB is 768m of heap plus ~475 MiB of metaspace,
+# code cache, GC structures, thread stacks and direct buffers — inside the
+# ~550 MiB the arithmetic below assumed, so two concurrent drivers still fit.
+#
+# The number that matters is not its size but its FLATNESS: 35x the batch moved
+# it 11%. That is what "nothing payload-bearing is cached" buys, and it is why
+# `--max-offsets-per-partition` can be raised for a backlog drain without
+# re-deriving this figure. Peak RSS here is a function of the heap setting, not
+# of how much arrived.
+#
+# Revisit trigger: raise it back to `1g` if `lake-ingest-5min` fails with an
+# OOM-kill or `java.lang.OutOfMemoryError`. It did exactly that once, on
+# 2026-08-26, and the cause was a `persist(DISK_ONLY)` on a DataFrame carrying
+# 5.2 MB payload rows rather than an undersized heap — read
+# docker/lake/README.md, "What one run may read, and why nothing is cached",
+# before touching this value.
 #
 # The other consumer is the `lake-ddl` one-shot, which gets its own container
 # with a 1 GiB limit — too small for 768m plus JVM overhead, so
@@ -126,6 +145,28 @@ def lake_session(app_name: str) -> SparkSession:
         # (services/capture-rust/src/sink.rs); keeping the last of a duplicate
         # pair loses nothing we wrote and costs nothing we did.
         .config("spark.sql.mapKeyDedupPolicy", "LAST_WIN")
+        # 256 rows per columnar cache batch, not the default 10,000. A backstop,
+        # deliberately: no lake job caches a payload-bearing DataFrame any more
+        # (docker/lake/ingest.py says why at each site), so on today's code this
+        # setting is never reached.
+        #
+        # It is here because the failure it bounds was not obvious from the code
+        # that caused it. `persist(DISK_ONLY)` reads as "spill to disk"; Spark
+        # actually builds an in-memory columnar batch first and writes it out
+        # whole, so the heap high-water mark is batchSize x row size regardless
+        # of the storage level. At 10,000 rows of Coinbase level2 frames — up to
+        # 5.2 MB each — that is tens of gigabytes against a 768m heap, and it is
+        # exactly how the first cold start died. At 256 the same mistake costs
+        # ~1.3 GB: still too much, but it fails on a batch boundary with a
+        # readable trace instead of taking the JVM out mid-append.
+        #
+        # NOT touched, for the record: `spark.sql.files.maxRecordsPerFile` and
+        # the tables' `write.target-file-size-bytes`. Neither was implicated —
+        # they govern how the WRITER rolls output files, which was streaming
+        # correctly the whole time, and shrinking them would trade a memory
+        # problem this does not have for a small-file problem compaction would
+        # then have to clean up nightly.
+        .config("spark.sql.inMemoryColumnarStorage.batchSize", "256")
         .getOrCreate()
     )
 

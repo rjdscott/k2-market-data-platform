@@ -32,6 +32,7 @@ LATEST = -1
 # `<table>.snapshots.summary`.
 JOB = "k2.job"
 KAFKA_OFFSETS = "k2.kafka-offsets"
+KAFKA_BACKLOG = "k2.kafka-backlog"
 MAX_KAFKA_TS = "k2.max-kafka-ts"
 SRC_SNAPSHOT_ID = "k2.src-snapshot-id"
 AUDIT_FAILURES = "k2.audit-failures"
@@ -42,7 +43,7 @@ JOB_DECODE = "decode"
 JOB_MAINTENANCE = "maintenance"
 
 # The partition count per topic is read from the broker, not configured — see
-# `ingest.topic_partitions`. It matters because a partition that has never
+# `ingest.broker_offsets`. It matters because a partition that has never
 # carried a record produces no row, so it never appears in a committed offset
 # map, and a startingOffsets JSON that omits a partition leaves where it starts
 # up to Spark. Filling the gap with EARLIEST makes it explicit and correct for
@@ -104,16 +105,74 @@ def next_starting_offsets(committed: dict, partition_counts: dict) -> dict:
     return out
 
 
-def end_offsets(rows: list) -> dict:
-    """`[(topic, partition, max_offset)]` -> `{topic: {partition: max+1}}`.
+def bounded_offsets(
+    starting: dict, earliest: dict, latest: dict, max_per_partition: int, until: dict = None
+) -> tuple:
+    """Where this run reads from, where it stops, and what it leaves behind.
 
-    +1 converts "the highest offset this run actually wrote" into Kafka's
-    exclusive end, which is what `next_starting_offsets` copies verbatim.
+    `(starts, ends, backlog)` — the first two `{topic: {partition: offset}}`
+    ready for Spark's `startingOffsets`/`endingOffsets`, the third
+    `{topic: remaining records}` for the log line and the
+    `k2_lake_ingest_backlog_offsets` gauge.
+
+    `earliest` and `latest` come from the broker (`ingest.broker_offsets`);
+    `until` is the offset of the first record at or after `--end-timestamp`,
+    or None when there is no such bound.
+
+    **This function replaced a `count()`-and-`max()` pass over the data.** Stage
+    1 used to read to `endingOffsets=latest` and then derive the offsets it had
+    consumed from the rows themselves — which meant the payload DataFrame had to
+    be cached so the second pass saw the same `latest`, and caching a DataFrame
+    whose rows are up to 5.2 MB of Coinbase level2 killed the driver with an
+    OutOfMemoryError on the first cold start (41.5 M records / 9.5 GB across 108
+    partitions, 2026-08-26). Deciding the end offsets *before* the read makes the
+    range pinned, so nothing has to be cached to know what was in it, and
+    `max_per_partition` puts a ceiling on how much a single run can pull.
+
+    Three rules, each one a way to lose records if it is missing:
+
+      * **Sentinels resolve first.** EARLIEST is -2, and `-2 + 50000` is an
+        offset, not a bound.
+      * **`latest` is a hard ceiling.** An end past it is a range Kafka cannot
+        serve.
+      * **An end never rewinds below its start.** Committed offsets above
+        `latest` mean the topic was recreated under the lake; the honest read is
+        an empty one, not a negative range.
+
+    `max_per_partition <= 0` disables the bound and reads to `latest`, which is
+    what a caught-up 5-minute cycle does anyway — the bound only bites on a
+    backlog.
     """
-    out: dict = {}
-    for topic, partition, max_offset in rows:
-        out.setdefault(topic, {})[int(partition)] = int(max_offset) + 1
-    return out
+    starts: dict = {}
+    ends: dict = {}
+    backlog: dict = {}
+    for topic, partitions in starting.items():
+        starts[topic], ends[topic], backlog[topic] = {}, {}, 0
+        for partition, offset in partitions.items():
+            first = int(earliest.get(topic, {}).get(partition, 0))
+            end_of_log = int(latest.get(topic, {}).get(partition, first))
+
+            start = int(offset)
+            if start == EARLIEST:
+                start = first
+            elif start == LATEST:
+                start = end_of_log
+
+            stop = end_of_log
+            if until is not None:
+                # -1: the broker holds no record at or after the instant, so
+                # every record in the partition is under the bound.
+                at_instant = int(until.get(topic, {}).get(partition, -1))
+                if at_instant >= 0:
+                    stop = min(stop, at_instant)
+            if max_per_partition > 0:
+                stop = min(stop, start + max_per_partition)
+            stop = max(stop, start)
+
+            starts[topic][partition] = start
+            ends[topic][partition] = stop
+            backlog[topic] += max(0, end_of_log - stop)
+    return starts, ends, backlog
 
 
 def merge_committed(previous: dict, produced: dict) -> dict:
