@@ -26,4 +26,4 @@ One file per audit, `YYYY-MM-DD-<surface>.md`.
 
 | Date | Surface | Verdict | Findings |
 |------|---------|---------|----------|
-| _none published yet_ | | | |
+| [2026-08-26](./2026-08-26-doc-accuracy.md) | Documentation vs the running stack | Headline numbers all slightly wrong; two documents walked a new user into a broken stack | 31 — 2 BLOCKER, 8 HIGH, 13 MED, 8 LOW · resolved in `535997a` |

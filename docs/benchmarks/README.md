@@ -31,4 +31,4 @@ One file per measurement session, `YYYY-MM-DD.md`.
 
 | Date | Commit | Highlights |
 |------|--------|------------|
-| _none published yet — v2 numbers currently live in `docs/decisions/README.md` and `docs/operations/`_ | | |
+| [2026-02-19](./2026-02-19-v2-baseline.md) | `c3fd668` | p99 170–197 ms exchange→Silver (n=12–13, **cold start**) · 6/6 failure modes, worst MTTR 32 s · 15.1 CPU / 21.875 GB declared · 236 K rows/s offload. Retro-compiled 2026-08-26 |
