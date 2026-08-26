@@ -275,6 +275,8 @@ Design and rejected alternatives: [ADR-018](./docs/adr/ADR-018-v3-lake-first-rus
 Phase C detail: [`services/capture-rust/README.md`](./services/capture-rust/README.md),
 [`docs/architecture/capacity-model.md`](./docs/architecture/capacity-model.md),
 [`docs/architecture/failure-modes.md`](./docs/architecture/failure-modes.md).
+The first measured window (throughput, latency, reconnects, RSS/CPU vs the Kotlin handlers) is that
+first README's "Measured" section.
 
 **Still true of v2 today:** Phase 7 is 4 of 5 (24 h resource burn-in outstanding); there is no query API
 ([ADR-005](./docs/adr/ADR-005-kotlin-spring-boot-api.md), deferred); no Alertmanager routing and no load

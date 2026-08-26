@@ -206,6 +206,155 @@ all three venues ran at 1.0/s or more.
 
 ---
 
+## Measured — 2 h window, 2026-08-26 14:15Z–16:15Z
+
+Binary `git_sha=v3-phase-b-33-gf808d87`; all three `capture-*` containers started
+2026-08-26T14:13:12Z, cpuset 12-14. Every rate below is
+`increase(<counter>[7200s])` evaluated at `2026-08-26T16:15:00Z`, i.e. Prometheus's
+own extrapolation over the full two hours — not a hand count — divided by 7200 s
+where a rate is shown. **Zero container restarts** (`docker inspect` restart count
++ health status, all three `healthy`) and **zero alerts fired**
+(`count(ALERTS{alertstate="firing"})` range query, 14:15Z–16:15Z, empty result).
+
+### Throughput per exchange
+
+| Exchange | msg/s | Query |
+|----------|-------|-------|
+| Binance | 306.2 | `sum(increase(k2_capture_messages_total{job="capture-binance"}[7200s]))/7200` |
+| Coinbase | 167.1 | `sum(increase(k2_capture_messages_total{job="capture-coinbase"}[7200s]))/7200` |
+| Kraken | 947.4 | `sum(increase(k2_capture_messages_total{job="capture-kraken"}[7200s]))/7200` |
+
+### msg/s and bytes/s per stream
+
+`increase(k2_capture_messages_total[7200s])/7200` and
+`increase(k2_capture_bytes_total[7200s])/7200`, by `(job, stream)`:
+
+| Exchange | Stream | msg/s | B/s |
+|----------|--------|------:|----:|
+| Binance | `trade` | 218.0 | 36,394 |
+| Binance | `depth20` | 88.2 | 118,066 |
+| Coinbase | `l2_data` | 153.7 | 226,608 |
+| Coinbase | `market_trades` | 12.4 | 7,088 |
+| Coinbase | `heartbeats` | 1.0 | 206 |
+| Coinbase | `subscriptions` | 0.0 | 0 |
+| Kraken | `book` | 944.2 | 189,789 |
+| Kraken | `trade` | 2.2 | 705 |
+| Kraken | `heartbeat` | 1.0 | 23 |
+| Kraken | `control` | 0.006 | 1.2 |
+| Kraken | `instrument` | 0.001 | 158 |
+| Kraken | `status` | 0.0003 | 0.04 |
+
+### Records produced per kind (2 h total)
+
+`increase(k2_capture_records_produced_total[7200s])`, by `(job, kind)` — the
+local-enqueue counter, not `records_delivered_total`:
+
+| Exchange | `raw` | `trade` | `book` |
+|----------|------:|--------:|-------:|
+| Binance | 2,204,389 | 1,569,527 | 86,398 |
+| Coinbase | 1,202,812 | 287,203 | 79,191 |
+| Kraken | 6,821,057 | 29,205 | 79,132 |
+
+### Produce errors, gaps, checksum failures, resyncs
+
+All zero, every exchange, over the full 2 h window:
+
+| Metric | Query | Binance | Coinbase | Kraken |
+|--------|-------|--------:|---------:|-------:|
+| Produce errors (`delivery`+`encode`+`enqueue`+`queue_full`) | `increase(k2_capture_produce_errors_total[7200s])` | 0 | 0 | 0 |
+| Gaps | `increase(k2_capture_gaps_total[7200s])` | 0 | 0 | 0 |
+| Checksum failures | `increase(k2_capture_checksum_failures_total[7200s])` | n/a (no checksum) | n/a | 0 |
+| Resyncs | `increase(k2_capture_resyncs_total[7200s])` | 0 | 0 | 0 |
+
+### Reconnects
+
+`increase(k2_capture_reconnects_total[7200s])`, by `(job, reason)`:
+
+| Exchange | `involuntary` | `scheduled` |
+|----------|--------------:|------------:|
+| Binance | 0 | 0 |
+| Coinbase | 0 | 0 |
+| Kraken | **2** | 0 |
+
+Both Kraken reconnects were the venue closing the socket, not a local fault:
+`docker logs k2-capture-kraken` shows `reconnecting wait=500ms` at
+`15:01:55.617Z` and `15:55:48.305Z`, each preceded by a clean connection close
+from Kraken's side. Neither correlates with a gap, checksum failure, or resync
+— the CRC32-verified `book` stream and `trade` sequencing came back clean on
+both reconnects.
+
+### Exchange → recv latency (trades only)
+
+**Caveat: this is venue clock skew plus the internet path to this host, not a
+platform-internal latency** — there is no way to separate the two from a
+single timestamp pair, and the exchange clock is not one we control.
+`histogram_quantile({0.5,0.95,0.99}, sum by (job, le) (rate(k2_capture_exchange_to_recv_seconds_bucket[7200s])))`
+at `2026-08-26T16:15:00Z`:
+
+| Exchange | p50 | p95 | p99 |
+|----------|----:|----:|----:|
+| Binance | 68 ms | 99 ms | 224 ms |
+| Kraken | 178 ms | 247 ms | 494 ms |
+| Coinbase | 193 ms | 474 ms | 2,297 ms |
+
+Coinbase's p99 is the widest of the three at every percentile; see the
+startup-transient note below for why its tail is heavier still in the first
+minutes after a connect.
+
+**Startup transient (Coinbase, separate earlier window, previous binary).**
+A prior 1 h window (12:40Z–13:40Z, before this binary — `git_sha` differs from
+the one this section measures) caught a Coinbase connect: `exchange_to_recv`
+p99 pinned at the histogram's top bucket for about 2 minutes while ~30 MB of
+`level2` snapshot frames drained, then fell back under 1 s by +4 minutes.
+Query: `histogram_quantile(0.99, sum by (le) (rate(k2_capture_exchange_to_recv_seconds_bucket{job="capture-coinbase"}[1m])))`,
+`query_range` 13:43Z–13:49Z. This is a cold-connect artefact of Coinbase's full-depth
+snapshot, not a steady-state number — the 2 h window above starts well after
+that container's connect and shows no equivalent spike.
+
+### Book depth / levels (instant, at window end)
+
+Point-in-time gauges read at `2026-08-26T16:15:00Z`, not averaged over the
+window:
+
+| Exchange | `sum(k2_capture_book_levels_total)` (all books) | `avg(k2_capture_book_depth)` (per book) |
+|----------|-------------------------------------------------:|------------------------------------------:|
+| Binance | 480 | 40 |
+| Kraken | 550 | 50 |
+| Coinbase | 140,120 | 3,448 |
+
+Binance and Kraken are fixed-depth (top-20 and depth-25 respectively, both
+sides), so the per-book figure is constant across symbols; Coinbase carries
+full-depth `level2` books, so its per-book average moves with each
+instrument's real liquidity.
+
+### RSS and CPU vs the Kotlin handlers
+
+`docker stats --no-stream` at `2026-08-26T16:15:00Z`. Docker reports `%CPU`
+as a fraction of **one host core**, not of the container's cgroup quota — the
+"% of quota" column divides that figure by the 0.25 CPU limit each `capture-*`
+container carries (`docker-compose.yml`, and `docs/architecture/README.md`'s
+resource table).
+
+| Container | %CPU (of 1 host core) | % of 0.25 CPU quota | RSS | Mem limit |
+|-----------|----------------------:|---------------------:|-----|-----------|
+| `k2-capture-binance` | 3.14% | 12.6% | 10.54 MiB | 256 MiB |
+| `k2-capture-kraken` | 3.22% | 12.9% | 12.02 MiB | 256 MiB |
+| `k2-capture-coinbase` | 3.57% | 14.3% | 30.65 MiB | 512 MiB |
+| `k2-feed-handler-binance` (Kotlin) | 3.05% | — | 158.3 MiB | 512 MiB |
+| `k2-feed-handler-kraken` (Kotlin) | 1.39% | — | 144.3 MiB | 512 MiB |
+| `k2-feed-handler-coinbase` (Kotlin) | 1.58% | — | 151.7 MiB | 512 MiB |
+
+Same `docker stats` line, same two minutes: the Rust binary's RSS is **15.0x**
+smaller than Kotlin's for Binance, **12.0x** for Kraken, **5.0x** for Coinbase
+— Coinbase's ratio is the smallest of the three because its full-depth book
+(140,120 levels, above) is the only one of the three actually large enough to
+show up in heap size. CPU is not directly comparable: the two runtimes measure
+against different limits (0.25 CPU capture vs 0.5 CPU feed-handler, per
+`docs/architecture/README.md`'s resource table) and neither is saturating its
+quota in this window.
+
+---
+
 ## Building and testing
 
 There is no local toolchain requirement; everything runs in a container. Build

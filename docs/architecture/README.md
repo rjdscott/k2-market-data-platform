@@ -254,7 +254,9 @@ The list above is what v2 chose not to build. Separately, an audit of the code f
 v3 inverts the storage hierarchy — the lake becomes the system of record and everything else is derived and rebuildable — and replaces the Kotlin handlers with one Rust `k2-capture` binary per exchange doing trades and L2 book on a single connection.
 
 **Today, honestly (Phase C, this branch):** Kotlin and Rust run in parallel for the parity window; the
-lake this branch writes to does not exist yet — that lands in Phase D.
+lake this branch writes to does not exist yet — that lands in Phase D. Throughput, latency, reconnects
+and resource use for the Rust tier are in the "Measured" section of
+[`services/capture-rust/README.md`](../../services/capture-rust/README.md).
 
 ```mermaid
 flowchart TB
