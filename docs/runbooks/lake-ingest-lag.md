@@ -22,6 +22,7 @@ It does **not** cover a crashed run (that is safe and automatic —
 | 2 | Scheduler stopped — no runs at all | < 15 min | not yet verified — Phase D burn-in |
 | 3 | `failOnDataLoss` — offsets point below broker retention | **investigation, not repair** | not yet verified — Phase D burn-in |
 | 4 | Nightly rewrite missed — small files accumulating | < 24 h (next maintenance window) | not yet verified — Phase D burn-in |
+| 5 | A flow run failed with `exited 2` — the ingest lock held | **nothing to repair** | n/a — the lock working is not an incident |
 
 ---
 
@@ -305,6 +306,64 @@ binpack on `raw.messages`, which is already written in offset order, and a sort 
 both bronze tables using the sort order declared in `lake.sql`.
 
 **Measured** — not yet verified.
+
+---
+
+## 5. A flow run failed with `exited 2` — the ingest lock held
+
+**Symptom** — one `lake-ingest-5min` flow run is Failed in the Prefect UI, its logs end in
+
+```
+ingest.py exited 2 after 3s
+another ingest holds /tmp/k2-lake-ingest.lock — refusing to run a second one.
+Two concurrent appends both commit and both write offsets; see LOCK_PATH above.
+```
+
+and the next scheduled run five minutes later succeeds normally.
+
+**Detection** — none, and there should be none. No Prometheus alert covers this: a single
+refused run costs one cycle of freshness, which is an order of magnitude inside
+`LakeIngestFailed`'s 30-minute threshold. A red run in Prefect is the whole signal.
+
+**Expected behaviour — this is the lock doing its job, and the correct response is
+nothing.** `main()` in `docker/lake/ingest.py` takes a non-blocking exclusive `flock` on
+`/tmp/k2-lake-ingest.lock` before it opens a Spark session, and exits 2 rather than
+queueing if another process holds it. Two concurrent ingests would both read the same
+committed offsets from the last snapshot summary and both append the same records, so
+concurrency is the one thing that breaks the exactly-once argument
+([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The deployment's
+`concurrency_limit=1` only gates runs *Prefect* launched; the runbooks, the chaos scripts
+and `make lake-verify` all `docker exec` an ingest directly, and the flock is the guard
+that covers every path.
+
+The ordinary causes are all benign: a hand-run ingest during triage that overlapped a
+scheduled cycle, a chaos script (each pauses the schedule for its duration precisely to
+avoid this), `make lake-verify`, or a long backlog slice still running when the next cycle
+fires. **The run that exited 2 wrote nothing** — the lock is taken before the Spark session
+— so there is nothing to clean up and nothing to replay.
+
+**Recovery** — only if it repeats. A run refused every cycle means a holder that never
+exits:
+
+```bash
+# 1. Who holds it?                                  not yet run — Phase D burn-in
+docker exec k2-spark-iceberg fuser /tmp/k2-lake-ingest.lock
+docker exec k2-spark-iceberg ps -o pid,etime,cmd -p "$(
+  docker exec k2-spark-iceberg fuser /tmp/k2-lake-ingest.lock 2>/dev/null)"
+
+# 2. A genuinely stuck run — hours of elapsed time, no progress in its log — is the
+#    killed-mid-run case, which is safe: kill it and let the next cycle resume.
+#    lake-recovery.md §5 is the same procedure.
+docker exec k2-spark-iceberg pkill -9 -f /home/iceberg/lake/ingest.py
+docker exec k2-spark-iceberg pkill -9 -f org.apache.spark.deploy.SparkSubmit
+```
+
+**Do not delete the lock file.** `flock` is held on the open file descriptor, not on the
+path, so unlinking it does not release anything — it just lets the next run take a *fresh*
+lock on a new inode and start the second concurrent ingest the lock exists to prevent.
+
+**Measured** — not yet verified. Exercised against a throwaway `scratch` namespace: two
+concurrent appends duplicate without the lock and the second run exits 2 with it.
 
 ---
 

@@ -32,12 +32,32 @@ INGEST_TIMEOUT_S = 3600
 MAINTENANCE_TIMEOUT_S = 7200
 
 
+# Lines of stdout/stderr carried in the failure message. The full streams still
+# go to the flow-run log; this is what the UI shows as the reason the run failed,
+# and a Spark stack trace is thousands of lines long. The lines that say WHY are
+# the last ones: the ingest's `another ingest holds /tmp/k2-lake-ingest.lock`,
+# the audit's failing check name, Spark's actual exception under its banner.
+TAIL_LINES = 20
+
+
+def _tail(text: str) -> str:
+    """The last TAIL_LINES lines, saying how many were dropped."""
+    lines = text.strip().splitlines()
+    if len(lines) <= TAIL_LINES:
+        return "\n".join(lines)
+    dropped = len(lines) - TAIL_LINES
+    return "\n".join([f"… {dropped} earlier line(s) in the flow-run log", *lines[-TAIL_LINES:]])
+
+
 def _run(script: str, args: list, timeout: int) -> str:
     """`docker exec` one lake script; raise on a non-zero exit, with its output.
 
-    stdout and stderr are both surfaced in the exception because a failed audit
-    prints which check failed to stdout and exits 1 — swallowing that would turn
+    stdout and stderr are both surfaced because a failed audit prints which check
+    failed to stdout and exits 1 — swallowing that would turn
     "duplicate_identifiers failed on bronze.trades" into "returned exit status 1".
+    In full to the log, as a tail in the exception: an ingest refused by the
+    flock exits 2 with one line on stderr, and that line has to be readable in
+    the Prefect UI without opening the run.
     """
     logger = get_run_logger()
     cmd = ["docker", "exec", SPARK_CONTAINER, "python3", f"{LAKE_DIR}/{script}", *args]
@@ -50,10 +70,12 @@ def _run(script: str, args: list, timeout: int) -> str:
     if result.stdout:
         logger.info(result.stdout.strip())
     if result.returncode != 0:
-        logger.error(result.stderr.strip())
+        if result.stderr.strip():
+            logger.error(result.stderr.strip())
         raise RuntimeError(
             f"{script} exited {result.returncode} after {elapsed:.0f}s\n"
-            f"stdout:\n{result.stdout.strip()}\nstderr:\n{result.stderr.strip()}"
+            f"stdout (last {TAIL_LINES}):\n{_tail(result.stdout)}\n"
+            f"stderr (last {TAIL_LINES}):\n{_tail(result.stderr)}"
         )
     return result.stdout
 
