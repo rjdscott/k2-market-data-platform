@@ -3,7 +3,7 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # Stage 1: Build
-FROM gradle:8.12-jdk21 AS build
+FROM gradle:9.7-jdk21 AS build
 
 WORKDIR /app
 
