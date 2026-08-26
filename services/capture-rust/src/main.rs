@@ -115,7 +115,7 @@ struct Cli {
 enum Command {
     /// Capture a venue and produce to Redpanda.
     Run(RunArgs),
-    /// Exit 0 if any stream has produced a frame recently, 1 otherwise.
+    /// Exit 0 if EVERY continuous stream has produced a frame recently, 1 otherwise.
     Healthcheck(HealthArgs),
     /// Record raw frames as JSONL on stdout, for a replay fixture.
     Record(RecordArgs),
