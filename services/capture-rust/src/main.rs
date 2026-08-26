@@ -287,7 +287,12 @@ async fn run(args: RunArgs) -> Result<()> {
             Ok(Session::Scheduled) => "scheduled",
             Ok(Session::Disconnected) => "involuntary",
             Err(e) => {
-                tracing::warn!(error = %e, "capture session ended");
+                // `?e` and not `%e`, here and at every other error site in this
+                // crate: Display on an `anyhow::Error` prints only the outermost
+                // `.context(..)`, so "capture session ended: connecting" told us
+                // nothing about the DNS or TLS failure underneath it. Debug
+                // prints the whole `Caused by:` chain.
+                tracing::warn!(error = ?e, "capture session ended");
                 "involuntary"
             }
         };

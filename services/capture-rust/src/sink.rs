@@ -127,7 +127,7 @@ impl Sink {
         let payload = match self.encoder.encode(record.avro_fields(), strategy).await {
             Ok(bytes) => bytes,
             Err(e) => {
-                tracing::error!(topic, error = %e, "avro encode failed, record dropped");
+                tracing::error!(topic, error = ?e, "avro encode failed, record dropped");
                 self.count_error("encode");
                 return;
             }
@@ -175,7 +175,7 @@ impl Sink {
                             .increment(1);
                         }
                         Ok(Err((e, _))) => {
-                            tracing::warn!(error = %e, "kafka delivery failed");
+                            tracing::warn!(error = ?e, "kafka delivery failed");
                             metrics::counter!(
                                 "k2_capture_produce_errors_total",
                                 "exchange" => exchange,
@@ -193,7 +193,7 @@ impl Sink {
                 self.count_error("queue_full");
             }
             Err((e, _)) => {
-                tracing::warn!(error = %e, "producer rejected a record");
+                tracing::warn!(error = ?e, "producer rejected a record");
                 self.count_error("enqueue");
             }
         }
@@ -203,7 +203,7 @@ impl Sink {
     /// after that is lost, and the counter above is what says so.
     pub fn flush(&self, timeout: Duration) {
         if let Err(e) = self.producer.flush(timeout) {
-            tracing::warn!(error = %e, "producer flush did not complete");
+            tracing::warn!(error = ?e, "producer flush did not complete");
         }
     }
 

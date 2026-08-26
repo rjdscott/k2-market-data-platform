@@ -599,7 +599,7 @@ impl<'a> Body<'a> {
             _ => return Body::Other,
         }
         .unwrap_or_else(|err| {
-            tracing::warn!(error = %err, "kraken frame body did not match its channel");
+            tracing::warn!(error = ?err, "kraken frame body did not match its channel");
             count_unknown(EXCHANGE, e.stream_name());
             Body::Other
         })

@@ -387,7 +387,7 @@ impl<'a> Body<'a> {
             _ => return Body::Other,
         }
         .unwrap_or_else(|err| {
-            tracing::warn!(error = %err, channel, "coinbase frame body did not match its channel");
+            tracing::warn!(error = ?err, channel, "coinbase frame body did not match its channel");
             Body::Other
         })
     }

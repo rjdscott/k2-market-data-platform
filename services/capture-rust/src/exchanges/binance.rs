@@ -166,7 +166,7 @@ impl BinanceAdapter {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "binance trade did not parse");
+                    tracing::warn!(error = ?e, "binance trade did not parse");
                     count_unknown(EXCHANGE, stream);
                 }
             },
@@ -176,7 +176,7 @@ impl BinanceAdapter {
                         .extend(self.replace_book(&native, &d, recv_ts_ns, conn_msg_seq))
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "binance depth did not parse");
+                    tracing::warn!(error = ?e, "binance depth did not parse");
                     count_unknown(EXCHANGE, stream);
                 }
             },
