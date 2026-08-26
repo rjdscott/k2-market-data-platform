@@ -16,8 +16,8 @@
 # the three Kotlin feed handlers, ClickHouse's Kafka-engine consumers, Redpanda
 # Console, and Prefect. Capture is only the tier being *measured*. Worst case
 # for this script is `--exchange coinbase`: 446 s of predicted slack, and with
-# the 3x wait plus the alert's `for: 3m` the broker can be paused for ~27
-# minutes. A `docker pause` longer than about five minutes is itself a risk on
+# the 3x wait plus the alert's `for: 5m` the broker can be paused for ~36
+# minutes (223 s half-window + 1,338 s drop wait + 600 s alert wait). A `docker pause` longer than about five minutes is itself a risk on
 # single-node Raft - the node cannot heartbeat its own group while frozen, and
 # recovery on unpause is not instant. That is why this ends with an explicit
 # `rpk cluster health` rather than assuming the broker came back clean.
@@ -87,8 +87,12 @@ else
   echo "  queue filled. That is a finding: the cap that binds is time, not bytes." >&2
 fi
 
-t_fire=$(wait_for_alert CaptureProduceErrors 300 "$EXCHANGE") \
-  || echo "→ CaptureProduceErrors did not fire within ${t_fire}s (needs rate > 0.1/s for 3m)" >&2
+# 600 s, not 300: the rule is `increase(k2_capture_produce_errors_total[10m]) > 0`
+# with `for: 5m`, so the earliest possible firing is ~5.5 minutes after the first
+# drop. A 300 s wait expired before the alert could exist and reported the alert
+# as broken on every run.
+t_fire=$(wait_for_alert CaptureProduceErrors 600 "$EXCHANGE") \
+  || echo "→ CaptureProduceErrors did not fire within ${t_fire}s (needs increase(k2_capture_produce_errors_total[10m]) > 0, for: 5m)" >&2
 
 echo "→ unpausing k2-redpanda" >&2
 docker unpause k2-redpanda >/dev/null

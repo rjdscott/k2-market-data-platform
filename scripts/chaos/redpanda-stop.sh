@@ -21,8 +21,8 @@
 # broker and the single schema registry, so stopping it takes down every
 # producer and consumer at once: the three Kotlin feed handlers, ClickHouse's
 # Kafka-engine consumers, Redpanda Console, and Prefect. Capture is only the
-# tier being *measured*. The broker is down for the alert's `for: 3m` plus the
-# wait, ~15 minutes worst case. The run ends with an explicit
+# tier being *measured*. The broker is down for the alert's `for: 5m` plus the
+# wait, ~15 minutes worst case (the 900 s `wait_for_alert` is the binding cap). The run ends with an explicit
 # `rpk cluster health` rather than assuming a clean return.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"

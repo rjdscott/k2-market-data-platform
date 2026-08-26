@@ -65,8 +65,8 @@ Three design notes worth knowing before reading them:
   handlers, ClickHouse's Kafka-engine consumers, Console and Prefect all lose it
   too — capture is only the tier being measured. `capture-queue-full.sh
   --exchange coinbase` is the longest: 446 s of predicted queue slack plus the
-  alert's `for: 3m` and the wait puts the broker under `docker pause` for up to
-  ~27 minutes, and `redpanda-stop.sh` stops it for up to ~15. A pause beyond a
+  alert's `for: 5m` and the wait puts the broker under `docker pause` for up to
+  ~36 minutes, and `redpanda-stop.sh` stops it for up to ~15. A pause beyond a
   few minutes is itself a risk on single-node Raft, so both end by printing
   `rpk cluster health` rather than assuming a clean return.
 - **`capture-corrupt-frame.sh` is a SKIP, not a stub.** It exists so `make chaos`
