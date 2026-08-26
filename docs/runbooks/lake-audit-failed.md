@@ -27,7 +27,7 @@ the tier being down ([lake-recovery.md](./lake-recovery.md)).
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | `offset_continuity` — a hole in the archive | **investigation, not repair** | occurred 2026-08-26 — one recorded hole, 1,168,954 records; see §1 |
+| 1 | `offset_continuity` — a hole in the archive | **investigation, not repair** | occurred 2026-08-26 — one recorded hole, 1,168,954 records, netted out by the check since 2026-08-27; see §1 |
 | 2 | `duplicate_identifiers` — a row landed twice | < 60 min | not yet verified — Phase D burn-in |
 | 3 | `sequence_gaps` — venue sequence discontinuity | **investigation, not repair** | not yet verified — Phase D burn-in |
 | 4 | `venue_replay` — informational; **cannot fail** | n/a — read the rate, do not repair it | not yet verified — Phase D burn-in |
@@ -113,29 +113,58 @@ WHERE topic = 'market.crypto.v3.raw.kraken' AND partition = 7
   AND offset BETWEEN 918430 AND 918460 ORDER BY offset;
 ```
 
-**First, check whether it is a gap that has already been recorded.** A
-`--accept-data-loss` repair files an `offset_gap` row in this same table, and from that
-moment `offset_continuity` fails on that partition **every night, forever** — the hole is
-permanent, so the check is right to keep reporting it. The two rows are the same fact
-written by two jobs, and they are reconciled by scope and count:
+**An already-recorded gap has already been reconciled, by the check itself.** A
+`--accept-data-loss` repair files an `offset_gap` row in this same table naming the exact
+range Redpanda evicted, and `offset_continuity` **nets those ranges out**: it reads the
+recorded gaps, reads the actual holes for the flagged partition, and passes when every hole
+sits inside a recorded range and the hole sizes account for the entire shortfall. The
+passing row still carries the number — `N recorded gaps netted (first..last)` — so the
+archive never claims to be dense when it is not; it claims the holes are the ones a person
+signed for. So a `LakeAuditFailed` on `offset_continuity` **is news**, which is the only
+state in which a critical alert is worth having.
+
+What still fails, and must:
+
+- a hole **wider** than what was recorded — even by one offset. Partial coverage is not
+  coverage; those offsets are records nobody wrote down.
+- a hole on a partition with **no** `offset_gap` row at all.
+- a partition whose hole sizes do not add up to the reported shortfall. `observed` is
+  `missing - duplicated`, so 100 acknowledged missing offsets plus 100 rows written twice
+  reports 0 — the arithmetic check is what stops a duplication hiding inside an
+  acknowledged hole.
+- an `offset_gap` row whose `detail` cannot be parsed for its two offsets (a hand-filed row
+  in some other wording). It nets nothing out, which fails, which is the safe direction.
+
+The netting is `offsets.uncovered_holes` / `offsets.recorded_gaps` (pure, unit-tested in
+`tests/test_lake_offsets.py`), wired in `maintenance._net_recorded`. The exact holes are
+read **only** for a partition the aggregate check already flagged — the healthy nightly path
+is still one group-by, not a window function over the whole archive.
+
+**To see the list yourself** — the same reconciliation, by hand, which is the way to read
+*which* incident a netted row is netting:
 
 ```sql
--- A continuity failure whose count matches a recorded offset_gap for the same
--- scope is that incident, and needs no new investigation. Anything else is new.
+-- Every recorded gap and every continuity result, by scope, oldest first.
+-- A continuity row that passes with "recorded gaps netted" names the ranges it
+-- netted; an offset_gap row above it names the incident that recorded them.
 SELECT check_name, scope, observed, run_ts, detail FROM lake.audit.checks
 WHERE check_name IN ('offset_gap', 'offset_continuity') ORDER BY scope, run_ts;
 ```
 
 Measured 2026-08-26: `market.crypto.v3.raw.kraken/0` carries an `offset_gap` of
-**1,168,954** and `offset_continuity` reports **1,168,954 missing** on the same partition —
-they agree, and that agreement is the answer. `LakeAuditFailed` therefore stays firing on
-that partition until the archive is rebuilt or the check learns to net out recorded gaps.
+**1,168,954** and `offset_continuity` reported **1,168,954 missing** on the same partition
+— the two records agreeing. Measured 2026-08-27, after the netting landed, the same
+partition passes:
 
-# ponytail: netting recorded offset_gap rows out of audit_offset_continuity is
-# ~15 lines in maintenance.py and one test. It is not done, deliberately: a
-# permanently-red critical alert is a real cost, and so is an audit that can be
-# taught to expect a hole. Do it when a SECOND recorded gap exists — one is a
-# footnote in this runbook, two is a pattern the check should know about.
+```text
+ok   offset_continuity  market.crypto.v3.raw.kraken/0
+     1 recorded gaps netted (1615463..2784416); 1168954 records missing, all
+     acknowledged by an offset_gap row in lake.audit.checks — nothing else is
+```
+
+`scripts/lake-verify.sh`'s `offsets gapless` check does **not** net — it is a Phase D exit
+gate run by hand, not an alert, and a red line there on this partition is expected until
+the archive is rebuilt. Reconcile it against the same query.
 
 **If the gap is real and not yet recorded**, its deliverable is a record, not a repair:
 [lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss--the-offsets-point-below-what-the-broker-holds)

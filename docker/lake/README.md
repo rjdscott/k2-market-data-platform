@@ -419,6 +419,20 @@ nothing bootstrapped.
   heartbeats that never reach bronze — so a `+1` check would report a gap for
   every correct capture. The docstring in `maintenance.py` has the per-venue
   detail.
+- **`offset_continuity` nets out gaps that were already recorded.** A
+  `--accept-data-loss` repair writes an `offset_gap` row naming the exact range
+  Redpanda evicted, and that hole is permanent — so without netting, the audit
+  fails on that partition every night forever and `LakeAuditFailed` (critical)
+  latches on a loss a person already signed for. The check reads the recorded
+  ranges, reads the actual holes **only for a partition the group-by already
+  flagged**, and passes when every hole sits inside a recorded range *and* the
+  hole sizes account for the whole shortfall — the second condition is what
+  stops a duplication hiding inside an acknowledged hole, because `observed` is
+  `missing - duplicated`. The passing row still carries the number:
+  `N recorded gaps netted (first..last)`. A hole one offset wider than the
+  record, a partition with no record, or a record this cannot parse all still
+  fail. `offsets.uncovered_holes` is pure and unit-tested; the wiring is
+  `maintenance._net_recorded`.
 - **`metrics.py` does not use PyIceberg.** `load_table` needs a FileIO to fetch
   `metadata.json` from S3, `FsspecFileIO` needs `s3fs` (absent), and
   `import pyiceberg.io.pyarrow` alone costs more RSS than the exporter's whole
