@@ -95,9 +95,12 @@ ALTER TABLE lake.raw.messages
 --
 -- Partitioned by exchange, then days(exchange_ts). Exchange first because it is
 -- the field every cross-venue query filters on and it has exactly three values;
--- symbol is deliberately NOT a partition field — BTC dwarfs the tail, so
--- partitioning on it produces one huge partition and a hundred tiny ones. The
--- sort order carries symbol pruning instead, at no file-count cost.
+-- symbol is deliberately NOT a partition field. config/instruments.yaml holds 34
+-- (exchange, symbol) pairs, so an exchange x symbol x day spec is 34 partitions
+-- a day over 0.156 GB/day — 4.6 MB each on average against a 128 MB target, and
+-- BTC dwarfs the tail so the real distribution is one huge partition and 33
+-- tiny ones. The sort order carries symbol pruning instead, at no file-count
+-- cost.
 --
 -- Identifier fields include conn_id, and that is a measurement rather than a
 -- preference. Over 287,184 trades captured on 2026-08-26 (30 min, all three
@@ -237,12 +240,13 @@ ALTER TABLE lake.bronze.book_snapshots_l2
 -- audit.checks — one row per check per maintenance run. Append-only history, so
 -- "when did offset continuity last hold for market.crypto.v3.raw.kraken/7" is a
 -- query rather than a log grep. docker/lake/metrics.py reads it for
--- k2_lake_audit_failures_total.
+-- k2_lake_audit_failures_total. docker/lake/ingest.py also writes here, with
+-- job='ingest', when it meets a schema id the registry cannot serve.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS lake.audit.checks (
     run_ts     TIMESTAMP NOT NULL COMMENT 'When the maintenance run that produced this row started',
-    job        STRING  NOT NULL COMMENT 'Which job wrote it: maintenance | verify',
-    check_name STRING  NOT NULL COMMENT 'offset_continuity | duplicate_identifiers | sequence_gaps',
+    job        STRING  NOT NULL COMMENT 'Which job wrote it: maintenance | ingest | verify',
+    check_name STRING  NOT NULL COMMENT 'offset_continuity | duplicate_identifiers | sequence_gaps | venue_replay (informational, no pass/fail) | unresolvable_schema_id (written by ingest, not maintenance)',
     scope      STRING  NOT NULL COMMENT 'What was checked: a table name, or topic/partition',
     passed     BOOLEAN NOT NULL COMMENT 'false here is what makes the maintenance run exit non-zero',
     observed   BIGINT           COMMENT 'The number the check produced — gap count, duplicate count. NULL where the check has no count',

@@ -124,7 +124,9 @@ At 400×: **~280,000 frames/s in**, **~354,000 records/s out**
 ### 3.2 Files per day, and why the small-file problem inverts
 
 **Assumption A3** — files land at the configured target size after compaction; the ingest
-cadence stays 5 minutes (288 commits/day/table).
+cadence stays 5 minutes (288 commits/day/table). GB and MB are **decimal** throughout this
+section, as in the capacity model; the DDL's `write.target-file-size-bytes` values are the
+binary equivalents (128 MiB, 256 MiB), a 5 % difference that moves no conclusion below.
 
 ```
 raw.messages, 400×:  2,588 GB/day ÷ 256 MB per file   = 10,109 files/day
@@ -140,7 +142,7 @@ guarded by a minimum-file-size filter, and the maintenance job's real work shift
 
 ```
 bronze.trades, 400×: 62.4 GB/day ÷ 20 exchange partitions = 3.12 GB/partition/day
-                     3.12 GB ÷ 128 MB                     = ~25 files/partition/day
+                     3,120 MB ÷ 128 MB                    = ~24 files/partition/day
 ```
 
 At that point `bronze.*` should move to a 256 MB target too — 128 MB exists today only
@@ -155,8 +157,9 @@ a table should not accumulate partitions faster than its metadata can be planned
 |---|---|---|---|
 | `raw.messages` `days(kafka_ts), topic` | 9 partitions/day, ~26 files/day, ~0.72 GB per partition | 60 partitions/day (20 venues × 3 streams), ~43 GB per partition | holds at both ends |
 | `raw.messages` `hours(kafka_ts), topic` | 216 partitions/day, **30 MB per partition** — a tenth of a target file | 1,440 partitions/day, **1.8 GB per partition** — 7 target files | wrong today, **right at scale** |
-| `bronze.*` `exchange, days(ts)` | 3 partitions/day, ~50 MB each | 20 partitions/day, ~3.1 GB each | holds at both ends |
-| `bronze.*` + `symbol` | ~100 partitions/day, most holding hundreds of rows | 10,000 symbols → **200,000 partitions/day** | wrong at both ends, catastrophically so at scale |
+| `bronze.trades` `exchange, days(ts)` | 3 partitions/day, ~52 MB each | 20 partitions/day, ~3.1 GB each | holds at both ends |
+| `bronze.book_snapshots_l2` `exchange, days(ts)` | 3 partitions/day, ~88 MB each | 20 partitions/day, ~5.3 GB each | holds at both ends |
+| `bronze.*` + `symbol` | 34 partitions/day (34 exchange–symbol pairs), ~4.6 MB of trades each and most holding hundreds of rows | 10,000 instruments → **10,000 partitions/day** | wrong at both ends, catastrophically so at scale |
 
 **The `hours()` crossover is a computable trigger, not a judgement.** A per-topic hour
 partition holds `6.47 GB/day ÷ 9 topics ÷ 24 h = 30 MB` today. It reaches one 256 MB
@@ -165,20 +168,21 @@ target file at `256 ÷ 30 ≈ 8.5×` today's rate. That is the number in this pa
 rejects `hours()` today without claiming it is wrong in general.
 
 **Symbol stays out of the partition spec at every scale**, and the reason strengthens
-rather than weakens: 10,000 symbols × 20 venues × 365 days is 73 million partitions a
-year, against a table whose sort order already prunes by symbol at zero metadata cost
+rather than weakens: the 10,000 instruments of A2 already span the 20 venues, so
+`10,000 × 365` is **3.65 million partitions a year**, against a table whose sort order
+already prunes by symbol at zero metadata cost
 ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)). Partition evolution
 remains the escape hatch for a *specific* hot symbol, not for the dimension.
 
 ### 3.4 Manifests
 
 **Assumption A4** — a manifest entry is ~500 bytes of Avro with metrics on 3–4 columns,
-and Iceberg's default `commit.manifest.target-size-bytes` is 8 MB, so **~16,700 entries
-per manifest**.
+and Iceberg's default `commit.manifest.target-size-bytes` is **8 MiB** (8,388,608 B), so
+`8,388,608 ÷ 500 = 16,777` — call it **~16,800 entries per manifest**.
 
 ```
-1×:    9,490 files/year   ÷ 16,700  = 1 manifest covers a year
-400×:  3.69 M files/year  ÷ 16,700  = ~221 manifests for a year of raw
+1×:    9,490 files/year   ÷ 16,777  = 1 manifest covers a year
+400×:  3.69 M files/year  ÷ 16,777  = ~220 manifests for a year of raw
 ```
 
 Two hundred manifests in a snapshot's manifest list is comfortable — planning reads the
@@ -187,7 +191,7 @@ list, prunes manifests by their partition summaries, and opens only the ones who
 manifests are *not* clustered by partition, which is what happens when hundreds of small
 commits each add their own: 288 commits/day × 365 = 105,000 manifests a year if nothing
 rewrites them. **`rewrite_manifests`, grouped by partition, is therefore a required
-maintenance step at scale and merely a nice-to-have today** — the difference between 221
+maintenance step at scale and merely a nice-to-have today** — the difference between 220
 and 105,000 is entirely whether that job runs.
 
 ### 3.5 Compaction cadence
@@ -244,8 +248,9 @@ in this repository cites the command or file that produced it; an AWS cost estim
 deployment that does not exist would have no provenance and would be quoted anyway. What
 can be said honestly is the *shape* — which terms dominate, and which are noise:
 
-- **Storage dominates, and it grows on a calendar.** `raw.messages` is 91 % of the bytes
-  ([capacity model §4b](capacity-model.md#4b-per-topic-per-day)) and nothing deletes it,
+- **Storage dominates, and it grows on a calendar.** `raw.messages` writes 6.47 GB/day of
+  the 6.89 GB/day all four lake tables write between them — **94 % of the lake's growth**
+  ([capacity model §4c](capacity-model.md#4c-per-lake-table-per-day)) — and nothing deletes it,
   so the storage line rises monotonically while every other line is roughly flat in
   steady state. The lifecycle policy in §4 is therefore the single largest lever on total
   cost, and the only one that trades money against a stated guarantee.

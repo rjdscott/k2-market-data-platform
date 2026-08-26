@@ -61,8 +61,8 @@ The specs, as applied by `docker/lake/ddl/lake.sql`:
 
 | Table | `PARTITIONED BY` | Sort order (local) | Identifier fields | Target file |
 |---|---|---|---|---|
-| `bronze.trades` | `exchange, days(exchange_ts)` | `symbol, exchange_ts` | `exchange, symbol, trade_id` | 128 MB |
-| `bronze.book_snapshots_l2` | `exchange, days(snapshot_ts)` | `symbol, snapshot_ts` | `exchange, symbol, conn_id, conn_msg_seq` | 128 MB |
+| `bronze.trades` | `exchange, days(exchange_ts)` | `symbol, exchange_ts` | `exchange, symbol, trade_id, conn_id` | 128 MB |
+| `bronze.book_snapshots_l2` | `exchange, days(snapshot_ts)` | `symbol, snapshot_ts` | `exchange, symbol, conn_id, snapshot_ts_ns` | 128 MB |
 
 Both are `write.distribution-mode = hash`, copy-on-write, Parquet + zstd, and carry
 `src_topic` / `src_partition` / `src_offset` lineage plus `ingest_ts`. Full column
@@ -78,7 +78,7 @@ contract.** ADR-011's transformations lived in per-venue SQL because the venues 
 in three dialects and something had to reconcile them. In v3 the reconciliation happens
 in `k2-capture`, in one Rust codebase, against one Avro record type, and it is enforced
 by the schema registry rather than by review of three materialized views. There is no
-per-venue shape left at the lake boundary to preserve — `trade.avsc` is the same eleven
+per-venue shape left at the lake boundary to preserve — `trade.avsc` is the same twelve
 fields whichever container produced it. Unifying three identical schemas is not lossy;
 keeping them apart would be ceremony.
 
@@ -92,10 +92,12 @@ directory layout reads and the way the audits scan.
 
 **Symbol is in the sort order, never in the partition spec, and this is the trade-off
 worth stating.** Symbol is the obvious partition candidate and it is skewed by
-construction: BTC-quoted majors dwarf the tail, so `exchange × day × 34 symbols` would
-be ~100 partitions per day, a handful holding real data and most holding a few hundred
-rows — files far too small to be worth opening, on a table whose whole daily volume is
-0.156 GB. The sort order does the same pruning work at no file-count cost: files are
+construction: BTC-quoted majors dwarf the tail. `config/instruments.yaml` holds 34
+`(exchange, symbol)` pairs — binance 12, kraken 11, coinbase 11 — so an
+`exchange × symbol × day` spec is **34 partitions per day**, a handful holding real data
+and most holding a few hundred rows. On a table whose whole daily volume is 0.156 GB
+that averages 4.6 MB a partition against a 128 MB target file: far too small to be worth
+opening, and the skew means the real distribution is worse than the mean. The sort order does the same pruning work at no file-count cost: files are
 locally sorted by `(symbol, exchange_ts)`, so per-file min/max bounds on `symbol` make a
 single-instrument scan skip most files, and Parquet row-group statistics narrow it again
 inside the ones it opens. The price is honest — pruning by sort order is *statistical*
@@ -115,13 +117,33 @@ a partition. `snapshot_ts` is K2's own sampler clock and is always present. Usin
 column for consistency's sake would have put a third of the book data in a null
 partition.
 
-**Identifier fields differ between the two tables for the same kind of reason.** Trades
-have a venue trade id, so `(exchange, symbol, trade_id)` is the duplicate audit's key.
-Book snapshots do not: Kraken emits `seq = 0` because it does not sequence that stream,
-and Coinbase's `sequence_num` is connection-wide across all channels rather than
-per-symbol (spike S5), so neither is unique per row. `(exchange, symbol, conn_id,
-conn_msg_seq)` is K2-assigned and always unique. Picking `seq` because the column exists
-would have produced a duplicate check that silently passes.
+**Identifier fields differ between the two tables, and both were settled by measurement
+rather than by which column looked like a key.** The obvious answers were
+`(exchange, symbol, trade_id)` for trades and `(exchange, symbol, conn_id, conn_msg_seq)`
+for book snapshots. Both are wrong, and the data says so:
+
+* Over **287,184 trades** captured on 2026-08-26 (30 min, all three venues),
+  `(exchange, symbol, trade_id)` had **956 duplicated keys** — every one Coinbase, every
+  one a pair of rows with identical price, qty, side and `exchange_ts` under two
+  different `conn_id`s. Coinbase replays recent `market_trades` on resubscribe, so a
+  reconnect genuinely delivers the same trade twice and the append-only archive genuinely
+  holds both frames. Adding `conn_id` makes the uniqueness claim true and leaves the
+  replay visible instead of hidden. The *logical* trade is still
+  `(exchange, symbol, trade_id)` — that is what a research query deduplicates on, and
+  `docker/lake/maintenance.py` reports the cross-`conn_id` count on every run so the
+  replay rate stays a published number rather than background noise.
+* Over **47,331 book snapshots** the same day, `(exchange, symbol, conn_id, conn_msg_seq)`
+  had **484 duplicated keys** — e.g. binance ATOMUSDT `conn_msg_seq` 81456 sampled one
+  second apart with the same `recv_ts_ns`. `conn_msg_seq` records which frame the book
+  last incorporated, so a quiet book gives two consecutive 1 Hz samples the same value.
+  Two snapshots of an unchanged book is correct behaviour, not a duplicate. The sampler
+  clock `snapshot_ts_ns` has zero duplicates over the same 47,331 rows.
+
+`seq` was no help on either table: Kraken writes 0 because it does not sequence the
+stream, and Coinbase's `sequence_num` is connection-wide across all channels rather than
+per-symbol (spike S5). Picking a column because it exists, on any of these three
+occasions, would have produced a duplicate check that silently passes — which is exactly
+what the 956 and the 484 are.
 
 **Rebuildability is what makes all of this low-stakes.** Both tables are pure functions of
 `raw.messages` (ADR-021). If the partition spec or the sort order turns out wrong, the
@@ -137,8 +159,8 @@ which was made against tables whose contents could not be reproduced.
 |--------|---------|
 | **Per-exchange lake tables** (`bronze.trades_binance`, …), mirroring ADR-011 | Preserves a per-venue shape that no longer exists — one Avro contract, three producers — and pays for it three ways: a `UNION ALL` in every cross-venue query, daily partitions of tens of MB against a 128 MB target so compaction can never converge, and a fourth exchange costing a table plus DDL plus compaction plus audit entries instead of a new value in a column. The debuggability ADR-011 bought is delivered better by `raw.messages`, which holds the actual bytes rather than a typed rendering of them. |
 | **One table, no `exchange` partition field** — `days()` only, exchange in the sort order | One-third the partition count and gives up an exact skip on the field most queries filter by, in exchange for pruning that is statistical. `exchange` has three values; this is the cheapest exact pruning available anywhere in the schema. |
-| **Partition by `exchange, symbol, days(...)`** | Exact symbol pruning, and ~100 partitions/day on 0.156 GB/day: one large partition (BTC), a long tail of partitions holding a few hundred rows, and a metadata tree larger than the data it indexes. This is the classic small-file failure, and it is unrecoverable without a full rewrite. |
-| **Partition by `hours(...)`** | 24× the partitions for a table that writes 0.156 GB/day. The day partition plus the sort order already prunes an intraday range to a handful of files; hourly buys metadata. Reconsidered at ~100× today's rate in the scale-out path, where the arithmetic changes. |
+| **Partition by `exchange, symbol, days(...)`** | Exact symbol pruning, and 34 partitions/day (`config/instruments.yaml`) on 0.156 GB/day — 4.6 MB each on average: one large partition (BTC), a long tail holding a few hundred rows, and a metadata tree larger than the data it indexes. This is the classic small-file failure, and it is unrecoverable without a full rewrite. |
+| **Partition by `hours(...)`** | 24× the partitions for a table that writes 0.156 GB/day. The day partition plus the sort order already prunes an intraday range to a handful of files; hourly buys metadata. Reconsidered at the 8.5× crossover in the scale-out path, where the arithmetic changes. |
 | **Keep the v2 medallion shape in the lake** (per-venue bronze → unified silver → gold) | Three layers of copies of the same trades, where v3 has exactly two representations by design: verbatim (`raw.messages`) and decoded (`bronze.*`). A Silver layer whose only job is unification is redundant when Bronze is already unified, and Gold is not in the lake at all — OHLCV is computed on read in the hot tier ([ADR-026, reserved](ADR-018-v3-lake-first-rust-capture.md#follow-on-adrs)). |
 | **Parallel `bid_px` / `bid_qty` arrays in the lake**, matching the wire | Free at write time, and it makes "the third bid level" a two-column zip every reader writes for itself, with a px/qty length mismatch representable in the storage format. `array<struct<px, qty>>` makes the pairing Parquet's problem. The wire keeps parallel arrays because ClickHouse 24.3 decodes `array<long>` natively (spike S4); the lake and the wire are allowed to differ where each has a different reader. |
 

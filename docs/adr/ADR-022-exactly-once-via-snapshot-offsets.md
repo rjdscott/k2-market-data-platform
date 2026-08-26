@@ -109,9 +109,9 @@ important line in `offsets.py` — which is why that module is pure and unit-tes
 
 | Failure | What survives | What the next run does | Result |
 |---|---|---|---|
-| **Crash after the Parquet files are written, before the Iceberg commit** | orphan data files in MinIO; no snapshot | reads the same `startingOffsets` as the dead run, re-reads the same records, writes new files, commits | no duplicates, no gap. The orphans are unreferenced by any snapshot, so no reader ever sees them; `remove_orphan_files` in daily maintenance reclaims the space |
+| **Crash after the Parquet files are written, before the Iceberg commit** | orphan data files in MinIO; no snapshot | reads the same `startingOffsets` as the dead run, re-reads the same records, writes new files, commits | no duplicates, no gap. The orphans are unreferenced by any snapshot, so no reader ever sees them; the nightly `remove_orphan_files` reclaims the space, with a 24 h floor so it cannot race a live write ([maintenance.py](../../docker/lake/maintenance.py)) |
 | **Crash after the commit, before the process exits** | the snapshot, with its offsets | reads the committed offsets, starts at the successor | no duplicates, no gap. The commit *is* the completion signal — there is nothing else to do after it |
-| **Double-run** (two ingests launched over the same window) | both read the same start; both write | Prefect `lake-ingest-5min` runs at concurrency 1, so this is operator error; if it happens, the second commit conflicts on the base snapshot and Iceberg's optimistic concurrency rejects or retries it | at worst a retry re-reads a range already committed and appends duplicates — the one case that is *not* automatically safe, and the reason concurrency 1 is a deployment setting rather than a convention. The duplicate audit on identifier fields catches it |
+| **Double-run** (two ingests launched over the same window) | both read the same start; both write | an exclusive `flock` in `ingest.py`'s `main()` — the second process exits 2 before it opens a Spark session. Prefect's `concurrency_limit=1` is belt and braces behind it, and covers only Prefect-launched runs; the runbooks, the chaos scripts and `make lake-verify` all dispatch by hand | no duplicates. **Without the lock there would be duplicates**, and not because Iceberg fails to notice: measured on a scratch table with this DDL's `commit.retry.num-retries=10`, two identical 5-row appends raised nothing and left 10 rows in two append snapshots. Iceberg's optimistic concurrency detects the conflict and its retry re-applies the loser on the new base — which is correct for an append and fatal for an append that also carries the reader's position |
 | **Compaction snapshot lands between two ingests** | the compaction snapshot, no offsets property | the offset reader skips it and takes the latest snapshot *with* the property | correct resume. If the reader took "latest" instead, it would either fail or restart from zero — silently duplicating a day |
 | **Topic truncated below the stored offset** (retention evicted unread data) | the offsets, pointing at records that no longer exist | `failOnDataLoss=true` → the job fails immediately | a loud failure and an alert, not a silent hole. Recovery is a human decision: record the gap, then resume from the earliest surviving offset explicitly. [`../runbooks/lake-ingest-lag.md`](../runbooks/lake-ingest-lag.md) |
 | **Lakekeeper unreachable at commit time** | the data files; no snapshot | identical to the first row — the commit never happened | no duplicates, no gap; the run is a no-op with orphans |
@@ -160,8 +160,9 @@ parse it, which is why `offsets.py` is pure and tested rather than inline in the
 **Committed to:** `k2.kafka-offsets` and `k2.max-kafka-ts` as stable property names on
 `raw.messages` commits and `k2.src-snapshot-id` on `bronze.*` commits — renaming one
 orphans every prior snapshot as a resume point; `failOnDataLoss=true` on every Kafka
-read, with a topic truncation treated as an incident rather than a skip; Prefect
-concurrency 1 on `lake-ingest-5min` as a correctness setting, not a politeness one; and
+read, with a topic truncation treated as an incident rather than a skip; one ingest at a
+time enforced by an exclusive `flock` in the script rather than by the scheduler, because
+seventeen documented commands dispatch an ingest outside Prefect; and
 deleting `docker/postgres/ddl/offload-watermarks.sql` together with `docker/offload/`
 in the same cutover PR, so no code path can read a stale watermark.
 

@@ -711,7 +711,7 @@
       "id": 14,
       "type": "timeseries",
       "title": "Mean data-file size",
-      "description": "Each 5-minute ingest writes one file per partition it touched, so this sags all day and the nightly binpack pulls it back up. Under 32 MiB on raw.messages for six hours fires LakeSmallFiles: compaction is not running or not finishing.",
+      "description": "Each 5-minute ingest writes one file per partition it touched, so this sags all day and the nightly binpack pulls it back up. A low value is NOT an alert: on a fresh table the mean cannot clear 32 MiB for ~15 days no matter how well compaction runs. LakeCompactionStale watches the rewrite job itself; this panel says how far the file layout has drifted while it was not running.",
       "gridPos": {
         "h": 8,
         "w": 8,

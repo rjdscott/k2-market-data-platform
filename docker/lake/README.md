@@ -119,10 +119,16 @@ what `scripts/chaos/lake-ingest-kill.sh` asserts by killing a run mid-write.
 
 Two consequences worth knowing:
 
-- **Concurrency must be 1.** Two ingests at once both read the same committed
-  offsets and both write the same records. The summary makes a *sequence* of
-  runs exactly-once, not a pair of concurrent ones. That is why
-  `lake-ingest-5min` sets `concurrency_limit=1`.
+- **Concurrency must be 1, and the script enforces it.** Two ingests at once
+  both read the same committed offsets and both write the same records — and
+  Iceberg will not stop them: measured on a scratch table with the DDL's
+  `commit.retry.num-retries=10`, two identical 5-row appends raised nothing and
+  left 10 rows in two append snapshots, because the retry re-applies the loser
+  on the new base. The summary makes a *sequence* of runs exactly-once, not a
+  pair of concurrent ones. `ingest.py` takes an exclusive `flock` on
+  `/tmp/k2-lake-ingest.lock` (`$K2_LAKE_LOCK`) in `main()` and exits 2 if it is
+  held; `lake-ingest-5min`'s `concurrency_limit=1` sits behind that and covers
+  only the runs Prefect launched, which is not the ones in these runbooks.
 - **Snapshot expiry must not outrun stage 2.** Bronze resumes from the
   `raw.messages` snapshot id it last decoded, so expiring that snapshot turns
   the next run into an error. `maintenance.py` refuses `--retain-days` under 7.
@@ -157,9 +163,19 @@ Three things worth stating here because they shape every one of those:
 - **A failed run leaves the table untouched, but may leave orphan files.** A
   write that died after uploading Parquet and before committing leaves data
   files no manifest references. They are invisible to every reader and cost only
-  disk; `CALL lake.system.remove_orphan_files` clears them. It is deliberately
-  not on the nightly path — it deletes by age and a badly chosen cutoff deletes
-  live files.
+  disk. `remove_orphan_files` clears them and it IS on the nightly path, with a
+  24-hour floor: the procedure decides "unreferenced" from the metadata at the
+  instant it runs, so a shorter cutoff can delete a file a concurrent writer has
+  staged and not yet committed. Iceberg enforces the same floor itself.
+
+  It cannot use the procedure's own listing. That goes through the Hadoop
+  FileSystem, this Spark image has no `hadoop-aws`, and the call answers
+  `UnsupportedFileSystemException: No FileSystem for scheme "s3"` and does
+  nothing. Rather than bake `hadoop-aws` plus a ~190 MB `aws-java-sdk-bundle`
+  into the image so a second S3 client can list what the first one already can,
+  `maintenance.file_list_view()` lists the prefix with Iceberg's own `S3FileIO`
+  and hands it to the procedure through `file_list_view`. Force it sooner with
+  `maintenance.py --orphan-hours 24`.
 
 ---
 
@@ -172,26 +188,36 @@ on the metric rather than an assumption in the docs. That matters here.
 **On this host, Docker runs inside a VM** (`docker context ls` shows
 `desktop-linux`, `docker info` reports `Operating System: Docker Desktop`), and
 the VM's disk is a thin-provisioned image on the machine's real disk. The two
-disagree, measured 2026-08-26:
+disagree. Both readings below are from the same instant, and this is the ONE
+free-space figure this repo publishes — everything else that needs a number
+quotes it and its timestamp:
 
+```console
+$ df -h /                                        # 2026-08-26T14:43Z, on the host
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p5  961G  715G  197G  79% /
+
+$ docker run --rm -v k2-market-data-platform_minio-data:/minio-data:ro \
+    python:3.12-slim python -c \
+    "import os; s=os.statvfs('/minio-data'); t=s.f_blocks*s.f_frsize; f=s.f_bavail*s.f_frsize; \
+     print(f'total={t/2**30:.1f}G free={f/2**30:.1f}G used_ratio={(t-f)/t:.3f}')"
+total=944.0G free=619.6G used_ratio=0.344
 ```
-$ docker exec k2-minio df -B1 /data
-/dev/vda1  1013625839616  294208262144  667852701696  31%  /data
 
-$ df -BG /var/lib/docker
-/dev/nvme0n1p5  961G  712G  201G  79%  /
-```
-
-31% inside, 79% outside, and only the second number is the one that runs out.
-Anything measured from inside a container — this metric, and ClickHouse's
-`ClickHouseAsyncMetrics_FilesystemMainPath*` series equally, which reports the
-same `/dev/vda1` at 34% — sees the VM, not the machine.
+0.344 inside, 0.79 outside — 45 points against a 0.80 threshold — and only the
+second number is the one that runs out. Anything measured from inside a
+container sees the VM, not the machine; ClickHouse's
+`ClickHouseAsyncMetrics_FilesystemMainPath*` series reports the same VM disk and
+is no better.
 
 So on a Docker Desktop host **`LakeDiskUsageHigh` will not fire before the real
 disk fills**, and the honest reading is that the alert is correct on bare metal
-and on AWS and blind here. Closing that needs a host-side exporter, which is a
-maintainer decision rather than something a container can fix. Until then the
-check is manual and it is `df -BG /var/lib/docker` on the host, which the
+and on AWS and blind here. The *rule* is proven either way:
+`docker/prometheus/rules/tests/lake-alerts_test.yml` asserts it fires at 0.81,
+stays quiet at 0.79, and that `LakeDiskUsageCritical` takes over at 0.95. What
+is missing on this host is a truthful input, and closing that needs a host-side
+exporter — a maintainer decision rather than something a container can fix.
+Until then the check is manual and it is `df -h /` on the host, which the
 [disk runbook](../../docs/runbooks/lake-disk-usage-high.md) carries.
 
 `mc du k2/k2-lake` answers a different question — what the buckets hold, rather
@@ -255,9 +281,25 @@ nothing bootstrapped.
   detail.
 - **`metrics.py` does not use PyIceberg.** `load_table` needs a FileIO to fetch
   `metadata.json` from S3, `FsspecFileIO` needs `s3fs` (absent), and
-  `import pyiceberg.io.pyarrow` alone measures 122 MB RSS against the 128 MB
-  container limit. One REST GET returns the same summaries; the exporter
-  measures 26.7 MB doing a full refresh.
+  `import pyiceberg.io.pyarrow` alone costs more RSS than the exporter's whole
+  128 MB limit. Both numbers, with the commands that produced them
+  (2026-08-26, pyiceberg 0.7.1):
+
+  ```console
+  $ docker exec k2-spark-iceberg python3 -c \
+      "import resource; import pyiceberg.io.pyarrow; \
+       print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024)"
+  121.9                       # MiB peak RSS, from a 10.9 MiB bare interpreter
+
+  # metrics.py against the live Lakekeeper, five full refreshes over four tables
+  $ docker exec k2-prefect-worker python /tmp/rss.py
+  5 full refreshes over 4 tables, 0 errors; peak RSS 26.6 MiB
+  ```
+
+  One REST GET returns the same summaries at a fifth of the cost. The 26.6 MiB
+  run was measured against four scratch tables created with
+  `apply_ddl.py --namespace-map`, because the real `raw`/`bronze`/`audit` tables
+  do not exist on this host yet.
 
 ---
 

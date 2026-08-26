@@ -35,11 +35,13 @@ NAME                               PARTITIONS  REPLICAS
 market.crypto.v3.book.binance      12          1
 market.crypto.v3.raw.binance       12          1
 market.crypto.v3.trades.binance    12          1
-…                                                        # 15 market topics, 268 partitions
+…
 ```
 
 The six v2 topics (`market.crypto.trades.<ex>{,.raw}`, 40/20/20 partitions) are still
-live and go away at the Phase E cutover.
+live and go away at the Phase E cutover. Counted from that listing, the two generations
+together are **15 market topics and 268 partitions** — `9 × 12` for v3 plus
+`2 × (40 + 20 + 20)` for v2.
 
 ### The key is the symbol, not the exchange
 
@@ -84,9 +86,12 @@ notice.
 **Skew is real and is accepted here.** BTC-quoted majors dominate volume, so the
 partitions holding them are hotter than the tail. At the predicted ~700 frames/s in
 ([capacity model §2c](capacity-model.md#2c-raw-frames-in-and-records-out)) against a
-broker sized for ~100 K msg/s, per-partition skew is not near anything that binds, and
-the fix if it ever is — more partitions — is available only at topic-recreation cost, so
-it is a decision to make once with headroom rather than to tune.
+broker sized for ~100 K msg/s ([ADR-010](../adr/ADR-010-resource-budget.md)'s "2 cores
+handles 100K msg/s" — the figure rank 6 of [capacity model
+§7](capacity-model.md#7-bottleneck-prediction) uses to put broker CPU at ~113× today's
+rate), per-partition skew is not near anything that binds, and the fix if it ever is —
+more partitions — is available only at topic-recreation cost, so it is a decision to make
+once with headroom rather than to tune.
 
 ### Retention is not partitioning, but it interacts
 
@@ -101,7 +106,8 @@ proportionally.
 
 ## Iceberg
 
-Four tables, one namespace each. Applied by `docker/lake/apply_ddl.py` from
+Four tables across three namespaces — `raw.messages`, `bronze.trades`,
+`bronze.book_snapshots_l2`, `audit.checks`. Applied by `docker/lake/apply_ddl.py` from
 [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql).
 
 | Table | `PARTITIONED BY` | Local sort order | Target file size | Metrics on |
@@ -112,7 +118,12 @@ Four tables, one namespace each. Applied by `docker/lake/apply_ddl.py` from
 | `audit.checks` | `days(run_ts)` | — | 128 MB | default |
 
 All four: Parquet + zstd, `format-version = 2`, `write.distribution-mode = hash`,
-copy-on-write for delete/update/merge, `write.metadata.metrics.default = none`.
+copy-on-write for delete/update/merge. Three of the four also set
+`write.metadata.metrics.default = none` and re-enable metrics per column, as the last
+table column above records. `audit.checks` is the exception: its DDL sets no metrics
+property at all, so it keeps Iceberg's `truncate(16)` default on every column — a table
+of a few rows a night whose columns are all short strings pays nothing for it, and there
+is no `payload`-shaped column to make the default expensive.
 
 ### `raw.messages`: time first, topic second
 
@@ -158,12 +169,16 @@ to trades crosses two different clocks, and any query doing it must say which.
 This is the load-bearing partitioning decision in the lake, so the argument is worth
 having in full.
 
-**Partitioning by symbol would produce skew by construction.** `exchange × day × 34
-symbols` is ~100 partitions per day against a table that writes **0.156 GB/day** for
-trades and **0.264 GB/day** for book snapshots
-([capacity model §4c](capacity-model.md#4c-per-lake-table-per-day)). BTC-quoted majors
-would hold most of that; the tail would hold partitions of a few hundred rows each. Those
-are files too small to be worth opening, a metadata tree larger than the data it indexes,
+**Partitioning by symbol would produce skew by construction.** The registry holds **34
+(exchange, symbol) pairs** — binance 12, kraken 11, coinbase 11, 23 distinct canonical
+symbols across them ([`config/instruments.yaml`](../../config/instruments.yaml)) — so
+`exchange × day × symbol` is 34 partitions per day against a table that writes
+**0.156 GB/day** for trades and **0.264 GB/day** for book snapshots
+([capacity model §4c](capacity-model.md#4c-per-lake-table-per-day)). Even split evenly
+that is `0.156 GB ÷ 34 = 4.6 MB` per trades partition per day, well under any file size
+worth writing. And it would not split evenly: BTC-quoted majors would hold most of it;
+the tail would hold partitions of a few hundred rows each. Those are files too small to
+be worth opening, a metadata tree larger than the data it indexes,
 and a compaction job that can never reach its 128 MB target because there is not 128 MB
 in the partition to reach it with.
 
@@ -192,14 +207,17 @@ At the predicted 6.5 GB/day across 9 topics, `hours(kafka_ts), topic` is ~216 pa
 a day, ~79,000 a year, on a single host holding the catalog metadata for all of it. What
 it would buy is a tighter time prune, and the day partition plus the `(topic, partition,
 offset)` sort order already narrows an intraday read to a handful of files. Hourly is
-metadata for a pruning gain that is already paid for. The arithmetic is redone at 100×
-and at PB scale in [`scale-out-path.md`](scale-out-path.md), where it comes out
-differently.
+metadata for a pruning gain that is already paid for. The arithmetic is redone in
+[`scale-out-path.md`](scale-out-path.md) §3.3, where it comes out differently: an hourly
+partition reaches one 256 MB target file at **8.5×** today's rate, and at the **400×** PB
+case it is the right spec.
 
 ### File size: 256 MB for raw, 128 MB for bronze
 
-`raw.messages` targets 256 MB because it is the high-volume table — 6.47 GB/day predicted,
-91 % of the lake's growth — and larger files mean fewer manifest entries per snapshot and
+`raw.messages` targets 256 MB because it is the high-volume table — 6.47 GB/day predicted
+of the 6.89 GB/day all four lake tables write between them, **94 % of the lake's growth**
+([capacity model §4c](capacity-model.md#4c-per-lake-table-per-day)) — and larger files
+mean fewer manifest entries per snapshot and
 fewer object-store round trips per scan. `bronze.*` target 128 MB because at 0.156 and
 0.264 GB/day a 256 MB target would never be reached and compaction would produce one
 undersized file per partition either way, with no benefit.

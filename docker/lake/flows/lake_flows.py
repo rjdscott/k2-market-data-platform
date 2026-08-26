@@ -25,8 +25,9 @@ SPARK_CONTAINER = "k2-spark-iceberg"
 LAKE_DIR = "/home/iceberg/lake"
 
 # Generous: a backlog slice after an outage reads far more than a five-minute
-# window. The concurrency limit of 1 on the deployment, not this timeout, is
-# what stops two ingests overlapping.
+# window. Neither this timeout nor the deployment's concurrency limit is what
+# stops two ingests overlapping — the flock in ingest.py is, because it also
+# covers the runs Prefect did not launch.
 INGEST_TIMEOUT_S = 3600
 MAINTENANCE_TIMEOUT_S = 7200
 

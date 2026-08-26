@@ -36,10 +36,13 @@ def main() -> int:
         name="lake-ingest-5min",
         work_pool_name=WORK_POOL,
         cron="*/5 * * * *",
-        # 1, and it is load-bearing rather than tidy. Two ingests running at once
-        # would both read from the same committed offsets and both write the same
-        # records: the snapshot summary makes a *sequence* of runs exactly-once,
-        # not a pair of concurrent ones.
+        # 1, and belt-and-braces rather than the contract. Two ingests at once
+        # both read the same committed offsets and both write the same records —
+        # the snapshot summary makes a *sequence* of runs exactly-once, not a
+        # pair of concurrent ones. But this setting only gates runs Prefect
+        # launched, and the runbooks, the chaos scripts and `make lake-verify`
+        # all `docker exec` an ingest directly. The guard that covers every path
+        # is the flock in ingest.py's main().
         concurrency_limit=1,
         tags=["lake", "v3", "ingest"],
         description="Redpanda -> Iceberg raw.messages -> bronze.*, every 5 minutes (ADR-018)",

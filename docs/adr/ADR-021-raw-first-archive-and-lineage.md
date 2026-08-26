@@ -34,9 +34,23 @@ verbatim frame. Phase D has to either honour that or quietly re-add a `book_delt
 table, and the second option is attractive precisely because it looks cheap.
 
 The constraint that shapes all three: one host, and the capacity model predicts
-`raw.messages` at **6.47 GB/day** after zstd-3 against **212 GiB free** on the host disk
-— disk binds first, *on a calendar*, at roughly **26 days** from a cold start
+`raw.messages` at **6.47 GB/day** after zstd-3 — disk binds first, *on a calendar*, at
+roughly **26 days** from a cold start
 ([`../architecture/capacity-model.md`](../architecture/capacity-model.md#7-bottleneck-prediction)).
+
+Free space is the one input to that arithmetic that moves while you read it, so it is
+quoted here with the command and the instant rather than as a constant:
+
+```console
+$ df -h /            # 2026-08-26T14:43Z
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p5  961G  715G  197G  79% /
+```
+
+`(197 GiB − 34.6 GB of Redpanda retention) ÷ 6.89 GB/day` is 25.7 days. The capacity
+model derives the same ~26 days from a 212 GiB reading taken earlier the same day; the
+answer is insensitive to the difference, and the 15 GiB that went missing between the two
+readings is the alert's whole reason for existing.
 That prediction is not a reason to bound the archive; it is the honest cost of not
 bounding it, and [Q8 of the requirements clarification](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host)
 settled the trade the other way.
@@ -109,8 +123,11 @@ regardless — recoverable by pushing archived frames back through the same
 Replay is a batch job, not a query. That is the cost, and it is stated rather than
 hidden.
 
-**`raw.messages` is frozen; `bronze.*` may add nullable columns.** The archive's schema
-is seven fields and will not gain an eighth: any field added there is a field the
+**`raw.messages` is frozen; `bronze.*` may add nullable columns.** The wire contract
+`schemas/avro/raw-message.avsc` is seven fields and will not gain an eighth — the lake
+table wraps them in nine columns, adding the Kafka coordinates (`topic`, `partition`,
+`offset`, `kafka_ts`) and the derived `schema_id`, and dropping nothing. Any field added
+to either is a field the
 2026 rows do not have, which turns "the archive is the record" into "the archive is the
 record plus a migration note". Derived tables are the place for evolution, because they
 are rebuildable — a new bronze column is a re-run, not a rewrite. Exchange-specific

@@ -25,3 +25,72 @@
 - Lake: snapshot summary offsets gapless; raw count == bronze count; double-run adds 0; audits pass; DuckDB notebook 01–04 run clean.
 - Chaos: `make chaos` exits 0 — every script sees its expected alert in `curl -s localhost:9090/api/v1/alerts | jq -r '.data.alerts[].labels.alertname'` and the stack returns to green within the script's stated bound; `docs/architecture/failure-modes.md` has no empty `detection signal`, `recovery step` or `proof` cell (`awk -F'|' '/^\|/ && NF>5 {for(i=2;i<NF;i++) if($i ~ /^ *$/) exit 1}' docs/architecture/failure-modes.md`).
 - Isolation: noisy-neighbour p99 during compaction and the quiet baseline are both in `capacity-model.md`, each with its `curl`/`clickhouse-client` command; the compaction run is pinned off the capture cpuset (`docker inspect -f '{{.HostConfig.CpusetCpus}}' k2-spark-iceberg k2-capture-binance` shows disjoint sets).
+
+## Deferred to deployment, and why
+
+The Scope and Verification bullets above are the design as written. Three of them
+cannot be met by code alone, so they are named here rather than quietly dropped.
+
+- **The exit criteria themselves are unexecuted.** `raw`, `bronze` and `audit` exist
+  as namespaces on the live Lakekeeper warehouse and hold **no tables**: `lake-ddl`
+  and `lake-metrics` have never run on this host, because Phase C is mid-burn-in on
+  the same containers. So "two consecutive ingests, second adds 0", "kill mid-run →
+  no dupes/gaps", "audits pass over a 2 h window" and the parallel run against
+  `docker/offload/` are all still ahead. Every lake proof cell in
+  `docs/architecture/failure-modes.md` says "written; not yet run", every threshold in
+  `docker/prometheus/rules/lake-alerts.yml` says "NOT yet observed firing", and every
+  lake runbook says "not yet verified end to end". Nothing here claims a measurement it
+  does not have — but the phase does not close until `make lake-verify` and `make
+  chaos` have both run green against real tables. That is a deployment gate.
+
+  What HAS been exercised, against a throwaway `scratch` namespace in the same
+  catalog: the DDL applies (9/9 statements), two concurrent appends duplicate without
+  the ingest lock and the second run exits 2 with it, the fixed-point conversion
+  round-trips int64 max instead of NULLing, an un-framed frame is archived and skipped
+  instead of poisoning stage 2, an unresolvable schema id becomes an `audit.checks`
+  row, a raising audit becomes a failed row, and `remove_orphan_files` finds and
+  deletes a planted orphan. Those are unit-level proofs of the mechanisms the exit
+  criteria measure end to end; they are not the exit criteria.
+
+- **The noisy-neighbour experiment (Scope bullet 8, Verification bullet 3) is not
+  delivered.** It needs a full day of `raw.messages` to compact over and a quiet
+  baseline of the same duration on an otherwise idle host — neither exists while
+  Phase C's burn-in owns the machine, and `docker inspect -f
+  '{{.HostConfig.CpusetCpus}}' k2-spark-iceberg k2-capture-binance` currently returns
+  two empty strings, because `spark-iceberg` carries no `cpuset` at all and the
+  capture services carry `${K2_CAPTURE_CPUSET:-}`. Assigning cpusets is a
+  `docker-compose.yml` change that recreates running containers, which is exactly what
+  cannot happen mid-burn-in. Deferred to the same deployment window as the exit
+  criteria: pin the cpusets, let `raw.messages` accumulate a day, then run the
+  comparison and put both numbers and the layout in `capacity-model.md` with their
+  commands. `make check-docs` gate (e) still reports *predicted-only* until they land,
+  which is the correct reading.
+
+- **The 80% disk alert measures the wrong filesystem on this host, and only on this
+  host.** `k2_lake_disk_used_ratio` reads 0.344 inside the container against the
+  machine's 79% (`df -h /`, 2026-08-26T14:43Z) because Docker Desktop puts a
+  thin-provisioned VM disk in between. The *rule* is delivered and tested —
+  `docker/prometheus/rules/tests/lake-alerts_test.yml` asserts it fires at 0.81 and
+  not at 0.79 — and on bare metal or EC2 the metric is honest and Q8's requirement is
+  met. Closing it here needs a host-side exporter, which is a separate decision.
+
+## Diverged from the plan, deliberately
+
+Three Scope details are described above as they were designed and are not what
+shipped. The plan is left as written; the reasons are here.
+
+- **`bronze.trades` identifier fields are `exchange, symbol, trade_id, conn_id`, not
+  `exchange, symbol, trade_id`,** and `bronze.book_snapshots_l2` uses
+  `exchange, symbol, conn_id, snapshot_ts_ns` rather than `conn_msg_seq`. Both were
+  settled by measurement over a 30-minute capture: 956 duplicated keys in 287,184
+  trades, 484 in 47,331 snapshots. [ADR-024](../../adr/ADR-024-unified-bronze-tables-in-the-lake.md)
+  carries the evidence and `docker/lake/ddl/lake.sql` repeats it above each table.
+- **`metrics.py` does not use PyIceberg.** `import pyiceberg.io.pyarrow` alone costs
+  121.9 MiB RSS against the exporter's 128 MB limit; one REST GET against Lakekeeper
+  returns the same snapshot summaries at 26.6 MiB. `docker/lake/README.md` has both
+  commands.
+- **`lake-alerts.yml` has ten rules, not four, and `SmallFiles` is not among them.**
+  An alert on mean file size fires by construction for the first ~15 days of the
+  table's life; `LakeCompactionStale` measures the rewrite job instead.
+  `LakeExporterStalled` and `LakeScrapeErrors` were added because a Lakekeeper outage
+  freezes every other gauge — which is why nothing here exports an age any more.
