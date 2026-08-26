@@ -4,14 +4,14 @@ K2 is a single-host crypto market-data platform: three exchange WebSocket feeds 
 
 > **The v2 hot tier is frozen as of 2026-08-26.** The three Kotlin feed handlers were the only producers of `market.crypto.trades.<ex>[.raw]`, and they retired to [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md) when the Rust capture tier matched them on per-symbol parity ([ADR-019](../adr/ADR-019-rust-capture-tier.md)). Nothing writes those six topics now, so the Kafka-engine queues have nothing to read and **`k2.bronze_trades_*`, `k2.silver_trades` and the six `k2.ohlcv_*` tables stop advancing at the retirement timestamp** — they hold history, they do not grow, and their TTLs keep expiring rows out from under them (bronze 7 d, silver 30 d). The `market.crypto.v3.{raw,trades,book}.<ex>` topics are the only live feed. The `k2` database, its Kafka-engine queues and the `.raw` topics are dropped together at the Phase E cutover, not here — a frozen table is still queryable while the v3 hot tier is being built beside it. Everything below that describes `k2.*` describes what was built and what is still readable, not what is being written.
 
-Everything below describes what actually runs on `main` today. Where the design intent and the built system diverge, the divergence is called out rather than papered over. The story of how it got here is in [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md).
+Everything below describes what actually runs on this branch. Where the design intent and the built system diverge, the divergence is called out rather than papered over. The story of how it got here is in [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md).
 
 ---
 
 ## System diagram
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph EX["Exchanges"]
         BIN["Binance<br/>12 pairs"]
         KRK["Kraken<br/>11 pairs"]
@@ -27,10 +27,7 @@ flowchart LR
     RP["Redpanda v25.3.4, schema registry<br/>v3: 9 topics, 108 partitions<br/>v2: 6 topics, frozen"]
 
     subgraph CH["Hot store · ClickHouse 24.3 LTS · frozen"]
-        Q["3 Kafka-engine queues<br/>JSONAsString"]
-        BR["3x bronze_trades_*<br/>MergeTree · TTL 7d"]
-        SI["silver_trades<br/>MergeTree · TTL 30d"]
-        GO["6x ohlcv_*<br/>AggregatingMergeTree"]
+        MED["3 Kafka-engine queues<br/>3x bronze_trades_* · 7d<br/>silver_trades · 30d<br/>6x ohlcv_*"]
     end
 
     subgraph BATCH["Orchestration + batch"]
@@ -51,17 +48,12 @@ flowchart LR
     FHB -->|"raw + trades + book"| RP
     FHK -->|"raw + trades + book"| RP
     FHC -->|"raw + trades + book"| RP
-    RP -.->|"v2 topics, frozen"| Q
-    Q -->|normalizing MV| BR
-    BR -->|"3 MVs"| SI
-    SI -->|"6 MVs"| GO
+    RP -.->|"v2 topics, frozen"| MED
     PF -->|"cron */15"| SP
-    BR -.->|JDBC| SP
-    SI -.->|JDBC| SP
-    GO -.->|JDBC| SP
+    MED -.->|"JDBC, 10 tables"| SP
     SP -->|append| ICE
     FHB -.->|"capture :8082"| PR
-    Q -.->|"ClickHouse :9363"| PR
+    MED -.->|"ClickHouse :9363"| PR
     PR --> GR
 
     classDef exchange fill:#e5e7eb,stroke:#4b5563,color:#1f2937
@@ -75,7 +67,7 @@ flowchart LR
     class BIN,KRK,CBS exchange
     class FHB,FHK,FHC rust
     class RP stream
-    class Q,BR,SI,GO ch
+    class MED ch
     class PF,SP batch
     class ICE storage
     class PR,GR obs
@@ -147,7 +139,7 @@ Two silver columns are absent from cold storage on purpose: `trade_conditions Ar
 
 Prometheus v3.2 scrapes the three capture containers (`:8082`), ClickHouse (`:9363`), Redpanda (`:9644`), the offload metrics exporter (`iceberg-metrics:8000`) and Grafana. Grafana 11.5 ships five provisioned dashboards in `docker/grafana/dashboards/`: pipeline overview, ClickHouse overview, Iceberg offload, v2 migration tracker, K2 Capture (v3).
 
-**23 alert rules** are loaded from `docker/prometheus/rules/`: 4 ClickHouse and 9 Iceberg-offload (13 v2 total), plus 10 v3 capture-tier rules, which landed with Phase C and are evaluated against live series. The `iceberg-scheduler` Prometheus job scrapes the offload metrics exporter on `iceberg-metrics:8000`, so all 9 offload alerts have live series. One honest gap remains: **not one alert has been shown to fire on the fault it names** — `make chaos` is what proves the capture-tier ones and it has not run (`scripts/chaos/results/` does not exist). Three capture rules do carry `promtool` unit tests ([`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml), `make check-alerts`), which pin an expression and never a recovery time. There is no Alertmanager.
+**23 alert rules** are loaded from `docker/prometheus/rules/`: 4 ClickHouse and 9 Iceberg-offload (13 v2 total), plus 10 v3 capture-tier rules, which landed with Phase C and are evaluated against live series. The `iceberg-scheduler` Prometheus job scrapes the offload metrics exporter on `iceberg-metrics:8000`, so all 9 offload alerts have live series. **Two of the ten capture rules have been shown to fire on the fault they name.** `make chaos` ran for the first time on 2026-08-26, 16:40–16:57Z: five faults injected, one SKIP, and `CaptureDown` (119 s / 152 s / 165 s to fire) and `CaptureProduceErrors` (256 s) both fired, with recovery 0–30 s ([`scripts/chaos/README.md`](../../scripts/chaos/README.md), raw rows in [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)). The remaining eight are unproven against a real fault; three of them — `CaptureFeedStale`, `CaptureProduceStalled`, `CaptureBookDepthDegraded` — carry `promtool` unit tests only ([`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml), `make check-alerts`), which pin an expression and never a recovery time. `CaptureFeedStale` cannot be proven by the pause script at all: a paused scrape target is stale-marked, so the rule stops evaluating rather than firing. The 13 v2 rules are unproven the same way. There is no Alertmanager.
 
 ---
 
