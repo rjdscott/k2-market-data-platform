@@ -1,0 +1,76 @@
+{
+  "type": "record",
+  "name": "Trade",
+  "namespace": "com.k2.market.v3",
+  "doc": "One executed trade, normalised across exchanges. Subject market.crypto.v3.trades.<exchange>-value under TopicNameStrategy. Prices and quantities are fixed-point int64 at a scale of 1e-8: the stored value is round(decimal * 100000000), so 45285.2 is 4528520000000. There is no decimal logicalType here on purpose - see schemas/README.md.",
+  "fields": [
+    {
+      "name": "exchange",
+      "type": "string",
+      "doc": "Lowercase venue identifier: binance | kraken | coinbase. Deliberately a string rather than an enum so that adding a venue is a config change, not a schema evolution on every existing subject."
+    },
+    {
+      "name": "symbol",
+      "type": "string",
+      "doc": "The instrument as the exchange spells it on the wire, byte for byte (BTCUSDT, XBT/USD, BTC-USD). The `native` field of config/instruments.yaml. Kept verbatim so a message can always be traced back to the raw frame that produced it."
+    },
+    {
+      "name": "canonical_symbol",
+      "type": "string",
+      "doc": "BASE/QUOTE, uppercase, matching ^[A-Z0-9]+/[A-Z0-9]+$. The `canonical` field of config/instruments.yaml and the Kafka message key. The quote currency is kept as the exchange quotes it: BTC/USDT and BTC/USD are different instruments, never folded together."
+    },
+    {
+      "name": "trade_id",
+      "type": "string",
+      "doc": "The exchange's own trade identifier, stringified without reformatting. String because the venues disagree on type - Kraken v2 and Binance emit integers, Coinbase emits a UUID-shaped string - and a string holds all of them without a lossy cast. Unique per (exchange, symbol); never synthesised by K2. If an exchange stops providing one, that is a capture bug to fix, not a value to invent."
+    },
+    {
+      "name": "price",
+      "type": "long",
+      "doc": "Trade price in the quote currency, fixed-point at scale 1e-8 (value = round(price * 100000000)). Example: 45285.2 -> 4528520000000. int64 at 1e-8 holds prices up to ~9.2e10 with 8 decimal places, which covers every crypto pair by a wide margin. A payload with more than 8 decimal places is rejected at capture and counted, never silently rounded."
+    },
+    {
+      "name": "qty",
+      "type": "long",
+      "doc": "Trade quantity in the base currency, fixed-point at scale 1e-8 (value = round(qty * 100000000)). Same encoding and same >8dp rejection rule as `price`. Quote volume is deliberately not carried: it is price * qty / 1e8 and storing a derived field invites the two to disagree."
+    },
+    {
+      "name": "side",
+      "type": {
+        "type": "enum",
+        "name": "Side",
+        "doc": "Aggressor (taker) side of the trade.",
+        "symbols": ["buy", "sell"]
+      },
+      "doc": "Taker side: `buy` means the aggressor lifted the offer, `sell` means the aggressor hit the bid. Normalised from each venue's own convention (Binance is_buyer_maker inverted, Kraken b/s, Coinbase BUY/SELL). An enum rather than a string so an unknown value fails at serialisation rather than reaching the lake; ClickHouse 24.3 AvroConfluent decodes it to Enum8."
+    },
+    {
+      "name": "exchange_ts",
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-micros"
+      },
+      "doc": "Exchange-stamped trade time, microseconds since the Unix epoch, UTC. The logicalType is nested inside the type object - as a sibling of `type` Avro ignores it, which is the bug this schema replaces. ClickHouse 24.3 AvroConfluent decodes this to DateTime64(6). This is the exchange's clock, not ours: it is subject to venue clock skew and must never be used alone to measure platform latency - subtract it from recv_ts_ns for that, and treat the result as skew + transit, not transit."
+    },
+    {
+      "name": "recv_ts_ns",
+      "type": "long",
+      "doc": "K2 receive time, nanoseconds since the Unix epoch, taken as the first statement on WebSocket frame receipt - before any parsing, normalisation or allocation. This is the only clock in the record we control. Carried in the record body AND duplicated as a Kafka header so a consumer can compute lag without deserialising the payload. Body is authoritative if the two ever disagree."
+    },
+    {
+      "name": "seq",
+      "type": "long",
+      "doc": "Exchange sequence number for the stream this trade arrived on, used for gap detection. Kraken v2 and Coinbase both provide one (Coinbase's sequence_num is connection-wide, not per-symbol, so gaps are detected per connection). Binance's trade stream has no sequence number and writes 0: a zero here means 'this venue does not sequence', not 'sequence zero'. Not nullable, because a nullable numeric would push the null check into every downstream aggregation for one venue's sake."
+    },
+    {
+      "name": "conn_id",
+      "type": "string",
+      "doc": "Opaque identifier for the WebSocket connection that received this message, regenerated on every (re)connect. Makes a reconnect visible in the data: `seq` continuity is only meaningful within one conn_id, so a gap that coincides with a conn_id change is a reconnect, not a dropped message."
+    },
+    {
+      "name": "conn_msg_seq",
+      "type": "long",
+      "doc": "K2-assigned monotonic counter of frames received on this conn_id, starting at 1. Independent of any exchange sequencing, so it detects loss between capture and the lake (a gap here is our bug) as distinct from loss on the wire (a gap in `seq` is the venue's). Together with conn_id it uniquely identifies the raw frame in market.crypto.v3.raw.<exchange>."
+    }
+  ]
+}

@@ -1,0 +1,103 @@
+{
+  "type": "record",
+  "name": "BookSnapshotL2",
+  "namespace": "com.k2.market.v3",
+  "doc": "A top-N level-2 order book snapshot, emitted by the 1 Hz sampler from the full book the capture process maintains in memory. Subject market.crypto.v3.book.<exchange>-value under TopicNameStrategy. This is the queryable L2 product (ADR-018): every delta stays verbatim in market.crypto.v3.raw.<exchange>, so deeper or higher-frequency books remain recoverable by replay without being stored. Prices and quantities are fixed-point int64 at scale 1e-8, identically to Trade.",
+  "fields": [
+    {
+      "name": "exchange",
+      "type": "string",
+      "doc": "Lowercase venue identifier: binance | kraken | coinbase. String rather than enum for the same reason as Trade.exchange - adding a venue should not evolve every existing subject."
+    },
+    {
+      "name": "symbol",
+      "type": "string",
+      "doc": "The instrument as the exchange spells it on the wire (BTCUSDT, XBT/USD, BTC-USD). The `native` field of config/instruments.yaml."
+    },
+    {
+      "name": "canonical_symbol",
+      "type": "string",
+      "doc": "BASE/QUOTE, uppercase, matching ^[A-Z0-9]+/[A-Z0-9]+$. The `canonical` field of config/instruments.yaml and the Kafka message key, so all snapshots for one instrument land on one partition and stay ordered."
+    },
+    {
+      "name": "depth",
+      "type": "int",
+      "doc": "Number of levels actually present per side in this record, i.e. the length the four arrays were truncated to. Normally 20. It is a field rather than a constant because a thin book can hold fewer levels than requested, and a consumer must be able to tell 'the book only had 6 levels' from 'we dropped 14'. Always equals len(bid_px) or len(ask_px), whichever is larger; a side may be shorter."
+    },
+    {
+      "name": "seq",
+      "type": "long",
+      "doc": "Exchange sequence number of the last update applied to the book before this snapshot was taken. Binance depth streams give lastUpdateId, Kraken v2 book messages carry no sequence (checksum takes its place, so this writes 0), Coinbase level2 gives the connection-wide sequence_num. 0 means 'this venue does not sequence this stream', not 'sequence zero'. Two consecutive snapshots with the same seq mean the book did not change, not that a message was lost."
+    },
+    {
+      "name": "checksum_ok",
+      "type": ["null", "boolean"],
+      "default": null,
+      "doc": "Kraken only: whether the CRC32 checksum Kraken sends with each book update matched the checksum computed over our local book at the moment of this snapshot. Three-valued on purpose. null means 'this venue publishes no checksum, so the question is unanswerable' - Binance and Coinbase always write null. true means 'verified correct'. false means 'our book had drifted', which triggers a resync and should be rare enough to alert on. Collapsing null into true would silently claim Binance and Coinbase books are verified when nothing verified them; that misrepresentation is the whole reason this field is a union."
+    },
+    {
+      "name": "bid_px",
+      "type": {
+        "type": "array",
+        "items": "long"
+      },
+      "doc": "Bid prices, best first (descending), fixed-point at scale 1e-8 (value = round(price * 100000000)); 45285.2 -> 4528520000000. Parallel array: bid_px[i] pairs with bid_qty[i]. Parallel arrays rather than an array of {px, qty} records because ClickHouse 24.3 AvroConfluent decodes array<long> straight to Array(Int64), where an array of records needs a Nested type and a flattening step at every read."
+    },
+    {
+      "name": "bid_qty",
+      "type": {
+        "type": "array",
+        "items": "long"
+      },
+      "doc": "Resting bid quantities in the base currency, fixed-point at scale 1e-8, aligned index-for-index with bid_px. Always the same length as bid_px; a zero quantity never appears, because a zero-quantity update is a level deletion and is applied to the book before the snapshot is taken."
+    },
+    {
+      "name": "ask_px",
+      "type": {
+        "type": "array",
+        "items": "long"
+      },
+      "doc": "Ask prices, best first (ascending), fixed-point at scale 1e-8, parallel to ask_qty. Note that Coinbase level2 labels this side `offer` rather than `ask`; the capture layer normalises {bid, offer} to {bid, ask} so the wire format is uniform across venues."
+    },
+    {
+      "name": "ask_qty",
+      "type": {
+        "type": "array",
+        "items": "long"
+      },
+      "doc": "Resting ask quantities in the base currency, fixed-point at scale 1e-8, aligned index-for-index with ask_px. Always the same length as ask_px."
+    },
+    {
+      "name": "exchange_ts",
+      "type": [
+        "null",
+        {
+          "type": "long",
+          "logicalType": "timestamp-micros"
+        }
+      ],
+      "default": null,
+      "doc": "Exchange-stamped time of the last book update included in this snapshot, microseconds since the Unix epoch, UTC. Nullable because Binance's partial-book depth stream carries no timestamp at all - only an update id - so inventing one would be fabricating a clock reading. Kraken v2 and Coinbase both provide one. The logicalType is nested inside the type object within the union; ClickHouse 24.3 decodes it to Nullable(DateTime64(6)). Use recv_ts_ns, not this, when you need a clock K2 controls."
+    },
+    {
+      "name": "recv_ts_ns",
+      "type": "long",
+      "doc": "K2 receive time of the last book update folded into this snapshot, nanoseconds since the Unix epoch, taken before parse on frame receipt. Together with snapshot_ts_ns it bounds the staleness of the snapshot: snapshot_ts_ns - recv_ts_ns is how long the top of book sat unchanged before the sampler fired, which is book quiescence, not platform latency. Duplicated as a Kafka header."
+    },
+    {
+      "name": "snapshot_ts_ns",
+      "type": "long",
+      "doc": "When the 1 Hz sampler emitted this record, nanoseconds since the Unix epoch. This is the sampling clock and the correct time axis for any research that treats book snapshots as a regular time series - it ticks on a fixed cadence whether or not the book moved, where recv_ts_ns only advances when an update arrives. Sampler cadence is a capture config value, so this field is what makes the actual cadence auditable from the data rather than assumed."
+    },
+    {
+      "name": "conn_id",
+      "type": "string",
+      "doc": "Opaque identifier for the WebSocket connection whose book this snapshot was taken from, regenerated on every (re)connect. A change in conn_id means the book was rebuilt from a fresh exchange snapshot, so `seq` continuity across that boundary is meaningless and any depth or checksum anomaly around it is expected."
+    },
+    {
+      "name": "conn_msg_seq",
+      "type": "long",
+      "doc": "K2-assigned monotonic counter of frames received on this conn_id, at the point this snapshot was taken. Locates the exact raw frame in market.crypto.v3.raw.<exchange> that the book last incorporated, which is what makes a snapshot reproducible from the archive: replay the raw topic on this conn_id up to this counter and the book must come out identical."
+    }
+  ]
+}
