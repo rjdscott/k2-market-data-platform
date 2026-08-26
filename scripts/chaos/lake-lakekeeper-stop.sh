@@ -72,13 +72,19 @@ finally:
 PY
 }
 
+# The trap goes in BEFORE anything it has to undo. `state()` below can die —
+# it runs a Spark session against the catalog — and with the trap installed
+# after it, that death left the 5-minute schedule paused for good.
+# `resume_lake_ingest` is a no-op until `pause_lake_ingest` records ids, so
+# installing it first is safe and installing it later is not.
+restore() { docker start k2-lakekeeper >/dev/null 2>&1 || true; resume_lake_ingest; }
+trap restore EXIT
+
 pause_lake_ingest
 
 before=$(state)
+[ -n "$before" ] || die "could not read snapshot/row counts before the fault — the assertion at the end compares against this, so an empty value would make it pass by vacuum"
 echo "→ before: snapshots/rows = $before" >&2
-
-restore() { docker start k2-lakekeeper >/dev/null 2>&1 || true; resume_lake_ingest; }
-trap restore EXIT
 
 if [ "$STOP_FIRST" = yes ]; then
   echo "→ stopping k2-lakekeeper BEFORE the run (catalog-already-down case)" >&2
@@ -138,9 +144,10 @@ fi
 
 echo "→ starting k2-lakekeeper" >&2
 docker start k2-lakekeeper >/dev/null
-sleep 20
+wait_healthy k2-lakekeeper 120
 
 after=$(state)
+[ -n "$after" ] || die "could not read snapshot/row counts after the fault — the catalog is healthy but not answering Spark"
 echo "→ after: snapshots/rows = $after" >&2
 [ "$before" = "$after" ] || die "the failed run changed the table: $before -> $after. A commit half-landed; this is the row's whole claim and it is false"
 echo "→ table unchanged across the failed run — the commit is atomic as claimed" >&2

@@ -34,14 +34,16 @@ banner "lake-ingest-kill.sh kill_after=${KILL_AFTER}s" \
   "none expected" docs/runbooks/lake-recovery.md \
   "SIGKILL an ingest ${KILL_AFTER}s in, then audit for duplicates and gaps"
 
-pause_lake_ingest
-
-# The trap covers both halves. Without it an early `die` — the "already
-# finished" branch below is the likely one — leaves the background ingest
-# running against a lake the operator now thinks is idle, and leaves the
-# 5-minute schedule paused.
+# The trap covers both halves, and it goes in BEFORE the pause. Without it an
+# early `die` — the "already finished" branch below is the likely one — leaves
+# the background ingest running against a lake the operator now thinks is idle,
+# and leaves the 5-minute schedule paused. `resume_lake_ingest` is a no-op until
+# `pause_lake_ingest` records ids, so installing it first costs nothing and
+# installing it after anything that can die costs the schedule.
 cleanup() { kill_ingest >/dev/null 2>&1 || true; resume_lake_ingest; }
 trap cleanup EXIT
+
+pause_lake_ingest
 
 # Both processes. `pkill -f "$LAKE/ingest.py"` matches the Python driver only:
 # the child JVM's command line is `... SparkSubmit ... pyspark-shell` and does

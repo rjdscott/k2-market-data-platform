@@ -134,6 +134,36 @@ wait_for_metric() {
   done
 }
 
+# wait_healthy <container> <timeout_s> — block until Docker calls it healthy.
+#
+# The replacement for `sleep 20` after a `docker start`. A fixed sleep is wrong
+# in both directions: dead time when the container is back in 3 s, and a FALSE
+# FAILURE when it is not, because the assertion that follows then reads an empty
+# string out of a container still starting and reports it as the fault under
+# test. Both scripts that restart a container assert on its output immediately
+# afterwards, so this is the difference between measuring the fault and
+# measuring the restart.
+#
+# `.State.Health.Status`, not `.State.Running`: running means the process
+# started, healthy means it is answering. Every container this is called on
+# declares a healthcheck; one that did not would report `<no value>` forever and
+# time out, which is the honest outcome rather than a silent pass.
+wait_healthy() {
+  local name=$1 timeout=$2 start status
+  start=$SECONDS
+  while :; do
+    status=$(docker inspect -f '{{.State.Health.Status}}' "$name" 2>/dev/null || true)
+    if [ "$status" = healthy ]; then
+      echo "→ $name healthy after $((SECONDS - start))s" >&2
+      return 0
+    fi
+    if [ $((SECONDS - start)) -ge "$timeout" ]; then
+      die "$name is '$status' after ${timeout}s, not healthy — the stack did not come back"
+    fi
+    sleep 2
+  done
+}
+
 # ── the scheduled ingest ────────────────────────────────────────────────────
 #
 # Every lake fault below races the `*/5 * * * *` lake-ingest-5min deployment.

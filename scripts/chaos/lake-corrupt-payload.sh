@@ -43,8 +43,11 @@ banner "lake-corrupt-payload.sh topic=$TOPIC" \
   "none expected" docs/runbooks/lake-recovery.md \
   "produce three un-framed records; the ingest must archive them all and carry on"
 
-pause_lake_ingest
+# Trap first, then pause. `resume_lake_ingest` is a no-op until
+# `pause_lake_ingest` records ids, so this ordering is free — and it is the one
+# where a `die` between the two still resumes the 5-minute schedule.
 trap resume_lake_ingest EXIT
+pause_lake_ingest
 
 # bronze BEFORE, because the assertion below is a count difference. The
 # original version searched bronze.trades for the marker in `trade_id`, which

@@ -58,10 +58,14 @@ bucket_bytes() {
     | python3 -c 'import json,sys; print(sum(json.loads(l)["size"] for l in sys.stdin if l.strip()))'
 }
 
-pause_lake_ingest
+# Trap first, then pause: `rows()` and `bucket_bytes()` below can both die, and
+# with the trap installed after them that death leaves the 5-minute schedule
+# paused. `resume_lake_ingest` is a no-op until `pause_lake_ingest` records ids.
 trap 'docker start k2-minio >/dev/null 2>&1 || true; resume_lake_ingest' EXIT
+pause_lake_ingest
 
 before=$(rows)
+[ -n "$before" ] || die "could not read the row count from raw.messages before the fault — the assertion at the end compares against this, so an empty value would make it pass by vacuum"
 bytes_before=$(bucket_bytes) || die "could not read the bucket size from k2-minio — check MC_ENDPOINT"
 echo "→ before: $before rows in raw.messages, $bytes_before bytes in k2/k2-lake" >&2
 
@@ -78,9 +82,10 @@ grep -aiE "s3|connect|refused|minio" /tmp/chaos-minio.log | tail -3 | sed 's/^/ 
 
 echo "→ starting k2-minio" >&2
 docker start k2-minio >/dev/null
-sleep 20
+wait_healthy k2-minio 120
 
 after=$(rows)
+[ -n "$after" ] || die "could not read the row count from raw.messages after the fault — MinIO is healthy but not serving the table"
 [ "$before" = "$after" ] || die "row count moved across the failed run: $before -> $after"
 echo "→ raw.messages unchanged at $after rows — no partial commit" >&2
 
