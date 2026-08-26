@@ -47,7 +47,7 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q
 
 # Gold: candles materialising
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT count() FROM k2.gold_ohlcv_1m"
+  "SELECT count() FROM k2.ohlcv_1m"
 
 # Redpanda: topics and consumers
 docker exec k2-redpanda rpk cluster health
