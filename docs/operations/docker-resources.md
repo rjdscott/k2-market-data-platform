@@ -1,24 +1,53 @@
 # Docker Resource Allocation
 
-Every service in [`docker-compose.yml`](../../docker-compose.yml) declares both a hard
-`limit` and a guaranteed `reservation`. The design target was a single 16-core / 40 GB
-host; the as-built stack fits with room to spare, and has since the Kotlin handlers
-retired.
+Every long-running service in [`docker-compose.yml`](../../docker-compose.yml) declares a
+hard `limit` and a guaranteed `reservation`; the one-shot init containers declare limits
+only. The design target was a single 16-core / 40 GB host, and the as-built stack fits
+inside it at steady state.
 
-**Steady state: 14.60 CPU / 21.625 GiB across 15 long-running services.**
+**As built, steady state: 14.70 CPU / 21.750 GiB across 16 long-running services.**
+**One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 16.70 CPU / 24.250 GiB
+across 21** — the one-shots run concurrently with the steady state at `docker compose up`,
+so that peak, not the steady state, is what the host has to absorb at boot. CPU limits are
+a ceiling on scheduling rather than a reservation, so 16.70 on a 16-core host is a burst
+that ends when the init containers exit, not a failure.
 
-**Bootstrap peak: 16.10 CPU / 23.125 GiB across all 19**, with the four one-shot init
-containers (`redpanda-init`, `iceberg-init`, `lakekeeper-migrate`, `lake-init`)
-overlapping the steady set. Still 0.10 CPU over the 16-core target for the length of a
-bootstrap, on the same ceiling-not-reservation argument the earlier addenda make.
-
-Both figures, the provenance command that produced them and the comparison against the
-prior published numbers are in the "Outcome addendum (Kotlin retirement, 2026-08-26)"
-section of [ADR-010](../adr/ADR-010-resource-budget.md). The three Kotlin
-`feed-handler-*` containers are gone from `docker-compose.yml`
+The three Kotlin `feed-handler-*` containers are gone from `docker-compose.yml`
 ([ADR-019](../adr/ADR-019-rust-capture-tier.md); code archived at
 [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md)) and gave back exactly the
-1.5 CPU / 1.5 GB they declared.
+1.5 CPU / 1.5 GiB they declared. One parallel run is still being paid for:
+[Phase D](../plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md) runs the
+v3 lake (`lakekeeper`, `lake-metrics`) beside the v2 offload path (`iceberg-metrics`,
+`iceberg-init`) it replaces. That is the cost of comparing an old path against its
+replacement before trusting the new one, and it ends at the cutover — retiring
+`docker/offload/` returns 0.10 CPU / 128 MiB steady and 0.50 CPU / 1 GiB of one-shot.
+
+The provenance command and the comparison against the prior published numbers are in the
+Outcome addenda of [ADR-010](../adr/ADR-010-resource-budget.md).
+
+### How these numbers are produced
+
+Every figure on this page, and every budget figure elsewhere in the repo, is the limit sum
+from the resolved compose file — not a hand-maintained tally:
+
+```console
+$ docker compose --env-file .env.example config | python3 -c '
+import sys, yaml
+svc = yaml.safe_load(sys.stdin)["services"]
+for label, oneshot in (("steady", False), ("one-shot", True)):
+    lim = [d["deploy"]["resources"]["limits"]
+           for d in svc.values() if (d.get("restart") == "no") == oneshot]
+    cpu = sum(float(l["cpus"]) for l in lim)
+    gib = sum(int(l["memory"]) for l in lim) / 2**30
+    print("%-9s %2d services  %5.2f CPU  %6.3f GiB" % (label, len(lim), cpu, gib))'
+steady    16 services  14.70 CPU  21.750 GiB
+one-shot   5 services   2.00 CPU   2.500 GiB
+```
+
+`docker compose config` normalises every `memory:` to bytes, so **GiB is what the limits
+actually are** — `2g` in the compose file is 2 × 2³⁰, not 2 × 10⁹. Older figures on this
+branch were written "GB" for the same quantities; the numbers did not change, the unit
+label was wrong. Run on 2026-08-26.
 
 ## Allocation
 
@@ -35,25 +64,39 @@ section of [ADR-010](../adr/ADR-010-resource-budget.md). The three Kotlin
 | `prefect-worker` | orchestration | 0.5 | 0.25 | 512 MB | 256 MB |
 | `prometheus` | observability | 1.0 | 0.5 | 2 GB | 1 GB |
 | `grafana` | observability | 0.5 | 0.25 | 512 MB | 256 MB |
-| `capture-binance` | ingestion | 0.25 | 0.1 | 256 MB | 128 MB |
-| `capture-kraken` | ingestion | 0.25 | 0.1 | 256 MB | 128 MB |
-| `capture-coinbase` | ingestion | 0.25 | 0.1 | 512 MB | 128 MB |
-| `iceberg-metrics` | observability | 0.1 | — | 128 MB | — |
-| **Subtotal (steady state, 15 services)** | | **14.60** | **7.00** | **21.625 GiB** | **10.625 GiB** |
+| `capture-binance` | ingestion (v3) | 0.25 | 0.1 | 256 MB | 128 MB |
+| `capture-kraken` | ingestion (v3) | 0.25 | 0.1 | 256 MB | 128 MB |
+| `capture-coinbase` | ingestion (v3) | 0.25 | 0.1 | 512 MB | 128 MB |
+| `iceberg-metrics` | observability (v2 offload) | 0.1 | — | 128 MB | — |
+| `lake-metrics` | observability (v3 lake) | 0.1 | — | 128 MB | — |
+| **Steady state (16 long-running services)** | | **14.70** | **7.00** | **21.750 GiB** | **10.625 GiB** |
 | `redpanda-init` | init (one-shot) | 0.25 | — | 128 MB | — |
 | `iceberg-init` | init (one-shot) | 0.5 | — | 1 GB | — |
 | `lakekeeper-migrate` | init (one-shot) | 0.5 | — | 256 MB | — |
 | `lake-init` | init (one-shot) | 0.25 | — | 128 MB | — |
-| **Total (bootstrap peak, 19 services)** | | **16.10** | **7.00** | **23.125 GiB** | **10.625 GiB** |
+| `lake-ddl` | init (one-shot) | 0.5 | — | 1 GB | — |
+| **One-shot subtotal (5)** | | **2.00** | **—** | **2.500 GiB** | **—** |
+| **Bootstrap peak (21 containers)** | | **16.70** | **7.00** | **24.250 GiB** | **10.625 GiB** |
 
 `capture-coinbase` gets twice the memory of the other two because Coinbase's `level2`
 channel is full depth, not top-20 — its subscribe snapshot alone is 5.2 MB
 ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) Appendix A, S5). All three are
 `cpuset`-pinned to cores 12–14 (`K2_CAPTURE_CPUSET`).
 
-Headroom against the 16 CPU / 40 GB envelope at steady state: **1.40 CPU (9%) and
-18.375 GiB (46%)**. At the bootstrap peak it is −0.10 CPU for as long as the one-shots
-run, and 16.875 GiB.
+The one-shots are **not free**. They declare limits and they run concurrently with the
+steady state at `docker compose up`, so the bootstrap peak is the number the host has to
+absorb.
+
+Headroom against the 16 CPU / 40 GB envelope at steady state: **1.30 CPU (8%) and
+18.250 GiB (46%)**. At the bootstrap peak it is −0.70 CPU for as long as the one-shots
+run, and 15.750 GiB.
+
+Where the remaining cutover lands it:
+
+| After | Services | CPU | RAM | Headroom |
+|---|---:|---:|---:|---|
+| Today (v3 lake beside the v2 offload) | 16 | 14.70 | 21.750 GiB | 1.30 CPU (8%) · 18.250 GiB (46%) |
+| `iceberg-metrics` goes with the rest of `docker/offload/` (−0.10 / −128 MiB) | 15 | 14.60 | 21.625 GiB | 1.40 CPU (9%) · 18.375 GiB (46%) |
 
 ## Where the budget goes
 

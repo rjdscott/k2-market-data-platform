@@ -11,7 +11,7 @@ Everything here targets the as-built `docker-compose.yml` at the repo root.
 | [data-inspection.md](./data-inspection.md) | Runnable queries for every layer — Redpanda, bronze/silver/gold, Iceberg cold |
 | [observability.md](./observability.md) | Grafana dashboards, capture-tier metrics, all 34 Prometheus alert rules |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
-| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits — 14.60 CPU / 21.625 GiB across 15 services (+4 one-shot) |
+| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits — 14.70 CPU / 21.750 GiB across 16 long-running services, +5 one-shot (2.00 / 2.500 GiB), bootstrap peak 16.70 / 24.250 GiB |
 | [prefect-schedules.md](./prefect-schedules.md) | The two deployed Prefect schedules (15-min offload, daily maintenance) |
 | [clickhouse-database-standard.md](./clickhouse-database-standard.md) | Why everything lives in the `k2` database and how to keep it that way |
 | [adding-new-exchanges.md](./adding-new-exchanges.md) | End-to-end checklist for wiring up a 4th exchange |

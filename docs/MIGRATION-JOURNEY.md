@@ -65,9 +65,9 @@ timeline
 | Python processes | 4 | 0 in the data path | Prefect remains, control plane only |
 | Trade → queryable | 5–15 min | **<200 ms p99** | >1000x |
 
-Fits the mandate on both axes, with 0.9 CPU and 18.125 GB of headroom. (v3 foundations on
-`feat/v3-foundations` add Lakekeeper — +0.25 CPU / +256 MB — for 15.35 CPU / 22.125 GB across
-15 services (+4 one-shot) as deployed on that branch; see
+Fits the mandate on both axes, with 0.9 CPU and 18.125 GB of headroom. (v3's capture and lake tiers run
+alongside the v2 paths they replace on `feat/v3-lake-tier`, for 16.20 CPU / 23.250 GiB across
+19 long-running services (+5 one-shot) as deployed on that branch; see
 [architecture/README.md](architecture/README.md).)
 
 ### Latency

@@ -38,6 +38,15 @@ guess. Section 8 says which command settles which row.
 | I8 | `RawMessage.payload` | the frame **byte for byte**, never compressed in-field, never re-serialised | [`schemas/avro/raw-message.avsc`](../../schemas/avro/raw-message.avsc) |
 | I9 | Capture container limits | `capture-binance` / `capture-kraken` 0.25 CPU / 256 M; `capture-coinbase` 0.25 CPU / 512 M | [`002-phase-c-rust-capture.md`](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md) Scope |
 | I10 | Steady-state budget before the Phase C cutover (v2 + Lakekeeper) | **15.35 CPU / 22.125 GB**; bootstrap peak **16.85 CPU / 23.625 GiB** | [ADR-010 Outcome addendum](../adr/ADR-010-resource-budget.md#outcome-addendum-v3-phase-b-2026-08-26) |
+
+> **I10, as of 2026-08-26 (Phase D).** The predictions below were computed against the Phase B
+> figures in the row above and are left as computed. Since then the three Kotlin feed handlers
+> retired ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) and this branch added `lake-metrics`
+> and the `lake-ddl` one-shot: steady state is now **14.70 CPU / 21.750 GiB across 16
+> long-running services** and the bootstrap peak **16.70 CPU / 24.250 GiB across 21** —
+> `docker compose --env-file .env.example config`, limits summed
+> ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
+
 | I11 | Host filesystem free space | **212 GiB free of 961 GiB** on `/` (Docker root) | `df -BG /var/lib/docker`, 2026-08-26 |
 | I12 | librdkafka producer queue cap | `queue.buffering.max.kbytes=32768` = **32 MiB** | [`002-phase-c-rust-capture.md`](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md) Scope |
 

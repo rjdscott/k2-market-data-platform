@@ -1,6 +1,6 @@
 # Architecture — As Built
 
-K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, ClickHouse turns them into a Bronze → Silver → Gold medallion using nothing but Kafka-engine tables and materialized views, and a Prefect-scheduled Spark job appends the results to Iceberg every 15 minutes. The whole thing runs in one Docker Compose file on **14.60 CPU / 21.625 GiB across 15 long-running containers** (+4 one-shot init containers, 16.10 CPU at the bootstrap peak), against a mandate of 16 cores / 40 GB.
+K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, ClickHouse turns them into a Bronze → Silver → Gold medallion using nothing but Kafka-engine tables and materialized views, and a Prefect-scheduled Spark job appends the results to Iceberg. The v2 pipeline ran in one Docker Compose file on **15.1 CPU / 21.875 GB across 14 long-lived containers** (+2 one-shot init containers), against a mandate of 16 cores / 40 GB. What is deployed here is that stack with its capture tier swapped for v3's Rust `k2-capture` ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) and the v3 lake tier running beside the v2 offload it replaces ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)): **14.70 CPU / 21.750 GiB across 16 long-running containers**, plus 5 one-shot init containers declaring a further 2.00 CPU / 2.500 GiB for a bootstrap peak of **16.70 CPU / 24.250 GiB across 21**. The v2 offload retires at its own cutover, landing at 14.60 CPU / 21.625 GiB across 15. Source for every figure: `docker compose --env-file .env.example config`, limits summed ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
 
 > **The v2 hot tier is frozen as of 2026-08-26.** The three Kotlin feed handlers were the only producers of `market.crypto.trades.<ex>[.raw]`, and they retired to [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md) when the Rust capture tier matched them on per-symbol parity ([ADR-019](../adr/ADR-019-rust-capture-tier.md)). Nothing writes those six topics now, so the Kafka-engine queues have nothing to read and **`k2.bronze_trades_*`, `k2.silver_trades` and the six `k2.ohlcv_*` tables stop advancing at the retirement timestamp** — they hold history, they do not grow, and their TTLs keep expiring rows out from under them (bronze 7 d, silver 30 d). The `market.crypto.v3.{raw,trades,book}.<ex>` topics are the only live feed. The `k2` database, its Kafka-engine queues and the `.raw` topics are dropped together at the Phase E cutover, not here — a frozen table is still queryable while the v3 hot tier is being built beside it. Everything below that describes `k2.*` describes what was built and what is still readable, not what is being written.
 
@@ -201,20 +201,26 @@ The end-to-end p99 is dominated by network RTT to the exchanges (~80 ms average)
 | grafana | 0.5 | 512 MB |
 | prefect-worker | 0.5 | 512 MB |
 | iceberg-metrics | 0.1 | 128 MB |
-| lakekeeper | 0.25 | 256 MB |
-| capture-binance | 0.25 | 256 MB |
-| capture-kraken | 0.25 | 256 MB |
-| capture-coinbase | 0.25 | 512 MB |
-| **Total (15 long-running services)** | **14.60** | **21.625 GiB** |
+| lakekeeper (v3) | 0.25 | 256 MB |
+| capture-binance (v3) | 0.25 | 256 MB |
+| capture-kraken (v3) | 0.25 | 256 MB |
+| capture-coinbase (v3) | 0.25 | 512 MB |
+| `lake-metrics` (v3) | 0.1 | 128 MB |
+| **Total (16 long-running services)** | **14.70** | **21.750 GiB** |
 
-Against the v2 baseline of 15.1 CPU / 21.875 GB across 14 services: `lakekeeper` and the three `capture-*`
-containers added +1.0 CPU / +1.25 GB, and retiring the three Kotlin feed handlers gave back
-−1.5 CPU / −1.5 GB ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) — net −0.5 CPU for a tier that now
-carries L2 books as well as trades. Four further entries —
-`redpanda-init` (v2, topic creation), `iceberg-init` (v2 cold.* Hadoop-catalog DDL), `lakekeeper-migrate`
-(v3 catalog DB schema) and `lake-init` (v3 bucket + warehouse + namespaces) — are one-shot containers that
-exit after startup and are not counted in the totals above; v2 alone carries 2 of these, v3 adds 2 more (4
-total). Budget and reasoning: [ADR-010](../adr/ADR-010-resource-budget.md),
+Against the v2 baseline of 15.1 CPU / 21.875 GB across 14 services: `lakekeeper`, the three `capture-*`
+containers and `lake-metrics` added +1.10 CPU / +1.375 GiB, and retiring the three Kotlin feed handlers
+gave back −1.5 CPU / −1.5 GiB ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) — net −0.4 CPU for a
+capture tier that now carries L2 books as well as trades, plus a lake exporter. `lake-metrics` still
+doubles up with `iceberg-metrics` on the v2 offload path; retiring that with the rest of
+`docker/offload/` (−0.10 CPU / −128 MiB) takes it to 14.60 CPU / 21.625 GiB across 15.
+
+Five further entries — `redpanda-init` (v2, topic creation), `iceberg-init` (v2 cold.* Hadoop-catalog DDL),
+`lakekeeper-migrate` (v3 catalog DB schema), `lake-init` (v3 bucket + warehouse + namespaces) and
+`lake-ddl` (v3 raw/bronze/audit table DDL) — are one-shot containers that exit after startup, so they are
+not in the steady-state total. They are not free either: they declare 2.00 CPU / 2.500 GiB between them and
+run concurrently with everything above at `docker compose up`, for a bootstrap peak of 16.70 CPU /
+24.250 GiB across 21 containers. Budget and reasoning: [ADR-010](../adr/ADR-010-resource-budget.md),
 [docs/operations/docker-resources.md](../operations/docker-resources.md).
 
 | Forward look | [capacity-model.md](capacity-model.md) — msg/s per core, bytes/day per topic and lake table, and headroom against 16 CPU / 40 GB once the v3 capture tier lands. Predictions only, written before the burn-in that scores them. |

@@ -14,9 +14,11 @@ queryable OHLCV candles in under a second — on a single host, inside a 16-core
   trade-to-queryable. v2 baseline: 14 services (+2 one-shot), 15.1 CPU / 21.875 GB, measured p99
   170–197 ms. **Phase C** has landed: the Rust `k2-capture` tier replaced the Kotlin handlers on
   a labelled per-symbol parity gate ([ADR-019](./docs/adr/ADR-019-rust-capture-tier.md), whose
-  Outcome carries the window's numbers) —
-  steady state **15 long-running services (+4 one-shot), 14.60 CPU / 21.625 GiB**, carrying L2
-  order books the JVM tier never had. Each move is an ADR.
+  Outcome carries the window's numbers), and the v3 lake tier runs beside the v2 offload it
+  replaces — steady state **16 long-running services (+5 one-shot), 14.70 CPU / 21.750 GiB**,
+  carrying L2 order books the JVM tier never had. Each move is an ADR.
+  <sub>Every figure on this page: `docker compose --env-file .env.example config`, limits summed —
+  command in [docs/operations/docker-resources.md](./docs/operations/docker-resources.md#how-these-numbers-are-produced).</sub>
 - **Deleting the stream processor.** Five always-on Spark Structured Streaming jobs (~14 CPU / 20 GB)
   replaced by ClickHouse Kafka engine tables and materialized views — **zero stream-processing code**.
 - **Exchange-native ingestion.** Three Rust `k2-capture` containers, one per exchange, each owning
@@ -95,13 +97,18 @@ offload does not write to it yet ([ADR-013](./docs/adr/ADR-013-pragmatic-iceberg
 | Stack | Python · Kafka · Spark Streaming · DuckDB · FastAPI | Kotlin/Ktor · Redpanda · ClickHouse · Spark batch · Iceberg |
 
 The v2 column is the baseline this repo was measured at. What is deployed here now is v2 with its
-capture tier swapped for v3's: Rust `k2-capture` in place of the three Kotlin handlers, plus
-Lakekeeper and 4 one-shot init containers — **14.60 CPU / 21.625 GiB across 15 long-running
-services (+4 one-shot)**, a bootstrap peak of 16.10 CPU / 23.125 GiB across all 19. The Kotlin
-handlers are archived in [`legacy/v2-kotlin/`](./legacy/v2-kotlin/README.md)
+capture tier swapped for v3's and the v3 lake tier running beside the v2 offload it replaces: Rust
+`k2-capture` in place of the three Kotlin handlers, plus Lakekeeper and `lake-metrics` —
+**14.70 CPU / 21.750 GiB across 16 long-running services**, plus 5 one-shot init containers that
+declare a further 2.00 CPU / 2.500 GiB and run concurrently at boot, for a bootstrap peak of
+**16.70 CPU / 24.250 GiB across 21**. The Kotlin handlers are archived in
+[`legacy/v2-kotlin/`](./legacy/v2-kotlin/README.md)
 ([ADR-019](./docs/adr/ADR-019-rust-capture-tier.md)); with them went the only producer of the v2
 topics, so the ClickHouse `k2` medallion is **frozen** — still queryable, no longer growing — until
-the Phase E cutover drops it.
+the Phase E cutover drops it. `iceberg-metrics` goes with the rest of `docker/offload/`, landing at
+14.60 CPU / 21.625 GiB across 15. Source for all of them:
+`docker compose --env-file .env.example config`, limits summed
+([command](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 
 v1 is preserved unmodified in [`legacy/v1/`](./legacy/v1/); the narrative is in
 [`docs/MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md).

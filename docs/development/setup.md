@@ -7,7 +7,7 @@ code once it is.
 
 | Tool | Needed for | Notes |
 |------|-----------|-------|
-| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 24 GB memory so every `deploy.resources.limits` can be honoured (`docker info --format '{{.MemTotal}}'`); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 14.60 CPU / 21.625 GiB of limits, 16.10 CPU / 23.125 GiB at the bootstrap peak |
+| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 24 GB memory so every `deploy.resources.limits` can be honoured (`docker info --format '{{.MemTotal}}'`); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 14.70 CPU / 21.750 GiB of limits, 16.70 CPU / 24.250 GiB at the bootstrap peak while the five one-shot init containers run |
 | [`uv`](https://docs.astral.sh/uv/) | Python offload-flow tests | Nothing else uses Python locally |
 | `jq`, `psql` | the diagnostic one-liners in the ops docs | optional |
 
