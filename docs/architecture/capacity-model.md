@@ -46,7 +46,7 @@ guess. Section 8 says which command settles which row.
 | # | Guess | Value | Why this value |
 |---|-------|-------|----------------|
 | G1 | **Tail-symbol decay.** The spikes sampled BTC-quoted majors. Non-major instruments are assumed to run at **1/3** the major's frame rate. | ×0.333 | A round number chosen deliberately over a fitted one, so that the error is attributable to *this line* rather than to a curve. |
-| G2 | **lz4 ratio on exchange JSON** in Redpanda (`compression.codec=lz4`, whole-batch) | **0.40** of raw | lz4 on repetitive JSON typically lands 0.35–0.45; the midpoint is taken. |
+| G2 | **Broker-side compression ratio on exchange JSON** in Redpanda, whole-batch | **0.40** of raw | The codec is **zstd, producer-side** — `compression.type=zstd` in `services/capture-rust/src/sink.rs`; no `compression.codec` is set on the v3 topics, so batches land on disk as the producer compressed them. The 0.40 is an lz4-era midpoint (lz4 on repetitive JSON typically lands 0.35–0.45) and is therefore **conservative**: one captured 4,803,578-byte Coinbase `level2` snapshot compressed to 383,011 bytes, 12.5:1 at `zstd -3` (`services/capture-rust/README.md`). That is one frame of one shape, not a whole-topic ratio, so the prediction is left at 0.40 and scored in Phase F rather than adjusted on a single sample. |
 | G3 | **zstd-3 ratio on `raw.messages.payload`** in Parquet | **0.20** of raw | The row [Q2 flags as most likely to miss](../research/2026-08-26-v3-requirements-clarification.md#q2--estimation-are-capacity-numbers-predicted-or-only-reported): the payload is an opaque `bytes` column, so Parquet's dictionary and RLE encodings do nothing for it and only the zstd block codec applies. |
 | G4 | **zstd-3 ratio on the derived columnar tables** (`bronze.trades` 0.10, `bronze.book_snapshots_l2` 0.15) | 0.10 / 0.15 | These *are* dictionary- and delta-encodable — repeated symbols, near-identical int64 magnitudes — so they should beat G3 by ~2×. |
 | G5 | **Per-frame capture cost**, single-threaded: parse + book apply + CRC32 + Avro encode + produce-enqueue | **~20 µs/frame** | Built up component by component in §3; rounded **up** from a ~13 µs component sum to absorb cache misses and the sampler. |
@@ -165,7 +165,11 @@ Two one-off costs excluded from the steady state and called out rather than buri
   stretches to **~1.5 s of wall time**. Predicted, and the reason the Coinbase
   container gets 512 M rather than 256 M.
 - **Binance 23 h scheduled reconnect** — one connect burst per day per container,
-  negligible against the above.
+  negligible against the above. Implemented as `BINANCE_MAX_CONNECTION_AGE` /
+  `connection_expired()` in `services/capture-rust/src/main.rs`, ahead of the venue's
+  own 24 h cut-off, and counted as
+  `k2_capture_reconnects_total{exchange="binance",reason="scheduled"}`. Kraken and
+  Coinbase publish no connection lifetime and have no equivalent burst.
 
 **Sanity anchor.** The v2 Kotlin handler measured 0.03 CPU / 134 MiB doing trades only
 ([ADR-010 Outcome](../adr/ADR-010-resource-budget.md#outcome-as-built-2026-02)).
@@ -200,7 +204,7 @@ Weighted average payload per exchange, predicted: binance **834 B**
 
 ### 4b. Per topic, per day
 
-| Topic | Uncompressed/day, predicted | On disk after lz4 (G2), predicted | Assumption | Derived from |
+| Topic | Uncompressed/day, predicted | On disk after compression (G2), predicted | Assumption | Derived from |
 |---|---|---|---|---|
 | `market.crypto.v3.raw.binance` | **13.80 GB** | **5.52 GB** | 924 B/record incl. envelope | `924 × 172.9 × 86,400` |
 | `market.crypto.v3.raw.kraken` | **13.13 GB** | **5.25 GB** | 390 B/record | `390 × 389.5 × 86,400` |
@@ -343,12 +347,12 @@ command per row, so that no number on this page is settled by inspection.
 
 | Section | Row | Command that settles it |
 |---|---|---|
-| §2a | trades/s per exchange | `curl -s localhost:8082/metrics \| grep k2_capture_records_produced_total` — take two samples 60 s apart and difference the `stream="trade"` counter |
+| §2a | trades/s per exchange | `curl -s --get localhost:9090/api/v1/query --data-urlencode 'query=rate(k2_capture_records_produced_total{kind="trade"}[5m])'`. **Not** `curl localhost:8082/metrics`: the capture metrics port is not published to the host and the distroless image has no `curl`, so the endpoint is reachable only through Prometheus or a one-shot `curlimages/curl` container on the compose network (verified 2026-08-26). This counter is the local **enqueue**; `k2_capture_records_delivered_total` is what the broker acknowledged |
 | §2b | book frames/s per exchange | same endpoint, `k2_capture_messages_total{stream="book"}` (`depth20@100ms`, `book`, `level2` per venue), differenced over 60 s |
-| §2c | raw frames/s, records/s | `k2_capture_messages_total` and `k2_capture_records_produced_total`, summed across streams, over the full 24 h window |
+| §2c | raw frames/s, records/s | `k2_capture_messages_total` and `k2_capture_records_produced_total`, summed across streams, over the full 24 h window, through Prometheus as in §2a. Use `records_delivered_total` instead if the question is what actually reached the broker |
 | §3b | CPU per container | `docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}' capture-binance capture-kraken capture-coinbase`, sampled every 60 s for 24 h and averaged — a single `--no-stream` sample is not an answer |
 | §3a | µs/frame | derive: measured CPU-seconds ÷ measured frames, i.e. `(docker stats CPU% × 86,400) ÷ Δk2_capture_messages_total` — this is what scores G5 |
-| §3b | Coinbase connect burst | `k2_capture_reconnects_total` cross-referenced with the CPU sample series; expect a visible ~1.5 s spike per reconnect |
+| §3b | Coinbase connect burst | `k2_capture_reconnects_total` (sum over the `reason` label, or `reason="involuntary"` to exclude Binance's scheduled recycle) cross-referenced with the CPU sample series; expect a visible ~1.5 s spike per reconnect |
 | §4b | bytes/day per topic, uncompressed | `k2_capture_bytes_total` differenced over 24 h, per topic |
 | §4b | bytes/day per topic, on disk | `rpk topic describe -p market.crypto.v3.raw.binance` (and the other 8) — sum `HIGH-WATERMARK` deltas against `rpk cluster logdirs describe` for on-disk size; scores G2 |
 | §4c | bytes/day per lake table | `mc du --depth 3 k2/k2-lake/` before and after the 24 h window, per table prefix; scores G3 and G4 |
@@ -356,8 +360,8 @@ command per row, so that no number on this page is settled by inspection.
 | §4d | Redpanda steady-state disk | `rpk cluster logdirs describe` after retention saturates — i.e. **≥48 h after start**, not at the end of the burn-in if the burn-in is 24 h |
 | §4d | MinIO growth/month | `mc du k2/k2-lake/` at the start and end of the window, extrapolated ×30.44 |
 | §5 | RSS per container | `docker stats` `MemUsage` from the same 60 s sample series as §3b; take max and p50, not the last value |
-| §5 | book levels held | `curl -s localhost:8082/metrics \| grep k2_capture_book_levels_total` — per symbol, which scores G1 and G6 together |
-| §5 | Coinbase snapshot parse peak | `k2_capture_book_levels_total` at connect vs the RSS series; expect the peak within 2 s of a `k2_capture_reconnects_total` increment |
+| §5 | book levels held | `curl -s --get localhost:9090/api/v1/query --data-urlencode 'query=k2_capture_book_depth'` — per symbol, which scores G1 and G6 together. Same reachability caveat as §2a: port 8082 is not published |
+| §5 | Coinbase snapshot parse peak | `k2_capture_book_levels_total` at connect vs the RSS series; expect the peak within 2 s of a `k2_capture_reconnects_total{reason="involuntary"}` increment |
 | §6 | steady-state CPU / RAM limits | `docker compose config \| yq '[.services[].deploy.resources.limits]'` summed — the same provenance ADR-010's addendum used |
 | §6 | bootstrap peak | as above, including the four one-shot services |
 | §7 | days-to-full | `df -BG /var/lib/docker` at the start and end of the window; the slope is the answer |

@@ -49,9 +49,9 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 | [capture-checksum-failure.md](./capture-checksum-failure.md) | Kraken CRC32 mismatch, book thinner than top-20, or a venue quoting finer than 8 dp | `CaptureChecksumFailure`, `CaptureBookDepthDegraded`, `CapturePrecisionLoss` |
 
 > **These four carry no measured MTTR yet, and say so on every row.** The capture tier
-> ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) is not built. Commands that could be
-> verified against the running v2 stack with a service name substituted are marked ✅;
-> the rest are written against the Phase C design. The Phase C chaos run
+> ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) is built and running; what has not
+> happened is a fault injection. Commands run against it are marked ✅. The Phase C
+> chaos run
 > (`make chaos`) induces each failure, waits for the alert, and fills in the
 > **Measured** rows and the **Last verified** stamp. Until then they are procedures,
 > not measurements — which is exactly the distinction this directory's conventions

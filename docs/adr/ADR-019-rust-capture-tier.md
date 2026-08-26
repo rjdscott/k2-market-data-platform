@@ -189,4 +189,58 @@ Kotlin is retired — and Kotlin stays until it does.
 
 ## Outcome
 
-_To be appended after the Phase C burn-in._
+_Burn-in and parity numbers are appended after the Phase C window. What is recorded
+below are design points that did not survive contact with the running tier._
+
+### As-built corrections, 2026-08-26
+
+**The producer compresses with `zstd`, not the `lz4` the Phase C plan named.** JSON on
+the `raw.*` topics is what makes the extra CPU worth paying, and the multi-MB Coinbase
+`level2` snapshots compress best of all: one captured 4,803,578-byte snapshot came out
+at 383,011 bytes, 12.5:1 at `zstd -3`. That is one frame of one shape, not a topic
+ratio; the capacity model's G2 prediction is deliberately left at the lz4-era 0.40 and
+scored in Phase F rather than adjusted on a single sample.
+
+**`records_produced_total` is an enqueue counter, and a delivery counter had to be added
+beside it.** `sink.rs` increments it when `send_result` returns `Ok`, which is the moment
+the record enters librdkafka's local queue — so it climbs at full rate throughout a broker
+outage. `CaptureProduceStalled` was originally written against it and could not fire in
+the only scenario it names. `k2_capture_records_delivered_total`, incremented from the
+delivery report, is the counter that actually goes flat, and the alert now reads that.
+
+**Metric series that alerts read are created at zero on startup, and three were not.**
+`precision_loss_total`, `unknown_frames_total` and the new `records_delivered_total` had
+no seeded series, so `increase(...) > 0` could not fire on the first event — which for
+precision loss is precisely the event this ADR wanted observed. Conversely
+`checksum_failures_total` was seeded for all three venues, advertising 23
+permanently-zero series for two venues that publish no checksum; it is now Kraken-only.
+
+**Staleness is per *continuous* stream, and the set is narrower than "every subscribed
+channel".** Stamping `k2_capture_last_message_ts_seconds` on Kraken's `status`/`control`
+and Coinbase's `subscriptions` fired a permanent critical about two minutes after every
+healthy connect. Kraken's `instrument` channel joined them for a different reason: at
+0.0017 frames/s (2 frames in 29 minutes, measured 2026-08-26) against a 60 s threshold it
+is a reference channel, not a liveness signal. The gauge is also now seeded at process
+start, because a subscription the venue silently rejects otherwise has no series and
+`time() - <absent>` cannot fire.
+
+**The Binance 23 h scheduled reconnect was specified in Phase C scope, asserted by three
+documents, and not implemented.** It exists now as `connection_expired()` /
+`BINANCE_MAX_CONNECTION_AGE` in `main.rs`, and `k2_capture_reconnects_total` gained a
+`reason` label (`scheduled` / `involuntary`) so the correlation the sequence-gaps runbook
+asks an operator to make is actually possible.
+
+**One call on the frame path blocks, and now says by how much.** The Avro encode awaits
+the schema registry on first use of a subject; `reqwest`'s default is no timeout, so a
+registry that accepted the connection and never answered would stall the socket read
+indefinitely — the failure the sink's own design notes claim to avoid. It is capped at
+5 s (`REGISTRY_TIMEOUT`).
+
+**The image could not be built by `docker compose` at all.** The compose build context
+was the crate directory, under which the Dockerfile's root-relative COPYs and
+`include_str!("../../../schemas/avro/...")` cannot resolve; `capture-kraken` and
+`capture-coinbase` had no `build:` key, so a selective bring-up tried to pull a tag from
+no registry; `make test-rust` mounted only the crate, so the pre-PR gate did not compile;
+and the CI docker leg carried the same wrong context. All four are fixed, and
+`K2_GIT_SHA` (`git describe --always --dirty`) is now passed by compose, CI and the
+Makefile — every automated build until then shipped `git_sha="unknown"`.

@@ -209,4 +209,30 @@ requires sub-second book state and the replay path proves too slow to answer it,
 
 ## Outcome
 
-_To be appended after the Phase C burn-in._
+_Burn-in numbers are appended after the Phase C window. What is recorded below are
+design points that did not survive contact with the running tier._
+
+### As-built corrections, 2026-08-26
+
+**`checksum_ok = false` was unreachable as first built, so the three-valued field was
+effectively two-valued.** The Kraken mismatch branch set `checksum_ok = Some(false)` and
+then cleared the book on the next line; `snapshot()` returns `None` on an empty book, so
+no snapshot carrying `false` was ever emitted and a consumer filtering for bad windows
+would have found nothing, ever. The adapter now emits one snapshot of the book as it
+actually stood, marked, *before* dropping it. Between that snapshot and the resync
+landing the symbol emits nothing — a gap, which is the honest alternative to a
+plausible-looking lie. Pinned by
+`services/capture-rust/src/exchanges/kraken.rs::a_bad_checksum_emits_a_marked_snapshot_then_resyncs`,
+which fails if the marked snapshot is absent.
+
+**`CaptureBookDepthDegraded` measured the wrong quantity.** The rule read
+`min_over_time(k2_capture_book_depth[10m]) < 10` and described it as "fewer than 10
+levels per side", but the gauge is `bids.len() + asks.len()` — total across both sides —
+so the threshold was half what the prose claimed. It is now
+`max_over_time(...) < 20`: 10 a side, and insensitive to the empty book a resync leaves
+behind. The alert's remaining blind spot is stated in the rule file rather than left to
+be discovered: on a full-depth venue it cannot see thinning that does not reach collapse.
+Coinbase held 13,000–15,000 levels on liquid symbols over the 2026-08-26 12:38–13:07Z
+sample, so a fall to 50 levels would be severe and would stay far above this floor.
+Catching that needs a per-venue baseline; Phase F's measured depth distributions are the
+trigger to revisit.

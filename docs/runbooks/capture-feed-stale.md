@@ -6,10 +6,10 @@ that is down or failing to produce, see [capture-down.md](./capture-down.md).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **Not yet verified — the Phase C chaos run fills this in.** The capture tier
-> (ADR-019) is not built. Commands marked ✅ were verified against the running v2
-> stack on 2026-08-26 with the service name substituted; the rest are written against
-> the Phase C design.
+> **No MTTR here is measured — the Phase C chaos run fills them in.** The capture
+> tier (ADR-019) is built and running. Commands marked ✅ were run against it on
+> 2026-08-26. What has not happened is a fault injection, so every **Measured** cell
+> below reads "not yet".
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
@@ -28,20 +28,38 @@ while trades keep flowing, or the reverse.
 [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml):
 
 ```promql
-time() - k2_capture_last_message_ts_seconds > 60
+(time() - k2_capture_last_message_ts_seconds > 60)
+and on (job) up == 1
 ```
 
 Fires after `for: 2m`. The metric is labelled `{exchange, stream}` with the venue's
-channel name (`trade`, `book`, `depth20`, `l2_data`, `market_trades`, `heartbeat(s)`,
-`instrument`), so the alert names which subscription went quiet.
+channel name (`trade`, `book`, `depth20`, `l2_data`, `market_trades`, `heartbeat(s)`),
+so the alert names which subscription went quiet.
 
-Only continuous streams carry this gauge. One-shot acknowledgements — Kraken
-`status`/`control`, Coinbase `subscriptions` — arrive once per (re)subscribe and
-are deliberately not stamped (`CONTINUOUS` in `services/capture-rust/src/main.rs`).
-The first 2 h window (2026-08-26 12:39Z) fired this alert on exactly those three
-acks two minutes after a healthy connect; that was the alert's only false positive
-and is the reason the allowlist exists. A firing on a name not in that list is a
-new stream the allowlist does not know about, not a stale feed.
+**The `up` guard is why a dead container is one alert and not five.** The gauges stay
+queryable for the whole staleness window after the process is gone, so without it a
+crash fires `CaptureDown` *plus* one `CaptureFeedStale` per continuous stream — four of
+them on Kraken — routing one incident to two runbooks. If this alert is firing, the
+container is up: go to §1 below, not to [capture-down.md](./capture-down.md).
+
+Only continuous streams carry this gauge (`CONTINUOUS` in
+`services/capture-rust/src/main.rs`), and two kinds of channel are deliberately left
+out of it:
+
+- **One-shot acknowledgements** — Kraken `status`/`control`, Coinbase `subscriptions`.
+  They arrive once per (re)subscribe and then legitimately never again. The first 2 h
+  window (2026-08-26 12:39Z) fired this alert on exactly those three, two minutes after
+  a healthy connect.
+- **Low-rate reference channels** — Kraken `instrument`. It is a snapshot at subscribe
+  plus the occasional reference change: 0.0017 frames/s over a 10-minute sample on
+  2026-08-26 (2 frames in 29 minutes), against a 60 s threshold, while every genuinely
+  continuous stream on all three venues ran at 1.0/s or more.
+
+Every continuous stream is also **seeded at process start**, so a subscription the
+venue silently rejects has a series that goes stale within the window rather than no
+series at all — `time() - <absent>` is an empty vector, and an empty vector cannot fire.
+A firing on a name not in `CONTINUOUS` is a new stream the list does not know about,
+not a stale feed.
 
 **Expected behaviour** — the WebSocket client sends and answers heartbeats and
 reconnects on its own backoff, so a dropped connection self-heals inside the 2-minute
@@ -51,9 +69,18 @@ exchange accepted a `subscribe` and stopped delivering, or a silent half-open TC
 connection is holding the read side open with nothing arriving.
 
 All three venues are liquid enough on the captured instruments that 60 seconds of
-silence on a subscribed stream is anomalous rather than idle. Binance also performs a
-scheduled reconnect at ~23 hours of connection life; that produces a brief, expected
-`conn_id` change, not a 60-second silence.
+silence on a subscribed stream is anomalous rather than idle. The process enforces the
+same 60 s on itself: the session watchdog reconnects when **any one** continuous stream
+goes 60 s without a frame, per stream rather than per socket, because Kraken's 1 Hz
+heartbeat would otherwise keep a socket with a dead `book` subscription alive forever.
+`k2-capture healthcheck` reads the **oldest** stream's gauge for the same reason.
+
+Binance also performs a scheduled reconnect at 23 hours of connection life
+(`BINANCE_MAX_CONNECTION_AGE` in `main.rs`, ahead of the venue's own 24 h cut-off);
+that produces a brief, expected `conn_id` change and a
+`k2_capture_reconnects_total{exchange="binance",reason="scheduled"}` increment, not a
+60-second silence. Kraken and Coinbase publish no connection lifetime and have no such
+timer.
 
 **Recovery**
 
@@ -142,9 +169,12 @@ public WebSocket feeds over the open internet and is explicitly not a trading pa
 value should never be quoted as a platform latency figure. A step change is the
 signal; the level is not.
 
-Binance's partial-depth book stream carries no `exchange_ts` at all, so book frames
-from that venue never enter this histogram (ADR-027). A Binance number here is trades
-only.
+**Only trades feed this histogram, on every venue** — `main.rs` records it inside
+`if let OutRecord::Trade(t) = record`. No book frame from Binance, Kraken or Coinbase
+contributes, so a number here is a trades number on all three, and a book-path latency
+regression is invisible in it by construction. (Binance's partial-depth stream carries
+no `exchange_ts` to record in any case, ADR-027; Kraken's and Coinbase's book frames do
+carry one and are simply not recorded.)
 
 **Expected behaviour** — nothing self-heals, because in most cases nothing is broken.
 The usual causes, in the order they are worth checking:
@@ -170,7 +200,8 @@ timedatectl status | grep -E 'System clock|NTP'
 # 3. One exchange only -> transit or their stamping
 mtr -r -c 20 stream.binance.com 2>/dev/null || traceroute stream.binance.com
 
-# 4. Is the capture container itself starved? cpuset-pinned at 0.25 CPU.
+# 4. Is the capture container itself starved? 0.25 CPU quota, cpuset-pinned to
+#    cores 12-14 by default (K2_CAPTURE_CPUSET, .env.example).
 docker stats --no-stream k2-capture-binance k2-capture-kraken k2-capture-coinbase
 ```
 
@@ -181,8 +212,10 @@ docker stats --no-stream k2-capture-binance k2-capture-kraken k2-capture-coinbas
   unaffected (`k2_capture_gaps_total` flat, `CaptureFeedStale` not firing). Late data
   that all arrives is not a data-quality problem.
 - **Capture starved** → if `docker stats` shows the container pegged at its CPU quota,
-  raise the limit or move its `cpuset` further from ClickHouse and Spark, and update
-  ADR-010's Outcome with the new budget as the project guardrails require.
+  raise the limit or move its `cpuset` (`K2_CAPTURE_CPUSET`, default `12-14`) further
+  from ClickHouse and Spark, and update ADR-010's Outcome with the new budget as the
+  project guardrails require. Confirm the sets are actually disjoint first:
+  `docker inspect -f '{{.HostConfig.CpusetCpus}}' k2-capture-binance k2-spark-iceberg`.
 
 **Do not restart the container for this alert.** A restart loses a window of data and
 does not change transit time, a venue's clock, or this host's.
@@ -199,6 +232,7 @@ _None yet. Appended with their date as they happen; never overwritten._
 
 ---
 
-**Last verified:** not yet verified — the capture tier is Phase C and unbuilt. Commands
+**Last verified:** commands marked ✅ were run against the running capture tier on
+2026-08-26; no MTTR on this page is measured, because nothing has been fault-injected. Commands
 marked ✅ were run against the v2 stack on 2026-08-26 with the service name
 substituted. Stamp this line with a date and a commit at the Phase C chaos run.

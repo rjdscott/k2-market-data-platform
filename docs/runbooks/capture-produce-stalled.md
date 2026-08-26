@@ -8,12 +8,12 @@ which `CaptureProduceErrors` fires for once the queue is full.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **Not yet verified — the Phase C chaos run fills this in.** The capture tier
-> (ADR-019) is not built. Commands below are written against the Phase C design;
-> those marked ✅ were verified against the running v2 stack on 2026-08-26 with the
-> service name substituted. `scripts/chaos/capture-queue-full.sh` (Phase C) fills the
-> queue and measures the boundary between "stalled" and "dropping" against the
-> predicted numbers below.
+> **Recovery times not yet measured — the Phase C chaos run fills them in.** The
+> capture tier (ADR-019) is built and running, and the commands marked ✅ were run
+> against it on 2026-08-26. What has not happened is a fault injection:
+> `scripts/chaos/capture-queue-full.sh` fills the queue and measures the boundary
+> between "stalled" and "dropping" against the predicted numbers below, and until it
+> runs every MTTR on this page reads "not yet".
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
@@ -25,22 +25,32 @@ which `CaptureProduceErrors` fires for once the queue is full.
 
 **Symptom** — no immediate alarm elsewhere: `CaptureDown` is not firing (the metrics
 endpoint is healthy) and `CaptureProduceErrors` is not firing yet (nothing has been
-dropped). Grafana's capture panels still show `k2_capture_messages_total` climbing for
-the affected exchange, but `k2_capture_records_produced_total` for the same exchange is
+dropped). Grafana's capture panels still show `k2_capture_records_produced_total` climbing for
+the affected exchange, but `k2_capture_records_delivered_total` for the same exchange is
 flat.
+
+**Read those two counters carefully — they are not interchangeable.**
+`records_produced_total` counts the *local enqueue*: `sink.rs` increments it the moment
+librdkafka accepts the record into its 32 MiB queue, which it keeps doing at full rate
+for the entire outage. `records_delivered_total` is incremented from the delivery
+report, so it is the one that goes flat when the broker is gone. An earlier version of
+this alert watched `records_produced_total` and could not fire in the scenario it was
+written for.
 
 **Detection** — `CaptureProduceStalled` from
 [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml):
 
 ```promql
-sum by (exchange) (rate(k2_capture_records_produced_total[1m])) == 0
+sum by (exchange) (rate(k2_capture_records_delivered_total[1m])) == 0
 and
-sum by (exchange) (rate(k2_capture_messages_total[1m])) > 0
+sum by (exchange) (rate(k2_capture_records_produced_total[1m])) > 0
 ```
 
-Fires after `for: 30s` — deliberately tighter than `CaptureProduceErrors`'s `3m`,
+Fires after `for: 30s` — deliberately tighter than `CaptureProduceErrors`'s `5m`,
 because this alert exists to buy time before the queue fills, not to confirm loss
-after the fact.
+after the fact. The expression is pinned by a `promtool` unit test
+([`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml),
+`make check-alerts`) with a case that enqueues at full rate while delivering nothing.
 
 **Expected behaviour** — none of this self-heals from the capture side. librdkafka
 keeps retrying and enqueueing in the background; the frame-read loop is deliberately
@@ -93,7 +103,7 @@ docker exec k2-redpanda rpk cluster health                              # confir
 # once produce succeeds again.
 docker run --rm --network k2-market-data-platform_k2-net \
   curlimages/curl:8.11.1 -s http://capture-kraken:8082/metrics | \
-  grep -E '^k2_capture_(records_produced|messages)_total'               # rates converge again
+  grep -E '^k2_capture_records_(produced|delivered)_total'              # ✅ rates converge again
 
 # Verify nothing actually dropped while it was stalled
 docker run --rm --network k2-market-data-platform_k2-net \
@@ -117,6 +127,6 @@ _None yet. Appended with their date as they happen; never overwritten._
 
 ---
 
-**Last verified:** not yet verified — the capture tier is Phase C and unbuilt. Commands
-marked ✅ were run against the v2 stack on 2026-08-26 with the service name
-substituted. Stamp this line with a date and a commit at the Phase C chaos run.
+**Last verified:** commands marked ✅ were run against the running capture tier on
+2026-08-26. No MTTR on this page is measured — nothing has been fault-injected. Stamp
+this line with a date and a commit at the Phase C chaos run.

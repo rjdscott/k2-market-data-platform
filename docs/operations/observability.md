@@ -112,18 +112,29 @@ Recording rules: `iceberg_offload:cycle_count:5m`, `iceberg_offload:duration_avg
 | Alert | Severity | Fires when |
 |-------|----------|-----------|
 | `CaptureDown` | critical | Metrics endpoint unreachable for 2m |
-| `CaptureFeedStale` | critical | No frames on a stream (trades/book/raw) for 60s, sustained 2m |
+| `CaptureFeedStale` | critical | No frames on a *continuous* stream for 60s, sustained 2m, and `up == 1` for that job — a dead container is `CaptureDown`, not four of these |
 | `CaptureSequenceGaps` | critical | Any sequence gap in 10m, sustained 5m |
-| `CaptureChecksumFailure` | critical | Kraken CRC32 book mismatch in 10m, sustained 5m |
-| `CaptureProduceErrors` | critical | `rate(k2_capture_produce_errors_total[5m]) > 0.1` for 3m |
-| `CaptureProduceStalled` | critical | Reading frames but zero records produced for 1m — early warning before `CaptureProduceErrors` |
+| `CaptureChecksumFailure` | critical | Kraken CRC32 book mismatch in 10m, sustained 5m. Kraken only — Binance and Coinbase publish no checksum and have no series |
+| `CaptureProduceErrors` | critical | `increase(k2_capture_produce_errors_total[10m]) > 0` for 5m — any produce error at all; there is no spill-to-disk, so a rate floor would tolerate permanent loss |
+| `CaptureProduceStalled` | critical | Enqueueing records but zero **delivered** for 1m — early warning before `CaptureProduceErrors`. `records_produced_total` counts the local enqueue and climbs right through a broker outage; `records_delivered_total` is the one that goes flat |
 | `CaptureResyncStorm` | warning | More than 3 book resyncs in 15m, sustained 5m |
-| `CaptureIngressLatencyHigh` | warning | Exchange→receive p99 above 2s for 10m — a "something changed" signal, not a latency SLO |
-| `CaptureBookDepthDegraded` | warning | Book depth below 10 levels for 10m |
+| `CaptureIngressLatencyHigh` | warning | Exchange→receive p99 above 2s for 10m — a "something changed" signal, not a latency SLO. **Trades only**, on every venue; no book frame enters the histogram |
+| `CaptureBookDepthDegraded` | warning | `max_over_time(k2_capture_book_depth[10m]) < 20` for 10m — the gauge is total levels across **both** sides, so 20 is 10 a side |
 | `CapturePrecisionLoss` | warning | A venue quoted finer than the fixed-point 1e-8 scale in the last hour |
 
-Not yet fire-tested against a running capture tier — `make chaos` is what proves each one and
-its recovery cost; thresholds move then, not before.
+These are evaluated against live series, but **not one has yet been shown to fire on the
+fault it names** — `make chaos` is what proves that and the recovery cost, and it has not
+run (`scripts/chaos/results/` does not exist). Thresholds move then, not before.
+`CaptureFeedStale`, `CaptureProduceStalled` and `CaptureBookDepthDegraded` additionally
+carry `promtool` unit tests in
+[`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml)
+(`make check-alerts`); those pin the expression, never the recovery time.
+
+The three `capture-*` scrape jobs set no `exchange` target label, unlike the Kotlin
+feed-handler jobs: the capture binary emits its own `exchange` on every series, and a
+target label of the same name would win and rename the sample's to `exported_exchange`.
+Alerts on capture series get `exchange` from the binary; alerts on `up` name the venue
+through `job` (`capture-<exchange>`).
 
 ### How the offload metrics are produced
 

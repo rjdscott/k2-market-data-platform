@@ -8,9 +8,10 @@ dead container see [capture-down.md](./capture-down.md).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **Not yet verified — the Phase C chaos run fills this in.** The capture tier
-> (ADR-019) is not built. Commands marked ✅ were verified against the running v2
-> stack on 2026-08-26 with the service name substituted.
+> **No MTTR here is measured — the Phase C chaos run fills them in.** The capture
+> tier (ADR-019) is built and running. Commands marked ✅ were run against it on
+> 2026-08-26. What has not happened is a fault injection, so every **Measured** cell
+> below reads "not yet".
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
@@ -40,11 +41,18 @@ their snapshots carry `checksum_ok = null` — "unanswerable", not "verified"
 ([ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md)). This alert can only fire
 for `exchange="kraken"`; if it fires for another venue, the metric is mislabelled.
 
-**Expected behaviour** — the policy is automatic and per symbol: increment the
-counter, resubscribe **that symbol only** (other symbols on the connection keep
-running), and emit the next snapshot with `checksum_ok = false` rather than
-suppressing it. Suppressing would hide the incident and leave a gap that reads as
-quiescence; emitting makes the bad window queryable and excludable.
+**Expected behaviour** — the policy is automatic and per symbol. On a mismatch the
+adapter, in this order: emits **one** snapshot of the book as it actually stood,
+stamped `checksum_ok = false`; drops that book; increments the counter; and
+resubscribes **that symbol only**, leaving other symbols on the connection running.
+
+The order matters and is the reason the marked snapshot exists at all. Dropping the
+book first would leave nothing to emit — `snapshot()` returns `None` on an empty book —
+so `checksum_ok` would in practice only ever be `true` or `null`, and a consumer
+filtering `checksum_ok = false` to find bad windows would find nothing, ever. Between
+the marked snapshot and the resync landing, that symbol emits **no** snapshots rather
+than a plausible-looking lie. Pinned by
+`services/capture-rust/src/exchanges/kraken.rs::a_bad_checksum_emits_a_marked_snapshot_then_resyncs`.
 
 So the book fixes itself. What is not automatic is deciding which of two very
 different things happened:
@@ -75,7 +83,8 @@ docker logs k2-capture-kraken --tail 500 | grep -i -E 'instrument|precision|chec
 # 3. What the emitted snapshots say
 docker exec k2-redpanda rpk topic consume market.crypto.v3.book.kraken \
   --num 5 --offset end --use-schema-registry=value                      # ✅ verified (v2 topic)
-#    expect checksum_ok true on healthy snapshots; false only around the resync
+#    expect checksum_ok true on healthy snapshots; exactly one false per mismatch,
+#    then a gap in that symbol's snapshots until the resync lands
 
 # 4. Correlate with resyncs and reconnects
 curl -s --get localhost:9090/api/v1/query \
@@ -87,7 +96,7 @@ Classify:
 
 | Pattern | Verdict | Action |
 |---------|---------|--------|
-| One failure, `checksum_ok` back to `true` within a second or two, no recurrence in 6 h | Transient | Record the window; close |
+| One `checksum_ok = false` snapshot, a short gap, then `true` again, no recurrence in 6 h | Transient | Record the window; close |
 | Failures on **one** symbol, repeating | Suspect that symbol's precision — did `instrument` report a change? | Compare the logged precision against Kraken's current instrument data; if it changed, the formatter is right and the resubscribe picked it up |
 | Failures across **many** symbols, repeating | Suspect the checksum computation | **Do not silence.** Run the S1 unit test (`cargo test checksum`) — it reproduces Kraken's published `3310070434` from the documented example. If that passes, the bug is in the live formatting path, not the algorithm |
 | `checksum_ok = false` with no counter increment, or vice versa | Instrumentation bug | Open an issue; the metric and the field must agree |
@@ -97,10 +106,14 @@ Classify:
 unverified for 11–20; drift below level 10 is undetected by construction (ADR-027
 Risks). Do not report "the book is verified" without that qualifier.
 
-**Measured** — not yet verified. `scripts/chaos/capture-corrupt-frame.sh` (Phase C)
-injects a corrupt level into the Kraken book to force a mismatch, waits for the alert,
-and measures time-to-`checksum_ok=true` after the per-symbol resubscribe, plus how
-many snapshots carried `false` in between.
+**Measured** — not yet, and **not by a chaos script either**.
+`scripts/chaos/capture-corrupt-frame.sh` exits as a recorded SKIP on purpose: every
+venue connection is TLS, so there is no seam to flip a byte in without terminating the
+connection instead, and replaying chosen bytes through the running binary is precisely
+what `k2-replay` (Phase G) is for. The script says so on every `make chaos` run rather
+than quietly not covering the row. What stands in today is the unit test named above,
+which proves the adapter on every commit but not the deployed container. Revisit when
+`k2-replay` lands.
 
 ---
 
@@ -113,10 +126,25 @@ spread and imbalance queries return thinner results than expected.
 [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml):
 
 ```promql
-min_over_time(k2_capture_book_depth[10m]) < 10
+max_over_time(k2_capture_book_depth[10m]) < 20
 ```
 
 Fires after `for: 10m`.
+
+**Read the gauge before reading the number.** `k2_capture_book_depth` is **total
+resting levels across both sides** — `book.rs` sets it to
+`self.bids.len() + self.asks.len()` — so the threshold of 20 is 10 a side, against a
+canonical top-20-*per-side* product (ADR-027). `max_over_time`, not `min_over_time`,
+because a resync empties the book by design and one empty sample would hold a minimum
+under the threshold for the ten minutes that follow.
+
+**What this alert cannot see:** a deep book thinning without collapsing. Coinbase runs
+full depth — 13,000-15,000 levels on liquid symbols, sampled over the 2026-08-26
+12:38-13:07Z window — so a fall from 15,000 to 50 levels is a severe degradation that
+never approaches this floor. Catching that needs a per-venue, per-symbol baseline;
+Phase F's measured depth distributions in
+[capacity-model.md](../architecture/capacity-model.md) are the trigger to revisit it.
+Until then, step 3 below is the manual version of that check.
 
 **Expected behaviour** — nothing self-heals, because this alert cannot tell on its own
 whether anything is broken. `depth` is an emitted field precisely so a consumer can
@@ -134,7 +162,7 @@ responses:**
 ```bash
 # 1. Which symbols, and how thin                                       ✅ verified (v2)
 curl -s --get localhost:9090/api/v1/query \
-  --data-urlencode 'query=min_over_time(k2_capture_book_depth[1h])' | \
+  --data-urlencode 'query=max_over_time(k2_capture_book_depth[1h])' | \
   jq -r '.data.result[] | "\(.metric.exchange) \(.metric.symbol) \(.value[1])"'
 
 # 2. Did it thin at a resync/reconnect boundary? Same window on both.
@@ -143,9 +171,10 @@ curl -s --get localhost:9090/api/v1/query \
   jq -r '.data.result[] | "\(.metric.exchange) \(.value[1])"'
 
 # 3. Has it always been thin, or did it change? A symbol that has never held 20
-#    levels is thin; one that used to is degraded.
+#    levels is thin; one that used to is degraded. This is also the check the
+#    alert cannot make for a deep venue: compare the week's peak with today's.
 curl -s --get localhost:9090/api/v1/query \
-  --data-urlencode 'query=min_over_time(k2_capture_book_depth[7d])' | \
+  --data-urlencode 'query=max_over_time(k2_capture_book_depth[7d])' | \
   jq -r '.data.result[] | "\(.metric.exchange) \(.metric.symbol) \(.value[1])"'
 
 # 4. Coinbase only: the full-depth book is held in memory. Is it being trimmed
@@ -252,6 +281,7 @@ _None yet. Appended with their date as they happen; never overwritten._
 
 ---
 
-**Last verified:** not yet verified — the capture tier is Phase C and unbuilt. Commands
+**Last verified:** commands marked ✅ were run against the running capture tier on
+2026-08-26; no MTTR on this page is measured, because nothing has been fault-injected. Commands
 marked ✅ were run against the v2 stack on 2026-08-26 with the service name
 substituted. Stamp this line with a date and a commit at the Phase C chaos run.

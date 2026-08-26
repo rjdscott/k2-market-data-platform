@@ -7,9 +7,10 @@ below because you need it to read the alert.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **Not yet verified — the Phase C chaos run fills this in.** The capture tier
-> (ADR-019) is not built. Commands marked ✅ were verified against the running v2
-> stack on 2026-08-26 with the service name substituted.
+> **No MTTR here is measured — the Phase C chaos run fills them in.** The capture
+> tier (ADR-019) is built and running. Commands marked ✅ were run against it on
+> 2026-08-26. What has not happened is a fault injection, so every **Measured** cell
+> below reads "not yet".
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
@@ -72,9 +73,11 @@ curl -s --get localhost:9090/api/v1/query \
 
 # 2. Did a reconnect happen at the same moment? If gaps and reconnects moved
 #    together, the gap is the reconnect boundary and is expected, not a loss.
+#    The `reason` label separates the two kinds: "scheduled" is Binance's own
+#    23 h connection recycle, "involuntary" is everything else.
 curl -s --get localhost:9090/api/v1/query --data-urlencode \
  'query=increase(k2_capture_reconnects_total[1h])' | \
-  jq -r '.data.result[] | "\(.metric.exchange) \(.value[1])"'
+  jq -r '.data.result[] | "\(.metric.exchange) \(.metric.reason) \(.value[1])"'
 
 # 3. What the process itself saw
 docker logs k2-capture-coinbase --tail 300 | grep -i -E 'gap|sequence|reconnect|conn_id'
@@ -83,8 +86,12 @@ docker logs k2-capture-coinbase --tail 300 | grep -i -E 'gap|sequence|reconnect|
 Then classify, because the response differs:
 
 - **Gap coincides with a reconnect or a `conn_id` change** → expected. A new
-  connection starts a new sequence space; Binance also does a scheduled reconnect at
-  ~23 h of connection life. Confirm the timestamps line up and close it. If the gap
+  connection starts a new sequence space. If step 2 shows the increment under
+  `reason="scheduled"`, this is Binance's own 23 h connection recycle
+  (`BINANCE_MAX_CONNECTION_AGE` in `main.rs`, ahead of the venue's 24 h cut-off) and
+  the correlation is exact rather than approximate; Kraken and Coinbase have no such
+  timer and will only ever show `reason="involuntary"`. Confirm the timestamps line up
+  and close it. If the gap
   detector is counting reconnect boundaries as gaps, that is a **capture bug** — the
   boundary is detectable via `conn_id` and should be excluded.
 - **Gap with no reconnect** → a real loss on a live connection. Record the window.
@@ -155,7 +162,7 @@ Read the correlation:
 |-------------|---------|-------|
 | `checksum_failures_total` (Kraken) | The book is genuinely drifting; the checksum path may be at fault | [capture-checksum-failure.md](./capture-checksum-failure.md) |
 | `gaps_total` (Coinbase / Binance) | Messages are being lost repeatedly — network or a starved container | §1 above, then the CPU check |
-| `reconnects_total` only | The connection is unstable; the book rebuild is a consequence, not the problem | [capture-feed-stale.md](./capture-feed-stale.md), and check the venue status page |
+| `reconnects_total{reason="involuntary"}` only | The connection is unstable; the book rebuild is a consequence, not the problem | [capture-feed-stale.md](./capture-feed-stale.md), and check the venue status page |
 | Nothing else | Resyncs are being triggered without a detected cause — a capture bug | Capture the log lines and open an issue |
 
 **Do not raise the resync threshold to silence this.** The alert fires because book
@@ -176,6 +183,7 @@ _None yet. Appended with their date as they happen; never overwritten._
 
 ---
 
-**Last verified:** not yet verified — the capture tier is Phase C and unbuilt. Commands
+**Last verified:** commands marked ✅ were run against the running capture tier on
+2026-08-26; no MTTR on this page is measured, because nothing has been fault-injected. Commands
 marked ✅ were run against the v2 stack on 2026-08-26 with the service name
 substituted. Stamp this line with a date and a commit at the Phase C chaos run.

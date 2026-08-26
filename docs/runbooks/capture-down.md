@@ -7,10 +7,10 @@ up and scrapeable but whose feed has gone quiet — that is
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **Not yet verified — the Phase C chaos run fills this in.** The capture tier
-> (ADR-019) is not built. Commands below are written against the Phase C design;
-> those marked ✅ were verified against the running v2 stack on 2026-08-26 with the
-> service name substituted. `make chaos` (`scripts/chaos/*.sh`) induces each failure,
+> **No MTTR here is measured — the Phase C chaos run fills them in.** The capture
+> tier (ADR-019) is built and running. Commands marked ✅ were run against it on
+> 2026-08-26. What has not happened is a fault injection, so every **Measured** cell
+> below reads "not yet". `make chaos` (`scripts/chaos/*.sh`) induces each failure,
 > waits for the alert, and measures recovery — the **Measured** rows are filled from
 > that run, not from an estimate.
 
@@ -103,24 +103,33 @@ hole rather than an unexplained one.
 
 **Measured** — not yet verified. `scripts/chaos/capture-kill.sh` (Phase C) induces
 this by `docker kill`-ing one capture container, waits for `CaptureDown`, and
-measures recovery as the time until `k2_capture_records_produced_total` increments
-again. That number, and its date, replace this line.
+measures recovery as the time until the container is scrapeable again *and* a fresh
+frame has arrived — `up == 1` alone would pass on a process that came back and never
+reconnected to the venue. That number, and its date, replace this line.
 
 ---
 
 ## 2. Produce errors — records built, broker rejecting
 
-**Symptom** — the capture container is up and reading frames (`k2_capture_messages_total`
-climbing) but `k2_capture_records_produced_total` is flat or lagging it.
+**Symptom** — the capture container is up and enqueueing records
+(`k2_capture_records_produced_total` climbing) but `k2_capture_records_delivered_total`
+is flat or lagging it. Note which counter is which: `records_produced_total` counts the
+*local enqueue* into librdkafka's queue and keeps climbing through a broker outage;
+`records_delivered_total` is incremented from the delivery report and is the one that
+stops. `CaptureProduceStalled` fires on that divergence *before* anything is dropped —
+see [capture-produce-stalled.md](./capture-produce-stalled.md).
 
 **Detection** — `CaptureProduceErrors` from
 [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml):
 
 ```promql
-rate(k2_capture_produce_errors_total[5m]) > 0.1
+increase(k2_capture_produce_errors_total[10m]) > 0
 ```
 
-Fires after `for: 3m`.
+Fires after `for: 5m`. The counter is seeded at zero for all four `reason` values at
+startup, so the **first** produce error trips this — there is no rate floor, because a
+rate floor of `0.1/s` tolerates 8,640 permanently-lost records a day and this tier has
+no spill-to-disk.
 
 **Expected behaviour** — librdkafka retries internally and rides out a brief broker
 hiccup without the counter moving far. **It does not spill to disk.** Its queue is the
@@ -172,6 +181,7 @@ _None yet. Appended with their date as they happen; never overwritten._
 
 ---
 
-**Last verified:** not yet verified — the capture tier is Phase C and unbuilt. Commands
+**Last verified:** commands marked ✅ were run against the running capture tier on
+2026-08-26; no MTTR on this page is measured, because nothing has been fault-injected. Commands
 marked ✅ were run against the v2 stack on 2026-08-26 with the service name
 substituted. Stamp this line with a date and a commit at the Phase C chaos run.
