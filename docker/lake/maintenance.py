@@ -290,9 +290,15 @@ def run_audits(spark, run_ts: datetime) -> list:
             for r in results
         ]
     )
+    # The failure count rides in the snapshot summary as well as in the rows.
+    # docker/lake/metrics.py then reads k2_lake_audit_failures_total straight
+    # off the summary — no table scan, no pyarrow, no credentials beyond the
+    # catalog's, in a 128 MB exporter that polls every 30 s.
+    failures = sum(1 for r in results if not r["passed"])
     (
         frame.writeTo(CHECKS_TABLE)
         .option(f"snapshot-property.{O.JOB}", O.JOB_MAINTENANCE)
+        .option(f"snapshot-property.{O.AUDIT_FAILURES}", str(failures))
         .append()
     )
     return results

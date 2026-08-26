@@ -34,6 +34,7 @@ JOB = "k2.job"
 KAFKA_OFFSETS = "k2.kafka-offsets"
 MAX_KAFKA_TS = "k2.max-kafka-ts"
 SRC_SNAPSHOT_ID = "k2.src-snapshot-id"
+AUDIT_FAILURES = "k2.audit-failures"
 
 # Values for the JOB property.
 JOB_INGEST = "ingest"
