@@ -52,9 +52,15 @@ test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo 
 # NOT part of `make test` and not run by CI: the Kotlin tier retired to
 # legacy/v2-kotlin/ in ADR-019 and nothing in the running stack builds it. Kept
 # runnable so the archive is verifiable rather than merely present.
+# --user: Gradle writes build/, .gradle/, .kotlin/ and logs/ straight into the
+# bind-mounted archive. As root those come out root-owned on the host and the
+# next run — or `git clean` — fails with EACCES. HOME=/tmp because the mapped
+# uid has no passwd entry and Gradle wants a writable home.
 test-legacy-kotlin:  ## Archived v2 Kotlin feed handler tests (legacy/v2-kotlin; not in `make test`)
-	docker run --rm -v "$(CURDIR)":/project -w /project/legacy/v2-kotlin \
-	  -e GRADLE_USER_HOME=/tmp/.gradle gradle:8.12-jdk21 ./gradlew test --no-daemon
+	docker run --rm --user $(shell id -u):$(shell id -g) \
+	  -v "$(CURDIR)":/project -w /project/legacy/v2-kotlin \
+	  -e GRADLE_USER_HOME=/tmp/.gradle -e HOME=/tmp \
+	  gradle:8.12-jdk21 ./gradlew test --no-daemon
 
 build-capture:  ## Build k2-capture:v3 from the repo root, stamping the git sha
 	docker compose build capture-binance

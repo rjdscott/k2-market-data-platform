@@ -1,0 +1,112 @@
+# config/instruments.yaml — the instrument registry. Single source of truth for
+# what K2 subscribes to, and for the native → canonical symbol mapping.
+#
+# ── The contract ────────────────────────────────────────────────────────────
+#
+# version: 2 is a BREAKING shape change from v1 (`instruments.<ex>.symbols:` as
+# a flat string list). In v1 the native → canonical mapping was *code*: three
+# hand-written branches in TradeNormalizer.kt (XBT→BTC by prefix match, a
+# longest-suffix scan over a hardcoded quote-currency list for Binance, a naive
+# `-`→`/` replace for Coinbase). In v2 it is *data*. A loader that cannot find
+# an instrument here must fail loudly rather than guess — guessing is what
+# produced `XDG/USD` and `DOGE/USD` as two different instruments in v2.
+#
+#   native     Exactly the string the exchange uses on the wire, byte for byte.
+#              This is what we send in the subscribe frame and what comes back
+#              in every message. Never normalise it, never upper/lower-case it.
+#   canonical  `BASE/QUOTE`, both uppercase, `[A-Z0-9]+/[A-Z0-9]+`. This is the
+#              partition key on every v3 topic and the join key across the lake.
+#   book_depth Optional per-instrument override of the L2 subscription depth.
+#              Absent = use the exchange default below.
+#
+# ── Why the quote currency is kept as the exchange quotes it ────────────────
+#
+# BTC/USDT and BTC/USD are **different instruments**, not two spellings of one.
+# They trade on different venues against different collateral, they have
+# different order books, and the USDT pair carries Tether's peg risk on top of
+# BTC's price risk — the basis between them is itself a tradeable spread and a
+# research subject. Folding USDT into USD would silently average two price
+# series together and destroy exactly the signal a quant would look for. So:
+# Binance BTCUSDT → BTC/USDT, Coinbase BTC-USD → BTC/USD, and the two never
+# meet. What we *do* normalise is the venue's private spelling of an asset:
+# Kraken's XBT is Bitcoin (XBT/USD → BTC/USD) and Kraken's XDG is Dogecoin
+# (XDG/USD → DOGE/USD), because those are the same instrument under a different
+# ticker, which is the opposite situation.
+#
+# ── Book depth defaults ─────────────────────────────────────────────────────
+#
+#   binance   20    `<symbol>@depth20@100ms` — partial book stream, fixed depth
+#                   from a menu of {5,10,20}. Carries no exchange timestamp.
+#   kraken    25    `book` channel `depth` param, from {10,25,100,500,1000}.
+#                   25 is the shallowest depth the CRC32 checksum is defined
+#                   over, so it is the shallowest depth we can *verify*.
+#   coinbase  full  `level2` sends the whole book and has no depth parameter;
+#                   the measured subscribe snapshot is 5.2 MB / ~44k levels.
+#                   Depth capping for Coinbase is therefore local truncation in
+#                   the capture process, not a subscription option.
+#
+# Regardless of subscription depth, the queryable L2 product is top-20 snapshots
+# at 1 Hz (ADR-018). Depth beyond 20 exists to keep the book correct — Kraken's
+# checksum needs 25, Coinbase gives no choice — not to be stored.
+#
+# No instrument overrides book_depth today; the field exists because Coinbase's
+# 5.2 MB snapshot means truncation depth will eventually need to be per-symbol,
+# and a schema change is more expensive than an unused optional key.
+#
+# ── Consumers ───────────────────────────────────────────────────────────────
+#
+#   Rust      services/k2-capture (serde_yaml)                    [Phase C]
+#   Kotlin    InstrumentsLoader.kt — native list only, until the handlers retire
+#   Python    tests/test_contracts.py; Spark symbol mappers       [Phase D]
+#
+# Bind-mount gotcha: this file is mounted file-level, which pins the inode.
+# After editing, `docker compose up -d --force-recreate --no-deps <service>`;
+# `docker restart` alone leaves the container reading the old inode.
+#
+# Instrument count: 34 (12 binance, 11 kraken, 11 coinbase) — asserted by
+# tests/test_contracts.py, which also rejects a duplicate canonical per exchange.
+#
+# Last updated: 2026-08-26
+
+version: 2
+
+instruments:
+  binance:
+    - { native: BTCUSDT,  canonical: BTC/USDT }
+    - { native: ETHUSDT,  canonical: ETH/USDT }
+    - { native: BNBUSDT,  canonical: BNB/USDT }
+    - { native: SOLUSDT,  canonical: SOL/USDT }
+    - { native: XRPUSDT,  canonical: XRP/USDT }
+    - { native: ADAUSDT,  canonical: ADA/USDT }
+    - { native: DOTUSDT,  canonical: DOT/USDT }
+    - { native: LINKUSDT, canonical: LINK/USDT }
+    - { native: DOGEUSDT, canonical: DOGE/USDT }
+    - { native: LTCUSDT,  canonical: LTC/USDT }
+    - { native: AVAXUSDT, canonical: AVAX/USDT }
+    - { native: ATOMUSDT, canonical: ATOM/USDT }
+
+  kraken:
+    - { native: XBT/USD,  canonical: BTC/USD }   # XBT is Kraken's ticker for Bitcoin
+    - { native: ETH/USD,  canonical: ETH/USD }
+    - { native: SOL/USD,  canonical: SOL/USD }
+    - { native: XRP/USD,  canonical: XRP/USD }
+    - { native: ADA/USD,  canonical: ADA/USD }
+    - { native: DOT/USD,  canonical: DOT/USD }
+    - { native: LINK/USD, canonical: LINK/USD }
+    - { native: XDG/USD,  canonical: DOGE/USD }  # XDG is Kraken's ticker for Dogecoin
+    - { native: LTC/USD,  canonical: LTC/USD }
+    - { native: AVAX/USD, canonical: AVAX/USD }
+    - { native: ATOM/USD, canonical: ATOM/USD }
+
+  coinbase:
+    - { native: BTC-USD,  canonical: BTC/USD }
+    - { native: ETH-USD,  canonical: ETH/USD }
+    - { native: SOL-USD,  canonical: SOL/USD }
+    - { native: XRP-USD,  canonical: XRP/USD }
+    - { native: ADA-USD,  canonical: ADA/USD }
+    - { native: DOT-USD,  canonical: DOT/USD }
+    - { native: LINK-USD, canonical: LINK/USD }
+    - { native: DOGE-USD, canonical: DOGE/USD }
+    - { native: LTC-USD,  canonical: LTC/USD }
+    - { native: AVAX-USD, canonical: AVAX/USD }
+    - { native: ATOM-USD, canonical: ATOM/USD }
