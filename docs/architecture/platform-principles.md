@@ -54,7 +54,7 @@ The strongest form of this: the best service is the one you notice you do not ha
 
 ### 6. Instrument it, then say what is not instrumented
 
-The Rust capture tier exposes Prometheus metrics on `:8082/metrics`; ClickHouse exposes Prometheus on `:9363`; 23 alert rules (13 v2 + 10 capture) are loaded from `docker/prometheus/rules/`; five Grafana dashboards are provisioned from source.
+The Rust capture tier exposes Prometheus metrics on `:8082/metrics`; ClickHouse exposes Prometheus on `:9363`; 33 alert rules (13 v2 + 10 capture + 10 lake) are loaded from `docker/prometheus/rules/`; six Grafana dashboards are provisioned from source.
 
 The second half is the part that matters. One gap is documented rather than glossed: no alert has been deliberately fired end to end. An undocumented gap is worse than a known one, because only one of them gets fixed.
 

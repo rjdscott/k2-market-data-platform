@@ -1,8 +1,9 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 23 alert rules (13 v2 + 10 v3 capture)
+Prometheus scrapes the stack, Grafana renders it, and 33 alert rules (13 v2 + 10 v3 capture + 10 v3 lake)
 cover the things that actually break: capture goes down or silent, sequence gaps and book
-checksum failures, ClickHouse struggles, and the cold-tier offload falls behind.
+checksum failures, ClickHouse struggles, the cold-tier offload falls behind, and the lake
+ingest stops committing.
 
 - Prometheus — http://localhost:9090 (`/targets`, `/alerts`)
 - Grafana — http://localhost:3000, `admin` / `$GRAFANA_PASSWORD`
@@ -70,6 +71,7 @@ recording rules for this tier.
 | Iceberg Offload Pipeline | `iceberg-offload` | Offload lag, success rate, rows/sec, duration quantiles, error rate, cycle status |
 | K2 Platform v2 — Migration Tracker | `k2-v2-migration` | Total CPU/RAM gauges against the 16-core budget, service up/down, Redpanda and ClickHouse rates |
 | K2 Capture (v3) | `k2-l2-capture` | The Rust capture tier, now the only ingestion tier: health (up, staleness, reconnects, gaps, checksum failures, resyncs), throughput (messages/bytes/records/produce errors), exchange→recv latency p50/p95/p99, book depth/levels/precision loss. `exchange` template variable filters all panels |
+| K2 Lake (v3) | `k2-lake` | Iceberg lake tier (Phase D): ingest lag and commit age per table, rows/files/bytes and mean file size, rows added by the last commit, audit failures, disk headroom, exporter scrape errors. Every panel reads an Iceberg snapshot summary — nothing here is an in-process counter |
 
 ![Redpanda topics](../images/redpanda-console-topics.jpg)
 
@@ -145,6 +147,31 @@ and a target label of the same name would win and rename the sample's to
 `exported_exchange`.
 Alerts on capture series get `exchange` from the binary; alerts on `up` name the venue
 through `job` (`capture-<exchange>`).
+
+### `lake-alerts.yml` — v3 lake tier, Phase D (10)
+
+Every staleness expression is `time() - <a timestamp gauge>`, never a pre-computed age.
+`docker/lake/metrics.py` only recomputes on a successful catalog read, so an age gauge
+freezes at its last small value during exactly the outage it is the backstop for.
+
+| Alert | Severity | Fires when |
+|-------|----------|-----------|
+| `LakeIngestFailed` | critical | `raw.messages` has taken no commit for 30m, sustained 5m — the data-loss clock, against Redpanda's 48 h raw retention |
+| `LakeAuditFailed` | critical | The last maintenance run stamped a non-zero failed-check count into the `audit.checks` snapshot summary |
+| `LakeDiskUsageCritical` | critical | `k2_lake_disk_used_ratio > 0.90` for 5m |
+| `LakeIngestLagHigh` | warning | The newest Kafka record in `raw.messages` is over 15m old, sustained 10m |
+| `LakeCommitAgeHigh` | warning | A `bronze.*` table has taken no commit for 30m while the archive keeps moving — stage 2 is the failing half |
+| `LakeCompactionStale` | warning | No file-rewrite snapshot on `raw.messages` for 36 h: the nightly compaction has missed a run. Measures the job, not its side effect on file size — an alert on mean file size fires by construction for the table's first ~15 days |
+| `LakeExporterDown` | warning | `up{job="lake-metrics"} == 0` for 5m |
+| `LakeExporterStalled` | warning | The exporter is scraped but has completed no refresh for 5m. The fast Lakekeeper-outage signal at ~10m: the prefix lookup throws before any table is read, so `up` stays 1 and scrape errors stay 0 |
+| `LakeScrapeErrors` | warning | `k2_lake_scrape_errors_total > 0` for 5m — the catalog is up and a table is not |
+| `LakeDiskUsageHigh` | warning | `k2_lake_disk_used_ratio > 0.80` for 15m. **The rule is tested, the metric is host-dependent** — on a Docker Desktop host `os.statvfs` sees the VM's thin-provisioned disk (0.344) and not the machine's (0.79). See `docker/lake/README.md` |
+
+These ten are the only rules in the repo with unit tests:
+`docker/prometheus/rules/tests/lake-alerts_test.yml`, run by `make check-docs` gate (c2).
+Each case is either "must fire on a synthetic series" or "must not fire on healthy
+input" — an alert that cannot fire and an alert that always fires are the same bug, and
+this file had one of each before it was written.
 
 ### How the offload metrics are produced
 
