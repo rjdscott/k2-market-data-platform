@@ -1,6 +1,6 @@
 # ADR-019: Rust capture tier replaces Kotlin feed handlers
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-26
 **Author:** Rob Scott
 **Category:** Ingestion
@@ -189,8 +189,8 @@ Kotlin is retired — and Kotlin stays until it does.
 
 ## Outcome
 
-_Burn-in and parity numbers are appended after the Phase C window. What is recorded
-below are design points that did not survive contact with the running tier._
+_What is recorded below are design points that did not survive contact with the
+running tier, followed by the retirement itself._
 
 ### As-built corrections, 2026-08-26
 
@@ -276,3 +276,78 @@ which were meant to be free. The new failure shape: `queue_full` is the first si
 binance and kraken rates, `delivery` at coinbase's slower rate, and a `delivery` tick
 during an outage now means the outage outran five minutes rather than thirty seconds.
 Evidence: [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv).
+
+### Retirement, 2026-08-26
+
+**Kotlin is retired.** `services/feed-handler-kotlin/` is archived at
+`legacy/v2-kotlin/` with a README, its six v2 topics inventoried, and its
+feed-handler crash runbook and alert rules moved alongside it. The three
+`feed-handler-*` services, their Prometheus scrape jobs and their three alert
+rules are out of `docker-compose.yml` and `docker/prometheus/`; the `kotlin` CI
+job and the `feed-handler` docker-matrix entry are out of
+`.github/workflows/ci.yml`. `make test` no longer runs them —
+`make test-legacy-kotlin` does, deliberately outside the default target.
+
+**Parity over the labelled 2-hour window.** Per-symbol trade counts and trade IDs
+from the Rust tier against the Kotlin tier, all three exchanges, in ClickHouse
+and the lake, per the retirement trigger above:
+
+«WINDOW3»
+
+**Sequence gaps, checksum failures and resource use over the same window:**
+
+«WINDOW3»
+
+Kraken's expected exception stands as written: v1's synthesised
+`"KRAKEN-${ms}-${hash}"` IDs collide by construction, so Kraken parity is
+asserted on counts and on v2's real integer `trade_id` being present and unique,
+never on ID equality with a v1 identifier that was never real. The v1/v2 symbol
+spellings are a second, smaller Kraken-only divergence, recorded in
+`scripts/parity/README.md`.
+
+**The window is a 2-hour sample and every number above carries that label.** It
+cannot observe the Binance 23 h scheduled reconnect, a venue's daily maintenance
+window, or any diurnal volume peak. The 24-hour continuous run stays a Phase F+
+revisit trigger, and the SLO error budgets built on this data are provisional
+until one exists.
+
+### What the retirement cost and returned
+
+The budget moved exactly as the Phase C addendum to
+[ADR-010](ADR-010-resource-budget.md) predicted: steady state from
+16.10 CPU / 23.125 GiB across 18 long-running services to
+**14.60 CPU / 21.625 GiB across 15**, the full 1.5 CPU / 1.5 GB the three JVMs
+declared, verified by summing `deploy.resources.limits` over
+`docker compose --env-file .env.example config` (that ADR's addendum carries the
+command and its output). Bootstrap peak is 16.10 CPU / 23.125 GiB across all 19
+services — what steady state used to be during the parallel run.
+
+Loaded Prometheus rules go from 27 to 24 (14 v2 + 10 v3 capture). Grafana stays
+at five dashboards: no dashboard read only feed-handler metrics, so none was
+archived; the "Feed Handlers" row came out of `k2-pipeline-overview.json`, whose
+v3 equivalents already existed in `k2-l2-capture.json`, and the two Stack Health
+panels were repointed at `k2_capture_*` series.
+
+Two consequences the Consequences section named as costs have now landed:
+
+**The comparison baseline is gone.** The Kotlin tier was the only capture
+implementation that had ever run here, which is why parity was a gate rather
+than a report. From this commit there is nothing to diff a suspect Rust number
+against except the archive and the exchange's own REST API.
+
+**The v2 hot tier is frozen, not dropped.** The Kotlin handlers were the only
+producers of `market.crypto.trades.<ex>[.raw]`, so `k2.bronze_trades_*`,
+`k2.silver_trades` and the six `k2.ohlcv_*` tables stop advancing at the
+retirement timestamp and keep expiring rows under their TTLs. Dropping the `k2`
+database and deleting the `.raw` topics is Phase E, after the v3 hot tier exists
+([`../research/2026-08-26-v3-requirements-clarification.md`](../research/2026-08-26-v3-requirements-clarification.md)
+Q5). `schemas/avro/normalized-trade.avsc` and the six v2 topics stay until then;
+`docker/redpanda/init.sh` keeps creating the topics and says why.
+
+**One thing this ADR did not anticipate.** Retiring the handlers freed
+`config/instruments.yaml` to carry Kraken's WS **v2** spellings — the registry
+had been pinned to `XBT/USD` and `XDG/USD` because the v1 handlers read the same
+file, and `kraken.rs` held a two-row alias table to bridge it. Both are gone, so
+`native` is once again exactly the bytes on the wire with nothing mapping it.
+That was a hidden cost of running the two tiers side by side, and it is only
+visible as a saving now that one of them is gone.
