@@ -79,6 +79,19 @@ scrape_configs:
     metrics_path: '/metrics'
     scrape_interval: 30s
 
+  # v3 lake metrics — the lake-metrics service runs docker/lake/metrics.py
+  # --serve, deriving every gauge from Iceberg snapshot summaries read over the
+  # Lakekeeper REST API. Runs alongside 'iceberg-scheduler' above until
+  # docker/offload/ retires (plan 003-phase-d, "Delete").
+  - job_name: 'lake-metrics'
+    static_configs:
+      - targets: ['lake-metrics:8000']
+        labels:
+          service: 'lake-metrics'
+          tier: 'cold-storage'
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
   # Rust capture tier — metrics-exporter-prometheus on port 8082. This is the
   # only ingestion tier: the three `feed-handler-*` jobs that scraped the Kotlin
   # handlers on the same port were removed with them (ADR-019). See

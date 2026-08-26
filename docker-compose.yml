@@ -443,16 +443,21 @@ services:
       - ./docker/prefect:/root/.prefect
       - ./docker/offload:/opt/prefect/offload
       - ./docker/offload/flows:/opt/prefect/flows
+      - ./docker/lake/flows:/opt/prefect/lake-flows:ro   # v3 lake deployments
       - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for container orchestration
     environment:
       PREFECT_API_URL: http://prefect-server:4200/api
       PYTHONPATH: /opt/prefect
       DOCKER_API_VERSION: "1.44"
-    # Register (upsert) the two scheduled deployments, then start the worker.
+    # Register (upsert) the four scheduled deployments, then start the worker.
+    # v2's two and v3's two share one work pool and one worker: a second
+    # process-type pool on the same host is a second thing to start and forget.
+    # The v2 pair stays registered through the parallel-run window.
     command: >
       sh -c "prefect work-pool create iceberg-offload --type process 2>/dev/null || true
       && python /opt/prefect/flows/deploy_production.py
       && python /opt/prefect/flows/deploy_maintenance.py
+      && python /opt/prefect/lake-flows/deploy_lake.py
       && prefect worker start --pool iceberg-offload --type process"
     depends_on:
       prefect-server:
@@ -733,6 +738,93 @@ services:
       com.k2.tier: "cold"
       com.k2.version: "v3"
 
+  # ───────────────────────────────────────────────────────────────────────
+  # Lake DDL - One-shot: the four Iceberg tables (docker/lake/ddl/lake.sql)
+  # ───────────────────────────────────────────────────────────────────────
+  # The v3 counterpart of `iceberg-init`, which creates v2's cold.* tables in
+  # the hadoop catalog. Both stay for the parallel-run window; `iceberg-init`
+  # and the whole of docker/offload/ retire together in a follow-up PR once the
+  # comparison is clean (plan 003-phase-d, "Delete").
+  #
+  # Runs in the Spark image because the DDL uses Iceberg's Spark extensions —
+  # `SET IDENTIFIER FIELDS`, `WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY`
+  # — which the REST API does not expose. That is why table DDL costs a JVM
+  # start here where docker/lake/init-lake.sh could create namespaces with curl.
+  #
+  # Idempotent (CREATE TABLE IF NOT EXISTS + converging ALTERs); verified as a
+  # no-op on re-run against a live warehouse.
+  lake-ddl:
+    image: k2-spark-iceberg:3.5.5_1.8.1  # built by the spark-iceberg service
+    container_name: k2-lake-ddl
+    networks:
+      - k2-net
+    volumes:
+      - ./docker/lake:/home/iceberg/lake:ro
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint: ["python3", "/home/iceberg/lake/apply_ddl.py"]
+    depends_on:
+      lake-init:
+        condition: service_completed_successfully
+      spark-iceberg:
+        condition: service_started  # only for the image build
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+    restart: "no"
+    labels:
+      com.k2.service: "init"
+      com.k2.tier: "cold"
+      com.k2.version: "v3"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Lake metrics exporter — Prometheus job 'lake-metrics'
+  # ───────────────────────────────────────────────────────────────────────
+  # Derives every metric from Iceberg snapshot summaries over the Lakekeeper
+  # REST API. Same reasoning as iceberg-metrics above — Prefect runs each job in
+  # a subprocess that exits before any scrape, so in-process counters are never
+  # seen — and the same image, which already carries prometheus-client.
+  #
+  # NOT the Spark image, even though docker/lake/*.py otherwise runs there:
+  # reading the catalog through PyIceberg needs a FileIO, and
+  # `import pyiceberg.io.pyarrow` alone measures 122 MB RSS against this 128 MB
+  # limit. urllib against the REST API costs 27 MB doing the whole refresh.
+  #
+  # minio-data is mounted read-only purely so `os.statvfs` can report free space
+  # on the filesystem the lake actually lands on. Nothing reads the objects.
+  lake-metrics:
+    image: k2-prefect-worker:3-python3.12  # built by the prefect-worker service
+    container_name: k2-lake-metrics
+    hostname: lake-metrics
+    networks:
+      - k2-net
+    volumes:
+      - ./docker/lake:/opt/prefect/lake:ro
+      - minio-data:/minio-data:ro
+    environment:
+      K2_LAKE_CATALOG_URI: http://lakekeeper:8181/catalog
+      K2_LAKE_WAREHOUSE: k2
+      K2_LAKE_DISK_PATH: /minio-data
+    command: ["python", "/opt/prefect/lake/metrics.py", "--serve"]
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+      prefect-worker:
+        condition: service_started  # only for the image build
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 128M
+    restart: unless-stopped
+    labels:
+      com.k2.service: "observability"
+      com.k2.tier: "cold"
+      com.k2.version: "v3"
+
 #############################################################################
 # SERVICES - TOPIC INITIALIZATION
 #############################################################################
@@ -955,7 +1047,8 @@ services:
 # prefect-worker        | 0.5       | 512M         | Workflow executor (Prefect 3.x)
 # spark-iceberg         | 2.0       | 4G           | ETL engine
 # lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018)
-# iceberg-metrics       | 0.1       | 128M         | Offload alerts exporter (:8000)
+# iceberg-metrics       | 0.1       | 128M         | v2 offload alerts exporter (:8000)
+# lake-metrics          | 0.1       | 128M         | v3 lake alerts exporter (:8000)
 # capture-binance       | 0.25      | 256M         | Rust capture, Binance (12 pairs, trades + L2)
 # capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (11 pairs, trades + L2)
 # capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (11 pairs, trades + L2)
@@ -964,7 +1057,7 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (15 long-running) | 14.60 CPU | 21.625 GiB | Full platform, v3 capture only
+# STEADY STATE (16 long-running) | 14.70 CPU | 21.750 GiB | Full platform, v3 capture + both exporters
 #
 # One-shots — NOT free. They declare limits and they run concurrently with the
 # steady state at boot, so the budget that matters at `docker compose up` is the
@@ -974,19 +1067,19 @@ services:
 #   iceberg-init       0.5  | 1G    v2 cold.* hadoop-catalog DDL (docker/iceberg/ddl/)
 #   lakekeeper-migrate 0.5  | 256M  v3 catalog DB schema
 #   lake-init          0.25 | 128M  v3 bucket + warehouse + namespaces (docker/lake/init-lake.sh)
+#   lake-ddl           0.5  | 1G    v3 raw/bronze/audit table DDL (docker/lake/ddl/lake.sql)
 #   ----------------------------------------------------------------------------
-#   one-shot subtotal  1.5  | 1.5G
+#   one-shot subtotal  2.0  | 2.5G
 #
-# Bootstrap peak: 16.10 CPU / 23.125 GiB — all 19 services. The three capture-*
-# containers gate only on redpanda-init; the other three one-shots can overlap
+# Bootstrap peak: 16.20 CPU / 23.250 GiB — all 21 services. The three capture-*
+# containers gate only on redpanda-init; the other four one-shots can overlap
 # live traffic. CPU limits are a ceiling on scheduling, not a reservation, so a
-# momentary overcommit at boot would be a burst, not a failure — and at 16.10
-# against a 16.0 target the peak is 0.10 CPU over for the length of a bootstrap.
+# momentary overcommit at boot would be a burst, not a failure.
 #
 # Retiring the three Kotlin feed handlers (ADR-019) gave back exactly the
-# 1.5 CPU / 1.5 GB they declared: steady state was 16.10 CPU / 23.125 GiB during
-# the Phase C parallel run and is 14.60 CPU / 21.625 GiB now — 1.40 CPU of
-# headroom under the target, where the parallel run was 0.10 CPU over it.
+# 1.5 CPU / 1.5 GB they declared. Retiring iceberg-metrics with the rest of
+# docker/offload/ (plan 003-phase-d, "Delete") gives back another
+# 0.1 CPU / 128M — landing steady state at 14.60 CPU / 21.625 GiB.
 #
 # Recompute after any limit change (the ADR-010 Outcome addendum carries the
 # same command and its dated output):
@@ -996,5 +1089,5 @@ services:
 # Target: 16 CPU / 40 GB total
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-08-26 (v3 Phase C: Kotlin feed handlers retired to legacy/v2-kotlin/, ADR-019)
+# Last updated: 2026-08-26 (v3 Phase D: +lake-ddl one-shot, +lake-metrics; v2 offload kept until it is deleted)
 #############################################################################
