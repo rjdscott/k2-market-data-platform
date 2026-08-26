@@ -1,12 +1,38 @@
 # Schema Design
 
-Four schemas matter here: the Avro contract a feed handler produces, and the three ClickHouse layers the medallion is built from. Cold-tier Iceberg tables mirror ClickHouse with two documented omissions.
+Two contracts live here at once. **v3** is the wire format going forward — three Avro records under `com.k2.market.v3`, described below. **v2** is what is running today: `NormalizedTrade` plus the three ClickHouse medallion layers and their Iceberg mirrors. v2 stays documented, unedited, until Phase C retires the Kotlin handlers; nothing new should be built against it.
 
 DDL: `docker/clickhouse/schema/` (hot), `docker/iceberg/ddl/` (cold), [`schemas/avro/`](../../schemas/avro/) (wire).
 
 ---
 
-## The wire contract — `NormalizedTrade`
+## v3 — the wire contract
+
+Three records, namespace `com.k2.market.v3`, registered under TopicNameStrategy with global compatibility `BACKWARD_TRANSITIVE`. Full field-by-field documentation lives in the `doc` string of every field in the `.avsc` itself and in [`schemas/README.md`](../../schemas/README.md); this section covers only the choices that reach beyond the wire.
+
+| Record | Topic | What it is |
+|---|---|---|
+| `RawMessage` | `market.crypto.v3.raw.<ex>` | The WebSocket frame verbatim as `bytes`, plus lineage. The system of record (ADR-018) |
+| `Trade` | `market.crypto.v3.trades.<ex>` | One execution, normalised |
+| `BookSnapshotL2` | `market.crypto.v3.book.<ex>` | Top-20 L2 snapshot at 1 Hz, parallel `bid_px/bid_qty/ask_px/ask_qty` arrays |
+
+The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2* normalized topic and is live: its `-value` subject holds `NormalizedTrade`, and posting `trade.avsc` against it returns `{"is_compatible":false}` (checked against the running stack, 2026-08-26). Reusing the name would fail `redpanda-init` and block every feed handler from starting, and ADR-018's parallel-run window needs the Rust and Kotlin producers on separate topics anyway. Reasoning and the cutover path are in [`schemas/README.md`](../../schemas/README.md).
+
+**Fixed-point `int64` at 1e-8 replaces decimal strings.** Every price and quantity is `round(value × 1e8)`: 45285.2 on the wire is `4528520000000`. v2 carried decimals as strings, which was the right call for a JSON-readable topic nobody consumed programmatically; v3's topics are read by ClickHouse's `AvroConfluent`, by Spark, and by Rust, and a plain `long` is the one representation all three decode identically and do exact arithmetic on. Avro's `decimal` logical type would be more self-describing and costs a `BigDecimal` reconstruction in every consumer with three different sets of precision rules — the trade-off, and the >8-decimal-place rejection counter that guards it, are argued in full in [`schemas/README.md`](../../schemas/README.md#the-fixed-point-contract).
+
+**`recv_ts_ns` is in the record body, not just a header.** v2's only wall clock was taken after JSON parse and normalisation, so exchange-clock skew and platform latency were not separable in any stored row. In v3 it is the first statement on frame receipt, it is on all three records, and it is duplicated as a Kafka header so a lag monitor need not deserialise. The body copy is authoritative.
+
+**`conn_id` + `conn_msg_seq` make completeness provable.** Every record carries which connection it arrived on and its monotonic frame counter within that connection. A gap in `conn_msg_seq` is loss on our side; a gap in the exchange's `seq` is loss on the wire; a `conn_id` change explains away both. `Trade.conn_msg_seq` and `BookSnapshotL2.conn_msg_seq` are foreign keys into `RawMessage`, so every derived row points at the bytes it came from.
+
+**Three-valued `checksum_ok`.** `["null","boolean"]`, default `null`. Kraken v2 publishes a CRC32 over the book; Binance and Coinbase do not. `null` means the question is unanswerable at that venue, `true` means verified, `false` means the local book had drifted and a resync fired. Defaulting the unanswerable case to `true` would claim two venues' books were verified when nothing verified them.
+
+**`exchange_ts` is `timestamp-micros`, nested inside the type object.** v2 put `logicalType` as a *sibling* of `type`, where Avro silently ignores it — the schema parsed, registered and serialised cleanly and simply lost the type. It is nullable on `BookSnapshotL2` only, because Binance's partial-book depth stream carries no timestamp at all and inventing one would fabricate a clock reading. `tests/test_contracts.py` fails on any sibling `logicalType`.
+
+**Where the ClickHouse and Iceberg DDL for these records go.** Nowhere yet — deliberately. The v3 hot-tier DDL (`ReplacingMergeTree` trades and book snapshots, OHLCV computed on read) is Phase E, and the Iceberg `raw.messages` / `bronze.*` tables behind Lakekeeper are Phase D. Until those land, the v3 half of the `/schema-change` checklist has three rows and not five: Avro, docs, tests. Writing DDL now would mean writing it against a catalog that does not exist yet.
+
+---
+
+## v2 — the wire contract, `NormalizedTrade` *(superseded)*
 
 [`schemas/avro/normalized-trade.avsc`](../../schemas/avro/normalized-trade.avsc), namespace `com.k2.marketdata.crypto`, registered in Redpanda's built-in schema registry as `market.crypto.trades.<exchange>-value`.
 

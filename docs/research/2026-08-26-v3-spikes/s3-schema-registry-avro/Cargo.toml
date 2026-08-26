@@ -1,0 +1,10 @@
+[package]
+name = "s3-sr-avro"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+schema_registry_converter = { version = "5", features = ["avro", "easy"] }
+apache-avro = "0.22"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }

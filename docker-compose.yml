@@ -188,8 +188,11 @@ services:
   # ───────────────────────────────────────────────────────────────────────
   # MinIO - S3-compatible object storage for Iceberg
   # ───────────────────────────────────────────────────────────────────────
+  # Until Phase B, MinIO was provisioned but carried no data — the v2 Iceberg
+  # warehouse is a bind-mounted hadoop catalog (docker/iceberg/warehouse, see
+  # ADR-013). The v3 `k2-lake` bucket behind Lakekeeper is its first real user.
   minio:
-    image: minio/minio:RELEASE.2024-01-18T22-51-28Z
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z  # console still present at :9001
     container_name: k2-minio
     hostname: minio
     networks:
@@ -344,8 +347,18 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
+    # TCP, not the default socket probe. `pg_isready -U $$POSTGRES_USER` talks to
+    # the Unix socket, which the *initdb temp server* is already listening on —
+    # that server runs with listen_addresses='' while it executes
+    # /docker-entrypoint-initdb.d/*.sql. So a socket probe reports healthy before
+    # 10-lakekeeper-db.sql has run and before postgres listens on 5432 at all.
+    # `lakekeeper-migrate` connects over TCP, does not retry (fails in ~0.3 s with
+    # "Error creating write pool") and is `restart: "no"` — on a fresh clone the
+    # whole v3 lake tier would silently never come up. -h 127.0.0.1 forces the
+    # probe down the same path the dependants use; -d the app DB makes it also
+    # prove the database exists, not merely that a postmaster answers.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -497,7 +510,7 @@ services:
     build:
       context: .
       dockerfile: docker/spark/Dockerfile
-    image: k2-spark-iceberg:3.5.0_1.4.2  # local tag after build
+    image: k2-spark-iceberg:3.5.5_1.8.1  # local tag after build
     container_name: k2-spark-iceberg
     hostname: spark-iceberg
     networks:
@@ -510,12 +523,17 @@ services:
       - ./docker/iceberg/warehouse:/home/iceberg/warehouse
       - ./docker/offload:/home/iceberg/offload
       - ./docker/offload/flows:/home/iceberg/offload/flows
+      - ./docker/lake:/home/iceberg/lake          # v3 lake catalog session builder
     environment:
       # MinIO / S3 credentials (Iceberg cold storage)
       - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
       - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
       - AWS_REGION=us-east-1
       - AWS_S3_ENDPOINT=http://minio:9000
+      # Same credentials under their own names — docker/lake/spark_conf.py passes
+      # them to the `lake` catalog's S3FileIO explicitly, not via the AWS chain.
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       # ClickHouse credentials (read by offload_generic.py via os.environ)
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       # PostgreSQL / watermark credentials (read by offload_generic.py via os.environ)
@@ -552,7 +570,7 @@ services:
   # Idempotent (CREATE ... IF NOT EXISTS) — safe to re-run on an existing warehouse.
   # ───────────────────────────────────────────────────────────────────────
   iceberg-init:
-    image: k2-spark-iceberg:3.5.0_1.4.2  # built by the spark-iceberg service
+    image: k2-spark-iceberg:3.5.5_1.8.1  # built by the spark-iceberg service
     container_name: k2-iceberg-init
     networks:
       - k2-net
@@ -574,37 +592,171 @@ services:
       com.k2.version: "v2"
 
 #############################################################################
+# SERVICES - v3 LAKE CATALOG (ADR-018)
+#############################################################################
+# Lakekeeper replaces v2's bind-mounted hadoop catalog (ADR-013) as the Iceberg
+# catalog, making Iceberg-on-MinIO the system of record rather than a JDBC copy
+# of ClickHouse. Runs alongside the v2 `k2` hadoop catalog until Phase D.
+#
+# Its metadata lives in a `lakekeeper` database on the existing prefect-db —
+# see docker/postgres/ddl/10-lakekeeper-db.sql. PostgreSQL init scripts only run
+# when the data directory is first created, so on a stack whose postgres-data
+# volume predates this change, create the database once by hand:
+#
+#   docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d postgres \
+#     -c 'CREATE DATABASE lakekeeper'
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Lakekeeper Migrate - One-shot schema migration for the catalog DB
+  # `migrate` creates the PostgreSQL extensions it needs itself, so the DDL
+  # file above only has to create an empty database.
+  # ───────────────────────────────────────────────────────────────────────
+  lakekeeper-migrate:
+    image: quay.io/lakekeeper/catalog:v0.13.3
+    container_name: k2-lakekeeper-migrate
+    networks:
+      - k2-net
+    environment:
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
+      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_ENCRYPTION_KEY}
+    command: ["migrate"]
+    depends_on:
+      prefect-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    restart: "no"
+    labels:
+      com.k2.service: "init"
+      com.k2.tier: "cold"
+      com.k2.version: "v3"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Lakekeeper - Iceberg REST catalog
+  # ───────────────────────────────────────────────────────────────────────
+  # Port published on loopback only: the catalog runs unauthenticated on a
+  # single host, and the only host-side consumers are the Phase E DuckDB /
+  # PyIceberg notebooks. Same reasoning as prefect-db's 127.0.0.1:15432.
+  # 18181 rather than 8181 because Redpanda already owns host 8081/8082.
+  #
+  # The image is distroless (no shell), so the healthcheck is the binary's own
+  # `healthcheck` subcommand — it GETs http://localhost:8181/health and exits
+  # non-zero on failure. CMD form, not CMD-SHELL: there is no shell to run.
+  lakekeeper:
+    image: quay.io/lakekeeper/catalog:v0.13.3
+    container_name: k2-lakekeeper
+    hostname: lakekeeper
+    networks:
+      - k2-net
+    ports:
+      - "127.0.0.1:18181:8181"
+    environment:
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
+      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_ENCRYPTION_KEY}
+      LAKEKEEPER__BASE_URI: http://lakekeeper:8181
+    command: ["serve"]
+    depends_on:
+      lakekeeper-migrate:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "catalog"
+      com.k2.tier: "cold"
+      com.k2.version: "v3"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Lake Init - One-shot: MinIO bucket, catalog bootstrap, warehouse, namespaces
+  # ───────────────────────────────────────────────────────────────────────
+  # Reuses the minio/minio image because it is the only image already in this
+  # stack carrying BOTH `mc` (bucket create) and `curl` (Lakekeeper REST) —
+  # minio/mc has no curl, curlimages/curl has no mc, and either alone would cost
+  # a second one-shot service. Idempotent; see docker/lake/init-lake.sh.
+  lake-init:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: k2-lake-init
+    networks:
+      - k2-net
+    volumes:
+      - ./docker/lake:/init:ro
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint: ["/bin/bash", "/init/init-lake.sh"]
+    depends_on:
+      minio:
+        condition: service_healthy
+      lakekeeper:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+    restart: "no"
+    labels:
+      com.k2.service: "init"
+      com.k2.tier: "cold"
+      com.k2.version: "v3"
+
+#############################################################################
 # SERVICES - TOPIC INITIALIZATION
 #############################################################################
 
   # ───────────────────────────────────────────────────────────────────────
-  # Redpanda Init - One-shot service to create topics with explicit partitions
+  # Redpanda Init - One-shot: topic creation + Avro schema registration
   # Runs once at startup; feed handlers depend on service_completed_successfully
   # ───────────────────────────────────────────────────────────────────────
+  # The script moved out of this file in Phase B: v3 adds Avro subject
+  # registration against the schema registry, which is more than a compose
+  # inline command should carry. After editing docker/redpanda/init.sh, run
+  # `docker compose up -d --force-recreate --no-deps redpanda-init`.
+  #
+  # A *directory* bind mount goes stale after a write-then-rename save exactly
+  # like the file-level config/instruments.yaml mount does — the staleness is
+  # held by the file-sharing layer for as long as ANY container has that host
+  # directory mounted, so a recreated container reads the old file too if a
+  # sibling still holds the path. `./docker/redpanda` is mounted by this service
+  # and nothing else (verified: `grep -n docker/redpanda docker-compose.yml`),
+  # so recreating redpanda-init alone is sufficient here. `./docker/lake` is
+  # NOT — see docker/README.md "A bind-mounted script runs its old contents".
   redpanda-init:
     image: docker.redpanda.com/redpandadata/redpanda:v25.3.4
     container_name: k2-redpanda-init
     networks:
       - k2-net
+    volumes:
+      - ./docker/redpanda:/init:ro
+      - ./schemas/avro:/schemas:ro
     depends_on:
       redpanda:
         condition: service_healthy
-    entrypoint: ["/bin/bash", "-c"]
-    command:
-      - |
-        rpk topic describe market.crypto.trades.binance.raw --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.binance.raw --partitions 40 --brokers redpanda:9092
-        rpk topic describe market.crypto.trades.binance     --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.binance     --partitions 40 --brokers redpanda:9092
-        rpk topic describe market.crypto.trades.kraken.raw  --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.kraken.raw  --partitions 20 --brokers redpanda:9092
-        rpk topic describe market.crypto.trades.kraken      --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.kraken      --partitions 20 --brokers redpanda:9092
-        rpk topic describe market.crypto.trades.coinbase.raw --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.coinbase.raw --partitions 20 --brokers redpanda:9092
-        rpk topic describe market.crypto.trades.coinbase     --brokers redpanda:9092 > /dev/null 2>&1 || rpk topic create market.crypto.trades.coinbase     --partitions 20 --brokers redpanda:9092
-        echo "✅ All topics initialized"
-        # Harden _schemas topic: compact policy + infinite retention prevents offset_out_of_range
-        # on schema registry restart (default delete policy trims records after 24h local retention)
-        rpk cluster config set kafka_nodelete_topics '["_redpanda.audit_log","__consumer_offsets"]' --api-urls redpanda:9644
-        rpk topic alter-config _schemas --set cleanup.policy=compact --set retention.ms=-1 --set retention.local.target.ms=-1 --brokers redpanda:9092
-        rpk cluster config set kafka_nodelete_topics '["_redpanda.audit_log","__consumer_offsets","_schemas"]' --api-urls redpanda:9644
-        echo "✅ _schemas topic hardened (compact, infinite retention)"
+    entrypoint: ["/bin/bash", "/init/init.sh"]
+    # Declared like the other one-shots so the bootstrap peak is arithmetic, not
+    # a guess — see the RESOURCE SUMMARY footer. rpk + curl in a shell loop.
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
     restart: "no"
     labels:
       com.k2.service: "init"
@@ -765,27 +917,43 @@ services:
 # Service               | CPU Limit | Memory Limit | Purpose
 # ----------------------|-----------|--------------|---------------------------
 # redpanda              | 2.0       | 2G           | Streaming backbone
-# redpanda-init         | -         | -            | One-shot topic init (exits)
 # redpanda-console      | 0.5       | 256M         | Streaming UI
 # clickhouse            | 4.0       | 8G           | Warm storage OLAP
 # minio                 | 1.0       | 1G           | S3-compatible storage
 # prometheus            | 1.0       | 2G           | Metrics collection
 # grafana               | 0.5       | 512M         | Visualization
-# prefect-db            | 1.0       | 1G           | Metadata + watermarks
-# prefect-server        | 1.0       | 1G           | Orchestration UI/API (v3.x)
-# prefect-worker        | 0.5       | 512M         | Workflow executor (v3.x)
+# prefect-db            | 1.0       | 1G           | Metadata + watermarks + catalog DB
+# prefect-server        | 1.0       | 1G           | Orchestration UI/API (Prefect 3.x)
+# prefect-worker        | 0.5       | 512M         | Workflow executor (Prefect 3.x)
 # spark-iceberg         | 2.0       | 4G           | ETL engine
+# lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018)
 # feed-handler-binance  | 0.5       | 512M         | Binance ingestion (12 pairs)
 # feed-handler-kraken   | 0.5       | 512M         | Kraken ingestion (11 pairs)
 # feed-handler-coinbase | 0.5       | 512M         | Coinbase ingestion (11 pairs)
 # iceberg-metrics       | 0.1       | 128M         | Offload alerts exporter (:8000)
-# iceberg-init          | -         | -            | One-shot Iceberg DDL bootstrap (exits)
 # ----------------------|-----------|--------------|---------------------------
-# TOTAL                 | 15.1 CPU  | 21.875 GB    | Full consolidated platform
+# STEADY STATE (15 long-running) | 15.35 CPU | 22.125 GB | Full consolidated platform
 #
-# Remaining budget: 0.9 CPU / 18.1 GB for future expansion
+# One-shots — NOT free. They declare limits and they run concurrently with the
+# steady state at boot, so the budget that matters at `docker compose up` is the
+# bootstrap peak, not the steady state:
+#
+#   redpanda-init      0.25 | 128M  topics + Avro subjects (docker/redpanda/init.sh)
+#   iceberg-init       0.5  | 1G    v2 cold.* hadoop-catalog DDL (docker/iceberg/ddl/)
+#   lakekeeper-migrate 0.5  | 256M  v3 catalog DB schema
+#   lake-init          0.25 | 128M  v3 bucket + warehouse + namespaces (docker/lake/init-lake.sh)
+#   ----------------------------------------------------------------------------
+#   one-shot subtotal  1.5  | 1.5G
+#
+# Bootstrap peak: 16.85 CPU / 23.625 GiB  (`docker compose config` limit sum — all
+# 19 services). That is over the 16 CPU target for the one-shots' lifetime, which
+# is seconds. The feed handlers gate only on redpanda-init; the other three
+# one-shots can overlap live traffic. CPU limits are a ceiling on scheduling,
+# not a reservation, so the overcommit is a burst not a failure.
+#
+# Steady-state headroom: 0.65 CPU / 17.875 GB for future expansion
 # Target: 16 CPU / 40 GB total
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-02-18
+# Last updated: 2026-08-26 (Phase B: +lakekeeper)
 #############################################################################

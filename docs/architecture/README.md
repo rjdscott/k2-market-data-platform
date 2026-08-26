@@ -1,6 +1,6 @@
 # Architecture — As Built
 
-K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, ClickHouse turns them into a Bronze → Silver → Gold medallion using nothing but Kafka-engine tables and materialized views, and a Prefect-scheduled Spark job appends the results to Iceberg every 15 minutes. The whole stack runs in one Docker Compose file on **15.1 CPU / 21.875 GB across 14 long-lived containers** (+2 one-shot init containers), against a mandate of 16 cores / 40 GB.
+K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, ClickHouse turns them into a Bronze → Silver → Gold medallion using nothing but Kafka-engine tables and materialized views, and a Prefect-scheduled Spark job appends the results to Iceberg every 15 minutes. The v2 pipeline runs in one Docker Compose file on **15.1 CPU / 21.875 GB across 14 long-lived containers** (+2 one-shot init containers), against a mandate of 16 cores / 40 GB. This branch also carries v3 foundations (Lakekeeper: +0.25 CPU / +256 MB, plus 2 more one-shot init containers), so what is actually deployed here is **15.35 CPU / 22.125 GB across 15 containers (+4 one-shot)**.
 
 Everything below describes what actually runs on `main` today. Where the design intent and the built system diverge, the divergence is called out rather than papered over. The story of how it got here is in [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md).
 
@@ -22,7 +22,7 @@ flowchart LR
         FHC["feed-handler-coinbase"]
     end
 
-    RP["Redpanda v25.3.4<br/>6 topics · 160 partitions<br/>built-in schema registry"]
+    RP["Redpanda v25.3.4<br/>v2: 6 topics · 160 partitions<br/>+v3: 9 topics · 108 partitions<br/>built-in schema registry"]
 
     subgraph CH["Hot store · ClickHouse 24.3 LTS"]
         Q["3 Kafka-engine queues<br/>JSONAsString"]
@@ -98,7 +98,7 @@ Three containers from one image (`services/feed-handler-kotlin/`), differing onl
 
 Single-broker Redpanda v25.3.4 in `dev-container` mode, `--smp 1 --memory 1500M`, with the schema registry built in — no separate Confluent registry process ([ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md)).
 
-Topics are created explicitly by the `redpanda-init` one-shot service rather than by auto-create, so partition counts are deterministic: 40 partitions for each Binance topic, 20 for each Kraken and Coinbase topic — 6 topics, 160 partitions. That job also hardens `_schemas` to `cleanup.policy=compact` with infinite retention, which fixed a real failure where the registry hit `offset_out_of_range` after a restart.
+Topics are created explicitly by the `redpanda-init` one-shot service rather than by auto-create, so partition counts are deterministic: 40 partitions for each Binance topic, 20 for each Kraken and Coinbase topic — v2: 6 topics, 160 partitions. This branch's v3 foundations add 9 more topics at 12 partitions each — `market.crypto.v3.{raw,trades,book}.<ex>` for each exchange — for +108 partitions, so `rpk topic list` shows 15 market topics / 268 partitions (plus `_schemas`). That job also hardens `_schemas` to `cleanup.policy=compact` with infinite retention, which fixed a real failure where the registry hit `offset_out_of_range` after a restart.
 
 ### Hot store — ClickHouse
 
@@ -205,9 +205,11 @@ The end-to-end p99 is dominated by network RTT to the exchanges (~80 ms average)
 | feed-handler-kraken | 0.5 | 512 MB |
 | feed-handler-coinbase | 0.5 | 512 MB |
 | iceberg-metrics | 0.1 | 128 MB |
-| **Total (14 services)** | **15.1** | **21.875 GB** |
+| **Subtotal, v2 (14 services)** | **15.1** | **21.875 GB** |
+| lakekeeper (v3) | 0.25 | 256 MB |
+| **Total, as deployed on this branch (15 services)** | **15.35** | **22.125 GB** |
 
-Two further entries, `redpanda-init` and `iceberg-init`, are one-shot containers (topic creation and Iceberg table bootstrap respectively) that exit after startup and are not counted in the total above. Budget and reasoning: [ADR-010](../adr/ADR-010-resource-budget.md), [docs/operations/docker-resources.md](../operations/docker-resources.md).
+Only `lakekeeper` is new since the v2 baseline — +0.25 CPU / +256 MB. Four further entries — `redpanda-init` (v2, topic creation), `iceberg-init` (v2 cold.* Hadoop-catalog DDL), `lakekeeper-migrate` (v3 catalog DB schema) and `lake-init` (v3 bucket + warehouse + namespaces) — are one-shot containers that exit after startup and are not counted in the totals above; v2 alone carries 2 of these, this branch's v3 foundations add 2 more (4 total). Budget and reasoning: [ADR-010](../adr/ADR-010-resource-budget.md), [docs/operations/docker-resources.md](../operations/docker-resources.md).
 
 ---
 

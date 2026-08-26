@@ -10,7 +10,7 @@ Three layers of partitioning, each solving a different problem: Redpanda partiti
 | `market.crypto.trades.kraken{,.raw}` | 20 | ~1–5 trades/s across 11 pairs |
 | `market.crypto.trades.coinbase{,.raw}` | 20 | Similar order to Kraken |
 
-Six topics, 160 partitions, created explicitly by the `redpanda-init` service so counts do not drift with auto-create defaults.
+v2: 6 topics, 160 partitions, created explicitly by the `redpanda-init` service so counts do not drift with auto-create defaults. This branch's v3 foundations add 9 topics · 108 partitions (`market.crypto.v3.{raw,trades,book}.<ex>`, 12 partitions each) — `rpk topic list` on this branch shows 15 topics / 268 partitions.
 
 These counts are provisioned for headroom, not for current load — a single ClickHouse Kafka-engine consumer (`kafka_num_consumers = 1`) keeps up with all of them today. Partition count is the one Kafka-family setting that cannot be reduced later without recreating the topic, so it is set for the volume this would handle, not the volume it handles.
 

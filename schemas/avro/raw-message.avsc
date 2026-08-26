@@ -1,0 +1,44 @@
+{
+  "type": "record",
+  "name": "RawMessage",
+  "namespace": "com.k2.market.v3",
+  "doc": "One WebSocket frame exactly as the exchange sent it, wrapped in the minimum lineage needed to replay it. Subject market.crypto.v3.raw.<exchange>-value under TopicNameStrategy. This is the system of record (ADR-018): Trade and BookSnapshotL2 are both functions of this stream, so any bug in normalisation, sequencing or book construction is repairable by reprocessing rather than by losing the day. Nothing in this record is parsed from the payload except what is needed to route it - the payload itself is never interpreted, reformatted, re-serialised or pretty-printed before it is written.",
+  "fields": [
+    {
+      "name": "exchange",
+      "type": "string",
+      "doc": "Lowercase venue identifier: binance | kraken | coinbase. Redundant with the topic name and stored anyway, so that a record dumped out of the lake or forwarded to a dead-letter topic still identifies its own origin without depending on where it was found."
+    },
+    {
+      "name": "stream",
+      "type": "string",
+      "doc": "Which subscription this frame arrived on, as the venue names it: `trade`, `depth20@100ms`, `book`, `level2`, `heartbeat`, `subscriptions`, and so on. Lets a replay filter to the frames a given consumer cares about without decoding every payload. Control frames are kept, not dropped: a `subscriptions` acknowledgement or an error frame is exactly what you want in the archive when explaining why a symbol went quiet."
+    },
+    {
+      "name": "symbol",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "The instrument this frame concerns, as the exchange spells it (`native` in config/instruments.yaml), when the frame concerns exactly one. Nullable because many frames legitimately concern none - heartbeats, subscription acknowledgements, error envelopes - and because Coinbase batches multiple products into one level2 envelope. null means 'not attributable to a single instrument', never 'unknown'; if a per-symbol frame cannot be attributed, that is a capture bug. The value is native rather than canonical because it is read out of the payload, and attaching the canonical mapping here would put a normalisation decision into the un-normalised archive."
+    },
+    {
+      "name": "recv_ts_ns",
+      "type": "long",
+      "doc": "K2 receive time, nanoseconds since the Unix epoch, taken as the first statement on frame receipt - before parse, before allocation, before the routing fields above are extracted. On this topic it is the only timestamp that is guaranteed present, since the payload may carry none. Duplicated as a Kafka header so a lag monitor can read it without decoding the frame."
+    },
+    {
+      "name": "conn_id",
+      "type": "string",
+      "doc": "Opaque identifier for the WebSocket connection, regenerated on every (re)connect. Segments the archive into connection episodes: exchange sequence numbers only run continuously within one conn_id, so a replay must reset its sequencing state at every conn_id boundary."
+    },
+    {
+      "name": "conn_msg_seq",
+      "type": "long",
+      "doc": "K2-assigned monotonic counter of frames on this conn_id, starting at 1. Together with conn_id this is the primary key of the archive, and it is what makes completeness provable: within one conn_id the counters must form an unbroken run, so a gap is capture-side loss regardless of what the exchange did. Trade.conn_msg_seq and BookSnapshotL2.conn_msg_seq are foreign keys into this field."
+    },
+    {
+      "name": "payload",
+      "type": "bytes",
+      "doc": "The frame body, byte for byte as it came off the socket. `bytes`, not `string`: a string forces a UTF-8 validation and a copy on every hop, and would corrupt rather than preserve a malformed frame - and a malformed frame is precisely the one worth keeping. Text frames are in practice UTF-8 JSON and decode as such; binary frames survive unchanged. Never compressed here - topic-level compression handles that and keeps the field a faithful copy."
+    }
+  ]
+}

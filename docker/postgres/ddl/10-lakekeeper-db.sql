@@ -1,0 +1,24 @@
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-- K2 v3 — Lakekeeper catalog database
+-- Purpose: give the Lakekeeper REST catalog its own database on the existing
+--          prefect-db instance, rather than a second PostgreSQL container.
+-- Database: PostgreSQL (prefect-db)
+-- ADR:      ADR-018 (Lakekeeper REST catalog replaces the hadoop bind mount)
+-- Added:    2026-08-26
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+--
+-- Runs from /docker-entrypoint-initdb.d as POSTGRES_USER, so the new database is
+-- owned by ${PREFECT_DB_USER} — the same role Lakekeeper connects as. No extension
+-- setup here: `lakekeeper migrate` creates the extensions it needs itself.
+--
+-- ⚠ PostgreSQL init scripts run ONLY when the data directory is first created.
+-- On a stack whose `postgres-data` volume already exists (i.e. every upgrade from
+-- v2), create it by hand once:
+--
+--   docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d postgres \
+--     -c 'CREATE DATABASE lakekeeper'
+--
+-- CREATE DATABASE cannot run inside a transaction block and has no IF NOT EXISTS,
+-- so this file deliberately contains exactly one statement and is not re-runnable.
+
+CREATE DATABASE lakekeeper;

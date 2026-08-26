@@ -16,9 +16,10 @@ make test-python   # offload flow unit tests (needs uv)
 | Suite | Count | Location | What it covers |
 |-------|------:|----------|----------------|
 | Kotlin — `TradeNormalizerTest` | 7 | [`services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/TradeNormalizerTest.kt`](../../services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/TradeNormalizerTest.kt) | Per-exchange symbol normalisation and trade mapping to the canonical schema |
-| Kotlin — `InstrumentsLoaderTest` | 9 | [`InstrumentsLoaderTest.kt`](../../services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/InstrumentsLoaderTest.kt) | Parsing `config/instruments.yaml`, per-exchange lookup, missing-file and malformed-YAML handling |
+| Kotlin — `InstrumentsLoaderTest` | 13 | [`InstrumentsLoaderTest.kt`](../../services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/InstrumentsLoaderTest.kt) | Parsing `config/instruments.yaml` (v2 schema), per-exchange lookup, missing-file and malformed-YAML handling |
 | Python — Iceberg maintenance flow | 28 | [`tests/test_iceberg_maintenance_flow.py`](../../tests/test_iceberg_maintenance_flow.py) | Compact / expire / audit tasks, the parent flows, failure policy, and script helpers — all with the Spark subprocess mocked |
-| **v2 total** | **44** | | |
+| Python — v3 data contracts | 41 | [`tests/test_contracts.py`](../../tests/test_contracts.py) | Structural checks on `schemas/avro/*.avsc` and `config/instruments.yaml` — sibling `logicalType`, fixed-point prices, nullable defaults, duplicate/malformed canonical symbols |
+| **v2 total** | **90** | | |
 | Legacy v1 | 180 | [`legacy/v1/tests/unit/`](../../legacy/v1/tests/unit/) | Archived. Kept for reference; not run in CI |
 
 ## Running them
@@ -27,7 +28,7 @@ make test-python   # offload flow unit tests (needs uv)
 
 ```bash
 cd services/feed-handler-kotlin
-./gradlew test --no-daemon          # 16 tests
+./gradlew test --no-daemon          # 20 tests
 ./gradlew build --no-daemon         # compile + test, what CI runs
 ```
 
@@ -66,7 +67,7 @@ on pushes to `main`:
 
 | Job | What it does |
 |-----|--------------|
-| **Kotlin (feed handler)** | `./gradlew build` on JDK 21 — compiles and runs the 16 tests. Uploads the HTML test report on failure |
+| **Kotlin (feed handler)** | `./gradlew build` on JDK 21 — compiles and runs the 20 tests. Uploads the HTML test report on failure |
 | **Python (offload + tests)** | `ruff check` then `pytest tests -q` under `uv` |
 | **Docker build** | Builds all three Dockerfiles (feed handler, Prefect worker, Spark) with GHA layer caching. Catches broken build contexts, not runtime behaviour |
 | **Security (Trivy)** | Filesystem scan for CRITICAL/HIGH findings, SARIF uploaded to GitHub code scanning. `legacy/` is skipped |

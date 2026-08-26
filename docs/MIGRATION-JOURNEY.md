@@ -58,14 +58,17 @@ timeline
 
 | | v1 | v2 as-built | Change |
 |---|---|---|---|
-| CPU limits | 35–40 cores | **15.1** | −57 to −63% |
-| RAM limits | 45–50 GB | **21.875 GB** | −52 to −56% |
+| CPU limits | 35–40 cores | **15.1** | −57 to −62% |
+| RAM limits | 45–50 GB | **21.875 GB** | −51 to −56% |
 | Long-lived services | 18–20 | **14** (+2 one-shot) | −22 to −30% |
 | Always-on Spark | 14 CPU / 20 GB | 0 (batch only) | −100% |
 | Python processes | 4 | 0 in the data path | Prefect remains, control plane only |
 | Trade → queryable | 5–15 min | **<200 ms p99** | >1000x |
 
-Fits the mandate on both axes, with 0.9 CPU and 18.1 GB of headroom.
+Fits the mandate on both axes, with 0.9 CPU and 18.125 GB of headroom. (v3 foundations on
+`feat/v3-foundations` add Lakekeeper — +0.25 CPU / +256 MB — for 15.35 CPU / 22.125 GB across
+15 services (+4 one-shot) as deployed on that branch; see
+[architecture/README.md](architecture/README.md).)
 
 ### Latency
 
@@ -142,7 +145,7 @@ Single broker, single ClickHouse node, single host, no replication. Iceberg on a
 
 2. **A database that already consumes Kafka does not need a service in front of it.** ClickHouse Kafka-engine tables plus materialized views replaced five Spark jobs *and* the Kotlin Silver Processor that was supposed to replace two of them. The best service is the one you notice you don't have to write.
 
-3. **Constraints beat intentions.** "Reduce resource usage" produces tuning. "16 cores, 40 GB, one host" produces architecture. The budget in [ADR-010](adr/ADR-010-resource-budget.md) was checked at every phase boundary, which is why the answer at the end was 15.0 and not 22.
+3. **Constraints beat intentions.** "Reduce resource usage" produces tuning. "16 cores, 40 GB, one host" produces architecture. The budget in [ADR-010](adr/ADR-010-resource-budget.md) was checked at every phase boundary, which is why the answer at the end was 15.1 and not 22.
 
 4. **Deleting a tool and repurposing it are different decisions.** [ADR-008](adr/ADR-008-eliminate-prefect-orchestration.md) argued Prefect was two services and a UI for what amounted to five cron jobs. That was true — of the OHLCV workload. Once MVs absorbed that, the offload job appeared, and it wanted retries, run history, watermark safety and a work pool. Prefect stayed for a better reason than it was originally there for. The ADR is kept as written, unamended.
 

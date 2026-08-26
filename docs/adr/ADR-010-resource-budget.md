@@ -299,3 +299,72 @@ services:
 - **Feed handlers split 1 → 3 containers** ([ADR-002](ADR-002-kotlin-feed-handlers.md) Outcome) and `redpanda-console` was added, costing +1.5 CPU / +1.75 GB against a single 1.0 CPU / 512 MB line item.
 
 Actual runtime usage sits far below these limits — feed handlers measure ~0.03 CPU / 134 MiB each against a 0.5 CPU / 512 MB cap. The budget held; the composition of it did not.
+
+## Outcome addendum (v3 Phase B, 2026-08-26)
+
+[ADR-018](ADR-018-v3-lake-first-rust-capture.md) makes Iceberg-on-MinIO the system of
+record behind a **Lakekeeper REST catalog**, which is a new always-on service where v2's
+hadoop catalog was a bind mount that cost nothing. It is the first line item added to the
+budget since the as-built table above.
+
+| Service | CPU Limit | RAM Limit | Note |
+|---------|-----------|-----------|------|
+| `lakekeeper` | 0.25 | 256M | Iceberg REST catalog (`quay.io/lakekeeper/catalog:v0.13.3`) |
+
+| Metric | As-built 2026-02 | As-built 2026-08-26 |
+|--------|------------------|---------------------|
+| CPU limits (steady state) | 15.1 | **15.35** |
+| RAM limits (steady state) | 21.875 GB | **22.125 GB** |
+| Long-running services | 14 | **15** |
+| One-shot services | 2 | **4** (`lakekeeper-migrate`, `lake-init` added) |
+| CPU / RAM at bootstrap peak | — | **16.85 / 23.625 GiB** |
+| Headroom vs 16 CPU / 40 GB | 6% / 45% | **4% / 45% steady; −4% CPU at boot** |
+
+Three things kept the cost to 0.25 CPU:
+
+- **No second PostgreSQL.** Lakekeeper's metadata lives in a `lakekeeper` database on the
+  existing `prefect-db` (`docker/postgres/ddl/10-lakekeeper-db.sql`), so the catalog adds
+  a process, not a database server. `prefect-db` absorbs it inside its existing 1.0 / 1 GB.
+- **No second object store.** MinIO was provisioned but carried no data — the v2 warehouse
+  is a bind mount ([ADR-013](ADR-013-pragmatic-iceberg-version-strategy.md)). The `k2-lake` bucket is
+  its first real user, at no new allocation.
+- **The bootstrap one-shots are cheap, and reuse an image already pulled.**
+  `lakekeeper-migrate` and `lake-init` exit in seconds, and `lake-init` runs the
+  `minio/minio` image already pulled for the MinIO service, so neither adds a
+  steady-state line item.
+
+  They are **not free**, which an earlier draft of this addendum claimed. All four
+  one-shots declare limits and all four run *concurrently with the 15.35 steady
+  state* at `docker compose up`:
+
+  | One-shot | CPU | RAM |
+  |----------|-----|-----|
+  | `redpanda-init` | 0.25 | 128M |
+  | `iceberg-init` | 0.5 | 1G |
+  | `lakekeeper-migrate` | 0.5 | 256M |
+  | `lake-init` | 0.25 | 128M |
+  | **subtotal** | **1.5** | **1.5G** |
+
+  So the honest numbers are: **steady state 15.35 CPU / 22.125 GB; bootstrap peak
+  16.85 CPU / 23.625 GiB for the one-shots' lifetime (seconds)**. That peak is over
+  the 16-core target. It is accepted rather than fixed: a CPU limit is a ceiling on
+  scheduling, not a reservation, so the overcommit is a burst that the kernel
+  resolves by sharing. Note the one-shots do *not* all finish before traffic
+  flows: the feed handlers gate only on `redpanda-init`; `iceberg-init`,
+  `lakekeeper-migrate` and `lake-init` sit on independent dependency branches
+  and were observed running after the handlers had started. The ceiling-not-
+  reservation argument carries the acceptance on its own.
+
+  `redpanda-init` declared no limits at all when this addendum was first written,
+  which is what made the peak unmeasurable; it now declares 0.25 / 128M and is
+  counted above. Provenance: sum of `deploy.resources.limits` over
+  `docker compose config` (19 services), 2026-08-26.
+
+Measured immediately after bootstrap: **3.25 % CPU / 39.34 MiB against the 256 MB cap**
+(`docker stats --no-stream`, 2026-08-26). The limit is headroom for the Phase C write
+volume, not sizing.
+
+**CPU headroom is now the tight axis at 0.65 cores.** Phase C adds three Rust capture
+containers and retires three JVM feed handlers (1.5 CPU / 1.5 GB); ADR-018 budgets the
+Rust tier at under 1.5 CPU combined, so the swap should be net-neutral to net-positive.
+If it is not, this Outcome gets a second addendum before Phase D.

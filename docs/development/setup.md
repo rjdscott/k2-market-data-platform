@@ -7,7 +7,7 @@ code once it is.
 
 | Tool | Needed for | Notes |
 |------|-----------|-------|
-| Docker Engine + Compose v2 | everything | Budget 16 CPU / 24 GB available to Docker. The stack declares 15.1 CPU / 21.875 GB of limits |
+| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 24 GB memory so every `deploy.resources.limits` can be honoured (`docker info --format '{{.MemTotal}}'`); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. The stack as deployed on this branch declares 15.35 CPU / 22.125 GB of limits (v2 alone: 15.1 CPU / 21.875 GB) |
 | JDK 21 | running Kotlin tests or a handler outside Docker | Only that; `./gradlew` bootstraps Gradle itself |
 | [`uv`](https://docs.astral.sh/uv/) | Python offload-flow tests | Nothing else uses Python locally |
 | `jq`, `psql` | the diagnostic one-liners in the ops docs | optional |
@@ -23,7 +23,9 @@ make ps
 `make up` builds three images on the first run — the Kotlin feed handler, the Prefect
 worker, and the Spark image (which downloads the ClickHouse JDBC driver). Allow **several
 minutes**; subsequent starts are seconds. Services come up healthy in dependency order —
-Redpanda, then `redpanda-init` creates the six topics and exits, then the feed handlers.
+Redpanda, then `redpanda-init` creates the topics and exits — v2: 6 topics · 160 partitions; this
+branch's v3 foundations add 9 more · 108 partitions (`market.crypto.v3.{raw,trades,book}.<ex>`) — then
+the feed handlers.
 
 Never commit `.env`. Everything reads its secrets from it; nothing in the repo hardcodes a
 password.

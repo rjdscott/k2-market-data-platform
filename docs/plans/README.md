@@ -29,4 +29,4 @@ and never renumbered.
 
 | Plan | Scope | Status |
 |------|-------|--------|
-| [2026-08-26-v3-quant-research-platform/](./2026-08-26-v3-quant-research-platform/README.md) | v3: Rust capture tier, lake-first Iceberg system of record, ClickHouse as derived hot tier, DuckDB query layer | Phases A–F; tracked via ADR-018+ and git tags |
+| [2026-08-26-v3-quant-research-platform/](./2026-08-26-v3-quant-research-platform/README.md) | v3: Rust capture tier, lake-first Iceberg system of record, ClickHouse as derived hot tier, DuckDB query layer | Phases A–G; tracked via ADR-018+ and git tags |

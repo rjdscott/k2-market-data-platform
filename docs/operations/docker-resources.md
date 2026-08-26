@@ -4,8 +4,9 @@ Every service in [`docker-compose.yml`](../../docker-compose.yml) declares both 
 `limit` and a guaranteed `reservation`. The design target was a single 16-core / 40 GB
 host; the as-built stack fits with room to spare.
 
-**As built: 15.1 CPU / 21.875 GB across every long-running resource-limited service (14)**
-(plus `redpanda-init` and `iceberg-init`, two one-shot containers that exit after startup).
+**As built: 15.35 CPU / 22.125 GB across every long-running resource-limited service (15)**
+(plus four one-shot containers that exit after startup: `redpanda-init`, `iceberg-init`,
+`lakekeeper-migrate`, `lake-init`).
 
 ## Allocation
 
@@ -16,6 +17,7 @@ host; the as-built stack fits with room to spare.
 | `clickhouse` | warm storage | 4.0 | 2.0 | 8 GB | 4 GB |
 | `minio` | cold storage | 1.0 | 0.5 | 1 GB | 512 MB |
 | `spark-iceberg` | cold storage | 2.0 | 1.0 | 4 GB | 2 GB |
+| `lakekeeper` | cold storage | 0.25 | 0.1 | 256 MB | 128 MB |
 | `prefect-db` | orchestration | 1.0 | 0.5 | 1 GB | 512 MB |
 | `prefect-server` | orchestration | 1.0 | 0.5 | 1 GB | 512 MB |
 | `prefect-worker` | orchestration | 0.5 | 0.25 | 512 MB | 256 MB |
@@ -25,11 +27,13 @@ host; the as-built stack fits with room to spare.
 | `feed-handler-kraken` | ingestion | 0.5 | 0.25 | 512 MB | 256 MB |
 | `feed-handler-coinbase` | ingestion | 0.5 | 0.25 | 512 MB | 256 MB |
 | `iceberg-metrics` | observability | 0.1 | — | 128 MB | — |
-| **Total (14 services)** | | **15.1** | **7.35** | **21.875 GB** | **10.88 GB** |
+| **Total (15 services)** | | **15.35** | **7.45** | **22.125 GB** | **11.0 GB** |
 | `redpanda-init` | init (one-shot) | — | — | — | — |
 | `iceberg-init` | init (one-shot) | — | — | — | — |
+| `lakekeeper-migrate` | init (one-shot) | — | — | — | — |
+| `lake-init` | init (one-shot) | — | — | — | — |
 
-Headroom against the 16 CPU / 40 GB envelope: **0.9 CPU (6%) and 18.1 GB (45%)**.
+Headroom against the 16 CPU / 40 GB envelope: **0.65 CPU (4%) and 17.875 GB (45%)**.
 
 ## Where the budget goes
 
@@ -43,6 +47,13 @@ Headroom against the 16 CPU / 40 GB envelope: **0.9 CPU (6%) and 18.1 GB (45%)**
   of the three), so the limits are headroom for volume spikes, not sizing.
 - **Observability is 1.6 CPU / 2.625 GB.** Prometheus and Grafana dominate it; `iceberg-metrics`
   (0.1 CPU / 128 MB) is the offload-alerts exporter. Drop retention if you need the RAM back.
+- **The Iceberg catalog costs 0.25 CPU / 256 MB.** Lakekeeper (v3, [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md))
+  is the only always-on service added since the v2 baseline. It stays that cheap because it
+  reuses `prefect-db` for its metadata (a `lakekeeper` database, not a second PostgreSQL) and
+  MinIO for its storage. `docker stats --no-stream k2-lakekeeper` showed 3.25% CPU / 39 MiB
+  after bootstrap, 2026-08-26 — this fluctuates (0.00% / 33.95 MiB observed minutes later on
+  the same run), so read the 0.25 CPU / 256 MB limit as the number that matters: idle usage is
+  well under 50 MiB.
 
 ## Sizing a new service
 
