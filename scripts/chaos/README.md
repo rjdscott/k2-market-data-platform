@@ -155,6 +155,8 @@ Each run appends one line to `scripts/chaos/results/<UTC-date>.tsv`:
 ts	script	expected_alert	t_fire_s	t_recover_s
 ```
 
+`ts` is when the row was written — the end of the run, not the injection; the FMEA
+quotes injection times, so the same run appears there a few minutes earlier.
 `t_fire_s` is seconds from injection to the alert entering `firing`; it reads
 `none` when the alert legitimately did not fire (a short `capture-kill.sh --hold`
 self-heals inside the 2-minute window, which is the documented expected behaviour,
