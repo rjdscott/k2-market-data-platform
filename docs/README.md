@@ -35,7 +35,7 @@ research/  →  adr/  →  plans/  →  audits/
 | Surface | Holds | Conventions |
 |---------|-------|-------------|
 | [research/](research/) | Analysis before a decision, dated. Allowed to be wrong in hindsight | [README](research/README.md) |
-| [adr/](adr/) | 17 ADRs. Immutable once accepted; divergence recorded in an `Outcome` section | [README](adr/README.md) · [template](adr/template.md) |
+| [adr/](adr/) | 18 ADRs. Immutable once accepted; divergence recorded in an `Outcome` section | [README](adr/README.md) · [template](adr/template.md) |
 | [plans/](plans/) | Multi-phase design documents with exit criteria per phase | [README](plans/README.md) |
 | [audits/](audits/) | Point-in-time sweeps of one surface, with a findings table | [README](audits/README.md) |
 | [benchmarks/](benchmarks/) | Dated measurement snapshots. Every published number traces here | [README](benchmarks/README.md) |

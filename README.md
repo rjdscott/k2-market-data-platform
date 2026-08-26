@@ -200,24 +200,70 @@ legacy/v1/                      Archived v1 platform
 docker-compose.yml              The whole stack
 ```
 
-## Status & roadmap
+## Where v2 falls short — and the v3 roadmap
 
-- **Phases 1–6 complete** — infrastructure, Redpanda, ClickHouse, streaming pipeline, Iceberg cold tier,
-  Kotlin feed handlers.
-- **Phase 7 (integration hardening): 4 of 5.** Done: latency benchmark, failure-mode testing, monitoring,
-  runbooks (8, in `docs/runbooks/`). Outstanding: 24 h resource burn-in.
-- **Phase 8 (query API): not started.** ADR-005 proposed one; deliberately deferred, since ClickHouse's
-  HTTP interface has been enough. There is no query API in this repo. 5×/10× load tests and Alertmanager
-  routing are also not done.
-- **Known issues:** Coinbase can lose a schema-registration race on cold start (fix:
-  `docker compose up -d --force-recreate --no-deps feed-handler-coinbase`); the Iceberg copy of
-  `silver_trades` omits its `Array`/`Map` columns — a ClickHouse JDBC limitation.
+v2 is complete and running: three exchanges, medallion in ClickHouse, Iceberg cold tier, 17 alert rules,
+8 runbooks. It is a good streaming pipeline and a poor research archive. This is a **quantitative-research**
+platform reading public WebSocket feeds over the open internet — it is **not a trading path**, and no number
+here should be read as one. What a quant actually needs from it — completeness they can prove, aggregations
+that are correct, and the ability to reproduce a figure from six months ago — v2 cannot deliver, for
+structural reasons rather than missing polish. An audit of the code (not the docs) found these:
+
+| Gap | Why it matters to a quant | v3 fix | ADR |
+|---|---|---|---|
+| Lake is a JDBC copy of ClickHouse, not the system of record — [`offload_generic.py:172`](./docker/offload/offload_generic.py#L172) | The archive inherits the serving DB's normalisation, its 7-day TTL, and the driver's dropped `Array`/`Map` columns. Nothing is reproducible | Spark batch reads Redpanda by offset range → Iceberg `raw.messages` (verbatim, never expired) → `bronze.*`; ClickHouse becomes derived | [018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md), 021, 022 |
+| OHLCV open/high/low/close resolve **arbitrarily** across merges — [`01-k2-schema.sql:178`](./docker/clickhouse/ddl/01-k2-schema.sql#L178) | `SummingMergeTree` sums volume correctly and picks non-summed columns at random. A candle can carry a close that never traded last. This is a real bug | OHLCV computed on read over deduplicated trades, plus a CI regression test across two insert blocks | 026 |
+| Bronze is plain `MergeTree` — [`01-k2-schema.sql:88`](./docker/clickhouse/ddl/01-k2-schema.sql#L88) | Replaying a topic duplicates every row. No key, no version, no dedup — so recovery corrupts history | `ReplacingMergeTree` hot tier with an explicit dedup contract; the lake holds truth | 025, 026 |
+| No receive timestamp before parse — [`TradeNormalizer.kt:28`](./services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L28) | Exchange-clock skew and platform latency are not separable in any stored row, so no honest latency distribution exists | `recv_ts_ns` taken as the first statement on frame receipt, carried in the record body and a Kafka header | 019, 020 |
+| Kraken on WS v1 with synthesised trade IDs — [`TradeNormalizer.kt:60`](./services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L60) | `KRAKEN-${ms}-${pair.hashCode()}` collides for two trades in the same millisecond — dedup and joins are unsound | Kraken WS v2: real `trade_id`, plus CRC32 book checksum verified on every update | 019, 027 |
+| Coinbase `sequence_num` parsed and never checked — [`CoinbaseWebSocketClient.kt:178`](./services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/CoinbaseWebSocketClient.kt#L178) | A dropped message is silent. Completeness is assumed, never measured | Per-exchange sequencing with gap counters, resync on gap, and audits over the lake | 019, 027 |
+| Avro contract broken and unused — [`normalized-trade.avsc:60`](./schemas/avro/normalized-trade.avsc#L60), [`01-k2-schema.sql:39`](./docker/clickhouse/ddl/01-k2-schema.sql#L39) | `logicalType` sits as a sibling of `type` (Avro ignores it) and prices are strings; ClickHouse reads raw JSON instead. The registry proves nothing | One wire format: Avro + registry, fixed-point `int64` @1e-8, `BACKWARD_TRANSITIVE` compatibility | 020 |
+| Trades only, no order book; raw topics keyed by exchange name — [`KafkaProducerService.kt:155`](./services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/KafkaProducerService.kt#L155) | No L2 means no spread, no imbalance, no microprice — most of what research wants. Single-key topics also pin two exchanges to one partition | Rust `k2-capture` does trades + L2 on one connection, top-20 snapshots at 1 Hz, symbol-keyed topics | 019, 027 |
+
+### v3 target architecture
+
+```mermaid
+flowchart LR
+  EX["Exchanges · public WS<br/>Binance · Kraken · Coinbase"]
+  CAP["k2-capture ×3 · Rust<br/>trades + L2 · recv_ts · seq · CRC32"]
+  RP[("Redpanda<br/>Avro + registry")]
+  IB[("Iceberg · Lakekeeper + MinIO<br/>system of record")]
+  CH["ClickHouse hot tier<br/>derived · rebuildable · 7d TTL"]
+  DD["DuckDB + PyIceberg<br/>notebooks"]
+  GR["Grafana + Prometheus"]
+  EX --> CAP --> RP
+  RP -->|"Spark batch · offsets in snapshot"| IB
+  RP --> CH
+  IB -->|rebuild| CH
+  IB --> DD
+  CH --> GR
+  CAP -.metrics.-> GR
+```
+
+Everything except the lake is derived and rebuildable. Same 16 CPU / 40 GB single host.
+
+**Phases** ([full plan](./docs/plans/2026-08-26-v3-quant-research-platform.md)):
+
+- **A — public now.** v2 shipped as-is, honestly labelled; v3 built in the open.
+- **B — foundations.** Verify-first spikes, Avro contracts, Lakekeeper + MinIO, Spark image bump.
+- **C — Rust capture.** `k2-capture` per exchange, trades + L2, 24 h parity run, Kotlin retired.
+- **D — lake tier.** Raw + bronze Iceberg tables, exactly-once ingest, completeness audits.
+- **E — hot tier.** ClickHouse rebuilt as derived: `ReplacingMergeTree`, OHLCV on read.
+- **F — notebooks & numbers.** DuckDB research notebooks, 24 h burn-in, published measurements.
+
+Design and rejected alternatives: [ADR-018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md) (Proposed).
+
+**Still true of v2 today:** Phase 7 is 4 of 5 (24 h resource burn-in outstanding); there is no query API
+([ADR-005](./docs/adr/ADR-005-kotlin-spring-boot-api.md), deferred); no Alertmanager routing and no load
+testing above 1×; Coinbase can lose a schema-registration race on cold start (fix:
+`docker compose up -d --force-recreate --no-deps feed-handler-coinbase`).
 
 ## Documentation
 
 - [`docs/README.md`](./docs/README.md) — start here
 - [`docs/architecture/README.md`](./docs/architecture/README.md) — system design
-- [`docs/adr/`](./docs/adr/) — all 17 ADRs
+- [`docs/adr/`](./docs/adr/) — all 18 ADRs, including [ADR-018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md) (v3, Proposed)
+- [`docs/plans/2026-08-26-v3-quant-research-platform.md`](./docs/plans/2026-08-26-v3-quant-research-platform.md) — the v3 plan
 - [`docs/operations/`](./docs/operations/) — runbooks, observability, cost model
 - [`docs/development/setup.md`](./docs/development/setup.md) — local development
 - [`docs/MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md) — the v1 → v2 story

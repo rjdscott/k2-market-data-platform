@@ -1,6 +1,6 @@
 # Architectural Decision Records
 
-Seventeen ADRs covering the design and rebuild of the K2 Market Data Platform: Kotlin/Ktor feed handlers → Redpanda → ClickHouse (medallion via materialized views) → Iceberg with a Hadoop catalog on a bind-mounted local warehouse (MinIO provisioned, unused by the offload), with Spark batch offload orchestrated by Prefect. ADR-001 to ADR-010 were written up front in February 2026, before any of it was built; ADR-011 to ADR-017 came out of implementation. The status column below records what actually happened — including the one decision that was reversed (ADR-008) and the one never built (ADR-005). Each ADR that deviated from its own design carries an `Outcome` section at the end explaining why.
+Eighteen ADRs covering the design and rebuild of the K2 Market Data Platform: Kotlin/Ktor feed handlers → Redpanda → ClickHouse (medallion via materialized views) → Iceberg with a Hadoop catalog on a bind-mounted local warehouse (MinIO provisioned, unused by the offload), with Spark batch offload orchestrated by Prefect. ADR-001 to ADR-010 were written up front in February 2026, before any of it was built; ADR-011 to ADR-017 came out of implementation. The status column below records what actually happened — including the one decision that was reversed (ADR-008) and the one never built (ADR-005). Each ADR that deviated from its own design carries an `Outcome` section at the end explaining why. ADR-018 opens the v3 series: an umbrella decision, still Proposed, arguing that the v2 shape is wrong for research work.
 
 Measured as-built: **15.1 CPU / 21.875 GB** across 14 long-running services (+2 one-shot), against a 16 CPU / 40 GB budget. End-to-end p99 trade → ClickHouse Silver: **170–197 ms** across Binance, Kraken and Coinbase. All 6 failure-mode tests pass, max MTTR 32 s. Every figure here traces to [`../benchmarks/2026-02-19-v2-baseline.md`](../benchmarks/2026-02-19-v2-baseline.md).
 
@@ -49,6 +49,12 @@ Measured as-built: **15.1 CPU / 21.875 GB** across 14 long-running services (+2 
 | [015](ADR-015-clickhouse-lts-downgrade.md) | ClickHouse 24.3 LTS downgrade | Accepted — Implemented | Latest ClickHouse broke every Spark JDBC driver; LTS is the version that has drivers |
 | [016](ADR-016-add-coinbase-exchange.md) | Add Coinbase as 3rd exchange | Accepted — Implemented | 11 pairs live; validated the ADR-011 Bronze pattern end to end |
 | [017](ADR-017-iceberg-maintenance-pipeline.md) | Iceberg daily maintenance pipeline | Accepted — Implemented | Nightly compact → expire → audit; audit gate fails the run on missing data |
+
+## v3 decisions (2026-08-26 →)
+
+| ADR | Title | Status | Outcome |
+|-----|-------|--------|---------|
+| [018](ADR-018-v3-lake-first-rust-capture.md) | v3: lake-first, Rust capture tier | **Proposed** | Umbrella for the v3 rebuild; supersedes ADR-002/007/009/013/014 when accepted, via follow-on ADRs 019–028 |
 
 ---
 
