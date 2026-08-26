@@ -10,9 +10,17 @@
 # the path is now machine-checkable, which is what lets CI assert that every alert
 # in this file points at a runbook that exists.
 #
-# NOT verified against a running capture tier - Phase C has not been built. These
-# thresholds are designed, and the Phase C chaos run (`make chaos`) is what proves
-# each one fires and what it costs to recover. Thresholds move then, not before.
+# Verification status, 2026-08-26: the capture tier IS built and running (three
+# k2-capture-* containers, image k2-capture:v3), so these rules are evaluated
+# against live series. What has NOT happened is a fault injection: `make chaos`
+# has never been run (`scripts/chaos/results/` does not exist), so no rule here
+# has been shown to fire on the fault it names, and no recovery time in the
+# runbooks is measured. Thresholds move when chaos runs, not before.
+#
+# `promtool test rules docker/prometheus/tests/capture-alerts.test.yml`
+# (`make check-alerts`, and the docs job in CI) covers the three rules whose
+# expressions have been wrong in a way live series could not reveal:
+# CaptureFeedStale, CaptureProduceStalled, CaptureBookDepthDegraded.
 
 groups:
   - name: capture_critical
@@ -29,13 +37,16 @@ groups:
           component: capture
           tier: ingestion
         annotations:
-          summary: "Capture container for {{ $labels.exchange }} is down (metrics endpoint unreachable)"
+          summary: "{{ $labels.job }} is down (metrics endpoint unreachable)"
           description: |
             Prometheus has not scraped {{ $labels.job }} for at least 2 minutes.
             The container is down, crashed, or the metrics server on :8082 is
             unreachable.
 
-            While this fires, nothing from {{ $labels.exchange }} reaches Redpanda:
+            `up` is a synthetic series, so it carries the scrape job's labels and
+            not the binary's: the venue is in {{ $labels.job }}, there is no
+            `exchange` label here. While this fires, nothing from that venue
+            reaches Redpanda:
             no trades, no book snapshots, and no raw frames. That window is
             permanently absent from the archive - the exchange does not replay it.
           runbook: docs/runbooks/capture-down.md
@@ -43,9 +54,23 @@ groups:
       # CRITICAL: A stream is up but has delivered nothing recently.
       # Per (exchange, stream): trades, book and raw each stamp their own metric,
       # so a stalled book subscription is visible while trades keep flowing.
+      #
+      # Only *continuous* streams carry this gauge (main.rs `CONTINUOUS`), and
+      # `run` seeds every one of them at process start. Both halves matter: a
+      # one-shot subscribe ack stamped here fired a permanent critical about two
+      # minutes after every healthy connect, and an unseeded gauge means a
+      # silently-rejected subscription has no series at all, so `time() -
+      # <absent>` is empty and this rule cannot fire on the failure it exists for.
+      #
+      # The `up` guard keeps one dead container to one alert. Without it a
+      # crashed process fires CaptureDown *plus* one CaptureFeedStale per
+      # continuous stream — five criticals for one incident, four of them
+      # pointing at the wrong runbook — because the gauges stay queryable for the
+      # whole staleness window after the process is gone.
       - alert: CaptureFeedStale
         expr: |
-          time() - k2_capture_last_message_ts_seconds > 60
+          (time() - k2_capture_last_message_ts_seconds > 60)
+          and on (job) up == 1
         for: 2m
         labels:
           severity: critical
@@ -98,7 +123,7 @@ groups:
           component: capture
           tier: ingestion
         annotations:
-          summary: "Book checksum mismatch on {{ $labels.exchange }} ({{ $value | humanize }} in 10m)"
+          summary: "Book checksum mismatch on {{ $labels.exchange }} {{ $labels.symbol }} ({{ $value | humanize }} in 10m)"
           description: |
             The CRC32 computed over the local book did not match the checksum
             {{ $labels.exchange }} published, {{ $value | humanize }} time(s) in the
@@ -113,19 +138,25 @@ groups:
           runbook: docs/runbooks/capture-checksum-failure.md
 
       # CRITICAL: records are being built but not accepted by the broker.
+      # `increase(...[10m]) > 0`, not a rate threshold: `> 0.1/s` tolerates 8,640
+      # permanently-lost records a day, and the description below is explicit
+      # that the loss is permanent. The counter is seeded at zero for all four
+      # reasons at startup (metrics.rs `zero`), so the 0 -> 1 step is detectable
+      # — the same treatment CaptureSequenceGaps gets above, for the same reason.
       - alert: CaptureProduceErrors
         expr: |
-          rate(k2_capture_produce_errors_total[5m]) > 0.1
-        for: 3m
+          increase(k2_capture_produce_errors_total[10m]) > 0
+        for: 5m
         labels:
           severity: critical
           component: capture
           tier: ingestion
         annotations:
-          summary: "Capture produce errors on {{ $labels.exchange }} ({{ $value | humanize }}/s)"
+          summary: "Capture produce errors on {{ $labels.exchange }} — {{ $value | humanize }} in 10m, reason={{ $labels.reason }}"
           description: |
-            The capture process for {{ $labels.exchange }} is failing to produce to
-            Redpanda at {{ $value | humanize }} errors/sec.
+            The capture process for {{ $labels.exchange }} failed to produce
+            {{ $value | humanize }} record(s) to Redpanda in the last 10 minutes,
+            with reason={{ $labels.reason }}.
 
             librdkafka's queue is the only buffer in this tier and it drops on full
             with a counter (ADR-019) - there is no spill-to-disk. Sustained produce
@@ -137,11 +168,19 @@ groups:
       # CRITICAL: the early warning before CaptureProduceErrors's first drop -
       # capture is still reading the exchange but nothing is reaching the broker,
       # so the librdkafka queue is filling with no counter moving yet.
+      #
+      # On DELIVERIES, not on produces. `records_produced_total` counts the local
+      # enqueue (`sink.rs`: the counter increments on `send_result` returning Ok,
+      # which is the moment the record is in librdkafka's queue), so during the
+      # 194-446 s window this alert was written for — broker gone, 32 MiB queue
+      # filling — it climbs at full rate and never reaches 0. The alert could not
+      # fire in the only scenario it names. `records_delivered_total` is
+      # incremented from the delivery report, and that is what goes flat.
       - alert: CaptureProduceStalled
         expr: |
-          sum by (exchange) (rate(k2_capture_records_produced_total[1m])) == 0
+          sum by (exchange) (rate(k2_capture_records_delivered_total[1m])) == 0
           and
-          sum by (exchange) (rate(k2_capture_messages_total[1m])) > 0
+          sum by (exchange) (rate(k2_capture_records_produced_total[1m])) > 0
         for: 30s
         labels:
           severity: critical
@@ -150,9 +189,10 @@ groups:
         annotations:
           summary: "capture is receiving but not producing — librdkafka queue is filling; data is lost in ~194–446 s (capacity-model §4)"
           description: |
-            {{ $labels.exchange }} is still reading exchange frames
-            (k2_capture_messages_total climbing) but k2_capture_records_produced_total
-            has been flat for a full minute. Nothing is dropping yet - the queue
+            {{ $labels.exchange }} is still building and enqueueing records
+            (k2_capture_records_produced_total climbing) but
+            k2_capture_records_delivered_total — the broker's own acknowledgements
+            — has been flat for a full minute. Nothing is dropping yet - the queue
             (32 MiB, ADR-019) is filling silently, and CaptureProduceErrors will not
             fire until it is full and starts dropping. This alert is the window
             before that: 194 s (binance), 204 s (kraken) or 446 s (coinbase) from the
@@ -218,24 +258,49 @@ groups:
             cannot be separated in one sample. A step change matters; the absolute
             value does not.
 
-            Binance's partial-depth book stream carries no exchange_ts at all, so
-            book frames from that venue never contribute to this histogram.
+            ONLY TRADES FEED THIS HISTOGRAM, on every venue - `main.rs` records it
+            inside `if let OutRecord::Trade(t) = record`. No book frame from
+            Binance, Kraken or Coinbase contributes, so a book-path latency
+            regression is invisible here. Binance's partial-depth stream carries
+            no exchange_ts to measure against in any case; Kraken and Coinbase
+            book frames do carry one and are simply not recorded.
           runbook: docs/runbooks/capture-feed-stale.md
 
-      # WARNING: the book is thinner than the product promises.
+      # WARNING: a symbol's local book has collapsed.
+      #
+      # `k2_capture_book_depth` is TOTAL RESTING LEVELS ACROSS BOTH SIDES, not
+      # levels per side: `book.rs` sets it to `self.bids.len() + self.asks.len()`.
+      # Threshold 20 is therefore 10 a side. It was 10, described as per-side,
+      # which is half the intended floor.
+      #
+      # `max_over_time`, not `min_over_time`: a resync empties the book by design,
+      # and one empty sample keeps `min_over_time(...[10m])` under the threshold
+      # for the ten minutes that follow — one evaluation short of the `for: 10m`
+      # gate, on a routine recovery. The max form asks "did this book fail to
+      # reach 10 levels a side at ANY point in ten minutes", which is a collapse
+      # and not a recovery, and the difference is pinned in
+      # docker/prometheus/tests/capture-alerts.test.yml.
+      #
+      # What this does NOT catch: a deep book thinning without collapsing.
+      # Coinbase runs full depth (13,000-15,000 levels on liquid symbols,
+      # measured 2026-08-26 over the 12:38-13:07Z window), so a fall to 50 levels
+      # is a severe degradation that stays far above this floor. Detecting that
+      # needs a per-venue, per-symbol baseline. Revisit when Phase F publishes
+      # measured depth distributions per venue in capacity-model.md.
       - alert: CaptureBookDepthDegraded
         expr: |
-          min_over_time(k2_capture_book_depth[10m]) < 10
+          max_over_time(k2_capture_book_depth[10m]) < 20
         for: 10m
         labels:
           severity: warning
           component: capture
           tier: ingestion
         annotations:
-          summary: "Book depth below 10 levels for {{ $labels.exchange }} {{ $labels.symbol }}"
+          summary: "Book collapsed below 20 total levels for {{ $labels.exchange }} {{ $labels.symbol }}"
           description: |
-            {{ $labels.exchange }} {{ $labels.symbol }} has held fewer than 10 levels
-            per side for 10 minutes (top-20 is the canonical product, ADR-027).
+            {{ $labels.exchange }} {{ $labels.symbol }} did not reach 20 resting
+            levels across both sides at any point in the last 10 minutes — under
+            10 a side, against a canonical top-20-per-side product (ADR-027).
 
             Two causes, and they need opposite responses: a genuinely thin
             instrument is correct data and the fix is an exclusion for that symbol,

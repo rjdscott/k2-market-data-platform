@@ -73,8 +73,8 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "up{job=~\"capture-.*\", exchange=~\"$exchange\"}",
-          "legendFormat": "{{job}} {{exchange}}",
+          "expr": "up{job=~\"capture-($exchange)\"}",
+          "legendFormat": "{{job}}",
           "refId": "A"
         }
       ]
@@ -263,7 +263,7 @@
       "targets": [
         {
           "expr": "increase(k2_capture_gaps_total{exchange=~\"$exchange\"}[1h])",
-          "legendFormat": "{{exchange}} {{stream}}",
+          "legendFormat": "{{exchange}}",
           "refId": "A"
         }
       ]
@@ -326,7 +326,7 @@
       "targets": [
         {
           "expr": "increase(k2_capture_checksum_failures_total{exchange=~\"$exchange\"}[1h])",
-          "legendFormat": "{{exchange}}",
+          "legendFormat": "{{exchange}} {{symbol}}",
           "refId": "A"
         }
       ]
@@ -389,7 +389,7 @@
       "targets": [
         {
           "expr": "increase(k2_capture_resyncs_total{exchange=~\"$exchange\"}[1h])",
-          "legendFormat": "{{exchange}} {{stream}}",
+          "legendFormat": "{{exchange}}",
           "refId": "A"
         }
       ]
@@ -531,13 +531,18 @@
         }
       },
       "pluginVersion": "9.0.0",
-      "title": "Records Produced / sec (by kind)",
+      "title": "Records Produced vs Delivered / sec",
       "type": "timeseries",
       "targets": [
         {
           "expr": "rate(k2_capture_records_produced_total{exchange=~\"$exchange\"}[1m])",
-          "legendFormat": "{{exchange}} {{kind}}",
+          "legendFormat": "{{exchange}} {{kind}} enqueued",
           "refId": "A"
+        },
+        {
+          "expr": "rate(k2_capture_records_delivered_total{exchange=~\"$exchange\"}[1m])",
+          "legendFormat": "{{exchange}} delivered (broker ack)",
+          "refId": "B"
         }
       ]
     },
@@ -879,7 +884,7 @@
       "targets": [
         {
           "expr": "rate(k2_capture_precision_loss_total{exchange=~\"$exchange\"}[5m])",
-          "legendFormat": "{{exchange}}",
+          "legendFormat": "{{exchange}} {{reason}}",
           "refId": "A"
         }
       ]
