@@ -190,9 +190,9 @@ and every other tier is derived from that ([ADR-021](adr/ADR-021-raw-first-archi
 [ADR-018](adr/ADR-018-v3-lake-first-rust-capture.md)). The Outcome sections of
 [ADR-014](adr/ADR-014-spark-based-iceberg-offload.md) and
 [ADR-017](adr/ADR-017-iceberg-maintenance-pipeline.md) carry the full reasoning, including
-why the planned 2-hour parallel run before deletion was dropped rather than run: the
-Kotlin feed handlers had already retired, which froze the `k2.*` tables the offload reads,
-so the comparison would have measured a stopped clock against a running one.
+why the planned 2-hour parallel run before deletion was dropped rather than run: the two
+paths write different tables, from different sources, into different catalogs, so no
+row-count comparison between them could have said anything either way.
 
 Budget: steady state drops from 16.20 to **16.10 CPU / 23.125 GiB across 18 long-running
 services**, one-shots from 5 to 4, bootstrap peak from 18.20 to **17.60 CPU / 24.625 GiB**

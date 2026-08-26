@@ -65,11 +65,11 @@ test-legacy-kotlin:  ## Archived v2 Kotlin feed handler tests (legacy/v2-kotlin;
 build-capture:  ## Build k2-capture:v3 from the repo root, stamping the git sha
 	docker compose build capture-binance
 
-check-alerts:  ## promtool: syntax-check every rule file and run the capture alert unit tests
+check-alerts:  ## promtool: syntax-check every rule file and run the capture + lake alert unit tests
 	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus \
 	  -c 'promtool check rules /p/rules/*.yml'
-	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint promtool prom/prometheus \
-	  test rules /p/tests/capture-alerts.test.yml
+	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus \
+	  -c 'promtool test rules /p/tests/*.test.yml /p/rules/tests/*_test.yml'
 
 lint:  ## Ruff over the v3 lake and the tests (same scope as CI)
 	uv run --no-project --with ruff ruff check docker/lake tests

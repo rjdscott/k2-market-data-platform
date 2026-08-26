@@ -495,10 +495,16 @@ with the consumed offsets written into the same Iceberg commit as the rows: the 
 exactly-once guarantee with one store instead of two.
 
 The plan called for a 2-hour parallel run of both paths before deletion. It was dropped on
-the maintainer's decision (2026-08-27): the Kotlin feed handlers retired in the preceding
-PR, which froze the `k2.*` ClickHouse tables the offload reads, so the comparison would
-have measured a frozen watermark against a live ingest — a green table meaning nothing. v2
-data is disposable (`docs/research/2026-08-26-v3-requirements-clarification.md`, Q7). Gone
+the maintainer's decision (2026-08-27), because the two paths have no comparable output to
+run in parallel. `cold.*` is a copy of ClickHouse's `k2.*` — normalised, TTL'd, minus the
+two columns the JDBC driver could not deserialize — fed by the Kotlin handlers. `bronze.*`
+is derived from the verbatim frames the Rust capture tier writes to `raw.messages`.
+Different source, different schema, different catalog: a row-count agreement between them
+would not have shown the new path correct, and a disagreement would not have shown it
+wrong. The comparison that decides whether the new path sees what the old one saw is the
+Kotlin/Rust parity window ([ADR-019](ADR-019-rust-capture-tier.md)), and that runs on its
+own schedule regardless of what the offload does. v2 data is disposable
+(`docs/research/2026-08-26-v3-requirements-clarification.md`, Q7). Gone
 with it: `docker/offload/`, `docker/iceberg/`, the `offload_watermarks` table, the
 `iceberg-metrics` and `iceberg-init` compose services, 9 alert rules, one Grafana
 dashboard, 28 tests, and the `clickhouse-jdbc` / `psycopg2` dependencies from the Spark

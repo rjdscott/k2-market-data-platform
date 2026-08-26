@@ -61,16 +61,17 @@ uv run --no-project --with ruff ruff check docker/lake tests
 
 ## CI
 
-[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs five jobs on every PR and
-on pushes to `main`: **rust**, **python**, **docker** (×3 matrix), **docs**, **security**.
-The **kotlin** job was deleted with the handlers — nothing in CI builds or tests
-`legacy/v2-kotlin/`.
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs six jobs on every PR and
+on pushes to `main`: **rust**, **python**, **docker** (×3 matrix), **compose**, **docs**,
+**security**. The **kotlin** job was deleted with the handlers — nothing in CI builds or
+tests `legacy/v2-kotlin/`.
 
 | Job | What it does |
 |-----|--------------|
 | **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain — runs the 58 tests |
 | **Python (lake + tests)** | `ruff check` then `pytest tests -q` under `uv` — runs the 164 tests |
 | **Docker build** | 3-way matrix: Prefect worker, Spark, capture, with GHA layer caching. Every leg builds from the repo root. Catches broken build contexts, not runtime behaviour |
+| **Compose (config validation)** | `docker compose --env-file .env.example config -q`, then a check that every service declares `deploy.resources.limits` — a service with no limit escapes the ADR-010 budget and nothing else would notice |
 | **Docs** | `bash scripts/check-docs.sh` — link/word/rule gates, promtool, runbook annotation paths, capacity-model gate, mermaid width |
 | **Security (Trivy)** | Filesystem scan for CRITICAL/HIGH findings, SARIF uploaded to GitHub code scanning. `legacy/` is skipped |
 

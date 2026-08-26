@@ -219,9 +219,10 @@ tests remain on the roadmap.
 `make test` runs the first two. The Kotlin suite is deliberately outside it: the code is archived,
 not maintained, and a green run of it proves nothing about what is deployed.
 
-[`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs five jobs per PR:
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs six jobs per PR:
 **rust** (fmt + clippy `-D warnings` + `cargo test`), **python** (Ruff + pytest), **docker** (3-way
-matrix: prefect, spark, capture), **docs** (`check-docs.sh`), **security** (Trivy → SARIF). Strategy:
+matrix: prefect, spark, capture), **compose** (`config -q` + every service declares limits), **docs**
+(`check-docs.sh`), **security** (Trivy → SARIF). Strategy:
 [`docs/development/testing.md`](./docs/development/testing.md).
 
 ## Repository layout

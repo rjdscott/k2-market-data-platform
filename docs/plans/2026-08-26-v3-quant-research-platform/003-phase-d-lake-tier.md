@@ -141,15 +141,17 @@ shipped. The plan is left as written; the reasons are here.
   freezes every other gauge — which is why nothing here exports an age any more.
 
 - **The 2-hour parallel run of the old offload against the new ingest was dropped, and
-  `docker/offload/` was deleted without it** (maintainer decision, 2026-08-27). The Kotlin
-  feed handlers retired in the PR immediately before this one, which stops every producer
-  feeding the `k2.*` ClickHouse tables the offload reads. A parallel run from that point
-  measures a frozen watermark against a live ingest: the offload would report zero lag and
-  zero rows because there is nothing left to offload, and no row-count comparison between
-  the two paths could say anything. The window would have produced a green table meaning
-  nothing, and two Spark drivers in one 4 GiB container for two hours to produce it. v2
-  data is disposable (`../../research/2026-08-26-v3-requirements-clarification.md`, Q7), so
-  there was nothing to protect by keeping the old path alive.
+  `docker/offload/` was deleted without it** (maintainer decision, 2026-08-27). The two
+  paths have nothing comparable to put side by side: `cold.*` copies ClickHouse's
+  normalised, TTL'd `k2.*` tables that the Kotlin handlers feed, and `bronze.*` is derived
+  from the verbatim frames the Rust capture tier writes to `raw.messages`. Different
+  source, different schema, different catalog — a row-count agreement would not have shown
+  the new path correct and a disagreement would not have shown it wrong. The window would
+  have produced a green table meaning nothing, and cost two Spark drivers in one 4 GiB
+  container for two hours to produce it. The comparison that does decide the question is
+  the Kotlin/Rust parity window (ADR-019), which runs on its own schedule. v2 data is
+  disposable (`../../research/2026-08-26-v3-requirements-clarification.md`, Q7), so there
+  was nothing to protect by keeping the old path alive.
 
   The parallel window in the RSS note above is therefore gone, but the sizing it forced is
   not: two drivers can still coexist in that container — the 03:00 maintenance run overlaps
