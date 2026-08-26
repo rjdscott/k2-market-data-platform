@@ -145,7 +145,7 @@ Each lands in the same PR as the code it describes; none is a status log.
 ## Verification (end-to-end)
 
 - Every phase: `make test` (rust/python/clickhouse-schema), CI green, `docker compose up -d --build` from clean clone → all services healthy.
-- Capture: `rpk topic consume market.crypto.book.kraken` shows 1 Hz snapshots with `checksum_ok=true`; `curl :8082/metrics` counters; induced failures (corrupt level → resync; `kill -STOP` → Coinbase gap+reconnect).
+- Capture: `rpk topic consume market.crypto.v3.book.kraken` shows 1 Hz snapshots with `checksum_ok=true`; `curl :8082/metrics` counters; induced failures (corrupt level → resync; `kill -STOP` → Coinbase gap+reconnect).
 - Lake: snapshot summary offsets gapless; raw count == bronze count; double-run adds 0; audits pass; DuckDB notebook 01–04 run clean.
 - Hot: CI schema tests; `hot.ohlcv` matches DuckDB over Iceberg; FINAL vs non-FINAL counts; rebuild `hot.*` from lake timed.
 - Numbers table complete and traceable to commands; grep sweep (no "Spring Boot", no `docker-compose.v2`, no TODO in published docs).
@@ -153,4 +153,4 @@ Each lands in the same PR as the code it describes; none is a status log.
 
 ## Risks / verify-first
 
-Lakekeeper↔Iceberg client (S8; escape: 1.8.1/1.10.1 runtime jars); CH `AvroConfluent` arrays/virtual columns (S4; fallback flat columns); Coinbase rate limits/JWT (S5); rdkafka+distroless (S6; fallback debian-slim); tabulario image tag (S7); `iceberg()` on 24.3 (S11; fallback `s3()` globs). Phase C is the long pole; Coinbase full-depth memory watched via `book_levels_total`. Public-in-the-open: keep `main` green; v3 work on `feat/v3-*` branches with PRs. Replay determinism is itself a verify-first item (S13, Phase G): any `HashMap` iteration order, wall-clock read or float formatting on the emit path breaks the byte-identical hash — escape hatch is `BTreeMap` ordering plus fixed-point only, never `f64`, on the record path.
+Lakekeeper↔Iceberg client (S8; escape: 1.8.1/1.10.1 runtime jars); CH `AvroConfluent` arrays/virtual columns (S4; fallback flat columns); Coinbase rate limits/JWT (S5); rdkafka+distroless (S6; fallback debian-slim); tabulario image tag (S7); `iceberg()` on 24.3 (S11; no glob fallback — `iceberg()` only; if it ever fails, that is a stop-the-line bug). Phase C is the long pole; Coinbase full-depth memory watched via `book_levels_total`. Public-in-the-open: keep `main` green; v3 work on `feat/v3-*` branches with PRs. Replay determinism is itself a verify-first item (S13, Phase G): any `HashMap` iteration order, wall-clock read or float formatting on the emit path breaks the byte-identical hash — escape hatch is `BTreeMap` ordering plus fixed-point only, never `f64`, on the record path.

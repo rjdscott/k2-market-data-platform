@@ -19,5 +19,5 @@ Single crate `k2-capture` (split to workspace only when a second binary needs `b
 ## Verification
 
 - Every phase: `make test` (rust/python/clickhouse-schema), CI green, `docker compose up -d --build` from clean clone → all services healthy.
-- Capture: `rpk topic consume market.crypto.book.kraken` shows 1 Hz snapshots with `checksum_ok=true`; `curl :8082/metrics` counters; induced failures (corrupt level → resync; `kill -STOP` → Coinbase gap+reconnect).
+- Capture: `rpk topic consume market.crypto.v3.book.kraken` shows 1 Hz snapshots with `checksum_ok=true`; `curl :8082/metrics` counters; induced failures (corrupt level → resync; `kill -STOP` → Coinbase gap+reconnect).
 - Capacity model is committed before the burn-in and every row is a prediction with its assumption: `git log --diff-filter=A --format=%H -1 -- docs/architecture/capacity-model.md` predates the first burn-in commit, and `grep -c "predicted" docs/architecture/capacity-model.md` is non-zero while `grep -ci "measured" …` is 0 at this phase's exit.

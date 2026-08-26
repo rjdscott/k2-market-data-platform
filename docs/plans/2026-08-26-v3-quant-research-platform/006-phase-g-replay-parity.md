@@ -59,9 +59,12 @@ on the record (`docs/research/2026-08-26-v3-requirements-clarification.md`, Q1).
   (b) DuckDB over Iceberg via PyIceberg, (c) a pure-Python reference — a sorted
   scan over the deduplicated trades, ~30 lines, deliberately the slowest and most
   obviously-correct implementation, written to be read rather than optimised.
-  Tolerance is **zero**: `open`/`high`/`low`/`close` are exact fixed-point integers
-  and `volume` is a `Decimal` sum, so "close enough" would only hide the bug class
-  this test exists to catch (`docker/clickhouse/ddl/01-k2-schema.sql:178`). The
+  Tolerance is **zero**: the exact-fixed-point-integer `open`/`high`/`low`/`close`
+  contract arrives with the Phase E hot-tier DDL — v2 today stores them as
+  `Decimal(18,8)` (`docker/clickhouse/ddl/01-k2-schema.sql:170-174`) — and
+  `volume` is a `Decimal`/fixed-point sum, so "close enough" would only hide the
+  bug class this test exists to catch, the v2 `SummingMergeTree` OHLCV
+  correctness bug (`docker/clickhouse/ddl/01-k2-schema.sql:178`). The
   reference implementation is the arbiter when two disagree.
 - **Golden fixtures, one copy.** `tests/golden/{binance,kraken,coinbase}/*.jsonl` —
   a few minutes of recorded frames each, including at least one Kraken checksum

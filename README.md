@@ -11,7 +11,9 @@ queryable OHLCV candles in under a second — on a single host, inside a 16-core
 ## What this demonstrates
 
 - **A rewrite justified by numbers, not taste.** v1: 18–20 containers, 35–40 CPU / 45–50 GB, 5–15 min
-  trade-to-queryable. v2: 15 services (+4 one-shot), 15.35 CPU / 22.125 GB, measured p99 170–197 ms. Each move is an ADR.
+  trade-to-queryable. v2: 14 services (+2 one-shot), 15.1 CPU / 21.875 GB, measured p99 170–197 ms. v3
+  foundations on this branch add Lakekeeper (+0.25 CPU / +256 MB) and 2 more one-shot init containers —
+  15.35 CPU / 22.125 GB across 15 (+4 one-shot) as deployed here. Each move is an ADR.
 - **Deleting the stream processor.** Five always-on Spark Structured Streaming jobs (~14 CPU / 20 GB)
   replaced by ClickHouse Kafka engine tables and materialized views — **zero stream-processing code**.
 - **Exchange-native ingestion.** Three Kotlin/Ktor feed handlers, one container per exchange, each
@@ -29,7 +31,7 @@ queryable OHLCV candles in under a second — on a single host, inside a 16-core
 flowchart LR
   E["Exchanges<br/>Binance · Kraken · Coinbase<br/>34 instruments"]:::kt
   F["Feed handlers · 3 containers<br/>Kotlin 2.3 · Ktor 3.1"]:::kt
-  R["Redpanda 25.3<br/>6 topics · 160 partitions"]:::rp
+  R["Redpanda 25.3<br/>v2: 6 topics · 160 partitions<br/>+v3: 9 topics · 108 partitions"]:::rp
   subgraph CH["ClickHouse 24.3 LTS — hot tier"]
     B["bronze tables<br/>one per exchange"]:::ch
     S["silver_trades"]:::ch
@@ -81,11 +83,14 @@ offload does not write to it yet ([ADR-013](./docs/adr/ADR-013-pragmatic-iceberg
 
 | | v1 | v2 |
 |---|---|---|
-| CPU / RAM (limits) | 35–40 cores / 45–50 GB | **15.35 cores / 22.125 GB** |
-| Services | 18–20 | **15** (+4 one-shot init containers) |
+| CPU / RAM (limits) | 35–40 cores / 45–50 GB | **15.1 cores / 21.875 GB** |
+| Services | 18–20 | **14** (+2 one-shot init containers) |
 | Always-on Spark | 5 streaming jobs, ~14 CPU / 20 GB | **none** — batch only |
 | Trade → queryable | 5–15 min | **p99 170–197 ms** |
 | Stack | Python · Kafka · Spark Streaming · DuckDB · FastAPI | Kotlin/Ktor · Redpanda · ClickHouse · Spark batch · Iceberg |
+
+v3 foundations on this branch add Lakekeeper — +0.25 CPU / +256 MB — plus 2 more one-shot init
+containers: **15.35 CPU / 22.125 GB across 15 services (+4 one-shot) as deployed here**.
 
 v1 is preserved unmodified in [`legacy/v1/`](./legacy/v1/); the narrative is in
 [`docs/MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md).
@@ -103,7 +108,10 @@ v1 is preserved unmodified in [`legacy/v1/`](./legacy/v1/); the narrative is in
 
 ## Quick start
 
-Requires Docker with ~16 GB RAM available.
+Requires a Docker engine with ≥ 24 GB memory so every `deploy.resources.limits` can be honoured
+(`docker info --format '{{.MemTotal}}'`); measured steady-state usage is far lower
+(see [docs/operations/docker-resources.md](./docs/operations/docker-resources.md)), so the stack runs
+on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real.
 
 ```bash
 git clone https://github.com/rjdscott/k2-market-data-platform.git

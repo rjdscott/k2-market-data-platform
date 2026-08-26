@@ -50,7 +50,10 @@ Headroom against the 16 CPU / 40 GB envelope: **0.65 CPU (4%) and 17.875 GB (45%
 - **The Iceberg catalog costs 0.25 CPU / 256 MB.** Lakekeeper (v3, [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md))
   is the only always-on service added since the v2 baseline. It stays that cheap because it
   reuses `prefect-db` for its metadata (a `lakekeeper` database, not a second PostgreSQL) and
-  MinIO for its storage. Measured 3.25% CPU / 39 MiB after bootstrap.
+  MinIO for its storage. `docker stats --no-stream k2-lakekeeper` showed 3.25% CPU / 39 MiB
+  after bootstrap, 2026-08-26 — this fluctuates (0.00% / 33.95 MiB observed minutes later on
+  the same run), so read the 0.25 CPU / 256 MB limit as the number that matters: idle usage is
+  well under 50 MiB.
 
 ## Sizing a new service
 

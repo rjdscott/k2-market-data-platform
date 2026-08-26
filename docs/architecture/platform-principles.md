@@ -6,7 +6,7 @@ Six rules the design is actually held to. Each one has a place in the codebase w
 
 ### 1. The resource budget is a hard constraint, not a goal
 
-16 cores, 40 GB, one host. Every service in [`docker-compose.yml`](../../docker-compose.yml) carries explicit `deploy.resources.limits`, and the total is checked at every phase boundary. As built: **15.35 CPU / 22.125 GB across 15 services** (+4 one-shot).
+16 cores, 40 GB, one host. Every service in [`docker-compose.yml`](../../docker-compose.yml) carries explicit `deploy.resources.limits`, and the total is checked at every phase boundary. As built (v2): **15.1 CPU / 21.875 GB across 14 services** (+2 one-shot). This branch's v3 foundations add Lakekeeper — +0.25 CPU / +256 MB — for **15.35 CPU / 22.125 GB across 15 (+4 one-shot) as deployed here**.
 
 This is first because it is the only principle that changed the architecture. "Reduce resource usage" produces tuning; a number you cannot exceed produces different decisions — five Spark Streaming jobs became materialized views, and a planned Kotlin stream processor was never written. Full accounting in [ADR-010](../adr/ADR-010-resource-budget.md).
 
