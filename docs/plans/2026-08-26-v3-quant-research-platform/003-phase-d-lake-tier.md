@@ -87,9 +87,11 @@ cannot be met by code alone, so they are named here rather than quietly dropped.
   | 1 | 50,000 | 2,721,812 | 2,721,812 | 92 s | 1,243 MiB | 2.13 GiB |
   | 2 | 50,000 | 1,770,914 | 1,770,914 | 57 s | 1,227 MiB | 1.94 GiB |
   | 3 | 50,000 | 1,564,334 | 1,564,334 | 49 s | 1,221 MiB | 1.92 GiB |
+  | 4 | 200,000 | 4,097,437 | 4,097,437 | 71 s | 1,213 MiB | 1.69 GiB |
 
   **Peak driver RSS 1,243 MiB**, peak container 2.13 GiB of 4 GiB over the
-  633 MiB idle baseline — inside the `768 + ~550` this arithmetic assumed, so two
+  633 MiB idle baseline. Note run 4: 53× the smoke batch at four times the bound,
+  and the peak went *down* — inside the `768 + ~550` this arithmetic assumed, so two
   concurrent drivers still fit and the 768m stands. 35× the batch moved the peak
   11%: with nothing payload-bearing cached, peak RSS is a function of the heap
   setting rather than of arrival volume, so a backlog drain at a higher bound
@@ -99,9 +101,18 @@ cannot be met by code alone, so they are named here rather than quietly dropped.
   the heap: the first cron run had no prior snapshot, read all 108 partitions to
   `latest`, and died on `java.lang.OutOfMemoryError` inside a
   `persist(DISK_ONLY)` over 5.2 MB payload rows. The fix was to bound the run
-  (`--max-offsets-per-partition`, default 50,000) and stop caching payloads, not
+  (`--max-offsets-per-partition`, default 200,000) and stop caching payloads, not
   to raise the heap — `docker/lake/README.md`, "What one run may read, and why
   nothing is cached".
+
+  **The first bound was itself too low, and it cost records.** 50,000 per partition
+  per 5-minute cycle is below `market.crypto.v3.raw.kraken-0`'s measured 55,250, so
+  that partition slid backwards on every cycle until Redpanda's 512 MiB cap evicted
+  1,168,954 unread records. The default is now 200,000, ~3.6× the measured rate, and
+  the resume point is checked against the broker's log start before each run
+  (`offsets.evicted`) so the loss is reported with its numbers rather than as a Kafka
+  stack trace. **Open, for a person:** that gap is not yet filed in `lake.audit.checks`
+  and the ingest will not advance past it — `docs/runbooks/lake-ingest-lag.md` §3.
 
   Revisit trigger for the 768m itself: raise it back to `1g` if
   `lake-ingest-5min` fails with an OOM-kill or `java.lang.OutOfMemoryError` in

@@ -64,7 +64,7 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --stage bronze
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
     --end-timestamp 2026-08-27T02:00:00Z
 
-# or drain it faster than the 50,000-offset default, with someone watching
+# or drain it faster than the 200,000-offset default, with someone watching
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
     --max-offsets-per-partition 200000
 
@@ -147,7 +147,7 @@ would restart from the beginning of every topic.
 ## What one run may read, and why nothing is cached
 
 **Every ingest is bounded before it starts.** `--max-offsets-per-partition`
-(default 50,000, `K2_LAKE_MAX_OFFSETS_PER_PARTITION`) caps each partition at
+(default 200,000, `K2_LAKE_MAX_OFFSETS_PER_PARTITION`) caps each partition at
 `min(latest, start + N)`, and those end offsets are computed in pure code
 (`offsets.bounded_offsets`) from what the broker reports, *before* Spark opens a
 connection. A caught-up 5-minute cycle never reaches the cap — there is only
@@ -179,9 +179,11 @@ against the mistake being reintroduced, not because anything caches today.
 
 ### Measured, on the live backlog
 
-Four hand-run cycles against 41.5 M queued records, `lake-ingest-5min` paused
-(2026-08-26; peak RSS sampled every 2 s with `docker stats --no-stream` and
-`docker exec k2-spark-iceberg ps -o rss=,cmd= -A`):
+Five hand-run cycles against 41.5 M queued records, `lake-ingest-5min` paused
+(2026-08-26/27; peak RSS sampled every 2 s with `docker stats --no-stream` and
+`docker exec k2-spark-iceberg ps -o rss=,cmd= -A`; run 4 covers `binance` and
+`coinbase` only — `K2_EXCHANGES` — because by then a kraken partition had fallen
+below broker retention, see below):
 
 | Run | Bound | Offsets committed | raw rows | Wall | Peak driver RSS | Peak container |
 |---|---|---|---|---|---|---|
@@ -189,8 +191,9 @@ Four hand-run cycles against 41.5 M queued records, `lake-ingest-5min` paused
 | 1 | 50,000 | 2,721,812 | 2,721,812 | 92 s | 1,243 MiB | 2.13 GiB |
 | 2 | 50,000 | 1,770,914 | 1,770,914 | 57 s | 1,227 MiB | 1.94 GiB |
 | 3 | 50,000 | 1,564,334 | 1,564,334 | 49 s | 1,221 MiB | 1.92 GiB |
+| 4 | 200,000 | 4,097,437 | 4,097,437 | 71 s | 1,213 MiB | 1.69 GiB |
 
-**35× the batch, 11% more memory.** That is the property worth having: peak RSS
+**53× the batch, and the peak went down.** That is the property worth having: peak RSS
 is now a function of the driver heap and Spark's own overhead, not of how much
 arrived. 1,243 MiB against a 4 GiB container with a 633 MiB idle baseline is the
 number `spark_conf.py`'s sizing comment now carries; the previous entry was
@@ -199,12 +202,39 @@ arithmetic, not a measurement.
 Offsets committed equals rows written on every run — the ranges are dense, so
 the bookkeeping and the data agree exactly.
 
-Backlog draining across the three runs, `market.crypto.v3.raw.kraken`:
-23,175,551 → 22,823,351 → 22,541,125 → 22,193,385, about 347 k per run against
-its ~6 non-empty partitions. Book topics and `trades.kraken` reached 0. At that
-rate the deepest topic needs roughly 64 more cycles (~5.3 h at the 5-minute
-cadence); `--max-offsets-per-partition 200000` on a hand-run drains it faster
-while a person is watching.
+Backlog draining across runs 1-3, `market.crypto.v3.raw.kraken`: 23,175,551 →
+22,823,351 → 22,541,125 → 22,193,385. Book topics and `trades.kraken` reached 0.
+
+### Why the default is 200,000, and what 50,000 cost
+
+**The bound must exceed what a partition receives between two runs.** Below that,
+the partition falls further behind on every cycle and never catches up — and
+Redpanda's retention keeps moving. The first default here was 50,000, which is
+below the measured arrival rate of the busiest partition:
+
+```bash
+# market.crypto.v3.raw.kraken-0, two samples 60 s apart, 2026-08-27
+docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.kraken
+#   arrival 11,050 records/min = 55,250 per 5-minute cycle   <- above a 50,000 bound
+```
+
+While the cold start drained that topic at 50,000 per run, the 512 MiB
+per-partition cap evicted the head of the queue faster:
+
+```text
+market.crypto.v3.raw.kraken-0   committed 1,615,463   LOG-START 2,784,417
+                                1,168,954 records permanently gone
+```
+
+That is ADR-022's "topic truncated below the stored offset" row, and it is
+reported as such: `offsets.evicted` compares the resume point against the
+broker's log start at plan time and the run stops with the numbers the runbook
+needs, before Spark starts. **It is never repaired automatically** — skipping
+forward is an unrecorded hole, which is the one outcome this archive exists to
+prevent. Recovery is [`../../docs/runbooks/lake-ingest-lag.md`](../../docs/runbooks/lake-ingest-lag.md) §3.
+
+200,000 is ~3.6× the measured arrival rate, and run 4 shows what it costs: more
+wall time, no more memory. A caught-up cycle never reaches it either way.
 
 **No alert on the backlog, deliberately.** A rising gauge is the only shape worth
 paging on, and it is indistinguishable from a legitimate cold-start drain that
@@ -337,7 +367,7 @@ pointing this lake at real S3 must be a config change, not a rewrite).
 | `K2_SCHEMA_REGISTRY_URL` | `http://redpanda:8081` | `ingest.py` |
 | `K2_V3_PREFIX` | `market.crypto.v3` | `ingest.py` |
 | `K2_LAKE_DISK_PATH` | `/minio-data` | `metrics.py` |
-| `K2_LAKE_MAX_OFFSETS_PER_PARTITION` | `50000` | `ingest.py`, same as `--max-offsets-per-partition` |
+| `K2_LAKE_MAX_OFFSETS_PER_PARTITION` | `200000` | `ingest.py`, same as `--max-offsets-per-partition` |
 
 `spark_conf.py` and `init-lake.sh` must agree: that script creates what these
 jobs connect to, so overriding one side alone points every job at a catalog

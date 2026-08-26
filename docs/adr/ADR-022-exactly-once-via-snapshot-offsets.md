@@ -224,7 +224,7 @@ at up to 5.2 MB each never reach the disk they are nominally spilling to.
 
 **The fix keeps the decision and removes the guess.** End offsets are now decided
 in pure code before the read — `min(latest, start + --max-offsets-per-partition)`
-per partition, from broker metadata (`offsets.bounded_offsets`, default 50,000,
+per partition, from broker metadata (`offsets.bounded_offsets`, default 200,000,
 unit-tested) — so the range is pinned by construction and nothing has to be
 cached to know what a run consumed. Row counts come from the commit's own
 `added-records`. `--end-timestamp` resolves to offsets through the broker instead
@@ -255,8 +255,24 @@ Three consequences for this ADR's own claims:
   sufficient** — the property identifies the writer; the timestamp is what
   identifies the newest.
 
+**The "topic truncated" row of the consequence table then fired for real, and the
+bound was why.** 50,000 offsets per partition per 5-minute cycle is below what
+`market.crypto.v3.raw.kraken-0` receives (11,050 records/minute = 55,250 per
+cycle, measured), so that partition fell further behind on every run until
+Redpanda's 512 MiB-per-partition cap evicted 1,168,954 unread records. The ADR
+predicted the failure mode and its handling exactly — a loud stop, no silent
+skip, a human decision — and what it did not say is that **a bound below the
+arrival rate makes this outcome certain rather than possible**. The default is
+now 200,000, and `offsets.evicted` compares the resume point against the broker's
+log start at plan time so the failure names every affected partition, its
+committed offset and its record count before a Spark job starts, rather than
+arriving as an `OffsetOutOfRangeException` inside a stack trace. Nothing is
+repaired automatically: skipping forward is the unrecorded hole this ADR exists
+to prevent.
+
 **Measured, 2026-08-27:** peak ingest driver RSS 1,243 MiB against a 768m heap in
-a 4 GiB container, and 35× the batch size moved that peak by 11%. Numbers,
+a 4 GiB container, and 53× the batch size moved that peak by *less than nothing* —
+the largest run had the lowest peak. Numbers,
 commands and the backlog drain are in
 [`../../docker/lake/README.md`](../../docker/lake/README.md) under "What one run
 may read, and why nothing is cached", and in the Phase D deployment gate.

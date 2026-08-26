@@ -175,6 +175,37 @@ def bounded_offsets(
     return starts, ends, backlog
 
 
+def evicted(starts: dict, earliest: dict) -> list:
+    """Partitions whose start offset is below what the broker still holds.
+
+    `[(topic, partition, start, log_start, records_lost)]`, empty when the
+    archive is still inside retention.
+
+    This is ADR-022's "topic truncated below the stored offset" row, and Spark
+    will find it too — `failOnDataLoss=true` raises `OffsetOutOfRangeException`
+    on the first fetch. It is detected here as well because *when* and *how* a
+    permanent hole is reported decides how well it is handled: the Kafka
+    exception names one partition, arrives 384 lines into a stack trace after a
+    Spark job has started, and carries neither the committed offset nor the
+    count. The runbook's first step is "establish exactly what was lost, per
+    partition", and that is a list this function can produce before anything
+    reads a byte.
+
+    It never repairs. Advancing the start to `log_start` here would be Spark's
+    `failOnDataLoss=false` behaviour written by hand — an unrecorded hole, the
+    one outcome the design exists to prevent. The recovery is a human decision
+    with a written record as its deliverable
+    (docs/runbooks/lake-ingest-lag.md §3).
+    """
+    losses = []
+    for topic, partitions in starts.items():
+        for partition, start in sorted(partitions.items()):
+            log_start = int(earliest.get(topic, {}).get(partition, 0))
+            if int(start) < log_start:
+                losses.append((topic, partition, int(start), log_start, log_start - int(start)))
+    return losses
+
+
 def merge_committed(previous: dict, produced: dict) -> dict:
     """Carry forward partitions this run read nothing from.
 

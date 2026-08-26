@@ -100,13 +100,23 @@ LOCK_PATH = os.environ.get("K2_LAKE_LOCK", "/tmp/k2-lake-ingest.lock")  # noqa: 
 # and commits them, so a backlog empties over a predictable number of runs
 # instead of in one that cannot finish.
 #
-# 50,000 x 108 partitions is ~5.4 M records upper bound per run; the live
-# measurement of what that costs in driver RSS and wall time is in
-# docker/lake/README.md. Lower it if a run cannot finish inside
-# `INGEST_TIMEOUT_S`; raise it to drain a backlog faster on an idle host. 0
-# disables the bound entirely, which is only ever right when a person is
-# watching it.
-MAX_OFFSETS_PER_PARTITION = int(os.environ.get("K2_LAKE_MAX_OFFSETS_PER_PARTITION", "50000"))
+# **200,000 is a floor set by an arrival rate, not a round number.** The bound
+# must exceed what a partition receives between two runs, or that partition
+# falls further behind on every cycle and never catches up. Measured on the
+# busiest one, `market.crypto.v3.raw.kraken-0`: 11,050 records/minute, i.e.
+# 55,250 per 5-minute cycle (two `rpk topic describe` samples 60 s apart,
+# 2026-08-27). The first default here was 50,000 — *below* that, and the topic
+# duly slid backwards until Redpanda's 512 MiB-per-partition cap evicted 1.17 M
+# unread records. 200,000 is ~3.6x the measured rate.
+#
+# Costs, measured (docker/lake/README.md): 4,097,437 records in 71 s at this
+# bound, peak driver RSS 1,213 MiB — *lower* than the same run at 50,000, which
+# is the point. Nothing payload-bearing is cached, so peak memory is a function
+# of the heap setting and raising the bound buys drain rate for wall time only.
+# Lower it if a run cannot finish inside `INGEST_TIMEOUT_S`; raise it to drain a
+# backlog faster on an idle host. 0 disables the bound entirely, which is only
+# ever right when a person is watching it.
+MAX_OFFSETS_PER_PARTITION = int(os.environ.get("K2_LAKE_MAX_OFFSETS_PER_PARTITION", "200000"))
 
 # Same three names, same prefix and same default as docker/redpanda/init.sh.
 EXCHANGES = os.environ.get("K2_EXCHANGES", "binance,kraken,coinbase").split(",")
@@ -274,6 +284,29 @@ def stage_raw(spark, ingest_ts: datetime, end_timestamp: str, max_per_partition:
     # `k2_lake_ingest_backlog_offsets`.
     for topic in sorted(backlog):
         print(f"stage 1: {topic} backlog remaining {backlog[topic]}")
+
+    # Retention has overtaken the archive on these partitions: the records
+    # between the committed offset and the broker's log start are gone and are
+    # not coming back. Spark would raise OffsetOutOfRangeException on the first
+    # fetch — correctly, and unreadably. Failing here instead puts the numbers
+    # the runbook's step 1 asks for on the first line of the failure, before a
+    # Spark job starts. Nothing is repaired: skipping forward is an unrecorded
+    # hole, and the recovery is a person writing down what was lost
+    # (docs/runbooks/lake-ingest-lag.md §3).
+    losses = O.evicted(starts, earliest)
+    if losses:
+        for topic, partition, start, log_start, lost in losses:
+            print(
+                f"stage 1: DATA LOSS {topic}/{partition}: committed {start}, "
+                f"broker LOG-START {log_start}, {lost} records evicted",
+                file=sys.stderr,
+            )
+        raise SystemExit(
+            f"failOnDataLoss: {len(losses)} partition(s) are below broker retention and "
+            f"{sum(loss[4] for loss in losses)} records are permanently gone. This is not "
+            "retried into success — record the gap in lake.audit.checks and resume "
+            "explicitly: docs/runbooks/lake-ingest-lag.md §3."
+        )
 
     # Decided in arithmetic, before Spark opens a connection: an empty range on
     # every partition is "no new records", and there is nothing to read, plan or

@@ -167,6 +167,40 @@ class TestMergeCommitted:
         assert previous == {"t": {0: 100}}
 
 
+class TestEvicted:
+    """Retention overtaking the archive — ADR-022's "topic truncated below the
+    stored offset" row, detected before the read instead of as a Kafka stack
+    trace 384 lines into a Spark job.
+
+    Real, on 2026-08-26: a cold start drained `market.crypto.v3.raw.kraken`
+    partition 0 at 50,000 offsets per run while the 512 MiB-per-partition cap
+    evicted faster, and the committed offset ended up below LOG-START.
+    """
+
+    def test_a_start_below_the_log_start_is_reported(self):
+        (loss,) = O.evicted({"t": {0: 1_615_463}}, {"t": {0: 2_784_417}})
+        assert loss == ("t", 0, 1_615_463, 2_784_417, 1_168_954)
+
+    def test_a_start_at_the_log_start_is_fine(self):
+        assert O.evicted({"t": {0: 500}}, {"t": {0: 500}}) == []
+
+    def test_a_start_above_the_log_start_is_fine(self):
+        assert O.evicted({"t": {0: 900}}, {"t": {0: 500}}) == []
+
+    def test_an_empty_partition_is_not_a_loss(self):
+        # earliest == latest == 0 on a partition nothing ever produced to.
+        assert O.evicted({"t": {0: 0}}, {"t": {0: 0}}) == []
+
+    def test_every_affected_partition_is_named(self):
+        # The runbook's step 1 is "establish exactly what was lost", per
+        # partition. Reporting only the first one Spark happened to fetch makes
+        # that a manual sweep.
+        losses = O.evicted(
+            {"t": {0: 10, 1: 900, 2: 20}}, {"t": {0: 100, 1: 500, 2: 200}}
+        )
+        assert [(topic, p, n) for topic, p, _, _, n in losses] == [("t", 0, 90), ("t", 2, 180)]
+
+
 class TestLatestSummary:
     INGEST_A = {O.JOB: O.JOB_INGEST, O.KAFKA_OFFSETS: '{"t":{"0":10}}'}
     INGEST_B = {O.JOB: O.JOB_INGEST, O.KAFKA_OFFSETS: '{"t":{"0":20}}'}

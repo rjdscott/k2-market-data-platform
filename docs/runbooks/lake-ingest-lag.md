@@ -19,7 +19,7 @@ It does **not** cover a crashed run (that is safe and automatic —
 |---|---------|-------------|----------|
 | 1 | Ingest lag above the 5-minute cadence | < 30 min | not yet verified — Phase D burn-in |
 | 2 | Scheduler stopped — no runs at all | < 15 min | not yet verified — Phase D burn-in |
-| 3 | `failOnDataLoss` — offsets point below broker retention | **investigation, not repair** | not yet verified — Phase D burn-in |
+| 3 | `failOnDataLoss` — offsets point below broker retention | **investigation, not repair** | occurred 2026-08-27, detected at plan time (below) |
 | 4 | Nightly rewrite missed — small files accumulating | < 24 h (next maintenance window) | not yet verified — Phase D burn-in |
 | 5 | A flow run failed with `exited 2` — the ingest lock held | **nothing to repair** | n/a — the lock working is not an incident |
 
@@ -108,7 +108,7 @@ Then read the cause:
 
 | What you see | Meaning | Do |
 |---|---|---|
-| Runs completing, each slower than 5 min | the backlog is larger than one cycle can drain | it is already draining — every run is bounded at `--max-offsets-per-partition` (50,000). Watch `k2_lake_ingest_backlog_offsets{topic}` fall; raise the bound on a hand-run to drain faster |
+| Runs completing, each slower than 5 min | the backlog is larger than one cycle can drain | it is already draining — every run is bounded at `--max-offsets-per-partition` (200,000). Watch `k2_lake_ingest_backlog_offsets{topic}` fall; raise the bound on a hand-run to drain faster |
 | Backlog gauge flat or rising across runs | the bound is below the arrival rate on that topic | raise `--max-offsets-per-partition` on hand-runs until it falls, then raise `K2_LAKE_MAX_OFFSETS_PER_PARTITION` for the scheduled path |
 | Runs completing fast, lag flat | the scheduler is not firing at cadence | §2 |
 | Spark at its CPU limit during a run | contention with capture or ClickHouse | check the cpuset layout — capture is pinned away from Spark deliberately ([Phase D isolation experiment](../plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md)) |
@@ -120,11 +120,11 @@ curl -sG http://localhost:9090/api/v1/query \
   --data-urlencode 'query=k2_lake_ingest_backlog_offsets' \
   | jq -r '.data.result[] | "\(.metric.topic) \(.value[1])"' | sort
 
-# Drain faster than the 50,000-per-partition default, with someone watching.
+# Drain faster than the 200,000-per-partition default, with someone watching.
 # Peak driver RSS does not move with the bound (docker/lake/README.md), but wall
 # time does, and the flow's INGEST_TIMEOUT_S is 3600.
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
-  --max-offsets-per-partition 200000
+  --max-offsets-per-partition 500000
 
 # Or bound by time instead of by count — resolved to offsets on the broker, so
 # the window means the same thing on every partition.
@@ -251,9 +251,32 @@ rate and the 512 MiB-per-partition byte cap is binding well inside 48 h. The sec
 capacity finding, not an incident: raise the disk slice or lower the partition count —
 **never** silently shorten retention, which `docker/redpanda/init.sh` says in as many words.
 
-**Measured** — not yet verified. This scenario is deliberately not in `make chaos`: inducing
-it means waiting out real retention or destroying a topic, and both prove something other
-than the fault.
+**Measured, 2026-08-27 — this happened.** The Phase D cold start drained
+`market.crypto.v3.raw.kraken` at 50,000 offsets per run while partition 0 took 11,050
+records/minute, and the 512 MiB-per-partition cap evicted the head of the queue faster than
+the ingest read it:
+
+```text
+stage 1: DATA LOSS market.crypto.v3.raw.kraken/0: committed 1615463,
+         broker LOG-START 2784417, 1168954 records evicted
+failOnDataLoss: 1 partition(s) are below broker retention and 1168954 records are
+permanently gone. This is not retried into success — record the gap in
+lake.audit.checks and resume explicitly: docs/runbooks/lake-ingest-lag.md §3.
+```
+
+Two things changed as a result, and neither of them is a workaround.
+`offsets.evicted` compares the resume point against the broker's log start **before** the
+Spark job starts, so step 1 above arrives as the first line of the failure instead of as an
+`OffsetOutOfRangeException` 384 lines into a stack trace naming one partition and no
+counts. And the per-run bound now defaults to 200,000 — above the measured arrival rate,
+which 50,000 was not — because a bound below the arrival rate guarantees this outcome
+rather than merely risking it (`docker/lake/README.md`).
+
+**The cause here was the second of the two below**: the byte cap binding well inside 48 h on
+one hot partition. It is a capacity finding — that partition holds ~7 h of records, not 48.
+
+This scenario is deliberately not in `make chaos`: inducing it means waiting out real
+retention or destroying a topic, and both prove something other than the fault.
 
 ---
 
