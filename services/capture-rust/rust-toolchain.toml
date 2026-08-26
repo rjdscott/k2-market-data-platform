@@ -1,0 +1,7 @@
+# Pinned so the container build, CI and a local `cargo` all agree. 1.98.0 is
+# what `rust:1-bookworm` shipped when this crate was written (checked, not
+# assumed); an unpinned toolchain turns a clippy release into a red CI run on
+# a branch that changed nothing.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]

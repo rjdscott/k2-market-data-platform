@@ -1,0 +1,39 @@
+# Test-only instrument registry for the Kraken WebSocket **v2** spellings.
+#
+# ── Why this file exists ────────────────────────────────────────────────────
+#
+# `config/instruments.yaml` lists Kraken natives as `XBT/USD` and `XDG/USD`.
+# Those are the Kraken **v1** WebSocket spellings, which is correct for the
+# Kotlin feed handlers - `KrakenWebSocketClient.kt` speaks the v1 channelID
+# protocol. They are *not* valid on v2, which is what this crate speaks:
+#
+#   {"error":"Currency pair not supported XBT/USD","method":"subscribe",
+#    "success":false,"symbol":"XBT/USD", ...}
+#
+# Verified 2026-08-26 against `wss://ws.kraken.com/v2`: the `instrument`
+# snapshot lists 1436 pairs, including `BTC/USD` and `DOGE/USD` and neither
+# `XBT/USD` nor `XDG/USD`. Every other Kraken row in the registry is valid on
+# both protocols.
+#
+# Reconciling the two spellings is a registry decision, not a capture decision -
+# `Trade.symbol` is contractually "as the exchange spells it on the wire", and
+# the two protocols spell it differently - so it is not fixed here. This file
+# lets the replay test and a live smoke run work against v2 in the meantime.
+#
+# Last verified: 2026-08-26
+
+version: 2
+
+instruments:
+  kraken:
+    - { native: BTC/USD,  canonical: BTC/USD }   # v1 spells this XBT/USD
+    - { native: ETH/USD,  canonical: ETH/USD }
+    - { native: SOL/USD,  canonical: SOL/USD }
+    - { native: XRP/USD,  canonical: XRP/USD }
+    - { native: ADA/USD,  canonical: ADA/USD }
+    - { native: DOT/USD,  canonical: DOT/USD }
+    - { native: LINK/USD, canonical: LINK/USD }
+    - { native: DOGE/USD, canonical: DOGE/USD }  # v1 spells this XDG/USD
+    - { native: LTC/USD,  canonical: LTC/USD }
+    - { native: AVAX/USD, canonical: AVAX/USD }
+    - { native: ATOM/USD, canonical: ATOM/USD }

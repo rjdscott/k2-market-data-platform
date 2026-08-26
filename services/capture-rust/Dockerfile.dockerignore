@@ -1,0 +1,15 @@
+# BuildKit reads `<dockerfile>.dockerignore` in preference to the root
+# `.dockerignore`, so this file scopes the k2-capture build context to this
+# service without touching the rest of the repo. Without it the context is the
+# whole 3.3 GB working tree, ~615 MB of which is the local Iceberg warehouse.
+#
+# Everything is excluded, then the two directories the build actually reads are
+# added back. Last match wins.
+*
+!services/capture-rust
+!schemas/avro
+
+# Build output and test data are not inputs to the image.
+services/capture-rust/target
+services/capture-rust/tests/fixtures
+services/capture-rust/README.md
