@@ -585,7 +585,7 @@ services:
           cpus: '0.25'
           memory: 256M
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "java"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -634,7 +634,7 @@ services:
           cpus: '0.25'
           memory: 256M
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "java"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -683,7 +683,7 @@ services:
           cpus: '0.25'
           memory: 256M
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "java"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/health"]
       interval: 15s
       timeout: 5s
       retries: 3

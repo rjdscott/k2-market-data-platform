@@ -46,12 +46,12 @@ RUN addgroup -g 1000 k2 && \
 
 USER k2
 
-# Expose metrics port (future)
+# Metrics + health endpoints (Micrometer / Ktor)
 EXPOSE 8082
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD test -f /app/logs/feed-handler.log || exit 1
+  CMD curl -fsS http://localhost:8082/health || exit 1
 
 # Run the application
 ENTRYPOINT ["java", "-jar", "/app/feed-handler.jar"]
