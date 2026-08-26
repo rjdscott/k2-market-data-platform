@@ -1,0 +1,360 @@
+# promtool unit tests for docker/prometheus/rules/lake-alerts.yml
+#
+#   docker run --rm --entrypoint sh -v "$PWD/docker/prometheus/rules:/r" \
+#     prom/prometheus:v3.2.0 -c 'promtool test rules /r/tests/*_test.yml'
+#
+# Run by `make check-docs` gate (h). Every case here is one of two kinds:
+#
+#   * a rule that MUST fire, on a synthetic series — the only way to earn the
+#     right to say an alert works before it has ever fired in anger, and the
+#     only way to check LakeDiskUsageHigh at all on a host whose disk metric is
+#     blind (see the rule's own comment and docker/lake/README.md).
+#   * a rule that MUST NOT fire on healthy input. Those are the ones that
+#     matter: the review this file came out of found LakeIngestFailed
+#     structurally unable to fire during a Lakekeeper outage, and LakeSmallFiles
+#     firing every day for a fortnight by construction. An alert that cannot
+#     fire and an alert that always fires are the same bug.
+#
+# `time()` in the rules is evaluation time, which promtool starts at 0 and
+# advances by eval_time. A timestamp gauge that never moves is therefore
+# written as a flat `0+0x...`: at eval_time 40m, `time() - 0` is 2400 s. That
+# is the frozen-exporter case, expressed exactly as it happens.
+
+rule_files:
+  - ../lake-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ── LakeIngestFailed: the frozen-gauge regression ────────────────────────
+  # A commit timestamp that never moves must age by itself. This is the case
+  # the previous `k2_lake_last_commit_age_seconds > 1800` could not express:
+  # during a Lakekeeper outage the exporter never recomputed the age, the gauge
+  # held its last small value, and the threshold was unreachable forever.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_last_commit_ts_seconds{table="raw.messages"}'
+        values: '0+0x120'   # one commit at t=0, then the exporter goes silent
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LakeIngestFailed
+        exp_alerts: []      # 20 min < 30 min threshold
+      - eval_time: 40m
+        alertname: LakeIngestFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: lake
+              tier: cold
+              table: raw.messages
+            exp_annotations:
+              summary: "raw.messages has not committed for 40m 0s"
+              description: |
+                The lake ingest is scheduled every 5 minutes and raw.messages has not
+                taken a commit in over 30. Either the Prefect flow is failing, the
+                Spark container is gone, or Lakekeeper is refusing commits.
+
+                This is the data-loss clock: Redpanda keeps 48 h of the raw topics,
+                so anything not ingested before that window closes is gone for good.
+                Check the flow run first — its logs carry the script's own stdout.
+              runbook: docs/runbooks/lake-recovery.md
+
+  # A healthy lake commits every 5 minutes. It must never fire.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_last_commit_ts_seconds{table="raw.messages"}'
+        values: '0+60x120'  # the timestamp keeps pace with wall clock
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: LakeIngestFailed
+        exp_alerts: []
+
+  # ── LakeExporterStalled: up, scraped, and producing nothing ──────────────
+  # The Lakekeeper-outage signal. `up` stays 1 and scrape_errors stays 0,
+  # because the prefix lookup throws before the refresh loop reaches a table.
+  - interval: 30s
+    input_series:
+      - series: 'k2_lake_last_refresh_ts_seconds'
+        values: '0+0x60'
+      - series: 'k2_lake_scrape_errors_total'
+        values: '0+0x60'
+      - series: 'up{job="lake-metrics"}'
+        values: '1+0x60'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: LakeExporterStalled
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: LakeExporterStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: lake
+              tier: cold
+            exp_annotations:
+              summary: "lake-metrics last completed a refresh 11m 0s ago"
+              description: |
+                The exporter is being scraped but has not finished a refresh in over
+                5 minutes, so every lake gauge is stale. The usual cause is
+                Lakekeeper being unreachable: the prefix lookup fails and the loop
+                retries every 30 s without ever reaching a table.
+
+                Check Lakekeeper first, then the exporter's own log. It never exits
+                on a catalog error by design, so "up but silent" is its outage state.
+              runbook: docs/runbooks/lake-recovery.md
+      # And the other two exporter alerts stay quiet: the target is up and
+      # every table it could read, it read.
+      - eval_time: 11m
+        alertname: LakeExporterDown
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: LakeScrapeErrors
+        exp_alerts: []
+
+  # A refresh completing every 30 s must never fire it.
+  - interval: 30s
+    input_series:
+      - series: 'k2_lake_last_refresh_ts_seconds'
+        values: '0+30x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: LakeExporterStalled
+        exp_alerts: []
+
+  # ── LakeScrapeErrors: catalog up, one table unreadable ───────────────────
+  - interval: 30s
+    input_series:
+      - series: 'k2_lake_scrape_errors_total'
+        values: '1+0x40'
+      - series: 'k2_lake_last_refresh_ts_seconds'
+        values: '0+30x40'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: LakeScrapeErrors
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: LakeScrapeErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: lake
+              tier: cold
+            exp_annotations:
+              summary: "lake-metrics could not read 1 of its 4 tables"
+              description: |
+                The exporter names the table it failed on in its own log, at
+                WARNING. On a fresh stack this is lake-ddl not having run yet and it
+                clears by itself; at any other time a table the alerts above depend
+                on is gone.
+              runbook: docs/runbooks/lake-recovery.md
+
+  # ── LakeCompactionStale: the alert that replaced LakeSmallFiles ──────────
+  # The point of the replacement is this pair. A table accumulating 2592 small
+  # files a day and compacting them every night is HEALTHY, and the old
+  # avg-file-size rule fired on it daily for the first ~15 days. Same series
+  # here: mean file size far under 32 MiB, thousands of files, nightly rewrite
+  # landing — nothing fires.
+  #
+  # avg_file_bytes and files_total are carried here with no rule referencing
+  # them, deliberately: they are the exact series the old rule fired on, and
+  # nothing in this file fires on them any more.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_last_compaction_ts_seconds{table="raw.messages"}'
+        values: '0+0x1440 86400+0x1440'          # a rewrite at t=0 and t=24h
+      - series: 'k2_lake_avg_file_bytes{table="raw.messages"}'
+        values: '2500000+0x2880'                 # 2.5 MB mean — the "small files"
+      - series: 'k2_lake_files_total{table="raw.messages"}'
+        values: '100+2x2880'                     # ~2880 files/day
+    alert_rule_test:
+      - eval_time: 47h
+        alertname: LakeCompactionStale
+        exp_alerts: []
+
+  # And it does fire when the rewrite actually stops.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_last_compaction_ts_seconds{table="raw.messages"}'
+        values: '0+0x2400'
+    alert_rule_test:
+      - eval_time: 30h
+        alertname: LakeCompactionStale
+        exp_alerts: []      # 30 h < 36 h threshold
+      - eval_time: 38h
+        alertname: LakeCompactionStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: lake
+              tier: cold
+              table: raw.messages
+            exp_annotations:
+              summary: "raw.messages has not been compacted for 1d 14h 0m 0s"
+              description: |
+                The nightly rewrite (03:00 UTC, lake-maintenance-daily) has not
+                produced a rewrite snapshot on raw.messages in over 36 hours, so it
+                has missed at least one run. Each 5-minute ingest adds a file per
+                partition it touched; without the rewrite every query pays per-file
+                open cost over thousands of files and manifest metadata grows faster
+                than the data.
+
+                k2_lake_avg_file_bytes and k2_lake_files_total say how far it has
+                drifted — they are the symptom, this is the cause. Run the
+                compaction by hand rather than waiting for the next nightly: the
+                runbook has the command.
+              runbook: docs/runbooks/lake-recovery.md
+
+  # ── LakeDiskUsageHigh / Critical, on a synthetic ratio ───────────────────
+  # The only test this rule can have on this host: k2_lake_disk_used_ratio here
+  # reads 0.342 while the host disk is at 79%, so nothing real crosses 0.80.
+  # The threshold arithmetic is still worth proving, and on a host where the
+  # metric is honest this is the whole alert.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_disk_used_ratio{path="/minio-data"}'
+        values: '0.79+0x120'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: LakeDiskUsageHigh
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_disk_used_ratio{path="/minio-data"}'
+        values: '0.81+0x120'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LakeDiskUsageHigh
+        exp_alerts: []      # 10 min < the 15-minute `for`
+      - eval_time: 20m
+        alertname: LakeDiskUsageHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: lake
+              tier: cold
+              path: /minio-data
+            exp_annotations:
+              summary: "Lake filesystem /minio-data is 81% full"
+              description: |
+                raw.messages is kept forever with no TTL, so this threshold is the
+                agreed cost of an unbounded replay window rather than a surprise
+                (requirements clarification Q8). The two options are add disk, or
+                purge with an audit row — never a silent delete.
+
+                k2_lake_bytes_total per table and k2_lake_disk_free_bytes give the
+                days-remaining arithmetic.
+              runbook: docs/runbooks/lake-disk-usage-high.md
+      - eval_time: 20m
+        alertname: LakeDiskUsageCritical
+        exp_alerts: []      # 0.81 is not past 0.90
+
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_disk_used_ratio{path="/minio-data"}'
+        values: '0.95+0x120'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LakeDiskUsageCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: lake
+              tier: cold
+              path: /minio-data
+            exp_annotations:
+              summary: "Lake filesystem /minio-data is 95% full"
+              description: |
+                Past 90%. MinIO will start refusing writes and the ingest will fail
+                with it, which turns a storage problem into a data-loss problem
+                inside the 48 h Redpanda window.
+
+                Add disk, or purge with an audit row — not a silent delete. Both
+                options and their commands are in the runbook.
+              runbook: docs/runbooks/lake-disk-usage-high.md
+
+  # ── LakeIngestLagHigh, on the same timestamp-not-age shape ───────────────
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_max_kafka_ts_seconds'
+        values: '0+60x120'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: LakeIngestLagHigh
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_max_kafka_ts_seconds'
+        values: '0+0x120'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LakeIngestLagHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: lake
+              tier: cold
+            exp_annotations:
+              summary: "Newest record in the lake is 30m 0s old"
+              description: |
+                The newest Kafka record in raw.messages is over 15 minutes old, on a
+                5-minute schedule. Lag that is falling is a backlog draining; lag
+                that is flat or rising is a cycle that no longer keeps up with the
+                feed, which is a capacity question rather than an incident.
+              runbook: docs/runbooks/lake-ingest-lag.md
+
+  # ── LakeCommitAgeHigh selects bronze only, and raw must not match it ─────
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_last_commit_ts_seconds{table="bronze.trades"}'
+        values: '0+0x120'
+      - series: 'k2_lake_last_commit_ts_seconds{table="raw.messages"}'
+        values: '0+0x120'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: LakeCommitAgeHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: lake
+              tier: cold
+              table: bronze.trades
+            exp_annotations:
+              summary: "bronze.trades has not committed for 45m 0s"
+              description: |
+                A bronze table has taken no commit in over 30 minutes. If
+                raw.messages is still committing, stage 2 is the failing half —
+                check the flow run for a FAILFAST decode error or a schema id the
+                registry could not serve.
+
+                A genuinely quiet period looks the same and is not an incident;
+                k2_lake_added_records tells the two apart.
+              runbook: docs/runbooks/lake-ingest-lag.md
+
+  # ── LakeAuditFailed ─────────────────────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_audit_failures_total'
+        values: '0+0x30 2+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LakeAuditFailed
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: LakeAuditFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: lake
+              tier: cold
+            exp_annotations:
+              summary: "2 lake audit check(s) failed in the last maintenance run"
+              description: |
+                docker/lake/maintenance.py exited non-zero. One of offset continuity,
+                duplicate identifiers or sequence monotonicity did not hold.
+
+                The row naming the failure is in lake.audit.checks with the run
+                timestamp, the scope and a detail string — query it before touching
+                anything, because the three checks mean very different things.
+              runbook: docs/runbooks/lake-audit-failed.md

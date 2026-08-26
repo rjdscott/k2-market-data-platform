@@ -12,6 +12,12 @@
 # NOT yet observed firing. The thresholds below are designed against the
 # predicted rates in docs/architecture/capacity-model.md and the 5-minute
 # ingest cadence; `scripts/chaos/lake-*.sh` is what earns the right to move one.
+#
+# Every staleness expression is `time() - <a timestamp gauge>`, never a
+# pre-computed age. docker/lake/metrics.py recomputes an age only on a
+# SUCCESSFUL catalog read, so an age gauge freezes at its last small value
+# during exactly the outage it is the backstop for, and `> 1800` can never be
+# reached. A timestamp ages whether the exporter is reading or not.
 
 groups:
   - name: lake_critical
@@ -31,7 +37,7 @@ groups:
       # window to act in.
       - alert: LakeIngestFailed
         expr: |
-          k2_lake_last_commit_age_seconds{table="raw.messages"} > 1800
+          time() - k2_lake_last_commit_ts_seconds{table="raw.messages"} > 1800
         for: 5m
         labels:
           severity: critical
@@ -111,7 +117,7 @@ groups:
       # 10-minute `for`.
       - alert: LakeIngestLagHigh
         expr: |
-          k2_lake_ingest_lag_seconds > 900
+          time() - k2_lake_max_kafka_ts_seconds > 900
         for: 10m
         labels:
           severity: warning
@@ -134,7 +140,7 @@ groups:
       # is a function of raw and replays from it.
       - alert: LakeCommitAgeHigh
         expr: |
-          k2_lake_last_commit_age_seconds{table=~"bronze\\..*"} > 1800
+          time() - k2_lake_last_commit_ts_seconds{table=~"bronze\\..*"} > 1800
         for: 10m
         labels:
           severity: warning
@@ -152,33 +158,101 @@ groups:
             k2_lake_added_records tells the two apart.
           runbook: docs/runbooks/lake-ingest-lag.md
 
-      # WARNING: compaction is not keeping up.
+      # WARNING: the nightly file rewrite has not run.
       #
-      # Each 5-minute ingest writes one file per partition it touched, so
-      # raw.messages accumulates small files all day and the nightly binpack is
-      # what merges them. Mean file size well under the 256 MB target for six
-      # hours means the rewrite is not running or not finishing.
+      # This measures the compaction JOB, not its side effect on mean file size,
+      # and that distinction is the whole rule. The obvious version —
+      # `k2_lake_avg_file_bytes{table="raw.messages"} < 32MiB` — fires by
+      # construction for the first two weeks of the table's life: 288 cycles/day
+      # x 9 topics under write.distribution-mode=hash is ~2592 new ~2.5 MB files
+      # a day, and a table-wide MEAN cannot clear 32 MiB until the compacted
+      # archive outweighs them, which solves to ~15 days. capacity-model.md puts
+      # the disk runway at ~26 days, so that alert would be noise for 15 of them
+      # — and "noisy for the first fortnight" is how an alert gets muted.
       #
-      # The files_total guard keeps a new or nearly empty table from firing:
-      # with no files the mean is 0, which is not a small-file problem.
-      - alert: LakeSmallFiles
+      # `rewrite_data_files` cannot carry a `k2.job` property (it does not go
+      # through writeTo), so metrics.py keys on Iceberg's own `operation` field
+      # for a rewrite snapshot. 36 h is one missed nightly plus slack.
+      #
+      # No series exists until the table has been compacted once, so a fresh
+      # table cannot fire this either.
+      - alert: LakeCompactionStale
         expr: |
-          k2_lake_avg_file_bytes{table="raw.messages"} < 33554432
-            and k2_lake_files_total{table="raw.messages"} > 50
-        for: 6h
+          time() - k2_lake_last_compaction_ts_seconds{table="raw.messages"} > 129600
+        for: 30m
         labels:
           severity: warning
           component: lake
           tier: cold
         annotations:
-          summary: "raw.messages mean file size is {{ $value | humanize1024 }}B"
+          summary: "raw.messages has not been compacted for {{ $value | humanizeDuration }}"
           description: |
-            Mean data-file size has been under 32 MiB for six hours against a
-            256 MB target. Every query then pays per-file open cost over
-            thousands of files, and manifest metadata grows faster than the data.
+            The nightly rewrite (03:00 UTC, lake-maintenance-daily) has not
+            produced a rewrite snapshot on raw.messages in over 36 hours, so it
+            has missed at least one run. Each 5-minute ingest adds a file per
+            partition it touched; without the rewrite every query pays per-file
+            open cost over thousands of files and manifest metadata grows faster
+            than the data.
 
-            Run the compaction by hand rather than waiting for the next nightly:
-            the runbook has the command.
+            k2_lake_avg_file_bytes and k2_lake_files_total say how far it has
+            drifted — they are the symptom, this is the cause. Run the
+            compaction by hand rather than waiting for the next nightly: the
+            runbook has the command.
+          runbook: docs/runbooks/lake-recovery.md
+
+      # WARNING: the exporter is up and producing nothing.
+      #
+      # The companion to LakeExporterDown, and the one that actually covers a
+      # Lakekeeper outage. metrics.py resolves the warehouse prefix from the
+      # catalog before every refresh and re-resolves it on any error, so with
+      # Lakekeeper down the refresh loop throws before it touches a table:
+      # k2_lake_scrape_errors_total never rises, `up` stays 1, and every gauge
+      # holds its last value. The refresh timestamp is the one thing that moves,
+      # by not moving.
+      #
+      # 5 minutes is ten refresh intervals. This fires ~10 minutes into a
+      # catalog outage, against LakeIngestFailed's 35, which is what makes it
+      # the fastest lake signal rather than a duplicate of one.
+      - alert: LakeExporterStalled
+        expr: |
+          time() - k2_lake_last_refresh_ts_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "lake-metrics last completed a refresh {{ $value | humanizeDuration }} ago"
+          description: |
+            The exporter is being scraped but has not finished a refresh in over
+            5 minutes, so every lake gauge is stale. The usual cause is
+            Lakekeeper being unreachable: the prefix lookup fails and the loop
+            retries every 30 s without ever reaching a table.
+
+            Check Lakekeeper first, then the exporter's own log. It never exits
+            on a catalog error by design, so "up but silent" is its outage state.
+          runbook: docs/runbooks/lake-recovery.md
+
+      # WARNING: some tables are readable and some are not.
+      #
+      # Distinct from LakeExporterStalled: the refresh is completing, so the
+      # catalog is up, but one or more of the four tables could not be read —
+      # missing (lake-ddl has not run), dropped, or failing its own load.
+      - alert: LakeScrapeErrors
+        expr: |
+          k2_lake_scrape_errors_total > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "lake-metrics could not read {{ $value }} of its 4 tables"
+          description: |
+            The exporter names the table it failed on in its own log, at
+            WARNING. On a fresh stack this is lake-ddl not having run yet and it
+            clears by itself; at any other time a table the alerts above depend
+            on is gone.
           runbook: docs/runbooks/lake-recovery.md
 
       # WARNING: the exporter is gone, so every alert above is blind.
@@ -202,14 +276,23 @@ groups:
 
             The exporter never exits on a catalog error by design, so an
             unreachable target means the container is down rather than
-            Lakekeeper being unreachable — check k2_lake_scrape_errors for that.
+            Lakekeeper being unreachable — LakeExporterStalled covers that.
           runbook: docs/runbooks/lake-recovery.md
 
       # WARNING: the 80% disk alert requirements clarification Q8 asks for.
       #
-      # Read docker/lake/README.md before acting on this one: on a Docker
-      # Desktop host it measures the VM's thin-provisioned disk, not the
-      # machine's, and the two disagree by a wide margin.
+      # The RULE is proven; the METRIC is host-dependent, and both halves are
+      # stated because only one of them is delivered here. That the rule fires
+      # at 0.81 and not at 0.79 is asserted in
+      # docker/prometheus/rules/tests/lake-alerts_test.yml, so on bare metal or
+      # EC2 — where os.statvfs on the MinIO volume IS the real disk — this is
+      # correct and this is the Q8 requirement met.
+      #
+      # On the Docker Desktop host this repo is developed on it is not.
+      # statvfs inside the container reports the VM's thin-provisioned disk
+      # (used_ratio 0.342) while the host reads 79%, so here the alert would
+      # page 45 points late. docker/lake/README.md, "What the disk metric
+      # actually measures", carries the numbers and the commands.
       - alert: LakeDiskUsageHigh
         expr: |
           k2_lake_disk_used_ratio > 0.80

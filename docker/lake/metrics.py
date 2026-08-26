@@ -70,12 +70,35 @@ JOB_INGEST = "ingest"
 MAX_KAFKA_TS = "k2.max-kafka-ts"
 AUDIT_FAILURES = "k2.audit-failures"
 
-ingest_lag = Gauge(
-    "k2_lake_ingest_lag_seconds",
-    "Age of the newest Kafka record in raw.messages, from the latest ingest snapshot",
+# ── timestamps, not ages ────────────────────────────────────────────────────
+#
+# Every "how stale is X" metric here is exported as the INSTANT X last happened
+# and aged in PromQL with `time() - <gauge>`. That is not a style preference: an
+# age computed at scrape time is only recomputed on a *successful* read, so when
+# Lakekeeper is down every age gauge freezes at its last small value and
+# `> 1800` becomes unreachable — the exporter goes blind in exactly the outage
+# whose backstop it is supposed to be. A timestamp ages by itself whether the
+# exporter is reading, stuck, or wrong.
+last_commit_ts = Gauge(
+    "k2_lake_last_commit_ts_seconds",
+    "Unix time of this table's newest commit. Age it with time() - this",
+    ["table"],
 )
-commit_age = Gauge(
-    "k2_lake_last_commit_age_seconds", "Seconds since this table last committed", ["table"]
+max_kafka_ts = Gauge(
+    "k2_lake_max_kafka_ts_seconds",
+    "Unix time of the newest Kafka record in raw.messages, from the latest ingest snapshot. "
+    "Lag is time() - this",
+)
+last_compaction_ts = Gauge(
+    "k2_lake_last_compaction_ts_seconds",
+    "Unix time of this table's newest file-rewrite snapshot — the compaction job itself, "
+    "not its side effect on mean file size",
+    ["table"],
+)
+last_refresh_ts = Gauge(
+    "k2_lake_last_refresh_ts_seconds",
+    "Unix time this exporter last completed a full refresh. Frozen means the exporter is up "
+    "and producing nothing — the fastest signal of a catalog outage",
 )
 rows_total = Gauge("k2_lake_rows_total", "Rows in the table's current snapshot", ["table"])
 files_total = Gauge("k2_lake_files_total", "Data files in the table's current snapshot", ["table"])
@@ -98,7 +121,7 @@ disk_used_ratio = Gauge(
 )
 disk_free_bytes = Gauge("k2_lake_disk_free_bytes", "Free bytes on that same filesystem", ["path"])
 scrape_errors = Gauge(
-    "k2_lake_scrape_errors", "Tables the last refresh could not read (0 is healthy)"
+    "k2_lake_scrape_errors_total", "Tables the last refresh could not read (0 is healthy)"
 )
 
 
@@ -118,10 +141,41 @@ def catalog_prefix() -> str:
     return config["defaults"]["prefix"]
 
 
-def load_snapshots(prefix: str, namespace: str, table: str) -> list:
-    """`[{snapshot}]` oldest first, straight out of the REST loadTable response."""
+def load_metadata(prefix: str, namespace: str, table: str) -> dict:
+    """The table's Iceberg metadata document, straight out of REST loadTable."""
     url = f"{CATALOG_URI.rstrip('/')}/v1/{prefix}/namespaces/{namespace}/tables/{table}"
-    return _get(url)["metadata"].get("snapshots", [])
+    return _get(url)["metadata"]
+
+
+def current_snapshot(metadata: dict) -> dict:
+    """The snapshot `current-snapshot-id` points at, or `{}`.
+
+    Not `snapshots[-1]`. The array is metadata order, and the authoritative
+    pointer is the id: after a rollback or a branch write the newest entry in
+    the array is not the live snapshot, and every gauge derived from it would
+    describe a snapshot no reader can see.
+    """
+    current_id = metadata.get("current-snapshot-id")
+    if current_id is None or current_id == -1:
+        return {}
+    for snapshot in metadata.get("snapshots", []):
+        if snapshot.get("snapshot-id") == current_id:
+            return snapshot
+    return {}
+
+
+# Iceberg's `operation` for a file rewrite. `rewrite_data_files` does not go
+# through `writeTo`, so it cannot carry a `k2.job` property the way the ingest
+# does — the operation field is the only marker it leaves.
+REWRITE_OPERATIONS = {"replace", "overwrite"}
+
+
+def latest_compaction_ts(snapshots: list) -> float:
+    """Unix time of the newest file-rewrite snapshot, or 0 if there is none."""
+    for snapshot in reversed(snapshots):
+        if snapshot.get("summary", {}).get("operation") in REWRITE_OPERATIONS:
+            return snapshot["timestamp-ms"] / 1000.0
+    return 0.0
 
 
 def latest_ingest_summary(snapshots: list) -> dict:
@@ -152,7 +206,7 @@ def refresh(prefix: str, now: float) -> int:
     errors = 0
     for label, (namespace, table) in TABLES.items():
         try:
-            snapshots = load_snapshots(prefix, namespace, table)
+            metadata = load_metadata(prefix, namespace, table)
         except Exception as exc:  # noqa: BLE001 - a missing table is a real state
             # Before `lake-ddl` has run, or after a table is dropped. Counted and
             # reported rather than crashing the loop: the other tables' metrics
@@ -162,32 +216,43 @@ def refresh(prefix: str, now: float) -> int:
             errors += 1
             continue
 
-        if not snapshots:
+        snapshots = metadata.get("snapshots", [])
+        current = current_snapshot(metadata)
+        if not current:
             rows_total.labels(table=label).set(0)
             files_total.labels(table=label).set(0)
             continue
 
-        current = snapshots[-1]
         summary = current.get("summary", {})
         files = _num(summary, "total-data-files")
         size = _num(summary, "total-files-size")
 
-        commit_age.labels(table=label).set(max(0.0, now - current["timestamp-ms"] / 1000.0))
+        last_commit_ts.labels(table=label).set(current["timestamp-ms"] / 1000.0)
         rows_total.labels(table=label).set(_num(summary, "total-records"))
         files_total.labels(table=label).set(files)
         bytes_total.labels(table=label).set(size)
         added_records.labels(table=label).set(_num(summary, "added-records"))
         avg_file_bytes.labels(table=label).set(size / files if files else 0.0)
 
+        compacted = latest_compaction_ts(snapshots)
+        if compacted:
+            last_compaction_ts.labels(table=label).set(compacted)
+
         if label == INGEST_TABLE:
             stamp = latest_ingest_summary(snapshots).get(MAX_KAFKA_TS)
             if stamp:
-                ingest_lag.set(max(0.0, now - _epoch(stamp)))
+                max_kafka_ts.set(_epoch(stamp))
         if label == CHECKS_TABLE:
             audit_failures.set(_num(summary, AUDIT_FAILURES))
 
     _refresh_disk()
     scrape_errors.set(errors)
+    # Last, and only on the path that got this far. A frozen
+    # k2_lake_last_refresh_ts_seconds is what makes "exporter up, catalog
+    # unreachable" alertable — the prefix lookup in serve() throws before
+    # refresh() is even called when Lakekeeper is down, so nothing else here
+    # would move either.
+    last_refresh_ts.set(now)
     return errors
 
 
@@ -244,6 +309,7 @@ def serve(port: int = 8000, interval: int = 30) -> None:
 def _self_check() -> None:
     """Offline check of the summary parsing and the lag arithmetic."""
     ingest = {
+        "snapshot-id": 111,
         "timestamp-ms": 1787750204280,
         "summary": {
             "operation": "append",
@@ -255,7 +321,11 @@ def _self_check() -> None:
             "added-records": "2895643",
         },
     }
-    compaction = {"timestamp-ms": 1787750304280, "summary": {"operation": "replace"}}
+    compaction = {
+        "snapshot-id": 222,
+        "timestamp-ms": 1787750304280,
+        "summary": {"operation": "replace"},
+    }
 
     assert _num(ingest["summary"], "total-files-size") == 143178703.0
     assert _num(ingest["summary"], "missing-key") == 0.0
@@ -269,6 +339,19 @@ def _self_check() -> None:
 
     assert _epoch("2026-08-26T12:50:00.289000") == 1787748600.289
     assert _epoch("2026-08-26T12:50:00.289000+00:00") == 1787748600.289
+
+    # `current-snapshot-id`, not the tail of the array. Flip the id back to the
+    # ingest and the newest entry must stop being the answer, or every gauge
+    # would describe a snapshot no reader can see after a rollback.
+    both = {"snapshots": [ingest, compaction], "current-snapshot-id": 222}
+    assert current_snapshot(both) is compaction
+    assert current_snapshot({**both, "current-snapshot-id": 111}) is ingest
+    assert current_snapshot({"snapshots": [ingest], "current-snapshot-id": -1}) == {}
+    assert current_snapshot({}) == {}
+
+    # The compaction gauge measures the rewrite job, not its side effect.
+    assert latest_compaction_ts([ingest, compaction]) == 1787750304.280
+    assert latest_compaction_ts([ingest]) == 0.0
     print("self-check ok")
 
 

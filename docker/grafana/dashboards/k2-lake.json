@@ -79,7 +79,7 @@
       },
       "targets": [
         {
-          "expr": "k2_lake_ingest_lag_seconds",
+          "expr": "time() - k2_lake_max_kafka_ts_seconds",
           "refId": "A",
           "legendFormat": "lag"
         }
@@ -143,7 +143,7 @@
       },
       "targets": [
         {
-          "expr": "k2_lake_last_commit_age_seconds{table=\"raw.messages\"}",
+          "expr": "time() - k2_lake_last_commit_ts_seconds{table=\"raw.messages\"}",
           "refId": "A",
           "legendFormat": "raw"
         }
@@ -544,7 +544,7 @@
       },
       "targets": [
         {
-          "expr": "k2_lake_last_commit_age_seconds",
+          "expr": "time() - k2_lake_last_commit_ts_seconds",
           "refId": "A",
           "legendFormat": "{{table}}"
         }
@@ -907,7 +907,7 @@
       },
       "targets": [
         {
-          "expr": "k2_lake_scrape_errors",
+          "expr": "k2_lake_scrape_errors_total",
           "refId": "A",
           "legendFormat": "tables unreadable"
         }
