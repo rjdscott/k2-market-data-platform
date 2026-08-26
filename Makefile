@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture
+.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -71,7 +71,13 @@ check-alerts:  ## promtool: syntax-check every rule file and run the capture ale
 	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint promtool prom/prometheus \
 	  test rules /p/tests/capture-alerts.test.yml
 
-chaos:  ## Inject each capture failure, wait for its alert, measure recovery (LOCAL ONLY - breaks the running stack)
+lint:  ## Ruff over the v2 offload, the v3 lake and the tests (same scope as CI)
+	uv run --no-project --with ruff ruff check docker/lake docker/offload tests
+
+lake-verify:  ## Phase D exit criteria against the LIVE stack: offsets gapless, raw == bronze, double-run adds 0
+	bash scripts/lake-verify.sh
+
+chaos:  ## Inject each capture and lake failure, wait for its alert, measure recovery (LOCAL ONLY - breaks the running stack)
 	@echo "chaos: breaks the running stack and drops real market data - public feeds do not replay it."
 	@echo "       Maintainer-run, never CI (docs/research/2026-08-26-v3-requirements-clarification.md Q3)."
 	scripts/chaos/capture-kill.sh        --exchange kraken
@@ -80,5 +86,9 @@ chaos:  ## Inject each capture failure, wait for its alert, measure recovery (LO
 	scripts/chaos/capture-queue-full.sh  --exchange kraken
 	scripts/chaos/redpanda-stop.sh       --exchange kraken
 	scripts/chaos/capture-corrupt-frame.sh
+	scripts/chaos/lake-lakekeeper-stop.sh
+	scripts/chaos/lake-minio-stop.sh
+	scripts/chaos/lake-ingest-kill.sh
+	scripts/chaos/lake-corrupt-payload.sh
 	@echo "results: scripts/chaos/results/$$(date -u +%F).tsv"
 	@echo "copy the measured recovery times into docs/architecture/failure-modes.md by hand, with the date"

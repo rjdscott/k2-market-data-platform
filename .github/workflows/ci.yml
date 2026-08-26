@@ -53,7 +53,7 @@ jobs:
       - run: cargo test --locked
 
   python:
-    name: Python (offload + tests)
+    name: Python (lake + offload + tests)
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -63,7 +63,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
 
       - name: Ruff
-        run: uv run --no-project --with ruff ruff check docker/offload tests
+        run: uv run --no-project --with ruff ruff check docker/lake docker/offload tests
 
       - name: Pytest
         run: uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q
@@ -104,6 +104,38 @@ jobs:
           build-args: ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  compose:
+    name: Compose (config validation)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # `config` resolves every variable, mount and dependency without pulling
+      # an image or starting anything, so it catches a bad service definition on
+      # the PR rather than at `docker compose up` on the host. .env.example
+      # supplies the variables; no secret is needed to validate the shape.
+      - name: docker compose config
+        run: docker compose --env-file .env.example config -q
+
+      # A service that declares no CPU or memory limit silently escapes the
+      # 16 CPU / 40 GB budget ADR-010 states, and nothing else would notice.
+      - name: every service declares resource limits
+        run: |
+          docker compose --env-file .env.example config \
+            | python3 -c '
+          import sys, yaml
+          services = yaml.safe_load(sys.stdin)["services"]
+          missing = [
+              name for name, svc in services.items()
+              if not (svc.get("deploy") or {}).get("resources", {}).get("limits")
+          ]
+          if missing:
+              sys.exit("services with no deploy.resources.limits: " + ", ".join(missing))
+          print(f"{len(services)} services, all with limits")
+          '
 
   docs:
     name: Docs (link/word/rule gates)
