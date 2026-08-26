@@ -105,8 +105,11 @@ which is the right trade at this scale:
    ticks and `CaptureProduceErrors` fires. This is the one level where the failure mode
    is loss rather than lag — see [../runbooks/capture-produce-stalled.md](../runbooks/capture-produce-stalled.md).
 2. **ClickHouse ingest saturates** → the Kafka Engine consumer lags. Data is safe in
-   Redpanda for the retention window; `ClickHouseBronzeInsertRateLow` fires. Watch
-   consumer lag with `rpk group describe`.
+   Redpanda for the retention window. There is no alert on this any more:
+   `ClickHouseBronzeInsertRateLow` was the proxy and it was archived with the v2
+   tier it measured ([ADR-019](../adr/ADR-019-rust-capture-tier.md) Outcome). The
+   v3 hot tier gets its own in Phase E; until then, watch consumer lag by hand
+   with `rpk group describe`.
 3. **Materialized views saturate** → merge queue grows; `ClickHouseMergeQueueLarge` fires.
    Queries degrade before ingest does.
 4. **Offload saturates** → cycles overrun the 15-minute schedule;

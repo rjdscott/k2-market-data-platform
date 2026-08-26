@@ -1,0 +1,54 @@
+# ARCHIVED 2026-08-27 — the v2 ClickHouse ingest-rate rules.
+#
+# Removed from docker/prometheus/rules/clickhouse-alerts.yml when the Kotlin feed
+# handlers retired to legacy/v2-kotlin/ (ADR-019). Both rules read
+# ClickHouseProfileEvents_InsertedRows as a proxy for "is the Kafka engine
+# consuming"; what it was a proxy FOR was the Kotlin handlers producing to
+# `market.crypto.trades.<ex>.raw`. With no producer the alert can only ever fire,
+# and an alert that can only ever fire is noise, not monitoring.
+#
+# NOT loaded by Prometheus. Kept for reference, and because two things about it
+# are worth remembering:
+#
+#   1. The expression was never bronze-scoped despite the alert's name — it is
+#      server-wide inserted rows, a gap the 2026-08-26 doc audit already recorded
+#      (docs/audits/2026-08-26-doc-accuracy.md). So how it would actually behave
+#      against a frozen `k2` was never measured; system-table inserts alone might
+#      have kept it under threshold some of the time. Firing "continuously" is the
+#      expected behaviour, not an observed one.
+#   2. `clickhouse:insert_rate:5m` had no consumer. The two Grafana dashboards
+#      that chart insert rate use the raw metric at [1m], not this recording
+#      rule, so it was dead the whole time.
+#
+# The v3 equivalent is CaptureProduceStalled in
+# docker/prometheus/rules/capture-alerts.yml, which reads
+# k2_capture_records_delivered_total — a delivery counter, not an ingest proxy.
+
+groups:
+  - name: clickhouse_warning
+    interval: 1m
+    rules:
+
+      # WARNING: Kafka Engine not consuming (consumer lag proxy)
+      # Note: Direct consumer lag not directly exposed; use insert rate as proxy
+      - alert: ClickHouseBronzeInsertRateLow
+        expr: |
+          rate(ClickHouseProfileEvents_InsertedRows[5m]) < 0.5
+        for: 10m
+        labels:
+          severity: warning
+          component: clickhouse
+          tier: warm-storage
+        annotations:
+          summary: "ClickHouse bronze insert rate very low"
+          description: |
+            ClickHouse is inserting fewer than 0.5 rows/sec over 10 minutes.
+
+            **Check:**
+            1. Kafka consumers: `docker exec k2-clickhouse clickhouse-client -q "SELECT table, num_messages_read, last_poll_time FROM system.kafka_consumers WHERE database='k2'"`
+
+  - name: clickhouse_recording
+    rules:
+      # Insert rate per 5 minutes
+      - record: clickhouse:insert_rate:5m
+        expr: rate(ClickHouseProfileEvents_InsertedRows[5m])

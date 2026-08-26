@@ -41,7 +41,7 @@ flowchart LR
     ICE["Iceberg cold.*<br/>10 tables · Hadoop catalog<br/>Parquet + zstd"]
 
     subgraph OBS["Observability"]
-        PR["Prometheus v3.2<br/>24 alert rules"]
+        PR["Prometheus v3.2<br/>23 alert rules"]
         GR["Grafana 11.5<br/>5 dashboards"]
     end
 
@@ -147,7 +147,7 @@ Two silver columns are absent from cold storage on purpose: `trade_conditions Ar
 
 Prometheus v3.2 scrapes the three capture containers (`:8082`), ClickHouse (`:9363`), Redpanda (`:9644`), the offload metrics exporter (`iceberg-metrics:8000`) and Grafana. Grafana 11.5 ships five provisioned dashboards in `docker/grafana/dashboards/`: pipeline overview, ClickHouse overview, Iceberg offload, v2 migration tracker, K2 Capture (v3).
 
-**24 alert rules** are loaded from `docker/prometheus/rules/`: 5 ClickHouse and 9 Iceberg-offload (14 v2 total), plus 10 v3 capture-tier rules, which landed with Phase C and are evaluated against live series. The `iceberg-scheduler` Prometheus job scrapes the offload metrics exporter on `iceberg-metrics:8000`, so all 9 offload alerts have live series. One honest gap remains: **not one alert has been shown to fire on the fault it names** — `make chaos` is what proves the capture-tier ones and it has not run (`scripts/chaos/results/` does not exist). Three capture rules do carry `promtool` unit tests ([`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml), `make check-alerts`), which pin an expression and never a recovery time. There is no Alertmanager.
+**23 alert rules** are loaded from `docker/prometheus/rules/`: 4 ClickHouse and 9 Iceberg-offload (13 v2 total), plus 10 v3 capture-tier rules, which landed with Phase C and are evaluated against live series. The `iceberg-scheduler` Prometheus job scrapes the offload metrics exporter on `iceberg-metrics:8000`, so all 9 offload alerts have live series. One honest gap remains: **not one alert has been shown to fire on the fault it names** — `make chaos` is what proves the capture-tier ones and it has not run (`scripts/chaos/results/` does not exist). Three capture rules do carry `promtool` unit tests ([`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml), `make check-alerts`), which pin an expression and never a recovery time. There is no Alertmanager.
 
 ---
 

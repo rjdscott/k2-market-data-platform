@@ -9,7 +9,7 @@ Everything here targets the as-built `docker-compose.yml` at the repo root.
 |-----|----------------|
 | [quick-reference.md](./quick-reference.md) | One-page cheat sheet: URLs, ports, credentials, stack commands |
 | [data-inspection.md](./data-inspection.md) | Runnable queries for every layer — Redpanda, bronze/silver/gold, Iceberg cold |
-| [observability.md](./observability.md) | Grafana dashboards, capture-tier metrics, all 24 Prometheus alert rules |
+| [observability.md](./observability.md) | Grafana dashboards, capture-tier metrics, all 23 Prometheus alert rules |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
 | [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits — 14.60 CPU / 21.625 GiB across 15 services (+4 one-shot) |
 | [prefect-schedules.md](./prefect-schedules.md) | The two deployed Prefect schedules (15-min offload, daily maintenance) |
@@ -53,19 +53,20 @@ curl -sG localhost:9090/api/v1/query \
 docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c \
   "SELECT table_name, status, last_successful_run FROM offload_watermarks ORDER BY last_successful_run"
 
-# 5. Nothing firing beyond the five expected v2 ones (see the note below)
+# 5. Nothing firing beyond the four expected IcebergOffload* ones (note below)
 curl -s localhost:9090/api/v1/alerts \
-  | jq -r '.data.alerts[] | select(.labels.alertname | test("^(ClickHouseBronzeInsertRateLow|IcebergOffloadLag(Elevated|Critical)|IcebergOffloadThroughputLow|IcebergOffloadWatermarkStale)$") | not)
+  | jq -r '.data.alerts[] | select(.labels.alertname | startswith("IcebergOffload") | not)
            | "\(.labels.alertname)\t\(.state)"'
 ```
 
 There is no "trades landed in ClickHouse" check any more: the `k2` database is
 frozen and gains no rows — see [../architecture/README.md](../architecture/README.md).
-The same freeze makes five v2 alerts fire permanently and expectedly
-(`ClickHouseBronzeInsertRateLow`, `IcebergOffloadLagElevated`,
-`IcebergOffloadLagCritical`, `IcebergOffloadThroughputLow`,
-`IcebergOffloadWatermarkStale`), which is why check 5 filters them out; they are
-dropped with the tier at the Phase E cutover. Rationale:
+The same freeze makes the four `IcebergOffload*` alerts fire permanently and
+expectedly, which is why check 5 filters them out; they are deleted with
+`docker/offload/` in the Phase D PR. `ClickHouseBronzeInsertRateLow` measured the
+same frozen ingest and was archived to
+[`legacy/v2-kotlin/runbooks/`](../../legacy/v2-kotlin/runbooks/clickhouse-v2-ingest-alerts.yml)
+in the retirement PR rather than left to fire. Rationale:
 [ADR-019](../adr/ADR-019-rust-capture-tier.md) Outcome.
 
 ## Related

@@ -1,6 +1,6 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 24 alert rules (14 v2 + 10 v3 capture)
+Prometheus scrapes the stack, Grafana renders it, and 23 alert rules (13 v2 + 10 v3 capture)
 cover the things that actually break: capture goes down or silent, sequence gaps and book
 checksum failures, ClickHouse struggles, and the cold-tier offload falls behind.
 
@@ -81,17 +81,17 @@ the Kotlin handlers ([ADR-019](../adr/ADR-019-rust-capture-tier.md)); their file
 archived at [`legacy/v2-kotlin/runbooks/feed-handler-alerts.yml`](../../legacy/v2-kotlin/runbooks/feed-handler-alerts.yml)
 and `capture-alerts.yml` below is what replaced them.
 
-### `clickhouse-alerts.yml` — warm tier (5)
+### `clickhouse-alerts.yml` — warm tier (4)
 
 | Alert | Severity | Fires when |
 |-------|----------|-----------|
 | `ClickHouseDown` | critical | `up{job="clickhouse"} == 0` for 2m |
 | `ClickHouseHighMemoryUsage` | critical | Resident memory >85% of system RAM for 5m |
 | `ClickHouseQueryFailureRateHigh` | critical | `rate(FailedQuery[5m]) > 0.1` for 3m |
-| `ClickHouseBronzeInsertRateLow` | warning | Server-wide inserted rows < 0.5/s over 5m. **Expected to fire continuously** — the `k2` database is frozen and nothing inserts into it until Phase E drops it; the rule's own annotation says so |
 | `ClickHouseMergeQueueLarge` | warning | >10 background merge tasks queued for 5m |
 
-Recording rules: `clickhouse:insert_rate:5m`, `clickhouse:query_duration_mean:5m`.
+Recording rule: `clickhouse:query_duration_mean:5m`. (`clickhouse:insert_rate:5m` was archived with
+`ClickHouseBronzeInsertRateLow` — same expression, and no dashboard ever read it.)
 
 ### `iceberg-offload-alerts.yml` — cold tier (9)
 

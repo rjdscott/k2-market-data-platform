@@ -322,7 +322,8 @@ declared, verified by summing `deploy.resources.limits` over
 command and its output). Bootstrap peak is 16.10 CPU / 23.125 GiB across all 19
 services — what steady state used to be during the parallel run.
 
-Loaded Prometheus rules go from 27 to 24 (14 v2 + 10 v3 capture). Grafana stays
+Loaded Prometheus rules go from 27 to 23 (13 v2 + 10 v3 capture) — the three
+`FeedHandler*` rules and `ClickHouseBronzeInsertRateLow`. Grafana stays
 at five dashboards: no dashboard read only feed-handler metrics, so none was
 archived; the "Feed Handlers" row came out of `k2-pipeline-overview.json`, whose
 v3 equivalents already existed in `k2-l2-capture.json`, and the two Stack Health
@@ -344,29 +345,37 @@ database and deleting the `.raw` topics is Phase E, after the v3 hot tier exists
 Q5). `schemas/avro/normalized-trade.avsc` and the six v2 topics stay until then;
 `docker/redpanda/init.sh` keeps creating the topics and says why.
 
-**Five v2 alerts now fire continuously, and that was not anticipated either.**
-Freezing the hot tier freezes everything downstream of it. `k2.*` gains no rows,
-so ClickHouse's insert rate goes to zero and the offload watermark cannot
-advance, and five rules written for a live v2 pipeline lose their subject while
-keeping their expressions:
+**Five v2 alerts lose their subject, and they are retired on three different
+schedules.** Freezing the hot tier freezes everything downstream of it: `k2.*`
+gains no rows, so ClickHouse's insert rate goes to zero and the offload watermark
+cannot advance. An alert that can only ever fire is noise, not monitoring — so
+each one goes when the thing it watches goes, and no sooner:
 
-| Alert | Fires after | Why |
+| Alert | Measures | Retired |
 |---|---|---|
-| `ClickHouseBronzeInsertRateLow` | ~10 min | insert rate is genuinely 0 |
-| `IcebergOffloadLagElevated` | ~30 min | watermark age passes 20 min |
-| `IcebergOffloadLagCritical` | ~35 min | watermark age passes 30 min, and never comes back |
-| `IcebergOffloadThroughputLow` | ~1 h | `rate(offload_rows_total[1h])` decays to 0 |
-| `IcebergOffloadWatermarkStale` | ~26 h | the slow backstop |
+| `ClickHouseBronzeInsertRateLow` | Kotlin-fed `k2.*` ingest rate, via `ClickHouseProfileEvents_InsertedRows` | **Here.** Archived at `legacy/v2-kotlin/runbooks/clickhouse-v2-ingest-alerts.yml`, with the `clickhouse:insert_rate:5m` recording rule that shared its expression and had no reader |
+| `IcebergOffloadLagElevated` | watermark age > 20 min | **Phase D**, with `docker/offload/` |
+| `IcebergOffloadLagCritical` | watermark age > 30 min | Phase D |
+| `IcebergOffloadThroughputLow` | `rate(offload_rows_total[1h])` | Phase D |
+| `IcebergOffloadWatermarkStale` | watermark age > 26 h | Phase D |
 
-Not silenced, not deleted, and not re-expressed here. Each description now says
-plainly that it is expected until the Phase E cutover drops the tier it watches,
-which is where the rules go too. That is a deliberate choice between two bad
-options: a permanently-firing alert teaches an operator to ignore the rule file,
-and a silently-deleted alert removes the only signal that would notice if the
-frozen tier started behaving unexpectedly before Phase E. Recording it beats
-either, and Phase E is close enough that a `for:` bump would be dead code before
-it earned its keep. **Revisit when:** Phase E drops `k2` — the five rules go with
-it. If Phase E slips past 2026-09-30, silence them instead.
+The four `IcebergOffload*` rules stay loaded and fire from this PR until the
+Phase D PR deletes `docker/offload/` — expected, not incidents, and each
+description says so. They are not archived here because unlike the ClickHouse
+one they still describe a component that exists; they go when it does.
+
+**The offload's source is frozen from this PR, so Phase D loses a step.** The
+plan had Phase D run the old offload beside the new lake ingest and compare. With
+`k2.*` gaining no rows there is nothing for the old side to offload, so that
+comparison would measure nothing; the maintainer dropped it on 2026-08-27. Phase D
+deletes `docker/offload/`, the hadoop warehouse bind mount, and these four rules
+together.
+
+**Sequencing, in one line:** `ClickHouseBronzeInsertRateLow` goes here; the four
+`IcebergOffload*` rules go in the Phase D PR with `docker/offload/`; the `k2`
+database and the six v2 topics go in the Phase E PR. **Revisit when:** the Phase D
+PR lands — if those four rules are still loaded after it, this Outcome was
+wrong about the sequencing.
 
 **One thing this ADR did not anticipate.** Retiring the handlers freed
 `config/instruments.yaml` to carry Kraken's WS **v2** spellings — the registry

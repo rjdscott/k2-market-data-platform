@@ -29,7 +29,7 @@ exists to tell you what "normal recovery" looks like so you can spot when it isn
 
 **Symptom** — capture logs show produce failures; ClickHouse insert rate drops to zero.
 
-**Detection** — `CaptureProduceErrors`, `CaptureProduceStalled`, `ClickHouseBronzeInsertRateLow`.
+**Detection** — `CaptureProduceErrors`, `CaptureProduceStalled`.
 
 **Expected behaviour** — capture reconnects on its own; in-flight messages sit in the
 librdkafka queue; ClickHouse Kafka Engine consumers resume from their last committed offset.
