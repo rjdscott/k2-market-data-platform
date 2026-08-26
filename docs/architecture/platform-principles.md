@@ -26,7 +26,7 @@ No transactions, no two-phase commit, no coordination protocol — one number th
 
 ### 3. Raw survives normalization
 
-Every trade is written twice: the exchange's untouched payload to a `.raw` topic, and a normalized record alongside it. Bronze tables keep native symbols and native sequence semantics per exchange — `XBT/USD` stays `XBT/USD` — and normalization to `BTC/USD` happens at Silver ([ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md)).
+Every frame is archived verbatim to `market.crypto.v3.raw.<ex>` before anything is derived from it, so a normalisation bug is repairable by reprocessing rather than by losing the day. The frozen v2 medallion held the same principle one layer up: bronze kept native symbols and native sequence semantics per exchange, and normalisation to the canonical symbol happened at Silver ([ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md)).
 
 The reason is debugging. When a price looks wrong, the question is always "did the exchange send this, or did we do it?", and that question is only answerable if the pre-transform bytes still exist.
 
@@ -36,9 +36,9 @@ The reason is debugging. When a price looks wrong, the question is always "did t
 
 ### 4. Isolate at the blast radius, not the deployment boundary
 
-One feed-handler image, three containers. Deploying one service with an exchange loop would be simpler; it would also mean a Binance parser bug stops Kraken.
+One `k2-capture` image, three containers. Deploying one service with an exchange loop would be simpler; it would also mean a Binance parser bug stops Kraken.
 
-Verified rather than assumed: stopping `feed-handler-binance` left Kraken and Coinbase ingesting normally, and Binance resumed within 30 seconds. Cost: two extra container slots. Same reasoning gives each exchange its own bronze table and its own Kafka-engine consumer group.
+Verified rather than assumed: stopping the Binance container left Kraken and Coinbase ingesting normally, and Binance resumed within 30 seconds (measured 2026-02-19 against the Kotlin handler this tier replaced; not re-measured on Rust — `make chaos` is the gate that would). Cost: two extra container slots. Same reasoning gave each exchange its own bronze table and its own Kafka-engine consumer group in the v2 tier.
 
 ---
 

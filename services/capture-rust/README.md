@@ -408,7 +408,7 @@ from a dirty tree must not claim to be the commit it was started from. All three
 `docker compose up -d --build` and a selective
 `docker compose up -d capture-kraken` both work from a fresh clone.
 
-**From the repository root**, exactly as the Kotlin handlers build. The crate
+**From the repository root.** The crate
 compiles `schemas/avro/*.avsc` in with `include_str!` and those live outside the
 crate, so a crate-directory context cannot see them, and copying them in would
 create a second source of truth for the wire contract.

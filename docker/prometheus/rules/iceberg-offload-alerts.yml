@@ -44,6 +44,16 @@ groups:
             Table {{ $labels.table }} has not been offloaded for {{ $value }} minutes.
             This exceeds the 30-minute SLO and may indicate scheduler or pipeline failure.
 
+            **EXPECTED SINCE 2026-08-26 — the v2 tier this watches is frozen.**
+            The Kotlin feed handlers were the only producers of
+            `market.crypto.trades.<ex>[.raw]` and they retired to
+            `legacy/v2-kotlin/` (ADR-019), so `k2.*` gains no rows, the offload
+            watermark cannot advance, and this alert fires continuously until
+            the `k2` database and the `.raw` topics are dropped together at the
+            Phase E cutover. Until then it is expected, not an incident. The
+            expression is deliberately unchanged: silencing or deleting the rule
+            is a Phase E decision, not a side effect of the retirement.
+
             **Scope:** bronze, silver and ohlcv_1m/5m only. Coarser OHLCV watermarks
             track the last completed window, so they lag by design.
 
@@ -93,6 +103,16 @@ groups:
             Watermark for {{ $labels.table }} has not updated in {{ $value | humanizeDuration }}
             (>26h). This is the slow backstop that catches a hung pipeline on any table,
             including ohlcv_1d; IcebergOffloadLagCritical is the fast detector.
+
+            **EXPECTED SINCE 2026-08-26 — the v2 tier this watches is frozen.**
+            The Kotlin feed handlers were the only producers of
+            `market.crypto.trades.<ex>[.raw]` and they retired to
+            `legacy/v2-kotlin/` (ADR-019), so `k2.*` gains no rows, the offload
+            watermark cannot advance, and this alert fires continuously until
+            the `k2` database and the `.raw` topics are dropped together at the
+            Phase E cutover. Until then it is expected, not an incident. The
+            expression is deliberately unchanged: silencing or deleting the rule
+            is a Phase E decision, not a side effect of the retirement.
 
             **Actions:**
             1. Check deployments registered: `docker exec k2-prefect-worker prefect deployment ls`
@@ -146,6 +166,16 @@ groups:
             Table {{ $labels.table }} offload lag: {{ $value }} minutes (target: <15 minutes).
             Not critical yet (threshold: 30 minutes), but trending upward.
 
+            **EXPECTED SINCE 2026-08-26 — the v2 tier this watches is frozen.**
+            The Kotlin feed handlers were the only producers of
+            `market.crypto.trades.<ex>[.raw]` and they retired to
+            `legacy/v2-kotlin/` (ADR-019), so `k2.*` gains no rows, the offload
+            watermark cannot advance, and this alert fires continuously until
+            the `k2` database and the `.raw` topics are dropped together at the
+            Phase E cutover. Until then it is expected, not an incident. The
+            expression is deliberately unchanged: silencing or deleting the rule
+            is a Phase E decision, not a side effect of the retirement.
+
             **Possible Causes:**
             - Scheduler delayed or skipped a cycle
             - Data volume spike
@@ -168,6 +198,16 @@ groups:
             Offload throughput for {{ $labels.table }}: {{ $value | humanize }} rows/second
             averaged over 1 hour. Below 0.1 rows/sec this high-volume table has
             effectively stopped offloading.
+
+            **EXPECTED SINCE 2026-08-26 — the v2 tier this watches is frozen.**
+            The Kotlin feed handlers were the only producers of
+            `market.crypto.trades.<ex>[.raw]` and they retired to
+            `legacy/v2-kotlin/` (ADR-019), so `k2.*` gains no rows, the offload
+            watermark cannot advance, and this alert fires continuously until
+            the `k2` database and the `.raw` topics are dropped together at the
+            Phase E cutover. Until then it is expected, not an incident. The
+            expression is deliberately unchanged: silencing or deleting the rule
+            is a Phase E decision, not a side effect of the retirement.
 
             **Check:**
             - Spark executor logs for slowness

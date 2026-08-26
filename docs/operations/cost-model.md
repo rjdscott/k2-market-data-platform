@@ -8,11 +8,12 @@ What this platform costs to run, and what the architecture decisions bought.
 
 ## What it costs today
 
-The v2 stack is one Docker Compose deployment: **15.1 CPU / 21.875 GB across 14
-services** (+2 one-shot) (see [docker-resources.md](./docker-resources.md)). This branch's v3
-foundations add Lakekeeper — +0.25 CPU / +256 MB, plus 2 more one-shot init containers — for
-**15.35 CPU / 22.125 GB across 15 services (+4 one-shot) as deployed here**. It runs on a
-single developer workstation, so the marginal cost is electricity.
+The stack is one Docker Compose deployment: **14.60 CPU / 21.625 GiB across 15
+long-running services**, rising to 16.10 CPU / 23.125 GiB across all 19 while the four
+one-shot init containers overlap at bootstrap (see
+[docker-resources.md](./docker-resources.md) and the Kotlin-retirement addendum to
+[ADR-010](../adr/ADR-010-resource-budget.md)). It runs on a single developer workstation,
+so the marginal cost is electricity.
 
 That is the headline result, not an aside. v1 needed 35–40 CPU and 45–50 GB — more than
 2× a 16-core budget — because five always-on Spark Structured Streaming jobs consumed
@@ -64,26 +65,30 @@ Scaling levers, in the order they would bite:
    1 year on gold; everything older lives in Iceberg. Zstd level 3 compresses the cold
    tier ~12:1, so a year of trades is tens of gigabytes, not terabytes. Storage is the
    cheapest axis and deliberately so.
-2. **More exchanges.** Each one is a feed handler at 0.5 CPU / 512 MB plus a bronze table
-   and a materialized view — near-zero marginal cost until ClickHouse's 4 CPU is the
-   constraint.
+2. **More exchanges.** Each one is a `k2-capture` container at 0.25 CPU / 256 MB (512 MB
+   for a full-depth venue like Coinbase) plus three more Redpanda topics — near-zero
+   marginal cost. See [adding-new-exchanges.md](./adding-new-exchanges.md).
 3. **Query concurrency.** ClickHouse is the first thing to need a bigger box. It already
    holds 27% of CPU and 37% of RAM.
-4. **Throughput.** Last, not first. A feed handler benchmarks at 5,000+ msg/s against a
-   measured ~50 msg/s; the streaming path has ~100× headroom before it costs anything.
+4. **Throughput.** Last, not first. The capture tier's saturation point has not been
+   measured — the v2 handlers were never the bottleneck at ~150 msg/s
+   ([2026-02-19 baseline](../benchmarks/2026-02-19-v2-baseline.md)) and the Rust tier
+   that replaced them is smaller, but the headroom multiple is unmeasured until a load
+   test runs.
 
 ## What the architecture saved
 
-| | v1 | v2 | Saving |
+| | v1 | today | Saving |
 |---|----|----|--------|
-| CPU (limits) | 35–40 | 15.1 | ~60% |
-| RAM (limits) | 45–50 GB | 21.875 GB | ~55% |
-| Services | 18–20 | 14 (+2 one-shot) | ~25% |
+| CPU (limits) | 35–40 | 14.60 | ~60% |
+| RAM (limits) | 45–50 GB | 21.625 GiB | ~55% |
+| Services | 18–20 | 15 (+4 one-shot) | ~20% |
 | Always-on Spark | 14 CPU / 20 GB | 0 (batch only) | 100% |
 
-This branch's v3 foundations add Lakekeeper — +0.25 CPU / +256 MB, plus 2 more one-shot init
-containers — for 15.35 CPU / 22.125 GB across 15 services (+4 one-shot) as deployed here; the
-saving above is v1 → v2 and excludes that addition.
+Almost all of that saving is v1 → v2 and belongs to ADR-004; the v3 changes since are
+close to a wash — Lakekeeper added 0.25 CPU / 256 MB, and swapping the three Kotlin feed
+handlers for three Rust capture containers gave back 0.75 CPU / 0.5 GiB
+([ADR-010](../adr/ADR-010-resource-budget.md) Outcome).
 
 On the reserved-instance estimate above, roughly 60% less compute is roughly 60% less
 compute bill — call it **$500–700/month avoided at this scale**, and proportionally more

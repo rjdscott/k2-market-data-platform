@@ -4,7 +4,7 @@ What this platform is for, what it is measurably good at, and the workloads it i
 
 ## What it is
 
-A single-host crypto market-data platform that takes live exchange trades and makes them queryable as OHLCV candles in **under 200 ms p99**, then lands them in an open table format for history. It runs three exchanges on 15.1 CPU / 21.875 GB (v2 baseline); this branch runs Phase C — Rust `k2-capture` alongside the Kotlin handlers for a labelled parity window ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) — for a steady state of 16.10 CPU / 23.125 GB across 18 long-running services, until Kotlin retires.
+A single-host crypto market-data platform that takes live exchange trades and makes them queryable as OHLCV candles in **under 200 ms p99**, then lands them in an open table format for history. It runs three exchanges on 15.1 CPU / 21.875 GB (v2 baseline); with the capture tier swapped for v3's Rust `k2-capture` ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) the steady state is **14.60 CPU / 21.625 GiB across 15 long-running services**, and the tier now carries L2 order books the v2 one never had.
 
 The design centre is the **warm path**: fast enough that a dashboard or a monitor reads current market state without feeling stale, durable enough that a year of history is one `SELECT` away, and small enough to run on one machine. That is a narrower target than "market data platform" usually implies, and the narrowness is the point.
 

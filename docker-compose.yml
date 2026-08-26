@@ -785,8 +785,9 @@ services:
 # See docs/plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md.
 # Three `k2-capture:v3` containers, one per exchange, carrying trades and L2 book
 # on one connection each. They ran beside the three Kotlin feed handlers for a
-# labelled 2-hour parity window; that comparison came back clean, so the handlers
-# are archived in legacy/v2-kotlin/ and are no longer in this file (ADR-019).
+# labelled 2-hour parity window; the handlers retired on that gate and are
+# archived in legacy/v2-kotlin/, no longer in this file. ADR-019's Outcome
+# carries the window's numbers.
 #
 # The v2 topics they wrote (`market.crypto.trades.<ex>[.raw]`) and the ClickHouse
 # `k2` database fed from them are FROZEN, not dropped: no producer writes them

@@ -8,6 +8,14 @@ production here, so retiring it removes the comparison baseline, and the compari
 has to be made before the baseline goes away. `compare_trades.py` is what makes that
 comparison, and its markdown table is what gets pasted into the retirement PR.
 
+**The retirement has landed** (2026-08-26, [ADR-019](../../docs/adr/ADR-019-rust-capture-tier.md)
+Accepted), so nothing produces `market.crypto.trades.<ex>` any more: a run over a
+window *after* the retirement finds an empty v2 side and exits 1. A window that
+predates it and is still inside Redpanda's retention still compares. The
+2-hour labelled window's own tables are not reproduced here — they go in
+ADR-019's Outcome, which carries a `«WINDOW3»` placeholder until they are pasted
+in. Everything below is the tool and the method, not the evidence.
+
 ---
 
 ## Running it
@@ -38,7 +46,8 @@ this window" for a window it never finished reading.
 `--v2-only` exists to prove the plumbing — Avro decode, `offsets_for_times`, the
 window cut — before the Rust tier is producing anything worth comparing. Run it
 first; if it prints sensible per-symbol counts, a red table later is a real finding
-rather than a broken script.
+rather than a broken script. It reads the same frozen v2 topic, so the same window
+constraint applies.
 
 The script reads with a throwaway consumer group and `enable.auto.commit=false`, so
 it cannot move a real consumer's offsets. It is safe to run against the live stack.
@@ -280,6 +289,10 @@ produced `XDG/USD` and `DOGE/USD` as two different instruments in v2"). The scri
 does not fold the two together: hiding a divergence to make a table green is the
 opposite of what this directory is for. Explain it in the PR next to the table.
 
+Since the retirement, `config/instruments.yaml` carries Kraken's WS v2 spellings
+as the natives too (`BTC/USD`, `DOGE/USD`), so nothing aliases `XDG/USD`
+anywhere — the divergence recorded here is what that change was made to end.
+
 Observed on the 2-hour labelled window, 2026-08-26T14:15Z → 16:15Z:
 
 | symbol | v2 | v3 | Δ | dup-v2 | dup-v3 | only-v2 | only-v3 | px/qty/side mismatch | verdict |
@@ -325,6 +338,12 @@ the tables:
 If the tables are green, the ADR's retirement trigger is met and
 `git mv services/feed-handler-kotlin legacy/v2-kotlin/` can land in the same PR. If
 any are red, ADR-019 is explicit: *"Kotlin stays until it does."*
+
+That `git mv` landed on 2026-08-26 and the handlers are now at
+[`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md). The tables it landed
+against belong in ADR-019's Outcome, not here — that section holds a `«WINDOW3»`
+placeholder until they are pasted in, and this line is not evidence that they
+were green.
 
 ---
 

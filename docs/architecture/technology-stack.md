@@ -1,6 +1,6 @@
 # Technology Stack
 
-Every component that runs, the version pinned, what it does here, and the decision record that chose it. Versions are read from [`docker-compose.yml`](../../docker-compose.yml), the Dockerfiles under `docker/`, and [`services/feed-handler-kotlin/build.gradle.kts`](../../services/feed-handler-kotlin/build.gradle.kts).
+Every component that runs, the version pinned, what it does here, and the decision record that chose it. Versions are read from [`docker-compose.yml`](../../docker-compose.yml), the Dockerfiles under `docker/`, and [`services/capture-rust/Cargo.toml`](../../services/capture-rust/Cargo.toml).
 
 ## Infrastructure
 
@@ -19,22 +19,26 @@ Every component that runs, the version pinned, what it does here, and the decisi
 | Grafana | 11.5.0 | 4 provisioned dashboards in `docker/grafana/dashboards/` | — |
 | Docker Compose | — | The only deployment target. One file, 15 long-running service entries (+4 one-shot init containers), explicit CPU/memory limits per service | [ADR-010](../adr/ADR-010-resource-budget.md) |
 
-## Feed handler (JVM)
+## Capture tier (Rust)
 
-| Library | Version | Role |
+[`services/capture-rust/`](../../services/capture-rust/README.md) — one `k2-capture` binary, run once per exchange. Toolchain pinned to **1.98.0** in `rust-toolchain.toml`, edition 2024, so the container build, CI and a local `cargo` all agree.
+
+| Crate | Version | Role |
 |---|---|---|
-| Kotlin | 2.3.10 | Language; JVM toolchain 21, runtime `eclipse-temurin:21-jre-alpine` |
-| kotlinx-coroutines | 1.10.1 | Concurrency model for the WebSocket read loop and producer dispatch |
-| Ktor client | 3.1.0 | WebSocket client (CIO engine) against Binance, Kraken and Coinbase |
-| Ktor server | 3.1.0 | Netty server exposing `/metrics` and `/health` on `:8082` |
-| kafka-clients | 4.1.0 | Producer |
-| kafka-avro-serializer | 7.8.2 | Confluent serializer against the Redpanda schema registry |
-| Apache Avro | 1.12.0 | `NormalizedTrade` record format |
-| kaml | 0.67.0 | Parses [`config/instruments.yaml`](../../config/instruments.yaml) |
-| Micrometer Prometheus registry | 1.14.5 | Metrics — package is `io.micrometer.prometheusmetrics` in this version |
-| kotlin-logging / Logback | 7.0.3 / 1.5.16 | Structured logging |
+| tokio | 1.48 | `current_thread` runtime — one connection per process, and a single-threaded scheduler makes frame order under a cgroup quota the same order a replay sees |
+| tokio-tungstenite | 0.28 | WebSocket client, `rustls-tls-webpki-roots` |
+| rdkafka | 0.39 | Producer. Features `cmake-build`, `libz-static`, `zstd`, `tokio` — not the defaults: distroless/cc has no `libz.so.1` and `zstd` is not in librdkafka's default set |
+| schema_registry_converter | 5.0 | Confluent framing (magic byte + schema id) against Redpanda's registry; `rustls_tls` so the image carries one TLS stack, not two |
+| apache-avro | 0.22 | Record encoding for `trade`, `book-snapshot-l2`, `raw-message` |
+| serde / serde_json / serde_yaml | 1 / 1 / 0.9 | Frame parsing and the [`config/instruments.yaml`](../../config/instruments.yaml) loader |
+| crc32fast | 1.5 | Kraken's book checksum, computed over decimal digit strings — never `f64` |
+| metrics / metrics-exporter-prometheus | 0.24 / 0.17 | `k2_capture_*` exposition on `:8082` |
+| clap | 4 | Subcommands `run`, `record`, `healthcheck` |
+| anyhow | 1 | The only error type: every error is either propagated with context or counted and dropped, so a `thiserror` enum would be a type nobody reads |
 
-Build is a multi-stage Dockerfile: `gradle:8.12-jdk21` produces a fat JAR, the runtime stage is a JRE-only Alpine image. `./gradlew` is checked in — see [development/testing.md](../development/testing.md) for how tests are run.
+Build is a multi-stage Dockerfile: `cargo-chef` caches the dependency layer, the runtime stage is `gcr.io/distroless/cc-debian12:nonroot` at ~43 MB. `[profile.release]` sets `lto="thin"`, `codegen-units=1`, `panic="abort"`, `strip=true`. The build context is the **repository root**, not the crate — `src/record.rs` compiles the wire contract in with `include_str!("../../../schemas/avro/trade.avsc")`. See [development/testing.md](../development/testing.md) for how tests are run.
+
+> The v2 JVM feed handlers (Kotlin 2.3.10, Ktor 3.1.0, `kafka-clients` 4.1.0, Micrometer) that occupied this section retired on 2026-08-26 ([ADR-019](../adr/ADR-019-rust-capture-tier.md)). Their dependency set is in [`legacy/v2-kotlin/build.gradle.kts`](../../legacy/v2-kotlin/build.gradle.kts).
 
 ## Batch / offload (Python)
 
@@ -51,7 +55,7 @@ Build is a multi-stage Dockerfile: `gradle:8.12-jdk21` produces a fat JAR, the r
 
 **ClickHouse as the stream processor, not just the store.** The transforms in this pipeline are stateless per-record maps and time-bucketed aggregates. ClickHouse already ingests from Kafka and already maintains incremental aggregates; adding a stream-processing framework to feed it would have been a second copy of machinery already present. This deleted five Spark Streaming jobs and a planned Kotlin service.
 
-**Kotlin over Python for ingestion.** Not the throughput number — the exchanges do not send 5,000 msg/s. It is one typed normalizer per exchange with a compile-time contract against the Avro schema, in a runtime that costs 134 MiB. The measured 0.034 CPU for Binance is the same order as the Python handler it replaced; the win is the type system, not the CPU.
+**Rust for the capture tier, and not for speed.** K2 reads public WebSocket feeds over the open internet; transit dominates everything the process does by two orders of magnitude, and at ~150 msg/s capture is not the bottleneck. What Rust buys is three properties of the frame path that the JVM tier could not be extended into: `recv_ts_ns` before the parser, exact fixed-point arithmetic without a decimal library on the hot path, and bit-for-bit replay determinism (no `HashMap` iteration on emit paths, no `f64` on the record path, no wall-clock read outside the receipt stamp). It also replaced three JVMs with three ~43 MB containers. The full argument, including why Go and Python lose on the same two properties, is [ADR-019](../adr/ADR-019-rust-capture-tier.md); the Kotlin decision it supersedes is [ADR-002](../adr/ADR-002-kotlin-feed-handlers.md).
 
 **Spark kept, batch only.** Spark was the thing being deleted, and it survived — for one job. ClickHouse → Iceberg needs a JDBC reader and a battle-tested Iceberg writer, and Spark has both. Writing a Kotlin service against the Iceberg Java SDK would have been 500+ lines and another JVM to keep alive; the Spark container idles at near-zero and wakes every 15 minutes.
 

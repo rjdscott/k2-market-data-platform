@@ -1,8 +1,9 @@
 # CLAUDE.md
 
 The working contract for this repo. K2 is a single-host crypto market data
-platform: Kotlin feed handlers → Redpanda → ClickHouse (medallion via
-materialized views) → Iceberg on MinIO, Spark batch offload under Prefect.
+platform: Rust capture (`services/capture-rust/`) → Redpanda → ClickHouse
+(medallion via materialized views) → Iceberg on MinIO, Spark batch offload
+under Prefect.
 v2 is at the repo root; v1 is archived unmodified in `legacy/v1/`.
 Read this before writing code or docs. Architecture: `ARCHITECTURE-V2.md`.
 
@@ -64,7 +65,7 @@ considered before committing*.
 - **"Revisit when" is a concrete trigger** — a metric, a date, or an event.
   Never "if needed".
 - **`make test` before every PR**, plus the verification commands of whatever
-  you touched. CI runs kotlin / python / docker / security; keep it green.
+  you touched. CI runs rust / python / docker / docs / security; keep it green.
 
 ### Immutability
 
@@ -105,14 +106,15 @@ considered before committing*.
 ## Tests
 
 ```bash
-make test          # kotlin + python
-make test-kotlin   # gradle:8.12-jdk21 container; no local JDK needed
+make test          # python + rust
 make test-python   # uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests
+make test-rust     # rust:1-bookworm container; no local cargo needed
 ```
 
-- Kotlin (`services/feed-handler-kotlin/`, JDK 21) runs in Docker because
-  Gradle 8.12 does not run on newer JDKs. `./gradlew test` directly works if
-  you have JDK 21 locally.
+- The v2 Kotlin tier retired to `legacy/v2-kotlin/` (ADR-019). Its tests are
+  still runnable via `make test-legacy-kotlin` (`gradle:8.12-jdk21` container),
+  deliberately outside `make test` and outside CI — the archive is verifiable,
+  not merely present.
 - Python has no root `pyproject.toml` — root tests run against ad-hoc `uv`
   deps, as above. Lint: `uv run --no-project --with ruff ruff check docker/offload tests`.
 - Legacy v1 is a real uv project: `cd legacy/v1 && uv sync --all-extras && uv run pytest`.

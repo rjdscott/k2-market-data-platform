@@ -13,8 +13,9 @@
 #
 # BLAST RADIUS IS THE WHOLE STACK, NOT JUST CAPTURE. Redpanda is the single
 # broker, so pausing it takes down every producer and consumer on it at once:
-# the three Kotlin feed handlers, ClickHouse's Kafka-engine consumers, Redpanda
-# Console, and Prefect. Capture is only the tier being *measured*. Worst case
+# all three capture containers, ClickHouse's Kafka-engine consumers, Redpanda
+# Console, and Prefect. The exchange passed on the command line is only the one
+# being *measured*. Worst case
 # for this script is `--exchange coinbase`: 300 s to the predicted first loss,
 # and with the 3x wait plus the alert's `for: 5m` the broker can be paused for
 # ~28 minutes (150 s half-window + 900 s drop wait + 600 s alert wait). A `docker pause` longer than about five minutes is itself a risk on
@@ -73,7 +74,7 @@ MESSAGES="sum(k2_capture_messages_total{exchange=\"$EXCHANGE\"})"
 preflight "$CONTAINER" k2-redpanda k2-prometheus
 banner "capture-queue-full.sh --exchange $EXCHANGE" \
   CaptureProduceErrors docs/runbooks/capture-down.md \
-  "docker pause k2-redpanda (WHOLE STACK: feed handlers, ClickHouse, Console, Prefect); $CONTAINER fills its 32 MiB queue"
+  "docker pause k2-redpanda (WHOLE STACK: all capture containers, ClickHouse, Console, Prefect); $CONTAINER fills its 32 MiB queue"
 
 drops_before=$(prom_query "$DROPS"); drops_before=${drops_before:-0}
 qf_before=$(prom_query "$QUEUE_FULL"); qf_before=${qf_before:-0}

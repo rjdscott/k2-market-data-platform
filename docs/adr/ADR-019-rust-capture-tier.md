@@ -344,6 +344,30 @@ database and deleting the `.raw` topics is Phase E, after the v3 hot tier exists
 Q5). `schemas/avro/normalized-trade.avsc` and the six v2 topics stay until then;
 `docker/redpanda/init.sh` keeps creating the topics and says why.
 
+**Five v2 alerts now fire continuously, and that was not anticipated either.**
+Freezing the hot tier freezes everything downstream of it. `k2.*` gains no rows,
+so ClickHouse's insert rate goes to zero and the offload watermark cannot
+advance, and five rules written for a live v2 pipeline lose their subject while
+keeping their expressions:
+
+| Alert | Fires after | Why |
+|---|---|---|
+| `ClickHouseBronzeInsertRateLow` | ~10 min | insert rate is genuinely 0 |
+| `IcebergOffloadLagElevated` | ~30 min | watermark age passes 20 min |
+| `IcebergOffloadLagCritical` | ~35 min | watermark age passes 30 min, and never comes back |
+| `IcebergOffloadThroughputLow` | ~1 h | `rate(offload_rows_total[1h])` decays to 0 |
+| `IcebergOffloadWatermarkStale` | ~26 h | the slow backstop |
+
+Not silenced, not deleted, and not re-expressed here. Each description now says
+plainly that it is expected until the Phase E cutover drops the tier it watches,
+which is where the rules go too. That is a deliberate choice between two bad
+options: a permanently-firing alert teaches an operator to ignore the rule file,
+and a silently-deleted alert removes the only signal that would notice if the
+frozen tier started behaving unexpectedly before Phase E. Recording it beats
+either, and Phase E is close enough that a `for:` bump would be dead code before
+it earned its keep. **Revisit when:** Phase E drops `k2` — the five rules go with
+it. If Phase E slips past 2026-09-30, silence them instead.
+
 **One thing this ADR did not anticipate.** Retiring the handlers freed
 `config/instruments.yaml` to carry Kraken's WS **v2** spellings — the registry
 had been pinned to `XBT/USD` and `XDG/USD` because the v1 handlers read the same

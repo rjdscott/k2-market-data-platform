@@ -165,11 +165,13 @@ Full field notes: [schema-design.md](schema-design.md).
 
 ## Trade lifecycle
 
+This is the **v2** path, as it ran and as it was measured on 2026-02-19. It is frozen at the first hop: the feed handler that opened it retired on 2026-08-26 and nothing produces to the topic the Kafka engine polls. Kept because the measured p99 below is what this repo published, and a measured number is not rewritten. The live path is `k2-capture` → `market.crypto.v3.*`, whose consumer is the Phase E hot tier.
+
 ```mermaid
 sequenceDiagram
     autonumber
     participant EX as Exchange WS
-    participant FH as Feed handler
+    participant FH as Feed handler (v2, retired)
     participant RP as Redpanda
     participant KE as CH Kafka engine
     participant MV as CH MVs

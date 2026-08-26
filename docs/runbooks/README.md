@@ -76,6 +76,15 @@ docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c \
   "SELECT table_name, status, NOW() - last_successful_run AS lag FROM offload_watermarks ORDER BY lag DESC"
 ```
 
+> **Five v2 alerts fire continuously and are expected**, not incidents:
+> `ClickHouseBronzeInsertRateLow`, `IcebergOffloadLagElevated`,
+> `IcebergOffloadLagCritical`, `IcebergOffloadThroughputLow` and
+> `IcebergOffloadWatermarkStale`. The v2 hot tier has had no producer since the
+> Kotlin handlers retired on 2026-08-26 ([ADR-019](../adr/ADR-019-rust-capture-tier.md)),
+> so `k2.*` gains no rows and the offload watermark cannot advance. They are
+> dropped with the tier at the Phase E cutover. Triage the v3 `Capture*` alerts
+> first; anything in that list above is noise until then.
+
 Then:
 
 - **Hot tier affected** (no trades arriving, ClickHouse down) → [failure-recovery.md](./failure-recovery.md)

@@ -42,9 +42,10 @@ EXCHANGES="binance kraken coinbase"
 #
 # The plan names the v3 topics `market.crypto.{raw,trades,book}.<ex>`. Two of
 # those three are new; `market.crypto.trades.<ex>` is NOT — it is the v2
-# normalized Avro topic, live right now, produced by the Kotlin feed handlers.
-# The collision is not cosmetic. Verified against the running v2 stack on
-# 2026-08-26:
+# normalized Avro topic, which was live and produced by the Kotlin feed handlers
+# when this was written (they retired 2026-08-26; the topic is frozen, not gone,
+# until Phase E). The collision is not cosmetic. Verified against the running v2
+# stack on 2026-08-26:
 #
 #   $ curl -s localhost:8081/subjects
 #   ["market.crypto.trades.kraken-value","market.crypto.trades.binance-value",
@@ -56,14 +57,14 @@ EXCHANGES="binance kraken coinbase"
 #
 # So registering v3 `Trade` on the plan's subject is rejected under
 # BACKWARD_TRANSITIVE (different record name, different every field), this
-# script exits non-zero, and every feed handler waiting on
-# `service_completed_successfully` is blocked. Phase B's exit criterion is "old
-# v2 pipeline still green"; the plan's names cannot satisfy it.
+# script exits non-zero, and every producer waiting on
+# `service_completed_successfully` is blocked. Phase B's exit criterion was "old
+# v2 pipeline still green"; the plan's names could not satisfy it.
 #
-# Nor is this only a Phase B problem: ADR-018 commits to "a parallel-run period
-# where Rust capture and Kotlin handlers both produce and are compared per
-# symbol over 24 h before cutover". Comparing two producers requires two topics.
-# The plan bullet predates that requirement.
+# Nor was this only a Phase B problem: ADR-018 committed to "a parallel-run
+# period where Rust capture and Kotlin handlers both produce and are compared per
+# symbol before cutover". Comparing two producers requires two topics. The plan
+# bullet predated that requirement.
 #
 # Prefixing all nine uniformly rather than special-casing `trades`: a v3 topic
 # is identifiable at a glance in `rpk topic list` and in Console, the segment

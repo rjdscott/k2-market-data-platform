@@ -1,7 +1,7 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # k2-capture - v3 market data capture (Rust)
 #
-# Build from the REPOSITORY ROOT, as the Kotlin handlers do:
+# Build from the REPOSITORY ROOT:
 #
 #     docker build -t k2-capture:v3 -f services/capture-rust/Dockerfile .
 #

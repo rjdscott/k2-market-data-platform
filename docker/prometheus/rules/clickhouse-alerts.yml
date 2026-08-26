@@ -85,14 +85,16 @@ groups:
           summary: "ClickHouse bronze insert rate very low"
           description: |
             ClickHouse is inserting fewer than 0.5 rows/sec over 10 minutes.
-            This may indicate feed handlers are down or Kafka Engine stalled.
 
-            **Note:** Low trading volumes during off-peak hours can trigger this
-            alert. Check if feed handlers are actually producing data.
+            **The v2 hot tier is frozen as of 2026-08-26.** The Kotlin feed
+            handlers were the only producers of `market.crypto.trades.<ex>[.raw]`
+            and they retired to `legacy/v2-kotlin/` (ADR-019), so the Kafka-engine
+            queues have nothing left to read and this alert fires continuously
+            until the `k2` database and the `.raw` topics are dropped together at
+            the Phase E cutover. Until then it is expected, not an incident.
 
-            **Check:**
-            1. Feed handler logs: `docker logs k2-feed-handler-binance --tail 20`
-            2. Kafka consumers: `docker exec k2-clickhouse clickhouse-client -q "SELECT table, num_messages_read, last_poll_time FROM system.kafka_consumers WHERE database='k2'"`
+            **Check (while `k2` still exists):**
+            1. Kafka consumers: `docker exec k2-clickhouse clickhouse-client -q "SELECT table, num_messages_read, last_poll_time FROM system.kafka_consumers WHERE database='k2'"`
 
       # WARNING: Large number of background merges queued
       - alert: ClickHouseMergeQueueLarge

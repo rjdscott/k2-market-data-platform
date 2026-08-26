@@ -2,457 +2,388 @@
 
 ## Overview
 
-This guide provides a step-by-step checklist for adding new exchange integrations following the multi-exchange bronze architecture pattern ([ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md)).
+A step-by-step checklist for adding a fourth venue to the v3 Rust capture tier.
 
-**Architecture**: Exchange-Native Bronze → Unified Silver → Aggregated Gold
+**Architecture**: Exchange WebSocket → one `k2-capture` container → three Avro topics
+(`market.crypto.v3.{raw,trades,book}.<exchange>`).
+
+> **A new exchange feeds the v3 topics only.** The v2 medallion — the six
+> `market.crypto.trades.*` topics, `k2.bronze_trades_*`, `k2.silver_trades` and the six
+> `k2.ohlcv_*` tables — is **frozen** as of 2026-08-26 and gains no rows from any producer,
+> new or old. See [../architecture/README.md](../architecture/README.md). What that tier
+> looked like is kept below under [The frozen v2 medallion](#the-frozen-v2-medallion), for
+> when the v3 hot tier is built in Phase E; none of it is a step you perform today.
+
+The Kotlin handlers this checklist used to describe are archived at
+[`legacy/v2-kotlin/README.md`](../../legacy/v2-kotlin/README.md)
+([ADR-019](../adr/ADR-019-rust-capture-tier.md)).
 
 ## Prerequisites
 
 - [ ] Exchange API documentation reviewed
-- [ ] WebSocket endpoint identified
-- [ ] Sample trade message captured
-- [ ] Symbol format documented (e.g., BTC/USD, BTCUSDT, XBT-USD)
+- [ ] WebSocket endpoint identified, and whether the subscription rides in the URL
+      (Binance) or in a frame after connect (Kraken, Coinbase)
+- [ ] Sample trade **and** L2 book frames captured
+- [ ] Symbol format documented, exactly as the venue spells it on the wire
+      (`BTCUSDT`, `BTC/USD`, `BTC-USD`)
 - [ ] Timestamp format documented
+- [ ] Continuity signal identified: a sequence number, a checksum, or neither — this is
+      what decides the resync policy in step 1
 
 ## Implementation Checklist
 
-### 1. Feed Handler (Kotlin)
+### 1. Capture adapter (Rust)
 
-**File**: `services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/{Exchange}WebSocketClient.kt`
+**File**: `services/capture-rust/src/exchanges/{exchange}.rs`
 
-- [ ] Create `{Exchange}WebSocketClient.kt` class
-- [ ] Implement WebSocket connection logic
-- [ ] Parse exchange-native message format
-- [ ] Build JSON matching exchange schema
-- [ ] Call `producer.produceRawJson("{exchange}", json)`
-- [ ] Add reconnection logic
-- [ ] Add logging
+- [ ] Add the module to [`exchanges/mod.rs`](../../services/capture-rust/src/exchanges/mod.rs)
+      and a variant to `enum Adapter`; the compiler then lists every `match` that has to
+      learn about it
+- [ ] Implement `new`, `begin_connection`, `symbols`, `subscribe_messages`,
+      `resubscribe_messages`, `handle_frame` and `snapshot`
+- [ ] Decide the continuity policy: `Action::Resubscribe(symbol)` if a gap is
+      attributable to one product, `Action::Reconnect` if it is connection-wide
 
-**Pattern**:
-```kotlin
-class KrakenWebSocketClient(
-    private val config: Config,
-    private val producer: KafkaProducerService,
-    private val symbols: List<String>
-) {
-    suspend fun connect() { /* ... */ }
-    private suspend fun handleMessage(text: String) { /* ... */ }
-}
-```
+`handle_frame` must be **pure** — no I/O, no clock reads, no randomness, no `HashMap`
+iteration on an emit path. That purity is what lets the replay test in step 7 feed
+archived frames back through the same code and assert the bytes out are identical. The
+four obligations are spelled out at the top of `exchanges/mod.rs`:
 
-**Reference**: [`KrakenWebSocketClient.kt`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/KrakenWebSocketClient.kt), or [`CoinbaseWebSocketClient.kt`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/CoinbaseWebSocketClient.kt) for the newest example
+1. A `RawMessage` for **every** frame, first, payload byte-for-byte — including frames
+   that failed to parse.
+2. The adapter owns `conn_msg_seq`; `begin_connection` resets it.
+3. Book state is internal and leaves only through `snapshot()`.
+4. Return an `Action`; never perform one.
+
+**Reference**: [`coinbase.rs`](../../services/capture-rust/src/exchanges/coinbase.rs) for a
+connection-wide sequence number, [`kraken.rs`](../../services/capture-rust/src/exchanges/kraken.rs)
+for CRC32 verification with no sequence at all, and
+[`binance.rs`](../../services/capture-rust/src/exchanges/binance.rs) for a stateless
+partial-depth stream.
 
 ---
 
-### 2. Configuration
+### 2. Exchange enum, endpoint and stream table
 
-**File**: `services/feed-handler-kotlin/src/main/resources/application.conf`
+**Files**: [`config.rs`](../../services/capture-rust/src/config.rs),
+[`main.rs`](../../services/capture-rust/src/main.rs)
 
-- [ ] Add exchange-specific configuration block:
+- [ ] Add the variant to `enum Exchange`, its lowercase id in `as_str()` (this string goes
+      in the topic name and in every metric label), and its public endpoint in
+      `default_ws_url()`
+- [ ] Add the `Adapter::` construction arm and a `{EXCHANGE}_STREAMS` list in `main.rs`
+- [ ] Add each stream name the venue uses to `CONTINUOUS` **only if it genuinely runs
+      continuously**, with its own staleness bound — 60 s for a book/heartbeat channel,
+      300 s for a trade channel
 
-```hocon
-{exchange} {
-  websocket-url = "wss://..."
-  websocket-url = ${?K2_{EXCHANGE}_WS_URL}
+`CONTINUOUS` is one table read by three things: the session watchdog, the
+`k2-capture healthcheck` subcommand, and `CaptureFeedStale`. Putting a one-shot subscribe
+acknowledgement in it fires a permanent critical about two minutes after every healthy
+connect; leaving a genuinely continuous stream out means a silently-rejected subscription
+has no series and the alert cannot fire on the failure it exists for.
 
-  reconnect-delay-ms = 5000
-  max-reconnect-attempts = -1
-  ping-interval-ms = 30000
-}
+---
+
+### 3. Instrument registry
+
+**File**: [`config/instruments.yaml`](../../config/instruments.yaml)
+
+- [ ] Add an `instruments.{exchange}` block, one row per symbol:
+
+```yaml
+  {exchange}:
+    - { native: BTC-USD, canonical: BTC/USD }
 ```
 
-**Reference**: [`application.conf`](../../services/feed-handler-kotlin/src/main/resources/application.conf) — see the existing `binance` / `kraken` / `coinbase` blocks.
+`native` is **exactly the bytes on the wire**, byte for byte — it is what goes in the
+subscribe frame and what comes back on every message. `canonical` is `BASE/QUOTE`,
+uppercase, and is the Kafka key and the lake join key. Nothing translates a symbol
+anywhere in the crate; a native the file does not list is a loud failure, not a guess.
+Keep the quote currency as the venue quotes it — `BTC/USDT` and `BTC/USD` are different
+instruments, not two spellings of one.
 
-- [ ] Add the exchange and its symbols to [`config/instruments.yaml`](../../config/instruments.yaml)
-      under `instruments.{exchange}.symbols`, in **exchange-native format**
-      (`BTCUSDT` for Binance, `XBT/USD` for Kraken, `BTC-USD` for Coinbase).
-
-`config/instruments.yaml` is the single source of truth for symbols. `K2_SYMBOLS` exists
-only as a fallback for local dev without the file.
+- [ ] Update the instrument count in the file header — `tests/test_contracts.py` asserts it
 
 > **Bind-mount gotcha:** `instruments.yaml` is mounted file-by-file, which pins the inode.
 > Editors that write-then-rename produce a new inode and the container keeps reading the
 > old file. After editing, run
-> `docker compose up -d --force-recreate --no-deps feed-handler-{exchange}` —
+> `docker compose up -d --force-recreate --no-deps capture-{exchange}` —
 > `docker restart` will **not** pick up the change.
 
 ---
 
-### 3. Main.kt Routing
+### 4. Topics and Avro subjects
 
-**File**: `services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/Main.kt`
+**File**: [`docker/redpanda/init.sh`](../../docker/redpanda/init.sh)
 
-- [ ] Add exchange case to routing logic:
+- [ ] Add the venue to `EXCHANGES`. That one word creates all three topics
+      (`${V3_PREFIX}.{raw,trades,book}.{exchange}`, 12 partitions each), applies the raw
+      retention and 8 MiB `max.message.bytes`, and registers the three Avro subjects under
+      `TopicNameStrategy`
 
-```kotlin
-val wsClient = when (exchange.lowercase()) {
-    "binance" -> BinanceWebSocketClient(...)
-    "kraken" -> KrakenWebSocketClient(...)
-    "{exchange}" -> {Exchange}WebSocketClient(
-        config = config.getConfig("{exchange}"),
-        producer = producer,
-        symbols = symbols
-    )
-    else -> { logger.error { "Unknown exchange: $exchange" }; exitProcess(1) }
-}
-```
-
-**Reference**: [`Main.kt`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/Main.kt)
+No new schema is needed: all three venues share `raw-message.avsc`, `trade.avsc` and
+`book-snapshot-l2.avsc`. If the venue needs a *field* nobody has, that is a schema change
+across every place the contract lives — use `/schema-change`, not this checklist.
 
 ---
 
-### 4. Bronze Layer Schema
+### 5. Compose service
 
-**File**: append to [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql) (auto-applied on a fresh volume)
+**File**: [`docker-compose.yml`](../../docker-compose.yml) (repo root — all services live
+in one file)
 
-- [ ] Create Kafka Engine table:
-
-```sql
-CREATE TABLE IF NOT EXISTS k2.trades_{exchange}_queue (
-    message String
-) ENGINE = Kafka()
-SETTINGS
-    kafka_broker_list = 'redpanda:9092',
-    kafka_topic_list = 'market.crypto.trades.{exchange}.raw',
-    kafka_group_name = 'clickhouse_bronze_{exchange}_consumer',
-    kafka_format = 'JSONAsString',
-    ...;
-```
-
-- [ ] Create the bronze table. **All three existing exchanges share an identical bronze
-      schema** — copy it exactly so the offload config and silver MVs stay uniform:
-
-```sql
-CREATE TABLE IF NOT EXISTS k2.bronze_trades_{exchange} (
-    exchange_timestamp  DateTime64(3),
-    sequence_number     UInt64,
-    symbol              String,          -- exchange-native, punctuation stripped
-    price               Decimal(18, 8),
-    quantity            Decimal(18, 8),
-    quote_volume        Decimal(18, 8),
-    event_time          DateTime64(3),
-    kafka_offset        UInt64,
-    kafka_partition     UInt16,
-    ingestion_timestamp DateTime DEFAULT now()
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMMDD(exchange_timestamp)
-ORDER BY (symbol, exchange_timestamp, sequence_number)
-TTL toDateTime(exchange_timestamp) + INTERVAL 7 DAY;
-```
-
-- [ ] Create the normalizing materialized view — this is where exchange-specific JSON
-      parsing lives:
-
-```sql
-CREATE MATERIALIZED VIEW IF NOT EXISTS k2.bronze_trades_{exchange}_mv
-TO k2.bronze_trades_{exchange} AS
-SELECT
-    parseDateTimeBestEffort(JSONExtractString(message, 'time')) AS exchange_timestamp,
-    JSONExtractUInt(message, 'sequence_num')                    AS sequence_number,
-    replaceAll(JSONExtractString(message, 'product_id'), '-', '') AS symbol,
-    toDecimal64(JSONExtractString(message, 'price'), 8)         AS price,
-    ...
-FROM k2.trades_{exchange}_queue
-WHERE message != '';
-```
-
-**Key principle**: the raw JSON stays untouched in the `.raw` Redpanda topic; bronze is
-already typed and uniform. `TTL` uses an explicit `toDateTime()` cast — `DateTime64`
-columns need it.
-
-**Reference**: [`11-bronze-coinbase.sql`](../../docker/clickhouse/schema/11-bronze-coinbase.sql) — the cleanest example of the current pattern
-
----
-
-### 5. Silver Layer Normalization
-
-**File**: append to [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql) (auto-applied on a fresh volume)
-
-- [ ] Create Materialized View to normalize Bronze → Silver:
-
-```sql
-CREATE MATERIALIZED VIEW IF NOT EXISTS k2.bronze_{exchange}_to_silver_mv
-TO k2.silver_trades AS
-SELECT
-    generateUUIDv4() AS message_id,
-
-    -- Generate or extract trade_id
-    '{EXCHANGE}-' || toString(...) AS trade_id,
-
-    -- Normalize exchange fields
-    '{exchange}' AS exchange,
-
-    -- Normalize symbol (e.g., XBT → BTC)
-    -- Your normalization logic here
-    ... AS canonical_symbol,
-
-    'crypto' AS asset_class,
-
-    -- Convert types (String → Decimal128, timestamps, etc.)
-    CAST(toDecimal64(price, 8) AS Decimal128(8)) AS price,
-
-    -- Normalize side (exchange format → BUY/SELL enum)
-    CAST(
-        CASE ...
-            WHEN ... THEN 'BUY'
-            WHEN ... THEN 'SELL'
-        END AS Enum8('BUY' = 1, 'SELL' = 2, 'SELL_SHORT' = 3, 'UNKNOWN' = 4)
-    ) AS side,
-
-    -- Convert timestamps
-    fromUnixTimestamp64Micro(...) AS timestamp,
-
-    -- Preserve original fields in vendor_data
-    map(
-        'native_field1', native_field1,
-        'native_field2', native_field2,
-        ...
-    ) AS vendor_data,
-
-    -- Validation
-    (price > 0 AND quantity > 0) AS is_valid,
-    ...
-
-FROM k2.bronze_trades_{exchange};
-```
-
-**Key Principle**: Normalize to v2 schema, preserve originals in `vendor_data`!
-
-**Reference**: [`09-silver-kraken-to-v2.sql`](../../docker/clickhouse/schema/09-silver-kraken-to-v2.sql) and [`12-silver-coinbase.sql`](../../docker/clickhouse/schema/12-silver-coinbase.sql)
-
----
-
-### 6. Docker Compose
-
-**File**: [`docker-compose.yml`](../../docker-compose.yml) (repo root — all services live in one file)
-
-- [ ] Add the two topics to the `redpanda-init` one-shot service, choosing a partition
-      count proportional to expected volume (binance 40, kraken 20, coinbase 20):
-
-```bash
-rpk topic describe market.crypto.trades.{exchange}.raw --brokers redpanda:9092 > /dev/null 2>&1 \
-  || rpk topic create market.crypto.trades.{exchange}.raw --partitions 20 --brokers redpanda:9092
-rpk topic describe market.crypto.trades.{exchange}     --brokers redpanda:9092 > /dev/null 2>&1 \
-  || rpk topic create market.crypto.trades.{exchange}     --partitions 20 --brokers redpanda:9092
-```
-
-- [ ] Add the feed handler service (copy `feed-handler-coinbase` and change the name and
-      `K2_EXCHANGE`):
+- [ ] Copy `capture-coinbase`, change the name, `hostname`, `container_name` and
+      `K2_EXCHANGE`. It reuses the shared `x-capture-build` anchor, so there is no second
+      image to build:
 
 ```yaml
-feed-handler-{exchange}:
-  build:
-    context: .
-    dockerfile: services/feed-handler-kotlin/Dockerfile
-  container_name: k2-feed-handler-{exchange}
-  hostname: feed-handler-{exchange}
+capture-{exchange}:
+  build: *capture-build
+  image: k2-capture:v3
+  container_name: k2-capture-{exchange}
+  hostname: capture-{exchange}
   networks:
-    k2-net:
-      # no static IP needed — services resolve by name
+    - k2-net
   depends_on:
-    redpanda:
-      condition: service_healthy
-    clickhouse:
-      condition: service_healthy
     redpanda-init:
       condition: service_completed_successfully
   environment:
-    - JAVA_OPTS=-Xmx512m -Xms256m
     - K2_EXCHANGE={exchange}
     - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
-    - K2_SCHEMA_PATH=/app/schemas
-    - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
-    - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
+    - K2_KAFKA_BROKERS=redpanda:9092
+    - K2_SCHEMA_REGISTRY_URL=http://redpanda:8081
+    - K2_METRICS_PORT=8082
+    - K2_SNAPSHOT_INTERVAL_MS=1000
+    - K2_TOPIC_PREFIX=market.crypto.v3
+    - RUST_LOG=info
   volumes:
-    - ./logs/{exchange}:/app/logs
-    - ./config/instruments.yaml:/app/config/instruments.yaml:ro
+    - ./config:/app/config:ro
+  cpuset: ${K2_CAPTURE_CPUSET-12-14}
   deploy:
     resources:
       limits:
-        cpus: '0.5'
-        memory: 512M
-      reservations:
         cpus: '0.25'
-        memory: 256M
+        memory: 256M      # 512M if the venue publishes full-depth L2
+      reservations:
+        cpus: '0.1'
+        memory: 128M
   healthcheck:
-    test: ["CMD", "curl", "-fsS", "http://localhost:8082/health"]
-    interval: 15s
+    test: ["CMD", "/k2-capture", "healthcheck"]
+    interval: 30s
     timeout: 5s
     retries: 3
-    start_period: 30s
+    start_period: 60s
   restart: unless-stopped
   labels:
-    com.k2.service: "feed-handler"
+    com.k2.service: "capture"
     com.k2.exchange: "{exchange}"
-    com.k2.version: "v2"
+    com.k2.tier: "hot"
+    com.k2.version: "v3"
 ```
 
-- [ ] Add a Prometheus scrape job in [`docker/prometheus/prometheus.yml`](../../docker/prometheus/prometheus.yml)
-      targeting `feed-handler-{exchange}:8082`
-- [ ] Update the totals in [docker-resources.md](./docker-resources.md) (+0.5 CPU / +512 MB)
+The healthcheck is the binary's own subcommand, not `curl` — the runtime image is
+distroless and has neither a shell nor curl.
+
+- [ ] Update the resource summary comment at the top of `docker-compose.yml` and the
+      totals in [docker-resources.md](./docker-resources.md) (+0.25 CPU / +256 MB, or
+      +512 MB for a full-depth venue), and append to
+      [ADR-010](../adr/ADR-010-resource-budget.md)'s Outcome
 
 ---
 
-### 7. Testing & Validation
+### 6. Observability
 
-**File**: `docker/clickhouse/validation/validate-{exchange}-integration.sql`
+- [ ] Add a scrape job in [`docker/prometheus/prometheus.yml`](../../docker/prometheus/prometheus.yml)
+      targeting `capture-{exchange}:8082`, named `capture-{exchange}`, with
+      `service`/`tier` labels and **no `exchange` target label** — the binary emits its own
+      `exchange` on every series, and a target label of the same name would rename the
+      sample's to `exported_exchange`
 
-- [ ] Create validation SQL script with sections:
-  1. Bronze Layer: Verify native format
-  2. Silver Layer: Verify normalization
-  3. Cross-Exchange: Compare with existing exchanges
-  4. Gold Layer: Verify aggregation
-  5. Data Quality: Validation checks
+Nothing else in observability needs editing. `CaptureDown` matches `job=~"capture-.*"`;
+every other capture alert keys off the `exchange` label the binary emits; and the
+`exchange` template variable on the `k2-l2-capture` dashboard is
+`label_values(k2_capture_messages_total, exchange)`, so all three discover the new venue
+on their own.
 
-**Reference**: [`validate-kraken-integration.sql`](../../docker/clickhouse/validation/validate-kraken-integration.sql)
+---
 
-- [ ] Add a `TradeNormalizerTest` case covering the new symbol format
-      ([`TradeNormalizerTest.kt`](../../services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/TradeNormalizerTest.kt))
-- [ ] Add the exchange to `InstrumentsLoaderTest` fixtures if the YAML shape changes
-- [ ] `make test` green before opening the PR — see [../development/testing.md](../development/testing.md)
+### 7. Fixture and replay test
+
+**Files**: `services/capture-rust/tests/replay_{exchange}.rs`,
+`services/capture-rust/tests/fixtures/{exchange}-NNs.jsonl`
+
+- [ ] Record a session with `k2-capture record --exchange {exchange} --symbols <native>
+      --seconds 20 > fixture.jsonl`. The recorder goes through the same `ws_url()` the
+      live path does, so the fixture is the conversation capture actually has
+- [ ] Add a replay test in the shape of
+      [`replay_coinbase.rs`](../../services/capture-rust/tests/replay_coinbase.rs): drive
+      the fixture through the live adapter's `handle_frame`, assert the book invariants
+      (top-20, sorted, uncrossed, no zero quantities) and the venue's own continuity
+      check, then hash two passes against a committed golden value
+- [ ] Load `config/instruments.yaml` directly in the test — no test-only copy of the
+      registry
+- [ ] If the fixture had to be trimmed to keep it committable, say exactly what was
+      trimmed in the test's module docs, as all three existing ones do
+- [ ] `make test` green before opening the PR — see
+      [../development/testing.md](../development/testing.md)
 
 ---
 
 ## Testing Steps
 
-### 1. Build & Deploy
+### 1. Build and deploy
 
 ```bash
-# Build and start the new handler
-docker compose up -d --build feed-handler-{exchange}
-
-# Apply the new bronze + silver DDL (already appended to docker/clickhouse/ddl/01-k2-schema.sql,
-# which only auto-runs on a fresh volume — apply by hand against an existing one)
-docker exec -i k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
-  --multiquery < docker/clickhouse/ddl/01-k2-schema.sql
+make test-rust                                        # the replay test first
+docker compose up -d --build capture-{exchange}
 ```
 
-### 2. Verify Feed Handler
+### 2. Verify capture
 
 ```bash
-# Check logs
-docker logs -f k2-feed-handler-{exchange}
-
-# Check Kafka topic
-docker exec k2-redpanda rpk topic consume market.crypto.trades.{exchange}.raw --num 5
+docker logs -f k2-capture-{exchange}
+docker exec k2-capture-{exchange} /k2-capture healthcheck
 ```
 
-### 3. Verify Bronze Layer
+`healthcheck` exits non-zero and names the offending stream if any continuous stream is
+past its bound — which is also the fastest way to find a `CONTINUOUS` entry you got wrong
+in step 2.
 
-```sql
--- Count trades
-SELECT count() FROM k2.bronze_trades_{exchange};
-
--- Verify native format
-SELECT * FROM k2.bronze_trades_{exchange} LIMIT 1 FORMAT Vertical;
-```
-
-### 4. Verify Silver Layer
-
-```sql
--- Verify normalization
-SELECT
-    exchange,
-    canonical_symbol,
-    vendor_data,
-    count()
-FROM k2.silver_trades
-WHERE exchange = '{exchange}'
-GROUP BY exchange, canonical_symbol, vendor_data;
-```
-
-### 5. Verify Gold Layer
-
-```sql
--- Verify cross-exchange aggregation
-SELECT exchange, canonical_symbol, count()
-FROM k2.ohlcv_1m
-WHERE canonical_symbol LIKE 'BTC/%'
-GROUP BY exchange, canonical_symbol;
-```
-
-### 6. Run Validation Script
+### 3. Verify the topics
 
 ```bash
-docker exec k2-clickhouse clickhouse-client --multiquery < \
-  docker/clickhouse/validation/validate-{exchange}-integration.sql
+docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.{exchange}    --num 3 --format '%v\n'
+docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.{exchange} --num 3 --format '%k\n'
+docker exec k2-redpanda curl -s localhost:8081/subjects | jq
 ```
+
+### 4. Verify the metrics
+
+```bash
+curl -sG localhost:9090/api/v1/query \
+  --data-urlencode 'query=sum by (exchange, kind) (rate(k2_capture_records_produced_total[5m]))' | jq
+
+# Delivered, not just produced — produced climbs straight through a broker outage
+curl -sG localhost:9090/api/v1/query \
+  --data-urlencode 'query=sum by (exchange) (rate(k2_capture_records_delivered_total[5m]))' | jq
+```
+
+Then check that `k2_capture_gaps_total`, `k2_capture_produce_errors_total` and
+`k2_capture_precision_loss_total` are all present **and zero** for the new venue. Present
+matters as much as zero: every one of them is seeded at startup precisely so its first
+event is detectable, and an absent series means the seeding was missed.
 
 ---
 
 ## Common Patterns by Exchange Type
 
-### Pattern 1: Binance-Like (REST + WebSocket)
-- Symbol format: No separator (BTCUSDT)
-- Timestamp: Milliseconds (Long)
-- Trade ID: Provided
+### Pattern 1: Binance-like (subscription in the URL)
+- Symbol format: no separator (BTCUSDT)
+- Book: fixed-depth partial stream, no exchange timestamp
+- Continuity: a monotonic update id; resync by dropping the book and waiting for the next
+  in-order frame
 - **Examples**: Binance, Bybit, OKX
 
-### Pattern 2: Kraken-Like (Array Protocol)
-- Symbol format: Slash separator (XBT/USD)
-- Timestamp: Decimal string ("seconds.microseconds")
-- Trade ID: Not provided (must generate)
+### Pattern 2: Kraken-like (checksum, no sequence)
+- Symbol format: slash separator (BTC/USD)
+- Book: depth parameter from a fixed menu; CRC32 over the top levels
+- Continuity: the checksum. Resync per symbol, emitting one last snapshot marked
+  `checksum_ok=false` **before** dropping the book
 - **Examples**: Kraken, potentially Bitstamp
 
-### Pattern 3: Coinbase-Like (Object Protocol)
-- Symbol format: Dash separator (BTC-USD)
-- Timestamp: ISO 8601 string
-- Trade ID: Provided
-- **Examples**: Coinbase Pro, Gemini
+### Pattern 3: Coinbase-like (connection-wide sequence)
+- Symbol format: dash separator (BTC-USD)
+- Book: full depth, truncated locally
+- Continuity: one `sequence_num` across every channel, so a gap cannot be attributed to a
+  product — drop every book and reconnect
+- **Examples**: Coinbase Advanced Trade, Gemini
 
 ---
 
-## Symbol Normalization Examples
+## Native and canonical symbols
 
-| Exchange | Native Format | Canonical Format | Notes |
-|----------|---------------|------------------|-------|
-| Binance  | BTCUSDT       | BTC/USDT         | Remove separator |
-| Kraken   | XBT/USD       | BTC/USD          | XBT → BTC |
-| Coinbase | BTC-USD       | BTC/USD          | - → / |
-| Bitfinex | tBTCUSD       | BTC/USD          | Remove 't' prefix |
+Nothing maps a symbol in code. Both columns are data, in `config/instruments.yaml`:
+
+| Exchange | `native` (bytes on the wire) | `canonical` |
+|----------|------------------------------|-------------|
+| Binance  | BTCUSDT                      | BTC/USDT    |
+| Kraken   | BTC/USD                      | BTC/USD     |
+| Coinbase | BTC-USD                      | BTC/USD     |
+
+Kraken's natives were `XBT/USD` and `XDG/USD` under WS v1. This platform speaks v2, which
+spells them `BTC/USD` and `DOGE/USD` and rejects the old ones outright; the translation
+table that used to bridge the two went with the Kotlin handlers.
 
 ---
 
 ## Troubleshooting Checklist
 
-- [ ] **Feed Handler**:
-  - [ ] WebSocket connected?
-  - [ ] Subscription confirmed?
-  - [ ] JSON produced to Kafka?
+- [ ] **Connection**:
+  - [ ] WebSocket connected? (`docker logs k2-capture-{exchange}`)
+  - [ ] Subscription acknowledged, or silently rejected? A rejected subscription looks
+        healthy until `k2_capture_last_message_ts_seconds` for that stream goes stale
+  - [ ] `k2_capture_unknown_frames_total` climbing? The adapter is not recognising frames
+        it is receiving — they are still archived, so the fix is replayable
 
-- [ ] **Bronze Layer**:
-  - [ ] Table created?
-  - [ ] Kafka Engine consuming?
-  - [ ] Data flowing to Bronze table?
-  - [ ] Native format preserved?
+- [ ] **Produce**:
+  - [ ] `records_produced_total` climbing but `records_delivered_total` flat? The broker or
+        the registry is the problem, not the venue — `CaptureProduceStalled`
+  - [ ] `produce_errors_total{reason="queue_full"}` ticking? Records are being **lost**;
+        there is no spill-to-disk
 
-- [ ] **Silver Layer**:
-  - [ ] MV created?
-  - [ ] Data flowing to Silver?
-  - [ ] Normalization correct?
-  - [ ] vendor_data populated?
+- [ ] **Book**:
+  - [ ] `book_depth` at or near the expected top-20-per-side?
+  - [ ] `gaps_total` / `checksum_failures_total` / `resyncs_total` non-zero? The
+        continuity policy from step 1 is either firing correctly or is wrong
+  - [ ] `precision_loss_total` non-zero? The venue quotes finer than the fixed-point 1e-8
+        scale and the contract needs an ADR, not a patch
 
-- [ ] **Gold Layer**:
-  - [ ] OHLCV aggregating both exchanges?
-  - [ ] No duplicate candles?
+---
+
+## The frozen v2 medallion
+
+Kept for reference and for whoever builds the v3 hot tier in Phase E. **None of this is a
+step for a new exchange today** — the `k2` database takes no new producers and is dropped
+at the Phase E cutover.
+
+Each v2 exchange had a Kafka-engine queue on `market.crypto.trades.{exchange}.raw`, a
+normalizing materialized view into an exchange-native `k2.bronze_trades_{exchange}`
+(`MergeTree`, `TTL 7 DAY`, identical schema across all three), and a second MV normalizing
+bronze into the unified `k2.silver_trades` — canonical symbol, `Decimal128(8)` prices, a
+`BUY`/`SELL` enum, and the venue's own fields preserved in a `vendor_data` map. Six gold
+`ohlcv_*` tables aggregated silver. The whole chain is in
+[`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql),
+with [`11-bronze-coinbase.sql`](../../docker/clickhouse/schema/11-bronze-coinbase.sql) and
+[`12-silver-coinbase.sql`](../../docker/clickhouse/schema/12-silver-coinbase.sql) as the
+cleanest worked pair. The design is [ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md);
+the last exchange added through it is [ADR-016](../adr/ADR-016-add-coinbase-exchange.md).
+
+The same applies to the Iceberg cold tier: `cold.bronze_trades_*` and the offload
+`TABLE_CONFIG` in
+[`docker/offload/flows/iceberg_offload_flow.py`](../../docker/offload/flows/iceberg_offload_flow.py)
+mirror the frozen v2 schema and gain nothing from a new venue.
 
 ---
 
 ## References
 
-- [ADR-011 — multi-exchange bronze architecture](../adr/ADR-011-multi-exchange-bronze-architecture.md) — the pattern this checklist implements
-- [ADR-016 — adding Coinbase](../adr/ADR-016-add-coinbase-exchange.md) — the most recent worked example, end to end
-- [Schema design](../architecture/schema-design.md) — the v2 canonical trade schema
+- [ADR-019 — Rust capture tier](../adr/ADR-019-rust-capture-tier.md) — why the capture tier
+  is Rust, and the gate the Kotlin handlers retired on
+- [ADR-018 — v3 lake-first architecture](../adr/ADR-018-v3-lake-first-rust-capture.md) —
+  why `raw` is the system of record and everything else is derived from it
+- [ADR-027 — book snapshot and sequencing](../adr/ADR-027-book-snapshot-and-sequencing.md) —
+  the top-20-at-1 Hz product and the per-venue resync policies
+- [`services/capture-rust/README.md`](../../services/capture-rust/README.md) — the adapter
+  contract, the environment table, and the build/test loop
 - [Streaming sources](../architecture/streaming-sources.md) — per-exchange protocol notes
-- [ClickHouse cascading materialized views](https://clickhouse.com/docs/en/guides/developer/cascading-materialized-views)
 
 ---
 
 ## Post-Integration Checklist
 
-- [ ] Add the exchange to the offload `TABLE_CONFIG` in [`docker/offload/flows/iceberg_offload_flow.py`](../../docker/offload/flows/iceberg_offload_flow.py)
-- [ ] Create the matching `cold.bronze_trades_{exchange}` Iceberg table and seed its watermark row
-- [ ] Update [docker-resources.md](./docker-resources.md) and [ADR-010](../adr/ADR-010-resource-budget.md)
-- [ ] Add the exchange to the feed-handler panels in [`docker/grafana/dashboards/k2-pipeline-overview.json`](../../docker/grafana/dashboards/k2-pipeline-overview.json)
-- [ ] Add a `TradeNormalizerTest` case for the new symbol format
-- [ ] Update the exchange counts in the root `README.md`
+- [ ] Update the instrument and exchange counts in `config/instruments.yaml`'s header and
+      the root `README.md`
+- [ ] Update [docker-resources.md](./docker-resources.md), the `docker-compose.yml`
+      resource summary comment, and [ADR-010](../adr/ADR-010-resource-budget.md)'s Outcome
+- [ ] Update the scrape-target table in [observability.md](./observability.md)
+- [ ] `bash scripts/check-docs.sh` green, then `make test`

@@ -77,7 +77,7 @@ else
   services=()
   printf '%s\n' "$changed" | grep -q '^docker/lake/'     && services+=(spark-iceberg lake-init) || true
   printf '%s\n' "$changed" | grep -q '^docker/redpanda/' && services+=(redpanda-init) || true
-  printf '%s\n' "$changed" | grep -q '^config/'          && services+=(feed-handler-binance feed-handler-kraken feed-handler-coinbase capture-binance capture-kraken capture-coinbase) || true
+  printf '%s\n' "$changed" | grep -q '^config/'          && services+=(capture-binance capture-kraken capture-coinbase) || true
   printf '%s\n' "$changed" | grep -q '^schemas/'         && services+=(redpanda-init) || true
 
   if [ "${#services[@]}" -eq 0 ]; then

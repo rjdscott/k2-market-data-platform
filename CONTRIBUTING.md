@@ -5,7 +5,7 @@ This is a personal portfolio project. Issues and questions are welcome; pull req
 ## Prerequisites
 
 - Docker Engine with Compose v2
-- JDK 21 only if you want to run `./gradlew` directly; `make test-kotlin` uses the JDK 21 Docker image (Gradle 8.12 does not run on newer JDKs)
+- Nothing else is required: `make test-rust` runs the Rust suite in a `rust:1-bookworm` container, so no local `cargo` or JDK is needed
 - [`uv`](https://docs.astral.sh/uv/) (only for the Python offload-flow tests)
 
 ## Setup
@@ -16,17 +16,19 @@ make up                  # first run builds three images; allow several minutes
 make ps
 ```
 
-`docs/development/setup.md` covers running a single feed handler locally, the instrument registry (`config/instruments.yaml`) and the bind-mount gotcha when editing it.
+`docs/development/setup.md` covers running a single capture process locally, the instrument registry (`config/instruments.yaml`) and the bind-mount gotcha when editing it.
 
 ## Tests
 
 ```bash
-make test                # Kotlin + Python unit tests
-make test-kotlin         # ./gradlew test inside gradle:8.12-jdk21
+make test                # Rust + Python unit tests
+make test-rust           # cargo test inside rust:1-bookworm
 make test-python         # uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same two suites plus a Docker build of every image and a Trivy scan.
+CI (`.github/workflows/ci.yml`) runs the same two suites plus a Docker build of every image, the doc gates and a Trivy scan.
+
+`make test-legacy-kotlin` runs the archived v2 Kotlin feed-handler tests against `legacy/v2-kotlin/` ([ADR-019](docs/adr/ADR-019-rust-capture-tier.md)). It needs the `gradle:8.12-jdk21` Docker image and is deliberately outside `make test` and outside CI — that code is archived, not maintained.
 
 ## Conventions
 
