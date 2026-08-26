@@ -69,6 +69,68 @@ pub const MESSAGE_MAX_BYTES: usize = 8 * 1024 * 1024;
 /// magnitude below the 60 s at which the venue-silence watchdog reconnects.
 const REGISTRY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Everything the producer is configured with, in one pure function so the
+/// numbers the README and the FMEA quote can be asserted without a broker.
+fn producer_config(brokers: &str) -> ClientConfig {
+    let mut config = ClientConfig::new();
+    config
+        .set("bootstrap.servers", brokers)
+        // 32 MiB of local buffer, and the only buffer in the process. Against
+        // the per-container wire rate (173.3 / 164.3 / 75.2 kB/s for binance /
+        // kraken / coinbase, capacity-model.md §4a–4b) that is 194 / 204 / 446 s
+        // of slack across a broker outage, and it is the number the container's
+        // memory limit is sized around. One 5.2 MB snapshot (S5) is ~16% of it;
+        // five products reconnecting at once fit with room to spare.
+        .set("queue.buffering.max.kbytes", "32768")
+        // See `MESSAGE_MAX_BYTES`: the socket cap and the produce cap agree.
+        .set("message.max.bytes", MESSAGE_MAX_BYTES.to_string())
+        // Exactly-once semantics on the producer side: a retry after a
+        // timeout cannot duplicate a record, which matters because the lake
+        // is append-only and nothing downstream dedups raw frames.
+        .set("enable.idempotence", "true")
+        .set("acks", "all")
+        // zstd is not in librdkafka's default codec set; the build enables
+        // it explicitly (spike S6) and this is where it gets used. JSON
+        // payloads on the raw topic are what makes it worth the CPU, and
+        // the multi-MB `level2` snapshots (repetitive price/size arrays)
+        // compress best of all — see the README for the measured ratio.
+        .set("compression.type", "zstd")
+        // How long one record may wait for delivery — retries included — before
+        // librdkafka fails it. This was 30 s, and the first chaos run is what
+        // showed the cost of that number.
+        //
+        // *Predicted:* pause the broker under `capture-queue-full.sh` and kraken
+        // enqueues for 204 s before 32 MiB is full and the first record is
+        // dropped with `reason="queue_full"`.
+        //
+        // *Measured* (2026-08-26, `scripts/chaos/results/2026-08-26.tsv`): first
+        // drop at **102 s**, 50 % early, and of the 231,744 records lost across
+        // the 388 s fault window **zero** carried `reason="queue_full"`. They
+        // all expired on this timeout, counted `delivery`, while the queue sat
+        // half empty. A buffer sized in minutes behind a cap set in seconds
+        // never gets to do its job.
+        //
+        // *Why 5 minutes:* it is librdkafka's own default and it covers the
+        // whole of the queue's slack on every venue (194 / 204 / 446 s), so a
+        // broker restart inside the window the 32 MiB was bought for now loses
+        // nothing. `enable.idempotence` does not constrain it — that flag
+        // adjusts `max.in.flight.requests.per.connection`, `retries`, `acks` and
+        // `queuing.strategy` only (librdkafka CONFIGURATION.md). The one setting
+        // that would clamp it is `transactional.id`, which this producer does
+        // not set.
+        //
+        // *New failure shape:* loss does not go away, it changes label and moves
+        // later. A record still older than 5 minutes is dropped and counted
+        // `reason="delivery"`. `queue_full` becomes the *earlier* signal
+        // whenever the wire rate fills 32 MiB in under 5 minutes — true at every
+        // venue's current rate — so a `queue_full` tick now means "the outage
+        // outran the buffer", and a `delivery` tick during an outage means "the
+        // broker was reachable enough to keep the queue draining but not enough
+        // to finish". Both are permanent loss; neither spills to disk.
+        .set("message.timeout.ms", "300000");
+    config
+}
+
 pub struct Sink {
     producer: FutureProducer,
     encoder: EasyAvroEncoder,
@@ -84,31 +146,7 @@ impl Sink {
         topic_prefix: String,
         exchange: &'static str,
     ) -> Result<Self> {
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", brokers)
-            // 32 MB of local buffer. At the measured v2 rate this is minutes of
-            // headroom across a broker restart, and it is the number the
-            // container's memory limit is sized around.
-            // One 5.2 MB snapshot (S5) is ~16% of it; five products
-            // reconnecting at once fit with room to spare.
-            .set("queue.buffering.max.kbytes", "32768")
-            // See `MESSAGE_MAX_BYTES`: the socket cap and the produce cap agree.
-            .set("message.max.bytes", MESSAGE_MAX_BYTES.to_string())
-            // Exactly-once semantics on the producer side: a retry after a
-            // timeout cannot duplicate a record, which matters because the lake
-            // is append-only and nothing downstream dedups raw frames.
-            .set("enable.idempotence", "true")
-            .set("acks", "all")
-            // zstd is not in librdkafka's default codec set; the build enables
-            // it explicitly (spike S6) and this is where it gets used. JSON
-            // payloads on the raw topic are what makes it worth the CPU, and
-            // the multi-MB `level2` snapshots (repetitive price/size arrays)
-            // compress best of all — see the README for the measured ratio.
-            .set("compression.type", "zstd")
-            // Fail a record after 30 s rather than holding it forever: a record
-            // that old is better dropped and counted than silently pinned in
-            // the queue behind a dead broker.
-            .set("message.timeout.ms", "30000")
+        let producer: FutureProducer = producer_config(brokers)
             .create()
             .context("creating the Kafka producer")?;
 
@@ -265,7 +303,7 @@ mod tests {
     use crate::record::OutRecord;
     use crate::record::samples::{sample_book, sample_raw, sample_trade};
 
-    use super::strategy_for;
+    use super::{producer_config, strategy_for};
 
     fn subject(topic_prefix: &str, kind: &str, exchange: &str) -> String {
         strategy_for(format!("{topic_prefix}.{kind}.{exchange}"))
@@ -299,5 +337,32 @@ mod tests {
                 .collect();
             assert_eq!(warmed, needed, "subjects differ for {exchange}");
         }
+    }
+
+    /// Four producer settings are quoted as numbers in `README.md`, ADR-019 and
+    /// `docs/architecture/failure-modes.md` — the 5-minute delivery cap, the
+    /// 32 MiB of queue slack the delayed→lost boundary is computed from, the
+    /// 8 MiB frame cap that must equal `ws::MAX_MESSAGE_BYTES`, and idempotence.
+    /// Changing one silently makes those documents wrong, and the only place
+    /// that shows up is a chaos run months later, so assert them here where the
+    /// diff is visible.
+    #[test]
+    fn producer_config_carries_the_numbers_the_docs_quote() {
+        let config = producer_config("localhost:9092");
+        for (key, want) in [
+            // 5 min, raised from 30 s after the 2026-08-26 chaos run measured
+            // every drop as a timeout and none as queue_full.
+            ("message.timeout.ms", "300000"),
+            // 32 MiB — 194/204/446 s of slack at the modelled wire rates.
+            ("queue.buffering.max.kbytes", "32768"),
+            // 8 MiB, equal to the WebSocket cap and the raw topics'.
+            ("message.max.bytes", "8388608"),
+            ("enable.idempotence", "true"),
+        ] {
+            assert_eq!(config.get(key), Some(want), "{key} drifted from the docs");
+        }
+        // A `transactional.id` would silently clamp message.timeout.ms to
+        // transaction.timeout.ms (60 s default) and undo the change above.
+        assert_eq!(config.get("transactional.id"), None);
     }
 }

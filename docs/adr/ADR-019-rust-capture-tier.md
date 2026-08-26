@@ -244,3 +244,35 @@ no registry; `make test-rust` mounted only the crate, so the pre-PR gate did not
 and the CI docker leg carried the same wrong context. All four are fixed, and
 `K2_GIT_SHA` (`git describe --always --dirty`) is now passed by compose, CI and the
 Makefile — every automated build until then shipped `git_sha="unknown"`.
+
+### Measured correction, 2026-08-26 — the 32 MiB buffer was unreachable
+
+**The producer's 32 MiB queue was sized in minutes and capped in seconds, so it never
+did its job.** `queue.buffering.max.kbytes=32768` buys 194 / 204 / 446 s of broker
+outage before a record is dropped, and that arithmetic is what the FMEA's delayed→lost
+boundary and the capacity model's §5 memory line both rest on. Sitting on top of it,
+`message.timeout.ms` was 30 s: any record still undelivered after half a minute was
+failed regardless of how empty the queue was.
+
+The first `make chaos` run measured the consequence rather than inferring it. With the
+broker paused, `capture-queue-full.sh --exchange kraken` saw its first drop at **102 s
+against a predicted 204 s** — 50 % early — and across the 388 s fault window **231,744
+records were lost with `reason="queue_full"` at exactly zero**. Every one was a timeout
+counted `delivery`. A prediction being half wrong is the cheap part; the expensive part
+is that the wrong half was the buffer the design advertises.
+
+`message.timeout.ms` is now **300000** (5 minutes, and librdkafka's own default), which
+covers the queue's slack at every venue. `enable.idempotence=true` does not constrain
+it — that flag adjusts `max.in.flight.requests.per.connection`, `retries`, `acks` and
+`queuing.strategy` only; only a `transactional.id`, which this producer does not set,
+would clamp `message.timeout.ms` to `transaction.timeout.ms`
+(librdkafka `CONFIGURATION.md`). The four numbers the docs quote are now asserted by a
+unit test (`sink.rs::producer_config_carries_the_numbers_the_docs_quote`) rather than by
+grep.
+
+What changed is *which* cap binds, not whether loss happens. Past ~204 s of kraken
+outage the records are gone either way; what the 30 s cap threw away was the first 204 s,
+which were meant to be free. The new failure shape: `queue_full` is the first signal at
+binance and kraken rates, `delivery` at coinbase's slower rate, and a `delivery` tick
+during an outage now means the outage outran five minutes rather than thirty seconds.
+Evidence: [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv).

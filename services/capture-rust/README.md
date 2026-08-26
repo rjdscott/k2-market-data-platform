@@ -133,8 +133,11 @@ Every one is also a `--flag`; `k2-capture run --help` is the authority.
 Fixed producer limits (not configurable — `sink.rs`): `message.max.bytes=8388608`
 (8 MiB, equal to the WebSocket cap in `ws.rs`; Coinbase's BTC-USD `level2`
 snapshot is 5.2 MB, ADR-018 S5, and `market.crypto.v3.raw.*` carries the same
-`max.message.bytes`), `queue.buffering.max.kbytes=32768`, `compression.type=zstd`
-— a captured 4,803,578-byte snapshot compressed to 383,011 bytes (12.5:1, `zstd -3`).
+`max.message.bytes`), `queue.buffering.max.kbytes=32768`,
+`message.timeout.ms=300000`, `compression.type=zstd` — a captured 4,803,578-byte
+snapshot compressed to 383,011 bytes (12.5:1, `zstd -3`). The four numbers are
+asserted by `sink.rs::producer_config_carries_the_numbers_the_docs_quote`, because
+they are quoted here, in ADR-019 and in the FMEA's delayed→lost arithmetic.
 
 ## Subcommands
 
@@ -465,10 +468,19 @@ silently losing one.
 
 ## Deliberate simplifications
 
-- **No spill-to-disk.** When librdkafka's 32 MB queue fills, records are dropped
-  and `k2_capture_produce_errors_total{reason="queue_full"}` ticks. Blocking the
-  frame loop instead would stop us reading the socket, and the venue would drop
-  us — losing more than we were trying to save.
+- **No spill-to-disk, and two caps decide when the loss starts.** When
+  librdkafka's 32 MiB queue fills, records are dropped and
+  `k2_capture_produce_errors_total{reason="queue_full"}` ticks — 194 / 204 /
+  446 s into a broker outage for binance / kraken / coinbase at the modelled wire
+  rates. Independently, `message.timeout.ms=300000` fails any record still
+  undelivered 5 minutes after enqueue, counted `reason="delivery"`. Whichever
+  comes first is the loss; for coinbase that is the timeout, for the other two
+  the queue. Blocking the frame loop instead of dropping would stop us reading
+  the socket, and the venue would drop us — losing more than we were trying to
+  save. **The timeout used to be 30 s**, which made the 32 MiB unreachable: the
+  2026-08-26 chaos run lost 231,744 kraken records with a first drop at 102 s and
+  *zero* of them `queue_full`
+  ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)).
   `// ponytail: spill-to-file when an outage costs data.`
 - **No internal channel** between the frame loop and the producer. librdkafka's
   queue is the only buffer, so there is one place records can back up and one
