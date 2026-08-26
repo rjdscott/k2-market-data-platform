@@ -245,8 +245,8 @@ ALTER TABLE lake.bronze.book_snapshots_l2
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS lake.audit.checks (
     run_ts     TIMESTAMP NOT NULL COMMENT 'When the maintenance run that produced this row started',
-    job        STRING  NOT NULL COMMENT 'Which job wrote it: maintenance | ingest | verify',
-    check_name STRING  NOT NULL COMMENT 'offset_continuity | duplicate_identifiers | sequence_gaps | venue_replay (informational, no pass/fail) | unresolvable_schema_id (written by ingest, not maintenance)',
+    job        STRING  NOT NULL COMMENT 'Who wrote it: maintenance | ingest | verify | operator. operator means a human filed it by hand at the moment of a decision — the two runbook rows that record a deliberate purge and a known offset gap. The column exists to answer "who asserted this", so a hand-filed row claiming maintenance would be the one lie that matters',
+    check_name STRING  NOT NULL COMMENT 'offset_continuity | duplicate_identifiers | sequence_gaps | venue_replay (informational, no pass/fail) | unresolvable_schema_id (written by ingest, not maintenance) | manual_purge (a deletion, not a finding — kept distinct so a query over this table never reads a purge as a check result)',
     scope      STRING  NOT NULL COMMENT 'What was checked: a table name, or topic/partition',
     passed     BOOLEAN NOT NULL COMMENT 'false here is what makes the maintenance run exit non-zero',
     observed   BIGINT           COMMENT 'The number the check produced — gap count, duplicate count. NULL where the check has no count',

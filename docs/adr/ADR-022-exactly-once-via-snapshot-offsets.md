@@ -162,7 +162,9 @@ parse it, which is why `offsets.py` is pure and tested rather than inline in the
 orphans every prior snapshot as a resume point; `failOnDataLoss=true` on every Kafka
 read, with a topic truncation treated as an incident rather than a skip; one ingest at a
 time enforced by an exclusive `flock` in the script rather than by the scheduler, because
-seventeen documented commands dispatch an ingest outside Prefect; and
+the runbooks, the chaos scripts and `make lake-verify` all dispatch an ingest outside
+Prefect (`grep -rn 'docker exec.*ingest\.py' docs scripts docker/lake` — 26 sites across
+10 files on 2026-08-26); and
 deleting `docker/postgres/ddl/offload-watermarks.sql` together with `docker/offload/`
 in the same cutover PR, so no code path can read a stale watermark.
 

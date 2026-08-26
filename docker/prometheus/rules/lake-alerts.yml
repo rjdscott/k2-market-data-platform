@@ -198,7 +198,7 @@ groups:
             drifted — they are the symptom, this is the cause. Run the
             compaction by hand rather than waiting for the next nightly: the
             runbook has the command.
-          runbook: docs/runbooks/lake-recovery.md
+          runbook: docs/runbooks/lake-ingest-lag.md
 
       # WARNING: the exporter is up and producing nothing.
       #

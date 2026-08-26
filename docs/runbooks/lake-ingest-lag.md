@@ -3,7 +3,7 @@
 The lake ingest runs every 5 minutes and reads Redpanda by offset range into
 `raw.messages`, then decodes into `bronze.*`. This covers the tier falling behind: a
 backlog, a stalled scheduler, an ingest that fails on data Redpanda has already evicted,
-and files arriving too small to be useful.
+and a missed nightly rewrite leaving files too small to be useful.
 
 It does **not** cover a crashed run (that is safe and automatic —
 [lake-recovery.md §5](./lake-recovery.md#5-ingest-killed-mid-run)), the v2 offload
@@ -12,15 +12,16 @@ It does **not** cover a crashed run (that is safe and automatic —
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **Not yet verified — the Phase D burn-in fills this in.** The ingest job is being built.
-> Commands marked ✅ were run read-only against the running stack on 2026-08-26.
+> **Not yet verified — the Phase D burn-in fills this in.** The ingest job exists and every
+> flag below is read from its argparse, but nothing here has been run against a populated
+> lake. Commands marked ✅ were run read-only against the running stack on 2026-08-26.
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
 | 1 | Ingest lag above the 5-minute cadence | < 30 min | not yet verified — Phase D burn-in |
 | 2 | Scheduler stopped — no runs at all | < 15 min | not yet verified — Phase D burn-in |
 | 3 | `failOnDataLoss` — offsets point below broker retention | **investigation, not repair** | not yet verified — Phase D burn-in |
-| 4 | Small files accumulating | < 24 h (next maintenance window) | not yet verified — Phase D burn-in |
+| 4 | Nightly rewrite missed — small files accumulating | < 24 h (next maintenance window) | not yet verified — Phase D burn-in |
 
 ---
 
@@ -46,11 +47,16 @@ is left*.
 the lake dashboard show a gap at the right-hand edge.
 
 **Detection** — `LakeIngestLagHigh` from `docker/prometheus/rules/lake-alerts.yml`, over
-`k2_lake_ingest_lag_seconds` (newest `kafka_ts` committed vs now) and
-`k2_lake_last_commit_age_seconds` (wall-clock age of the last commit). The two say
-different things and both matter: lag high with commit age *low* means runs are happening
-and not keeping up; lag high with commit age *high* means runs are not happening — go to
-§2.
+`time() - k2_lake_max_kafka_ts_seconds` (newest `kafka_ts` committed vs now). Its companion
+is `time() - k2_lake_last_commit_ts_seconds{table="raw.messages"}` (wall-clock age of the
+last commit). The two say different things and both matter: lag high with commit age *low*
+means runs are happening and not keeping up; lag high with commit age *high* means runs are
+not happening — go to §2.
+
+Both are exported as **timestamps** and aged in PromQL, never as pre-computed ages
+(`docker/lake/metrics.py`). An age gauge is only recomputed on a *successful* catalog read,
+so it would freeze at its last small value during exactly the outage it is the backstop
+for; a timestamp ages by itself. Any query you write here takes the `time() - …` form.
 
 **Expected behaviour** — a single slow cycle self-corrects, because the next run reads a
 wider offset range. Sustained lag does not: at 5-minute cadence, a run that takes longer
@@ -64,9 +70,15 @@ curl -s localhost:9090/api/v1/alerts | \
   jq -r '.data.alerts[] | "\(.labels.alertname) \(.labels.severity) \(.activeAt)"'
 #   CaptureFeedStale critical 2026-08-26T...   (the only alert firing on 2026-08-26)
 
+# Lag (label-free — raw.messages is the only table with a Kafka watermark), then
+# commit age per table.                                       not yet run — Phase D
 curl -s --get localhost:9090/api/v1/query \
-  --data-urlencode 'query=k2_lake_ingest_lag_seconds' | \
-  jq -r '.data.result[] | "\(.metric.table) \(.value[1])"'   # not yet run — Phase D
+  --data-urlencode 'query=time() - k2_lake_max_kafka_ts_seconds' | \
+  jq -r '.data.result[].value[1]'
+
+curl -s --get localhost:9090/api/v1/query \
+  --data-urlencode 'query=time() - k2_lake_last_commit_ts_seconds' | \
+  jq -r '.data.result[] | "\(.metric.table) \(.value[1])"'
 ```
 
 ```bash
@@ -120,11 +132,16 @@ window instead.
 
 ## 2. Scheduler stopped
 
-**Symptom** — `k2_lake_last_commit_age_seconds` climbing steadily, no failed runs, no
-errors anywhere. The quietest failure on this page.
+**Symptom** — `time() - k2_lake_last_commit_ts_seconds{table="raw.messages"}` climbing
+steadily, no failed runs, no errors anywhere. The quietest failure on this page.
 
-**Detection** — `LakeCommitAgeHigh` from `docker/prometheus/rules/lake-alerts.yml`;
-`LakeExporterDown` if the metrics exporter itself is the thing that is gone.
+**Detection** — `LakeIngestFailed` from `docker/prometheus/rules/lake-alerts.yml`: it is the
+rule over `raw.messages` commit age, and a stopped scheduler is exactly a `raw.messages`
+commit that never lands. **Not `LakeCommitAgeHigh`** — that rule selects
+`table=~"bronze\\..*"` and is structurally blind to a `raw.messages` stall. If the metrics
+exporter itself is what is gone, `LakeExporterDown` fires instead; if it is up but no longer
+refreshing (the usual shape of a Lakekeeper outage), `LakeExporterStalled` fires first —
+both are [lake-recovery.md](./lake-recovery.md).
 
 **Expected behaviour** — nothing recovers on its own. A paused deployment stays paused.
 
@@ -198,7 +215,9 @@ FROM lake.raw.messages.snapshots ORDER BY committed_at DESC LIMIT 1;
    traceability is the reason the archive exists.
 
 ```sql
--- not yet run — Phase D burn-in
+-- not yet run — Phase D burn-in. check_name reuses the audit's own
+-- 'offset_continuity'; job='operator' says a human filed it rather than the
+-- nightly run, and must be listed in docker/lake/ddl/lake.sql's column comment.
 INSERT INTO lake.audit.checks
 VALUES (current_timestamp(), 'operator', 'offset_continuity',
         'market.crypto.v3.raw.kraken/7', false, 41233,
@@ -220,12 +239,30 @@ than the fault.
 
 ---
 
-## 4. Small files accumulating
+## 4. The nightly rewrite has not run — small files accumulating
 
 **Symptom** — queries getting slower without getting wrong. `k2_lake_files_total` climbing
-faster than `k2_lake_rows_total`.
+faster than `k2_lake_rows_total`, `k2_lake_avg_file_bytes` falling.
 
-**Detection** — `LakeSmallFiles` from `docker/prometheus/rules/lake-alerts.yml`.
+**Detection** — `LakeCompactionStale` from `docker/prometheus/rules/lake-alerts.yml`:
+`time() - k2_lake_last_compaction_ts_seconds{table="raw.messages"} > 129600`, `for: 30m`.
+Its annotation points at [lake-recovery.md](./lake-recovery.md); the diagnosis is here.
+
+**Read what that rule measures, because it is not what the name suggests.** It fires on the
+compaction **job** — 36 hours with no file-rewrite snapshot on `raw.messages`, i.e. at least
+one missed nightly — not on mean file size. `rewrite_data_files` does not go through
+`writeTo` and so cannot carry a `k2.job` property; `docker/lake/metrics.py` keys on
+Iceberg's own `operation` field (`replace`/`overwrite`) instead.
+
+The obvious alternative, `k2_lake_avg_file_bytes{table="raw.messages"} < 32MiB`, was
+rejected because **it fires by construction on a healthy table for about the first 15
+days**: 288 cycles/day × 9 topics under `write.distribution-mode=hash` is ~2,592 new ~2.5 MB
+files a day, and a table-wide *mean* cannot clear 32 MiB until the compacted archive
+outweighs them. The capacity model puts the disk runway at ~26 days, so that alert would
+have been noise for 15 of them — which is how an alert gets muted. `k2_lake_avg_file_bytes`
+and `k2_lake_files_total` are still the right things to *read* here; they are the symptom,
+and `LakeCompactionStale` is the cause. No series exists at all until the table has been
+compacted once, so a fresh table cannot fire it either.
 
 **Expected behaviour** — the 5-minute cadence writes ~288 commits per table per day, each
 one small, and nightly compaction is what converges them toward the target (256 MB for
@@ -247,16 +284,25 @@ FROM lake.raw.messages.files GROUP BY partition ORDER BY partition DESC LIMIT 10
 # 2. Did maintenance run last night?               not yet run — Phase D burn-in
 docker exec k2-prefect-server prefect flow-run ls --limit 5
 
-# 3. Compact now rather than waiting.
-docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --compact
+# 3. Compact now rather than waiting. --days N is the compaction window, days
+#    back; the nightly default is 2. Widen it to cover every night that was
+#    missed — anything older was compacted by an earlier run and rewriting the
+#    whole archive nightly costs without bound for no gain.
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --days 3
 ```
+
+`--days` is the only compaction flag. `maintenance.py` accepts `--days`, `--retain-days`,
+`--orphan-hours` and `--audit-only`, and argparse exits 2 on anything else — a full run does
+compaction, then expiry, then orphan removal, then the audits.
 
 **Sort-order degradation is the second-order cost, and it is the one that is easy to miss.**
 `bronze.*` prune by symbol through the sort order rather than a partition field
 ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)), so unsorted small files
 widen every file's symbol bounds and single-instrument queries stop pruning. Compaction on
 `bronze.*` must therefore be a **sort rewrite**, not a plain binpack — a binpack merges the
-files and leaves the clustering as bad as it found it.
+files and leaves the clustering as bad as it found it. `compact()` does exactly that:
+binpack on `raw.messages`, which is already written in offset order, and a sort rewrite on
+both bronze tables using the sort order declared in `lake.sql`.
 
 **Measured** — not yet verified.
 
@@ -280,6 +326,7 @@ window is recorded here**, with its offsets and its wall-clock span._
 
 ---
 
-**Last verified:** not yet verified — the lake ingest is Phase D and unbuilt. Commands
+**Last verified:** not yet verified — the ingest and maintenance code exists but has never
+run against a populated lake on this host. Commands
 marked ✅ were run read-only against the running stack on 2026-08-26 with their real output
 pasted. Stamp this line at the Phase D burn-in.

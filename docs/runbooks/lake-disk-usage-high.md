@@ -1,7 +1,10 @@
 # Runbook: Host disk above 80 % — the lake is filling it
 
-The lake keeps `raw.messages` forever. There is no TTL, no expiry, and nothing on this
-platform deletes a row of it
+The lake keeps `raw.messages` forever. There is no TTL, no expiry, and **no automatic path
+deletes a row of it** — compaction rewrites files, snapshot expiry drops superseded ones,
+orphan removal deletes objects no snapshot ever referenced, and none of the three can touch
+a row in the current snapshot. A deliberate operator purge with an audit row (Option C
+below) is the one documented escape hatch, and it is a human decision rather than a policy
 ([Q8](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host),
 [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)). Disk is therefore the
 platform's first binding constraint, it binds on a *calendar* rather than at a load
@@ -12,9 +15,9 @@ itself) or Redpanda disk (time- and byte-capped in `docker/redpanda/init.sh`).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **Not yet verified.** The alert is Phase D and the lake has not yet grown. Commands
-> marked ✅ were run read-only against the running stack on 2026-08-26 and their real
-> output is pasted.
+> **Not yet verified.** Both alerts are wired and their thresholds are unit-tested, but the
+> lake has not yet grown and neither has fired. Commands marked ✅ were run read-only
+> against the running stack on 2026-08-26 and their real output is pasted.
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
@@ -36,35 +39,37 @@ capacity model predicts `raw.messages` at **6.47 GB/day** and the whole lake at
 ([capacity model §7](../architecture/capacity-model.md#7-bottleneck-prediction)). Those are
 predictions, not measurements; the commands below produce the real slope.
 
-### Read the disk — and read it in the right place
+### Read the disk — and know what the alert is reading
 
-**The two obvious sources disagree on this host, and knowing which one is right matters
-more than the reading.** Verified 2026-08-26:
+**The host and the container disagree on this host, and knowing which one the alert sees
+matters more than either reading.** Both taken at the same instant, 2026-08-26T14:43Z:
 
 ```console
-$ df -BG /var/lib/docker | tail -2                                        # ✅ verified
-Filesystem     1G-blocks  Used Available Use% Mounted on
-/dev/nvme0n1p5      961G  711G      202G  78% /
-
-$ curl -s --get localhost:9090/api/v1/query --data-urlencode \
-   'query=1 - ClickHouseAsyncMetrics_FilesystemMainPathAvailableBytes
-            / ClickHouseAsyncMetrics_FilesystemMainPathTotalBytes' \
-   | jq -r '.data.result[].value[1]'                                      # ✅ verified
-0.3404562234470415
+$ df -h /            # 2026-08-26T14:43Z                                  ✅ verified
+/dev/nvme0n1p5  961G  715G  197G  79% /
 ```
 
-**78 % against 34 %, on what ought to be the same disk.** The reason is that Docker on
-this host runs inside a VM: the ClickHouse container sees `/dev/vda1`, 944 GiB, 31 % used
-(`docker exec k2-clickhouse df -h /` ✅), while the host sees `/dev/nvme0n1p5`, 961 G, 78 %
-used. The ClickHouse Prometheus metric reports the **VM's** view of a thin-provisioned
-virtual disk, not the physical one the archive actually consumes — and it is the physical
-one that stops accepting writes.
+`k2_lake_disk_used_ratio`, which is what `LakeDiskUsageHigh` and `LakeDiskUsageCritical`
+actually evaluate, comes from `os.statvfs('/minio-data')` inside the `lake-metrics`
+container (`_refresh_disk` in `docker/lake/metrics.py`). At that same instant it read
+`total=944.0G free=619.6G used_ratio=0.344`.
 
-**Consequence for the alert, stated so Phase D does not wire the wrong metric:** the 80 %
-alert must be sourced from something that sees the host filesystem, and today's
-`ClickHouseAsyncMetrics_FilesystemMainPath*` series is not it. Anything else is an alert
-that fires 44 points late. This is a real, open finding — it is recorded here rather than
-quietly worked around, and it is the first thing the Phase D burn-in must settle.
+**79 % against 34.4 % — 45 points apart, on what ought to be the same disk.** Docker on this
+host runs inside a VM, so `statvfs` in the container measures the VM's thin-provisioned
+virtual disk while `df` on the host measures the physical partition the archive actually
+consumes. It is the physical one that stops accepting writes.
+
+**The stance, stated once so nobody re-litigates it at 2 a.m.:** the *rule* is correct and
+the *metric* is host-dependent. On bare metal and on EC2 — where `os.statvfs` on the MinIO
+volume **is** the real disk — the 80 % alert is right, and that is the Q8 requirement met;
+`docker/prometheus/rules/tests/lake-alerts_test.yml` asserts it fires at 0.81 and not at
+0.79. On Docker Desktop it is **blind**: it would page 45 points late, so on this host `df`
+above is the reading to act on and the alert is not. That is a documented limitation of the
+development host, not an open bug in the rule.
+
+**Every free-space number in this runbook is the `df -h /` line above.** Do not substitute
+`ClickHouseAsyncMetrics_FilesystemMainPath*`: it measures whatever filesystem ClickHouse's
+own data directory sits on and arrives with a name that invites reading it as the host's.
 
 ### Then read the growth rate, not just the level
 
@@ -82,7 +87,7 @@ docker exec k2-minio mc du --depth 3 lk/k2-lake/    # per-prefix once populated 
 ```bash
 # Days remaining = free ÷ slope. Take df twice, at least 24 h apart, and divide.
 # One sample is a level, not a slope, and a level cannot tell you when to act.
-df -BG /var/lib/docker | tail -1 | awk '{print strftime("%F %T"), $4}' >> /tmp/k2-disk.log
+df -h / | tail -1 | awk '{print strftime("%F %T"), $4}' >> /tmp/k2-disk.log
 ```
 
 Phase F publishes days-remaining as a first-class number with its command
@@ -143,6 +148,8 @@ justification for allowing it:
 
 ```sql
 -- not yet run — verify at the Phase D burn-in. Record it BEFORE deleting.
+-- job='operator' / check_name='manual_purge': a human decision, not a check.
+-- Both values must be listed in docker/lake/ddl/lake.sql's column comments.
 INSERT INTO lake.audit.checks
 VALUES (current_timestamp(), 'operator', 'manual_purge',
         'raw.messages kafka_ts [2026-08-01, 2026-08-08)', false, NULL,
@@ -178,19 +185,38 @@ of raw, which is the real deadline.
 **Recovery** — buy time first, then take Option A or B.
 
 ```bash
-# 1. Reclaim what is safe to reclaim, in cost-of-mistake order.
+# 1. Reclaim what is safe to reclaim. There is no per-pass flag: ONE run does
+#    compaction, then snapshot expiry, then orphan removal, then the audits.
+#    Run it ONCE, naming the horizon you care about — these two lines are the
+#    same nightly pass with a different knob made explicit, not two steps.
+#    `maintenance.py` takes only --days / --retain-days / --orphan-hours /
+#    --audit-only; argparse exits 2 on anything else.
 #    not yet run — verify at the Phase D burn-in
-docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --expire-snapshots
-docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --remove-orphans
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --retain-days 7
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --orphan-hours 24
 
 # 2. Docker's own reclaimable space — images and build cache, never volumes.  ✅ verified
 docker system df
 docker image prune -f          # safe; does not touch volumes
 ```
 
-Snapshot expiry reclaims metadata and files that compaction superseded; orphan removal
-reclaims files written by runs that never committed. Both are routine maintenance being
-run early rather than emergency measures, and neither touches a live row.
+Snapshot expiry reclaims metadata and the data files compaction already superseded — never
+a file the current snapshot still references — and **7 days is a floor, not a default**:
+`--retain-days` below 7 is refused, because that is the window the `bronze.*` incremental
+read resumes from and expiring it turns the next stage-2 run into an error (`expire()` in
+`docker/lake/maintenance.py`).
+
+Orphan removal deletes objects under each of the four table prefixes that no snapshot ever
+referenced — Parquet from writes that crashed before committing. **24 hours is also a floor
+and it is a safety property**: `remove_orphan_files` decides "unreferenced" from the table
+metadata at the instant it runs, so a file a concurrent writer has staged but not yet
+committed looks like an orphan, and deleting it corrupts the commit about to name it. A
+24 h horizon puts every candidate outside any in-flight write on this stack. `--orphan-hours`
+below 24 is refused. This is the only pass with anything to reclaim on `raw.messages`, which
+is never expired.
+
+Both are routine maintenance being run early rather than emergency measures, and neither
+touches a live row.
 
 **Never** run `docker system prune --volumes` on this host. The lake, the catalog database
 and ClickHouse all live in Docker volumes; that command is the fastest way to turn a disk
@@ -218,8 +244,9 @@ purge is recorded here**, with its window and the reason._
 
 ---
 
-**Last verified:** not yet verified — the disk alert is Phase D and unbuilt. The `df`,
-`docker exec … df`, `mc du`, `docker system df` and Prometheus query commands marked ✅
-were run read-only against the running stack on 2026-08-26 and their real output is pasted.
-The 78 %-vs-34 % discrepancy above is a genuine open finding, not a rounding difference:
-Phase D must source the alert from a metric that sees the host filesystem.
+**Last verified:** not yet verified — the lake has not yet grown, so neither disk alert has
+fired and neither recovery path has been exercised. The `df`, `mc du` and `docker system df`
+commands marked ✅ were run read-only against the running stack on 2026-08-26 and their real
+output is pasted. The 79 %-vs-34.4 % spread above is not a rounding difference: it is the
+documented Docker Desktop blindness, and it is the reason the `df` reading — not
+`k2_lake_disk_used_ratio` — is the one to act on **on this host only**.
