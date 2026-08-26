@@ -1,6 +1,8 @@
 # Architecture — As Built
 
-K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, ClickHouse turns them into a Bronze → Silver → Gold medallion using nothing but Kafka-engine tables and materialized views, and a Prefect-scheduled Spark job appends the results to Iceberg every 15 minutes. The v2 pipeline runs in one Docker Compose file on **15.1 CPU / 21.875 GB across 14 long-lived containers** (+2 one-shot init containers), against a mandate of 16 cores / 40 GB. This branch runs Phase C: Rust `k2-capture` alongside the Kotlin handlers for a labelled parity window ([ADR-019](../adr/ADR-019-rust-capture-tier.md)), so what is actually deployed here is the steady state of that parallel run — **16.10 CPU / 23.125 GB across 18 long-running containers (+4 one-shot)**. Kotlin retires once per-symbol parity is clean.
+K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, ClickHouse turns them into a Bronze → Silver → Gold medallion using nothing but Kafka-engine tables and materialized views, and a Prefect-scheduled Spark job appends the results to Iceberg every 15 minutes. The whole thing runs in one Docker Compose file on **14.60 CPU / 21.625 GiB across 15 long-running containers** (+4 one-shot init containers, 16.10 CPU at the bootstrap peak), against a mandate of 16 cores / 40 GB.
+
+> **The v2 hot tier is frozen as of 2026-08-26.** The three Kotlin feed handlers were the only producers of `market.crypto.trades.<ex>[.raw]`, and they retired to [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md) when the Rust capture tier matched them on per-symbol parity ([ADR-019](../adr/ADR-019-rust-capture-tier.md)). Nothing writes those six topics now, so the Kafka-engine queues have nothing to read and **`k2.bronze_trades_*`, `k2.silver_trades` and the six `k2.ohlcv_*` tables stop advancing at the retirement timestamp** — they hold history, they do not grow, and their TTLs keep expiring rows out from under them (bronze 7 d, silver 30 d). The `market.crypto.v3.{raw,trades,book}.<ex>` topics are the only live feed. The `k2` database, its Kafka-engine queues and the `.raw` topics are dropped together at the Phase E cutover, not here — a frozen table is still queryable while the v3 hot tier is being built beside it. Everything below that describes `k2.*` describes what was built and what is still readable, not what is being written.
 
 Everything below describes what actually runs on `main` today. Where the design intent and the built system diverge, the divergence is called out rather than papered over. The story of how it got here is in [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md).
 
@@ -16,15 +18,15 @@ flowchart LR
         CBS["Coinbase<br/>11 pairs"]
     end
 
-    subgraph FH["Ingestion · Kotlin 2.3 + Ktor 3.1"]
-        FHB["feed-handler-binance"]
-        FHK["feed-handler-kraken"]
-        FHC["feed-handler-coinbase"]
+    subgraph FH["Ingestion · Rust k2-capture"]
+        FHB["capture-binance"]
+        FHK["capture-kraken"]
+        FHC["capture-coinbase"]
     end
 
-    RP["Redpanda v25.3.4, schema registry<br/>v2: 6 topics, 160 partitions<br/>v3: 9 topics, 108 partitions"]
+    RP["Redpanda v25.3.4, schema registry<br/>v3: 9 topics, 108 partitions<br/>v2: 6 topics, frozen"]
 
-    subgraph CH["Hot store · ClickHouse 24.3 LTS"]
+    subgraph CH["Hot store · ClickHouse 24.3 LTS · frozen"]
         Q["3 Kafka-engine queues<br/>JSONAsString"]
         BR["3x bronze_trades_*<br/>MergeTree · TTL 7d"]
         SI["silver_trades<br/>MergeTree · TTL 30d"]
@@ -46,10 +48,10 @@ flowchart LR
     BIN -->|WebSocket| FHB
     KRK -->|WebSocket| FHK
     CBS -->|WebSocket| FHC
-    FHB -->|"raw JSON + Avro"| RP
-    FHK -->|"raw JSON + Avro"| RP
-    FHC -->|"raw JSON + Avro"| RP
-    RP --> Q
+    FHB -->|"raw + trades + book"| RP
+    FHK -->|"raw + trades + book"| RP
+    FHC -->|"raw + trades + book"| RP
+    RP -.->|"v2 topics, frozen"| Q
     Q -->|normalizing MV| BR
     BR -->|"3 MVs"| SI
     SI -->|"6 MVs"| GO
@@ -58,12 +60,12 @@ flowchart LR
     SI -.->|JDBC| SP
     GO -.->|JDBC| SP
     SP -->|append| ICE
-    FHB -.->|"handlers :8082"| PR
+    FHB -.->|"capture :8082"| PR
     Q -.->|"ClickHouse :9363"| PR
     PR --> GR
 
     classDef exchange fill:#e5e7eb,stroke:#4b5563,color:#1f2937
-    classDef kotlin fill:#c7d2fe,stroke:#4338ca,color:#1f2937
+    classDef rust fill:#c7d2fe,stroke:#4338ca,color:#1f2937
     classDef stream fill:#fde68a,stroke:#b45309,color:#1f2937
     classDef ch fill:#bbf7d0,stroke:#15803d,color:#1f2937
     classDef batch fill:#fed7aa,stroke:#c2410c,color:#1f2937
@@ -71,7 +73,7 @@ flowchart LR
     classDef obs fill:#e9d5ff,stroke:#7e22ce,color:#1f2937
 
     class BIN,KRK,CBS exchange
-    class FHB,FHK,FHC kotlin
+    class FHB,FHK,FHC rust
     class RP stream
     class Q,BR,SI,GO ch
     class PF,SP batch
@@ -83,26 +85,29 @@ flowchart LR
 
 ## Tiers
 
-### Ingestion — Kotlin feed handlers
+### Ingestion — Rust `k2-capture`
 
-Three containers from one image (`services/feed-handler-kotlin/`), differing only by `K2_EXCHANGE`. Kotlin 2.3.10 on JVM 21, Ktor 3.1.0 WebSocket client, coroutines, `kafka-clients` 4.1.0 with the Confluent Avro serializer. Each handler subscribes to its instruments, then **dual-produces**: the untouched exchange payload to `market.crypto.trades.<exchange>.raw`, and a `NormalizedTrade` Avro record to `market.crypto.trades.<exchange>`.
+Three containers from one image ([`services/capture-rust/`](../../services/capture-rust/README.md)), differing only by `--exchange`. One `k2-capture` binary per venue on `gcr.io/distroless/cc-debian12:nonroot`, one WebSocket connection carrying trades *and* L2 book, `recv_ts_ns` stamped as the first statement on frame receipt, fixed-point `i64` at 1e-8 end to end. Each container produces to three topics: `market.crypto.v3.raw.<ex>` (every frame verbatim), `.trades.<ex>` (Avro `Trade`) and `.book.<ex>` (Avro `BookSnapshotL2`, top-20 at 1 Hz).
 
-- Instruments come from [`config/instruments.yaml`](../../config/instruments.yaml) — one file, all three exchanges, no per-service duplication.
-- Reconnect is a fixed 5 s delay with unlimited retries (`reconnect-delay-ms`, `max-reconnect-attempts = -1` in `application.conf`) — the KDoc in the WebSocket clients still says "exponential backoff"; it isn't. Measured cost is ~0.03 CPU / 134 MiB for Binance at 100–200 trades/s, against a 0.5 CPU / 512 MB limit.
-- Micrometer exposes `feed_handler_trades_produced_total`, `feed_handler_errors_total`, `feed_handler_reconnects_total` on `:8082/metrics`; `:8082/health` backs the Compose healthcheck.
-- Why Kotlin over the v1 Python handlers: [ADR-002](../adr/ADR-002-kotlin-feed-handlers.md).
+- Instruments come from [`config/instruments.yaml`](../../config/instruments.yaml) — one file, all three exchanges, native *and* canonical spellings, no per-service duplication and no mapping in code.
+- Prometheus metrics on `:8082/metrics` (`k2_capture_messages_total`, `_gaps_total`, `_checksum_failures_total`, `_records_delivered_total`, `_exchange_to_recv_seconds`, …); the `k2-capture healthcheck` subcommand backs the Compose healthcheck, because distroless has no `curl`.
+- Why Rust, and what the JVM tier could not be asked to do: [ADR-019](../adr/ADR-019-rust-capture-tier.md). The wire contract is [ADR-020](../adr/ADR-020-avro-fixed-point-contracts.md); the book product and resync policy are [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md).
 
-**As-built quirk:** the Bronze layer consumes the *raw JSON* topics, not the normalized Avro ones. The Avro path is live and schema-registered, but nothing downstream reads it today — normalization ended up in ClickHouse instead (see below). It is kept because it is the seam a non-ClickHouse consumer would attach to.
+**Retired: the Kotlin feed handlers.** Three JVM containers (Kotlin 2.3.10, Ktor 3.1.0, `kafka-clients` 4.1.0) dual-produced raw exchange JSON to `market.crypto.trades.<ex>.raw` and a `NormalizedTrade` Avro record to `market.crypto.trades.<ex>` from February to August 2026. They were the only producer of the v2 topics, and their retirement is what freezes the ClickHouse medallion below. Code, topic inventory and their measured footprint: [`legacy/v2-kotlin/README.md`](../../legacy/v2-kotlin/README.md); the decision is [ADR-002](../adr/ADR-002-kotlin-feed-handlers.md), superseded by [ADR-019](../adr/ADR-019-rust-capture-tier.md).
+
+**As-built quirk, inherited:** the Bronze layer consumed the *raw JSON* topics, never the normalized Avro ones. The Avro path was live and schema-registered for its whole life and nothing downstream ever read it — normalization ended up in ClickHouse instead (see below). v3 does not repeat the shape: `.trades.<ex>` is Avro and is what the v3 hot tier will read.
 
 ### Streaming backbone — Redpanda
 
 Single-broker Redpanda v25.3.4 in `dev-container` mode, `--smp 1 --memory 1500M`, with the schema registry built in — no separate Confluent registry process ([ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md)).
 
-Topics are created explicitly by the `redpanda-init` one-shot service rather than by auto-create, so partition counts are deterministic: 40 partitions for each Binance topic, 20 for each Kraken and Coinbase topic — v2: 6 topics, 160 partitions. This branch's v3 foundations add 9 more topics at 12 partitions each — `market.crypto.v3.{raw,trades,book}.<ex>` for each exchange — for +108 partitions, so `rpk topic list` shows 15 market topics / 268 partitions (plus `_schemas`). That job also hardens `_schemas` to `cleanup.policy=compact` with infinite retention, which fixed a real failure where the registry hit `offset_out_of_range` after a restart.
+Topics are created explicitly by the `redpanda-init` one-shot service rather than by auto-create, so partition counts are deterministic: 9 v3 topics at 12 partitions each — `market.crypto.v3.{raw,trades,book}.<ex>` for each exchange — for 108 partitions. The 6 v2 topics (40 partitions per Binance topic, 20 per Kraken and Coinbase topic, 160 total) are still created and still hold their retained data, but **no producer writes them**: `redpanda-init` keeps creating them so a fresh volume can still be read against, and Phase E deletes them. `rpk topic list` shows 15 market topics / 268 partitions (plus `_schemas`). That job also hardens `_schemas` to `cleanup.policy=compact` with infinite retention, which fixed a real failure where the registry hit `offset_out_of_range` after a restart.
 
 ### Hot store — ClickHouse
 
 ClickHouse 24.3 LTS ([ADR-015](../adr/ADR-015-clickhouse-lts-downgrade.md) — downgraded from 26.1 for Spark JDBC compatibility) is the whole stream processor. There is no stream-processing framework in this platform ([ADR-004](../adr/ADR-004-eliminate-spark-streaming.md), [ADR-009](../adr/ADR-009-medallion-in-clickhouse.md)).
+
+**Frozen since 2026-08-26.** The three Kafka-engine queues below still exist and still poll, but their topics have had no producer since the Kotlin handlers retired, so every table in this section holds history and gains no rows. Existing data stays queryable and keeps ageing out under its TTL; the v3 hot tier built on `market.crypto.v3.*` replaces this chain in Phase E, which is also when `DROP DATABASE k2` and the `.raw` topic deletion happen. Nothing here is dropped by the retirement PR.
 
 Per exchange, the chain is four objects:
 
@@ -140,7 +145,7 @@ Two silver columns are absent from cold storage on purpose: `trade_conditions Ar
 
 ### Observability
 
-Prometheus v3.2 scrapes the three feed handlers (`:8082`), ClickHouse (`:9363`), Redpanda (`:9644`), the three v3 capture containers (`:8082`), and Grafana. Grafana 11.5 ships five provisioned dashboards in `docker/grafana/dashboards/`: pipeline overview, ClickHouse overview, Iceberg offload, v2 migration tracker, K2 Capture (v3).
+Prometheus v3.2 scrapes the three capture containers (`:8082`), ClickHouse (`:9363`), Redpanda (`:9644`), the offload metrics exporter (`iceberg-metrics:8000`) and Grafana. Grafana 11.5 ships five provisioned dashboards in `docker/grafana/dashboards/`: pipeline overview, ClickHouse overview, Iceberg offload, v2 migration tracker, K2 Capture (v3).
 
 **24 alert rules** are loaded from `docker/prometheus/rules/`: 5 ClickHouse and 9 Iceberg-offload (14 v2 total), plus 10 v3 capture-tier rules, which landed with Phase C and are evaluated against live series. The `iceberg-scheduler` Prometheus job scrapes the offload metrics exporter on `iceberg-metrics:8000`, so all 9 offload alerts have live series. One honest gap remains: **not one alert has been shown to fire on the fault it names** — `make chaos` is what proves the capture-tier ones and it has not run (`scripts/chaos/results/` does not exist). Three capture rules do carry `promtool` unit tests ([`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml), `make check-alerts`), which pin an expression and never a recovery time. There is no Alertmanager.
 
@@ -201,21 +206,17 @@ The end-to-end p99 is dominated by network RTT to the exchanges (~80 ms average)
 | redpanda-console | 0.5 | 256 MB |
 | grafana | 0.5 | 512 MB |
 | prefect-worker | 0.5 | 512 MB |
-| feed-handler-binance | 0.5 | 512 MB |
-| feed-handler-kraken | 0.5 | 512 MB |
-| feed-handler-coinbase | 0.5 | 512 MB |
 | iceberg-metrics | 0.1 | 128 MB |
-| **Subtotal, v2 baseline (14 services)** | **15.1** | **21.875 GB** |
-| lakekeeper (v3) | 0.25 | 256 MB |
-| capture-binance (v3, Phase C) | 0.25 | 256 MB |
-| capture-kraken (v3, Phase C) | 0.25 | 256 MB |
-| capture-coinbase (v3, Phase C) | 0.25 | 512 MB |
-| **Total, Phase C parallel run (18 long-running services)** | **16.10** | **23.125 GB** |
+| lakekeeper | 0.25 | 256 MB |
+| capture-binance | 0.25 | 256 MB |
+| capture-kraken | 0.25 | 256 MB |
+| capture-coinbase | 0.25 | 512 MB |
+| **Total (15 long-running services)** | **14.60** | **21.625 GiB** |
 
-`lakekeeper` and the three `capture-*` containers are new since the v2 baseline — +1.0 CPU / +1.25 GB.
-They run *alongside* the three Kotlin feed handlers above, not in place of them, for a labelled parity
-window ([ADR-019](../adr/ADR-019-rust-capture-tier.md)); the Kotlin handlers (−1.5 CPU / −1.5 GB) retire
-once per-symbol parity is clean, so the budget comes back down after Phase C ends. Four further entries —
+Against the v2 baseline of 15.1 CPU / 21.875 GB across 14 services: `lakekeeper` and the three `capture-*`
+containers added +1.0 CPU / +1.25 GB, and retiring the three Kotlin feed handlers gave back
+−1.5 CPU / −1.5 GB ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) — net −0.5 CPU for a tier that now
+carries L2 books as well as trades. Four further entries —
 `redpanda-init` (v2, topic creation), `iceberg-init` (v2 cold.* Hadoop-catalog DDL), `lakekeeper-migrate`
 (v3 catalog DB schema) and `lake-init` (v3 bucket + warehouse + namespaces) — are one-shot containers that
 exit after startup and are not counted in the totals above; v2 alone carries 2 of these, v3 adds 2 more (4
@@ -245,30 +246,30 @@ The list above is what v2 chose not to build. Separately, an audit of the code f
 - The lake is a JDBC copy of ClickHouse, not the system of record ([`offload_generic.py:172`](../../docker/offload/offload_generic.py#L172)) — the archive inherits a serving DB's normalisation, TTL and dropped columns.
 - OHLCV `SummingMergeTree` resolves open/high/low/close arbitrarily across merges ([`01-k2-schema.sql:178`](../../docker/clickhouse/ddl/01-k2-schema.sql#L178)) — a real correctness bug, not a rounding one.
 - Bronze is plain `MergeTree` ([`01-k2-schema.sql:88`](../../docker/clickhouse/ddl/01-k2-schema.sql#L88)) — a topic replay duplicates every row.
-- No receive timestamp before parse ([`TradeNormalizer.kt:28`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L28)) — clock skew and platform latency are inseparable.
-- Kraken runs WS v1 with synthesised colliding trade IDs ([`TradeNormalizer.kt:60`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L60)).
-- Coinbase `sequence_num` is parsed and never compared ([`CoinbaseWebSocketClient.kt:178`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/CoinbaseWebSocketClient.kt#L178)) — dropped messages are silent.
+- No receive timestamp before parse ([`TradeNormalizer.kt:28`](../../legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L28)) — clock skew and platform latency are inseparable.
+- Kraken runs WS v1 with synthesised colliding trade IDs ([`TradeNormalizer.kt:60`](../../legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L60)).
+- Coinbase `sequence_num` is parsed and never compared ([`CoinbaseWebSocketClient.kt:178`](../../legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/CoinbaseWebSocketClient.kt#L178)) — dropped messages are silent.
 - The Avro schema puts `logicalType` beside `type` where Avro ignores it ([`normalized-trade.avsc:60`](../../schemas/avro/normalized-trade.avsc#L60)), and ClickHouse consumes raw JSON anyway ([`01-k2-schema.sql:39`](../../docker/clickhouse/ddl/01-k2-schema.sql#L39)).
-- Trades only, no L2 book, and raw topics keyed by exchange name ([`KafkaProducerService.kt:155`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/KafkaProducerService.kt#L155)) pin two exchanges to a single partition.
+- Trades only, no L2 book, and raw topics keyed by exchange name ([`KafkaProducerService.kt:155`](../../legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/KafkaProducerService.kt#L155)) pin two exchanges to a single partition.
 
-v3 inverts the storage hierarchy — the lake becomes the system of record and everything else is derived and rebuildable — and replaces the Kotlin handlers with one Rust `k2-capture` binary per exchange doing trades and L2 book on a single connection.
+The four source links above resolve into [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md): the code is archived, not deleted, because it is the baseline the parity comparison was measured against.
 
-**Today, honestly (Phase C, this branch):** Kotlin and Rust run in parallel for the parity window; the
-lake this branch writes to does not exist yet — that lands in Phase D. Throughput, latency, reconnects
-and resource use for the Rust tier are in the "Measured" section of
+v3 inverts the storage hierarchy — the lake becomes the system of record and everything else is derived and rebuildable — and has replaced the Kotlin handlers with one Rust `k2-capture` binary per exchange doing trades and L2 book on a single connection.
+
+**Today, honestly (Phase C complete, this branch):** capture is Rust only and the v2 hot tier is frozen
+(top of this page); the lake the v3 topics are written for does not exist yet — that lands in Phase D.
+Throughput, latency, reconnects and resource use for the Rust tier are in the "Measured" section of
 [`services/capture-rust/README.md`](../../services/capture-rust/README.md).
 
 ```mermaid
 flowchart TB
   EX["Exchanges<br/>Binance · Kraken · Coinbase"]
-  KT["Kotlin feed handlers ×3<br/>v2, retiring"]
-  CAP["Rust k2-capture ×3<br/>v3, Phase C"]
+  CAP["Rust k2-capture ×3<br/>v3, the only capture tier"]
   RP[("Redpanda")]
-  CH["ClickHouse k2<br/>v2 topics, hot tier"]
+  CH["ClickHouse k2<br/>v2 topics · frozen, no producer"]
   LK["Phase D lake<br/>v3 topics, not yet built"]
-  EX --> KT --> RP
   EX --> CAP --> RP
-  RP --> CH
+  RP -.->|frozen| CH
   RP --> LK
 ```
 

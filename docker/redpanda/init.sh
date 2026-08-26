@@ -13,8 +13,9 @@
 #
 # RE-RUNNABLE. Every step is create-if-missing or converge-to-desired, so a
 # second run is a no-op that exits 0. That matters more than it looks: this is
-# the service every feed handler waits on with `service_completed_successfully`,
-# so a non-zero exit on restart blocks the whole stack from coming up.
+# the service every capture container waits on with
+# `service_completed_successfully`, so a non-zero exit on restart blocks the
+# whole stack from coming up.
 #
 # ── Why rpk and not curl for the registry ────────────────────────────────────
 # The redpanda image ships curl and rpk. It has no jq and no python3 (verified:
@@ -70,8 +71,9 @@ EXCHANGES="binance kraken coinbase"
 # and `raw`/`book` do not become inconsistent with `trades` for one venue's
 # historical accident.
 #
-# At cutover (Phase E, once the Kotlin handlers move to legacy/v2-kotlin/ and
-# the v2 topics are deleted) this is one line to change or to leave alone.
+# The Kotlin handlers have since moved to legacy/v2-kotlin/ and the v2 topics are
+# frozen; at the Phase E cutover, once they are deleted, this prefix is one line
+# to change or to leave alone.
 V3_PREFIX="${K2_V3_PREFIX:-market.crypto.v3}"
 
 # ── v3 retention ────────────────────────────────────────────────────────────
@@ -112,20 +114,30 @@ DERIVED_RETENTION_MS=604800000
 log() { echo "  $*"; }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. v2 topics — unchanged from the inline redpanda-init command they replace.
-#    Partition counts are copied exactly (binance 40, kraken 20, coinbase 20);
-#    changing them here would silently repartition nothing (rpk will not shrink
-#    a topic) while making the file disagree with the running cluster.
-#    These go away only after the ClickHouse cutover in Phase E.
+# 1. v2 topics — FROZEN as of 2026-08-26, still created.
+#
+#    The Kotlin feed handlers that were the only producers of these six topics
+#    retired to legacy/v2-kotlin/ (ADR-019). NOTHING WRITES THEM. They are still
+#    created here on purpose: the ClickHouse `k2` database's Kafka-engine queues
+#    subscribe to the three `.raw` topics at startup and error out if the topic
+#    is missing, and `k2.*` stays queryable as frozen history until Phase E drops
+#    the database and deletes these topics together. Creating an empty topic on a
+#    fresh volume costs nothing and keeps a from-scratch bring-up identical to
+#    the running cluster.
+#
+#    Do not "clean this up" ahead of Phase E, and do not touch the partition
+#    counts (binance 40, kraken 20, coinbase 20): rpk will not shrink a topic, so
+#    an edit here would silently repartition nothing while making the file
+#    disagree with the cluster.
 # ─────────────────────────────────────────────────────────────────────────────
-echo "▶ v2 topics"
+echo "▶ v2 topics (frozen — no producer since 2026-08-26)"
 rpk topic describe market.crypto.trades.binance.raw  --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.binance.raw  --partitions 40 --brokers "$BROKERS"
 rpk topic describe market.crypto.trades.binance      --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.binance      --partitions 40 --brokers "$BROKERS"
 rpk topic describe market.crypto.trades.kraken.raw   --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.kraken.raw   --partitions 20 --brokers "$BROKERS"
 rpk topic describe market.crypto.trades.kraken       --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.kraken       --partitions 20 --brokers "$BROKERS"
 rpk topic describe market.crypto.trades.coinbase.raw --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.coinbase.raw --partitions 20 --brokers "$BROKERS"
 rpk topic describe market.crypto.trades.coinbase     --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.coinbase     --partitions 20 --brokers "$BROKERS"
-log "✅ 6 v2 topics present"
+log "✅ 6 v2 topics present (frozen, retained data only)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. v3 topics — 9 topics, 12 partitions each.
@@ -227,12 +239,11 @@ log "✅ _schemas hardened (compact + retention.ms=-1)"
 #    in schemas/README.md: the Iceberg archive is never rewritten, so a reader
 #    must handle EVERY prior version, not just the previous one.
 #
-#    This tightens the level on the three live v2 subjects too (they are on the
-#    BACKWARD default today). Harmless: the Kotlin handlers auto-register a
-#    schema byte-identical to their already-registered version 1, and an
-#    identical schema is a lookup, not an evolution, so no compatibility check
-#    runs. If v2 ever needed a real schema change it would now be blocked — and
-#    a frozen v2 contract during the v3 migration is the desired behaviour.
+#    This tightens the level on the three v2 subjects too (they are on the
+#    BACKWARD default today). Harmless, and now moot: the Kotlin handlers that
+#    auto-registered `NormalizedTrade` are retired, so nothing re-registers those
+#    subjects at all. They stay in the registry until Phase E for the same reason
+#    the topics do — the frozen v2 data is still decodable.
 # ─────────────────────────────────────────────────────────────────────────────
 #    NON-FATAL (see step 6's banner): a registry that will not take the global
 #    level is a v3 problem, and blocking the v2 feed handlers over it is worse
@@ -261,13 +272,15 @@ fi
 #    schemas/README.md).
 #
 #    ── NON-FATAL, deliberately ──────────────────────────────────────────────
-#    Every v2 feed handler waits on this service with
+#    Every capture container waits on this service with
 #    `service_completed_successfully`. Under `set -e` a single failed schema
-#    registration exits 1 and takes the whole live v2 pipeline down with it —
-#    which inverts the severity: v3 has no producers or consumers yet, v2 is
-#    carrying production traffic. A subject that fails to register breaks
-#    nothing that is running today, so it WARNs and the script carries on.
-#    v2 topic creation and `_schemas` hardening stay fatal: those v2 does need.
+#    registration exits 1 and takes the whole stack down with it. This was
+#    written when v2 carried the traffic and v3 had no producers; the polarity
+#    has since flipped — v3 is the live tier now — but non-fatal is still the
+#    right call, because a capture container that starts and warns is more
+#    diagnosable than a stack that will not boot.
+#    v2 topic creation and `_schemas` hardening stay fatal: the frozen `k2`
+#    Kafka-engine queues still need those topics to exist.
 #
 #    The final summary line is the thing to alert on — "9/9" is healthy, any
 #    other count means Phase C has work to do before it can produce.
@@ -314,7 +327,7 @@ rpk topic list --brokers "$BROKERS" || true
 curl -sf "http://${REGISTRY}/subjects" || true
 echo
 
-# Exit 0 even on partial v3 registration — the v2 feed handlers gate on this.
+# Exit 0 even on partial v3 registration — every capture container gates on this.
 # v2 topic creation and `_schemas` hardening already exited non-zero if they failed.
 if [ "$V3_OK" -eq "$V3_TOTAL" ] && [ "${V3_COMPAT_OK:-1}" -eq 1 ]; then
   echo "✅ redpanda-init complete: 6 v2 topics, 9 v3 topics, ${V3_OK}/${V3_TOTAL} v3 subjects"
