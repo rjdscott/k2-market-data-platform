@@ -349,9 +349,11 @@ Three things kept the cost to 0.25 CPU:
   16.85 CPU / 23.625 GiB for the one-shots' lifetime (seconds)**. That peak is over
   the 16-core target. It is accepted rather than fixed: a CPU limit is a ceiling on
   scheduling, not a reservation, so the overcommit is a burst that the kernel
-  resolves by sharing — and all four one-shots exit before the feed handlers start,
-  because the handlers gate on `service_completed_successfully`. Nothing that
-  carries traffic is running while the peak is in effect.
+  resolves by sharing. Note the one-shots do *not* all finish before traffic
+  flows: the feed handlers gate only on `redpanda-init`; `iceberg-init`,
+  `lakekeeper-migrate` and `lake-init` sit on independent dependency branches
+  and were observed running after the handlers had started. The ceiling-not-
+  reservation argument carries the acceptance on its own.
 
   `redpanda-init` declared no limits at all when this addendum was first written,
   which is what made the peak unmeasurable; it now declares 0.25 / 128M and is

@@ -99,8 +99,10 @@ def _smoke() -> None:
 
         print("✓ lake smoke passed")
     finally:
-        spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.audit.smoke")
-        spark.stop()
+        try:
+            spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.audit.smoke")
+        finally:
+            spark.stop()
 
 
 if __name__ == "__main__":

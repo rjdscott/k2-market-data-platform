@@ -380,9 +380,9 @@ Lakekeeper v0.13.3 against the Iceberg 1.8.1 Spark client: no errors on create, 
 ### S9 — Lakekeeper bootstrap and warehouse create
 
 ```bash
-curl -X POST localhost:8181/management/v1/bootstrap -d '{"accept-terms-of-use":true}'   # 204
-curl -X POST localhost:8181/management/v1/warehouse -d @warehouse.json                  # 201
-curl -s localhost:8181/health                                                           # 200
+curl -X POST localhost:18181/management/v1/bootstrap -d '{"accept-terms-of-use":true}'   # 204
+curl -X POST localhost:18181/management/v1/warehouse -d @warehouse.json                  # 201
+curl -s localhost:18181/health                                                           # 200
 ```
 
 ```json

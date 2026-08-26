@@ -947,8 +947,8 @@ services:
 #
 # Bootstrap peak: 16.85 CPU / 23.625 GiB  (`docker compose config` limit sum — all
 # 19 services). That is over the 16 CPU target for the one-shots' lifetime, which
-# is seconds: all four exit before the feed handlers start (they gate on
-# `service_completed_successfully`), and CPU limits are a ceiling on scheduling,
+# is seconds. The feed handlers gate only on redpanda-init; the other three
+# one-shots can overlap live traffic. CPU limits are a ceiling on scheduling,
 # not a reservation, so the overcommit is a burst not a failure.
 #
 # Steady-state headroom: 0.65 CPU / 17.875 GB for future expansion

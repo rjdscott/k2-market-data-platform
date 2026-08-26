@@ -293,8 +293,8 @@ else
 fi
 
 echo "▶ done"
-rpk topic list --brokers "$BROKERS"
-curl -sf "http://${REGISTRY}/subjects"
+rpk topic list --brokers "$BROKERS" || true
+curl -sf "http://${REGISTRY}/subjects" || true
 echo
 
 # Exit 0 even on partial v3 registration — the v2 feed handlers gate on this.

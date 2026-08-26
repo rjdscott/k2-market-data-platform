@@ -98,7 +98,7 @@ Three containers from one image (`services/feed-handler-kotlin/`), differing onl
 
 Single-broker Redpanda v25.3.4 in `dev-container` mode, `--smp 1 --memory 1500M`, with the schema registry built in — no separate Confluent registry process ([ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md)).
 
-Topics are created explicitly by the `redpanda-init` one-shot service rather than by auto-create, so partition counts are deterministic: 40 partitions for each Binance topic, 20 for each Kraken and Coinbase topic — v2: 6 topics, 160 partitions. This branch's v3 foundations add 9 more topics at 12 partitions each — `market.crypto.v3.{raw,trades,book}.<ex>` for each exchange — for +108 partitions, so `rpk topic list` shows 15 topics / 268 partitions total. That job also hardens `_schemas` to `cleanup.policy=compact` with infinite retention, which fixed a real failure where the registry hit `offset_out_of_range` after a restart.
+Topics are created explicitly by the `redpanda-init` one-shot service rather than by auto-create, so partition counts are deterministic: 40 partitions for each Binance topic, 20 for each Kraken and Coinbase topic — v2: 6 topics, 160 partitions. This branch's v3 foundations add 9 more topics at 12 partitions each — `market.crypto.v3.{raw,trades,book}.<ex>` for each exchange — for +108 partitions, so `rpk topic list` shows 15 market topics / 268 partitions (plus `_schemas`). That job also hardens `_schemas` to `cleanup.policy=compact` with infinite retention, which fixed a real failure where the registry hit `offset_out_of_range` after a restart.
 
 ### Hot store — ClickHouse
 
