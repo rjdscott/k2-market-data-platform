@@ -609,7 +609,7 @@ one they still describe a component that exists; they go when it does.
 **The offload's source is frozen from this PR, so Phase D loses a step.** The
 plan had Phase D run the old offload beside the new lake ingest and compare. With
 `k2.*` gaining no rows there is nothing for the old side to offload, so that
-comparison would measure nothing; the maintainer dropped it on 2026-08-27. Phase D
+comparison would measure nothing; the maintainer dropped it on 2026-08-26. Phase D
 deletes `docker/offload/`, the hadoop warehouse bind mount, and these four rules
 together.
 
