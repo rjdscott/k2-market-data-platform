@@ -1,6 +1,6 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 27 alert rules (17 v2 + 10 v3 capture)
+Prometheus scrapes the stack, Grafana renders it, and 24 alert rules (14 v2 + 10 v3 capture)
 cover the things that actually break: ingestion stops, ClickHouse struggles, the cold-tier
 offload falls behind, and — on this branch's Phase C capture tier — feed staleness, sequence
 gaps and book checksum failures.

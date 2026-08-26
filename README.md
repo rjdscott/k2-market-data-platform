@@ -45,7 +45,7 @@ flowchart LR
   end
   I["Cold tier<br/>Iceberg · Hadoop catalog · cold.*"]:::st
   subgraph OBS["Observability"]
-    M["Prometheus<br/>27 alert rules"]:::ob
+    M["Prometheus<br/>24 alert rules"]:::ob
     D["Grafana<br/>5 dashboards"]:::ob
   end
 
@@ -159,13 +159,13 @@ K2 Capture v3 (`k2-l2-capture`).
 ![Pipeline overview dashboard](docs/images/grafana-pipeline-overview.jpg)
 ![Prefect deployments](docs/images/prefect-deployments.jpg)
 
-27 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 3 feed handler (down, error
-rate, reconnect churn), 5 ClickHouse (down, memory, query failures, bronze insert
-rate, merge queue), 9 Iceberg offload (lag, consecutive failures, cycle time, watermark staleness,
-scheduler down), 10 v3 capture (down, feed stale, sequence gaps, checksum failure, produce errors/stalled,
-resync storm, ingress latency, book depth, precision loss). Handlers expose Micrometer metrics on
-`:8082/metrics` plus a `/health` endpoint used as the container healthcheck; ClickHouse exposes its own
-on `:9363`. Details: [`docs/operations/observability.md`](./docs/operations/observability.md).
+24 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 5 ClickHouse (down, memory,
+query failures, bronze insert rate, merge queue), 9 Iceberg offload (lag, consecutive failures, cycle time,
+watermark staleness, scheduler down), 10 v3 capture (down, feed stale, sequence gaps, checksum failure,
+produce errors/stalled, resync storm, ingress latency, book depth, precision loss). The 3 feed-handler
+rules retired with the handlers (ADR-019) and are archived at
+[`legacy/v2-kotlin/runbooks/feed-handler-alerts.yml`](./legacy/v2-kotlin/runbooks/feed-handler-alerts.yml).
+Capture exposes Prometheus metrics on `:8082/metrics`; ClickHouse exposes its own on `:9363`. Details: [`docs/operations/observability.md`](./docs/operations/observability.md).
 
 ## Reliability testing
 
@@ -208,7 +208,7 @@ services/feed-handler-kotlin/   Kotlin/Ktor feed handler (one image, three conta
 services/capture-rust/          Rust k2-capture: trades + L2 book, one binary per exchange (v3, Phase C)
 docker/clickhouse/ddl/          Bronze → Silver → Gold DDL and materialized views (auto-applied)
 docker/offload/                 Spark offload job + Prefect flows (offload, maintenance)
-docker/prometheus/rules/        27 alert rules
+docker/prometheus/rules/        24 alert rules
 docker/grafana/dashboards/      5 provisioned dashboards
 docker/spark/  docker/prefect/  Custom images
 config/instruments.yaml         Instrument registry — single source of truth
@@ -221,7 +221,7 @@ docker-compose.yml              The whole stack
 
 ## Where v2 falls short — and the v3 roadmap
 
-v2 is complete and running: three exchanges, medallion in ClickHouse, Iceberg cold tier, 17 v2 alert rules,
+v2 is complete and running: three exchanges, medallion in ClickHouse, Iceberg cold tier, 14 v2 alert rules,
 13 runbooks. It is a good streaming pipeline and a poor research archive. This is a **quantitative-research**
 platform reading public WebSocket feeds over the open internet — it is **not a trading path**, and no number
 here should be read as one. What a quant actually needs from it — completeness they can prove, aggregations

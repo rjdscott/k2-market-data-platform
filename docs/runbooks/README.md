@@ -29,8 +29,8 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
-| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, feed-handler crash, offload failure, MinIO down, network partition | `ClickHouseDown`, `FeedHandlerDown`, `FeedHandlerHighErrorRate` |
-| [redpanda.md](./redpanda.md) | Topic, partition, consumer-group or schema-registry problems; broker health | `FeedHandlerHighErrorRate` |
+| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, capture crash, offload failure, MinIO down, network partition | `ClickHouseDown`, `CaptureDown`, `CaptureProduceErrors` |
+| [redpanda.md](./redpanda.md) | Topic, partition, consumer-group or schema-registry problems; broker health | `CaptureProduceErrors` |
 | [iceberg-offload-failure.md](./iceberg-offload-failure.md) | Offload runs erroring — ClickHouse unreachable, Spark crash, JDBC or timeout errors | `IcebergOffloadConsecutiveFailures` |
 | [iceberg-offload-lag.md](./iceberg-offload-lag.md) | Cold tier behind the 15-minute SLO and you need to catch up | `IcebergOffloadLagCritical`, `IcebergOffloadLagElevated` |
 | [iceberg-offload-performance.md](./iceberg-offload-performance.md) | Cycles running long or throughput dropping — volume spikes, resource contention | `IcebergOffloadCycleSlow`, `IcebergOffloadCycleTooSlow`, `IcebergOffloadThroughputLow` |
@@ -94,6 +94,14 @@ dangerous.
 | Root cause is a code bug | Open an issue, link the runbook section that failed |
 | More than 3 occurrences in 24 h | Stop restarting; find the cause |
 | Data loss suspected | Escalate immediately — reconcile hot vs cold using [../operations/data-inspection.md](../operations/data-inspection.md#warm-vs-cold-reconciliation) before taking any destructive action |
+
+## Archived v2 Kotlin runbooks
+
+The feed-handler crash procedure and the three `FeedHandler*` alert rules moved to
+[`legacy/v2-kotlin/runbooks/`](../../legacy/v2-kotlin/runbooks/) when the Kotlin capture
+tier retired ([ADR-019](../adr/ADR-019-rust-capture-tier.md)). The measured MTTR is kept
+as measured; the alerts and the `feed_handler_*` metric family no longer exist, so do not
+follow it against this stack.
 
 ## v1 runbooks
 
