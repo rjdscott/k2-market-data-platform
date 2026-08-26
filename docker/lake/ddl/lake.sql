@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS lake.raw.messages (
     kafka_ts    TIMESTAMP NOT NULL COMMENT 'Broker-assigned record timestamp (CreateTime from the producer)',
     ingest_ts   TIMESTAMP NOT NULL COMMENT 'When this ingest run started. Not per-row: it identifies the batch, and a per-row clock read would cost a call per record for no answerable question',
     key         BINARY           COMMENT 'Kafka message key, verbatim. The canonical symbol as UTF-8 for trades/book; null where capture set none',
-    schema_id   INT     NOT NULL COMMENT 'Confluent schema id, decoded from payload bytes 2-5. Derived and stored so stage 2 can group by it without re-reading every payload',
+    schema_id   INT              COMMENT 'Confluent schema id, decoded from payload bytes 2-5. NULL means the payload is not Confluent-framed: the bytes are still archived verbatim, stage 2 skips the row, and the audit counts it. Nullable so one foreign record cannot block every following ingest on the same offset',
     payload     BINARY  NOT NULL COMMENT 'The Kafka value byte for byte, INCLUDING the 5-byte Confluent header',
     headers     MAP<STRING, BINARY> COMMENT 'Kafka record headers; carries recv_ts_ns as ASCII digits (services/capture-rust/src/sink.rs)'
 )

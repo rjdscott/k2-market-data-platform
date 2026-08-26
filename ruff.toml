@@ -5,3 +5,10 @@ line-length = 100
 [lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]  # formatter owns line length
+
+[lint.isort]
+# docker/lake/*.py import each other by bare module name — they run inside the
+# Spark image with the script's own directory on sys.path, not as a package.
+# Without this, isort files them under third-party and interleaves `import wire`
+# with `import pyspark`.
+known-first-party = ["offsets", "spark_conf", "wire"]
