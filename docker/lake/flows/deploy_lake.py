@@ -5,9 +5,9 @@ service at start, before the worker itself starts.
 
     python /opt/prefect/lake-flows/deploy_lake.py
 
-These are the only deployments on the stack. v2's pair went with
-docker/offload/, and the `iceberg-offload` work pool they ran on went with them:
-this file and the compose command both name `lake`.
+These are the only deployments on the stack. v2's pair went with docker/offload/
+in Phase D, and so did the work pool they ran on: this file and the compose
+command both name `lake`, and they must not drift apart.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ def main() -> int:
         work_pool_name=WORK_POOL,
         # Minutes 1, 6, 11 … 56 — offset by one from `*/5`, and kept that way.
         #
-        # The offset was introduced when v2's `iceberg-offload` (`*/15`) shared
-        # this container: on `*/5` the two collided at :00, :15, :30 and :45 and
+        # The offset was introduced when v2's cold-tier job (`*/15`) shared this
+        # container: on `*/5` the two collided at :00, :15, :30 and :45 and
         # started two Spark drivers at once in a 2 CPU / 4 GiB box. That path is
         # gone, so the collision is gone with it — but the offset still costs
         # nothing (the ingest resumes from the offsets in its own last snapshot,
@@ -61,9 +61,10 @@ def main() -> int:
     )
     print(f"  lake-ingest-5min       {ingest_id}")
 
-    # 03:00 UTC, an hour after the v2 iceberg-maintenance-daily at 02:00, so the
-    # two compactions do not contend for the same Spark container during the
-    # parallel-run window.
+    # 03:00 UTC. Chosen an hour after v2's nightly maintenance at 02:00 so the two
+    # compactions could not contend for this Spark container; that job is gone,
+    # and the hour is kept because moving a cron buys nothing and loses the
+    # comparability of every timing measured against it so far.
     maintenance_id = lake_maintenance.from_source(
         source=SOURCE, entrypoint="lake_flows.py:lake_maintenance"
     ).deploy(

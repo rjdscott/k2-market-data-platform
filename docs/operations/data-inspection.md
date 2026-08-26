@@ -1,8 +1,8 @@
 # Data Inspection
 
-How to look at the data at every hop: Redpanda → ClickHouse bronze → silver → gold →
-Iceberg cold. Every query below matches the as-built schema; column names differ
-between layers, so copy them rather than guessing.
+How to look at the data at every hop: Redpanda → ClickHouse bronze → silver → gold, and
+Redpanda → the Iceberg lake. Every query below matches the as-built schema; column names
+differ between layers, so copy them rather than guessing.
 
 Load credentials into your shell first, then set a shorthand:
 
@@ -20,13 +20,20 @@ CH="docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD"
 | Bronze | `k2.bronze_trades_{binance,kraken,coinbase}` | `exchange_timestamp` | `sequence_number`, `symbol`, `price`, `quantity`, `quote_volume`, `event_time`, `kafka_offset`, `kafka_partition`, `ingestion_timestamp` |
 | Silver | `k2.silver_trades` | `timestamp` | `exchange`, `canonical_symbol`, `side`, `trade_id`, `price`, `quantity`, `is_valid`, `ingestion_timestamp`, `processed_at` |
 | Gold | `k2.ohlcv_{1m,5m,15m,30m,1h,1d}` | `window_start` | `exchange`, `canonical_symbol`, `open_price`, `high_price`, `low_price`, `close_price`, `volume`, `quote_volume`, `trade_count` |
-| Cold | `k2.cold.bronze_trades_*`, `k2.cold.silver_trades`, `k2.cold.gold_ohlcv_*` | as above | Iceberg, queried through Spark |
+| Lake archive | `lake.raw.messages` | `kafka_ts` | `topic`, `partition`, `offset`, `ingest_ts`, `key`, `schema_id`, `payload`, `headers` |
+| Lake bronze | `lake.bronze.trades` | `exchange_ts` | `exchange`, `symbol`, `canonical_symbol`, `trade_id`, `price`, `qty`, `side`, `recv_ts_ns`, `seq`, `conn_id`, `conn_msg_seq`, `src_topic`/`src_partition`/`src_offset`, `ingest_ts` |
+| Lake bronze | `lake.bronze.book_snapshots_l2` | `snapshot_ts` | as above plus `depth`, `checksum_ok`, `bids`, `asks`, `snapshot_ts_ns` |
+| Lake audit | `lake.audit.checks` | `run_ts` | `job`, `check_name`, `scope`, `passed`, `observed`, `detail` |
 
-Bronze tables carry **no** `exchange` column — the exchange is the table. Silver adds it
-during unification. Gold windows have a `window_start` only; there is no `window_end`.
+ClickHouse bronze tables carry **no** `exchange` column — the exchange is the table. Silver
+adds it during unification. Gold windows have a `window_start` only; there is no
+`window_end`.
 
-`cold.silver_trades` drops `trade_conditions`, `vendor_data` and `validation_errors` —
-Spark's JDBC reader cannot deserialize ClickHouse `Array(String)` / `Map(String,String)`.
+The **lake** tables invert that: one `bronze.trades` for all three venues with `exchange`
+as the leading partition field ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)),
+and `raw.messages` holding the Kafka value byte for byte, framing included, as the system
+of record ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)). `price`/`qty` are
+`DECIMAL(28,10)` — the wire's int64 at 1e-8 divided by 1e8, exact and unrounded.
 
 ## Redpanda
 
@@ -140,59 +147,89 @@ $CH -q "SELECT canonical_symbol, window_start, sum(volume) AS volume, sum(trade_
         GROUP BY canonical_symbol, window_start ORDER BY window_start DESC FORMAT Pretty"
 ```
 
-## Cold tier — Iceberg via Spark
+## Lake tier — Iceberg via Spark
 
-The offload uses a **hadoop catalog** (no REST catalog service). The warehouse is a
-directory bind-mounted from `docker/iceberg/warehouse` into the Spark container at
-`/home/iceberg/warehouse`. Reproduce the offload job's session config to query it:
+The lake lives on a **Lakekeeper REST catalog** over MinIO
+([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)) — one catalog, named `lake`, with the
+`raw`, `bronze` and `audit` namespaces. Its configuration lives in exactly one place,
+[`docker/lake/spark_conf.py`](../../docker/lake/spark_conf.py); every v3 Spark job gets its
+session from `lake_session()`, so query it the same way rather than reassembling a dozen
+`--conf` flags:
 
 ```bash
-docker exec -it k2-spark-iceberg spark-sql \
-  --conf spark.sql.catalog.k2=org.apache.iceberg.spark.SparkCatalog \
-  --conf spark.sql.catalog.k2.type=hadoop \
-  --conf spark.sql.catalog.k2.warehouse=/home/iceberg/warehouse \
-  --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+# Round-trip the catalog first — create, append, read, drop. Proves the session
+# and the snapshot-property mechanism the offsets ride on.
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/spark_conf.py --smoke
+
+# An ad-hoc query through the same builder
+docker exec -i k2-spark-iceberg python3 - <<'PY'
+import sys; sys.path.insert(0, "/home/iceberg/lake")
+from spark_conf import lake_session
+spark = lake_session("k2-adhoc")
+spark.sql("SELECT topic, count(*) FROM lake.raw.messages GROUP BY topic").show(truncate=False)
+spark.stop()
+PY
 ```
 
-Then:
+Queries worth having:
 
 ```sql
-SHOW TABLES IN k2.cold;
+SHOW TABLES IN lake.bronze;
 
-SELECT count(*) FROM k2.cold.silver_trades;
-SELECT exchange, count(*) FROM k2.cold.silver_trades GROUP BY exchange;
+SELECT exchange, count(*) FROM lake.bronze.trades GROUP BY exchange;
 
--- Snapshot history (what each 15-minute offload appended)
-SELECT snapshot_id, committed_at, operation, summary['added-records']
-FROM k2.cold.silver_trades.snapshots ORDER BY committed_at DESC LIMIT 10;
+-- Snapshot history, with the committed Kafka offsets that make it exactly-once
+SELECT snapshot_id, committed_at, operation,
+       summary['added-records']    AS rows,
+       summary['k2.kafka-offsets'] AS offsets
+FROM lake.raw.messages.snapshots ORDER BY committed_at DESC LIMIT 10;
 
--- File layout — the daily maintenance flow compacts these to ~128 MB
-SELECT count(*) AS files, sum(file_size_in_bytes) / 1024 / 1024 AS mb
-FROM k2.cold.bronze_trades_binance.files;
+-- File layout — nightly maintenance compacts raw.messages toward 256 MB,
+-- bronze.* toward 128 MB
+SELECT partition, count(*) AS files,
+       round(avg(file_size_in_bytes) / 1048576, 1) AS avg_mb
+FROM lake.raw.messages.files GROUP BY partition ORDER BY partition DESC LIMIT 10;
+
+-- What the nightly audit found
+SELECT run_ts, job, check_name, scope, passed, observed, detail
+FROM lake.audit.checks ORDER BY run_ts DESC LIMIT 20;
 ```
 
-Same config from PySpark — see [`docker/offload/offload_generic.py`](../../docker/offload/offload_generic.py)
-for the canonical session builder.
+**Reading the lake from ClickHouse: `iceberg()` only.** The
+`s3('…/data/*.parquet')` glob is banned — it reads the object listing rather than the
+current Iceberg metadata and returns files no live snapshot references, which fails as a
+plausible number rather than as an error. See
+[lake-recovery.md](../runbooks/lake-recovery.md).
 
-## Warm vs. cold reconciliation
+## Hot vs. lake reconciliation
 
-Cold accumulates history past the ClickHouse TTL (7 days bronze, 30 days silver), so
-cold row counts exceeding hot is expected. What should match is the overlapping window:
+The lake accumulates history past the ClickHouse TTL (7 days bronze, 30 days silver), so
+lake row counts exceeding the hot tier is expected. Two things are worth comparing on an
+overlapping window:
 
 ```bash
 # Hot side
-$CH -q "SELECT count() FROM k2.silver_trades WHERE timestamp >= '2026-02-18 00:00:00'"
+$CH -q "SELECT exchange, count() FROM k2.silver_trades WHERE timestamp >= '2026-08-26 00:00:00' GROUP BY exchange"
 ```
 
 ```sql
--- Cold side, same window
-SELECT count(*) FROM k2.cold.silver_trades WHERE timestamp >= TIMESTAMP '2026-02-18 00:00:00';
+-- Lake side, same window
+SELECT exchange, count(*) FROM lake.bronze.trades
+WHERE exchange_ts >= TIMESTAMP '2026-08-26 00:00:00' GROUP BY exchange;
 ```
 
-Gold tables can differ by a few percent because ClickHouse background part merges are
-still in flight when the offload snapshot is taken. The daily audit in
-[prefect-schedules.md](./prefect-schedules.md) treats that as expected and only fails on
-missing tables or errors.
+**During the Phase C parallel run these are two independently captured paths** — the
+ClickHouse tier reads the v2 Kotlin topics, the lake reads the v3 capture topics — so an
+exact match is not the expectation and a small divergence is not a finding.
+`scripts/parity/compare_trades.py` is the tool that compares them properly, on
+`(exchange, symbol, trade_id)` with a fixed-point tolerance; it is the evidence
+[ADR-019](../adr/ADR-019-rust-capture-tier.md)'s Kotlin retirement rests on.
+
+What *is* a hard invariant is internal to the lake, and the nightly audit checks it:
+`raw.messages` holds an unbroken offset run per `(topic, partition)`, and no two
+`bronze.*` rows share their identifier fields. See
+[prefect-schedules.md](./prefect-schedules.md) and
+[lake-audit-failed.md](../runbooks/lake-audit-failed.md).
 
 ## Storage and export
 

@@ -1,6 +1,6 @@
 # ADR-014: Spark-Based Iceberg Offload (Not Kotlin Service)
 
-**Status:** Accepted (Supersedes Kotlin approach in Phase 5 plan) — **superseded by [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md)**
+**Status:** Accepted (Supersedes Kotlin approach in Phase 5 plan) — **superseded by [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md)**; implementation deleted 2026-08-27, see Outcome
 **Date:** 2026-02-11
 **Deciders:** Platform Engineering
 **Related Phase:** Phase 5 (Cold Tier Restructure)
@@ -476,3 +476,31 @@ Run 2: Read trades 1-1000 again → Iceberg deduplicates by trade_id → No dupl
 - Use case: Non-critical metrics
 
 **Chosen**: Exactly-once (market data requires correctness)
+
+---
+
+## Outcome (2026-08-27)
+
+The offload ran as designed for six months and was deleted in v3 Phase D. The mechanism
+was never the problem — the watermark held, killed runs resumed without duplicates, and
+Spark cost nothing the stack was not already paying. What this ADR got wrong is one level
+up: it decided *how* to copy ClickHouse into Iceberg without asking whether the archive
+should be a copy of a serving database at all. It should not. The lake inherited
+ClickHouse's normalisation, its 7-day TTL and the two `Array`/`Map` columns the JDBC
+driver could not deserialize, so nothing in it was reproducible from source.
+[ADR-021](ADR-021-raw-first-archive-and-lineage.md) inverts that — Redpanda frames land
+in `raw.messages` verbatim and everything else is derived — and
+[ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md) replaces the PostgreSQL watermark
+with the consumed offsets written into the same Iceberg commit as the rows: the same
+exactly-once guarantee with one store instead of two.
+
+The plan called for a 2-hour parallel run of both paths before deletion. It was dropped on
+the maintainer's decision (2026-08-27): the Kotlin feed handlers retired in the preceding
+PR, which froze the `k2.*` ClickHouse tables the offload reads, so the comparison would
+have measured a frozen watermark against a live ingest — a green table meaning nothing. v2
+data is disposable (`docs/research/2026-08-26-v3-requirements-clarification.md`, Q7). Gone
+with it: `docker/offload/`, `docker/iceberg/`, the `offload_watermarks` table, the
+`iceberg-metrics` and `iceberg-init` compose services, 9 alert rules, one Grafana
+dashboard, 28 tests, and the `clickhouse-jdbc` / `psycopg2` dependencies from the Spark
+image. The six operational runbooks — including the one this document's Implementation
+section lists — are archived unmodified in `legacy/v2-offload/`.

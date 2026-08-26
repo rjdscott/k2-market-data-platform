@@ -16,8 +16,8 @@ RUN apt-get update \
 # ─────────────────────────────────────────────────────────────────────────────
 # prometheus-client: docker/lake/metrics.py serves the lake gauges in the
 # lake-metrics service, which reuses this image.
-# psycopg2-binary: no longer imported by anything in this repo — it went with
-# docker/offload/watermark_pg.py in Phase D — but tests/ still install it via
-# `make test-python`, so it is dropped here and nowhere else.
+# psycopg2-binary was dropped in Phase D: the only thing that imported it was
+# the v2 offload's PostgreSQL watermark module, deleted with the rest of
+# docker/offload/. Nothing in docker/lake/ talks to PostgreSQL.
 RUN pip install --no-cache-dir \
     prometheus-client==0.21.1

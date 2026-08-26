@@ -4,7 +4,7 @@ What this platform is for, what it is measurably good at, and the workloads it i
 
 ## What it is
 
-A single-host crypto market-data platform that takes live exchange trades and makes them queryable as OHLCV candles in **under 200 ms p99**, then lands them in an open table format for history. It runs three exchanges on 15.1 CPU / 21.875 GB (v2 baseline); with the capture tier swapped for v3's Rust `k2-capture` ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) and the v3 lake tier running beside the v2 offload it replaces ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)), the steady state is **14.70 CPU / 21.750 GiB across 16 long-running services** (bootstrap peak 16.70 CPU / 24.250 GiB across 21, with the five one-shots), falling to 14.60 CPU / 21.625 GiB across 15 once the v2 offload retires. The capture tier now carries L2 order books the v2 one never had. Source: `docker compose --env-file .env.example config`, limits summed ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
+A single-host crypto market-data platform that takes live exchange trades and makes them queryable as OHLCV candles in **under 200 ms p99**, then lands them in an open table format for history. It runs three exchanges on 15.1 CPU / 21.875 GB (v2 baseline); with the capture tier swapped for v3's Rust `k2-capture` ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) and Phase D finished — the v2 ClickHouse→Iceberg offload deleted, the v3 lake the only lake ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)) — the steady state is **14.60 CPU / 21.625 GiB across 15 long-running services** (bootstrap peak 16.10 CPU / 23.125 GiB across 19, with the four one-shots). The capture tier now carries L2 order books the v2 one never had. Source: `docker compose --env-file .env.example config`, limits summed ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
 
 The design centre is the **warm path**: fast enough that a dashboard or a monitor reads current market state without feeling stale, durable enough that a year of history is one `SELECT` away, and small enough to run on one machine. That is a narrower target than "market data platform" usually implies, and the narrowness is the point.
 
@@ -17,7 +17,7 @@ flowchart TB
     L3["<b>Cold · seconds to minutes</b><br/>Backtesting, compliance, ML features<br/>Lakehouse, warehouse"]
 
     L1 -->|"post-trade"| L2
-    L2 -->|"offload every 15 min"| L3
+    L2 -->|"batch archive"| L3
 
     classDef hot fill:#fecaca,stroke:#b91c1c,color:#1f2937
     classDef warm fill:#bbf7d0,stroke:#15803d,color:#1f2937
@@ -27,7 +27,7 @@ flowchart TB
     class L3 cold
 ```
 
-K2 spans the warm tier and the cold tier: ClickHouse is the warm store, Iceberg is the cold one, and the 15-minute Spark offload is the bridge. It is nowhere near the hot tier and is not trying to be — it sits after execution, never in front of it.
+K2 spans the warm tier and the cold tier: ClickHouse is the warm store and Iceberg is the cold one. They are siblings rather than a chain — since Phase D both are fed from Redpanda, ClickHouse by its Kafka-engine consumers and the lake by a 5-minute Spark batch ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)) — so the archive is not a copy of a serving database, and losing the hot tier costs a rebuild rather than data ([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)). It is nowhere near the hot tier and is not trying to be — it sits after execution, never in front of it.
 
 ## Fits
 
@@ -37,7 +37,7 @@ K2 spans the warm tier and the cold tier: ClickHouse is the warm store, Iceberg 
 
 **Cross-exchange comparison.** Three venues normalized to one `canonical_symbol` in `silver_trades`. Comparing BTC/USD across Binance, Kraken and Coinbase is a `GROUP BY exchange` — the normalization that makes that work is the platform's main piece of domain logic.
 
-**Learning the medallion pattern end to end.** Bronze/Silver/Gold, hot/cold tiering, watermark-based idempotent offload, table-format maintenance — all present, all small enough to read in an afternoon.
+**Learning the medallion pattern end to end.** Bronze/Silver/Gold, hot/cold tiering, idempotent batch ingest with the offsets in the snapshot summary, table-format maintenance — all present, all small enough to read in an afternoon.
 
 ## Does not fit
 

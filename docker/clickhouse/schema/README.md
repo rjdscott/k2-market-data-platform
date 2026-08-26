@@ -40,7 +40,7 @@ predate the v2 bronze cutover. Read them for history, not for truth.
 ## Related
 
 - `../ddl/` — what actually runs on container init
-- `../../postgres/ddl/offload-watermarks.sql` — Iceberg offload watermarks live in
-  PostgreSQL, not ClickHouse (ADR-014)
-- `../../iceberg/warehouse/cold/` — cold-tier Iceberg schemas; bronze/silver/gold
-  column names and types must stay in lock step with `ddl/01-k2-schema.sql`
+- `../../lake/ddl/lake.sql` — the Iceberg lake tables. They are **not** derived
+  from the DDL here and do not have to match it: v3 Phase D deleted the offload
+  that copied ClickHouse into Iceberg, and the lake is now the system of record
+  ([ADR-021](../../../docs/adr/ADR-021-raw-first-archive-and-lineage.md))

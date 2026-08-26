@@ -97,7 +97,7 @@ renamed**, for the life of the record type.
    wrong and the `doc` explains it.
 3. **Never change a type.** `int` → `long` is promotable in the Avro spec and is
    still not allowed here, because Iceberg and ClickHouse do not agree on
-   promotion rules and the failure would land at the offload boundary hours
+   promotion rules and the failure would land at the lake ingest boundary hours
    later. Add a new field instead.
 4. **A new record shape is a new topic.** Reshaping `Trade` into something
    version 1 cannot be read as is not an evolution — it is `TradeV2` on

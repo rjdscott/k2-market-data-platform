@@ -448,10 +448,10 @@ services:
       PYTHONPATH: /opt/prefect
       DOCKER_API_VERSION: "1.44"
     # Register (upsert) the two lake deployments, then start the worker.
-    # v2's `iceberg-offload` pool and its two deployments went with
-    # docker/offload/: a fresh clone must not register deployments whose code no
-    # longer exists. A stack upgraded in place still shows the dead pool until
-    # `prefect work-pool delete iceberg-offload` is run once by hand.
+    # v2's cold-tier pool and its two deployments went with docker/offload/ in
+    # Phase D: a fresh clone must not register deployments whose code no longer
+    # exists. A stack upgraded in place keeps the old, empty pool until someone
+    # deletes it by hand — `prefect work-pool ls` shows it, nothing runs on it.
     command: >
       sh -c "prefect work-pool create lake --type process 2>/dev/null || true
       && python /opt/prefect/lake-flows/deploy_lake.py
@@ -995,10 +995,10 @@ services:
 # against a 16.0 target the peak is 0.10 CPU over for the length of a bootstrap.
 #
 # Retiring the three Kotlin feed handlers (ADR-019) gave back exactly the
-# 1.5 CPU / 1.5 GB they declared, and deleting docker/offload/ took
-# `iceberg-metrics` (0.1 CPU / 128M) and `iceberg-init` (0.5 CPU / 1G one-shot)
-# with it. Steady state is 14.60 CPU / 21.625 GiB across 15 — 1.40 CPU of
-# headroom under the target, where the Phase C+D parallel runs were over it.
+# 1.5 CPU / 1.5 GB they declared, and deleting docker/offload/ took its metrics
+# exporter (0.1 CPU / 128M) and its DDL one-shot (0.5 CPU / 1G) with it. Steady
+# state is 14.60 CPU / 21.625 GiB across 15 — 1.40 CPU of headroom under the
+# target, where the Phase C+D parallel runs were over it.
 #
 # Recompute after any limit change (the ADR-010 Outcome addendum carries the
 # same command and its dated output):
@@ -1008,5 +1008,5 @@ services:
 # Target: 16 CPU / 40 GB total
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-08-27 (v3 Phase D: v2 offload path deleted — -iceberg-metrics, -iceberg-init)
+# Last updated: 2026-08-27 (v3 Phase D: v2 offload path deleted — -1 service, -1 one-shot)
 #############################################################################

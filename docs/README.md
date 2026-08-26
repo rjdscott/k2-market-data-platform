@@ -39,7 +39,7 @@ research/  →  adr/  →  plans/  →  audits/
 | [plans/](plans/) | Multi-phase design documents with exit criteria per phase | [README](plans/README.md) |
 | [audits/](audits/) | Point-in-time sweeps of one surface, with a findings table | [README](audits/README.md) |
 | [benchmarks/](benchmarks/) | Dated measurement snapshots. Every published number traces here | [README](benchmarks/README.md) |
-| [runbooks/](runbooks/) | 17 incident procedures (8 v2 + 5 v3 capture + 4 v3 lake), one per alert family, with measured MTTR | [README](runbooks/README.md) · [template](runbooks/template.md) |
+| [runbooks/](runbooks/) | 11 incident procedures (2 v2 + 5 v3 capture + 4 v3 lake), one per alert family, with measured MTTR | [README](runbooks/README.md) · [template](runbooks/template.md) |
 
 ## Reference
 

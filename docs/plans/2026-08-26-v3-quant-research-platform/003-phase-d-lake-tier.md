@@ -127,3 +127,32 @@ shipped. The plan is left as written; the reasons are here.
   table's life; `LakeCompactionStale` measures the rewrite job instead.
   `LakeExporterStalled` and `LakeScrapeErrors` were added because a Lakekeeper outage
   freezes every other gauge — which is why nothing here exports an age any more.
+
+- **The 2-hour parallel run of the old offload against the new ingest was dropped, and
+  `docker/offload/` was deleted without it** (maintainer decision, 2026-08-27). The Kotlin
+  feed handlers retired in the PR immediately before this one, which stops every producer
+  feeding the `k2.*` ClickHouse tables the offload reads. A parallel run from that point
+  measures a frozen watermark against a live ingest: the offload would report zero lag and
+  zero rows because there is nothing left to offload, and no row-count comparison between
+  the two paths could say anything. The window would have produced a green table meaning
+  nothing, and two Spark drivers in one 4 GiB container for two hours to produce it. v2
+  data is disposable (`../../research/2026-08-26-v3-requirements-clarification.md`, Q7), so
+  there was nothing to protect by keeping the old path alive.
+
+  The "Watch `k2-spark-iceberg` RSS for the whole parallel window" note above is therefore
+  moot as written — there is no window and only one driver in that container. The sizing it
+  produced is kept: `spark.driver.memory` stays pinned at 1 g and the ingest cron stays
+  `1-59/5`, because two drivers can still coexist there (a maintenance run, or an
+  operator's `docker exec` during an incident) and the reasoning survives the parallel run
+  that prompted it.
+
+  Deleted with it: `docker/offload/`, `docker/iceberg/` (hadoop DDL, validation, the
+  bind-mounted warehouse), `docker/postgres/ddl/offload-watermarks.sql`,
+  `iceberg-offload-alerts.yml` (9 rules), `iceberg-offload.json`, the `iceberg-metrics` and
+  `iceberg-init` compose services, the `iceberg-scheduler` scrape job,
+  `tests/test_iceberg_maintenance_flow.py` (28 tests), the two v2 Prefect deployments and
+  the `iceberg-offload` work pool, and `clickhouse-jdbc` / `psycopg2` from the images. The
+  six operational runbooks are archived in `legacy/v2-offload/`. The reasoning is recorded
+  in the Outcome sections of [ADR-014](../../adr/ADR-014-spark-based-iceberg-offload.md)
+  and [ADR-017](../../adr/ADR-017-iceberg-maintenance-pipeline.md), and the budget in
+  [ADR-010](../../adr/ADR-010-resource-budget.md)'s Phase D cutover addendum.

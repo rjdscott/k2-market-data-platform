@@ -25,7 +25,7 @@ key" — but the offload as built does a plain `.append()` with no merge and no 
 (`docker/offload/offload_generic.py`), so the third layer does not exist in the code.
 The v2 guarantee is at-least-once with a small window, and the operational evidence is
 that the window needed a runbook of its own:
-[`iceberg-offload-watermark-recovery.md`](../runbooks/iceberg-offload-watermark-recovery.md)
+[`iceberg-offload-watermark-recovery.md`](../../legacy/v2-offload/runbooks/iceberg-offload-watermark-recovery.md)
 covers a watermark "stuck, stale, wedged in `running`, or needs rewinding". A position
 store that needs a recovery procedure for its own state machine is a second system.
 
@@ -131,7 +131,7 @@ it would preserve the failure mode while adding the code to detect it.
 
 | Option | Why not |
 |--------|---------|
-| **Keep the PostgreSQL `offload_watermarks` table**, pointed at offsets instead of timestamps | Fixes the timestamp problem and leaves the two-store problem: the commit and the position update are still not atomic, so the crash window survives and so does [the watermark recovery runbook](../runbooks/iceberg-offload-watermark-recovery.md). It also keeps PostgreSQL on the archive's critical path, where a Prefect database outage stops the system of record from advancing. |
+| **Keep the PostgreSQL `offload_watermarks` table**, pointed at offsets instead of timestamps | Fixes the timestamp problem and leaves the two-store problem: the commit and the position update are still not atomic, so the crash window survives and so does [the watermark recovery runbook](../../legacy/v2-offload/runbooks/iceberg-offload-watermark-recovery.md). It also keeps PostgreSQL on the archive's critical path, where a Prefect database outage stops the system of record from advancing. |
 | **Spark Structured Streaming with a checkpoint directory** | The framework's own answer, and it costs a resident streaming runtime against a binding CPU budget — [ADR-004](ADR-004-eliminate-spark-streaming.md) deleted exactly this to buy 13.5 CPU back. The checkpoint is also a second store with the same atomicity gap against the Iceberg commit, plus a directory whose format is Spark's business and whose corruption is a known v1 incident class. |
 | **Kafka consumer-group offsets** (commit back to Redpanda) | The idiomatic Kafka answer and the least atomic of all of them: the offset commit is a separate round trip to a separate system, so the crash window is exactly what it was in v2. It also makes the broker's retention the archive's memory, and the broker keeps 48 h. |
 | **Idempotent writes keyed on `(topic, partition, offset)`** — MERGE instead of append | Genuinely exactly-once and pays for it on every row: a merge-on-read or copy-on-write MERGE against a table with no useful key distribution, at 700 records/s, rewriting files to delete duplicates that a correct start offset never creates. Spike S11 also left merge-on-read deletes untested against ClickHouse's `iceberg()` reader, so this would put an unverified read path under the rebuild story. |

@@ -3,7 +3,10 @@
 This directory holds the operational runbooks for the v2 cold-tier offload path,
 which was deleted in v3 Phase D. Nothing here is maintained, wired to an alert,
 or runnable against the current stack — the code, the alert rules, the dashboard
-and the tables they all talk about are gone.
+and the tables they all talk about are gone. The runbooks are archived exactly as
+they were: their relative links point at the paths they had under `docs/runbooks/`
+and were not rewritten, because rewriting them would edit a record of how the
+system was operated.
 
 ## What it was
 

@@ -6,7 +6,7 @@ Six rules the design is actually held to. Each one has a place in the codebase w
 
 ### 1. The resource budget is a hard constraint, not a goal
 
-16 cores, 40 GB, one host. Every service in [`docker-compose.yml`](../../docker-compose.yml) carries explicit `deploy.resources.limits`, and the total is checked at every phase boundary. As built (v2): **15.1 CPU / 21.875 GB across 14 services** (+2 one-shot). v3 added Lakekeeper (+0.25 CPU / +256 MB), swapped three Kotlin feed handlers (−1.5 CPU / −1.5 GB) for three Rust capture containers (+0.75 CPU / +1 GB), and added the lake tier's `lake-metrics` exporter (+0.1 CPU / +128 MB) and `lake-ddl` one-shot: **14.70 CPU / 21.750 GiB across 16 (+5 one-shot, 2.00 CPU / 2.500 GiB, bootstrap peak 16.70 / 24.250) as deployed here**. Retiring `iceberg-metrics` with the rest of `docker/offload/` lands it at 14.60 CPU / 21.625 GiB across 15. Every figure: `docker compose --env-file .env.example config`, limits summed ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
+16 cores, 40 GB, one host. Every service in [`docker-compose.yml`](../../docker-compose.yml) carries explicit `deploy.resources.limits`, and the total is checked at every phase boundary. As built (v2): **15.1 CPU / 21.875 GB across 14 services** (+2 one-shot). v3 added Lakekeeper (+0.25 CPU / +256 MB) and the lake tier's `lake-metrics` exporter (+0.1 CPU / +128 MB), swapped three Kotlin feed handlers (−1.5 CPU / −1.5 GB) for three Rust capture containers (+0.75 CPU / +1 GB), and deleted the v2 offload's exporter (−0.1 CPU / −128 MB): **14.60 CPU / 21.625 GiB across 15 (+4 one-shot, 1.50 CPU / 1.500 GiB, bootstrap peak 16.10 / 23.125 across 19) as deployed here**. Every figure: `docker compose --env-file .env.example config`, limits summed ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
 
 This is first because it is the only principle that changed the architecture. "Reduce resource usage" produces tuning; a number you cannot exceed produces different decisions — five Spark Streaming jobs became materialized views, and a planned Kotlin stream processor was never written. Full accounting in [ADR-010](../adr/ADR-010-resource-budget.md).
 
@@ -16,11 +16,11 @@ This is first because it is the only principle that changed the architecture. "R
 
 ### 2. Idempotency over exactly-once
 
-Every batch job must be safe to kill and re-run. The Iceberg offload reads ClickHouse above a per-table watermark, appends, and only then advances the watermark in PostgreSQL. A run killed mid-flight leaves the watermark where it was and the next 15-minute cycle repeats the same range.
+Every batch job must be safe to kill and re-run. The lake ingest reads Redpanda by offset range and writes the offsets it consumed into the Iceberg snapshot summary of the very commit that wrote those rows ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). A run killed mid-flight either committed both or neither, so the next 5-minute cycle either repeats the same range or starts at its successor.
 
-No transactions, no two-phase commit, no coordination protocol — one number that moves last. Tested by killing the Spark container mid-offload: no duplicates, no gap, recovery on the next scheduled cycle.
+v2 got this from a PostgreSQL watermark advanced after the write — one number that moves last. The lake removes even that: there is no second store to order against, so there is no intermediate state to get wrong. Files written by a run that never committed are orphans no reader can see, and the nightly maintenance pass reclaims them with a 24-hour floor.
 
-**Where it bites:** a partial Iceberg write is possible in principle. It has not been observed, and the daily row-count audit ([ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md)) is what would catch it.
+**Where it bites:** the property holds for a *sequence* of runs, not for two concurrent ones — two racing appends both commit and the loser's offsets overwrite the winner's. `lake-ingest-5min` is deployed at concurrency 1 and `ingest.py` takes an exclusive `flock`, because the Prefect setting only gates the runs Prefect launched.
 
 ---
 
@@ -44,7 +44,7 @@ Verified rather than assumed: stopping the Binance container left Kraken and Coi
 
 ### 5. Use what is already running before adding something new
 
-ClickHouse already consumed from Kafka and already maintained incremental aggregates, so it did the stream processing — deleting five Spark Streaming jobs and a planned Kotlin Silver Processor. Redpanda has a schema registry built in, so there is no Confluent registry. Spark was already present for the offload, so no Iceberg SDK service was written ([ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md)).
+ClickHouse already consumed from Kafka and already maintained incremental aggregates, so it did the stream processing — deleting five Spark Streaming jobs and a planned Kotlin Silver Processor. Redpanda has a schema registry built in, so there is no Confluent registry. Spark was already present for batch, so no Iceberg SDK service was written ([ADR-006](../adr/ADR-006-spark-batch-only.md)).
 
 The strongest form of this: the best service is the one you notice you do not have to write. Three planned services were deleted from the plan mid-build for exactly this reason, and none was missed.
 
@@ -54,7 +54,7 @@ The strongest form of this: the best service is the one you notice you do not ha
 
 ### 6. Instrument it, then say what is not instrumented
 
-The Rust capture tier exposes Prometheus metrics on `:8082/metrics`; ClickHouse exposes Prometheus on `:9363`; 34 alert rules (13 v2 + 10 capture + 11 lake) are loaded from `docker/prometheus/rules/`; six Grafana dashboards are provisioned from source.
+The Rust capture tier exposes Prometheus metrics on `:8082/metrics`; ClickHouse exposes Prometheus on `:9363`; 25 alert rules (4 v2 ClickHouse + 10 capture + 11 lake) are loaded from `docker/prometheus/rules/`; five Grafana dashboards are provisioned from source.
 
 The second half is the part that matters. One gap is documented rather than glossed: no alert has been deliberately fired end to end. An undocumented gap is worse than a known one, because only one of them gets fixed.
 

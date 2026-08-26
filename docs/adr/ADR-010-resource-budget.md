@@ -505,3 +505,35 @@ landing steady state at **14.60 CPU / 21.625 GB**.
 
 Numbers from `DOCKER_CONTEXT=default docker compose --env-file .env.example config` summed
 over `deploy.resources.limits`, 2026-08-26.
+
+## Outcome addendum (v3 Phase D cutover, 2026-08-27)
+
+The addendum above budgeted for a parallel run that did not happen. `docker/offload/` was
+deleted rather than compared (the reason is in
+[ADR-014](ADR-014-spark-based-iceberg-offload.md)'s Outcome), so `lake-metrics` never ran
+beside `iceberg-metrics` and the second of the two overlaps was paid for on paper only.
+
+| Metric | Phase D as budgeted | Phase D cutover, as built |
+|--------|---------------------|---------------------------|
+| CPU limits (steady state) | 16.20 | **16.10** |
+| RAM limits (steady state) | 23.250 GiB | **23.125 GiB** |
+| Long-running services | 19 | **18** (`iceberg-metrics` gone) |
+| One-shot services | 5 | **4** (`iceberg-init` gone) |
+| CPU / RAM at bootstrap peak | 18.20 / 25.750 GiB | **17.60 / 24.625 GiB** |
+| Headroom vs 16 CPU / 40 GB | −1.3% CPU / 42% RAM | **−0.6% CPU / 42% RAM** |
+
+Steady state is back to 0.10 CPU over the 16-core target with **one** parallel run paying
+for it — Rust capture beside the Kotlin feed handlers — which is exactly where the Phase C
+addendum left it. Retiring `feed-handler-{binance,kraken,coinbase}` returns the remaining
+1.5 CPU / 1.5 GiB and lands steady state at **14.60 CPU / 21.625 GiB across 15**: 1.40 CPU
+(9%) and 18.375 GiB (46%) of headroom. That is the same end state the Phase D addendum
+predicted, reached one step earlier because the offload exporter never had to be retired
+separately.
+
+Deleting the offload also removed `clickhouse-jdbc-0.4.6-all.jar` and `psycopg2-binary`
+from the Spark image and `psycopg2-binary` from the Prefect image. Neither shows up in this
+table — image size is not in the budget — but both were carried solely for the JDBC read
+and the watermark table.
+
+Numbers from `DOCKER_CONTEXT=default docker compose --env-file .env.example config` summed
+over `deploy.resources.limits`, 2026-08-27.

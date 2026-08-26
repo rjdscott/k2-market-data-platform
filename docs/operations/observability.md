@@ -1,9 +1,9 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 34 alert rules (13 v2 + 10 v3 capture + 11 v3 lake)
+Prometheus scrapes the stack, Grafana renders it, and 25 alert rules (4 v2 + 10 v3 capture + 11 v3 lake)
 cover the things that actually break: capture goes down or silent, sequence gaps and book
-checksum failures, ClickHouse struggles, the cold-tier offload falls behind, and the lake
-ingest stops committing.
+checksum failures, ClickHouse struggles, and the lake ingest falls behind or its nightly
+audit fails.
 
 - Prometheus — http://localhost:9090 (`/targets`, `/alerts`)
 - Grafana — http://localhost:3000, `admin` / `$GRAFANA_PASSWORD`
@@ -22,7 +22,7 @@ container start, no click-ops.
 | `clickhouse` | `clickhouse:9363` | 15s | `<prometheus>` block in [`docker/clickhouse/config.xml`](../../docker/clickhouse/config.xml) |
 | `grafana` | `grafana:3000` | 15s | Grafana internal metrics |
 | `capture-{binance,kraken,coinbase}` | `capture-<x>:8082` | 15s | `k2-capture`, see below |
-| `iceberg-scheduler` | `iceberg-metrics:8000` | 15s | `docker/offload/metrics.py --serve`, see below |
+| `lake-metrics` | `lake-metrics:8000` | 30s | [`docker/lake/metrics.py`](../../docker/lake/metrics.py), see below |
 
 Port 8082 is **not published to the host**, and the capture image is distroless — no curl,
 no shell. Read the series through Prometheus:
@@ -66,9 +66,8 @@ recording rules for this tier.
 
 | Dashboard | UID | What it shows |
 |-----------|-----|---------------|
-| K2 Pipeline Overview | `k2-pipeline-overview` | The one to open first. Four rows: stack health (service up/down, trade records produced per exchange), ClickHouse (insert rate, memory, merge queue), Iceberg offload (lag, cycle duration, rows/sec), Redpanda (throughput, connections) |
+| K2 Pipeline Overview | `k2-pipeline-overview` | The one to open first. Three rows: stack health (service up/down, trade records produced per exchange), ClickHouse (insert rate, memory, merge queue), Redpanda (throughput, connections) |
 | ClickHouse Overview (v2) | `clickhouse-v2` | Query rate, memory gauge, insert rate, background merges — the warm tier in isolation |
-| Iceberg Offload Pipeline | `iceberg-offload` | Offload lag, success rate, rows/sec, duration quantiles, error rate, cycle status |
 | K2 Platform v2 — Migration Tracker | `k2-v2-migration` | Total CPU/RAM gauges against the 16-core budget, service up/down, Redpanda and ClickHouse rates |
 | K2 Capture (v3) | `k2-l2-capture` | The Rust capture tier, now the only ingestion tier: health (up, staleness, reconnects, gaps, checksum failures, resyncs), throughput (messages/bytes/records/produce errors), exchange→recv latency p50/p95/p99, book depth/levels/precision loss. `exchange` template variable filters all panels |
 | K2 Lake (v3) | `k2-lake` | Iceberg lake tier (Phase D): ingest lag and commit age per table, rows/files/bytes and mean file size, rows added by the last commit, audit failures, disk headroom, exporter scrape errors, and a maintenance row plotting compaction age per table and the exporter's own refresh age — the two alertable gauges that had no panel. Every panel reads an Iceberg snapshot summary — nothing here is an in-process counter |
@@ -77,11 +76,13 @@ recording rules for this tier.
 
 ## Alert rules
 
-34 rules across four files. Every annotation carries the diagnostic commands and a
+25 rules across three files. Every annotation carries the diagnostic commands and a
 runbook link; the tables below are the index. The three `FeedHandler*` rules retired with
 the Kotlin handlers ([ADR-019](../adr/ADR-019-rust-capture-tier.md)); their file is
 archived at [`legacy/v2-kotlin/runbooks/feed-handler-alerts.yml`](../../legacy/v2-kotlin/runbooks/feed-handler-alerts.yml)
-and `capture-alerts.yml` below is what replaced them.
+and `capture-alerts.yml` below is what replaced them. The nine `IcebergOffload*` rules went
+with the v2 offload path they watched, archived at
+[`legacy/v2-offload/runbooks/`](../../legacy/v2-offload/runbooks/).
 
 ### `clickhouse-alerts.yml` — warm tier (4)
 
@@ -94,29 +95,6 @@ and `capture-alerts.yml` below is what replaced them.
 
 Recording rule: `clickhouse:query_duration_mean:5m`. (`clickhouse:insert_rate:5m` was archived with
 `ClickHouseBronzeInsertRateLow` — same expression, and no dashboard ever read it.)
-
-### `iceberg-offload-alerts.yml` — cold tier (9)
-
-| Alert | Severity | Fires when |
-|-------|----------|-----------|
-| `IcebergOffloadConsecutiveFailures` | critical | ≥3 errors for one table within 15m |
-| `IcebergOffloadLagCritical` | critical | `offload_lag_minutes > 30` for 5m (SLO breach) |
-| `IcebergOffloadCycleTooSlow` | critical | A table's last run took >600s — risks overlapping the 15-min schedule |
-| `IcebergOffloadWatermarkStale` | critical | Watermark unchanged for >26h — hung-pipeline backstop |
-| `IcebergOffloadSchedulerDown` | critical | `iceberg-metrics` scrape target unreachable for 2m |
-| `IcebergOffloadSuccessRateLow` | warning | Success rate <95% over 15m |
-| `IcebergOffloadLagElevated` | warning | Lag between 20 and 30 min for 10m |
-| `IcebergOffloadThroughputLow` | warning | bronze/silver <0.1 rows/sec averaged over 1h |
-| `IcebergOffloadCycleSlow` | warning | A table's last run took 300–600s for 10m |
-
-The two lag alerts scope to `bronze_*`, `silver_trades`, `ohlcv_1m` and `ohlcv_5m`. A gold
-table's watermark tracks the last *completed* window, so `ohlcv_15m`/`30m`/`1h`/`1d` lag by
-design and can never satisfy a 30-minute SLO; `IcebergOffloadWatermarkStale` is their
-backstop. `IcebergOffloadThroughputLow` uses a 1-hour window because offloads run on a
-15-minute batch cadence — a 5-minute rate is zero most of the time for every table.
-
-Recording rules: `iceberg_offload:cycle_count:5m`, `iceberg_offload:duration_avg:5m`,
-`iceberg_offload:rows_rate:5m`.
 
 ### `capture-alerts.yml` — v3 capture tier, the live ingestion path (10)
 
@@ -168,56 +146,61 @@ freezes at its last small value during exactly the outage it is the backstop for
 | `LakeScrapeErrors` | warning | `k2_lake_scrape_errors_total > 0` for 5m — the catalog is up and a table is not |
 | `LakeDiskUsageHigh` | warning | `k2_lake_disk_used_ratio > 0.80` for 15m. **The rule is tested, the metric is host-dependent** — on a Docker Desktop host `os.statvfs` sees the VM's thin-provisioned disk (0.344) and not the machine's (0.79). See `docker/lake/README.md` |
 
-These ten are the only rules in the repo with unit tests:
+These eleven are the only rules in the repo with unit tests:
 `docker/prometheus/rules/tests/lake-alerts_test.yml`, run by `make check-docs` gate (c2).
 Each case is either "must fire on a synthetic series" or "must not fire on healthy
 input" — an alert that cannot fire and an alert that always fires are the same bug, and
 this file had one of each before it was written.
 
-### How the offload metrics are produced
+### How the lake metrics are produced
 
-The `offload_*` metrics come from the **`iceberg-metrics`** service, which runs
-[`docker/offload/metrics.py`](../../docker/offload/metrics.py) `--serve` and is scraped on
-`iceberg-metrics:8000` as Prometheus job `iceberg-scheduler`.
+Every `k2_lake_*` series comes from the **`lake-metrics`** service, which runs
+[`docker/lake/metrics.py`](../../docker/lake/metrics.py) `--serve` and is scraped on
+`lake-metrics:8000` as Prometheus job `lake-metrics`, every 30s.
 
-Every metric is derived from the PostgreSQL `offload_watermarks` table, re-read every 15s
-— not from counters inside the flow. Prefect runs each flow in a short-lived subprocess
-that exits long before Prometheus scrapes it, so in-process counters were never
-observable. The watermark row is the durable record of what the pipeline did.
+**Nothing here is an in-process counter.** Each refresh loads the four lake tables from the
+Lakekeeper REST catalog and reads their current snapshot summary — the same property bag
+the ingest and maintenance jobs write their position into
+([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). Prefect runs each flow in
+a short-lived subprocess that exits long before Prometheus scrapes it, so a counter inside
+the job was never observable; the committed snapshot is the durable record of what ran.
 
-It is a separate service rather than a sidecar in `prefect-worker` on purpose: if the
-worker crashes, the exporter keeps reporting the rising offload lag that these alerts
-exist to catch.
+It is a separate 128 MB service rather than a sidecar in `prefect-worker` on purpose: if the
+worker crashes, the exporter keeps reporting the rising ingest lag these alerts exist to
+catch.
 
-| Metric | Type | Source column |
-|--------|------|---------------|
-| `offload_lag_minutes{table}` | gauge | `now() - last_offload_timestamp` |
-| `watermark_timestamp_seconds{table}` | gauge | `last_offload_timestamp` |
-| `offload_last_duration_seconds{table}` | gauge | `last_run_duration_seconds` |
-| `offload_last_rows_per_second{table}` | gauge | `last_offload_row_count / last_run_duration_seconds` |
-| `offload_tables_configured` | gauge | row count |
-| `offload_rows_total{table,layer}` | counter | `last_offload_row_count`, added once per finished run |
-| `offload_cycles_total{status}` | counter | one increment per finished run |
-| `offload_errors_total{table,error_type}` | counter | one increment per failed run |
-| `offload_duration_seconds{table,layer}` | histogram | observed once per finished run |
+| Metric | Type | Source |
+|--------|------|--------|
+| `k2_lake_last_commit_ts_seconds{table}` | gauge | `committed_at` of the table's current snapshot |
+| `k2_lake_max_kafka_ts_seconds` | gauge | `k2.max-kafka-ts` on the newest ingest snapshot of `raw.messages` |
+| `k2_lake_last_compaction_ts_seconds{table}` | gauge | newest snapshot whose Iceberg `operation` is a file rewrite |
+| `k2_lake_last_refresh_ts_seconds` | gauge | set last, and only on a refresh that completed |
+| `k2_lake_rows_total{table}` | gauge | `total-records` |
+| `k2_lake_files_total{table}` | gauge | `total-data-files` |
+| `k2_lake_bytes_total{table}` | gauge | `total-files-size-bytes` |
+| `k2_lake_avg_file_bytes{table}` | gauge | bytes ÷ files |
+| `k2_lake_added_records{table}` | gauge | `added-records` on the most recent commit |
+| `k2_lake_audit_failures_total` | gauge | `k2.audit-failures` on the newest `audit.checks` snapshot with `k2.job=maintenance` |
+| `k2_lake_unresolvable_schema_ids_total` | gauge | the same property on the newest snapshot with `k2.job=ingest` |
+| `k2_lake_disk_used_ratio` / `k2_lake_disk_free_bytes{path}` | gauge | `os.statvfs` on the warehouse filesystem |
+| `k2_lake_scrape_errors_total` | gauge | tables the last refresh could not read; 0 is healthy |
 
-Runs are counted exactly once by tracking `updated_at` per table; rows still in `running`
-are skipped until they resolve. Counters restart at zero if the exporter restarts, which
-Prometheus handles as a normal counter reset.
+Every staleness alert ages a **timestamp** in PromQL rather than reading a pre-computed age
+gauge, because an age is only recomputed on a successful catalog read and would freeze at
+its last small value during exactly the outage it backstops.
 
-Sanity-check the exporter's counting logic offline with
-`python docker/offload/metrics.py --self-check`.
+Sanity-check the exporter's summary-parsing logic offline, with no catalog, with
+`python3 docker/lake/metrics.py --self-check`.
 
 ## SLOs
 
 | Signal | Target | SLO | Measured |
 |--------|--------|-----|----------|
 | Exchange → silver latency (p99) | <200 ms | <500 ms | 170–197 ms (2026-02-19, v2 Kotlin path — now frozen) — see [latency-budgets.md](./latency-budgets.md) |
-| Offload lag | <15 min | <30 min | 9 min (2026-02-15) |
-| Offload success rate | >99% | >95% | no failures observed to date |
-| Offload cycle duration | <30 s | <10 min | 5–7 s per table (2026-08-26) |
-| Warm/cold consistency | 100% | >99% | 99.9%+ (2026-02-15, 2026-02-18) |
-| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 modes tested 2026-02-19 on the v2 stack — see [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md). **Unmeasured for the capture tier**: `make chaos` has never run |
+| Lake ingest lag (newest `kafka_ts` in `raw.messages`) | <5 min | <15 min (`LakeIngestLagHigh`) | not yet measured — Phase D burn-in |
+| `raw.messages` commit freshness | <5 min | <30 min (`LakeIngestFailed`) | not yet measured — Phase D burn-in |
+| Nightly audit failed checks | 0 | 0 (`LakeAuditFailed` on any) | not yet measured — Phase D burn-in |
+| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 modes tested 2026-02-19 on the v2 stack — see [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md). **Unmeasured for the capture and lake tiers**: `make chaos` has never run |
 
 ## Not wired up
 

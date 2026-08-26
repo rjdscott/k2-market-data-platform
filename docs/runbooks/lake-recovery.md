@@ -4,7 +4,7 @@ Covers the ways the v3 lake path breaks and what each one costs: rebuilding Clic
 the archive, Redpanda replay as a cold start, Lakekeeper down, MinIO down, an ingest run
 killed mid-flight, and the three lake alerts that name this file as their destination
 without belonging to any of those (§6–§8). It does **not** cover capture-side failures
-(`capture-*.md`), the v2 offload (`iceberg-offload-*.md`), or disk filling up
+(`capture-*.md`) or disk filling up
 ([lake-disk-usage-high.md](./lake-disk-usage-high.md)).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
@@ -377,11 +377,12 @@ lower it before doing anything else.
 #    not yet run — Phase D burn-in
 docker exec k2-prefect-server prefect deployment run 'lake-ingest/lake-ingest-5min'
 
-# 2. Deployment list — confirms concurrency and that the deployment exists.  ✅ verified
+# 2. Deployment list — confirms concurrency and that the deployment exists.
+#    not yet run — Phase D burn-in
 docker exec k2-prefect-server prefect deployment ls
-#   iceberg-maintenance-main/iceberg-maintenance-daily
-#   iceberg-offload-main/iceberg-offload-15min
-#   (v2 deployments; the lake-* deployments land with Phase D)
+#   lake-ingest/lake-ingest-5min            cron 1-59/5 * * * *, concurrency 1
+#   lake-maintenance/lake-maintenance-daily nightly
+docker exec k2-prefect-server prefect deployment inspect 'lake-ingest/lake-ingest-5min'
 ```
 
 ```sql

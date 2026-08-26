@@ -124,6 +124,7 @@ Coinbase was added this way in Phase 7 ([ADR-016](../adr/ADR-016-add-coinbase-ex
 5. Add the three v3 topics and their Avro subjects to `docker/redpanda/init.sh`.
 6. Add the `capture-<exchange>` service to `docker-compose.yml` (0.25 CPU / 256M, more if the venue sends full-depth books) and a Prometheus scrape job with no `exchange` target label.
 7. Extend the `exchange=~` selectors in `docker/prometheus/rules/capture-alerts.yml` and the capture dashboard.
+8. Nothing in the lake. `lake.raw.messages` and `lake.bronze.*` are unified across venues with `exchange` as a column, and [`docker/lake/ingest.py`](../../docker/lake/ingest.py) builds its topic list as `K2_EXCHANGES × {raw, trades, book}` — so setting that variable (it defaults to `binance,kraken,coinbase`) and creating the three v3 topics in step 5 is the whole change. No new Iceberg table, no DDL, no bookkeeping row: a topic absent from the previous commit's `k2.kafka-offsets` has no stored position, so the next ingest starts it at the beginning.
 
 The full procedure, including the frozen v2 medallion's own steps: [operations/adding-new-exchanges.md](../operations/adding-new-exchanges.md).
 

@@ -41,9 +41,10 @@ guess. Section 8 says which command settles which row.
 
 > **I10, as of 2026-08-26 (Phase D).** The predictions below were computed against the Phase B
 > figures in the row above and are left as computed. Since then the three Kotlin feed handlers
-> retired ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) and this branch added `lake-metrics`
-> and the `lake-ddl` one-shot: steady state is now **14.70 CPU / 21.750 GiB across 16
-> long-running services** and the bootstrap peak **16.70 CPU / 24.250 GiB across 21** —
+> retired ([ADR-019](../adr/ADR-019-rust-capture-tier.md)), this branch added `lake-metrics` and the
+> `lake-ddl` one-shot, and deleted the v2 offload's exporter and its init one-shot: steady state is
+> now **14.60 CPU / 21.625 GiB across 15 long-running services** and the bootstrap peak
+> **16.10 CPU / 23.125 GiB across 19** —
 > `docker compose --env-file .env.example config`, limits summed
 > ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
 
@@ -370,7 +371,7 @@ Each resource, and the multiple of today's 1× rate at which it binds:
 | 4 | Total CPU budget headroom | **~19×** on capture usage alone | 1.40 cores of headroom ÷ 0.074 predicted usage — but this is headroom for *everything*, not just capture | `1.40 ÷ 0.074` (§3b, §6) |
 | 5 | Capture CPU (`capture-kraken`, the busiest) | **~32×** | G5 holds and the 0.25 CPU quota is the ceiling | `12,500 frames/s ÷ 389.5 frames/s` (§3) |
 | 6 | Redpanda broker CPU | **~113×** | ADR-010's "2 cores handles 100 K msg/s" | `100,000 ÷ 883.8 records/s` |
-| 7 | ClickHouse hot-tier ingest | **>100×** | 884 records/s against a store that absorbed 236 K rows/s on the v2 offload path | [v2 baseline, cold tier throughput](../benchmarks/2026-02-19-v2-baseline.md) |
+| 7 | ClickHouse hot-tier ingest | **>100×** | 884 records/s against a store measured at 236 K rows/s on the v2 baseline. That path is deleted; the number is kept as the last measurement of what this ClickHouse absorbs, not as a live claim | [v2 baseline, cold tier throughput](../benchmarks/2026-02-19-v2-baseline.md) |
 
 **The prediction, in one sentence: disk binds first, and it binds on a calendar rather
 than on a multiple — ~26 days from a cold start on the current host, because

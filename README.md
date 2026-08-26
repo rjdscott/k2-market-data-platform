@@ -14,9 +14,10 @@ queryable OHLCV candles in under a second — on a single host, inside a 16-core
   trade-to-queryable. v2 baseline: 14 services (+2 one-shot), 15.1 CPU / 21.875 GB, measured p99
   170–197 ms. **Phase C** has landed: the Rust `k2-capture` tier replaced the Kotlin handlers on
   a labelled per-symbol parity gate ([ADR-019](./docs/adr/ADR-019-rust-capture-tier.md), whose
-  Outcome carries the window's numbers), and the v3 lake tier runs beside the v2 offload it
-  replaces — steady state **16 long-running services (+5 one-shot), 14.70 CPU / 21.750 GiB**,
-  carrying L2 order books the JVM tier never had. Each move is an ADR.
+  Outcome carries the window's numbers), and **Phase D** replaced the v2 ClickHouse→Iceberg offload
+  with a Redpanda→Iceberg lake ingest ([ADR-018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md)) —
+  steady state **15 long-running services (+4 one-shot), 14.60 CPU / 21.625 GiB**, carrying L2
+  order books the JVM tier never had. Each move is an ADR.
   <sub>Every figure on this page: `docker compose --env-file .env.example config`, limits summed —
   command in [docs/operations/docker-resources.md](./docs/operations/docker-resources.md#how-these-numbers-are-produced).</sub>
 - **Deleting the stream processor.** Five always-on Spark Structured Streaming jobs (~14 CPU / 20 GB)
@@ -25,10 +26,11 @@ queryable OHLCV candles in under a second — on a single host, inside a 16-core
   one WebSocket dialect and carrying trades *and* L2 book on a single connection. `recv_ts_ns` is
   stamped before the parser, arithmetic is fixed-point `i64` end to end, and the same
   `handle_frame` runs live and in replay. Adding an exchange is additive.
-- **A cold tier with real semantics.** Prefect drives Spark batch offload into Apache Iceberg (Hadoop catalog)
-  every 15 min, with PostgreSQL watermarks for idempotent appends and nightly compaction + audit.
-- **Operability as a deliverable.** 34 Prometheus alert rules (13 v2 + 10 v3 capture +
-  11 v3 lake), 6 Grafana dashboards, and six failure modes deliberately induced and timed — max MTTR 32 s.
+- **A lake with real semantics.** Prefect drives a Spark batch ingest that reads Redpanda by offset range
+  into Apache Iceberg (Lakekeeper + MinIO) every 5 min, exactly-once via the consumed offsets written into
+  the same snapshot that writes the rows, with nightly compaction + completeness audits.
+- **Operability as a deliverable.** 25 Prometheus alert rules (4 v2 + 10 v3 capture +
+  11 v3 lake), 5 Grafana dashboards, and six failure modes deliberately induced and timed — max MTTR 32 s.
 - **A reversed decision, kept in the record.** ADR-008 argued for removing Prefect. It was wrong, and
   the record says so rather than being quietly deleted.
 
@@ -48,10 +50,10 @@ flowchart LR
     P["Prefect 3"]:::sp
     K["Spark 3.5"]:::sp
   end
-  I["Cold tier<br/>Iceberg · Hadoop catalog · cold.*"]:::st
+  I["Iceberg lake · Lakekeeper + MinIO<br/>raw · bronze · audit"]:::st
   subgraph OBS["Observability"]
-    M["Prometheus<br/>34 alert rules"]:::ob
-    D["Grafana<br/>6 dashboards"]:::ob
+    M["Prometheus<br/>25 alert rules"]:::ob
+    D["Grafana<br/>5 dashboards"]:::ob
   end
 
   E -->|WebSocket| F
@@ -59,10 +61,8 @@ flowchart LR
   R -->|"Kafka engine · JSON"| B
   B -->|materialized view| S
   S -->|materialized view| G
-  P -->|every 15 min| K
-  B -.->|JDBC| K
-  S -.->|JDBC| K
-  G -.->|"JDBC · 10 tables"| K
+  P -->|every 5 min| K
+  R -.->|"offset range"| K
   K -->|append| I
   F -.->|/metrics| M
   CH -.->|:9363| M
@@ -81,10 +81,12 @@ Each handler holds one WebSocket and produces every trade twice to Redpanda: the
 and a normalized Avro record registered in the built-in schema registry.
 ClickHouse consumes with Kafka engine tables; materialized views carry rows from per-exchange bronze into
 a unified `silver_trades` and on into six OHLCV tables — no scheduler, no streaming job, no application
-code in the hot path. Every 15 min a Prefect flow runs Spark to read ClickHouse over JDBC and append to
-Iceberg, with per-table watermarks in PostgreSQL so a failed run resumes rather than duplicates. The
-Iceberg warehouse is a Hadoop catalog on a local volume; MinIO is provisioned for the S3 path but the
-offload does not write to it yet ([ADR-013](./docs/adr/ADR-013-pragmatic-iceberg-version-strategy.md)).
+code in the hot path. Independently, every 5 min a Prefect flow runs Spark to read Redpanda **by offset
+range** and append to Iceberg — raw frames verbatim first, decoded `bronze.*` from that archive second —
+with the consumed offsets written into the same commit as the rows, so a failed run resumes rather than
+duplicates ([ADR-022](./docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The catalog is Lakekeeper
+over MinIO ([ADR-023](./docs/adr/ADR-023-lakekeeper-rest-catalog.md)); v2's Hadoop catalog on a local
+volume, and the ClickHouse→Iceberg offload that wrote to it, are deleted.
 
 ## v1 → v2
 
@@ -97,16 +99,16 @@ offload does not write to it yet ([ADR-013](./docs/adr/ADR-013-pragmatic-iceberg
 | Stack | Python · Kafka · Spark Streaming · DuckDB · FastAPI | Kotlin/Ktor · Redpanda · ClickHouse · Spark batch · Iceberg |
 
 The v2 column is the baseline this repo was measured at. What is deployed here now is v2 with its
-capture tier swapped for v3's and the v3 lake tier running beside the v2 offload it replaces: Rust
-`k2-capture` in place of the three Kotlin handlers, plus Lakekeeper and `lake-metrics` —
-**14.70 CPU / 21.750 GiB across 16 long-running services**, plus 5 one-shot init containers that
-declare a further 2.00 CPU / 2.500 GiB and run concurrently at boot, for a bootstrap peak of
-**16.70 CPU / 24.250 GiB across 21**. The Kotlin handlers are archived in
+capture tier swapped for v3's and its cold tier replaced by the v3 lake: Rust `k2-capture` in place of
+the three Kotlin handlers, plus Lakekeeper, `lake-metrics` and 4 one-shot init containers —
+**14.60 CPU / 21.625 GiB across 15 long-running services (+4 one-shot, 1.50 CPU / 1.500 GiB)**, a
+bootstrap peak of 16.10 CPU / 23.125 GiB across all 19. The Kotlin handlers are archived in
 [`legacy/v2-kotlin/`](./legacy/v2-kotlin/README.md)
 ([ADR-019](./docs/adr/ADR-019-rust-capture-tier.md)); with them went the only producer of the v2
 topics, so the ClickHouse `k2` medallion is **frozen** — still queryable, no longer growing — until
-the Phase E cutover drops it. `iceberg-metrics` goes with the rest of `docker/offload/`, landing at
-14.60 CPU / 21.625 GiB across 15. Source for all of them:
+the Phase E cutover drops it. The v2 ClickHouse→Iceberg offload is deleted outright
+([ADR-022](./docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)); its runbooks are archived in
+[`legacy/v2-offload/`](./legacy/v2-offload/). Source for all of them:
 `docker compose --env-file .env.example config`, limits summed
 ([command](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 
@@ -143,8 +145,8 @@ docker compose up -d      # or: make up
 First run builds three images — `services/capture-rust` (shared by all three `capture-*` services),
 `docker/prefect` and `docker/spark` — plus image pulls; all 15 long-running services report healthy
 roughly three minutes after `up`. Subsequent starts take under a minute. Measured on a clean clone,
-2026-08-26, when the stack still carried the three Kotlin containers as well: an upper bound on what
-it takes now, not a fresh measurement.
+2026-08-26, when the stack still carried the three Kotlin containers and the v2 offload as well: an
+upper bound on what it takes now, not a fresh measurement.
 
 **Verify it's flowing:**
 
@@ -158,9 +160,9 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 
 |---|---|---|
 | Redpanda Console | http://localhost:8080 | topics, consumer lag, schema registry |
 | ClickHouse | http://localhost:8123 | HTTP interface; native on 9002 |
-| Prefect | http://localhost:4200 | offload + maintenance deployments |
-| MinIO Console | http://localhost:9001 | S3 endpoint (provisioned, not yet used by v2 offload) |
-| Lakekeeper | http://localhost:18181 | v3 Iceberg REST catalog (ADR-018) — not yet wired to the v2 offload |
+| Prefect | http://localhost:4200 | lake ingest + maintenance deployments |
+| MinIO Console | http://localhost:9001 | S3 endpoint backing the Iceberg lake |
+| Lakekeeper | http://localhost:18181 | Iceberg REST catalog (ADR-018, ADR-023) |
 | Prometheus | http://localhost:9090 | targets and alert rules |
 | Grafana | http://localhost:3000 | `admin` / `$GRAFANA_PASSWORD` |
 | Spark Master | http://localhost:18080 | batch jobs |
@@ -168,22 +170,22 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 
 ## Observability
 
 Five provisioned Grafana dashboards: pipeline overview (`k2-pipeline-overview`), ClickHouse
-(`clickhouse-v2`), Iceberg offload (`iceberg-offload`), v2 migration tracker (`k2-v2-migration`),
-K2 Capture v3 (`k2-l2-capture`).
+(`clickhouse-v2`), v2 migration tracker (`k2-v2-migration`), K2 Capture v3 (`k2-l2-capture`),
+K2 Lake v3 (`k2-lake`).
 
 ![Pipeline overview dashboard](docs/images/grafana-pipeline-overview.jpg)
 ![Prefect deployments](docs/images/prefect-deployments.jpg)
 
-34 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 4 ClickHouse (down, memory,
-query failures, merge queue), 9 Iceberg offload (lag, consecutive failures, cycle time,
-watermark staleness, scheduler down), 10 v3 capture (down, feed stale, sequence gaps, checksum failure,
+25 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 4 ClickHouse (down, memory,
+query failures, merge queue), 10 v3 capture (down, feed stale, sequence gaps, checksum failure,
 produce errors/stalled, resync storm, ingress latency, book depth, precision loss), 11 v3 lake (ingest
 failed, audit failed, unresolvable schema id, ingest lag, bronze commit age, compaction stale, exporter
-down/stalled, scrape errors, disk high/critical). The 3 feed-handler
-rules and `ClickHouseBronzeInsertRateLow` retired with the handlers (ADR-019) and are archived in
-[`legacy/v2-kotlin/runbooks/`](./legacy/v2-kotlin/runbooks/) — each measured something only the Kotlin
-tier produced, so each could only ever fire once it retired.
-Capture exposes Prometheus metrics on `:8082/metrics`; ClickHouse exposes its own on `:9363`. Details: [`docs/operations/observability.md`](./docs/operations/observability.md).
+down/stalled, scrape errors, disk high/critical). The 3 feed-handler rules and
+`ClickHouseBronzeInsertRateLow` retired with the handlers (ADR-019) and are archived in
+[`legacy/v2-kotlin/runbooks/`](./legacy/v2-kotlin/runbooks/); the 9 Iceberg-offload rules went with the
+offload path they watched, archived in [`legacy/v2-offload/runbooks/`](./legacy/v2-offload/runbooks/).
+Capture exposes Prometheus metrics on `:8082/metrics`, ClickHouse its own on `:9363`, and the lake
+exporter on `lake-metrics:8000`. Details: [`docs/operations/observability.md`](./docs/operations/observability.md).
 
 ## Reliability testing
 
@@ -194,7 +196,7 @@ Six failure modes induced against the running stack, 2026-02-19 — all recovere
 | Redpanda restart | ~10 s | All 3 ClickHouse consumers resumed from committed offsets |
 | ClickHouse restart | **~32 s** | `silver_trades` resumed; no gaps in bronze or gold |
 | Capture container killed | ~30 s | Other two exchanges unaffected — isolation confirmed. Measured 2026-02-19 against the Kotlin handler this replaced; not re-measured on Rust |
-| Spark killed mid-offload | next 15-min run | Watermark held; no duplicates on resume |
+| Spark killed mid-offload | next 15-min run | Watermark held; no duplicates on resume (v2 offload, since deleted — the lake equivalent is `scripts/chaos/lake-ingest-kill.sh`) |
 | MinIO stopped | ~5 s | Hot tier kept ingesting; cold tier deferred cleanly |
 | Network partition | ~20–30 s | Consumers resumed from last committed offset, no corruption |
 
@@ -210,7 +212,7 @@ tests remain on the roadmap.
 | Suite | Count | Run |
 |---|---|---|
 | Rust capture | 58 (48 lib unit + 4 in the binary + 6 replay integration) | `make test-rust` |
-| Python — Iceberg maintenance flow + v3 data contracts + parity | 126 (28 + 41 in `tests/test_contracts.py` + 57 in `tests/test_parity.py`) | `make test-python` |
+| Python — v3 data contracts, parity, lake offsets, wire format | 164 (41 contracts + 65 parity + 26 lake offsets + 32 wire format) | `make test-python` |
 | Archived v2 Kotlin (reference only) | 20 (`TradeNormalizer` 7, `InstrumentsLoader` 13) | `make test-legacy-kotlin` |
 | Legacy v1 (reference only) | ~180 unit | `cd legacy/v1 && uv run pytest` |
 
@@ -227,23 +229,24 @@ matrix: prefect, spark, capture), **docs** (`check-docs.sh`), **security** (Triv
 ```
 services/capture-rust/          Rust k2-capture: trades + L2 book, one binary per exchange — the capture tier
 docker/clickhouse/ddl/          Bronze → Silver → Gold DDL and materialized views (auto-applied)
-docker/offload/                 Spark offload job + Prefect flows (offload, maintenance)
-docker/prometheus/rules/        34 alert rules
-docker/grafana/dashboards/      6 provisioned dashboards
+docker/lake/                    Spark lake ingest + maintenance + metrics, DDL, Prefect flows (v3)
+docker/prometheus/rules/        25 alert rules
+docker/grafana/dashboards/      5 provisioned dashboards
 docker/spark/  docker/prefect/  Custom images
 config/instruments.yaml         Instrument registry — single source of truth
 schemas/avro/                   v3 contracts (trade, book-snapshot-l2, raw-message); normalized-trade.avsc is the frozen v2 contract
-tests/                          Python tests (maintenance flow, v3 data contracts, parity)
+tests/                          Python tests (v3 contracts, parity, lake offsets, wire format)
 docs/                           Architecture, ADRs, operations, development
 legacy/v1/                      Archived v1 platform
 legacy/v2-kotlin/               Archived v2 Kotlin feed handlers (ADR-019)
+legacy/v2-offload/              Archived runbooks for the deleted v2 ClickHouse→Iceberg offload
 docker-compose.yml              The whole stack
 ```
 
 ## Where v2 falls short — and the v3 roadmap
 
-v2 is complete and frozen: three exchanges, medallion in ClickHouse, Iceberg cold tier, 13 v2 alert rules,
-13 runbooks. It is a good streaming pipeline and a poor research archive. This is a **quantitative-research**
+v2 is complete and frozen: three exchanges, medallion in ClickHouse, 4 v2 alert rules,
+11 runbooks. It is a good streaming pipeline and a poor research archive. This is a **quantitative-research**
 platform reading public WebSocket feeds over the open internet — it is **not a trading path**, and no number
 here should be read as one. What a quant actually needs from it — completeness they can prove, aggregations
 that are correct, and the ability to reproduce a figure from six months ago — v2 cannot deliver, for
@@ -251,7 +254,7 @@ structural reasons rather than missing polish. An audit of the code (not the doc
 
 | Gap | Why it matters to a quant | v3 fix | ADR |
 |---|---|---|---|
-| Lake is a JDBC copy of ClickHouse, not the system of record — [`offload_generic.py:172`](./docker/offload/offload_generic.py#L172) | The archive inherits the serving DB's normalisation, its 7-day TTL, and the driver's dropped `Array`/`Map` columns. Nothing is reproducible | Spark batch reads Redpanda by offset range → Iceberg `raw.messages` (verbatim, never expired) → `bronze.*`; ClickHouse becomes derived | [018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md), 021, 022 |
+| Lake was a JDBC copy of ClickHouse, not the system of record (deleted in Phase D; archived in [`legacy/v2-offload/`](./legacy/v2-offload/README.md)) | The archive inherited the serving DB's normalisation, its 7-day TTL, and the driver's dropped `Array`/`Map` columns. Nothing was reproducible | Spark batch reads Redpanda by offset range → Iceberg `raw.messages` (verbatim, never expired) → `bronze.*`; ClickHouse becomes derived | [018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md), 021, 022 |
 | OHLCV open/high/low/close resolve **arbitrarily** across merges — [`01-k2-schema.sql:178`](./docker/clickhouse/ddl/01-k2-schema.sql#L178) | `SummingMergeTree` sums volume correctly and picks non-summed columns at random. A candle can carry a close that never traded last. This is a real bug | OHLCV computed on read over deduplicated trades, plus a CI regression test across two insert blocks | 026 |
 | Bronze is plain `MergeTree` — [`01-k2-schema.sql:88`](./docker/clickhouse/ddl/01-k2-schema.sql#L88) | Replaying a topic duplicates every row. No key, no version, no dedup — so recovery corrupts history | `ReplacingMergeTree` hot tier with an explicit dedup contract; the lake holds truth | 025, 026 |
 | No receive timestamp before parse — [`TradeNormalizer.kt:28`](./legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L28) | Exchange-clock skew and platform latency are not separable in any stored row, so no honest latency distribution exists | `recv_ts_ns` taken as the first statement on frame receipt, carried in the record body and a Kafka header | 019, 020 |

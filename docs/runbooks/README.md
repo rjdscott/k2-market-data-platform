@@ -29,14 +29,13 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
-| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, capture crash, offload failure, MinIO down, network partition | `ClickHouseDown`, `CaptureDown`, `CaptureProduceErrors` |
+| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, capture crash, batch-job failure, MinIO down, network partition | `ClickHouseDown`, `CaptureDown`, `CaptureProduceErrors` |
 | [redpanda.md](./redpanda.md) | Topic, partition, consumer-group or schema-registry problems; broker health | `CaptureProduceErrors` |
-| [iceberg-offload-failure.md](./iceberg-offload-failure.md) | Offload runs erroring — ClickHouse unreachable, Spark crash, JDBC or timeout errors | `IcebergOffloadConsecutiveFailures` |
-| [iceberg-offload-lag.md](./iceberg-offload-lag.md) | Cold tier behind the 15-minute SLO and you need to catch up | `IcebergOffloadLagCritical`, `IcebergOffloadLagElevated` |
-| [iceberg-offload-performance.md](./iceberg-offload-performance.md) | Cycles running long or throughput dropping — volume spikes, resource contention | `IcebergOffloadCycleSlow`, `IcebergOffloadCycleTooSlow`, `IcebergOffloadThroughputLow` |
-| [iceberg-offload-watermark-recovery.md](./iceberg-offload-watermark-recovery.md) | Watermark stuck, stale, wedged in `running`, or needs rewinding to re-offload a window | `IcebergOffloadWatermarkStale` |
-| [iceberg-offload-monitoring.md](./iceberg-offload-monitoring.md) | Reference: offload metrics, SLO definitions, dashboard panels. Read before tuning thresholds | — |
-| [iceberg-scheduler-recovery.md](./iceberg-scheduler-recovery.md) | Prefect deployment paused or missing, worker not claiming runs, empty offload dashboard | `IcebergOffloadSchedulerDown` |
+
+The six runbooks for the v2 ClickHouse→Iceberg offload were archived with the code they
+described; they are kept unmodified in
+[`legacy/v2-offload/runbooks/`](../../legacy/v2-offload/README.md) and describe a path that
+no longer exists — do not follow them against this stack.
 
 ### v3 capture tier (Phase C — written ahead of the code; see the note below)
 
@@ -87,9 +86,17 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q
   "SELECT exchange, count(), max(timestamp) FROM k2.silver_trades
    WHERE timestamp > now() - INTERVAL 5 MINUTE GROUP BY exchange"
 
-# Is the cold tier keeping up?
-docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c \
-  "SELECT table_name, status, NOW() - last_successful_run AS lag FROM offload_watermarks ORDER BY lag DESC"
+# Is the lake keeping up? Ingest lag, and how long since each table last committed.
+curl -s --get localhost:9090/api/v1/query \
+  --data-urlencode 'query=time() - k2_lake_max_kafka_ts_seconds' | jq -r '.data.result[].value[1]'
+curl -s --get localhost:9090/api/v1/query \
+  --data-urlencode 'query=time() - k2_lake_last_commit_ts_seconds' | \
+  jq -r '.data.result[] | "\(.metric.table) \(.value[1])"'
+
+# Did the last nightly audit pass? Non-zero is LakeAuditFailed's input; the
+# failing rows themselves are in lake.audit.checks (see lake-audit-failed.md).
+curl -s --get localhost:9090/api/v1/query \
+  --data-urlencode 'query=k2_lake_audit_failures_total' | jq -r '.data.result[].value[1]'
 ```
 
 > **Four `IcebergOffload*` alerts fire continuously and are expected**, not
@@ -104,14 +111,11 @@ docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c \
 Then:
 
 - **Hot tier affected** (no trades arriving, ClickHouse down) → [failure-recovery.md](./failure-recovery.md)
-- **Cold tier only** (hot tier healthy, offload behind or failing) → the `iceberg-*` runbooks
 - **Broker-level** (topics, partitions, schema registry) → [redpanda.md](./redpanda.md)
 - **v3 lake** (ingest behind, audit failed, catalog or object store down, disk filling) →
   the `lake-*` runbooks
 
-Hot-tier problems are user-visible and take priority. Cold-tier problems are recoverable
-by design — the watermark makes every offload idempotent, so lag is annoying rather than
-dangerous.
+Hot-tier problems are user-visible and take priority.
 
 The v3 lake inverts that priority, and it is worth knowing before triaging one. The lake
 is the system of record ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)), so

@@ -45,8 +45,8 @@ KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 # Driver heap, pinned rather than inherited. `spark-iceberg` is capped at 2 CPU
 # and 4 GiB, and two drivers can still be alive in it at once — the 5-minute
 # ingest, a maintenance run, or an operator's `docker exec` during an incident.
-# (Until Phase D a third could: v2's iceberg-offload every 15 minutes. That path
-# is gone; the sizing it forced is kept, because the overlap is not.)
+# (Until Phase D a third could: v2's cold-tier offload, every 15 minutes. That
+# path is gone; the sizing it forced is kept, because the overlap is not.)
 #
 # 1 g each is what fits. A driver JVM costs its heap plus roughly 400-600 MB of
 # metaspace, code cache, GC structures, thread stacks and direct buffers, and

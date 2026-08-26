@@ -6,8 +6,7 @@ backlog, a stalled scheduler, an ingest that fails on data Redpanda has already 
 and a missed nightly rewrite leaving files too small to be useful.
 
 It does **not** cover a crashed run (that is safe and automatic —
-[lake-recovery.md §5](./lake-recovery.md#5-ingest-killed-mid-run)), the v2 offload
-(`iceberg-offload-lag.md`), or a failing audit
+[lake-recovery.md §5](./lake-recovery.md#5-ingest-killed-mid-run)) or a failing audit
 ([lake-audit-failed.md](./lake-audit-failed.md)).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
@@ -149,11 +148,13 @@ both are [lake-recovery.md](./lake-recovery.md).
 **Recovery**
 
 ```bash
-# 1. Do the deployments exist, and are they scheduled?                     ✅ verified
+# 1. Do the deployments exist, and are they scheduled?    not yet run — Phase D burn-in
 docker exec k2-prefect-server prefect deployment ls
-#   iceberg-maintenance-main/iceberg-maintenance-daily
-#   iceberg-offload-main/iceberg-offload-15min
-#   (the lake-* deployments land with Phase D)
+#   expect exactly two, both registered by docker/lake/flows/deploy_lake.py:
+#   lake-ingest/lake-ingest-5min            cron 1-59/5 * * * *, concurrency 1
+#   lake-maintenance/lake-maintenance-daily nightly
+#   Both run on the `lake` work pool. Anything else listed here is a leftover from a
+#   stack upgraded in place and can be deleted with `prefect deployment delete`.
 
 # 2. Is a worker actually claiming runs?                                   ✅ verified
 docker ps --filter name=k2-prefect-worker --format '{{.Names}}\t{{.Status}}'
@@ -173,7 +174,7 @@ an ingest problem that does not exist:
 ```bash
 curl -s localhost:9090/api/v1/targets | \
   jq -r '.data.activeTargets[] | "\(.labels.job) \(.health)"' | sort -u    # ✅ verified
-#   capture-binance up / clickhouse up / iceberg-scheduler up / redpanda up ...
+#   capture-binance up / clickhouse up / lake-metrics up / redpanda up ...
 ```
 
 **Measured** — not yet verified.
