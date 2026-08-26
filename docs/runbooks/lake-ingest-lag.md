@@ -108,14 +108,26 @@ Then read the cause:
 
 | What you see | Meaning | Do |
 |---|---|---|
-| Runs completing, each slower than 5 min | the backlog is larger than one cycle can drain | slice it: run with `--end-timestamp` to ingest a bounded window at a time, repeatedly, until the lag closes |
+| Runs completing, each slower than 5 min | the backlog is larger than one cycle can drain | it is already draining — every run is bounded at `--max-offsets-per-partition` (50,000). Watch `k2_lake_ingest_backlog_offsets{topic}` fall; raise the bound on a hand-run to drain faster |
+| Backlog gauge flat or rising across runs | the bound is below the arrival rate on that topic | raise `--max-offsets-per-partition` on hand-runs until it falls, then raise `K2_LAKE_MAX_OFFSETS_PER_PARTITION` for the scheduled path |
 | Runs completing fast, lag flat | the scheduler is not firing at cadence | §2 |
 | Spark at its CPU limit during a run | contention with capture or ClickHouse | check the cpuset layout — capture is pinned away from Spark deliberately ([Phase D isolation experiment](../plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md)) |
 | `failOnDataLoss` in the logs | offsets below broker retention | §3 — **stop and read it before doing anything** |
 
 ```bash
-# Backlog slicing: bounded windows, oldest first, so each run is a normal-sized
-# batch rather than one enormous one.               not yet run — Phase D burn-in
+# What is left, per topic, as of the last commit — read it before doing anything.
+curl -sG http://localhost:9090/api/v1/query \
+  --data-urlencode 'query=k2_lake_ingest_backlog_offsets' \
+  | jq -r '.data.result[] | "\(.metric.topic) \(.value[1])"' | sort
+
+# Drain faster than the 50,000-per-partition default, with someone watching.
+# Peak driver RSS does not move with the bound (docker/lake/README.md), but wall
+# time does, and the flow's INGEST_TIMEOUT_S is 3600.
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
+  --max-offsets-per-partition 200000
+
+# Or bound by time instead of by count — resolved to offsets on the broker, so
+# the window means the same thing on every partition.
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
   --end-timestamp '2026-08-26T10:00:00Z'
 ```
@@ -123,10 +135,14 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
 **Do not raise the ingest cadence to catch up.** Runs are deployed at concurrency 1 for
 correctness ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)); a faster
 schedule against a concurrency-1 deployment queues runs rather than parallelising them, and
-raising the concurrency is the one change that breaks the exactly-once argument. Slice the
-window instead.
+raising the concurrency is the one change that breaks the exactly-once argument. Raise the
+per-run bound instead — one bigger run, not two overlapping ones.
 
-**Measured** — not yet verified.
+**Measured, 2026-08-27** — draining a 41.5 M-record cold-start backlog at the default
+bound, `lake-ingest-5min` paused: 2,721,812 / 1,770,914 / 1,564,334 records committed in
+92 s / 57 s / 49 s, peak ingest driver RSS 1,243 MiB of a 4 GiB container. A run with
+nothing to do costs 5.7 s. `market.crypto.v3.raw.kraken` fell 23,175,551 → 22,193,385 over
+the three, about 347 k per run.
 
 ---
 

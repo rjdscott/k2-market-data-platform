@@ -67,9 +67,23 @@ echo "  container : $SPARK"
 echo "  window end: $END_MS ($(date -u -d "@$((END_MS/1000))" +%FT%TZ))"
 echo
 
-echo "[1/3] ingest cycle 1"
-docker exec "$SPARK" python3 "$LAKE_DIR/ingest.py" --end-timestamp "$END_MS" \
-  | sed 's/^/      /'
+# Drain the window, however many runs that takes. One run reads at most
+# --max-offsets-per-partition offsets per partition (docker/lake/ingest.py), so
+# "cycle 1" is only a single run when the window fits inside that bound — and on
+# a cold start it does not. Looping is what keeps step 2 an idempotence test
+# rather than a test of whether the backlog happened to be small: without it a
+# deep backlog fails here with "NOT idempotent", which would be a false alarm
+# about the exactly-once contract from a run that was working correctly.
+MAX_CYCLES=${MAX_CYCLES:-40}
+echo "[1/3] ingest cycle 1 — drain the window (at most $MAX_CYCLES runs)"
+drained=no
+for _ in $(seq 1 "$MAX_CYCLES"); do
+  out=$(docker exec "$SPARK" python3 "$LAKE_DIR/ingest.py" --end-timestamp "$END_MS")
+  printf '%s\n' "$out" | sed 's/^/      /'
+  if printf '%s\n' "$out" | grep -q 'stage 1: no new records'; then drained=yes; break; fi
+done
+[ "$drained" = yes ] \
+  || die "the window was still not drained after $MAX_CYCLES runs — raise MAX_CYCLES or K2_LAKE_MAX_OFFSETS_PER_PARTITION"
 
 echo "[2/3] ingest cycle 2 — the same window, so it must add nothing"
 cycle2=$(docker exec "$SPARK" python3 "$LAKE_DIR/ingest.py" --end-timestamp "$END_MS")
