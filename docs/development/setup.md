@@ -7,7 +7,7 @@ code once it is.
 
 | Tool | Needed for | Notes |
 |------|-----------|-------|
-| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 28 GB memory so every `deploy.resources.limits` can be honoured (`docker info --format '{{.MemTotal}}'` — **Docker Desktop defaults far lower and silently clips every limit above the VM size**; Settings → Resources → Memory); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 14.60 CPU / 21.625 GiB of limits across 15 long-running services and peaks at 16.10 CPU / 23.125 GiB across 19 while the four one-shot init containers run (v2 alone: 15.1 CPU / 21.875 GB) |
+| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 28 GB memory so every `deploy.resources.limits` can be honoured (`docker info --format '{{.MemTotal}}'` — **Docker Desktop defaults far lower and silently clips every limit above the VM size**; Settings → Resources → Memory); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 14.60 CPU / 25.625 GiB of limits across 15 long-running services and peaks at 16.10 CPU / 27.125 GiB across 19 while the four one-shot init containers run (v2 alone: 15.1 CPU / 21.875 GB) |
 | [`uv`](https://docs.astral.sh/uv/) | the Python unit tests and ruff | Nothing else uses Python locally |
 | `jq`, `psql` | the diagnostic one-liners in the ops docs | optional |
 
