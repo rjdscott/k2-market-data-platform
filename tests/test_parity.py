@@ -22,6 +22,7 @@ What each test is actually guarding:
     implementation would fail this test — which is why it is here.
 """
 
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -674,3 +675,22 @@ def test_v2_only_fails_on_a_truncated_read(monkeypatch):
     """
     note = f"{TRUNCATION_NOTE} — `t` returned no records for 30s with 2 of 20 partition(s) short."
     assert _v2_only(monkeypatch, note) == 1
+
+
+def test_v2_only_json_carries_the_truncation_the_exit_code_reports(monkeypatch, capsys):
+    """
+    An exit code is not in the document. A pipeline that reads the JSON and not
+    `$?` — which is the whole point of `--json` — would take `counts` for the
+    topic's totals with nothing in the payload saying they are a lower bound.
+    Same two keys as the full comparison's header.
+    """
+    note = f"{TRUNCATION_NOTE} — `t` returned no records for 30s with 2 of 20 partition(s) short."
+    assert _v2_only(monkeypatch, note) == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["truncated"] is True
+    assert doc["notes"] == [note]
+
+    assert _v2_only(monkeypatch, None) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["truncated"] is False
+    assert doc["notes"] == []

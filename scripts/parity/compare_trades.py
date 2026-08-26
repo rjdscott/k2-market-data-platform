@@ -664,8 +664,14 @@ def main(argv=None) -> int:
 
         if args.v2_only:
             counts = Counter(n.canonical_symbol for n in v2_rows)
+            # Same two keys the full comparison's header carries, for the same
+            # reason: the exit code says truncated, and a consumer of the JSON
+            # that only reads `counts` would otherwise take a lower bound for a
+            # total with nothing in the document to contradict it.
+            truncated = any(n.startswith(TRUNCATION_NOTE) for n in notes)
             if args.json:
                 print(json.dumps({"topic": v2_topic, "consumed": v2_consumed,
+                                  "notes": notes, "truncated": truncated,
                                   "counts": dict(sorted(counts.items()))}, indent=2))
             else:
                 print(f"# v2-only smoke — `{v2_topic}`\n")
@@ -681,7 +687,7 @@ def main(argv=None) -> int:
             # say whether decoding and offsets_for_times worked over the window
             # asked for - a short read that exits 0 reports success for a window
             # it never finished reading.
-            return 1 if any(n.startswith(TRUNCATION_NOTE) for n in notes) else 0
+            return 1 if truncated else 0
 
         v3_rows, v3_consumed, note = consume_window(
             consumer, v3_topic, start_ms, end_ms, deserializer, normalise_v3
