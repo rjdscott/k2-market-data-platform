@@ -1,0 +1,75 @@
+networks:
+  spikenet:
+    ipam:
+      config:
+        - subnet: 10.99.0.0/24
+
+volumes:
+  rp-data:
+  ch-data:
+  minio-data:
+  work-data:
+
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.3.4
+    hostname: redpanda
+    networks: [spikenet]
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:29092
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --default-log-level=warn
+    ports:
+      - "29092:19092"
+      - "28081:18081"
+    volumes:
+      - rp-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      retries: 20
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    hostname: clickhouse
+    networks: [spikenet]
+    environment:
+      CLICKHOUSE_DB: spike
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: spike
+    ports:
+      - "28123:8123"
+      - "29000:9000"
+    volumes:
+      - ch-data:/var/lib/clickhouse
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-13T22-19-12Z
+    hostname: minio
+    networks: [spikenet]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: spikekey
+      MINIO_ROOT_PASSWORD: spikesecret
+    ports:
+      - "29001:9001"
+    volumes:
+      - minio-data:/data
+
+  work:
+    image: python:3.12-slim
+    hostname: work
+    networks: [spikenet]
+    command: ["sleep", "infinity"]
+    working_dir: /w
+    volumes:
+      - work-data:/w

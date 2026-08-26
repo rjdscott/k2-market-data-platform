@@ -169,7 +169,10 @@ allowed to start Phase C unanswered. All four were run on 2026-08-26 — results
 and the fallbacks actually taken are in [Appendix A](#appendix-a--phase-b-verify-first-spikes-2026-08-26).
 Two unchanged non-risks worth stating: no
 HA (still one broker, one ClickHouse, one host), and Prefect + Spark are
-retained rather than replaced.
+retained rather than replaced. S13 is the Phase G replay determinism spike —
+same input produces a byte-identical output hash — run before `k2-replay` is
+built, not counted among the four above because it verifies a Phase G
+component, not a Phase B risk.
 
 **Revisit when:** the Phase C 24-hour burn-in numbers are published in
 `docs/benchmarks/` — if gaps are non-zero and unexplained, or Kraken checksum
@@ -193,6 +196,7 @@ To be written when each phase lands, not before:
 | 026 | OHLCV computed on read + the ReplacingMergeTree dedup contract | — |
 | 027 | L2 book snapshot model and per-exchange resync policy | — |
 | 028 | Non-goals and honest limits of a single-host research platform | — |
+| ADR-029 | Research/production parity contract (Phase G) | — |
 
 ---
 
@@ -208,7 +212,7 @@ To be written when each phase lands, not before:
 
 ## Appendix A — Phase B verify-first spikes (2026-08-26)
 
-Every risk this ADR names as a risk was made to fail or pass against a real container before a line of v3 code was written, because a wrong assumption about a wire format or an image tag is cheap on day one and expensive in Phase C. Raw spike artefacts — the scratch Cargo projects, Python scripts and container logs — lived in a session scratchpad and were never committed; this appendix is the record of them.
+Every risk this ADR names as a risk was made to fail or pass against a real container before a line of v3 code was written, because a wrong assumption about a wire format or an image tag is cheap on day one and expensive in Phase C. Raw spike inputs — the scratch Cargo projects, Python scripts and compose files — are retained under [`../research/2026-08-26-v3-spikes/`](../research/2026-08-26-v3-spikes/README.md); this appendix is the record of the outputs they produced.
 
 | Spike | Question | Result | Consequence for the design |
 |-------|----------|--------|----------------------------|
