@@ -3,7 +3,7 @@
 ingest.py takes it non-blocking and exits 2 if held: two appends must never
 interleave (docker/lake/README.md, "Concurrency must be 1"). maintenance.py
 takes it blocking, waits out a running ingest, and holds it for its whole run,
-so the only ingest that could share the 4 GiB container with its 2g driver is
+so the only ingest that could share the 8 GiB container with its 2g driver is
 refused at the lock instead of OOM-killed halfway through a commit.
 
 Pure stdlib, no pyspark, so tests import it directly.

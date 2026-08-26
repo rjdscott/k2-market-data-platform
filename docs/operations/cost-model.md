@@ -8,8 +8,8 @@ What this platform costs to run, and what the architecture decisions bought.
 
 ## What it costs today
 
-The stack is one Docker Compose deployment: **14.60 CPU / 21.625 GiB across 15
-long-running services**, rising to 16.10 CPU / 23.125 GiB across all 19 while the four
+The stack is one Docker Compose deployment: **14.60 CPU / 25.625 GiB across 15
+long-running services**, rising to 16.10 CPU / 27.125 GiB across all 19 while the four
 one-shot init containers overlap at bootstrap (see
 [docker-resources.md](./docker-resources.md) and the Outcome addenda to
 [ADR-010](../adr/ADR-010-resource-budget.md)). It runs on a single developer workstation,
@@ -81,7 +81,7 @@ Scaling levers, in the order they would bite:
 | | v1 | today | Saving |
 |---|----|----|--------|
 | CPU (limits) | 35–40 | 14.60 | ~60% |
-| RAM (limits) | 45–50 GB | 21.625 GiB | ~55% |
+| RAM (limits) | 45–50 GB | 25.625 GiB | ~55% |
 | Services | 18–20 | 15 (+4 one-shot) | ~20% |
 | Always-on Spark | 14 CPU / 20 GB | 0 (batch only) | 100% |
 

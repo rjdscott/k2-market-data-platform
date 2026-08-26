@@ -105,7 +105,7 @@ DRIVER_MEMORY = os.environ.get("K2_LAKE_DRIVER_MEMORY", "768m")
 # concurrent groups, 22:28Z with one). It can afford it because it holds the
 # ingest lock for its whole run, so it is never in the container with an ingest
 # driver: 2g + ~550 MiB JVM overhead + the 633 MiB idle baseline is ~3.2 GiB of
-# the 4 GiB cap.
+# an 8 GiB cap (4 GiB when measured).
 MAINTENANCE_DRIVER_MEMORY = os.environ.get("K2_LAKE_MAINTENANCE_DRIVER_MEMORY", "2g")
 
 

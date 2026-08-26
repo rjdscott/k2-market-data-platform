@@ -601,3 +601,18 @@ docker/prometheus/rules/capture-alerts.yml         10
 docker/prometheus/rules/clickhouse-alerts.yml       4
 docker/prometheus/rules/lake-alerts.yml            11
 ```
+
+### Outcome addendum — 2026-08-26, spark-iceberg 4G → 8G
+
+`rewrite_data_files` over `raw.messages` (rows up to 5 MB) OOM'd a 768m driver heap
+twice and finished at 2g with a peak driver RSS of 2,641 MiB (`capacity-model.md`, dated
+note). `maintenance.py` now runs alone behind the ingest lock, and the container limit
+went 4G → 8G so an operator's `docker exec` fits beside it. Steady state **14.60 CPU /
+25.625 GiB across 15**, bootstrap peak **16.10 CPU / 27.125 GiB across 19**; headroom
+14.375 GiB (36%) at steady state.
+
+Found while doing it: the Docker Desktop VM on the maintainer host had **7.6 GiB** —
+every limit above it, ClickHouse's 8G included, was clipped (`docker stats` showed
+`/ 7.648GiB`). The 40 GB envelope is a statement about the host, and a host must be
+checked with `docker info --format '{{.MemTotal}}'`, not assumed. Resized to 39.2 GiB the
+same day; `docs/development/setup.md` now says ≥ 28 GB engine memory and why.

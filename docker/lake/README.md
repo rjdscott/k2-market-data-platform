@@ -140,7 +140,7 @@ Two consequences worth knowing:
   only the runs Prefect launched, which is not the ones in these runbooks.
   `maintenance.py` takes the same lock *blocking* — it waits out a running ingest,
   then holds the lock for its whole run. That is what lets it use a 2g driver heap
-  (`K2_LAKE_MAINTENANCE_DRIVER_MEMORY`) in the same 4 GiB container: compaction of
+  (`K2_LAKE_MAINTENANCE_DRIVER_MEMORY`) in what was then a 4 GiB container (8 GiB since): compaction of
   5 MB `raw.messages` rows OOM'd at 768m on 2026-08-26, and two drivers that size do
   not fit together. The ingest tick that lands during the nightly run exits 2 and
   shows as one failed `lake-ingest` flow run at ~03:01Z; the next tick catches up.

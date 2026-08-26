@@ -16,7 +16,7 @@ queryable OHLCV candles in under a second — on a single host, inside a 16-core
   a labelled per-symbol parity gate ([ADR-019](./docs/adr/ADR-019-rust-capture-tier.md), whose
   Outcome carries the window's numbers), and **Phase D** replaced the v2 ClickHouse→Iceberg offload
   with a Redpanda→Iceberg lake ingest ([ADR-018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md)) —
-  steady state **15 long-running services (+4 one-shot), 14.60 CPU / 21.625 GiB**, carrying L2
+  steady state **15 long-running services (+4 one-shot), 14.60 CPU / 25.625 GiB**, carrying L2
   order books the JVM tier never had. Each move is an ADR.
   <sub>Every figure on this page: `docker compose --env-file .env.example config`, limits summed —
   command in [docs/operations/docker-resources.md](./docs/operations/docker-resources.md#how-these-numbers-are-produced).</sub>
@@ -101,8 +101,8 @@ volume, and the ClickHouse→Iceberg offload that wrote to it, are deleted.
 The v2 column is the baseline this repo was measured at. What is deployed here now is v2 with its
 capture tier swapped for v3's and its cold tier replaced by the v3 lake: Rust `k2-capture` in place of
 the three Kotlin handlers, plus Lakekeeper, `lake-metrics` and 4 one-shot init containers —
-**14.60 CPU / 21.625 GiB across 15 long-running services (+4 one-shot, 1.50 CPU / 1.500 GiB)**, a
-bootstrap peak of 16.10 CPU / 23.125 GiB across all 19. The Kotlin handlers are archived in
+**14.60 CPU / 25.625 GiB across 15 long-running services (+4 one-shot, 1.50 CPU / 1.500 GiB)**, a
+bootstrap peak of 16.10 CPU / 27.125 GiB across all 19. The Kotlin handlers are archived in
 [`legacy/v2-kotlin/`](./legacy/v2-kotlin/README.md)
 ([ADR-019](./docs/adr/ADR-019-rust-capture-tier.md)); with them went the only producer of the v2
 topics, so the ClickHouse `k2` medallion is **frozen** — still queryable, no longer growing — until

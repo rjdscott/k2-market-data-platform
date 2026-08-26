@@ -12,7 +12,7 @@ Redpanda → the Iceberg lake on MinIO. Everything here targets the as-built
 | [data-inspection.md](./data-inspection.md) | Runnable queries for every layer — Redpanda, bronze/silver/gold, the Iceberg lake |
 | [observability.md](./observability.md) | Grafana dashboards, capture-tier and lake metrics, all 26 Prometheus alert rules |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
-| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits — 14.60 CPU / 21.625 GiB across 15 long-running services, +4 one-shot (1.50 / 1.500 GiB), bootstrap peak 16.10 / 23.125 GiB |
+| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits — 14.60 CPU / 25.625 GiB across 15 long-running services, +4 one-shot (1.50 / 1.500 GiB), bootstrap peak 16.10 / 27.125 GiB |
 | [prefect-schedules.md](./prefect-schedules.md) | The two Prefect schedules (5-min lake ingest, daily lake maintenance) — written, not yet deployed |
 | [clickhouse-database-standard.md](./clickhouse-database-standard.md) | Why everything lives in the `k2` database and how to keep it that way |
 | [adding-new-exchanges.md](./adding-new-exchanges.md) | End-to-end checklist for wiring up a 4th exchange |

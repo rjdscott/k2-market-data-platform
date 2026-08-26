@@ -531,7 +531,7 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 4G
+          memory: 8G
         reservations:
           cpus: '1.0'
           memory: 2G
@@ -992,7 +992,7 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (15 long-running) | 14.60 CPU | 21.625 GiB | Full platform, v3 capture + v3 lake
+# STEADY STATE (15 long-running) | 14.60 CPU | 25.625 GiB | Full platform, v3 capture + v3 lake
 #
 # One-shots — NOT free. They declare limits and they run concurrently with the
 # steady state at boot, so the budget that matters at `docker compose up` is the
@@ -1005,7 +1005,7 @@ services:
 #   ----------------------------------------------------------------------------
 #   one-shot subtotal  1.5  | 1.5G
 #
-# Bootstrap peak: 16.10 CPU / 23.125 GiB — all 19 services. The three capture-*
+# Bootstrap peak: 16.10 CPU / 27.125 GiB — all 19 services. The three capture-*
 # containers gate only on redpanda-init; the other three one-shots can overlap
 # live traffic. CPU limits are a ceiling on scheduling, not a reservation, so a
 # momentary overcommit at boot would be a burst, not a failure — and at 16.10
@@ -1014,8 +1014,10 @@ services:
 # Retiring the three Kotlin feed handlers (ADR-019) gave back exactly the
 # 1.5 CPU / 1.5 GB they declared, and deleting docker/offload/ took its metrics
 # exporter (0.1 CPU / 128M) and its DDL one-shot (0.5 CPU / 1G) with it. Steady
-# state is 14.60 CPU / 21.625 GiB across 15 — 1.40 CPU of headroom under the
-# target, where the Phase C+D parallel runs were over it.
+# state is 14.60 CPU / 25.625 GiB across 15 — 1.40 CPU of headroom under the
+# target, where the Phase C+D parallel runs were over it. spark-iceberg went
+# 4G -> 8G on 2026-08-26 after compaction of raw.messages needed a 2g driver
+# heap (peak 2,641 MiB) and the two batch engines now match at 8G each.
 #
 # Recompute after any limit change (the ADR-010 Outcome addendum carries the
 # same command and its dated output):

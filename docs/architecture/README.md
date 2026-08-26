@@ -1,6 +1,6 @@
 # Architecture — As Built
 
-K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, and a Prefect-scheduled Spark job reads Redpanda by offset range into an Iceberg lake every 5 minutes. The ClickHouse Bronze → Silver → Gold medallion that the v2 pipeline built out of Kafka-engine tables and materialized views is frozen (below). The whole thing runs in one Docker Compose file on **14.60 CPU / 21.625 GiB across 15 long-running containers** (+4 one-shot init containers declaring a further 1.50 CPU / 1.500 GiB, for a bootstrap peak of 16.10 CPU / 23.125 GiB across 19), against a mandate of 16 cores / 40 GB. Phase D deleted the v2 ClickHouse→Iceberg offload ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md), and the Outcome sections of [ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md) and [ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md)). Source for every figure: `docker compose --env-file .env.example config`, limits summed ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
+K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, and a Prefect-scheduled Spark job reads Redpanda by offset range into an Iceberg lake every 5 minutes. The ClickHouse Bronze → Silver → Gold medallion that the v2 pipeline built out of Kafka-engine tables and materialized views is frozen (below). The whole thing runs in one Docker Compose file on **14.60 CPU / 25.625 GiB across 15 long-running containers** (+4 one-shot init containers declaring a further 1.50 CPU / 1.500 GiB, for a bootstrap peak of 16.10 CPU / 27.125 GiB across 19), against a mandate of 16 cores / 40 GB. Phase D deleted the v2 ClickHouse→Iceberg offload ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md), and the Outcome sections of [ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md) and [ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md)). Source for every figure: `docker compose --env-file .env.example config`, limits summed ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
 
 > **The v2 hot tier is frozen as of 2026-08-26.** The three Kotlin feed handlers were the only producers of `market.crypto.trades.<ex>[.raw]`, and they retired to [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md) when the Rust capture tier matched them on per-symbol parity ([ADR-019](../adr/ADR-019-rust-capture-tier.md)). Nothing writes those six topics now, so the Kafka-engine queues have nothing to read and **`k2.bronze_trades_*`, `k2.silver_trades` and the six `k2.ohlcv_*` tables stop advancing at the retirement timestamp** — they hold history, they do not grow, and their TTLs keep expiring rows out from under them (bronze 7 d, silver 30 d). The `market.crypto.v3.{raw,trades,book}.<ex>` topics are the only live feed. The `k2` database, its Kafka-engine queues and the `.raw` topics are dropped together at the Phase E cutover, not here — a frozen table is still queryable while the v3 hot tier is being built beside it. Everything below that describes `k2.*` describes what was built and what is still readable, not what is being written.
 
@@ -205,7 +205,7 @@ The end-to-end p99 is dominated by network RTT to the exchanges (~80 ms average)
 | capture-kraken (v3) | 0.25 | 256 MB |
 | capture-coinbase (v3) | 0.25 | 512 MB |
 | `lake-metrics` (v3) | 0.1 | 128 MB |
-| **Total (15 long-running services)** | **14.60** | **21.625 GiB** |
+| **Total (15 long-running services)** | **14.60** | **25.625 GiB** |
 
 Against the v2 baseline of 15.1 CPU / 21.875 GB across 14 services: `lakekeeper`, the three `capture-*`
 containers and `lake-metrics` added +1.10 CPU / +1.375 GiB, retiring the three Kotlin feed handlers gave
@@ -217,7 +217,7 @@ Four further entries — `redpanda-init` (v2, topic creation), `lakekeeper-migra
 `lake-init` (v3 bucket + warehouse + namespaces) and `lake-ddl` (v3 raw/bronze/audit table DDL) — are
 one-shot containers that exit after startup, so they are not in the steady-state total. They are not free
 either: they declare 1.50 CPU / 1.500 GiB between them and run concurrently with everything above at
-`docker compose up`, for a bootstrap peak of 16.10 CPU / 23.125 GiB across 19 containers. Budget and
+`docker compose up`, for a bootstrap peak of 16.10 CPU / 27.125 GiB across 19 containers. Budget and
 reasoning: [ADR-010](../adr/ADR-010-resource-budget.md),
 [docs/operations/docker-resources.md](../operations/docker-resources.md).
 

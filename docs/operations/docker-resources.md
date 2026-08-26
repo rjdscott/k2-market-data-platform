@@ -5,8 +5,8 @@ hard `limit` and a guaranteed `reservation`; the one-shot init containers declar
 only. The design target was a single 16-core / 40 GB host, and the as-built stack fits
 inside it at steady state.
 
-**As built, steady state: 14.60 CPU / 21.625 GiB across 15 long-running services.**
-**One-shots: 1.50 CPU / 1.500 GiB across 4.** **Bootstrap peak: 16.10 CPU / 23.125 GiB
+**As built, steady state: 14.60 CPU / 25.625 GiB across 15 long-running services.**
+**One-shots: 1.50 CPU / 1.500 GiB across 4.** **Bootstrap peak: 16.10 CPU / 27.125 GiB
 across 19** — the one-shots run concurrently with the steady state at `docker compose up`,
 so that peak, not the steady state, is what the host has to absorb at boot. CPU limits are
 a ceiling on scheduling rather than a reservation, so 16.10 on a 16-core host is a burst
@@ -39,7 +39,7 @@ for label, oneshot in (("steady", False), ("one-shot", True)):
     cpu = sum(float(l["cpus"]) for l in lim)
     gib = sum(int(l["memory"]) for l in lim) / 2**30
     print("%-9s %2d services  %5.2f CPU  %6.3f GiB" % (label, len(lim), cpu, gib))'
-steady    15 services  14.60 CPU  21.625 GiB
+steady    15 services  14.60 CPU  25.625 GiB
 one-shot   4 services   1.50 CPU   1.500 GiB
 ```
 
@@ -56,7 +56,7 @@ label was wrong. Run on 2026-08-27.
 | `redpanda-console` | streaming | 0.5 | 0.1 | 256 MB | 128 MB |
 | `clickhouse` | warm storage | 4.0 | 2.0 | 8 GB | 4 GB |
 | `minio` | cold storage | 1.0 | 0.5 | 1 GB | 512 MB |
-| `spark-iceberg` | lake batch engine | 2.0 | 1.0 | 4 GB | 2 GB |
+| `spark-iceberg` | lake batch engine | 2.0 | 1.0 | 8 GB | 2 GB |
 | `prefect-db` | orchestration | 1.0 | 0.5 | 1 GB | 512 MB |
 | `prefect-server` | orchestration | 1.0 | 0.5 | 1 GB | 512 MB |
 | `prefect-worker` | orchestration | 0.5 | 0.25 | 512 MB | 256 MB |
@@ -66,13 +66,13 @@ label was wrong. Run on 2026-08-27.
 | `capture-kraken` | ingestion (v3) | 0.25 | 0.1 | 256 MB | 128 MB |
 | `capture-coinbase` | ingestion (v3) | 0.25 | 0.1 | 512 MB | 128 MB |
 | `lake-metrics` | observability (v3 lake) | 0.1 | — | 128 MB | — |
-| **Steady state (15 long-running services)** | | **14.60** | **7.00** | **21.625 GiB** | **10.625 GiB** |
+| **Steady state (15 long-running services)** | | **14.60** | **7.00** | **25.625 GiB** | **10.625 GiB** |
 | `redpanda-init` | init (one-shot) | 0.25 | — | 128 MB | — |
 | `lakekeeper-migrate` | init (one-shot) | 0.5 | — | 256 MB | — |
 | `lake-init` | init (one-shot) | 0.25 | — | 128 MB | — |
 | `lake-ddl` | init (one-shot) | 0.5 | — | 1 GB | — |
 | **One-shot subtotal (4)** | | **1.50** | **—** | **1.500 GiB** | **—** |
-| **Bootstrap peak (19 containers)** | | **16.10** | **7.00** | **23.125 GiB** | **10.625 GiB** |
+| **Bootstrap peak (19 containers)** | | **16.10** | **7.00** | **27.125 GiB** | **10.625 GiB** |
 
 `capture-coinbase` gets twice the memory of the other two because Coinbase's `level2`
 channel is full depth, not top-20 — its subscribe snapshot alone is 5.2 MB
@@ -87,15 +87,15 @@ steady state at `docker compose up`, so the bootstrap peak is the number the hos
 absorb.
 
 Headroom against the 16 CPU / 40 GB envelope at steady state: **1.40 CPU (9%) and
-18.375 GiB (46%)**. At the bootstrap peak it is −0.10 CPU for as long as the one-shots
-run, and 16.875 GiB.
+14.375 GiB (36%)**. At the bootstrap peak it is −0.10 CPU for as long as the one-shots
+run, and 12.875 GiB.
 
 ## Where the budget goes
 
 - **ClickHouse takes 25% of CPU and 35% of RAM.** It absorbs the work v1 spent on five
   always-on Spark Streaming jobs — Kafka Engine ingest, Bronze→Silver→Gold materialized
   views and every analytical query run against the hot tier.
-- **Spark is batch-only, but the container is never empty.** Its 2.0 CPU / 4 GiB runs a job
+- **Spark is batch-only, but the container is never empty.** Its 2.0 CPU / 8 GiB (4 GiB until 2026-08-26) runs a job
   only during the 5-minute lake ingest and the nightly maintenance run, so the practical
   steady-state footprint is closer to 12.60 CPU / 17.625 GiB — but the base image's
   always-on Master, Worker, History Server, Thrift Server and Jupyter idle at **633 MiB**
@@ -109,7 +109,13 @@ run, and 16.875 GiB.
   the two drivers are now **serialised, not co-resident**: `maintenance.py` takes the
   ingest `flock` blocking and runs with a **2g** heap (`K2_LAKE_MAINTENANCE_DRIVER_MEMORY`);
   an ingest tick that lands during it exits 2 at the lock. Budget with one driver at a
-  time: 633 MiB + 2g + ~550 MiB overhead ≈ 3.2 GiB of 4 GiB.
+  time: 633 MiB + 2g + ~550 MiB overhead ≈ 3.2 GiB — which is why the limit went to
+  8 GiB the same day: 4 GiB left no margin for an operator's `docker exec` beside it.
+  **The limit only means something if the Docker engine has the memory:** this host's
+  Docker Desktop VM was 7.6 GiB until 2026-08-26 (`docker info --format '{{.MemTotal}}'`),
+  so every limit above that was clipped — `docker stats` showed ClickHouse as
+  `/ 7.648GiB` against its declared 8G. It is 39.2 GiB now; `docs/development/setup.md`
+  states the requirement.
 - **The three capture containers cost 0.75 CPU / 1 GiB combined** — 5% of CPU, 5% of RAM.
   That is half what the Kotlin handlers they replaced declared. RSS against these limits
   is **not yet measured** for the post-retirement stack ([ADR-010](../adr/ADR-010-resource-budget.md)
