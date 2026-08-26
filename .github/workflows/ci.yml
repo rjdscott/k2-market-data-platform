@@ -64,8 +64,12 @@ jobs:
         with:
           workspaces: services/capture-rust
 
-      # rdkafka's cmake build and zstd-sys both need a C toolchain.
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq cmake clang libclang-dev
+      # rdkafka's cmake build and zstd-sys both need a C toolchain. libcurl
+      # headers too: the runner ships libcurl.so, librdkafka's cmake detects it
+      # and enables the OAuth/OIDC code path, and the build then fails on
+      # `curl/curl.h` (run 32994901727). The Docker builder has no libcurl at
+      # all, so it never hit this; here the header package is the fix.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq cmake clang libclang-dev libcurl4-openssl-dev
 
       - run: cargo fmt --check
 
