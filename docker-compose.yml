@@ -418,7 +418,12 @@ services:
       PREFECT_API_URL: http://prefect-server:4200/api
       PYTHONPATH: /opt/prefect
       DOCKER_API_VERSION: "1.44"
-    command: prefect worker start --pool iceberg-offload --type process
+    # Register (upsert) the two scheduled deployments, then start the worker.
+    command: >
+      sh -c "prefect work-pool create iceberg-offload --type process 2>/dev/null || true
+      && python /opt/prefect/flows/deploy_production.py
+      && python /opt/prefect/flows/deploy_maintenance.py
+      && prefect worker start --pool iceberg-offload --type process"
     depends_on:
       prefect-server:
         condition: service_healthy

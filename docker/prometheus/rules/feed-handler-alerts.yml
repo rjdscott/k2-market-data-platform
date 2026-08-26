@@ -26,9 +26,9 @@ groups:
             **Immediate Actions:**
             1. Check container: `docker logs k2-feed-handler-{{ $labels.exchange }} --tail 50`
             2. Check container status: `docker compose ps feed-handler-{{ $labels.exchange }}`
-            3. Restart if crashed: `docker compose -f docker-compose.v2.yml restart feed-handler-{{ $labels.exchange }}`
+            3. Restart if crashed: `docker compose restart feed-handler-{{ $labels.exchange }}`
 
-            **Runbook:** docs/operations/runbooks/feed-handler-recovery.md
+            **Runbook:** docs/operations/runbooks/failure-recovery.md
 
       # CRITICAL: Error rate spike on a feed handler
       - alert: FeedHandlerHighErrorRate

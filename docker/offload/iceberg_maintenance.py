@@ -18,7 +18,7 @@ Design:
   - Audit is a full-pipeline operation that opens one Spark session, queries
     all 10 ClickHouse + Iceberg tables, then writes a consolidated report to
     PostgreSQL. One session start-up cost for 10 tables is far cheaper than 10.
-  - All env vars inherit from the spark-iceberg container (see docker-compose.v2.yml).
+  - All env vars inherit from the spark-iceberg container (see docker-compose.yml).
   - Exit code 0 = success, 1 = failure (matches offload_generic.py convention).
 """
 
