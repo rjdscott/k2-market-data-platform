@@ -156,8 +156,13 @@ sampler's own clock, `snapshot_ts_ns`, had zero. Both numbers and their commands
 
 **So cross-`conn_id` replay of the same `(exchange, symbol, trade_id)` is EXPECTED, and it
 is not this check.** It is counted separately by `venue_replay` (§4), which reports it as a
-rate and never fails. On the measured 2026-08-26 rate that is roughly a thousand trades a
-day; escalating it as an ingest bug is escalating the venue's documented behaviour.
+number and never fails. **One sample exists and no daily rate is extrapolated from it:**
+956 replayed trades in 287,184, over 30 minutes on 2026-08-26, all three venues
+([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md), repeated above
+`bronze.trades` in `docker/lake/ddl/lake.sql`). Reconnects are bursty — the replay follows
+resubscribes, not the clock — so scaling half an hour to a day would invent a number the
+sample cannot support. The Phase D burn-in produces the daily figure. Either way,
+escalating this as an ingest bug is escalating the venue's documented behaviour.
 
 **Expected behaviour** — a `duplicate_identifiers` failure on the **four-column** key is the
 one that means the exactly-once contract broke, and that should be impossible. The ingest is
@@ -290,13 +295,28 @@ the archive keeps both.
 question ([capture-sequence-gaps.md](./capture-sequence-gaps.md)), not a lake one.
 
 ```sql
--- The replay count per run, over the last fortnight. A step change is the signal;
--- a steady few hundred a day is the venue behaving as documented.
+-- The replay count per run, over the last fortnight. A step change is the signal.
+-- There is no expected level to compare a single run against yet: the only
+-- measurement is the 30-minute sample above, and the daily rate is what this
+-- query produces rather than what it is checked against.
 -- not yet run — Phase D burn-in
 SELECT run_ts, observed, detail
 FROM lake.audit.checks
 WHERE check_name = 'venue_replay' AND run_ts >= current_date() - INTERVAL 14 DAYS
 ORDER BY run_ts;
+```
+
+The 956 itself is `audit_venue_replay()` in `docker/lake/maintenance.py`, and it is one
+query — run it against any window to reproduce the count for that window:
+
+```sql
+-- not yet run against real tables — Phase D burn-in
+SELECT count(*) FROM (
+  SELECT exchange, symbol, trade_id
+  FROM lake.bronze.trades
+  GROUP BY exchange, symbol, trade_id
+  HAVING count(DISTINCT conn_id) > 1
+);
 ```
 
 A research query that wants one row per logical trade deduplicates on

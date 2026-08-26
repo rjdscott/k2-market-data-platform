@@ -48,6 +48,14 @@ guess. Section 8 says which command settles which row.
 > ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
 
 | I11 | Host filesystem free space | **212 GiB free of 961 GiB** on `/` (Docker root) | `df -BG /var/lib/docker`, 2026-08-26 |
+
+> **I11, unit note — the predicted values below are left as computed.** `df -BG` counts in
+> 2³⁰ blocks, so this row is GiB and is right; §7 rank 1 then subtracts a GB figure from it
+> and divides by GB/day, which mixes the two. The conversion is **212 GiB = 227.6 GB**, and
+> the same disk read again later the same day gives **194 GiB (208.3 GB) free of 961 GiB,
+> 79% used** — `df -BG /var/lib/docker`, 2026-08-26T15:44Z. The prediction is restated with
+> both corrections under §7 rank 1; neither number here is edited.
+
 | I12 | librdkafka producer queue cap | `queue.buffering.max.kbytes=32768` = **32 MiB** | [`002-phase-c-rust-capture.md`](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md) Scope |
 
 ### Stated guesses — the inputs with no measurement behind them at all
@@ -349,6 +357,14 @@ Each resource, and the multiple of today's 1× rate at which it binds:
 | Rank | Resource | Binds at, predicted | Assumption | Derived from |
 |---|---|---|---|---|
 | **1** | **Host disk, from lake growth** | **not a multiple — a date: ~26 days** | The lake has no TTL by design. Growth is a *calendar* problem, not a load problem, and it is the only unbounded line on this page. | `(212 GiB free − 34.6 GB Redpanda) ÷ 6.89 GB/day` (I11, §4d) |
+
+> **Rank 1, unit note — the ~26 days above is left as computed.** Its arithmetic subtracts
+> GB from GiB: 212 GiB is 227.6 GB, so on the same inputs it is `(227.6 − 34.6) ÷ 6.89` =
+> **28.0 days**, not 26. On today's free space — 194 GiB = 208.3 GB, `df -BG /var/lib/docker`,
+> 2026-08-26T15:44Z — it is `(208.3 − 34.6) ÷ 6.89` = **25.2 days**. Both corrections point
+> the same way as the original conclusion and neither changes it: disk binds first, on a
+> calendar, inside a month.
+
 | 2 | Redpanda disk at 48 h raw retention | **~5.8×**, if 200 GB is allocated to it | Time-based retention scales disk linearly with rate | `200 GB ÷ 34.6 GB` (§4d) |
 | 3 | `capture-coinbase` RSS | **~12.5×** on **book depth** — *not* on message rate | Only the book scales with depth: fixed cost is `(8+8+32+16)×1.2 + 25×1.2 = 106.8 MB`, book cost `27.1×1.2 = 32.5 MB`. A market-wide depth increase binds this; a trade-rate spike does not touch it. | `(512 − 106.8) ÷ 32.5` (§5) |
 | 4 | Total CPU budget headroom | **~19×** on capture usage alone | 1.40 cores of headroom ÷ 0.074 predicted usage — but this is headroom for *everything*, not just capture | `1.40 ÷ 0.074` (§3b, §6) |

@@ -110,7 +110,19 @@ shipped. The plan is left as written; the reasons are here.
   121.9 MiB RSS against the exporter's 128 MB limit; one REST GET against Lakekeeper
   returns the same snapshot summaries at 26.6 MiB. `docker/lake/README.md` has both
   commands.
-- **`lake-alerts.yml` has ten rules, not four, and `SmallFiles` is not among them.**
+- **`k2_lake_ingest_lag_seconds` is not exported, and nothing replaces it under that
+  name.** Scope bullet 4 above names it, and so does
+  [005-phase-f](005-phase-f-notebooks-numbers-docs.md) where the lake SLO is defined against
+  it. What `docker/lake/metrics.py` exports instead is
+  `k2_lake_max_kafka_ts_seconds` — the *instant* of the newest Kafka record — and lag is
+  `time() - k2_lake_max_kafka_ts_seconds` in PromQL. Same for `last_commit_age`, which is
+  `k2_lake_last_commit_ts_seconds`. Timestamps, not ages, and the reason is B2 in
+  `docker/lake/metrics.py`: an age gauge is recomputed only on a *successful* catalog read,
+  so during a Lakekeeper outage every age freezes at its last small value and its threshold
+  becomes unreachable — the exporter goes blind in exactly the outage it is the backstop
+  for. Phase F's SLO should be written against the timestamp gauge.
+
+- **`lake-alerts.yml` has eleven rules, not four, and `SmallFiles` is not among them.**
   An alert on mean file size fires by construction for the first ~15 days of the
   table's life; `LakeCompactionStale` measures the rewrite job instead.
   `LakeExporterStalled` and `LakeScrapeErrors` were added because a Lakekeeper outage

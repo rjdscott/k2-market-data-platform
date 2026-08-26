@@ -190,9 +190,11 @@ on the metric rather than an assumption in the docs. That matters here.
 **On this host, Docker runs inside a VM** (`docker context ls` shows
 `desktop-linux`, `docker info` reports `Operating System: Docker Desktop`), and
 the VM's disk is a thin-provisioned image on the machine's real disk. The two
-disagree. Both readings below are from the same instant, and this is the ONE
-free-space figure this repo publishes — everything else that needs a number
-quotes it and its timestamp:
+disagree. Both readings below are from the same instant, and this is the pair
+the alert's honesty is argued from. It is not the only free-space figure in the
+repo — [capacity-model.md](../../docs/architecture/capacity-model.md) I11 carries
+its own `df` reading as an input to the disk-runway prediction — so a figure
+without a timestamp and a command is the thing to distrust, not a second figure:
 
 ```console
 $ df -h /                                        # 2026-08-26T14:43Z, on the host
@@ -216,7 +218,9 @@ So on a Docker Desktop host **`LakeDiskUsageHigh` will not fire before the real
 disk fills**, and the honest reading is that the alert is correct on bare metal
 and on AWS and blind here. The *rule* is proven either way:
 `docker/prometheus/rules/tests/lake-alerts_test.yml` asserts it fires at 0.81,
-stays quiet at 0.79, and that `LakeDiskUsageCritical` takes over at 0.95. What
+stays quiet at 0.79, and that `LakeDiskUsageCritical` — whose threshold is
+**0.90** — stays quiet at 0.81 and fires on the 0.95 sample the test drives it
+with. 0.95 is the input, 0.90 is the rule. What
 is missing on this host is a truthful input, and closing that needs a host-side
 exporter — a maintainer decision rather than something a container can fix.
 Until then the check is manual and it is `df -h /` on the host, which the
