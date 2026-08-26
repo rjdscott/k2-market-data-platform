@@ -455,7 +455,20 @@ Outcome with the rest of the parity-window measurements.
 (`feed-handler-{binance,kraken,coinbase}`; `FeedHandlerDown`,
 `FeedHandlerHighErrorRate`, `FeedHandlerFrequentReconnects`, plus the
 `feed_handler:trade_rate:5m` recording rule). The rule file is archived at
-`legacy/v2-kotlin/runbooks/feed-handler-alerts.yml`. The count of loaded rules
-goes from 27 to **24** (14 v2 + 10 v3 capture); Prometheus's own 1.0 CPU / 2 GB
-allocation is unchanged, because it was raised for ClickHouse's `:9363`
-cardinality rather than for the handlers.
+`legacy/v2-kotlin/runbooks/feed-handler-alerts.yml`. Alert rules go from 27 to
+**23** (13 v2 + 10 v3 capture): the handlers took three, and the same PR archived
+`ClickHouseBronzeInsertRateLow`, which could only ever fire once nothing produced
+to the v2 topics. Prometheus's own 1.0 CPU / 2 GB allocation is unchanged, because
+it was raised for ClickHouse's `:9363` cardinality rather than for the handlers.
+
+```bash
+for f in docker/prometheus/rules/*.yml; do
+  printf '%-50s %2d\n' "$f" "$(grep -c '^[[:space:]]*- alert:' "$f")"
+done
+```
+
+```
+docker/prometheus/rules/capture-alerts.yml         10
+docker/prometheus/rules/clickhouse-alerts.yml       4
+docker/prometheus/rules/iceberg-offload-alerts.yml  9
+```
