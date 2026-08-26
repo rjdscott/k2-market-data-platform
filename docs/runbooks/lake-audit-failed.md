@@ -192,7 +192,7 @@ the ones `docker/lake/maintenance.py` passes into `audit_duplicates`, which are 
 
 | Table | Duplicate key |
 |---|---|
-| `bronze.trades` | `(exchange, symbol, trade_id, conn_id)` — **`conn_id` included** |
+| `bronze.trades` | `(exchange, symbol, trade_id, src_topic, src_partition, src_offset)` — **the source lineage, not `conn_id`** |
 | `bronze.book_snapshots_l2` | `(exchange, symbol, conn_id, snapshot_ts_ns)` |
 
 **Both keys were settled by measurement, and the trade key is the most misread line on this
@@ -207,8 +207,16 @@ quiet book gives two consecutive 1 Hz samples the same value — **484 duplicate
 sampler's own clock, `snapshot_ts_ns`, had zero. Both numbers and their commands are in
 `docker/lake/ddl/lake.sql`.
 
-**So cross-`conn_id` replay of the same `(exchange, symbol, trade_id)` is EXPECTED, and it
-is not this check.** It is counted separately by `venue_replay` (§4), which reports it as a
+**`conn_id` turned out not to be enough.** The first day of the archive (2026-08-26) held
+**5,034 Coinbase `(exchange, symbol, trade_id, conn_id)` keys twice** — two distinct
+`market_trades` frames ~15 s apart on one connection (`src_offset` 9374 and 9772 on
+`trades.coinbase/9` are one pair; identical price, qty, side and `exchange_ts`). The venue
+re-sends recent trades inside a live subscription, not only after a reconnect. So the key
+is now the **source lineage**: one archived record decodes into one row per trade id it
+carries, and that is the only uniqueness the ingest can promise.
+
+**So venue replay of the same `(exchange, symbol, trade_id)` — across connections or within
+one — is EXPECTED, and it is not this check.** It is counted separately by `venue_replay` (§4), which reports it as a
 number and never fails. **One sample exists and no daily rate is extrapolated from it:**
 956 replayed trades in 287,184, over 30 minutes on 2026-08-26, all three venues
 ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md), repeated above
@@ -217,7 +225,7 @@ resubscribes, not the clock — so scaling half an hour to a day would invent a 
 sample cannot support. The Phase D burn-in produces the daily figure. Either way,
 escalating this as an ingest bug is escalating the venue's documented behaviour.
 
-**Expected behaviour** — a `duplicate_identifiers` failure on the **four-column** key is the
+**Expected behaviour** — a `duplicate_identifiers` failure on the **lineage** key is the
 one that means the exactly-once contract broke, and that should be impossible. The ingest is
 exactly-once by construction: a run's own commit moves its start offset, so no run can
 re-read a range another run committed
@@ -229,8 +237,8 @@ repeated itself.
 
 ```sql
 -- 1. What exactly is duplicated, and does it come from one source row or two?
---    Note the four-column key: dropping conn_id here re-finds the venue replay
---    §4 already reports.                             not yet run — Phase D burn-in
+--    Grouping on the venue key re-finds the replay §4 already reports — the
+--    distinct_sources column is what separates the two.   run 2026-08-26: 5,034 keys, all distinct_sources = 2
 SELECT exchange, symbol, trade_id, conn_id, count(*) AS n,
        count(DISTINCT (src_topic, src_partition, src_offset)) AS distinct_sources
 FROM lake.bronze.trades
@@ -244,7 +252,7 @@ columns exist:
 | `distinct_sources` | Meaning | Where the bug is |
 |---|---|---|
 | **1** | one archived frame decoded into two bronze rows | stage 2 ran twice over the same source snapshot range — check `k2.src-snapshot-id` on consecutive `bronze.*` commits |
-| **2** | two archived frames, on the *same connection*, carry the same venue trade id | `raw.messages` holds the record twice, so run §1 first: if `offset_continuity` also fails, stage 1 wrote a range twice. If it passes, the venue re-sent the trade on one connection — a **data finding**, not an ingest bug |
+| **2** | two archived frames, on the *same connection*, carry the same venue trade id | **the venue re-sent it** — measured 2026-08-26, 5,034 Coinbase pairs ~15 s apart. Not an ingest bug and, since the key became the lineage, no longer this check; §4 counts it |
 
 ```bash
 # 2. Was ingest running more than once at a time? Concurrency 1 is a

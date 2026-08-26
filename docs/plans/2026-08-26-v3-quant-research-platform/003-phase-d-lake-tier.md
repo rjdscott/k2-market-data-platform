@@ -149,8 +149,10 @@ cannot be met by code alone, so they are named here rather than quietly dropped.
 Three Scope details are described above as they were designed and are not what
 shipped. The plan is left as written; the reasons are here.
 
-- **`bronze.trades` identifier fields are `exchange, symbol, trade_id, conn_id`, not
-  `exchange, symbol, trade_id`,** and `bronze.book_snapshots_l2` uses
+- **`bronze.trades` identifier fields are `exchange, symbol, trade_id, src_topic,
+  src_partition, src_offset`, not `exchange, symbol, trade_id`** (first `conn_id` was added,
+  then the first day of the archive showed Coinbase re-sending trades within one connection
+  too — 5,034 keys — so the key became the lineage), and `bronze.book_snapshots_l2` uses
   `exchange, symbol, conn_id, snapshot_ts_ns` rather than `conn_msg_seq`. Both were
   settled by measurement over a 30-minute capture: 956 duplicated keys in 287,184
   trades, 484 in 47,331 snapshots. [ADR-024](../../adr/ADR-024-unified-bronze-tables-in-the-lake.md)

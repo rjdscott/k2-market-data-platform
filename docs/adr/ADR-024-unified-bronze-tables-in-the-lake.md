@@ -61,7 +61,7 @@ The specs, as applied by `docker/lake/ddl/lake.sql`:
 
 | Table | `PARTITIONED BY` | Sort order (local) | Identifier fields | Target file |
 |---|---|---|---|---|
-| `bronze.trades` | `exchange, days(exchange_ts)` | `symbol, exchange_ts` | `exchange, symbol, trade_id, conn_id` | 128 MB |
+| `bronze.trades` | `exchange, days(exchange_ts)` | `symbol, exchange_ts` | `exchange, symbol, trade_id, src_topic, src_partition, src_offset` (amended 2026-08-26, below) | 128 MB |
 | `bronze.book_snapshots_l2` | `exchange, days(snapshot_ts)` | `symbol, snapshot_ts` | `exchange, symbol, conn_id, snapshot_ts_ns` | 128 MB |
 
 Both are `write.distribution-mode = hash`, copy-on-write, Parquet + zstd, and carry
@@ -132,6 +132,12 @@ for book snapshots. Both are wrong, and the data says so:
   `(exchange, symbol, trade_id)` — that is what a research query deduplicates on, and
   `docker/lake/maintenance.py` reports the cross-`conn_id` count on every run so the
   replay rate stays a published number rather than background noise.
+* **Amended 2026-08-26, first full day of the archive:** `conn_id` was not enough either.
+  5,034 Coinbase `(exchange, symbol, trade_id, conn_id)` keys held two rows, each pair two
+  distinct `market_trades` frames ~15 s apart on one connection with identical price, qty,
+  side and `exchange_ts`. The venue re-sends recent trades inside a live subscription. So
+  the identifier is the **source lineage** — the one uniqueness an archive of frames can
+  promise — and `venue_replay` reports the replay count split across / within connections.
 * Over **47,331 book snapshots** the same day, `(exchange, symbol, conn_id, conn_msg_seq)`
   had **484 duplicated keys** — e.g. binance ATOMUSDT `conn_msg_seq` 81456 sampled one
   second apart with the same `recv_ts_ns`. `conn_msg_seq` records which frame the book

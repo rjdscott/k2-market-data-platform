@@ -113,9 +113,19 @@ ALTER TABLE lake.raw.messages
 -- disproves; adding conn_id makes the claim true and leaves the venue replay
 -- visible instead of hidden.
 --
+-- conn_id was not enough either. Measured 2026-08-26 over the first day of the
+-- archive: 5,034 Coinbase (exchange, symbol, trade_id, conn_id) keys held two
+-- rows each, from two distinct market_trades frames ~15 s apart on ONE
+-- connection — the venue re-sends recent trades inside a live subscription as
+-- well as after a reconnect. So the identifier is the source lineage: an
+-- archived record decodes into exactly one row per trade id it carries, and
+-- that is the only uniqueness the ingest can promise. Anything the venue
+-- repeats, the archive repeats.
+--
 -- The logical trade is still (exchange, symbol, trade_id) — that is what a
 -- research query deduplicates on, and docker/lake/maintenance.py reports the
--- cross-conn_id count on every run so the replay rate stays a number.
+-- replay count on every run (split across / within connections) so the rate
+-- stays a number.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS lake.bronze.trades (
     exchange         STRING  NOT NULL COMMENT 'binance | kraken | coinbase',
@@ -155,7 +165,7 @@ TBLPROPERTIES (
     'comment'                                       = 'Unified normalised trades, decoded from raw.messages. Rebuildable: drop and replay.'
 );
 
-ALTER TABLE lake.bronze.trades SET IDENTIFIER FIELDS exchange, symbol, trade_id, conn_id;
+ALTER TABLE lake.bronze.trades SET IDENTIFIER FIELDS exchange, symbol, trade_id, src_topic, src_partition, src_offset;
 
 ALTER TABLE lake.bronze.trades
     WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, exchange_ts;

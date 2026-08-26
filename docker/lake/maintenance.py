@@ -349,7 +349,11 @@ def audit_duplicates(spark, table: str, keys: list) -> list:
 
     A failure here means the ingest wrote the same record twice, which would
     mean the offset contract broke. It does **not** mean the venue sent the same
-    trade twice — that is a separate number, reported below.
+    trade twice — that is a separate number, reported below. That is why the
+    trade key carries the source lineage: measured 2026-08-26, Coinbase re-sends
+    a trade inside the *same* connection too (5,034 keys, 15 s apart, two
+    distinct frames), so no combination of venue fields is unique in an archive
+    of frames. Only "which archived record produced this row" is.
     """
     key_list = ", ".join(keys)
     row = spark.sql(
@@ -374,8 +378,11 @@ def audit_venue_replay(spark) -> list:
     Coinbase replays recent `market_trades` when a subscription is
     re-established, so after every reconnect the archive legitimately holds the
     same (exchange, symbol, trade_id) twice under two conn_ids — measured at 956
-    such trades in 287,184 over 30 min on 2026-08-26. Those rows are real frames
-    that really arrived and the append-only archive keeps both.
+    such trades in 287,184 over 30 min on 2026-08-26. It also re-sends trades
+    inside one connection: the same day, 5,034 Coinbase trade ids arrived twice
+    on one conn_id in two distinct `market_trades` frames ~15 s apart (raw
+    offsets 9374 and 9772 on trades.coinbase/9 are one such pair). Those rows
+    are real frames that really arrived and the append-only archive keeps both.
 
     What this row buys: the replay rate becomes a published number instead of
     background noise, so a *change* in it is visible. A jump means reconnect
@@ -383,23 +390,25 @@ def audit_venue_replay(spark) -> list:
     """
     row = spark.sql(
         f"""
-        SELECT count(*) AS replayed
+        SELECT count(*) AS replayed,
+               coalesce(sum(CASE WHEN conns > 1 THEN 1 ELSE 0 END), 0) AS across_conns
         FROM (
-          SELECT exchange, symbol, trade_id
+          SELECT exchange, symbol, trade_id, count(DISTINCT conn_id) AS conns
           FROM {TRADES_TABLE}
           GROUP BY exchange, symbol, trade_id
-          HAVING count(DISTINCT conn_id) > 1
+          HAVING count(*) > 1
         )
         """
     ).collect()[0]
-    count = int(row["replayed"])
+    count, across = int(row["replayed"]), int(row["across_conns"])
     return [
         _result(
             "venue_replay",
             TRADES_TABLE,
             True,
             count,
-            f"{count} trade ids seen on 2+ conn_ids (venue replay after reconnect, expected)",
+            f"{count} trade ids delivered 2+ times ({across} across reconnects, "
+            f"{count - across} within one connection; venue replay, expected)",
         )
     ]
 
@@ -473,7 +482,9 @@ AUDITS = (
     (
         "duplicate_identifiers",
         TRADES_TABLE,
-        lambda s: audit_duplicates(s, TRADES_TABLE, ["exchange", "symbol", "trade_id", "conn_id"]),
+        lambda s: audit_duplicates(
+            s, TRADES_TABLE, ["exchange", "symbol", "trade_id", "src_topic", "src_partition", "src_offset"]
+        ),
     ),
     (
         "duplicate_identifiers",
