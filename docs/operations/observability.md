@@ -148,7 +148,7 @@ Sanity-check the exporter's counting logic offline with
 | Offload success rate | >99% | >95% | no failures observed to date |
 | Offload cycle duration | <30 s | <10 min | 5–7 s per table (2026-08-26) |
 | Warm/cold consistency | 100% | >99% | 99.9%+ (2026-02-15, 2026-02-18) |
-| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 tested modes — see [runbooks/failure-recovery.md](./runbooks/failure-recovery.md) |
+| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 tested modes — see [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md) |
 
 ## Not wired up
 
@@ -165,5 +165,5 @@ Honest gaps, in priority order:
 ## Related
 
 - [quick-reference.md](./quick-reference.md) — health-check one-liners
-- [runbooks/failure-recovery.md](./runbooks/failure-recovery.md) — what to do when one of these fires
+- [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md) — what to do when one of these fires
 - [latency-budgets.md](./latency-budgets.md) — the latency targets behind the SLO table

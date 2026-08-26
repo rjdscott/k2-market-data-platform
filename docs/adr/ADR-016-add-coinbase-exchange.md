@@ -57,7 +57,7 @@ Both provide global/non-US perspective. Adding a US-regulated exchange creates e
 |------|---------|
 | `services/feed-handler-kotlin/src/.../CoinbaseWebSocketClient.kt` | WebSocket client (mirrors KrakenWebSocketClient pattern) |
 | `docker/clickhouse/schema/11-bronze-coinbase.sql` | Kafka Engine queue + bronze table + MV |
-| `docs/decisions/ADR-016-add-coinbase-exchange.md` | This file |
+| `docs/adr/ADR-016-add-coinbase-exchange.md` | This file |
 
 ### Modified Files
 | File | Change |

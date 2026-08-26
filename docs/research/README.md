@@ -1,0 +1,21 @@
+# Research
+
+Analysis that happened *before* a decision: the costing, ranking and comparison work that
+an ADR then commits to. Research holds the reasoning; ADRs (`../adr/`) hold the verdict;
+benchmarks (`../benchmarks/`) hold the measurements that settled it.
+
+## Conventions
+
+- One file per investigation, `YYYY-MM-DD-<slug>.md`, dated when the analysis was done.
+- **Research is allowed to be wrong in hindsight.** It is never rewritten to match what
+  was eventually decided — the ADR's `Outcome` section carries the correction, and
+  [`../MIGRATION-JOURNEY.md`](../MIGRATION-JOURNEY.md) scores the predictions.
+- The moment a conclusion becomes a commitment it becomes an ADR. ADRs, plans and audits
+  cite research; they do not restate it.
+- Estimates are labelled as estimates. A number that was guessed says so.
+
+## Index
+
+| Document | Question | Outcome |
+|----------|----------|---------|
+| [2026-02-09-v2-investment-analysis.md](./2026-02-09-v2-investment-analysis.md) | Which v2 changes are worth doing, ranked by risk against reward, before any code is written? | Produced ADR-001 … ADR-010. Predictions scored in [`../MIGRATION-JOURNEY.md`](../MIGRATION-JOURNEY.md) — the misses were all in the same direction: underestimating what orchestration is worth |

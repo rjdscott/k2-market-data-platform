@@ -18,13 +18,16 @@ of in a prompt. Each reads its surface's `README.md` before writing anything.
 
 | Skill | Produces |
 |-------|----------|
-| `adr` | `docs/decisions/ADR-NNN-*.md` — a decision, immutable once Accepted |
+| `adr` | `docs/adr/ADR-NNN-*.md` — a decision, immutable once Accepted |
 | `plan` | `docs/plans/<date>-<slug>.md` — design doc with phase exit criteria |
 | `audit` | `docs/audits/<date>-<surface>.md` — claims vs reality, verify-or-drop |
-| `runbook` | `docs/operations/runbooks/<slug>.md` — symptom → recovery → measured MTTR |
+| `runbook` | `docs/runbooks/<slug>.md` — symptom → recovery → measured MTTR |
 | `schema-change` | a checklist, not a file: the five places a data contract lives |
 | `benchmark-report` | `docs/benchmarks/<date>.md` — numbers, each with its command |
 | `release-check` | a fresh-clone pass/fail gate, run before tagging |
+
+Each skill reads its surface's `README.md` first — conventions live next to the
+artifact. `docs/README.md` is the map of all six surfaces.
 
 ## Honesty note
 

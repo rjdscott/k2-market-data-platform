@@ -48,7 +48,7 @@ Budget: 16 CPU / 40 GB. Headroom: … .
 
 ## MTTR
 
-From `docs/operations/runbooks/failure-recovery.md`. Re-induced for this
+From `docs/runbooks/failure-recovery.md`. Re-induced for this
 report: yes / no (if no, cite the date they were last measured).
 
 ---
@@ -60,5 +60,13 @@ report: yes / no (if no, cite the date they were last measured).
 ```
 
 <a id="t2"></a>**T2**
+```bash
+```
+
+<a id="t3"></a>**T3**
+```bash
+```
+
+<a id="t4"></a>**T4**
 ```bash
 ```

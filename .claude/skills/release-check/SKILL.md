@@ -79,7 +79,7 @@ grep -rInE "TODO|FIXME|XXX|change-me-in-production|localhost:8123 with password"
 grep -rIn "Spring Boot API\|docker-compose.v2\|clickhouse/schema/" --include='*.md' . | grep -v '^./legacy/'
 ```
 Anything published that describes a component that was never built, or a path
-that no longer exists, is a FAIL. `docs/decisions/` is exempt where an ADR is
+that no longer exists, is a FAIL. `docs/adr/` is exempt where an ADR is
 deliberately recording a rejected design — check, don't assume.
 
 ## 6. Links and secrets

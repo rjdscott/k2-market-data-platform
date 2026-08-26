@@ -122,7 +122,7 @@ docker exec -it k2-spark-iceberg spark-sql \
 
 ## When something breaks
 
-Start at [runbooks/failure-recovery.md](./runbooks/failure-recovery.md); the alert
+Start at [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md); the alert
 that fired names its own runbook in the annotation. Deeper query recipes are in
 [data-inspection.md](./data-inspection.md); dashboards and alert definitions in
 [observability.md](./observability.md).

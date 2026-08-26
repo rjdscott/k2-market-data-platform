@@ -1,11 +1,11 @@
 ---
 name: adr
-description: Record an architecture decision in docs/decisions/ using the K2 ADR template (ADR-NNN-kebab-title.md, immutable once Accepted, Outcome appended on divergence). Use when a fork between technologies/patterns/schemas is being decided, a decision has just been made in conversation, an obvious option is being deliberately rejected, a prior ADR is being reversed, or the user says "write an ADR", "record this decision", "capture this choice". Also use when a plan or audit hits a decision fork.
+description: Record an architecture decision in docs/adr/ using the K2 ADR template (ADR-NNN-kebab-title.md, immutable once Accepted, Outcome appended on divergence). Use when a fork between technologies/patterns/schemas is being decided, a decision has just been made in conversation, an obvious option is being deliberately rejected, a prior ADR is being reversed, or the user says "write an ADR", "record this decision", "capture this choice". Also use when a plan or audit hits a decision fork.
 ---
 
 # adr — record an architecture decision
 
-One ADR per decision, in `docs/decisions/`. Read `docs/decisions/README.md`
+One ADR per decision, in `docs/adr/`. Read `docs/adr/README.md`
 first — it holds the conventions and the index you must update.
 
 ## Workflow
@@ -13,7 +13,7 @@ first — it holds the conventions and the index you must update.
 1. **Confirm it deserves an ADR.** The test is cost of reversal: **more than a
    day to unwind** → ADR. One sane option, or a cheap-to-reverse detail → say
    so and stop. A corpus padded with trivia is a corpus nobody reads.
-2. **Number it.** `ls docs/decisions/ADR-*.md | tail -1` → next number, zero
+2. **Number it.** `ls docs/adr/ADR-*.md | tail -1` → next number, zero
    padded to 3. Never reuse, never renumber, including for rejected ADRs.
    Slug states the decision: `ADR-019-rust-capture-tier.md`, not
    `ADR-019-capture.md`.
@@ -37,7 +37,7 @@ first — it holds the conventions and the index you must update.
    - Reversed → the *new* ADR references the old; edit the old one's status to
      `Superseded by [ADR-NNN](ADR-NNN-slug.md)`. **That line is the only
      permitted edit to an Accepted ADR.**
-5. **Update the index table** in `docs/decisions/README.md` — the right table
+5. **Update the index table** in `docs/adr/README.md` — the right table
    (design vs implementation decisions), with ADR number, title, status and a
    one-line Outcome cell. Keep the supersession chain readable.
 6. **Report** the file path and the one-line decision. Land the ADR in the same

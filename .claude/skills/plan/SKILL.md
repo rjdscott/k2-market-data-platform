@@ -16,7 +16,7 @@ CI. If you feel the urge to add a checkbox table, don't.
 ## Workflow
 
 1. **Ground it.** A plan executes decisions already made. Check
-   `docs/decisions/` for what it builds on. If a major fork is still open,
+   `docs/adr/` for what it builds on. If a major fork is still open,
    resolve it with `/adr` before planning around a guess. If the plan itself
    settles forks, list them under Decisions and open the ADRs as the phases land.
 2. **Gather ground truth first.** Read the code and run the commands. A plan

@@ -107,7 +107,7 @@ throughout.
 **Symptom** — a Prefect flow run is marked Failed; cold-tier row counts stop advancing.
 
 **Detection** — `IcebergOffloadConsecutiveFailures`, `IcebergOffloadWatermarkStale` (see
-[observability.md](../observability.md#iceberg-offload-alertsyml--cold-tier-9)); also
+[observability.md](../operations/observability.md#iceberg-offload-alertsyml--cold-tier-9)); also
 visible in Prefect run history.
 
 **Expected behaviour** — the watermark is only advanced *after* a successful Iceberg
@@ -186,6 +186,6 @@ count before and after, and confirm continuity across the outage window rather t
 
 ## Related
 
-- [../observability.md](../observability.md) — the alerts referenced above
-- [../latency-budgets.md](../latency-budgets.md) — why lag rather than loss is the failure mode
+- [../operations/observability.md](../operations/observability.md) — the alerts referenced above
+- [../operations/latency-budgets.md](../operations/latency-budgets.md) — why lag rather than loss is the failure mode
 - [README.md](./README.md) — full runbook index

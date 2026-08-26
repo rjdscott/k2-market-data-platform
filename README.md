@@ -75,7 +75,7 @@ a unified `silver_trades` and on into six OHLCV tables — no scheduler, no stre
 code in the hot path. Every 15 min a Prefect flow runs Spark to read ClickHouse over JDBC and append to
 Iceberg, with per-table watermarks in PostgreSQL so a failed run resumes rather than duplicates. The
 Iceberg warehouse is a Hadoop catalog on a local volume; MinIO is provisioned for the S3 path but the
-offload does not write to it yet ([ADR-013](./docs/decisions/ADR-013-pragmatic-iceberg-version-strategy.md)).
+offload does not write to it yet ([ADR-013](./docs/adr/ADR-013-pragmatic-iceberg-version-strategy.md)).
 
 ## v1 → v2
 
@@ -94,12 +94,12 @@ v1 is preserved unmodified in [`legacy/v1/`](./legacy/v1/); the narrative is in
 
 | ADR | Decision | Why it mattered |
 |---|---|---|
-| [ADR-001](./docs/decisions/ADR-001-replace-kafka-with-redpanda.md) | Kafka → Redpanda | One binary, built-in schema registry and console; −1.5 CPU / −1.8 GB |
-| [ADR-003](./docs/decisions/ADR-003-clickhouse-warm-storage.md) | ClickHouse as the hot tier | Made real-time aggregation a view instead of a job |
-| [ADR-004](./docs/decisions/ADR-004-eliminate-spark-streaming.md) | Kill Spark Structured Streaming | The single largest win: ~14 CPU / 20 GB reclaimed |
-| [ADR-009](./docs/decisions/ADR-009-medallion-in-clickhouse.md) | Medallion layers as ClickHouse MVs | Bronze → Silver → Gold becomes DDL, not a codebase |
-| [ADR-011](./docs/decisions/ADR-011-multi-exchange-bronze-architecture.md) | Per-exchange bronze tables | Exchange quirks stay isolated; adding Coinbase touched no existing table |
-| [ADR-008](./docs/decisions/ADR-008-eliminate-prefect-orchestration.md) | **Planned to remove Prefect — kept it** | Reversed in practice: retries, scheduling, and run history were worth 1.5 CPU. The ADR stands as written, with the outcome recorded. |
+| [ADR-001](./docs/adr/ADR-001-replace-kafka-with-redpanda.md) | Kafka → Redpanda | One binary, built-in schema registry and console; −1.5 CPU / −1.8 GB |
+| [ADR-003](./docs/adr/ADR-003-clickhouse-warm-storage.md) | ClickHouse as the hot tier | Made real-time aggregation a view instead of a job |
+| [ADR-004](./docs/adr/ADR-004-eliminate-spark-streaming.md) | Kill Spark Structured Streaming | The single largest win: ~14 CPU / 20 GB reclaimed |
+| [ADR-009](./docs/adr/ADR-009-medallion-in-clickhouse.md) | Medallion layers as ClickHouse MVs | Bronze → Silver → Gold becomes DDL, not a codebase |
+| [ADR-011](./docs/adr/ADR-011-multi-exchange-bronze-architecture.md) | Per-exchange bronze tables | Exchange quirks stay isolated; adding Coinbase touched no existing table |
+| [ADR-008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | **Planned to remove Prefect — kept it** | Reversed in practice: retries, scheduling, and run history were worth 1.5 CPU. The ADR stands as written, with the outcome recorded. |
 
 ## Quick start
 
@@ -164,7 +164,7 @@ Six failure modes induced against the running stack, 2026-02-19 — all recovere
 | MinIO stopped | ~5 s | Hot tier kept ingesting; cold tier deferred cleanly |
 | Network partition | ~20–30 s | Consumers resumed from last committed offset, no corruption |
 
-Runbook: [`docs/operations/runbooks/failure-recovery.md`](./docs/operations/runbooks/failure-recovery.md).
+Runbook: [`docs/runbooks/failure-recovery.md`](./docs/runbooks/failure-recovery.md).
 
 **Latency caveat:** the p99 figures (Binance 191 ms, Coinbase 197 ms, Kraken 170 ms, measured 2026-02-19
 as `ingestion_timestamp - exchange timestamp` on `silver_trades`) come from a cold-start sample of only
@@ -205,7 +205,7 @@ docker-compose.yml              The whole stack
 - **Phases 1–6 complete** — infrastructure, Redpanda, ClickHouse, streaming pipeline, Iceberg cold tier,
   Kotlin feed handlers.
 - **Phase 7 (integration hardening): 4 of 5.** Done: latency benchmark, failure-mode testing, monitoring,
-  runbooks (8, in `docs/operations/runbooks/`). Outstanding: 24 h resource burn-in.
+  runbooks (8, in `docs/runbooks/`). Outstanding: 24 h resource burn-in.
 - **Phase 8 (query API): not started.** ADR-005 proposed one; deliberately deferred, since ClickHouse's
   HTTP interface has been enough. There is no query API in this repo. 5×/10× load tests and Alertmanager
   routing are also not done.
@@ -217,7 +217,7 @@ docker-compose.yml              The whole stack
 
 - [`docs/README.md`](./docs/README.md) — start here
 - [`docs/architecture/README.md`](./docs/architecture/README.md) — system design
-- [`docs/decisions/`](./docs/decisions/) — all 17 ADRs
+- [`docs/adr/`](./docs/adr/) — all 17 ADRs
 - [`docs/operations/`](./docs/operations/) — runbooks, observability, cost model
 - [`docs/development/setup.md`](./docs/development/setup.md) — local development
 - [`docs/MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md) — the v1 → v2 story

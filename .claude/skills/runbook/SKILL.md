@@ -1,11 +1,11 @@
 ---
 name: runbook
-description: Create or update an operational runbook in docs/operations/runbooks/ in the K2 shape — symptom, detection (the alert that fires), expected behaviour, recovery commands, measured MTTR, last verified. Use when the user says "write a runbook", "document how to recover X", after resolving an incident worth teaching, when a new Prometheus alert needs a destination, or when a change invalidates an existing runbook's steps.
+description: Create or update an operational runbook in docs/runbooks/ in the K2 shape — symptom, detection (the alert that fires), expected behaviour, recovery commands, measured MTTR, last verified. Use when the user says "write a runbook", "document how to recover X", after resolving an incident worth teaching, when a new Prometheus alert needs a destination, or when a change invalidates an existing runbook's steps.
 ---
 
 # runbook — record how, not why
 
-Runbooks live in `docs/operations/runbooks/`. Read that directory's
+Runbooks live in `docs/runbooks/`. Read that directory's
 `README.md` first: it holds the index, the triage flow and the escalation
 table. Reference material (metrics definitions, SLOs, cost model) belongs in
 `docs/operations/` proper, not in a runbook.
@@ -18,7 +18,7 @@ the ADR instead.
 1. **Confirm it's a runbook.** A repeatable operational task or an incident
    recovery → runbook. A decision → `/adr`. A number → `/benchmark-report`.
    Check the index: updating an existing runbook beats a near-duplicate.
-2. **One task per file**: `docs/operations/runbooks/<slug>.md`, imperative
+2. **One task per file**: `docs/runbooks/<slug>.md`, imperative
    title. Note at the top that every command assumes
    `set -a && . ./.env && set +a` is loaded.
 3. **Structure per scenario** — all five, in order (see `template.md`):
@@ -38,7 +38,7 @@ the ADR instead.
    runbook nobody ran is fiction, and this repo's runbooks claim measured
    MTTRs — don't dilute that.
 5. **Stamp it**: `**Last verified:** YYYY-MM-DD against <commit/stack state>`.
-6. **Update the index** table in `docs/operations/runbooks/README.md`: file,
+6. **Update the index** table in `docs/runbooks/README.md`: file,
    "when to use", triggering alert. Point the alert's annotation at the
    runbook too.
 

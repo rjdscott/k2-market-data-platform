@@ -77,4 +77,4 @@ The last two rows are the honest limits of what can be claimed. Details and the 
 | Managed streaming you do not operate | Confluent Cloud, MSK, Redpanda Cloud |
 | High availability | Any of the above, or this design across three hosts with replication |
 
-K2's claim is narrow and specific: sub-second trade-to-candle, open formats end to end, three exchanges, on one 16-core machine, with the resource accounting shown ([ADR-010](../decisions/ADR-010-resource-budget.md)). Outside that envelope, something on this list is a better answer.
+K2's claim is narrow and specific: sub-second trade-to-candle, open formats end to end, three exchanges, on one 16-core machine, with the resource accounting shown ([ADR-010](../adr/ADR-010-resource-budget.md)). Outside that envelope, something on this list is a better answer.

@@ -15,7 +15,7 @@ single developer workstation, so the marginal cost is electricity.
 That is the headline result, not an aside. v1 needed 35–40 CPU and 45–50 GB — more than
 2× a 16-core budget — because five always-on Spark Structured Streaming jobs consumed
 14 CPU / 20 GB before a single trade was processed. Removing them
-([ADR-004](../decisions/ADR-004-eliminate-spark-streaming.md)) is what moved the platform
+([ADR-004](../adr/ADR-004-eliminate-spark-streaming.md)) is what moved the platform
 from "needs a cluster" to "runs on one box".
 
 ## Cloud equivalent — same footprint
@@ -88,5 +88,5 @@ procurement one.
 ## Related
 
 - [docker-resources.md](./docker-resources.md) — the footprint these numbers price
-- [ADR-010 — resource budget](../decisions/ADR-010-resource-budget.md) — the 16-core constraint that forced the design
-- [ADR-004 — eliminate Spark Streaming](../decisions/ADR-004-eliminate-spark-streaming.md) — where the saving came from
+- [ADR-010 — resource budget](../adr/ADR-010-resource-budget.md) — the 16-core constraint that forced the design
+- [ADR-004 — eliminate Spark Streaming](../adr/ADR-004-eliminate-spark-streaming.md) — where the saving came from

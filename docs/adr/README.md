@@ -2,7 +2,24 @@
 
 Seventeen ADRs covering the design and rebuild of the K2 Market Data Platform: Kotlin/Ktor feed handlers → Redpanda → ClickHouse (medallion via materialized views) → Iceberg with a Hadoop catalog on a bind-mounted local warehouse (MinIO provisioned, unused by the offload), with Spark batch offload orchestrated by Prefect. ADR-001 to ADR-010 were written up front in February 2026, before any of it was built; ADR-011 to ADR-017 came out of implementation. The status column below records what actually happened — including the one decision that was reversed (ADR-008) and the one never built (ADR-005). Each ADR that deviated from its own design carries an `Outcome` section at the end explaining why.
 
-Measured as-built: **15.1 CPU / 21.875 GB** across 14 long-running services (+2 one-shot), against a 16 CPU / 40 GB budget. End-to-end p99 trade → ClickHouse Silver: **170–197 ms** across Binance, Kraken and Coinbase. All 6 failure-mode tests pass, max MTTR 32 s.
+Measured as-built: **15.1 CPU / 21.875 GB** across 14 long-running services (+2 one-shot), against a 16 CPU / 40 GB budget. End-to-end p99 trade → ClickHouse Silver: **170–197 ms** across Binance, Kraken and Coinbase. All 6 failure-mode tests pass, max MTTR 32 s. Every figure here traces to [`../benchmarks/2026-02-19-v2-baseline.md`](../benchmarks/2026-02-19-v2-baseline.md).
+
+## Conventions
+
+- One decision per file: `ADR-NNN-slug.md`, sequential, never reused, never renumbered.
+  The slug states the decision (`ADR-015-clickhouse-lts-downgrade.md`, not `ADR-015-ch.md`).
+- Structure comes from [`template.md`](./template.md): Context · Decision · Options
+  considered · Consequences · Outcome.
+- **The test is cost of reversal**: would unwinding this six months on cost more than a
+  day? If not, it is not an ADR. A corpus padded with cheap choices is one nobody reads.
+- **Consequences state what the decision costs**, not only what it buys.
+- **Accepted ADRs are immutable.** Reversing one means a new ADR; the only permitted edit
+  to an accepted ADR is its status line and an appended `Outcome`.
+- **`Outcome` is where honesty lives.** When implementation diverged, the original
+  reasoning stays as written and the Outcome says what was built instead, and why. The
+  recorded wrong prediction is the most valuable thing in this directory.
+- An ADR lands in the same PR as the work it governs; the index tables below update with it.
+- Write it with the `/adr` skill — it handles numbering, the header block and the index.
 
 ---
 
@@ -39,13 +56,5 @@ Measured as-built: **15.1 CPU / 21.875 GB** across 14 long-running services (+2 
 
 | Document | Description |
 |----------|-------------|
-| [INVESTMENT-ANALYSIS.md](INVESTMENT-ANALYSIS.md) | Pre-build risk/reward ranking of each proposed change (2026-02-09) — predictions left unedited |
+| [../research/2026-02-09-v2-investment-analysis.md](../research/2026-02-09-v2-investment-analysis.md) | Pre-build risk/reward ranking of each proposed change (2026-02-09) — predictions left unedited |
 | [../MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md) | What those predictions were actually worth, measured after the build |
-
----
-
-## Format
-
-ADRs are numbered sequentially and never rewritten after the fact. When an implementation diverged from its design, the original reasoning stays as written and an `Outcome` section is appended saying what was built instead and why. Superseded ADRs keep their number and point forward.
-
-Conventions and the template live with the `/adr` skill (`.claude/skills/adr/`); use it to write one — it handles numbering, the header block, supersession and the index tables above.

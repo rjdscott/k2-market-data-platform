@@ -207,7 +207,7 @@ docker logs k2-spark-iceberg --tail 50
 
 Common causes: Spark OOM (increase executor memory), ClickHouse down, MinIO unreachable.
 
-See also: [iceberg-offload-failure.md](./runbooks/iceberg-offload-failure.md), [iceberg-offload-lag.md](./runbooks/iceberg-offload-lag.md)
+See also: [iceberg-offload-failure.md](../runbooks/iceberg-offload-failure.md), [iceberg-offload-lag.md](../runbooks/iceberg-offload-lag.md)
 
 ### Maintenance audit failed (MISSING_DATA)
 
@@ -254,8 +254,8 @@ The `iceberg-offload` pool is created automatically when the worker starts with 
 
 ## Related
 
-- [ADR-017 — Iceberg maintenance pipeline](../decisions/ADR-017-iceberg-maintenance-pipeline.md) — design rationale
-- [ADR-014 — Spark-based Iceberg offload](../decisions/ADR-014-spark-based-iceberg-offload.md) — why Spark batch, and the watermark design
-- [runbooks/iceberg-offload-failure.md](./runbooks/iceberg-offload-failure.md)
-- [runbooks/iceberg-offload-watermark-recovery.md](./runbooks/iceberg-offload-watermark-recovery.md)
-- [runbooks/iceberg-scheduler-recovery.md](./runbooks/iceberg-scheduler-recovery.md)
+- [ADR-017 — Iceberg maintenance pipeline](../adr/ADR-017-iceberg-maintenance-pipeline.md) — design rationale
+- [ADR-014 — Spark-based Iceberg offload](../adr/ADR-014-spark-based-iceberg-offload.md) — why Spark batch, and the watermark design
+- [../runbooks/iceberg-offload-failure.md](../runbooks/iceberg-offload-failure.md)
+- [../runbooks/iceberg-offload-watermark-recovery.md](../runbooks/iceberg-offload-watermark-recovery.md)
+- [../runbooks/iceberg-scheduler-recovery.md](../runbooks/iceberg-scheduler-recovery.md)

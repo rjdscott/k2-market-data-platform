@@ -251,6 +251,6 @@ Justified by: 10x throughput improvement, 5x latency reduction, unified language
 
 ## Outcome — not implemented
 
-**No query API exists in v2.** [INVESTMENT-ANALYSIS.md](INVESTMENT-ANALYSIS.md) scored this 3/10 — the only item on the list that *costs* resources (+0.5 CPU) to rewrite a working API — and recommended deferring it to Phase 8. Phase 8 has not started. ClickHouse's own HTTP interface has absorbed every query need so far: Grafana, ad-hoc analysis and the offload jobs all talk to it directly, so nothing has forced the API layer into existence.
+**No query API exists in v2.** [the investment analysis](../research/2026-02-09-v2-investment-analysis.md) scored this 3/10 — the only item on the list that *costs* resources (+0.5 CPU) to rewrite a working API — and recommended deferring it to Phase 8. Phase 8 has not started. ClickHouse's own HTTP interface has absorbed every query need so far: Grafana, ad-hoc analysis and the offload jobs all talk to it directly, so nothing has forced the API layer into existence.
 
 Knock-on effect: [ADR-006](ADR-006-spark-batch-only.md) and [ADR-008](ADR-008-eliminate-prefect-orchestration.md) both proposed hosting scheduled work *inside* this Spring Boot service via `@Scheduled`. With the service never built, that home never existed — see the ADR-008 Outcome for how offload scheduling was actually solved.

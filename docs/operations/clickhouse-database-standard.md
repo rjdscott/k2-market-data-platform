@@ -66,7 +66,7 @@ $CH -q "SELECT table, total_rows FROM system.tables
 
 ## Related
 
-- [ADR-009 — medallion architecture in ClickHouse](../decisions/ADR-009-medallion-in-clickhouse.md)
-- [ADR-011 — multi-exchange bronze architecture](../decisions/ADR-011-multi-exchange-bronze-architecture.md)
-- [ADR-015 — ClickHouse 24.3 LTS downgrade](../decisions/ADR-015-clickhouse-lts-downgrade.md)
+- [ADR-009 — medallion architecture in ClickHouse](../adr/ADR-009-medallion-in-clickhouse.md)
+- [ADR-011 — multi-exchange bronze architecture](../adr/ADR-011-multi-exchange-bronze-architecture.md)
+- [ADR-015 — ClickHouse 24.3 LTS downgrade](../adr/ADR-015-clickhouse-lts-downgrade.md)
 - [data-inspection.md](./data-inspection.md) — queries against these tables

@@ -92,7 +92,7 @@ Micrometer on `:8082/metrics`, scraped by Prometheus as `feed-handler-{binance,k
 
 ## Adding a fourth exchange
 
-Coinbase was added this way in Phase 7 ([ADR-016](../decisions/ADR-016-add-coinbase-exchange.md)). The full procedure is [operations/adding-new-exchanges.md](../operations/adding-new-exchanges.md); the shape of it:
+Coinbase was added this way in Phase 7 ([ADR-016](../adr/ADR-016-add-coinbase-exchange.md)). The full procedure is [operations/adding-new-exchanges.md](../operations/adding-new-exchanges.md); the shape of it:
 
 1. Add the exchange and its symbols to `config/instruments.yaml`.
 2. Add a `<Exchange>WebSocketClient.kt` and its payload models; add a `normalize<Exchange>` to `TradeNormalizer` plus tests for the symbol mapping.

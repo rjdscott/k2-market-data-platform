@@ -80,5 +80,5 @@ drops the column.
 ClickHouse `ADD COLUMN` is reversible (`DROP COLUMN`) and cheap. **Iceberg is
 not**: files written under the new schema stay. Rolling back means dropping the
 target Iceberg table and re-offloading from the rewound watermark
-(`docs/operations/runbooks/iceberg-offload-watermark-recovery.md`) — so verify
+(`docs/runbooks/iceberg-offload-watermark-recovery.md`) — so verify
 step 8 before merging, not after.

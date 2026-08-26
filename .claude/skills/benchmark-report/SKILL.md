@@ -25,7 +25,7 @@ produced it. This skill produces the file those numbers cite:
 5. **Propagate.** Any doc quoting one of these numbers (README.md,
    `docs/architecture/README.md`, `docs/operations/{docker-resources,
    latency-budgets,cost-model}.md`, ADR Outcome sections,
-   `docs/decisions/README.md`) is updated in the same PR and links back to this
+   `docs/adr/README.md`) is updated in the same PR and links back to this
    file. Grep for the old value before you assume nothing quotes it.
 6. **Register it** in the index in `docs/benchmarks/README.md`, newest first.
 
@@ -79,7 +79,7 @@ docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c \
 a symbol scan), each timed three times, median reported, and the row count.
 Run with `clickhouse-client --time`.
 
-**MTTR** — only from `docs/operations/runbooks/failure-recovery.md`, and only
+**MTTR** — only from `docs/runbooks/failure-recovery.md`, and only
 if the failures were re-induced for this report. Otherwise cite the runbook's
 date and say it was not re-measured.
 

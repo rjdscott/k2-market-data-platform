@@ -460,5 +460,5 @@ def iceberg_offload_main():
 **Escalation**: If failure_count >5, engage platform team
 
 **Documentation**:
-- [ADR-014: Spark-Based Iceberg Offload](../../decisions/ADR-014-spark-based-iceberg-offload.md)
-- [Prefect schedules](../prefect-schedules.md)
+- [ADR-014: Spark-Based Iceberg Offload](../adr/ADR-014-spark-based-iceberg-offload.md)
+- [Prefect schedules](../operations/prefect-schedules.md)

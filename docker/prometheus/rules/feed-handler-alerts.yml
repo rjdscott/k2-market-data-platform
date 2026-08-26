@@ -29,7 +29,7 @@ groups:
             2. Check container status: `docker compose ps feed-handler-{{ $labels.exchange }}`
             3. Restart if crashed: `docker compose restart feed-handler-{{ $labels.exchange }}`
 
-            **Runbook:** docs/operations/runbooks/failure-recovery.md
+            **Runbook:** docs/runbooks/failure-recovery.md
 
       # CRITICAL: Error rate spike on a feed handler
       - alert: FeedHandlerHighErrorRate

@@ -70,6 +70,6 @@ Two known behaviours to expect when comparing declared vs. actual:
 
 ## Related
 
-- [ADR-010 — resource budget](../decisions/ADR-010-resource-budget.md) — the original target and the v1 comparison
-- [ADR-004 — eliminate Spark Streaming](../decisions/ADR-004-eliminate-spark-streaming.md) — where the 13.5 CPU saving came from
+- [ADR-010 — resource budget](../adr/ADR-010-resource-budget.md) — the original target and the v1 comparison
+- [ADR-004 — eliminate Spark Streaming](../adr/ADR-004-eliminate-spark-streaming.md) — where the 13.5 CPU saving came from
 - [cost-model.md](./cost-model.md) — what this footprint costs as managed cloud services

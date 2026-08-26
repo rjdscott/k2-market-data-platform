@@ -45,13 +45,15 @@ Doc surfaces, adopted by tier. This repo is public, so it earns Tier 2.
 
 | Tier | Surfaces | Purpose |
 |------|----------|---------|
-| 0 | `docs/decisions/`, `docs/operations/runbooks/` | why, and how. Always. |
+| 0 | `docs/adr/`, `docs/runbooks/` | why, and how. Always. |
 | 1 | `docs/plans/` | multi-phase work: design + phase gates |
-| 2 | `docs/audits/`, `docs/benchmarks/` | dated snapshots: claims vs reality, numbers vs commands |
+| 2 | `docs/audits/`, `docs/benchmarks/`, `docs/research/` | dated snapshots: claims vs reality, numbers vs commands, analysis before a decision |
 
-Reference material lives in `docs/{architecture,operations,development}/` and
-updates in the same PR as the change it describes. ADRs record *why*, runbooks
-record *how*, benchmarks record *what it measured*.
+Each surface's `README.md` carries its own conventions and index; `docs/README.md`
+is the map. Reference material lives in `docs/{architecture,operations,development}/`
+and updates in the same PR as the change it describes. ADRs record *why*, runbooks
+record *how*, benchmarks record *what it measured*, research records *what was
+considered before committing*.
 
 ### Verification habits
 
@@ -69,7 +71,7 @@ record *how*, benchmarks record *what it measured*.
 - An Accepted ADR is never edited. The only permitted changes: the status line
   (`Superseded by ADR-NNN`), and an appended `## Outcome` section when reality
   diverged from the design. The original reasoning stays as written — a
-  recorded wrong prediction is the most valuable thing in `docs/decisions/`.
+  recorded wrong prediction is the most valuable thing in `docs/adr/`.
 - Audits and benchmarks are dated snapshots. Append `Resolved in <commit>`
   lines; never rewrite a published finding or number.
 

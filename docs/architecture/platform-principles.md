@@ -8,7 +8,7 @@ Six rules the design is actually held to. Each one has a place in the codebase w
 
 16 cores, 40 GB, one host. Every service in [`docker-compose.yml`](../../docker-compose.yml) carries explicit `deploy.resources.limits`, and the total is checked at every phase boundary. As built: **15.1 CPU / 21.875 GB across 14 services** (+2 one-shot).
 
-This is first because it is the only principle that changed the architecture. "Reduce resource usage" produces tuning; a number you cannot exceed produces different decisions — five Spark Streaming jobs became materialized views, and a planned Kotlin stream processor was never written. Full accounting in [ADR-010](../decisions/ADR-010-resource-budget.md).
+This is first because it is the only principle that changed the architecture. "Reduce resource usage" produces tuning; a number you cannot exceed produces different decisions — five Spark Streaming jobs became materialized views, and a planned Kotlin stream processor was never written. Full accounting in [ADR-010](../adr/ADR-010-resource-budget.md).
 
 **Where it bites:** a new service must displace an existing one or justify its slot. That is the intended friction.
 
@@ -20,17 +20,17 @@ Every batch job must be safe to kill and re-run. The Iceberg offload reads Click
 
 No transactions, no two-phase commit, no coordination protocol — one number that moves last. Tested by killing the Spark container mid-offload: no duplicates, no gap, recovery on the next scheduled cycle.
 
-**Where it bites:** a partial Iceberg write is possible in principle. It has not been observed, and the daily row-count audit ([ADR-017](../decisions/ADR-017-iceberg-maintenance-pipeline.md)) is what would catch it.
+**Where it bites:** a partial Iceberg write is possible in principle. It has not been observed, and the daily row-count audit ([ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md)) is what would catch it.
 
 ---
 
 ### 3. Raw survives normalization
 
-Every trade is written twice: the exchange's untouched payload to a `.raw` topic, and a normalized record alongside it. Bronze tables keep native symbols and native sequence semantics per exchange — `XBT/USD` stays `XBT/USD` — and normalization to `BTC/USD` happens at Silver ([ADR-011](../decisions/ADR-011-multi-exchange-bronze-architecture.md)).
+Every trade is written twice: the exchange's untouched payload to a `.raw` topic, and a normalized record alongside it. Bronze tables keep native symbols and native sequence semantics per exchange — `XBT/USD` stays `XBT/USD` — and normalization to `BTC/USD` happens at Silver ([ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md)).
 
 The reason is debugging. When a price looks wrong, the question is always "did the exchange send this, or did we do it?", and that question is only answerable if the pre-transform bytes still exist.
 
-**Where it bites:** it costs a second produce per trade and a second copy of storage. And the principle is imperfectly applied — nothing durably persists pre-normalization rows in ClickHouse, which is why the four-layer medallion in [ADR-009](../decisions/ADR-009-medallion-in-clickhouse.md) shipped as three.
+**Where it bites:** it costs a second produce per trade and a second copy of storage. And the principle is imperfectly applied — nothing durably persists pre-normalization rows in ClickHouse, which is why the four-layer medallion in [ADR-009](../adr/ADR-009-medallion-in-clickhouse.md) shipped as three.
 
 ---
 
@@ -44,7 +44,7 @@ Verified rather than assumed: stopping `feed-handler-binance` left Kraken and Co
 
 ### 5. Use what is already running before adding something new
 
-ClickHouse already consumed from Kafka and already maintained incremental aggregates, so it did the stream processing — deleting five Spark Streaming jobs and a planned Kotlin Silver Processor. Redpanda has a schema registry built in, so there is no Confluent registry. Spark was already present for the offload, so no Iceberg SDK service was written ([ADR-014](../decisions/ADR-014-spark-based-iceberg-offload.md)).
+ClickHouse already consumed from Kafka and already maintained incremental aggregates, so it did the stream processing — deleting five Spark Streaming jobs and a planned Kotlin Silver Processor. Redpanda has a schema registry built in, so there is no Confluent registry. Spark was already present for the offload, so no Iceberg SDK service was written ([ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md)).
 
 The strongest form of this: the best service is the one you notice you do not have to write. Three planned services were deleted from the plan mid-build for exactly this reason, and none was missed.
 
@@ -69,4 +69,4 @@ The second half is the part that matters. One gap is documented rather than glos
 5. Are the pre-transform inputs still recoverable? (3)
 6. What does it export, and what is still dark? (6)
 
-Answers that are non-obvious become an ADR in [`docs/decisions/`](../decisions/) — including the ones that later turn out wrong. [ADR-008](../decisions/ADR-008-eliminate-prefect-orchestration.md) argued for deleting Prefect; Prefect is still running. It is kept as written, and the reversal is explained in [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md) rather than edited out.
+Answers that are non-obvious become an ADR in [`docs/adr/`](../adr/) — including the ones that later turn out wrong. [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md) argued for deleting Prefect; Prefect is still running. It is kept as written, and the reversal is explained in [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md) rather than edited out.

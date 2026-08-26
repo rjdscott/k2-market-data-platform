@@ -80,5 +80,5 @@ docker compose logs prefect-worker --tail 100
 - Validate rules: `docker run --rm -v $PWD/docker/prometheus/rules:/r --entrypoint promtool prom/prometheus:v3.2.0 check rules /r/*.yml`
 
 **Iceberg offload stuck**
-- See [../docs/operations/runbooks/iceberg-offload-failure.md](../docs/operations/runbooks/iceberg-offload-failure.md)
-  and [../docs/operations/runbooks/iceberg-offload-lag.md](../docs/operations/runbooks/iceberg-offload-lag.md)
+- See [../docs/runbooks/iceberg-offload-failure.md](../docs/runbooks/iceberg-offload-failure.md)
+  and [../docs/runbooks/iceberg-offload-lag.md](../docs/runbooks/iceberg-offload-lag.md)

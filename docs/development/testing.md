@@ -103,7 +103,7 @@ restart, database restart, feed-handler crash, offload failure, object-store out
 network partition. All six passed, worst MTTR 32 seconds. The procedures are written up as
 a runbook so they double as incident response:
 
-**[../operations/runbooks/failure-recovery.md](../operations/runbooks/failure-recovery.md)**
+**[../runbooks/failure-recovery.md](../runbooks/failure-recovery.md)**
 
 Re-run them after any change to the compose topology, healthchecks or consumer
 configuration. Each mode is one command to induce and one to recover.
