@@ -1,4 +1,10 @@
-.PHONY: chaos help up down logs ps test test-kotlin test-python test-rust dev-up check-docs
+.PHONY: chaos help up down logs ps test test-kotlin test-python test-rust dev-up check-docs check-alerts build-capture
+
+# Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
+# and not `rev-parse`: an image built from a dirty tree must not claim to be the
+# commit it was started from. Overridable, and `unknown` outside a git checkout.
+K2_GIT_SHA ?= $(shell git describe --always --dirty 2>/dev/null || echo unknown)
+export K2_GIT_SHA
 .DEFAULT_GOAL := help
 
 help:  ## Show available targets
@@ -31,9 +37,22 @@ test-kotlin:  ## Feed handler unit tests (runs in the JDK 21 build image; no loc
 test-python:  ## Iceberg offload flow unit tests (needs uv)
 	uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q
 
+# The WHOLE repo is mounted, not just the crate: src/record.rs compiles the wire
+# contract in with `include_str!("../../../schemas/avro/trade.avsc")` and the
+# replay tests load `../../config/instruments.yaml`. Mounting only the crate is
+# an include_str! *compile* error, not a skipped test.
 test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo needed)
-	docker run --rm -v "$(CURDIR)/services/capture-rust":/w -w /w rust:1-bookworm \
-	  sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang libclang-dev >/dev/null && cargo test'
+	docker run --rm -v "$(CURDIR)":/repo -w /repo/services/capture-rust rust:1-bookworm \
+	  sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang libclang-dev >/dev/null && cargo test --locked'
+
+build-capture:  ## Build k2-capture:v3 from the repo root, stamping the git sha
+	docker compose build capture-binance
+
+check-alerts:  ## promtool: syntax-check every rule file and run the capture alert unit tests
+	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus \
+	  -c 'promtool check rules /p/rules/*.yml'
+	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint promtool prom/prometheus \
+	  test rules /p/tests/capture-alerts.test.yml
 
 chaos:  ## Inject each capture failure, wait for its alert, measure recovery (LOCAL ONLY - breaks the running stack)
 	@echo "chaos: breaks the running stack and drops real market data - public feeds do not replay it."

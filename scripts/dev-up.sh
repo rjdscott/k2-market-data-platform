@@ -55,7 +55,15 @@ EOF
 fi
 
 # (c) build + start — daemon caches, so plain --build is cheap on a no-op
+# K2_GIT_SHA is the capture image's build arg; it lands in
+# k2_capture_build_info's `git_sha` label. `git describe --always --dirty`, not
+# `rev-parse`: an image built from a dirty tree must not claim to be the commit
+# it was started from. Unset (outside a checkout) ships `unknown`, which is
+# honest — compose's default.
 step "(c) docker compose up -d --build"
+K2_GIT_SHA="$(git describe --always --dirty 2>/dev/null || echo unknown)"
+export K2_GIT_SHA
+result "(c) build sha" "$K2_GIT_SHA"
 run docker compose up -d --build
 result "(c) up --build" "$( [ "$DRY_RUN" = "1" ] && echo 'SKIPPED (dry-run)' || echo DONE )"
 

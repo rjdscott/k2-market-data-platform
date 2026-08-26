@@ -52,7 +52,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to the channel services/capture-rust/rust-toolchain.toml declares.
+      # `@stable` was a no-op: rustup honours the toolchain file, so the action's
+      # `components:` never applied and 1.98.0 was downloaded on every run anyway
+      # (rust-cache caches build artefacts, not toolchains).
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy, rustfmt
 
@@ -65,9 +69,12 @@ jobs:
 
       - run: cargo fmt --check
 
-      - run: cargo clippy --all-targets -- -D warnings
+      # --locked: the Docker build compiles against the committed Cargo.lock, so
+      # CI must too. Without it a transitive minor bump can be green here and a
+      # different dependency set in the image.
+      - run: cargo clippy --locked --all-targets -- -D warnings
 
-      - run: cargo test
+      - run: cargo test --locked
 
   python:
     name: Python (offload + tests)
@@ -101,21 +108,26 @@ jobs:
             dockerfile: docker/spark/Dockerfile
           - name: capture
             dockerfile: services/capture-rust/Dockerfile
-            context: services/capture-rust
+            # Only this image declares the ARG; passing it to the others would
+            # just print an unconsumed-build-arg warning on three legs.
+            build_args: K2_GIT_SHA=${{ github.sha }}
 
     steps:
       - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v4
 
-      # Kotlin/Prefect/Spark COPY from repo root, so their context is `.` (matches
-      # docker-compose.yml). capture-rust is a standalone crate with its own
-      # context — matrix.context overrides the default per entry.
+      # Every one of these COPYs from the repo root, so the context is `.` and
+      # matches docker-compose.yml. capture-rust is NOT a standalone crate: it
+      # compiles the wire contract in from the repo with
+      # `include_str!("../../../schemas/avro/trade.avsc")` (src/record.rs), and
+      # its Dockerfile.dockerignore is what keeps the context small.
       - uses: docker/build-push-action@v7
         with:
-          context: ${{ matrix.context || '.' }}
+          context: .
           file: ${{ matrix.dockerfile }}
           push: false
+          build-args: ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 

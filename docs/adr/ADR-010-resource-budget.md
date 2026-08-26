@@ -387,3 +387,15 @@ argument the Phase B bootstrap-peak overcommit made above. Retiring
 `feed-handler-{binance,kraken,coinbase}` once the parity check is clean gives back 1.5
 CPU / 1.5 GB, landing steady state at 14.60 CPU / 21.625 GB — better headroom than the
 v2 baseline. [ADR-019](ADR-019-rust-capture-tier.md) records that retirement.
+
+**`cpuset` pinning now has a real default.** The three capture containers ship
+`cpuset: ${K2_CAPTURE_CPUSET-12-14}` — cores 12-14, the layout
+`005-phase-f-notebooks-numbers-docs.md` specifies, away from the low cores ClickHouse
+and Spark contend for. The knob previously defaulted to the empty string, so no
+container was pinned at all (`docker inspect -f '{{.HostConfig.CpusetCpus}}'` returned
+`""` on all three) and the Phase C scope bullet "cpuset pinned away from CH/Spark" was
+undelivered. A cpuset is a *placement* constraint, not a quota: it does not change the
+16.10 CPU limit sum above, and the `-` (not `:-`) default means a host with fewer than
+15 cores can still run unpinned by setting `K2_CAPTURE_CPUSET=` explicitly in `.env`.
+The disjoint-set check that Phase D's noisy-neighbour experiment depends on
+(`003-phase-d-lake-tier.md`) can now actually be run.

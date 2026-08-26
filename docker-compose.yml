@@ -39,6 +39,21 @@ volumes:
     driver: local
 
 
+# ── shared build definition for the three capture-* services ────────────────
+# Context is the REPOSITORY ROOT, not the crate: src/record.rs compiles the wire
+# contract in with `include_str!("../../../schemas/avro/trade.avsc")`, and
+# services/capture-rust/Dockerfile.dockerignore is what keeps the context small.
+# All three services build the same image; an anchor keeps them from drifting.
+x-capture-build: &capture-build
+  context: .
+  dockerfile: services/capture-rust/Dockerfile
+  args:
+    # Stamped into k2_capture_build_info. `git describe --always --dirty` rather
+    # than a bare sha: an image built from a dirty tree must not claim to be the
+    # commit it was started from. `make build-capture` and scripts/dev-up.sh
+    # export it; unset ships `unknown`, which is honest.
+    K2_GIT_SHA: ${K2_GIT_SHA:-unknown}
+
 #############################################################################
 # SERVICES - STREAMING BACKBONE
 #############################################################################
@@ -932,8 +947,7 @@ services:
   # Binance Capture - Rust k2-capture (trades + L2 book, one connection)
   # ───────────────────────────────────────────────────────────────────────
   capture-binance:
-    build:
-      context: services/capture-rust
+    build: *capture-build
     image: k2-capture:v3
     container_name: k2-capture-binance
     hostname: capture-binance
@@ -953,7 +967,7 @@ services:
       - RUST_LOG=info
     volumes:
       - ./config:/app/config:ro
-    cpuset: ${K2_CAPTURE_CPUSET:-}
+    cpuset: ${K2_CAPTURE_CPUSET-12-14}
     deploy:
       resources:
         limits:
@@ -979,6 +993,7 @@ services:
   # Kraken Capture - Rust k2-capture (trades + L2 book, one connection)
   # ───────────────────────────────────────────────────────────────────────
   capture-kraken:
+    build: *capture-build
     image: k2-capture:v3
     container_name: k2-capture-kraken
     hostname: capture-kraken
@@ -998,7 +1013,7 @@ services:
       - RUST_LOG=info
     volumes:
       - ./config:/app/config:ro
-    cpuset: ${K2_CAPTURE_CPUSET:-}
+    cpuset: ${K2_CAPTURE_CPUSET-12-14}
     deploy:
       resources:
         limits:
@@ -1026,6 +1041,7 @@ services:
   # 512M not 256M: Coinbase's full-depth BTreeMap<i64,i64> book (vs. Binance's
   # top-20 no-state and Kraken's depth=25) is the larger resident structure.
   capture-coinbase:
+    build: *capture-build
     image: k2-capture:v3
     container_name: k2-capture-coinbase
     hostname: capture-coinbase
@@ -1045,7 +1061,7 @@ services:
       - RUST_LOG=info
     volumes:
       - ./config:/app/config:ro
-    cpuset: ${K2_CAPTURE_CPUSET:-}
+    cpuset: ${K2_CAPTURE_CPUSET-12-14}
     deploy:
       resources:
         limits:
@@ -1090,6 +1106,10 @@ services:
 # capture-binance       | 0.25      | 256M         | Rust capture, Binance (v3 Phase C, parallel run)
 # capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (v3 Phase C, parallel run)
 # capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (v3 Phase C, parallel run)
+#
+# The three capture-* containers are also cpuset-pinned to cores 12-14
+# (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
+# it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
 # STEADY STATE (18 long-running) | 16.10 CPU | 23.125 GB | Full platform, Phase C parallel run
 #
