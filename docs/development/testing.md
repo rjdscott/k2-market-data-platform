@@ -18,7 +18,7 @@ make test-python   # offload flow unit tests (needs uv)
 | Kotlin — `TradeNormalizerTest` | 7 | [`services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/TradeNormalizerTest.kt`](../../services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/TradeNormalizerTest.kt) | Per-exchange symbol normalisation and trade mapping to the canonical schema |
 | Kotlin — `InstrumentsLoaderTest` | 13 | [`InstrumentsLoaderTest.kt`](../../services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/InstrumentsLoaderTest.kt) | Parsing `config/instruments.yaml` (v2 schema), per-exchange lookup, missing-file and malformed-YAML handling |
 | Python — Iceberg maintenance flow | 28 | [`tests/test_iceberg_maintenance_flow.py`](../../tests/test_iceberg_maintenance_flow.py) | Compact / expire / audit tasks, the parent flows, failure policy, and script helpers — all with the Spark subprocess mocked |
-| Python — v3 data contracts | 42 | [`tests/test_contracts.py`](../../tests/test_contracts.py) | Structural checks on `schemas/avro/*.avsc` and `config/instruments.yaml` — sibling `logicalType`, fixed-point prices, nullable defaults, duplicate/malformed canonical symbols |
+| Python — v3 data contracts | 41 | [`tests/test_contracts.py`](../../tests/test_contracts.py) | Structural checks on `schemas/avro/*.avsc` and `config/instruments.yaml` — sibling `logicalType`, fixed-point prices, nullable defaults, duplicate/malformed canonical symbols |
 | **v2 total** | **90** | | |
 | Legacy v1 | 180 | [`legacy/v1/tests/unit/`](../../legacy/v1/tests/unit/) | Archived. Kept for reference; not run in CI |
 

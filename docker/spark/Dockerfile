@@ -4,7 +4,13 @@
 # the client Lakekeeper 0.13.3 is verified against, and it brings
 # iceberg-aws-bundle (S3FileIO) which the REST catalog needs.
 # 3.5.6_1.9.0 does not exist on Docker Hub — 3.5.5_1.8.1 is the newest tag.
-FROM tabulario/spark-iceberg:3.5.5_1.8.1
+#
+# Pinned by digest, not by tag alone: a tag is mutable and this image is not
+# ours, so an upstream repush would silently change the Spark and Iceberg jars
+# under every job. The tag is kept alongside for readability. Refresh with:
+#   docker buildx imagetools inspect tabulario/spark-iceberg:3.5.5_1.8.1
+# (2026-08-26 — OCI image index digest)
+FROM tabulario/spark-iceberg:3.5.5_1.8.1@sha256:790a72e744e0d09f161e1b4c7c2f79625cc598cf0476da4703e62f1f4e023460
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Neutralise the base image's `demo` catalog
@@ -35,9 +41,19 @@ RUN pip3 install --no-cache-dir psycopg2-binary==2.9.9
 # are shaded in and no spark.jars.packages resolution is needed.
 # Pinned to 0.4.6 (2026-02-18) — the version ADR-015's 24.3 downgrade was tested
 # against. Upgrading requires an integration test.
+#
+# sha256 pinned by the same method as the five jars below (2026-08-26): Maven
+# Central publishes only a .sha1 sidecar for this artifact, so the jar was
+# downloaded once, its published .sha1 verified against the bytes, and the
+# sha256 computed from that same byte stream. Both checks agreed —
+#   published/computed sha1: 6efc73bb044a64add5555d676a8074b8389632e6
+# Reproduce with:
+#   curl -fsSLO <url> && curl -fsSL <url>.sha1 && sha1sum <jar> && sha256sum <jar>
 RUN curl -fsSL \
     "https://repo1.maven.org/maven2/com/clickhouse/clickhouse-jdbc/0.4.6/clickhouse-jdbc-0.4.6-all.jar" \
-    -o "$SPARK_HOME/jars/clickhouse-jdbc-0.4.6-all.jar"
+    -o "$SPARK_HOME/jars/clickhouse-jdbc-0.4.6-all.jar" \
+ && echo "ccd7dc983d7ed4ee1e1a4ad12a91f5912718ae15f4b6078efd66862f758ff7e9  $SPARK_HOME/jars/clickhouse-jdbc-0.4.6-all.jar" \
+    | sha256sum -c -
 
 # v3: Kafka source + Avro codec. The base image has neither, and Phase C reads
 # Redpanda by offset range and decodes Confluent-framed Avro.

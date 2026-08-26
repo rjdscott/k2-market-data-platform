@@ -182,17 +182,25 @@ log "✅ registry reachable at ${REGISTRY}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Harden `_schemas` — verbatim from the redpanda-init command this replaces.
-#    Compact policy + infinite retention prevents offset_out_of_range on schema
-#    registry restart (default delete policy trims records after 24h local
-#    retention). The nodelete list is set twice on purpose: `_schemas` can only
-#    be added to it once the topic exists, and the first call establishes the
-#    baseline list that the second one extends.
+#
+#    `cleanup.policy=compact` + `retention.ms=-1` is the pair that prevents
+#    offset_out_of_range on schema registry restart: the default delete policy
+#    would trim records out from under the registry's stored offsets.
+#
+#    `retention.local.target.ms=-1` is belt-and-braces only. It governs the LOCAL
+#    tier under Tiered Storage, and this cluster runs cloud_storage_enabled=false
+#    (dev-container mode), so it is inert today. Kept so the topic stays correct
+#    if Tiered Storage is ever switched on, not because it is doing work now.
+#
+#    The nodelete list is set twice on purpose: `_schemas` can only be added to
+#    it once the topic exists, and the first call establishes the baseline list
+#    that the second one extends.
 # ─────────────────────────────────────────────────────────────────────────────
 echo "▶ _schemas hardening"
 rpk cluster config set kafka_nodelete_topics '["_redpanda.audit_log","__consumer_offsets"]' --api-urls "$ADMIN"
 rpk topic alter-config _schemas --set cleanup.policy=compact --set retention.ms=-1 --set retention.local.target.ms=-1 --brokers "$BROKERS"
 rpk cluster config set kafka_nodelete_topics '["_redpanda.audit_log","__consumer_offsets","_schemas"]' --api-urls "$ADMIN"
-log "✅ _schemas hardened (compact, infinite retention)"
+log "✅ _schemas hardened (compact + retention.ms=-1)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. Global compatibility level.
@@ -209,11 +217,19 @@ log "✅ _schemas hardened (compact, infinite retention)"
 #    runs. If v2 ever needed a real schema change it would now be blocked — and
 #    a frozen v2 contract during the v3 migration is the desired behaviour.
 # ─────────────────────────────────────────────────────────────────────────────
+#    NON-FATAL (see step 6's banner): a registry that will not take the global
+#    level is a v3 problem, and blocking the v2 feed handlers over it is worse
+#    than running them under the BACKWARD default they already have.
 echo "▶ registry compatibility"
-curl -sf -X PUT "http://${REGISTRY}/config" \
-  -H 'Content-Type: application/vnd.schemaregistry.v1+json' \
-  -d '{"compatibility":"BACKWARD_TRANSITIVE"}' >/dev/null
-log "✅ global compatibility = $(curl -sf "http://${REGISTRY}/config")"
+if curl -sf -X PUT "http://${REGISTRY}/config" \
+     -H 'Content-Type: application/vnd.schemaregistry.v1+json' \
+     -d '{"compatibility":"BACKWARD_TRANSITIVE"}' >/dev/null; then
+  log "✅ global compatibility = $(curl -sf "http://${REGISTRY}/config")"
+else
+  echo "  ⚠️  WARN: could not set global compatibility to BACKWARD_TRANSITIVE" >&2
+  echo "  ⚠️  WARN: registry stays on its current default — v3 subjects are unguarded" >&2
+  V3_COMPAT_OK=0
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. Register the v3 schemas — TopicNameStrategy, so subject = <topic>-value.
@@ -226,8 +242,22 @@ log "✅ global compatibility = $(curl -sf "http://${REGISTRY}/config")"
 #
 #    No `-key` subjects: keys are the canonical symbol as plain UTF-8 (see
 #    schemas/README.md).
+#
+#    ── NON-FATAL, deliberately ──────────────────────────────────────────────
+#    Every v2 feed handler waits on this service with
+#    `service_completed_successfully`. Under `set -e` a single failed schema
+#    registration exits 1 and takes the whole live v2 pipeline down with it —
+#    which inverts the severity: v3 has no producers or consumers yet, v2 is
+#    carrying production traffic. A subject that fails to register breaks
+#    nothing that is running today, so it WARNs and the script carries on.
+#    v2 topic creation and `_schemas` hardening stay fatal: those v2 does need.
+#
+#    The final summary line is the thing to alert on — "9/9" is healthy, any
+#    other count means Phase C has work to do before it can produce.
 # ─────────────────────────────────────────────────────────────────────────────
 echo "▶ v3 schemas"
+V3_TOTAL=0
+V3_OK=0
 for ex in $EXCHANGES; do
   for kind in raw trades book; do
     case "$kind" in
@@ -236,19 +266,41 @@ for ex in $EXCHANGES; do
       book)   schema="book-snapshot-l2.avsc" ;;
     esac
 
-    [ -f "${SCHEMA_DIR}/${schema}" ] || {
-      echo "❌ ${SCHEMA_DIR}/${schema} not found — is ./schemas/avro mounted at ${SCHEMA_DIR}?" >&2
-      exit 1
-    }
+    subject="${V3_PREFIX}.${kind}.${ex}-value"
+    V3_TOTAL=$((V3_TOTAL + 1))
 
-    rpk registry schema create "${V3_PREFIX}.${kind}.${ex}-value" \
-      --schema "${SCHEMA_DIR}/${schema}" \
-      -X "registry.hosts=${REGISTRY}" >/dev/null
+    if [ ! -f "${SCHEMA_DIR}/${schema}" ]; then
+      echo "  ⚠️  WARN: ${SCHEMA_DIR}/${schema} not found (is ./schemas/avro mounted at ${SCHEMA_DIR}?) — skipping ${subject}" >&2
+      continue
+    fi
+
+    if rpk registry schema create "$subject" \
+         --schema "${SCHEMA_DIR}/${schema}" \
+         -X "registry.hosts=${REGISTRY}" >/dev/null 2>&1; then
+      V3_OK=$((V3_OK + 1))
+    else
+      echo "  ⚠️  WARN: failed to register ${subject} from ${schema}" >&2
+    fi
   done
 done
-log "✅ 9 subjects registered"
+
+if [ "$V3_OK" -eq "$V3_TOTAL" ]; then
+  log "✅ v3 schemas: ${V3_OK}/${V3_TOTAL} subjects registered"
+else
+  echo "  ⚠️  WARN: v3 schemas: only ${V3_OK}/${V3_TOTAL} subjects registered" >&2
+  echo "  ⚠️  WARN: v2 is unaffected and this service still exits 0 — but Phase C" >&2
+  echo "  ⚠️  WARN: cannot produce until the missing subjects are registered." >&2
+fi
 
 echo "▶ done"
 rpk topic list --brokers "$BROKERS"
 curl -sf "http://${REGISTRY}/subjects"
 echo
+
+# Exit 0 even on partial v3 registration — the v2 feed handlers gate on this.
+# v2 topic creation and `_schemas` hardening already exited non-zero if they failed.
+if [ "$V3_OK" -eq "$V3_TOTAL" ] && [ "${V3_COMPAT_OK:-1}" -eq 1 ]; then
+  echo "✅ redpanda-init complete: 6 v2 topics, 9 v3 topics, ${V3_OK}/${V3_TOTAL} v3 subjects"
+else
+  echo "⚠️  redpanda-init complete WITH WARNINGS: v2 tier healthy (6 topics, _schemas hardened); v3 subjects ${V3_OK}/${V3_TOTAL}"
+fi

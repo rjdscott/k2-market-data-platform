@@ -19,6 +19,11 @@ from pyspark.sql import SparkSession
 
 # Fixed for this stack — one host, one catalog, one bucket. Only the credentials
 # vary, and those come from the environment.
+#
+# CATALOG_URI and WAREHOUSE must match LK and WAREHOUSE in docker/lake/init-lake.sh,
+# which hard-codes the same values for the same reason. That script creates what
+# this one connects to; change them together or every job points at a catalog
+# nothing bootstrapped.
 CATALOG = "lake"
 CATALOG_URI = "http://lakekeeper:8181/catalog"
 WAREHOUSE = "k2"
@@ -60,36 +65,42 @@ def _smoke() -> None:
     data commit, so it is the part worth proving before Phase C builds on it.
     """
     spark = lake_session("k2-lake-smoke")
-    # No PURGE on the drops: Lakekeeper 0.13.3 answers a purge-drop with
-    # `BadRequestException: Table does not exist ... at location <metadata.json>`
-    # (verified 2026-08-26). It expires dropped tables through its own task queue,
-    # so a plain DROP is both what works and what we want.
-    spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {CATALOG}.audit")
-    spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.audit.smoke")
-    spark.sql(f"CREATE TABLE {CATALOG}.audit.smoke (id bigint, note string) USING iceberg")
+    # try/finally so a failed assert still drops the table and stops the session.
+    # Without it the first failure leaves lake.audit.smoke behind, and the NEXT
+    # run's CREATE TABLE fails on the leftover instead of on the real problem —
+    # a debugging dead end on the very path you only walk when something is wrong.
+    try:
+        # No PURGE on the drops: Lakekeeper 0.13.3 answers a purge-drop with
+        # `BadRequestException: Table does not exist ... at location <metadata.json>`
+        # (verified 2026-08-26). It expires dropped tables through its own task queue,
+        # so a plain DROP is both what works and what we want.
+        spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {CATALOG}.audit")
+        spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.audit.smoke")
+        spark.sql(f"CREATE TABLE {CATALOG}.audit.smoke (id bigint, note string) USING iceberg")
 
-    (
-        spark.createDataFrame([(1, "smoke")], "id bigint, note string")
-        .writeTo(f"{CATALOG}.audit.smoke")
-        .option("snapshot-property.k2.smoke", "1")
-        .append()
-    )
+        (
+            spark.createDataFrame([(1, "smoke")], "id bigint, note string")
+            .writeTo(f"{CATALOG}.audit.smoke")
+            .option("snapshot-property.k2.smoke", "1")
+            .append()
+        )
 
-    count = spark.sql(f"SELECT count(*) FROM {CATALOG}.audit.smoke").collect()[0][0]
-    summary = spark.sql(
-        f"SELECT summary FROM {CATALOG}.audit.smoke.snapshots "
-        "ORDER BY committed_at DESC LIMIT 1"
-    ).collect()[0][0]
+        count = spark.sql(f"SELECT count(*) FROM {CATALOG}.audit.smoke").collect()[0][0]
+        summary = spark.sql(
+            f"SELECT summary FROM {CATALOG}.audit.smoke.snapshots "
+            "ORDER BY committed_at DESC LIMIT 1"
+        ).collect()[0][0]
 
-    print(f"count={count}")
-    print(f"summary={summary}")
+        print(f"count={count}")
+        print(f"summary={summary}")
 
-    assert count == 1, f"expected 1 row, got {count}"
-    assert summary.get("k2.smoke") == "1", f"snapshot summary lost k2.smoke: {summary}"
+        assert count == 1, f"expected 1 row, got {count}"
+        assert summary.get("k2.smoke") == "1", f"snapshot summary lost k2.smoke: {summary}"
 
-    spark.sql(f"DROP TABLE {CATALOG}.audit.smoke")
-    print("✓ lake smoke passed")
-    spark.stop()
+        print("✓ lake smoke passed")
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {CATALOG}.audit.smoke")
+        spark.stop()
 
 
 if __name__ == "__main__":

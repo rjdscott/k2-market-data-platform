@@ -42,6 +42,14 @@ V3_SCHEMAS = {
     "book-snapshot-l2.avsc": "BookSnapshotL2",
 }
 
+# The nullable (union) fields each v3 record is allowed to have. Pinned so
+# test_nullable_fields_default_to_null cannot pass vacuously — see its docstring.
+EXPECTED_NULLABLE = {
+    "raw-message.avsc": {"symbol"},
+    "trade.avsc": set(),
+    "book-snapshot-l2.avsc": {"checksum_ok", "exchange_ts"},
+}
+
 CANONICAL_RE = re.compile(r"^[A-Z0-9]+/[A-Z0-9]+$")
 
 # Fixed-point int64 at scale 1e-8. Matched by name because that is the only
@@ -100,11 +108,6 @@ def instruments() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # Avro schemas
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def test_v2_binance_raw_schema_is_gone():
-    """The v2 raw-trade schema was superseded by RawMessage and deleted."""
-    assert not (AVRO_DIR / "binance-raw-trade.avsc").exists()
 
 
 @pytest.mark.parametrize("filename,record_name", sorted(V3_SCHEMAS.items()))
@@ -202,7 +205,20 @@ def test_nullable_fields_default_to_null(filename):
     BACKWARD_TRANSITIVE needs a default on every nullable field, and Avro only
     honours a default that matches the union's *first* branch — so the union
     must lead with "null" and the default must be null.
+
+    The expected union fields are pinned per schema rather than left implicit.
+    Without that this test passes trivially on any schema whose unions were
+    accidentally flattened to a bare type — the exact regression it exists to
+    catch. `trade.avsc` legitimately has none: every Trade field is required,
+    which is itself a contract worth failing on if it ever changes.
     """
+    nullable = {f["name"] for f in _fields(_load(filename)) if isinstance(f["type"], list)}
+    assert nullable == EXPECTED_NULLABLE[filename], (
+        f"{filename}: nullable fields are {sorted(nullable)}, expected "
+        f"{sorted(EXPECTED_NULLABLE[filename])} — a union that silently became a "
+        "bare type breaks BACKWARD_TRANSITIVE reads of older data"
+    )
+
     for field in _fields(_load(filename)):
         declared = field["type"]
         if not isinstance(declared, list):

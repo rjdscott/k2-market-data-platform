@@ -124,16 +124,44 @@ docker compose logs prefect-worker --tail 100
 - Validate rules: `docker run --rm -v $PWD/docker/prometheus/rules:/r --entrypoint promtool prom/prometheus:v3.2.0 check rules /r/*.yml`
 
 **A bind-mounted script runs its old contents after you edited it**
-- Observed 2026-08-26 on `docker/lake` — a *directory* mount, not the file-level
-  `config/instruments.yaml` case CLAUDE.md documents. An editor that saves by
-  write-to-temp-then-rename leaves the container reading the replaced inode, and
-  `--force-recreate` does not clear it. Rewrite the file in place to fix:
-  ```bash
-  python3 -c "import os,sys; p=sys.argv[1]; d=open(p,'rb').read(); f=open(p,'r+b'); \
-    f.write(d); f.truncate(); f.flush(); os.fsync(f.fileno())" docker/lake/init-lake.sh
-  ```
-- Confirm what the container actually sees before debugging the script:
-  `docker run --rm -v "$PWD/docker/lake:/init:ro" --entrypoint cat <image> /init/init-lake.sh`
+
+*Directory* mounts go stale too — the same write-then-rename problem CLAUDE.md
+documents for the file-level `config/instruments.yaml` mount. An editor (and the
+Edit tool) saves by write-to-temp-then-rename, which produces a new inode, and
+the file-sharing layer keeps serving the old one.
+
+**`--force-recreate` is the fix, but it has to cover every service that mounts
+the directory.** The stale entry is held for as long as *any* container has that
+host path mounted, so recreating one service while a sibling still holds the
+same directory leaves the new container reading the old file as well. Verified
+2026-08-26 on this stack:
+
+| Situation | New container reads |
+|-----------|--------------------|
+| No container holds the dir at rename time | new contents |
+| Another container still holds the dir | **old contents** |
+| Holder removed, then new container started | new contents |
+
+That is why `docker/lake` looked immune to `--force-recreate`: it is mounted by
+**both** `spark-iceberg` (`/home/iceberg/lake`) and `lake-init` (`/init`), so
+recreating `lake-init` alone leaves `spark-iceberg` pinning the stale copy.
+
+```bash
+# docker/lake — recreate BOTH holders
+docker compose up -d --force-recreate --no-deps spark-iceberg lake-init
+
+# docker/redpanda — only redpanda-init mounts it, so one service is enough
+docker compose up -d --force-recreate --no-deps redpanda-init
+
+# Which services mount the directory you edited:
+grep -n 'docker/lake' docker-compose.yml
+```
+
+Confirm what the container actually sees before debugging the script:
+
+```bash
+docker exec k2-spark-iceberg head -5 /home/iceberg/lake/spark_conf.py
+```
 
 **Iceberg offload stuck**
 - See [../docs/runbooks/iceberg-offload-failure.md](../docs/runbooks/iceberg-offload-failure.md)

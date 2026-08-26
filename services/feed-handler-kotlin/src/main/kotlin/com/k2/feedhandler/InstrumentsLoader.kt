@@ -89,8 +89,18 @@ class InstrumentsLoader(private val filePath: String) {
     // {Binance,Kraken,Coinbase}WebSocketClient, so it would need constructing with a
     // loader and every call site changed, on code that Phase C retires to
     // legacy/v2-kotlin/. The canonical mapping is data for the Rust capture tier,
-    // which is the only consumer that will still exist. The two agree today (asserted
-    // by tests/test_contracts.py against the same file TradeNormalizerTest asserts
-    // against); if they ever diverge before cutover, that is the signal to do the
-    // wiring rather than a reason to have done it now.
+    // which is the only consumer that will still exist.
+    //
+    // The two can and DO disagree, and nothing cross-checks them. TradeNormalizer's
+    // normalizeKrakenPair() rewrites only the `XBT/` prefix, so Kraken's XDG/USD is
+    // published as `XDG/USD` while config/instruments.yaml declares its canonical as
+    // `DOGE/USD` (live: `SELECT DISTINCT symbol FROM k2.silver_trades WHERE
+    // exchange = 'kraken'` shows XDG/USD). tests/test_contracts.py asserts the
+    // registry side only — it never imports or models TradeNormalizer.
+    //
+    // Left as-is deliberately: v2's silver/gold tables are already keyed on XDG/USD,
+    // so "fixing" the normalizer now splits Dogecoin across two symbols mid-migration
+    // for a tier that is being retired. Phase C's Rust capture reads canonical
+    // straight from the registry, which retires the hard-coded map and closes the
+    // gap by construction.
 }

@@ -5,6 +5,7 @@ import java.io.File
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class InstrumentsLoaderTest {
@@ -18,11 +19,31 @@ class InstrumentsLoaderTest {
         return file.absolutePath
     }
 
-    /** config/instruments.yaml, or null when the tests run outside the repo (CI images). */
-    private fun canonicalYaml(): File? =
-        System.getProperty("user.dir")
-            .let { File(it).parentFile?.parentFile?.resolve("config/instruments.yaml") }
-            ?.takeIf { it.exists() }
+    /**
+     * The real config/instruments.yaml.
+     *
+     * Walks up from user.dir rather than assuming exactly two levels: Gradle sets
+     * user.dir to the subproject dir, but the test-runner container and IDE runners
+     * do not always agree on that, and a hardcoded `parentFile.parentFile` silently
+     * resolved to a nonexistent path — which the old `?: return` then turned into
+     * three tests that passed without asserting anything.
+     *
+     * Fails loudly instead. If this cannot find the registry, the three tests below
+     * are not verifying the shipped config and must not report green.
+     */
+    private fun canonicalYaml(): File {
+        val start = File(System.getProperty("user.dir"))
+        val found = generateSequence(start) { it.parentFile }
+            .map { File(it, "config/instruments.yaml") }
+            .firstOrNull { it.isFile }
+
+        assertNotNull(
+            found,
+            "config/instruments.yaml not found walking up from user.dir=$start — " +
+                "these tests must assert against the shipped registry, not skip silently"
+        )
+        return found
+    }
 
     @Test
     fun `loads binance native symbols from valid yaml`() {
@@ -178,7 +199,7 @@ class InstrumentsLoaderTest {
 
     @Test
     fun `loads all 12 binance pairs from canonical instruments yaml`() {
-        val file = canonicalYaml() ?: return
+        val file = canonicalYaml()
 
         val symbols = InstrumentsLoader(file.absolutePath).loadForExchange("binance")
         assertEquals(12, symbols.size, "Expected 12 Binance pairs")
@@ -189,7 +210,7 @@ class InstrumentsLoaderTest {
 
     @Test
     fun `loads all 11 kraken pairs from canonical instruments yaml`() {
-        val file = canonicalYaml() ?: return
+        val file = canonicalYaml()
 
         val symbols = InstrumentsLoader(file.absolutePath).loadForExchange("kraken")
         assertEquals(11, symbols.size, "Expected 11 Kraken pairs")
@@ -199,7 +220,7 @@ class InstrumentsLoaderTest {
 
     @Test
     fun `loads all 11 coinbase pairs from canonical instruments yaml`() {
-        val file = canonicalYaml() ?: return
+        val file = canonicalYaml()
 
         val symbols = InstrumentsLoader(file.absolutePath).loadForExchange("coinbase")
         assertEquals(11, symbols.size, "Expected 11 Coinbase pairs")

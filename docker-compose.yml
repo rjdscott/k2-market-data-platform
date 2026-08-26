@@ -347,8 +347,18 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
+    # TCP, not the default socket probe. `pg_isready -U $$POSTGRES_USER` talks to
+    # the Unix socket, which the *initdb temp server* is already listening on —
+    # that server runs with listen_addresses='' while it executes
+    # /docker-entrypoint-initdb.d/*.sql. So a socket probe reports healthy before
+    # 10-lakekeeper-db.sql has run and before postgres listens on 5432 at all.
+    # `lakekeeper-migrate` connects over TCP, does not retry (fails in ~0.3 s with
+    # "Error creating write pool") and is `restart: "no"` — on a fresh clone the
+    # whole v3 lake tier would silently never come up. -h 127.0.0.1 forces the
+    # probe down the same path the dependants use; -d the app DB makes it also
+    # prove the database exists, not merely that a postmaster answers.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -717,10 +727,17 @@ services:
   # ───────────────────────────────────────────────────────────────────────
   # The script moved out of this file in Phase B: v3 adds Avro subject
   # registration against the schema registry, which is more than a compose
-  # inline command should carry. Editing docker/redpanda/init.sh is a
-  # `docker compose up -d --force-recreate --no-deps redpanda-init` away —
-  # the directory-level bind mount does not pin an inode the way the
-  # file-level config/instruments.yaml mount does.
+  # inline command should carry. After editing docker/redpanda/init.sh, run
+  # `docker compose up -d --force-recreate --no-deps redpanda-init`.
+  #
+  # A *directory* bind mount goes stale after a write-then-rename save exactly
+  # like the file-level config/instruments.yaml mount does — the staleness is
+  # held by the file-sharing layer for as long as ANY container has that host
+  # directory mounted, so a recreated container reads the old file too if a
+  # sibling still holds the path. `./docker/redpanda` is mounted by this service
+  # and nothing else (verified: `grep -n docker/redpanda docker-compose.yml`),
+  # so recreating redpanda-init alone is sufficient here. `./docker/lake` is
+  # NOT — see docker/README.md "A bind-mounted script runs its old contents".
   redpanda-init:
     image: docker.redpanda.com/redpandadata/redpanda:v25.3.4
     container_name: k2-redpanda-init
@@ -733,6 +750,13 @@ services:
       redpanda:
         condition: service_healthy
     entrypoint: ["/bin/bash", "/init/init.sh"]
+    # Declared like the other one-shots so the bootstrap peak is arithmetic, not
+    # a guess — see the RESOURCE SUMMARY footer. rpk + curl in a shell loop.
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
     restart: "no"
     labels:
       com.k2.service: "init"
@@ -908,15 +932,26 @@ services:
 # feed-handler-coinbase | 0.5       | 512M         | Coinbase ingestion (11 pairs)
 # iceberg-metrics       | 0.1       | 128M         | Offload alerts exporter (:8000)
 # ----------------------|-----------|--------------|---------------------------
-# TOTAL (15 long-running) | 15.35 CPU | 22.125 GB  | Full consolidated platform
+# STEADY STATE (15 long-running) | 15.35 CPU | 22.125 GB | Full consolidated platform
 #
-# One-shots (exit after startup, not counted above):
-#   redpanda-init      topics + Avro subjects       (docker/redpanda/init.sh)
-#   iceberg-init       v2 cold.* hadoop-catalog DDL (docker/iceberg/ddl/)
-#   lakekeeper-migrate v3 catalog DB schema
-#   lake-init          v3 bucket + warehouse + namespaces (docker/lake/init-lake.sh)
+# One-shots — NOT free. They declare limits and they run concurrently with the
+# steady state at boot, so the budget that matters at `docker compose up` is the
+# bootstrap peak, not the steady state:
 #
-# Remaining budget: 0.65 CPU / 17.875 GB for future expansion
+#   redpanda-init      0.25 | 128M  topics + Avro subjects (docker/redpanda/init.sh)
+#   iceberg-init       0.5  | 1G    v2 cold.* hadoop-catalog DDL (docker/iceberg/ddl/)
+#   lakekeeper-migrate 0.5  | 256M  v3 catalog DB schema
+#   lake-init          0.25 | 128M  v3 bucket + warehouse + namespaces (docker/lake/init-lake.sh)
+#   ----------------------------------------------------------------------------
+#   one-shot subtotal  1.5  | 1.5G
+#
+# Bootstrap peak: 16.85 CPU / 23.625 GiB  (`docker compose config` limit sum — all
+# 19 services). That is over the 16 CPU target for the one-shots' lifetime, which
+# is seconds: all four exit before the feed handlers start (they gate on
+# `service_completed_successfully`), and CPU limits are a ceiling on scheduling,
+# not a reservation, so the overcommit is a burst not a failure.
+#
+# Steady-state headroom: 0.65 CPU / 17.875 GB for future expansion
 # Target: 16 CPU / 40 GB total
 #
 # Instrument config: see config/instruments.yaml (single source of truth)

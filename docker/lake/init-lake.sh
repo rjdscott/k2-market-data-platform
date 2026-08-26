@@ -13,9 +13,16 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 set -euo pipefail
 
-LK="${LAKEKEEPER_URL:-http://lakekeeper:8181}"
-WAREHOUSE="${LAKE_WAREHOUSE:-k2}"
-BUCKET="${LAKE_BUCKET:-k2-lake}"
+# Constants, not env indirection: nothing in docker-compose.yml ever set
+# LAKEKEEPER_URL / LAKE_WAREHOUSE / LAKE_BUCKET, so the `${VAR:-default}` form
+# was three names for one value each and an invitation to set one of them and
+# silently diverge from the Spark side. These MUST match CATALOG_URI / WAREHOUSE
+# in docker/lake/spark_conf.py, which hard-codes the same three for the same
+# reason — change them together or the jobs point at a catalog nothing created.
+LK=http://lakekeeper:8181
+WAREHOUSE=k2
+BUCKET=k2-lake
+PROJECT_ID=00000000-0000-0000-0000-000000000000
 
 # POST $1 with body $2; succeed on 2xx or on any status listed in $3.
 # ponytail: no jq in this image and none needed — we only ever branch on the code.
@@ -46,11 +53,24 @@ mc mb --ignore-existing "k2/$BUCKET"
 echo "[2/4] Lakekeeper bootstrap"
 post "$LK/management/v1/bootstrap" '{"accept-terms-of-use":true}' "400 401 403 409"
 
+# Ask first, then create. The old version tolerated ANY 400 on create, on the
+# grounds that a rerun answers 400 CreateWarehouseStorageProfileOverlap — but
+# that also swallowed a 400 from a malformed body, leaving "✓ lake ready" printed
+# over a warehouse that was never created. Listing first splits the two cases:
+# already-there is a skip, and a create that does not return 201 is now fatal.
+#
+# ponytail: bash glob match, not grep/jq — this image ships mc, curl and bash and
+# NOT grep (verified: `grep: command not found` from this very line, 2026-08-26).
+# Same constraint the namespace parser below is written around.
 echo "[3/4] Warehouse '$WAREHOUSE'"
+existing=$(curl -fsS "$LK/management/v1/warehouse?project-id=$PROJECT_ID")
+if [[ $existing == *"\"name\":\"$WAREHOUSE\""* ]]; then
+  echo "  → exists, skipping create"
+else
 post "$LK/management/v1/warehouse" "$(cat <<JSON
 {
   "warehouse-name": "$WAREHOUSE",
-  "project-id": "00000000-0000-0000-0000-000000000000",
+  "project-id": "$PROJECT_ID",
   "storage-profile": {
     "type": "s3",
     "bucket": "$BUCKET",
@@ -69,7 +89,8 @@ post "$LK/management/v1/warehouse" "$(cat <<JSON
   }
 }
 JSON
-)" "400 409"
+)"   # no tolerated codes: 2xx or fail
+fi
 
 # Namespaces over the REST catalog API rather than a Spark `lake-ddl` one-shot:
 # three HTTP calls against a service that is already up, versus a ~20 s JVM

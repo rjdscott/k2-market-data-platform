@@ -186,7 +186,7 @@ tests remain on the roadmap.
 | Suite | Count | Run |
 |---|---|---|
 | Kotlin feed handler | 20 (`TradeNormalizer` 7, `InstrumentsLoader` 13) | `make test-kotlin` |
-| Python — Iceberg maintenance flow + v3 data contracts | 70 (28 + 42 in `tests/test_contracts.py`) | `make test-python` |
+| Python — Iceberg maintenance flow + v3 data contracts | 69 (28 + 41 in `tests/test_contracts.py`) | `make test-python` |
 | Legacy v1 (reference only) | ~180 unit | `cd legacy/v1 && uv run pytest` |
 
 [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs four jobs per PR: **kotlin** (`gradlew build`),
