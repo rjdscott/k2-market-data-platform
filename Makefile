@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps test test-kotlin test-python test-rust dev-up check-docs check-alerts build-capture
+.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -28,11 +28,8 @@ logs:  ## Tail all service logs
 ps:  ## Show service status
 	docker compose ps
 
-test: test-kotlin test-python test-rust  ## Run all unit tests
+test: test-python test-rust  ## Run all unit tests
 
-test-kotlin:  ## Feed handler unit tests (runs in the JDK 21 build image; no local JDK needed)
-	docker run --rm -v "$(CURDIR)":/project -w /project/services/feed-handler-kotlin \
-	  -e GRADLE_USER_HOME=/tmp/.gradle gradle:8.12-jdk21 ./gradlew test --no-daemon
 
 test-python:  ## Iceberg offload flow unit tests (needs uv)
 	uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q
@@ -51,6 +48,13 @@ test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo 
 	  -v k2-capture-cargo:/usr/local/cargo/registry \
 	  -v k2-capture-target:/repo/services/capture-rust/target rust:1-bookworm \
 	  sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang libclang-dev >/dev/null && cargo test --locked'
+
+# NOT part of `make test` and not run by CI: the Kotlin tier retired to
+# legacy/v2-kotlin/ in ADR-019 and nothing in the running stack builds it. Kept
+# runnable so the archive is verifiable rather than merely present.
+test-legacy-kotlin:  ## Archived v2 Kotlin feed handler tests (legacy/v2-kotlin; not in `make test`)
+	docker run --rm -v "$(CURDIR)":/project -w /project/legacy/v2-kotlin \
+	  -e GRADLE_USER_HOME=/tmp/.gradle gradle:8.12-jdk21 ./gradlew test --no-daemon
 
 build-capture:  ## Build k2-capture:v3 from the repo root, stamping the git sha
 	docker compose build capture-binance

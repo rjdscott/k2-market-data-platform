@@ -83,3 +83,8 @@ groups:
       # Trade rate per exchange over 5 minutes
       - record: feed_handler:trade_rate:5m
         expr: rate(feed_handler_trades_produced_total{type="raw"}[5m])
+
+# ARCHIVED 2026-08-26 — these rules were removed from docker/prometheus/rules/ when the
+# three Kotlin feed handlers retired to legacy/v2-kotlin/ (ADR-019). The feed_handler_*
+# metric family no longer exists; the v3 equivalents are in
+# docker/prometheus/rules/capture-alerts.yml. Kept for reference, not loaded by Prometheus.
