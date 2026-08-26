@@ -213,6 +213,7 @@ Only `lakekeeper` is new since the v2 baseline — +0.25 CPU / +256 MB. Four fur
 
 | Forward look | [capacity-model.md](capacity-model.md) — msg/s per core, bytes/day per topic and lake table, and headroom against 16 CPU / 40 GB once the v3 capture tier lands. Predictions only, written before the burn-in that scores them. |
 |---|---|
+| Failure modes | [failure-modes.md](failure-modes.md) — FMEA over the v3 capture tier and Redpanda as capture sees it: each failure's detection signal, what it loses versus delays, its runbook, and the [`scripts/chaos/`](../../scripts/chaos/README.md) script that proves it. Lake and hot-tier rows land with Phases D and E. |
 
 ---
 
