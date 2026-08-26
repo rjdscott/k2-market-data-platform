@@ -96,25 +96,56 @@ Recording rules: `clickhouse:insert_rate:5m`, `clickhouse:query_duration_p99:5m`
 |-------|----------|-----------|
 | `IcebergOffloadConsecutiveFailures` | critical | ≥3 errors for one table within 15m |
 | `IcebergOffloadLagCritical` | critical | `offload_lag_minutes > 30` for 5m (SLO breach) |
-| `IcebergOffloadCycleTooSlow` | critical | Cycle >600s — risks overlapping the 15-min schedule |
-| `IcebergOffloadWatermarkStale` | critical | Watermark unchanged for >1h — pipeline hung silently |
-| `IcebergOffloadSchedulerDown` | critical | Scheduler scrape target unreachable for 2m |
+| `IcebergOffloadCycleTooSlow` | critical | A table's last run took >600s — risks overlapping the 15-min schedule |
+| `IcebergOffloadWatermarkStale` | critical | Watermark unchanged for >26h — hung-pipeline backstop |
+| `IcebergOffloadSchedulerDown` | critical | `iceberg-metrics` scrape target unreachable for 2m |
 | `IcebergOffloadSuccessRateLow` | warning | Success rate <95% over 15m |
 | `IcebergOffloadLagElevated` | warning | Lag between 20 and 30 min for 10m |
-| `IcebergOffloadThroughputLow` | warning | <10K rows/sec sustained 15m |
-| `IcebergOffloadCycleSlow` | warning | Cycle between 300s and 600s for 10m |
+| `IcebergOffloadThroughputLow` | warning | bronze/silver <0.1 rows/sec averaged over 1h |
+| `IcebergOffloadCycleSlow` | warning | A table's last run took 300–600s for 10m |
+
+The two lag alerts scope to `bronze_*`, `silver_trades`, `ohlcv_1m` and `ohlcv_5m`. A gold
+table's watermark tracks the last *completed* window, so `ohlcv_15m`/`30m`/`1h`/`1d` lag by
+design and can never satisfy a 30-minute SLO; `IcebergOffloadWatermarkStale` is their
+backstop. `IcebergOffloadThroughputLow` uses a 1-hour window because offloads run on a
+15-minute batch cadence — a 5-minute rate is zero most of the time for every table.
 
 Recording rules: `iceberg_offload:cycle_count:5m`, `iceberg_offload:duration_avg:5m`,
 `iceberg_offload:rows_rate:5m`.
 
-**Known gap:** all nine depend on `offload_*` metrics from
-[`docker/offload/metrics.py`](../../docker/offload/metrics.py), which only starts its HTTP
-server when the flow runs standalone (`python3 iceberg_offload_flow.py`). Under the
-Prefect worker no server starts, and the `iceberg-scheduler` scrape job is commented out
-in `prometheus.yml`. So these rules and the Iceberg dashboard render empty against the
-default deployment. Until the exporter is wired into the worker, monitor the cold tier
-through Prefect run history and the watermark table — see
-[prefect-schedules.md](./prefect-schedules.md).
+### How the offload metrics are produced
+
+The `offload_*` metrics come from the **`iceberg-metrics`** service, which runs
+[`docker/offload/metrics.py`](../../docker/offload/metrics.py) `--serve` and is scraped on
+`iceberg-metrics:8000` as Prometheus job `iceberg-scheduler`.
+
+Every metric is derived from the PostgreSQL `offload_watermarks` table, re-read every 15s
+— not from counters inside the flow. Prefect runs each flow in a short-lived subprocess
+that exits long before Prometheus scrapes it, so in-process counters were never
+observable. The watermark row is the durable record of what the pipeline did.
+
+It is a separate service rather than a sidecar in `prefect-worker` on purpose: if the
+worker crashes, the exporter keeps reporting the rising offload lag that these alerts
+exist to catch.
+
+| Metric | Type | Source column |
+|--------|------|---------------|
+| `offload_lag_minutes{table}` | gauge | `now() - last_offload_timestamp` |
+| `watermark_timestamp_seconds{table}` | gauge | `last_offload_timestamp` |
+| `offload_last_duration_seconds{table}` | gauge | `last_run_duration_seconds` |
+| `offload_last_rows_per_second{table}` | gauge | `last_offload_row_count / last_run_duration_seconds` |
+| `offload_tables_configured` | gauge | row count |
+| `offload_rows_total{table,layer}` | counter | `last_offload_row_count`, added once per finished run |
+| `offload_cycles_total{status}` | counter | one increment per finished run |
+| `offload_errors_total{table,error_type}` | counter | one increment per failed run |
+| `offload_duration_seconds{table,layer}` | histogram | observed once per finished run |
+
+Runs are counted exactly once by tracking `updated_at` per table; rows still in `running`
+are skipped until they resolve. Counters restart at zero if the exporter restarts, which
+Prometheus handles as a normal counter reset.
+
+Sanity-check the exporter's counting logic offline with
+`python docker/offload/metrics.py --self-check`.
 
 ## SLOs
 
@@ -123,7 +154,7 @@ through Prefect run history and the watermark table — see
 | Exchange → silver latency (p99) | <200 ms | <500 ms | 170–197 ms — see [latency-budgets.md](./latency-budgets.md) |
 | Offload lag | <15 min | <30 min | 9 min (2026-02-15) |
 | Offload success rate | >99% | >95% | no failures observed to date |
-| Offload cycle duration | <30 s | <10 min | 12–76 s depending on backlog |
+| Offload cycle duration | <30 s | <10 min | 5–7 s per table (2026-08-26) |
 | Warm/cold consistency | 100% | >99% | 99.9%+ (2026-02-15, 2026-02-18) |
 | Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 tested modes — see [runbooks/failure-recovery.md](./runbooks/failure-recovery.md) |
 
@@ -133,10 +164,12 @@ Honest gaps, in priority order:
 
 1. **No Alertmanager.** `alerting.alertmanagers.targets` is empty — alerts are visible in
    the Prometheus UI and Grafana but nothing routes to a pager or Slack.
-2. **Offload metrics not scraped** (above) — the largest blind spot.
-3. **`FeedHandlerDown` references a metric that does not exist** (above).
-4. **No exporters for MinIO, PostgreSQL or Spark.** Their health is only observable via
+2. **`FeedHandlerDown` references a metric that does not exist** (above).
+3. **No exporters for MinIO, PostgreSQL or Spark.** Their health is only observable via
    `docker compose ps` and container logs.
+4. **No query-latency percentiles for ClickHouse.** Its Prometheus endpoint exposes
+   counters only — no native histograms — so `clickhouse:query_duration_mean:5m` is a mean,
+   not a p99.
 
 ## Related
 

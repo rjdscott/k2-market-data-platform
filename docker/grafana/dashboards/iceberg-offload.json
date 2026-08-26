@@ -22,22 +22,38 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "green", "value": null},
-              {"color": "yellow", "value": 10},
-              {"color": "red", "value": 30}
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
             ]
           },
           "unit": "m"
         },
         "overrides": []
       },
-      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
       "options": {
         "orientation": "auto",
         "reduceOptions": {
           "values": false,
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": ""
         },
         "showThresholdLabels": false,
@@ -61,29 +77,61 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "thresholds"},
+          "color": {
+            "mode": "thresholds"
+          },
           "mappings": [
-            {"type": "value", "value": "0", "text": "ERROR"},
-            {"type": "range", "from": 0.1, "to": 99.9, "text": "DEGRADED"},
-            {"type": "range", "from": 99.9, "to": 100, "text": "HEALTHY"}
+            {
+              "type": "value",
+              "value": "0",
+              "text": "ERROR"
+            },
+            {
+              "type": "range",
+              "from": 0.1,
+              "to": 99.9,
+              "text": "DEGRADED"
+            },
+            {
+              "type": "range",
+              "from": 99.9,
+              "to": 100,
+              "text": "HEALTHY"
+            }
           ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "red", "value": null},
-              {"color": "yellow", "value": 95},
-              {"color": "green", "value": 99.5}
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 95
+              },
+              {
+                "color": "green",
+                "value": 99.5
+              }
             ]
           },
           "unit": "percent"
         }
       },
-      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
       "id": 2,
       "options": {
         "reduceOptions": {
           "values": false,
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": ""
         },
         "showThresholdMarkers": true
@@ -104,17 +152,26 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "short",
           "decimals": 0
         }
       },
-      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
       "id": 3,
       "options": {
         "reduceOptions": {
           "values": false,
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": ""
         }
       },
@@ -134,7 +191,9 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
             "axisLabel": "rows/second",
             "axisPlacement": "auto",
@@ -152,11 +211,19 @@
           "unit": "short"
         }
       },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
       "id": 4,
       "options": {
         "legend": {
-          "calcs": ["mean", "max"],
+          "calcs": [
+            "mean",
+            "max"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -183,7 +250,9 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
             "axisLabel": "seconds",
             "axisPlacement": "auto",
@@ -201,11 +270,20 @@
           "unit": "s"
         }
       },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
       "id": 5,
       "options": {
         "legend": {
-          "calcs": ["mean", "max", "p95"],
+          "calcs": [
+            "mean",
+            "max",
+            "p95"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -242,7 +320,9 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
             "axisLabel": "seconds",
             "axisPlacement": "auto",
@@ -261,18 +341,35 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "green", "value": null},
-              {"color": "yellow", "value": 60},
-              {"color": "red", "value": 300}
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
             ]
           }
         }
       },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
       "id": 6,
       "options": {
         "legend": {
-          "calcs": ["mean", "max"],
+          "calcs": [
+            "mean",
+            "max"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -286,7 +383,7 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "offload_cycle_duration_seconds",
+          "expr": "offload_last_duration_seconds",
           "refId": "A",
           "legendFormat": "Cycle Duration"
         }
@@ -299,7 +396,9 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
             "axisLabel": "errors/min",
             "axisPlacement": "auto",
@@ -317,11 +416,18 @@
           "unit": "short"
         }
       },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
       "id": 7,
       "options": {
         "legend": {
-          "calcs": ["sum"],
+          "calcs": [
+            "sum"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -348,7 +454,9 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
             "axisLabel": "rows/second",
             "axisPlacement": "auto",
@@ -366,11 +474,19 @@
           "unit": "short"
         }
       },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
       "id": 8,
       "options": {
         "legend": {
-          "calcs": ["mean", "max"],
+          "calcs": [
+            "mean",
+            "max"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -380,23 +496,13 @@
           "sort": "desc"
         }
       },
-      "title": "Throughput Quantiles (p50, p90, p99)",
+      "title": "Throughput of Last Run (rows/second)",
       "type": "timeseries",
       "targets": [
         {
-          "expr": "offload_rows_per_second{quantile=\"0.5\"}",
+          "expr": "offload_last_rows_per_second",
           "refId": "A",
-          "legendFormat": "{{table}} p50"
-        },
-        {
-          "expr": "offload_rows_per_second{quantile=\"0.9\"}",
-          "refId": "B",
-          "legendFormat": "{{table}} p90"
-        },
-        {
-          "expr": "offload_rows_per_second{quantile=\"0.99\"}",
-          "refId": "C",
-          "legendFormat": "{{table}} p99"
+          "legendFormat": "{{table}}"
         }
       ]
     },
@@ -407,7 +513,9 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
             "axisLabel": "cycles",
             "axisPlacement": "auto",
@@ -420,22 +528,74 @@
             "pointSize": 5,
             "showPoints": "never",
             "spanNulls": false,
-            "stacking": {"mode": "normal", "group": "A"}
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
           },
           "mappings": [],
           "unit": "short"
         },
         "overrides": [
-          {"matcher": {"id": "byName", "options": "success"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]},
-          {"matcher": {"id": "byName", "options": "failed"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]},
-          {"matcher": {"id": "byName", "options": "partial"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "yellow"}}]}
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "success"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "partial"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          }
         ]
       },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
       "id": 9,
       "options": {
         "legend": {
-          "calcs": ["sum"],
+          "calcs": [
+            "sum"
+          ],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -454,13 +614,8 @@
           "legendFormat": "success"
         },
         {
-          "expr": "rate(offload_cycles_total{status=\"partial\"}[5m]) * 300",
-          "refId": "B",
-          "legendFormat": "partial"
-        },
-        {
           "expr": "rate(offload_cycles_total{status=\"failed\"}[5m]) * 300",
-          "refId": "C",
+          "refId": "B",
           "legendFormat": "failed"
         }
       ]
@@ -469,7 +624,12 @@
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["iceberg", "offload", "cold-storage", "phase-5"],
+  "tags": [
+    "iceberg",
+    "offload",
+    "cold-storage",
+    "phase-5"
+  ],
   "templating": {
     "list": []
   },

@@ -16,22 +16,10 @@ from pathlib import Path
 from prefect import flow, task
 from prefect.task_runners import ConcurrentTaskRunner
 
-# Import Prometheus metrics (optional - graceful degradation)
-try:
-    sys.path.insert(0, "/opt/prefect/offload")
-    from metrics import (
-        record_cycle_complete,
-        record_offload_failure,
-        record_offload_success,
-        set_configured_tables,
-        set_pipeline_info,
-        start_metrics_server,
-    )
-
-    METRICS_ENABLED = True
-except ImportError:
-    METRICS_ENABLED = False
-    print("Warning: Prometheus metrics module not available")
+# Prometheus metrics are exported by docker/offload/metrics.py, which runs as a
+# long-lived sidecar in the prefect-worker container and derives every metric
+# from the offload_watermarks table. In-process counters are pointless here:
+# Prefect runs each flow in its own subprocess, which exits before any scrape.
 
 # Add offload scripts to Python path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -225,12 +213,6 @@ def offload_table(
         logger.info(f"  Duration: {duration:.2f}s")
         logger.info(f"  Rows: {rows_written:,}")
 
-        # Record Prometheus metrics
-        if METRICS_ENABLED:
-            record_offload_success(
-                table=source_table, layer=layer, rows=rows_written, duration=duration
-            )
-
         return {
             "table": source_table,
             "status": "success",
@@ -246,26 +228,11 @@ def offload_table(
         logger.error(f"  Exit code: {e.returncode}")
         logger.error(f"  Stderr: {e.stderr}")
 
-        # Record Prometheus metrics
-        if METRICS_ENABLED:
-            record_offload_failure(
-                table=source_table,
-                layer=layer,
-                error_type="process_error",
-                duration=duration,
-            )
-
         raise RuntimeError(f"Offload failed for {source_table}: {e.stderr}") from e
 
     except subprocess.TimeoutExpired:
         duration = (datetime.now() - start_time).total_seconds()
         logger.error(f"✗ Offload timeout: {source_table} (exceeded 10 minutes)")
-
-        # Record Prometheus metrics
-        if METRICS_ENABLED:
-            record_offload_failure(
-                table=source_table, layer=layer, error_type="timeout", duration=duration
-            )
 
         raise
 
@@ -478,18 +445,6 @@ def iceberg_offload_main() -> dict[str, any]:
     )
     logger.info("")
 
-    # Record cycle metrics
-    if METRICS_ENABLED:
-        status = "success" if failed == 0 else "partial" if successful > 0 else "failed"
-        record_cycle_complete(
-            status=status,
-            duration=total_duration,
-            tables_processed=total_tables,
-            successful=successful,
-            failed=failed,
-            total_rows=total_rows,
-        )
-
     return {
         "total_tables": total_tables,
         "successful": successful,
@@ -510,16 +465,6 @@ def iceberg_offload_main() -> dict[str, any]:
 if __name__ == "__main__":
     # For local testing - run the flow once
     print("Running iceberg offload flow (local test mode)...")
-
-    # Start Prometheus metrics server if running standalone
-    if METRICS_ENABLED:
-        if start_metrics_server(port=8000):
-            print("Prometheus metrics enabled on port 8000")
-            set_configured_tables(len(TABLE_CONFIG["bronze"]))
-            table_names = [t["source"] for t in TABLE_CONFIG["bronze"]]
-            set_pipeline_info(version="3.0.0", schedule_minutes=15, tables=table_names)
-
-    # Run flow
     iceberg_offload_main()
 
 

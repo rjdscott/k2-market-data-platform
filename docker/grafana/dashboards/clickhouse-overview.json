@@ -84,14 +84,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "rate(clickhouse_query_metric_FailedQuery[1m])",
+          "expr": "rate(ClickHouseProfileEvents_Query[1m])",
           "refId": "A",
-          "legendFormat": "Failed Queries"
+          "legendFormat": "Queries/sec"
         },
         {
-          "expr": "rate(clickhouse_query_metric_Query[1m])",
+          "expr": "rate(ClickHouseProfileEvents_FailedQuery[1m])",
           "refId": "B",
-          "legendFormat": "Total Queries"
+          "legendFormat": "Failed queries/sec"
         }
       ]
     },
@@ -147,8 +147,9 @@
       "type": "gauge",
       "targets": [
         {
-          "expr": "clickhouse_metric_MemoryTracking",
-          "refId": "A"
+          "expr": "ClickHouseAsyncMetrics_MemoryResident",
+          "refId": "A",
+          "legendFormat": "Resident memory"
         }
       ]
     },
@@ -228,9 +229,14 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "rate(clickhouse_query_metric_InsertQuery[1m])",
+          "expr": "rate(ClickHouseProfileEvents_InsertQuery[1m])",
           "refId": "A",
-          "legendFormat": "Inserts"
+          "legendFormat": "Inserts/sec"
+        },
+        {
+          "expr": "rate(ClickHouseProfileEvents_InsertedRows[1m])",
+          "refId": "B",
+          "legendFormat": "Inserted rows/sec"
         }
       ]
     },
@@ -310,16 +316,24 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "clickhouse_metric_BackgroundMergesAndMutationsPoolTask",
+          "expr": "ClickHouseMetrics_BackgroundMergesAndMutationsPoolTask",
           "refId": "A",
-          "legendFormat": "Active Merges"
+          "legendFormat": "Merge tasks running"
+        },
+        {
+          "expr": "rate(ClickHouseProfileEvents_Merge[5m])",
+          "refId": "B",
+          "legendFormat": "Merges started/sec"
         }
       ]
     }
   ],
   "refresh": "10s",
   "schemaVersion": 39,
-  "tags": ["clickhouse", "v2"],
+  "tags": [
+    "clickhouse",
+    "v2"
+  ],
   "templating": {
     "list": []
   },
