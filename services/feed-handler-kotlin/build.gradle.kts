@@ -25,7 +25,7 @@ dependencies {
     implementation("io.ktor:ktor-client-logging:3.1.0")
 
     // Kafka & Avro
-    implementation("org.apache.kafka:kafka-clients:4.1.0")
+    implementation("org.apache.kafka:kafka-clients:4.3.1")
     implementation("io.confluent:kafka-avro-serializer:7.8.2")
     implementation("org.apache.avro:avro:1.12.0")
 
