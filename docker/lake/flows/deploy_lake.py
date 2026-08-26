@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lake_flows import lake_ingest, lake_maintenance  # noqa: E402 - after sys.path
+from lake_flows import lake_ingest, lake_maintenance
 
 os.environ.setdefault("PREFECT_API_URL", "http://localhost:4200/api")
 
@@ -73,7 +73,7 @@ def main() -> int:
         cron="0 3 * * *",
         concurrency_limit=1,
         tags=["lake", "v3", "maintenance"],
-        description="Compact, expire snapshots, audit. Non-zero exit on a failed audit.",
+        description="Compact, expire snapshots, remove orphans, audit.",
         version="1.0.0",
         parameters={"days": 2, "retain_days": 7},
         paused=False,

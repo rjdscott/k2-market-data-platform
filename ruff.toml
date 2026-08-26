@@ -11,4 +11,4 @@ ignore = ["E501"]  # formatter owns line length
 # Spark image with the script's own directory on sys.path, not as a package.
 # Without this, isort files them under third-party and interleaves `import wire`
 # with `import pyspark`.
-known-first-party = ["offsets", "spark_conf", "wire"]
+known-first-party = ["lake_flows", "metrics", "offsets", "spark_conf", "wire"]
