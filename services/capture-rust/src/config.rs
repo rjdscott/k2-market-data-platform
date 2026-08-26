@@ -121,27 +121,6 @@ impl Instruments {
         })
     }
 
-    /// Rewrite every native symbol through `rename`, keeping the canonical
-    /// mapping and the registry order.
-    ///
-    /// For an adapter whose protocol spells a symbol differently from the
-    /// registry - Kraken WS v2 against a registry that must keep the v1
-    /// spellings while the v1 handlers still run. Goes through `from_list`, so
-    /// two natives that collide after renaming fail here rather than silently
-    /// dropping one instrument.
-    pub fn map_natives(&self, rename: impl Fn(&str) -> String) -> Result<Self> {
-        let renamed = self
-            .instruments
-            .iter()
-            .map(|i| Instrument {
-                native: rename(&i.native),
-                canonical: i.canonical.clone(),
-                book_depth: i.book_depth,
-            })
-            .collect();
-        Self::from_list(renamed)
-    }
-
     /// Keep only the listed native symbols - the fixture recorder trims a
     /// 20 second capture to two instruments so the committed file stays small.
     pub fn retain_native(&mut self, keep: &[String]) -> Result<()> {
@@ -251,7 +230,21 @@ instruments:
             let i = Instruments::load(&path, ex).unwrap();
             assert_eq!(i.len(), want, "{ex} instrument count");
         }
+        // Kraken's natives are the WS v2 spellings and nothing translates them
+        // any more (ADR-019 retired the v1 handlers that forced the alias). The
+        // v1 spelling must not resolve: if it did, something is aliasing again.
         let kraken = Instruments::load(&path, Exchange::Kraken).unwrap();
-        assert_eq!(kraken.canonical("XBT/USD"), Some("BTC/USD"));
+        assert_eq!(kraken.canonical("BTC/USD"), Some("BTC/USD"));
+        assert_eq!(kraken.canonical("DOGE/USD"), Some("DOGE/USD"));
+        assert_eq!(
+            kraken.canonical("XBT/USD"),
+            None,
+            "v1 spelling still listed"
+        );
+        assert_eq!(
+            kraken.canonical("XDG/USD"),
+            None,
+            "v1 spelling still listed"
+        );
     }
 }

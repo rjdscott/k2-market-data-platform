@@ -28,10 +28,22 @@
 # research subject. Folding USDT into USD would silently average two price
 # series together and destroy exactly the signal a quant would look for. So:
 # Binance BTCUSDT → BTC/USDT, Coinbase BTC-USD → BTC/USD, and the two never
-# meet. What we *do* normalise is the venue's private spelling of an asset:
-# Kraken's XBT is Bitcoin (XBT/USD → BTC/USD) and Kraken's XDG is Dogecoin
-# (XDG/USD → DOGE/USD), because those are the same instrument under a different
-# ticker, which is the opposite situation.
+# meet.
+#
+# ── Kraken spells these the WS v2 way ───────────────────────────────────────
+#
+# Kraken WS **v1** spelled Bitcoin `XBT/USD` and Dogecoin `XDG/USD`; **v2**, the
+# protocol this platform speaks, spells them `BTC/USD` and `DOGE/USD` and answers
+# `{"error":"Currency pair not supported XBT/USD"}` to the old ones. Verified
+# 2026-08-26 against wss://ws.kraken.com/v2: the `instrument` snapshot lists 1436
+# pairs including `BTC/USD` and `DOGE/USD` and neither v1 spelling.
+#
+# This file carried the v1 spellings until 2026-08-26 because the Kotlin handlers
+# read it and spoke v1, and `kraken.rs` translated on the way in. The handlers
+# retired (ADR-019), the translation table went with them, and `native` is once
+# again exactly the bytes on the wire with nothing mapping it. Running the
+# archived v1 handlers needs a local registry file with the old spellings; see
+# legacy/v2-kotlin/README.md.
 #
 # ── Book depth defaults ─────────────────────────────────────────────────────
 #
@@ -55,8 +67,7 @@
 #
 # ── Consumers ───────────────────────────────────────────────────────────────
 #
-#   Rust      services/k2-capture (serde_yaml)                    [Phase C]
-#   Kotlin    InstrumentsLoader.kt — native list only, until the handlers retire
+#   Rust      services/capture-rust (serde_yaml)
 #   Python    tests/test_contracts.py; Spark symbol mappers       [Phase D]
 #
 # Bind-mount gotcha: this file is mounted file-level, which pins the inode.
@@ -66,7 +77,7 @@
 # Instrument count: 34 (12 binance, 11 kraken, 11 coinbase) — asserted by
 # tests/test_contracts.py, which also rejects a duplicate canonical per exchange.
 #
-# Last updated: 2026-08-26
+# Last updated: 2026-08-26 (Kraken natives moved to the WS v2 spellings)
 
 version: 2
 
@@ -86,14 +97,14 @@ instruments:
     - { native: ATOMUSDT, canonical: ATOM/USDT }
 
   kraken:
-    - { native: XBT/USD,  canonical: BTC/USD }   # XBT is Kraken's ticker for Bitcoin
+    - { native: BTC/USD,  canonical: BTC/USD }
     - { native: ETH/USD,  canonical: ETH/USD }
     - { native: SOL/USD,  canonical: SOL/USD }
     - { native: XRP/USD,  canonical: XRP/USD }
     - { native: ADA/USD,  canonical: ADA/USD }
     - { native: DOT/USD,  canonical: DOT/USD }
     - { native: LINK/USD, canonical: LINK/USD }
-    - { native: XDG/USD,  canonical: DOGE/USD }  # XDG is Kraken's ticker for Dogecoin
+    - { native: DOGE/USD, canonical: DOGE/USD }
     - { native: LTC/USD,  canonical: LTC/USD }
     - { native: AVAX/USD, canonical: AVAX/USD }
     - { native: ATOM/USD, canonical: ATOM/USD }
