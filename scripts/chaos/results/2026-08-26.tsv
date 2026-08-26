@@ -1,0 +1,7 @@
+ts	script	expected_alert	t_fire_s	t_recover_s
+2026-08-26T16:42:20Z	capture-kill.sh --exchange kraken --hold 150	CaptureDown	119	3
+2026-08-26T16:46:03Z	capture-pause.sh --exchange coinbase	CaptureDown	165	28
+2026-08-26T16:49:35Z	capture-pause.sh --exchange binance	CaptureDown	152	30
+2026-08-26T16:56:03Z	capture-queue-full.sh --exchange kraken	CaptureProduceErrors	256	0
+2026-08-26T16:57:04Z	redpanda-stop.sh --exchange kraken cold_start=no	CaptureProduceErrors	0	14
+2026-08-26T16:57:04Z	capture-corrupt-frame.sh	SKIP	skip	skip
