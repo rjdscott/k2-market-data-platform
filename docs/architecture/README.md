@@ -211,6 +211,9 @@ The end-to-end p99 is dominated by network RTT to the exchanges (~80 ms average)
 
 Only `lakekeeper` is new since the v2 baseline — +0.25 CPU / +256 MB. Four further entries — `redpanda-init` (v2, topic creation), `iceberg-init` (v2 cold.* Hadoop-catalog DDL), `lakekeeper-migrate` (v3 catalog DB schema) and `lake-init` (v3 bucket + warehouse + namespaces) — are one-shot containers that exit after startup and are not counted in the totals above; v2 alone carries 2 of these, this branch's v3 foundations add 2 more (4 total). Budget and reasoning: [ADR-010](../adr/ADR-010-resource-budget.md), [docs/operations/docker-resources.md](../operations/docker-resources.md).
 
+| Forward look | [capacity-model.md](capacity-model.md) — msg/s per core, bytes/day per topic and lake table, and headroom against 16 CPU / 40 GB once the v3 capture tier lands. Predictions only, written before the burn-in that scores them. |
+|---|---|
+
 ---
 
 ## What is not built
