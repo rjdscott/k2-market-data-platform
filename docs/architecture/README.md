@@ -221,6 +221,43 @@ Two further entries, `redpanda-init` and `iceberg-init`, are one-shot containers
 
 ---
 
+## v3 direction
+
+The list above is what v2 chose not to build. Separately, an audit of the code found eight things v2 got *wrong* for research use — this is a quant-research platform on public internet feeds, not a trading path, and it still fails at completeness, correctness and reproducibility:
+
+- The lake is a JDBC copy of ClickHouse, not the system of record ([`offload_generic.py:172`](../../docker/offload/offload_generic.py#L172)) — the archive inherits a serving DB's normalisation, TTL and dropped columns.
+- OHLCV `SummingMergeTree` resolves open/high/low/close arbitrarily across merges ([`01-k2-schema.sql:178`](../../docker/clickhouse/ddl/01-k2-schema.sql#L178)) — a real correctness bug, not a rounding one.
+- Bronze is plain `MergeTree` ([`01-k2-schema.sql:88`](../../docker/clickhouse/ddl/01-k2-schema.sql#L88)) — a topic replay duplicates every row.
+- No receive timestamp before parse ([`TradeNormalizer.kt:28`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L28)) — clock skew and platform latency are inseparable.
+- Kraken runs WS v1 with synthesised colliding trade IDs ([`TradeNormalizer.kt:60`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L60)).
+- Coinbase `sequence_num` is parsed and never compared ([`CoinbaseWebSocketClient.kt:178`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/CoinbaseWebSocketClient.kt#L178)) — dropped messages are silent.
+- The Avro schema puts `logicalType` beside `type` where Avro ignores it ([`normalized-trade.avsc:60`](../../schemas/avro/normalized-trade.avsc#L60)), and ClickHouse consumes raw JSON anyway ([`01-k2-schema.sql:39`](../../docker/clickhouse/ddl/01-k2-schema.sql#L39)).
+- Trades only, no L2 book, and raw topics keyed by exchange name ([`KafkaProducerService.kt:155`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/KafkaProducerService.kt#L155)) pin two exchanges to a single partition.
+
+v3 inverts the storage hierarchy — the lake becomes the system of record and everything else is derived and rebuildable — and replaces the Kotlin handlers with one Rust `k2-capture` binary per exchange doing trades and L2 book on a single connection:
+
+```mermaid
+flowchart LR
+  EX["Exchanges · public WS<br/>Binance · Kraken · Coinbase"]
+  CAP["k2-capture ×3 · Rust<br/>trades + L2 · recv_ts · seq · CRC32"]
+  RP[("Redpanda<br/>Avro + registry")]
+  IB[("Iceberg · Lakekeeper + MinIO<br/>system of record")]
+  CH["ClickHouse hot tier<br/>derived · rebuildable · 7d TTL"]
+  DD["DuckDB + PyIceberg<br/>notebooks"]
+  GR["Grafana + Prometheus"]
+  EX --> CAP --> RP
+  RP -->|"Spark batch · offsets in snapshot"| IB
+  RP --> CH
+  IB -->|rebuild| CH
+  IB --> DD
+  CH --> GR
+  CAP -.metrics.-> GR
+```
+
+Same 16 CPU / 40 GB single host ([ADR-010](../adr/ADR-010-resource-budget.md) holds). Phases, exit criteria and verify-first spikes: [the v3 plan](../plans/2026-08-26-v3-quant-research-platform.md). Decision and rejected alternatives: [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) (Proposed).
+
+---
+
 ## Decision records
 
 The full set is in [docs/adr/](../adr/). The ones that shaped this diagram:
@@ -242,3 +279,4 @@ The full set is in [docs/adr/](../adr/). The ones that shaped this diagram:
 | [ADR-015](../adr/ADR-015-clickhouse-lts-downgrade.md) | ClickHouse 26.1 → 24.3 LTS |
 | [ADR-016](../adr/ADR-016-add-coinbase-exchange.md) | Coinbase as the third exchange |
 | [ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md) | Daily compaction + snapshot expiry |
+| [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) | **Proposed** — v3: lake-first, Rust capture tier |
