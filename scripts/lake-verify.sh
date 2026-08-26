@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # make lake-verify — the Phase D exit criteria, as a command.
 #
@@ -16,12 +17,26 @@
 # Both ingest runs are pinned to the same `--end-timestamp`. Without that the
 # second run legitimately picks up the seconds of live traffic that arrived
 # while the first was running, and "adds 0" becomes untestable on a live feed
-# rather than false.
+# rather than false. `ingest.py` bounds the read by kafka_ts as well as by
+# `endingTimestamp`, because Spark resolves an unmatched timestamp to LATEST and
+# a quiet partition would otherwise drift past the window between the two runs —
+# which reads here as a false "NOT idempotent".
+#
+# The 5-minute lake-ingest-5min schedule is paused for the duration and resumed
+# from a trap. A scheduled run landing between the two cycles reads records this
+# script's window does not cover, and the flock in ingest.py makes an overlapping
+# one exit 2 — either way the result would be a failure that says nothing about
+# idempotency.
 #
 #   scripts/lake-verify.sh                 # window ends 60 s ago
 #   scripts/lake-verify.sh --end <epoch_ms>
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 set -euo pipefail
+
+SELF="${BASH_SOURCE[0]}"          # captured before the cd below, for --help
+cd "$(dirname "${BASH_SOURCE[0]}")"
+# shellcheck source=chaos/lib.sh
+. ./chaos/lib.sh
 
 SPARK="${K2_SPARK_CONTAINER:-k2-spark-iceberg}"
 LAKE_DIR="${K2_LAKE_DIR:-/home/iceberg/lake}"
@@ -31,7 +46,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     --end) END_MS=$2; shift 2 ;;
     --end=*) END_MS=${1#*=}; shift ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,33p' "$(basename "$SELF")"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -43,6 +58,9 @@ die() { printf 'lake-verify: %s\n' "$*" >&2; exit 1; }
 
 docker inspect -f '{{.State.Running}}' "$SPARK" 2>/dev/null | grep -qx true \
   || die "$SPARK is not running. Bring the stack up first: make up"
+
+pause_lake_ingest
+trap resume_lake_ingest EXIT
 
 echo "── lake-verify ─────────────────────────────────────────────"
 echo "  container : $SPARK"
@@ -63,9 +81,9 @@ echo "[3/3] checks"
 # One python program rather than a pile of shell: these are three assertions
 # over the same catalog session, and starting the JVM three times to keep them
 # in separate files would cost a minute for no clarity.
-docker exec -i "$SPARK" python3 - <<PY
+docker exec -i "$SPARK" python3 - "$LAKE_DIR" <<'PY'
 import sys
-sys.path.insert(0, "$LAKE_DIR")
+sys.path.insert(0, sys.argv[1])
 
 import offsets as O
 from ingest import ALL_TOPICS, BOOK_TABLE, RAW_TABLE, TRADES_TABLE, snapshot_history, topics
@@ -89,10 +107,19 @@ try:
           "k2.kafka-offsets present on the latest ingest snapshot" if summary
           else "no ingest snapshot on " + RAW_TABLE)
 
+    # Every committed topic is one this ingest knows about. NOT the converse:
+    # a v3 topic that has never carried a record produces no row and so no
+    # committed offset, and a legitimately quiet topic is not a verification
+    # failure. The direction that matters is an offset committed for a topic
+    # ALL_TOPICS does not list, which means the two ends disagree about what
+    # the lake ingests.
     committed = O.decode(summary[O.KAFKA_OFFSETS]) if summary else {}
-    check("offsets cover every topic", set(committed) == set(ALL_TOPICS),
-          f"{len(committed)}/{len(ALL_TOPICS)} topics; missing "
-          f"{sorted(set(ALL_TOPICS) - set(committed)) or 'none'}")
+    unknown = sorted(set(committed) - set(ALL_TOPICS))
+    quiet = sorted(set(ALL_TOPICS) - set(committed))
+    check("offsets cover known topics", not unknown,
+          f"{len(committed)}/{len(ALL_TOPICS)} topics"
+          + (f"; QUIET (no records yet): {quiet}" if quiet else "")
+          + (f"; UNKNOWN: {unknown}" if unknown else ""))
 
     # (1b) gapless, over the whole table so a gap on a days() partition seam is
     # not hidden by the boundary it sits on.

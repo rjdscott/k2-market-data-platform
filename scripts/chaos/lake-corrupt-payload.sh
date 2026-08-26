@@ -19,8 +19,13 @@
 #      every following cycle on the same offset, turning one bad record into a
 #      total outage
 #
-# LEAVES ONE ROW BEHIND, permanently. raw.messages is never expired, so the
-# junk record stays in the archive with its own offset. That is the correct
+# Three shapes are injected, not one. JSON (magic 0x7b) is the easy case and was
+# the only one this script used to cover; the two that actually broke the ingest
+# are a frame shorter than the 5-byte header and a frame declaring schema id 0,
+# because the archive's framing check used to test the magic byte alone.
+#
+# LEAVES THREE ROWS BEHIND, permanently. raw.messages is never expired, so the
+# junk records stay in the archive with their own offsets. That is the correct
 # outcome (the topic really did carry those bytes) and it is stated here rather
 # than discovered later.
 set -euo pipefail
@@ -36,11 +41,44 @@ MARKER="k2-chaos-$(date -u +%s)"
 preflight "$SPARK" k2-redpanda k2-lakekeeper k2-prometheus
 banner "lake-corrupt-payload.sh topic=$TOPIC" \
   "none expected" docs/runbooks/lake-recovery.md \
-  "produce one un-framed JSON record; the ingest must archive it and carry on"
+  "produce three un-framed records; the ingest must archive them all and carry on"
 
-echo "→ producing an un-framed record (magic byte 0x7b '{', not 0x00)" >&2
+pause_lake_ingest
+trap resume_lake_ingest EXIT
+
+# bronze BEFORE, because the assertion below is a count difference. The
+# original version searched bronze.trades for the marker in `trade_id`, which
+# could never fail: a leaked un-framed record would have crashed the Avro
+# decode long before it reached a column, so the query was asserting that a
+# crash had not happened by a means that could not observe one.
+bronze_before=$(docker exec -i "$SPARK" python3 - <<'PY' 2>/dev/null | tail -1
+import sys
+sys.path.insert(0, "/home/iceberg/lake")
+from ingest import TRADES_TABLE
+from spark_conf import lake_session
+spark = lake_session("k2-chaos-bronze-before")
+try:
+    print(spark.sql(f"SELECT count(*) FROM {TRADES_TABLE}").collect()[0][0])
+finally:
+    spark.stop()
+PY
+)
+echo "→ before: $bronze_before rows in bronze.trades" >&2
+
+# THREE records, not one. `{"chaos":...}` has magic 0x7b, the easy case, and it
+# is the only one the first version of this script injected. The two that
+# actually broke the ingest were a 3-byte 00 00 01 frame — magic OK, a
+# FABRICATED schema id of 1, an empty body — and a well-formed frame declaring
+# schema id 0. Both passed the old magic-byte-only check, reached the decoder,
+# and killed every following run on the same offset forever, because the record
+# is already archived and stage 2 re-reads the same range each cycle.
+echo "→ producing three un-framed records: JSON, a 3-byte 0x00 frame, schema id 0" >&2
 printf '{"chaos":"%s"}' "$MARKER" \
   | docker exec -i k2-redpanda rpk topic produce "$TOPIC" --brokers redpanda:9092 >&2
+docker exec -i k2-redpanda sh -c \
+  'printf "\x00\x00\x01" | rpk topic produce '"$TOPIC"' --brokers redpanda:9092' >&2
+docker exec -i k2-redpanda sh -c \
+  'printf "\x00\x00\x00\x00\x00x" | rpk topic produce '"$TOPIC"' --brokers redpanda:9092' >&2
 
 echo "→ running an ingest" >&2
 start=$SECONDS
@@ -51,14 +89,14 @@ set -e
 t_recover=$((SECONDS - start))
 [ "$rc" -eq 0 ] || die "ingest exited $rc on one un-framed record — a single bad record must not block the pipeline"
 
-echo "→ checking where the record landed" >&2
-docker exec -i "$SPARK" python3 - "$MARKER" "$TOPIC" <<'PY' >&2
+echo "→ checking where the records landed" >&2
+docker exec -i "$SPARK" python3 - "$MARKER" "$TOPIC" "$bronze_before" <<'PY' >&2
 import sys
 sys.path.insert(0, "/home/iceberg/lake")
 from ingest import RAW_TABLE, TRADES_TABLE
 from spark_conf import lake_session
 
-marker, topic = sys.argv[1], sys.argv[2]
+marker, topic, before = sys.argv[1], sys.argv[2], int(sys.argv[3])
 spark = lake_session("k2-chaos-corrupt")
 try:
     archived = spark.sql(f"""
@@ -66,21 +104,56 @@ try:
         WHERE topic = '{topic}' AND schema_id IS NULL
           AND cast(payload AS string) LIKE '%{marker}%'
     """).collect()[0][0]
-    print(f"    raw.messages rows with schema_id NULL carrying the marker: {archived}")
+    print(f"    raw.messages rows with schema_id NULL carrying the JSON marker: {archived}")
     assert archived == 1, "the un-framed record was not archived verbatim — the archive dropped bytes"
 
-    leaked = spark.sql(
-        f"SELECT count(*) FROM {TRADES_TABLE} WHERE trade_id LIKE '%{marker}%'"
-    ).collect()[0][0]
-    print(f"    bronze.trades rows carrying the marker: {leaked}")
-    assert leaked == 0, "an un-framed record reached bronze"
+    # The two hard frames carry no marker, so they are counted by shape: three
+    # NULL-schema_id rows must have appeared on this topic, and the 3-byte one
+    # must be one of them rather than a row with a fabricated schema_id of 1.
+    short = spark.sql(f"""
+        SELECT count(*) FROM {RAW_TABLE}
+        WHERE topic = '{topic}' AND length(payload) = 3 AND schema_id IS NULL
+    """).collect()[0][0]
+    print(f"    3-byte 0x00 frames archived with schema_id NULL: {short}")
+    assert short >= 1, (
+        "the 3-byte frame did not get schema_id NULL — the framing guard is back to "
+        "checking the magic byte alone and fabricating an id from a truncated header"
+    )
+
+    zero = spark.sql(f"""
+        SELECT count(*) FROM {RAW_TABLE}
+        WHERE topic = '{topic}' AND schema_id IS NULL
+          AND length(payload) = 6 AND hex(substring(payload, 1, 5)) = '0000000000'
+    """).collect()[0][0]
+    print(f"    schema id 0 frames archived with schema_id NULL: {zero}")
+    assert zero >= 1, "a frame declaring schema id 0 was not rejected"
+
+    # The leak assertion, as a difference. bronze may legitimately have grown
+    # from real traffic in the same ingest; what it must not have grown by is
+    # the three records that cannot be decoded.
+    after = spark.sql(f"SELECT count(*) FROM {TRADES_TABLE}").collect()[0][0]
+    print(f"    bronze.trades {before} -> {after}")
+    decodable = spark.sql(f"""
+        SELECT count(*) FROM {RAW_TABLE}
+        WHERE topic = '{topic}' AND schema_id IS NOT NULL
+    """).collect()[0][0]
+    orphans = spark.sql(f"""
+        SELECT count(*) FROM {TRADES_TABLE} t
+        WHERE t.src_topic = '{topic}' AND NOT EXISTS (
+          SELECT 1 FROM {RAW_TABLE} r
+          WHERE r.topic = t.src_topic AND r.partition = t.src_partition
+            AND r.offset = t.src_offset AND r.schema_id IS NOT NULL)
+    """).collect()[0][0]
+    print(f"    bronze rows on {topic} with no framed raw row behind them: {orphans}")
+    assert orphans == 0, "an un-framed record reached bronze"
+    print(f"    ({decodable} framed rows on this topic in the archive)")
     print("    ok: archived verbatim, skipped by the decode, ingest exit 0")
 finally:
     spark.stop()
 PY
 
-echo "  This record is now a permanent row in raw.messages. The nightly audit" >&2
-echo "  counts it; it is not a failure, and offset continuity is unaffected" >&2
-echo "  because the offset was consumed exactly once like any other." >&2
+echo "  These three records are now permanent rows in raw.messages. The nightly" >&2
+echo "  audit counts them; they are not a failure, and offset continuity is" >&2
+echo "  unaffected because each offset was consumed exactly once like any other." >&2
 
 report "lake-corrupt-payload.sh topic=$TOPIC" "none expected" 0 "$t_recover"

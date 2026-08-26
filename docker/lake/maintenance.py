@@ -9,25 +9,31 @@ K2 v3 lake maintenance — compact, expire, audit. Runs nightly under Prefect
 **Exit code is the product.** Any failed audit exits non-zero, which fails the
 Prefect flow run, which is what `LakeAuditFailed` alerts on. Every check also
 lands as a row in `lake.audit.checks` so "when did this last hold" is a query
-rather than a log grep.
+rather than a log grep — including a check that *raised*, which is why every
+call is wrapped: a run that dies with nothing written fires the alert and leaves
+the table the runbook points at empty.
 
 **No row is ever deleted here.** Compaction rewrites files, not rows.
 `expire_snapshots` drops old *metadata* and the data files that compaction
-already superseded — never a file the current snapshot still references. That is
-how `raw.messages` is both "never expired" (requirements clarification Q8) and
-not accumulating a snapshot per five minutes forever.
+already superseded — never a file the current snapshot still references.
+`remove_orphan_files` deletes objects no snapshot ever referenced, from writes
+that crashed before committing, with a 24-hour floor so it cannot race one.
+None of the three can remove a row that is in the current snapshot, which is how
+`raw.messages` is both "never expired" (requirements clarification Q8) and not
+accumulating a snapshot per five minutes forever.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
 from pyspark.sql import Row
 
 import offsets as O
-from spark_conf import CATALOG, lake_session
+from spark_conf import CATALOG, S3_ENDPOINT, S3_PATH_STYLE, S3_REGION, lake_session
 
 RAW_TABLE = f"{CATALOG}.raw.messages"
 TRADES_TABLE = f"{CATALOG}.bronze.trades"
@@ -112,6 +118,89 @@ def expire(spark, retain_days: int) -> None:
             f"  table => '{_bare(table)}',"
             f"  older_than => {_ts(older_than)},"
             f"  retain_last => 10)",
+        )
+
+
+def table_location(spark, table: str) -> str:
+    """The table's own object-store prefix, from the catalog."""
+    for row in spark.sql(f"DESCRIBE TABLE EXTENDED {table}").collect():
+        if row["col_name"] == "Location":
+            return row["data_type"]
+    raise RuntimeError(f"{table} reports no Location")
+
+
+def file_list_view(spark, location: str, view: str) -> int:
+    """Materialise `(file_path, last_modified)` for everything under `location`.
+
+    `remove_orphan_files` lists the prefix through the HADOOP FileSystem by
+    default, and this Spark image has no `hadoop-aws` — the procedure answers
+    `UnsupportedFileSystemException: No FileSystem for scheme "s3"` and does
+    nothing. The alternative to this function is baking hadoop-aws plus a ~190 MB
+    aws-java-sdk-bundle into docker/spark/Dockerfile so a second S3 client can
+    list what the first one already can.
+
+    So: list with Iceberg's own S3FileIO, which is already on the classpath,
+    already speaks to MinIO, and takes the same four properties spark_conf.py
+    hands the catalog. `file_list_view` is the procedure's supported way to be
+    given a listing rather than to make one.
+
+    # ponytail: the listing lands in the driver before it becomes a DataFrame,
+    # so it is bounded by driver memory — roughly 200 bytes per object, i.e. a
+    # few hundred MB at ten million files. Past that, page `listPrefix` into
+    # Parquet and read it back instead of collecting it.
+    """
+    jvm = spark._jvm
+    props = jvm.java.util.HashMap()
+    props.put("s3.endpoint", S3_ENDPOINT)
+    props.put("s3.path-style-access", S3_PATH_STYLE)
+    props.put("s3.access-key-id", os.environ["MINIO_ROOT_USER"])
+    props.put("s3.secret-access-key", os.environ["MINIO_ROOT_PASSWORD"])
+    props.put("client.region", S3_REGION)
+    io = jvm.org.apache.iceberg.aws.s3.S3FileIO()
+    io.initialize(props)
+    try:
+        rows, listing = [], io.listPrefix(location).iterator()
+        while listing.hasNext():
+            info = listing.next()
+            rows.append((info.location(), datetime.fromtimestamp(info.createdAtMillis() / 1000, timezone.utc)))
+    finally:
+        io.close()
+    spark.createDataFrame(rows, "file_path string, last_modified timestamp").createOrReplaceTempView(view)
+    return len(rows)
+
+
+def remove_orphans(spark, older_than_hours: int) -> None:
+    """Delete files under each table's prefix that no snapshot references.
+
+    A crashed or killed write leaves Parquet in the object store that the
+    commit never named. Nothing reads it — a file no manifest lists is invisible
+    to every reader — but it costs disk forever, and `raw.messages` is never
+    expired, so the disk runbook's 80/90% path has nothing else to reclaim.
+
+    `older_than` is clamped to 24 h and that clamp is the safety property, not a
+    default. `remove_orphan_files` decides "unreferenced" from the table
+    metadata at the instant it runs; a file a *concurrent* writer has staged but
+    not yet committed is unreferenced by that definition, and deleting it
+    corrupts the commit that was about to name it. A 24-hour floor puts every
+    candidate far outside any in-flight write on this stack, where the longest
+    job is a one-hour backlog slice (INGEST_TIMEOUT_S in flows/lake_flows.py).
+    """
+    if older_than_hours < 24:
+        raise ValueError(
+            f"--orphan-hours {older_than_hours} is below the 24 h floor; "
+            "see remove_orphans() for why that floor is a safety property"
+        )
+    older_than = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+    for table in (RAW_TABLE, TRADES_TABLE, BOOK_TABLE, CHECKS_TABLE):
+        view = "k2_orphan_candidates"
+        listed = file_list_view(spark, table_location(spark, table), view)
+        print(f"  {table}: {listed} objects under its prefix")
+        _call(
+            spark,
+            f"CALL {CATALOG}.system.remove_orphan_files("
+            f"  table => '{_bare(table)}',"
+            f"  older_than => {_ts(older_than)},"
+            f"  file_list_view => '{view}')",
         )
 
 
@@ -218,7 +307,7 @@ def audit_venue_replay(spark) -> list:
     ]
 
 
-def audit_sequence(spark, table: str, time_column: str) -> list:
+def audit_sequence(spark, table: str) -> list:
     """`seq` never goes backwards within one (exchange, symbol, conn_id).
 
     Deliberately monotonicity, not `+1` continuity, and the reason is in the
@@ -237,13 +326,23 @@ def audit_sequence(spark, table: str, time_column: str) -> list:
     row in docs/architecture/failure-modes.md. Full `+1` continuity is provable
     against `conn_msg_seq` in the raw frames, and that belongs to a replay tool
     (Phase G), not to a nightly SQL pass over bronze.
+
+    Ordered by ARRIVAL — `(recv_ts_ns, conn_msg_seq)` — not by the venue clock.
+    Two reasons, and the first one is that the check was previously unable to
+    fail: ordering by `(exchange_ts, seq)` sorts any out-of-order pair sharing
+    an `exchange_ts` into ascending `seq`, which makes `seq < previous`
+    unreachable for exactly the ties a venue produces most of. The second is
+    that "frames arrived out of order" is a statement about arrival, and
+    `conn_msg_seq` is K2's own strictly increasing frame counter on the
+    connection — the only total order in the row that we control.
     """
     row = spark.sql(
         f"""
         SELECT count(*) AS regressions
         FROM (
           SELECT seq, lag(seq) OVER (
-                   PARTITION BY exchange, symbol, conn_id ORDER BY {time_column}, seq
+                   PARTITION BY exchange, symbol, conn_id
+                   ORDER BY recv_ts_ns, conn_msg_seq
                  ) AS previous
           FROM {table} WHERE seq > 0
         )
@@ -265,16 +364,44 @@ def _result(check: str, scope: str, passed: bool, observed: int, detail: str) ->
     }
 
 
+# venue_replay has no pass/fail semantics — it publishes a rate so a *change* in
+# it is visible. Counting it as a passing audit inflates the summary line with a
+# check that cannot fail, so it is named here and reported separately.
+INFORMATIONAL = {"venue_replay"}
+
+# (check name, scope, callable). The scope is here rather than only inside the
+# check so that a check which RAISES still has somewhere to file its failure.
+AUDITS = (
+    ("offset_continuity", RAW_TABLE, audit_offset_continuity),
+    (
+        "duplicate_identifiers",
+        TRADES_TABLE,
+        lambda s: audit_duplicates(s, TRADES_TABLE, ["exchange", "symbol", "trade_id", "conn_id"]),
+    ),
+    (
+        "duplicate_identifiers",
+        BOOK_TABLE,
+        lambda s: audit_duplicates(s, BOOK_TABLE, ["exchange", "symbol", "conn_id", "snapshot_ts_ns"]),
+    ),
+    ("venue_replay", TRADES_TABLE, audit_venue_replay),
+    ("sequence_gaps", TRADES_TABLE, lambda s: audit_sequence(s, TRADES_TABLE)),
+    ("sequence_gaps", BOOK_TABLE, lambda s: audit_sequence(s, BOOK_TABLE)),
+)
+
+
 def run_audits(spark, run_ts: datetime) -> list:
     results = []
-    results += audit_offset_continuity(spark)
-    results += audit_duplicates(spark, TRADES_TABLE, ["exchange", "symbol", "trade_id", "conn_id"])
-    results += audit_duplicates(
-        spark, BOOK_TABLE, ["exchange", "symbol", "conn_id", "snapshot_ts_ns"]
-    )
-    results += audit_venue_replay(spark)
-    results += audit_sequence(spark, TRADES_TABLE, "exchange_ts")
-    results += audit_sequence(spark, BOOK_TABLE, "snapshot_ts")
+    for name, scope, check in AUDITS:
+        try:
+            results += check(spark)
+        except Exception as exc:  # noqa: BLE001 - a raising check is a finding
+            # The row is the product, not the exit code. Letting the exception
+            # out means the run dies with nothing durable written, the alert
+            # fires, and audit.checks — the table the runbook tells you to
+            # query — is silent about the run that fired it.
+            results.append(
+                _result(name, scope, False, -1, f"check raised {type(exc).__name__}: {exc}")
+            )
 
     frame = spark.createDataFrame(
         [
@@ -308,10 +435,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=2, help="compaction window, days back")
     parser.add_argument("--retain-days", type=int, default=7, help="snapshot retention floor")
+    parser.add_argument(
+        "--orphan-hours",
+        type=int,
+        default=24,
+        help="remove_orphan_files horizon, hours back. Floor 24; see remove_orphans()",
+    )
     parser.add_argument("--audit-only", action="store_true", help="skip compaction and expiry")
     args = parser.parse_args()
     if args.retain_days < 7:
         parser.error("--retain-days below 7 breaks the bronze incremental read; see expire()")
+    if args.orphan_hours < 24:
+        parser.error("--orphan-hours below 24 is unsafe against a concurrent write; see remove_orphans()")
 
     run_ts = datetime.now(timezone.utc)
     spark = lake_session("k2-lake-maintenance")
@@ -319,20 +454,21 @@ def main() -> int:
         if not args.audit_only:
             compact(spark, run_ts - timedelta(days=args.days))
             expire(spark, args.retain_days)
+            remove_orphans(spark, args.orphan_hours)
         results = run_audits(spark, run_ts)
     finally:
         spark.stop()
 
     failed = [r for r in results if not r["passed"]]
+    informational = [r for r in results if r["check_name"] in INFORMATIONAL]
     print("\naudits:")
     for r in results:
-        print("  {} {:<24} {:<44} {}".format(
-            "FAIL" if not r["passed"] else "ok  ", r["check_name"], r["scope"], r["detail"]
-        ))
+        mark = "FAIL" if not r["passed"] else ("info" if r["check_name"] in INFORMATIONAL else "ok  ")
+        print("  {} {:<24} {:<44} {}".format(mark, r["check_name"], r["scope"], r["detail"]))
     if failed:
         print(f"\n{len(failed)} audit(s) FAILED — see {CHECKS_TABLE}")
         return 1
-    print(f"\n{len(results)} audits passed")
+    print(f"\n{len(results) - len(informational)} audits passed, {len(informational)} informational")
     return 0
 
 

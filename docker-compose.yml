@@ -464,11 +464,14 @@ services:
         condition: service_healthy
       iceberg-init:
         condition: service_completed_successfully
-      # Same reason as iceberg-init above, for the v3 tables: the first
-      # lake-ingest-5min run fires within 5 minutes of boot, and on a clean
-      # clone it would hit TABLE_OR_VIEW_NOT_FOUND if the DDL had not landed.
-      lake-ddl:
-        condition: service_completed_successfully
+      # NOT gated on lake-ddl, and that is deliberate. The worker also carries
+      # v2's two offload deployments, and lake-ddl is `restart: "no"`: gating
+      # here meant one transient v3 DDL failure at boot took v2's offload down
+      # with it, during the exact parallel-run window whose purpose is keeping
+      # v2 trustworthy. The v3 cost of not gating is bounded and self-healing —
+      # the first lake-ingest-5min tick may hit TABLE_OR_VIEW_NOT_FOUND, the
+      # flow retries once after 60 s, and the next tick is five minutes later,
+      # against LakeIngestFailed's 35-minute threshold.
     deploy:
       resources:
         limits:

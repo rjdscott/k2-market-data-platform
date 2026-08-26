@@ -10,8 +10,14 @@
 # Parquet, fails partway, and the commit never happens — so the S3 prefix is
 # left holding orphaned data files that no snapshot references. Those are not a
 # correctness problem (nothing reads a file no manifest names) but they are a
-# disk problem, and `remove_orphan_files` is what clears them. This script
-# measures whether the row count is unchanged AND reports the orphan bytes.
+# disk problem, and `remove_orphan_files` — on the nightly path in
+# docker/lake/maintenance.py, with a 24-hour floor — is what clears them.
+#
+# The orphan number is a DIFFERENCE across the failed write, not `mc du` after
+# it. `mc du` reports what the bucket holds; printing that under the heading
+# "orphaned data files left behind" labels the whole lake as garbage. Bucket
+# size before minus bucket size after the failed run is the number that means
+# what the heading says.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 # shellcheck source=lib.sh
@@ -39,12 +45,28 @@ finally:
 PY
 }
 
+# bucket_bytes -> total bytes under the lake bucket, as an integer.
+# `mc` runs inside k2-minio against its own endpoint: K2_S3_ENDPOINT is set on
+# the Spark and lake services, NOT in the MinIO container, so the original
+# `mc alias set k2 "$K2_S3_ENDPOINT"` there always fell through to the
+# hard-coded fallback — under a `2>/dev/null` that hid it either way.
+MC_ENDPOINT="${K2_CHAOS_MC_ENDPOINT:-http://localhost:9000}"
+bucket_bytes() {
+  docker exec k2-minio sh -c \
+    "mc alias set k2 '$MC_ENDPOINT' \"\$MINIO_ROOT_USER\" \"\$MINIO_ROOT_PASSWORD\" >/dev/null \
+     && mc du --json k2/k2-lake" \
+    | python3 -c 'import json,sys; print(sum(json.loads(l)["size"] for l in sys.stdin if l.strip()))'
+}
+
+pause_lake_ingest
+trap 'docker start k2-minio >/dev/null 2>&1 || true; resume_lake_ingest' EXIT
+
 before=$(rows)
-echo "→ before: $before rows in raw.messages" >&2
+bytes_before=$(bucket_bytes) || die "could not read the bucket size from k2-minio — check MC_ENDPOINT"
+echo "→ before: $before rows in raw.messages, $bytes_before bytes in k2/k2-lake" >&2
 
 echo "→ stopping k2-minio" >&2
 docker stop k2-minio >/dev/null
-trap 'docker start k2-minio >/dev/null 2>&1 || true' EXIT
 
 set +e
 docker exec "$SPARK" python3 "$LAKE/ingest.py" >/tmp/chaos-minio.log 2>&1
@@ -56,21 +78,21 @@ grep -aiE "s3|connect|refused|minio" /tmp/chaos-minio.log | tail -3 | sed 's/^/ 
 
 echo "→ starting k2-minio" >&2
 docker start k2-minio >/dev/null
-trap - EXIT
 sleep 20
 
 after=$(rows)
 [ "$before" = "$after" ] || die "row count moved across the failed run: $before -> $after"
 echo "→ raw.messages unchanged at $after rows — no partial commit" >&2
 
-echo "→ orphaned data files left behind by the failed write:" >&2
-docker exec k2-minio sh -c \
-  'mc alias set k2 "$K2_S3_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 \
-   || mc alias set k2 http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null; \
-   mc du k2/k2-lake' 2>/dev/null | sed 's/^/    /' >&2
+bytes_after=$(bucket_bytes)
+orphan_bytes=$((bytes_after - bytes_before))
+echo "→ bucket bytes across the failed write: $bytes_before -> $bytes_after" >&2
+echo "→ orphaned by this run: $orphan_bytes bytes" >&2
+echo "  Zero is a legitimate answer — MinIO may have refused the very first PUT." >&2
 echo "  Files with no manifest referencing them are invisible to every reader and" >&2
-echo "  cost only disk. CALL lake.system.remove_orphan_files clears them — the" >&2
-echo "  runbook has the command and the reason it is not on the nightly path." >&2
+echo "  cost only disk. The nightly maintenance run calls remove_orphan_files with" >&2
+echo "  a 24 h floor, so these clear on the next one; the disk runbook has the" >&2
+echo "  command to do it sooner." >&2
 
 echo "→ recovery: one ingest with the object store back" >&2
 start=$SECONDS
