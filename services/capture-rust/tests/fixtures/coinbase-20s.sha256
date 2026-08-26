@@ -1,0 +1,13 @@
+020ac3d9182c8dd230b43f647d4a8a19d4fb9c5d47e9abd9d39f510dea4d626f
+
+# SHA-256 of `serde_json::to_vec(&records)` over one replay of
+# coinbase-20s.jsonl - see tests/replay_coinbase.rs::replay_is_deterministic.
+#
+# Golden value for "same input, same bytes out". It changes only when the
+# fixture changes or a record's shape changes; either way the new value goes
+# here with a line saying what moved. It is not a hash of the fixture file.
+#
+# 2026-08-26  first recorded: ATOM-USD, 159 frames, sequence_num 0..158 with
+#             0 gaps, 1 market_trades frame (100 trades), 16 snapshots. The
+#             level2 snapshot event is trimmed to 1,250 of 3,440 levels (all
+#             450 bids, best 800 offers) to keep the file under 400 KB.

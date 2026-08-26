@@ -14,10 +14,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use k2_capture::config::{Exchange, Instruments};
-use k2_capture::exchanges::{Action, Adapter, KrakenAdapter};
+use k2_capture::exchanges::{Action, Adapter, BinanceAdapter, CoinbaseAdapter, KrakenAdapter};
 use k2_capture::metrics as k2_metrics;
 use k2_capture::record::OutRecord;
 use k2_capture::sink::Sink;
@@ -35,6 +35,8 @@ const KRAKEN_STREAMS: &[&str] = &[
     "status",
     "control",
 ];
+const BINANCE_STREAMS: &[&str] = &["trade", "depth20"];
+const COINBASE_STREAMS: &[&str] = &["l2_data", "market_trades", "heartbeats", "subscriptions"];
 
 #[derive(Parser)]
 #[command(name = "k2-capture", version, about = "K2 v3 market data capture")]
@@ -133,17 +135,16 @@ async fn main() -> Result<()> {
 fn build_adapter(exchange: Exchange, instruments: Instruments) -> Result<Adapter> {
     match exchange {
         Exchange::Kraken => Ok(Adapter::Kraken(KrakenAdapter::new(instruments)?)),
-        other => bail!(
-            "no adapter for {other} yet - Binance and Coinbase land later in Phase C \
-             against the contract in src/exchanges/mod.rs"
-        ),
+        Exchange::Binance => Ok(Adapter::Binance(BinanceAdapter::new(instruments))),
+        Exchange::Coinbase => Ok(Adapter::Coinbase(CoinbaseAdapter::new(instruments))),
     }
 }
 
 fn streams_for(exchange: Exchange) -> &'static [&'static str] {
     match exchange {
         Exchange::Kraken => KRAKEN_STREAMS,
-        _ => &[],
+        Exchange::Binance => BINANCE_STREAMS,
+        Exchange::Coinbase => COINBASE_STREAMS,
     }
 }
 
@@ -172,9 +173,11 @@ async fn run(args: RunArgs) -> Result<()> {
         exchange.as_str(),
     )?;
 
-    let url = args
-        .ws_url
-        .unwrap_or_else(|| exchange.default_ws_url().to_string());
+    let url = adapter.ws_url(
+        &args
+            .ws_url
+            .unwrap_or_else(|| exchange.default_ws_url().to_string()),
+    );
     let snapshot_interval = Duration::from_millis(args.snapshot_interval_ms);
     let mut backoff = Backoff::new();
     let mut shutdown = Shutdown::new()?;
@@ -278,8 +281,18 @@ async fn session(
                     sink.send(record).await;
                 }
                 for action in handled.actions {
-                    let Action::Resubscribe(symbol) = action;
-                    to_send.extend(adapter.resubscribe_messages(&symbol));
+                    match action {
+                        // Binance returns no frames here: its resync is the
+                        // next in-order partial frame.
+                        Action::Resubscribe(symbol) => {
+                            to_send.extend(adapter.resubscribe_messages(&symbol));
+                        }
+                        Action::Reconnect => {
+                            tracing::warn!("adapter asked for a fresh connection");
+                            feed.close().await;
+                            return Ok(Session::Disconnected);
+                        }
+                    }
                 }
             }
             _ = ticker.tick() => {
@@ -379,9 +392,11 @@ async fn record(args: RecordArgs) -> Result<()> {
         instruments.retain_native(&args.symbols)?;
     }
     let adapter = build_adapter(args.exchange, instruments)?;
-    let url = args
-        .ws_url
-        .unwrap_or_else(|| args.exchange.default_ws_url().to_string());
+    let url = adapter.ws_url(
+        &args
+            .ws_url
+            .unwrap_or_else(|| args.exchange.default_ws_url().to_string()),
+    );
 
     let mut feed = Feed::connect(&url).await?;
     for message in adapter.subscribe_messages() {

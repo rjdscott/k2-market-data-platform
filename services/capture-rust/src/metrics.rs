@@ -73,7 +73,8 @@ fn describe() {
         "k2_capture_produce_errors_total",
         "Records that did not reach Redpanda, by reason. queue_full means the local \
          librdkafka queue was full and the record was dropped; encode means the schema \
-         registry or Avro encoder rejected it; delivery means the broker did."
+         registry or Avro encoder rejected it; enqueue means librdkafka refused it \
+         locally (a frame over message.max.bytes); delivery means the broker did."
     );
     describe_counter!(
         "k2_capture_gaps_total",
@@ -98,6 +99,12 @@ fn describe() {
         "Decimal values the 1e-8 fixed-point contract cannot hold exactly. The record \
          is dropped, never rounded - a rounded price is a wrong price that looks right \
          forever. reason distinguishes too_many_dp from a malformed or out-of-range value."
+    );
+    describe_counter!(
+        "k2_capture_unknown_frames_total",
+        "Frames archived to the raw topic but not understood: an unknown channel, a body \
+         that did not match its channel, or a frame that was not JSON. Never a drop - \
+         the raw record is always emitted first."
     );
     describe_histogram!(
         "k2_capture_exchange_to_recv_seconds",
@@ -135,7 +142,7 @@ fn zero(exchange: &'static str, streams: &[&'static str], symbols: &[String]) {
         counter!("k2_capture_records_produced_total", "exchange" => exchange, "kind" => kind)
             .increment(0);
     }
-    for reason in ["queue_full", "encode", "delivery"] {
+    for reason in ["queue_full", "encode", "enqueue", "delivery"] {
         counter!("k2_capture_produce_errors_total", "exchange" => exchange, "reason" => reason)
             .increment(0);
     }

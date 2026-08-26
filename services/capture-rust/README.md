@@ -13,7 +13,7 @@ that is the whole argument of [ADR-018](../../docs/adr/ADR-018-v3-lake-first-rus
 ```mermaid
 flowchart TB
     WS["ws.rs<br/>frame in, recv_ts_ns stamped first"]
-    AD["exchanges/kraken.rs<br/>pure: bytes -> records + actions"]
+    AD["exchanges/{kraken,binance,coinbase}.rs<br/>pure: bytes -> records + actions"]
     SK["sink.rs<br/>Avro + Confluent framing -> Redpanda"]
     WS --> AD --> SK
 ```
@@ -34,8 +34,10 @@ identical.
 | `decimal.rs` | decimal text → `i64` at 1e-8, and Kraken's checksum digit formatting. No `f64`, anywhere |
 | `book.rs` | `BTreeMap` L2 book: absolute-quantity updates, `top_n`, depth truncation |
 | `record.rs` | the three wire records, mirroring `schemas/avro/*.avsc` field for field |
-| `exchanges/mod.rs` | the adapter contract — read this before writing Binance or Coinbase |
+| `exchanges/mod.rs` | the adapter contract, the `Adapter` enum, and the helpers every venue shares (`parse_micros`, the precision-loss and unknown-frame counters) |
 | `exchanges/kraken.rs` | Kraken spot WS v2: `instrument` + `trade` + `book depth=25`, CRC32 verified |
+| `exchanges/binance.rs` | Binance spot combined stream: `<sym>@trade` + `<sym>@depth20@100ms`, stateless top-20, `lastUpdateId` monotonic |
+| `exchanges/coinbase.rs` | Coinbase Advanced Trade: `level2` (full depth) + `market_trades` + `heartbeats`, connection-wide `sequence_num` |
 | `sink.rs` | rdkafka `FutureProducer` + `schema_registry_converter`, drop-on-full |
 | `metrics.rs` | Prometheus exposition on `:8082`, every metric `describe_`d |
 | `ws.rs` | the socket, the `recv_ts_ns` stamp, backoff, and a ten-line HTTP GET |
@@ -50,13 +52,14 @@ and — the real cost — make a mock adapter possible, at which point the tests
 stop exercising the code that runs in production.
 
 ```rust
+let feed = Feed::connect(&adapter.ws_url(base)).await?;   // Binance: base + "?streams=..."
 adapter.begin_connection(&conn_id);                      // once per (re)connect
 for msg in adapter.subscribe_messages() { feed.send(&msg).await?; }
 
 let handled = adapter.handle_frame(&bytes, recv_ts_ns);  // pure
 //   handled.stream   -> the `stream` metric label and RawMessage.stream
 //   handled.records  -> Raw first, then anything derived from it
-//   handled.actions  -> Action::Resubscribe(symbol), for the caller to perform
+//   handled.actions  -> Action::{Resubscribe(symbol), Reconnect}, for the caller to perform
 
 adapter.snapshot(&symbol, now_ns)                        // driven by the sampler
 ```
@@ -76,6 +79,24 @@ Four obligations, spelled out in `src/exchanges/mod.rs`:
 3. Book state is internal and leaves only through `snapshot()`. The adapter
    never decides *when* to emit.
 4. Return an `Action`; never perform one.
+
+`ws_url(base)` is the one place the URL is venue-shaped: Binance's combined
+endpoint carries the subscription as `?streams=btcusdt@trade/btcusdt@depth20@100ms/...`
+and sends no subscribe frame, so `subscribe_messages()` is empty there. Kraken
+and Coinbase return `base` unchanged. Both `run` and `record` go through it, so
+a fixture is the same conversation the live path has.
+
+### Sequencing and resync, per venue
+
+| Venue | Continuity signal | On failure | Counters |
+|-------|-------------------|------------|----------|
+| Binance | `lastUpdateId` strictly increasing per symbol on `@depth20@100ms` | drop that book; `Action::Resubscribe` with **no frames** — the next in-order partial frame is a complete top-20 | `gaps_total`, `resyncs_total` |
+| Kraken | CRC32 checksum on every `book` frame (no sequence numbers) | drop that book; unsubscribe + subscribe that symbol with `snapshot: true` | `checksum_failures_total{symbol}`, `resyncs_total` |
+| Coinbase | `sequence_num`, connection-wide across every channel | drop **every** book; `Action::Reconnect` — `main.rs` closes the socket and takes the backoff path | `gaps_total`, `resyncs_total`, `reconnects_total` |
+
+Coinbase reconnects rather than resubscribes because a gap cannot be attributed
+to a product: the missing frame could have carried any of them, and `level2`
+has no per-product resync short of a fresh snapshot.
 
 ---
 
@@ -162,21 +183,24 @@ compressed (`docker save | wc -c`), of which 11.6 MB is the binary.
 
 ## Fixtures and replay
 
-`tests/replay.rs` drives `tests/fixtures/kraken-20s.jsonl` — 1185 real frames,
-recorded with `k2-capture record` — through `KrakenAdapter::handle_frame` and
-asserts every book update reproduced Kraken's own CRC32, the top-20 invariants
-hold, and two passes hash identically against the golden value in
-`tests/fixtures/kraken-20s.sha256`.
+One replay test per venue drives a recorded JSONL session through the live
+adapter's `handle_frame`, asserts the book invariants (top-20, sorted,
+uncrossed, no zero quantities) and every venue's own continuity check, then
+hashes two passes against a committed golden value. All three were recorded
+with `k2-capture record` on 2026-08-26.
 
-Two things about that fixture are worth knowing before you regenerate it:
+| Fixture | Test | Frames | Size | Symbol | Not verbatim |
+|---------|------|--------|------|--------|--------------|
+| `kraken-20s.jsonl` | `tests/replay.rs` | 1185 | 329 KB | BTC/USD (20 s) | the `instrument` snapshot's `pairs` filtered to the recorded symbol and `assets` emptied: 639 KB → under 1 KB |
+| `binance-10s.jsonl` | `tests/replay_binance.rs` | 539 (438 trade, 101 depth20) | 269 KB | BTCUSDT (10 s) | none — 10 s of one symbol is the whole budget at 100 ms depth frames |
+| `coinbase-20s.jsonl` | `tests/replay_coinbase.rs` | 159 (`sequence_num` 0..158) | 320 KB | ATOM-USD (20 s) | the `level2` snapshot event trimmed to 1,250 of 3,440 levels (all 450 bids, best 800 offers): 582 KB → 320 KB. Every `sequence_num` intact |
 
-- One line is not verbatim. The `instrument` snapshot's `pairs` array is
-  filtered to the recorded symbol and `assets` emptied, taking the frame from
-  639 KB to under 1 KB. Its shape and every field the adapter reads are intact.
-- It uses `tests/fixtures/instruments-kraken-v2.yaml`, which spells the symbols
-  the way the v2 wire does. `config/instruments.yaml` works equally well — see
-  the alias table below — but the fixture registry keeps the recorded frames and
-  the file that produced them spelled identically.
+The Kraken fixture uses `tests/fixtures/instruments-kraken-v2.yaml`, which
+spells the symbols the way the v2 wire does. `config/instruments.yaml` works
+equally well — see the alias table below — but the fixture registry keeps the
+recorded frames and the file that produced them spelled identically. Binance
+and Coinbase natives are the wire spelling already, so those tests load the
+repo registry directly.
 
 ---
 

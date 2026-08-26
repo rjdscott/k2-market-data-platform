@@ -26,10 +26,10 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
-use super::{Action, Handled};
+use super::{Action, Handled, count_decimal_error, count_unknown, parse_micros};
 use crate::book::{Book, Side as BookSide};
 use crate::config::Instruments;
-use crate::decimal::{DecimalError, checksum_digits, parse_fixed};
+use crate::decimal::{checksum_digits, parse_fixed};
 use crate::record::{BookSnapshotRecord, OutRecord, RawMessageRecord, Side, TradeRecord};
 
 const EXCHANGE: &str = "kraken";
@@ -267,7 +267,14 @@ impl KrakenAdapter {
                     }
                 }
             }
-            Body::Other => {}
+            // `heartbeat`, `status` and subscribe acks land here too; only a
+            // channel we have no name for is "unknown". A known channel whose
+            // body did not parse is counted inside `Body::parse`.
+            Body::Other => {
+                if matches!(stream, "unknown" | "unparseable") {
+                    count_unknown(EXCHANGE, stream);
+                }
+            }
         }
         out
     }
@@ -370,7 +377,7 @@ impl KrakenAdapter {
                     (Ok(px), Ok(qty)) => state.book.apply(side, px, qty),
                     (px, qty) => {
                         for e in [px.err(), qty.err()].into_iter().flatten() {
-                            count_decimal_error(e);
+                            count_decimal_error(EXCHANGE, e);
                         }
                         ok = false;
                     }
@@ -488,34 +495,11 @@ impl KrakenAdapter {
                     ?e,
                     "kraken decimal rejected, record dropped"
                 );
-                count_decimal_error(e);
+                count_decimal_error(EXCHANGE, e);
                 None
             }
         }
     }
-}
-
-/// `k2_capture_precision_loss_total` - a decimal the 1e-8 contract cannot hold
-/// exactly. The record is dropped, never rounded: a rounded price is a wrong
-/// price that looks right forever, a counter is a bug someone fixes.
-///
-/// No `symbol` label: five reasons times eleven instruments is fifty-five
-/// series for something that should never tick, and the offending symbol and
-/// text are already in the log line next to every increment.
-fn count_decimal_error(e: DecimalError) {
-    let reason = match e {
-        DecimalError::TooManyDecimals => "too_many_dp",
-        DecimalError::Scientific => "scientific",
-        DecimalError::Malformed => "malformed",
-        DecimalError::Overflow => "overflow",
-        DecimalError::Negative => "negative",
-    };
-    metrics::counter!(
-        "k2_capture_precision_loss_total",
-        "exchange" => EXCHANGE,
-        "reason" => reason,
-    )
-    .increment(1);
 }
 
 /// Kraken v2 book checksum.
@@ -543,15 +527,6 @@ pub fn book_checksum(
         }
     }
     hasher.finalize()
-}
-
-/// RFC 3339 with microseconds, as Kraken writes it, to microseconds since the
-/// epoch. `None` on anything else - a timestamp we cannot read is not a
-/// timestamp to invent.
-fn parse_micros(ts: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(ts)
-        .ok()
-        .and_then(|dt| dt.timestamp_micros().into())
 }
 
 // ── wire types ──────────────────────────────────────────────────────────────
@@ -604,8 +579,9 @@ impl<'a> Body<'a> {
                 .map(|d| Body::Instrument(d.pairs)),
             _ => return Body::Other,
         }
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "kraken frame body did not match its channel");
+        .unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "kraken frame body did not match its channel");
+            count_unknown(EXCHANGE, e.stream_name());
             Body::Other
         })
     }
