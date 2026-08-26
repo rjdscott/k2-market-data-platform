@@ -99,7 +99,20 @@ ALTER TABLE lake.raw.messages
 -- partitioning on it produces one huge partition and a hundred tiny ones. The
 -- sort order carries symbol pruning instead, at no file-count cost.
 --
--- Identifier fields (exchange, symbol, trade_id) are the duplicate audit's key.
+-- Identifier fields include conn_id, and that is a measurement rather than a
+-- preference. Over 287,184 trades captured on 2026-08-26 (30 min, all three
+-- venues), (exchange, symbol, trade_id) had 956 duplicated keys — every one of
+-- them Coinbase, every one a pair of rows with identical price, qty, side and
+-- exchange_ts under two different conn_ids. Coinbase replays recent
+-- market_trades on resubscribe, so a reconnect genuinely delivers the same
+-- trade twice and the archive genuinely holds both frames. Declaring
+-- (exchange, symbol, trade_id) unique would be declaring something the data
+-- disproves; adding conn_id makes the claim true and leaves the venue replay
+-- visible instead of hidden.
+--
+-- The logical trade is still (exchange, symbol, trade_id) — that is what a
+-- research query deduplicates on, and docker/lake/maintenance.py reports the
+-- cross-conn_id count on every run so the replay rate stays a number.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS lake.bronze.trades (
     exchange         STRING  NOT NULL COMMENT 'binance | kraken | coinbase',
@@ -139,7 +152,7 @@ TBLPROPERTIES (
     'comment'                                       = 'Unified normalised trades, decoded from raw.messages. Rebuildable: drop and replay.'
 );
 
-ALTER TABLE lake.bronze.trades SET IDENTIFIER FIELDS exchange, symbol, trade_id;
+ALTER TABLE lake.bronze.trades SET IDENTIFIER FIELDS exchange, symbol, trade_id, conn_id;
 
 ALTER TABLE lake.bronze.trades
     WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, exchange_ts;
@@ -203,11 +216,19 @@ TBLPROPERTIES (
     'comment'                                       = 'Queryable L2 product. Deltas are not stored here — they stay verbatim in raw.messages and are recoverable by replay.'
 );
 
--- (exchange, symbol, conn_id, conn_msg_seq) rather than seq: Kraken writes seq=0
--- and Coinbase's sequence_num is connection-wide, so neither is unique per row.
--- The K2-assigned pair always is.
+-- snapshot_ts_ns, not conn_msg_seq, and again the data settled it. conn_msg_seq
+-- records which frame the book last incorporated, so a quiet book gives two
+-- consecutive 1 Hz samples the same value: measured 484 duplicated
+-- (exchange, symbol, conn_id, conn_msg_seq) keys over 47,331 snapshots on
+-- 2026-08-26, e.g. binance ATOMUSDT conn_msg_seq 81456 sampled at
+-- ...156094883844 and ...157094267621, one second apart, same recv_ts_ns.
+-- Two snapshots of an unchanged book is correct behaviour, not a duplicate.
+-- The same 47,331 rows have zero duplicates on the sampler clock below.
+--
+-- seq is no help either: Kraken writes 0 and Coinbase's sequence_num is
+-- connection-wide.
 ALTER TABLE lake.bronze.book_snapshots_l2
-    SET IDENTIFIER FIELDS exchange, symbol, conn_id, conn_msg_seq;
+    SET IDENTIFIER FIELDS exchange, symbol, conn_id, snapshot_ts_ns;
 
 ALTER TABLE lake.bronze.book_snapshots_l2
     WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, snapshot_ts;

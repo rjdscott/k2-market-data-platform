@@ -38,6 +38,7 @@ SRC_SNAPSHOT_ID = "k2.src-snapshot-id"
 # Values for the JOB property.
 JOB_INGEST = "ingest"
 JOB_DECODE = "decode"
+JOB_MAINTENANCE = "maintenance"
 
 # Every v3 topic is created with 12 partitions (docker/redpanda/init.sh). The
 # count matters because a partition that has never carried a record produces no
