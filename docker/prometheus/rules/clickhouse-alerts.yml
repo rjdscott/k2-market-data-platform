@@ -67,32 +67,16 @@ groups:
             ClickHouse is failing {{ $value | humanize }} queries/sec.
             This may indicate memory pressure, disk issues, or misconfiguration.
 
+  # ClickHouseBronzeInsertRateLow and the clickhouse:insert_rate:5m recording rule
+  # were removed on 2026-08-26 and archived at
+  # legacy/v2-kotlin/runbooks/clickhouse-v2-ingest-alerts.yml. Both read
+  # ClickHouseProfileEvents_InsertedRows as a proxy for "is the Kafka engine
+  # consuming", and the thing they proxied for was the Kotlin feed handlers'
+  # output. With those retired (ADR-019) the alert can only ever fire, which is
+  # noise rather than monitoring.
   - name: clickhouse_warning
     interval: 1m
     rules:
-
-      # WARNING: Kafka Engine not consuming (consumer lag proxy)
-      # Note: Direct consumer lag not directly exposed; use insert rate as proxy
-      - alert: ClickHouseBronzeInsertRateLow
-        expr: |
-          rate(ClickHouseProfileEvents_InsertedRows[5m]) < 0.5
-        for: 10m
-        labels:
-          severity: warning
-          component: clickhouse
-          tier: warm-storage
-        annotations:
-          summary: "ClickHouse bronze insert rate very low"
-          description: |
-            ClickHouse is inserting fewer than 0.5 rows/sec over 10 minutes.
-            This may indicate feed handlers are down or Kafka Engine stalled.
-
-            **Note:** Low trading volumes during off-peak hours can trigger this
-            alert. Check if feed handlers are actually producing data.
-
-            **Check:**
-            1. Feed handler logs: `docker logs k2-feed-handler-binance --tail 20`
-            2. Kafka consumers: `docker exec k2-clickhouse clickhouse-client -q "SELECT table, num_messages_read, last_poll_time FROM system.kafka_consumers WHERE database='k2'"`
 
       # WARNING: Large number of background merges queued
       - alert: ClickHouseMergeQueueLarge
@@ -111,10 +95,6 @@ groups:
 
   - name: clickhouse_recording
     rules:
-      # Insert rate per 5 minutes
-      - record: clickhouse:insert_rate:5m
-        expr: rate(ClickHouseProfileEvents_InsertedRows[5m])
-
       # Mean query duration in seconds (5-min window).
       # ClickHouse's Prometheus endpoint exposes counters only — no native
       # histograms — so p99 is not derivable; total time / query count is.

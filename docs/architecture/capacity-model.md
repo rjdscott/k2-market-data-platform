@@ -37,7 +37,7 @@ guess. Section 8 says which command settles which row.
 | I7 | Book snapshot emit cadence | **1 Hz × symbols** (`K2_SNAPSHOT_INTERVAL_MS`) | [`002-phase-c-rust-capture.md`](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md) Scope |
 | I8 | `RawMessage.payload` | the frame **byte for byte**, never compressed in-field, never re-serialised | [`schemas/avro/raw-message.avsc`](../../schemas/avro/raw-message.avsc) |
 | I9 | Capture container limits | `capture-binance` / `capture-kraken` 0.25 CPU / 256 M; `capture-coinbase` 0.25 CPU / 512 M | [`002-phase-c-rust-capture.md`](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md) Scope |
-| I10 | Steady-state budget on this branch | **15.35 CPU / 22.125 GB**; bootstrap peak **16.85 CPU / 23.625 GiB** | [ADR-010 Outcome addendum](../adr/ADR-010-resource-budget.md#outcome-addendum-v3-phase-b-2026-08-26) |
+| I10 | Steady-state budget before the Phase C cutover (v2 + Lakekeeper) | **15.35 CPU / 22.125 GB**; bootstrap peak **16.85 CPU / 23.625 GiB** | [ADR-010 Outcome addendum](../adr/ADR-010-resource-budget.md#outcome-addendum-v3-phase-b-2026-08-26) |
 | I11 | Host filesystem free space | **212 GiB free of 961 GiB** on `/` (Docker root) | `df -BG /var/lib/docker`, 2026-08-26 |
 | I12 | librdkafka producer queue cap | `queue.buffering.max.kbytes=32768` = **32 MiB** | [`002-phase-c-rust-capture.md`](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md) Scope |
 
@@ -296,7 +296,7 @@ Coinbase 512 M limit exists for I3, not for the steady state — and if Phase F 
 
 | Step | CPU, predicted | RAM, predicted | Derived from |
 |---|---|---|---|
-| Steady state on this branch (v2 + Lakekeeper) | 15.35 | 22.125 GB | I10 — declared, not predicted |
+| Steady state before the cutover (v2 + Lakekeeper) | 15.35 | 22.125 GB | I10 — declared, not predicted |
 | − 3 Kotlin feed handlers retired to `legacy/v2-kotlin/` | −1.50 | −1.50 GB | `3 × 0.5 CPU`, `3 × 512 M` |
 | + 3 Rust capture containers | +0.75 | +1.00 GB | `3 × 0.25 CPU`; `256 M + 256 M + 512 M` |
 | **Steady state after Phase C, predicted** | **14.60** | **21.625 GB** | sum |
@@ -308,6 +308,14 @@ Coinbase 512 M limit exists for I3, not for the steady state — and if Phase F 
 | + 4 one-shots running concurrently | +1.50 | +1.50 GB | [ADR-010 addendum](../adr/ADR-010-resource-budget.md#outcome-addendum-v3-phase-b-2026-08-26) one-shot table |
 | **Bootstrap peak, predicted** | **16.10** | **23.125 GB** | sum |
 | vs the current 16.85 / 23.625 GiB peak | **−0.75 CPU** | **−0.50 GB** | `16.85 − 16.10` |
+
+> **Scored, 2026-08-26.** Phase C landed and the Kotlin handlers are out of
+> `docker-compose.yml`. The measured declaration is **14.60 CPU / 21.625 GiB across
+> 15 steady services**, bootstrap peak **16.10 CPU / 23.125 GiB across 19** — both
+> predictions exact, because every term in them is a declared limit rather than an
+> estimate. Provenance and the command:
+> [ADR-010 Kotlin-retirement addendum](../adr/ADR-010-resource-budget.md#outcome-addendum-kotlin-retirement-2026-08-26).
+> The predicted values above are left as written.
 
 Three things worth saying plainly:
 

@@ -86,7 +86,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "up{job=~\"feed-handler-binance|feed-handler-kraken|feed-handler-coinbase|redpanda|clickhouse|prometheus\"}",
+          "expr": "up{job=~\"capture-binance|capture-kraken|capture-coinbase|redpanda|clickhouse|prometheus\"}",
           "legendFormat": "{{job}}",
           "refId": "A"
         }
@@ -127,11 +127,11 @@
         }
       },
       "pluginVersion": "9.0.0",
-      "title": "Total Trade Ingestion Rate (all exchanges)",
+      "title": "Total Trade Records Produced (all exchanges)",
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (exchange) (rate(feed_handler_trades_produced_total{type=\"raw\"}[1m]))",
+          "expr": "sum by (exchange) (rate(k2_capture_records_produced_total{kind=\"trade\"}[1m]))",
           "legendFormat": "{{exchange}}",
           "refId": "A"
         }
@@ -144,151 +144,6 @@
         "w": 24,
         "x": 0,
         "y": 4
-      },
-      "id": 101,
-      "title": "\ud83d\udce1 Feed Handlers",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "rps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 12,
-        "x": 0,
-        "y": 5
-      },
-      "id": 10,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "lastNotNull"
-          ],
-          "displayMode": "table",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "pluginVersion": "9.0.0",
-      "title": "Trade Messages / sec per Exchange (raw)",
-      "type": "timeseries",
-      "targets": [
-        {
-          "expr": "rate(feed_handler_trades_produced_total{type=\"raw\"}[1m])",
-          "legendFormat": "{{exchange}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 12,
-        "y": 5
-      },
-      "id": 11,
-      "options": {
-        "legend": {
-          "calcs": [
-            "sum"
-          ],
-          "displayMode": "table",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "pluginVersion": "9.0.0",
-      "title": "WebSocket Reconnects (last 15m)",
-      "type": "timeseries",
-      "targets": [
-        {
-          "expr": "increase(feed_handler_reconnects_total[15m])",
-          "legendFormat": "{{exchange}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "rps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 18,
-        "y": 5
-      },
-      "id": 12,
-      "options": {
-        "legend": {
-          "calcs": [
-            "sum"
-          ],
-          "displayMode": "table",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "pluginVersion": "9.0.0",
-      "title": "Kafka Produce Errors / sec",
-      "type": "timeseries",
-      "targets": [
-        {
-          "expr": "rate(feed_handler_errors_total[5m])",
-          "legendFormat": "{{exchange}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 11
       },
       "id": 102,
       "title": "\ud83d\uddc4\ufe0f ClickHouse Pipeline",
@@ -312,7 +167,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 12
+        "y": 5
       },
       "id": 20,
       "options": {
@@ -374,7 +229,7 @@
         "h": 6,
         "w": 6,
         "x": 12,
-        "y": 12
+        "y": 5
       },
       "id": 21,
       "options": {
@@ -436,7 +291,7 @@
         "h": 6,
         "w": 6,
         "x": 18,
-        "y": 12
+        "y": 5
       },
       "id": 22,
       "options": {
@@ -469,7 +324,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 11
       },
       "id": 103,
       "title": "\ud83e\uddca Iceberg Offload (Cold Tier)",
@@ -510,7 +365,7 @@
         "h": 4,
         "w": 8,
         "x": 0,
-        "y": 19
+        "y": 12
       },
       "id": 30,
       "options": {
@@ -555,7 +410,7 @@
         "h": 4,
         "w": 8,
         "x": 8,
-        "y": 19
+        "y": 12
       },
       "id": 31,
       "options": {
@@ -599,7 +454,7 @@
         "h": 4,
         "w": 8,
         "x": 16,
-        "y": 19
+        "y": 12
       },
       "id": 32,
       "options": {
@@ -631,7 +486,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 16
       },
       "id": 104,
       "title": "\ud83d\udcf6 Redpanda",
@@ -655,7 +510,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 24
+        "y": 17
       },
       "id": 40,
       "options": {
@@ -717,7 +572,7 @@
         "h": 5,
         "w": 6,
         "x": 12,
-        "y": 24
+        "y": 17
       },
       "id": 41,
       "options": {

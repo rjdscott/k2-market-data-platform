@@ -4,12 +4,18 @@ What "fast enough" means for this pipeline, where the budget is spent, and what 
 actually measured. The target that matters: a trade leaving an exchange should be visible
 in a gold OHLCV candle in **under 200 ms at p99**.
 
+> **Segments 3–6 no longer carry live traffic.** The v2 hot tier froze on 2026-08-26 —
+> nothing produces to `market.crypto.trades.<ex>[.raw]`, so the ClickHouse medallion holds
+> history and gains no rows. See [../architecture/README.md](../architecture/README.md).
+> Segments 1–2 are live and are now the Rust `k2-capture` tier's; the measured numbers
+> below are the v2 Kotlin pipeline's, kept as the dated record of what that path did.
+
 ## The 7-segment budget
 
 | # | Segment | Target |
 |---|---------|--------|
-| 1 | Exchange WebSocket → feed handler parse | <1 ms |
-| 2 | Feed handler → Redpanda produce | <2 ms |
+| 1 | Exchange WebSocket → capture parse | <1 ms |
+| 2 | Capture → Redpanda produce | <2 ms |
 | 3 | Redpanda → ClickHouse Kafka Engine consume | <3 ms |
 | 4 | Raw queue → bronze MV (normalisation) | <1 ms |
 | 5 | Bronze → silver MV (unification) | <3 ms |
@@ -68,40 +74,50 @@ Supporting observations from the same run:
 
 ## Producer configuration
 
-The feed handler's Kafka producer is tuned for latency over throughput, in
-[`application.conf`](../../services/feed-handler-kotlin/src/main/resources/application.conf):
+The capture tier's librdkafka producer is configured in
+[`sink.rs`](../../services/capture-rust/src/sink.rs), and the settings are fixed rather
+than tunable — there is one buffer in this tier and it is sized against the container's
+memory limit:
 
-```hocon
-acks = "all"                              # durability first
-enable-idempotence = true                 # exactly-once produce
-linger-ms = 10                            # 10ms max batching delay
-batch-size = 16384
-compression-type = "lz4"                  # fast, not maximal
-max-in-flight-requests-per-connection = 5
+```rust
+queue.buffering.max.kbytes = 32768        // 32 MB, the only buffer
+message.max.bytes          = 8388608      // 8 MiB; matches the WebSocket cap in ws.rs
+enable.idempotence         = true         // a retry cannot duplicate a record
+acks                       = "all"        // durability first
+compression.type           = "zstd"
+message.timeout.ms         = 30000        // drop and count rather than pin forever
 ```
 
-`linger-ms = 10` is the one knob worth understanding: it buys batching efficiency for at
-most 10 ms of added latency, which is under 5% of the 200 ms budget and roughly an order
-of magnitude below the network RTT it sits behind. Raising it is the first thing to try if
-throughput ever becomes the constraint instead of latency.
+`message.timeout.ms = 30000` is the one worth understanding: a record still unsent after
+30 s is failed and counted rather than held, because the lake is append-only and a record
+that stale is better lost visibly than pinned behind a dead broker. There is no
+`linger.ms` tuning here — the venue's frame arrival rate, not batching, sets the cadence.
 
 ## What degrades under load
 
 The stack has no explicit backpressure machinery — it relies on Redpanda as the buffer,
 which is the right trade at this scale:
 
-1. **Feed handler saturates** → the Kafka producer blocks; the WebSocket read loop stalls
-   and the exchange's own buffer absorbs it. Watch `feed_handler_errors_total`.
+1. **Capture saturates** → librdkafka's 32 MB queue fills and records are **dropped**, not
+   buffered: blocking the frame loop would stop us reading the socket and the venue would
+   drop us instead, losing more. `CaptureProduceStalled` fires first (deliveries flat
+   while produces climb), then `k2_capture_produce_errors_total{reason="queue_full"}`
+   ticks and `CaptureProduceErrors` fires. This is the one level where the failure mode
+   is loss rather than lag — see [../runbooks/capture-produce-stalled.md](../runbooks/capture-produce-stalled.md).
 2. **ClickHouse ingest saturates** → the Kafka Engine consumer lags. Data is safe in
-   Redpanda for the retention window; `ClickHouseBronzeInsertRateLow` fires. Watch
-   consumer lag with `rpk group describe`.
+   Redpanda for the retention window. There is no alert on this any more:
+   `ClickHouseBronzeInsertRateLow` was the proxy and it was archived with the v2
+   tier it measured ([ADR-019](../adr/ADR-019-rust-capture-tier.md) Outcome). The
+   v3 hot tier gets its own in Phase E; until then, watch consumer lag by hand
+   with `rpk group describe`.
 3. **Materialized views saturate** → merge queue grows; `ClickHouseMergeQueueLarge` fires.
    Queries degrade before ingest does.
 4. **Offload saturates** → cycles overrun the 15-minute schedule;
    `IcebergOffloadCycleTooSlow` fires. The hot tier is unaffected — cold simply lags.
 
-Nothing here drops data silently. The failure mode at every level is *lag*, not loss,
-which is what the failure-mode testing in
+Nothing here drops data silently — the one level that drops (1) counts every record it
+loses. Below the capture tier the failure mode is *lag*, not loss, which is what the
+failure-mode testing in
 [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md) confirms.
 
 ## Related

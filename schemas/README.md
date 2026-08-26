@@ -15,21 +15,28 @@ is `com.k2.market.v3`. Registration is done by
 [`docker/redpanda/init.sh`](../docker/redpanda/init.sh), which is idempotent and
 runs on every stack start.
 
-> **Why the `v3` segment.** `market.crypto.trades.<ex>` is taken: it is the v2
-> normalized Avro topic, live now, and its `-value` subject already holds
-> `NormalizedTrade`. Registering `Trade` there returns `{"is_compatible":false}`
-> (verified against the running stack, 2026-08-26), which would fail
-> `redpanda-init` and block every feed handler from starting. ADR-018 also
-> commits to a parallel-run window where the Rust capture tier and the Kotlin
-> handlers both produce and are compared — which needs two topics regardless.
-> The prefix is applied to all nine uniformly rather than only to the one that
-> collides, and it comes off at the Phase E cutover if anyone wants it to.
+> **Why the `v3` segment.** `market.crypto.trades.<ex>` was taken: it is the v2
+> normalized Avro topic, and its `-value` subject already holds
+> `NormalizedTrade`. Registering `Trade` there returned `{"is_compatible":false}`
+> (verified against the running stack, 2026-08-26), which would have failed
+> `redpanda-init` and blocked every feed handler from starting; the parallel-run
+> window ADR-018 committed to needed two topics regardless. Those topics and
+> subjects are frozen now rather than gone — Phase E deletes them — so the prefix
+> stays until then, and comes off afterwards if anyone wants it to. It is applied
+> to all nine uniformly rather than only to the one that collided.
 
 > **Still present:** [`avro/normalized-trade.avsc`](avro/normalized-trade.avsc)
-> is the **v2** contract. It is superseded by `trade.avsc` and must not be used
-> for new work, but it is loaded at runtime by the Kotlin feed handlers
-> (`KafkaProducerService.kt:115`) and deleting it stops all three v2 containers
-> at boot. It goes when the handlers move to `legacy/v2-kotlin/` in Phase C.
+> is the **v2** contract, superseded by `trade.avsc` and not to be used for new
+> work. Its producers — the Kotlin feed handlers — retired to
+> [`legacy/v2-kotlin/`](../legacy/v2-kotlin/README.md) on 2026-08-26
+> ([ADR-019](../docs/adr/ADR-019-rust-capture-tier.md)), and the file did **not**
+> go with them. Three reasons it stays here: the three
+> `market.crypto.trades.<ex>-value` subjects are still registered and the frozen
+> topic data is still decodable against it; the archived handler loads it from
+> `/app/schemas` at producer start (`KafkaProducerService.kt:115`), so a run from
+> the archive needs it on the repo-root build context; and four current documents
+> cite it by line number as the worked example of a contract nothing enforced.
+> It is deleted with the `k2` database and the v2 topics at the Phase E cutover.
 
 ---
 

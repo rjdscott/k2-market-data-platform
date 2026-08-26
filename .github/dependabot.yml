@@ -1,15 +1,7 @@
+# No gradle ecosystem here: the only Gradle project is legacy/v2-kotlin/, archived
+# and unbuilt since ADR-019. Dependency PRs against an archive are noise.
 version: 2
 updates:
-  - package-ecosystem: "gradle"
-    directory: "/services/feed-handler-kotlin"
-    schedule:
-      interval: "monthly"
-    open-pull-requests-limit: 5
-    labels: ["dependencies", "kotlin"]
-    commit-message:
-      prefix: "deps"
-      include: "scope"
-
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -22,13 +14,24 @@ updates:
 
   - package-ecosystem: "docker"
     directories:
-      - "/services/feed-handler-kotlin"
       - "/docker/prefect"
       - "/docker/spark"
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "build"
+      include: "scope"
+
+  # Weekly, not monthly: capture-rust is the only tier producing data now, and its
+  # tree (rdkafka, rustls, tokio) is where a CVE would actually reach the wire.
+  - package-ecosystem: "cargo"
+    directory: "/services/capture-rust"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "rust"]
     commit-message:
       prefix: "build"
       include: "scope"

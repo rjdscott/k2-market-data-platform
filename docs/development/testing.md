@@ -1,14 +1,14 @@
 # Testing
 
-The v2 test suite is deliberately small. It covers the pure logic that is easy to get
-wrong and cheap to test — symbol normalisation, config loading, orchestration control
-flow — and leans on manual failure-mode testing for everything that needs a live stack.
-Where that leaves gaps, they are listed below rather than papered over.
+The test suite is deliberately small. It covers the pure logic that is easy to get
+wrong and cheap to test — fixed-point conversion, book state, per-venue frame decoding,
+config loading, orchestration control flow — and leans on manual failure-mode testing for
+everything that needs a live stack. Where that leaves gaps, they are listed below rather
+than papered over.
 
 ```bash
-make test          # everything: Kotlin + Python + Rust
-make test-kotlin   # feed handler unit tests
-make test-python   # offload flow unit tests (needs uv)
+make test          # everything: Python + Rust
+make test-python   # offload flow, contract and parity unit tests (needs uv)
 make test-rust     # capture unit + replay integration tests (runs in rust:1-bookworm)
 ```
 
@@ -16,36 +16,29 @@ make test-rust     # capture unit + replay integration tests (runs in rust:1-boo
 
 | Suite | Count | Location | What it covers |
 |-------|------:|----------|----------------|
-| Kotlin — `TradeNormalizerTest` | 7 | [`services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/TradeNormalizerTest.kt`](../../services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/TradeNormalizerTest.kt) | Per-exchange symbol normalisation and trade mapping to the canonical schema |
-| Kotlin — `InstrumentsLoaderTest` | 13 | [`InstrumentsLoaderTest.kt`](../../services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/InstrumentsLoaderTest.kt) | Parsing `config/instruments.yaml` (v2 schema), per-exchange lookup, missing-file and malformed-YAML handling |
-| Rust — capture lib unit | 46 | [`services/capture-rust/src/`](../../services/capture-rust/src/) | `decimal`, `record`, `config`, `ws`, `book`, `exchanges/{binance,kraken,coinbase}` — fixed-point conversion, book state, per-exchange framing |
+| Rust — capture lib unit | 48 | [`services/capture-rust/src/`](../../services/capture-rust/src/) | `decimal`, `record`, `config`, `ws`, `book`, `sink`, `metrics`, `exchanges/{binance,kraken,coinbase}` — fixed-point conversion, book state, per-exchange framing |
+| Rust — capture binary unit | 4 | [`services/capture-rust/src/main.rs`](../../services/capture-rust/src/main.rs) | The healthcheck's staleness parsing and per-stream bounds — the "green while the primary feed is dead" bug and its opposite |
 | Rust — capture replay integration | 6 | [`services/capture-rust/tests/`](../../services/capture-rust/tests/) | `replay.rs` (2), `replay_binance.rs` (2), `replay_coinbase.rs` (2) — golden-fixture replay through the same `handle_frame()` path live capture runs |
 | Python — Iceberg maintenance flow | 28 | [`tests/test_iceberg_maintenance_flow.py`](../../tests/test_iceberg_maintenance_flow.py) | Compact / expire / audit tasks, the parent flows, failure policy, and script helpers — all with the Spark subprocess mocked |
 | Python — v3 data contracts | 41 | [`tests/test_contracts.py`](../../tests/test_contracts.py) | Structural checks on `schemas/avro/*.avsc` and `config/instruments.yaml` — sibling `logicalType`, fixed-point prices, nullable defaults, duplicate/malformed canonical symbols |
-| Python — v3 parity | 40 | [`tests/test_parity.py`](../../tests/test_parity.py) | Per-symbol trade count/id comparison between Kotlin and Rust capture output — the Phase C exit gate (ADR-019) |
-| **v2+v3 total (Kotlin + Rust + Python)** | **181** | | |
+| Python — parity comparator | 57 | [`tests/test_parity.py`](../../tests/test_parity.py) | `scripts/parity/compare_trades.py` — the tolerance boundary, Kraken's no-trade-id join, string → fixed-point conversion. This is the evidence the Kotlin retirement rested on ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) |
+| **Total (Rust + Python)** | **184** | | |
+| Archived v2 Kotlin | 20 | [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md) | `TradeNormalizerTest` (7), `InstrumentsLoaderTest` (13). `make test-legacy-kotlin` runs them; deliberately **not** part of `make test` and not run in CI |
 | Legacy v1 | 180 | [`legacy/v1/tests/unit/`](../../legacy/v1/tests/unit/) | Archived. Kept for reference; not run in CI |
 
 ## Running them
 
-### Kotlin
+### Rust
 
 ```bash
-cd services/feed-handler-kotlin
-./gradlew test --no-daemon          # 20 tests
-./gradlew build --no-daemon         # compile + test, what CI runs
+make test-rust      # cargo test --locked in rust:1-bookworm — 58 tests
 ```
 
-Needs JDK 21 (the build sets `jvmToolchain(21)`). No local JDK? Run it in the same image
-CI uses:
-
-```bash
-docker run --rm -v "$PWD":/project -w /project/services/feed-handler-kotlin \
-  -e GRADLE_USER_HOME=/tmp/.gradle gradle:8.12-jdk21 ./gradlew test --no-daemon
-```
-
-HTML report: `services/feed-handler-kotlin/build/reports/tests/test/index.html`.
-JUnit XML: `build/test-results/test/`.
+No local toolchain needed. For a tight loop use the pre-built builder image and the named
+cargo/target volumes described in
+[`services/capture-rust/README.md`](../../services/capture-rust/README.md) — that is also
+where `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` are run the way
+CI runs them.
 
 ### Python
 
@@ -66,15 +59,16 @@ uv run --no-project --with ruff ruff check docker/offload tests
 
 ## CI
 
-[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs six jobs on every PR and
-on pushes to `main`: **kotlin**, **rust**, **python**, **docker** (×4 matrix), **docs**, **security**.
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs five jobs on every PR and
+on pushes to `main`: **rust**, **python**, **docker** (×3 matrix), **docs**, **security**.
+The **kotlin** job was deleted with the handlers — nothing in CI builds or tests
+`legacy/v2-kotlin/`.
 
 | Job | What it does |
 |-----|--------------|
-| **Kotlin (feed handler)** | `./gradlew build` on JDK 21 — compiles and runs the 20 tests. Uploads the HTML test report on failure |
-| **Rust (capture)** | `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test` — runs the 52 tests |
-| **Python (offload + tests)** | `ruff check` then `pytest tests -q` under `uv` — runs the 109 tests |
-| **Docker build** | 4-way matrix: feed handler, Prefect worker, Spark, capture (own build context), with GHA layer caching. Catches broken build contexts, not runtime behaviour |
+| **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain — runs the 58 tests |
+| **Python (offload + tests)** | `ruff check` then `pytest tests -q` under `uv` — runs the 126 tests |
+| **Docker build** | 3-way matrix: Prefect worker, Spark, capture, with GHA layer caching. Every leg builds from the repo root. Catches broken build contexts, not runtime behaviour |
 | **Docs** | `bash scripts/check-docs.sh` — link/word/rule gates, promtool, runbook annotation paths, capacity-model gate, mermaid width |
 | **Security (Trivy)** | Filesystem scan for CRITICAL/HIGH findings, SARIF uploaded to GitHub code scanning. `legacy/` is skipped |
 
@@ -85,14 +79,17 @@ WebSocket connection.
 
 Stated plainly, because the gaps are structural rather than accidental:
 
-- **WebSocket clients** — `BinanceWebSocketClient`, `KrakenWebSocketClient` and
-  `CoinbaseWebSocketClient` have no tests. Connection handling, subscription framing,
-  reconnect-with-backoff and per-exchange message parsing are all validated only by
-  running against the live exchange. This is the largest gap; a fake WebSocket server
-  fed with captured frames would close most of it.
-- **`KafkaProducerService`** — Avro record construction, the dual raw/normalized produce
-  path and the Micrometer counters are untested. It needs an embedded broker or a
-  `MockProducer`.
+- **The live socket** — `ws.rs` covers the backoff schedule and the `recv_ts_ns` unit, but
+  nothing exercises a real connect, subscribe or mid-frame disconnect. Frame *decoding* is
+  well covered, because `handle_frame` is pure and the replay fixtures drive it; the I/O
+  around it is validated only by running against the live venue.
+- **The produce path** — `sink.rs` has one test, that `warm_up()` fetches every subject a
+  record can need. Avro encoding against a real registry and librdkafka delivery reports
+  are not covered; that needs an embedded broker or a registry stub.
+- **Every alert** — the 10 capture rules are evaluated against live series, but `make chaos`
+  has never run, so no rule has been shown to fire on the fault it names and no capture
+  recovery time is measured. Three of them carry `promtool` unit tests
+  (`make check-alerts`) that pin the expression, not the recovery.
 - **ClickHouse DDL and materialized views** — the bronze → silver → gold transform chain
   is SQL, and SQL is where the schema bugs live. Verified by hand with the queries in
   [../operations/data-inspection.md](../operations/data-inspection.md).
@@ -105,10 +102,12 @@ Stated plainly, because the gaps are structural rather than accidental:
 
 ## Manual failure-mode suite
 
-Six infrastructure failure modes were induced and recovered on 2026-02-19 — broker
-restart, database restart, feed-handler crash, offload failure, object-store outage and
-network partition. All six passed, worst MTTR 32 seconds. The procedures are written up as
-a runbook so they double as incident response:
+Six infrastructure failure modes were induced and recovered on 2026-02-19 **against the v2
+stack** — broker restart, database restart, feed-handler crash, offload failure,
+object-store outage and network partition. All six passed, worst MTTR 32 seconds. Those
+numbers belong to the Kotlin tier and have not been re-measured since it retired; the
+capture-tier equivalent is `make chaos`, which has not run. The procedures are written up
+as a runbook so they double as incident response:
 
 **[../runbooks/failure-recovery.md](../runbooks/failure-recovery.md)**
 
@@ -117,12 +116,12 @@ configuration. Each mode is one command to induce and one to recover.
 
 ## Adding tests
 
-- Kotlin tests use `kotlin.test` with JUnit Platform; put them alongside the existing two
-  files in `src/test/kotlin/com/k2/feedhandler/`.
+- Rust tests live in a `#[cfg(test)] mod tests` at the foot of the module they cover;
+  anything that needs a recorded session goes in `tests/` with its fixture.
 - Python tests use plain pytest with `unittest.mock` — no fixtures framework, no plugins.
   Mock the subprocess boundary rather than Spark itself.
-- Adding an exchange means at minimum a new `TradeNormalizerTest` case for its symbol
-  format — see [../operations/adding-new-exchanges.md](../operations/adding-new-exchanges.md).
+- Adding an exchange means at minimum a recorded fixture and a replay test for it — see
+  [../operations/adding-new-exchanges.md](../operations/adding-new-exchanges.md).
 - Follow the pragmatic TDD loop in [`CLAUDE.md`](../../CLAUDE.md): happy path first, then
   one meaningful edge case. A few good tests beat fifteen shallow ones.
 

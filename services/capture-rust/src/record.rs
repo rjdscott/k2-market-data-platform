@@ -145,11 +145,21 @@ impl OutRecord {
         }
     }
 
-    /// Kafka message key: the canonical symbol, so every record for one
-    /// instrument lands on one partition and stays ordered. Raw frames that
-    /// belong to no single instrument (heartbeats, subscribe acks) have no key
-    /// and are spread round-robin, which is correct - they have no ordering
-    /// relationship to anything.
+    /// Kafka message key, so every record for one instrument lands on one
+    /// partition and stays ordered.
+    ///
+    /// `Trade` and `Book` key on the **canonical** symbol, which is what makes a
+    /// cross-venue join on the topic key possible. `Raw` keys on
+    /// `RawMessage.symbol`, the **wire** spelling, because a raw frame is the
+    /// venue's bytes and carries the venue's name for the instrument - so
+    /// `market.crypto.v3.raw.binance` keys on `BTCUSDT` where
+    /// `.trades.binance` keys on `BTC/USDT` (verified against the running
+    /// cluster, 2026-08-27). Ordering per instrument holds either way; only the
+    /// key's alphabet differs.
+    ///
+    /// Raw frames that belong to no single instrument (heartbeats, subscribe
+    /// acks) have no key and are spread round-robin, which is correct - they
+    /// have no ordering relationship to anything.
     pub fn key(&self) -> Option<&str> {
         match self {
             OutRecord::Trade(t) => Some(&t.canonical_symbol),

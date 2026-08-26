@@ -1,5 +1,7 @@
-# K2 Market Data Platform v2 - Prometheus Configuration
-# Scrapes metrics from all v2 services
+# K2 Market Data Platform - Prometheus Configuration
+# Scrapes the v3 capture tier plus the shared v2 infrastructure (Redpanda,
+# ClickHouse, Iceberg offload). The Kotlin feed-handler jobs retired with the
+# handlers — ADR-019.
 
 global:
   scrape_interval: 15s
@@ -77,44 +79,13 @@ scrape_configs:
     metrics_path: '/metrics'
     scrape_interval: 30s
 
-  # Kotlin feed handlers — Micrometer Prometheus endpoint on port 8082
-  - job_name: 'feed-handler-binance'
-    static_configs:
-      - targets: ['feed-handler-binance:8082']
-        labels:
-          service: 'feed-handler-binance'
-          exchange: 'binance'
-          tier: 'ingestion'
-    metrics_path: '/metrics'
-    scrape_interval: 10s
-
-  - job_name: 'feed-handler-kraken'
-    static_configs:
-      - targets: ['feed-handler-kraken:8082']
-        labels:
-          service: 'feed-handler-kraken'
-          exchange: 'kraken'
-          tier: 'ingestion'
-    metrics_path: '/metrics'
-    scrape_interval: 10s
-
-  - job_name: 'feed-handler-coinbase'
-    static_configs:
-      - targets: ['feed-handler-coinbase:8082']
-        labels:
-          service: 'feed-handler-coinbase'
-          exchange: 'coinbase'
-          tier: 'ingestion'
-    metrics_path: '/metrics'
-    scrape_interval: 10s
-
-  # Rust capture tier (v3 Phase C) — metrics-exporter-prometheus on port 8082,
-  # same port as the Kotlin handlers above since the two run against different
-  # containers during the parallel run. See
+  # Rust capture tier — metrics-exporter-prometheus on port 8082. This is the
+  # only ingestion tier: the three `feed-handler-*` jobs that scraped the Kotlin
+  # handlers on the same port were removed with them (ADR-019). See
   # docs/plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md.
   #
-  # NO `exchange:` target label here, unlike the Kotlin jobs above. The capture
-  # binary emits its own `exchange` label on every series, and with the default
+  # NO `exchange:` target label here. The capture binary emits its own
+  # `exchange` label on every series, and with the default
   # `honor_labels: false` a target label of the same name wins and the sample's
   # own is renamed `exported_exchange` — so every capture series carried both,
   # while `k2_capture_build_info` (which the binary emits without `exchange`)

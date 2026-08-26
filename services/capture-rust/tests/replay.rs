@@ -10,8 +10,12 @@
 //!
 //! ```text
 //! cargo run -- record --exchange kraken --seconds 20 --symbols BTC/USD \
-//!     --instruments-file tests/fixtures/instruments-kraken-v2.yaml \
+//!     --instruments-file ../../config/instruments.yaml \
 //!     > tests/fixtures/kraken-20s.jsonl
+//!
+//! (`--instruments-file` because the default is the container path
+//! `/app/config/instruments.yaml`; it used to point at a Kraken-only fixture
+//! registry, which is gone — see `adapter()` below.)
 //! ```
 //!
 //! One line of the committed fixture is not verbatim: the `instrument`
@@ -43,13 +47,18 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
+/// The repo registry, like the Binance and Coinbase replay tests. This test used
+/// to need its own copy with the WS v2 spellings, because
+/// `config/instruments.yaml` had to keep Kraken's v1 spellings while the Kotlin
+/// v1 handlers read the same file. Those retired (ADR-019), the registry moved
+/// to the v2 spellings, and the fixture copy went with the alias table it
+/// existed for. The recorded frames and the file that produced them are still
+/// spelled identically - that is now true by default rather than by a second
+/// file.
 fn adapter() -> Adapter {
-    let instruments = Instruments::load(
-        &fixtures().join("instruments-kraken-v2.yaml"),
-        Exchange::Kraken,
-    )
-    .expect("test registry");
-    Adapter::Kraken(KrakenAdapter::new(instruments).expect("adapter"))
+    let registry = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/instruments.yaml");
+    let instruments = Instruments::load(&registry, Exchange::Kraken).expect("repo registry");
+    Adapter::Kraken(KrakenAdapter::new(instruments))
 }
 
 /// Everything one pass over the fixture produced.

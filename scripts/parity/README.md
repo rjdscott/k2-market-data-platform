@@ -8,6 +8,20 @@ production here, so retiring it removes the comparison baseline, and the compari
 has to be made before the baseline goes away. `compare_trades.py` is what makes that
 comparison, and its markdown table is what gets pasted into the retirement PR.
 
+**The retirement has landed** ([ADR-019](../../docs/adr/ADR-019-rust-capture-tier.md)
+Accepted; deploy at `2026-08-26T18:58:29Z`), so nothing produces
+`market.crypto.trades.<ex>` any more: a run over a window *after* the retirement finds
+an empty v2 side and exits 1. **This tool can now only re-read retained topics**, and
+the v2 topics carry `retention.ms=604800000` — 7 days — so the window below stops being
+re-runnable around **2026-09-02**. After that the tables in ADR-019's Outcome are the
+only record and cannot be regenerated.
+
+The three tables from the 2-hour labelled window live in
+[ADR-019's Outcome](../../docs/adr/ADR-019-rust-capture-tier.md), not here. The one
+exception is the Dogecoin naming pair, reproduced below under *Known expected
+divergence* because it is the worked example of a red row that is a v2 bug rather than
+a v3 one. Everything else here is the tool and the method.
+
 ---
 
 ## Running it
@@ -38,7 +52,8 @@ this window" for a window it never finished reading.
 `--v2-only` exists to prove the plumbing — Avro decode, `offsets_for_times`, the
 window cut — before the Rust tier is producing anything worth comparing. Run it
 first; if it prints sensible per-symbol counts, a red table later is a real finding
-rather than a broken script.
+rather than a broken script. It reads the same frozen v2 topic, so the same window
+constraint applies.
 
 The script reads with a throwaway consumer group and `enable.auto.commit=false`, so
 it cannot move a real consumer's offsets. It is safe to run against the live stack.
@@ -78,14 +93,17 @@ independently**. Pick it so that:
 
 - both producers were up and healthy for the whole of it — a capture container that
   restarts mid-window shows up as a large one-sided deficit, which is the tool
-  working correctly and is not parity evidence;
+  working correctly and is not parity evidence. *(Historical: the v2 producers are
+  retired, so this is a constraint on which past window you pick, not on scheduling
+  a new one.)*;
 - it ends at least a minute in the past, so neither producer is still writing into it.
   **This is enforced, not advised**: `--window-end` less than 60 s old is a hard
   error. The two topics are read one after the other, so a window still being
   written into hands v3 every record produced during the v2 read and v2 none of
   them — a systematic one-sided deficit that is an artefact of this tool;
-- it is inside the topics' retention (v2 topics are the live ones; v3 `trades.*` keep
-  7 days).
+- it is inside the topics' retention. **Both sides are now a countdown**: the frozen
+  v2 topics and the live v3 `trades.*` both keep 7 days, so the last re-runnable
+  window ends 7 days after the retirement deploy — around **2026-09-02**.
 
 The window and its length are printed in the header of every table, and the header
 says *"a labelled sample, not a soak"* on purpose. A 2-hour window cannot observe
@@ -280,6 +298,10 @@ produced `XDG/USD` and `DOGE/USD` as two different instruments in v2"). The scri
 does not fold the two together: hiding a divergence to make a table green is the
 opposite of what this directory is for. Explain it in the PR next to the table.
 
+Since the retirement, `config/instruments.yaml` carries Kraken's WS v2 spellings
+as the natives too (`BTC/USD`, `DOGE/USD`), so nothing aliases `XDG/USD`
+anywhere — the divergence recorded here is what that change was made to end.
+
 Observed on the 2-hour labelled window, 2026-08-26T14:15Z → 16:15Z:
 
 | symbol | v2 | v3 | Δ | dup-v2 | dup-v3 | only-v2 | only-v3 | px/qty/side mismatch | verdict |
@@ -325,6 +347,14 @@ the tables:
 If the tables are green, the ADR's retirement trigger is met and
 `git mv services/feed-handler-kotlin legacy/v2-kotlin/` can land in the same PR. If
 any are red, ADR-019 is explicit: *"Kotlin stays until it does."*
+
+That `git mv` landed on 2026-08-26 and the handlers are now at
+[`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md). All three tables are pasted
+into [ADR-019's Outcome](../../docs/adr/ADR-019-rust-capture-tier.md), and **they were
+not all green**: Binance passed 12/12, Coinbase and Kraken carry red rows that stay red
+in the record. The maintainer accepted them on the trigger's own wording — *explained,
+not tolerated* — with every divergence attributed to the v2 tier or the venue. Read
+that section, not this line, for what the retirement actually landed against.
 
 ---
 

@@ -12,7 +12,7 @@
     {
       "name": "symbol",
       "type": "string",
-      "doc": "The instrument as the exchange spells it on the wire, byte for byte (BTCUSDT, XBT/USD, BTC-USD). The `native` field of config/instruments.yaml. Kept verbatim so a message can always be traced back to the raw frame that produced it."
+      "doc": "The instrument as the exchange spells it on the wire, byte for byte (BTCUSDT, BTC/USD, BTC-USD). The `native` field of config/instruments.yaml. Kept verbatim so a message can always be traced back to the raw frame that produced it."
     },
     {
       "name": "canonical_symbol",

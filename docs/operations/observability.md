@@ -1,9 +1,8 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 27 alert rules (17 v2 + 10 v3 capture)
-cover the things that actually break: ingestion stops, ClickHouse struggles, the cold-tier
-offload falls behind, and — on this branch's Phase C capture tier — feed staleness, sequence
-gaps and book checksum failures.
+Prometheus scrapes the stack, Grafana renders it, and 23 alert rules (13 v2 + 10 v3 capture)
+cover the things that actually break: capture goes down or silent, sequence gaps and book
+checksum failures, ClickHouse struggles, and the cold-tier offload falls behind.
 
 - Prometheus — http://localhost:9090 (`/targets`, `/alerts`)
 - Grafana — http://localhost:3000, `admin` / `$GRAFANA_PASSWORD`
@@ -21,68 +20,78 @@ container start, no click-ops.
 | `redpanda` | `redpanda:9644` | 10s | Redpanda admin API |
 | `clickhouse` | `clickhouse:9363` | 15s | `<prometheus>` block in [`docker/clickhouse/config.xml`](../../docker/clickhouse/config.xml) |
 | `grafana` | `grafana:3000` | 15s | Grafana internal metrics |
-| `feed-handler-{binance,kraken,coinbase}` | `feed-handler-<x>:8082` | 10s | Micrometer, see below |
+| `capture-{binance,kraken,coinbase}` | `capture-<x>:8082` | 15s | `k2-capture`, see below |
 | `iceberg-scheduler` | `iceberg-metrics:8000` | 15s | `docker/offload/metrics.py --serve`, see below |
 
-Port 8082 is **not published to the host** — reach it through the container:
+Port 8082 is **not published to the host**, and the capture image is distroless — no curl,
+no shell. Read the series through Prometheus:
 
 ```bash
-docker exec k2-feed-handler-binance curl -s localhost:8082/metrics | grep feed_handler_
+curl -sG localhost:9090/api/v1/query \
+  --data-urlencode 'query=sum by (exchange, kind) (rate(k2_capture_records_produced_total[5m]))' | jq
 curl -s localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, health}'
+
+# Liveness without Prometheus: the binary reads its own /metrics over loopback
+docker exec k2-capture-binance /k2-capture healthcheck
 ```
 
-## Feed handler metrics
+## Capture metrics
 
-Emitted by [`KafkaProducerService.kt`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/KafkaProducerService.kt)
-into a shared Micrometer registry, served by
-[`MetricsServer.kt`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/MetricsServer.kt)
-(Ktor, `/metrics` + `/health` on port 8082, overridable with `K2_METRICS_PORT`).
+Emitted by [`metrics.rs`](../../services/capture-rust/src/metrics.rs) on `:8082/metrics`,
+overridable with `K2_METRICS_PORT`. Every family is `k2_capture_*`; every series an alert
+reads is seeded at zero on startup, so a counter's *first* event is detectable.
 
 | Metric | Type | Labels | Meaning |
 |--------|------|--------|---------|
-| `feed_handler_trades_produced_total` | counter | `exchange`, `type=raw\|normalized` | Trades produced to Redpanda. `raw` is JSON, `normalized` is Avro |
-| `feed_handler_errors_total` | counter | `exchange` | Kafka produce callbacks that returned an exception |
-| `feed_handler_reconnects_total` | counter | `exchange` | WebSocket reconnect attempts |
+| `messages_total`, `bytes_total` | counter | `exchange`, `stream` | Frames and bytes off the WebSocket, per venue subscription |
+| `records_produced_total` | counter | `exchange`, `kind=raw\|trade\|book` | Records enqueued into librdkafka's queue |
+| `records_delivered_total` | counter | `exchange` | Records the broker actually acknowledged — the one that goes flat in an outage |
+| `produce_errors_total` | counter | `exchange`, `reason` | Records that failed to produce. There is no spill-to-disk, so these are lost |
+| `gaps_total`, `resyncs_total` | counter | `exchange` | Sequence continuity broke; book rebuilt |
+| `checksum_failures_total` | counter | `exchange`, `symbol` | Kraken CRC32 mismatch. Kraken only — the other two publish no checksum |
+| `reconnects_total` | counter | `exchange`, `reason=scheduled\|involuntary` | `scheduled` is Binance's 23 h pre-emptive recycle |
+| `precision_loss_total` | counter | `exchange`, `reason` | A venue quoted finer than the fixed-point 1e-8 scale |
+| `unknown_frames_total` | counter | `exchange`, `stream` | Frames the adapter did not recognise (still archived verbatim) |
+| `last_message_ts_seconds` | gauge | `exchange`, `stream` | Per-stream liveness. What `CaptureFeedStale` and `healthcheck` both read |
+| `exchange_to_recv_seconds` | histogram | `exchange` | Venue stamp → our receive. **Trades only.** Transit + clock skew, not a platform SLO |
+| `book_depth` | gauge | `exchange`, `symbol` | Resting levels for one symbol, across **both** sides. `CaptureBookDepthDegraded`'s input |
+| `book_levels_total` | gauge | `exchange` | Resting levels summed over every book on that venue |
+| `build_info` | gauge | `version`, `git_sha` | `K2_GIT_SHA` at image build; `unknown` if unset |
 
-Plus the JVM/process metrics Micrometer registers by default. Recording rule
-`feed_handler:trade_rate:5m` pre-computes the raw trade rate per exchange.
+Metric names are the family above prefixed with `k2_capture_`. There are no
+recording rules for this tier.
 
 ## Dashboards
 
 | Dashboard | UID | What it shows |
 |-----------|-----|---------------|
-| K2 Pipeline Overview | `k2-pipeline-overview` | The one to open first. Five rows: stack health, feed handlers (trade rate per exchange, reconnects, produce errors), ClickHouse (insert rate, memory, merge queue), Iceberg offload (lag, cycle duration, rows/sec), Redpanda (throughput, connections) |
+| K2 Pipeline Overview | `k2-pipeline-overview` | The one to open first. Four rows: stack health (service up/down, trade records produced per exchange), ClickHouse (insert rate, memory, merge queue), Iceberg offload (lag, cycle duration, rows/sec), Redpanda (throughput, connections) |
 | ClickHouse Overview (v2) | `clickhouse-v2` | Query rate, memory gauge, insert rate, background merges — the warm tier in isolation |
 | Iceberg Offload Pipeline | `iceberg-offload` | Offload lag, success rate, rows/sec, duration quantiles, error rate, cycle status |
 | K2 Platform v2 — Migration Tracker | `k2-v2-migration` | Total CPU/RAM gauges against the 16-core budget, service up/down, Redpanda and ClickHouse rates |
-| K2 Capture (v3) | `k2-l2-capture` | Rust capture tier (Phase C): health (up, staleness, reconnects, gaps, checksum failures, resyncs), throughput (messages/bytes/records/produce errors), exchange→recv latency p50/p95/p99, book depth/levels/precision loss. `exchange` template variable filters all panels |
+| K2 Capture (v3) | `k2-l2-capture` | The Rust capture tier, now the only ingestion tier: health (up, staleness, reconnects, gaps, checksum failures, resyncs), throughput (messages/bytes/records/produce errors), exchange→recv latency p50/p95/p99, book depth/levels/precision loss. `exchange` template variable filters all panels |
 
 ![Redpanda topics](../images/redpanda-console-topics.jpg)
 
 ## Alert rules
 
-27 rules across four files. Every annotation carries the diagnostic commands and a
-runbook link; the tables below are the index.
+24 rules across three files. Every annotation carries the diagnostic commands and a
+runbook link; the tables below are the index. The three `FeedHandler*` rules retired with
+the Kotlin handlers ([ADR-019](../adr/ADR-019-rust-capture-tier.md)); their file is
+archived at [`legacy/v2-kotlin/runbooks/feed-handler-alerts.yml`](../../legacy/v2-kotlin/runbooks/feed-handler-alerts.yml)
+and `capture-alerts.yml` below is what replaced them.
 
-### `feed-handler-alerts.yml` — ingestion (3)
-
-| Alert | Severity | Fires when |
-|-------|----------|-----------|
-| `FeedHandlerDown` | critical | Metrics endpoint / scrape target down for 2m |
-| `FeedHandlerHighErrorRate` | critical | `rate(feed_handler_errors_total[5m]) > 0.1` for 3m |
-| `FeedHandlerFrequentReconnects` | warning | More than 3 reconnects in 15m, sustained 5m |
-
-### `clickhouse-alerts.yml` — warm tier (5)
+### `clickhouse-alerts.yml` — warm tier (4)
 
 | Alert | Severity | Fires when |
 |-------|----------|-----------|
 | `ClickHouseDown` | critical | `up{job="clickhouse"} == 0` for 2m |
 | `ClickHouseHighMemoryUsage` | critical | Resident memory >85% of system RAM for 5m |
 | `ClickHouseQueryFailureRateHigh` | critical | `rate(FailedQuery[5m]) > 0.1` for 3m |
-| `ClickHouseBronzeInsertRateLow` | warning | Server-wide inserted rows < 0.5/s over 5m |
 | `ClickHouseMergeQueueLarge` | warning | >10 background merge tasks queued for 5m |
 
-Recording rules: `clickhouse:insert_rate:5m`, `clickhouse:query_duration_mean:5m`.
+Recording rule: `clickhouse:query_duration_mean:5m`. (`clickhouse:insert_rate:5m` was archived with
+`ClickHouseBronzeInsertRateLow` — same expression, and no dashboard ever read it.)
 
 ### `iceberg-offload-alerts.yml` — cold tier (9)
 
@@ -107,7 +116,7 @@ backstop. `IcebergOffloadThroughputLow` uses a 1-hour window because offloads ru
 Recording rules: `iceberg_offload:cycle_count:5m`, `iceberg_offload:duration_avg:5m`,
 `iceberg_offload:rows_rate:5m`.
 
-### `capture-alerts.yml` — v3 capture tier, Phase C (10)
+### `capture-alerts.yml` — v3 capture tier, the live ingestion path (10)
 
 | Alert | Severity | Fires when |
 |-------|----------|-----------|
@@ -130,9 +139,10 @@ carry `promtool` unit tests in
 [`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml)
 (`make check-alerts`); those pin the expression, never the recovery time.
 
-The three `capture-*` scrape jobs set no `exchange` target label, unlike the Kotlin
-feed-handler jobs: the capture binary emits its own `exchange` on every series, and a
-target label of the same name would win and rename the sample's to `exported_exchange`.
+The three `capture-*` scrape jobs set no `exchange` target label, unlike the retired
+`feed-handler-*` jobs did: the capture binary emits its own `exchange` on every series,
+and a target label of the same name would win and rename the sample's to
+`exported_exchange`.
 Alerts on capture series get `exchange` from the binary; alerts on `up` name the venue
 through `job` (`capture-<exchange>`).
 
@@ -174,12 +184,12 @@ Sanity-check the exporter's counting logic offline with
 
 | Signal | Target | SLO | Measured |
 |--------|--------|-----|----------|
-| Exchange → silver latency (p99) | <200 ms | <500 ms | 170–197 ms — see [latency-budgets.md](./latency-budgets.md) |
+| Exchange → silver latency (p99) | <200 ms | <500 ms | 170–197 ms (2026-02-19, v2 Kotlin path — now frozen) — see [latency-budgets.md](./latency-budgets.md) |
 | Offload lag | <15 min | <30 min | 9 min (2026-02-15) |
 | Offload success rate | >99% | >95% | no failures observed to date |
 | Offload cycle duration | <30 s | <10 min | 5–7 s per table (2026-08-26) |
 | Warm/cold consistency | 100% | >99% | 99.9%+ (2026-02-15, 2026-02-18) |
-| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 tested modes — see [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md) |
+| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 modes tested 2026-02-19 on the v2 stack — see [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md). **Unmeasured for the capture tier**: `make chaos` has never run |
 
 ## Not wired up
 

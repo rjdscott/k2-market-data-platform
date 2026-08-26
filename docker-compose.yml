@@ -780,162 +780,18 @@ services:
       com.k2.version: "v2"
 
 #############################################################################
-# SERVICES - FEED HANDLERS (DATA INGESTION)
-#############################################################################
-
-  # ───────────────────────────────────────────────────────────────────────
-  # Binance Feed Handler - Kotlin/Coroutines WebSocket client
-  # ───────────────────────────────────────────────────────────────────────
-  feed-handler-binance:
-    build:
-      context: .
-      dockerfile: services/feed-handler-kotlin/Dockerfile
-    container_name: k2-feed-handler-binance
-    hostname: feed-handler-binance
-    networks:
-      - k2-net
-    depends_on:
-      redpanda:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-      redpanda-init:
-        condition: service_completed_successfully
-    environment:
-      - JAVA_OPTS=-Xmx512m -Xms256m
-      - K2_EXCHANGE=binance
-      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
-      - K2_SCHEMA_PATH=/app/schemas
-      - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
-      - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
-    volumes:
-      - ./logs/binance:/app/logs
-      - ./config/instruments.yaml:/app/config/instruments.yaml:ro
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8082/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-    labels:
-      com.k2.service: "feed-handler"
-      com.k2.exchange: "binance"
-      com.k2.version: "v2"
-
-  # ───────────────────────────────────────────────────────────────────────
-  # Kraken Feed Handler - Kotlin/Coroutines WebSocket client
-  # ───────────────────────────────────────────────────────────────────────
-  feed-handler-kraken:
-    build:
-      context: .
-      dockerfile: services/feed-handler-kotlin/Dockerfile
-    container_name: k2-feed-handler-kraken
-    hostname: feed-handler-kraken
-    networks:
-      - k2-net
-    depends_on:
-      redpanda:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-      redpanda-init:
-        condition: service_completed_successfully
-    environment:
-      - JAVA_OPTS=-Xmx512m -Xms256m
-      - K2_EXCHANGE=kraken
-      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
-      - K2_SCHEMA_PATH=/app/schemas
-      - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
-      - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
-    volumes:
-      - ./logs/kraken:/app/logs
-      - ./config/instruments.yaml:/app/config/instruments.yaml:ro
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8082/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-    labels:
-      com.k2.service: "feed-handler"
-      com.k2.exchange: "kraken"
-      com.k2.version: "v2"
-
-  # ───────────────────────────────────────────────────────────────────────
-  # Coinbase Feed Handler - Kotlin/Coroutines WebSocket client
-  # ───────────────────────────────────────────────────────────────────────
-  feed-handler-coinbase:
-    build:
-      context: .
-      dockerfile: services/feed-handler-kotlin/Dockerfile
-    container_name: k2-feed-handler-coinbase
-    hostname: feed-handler-coinbase
-    networks:
-      - k2-net
-    depends_on:
-      redpanda:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-      redpanda-init:
-        condition: service_completed_successfully
-    environment:
-      - JAVA_OPTS=-Xmx512m -Xms256m
-      - K2_EXCHANGE=coinbase
-      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
-      - K2_SCHEMA_PATH=/app/schemas
-      - K2_KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
-      - K2_KAFKA_SCHEMA_REGISTRY_URL=http://redpanda:8081
-    volumes:
-      - ./logs/coinbase:/app/logs
-      - ./config/instruments.yaml:/app/config/instruments.yaml:ro
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8082/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-    labels:
-      com.k2.service: "feed-handler"
-      com.k2.exchange: "coinbase"
-      com.k2.version: "v2"
-
-#############################################################################
-# SERVICES - RUST CAPTURE (v3 PHASE C — parallel run alongside Kotlin)
+# SERVICES - RUST CAPTURE (v3 — the only capture tier)
 #############################################################################
 # See docs/plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md.
-# Three `k2-capture:v3` containers run alongside the three Kotlin feed handlers
-# above for a labelled 2-hour parity window (per-symbol trade counts/ids compared
-# in ClickHouse and the lake — ADR-019). The Kotlin handlers are only retired once
-# that comparison is clean; ADR-019's Outcome records the retirement and the
-# CPU/RAM given back.
+# Three `k2-capture:v3` containers, one per exchange, carrying trades and L2 book
+# on one connection each. They ran beside the three Kotlin feed handlers for a
+# labelled 2-hour parity window; the handlers retired on that gate and are
+# archived in legacy/v2-kotlin/, no longer in this file. ADR-019's Outcome
+# carries the window's numbers.
+#
+# The v2 topics they wrote (`market.crypto.trades.<ex>[.raw]`) and the ClickHouse
+# `k2` database fed from them are FROZEN, not dropped: no producer writes them
+# from this commit on, and Phase E deletes them.
 #
 # `./config` is a *directory* bind mount here (all of config/, not just
 # instruments.yaml). Directory mounts go stale the same way the file-level
@@ -1099,19 +955,16 @@ services:
 # prefect-worker        | 0.5       | 512M         | Workflow executor (Prefect 3.x)
 # spark-iceberg         | 2.0       | 4G           | ETL engine
 # lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018)
-# feed-handler-binance  | 0.5       | 512M         | Binance ingestion (12 pairs)
-# feed-handler-kraken   | 0.5       | 512M         | Kraken ingestion (11 pairs)
-# feed-handler-coinbase | 0.5       | 512M         | Coinbase ingestion (11 pairs)
 # iceberg-metrics       | 0.1       | 128M         | Offload alerts exporter (:8000)
-# capture-binance       | 0.25      | 256M         | Rust capture, Binance (v3 Phase C, parallel run)
-# capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (v3 Phase C, parallel run)
-# capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (v3 Phase C, parallel run)
+# capture-binance       | 0.25      | 256M         | Rust capture, Binance (12 pairs, trades + L2)
+# capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (11 pairs, trades + L2)
+# capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (11 pairs, trades + L2)
 #
 # The three capture-* containers are also cpuset-pinned to cores 12-14
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (18 long-running) | 16.10 CPU | 23.125 GB | Full platform, Phase C parallel run
+# STEADY STATE (15 long-running) | 14.60 CPU | 21.625 GiB | Full platform, v3 capture only
 #
 # One-shots — NOT free. They declare limits and they run concurrently with the
 # steady state at boot, so the budget that matters at `docker compose up` is the
@@ -1124,24 +977,24 @@ services:
 #   ----------------------------------------------------------------------------
 #   one-shot subtotal  1.5  | 1.5G
 #
-# Bootstrap peak: 17.60 CPU / 24.625 GiB  (`docker compose config` limit sum — all
-# 22 services). The feed handlers AND the three capture-* containers gate only on
-# redpanda-init; the other three one-shots can overlap live traffic. CPU limits
-# are a ceiling on scheduling, not a reservation, so the overcommit is a burst
-# not a failure.
+# Bootstrap peak: 16.10 CPU / 23.125 GiB — all 19 services. The three capture-*
+# containers gate only on redpanda-init; the other three one-shots can overlap
+# live traffic. CPU limits are a ceiling on scheduling, not a reservation, so a
+# momentary overcommit at boot would be a burst, not a failure — and at 16.10
+# against a 16.0 target the peak is 0.10 CPU over for the length of a bootstrap.
 #
-# STEADY STATE ITSELF now exceeds the 16 CPU target — by 0.10 CPU — for as long
-# as Phase C runs Rust capture and the Kotlin feed handlers side by side (the
-# parity window in
-# docs/plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md).
-# This is deliberate and temporary: it is the cost of comparing two producers
-# before trusting the new one. Retiring the three Kotlin feed handlers gives
-# back 1.5 CPU / 1.5 GB (feed-handler-{binance,kraken,coinbase} above), landing
-# steady state at 14.60 CPU / 21.625 GB — headroom restored and then some.
-# ADR-019's Outcome records that retirement once the labelled 2-hour parity check is clean.
+# Retiring the three Kotlin feed handlers (ADR-019) gave back exactly the
+# 1.5 CPU / 1.5 GB they declared: steady state was 16.10 CPU / 23.125 GiB during
+# the Phase C parallel run and is 14.60 CPU / 21.625 GiB now — 1.40 CPU of
+# headroom under the target, where the parallel run was 0.10 CPU over it.
+#
+# Recompute after any limit change (the ADR-010 Outcome addendum carries the
+# same command and its dated output):
+#
+#   docker compose --env-file .env.example config --format json | python3 -c '...'
 #
 # Target: 16 CPU / 40 GB total
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-08-26 (v3 Phase C: +capture-{binance,kraken,coinbase}, parallel run with Kotlin)
+# Last updated: 2026-08-26 (v3 Phase C: Kotlin feed handlers retired to legacy/v2-kotlin/, ADR-019)
 #############################################################################

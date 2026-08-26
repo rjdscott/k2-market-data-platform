@@ -8,10 +8,10 @@ FROM gradle:8.12-jdk21 AS build
 WORKDIR /app
 
 # Copy Gradle files first (layer caching)
-COPY services/feed-handler-kotlin/build.gradle.kts services/feed-handler-kotlin/settings.gradle.kts services/feed-handler-kotlin/gradle.properties ./
+COPY legacy/v2-kotlin/build.gradle.kts legacy/v2-kotlin/settings.gradle.kts legacy/v2-kotlin/gradle.properties ./
 
 # Copy source code
-COPY services/feed-handler-kotlin/src ./src
+COPY legacy/v2-kotlin/src ./src
 
 # Copy Avro schemas
 COPY schemas /app/schemas
@@ -23,7 +23,7 @@ RUN gradle fatJar --no-daemon
 FROM eclipse-temurin:21-jre-alpine
 
 LABEL maintainer="K2 Platform Engineering"
-LABEL description="Kotlin feed handler for crypto market data streams"
+LABEL description="ARCHIVED v2 Kotlin feed handler - see legacy/v2-kotlin/README.md"
 
 WORKDIR /app
 

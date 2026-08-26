@@ -408,7 +408,7 @@ from a dirty tree must not claim to be the commit it was started from. All three
 `docker compose up -d --build` and a selective
 `docker compose up -d capture-kraken` both work from a fresh clone.
 
-**From the repository root**, exactly as the Kotlin handlers build. The crate
+**From the repository root.** The crate
 compiles `schemas/avro/*.avsc` in with `include_str!` and those live outside the
 crate, so a crate-directory context cannot see them, and copying them in would
 create a second source of truth for the wire contract.
@@ -436,33 +436,13 @@ with `k2-capture record` on 2026-08-26.
 | `binance-10s.jsonl` | `tests/replay_binance.rs` | 539 (438 trade, 101 depth20) | 269 KB | BTCUSDT (10 s) | none — 10 s of one symbol is the whole budget at 100 ms depth frames |
 | `coinbase-20s.jsonl` | `tests/replay_coinbase.rs` | 159 (`sequence_num` 0..158) | 320 KB | ATOM-USD (20 s) | the `level2` snapshot event trimmed to 1,250 of 3,440 levels (all 450 bids, best 800 offers): 582 KB → 320 KB. Every `sequence_num` intact |
 
-The Kraken fixture uses `tests/fixtures/instruments-kraken-v2.yaml`, which
-spells the symbols the way the v2 wire does. `config/instruments.yaml` works
-equally well — see the alias table below — but the fixture registry keeps the
-recorded frames and the file that produced them spelled identically. Binance
-and Coinbase natives are the wire spelling already, so those tests load the
-repo registry directly.
-
----
-
-## The v1/v2 symbol alias
-
-**Kraken WS v2 does not accept `XBT/USD` or `XDG/USD`** — it answers
-`{"error":"Currency pair not supported XBT/USD"}`. Those are the v1 spellings,
-and they are correct in `config/instruments.yaml` for as long as the Kotlin
-handlers read the same file: `KrakenWebSocketClient.kt` speaks the v1 channelID
-protocol, where `XBT/USD` is the right name.
-
-So `KrakenAdapter::new` translates the registry's natives once, through an
-explicit two-row table — `XBT/` → `BTC/`, `XDG/` → `DOGE/`, a prefix match on the
-base asset only. Everything downstream sees the v2 spelling: the subscribe frame
-sends `BTC/USD`, and `Trade.symbol` / `BookSnapshotL2.symbol` carry `BTC/USD`,
-which is what "as the exchange spells it on the wire" means in the `.avsc`. The
-registry's `canonical` is untouched and stays authoritative. A registry that
-listed both spellings of one instrument fails at construction rather than
-silently losing one.
-
-`// ponytail: remove with the Kotlin handlers — instruments.yaml then carries v2 spellings`
+All three tests load `config/instruments.yaml` directly. The Kraken one used to
+need its own copy of the registry (`tests/fixtures/instruments-kraken-v2.yaml`)
+because the repo file had to keep Kraken's WS v1 spellings while the Kotlin v1
+handlers read it; that file and the alias table it existed for went with the
+handlers ([ADR-019](../../docs/adr/ADR-019-rust-capture-tier.md)). Kraken natives
+in the registry are now `BTC/USD` and `DOGE/USD` — the v2 wire spellings — and
+nothing translates a symbol anywhere in this crate.
 
 ---
 

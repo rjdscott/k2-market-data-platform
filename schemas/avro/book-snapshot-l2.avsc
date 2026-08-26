@@ -12,7 +12,7 @@
     {
       "name": "symbol",
       "type": "string",
-      "doc": "The instrument as the exchange spells it on the wire (BTCUSDT, XBT/USD, BTC-USD). The `native` field of config/instruments.yaml."
+      "doc": "The instrument as the exchange spells it on the wire (BTCUSDT, BTC/USD, BTC-USD). The `native` field of config/instruments.yaml."
     },
     {
       "name": "canonical_symbol",

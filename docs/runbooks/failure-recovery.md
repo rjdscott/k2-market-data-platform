@@ -4,13 +4,21 @@ Six failure modes, each deliberately induced and recovered on 2026-02-19. All si
 the worst observed MTTR was 32 seconds. Recovery is automatic in every case — this runbook
 exists to tell you what "normal recovery" looks like so you can spot when it isn't.
 
+> **Mode 3 was measured against the Kotlin feed handlers, which have since retired**
+> ([ADR-019](../adr/ADR-019-rust-capture-tier.md)). Its procedure and its measured
+> 30 s MTTR are archived verbatim at
+> [`legacy/v2-kotlin/runbooks/feed-handler-crash.md`](../../legacy/v2-kotlin/runbooks/feed-handler-crash.md);
+> the live equivalent for the Rust capture tier is [capture-down.md](./capture-down.md),
+> whose MTTR is not yet measured. The other five modes are unaffected — none of them
+> depended on which process was producing.
+
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
 | 1 | Redpanda restart | <2 min | ~10 s |
 | 2 | ClickHouse restart | <3 min | ~32 s |
-| 3 | Feed handler crash | <1 min | ~30 s |
+| 3 | Capture container crash | <1 min | ~30 s (Kotlin, 2026-02-19; not re-measured on Rust) |
 | 4 | Spark / Prefect offload failure | <15 min | next scheduled run |
 | 5 | MinIO unavailable | <5 min | ~5 s |
 | 6 | Network partition | <5 min | ~20–30 s |
@@ -19,12 +27,12 @@ exists to tell you what "normal recovery" looks like so you can spot when it isn
 
 ## 1. Redpanda restart
 
-**Symptom** — feed handler logs show produce failures; ClickHouse insert rate drops to zero.
+**Symptom** — capture logs show produce failures; ClickHouse insert rate drops to zero.
 
-**Detection** — `FeedHandlerHighErrorRate`, `ClickHouseBronzeInsertRateLow`.
+**Detection** — `CaptureProduceErrors`, `CaptureProduceStalled`.
 
-**Expected behaviour** — feed handlers reconnect on their own; in-flight messages sit in
-the OS send queue; ClickHouse Kafka Engine consumers resume from their last committed offset.
+**Expected behaviour** — capture reconnects on its own; in-flight messages sit in the
+librdkafka queue; ClickHouse Kafka Engine consumers resume from their last committed offset.
 
 **Recovery**
 
@@ -73,32 +81,31 @@ outage window rather than assuming it.
 
 ---
 
-## 3. Feed handler crash
+## 3. Capture container crash
 
-**Symptom** — one exchange stops appearing in `silver_trades`; the other two are fine.
+**Symptom** — one exchange stops appearing in the v3 topics; the other two are fine.
 
-**Detection** — `FeedHandlerDown` for that exchange (scrape target down for 2m), or the
-container healthcheck flipping to unhealthy.
+**Detection** — `CaptureDown` for that exchange (scrape target down), or the container
+healthcheck flipping to unhealthy.
 
-**Expected behaviour** — full cross-exchange isolation. The Redpanda topic stays alive,
-other handlers are untouched, and the crashed handler resumes on start.
+**Expected behaviour** — full cross-exchange isolation. The Redpanda topics stay alive,
+the other two containers are untouched, and the crashed one resubscribes on start with a
+fresh book snapshot.
 
-**Recovery**
+**Recovery** — [capture-down.md](./capture-down.md) is the procedure; it carries the
+`k2-capture` specifics (book resync, `conn_id` rotation, what a restart costs the book).
 
 ```bash
-docker compose ps feed-handler-binance
-docker logs --tail 100 k2-feed-handler-binance
-docker compose start feed-handler-binance
-
-# If it was a config change rather than a crash:
-docker compose up -d --force-recreate --no-deps feed-handler-binance
+docker compose ps capture-binance
+docker logs --tail 100 k2-capture-binance
+docker compose start capture-binance
 ```
 
-**Measured** — 30 s from `docker compose start`. Kraken and Coinbase were unaffected
-throughout.
-
-**Known trap** — if the handler is stuck in a schema-registration retry loop at startup
-(seen with Coinbase), `docker restart` will not clear it. Force-recreate for a fresh JVM.
+**Measured** — 30 s from `docker compose start`, on 2026-02-19, **against the Kotlin
+feed handler this replaced** — see the archived
+[feed-handler-crash.md](../../legacy/v2-kotlin/runbooks/feed-handler-crash.md). The Rust
+tier has not been through a fault injection yet; `make chaos` is what fills this row in,
+and until it runs this is an inherited number, not a measurement of what is deployed.
 
 ---
 
@@ -157,7 +164,7 @@ confirming ingest was never in the blast radius.
 
 **Symptom** — one container's consumers stall while everything else keeps running.
 
-**Detection** — `FeedHandlerDown` or `ClickHouseDown` depending on which container
+**Detection** — `CaptureDown` or `ClickHouseDown` depending on which container
 is isolated.
 
 **Expected behaviour** — the isolated container reconnects when the partition heals and

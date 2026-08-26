@@ -51,11 +51,11 @@ The system as built, for readers who want the detail rather than the argument.
 | [architecture/technology-stack.md](architecture/technology-stack.md) | Every component, its version, its job, and the ADR that chose it |
 | [architecture/schema-design.md](architecture/schema-design.md) | Bronze / Silver / Gold columns, the Avro normalized-trade contract, precision choices |
 | [architecture/partitioning-strategy.md](architecture/partitioning-strategy.md) | Redpanda partitions, ClickHouse partition and sort keys, Iceberg partition specs |
-| [architecture/streaming-sources.md](architecture/streaming-sources.md) | How a feed handler works, and what a fourth exchange costs |
+| [architecture/streaming-sources.md](architecture/streaming-sources.md) | How a capture process works, the per-venue dialects, and what a fourth exchange costs |
 | [architecture/platform-principles.md](architecture/platform-principles.md) | The handful of rules the design is actually held to |
 | [architecture/positioning.md](architecture/positioning.md) | What this platform is for — and the workloads it is deliberately wrong for |
 | [operations/](operations/) | Running the stack: [quick reference](operations/quick-reference.md), [Docker budget](operations/docker-resources.md), [observability](operations/observability.md), [latency budgets](operations/latency-budgets.md), [Prefect schedules](operations/prefect-schedules.md), [data inspection](operations/data-inspection.md), [adding an exchange](operations/adding-new-exchanges.md), [cost model](operations/cost-model.md) |
-| [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md) — prerequisites, and how to run the Kotlin and Python suites |
+| [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md) — prerequisites, and how to run the Rust and Python suites |
 
 ## Migration journey
 

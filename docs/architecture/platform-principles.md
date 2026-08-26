@@ -6,7 +6,7 @@ Six rules the design is actually held to. Each one has a place in the codebase w
 
 ### 1. The resource budget is a hard constraint, not a goal
 
-16 cores, 40 GB, one host. Every service in [`docker-compose.yml`](../../docker-compose.yml) carries explicit `deploy.resources.limits`, and the total is checked at every phase boundary. As built (v2): **15.1 CPU / 21.875 GB across 14 services** (+2 one-shot). This branch's v3 foundations add Lakekeeper — +0.25 CPU / +256 MB — for **15.35 CPU / 22.125 GB across 15 (+4 one-shot) as deployed here**.
+16 cores, 40 GB, one host. Every service in [`docker-compose.yml`](../../docker-compose.yml) carries explicit `deploy.resources.limits`, and the total is checked at every phase boundary. As built (v2): **15.1 CPU / 21.875 GB across 14 services** (+2 one-shot). v3 added Lakekeeper (+0.25 CPU / +256 MB), then swapped three Kotlin feed handlers (−1.5 CPU / −1.5 GB) for three Rust capture containers (+0.75 CPU / +1 GB): **14.60 CPU / 21.625 GiB across 15 (+4 one-shot) as deployed here**, with the command in the [ADR-010 Kotlin-retirement addendum](../adr/ADR-010-resource-budget.md#outcome-addendum-kotlin-retirement-2026-08-26).
 
 This is first because it is the only principle that changed the architecture. "Reduce resource usage" produces tuning; a number you cannot exceed produces different decisions — five Spark Streaming jobs became materialized views, and a planned Kotlin stream processor was never written. Full accounting in [ADR-010](../adr/ADR-010-resource-budget.md).
 
@@ -26,7 +26,7 @@ No transactions, no two-phase commit, no coordination protocol — one number th
 
 ### 3. Raw survives normalization
 
-Every trade is written twice: the exchange's untouched payload to a `.raw` topic, and a normalized record alongside it. Bronze tables keep native symbols and native sequence semantics per exchange — `XBT/USD` stays `XBT/USD` — and normalization to `BTC/USD` happens at Silver ([ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md)).
+Every frame is archived verbatim to `market.crypto.v3.raw.<ex>` before anything is derived from it, so a normalisation bug is repairable by reprocessing rather than by losing the day. The frozen v2 medallion held the same principle one layer up: bronze kept native symbols and native sequence semantics per exchange, and normalisation to the canonical symbol happened at Silver ([ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md)).
 
 The reason is debugging. When a price looks wrong, the question is always "did the exchange send this, or did we do it?", and that question is only answerable if the pre-transform bytes still exist.
 
@@ -36,9 +36,9 @@ The reason is debugging. When a price looks wrong, the question is always "did t
 
 ### 4. Isolate at the blast radius, not the deployment boundary
 
-One feed-handler image, three containers. Deploying one service with an exchange loop would be simpler; it would also mean a Binance parser bug stops Kraken.
+One `k2-capture` image, three containers. Deploying one service with an exchange loop would be simpler; it would also mean a Binance parser bug stops Kraken.
 
-Verified rather than assumed: stopping `feed-handler-binance` left Kraken and Coinbase ingesting normally, and Binance resumed within 30 seconds. Cost: two extra container slots. Same reasoning gives each exchange its own bronze table and its own Kafka-engine consumer group.
+Verified rather than assumed: stopping the Binance container left Kraken and Coinbase ingesting normally, and Binance resumed within 30 seconds (measured 2026-02-19 against the Kotlin handler this tier replaced; not re-measured on Rust — `make chaos` is the gate that would). Cost: two extra container slots. Same reasoning gave each exchange its own bronze table and its own Kafka-engine consumer group in the v2 tier.
 
 ---
 
@@ -54,7 +54,7 @@ The strongest form of this: the best service is the one you notice you do not ha
 
 ### 6. Instrument it, then say what is not instrumented
 
-Feed handlers expose Micrometer metrics on `:8082/metrics`; ClickHouse exposes Prometheus on `:9363`; 27 alert rules (17 v2 + 10 capture) are loaded from `docker/prometheus/rules/`; five Grafana dashboards are provisioned from source.
+The Rust capture tier exposes Prometheus metrics on `:8082/metrics`; ClickHouse exposes Prometheus on `:9363`; 23 alert rules (13 v2 + 10 capture) are loaded from `docker/prometheus/rules/`; five Grafana dashboards are provisioned from source.
 
 The second half is the part that matters. One gap is documented rather than glossed: no alert has been deliberately fired end to end. An undocumented gap is worse than a known one, because only one of them gets fixed.
 

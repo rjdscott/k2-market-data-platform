@@ -300,8 +300,7 @@ def test_every_canonical_is_base_slash_quote(instruments, exchange):
 def test_no_duplicate_canonical_per_exchange(instruments, exchange):
     """
     Two natives mapping to one canonical on the same venue means two order books
-    merged onto one partition key. Kraken is the live risk: XBT/USD and XDG/USD
-    both rename, and adding a BTC/USD alongside XBT/USD would collide silently.
+    merged onto one partition key — a silent collision, not a load error.
     """
     canonicals = [row["canonical"] for row in instruments["instruments"][exchange]]
     duplicates = {c for c in canonicals if canonicals.count(c) > 1}
@@ -339,14 +338,25 @@ def test_quote_currency_is_kept_as_the_exchange_quotes_it(instruments):
     assert quotes["coinbase"] == {"USD"}
 
 
-def test_venue_private_tickers_are_renamed(instruments):
+def test_kraken_natives_are_the_ws_v2_spellings(instruments):
     """
-    The other half of the rule: the same instrument under a venue's private
-    ticker DOES get folded. Kraken's XBT is Bitcoin and XDG is Dogecoin.
+    `native` is the bytes on the wire and nothing translates it.
+
+    Kraken WS v1 spelled Bitcoin `XBT/USD` and Dogecoin `XDG/USD`; v2, which the
+    capture tier speaks, spells them `BTC/USD` and `DOGE/USD` and rejects the old
+    names outright. The registry carried the v1 spellings while the Kotlin v1
+    handlers read the same file, and `kraken.rs` held a two-row alias table to
+    bridge them; both retired together on 2026-08-26 (ADR-019).
+
+    So a v1 spelling reappearing here is a real regression: `capture-kraken`
+    would subscribe to a pair Kraken does not know, get an error frame, and
+    silently carry no data for that instrument.
     """
     kraken = {row["native"]: row["canonical"] for row in instruments["instruments"]["kraken"]}
-    assert kraken["XBT/USD"] == "BTC/USD"
-    assert kraken["XDG/USD"] == "DOGE/USD"
+    assert kraken["BTC/USD"] == "BTC/USD"
+    assert kraken["DOGE/USD"] == "DOGE/USD"
+    assert "XBT" not in " ".join(kraken), "Kraken WS v1 spelling in `native`"
+    assert "XDG" not in " ".join(kraken), "Kraken WS v1 spelling in `native`"
     assert "XBT" not in " ".join(kraken.values())
     assert "XDG" not in " ".join(kraken.values())
 

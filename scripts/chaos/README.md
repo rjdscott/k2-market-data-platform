@@ -70,10 +70,11 @@ Four design notes worth knowing before reading them:
   librdkafka keeps enqueueing — the purest queue-full injection. A stopped broker
   refuses the connection and librdkafka fails differently. Same neighbourhood,
   different failure, two scripts.
-- **Those two scripts take down the whole stack, not just capture.** Redpanda is
-  the single broker *and* the single schema registry, so the three Kotlin feed
-  handlers, ClickHouse's Kafka-engine consumers, Console and Prefect all lose it
-  too — capture is only the tier being measured. `capture-queue-full.sh
+- **Those two scripts take down the whole stack, not just one container.**
+  Redpanda is the single broker *and* the single schema registry, so all three
+  `capture-*` containers, ClickHouse's Kafka-engine consumers, Console and Prefect all lose it
+  too — the `--exchange` you pass is only the one being
+  measured. `capture-queue-full.sh
   --exchange coinbase` is the longest: 300 s to the predicted first loss plus the
   alert's `for: 5m` and the wait puts the broker under `docker pause` for up to
   ~28 minutes, and `redpanda-stop.sh` stops it for up to ~15. A pause beyond a

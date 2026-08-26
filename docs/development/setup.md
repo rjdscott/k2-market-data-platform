@@ -1,14 +1,13 @@
 # Development Setup
 
-Getting the v2 stack running locally, and the inner loops for changing Kotlin or Python
+Getting the stack running locally, and the inner loops for changing Rust or Python
 code once it is.
 
 ## Prerequisites
 
 | Tool | Needed for | Notes |
 |------|-----------|-------|
-| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 24 GB memory so every `deploy.resources.limits` can be honoured (`docker info --format '{{.MemTotal}}'`); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. The stack as deployed on this branch declares 15.35 CPU / 22.125 GB of limits (v2 alone: 15.1 CPU / 21.875 GB) |
-| JDK 21 | running Kotlin tests or a handler outside Docker | Only that; `./gradlew` bootstraps Gradle itself |
+| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 24 GB memory so every `deploy.resources.limits` can be honoured (`docker info --format '{{.MemTotal}}'`); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 14.60 CPU / 21.625 GiB of limits, 16.10 CPU / 23.125 GiB at the bootstrap peak |
 | [`uv`](https://docs.astral.sh/uv/) | Python offload-flow tests | Nothing else uses Python locally |
 | `jq`, `psql` | the diagnostic one-liners in the ops docs | optional |
 
@@ -20,12 +19,13 @@ make up
 make ps
 ```
 
-`make up` builds three images on the first run — the Kotlin feed handler, the Prefect
+`make up` builds three images on the first run — the Rust `k2-capture` binary, the Prefect
 worker, and the Spark image (which downloads the ClickHouse JDBC driver). Allow **several
 minutes**; subsequent starts are seconds. Services come up healthy in dependency order —
-Redpanda, then `redpanda-init` creates the topics and exits — v2: 6 topics · 160 partitions; this
-branch's v3 foundations add 9 more · 108 partitions (`market.crypto.v3.{raw,trades,book}.<ex>`) — then
-the feed handlers.
+Redpanda, then `redpanda-init` creates the topics, registers the nine v3 Avro subjects and
+exits (9 live v3 topics · 108 partitions, `market.crypto.v3.{raw,trades,book}.<ex>`, plus
+the 6 frozen v2 topics · 160 partitions it still creates so the `k2` Kafka-engine queues
+have something to attach to) — then the three `capture-*` containers.
 
 Never commit `.env`. Everything reads its secrets from it; nothing in the repo hardcodes a
 password.
@@ -49,70 +49,75 @@ migration trail and is not run.
 ## Verifying data is flowing
 
 ```bash
-# 1. Raw trades reaching Redpanda
-docker exec k2-redpanda rpk topic consume market.crypto.trades.binance.raw --num 3 --format '%v\n'
+# 1. Raw frames reaching Redpanda
+docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.binance --num 3 --format '%v\n'
 
-# 2. All three exchanges landing in silver
-docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count(), max(timestamp) FROM k2.silver_trades
-   WHERE timestamp > now() - INTERVAL 5 MINUTE GROUP BY exchange"
+# 2. All three capture containers healthy (exits non-zero if a stream has gone stale)
+for x in binance kraken coinbase; do
+  echo -n "$x: "; docker exec k2-capture-$x /k2-capture healthcheck
+done
 
-# 3. Candles being produced
-docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT count(), max(window_start) FROM k2.ohlcv_1m"
+# 3. Records per exchange and kind
+curl -sG localhost:9090/api/v1/query \
+  --data-urlencode 'query=sum by (exchange, kind) (rate(k2_capture_records_produced_total[5m]))' | jq
 ```
 
-More query recipes: [../operations/data-inspection.md](../operations/data-inspection.md).
+The `k2` ClickHouse database is **frozen** — it holds v2 history and gains no rows, so
+none of the `k2.*` queries in the ops docs will show recent data. See
+[../architecture/README.md](../architecture/README.md). More query recipes:
+[../operations/data-inspection.md](../operations/data-inspection.md).
 
 ## Instrument registry
 
 [`config/instruments.yaml`](../../config/instruments.yaml) is the single source of truth
-for which symbols each handler subscribes to — 12 Binance, 11 Kraken, 11 Coinbase, in
-each exchange's native format (`BTCUSDT`, `XBT/USD`, `BTC-USD`).
+for which symbols each capture container subscribes to — 12 Binance, 11 Kraken, 11
+Coinbase. Each row carries a `native` (exactly the bytes on the wire — `BTCUSDT`,
+`BTC/USD`, `BTC-USD`) and a `canonical` (`BASE/QUOTE`, the Kafka key and the lake join
+key). Nothing translates a symbol in code; a native the file does not list is a loud
+failure, not a guess.
 
 > **Bind-mount inode gotcha.** The file is mounted file-by-file, which pins its inode. Most
 > editors save by writing a temp file and renaming it, which produces a *new* inode — the
 > container keeps reading the old one. After editing:
 >
 > ```bash
-> docker compose up -d --force-recreate --no-deps feed-handler-binance
+> docker compose up -d --force-recreate --no-deps capture-binance
 > ```
 >
 > `docker restart` will **not** pick up the change. This costs an hour the first time it
 > bites you.
 
-## Kotlin inner loop
+## Rust inner loop
 
-Rebuild one handler after a code change:
-
-```bash
-docker compose up -d --build feed-handler-binance
-docker compose logs -f feed-handler-binance
-```
-
-Or run a handler on the host against the containerised infrastructure — faster, and you
-get a debugger. Redpanda's Kafka API (9092) and schema registry (8081) are published, so
-this works with the rest of the stack up:
+Rebuild one capture container after a code change:
 
 ```bash
-cd services/feed-handler-kotlin
-K2_EXCHANGE=binance \
-K2_INSTRUMENTS_FILE=../../config/instruments.yaml \
-K2_SCHEMA_PATH=../../schemas \
-K2_KAFKA_BOOTSTRAP_SERVERS=localhost:9092 \
-K2_KAFKA_SCHEMA_REGISTRY_URL=http://localhost:8081 \
-K2_METRICS_PORT=8082 \
-./gradlew run
+docker compose up -d --build capture-binance
+docker compose logs -f capture-binance
 ```
 
-Every setting in [`application.conf`](../../services/feed-handler-kotlin/src/main/resources/application.conf)
-has a `K2_*` override — HOCON with env substitution, 12-factor style. Drop
-`K2_INSTRUMENTS_FILE` and set `K2_SYMBOLS=BTCUSDT,ETHUSDT` for a quick throwaway run.
+The build context is the **repository root**, not the crate: `src/record.rs` compiles the
+wire contract in with `include_str!("../../../schemas/avro/trade.avsc")`, so a
+crate-directory context cannot see the schemas. `make build-capture` is the same build
+with `K2_GIT_SHA` stamped into `k2_capture_build_info`.
 
-Stop the containerised handler first (`docker compose stop feed-handler-binance`) or both
-will produce to the same topic.
+There is no local Rust toolchain requirement — compile and test in a container:
 
-Tests: `./gradlew test --no-daemon` — see [testing.md](./testing.md).
+```bash
+make test-rust      # cargo test --locked in rust:1-bookworm
+```
+
+That target reinstalls `cmake`/`clang` on every run. For a tight loop, build the builder
+image once and mount named volumes for the cargo registry and target dir — a rebuild then
+takes seconds instead of minutes. Both are in
+[`services/capture-rust/README.md`](../../services/capture-rust/README.md), along with the
+full `K2_*` / `--flag` table and the `k2-capture record` subcommand for capturing a replay
+fixture.
+
+Stop the containerised capture first (`docker compose stop capture-binance`) if you run a
+second one, or both will produce to the same topics.
+
+Tests: `make test-rust` — see [testing.md](./testing.md).
 
 ## Python offload inner loop
 
@@ -146,7 +151,7 @@ docker exec k2-prefect-worker python3 /opt/prefect/flows/deploy_production.py
 | Source | Where |
 |--------|-------|
 | Any container | `docker compose logs -f <service>` or `make logs` |
-| Feed handler files | `./logs/{binance,kraken,coinbase}/` — bind-mounted out of the containers |
+| Capture | `docker logs -f k2-capture-binance` — `tracing` to stderr, filtered by `RUST_LOG`. No log files: nothing is bind-mounted out |
 | Offload flow runs | `docker logs k2-prefect-worker`, plus run history at http://localhost:4200 |
 | Spark job output | `docker logs k2-spark-iceberg`; the Application UI is on http://localhost:4040 while a job runs |
 | ClickHouse server | `docker logs k2-clickhouse` |

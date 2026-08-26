@@ -59,8 +59,8 @@ Work top to bottom; do not skip a row because "nothing reads it yet".
 6. **Docs** — `schema-design.md` (the field table) and, if partitioning or
    sort order moved, `partitioning-strategy.md`.
 7. **Tests** — a test that would fail if the field were dropped:
-   `make test-kotlin` for normalizer changes, `make test-python` for offload
-   changes.
+   `make test-rust` for capture/normalisation changes, `make test-python` for
+   offload changes. (Not `make test-kotlin` — that tier retired in ADR-019.)
 8. **Verify end to end** on the running stack before opening the PR:
    ```bash
    docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \

@@ -30,10 +30,10 @@ docker/
 ├── spark/                # Spark image (Iceberg 1.8.1, Kafka + Avro + ClickHouse JDBC jars)
 ├── grafana/
 │   ├── provisioning/     # Auto-provisioned datasource (Prometheus) + dashboard loader
-│   └── dashboards/       # Dashboard JSON (pipeline overview, ClickHouse, Iceberg offload, v2-migration-tracker)
+│   └── dashboards/       # Dashboard JSON, 5: pipeline overview, ClickHouse, Iceberg offload, v2-migration-tracker, k2-l2-capture
 ├── prometheus/
 │   ├── prometheus.yml    # Scrape configs
-│   └── rules/            # Alerting rules (ClickHouse, feed handlers, Iceberg offload)
+│   └── rules/            # Alerting rules (ClickHouse, capture, Iceberg offload)
 └── postgres/
     └── ddl/              # offload_watermarks + lakekeeper catalog DB (Prefect metadata DB)
 ```
@@ -49,7 +49,7 @@ docker/
 | `spark-iceberg` | long-running | Batch ETL: v2 offload + v3 lake jobs |
 | `prefect-db`, `prefect-server`, `prefect-worker` | long-running | Orchestration + metadata + watermarks |
 | `prometheus`, `grafana`, `iceberg-metrics` | long-running | Observability |
-| `feed-handler-{binance,kraken,coinbase}` | long-running | Kotlin WebSocket ingestion |
+| `capture-{binance,kraken,coinbase}` | long-running | **v3** Rust WebSocket capture (trades + L2 book); metrics on `:8082/metrics` ([ADR-019](../docs/adr/ADR-019-rust-capture-tier.md)) |
 | `redpanda-init` | one-shot | Topics + Avro subjects (`redpanda/init.sh`) |
 | `iceberg-init` | one-shot | v2 `cold.*` hadoop-catalog DDL (`iceberg/ddl/`) |
 | `lakekeeper-migrate` | one-shot | v3 catalog DB schema (`lakekeeper migrate`) |

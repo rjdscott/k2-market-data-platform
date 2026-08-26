@@ -229,11 +229,11 @@ async fn main() -> Result<()> {
     }
 }
 
-fn build_adapter(exchange: Exchange, instruments: Instruments) -> Result<Adapter> {
+fn build_adapter(exchange: Exchange, instruments: Instruments) -> Adapter {
     match exchange {
-        Exchange::Kraken => Ok(Adapter::Kraken(KrakenAdapter::new(instruments)?)),
-        Exchange::Binance => Ok(Adapter::Binance(BinanceAdapter::new(instruments))),
-        Exchange::Coinbase => Ok(Adapter::Coinbase(CoinbaseAdapter::new(instruments))),
+        Exchange::Kraken => Adapter::Kraken(KrakenAdapter::new(instruments)),
+        Exchange::Binance => Adapter::Binance(BinanceAdapter::new(instruments)),
+        Exchange::Coinbase => Adapter::Coinbase(CoinbaseAdapter::new(instruments)),
     }
 }
 
@@ -254,7 +254,7 @@ async fn run(args: RunArgs) -> Result<()> {
         "loaded the instrument registry"
     );
 
-    let mut adapter = build_adapter(exchange, instruments)?;
+    let mut adapter = build_adapter(exchange, instruments);
     let symbols = adapter.symbols();
     // Only Kraken publishes a book checksum, so only Kraken gets a
     // `k2_capture_checksum_failures_total` series per symbol. Seeding 23 of them
@@ -607,7 +607,7 @@ async fn record(args: RecordArgs) -> Result<()> {
     if !args.symbols.is_empty() {
         instruments.retain_native(&args.symbols)?;
     }
-    let adapter = build_adapter(args.exchange, instruments)?;
+    let adapter = build_adapter(args.exchange, instruments);
     let url = adapter.ws_url(
         &args
             .ws_url

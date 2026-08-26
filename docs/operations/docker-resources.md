@@ -2,23 +2,23 @@
 
 Every service in [`docker-compose.yml`](../../docker-compose.yml) declares both a hard
 `limit` and a guaranteed `reservation`. The design target was a single 16-core / 40 GB
-host; the as-built stack fits with room to spare — except during the v3 Phase C parallel
-run below, where it deliberately does not.
+host; the as-built stack fits with room to spare, and has since the Kotlin handlers
+retired.
 
-**As built (v2 baseline): 15.35 CPU / 22.125 GB across every long-running resource-limited
-service (15)** (plus four one-shot containers that exit after startup: `redpanda-init`,
-`iceberg-init`, `lakekeeper-migrate`, `lake-init`).
+**Steady state: 14.60 CPU / 21.625 GiB across 15 long-running services.**
 
-**As built (v3 Phase C, parallel run): 16.10 CPU / 23.125 GB across 18 long-running
-services.** [Phase C](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md)
-runs three Rust `capture-{binance,kraken,coinbase}` containers alongside the three Kotlin
-feed handlers for a labelled 2-hour parity window before the Kotlin handlers retire, so both sets of
-ingestion containers are billed against the budget at once. This pushes steady state 0.10
-CPU over the 16-core target; it is temporary by design —
-[ADR-019](../adr/ADR-019-rust-capture-tier.md) decides the replacement and gates Kotlin's
-retirement on that labelled 2-hour parity check passing; its Outcome section, appended
-once the check is clean, documents giving back the 1.5 CPU / 1.5 GB and restoring
-headroom.
+**Bootstrap peak: 16.10 CPU / 23.125 GiB across all 19**, with the four one-shot init
+containers (`redpanda-init`, `iceberg-init`, `lakekeeper-migrate`, `lake-init`)
+overlapping the steady set. Still 0.10 CPU over the 16-core target for the length of a
+bootstrap, on the same ceiling-not-reservation argument the earlier addenda make.
+
+Both figures, the provenance command that produced them and the comparison against the
+prior published numbers are in the "Outcome addendum (Kotlin retirement, 2026-08-26)"
+section of [ADR-010](../adr/ADR-010-resource-budget.md). The three Kotlin
+`feed-handler-*` containers are gone from `docker-compose.yml`
+([ADR-019](../adr/ADR-019-rust-capture-tier.md); code archived at
+[`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md)) and gave back exactly the
+1.5 CPU / 1.5 GB they declared.
 
 ## Allocation
 
@@ -35,28 +35,25 @@ headroom.
 | `prefect-worker` | orchestration | 0.5 | 0.25 | 512 MB | 256 MB |
 | `prometheus` | observability | 1.0 | 0.5 | 2 GB | 1 GB |
 | `grafana` | observability | 0.5 | 0.25 | 512 MB | 256 MB |
-| `feed-handler-binance` | ingestion | 0.5 | 0.25 | 512 MB | 256 MB |
-| `feed-handler-kraken` | ingestion | 0.5 | 0.25 | 512 MB | 256 MB |
-| `feed-handler-coinbase` | ingestion | 0.5 | 0.25 | 512 MB | 256 MB |
+| `capture-binance` | ingestion | 0.25 | 0.1 | 256 MB | 128 MB |
+| `capture-kraken` | ingestion | 0.25 | 0.1 | 256 MB | 128 MB |
+| `capture-coinbase` | ingestion | 0.25 | 0.1 | 512 MB | 128 MB |
 | `iceberg-metrics` | observability | 0.1 | — | 128 MB | — |
-| **Subtotal (v2 baseline, 15 services)** | | **15.35** | **7.45** | **22.125 GB** | **11.0 GB** |
-| `capture-binance` | ingestion (v3 Phase C) | 0.25 | 0.1 | 256 MB | 128 MB |
-| `capture-kraken` | ingestion (v3 Phase C) | 0.25 | 0.1 | 256 MB | 128 MB |
-| `capture-coinbase` | ingestion (v3 Phase C) | 0.25 | 0.1 | 512 MB | 128 MB |
-| **Total (18 services, Phase C parallel run)** | | **16.10** | **7.75** | **23.125 GB** | **11.375 GB** |
-| `redpanda-init` | init (one-shot) | — | — | — | — |
-| `iceberg-init` | init (one-shot) | — | — | — | — |
-| `lakekeeper-migrate` | init (one-shot) | — | — | — | — |
-| `lake-init` | init (one-shot) | — | — | — | — |
+| **Subtotal (steady state, 15 services)** | | **14.60** | **7.00** | **21.625 GiB** | **10.625 GiB** |
+| `redpanda-init` | init (one-shot) | 0.25 | — | 128 MB | — |
+| `iceberg-init` | init (one-shot) | 0.5 | — | 1 GB | — |
+| `lakekeeper-migrate` | init (one-shot) | 0.5 | — | 256 MB | — |
+| `lake-init` | init (one-shot) | 0.25 | — | 128 MB | — |
+| **Total (bootstrap peak, 19 services)** | | **16.10** | **7.00** | **23.125 GiB** | **10.625 GiB** |
 
-Headroom against the 16 CPU / 40 GB envelope (v2 baseline, no capture tier):
-**0.65 CPU (4%) and 17.875 GB (45%)**.
+`capture-coinbase` gets twice the memory of the other two because Coinbase's `level2`
+channel is full depth, not top-20 — its subscribe snapshot alone is 5.2 MB
+([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) Appendix A, S5). All three are
+`cpuset`-pinned to cores 12–14 (`K2_CAPTURE_CPUSET`).
 
-Headroom during the v3 Phase C parallel run (capture-* running alongside the Kotlin
-handlers it is validated against): **−0.10 CPU (steady state is over budget by design
-for the parity window) and 16.875 GB (42%)**. Retiring the three Kotlin feed handlers
-(−1.5 CPU / −1.5 GB, ADR-019) drops steady state to 14.60 CPU / 21.625 GB — 1.40 CPU
-(9%) and 18.375 GB (46%) headroom restored, and then some.
+Headroom against the 16 CPU / 40 GB envelope at steady state: **1.40 CPU (9%) and
+18.375 GiB (46%)**. At the bootstrap peak it is −0.10 CPU for as long as the one-shots
+run, and 16.875 GiB.
 
 ## Where the budget goes
 
@@ -64,10 +61,11 @@ for the parity window) and 16.875 GB (42%)**. Retiring the three Kotlin feed han
   always-on Spark Streaming jobs — Kafka Engine ingest, Bronze→Silver→Gold materialized
   views and every analytical query run against the hot tier.
 - **Spark is batch-only.** Its 2.0 CPU / 4 GB is idle except during the 15-minute offload
-  cycle, so the practical steady-state footprint is closer to 13.1 CPU / 17.875 GB.
-- **The three feed handlers cost 1.5 CPU / 1.5 GB combined** — 10% of CPU, 7% of RAM.
-  Measured usage is far below the limits (~0.03 CPU / 134 MiB for Binance, the busiest
-  of the three), so the limits are headroom for volume spikes, not sizing.
+  cycle, so the practical steady-state footprint is closer to 12.60 CPU / 17.625 GiB.
+- **The three capture containers cost 0.75 CPU / 1 GiB combined** — 5% of CPU, 5% of RAM.
+  That is half what the Kotlin handlers they replaced declared. RSS against these limits
+  is **not yet measured** for the post-retirement stack ([ADR-010](../adr/ADR-010-resource-budget.md)
+  Outcome); they are declared ceilings, not sizing from observation.
 - **Observability is 1.6 CPU / 2.625 GB.** Prometheus and Grafana dominate it; `iceberg-metrics`
   (0.1 CPU / 128 MB) is the offload-alerts exporter. Drop retention if you need the RAM back.
 - **The Iceberg catalog costs 0.25 CPU / 256 MB.** Lakekeeper (v3, [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md))
@@ -80,10 +78,11 @@ for the parity window) and 16.875 GB (42%)**. Retiring the three Kotlin feed han
 
 ## Sizing a new service
 
-Adding a fourth exchange costs one more feed handler: **0.5 CPU / 512 MB limit**
-(see [adding-new-exchanges.md](./adding-new-exchanges.md)). That is the only linear
-scaling axis in the stack — ClickHouse absorbs the extra bronze table and materialized
-views inside its existing allocation.
+Adding a fourth exchange costs one more `k2-capture` container: **0.25 CPU / 256 MB
+limit**, or 512 MB if the venue publishes full-depth L2 (see
+[adding-new-exchanges.md](./adding-new-exchanges.md)). That is the only linear scaling
+axis in the stack — Redpanda absorbs the three extra topics inside its existing
+allocation.
 
 ## Verifying the numbers
 

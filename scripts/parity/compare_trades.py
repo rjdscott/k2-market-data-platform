@@ -17,6 +17,12 @@ exit code is what a script would gate on.
 Exit 0 = every symbol PASS. Exit 1 = any symbol FAIL, or the run could not be
 completed (registry down, empty window, unknown schema id).
 
+The Kotlin tier this compares against was retired on 2026-08-26 and is archived
+at legacy/v2-kotlin/ (ADR-019). Nothing produces the v2 topic any more, so a
+window after that date has an empty v2 side and exits 1; a window before it,
+still inside Redpanda retention, still compares. The tables from the labelled
+retirement window live in ADR-019's Outcome section.
+
 ── What is being compared ───────────────────────────────────────────────────
 
   v2  market.crypto.trades.<ex>       com.k2.marketdata.crypto.NormalizedTrade

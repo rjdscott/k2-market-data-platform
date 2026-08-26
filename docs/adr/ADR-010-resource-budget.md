@@ -399,3 +399,76 @@ undelivered. A cpuset is a *placement* constraint, not a quota: it does not chan
 15 cores can still run unpinned by setting `K2_CAPTURE_CPUSET=` explicitly in `.env`.
 The disjoint-set check that Phase D's noisy-neighbour experiment depends on
 (`003-phase-d-lake-tier.md`) can now actually be run.
+
+## Outcome addendum (Kotlin retirement, 2026-08-26)
+
+The three Kotlin feed handlers are gone from `docker-compose.yml`
+([ADR-019](ADR-019-rust-capture-tier.md); the code is archived at
+`legacy/v2-kotlin/`). They gave back exactly the 1.5 CPU / 1.5 GB they declared,
+so the swap the Phase B addendum predicted as "net-neutral to net-positive"
+landed net-positive: three JVMs at 0.5 CPU / 512M each out, three Rust
+containers at 0.75 CPU / 1 GB combined in.
+
+**Steady state is 14.60 CPU / 21.625 GiB across 15 long-running services** — the
+first time since Phase B that steady state is inside the 16-core target with
+room to spare (1.40 CPU headroom, against 0.65 at Phase B and −0.10 during the
+Phase C parallel run). Bootstrap peak, with the four one-shots overlapping, is
+**16.10 CPU / 23.125 GiB across all 19 services**: still 0.10 over target for
+the length of a bootstrap, still accepted on the same ceiling-not-reservation
+argument as the two addenda above, and now 0.75 CPU lower than the peak they
+recorded.
+
+Provenance — sum of `deploy.resources.limits` over the rendered compose file,
+split by whether a service is a one-shot (`restart: "no"`), 2026-08-26:
+
+```bash
+docker compose --env-file .env.example config --format json \
+  | python3 -c 'import json,sys
+s=json.load(sys.stdin)["services"]
+def lim(v):
+    r=v.get("deploy",{}).get("resources",{}).get("limits",{})
+    return float(r.get("cpus",0) or 0), int(r.get("memory",0) or 0)
+g={"steady":[],"one-shot":[]}
+for n,v in s.items(): g["one-shot" if v.get("restart")=="no" else "steady"].append((n,)+lim(v))
+for k in ("steady","one-shot",):
+    c=sum(r[1] for r in g[k]); m=sum(r[2] for r in g[k])
+    print("%-9s %2d services  %6.2f CPU  %7.3f GiB" % (k,len(g[k]),c,m/1024**3))
+a=g["steady"]+g["one-shot"]
+print("%-9s %2d services  %6.2f CPU  %7.3f GiB" % ("TOTAL",len(a),sum(r[1] for r in a),sum(r[2] for r in a)/1024**3))'
+```
+
+```
+steady    15 services   14.60 CPU   21.625 GiB
+one-shot   4 services    1.50 CPU    1.500 GiB
+TOTAL     19 services   16.10 CPU   23.125 GiB
+```
+
+The same command and its output are carried in the `docker-compose.yml` resource
+summary comment, which is the copy anyone editing a limit will actually see.
+
+**RSS against these limits is not yet measured for the post-retirement stack.**
+The numbers above are declared ceilings, which is what a budget is; what the
+containers actually resident is a burn-in question and lands in ADR-019's
+Outcome with the rest of the parity-window measurements.
+
+**Prometheus lost three scrape jobs and three alert rules with the handlers**
+(`feed-handler-{binance,kraken,coinbase}`; `FeedHandlerDown`,
+`FeedHandlerHighErrorRate`, `FeedHandlerFrequentReconnects`, plus the
+`feed_handler:trade_rate:5m` recording rule). The rule file is archived at
+`legacy/v2-kotlin/runbooks/feed-handler-alerts.yml`. Alert rules go from 27 to
+**23** (13 v2 + 10 v3 capture): the handlers took three, and the same PR archived
+`ClickHouseBronzeInsertRateLow`, which could only ever fire once nothing produced
+to the v2 topics. Prometheus's own 1.0 CPU / 2 GB allocation is unchanged, because
+it was raised for ClickHouse's `:9363` cardinality rather than for the handlers.
+
+```bash
+for f in docker/prometheus/rules/*.yml; do
+  printf '%-50s %2d\n' "$f" "$(grep -c '^[[:space:]]*- alert:' "$f")"
+done
+```
+
+```
+docker/prometheus/rules/capture-alerts.yml         10
+docker/prometheus/rules/clickhouse-alerts.yml       4
+docker/prometheus/rules/iceberg-offload-alerts.yml  9
+```

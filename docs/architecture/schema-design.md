@@ -16,7 +16,7 @@ Three records, namespace `com.k2.market.v3`, registered under TopicNameStrategy 
 | `Trade` | `market.crypto.v3.trades.<ex>` | One execution, normalised |
 | `BookSnapshotL2` | `market.crypto.v3.book.<ex>` | Top-20 L2 snapshot at 1 Hz, parallel `bid_px/bid_qty/ask_px/ask_qty` arrays |
 
-The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2* normalized topic and is live: its `-value` subject holds `NormalizedTrade`, and posting `trade.avsc` against it returns `{"is_compatible":false}` (checked against the running stack, 2026-08-26). Reusing the name would fail `redpanda-init` and block every feed handler from starting, and ADR-018's parallel-run window needs the Rust and Kotlin producers on separate topics anyway. Reasoning and the cutover path are in [`schemas/README.md`](../../schemas/README.md).
+The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2* normalized topic: its `-value` subject holds `NormalizedTrade`, and posting `trade.avsc` against it returns `{"is_compatible":false}` (checked against the running stack, 2026-08-26). Reusing the name would have failed `redpanda-init` and blocked every feed handler from starting, and the parallel-run window needed the Rust and Kotlin producers on separate topics anyway. That topic is frozen now rather than gone — its producers retired on 2026-08-26 ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) and Phase E deletes it with the `k2` database — so the prefix stays until then. Reasoning and the cutover path are in [`schemas/README.md`](../../schemas/README.md).
 
 **Fixed-point `int64` at 1e-8 replaces decimal strings.** Every price and quantity is `round(value × 1e8)`: 45285.2 on the wire is `4528520000000`. v2 carried decimals as strings, which was the right call for a JSON-readable topic nobody consumed programmatically; v3's topics are read by ClickHouse's `AvroConfluent`, by Spark, and by Rust, and a plain `long` is the one representation all three decode identically and do exact arithmetic on. Avro's `decimal` logical type would be more self-describing and costs a `BigDecimal` reconstruction in every consumer with three different sets of precision rules — the trade-off, and the >8-decimal-place rejection counter that guards it, are argued in full in [`schemas/README.md`](../../schemas/README.md#the-fixed-point-contract).
 
@@ -40,7 +40,7 @@ The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2*
 |---|---|---|
 | `schema_version` | string | Semantic version, default `1.0.0` |
 | `exchange` | string | Lowercase: `binance`, `kraken`, `coinbase` |
-| `symbol` | string | Exchange-native: `BTCUSDT`, `XBT/USD`, `BTCUSD` |
+| `symbol` | string | Exchange-native: `BTCUSDT`, `BTC/USD`, `BTC-USD` |
 | `canonical_symbol` | string | Cross-exchange: `BTC/USDT`, `BTC/USD` |
 | `trade_id` | string | Exchange-assigned, unique within an exchange |
 | `price`, `quantity`, `quote_volume` | string | **Strings on purpose** — see below |

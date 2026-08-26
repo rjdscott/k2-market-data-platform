@@ -20,29 +20,20 @@ class InstrumentsLoaderTest {
     }
 
     /**
-     * The real config/instruments.yaml.
+     * The registry this tier shipped against — a verbatim copy of
+     * `config/instruments.yaml` as of the retirement, frozen into test resources.
      *
-     * Walks up from user.dir rather than assuming exactly two levels: Gradle sets
-     * user.dir to the subproject dir, but the test-runner container and IDE runners
-     * do not always agree on that, and a hardcoded `parentFile.parentFile` silently
-     * resolved to a nonexistent path — which the old `?: return` then turned into
-     * three tests that passed without asserting anything.
-     *
-     * Fails loudly instead. If this cannot find the registry, the three tests below
-     * are not verifying the shipped config and must not report green.
+     * This used to walk up to the *live* `config/instruments.yaml`, which made an
+     * archived tier's tests hostage to the current platform: Kraken's WS v2
+     * spellings replaced `XBT/USD` and `XDG/USD` in the live registry and these
+     * three tests went red for a service that no longer runs. An archive asserts
+     * against its own snapshot; the live file stopped being its contract the day
+     * the handlers came out of the compose file.
      */
-    private fun canonicalYaml(): File {
-        val start = File(System.getProperty("user.dir"))
-        val found = generateSequence(start) { it.parentFile }
-            .map { File(it, "config/instruments.yaml") }
-            .firstOrNull { it.isFile }
-
-        assertNotNull(
-            found,
-            "config/instruments.yaml not found walking up from user.dir=$start — " +
-                "these tests must assert against the shipped registry, not skip silently"
-        )
-        return found
+    private fun frozenRegistry(): File {
+        val url = javaClass.getResource("/instruments-v1.yaml")
+        assertNotNull(url, "src/test/resources/instruments-v1.yaml is missing from the archive")
+        return File(url.toURI())
     }
 
     @Test
@@ -198,8 +189,8 @@ class InstrumentsLoaderTest {
     }
 
     @Test
-    fun `loads all 12 binance pairs from canonical instruments yaml`() {
-        val file = canonicalYaml()
+    fun `loads all 12 binance pairs from the frozen registry`() {
+        val file = frozenRegistry()
 
         val symbols = InstrumentsLoader(file.absolutePath).loadForExchange("binance")
         assertEquals(12, symbols.size, "Expected 12 Binance pairs")
@@ -209,8 +200,8 @@ class InstrumentsLoaderTest {
     }
 
     @Test
-    fun `loads all 11 kraken pairs from canonical instruments yaml`() {
-        val file = canonicalYaml()
+    fun `loads all 11 kraken pairs from the frozen registry`() {
+        val file = frozenRegistry()
 
         val symbols = InstrumentsLoader(file.absolutePath).loadForExchange("kraken")
         assertEquals(11, symbols.size, "Expected 11 Kraken pairs")
@@ -219,8 +210,8 @@ class InstrumentsLoaderTest {
     }
 
     @Test
-    fun `loads all 11 coinbase pairs from canonical instruments yaml`() {
-        val file = canonicalYaml()
+    fun `loads all 11 coinbase pairs from the frozen registry`() {
+        val file = frozenRegistry()
 
         val symbols = InstrumentsLoader(file.absolutePath).loadForExchange("coinbase")
         assertEquals(11, symbols.size, "Expected 11 Coinbase pairs")
