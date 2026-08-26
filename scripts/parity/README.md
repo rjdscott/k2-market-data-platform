@@ -30,7 +30,10 @@ uv run --no-project --with "confluent-kafka[avro]==2.15.0" \
 | `--v2-only` | off | consume only the v2 topic and print per-symbol counts. No verdict. |
 
 Exit `0` = every symbol PASS. Exit `1` = any symbol FAIL, or the run could not be
-completed (registry unreachable, empty window, unknown schema id, broker unreachable).
+completed (registry unreachable, empty window, unknown schema id, broker unreachable),
+or the read was truncated. **`--v2-only` exits 1 on a truncated read too**: its counts
+are a lower bound on the topic, so exiting 0 would report "the plumbing works over
+this window" for a window it never finished reading.
 
 `--v2-only` exists to prove the plumbing — Avro decode, `offsets_for_times`, the
 window cut — before the Rust tier is producing anything worth comparing. Run it
@@ -140,6 +143,16 @@ literally the same trades at the edges. Two edges × three exchanges makes a han
 boundary trades expected and meaningless. The floor of 2 absorbs that on a quiet
 symbol; the 0.1% scales it on a busy one; neither is large enough to hide a producer
 that is actually dropping messages.
+
+**The floor of 2 is a prediction, not a measurement.** `EDGE_ALLOWANCE = 2` says a
+window edge can move at most one trade per edge per symbol, and nothing has yet run a
+full window through both tiers to check it. Until that first run, a symbol failing by
+1 or 2 is as likely to be this number being wrong as it is to be a producer dropping
+records: read the first full-window run's near-misses before treating a small delta as
+a finding, and if the edges routinely move more than 2 the fix is this constant with
+the measurement written next to it — not a wider proportional tolerance, which would
+also loosen the busy symbols where the floor never binds. Revisit at the first
+full-window comparison against a v3 tier that has been producing for the whole window.
 
 One thing the tolerance explicitly does **not** cover: a symbol that one tier saw and
 the other did not see at all. That is never a window edge, so a symbol with a zero on

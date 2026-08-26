@@ -676,7 +676,12 @@ def main(argv=None) -> int:
                     print(f"| {symbol} | {n:,} |")
                 if not counts:
                     print("\n(no records in window)")
-            return 0
+            # The same gate the full comparison applies. A truncated read makes
+            # these counts a lower bound, and the smoke test's whole job is to
+            # say whether decoding and offsets_for_times worked over the window
+            # asked for - a short read that exits 0 reports success for a window
+            # it never finished reading.
+            return 1 if any(n.startswith(TRUNCATION_NOTE) for n in notes) else 0
 
         v3_rows, v3_consumed, note = consume_window(
             consumer, v3_topic, start_ms, end_ms, deserializer, normalise_v3

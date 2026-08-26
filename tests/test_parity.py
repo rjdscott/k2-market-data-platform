@@ -620,3 +620,57 @@ def test_a_window_ending_safely_in_the_past_is_accepted():
     end = now - timedelta(seconds=MIN_WINDOW_END_AGE_S + 30)
     args = _args((end - timedelta(hours=2)).isoformat(), end.isoformat())
     assert args.window_end == end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# --v2-only: the smoke path has the same truncation gate as the verdict path
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _v2_only(monkeypatch, note):
+    """
+    Run `main(--v2-only)` with the Kafka half replaced: one decoded record and
+    whatever `note` the read is supposed to have produced. Everything Kafka-shaped
+    in that path is a shell around `consume_window`, which is what this stubs.
+    """
+    import compare_trades as ct
+
+    row = Norm(
+        canonical_symbol="BTC/USD",
+        trade_id="1",
+        price=to_fixed_1e8("78600.44"),
+        qty=to_fixed_1e8("0.001"),
+        side="buy",
+        exchange_ts_us=1_787_730_846_075_373,
+    )
+    monkeypatch.setattr(ct, "build_deserializer", lambda registry: object())
+    monkeypatch.setattr(
+        ct, "make_consumer", lambda brokers: type("C", (), {"close": lambda self: None})()
+    )
+    monkeypatch.setattr(ct, "consume_window", lambda *a, **k: ([row], 1, note))
+
+    end = datetime.now(timezone.utc) - timedelta(seconds=MIN_WINDOW_END_AGE_S + 30)
+    return ct.main(
+        [
+            "--exchange", "binance",
+            "--window-start", (end - timedelta(hours=2)).isoformat(),
+            "--window-end", end.isoformat(),
+            "--v2-only",
+            "--json",
+        ]
+    )
+
+
+def test_v2_only_exits_zero_on_a_complete_read(monkeypatch):
+    assert _v2_only(monkeypatch, None) == 0
+
+
+def test_v2_only_fails_on_a_truncated_read(monkeypatch):
+    """
+    The counts a truncated read prints are a lower bound on the topic. Exiting 0
+    on them reports "decoding and offsets_for_times work over this window" for a
+    window the tool never finished reading — the same reason the full comparison
+    forces FAIL on `header["truncated"]`.
+    """
+    note = f"{TRUNCATION_NOTE} — `t` returned no records for 30s with 2 of 20 partition(s) short."
+    assert _v2_only(monkeypatch, note) == 1
