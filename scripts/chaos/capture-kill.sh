@@ -22,7 +22,9 @@ EXCHANGE=$(parse_exchange "$@")
 HOLD=150
 while [ $# -gt 0 ]; do
   case $1 in
-    --hold) HOLD=$2; shift 2 ;;
+    --hold)
+      [ $# -ge 2 ] || die "--hold needs a value in seconds"
+      HOLD=$2; shift 2 ;;
     --hold=*) HOLD=${1#*=}; shift ;;
     *) shift ;;
   esac
@@ -47,9 +49,17 @@ if [ "$HOLD" -gt 0 ]; then
   # what keeps it down long enough for `for: 2m` to elapse. The fault was still
   # a SIGKILL - this only suppresses the auto-restart while we watch the alert.
   docker stop "$CONTAINER" >/dev/null 2>&1 || true
+  # `docker stop` deliberately defeats `restart: unless-stopped`, so from here
+  # until the restore below nothing brings this venue back on its own. Two to
+  # four minutes of that is spent inside `wait_for_alert`. A Ctrl-C, a
+  # Prometheus blip or a broken pipe in that window would otherwise leave the
+  # venue dark indefinitely - the exact fault this directory promises it cannot
+  # cause (README: "a chaos script that can leave the stack broken is a fault of
+  # its own").
+  trap 'compose up -d "capture-$EXCHANGE" >/dev/null 2>&1 || true' EXIT
 fi
 
-t_fire=$(wait_for_alert CaptureDown $((HOLD + 120))) && fired=yes || fired=no
+t_fire=$(wait_for_alert CaptureDown $((HOLD + 120)) "$EXCHANGE") && fired=yes || fired=no
 if [ "$fired" = yes ]; then
   echo "→ CaptureDown fired after ${t_fire}s" >&2
 else
@@ -60,6 +70,7 @@ fi
 
 echo "→ restoring" >&2
 compose up -d "capture-$EXCHANGE" >/dev/null
+trap - EXIT
 
 # Recovered means two things, and both have to hold: Prometheus can scrape it
 # again, and a frame has actually arrived since. `up == 1` alone would pass on a

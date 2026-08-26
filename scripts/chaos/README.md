@@ -1,7 +1,8 @@
 # `scripts/chaos/` — fault injection for the capture tier
 
-Five scripts that break the running stack on purpose, wait for the alert that is
-supposed to notice, measure how long recovery took, and put the stack back. They
+Five scripts: four break the running stack on purpose, wait for the alert that is
+supposed to notice, measure how long recovery took, and put the stack back; the
+fifth records an honest gap it cannot yet inject. They
 are the `proof` column of
 [`docs/architecture/failure-modes.md`](../../docs/architecture/failure-modes.md):
 an FMEA whose recovery times are estimates is a wish list, and these are what turn
@@ -21,11 +22,20 @@ failures are injected nightly"*.
 
 ## Status
 
-**None of these has been run.** The capture image is not built and no `k2-capture-*`
-container exists on this host, so every script would fail its preflight today. They
-are committed unrun on purpose — the alert rules, the runbooks and the FMEA all
+**None of these has been run** — `scripts/chaos/results/` does not exist yet, and
+that directory is the only thing that makes a recovery number real.
+
+The blocker is no longer the capture tier: `k2-capture:v3` is built and
+`k2-capture-{binance,kraken,coinbase}` are up and healthy, so preflight passes
+today. What remains is that each script drops real market data from whichever
+venue it targets, and the two broker scripts drop it for the whole stack, so a run
+is scheduled deliberately rather than taken opportunistically — and never during a
+labelled burn-in or parity window, whose evidence it would destroy.
+
+They are committed unrun on purpose: the alert rules, the runbooks and the FMEA all
 already claim behaviour that only these scripts can check, and shipping the checker
-alongside the claim is the point.
+alongside the claim is the point. Until `results/` has a dated file, every
+**Measured** cell downstream of it stays empty rather than estimated.
 
 ---
 
@@ -43,13 +53,22 @@ All five take `--exchange binance|kraken|coinbase`, defaulting to `kraken`.
 `capture-kill.sh` also takes `--hold <seconds>` (default 150) and
 `redpanda-stop.sh` takes `--cold-start`.
 
-Two design notes worth knowing before reading them:
+Three design notes worth knowing before reading them:
 
 - **`capture-queue-full.sh` pauses the broker; `redpanda-stop.sh` stops it.** A
   paused broker leaves every TCP connection open and stops answering, so
   librdkafka keeps enqueueing — the purest queue-full injection. A stopped broker
   refuses the connection and librdkafka fails differently. Same neighbourhood,
   different failure, two scripts.
+- **Those two scripts take down the whole stack, not just capture.** Redpanda is
+  the single broker *and* the single schema registry, so the three Kotlin feed
+  handlers, ClickHouse's Kafka-engine consumers, Console and Prefect all lose it
+  too — capture is only the tier being measured. `capture-queue-full.sh
+  --exchange coinbase` is the longest: 446 s of predicted queue slack plus the
+  alert's `for: 3m` and the wait puts the broker under `docker pause` for up to
+  ~27 minutes, and `redpanda-stop.sh` stops it for up to ~15. A pause beyond a
+  few minutes is itself a risk on single-node Raft, so both end by printing
+  `rpk cluster health` rather than assuming a clean return.
 - **`capture-corrupt-frame.sh` is a SKIP, not a stub.** It exists so `make chaos`
   reports the gap on every run rather than quietly not covering it. The reasons
   are in its header: TLS leaves no seam to flip a byte in a live frame, and
@@ -58,9 +77,16 @@ Two design notes worth knowing before reading them:
   says so.
 
 `lib.sh` holds everything that observes rather than breaks — `prom_query`,
-`wait_for_alert`, `wait_for_alert_clear`, `wait_for_metric`, `metrics`, `stamp`,
-`report`, and the preflight. Keeping it out of the fault scripts is what makes
-"measure" identical across them, and therefore comparable.
+`alert_state`, `wait_for_alert`, `wait_for_alert_clear`, `wait_for_metric`,
+`stamp`, `report`, and the preflight. Keeping it out of the fault scripts is what
+makes "measure" identical across them, and therefore comparable.
+
+Every wait is **scoped to one venue**. `alert_state` takes the exchange and matches
+it against either label an alert can carry it in — the sample's own `exchange`, or
+the scrape `job` (`capture-<exchange>`) for `up`-based alerts like `CaptureDown`.
+Without that scope `capture-kill.sh --exchange binance` would return "firing" off an
+unrelated kraken alert and every number after the wait would belong to the wrong
+venue.
 
 ---
 
@@ -69,17 +95,16 @@ Two design notes worth knowing before reading them:
 - The stack is up (`make up`) and **healthy** — `docker compose ps` shows no
   restarting service. Injecting a fault into a stack that is already broken
   measures nothing.
-- The capture containers for the exchange under test are running. They are built
-  in Phase C; until then every script stops at its preflight with a clear message.
+- The capture container for the exchange under test is running; a script that
+  cannot find it stops at its preflight with a clear message.
 - `jq` and `docker` on the host. Prometheus reachable on `localhost:9090`
-  (override with `K2_CHAOS_PROM`).
-- Capture `/metrics` is read through a `curlimages/curl` sidecar on the compose
-  network, because the capture image is distroless and `:8082` is not published.
-  Override the network with `K2_CHAOS_NETWORK` if the compose project name differs
-  from `k2-market-data-platform`.
+  (override with `K2_CHAOS_PROM`). Prometheus is the only reader of capture
+  `/metrics` — the image is distroless and `:8082` is not published — so the
+  scripts measure exactly the numbers the alerts measure.
 - **Nothing you care about is running.** These scripts drop real market data, and
   public WebSocket feeds do not replay it. Every window a script breaks is
-  permanently absent from `raw.messages`.
+  permanently absent from `raw.messages`. That includes any burn-in or parity
+  window in flight: a chaos run during one invalidates its evidence.
 
 Run them one at a time, from anywhere:
 
@@ -87,8 +112,11 @@ Run them one at a time, from anywhere:
 scripts/chaos/capture-pause.sh --exchange coinbase
 ```
 
-Each restores the stack on exit, including on `Ctrl-C` — a chaos script that can
-leave the stack broken is a fault of its own.
+Every script that injects a fault restores the stack on exit, including on
+`Ctrl-C`, via a `trap` armed before the fault and cleared after the restore — a
+chaos script that can leave the stack broken is a fault of its own.
+`capture-corrupt-frame.sh` has no trap because it injects nothing: it prints its
+SKIP banner, appends a `skip` row and exits.
 
 ---
 
@@ -106,7 +134,19 @@ self-heals inside the 2-minute window, which is the documented expected behaviou
 not a failure) and `skip` for the corrupt-frame placeholder. `t_recover_s` is
 seconds from restoring the stack to the metric that defines "recovered" — a fresh
 `k2_capture_last_message_ts_seconds`, or `k2_capture_records_produced_total`
-climbing again.
+climbing past its **mid-outage** level.
+
+Both cells can also read `unmeasured`, and that is a real outcome rather than a
+missing one: it means a wait timed out, so nothing was observed. A timeout is never
+folded into a duration and published as one. `t_fresh + <the timeout>` is a constant
+wearing a measurement's clothes, and these cells are hand-copied into the FMEA and
+the runbook MTTR tables.
+
+Note what `k2_capture_records_produced_total` counts: local **enqueue**, not
+delivery (`sink.rs`). A recovery time measured on it says the producer resumed
+accepting records, which is why `redpanda-stop.sh` baselines it mid-outage — against
+the pre-fault sample the comparison is already satisfied before the broker is even
+restarted, and the answer is always ~0.
 
 **Results are committed.** They are the evidence behind every recovery number this
 repo publishes, and an uncommitted measurement is one nobody can check. They are
@@ -136,7 +176,9 @@ script's bound, and the FMEA has no empty cell.
 2. Source `lib.sh`; call `preflight` with every container you touch; call `banner`
    with the alert and the runbook so a reader of the terminal output knows what is
    supposed to happen before it does.
-3. `trap` the restore, so an interrupted run leaves the stack up.
+3. `trap` the restore — armed *before* the fault, cleared *after* the restore, so
+   there is no window in which an interrupt leaves the stack broken. Scope every
+   wait to the venue under test by passing the exchange.
 4. End with `report`, and add the script to the table above and to the `chaos`
    target in the `Makefile`.
 5. If the fault cannot be injected honestly, say so in a SKIP script rather than

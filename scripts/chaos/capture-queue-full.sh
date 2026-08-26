@@ -11,6 +11,17 @@
 # keeps enqueueing instead of failing fast. That is the purest queue-full
 # injection available here. `redpanda-stop.sh` covers the fail-fast case.
 #
+# BLAST RADIUS IS THE WHOLE STACK, NOT JUST CAPTURE. Redpanda is the single
+# broker, so pausing it takes down every producer and consumer on it at once:
+# the three Kotlin feed handlers, ClickHouse's Kafka-engine consumers, Redpanda
+# Console, and Prefect. Capture is only the tier being *measured*. Worst case
+# for this script is `--exchange coinbase`: 446 s of predicted slack, and with
+# the 3x wait plus the alert's `for: 3m` the broker can be paused for ~27
+# minutes. A `docker pause` longer than about five minutes is itself a risk on
+# single-node Raft - the node cannot heartbeat its own group while frozen, and
+# recovery on unpause is not instant. That is why this ends with an explicit
+# `rpk cluster health` rather than assuming the broker came back clean.
+#
 # It also scores a prediction. capacity-model.md §4a-4b puts the wire rate at
 # 173.3 / 164.3 / 75.2 kB/s for binance / kraken / coinbase, so 32 MiB of queue
 # is 194 / 204 / 446 seconds of slack. The script prints predicted vs measured;
@@ -37,9 +48,10 @@ MESSAGES="sum(k2_capture_messages_total{exchange=\"$EXCHANGE\"})"
 preflight "$CONTAINER" k2-redpanda k2-prometheus
 banner "capture-queue-full.sh --exchange $EXCHANGE" \
   CaptureProduceErrors docs/runbooks/capture-down.md \
-  "docker pause k2-redpanda; $CONTAINER keeps reading the socket and fills its 32 MiB queue"
+  "docker pause k2-redpanda (WHOLE STACK: feed handlers, ClickHouse, Console, Prefect); $CONTAINER fills its 32 MiB queue"
 
 drops_before=$(prom_query "$DROPS"); drops_before=${drops_before:-0}
+qf_before=$(prom_query "$QUEUE_FULL"); qf_before=${qf_before:-0}
 produced_before=$(prom_query "$PRODUCED"); produced_before=${produced_before:-0}
 messages_before=$(prom_query "$MESSAGES"); messages_before=${messages_before:-0}
 
@@ -61,18 +73,21 @@ t_drop=$(wait_for_metric "$DROPS" gt "$drops_before" $((PREDICTED * 3))) \
   || die "no produce errors after ${t_drop}s — the queue did not fill; check queue.buffering.max.kbytes"
 t_drop=$((t_drop + PREDICTED / 2))
 
-qf=$(prom_query "$QUEUE_FULL"); qf=${qf:-0}
+# Every drop figure here is a DELTA against the pre-fault sample. These are
+# lifetime counters: comparing a raw reading against zero, or against a
+# different reason's total, reports a previous run's drops as this run's.
+qf_mid=$(prom_query "$QUEUE_FULL"); qf_mid=${qf_mid:-0}
 printf '→ first drop at %ss (predicted %ss, error %s%%)\n' \
   "$t_drop" "$PREDICTED" \
   "$(awk -v a="$t_drop" -v b="$PREDICTED" 'BEGIN { printf "%+.0f", (a - b) / b * 100 }')" >&2
-if awk -v v="$qf" 'BEGIN { exit !(v > 0) }'; then
+if awk -v a="$qf_mid" -v b="$qf_before" 'BEGIN { exit !(a - b > 0) }'; then
   echo "  reason=queue_full, as designed." >&2
 else
   echo "  reason is NOT queue_full — message.timeout.ms expired records before the" >&2
   echo "  queue filled. That is a finding: the cap that binds is time, not bytes." >&2
 fi
 
-t_fire=$(wait_for_alert CaptureProduceErrors 300) \
+t_fire=$(wait_for_alert CaptureProduceErrors 300 "$EXCHANGE") \
   || echo "→ CaptureProduceErrors did not fire within ${t_fire}s (needs rate > 0.1/s for 3m)" >&2
 
 echo "→ unpausing k2-redpanda" >&2
@@ -83,9 +98,26 @@ t_recover=$(wait_for_metric "$PRODUCED" gt "$mid_produced" 300) \
   || die "capture did not resume producing after ${t_recover}s"
 
 echo "→ producing again ${t_recover}s after the broker came back" >&2
-echo "→ data lost: $(awk -v a="$qf" -v b="$drops_before" 'BEGIN { print a - b }') records dropped." >&2
+
+# One scrape interval so the last drops land before the loss figure is read.
+sleep 30
+qf_after=$(prom_query "$QUEUE_FULL"); qf_after=${qf_after:-0}
+drops_after=$(prom_query "$DROPS"); drops_after=${drops_after:-0}
+qf_lost=$(awk -v a="$qf_after" -v b="$qf_before" 'BEGIN { print a - b }')
+all_lost=$(awk -v a="$drops_after" -v b="$drops_before" 'BEGIN { print a - b }')
+printf '→ data lost: %s records dropped this run, %s of them reason=queue_full.\n' \
+  "$all_lost" "$qf_lost" >&2
+echo "  Both are deltas over this run's fault window only, on $EXCHANGE only." >&2
+echo "  A gap between the two totals is records lost for some other reason —" >&2
+echo "  encode, enqueue or delivery — and is its own finding." >&2
 echo "  Dropped means gone — no spill-to-disk, and raw was dropped with the rest," >&2
 echo "  so reprocessing cannot recover it. Record the window." >&2
 echo "→ total elapsed under fault: $((SECONDS - paused_at))s" >&2
+
+# The broker was frozen for minutes on a single-node Raft cluster; whether it
+# came back healthy is not an assumption this script gets to make.
+echo "→ cluster health after restore:" >&2
+docker exec k2-redpanda rpk cluster health 2>&1 | sed 's/^/  /' >&2 \
+  || echo "  rpk cluster health did not answer — check k2-redpanda by hand before the next run." >&2
 
 report "capture-queue-full.sh --exchange $EXCHANGE" CaptureProduceErrors "$t_fire" "$t_recover"

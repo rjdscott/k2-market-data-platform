@@ -6,14 +6,13 @@
 # alert, break it, measure, restore. Keeping the observation code out of them is
 # what makes "measure" identical across scripts and therefore comparable.
 #
-# Two dependencies, both already on this host: `jq` and `docker`. Prometheus is
-# reached over the published port; capture /metrics is reached from inside the
-# compose network via a curl sidecar, because the capture image is distroless
-# and the metrics port is not published.
+# Two dependencies, both already on this host: `jq` and `docker`. Everything is
+# observed through Prometheus on its published port - the capture image is
+# distroless and its :8082 is not published, so Prometheus is the only reader of
+# it, and reading the same numbers the alerts read is the point rather than a
+# limitation.
 
 PROM="${K2_CHAOS_PROM:-http://localhost:9090}"
-NET="${K2_CHAOS_NETWORK:-k2-market-data-platform_k2-net}"
-CURL_IMAGE="${K2_CHAOS_CURL_IMAGE:-curlimages/curl:8.11.1}"
 
 CHAOS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 RESULTS_DIR="${K2_CHAOS_RESULTS_DIR:-$CHAOS_DIR/results}"
@@ -27,28 +26,52 @@ compose() { docker compose -f "$CHAOS_DIR/../../docker-compose.yml" "$@"; }
 
 # prom_query <expr> -> the first sample's value, or empty. Instant vectors only;
 # a scalar or a multi-series result is the caller's problem to avoid.
+#
+# The trailing `|| true` is load-bearing. Every caller runs under `set -euo
+# pipefail`, and this is called *mid-fault* - with a container paused, a broker
+# stopped, or Prometheus itself under load. One transient curl failure would
+# otherwise abort the script between "break it" and "restore it". Failing soft
+# to an empty string is correct here because every caller already treats empty
+# as "no reading yet": `wait_for_metric` keeps polling, the samplers default
+# with `${x:-0}`.
 prom_query() {
-  curl -sf --get "$PROM/api/v1/query" --data-urlencode "query=$1" \
-    | jq -r '.data.result[0].value[1] // empty'
+  curl -sf --get "$PROM/api/v1/query" --data-urlencode "query=$1" 2>/dev/null \
+    | jq -r '.data.result[0].value[1] // empty' || true
 }
 
-# alert_state <name> -> firing | pending | "" . "firing" wins if any instance of
-# the alert is firing, because one stale stream firing is the alert firing.
+# alert_state <name> <exchange> -> firing | pending | "" for THAT VENUE only.
+# "firing" wins if any instance of the alert is firing for the venue, because
+# one stale stream firing is the alert firing.
+#
+# The venue filter is not optional. Matching on `alertname` alone means
+# `capture-kill.sh --exchange binance` returns "firing" off a kraken outage, and
+# every measurement downstream of that wait is then a number about the wrong
+# venue. An alert can name its venue in either of two labels, so both are
+# accepted:
+#   * `exchange` - the sample's own label, on everything built from a
+#     k2_capture_* series, including alerts that aggregate with
+#     `sum by (exchange)` and so drop the scrape job.
+#   * `job` (`capture-<exchange>`) - the scrape target's label, which is all
+#     `up`-based alerts such as CaptureDown carry.
+# Neither label is present on both kinds, which is why the match is an `or`.
 alert_state() {
-  curl -sf "$PROM/api/v1/alerts" \
-    | jq -r --arg n "$1" '
-        [.data.alerts[] | select(.labels.alertname == $n) | .state]
-        | (map(select(. == "firing"))[0] // .[0] // empty)'
+  curl -sf "$PROM/api/v1/alerts" 2>/dev/null \
+    | jq -r --arg n "$1" --arg ex "$2" '
+        [ .data.alerts[]
+          | select(.labels.alertname == $n)
+          | select(.labels.exchange == $ex or .labels.job == "capture-" + $ex)
+          | .state ]
+        | (map(select(. == "firing"))[0] // .[0] // empty)' || true
 }
 
-# wait_for_alert <name> <timeout_s> -> prints elapsed seconds; 1 on timeout.
+# wait_for_alert <name> <timeout_s> <exchange> -> prints elapsed seconds; 1 on timeout.
 # Non-zero on timeout is a real outcome, not an error: some faults are designed
 # to self-heal inside the alert's `for:` window and never fire.
 wait_for_alert() {
-  local name=$1 timeout=$2 start elapsed
+  local name=$1 timeout=$2 exchange=$3 start elapsed
   start=$SECONDS
   while :; do
-    if [ "$(alert_state "$name")" = "firing" ]; then
+    if [ "$(alert_state "$name" "$exchange")" = "firing" ]; then
       echo "$((SECONDS - start))"
       return 0
     fi
@@ -61,12 +84,14 @@ wait_for_alert() {
   done
 }
 
-# wait_for_alert_clear <name> <timeout_s> -> prints elapsed seconds; 1 on timeout.
+# wait_for_alert_clear <name> <timeout_s> <exchange> -> prints elapsed seconds;
+# 1 on timeout. A timeout here is NOT a recovery time: see capture-pause.sh for
+# what a caller must do with it.
 wait_for_alert_clear() {
-  local name=$1 timeout=$2 start elapsed
+  local name=$1 timeout=$2 exchange=$3 start elapsed
   start=$SECONDS
   while :; do
-    if [ -z "$(alert_state "$name")" ]; then
+    if [ -z "$(alert_state "$name" "$exchange")" ]; then
       echo "$((SECONDS - start))"
       return 0
     fi
@@ -103,13 +128,6 @@ wait_for_metric() {
   done
 }
 
-# metrics <container> -> that container's raw /metrics exposition.
-# k2-capture-kraken -> http://capture-kraken:8082/metrics (the compose hostname).
-metrics() {
-  local svc=${1#k2-}
-  docker run --rm --network "$NET" "$CURL_IMAGE" -s "http://$svc:8082/metrics"
-}
-
 # ── reporting ───────────────────────────────────────────────────────────────
 
 # report <script> <expected-alert> <t_fire_s> <t_recover_s>
@@ -117,6 +135,12 @@ metrics() {
 # evidence, so they are committed rather than gitignored; the FMEA row in
 # docs/architecture/failure-modes.md is updated BY HAND from this file, with the
 # date, so that a published recovery number always names the run it came from.
+#
+# The two time cells are not always numbers, and that is deliberate: `none` (the
+# alert did not fire, which is the pass condition for some faults), `skip`, and
+# `unmeasured` (the wait timed out, so no recovery time was observed) are all
+# real outcomes. A timeout must never be arithmetic'd into a duration and
+# published as one - that is how `t_fresh + 300` becomes a "measured" MTTR.
 report() {
   local file header
   file="$RESULTS_DIR/$(date -u +%F).tsv"
@@ -163,7 +187,9 @@ parse_exchange() {
   local ex=kraken
   while [ $# -gt 0 ]; do
     case $1 in
-      --exchange) ex=$2; shift 2 ;;
+      --exchange)
+        [ $# -ge 2 ] || die "--exchange needs a value (binance|kraken|coinbase)"
+        ex=$2; shift 2 ;;
       --exchange=*) ex=${1#*=}; shift ;;
       *) shift ;;
     esac

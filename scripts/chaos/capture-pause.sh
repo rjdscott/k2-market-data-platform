@@ -41,7 +41,7 @@ docker pause "$CONTAINER" >/dev/null
 # can leave the stack broken is a fault of its own.
 trap 'docker unpause "$CONTAINER" >/dev/null 2>&1 || true' EXIT
 
-t_fire=$(wait_for_alert CaptureFeedStale 300) \
+t_fire=$(wait_for_alert CaptureFeedStale 300 "$EXCHANGE") \
   || die "CaptureFeedStale did not fire within ${t_fire}s — check the metric is labelled {exchange,stream}"
 echo "→ CaptureFeedStale fired after ${t_fire}s" >&2
 
@@ -50,8 +50,22 @@ docker unpause "$CONTAINER" >/dev/null
 trap - EXIT
 
 t_fresh=$(wait_for_metric "$FRESH" lt 60 180) || die "no fresh frames after ${t_fresh}s"
-t_clear=$(wait_for_alert_clear CaptureFeedStale 300) || echo "→ alert still set after ${t_clear}s" >&2
-t_recover=$((t_fresh + t_clear))
+
+# A timeout on the clear is not a recovery time, and adding it to t_fresh does
+# not make it one: `t_fresh + <the timeout>` is a constant wearing a
+# measurement's clothes, and this number is hand-copied into the FMEA and the
+# runbook MTTR tables. If the alert does not clear, the run says so and the
+# recovery cell reads `unmeasured`.
+if t_clear=$(wait_for_alert_clear CaptureFeedStale 300 "$EXCHANGE"); then
+  t_recover=$((t_fresh + t_clear))
+else
+  t_recover=unmeasured
+  echo "→ CaptureFeedStale for $EXCHANGE was still set ${t_clear}s after frames came back." >&2
+  echo "  Recovery NOT measured. Either the venue has a stream that is legitimately" >&2
+  echo "  quieter than the 60s threshold — in which case the rule needs the fix, not" >&2
+  echo "  the number — or something is still broken. Do not publish a recovery time" >&2
+  echo "  for this run." >&2
+fi
 
 # The interesting part is not that it recovered - it is how the venue reported
 # the hole. Give the counters a scrape interval to land before reading them.
@@ -59,7 +73,11 @@ sleep 30
 gaps_after=$(prom_query "$GAPS"); gaps_after=${gaps_after:-0}
 reconnects_after=$(prom_query "$RECONNECTS"); reconnects_after=${reconnects_after:-0}
 
-echo "→ frames fresh in ${t_fresh}s, alert cleared in a further ${t_clear}s" >&2
+if [ "$t_recover" = unmeasured ]; then
+  echo "→ frames fresh in ${t_fresh}s, alert NOT cleared within ${t_clear}s" >&2
+else
+  echo "→ frames fresh in ${t_fresh}s, alert cleared in a further ${t_clear}s" >&2
+fi
 printf '→ gaps %s → %s   reconnects %s → %s\n' \
   "$gaps_before" "$gaps_after" "$reconnects_before" "$reconnects_after" >&2
 case $EXCHANGE in
