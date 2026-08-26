@@ -134,6 +134,32 @@ groups:
             record can be produced, ADR-020), or a full disk.
           runbook: docs/runbooks/capture-down.md
 
+      # CRITICAL: the early warning before CaptureProduceErrors's first drop -
+      # capture is still reading the exchange but nothing is reaching the broker,
+      # so the librdkafka queue is filling with no counter moving yet.
+      - alert: CaptureProduceStalled
+        expr: |
+          sum by (exchange) (rate(k2_capture_records_produced_total[1m])) == 0
+          and
+          sum by (exchange) (rate(k2_capture_messages_total[1m])) > 0
+        for: 30s
+        labels:
+          severity: critical
+          component: capture
+          tier: ingestion
+        annotations:
+          summary: "capture is receiving but not producing — librdkafka queue is filling; data is lost in ~194–446 s (capacity-model §4)"
+          description: |
+            {{ $labels.exchange }} is still reading exchange frames
+            (k2_capture_messages_total climbing) but k2_capture_records_produced_total
+            has been flat for a full minute. Nothing is dropping yet - the queue
+            (32 MiB, ADR-019) is filling silently, and CaptureProduceErrors will not
+            fire until it is full and starts dropping. This alert is the window
+            before that: 194 s (binance), 204 s (kraken) or 446 s (coinbase) from the
+            moment production stopped to the first permanent drop
+            (capacity-model.md §4).
+          runbook: docs/runbooks/capture-produce-stalled.md
+
   - name: capture_warning
     interval: 1m
     rules:

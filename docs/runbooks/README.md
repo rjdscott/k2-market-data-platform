@@ -43,6 +43,7 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
 | [capture-down.md](./capture-down.md) | A `k2-capture` container is down or crash-looping, or is running but failing to produce to Redpanda | `CaptureDown`, `CaptureProduceErrors` |
+| [capture-produce-stalled.md](./capture-produce-stalled.md) | Capture is receiving from the exchange but producing nothing to Redpanda, before the queue fills and starts dropping | `CaptureProduceStalled` |
 | [capture-feed-stale.md](./capture-feed-stale.md) | Container up and scrapeable but a stream has gone silent; or exchange→receive p99 has stepped up | `CaptureFeedStale`, `CaptureIngressLatencyHigh` |
 | [capture-sequence-gaps.md](./capture-sequence-gaps.md) | Exchange sequence continuity broke (messages lost), or the book keeps being resynced | `CaptureSequenceGaps`, `CaptureResyncStorm` |
 | [capture-checksum-failure.md](./capture-checksum-failure.md) | Kraken CRC32 mismatch, book thinner than top-20, or a venue quoting finer than 8 dp | `CaptureChecksumFailure`, `CaptureBookDepthDegraded`, `CapturePrecisionLoss` |
