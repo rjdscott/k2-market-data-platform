@@ -196,7 +196,7 @@ To be written when each phase lands, not before:
 
 ## References
 
-- [`../plans/2026-08-26-v3-quant-research-platform.md`](../plans/2026-08-26-v3-quant-research-platform.md) — phases, exit criteria, verify-first spikes
+- [`../plans/2026-08-26-v3-quant-research-platform/`](../plans/2026-08-26-v3-quant-research-platform/README.md) — phases, exit criteria, verify-first spikes
 - [`../benchmarks/2026-02-19-v2-baseline.md`](../benchmarks/2026-02-19-v2-baseline.md) — the v2 numbers this argues against
 - [ADR-004](ADR-004-eliminate-spark-streaming.md) — why a resident streaming runtime is not affordable here
 - [ADR-010](ADR-010-resource-budget.md) — the 16 CPU / 40 GB constraint v3 keeps

@@ -1,0 +1,21 @@
+# Phase C — Rust capture tier (`services/capture-rust/`, ~2 weeks)
+
+**Depends on:** Phase B
+**Delivers:** Replaces the Kotlin feed handlers with a Rust `k2-capture` binary per exchange doing trades + L2 book, run in parallel and verified before Kotlin retires.
+**Exit:** 3 exchanges × 24h clean (gaps=0 or explained, checksum failures=0), limits measured and cut.
+
+## Scope
+
+Single crate `k2-capture` (split to workspace only when a second binary needs `book.rs`). Layout: `main.rs, config.rs, book.rs, decimal.rs, record.rs, sink.rs (rdkafka + registry), metrics.rs, ws.rs, exchanges/{mod,binance,kraken,coinbase}.rs`, `tests/{fixtures/*.jsonl, replay.rs}`. Runtime `current_thread` tokio (cgroup quota); no internal channels — librdkafka queue is the only buffer (`queue.buffering.max.kbytes=32768`, idempotent, acks=all, lz4); drop-on-full with counter (`// ponytail: spill-to-file when an outage costs data`). SIGTERM → flush 5s.
+- Adapters expose `handle_frame(&mut self, bytes, recv_ts_ns) -> Vec<OutRecord>` (pure; no Sink trait/mocks). `recv_ts_ns` from `SystemTime::now()` first statement on frame receipt; monotonic `Instant` for internal histograms only.
+- **Streams per exchange (trades + book on ONE connection):** Binance combined `/stream?streams=` with `@trade` + `@depth20@100ms` (no book state; `lastUpdateId` regression check; 23h scheduled reconnect; pong). Kraken v2 `trade` + `book depth=25` + `instrument`; CRC32 verify every update, mismatch → `checksum_failures_total`, per-symbol resubscribe, `checksum_ok=false` emitted. Coinbase `market_trades` + `level2` + `heartbeats`; full-depth `BTreeMap<i64,i64>` book; `sequence_num` gap → reconnect + fresh snapshot; keep snapshot events.
+- Emit: `Trade` per trade; `BookSnapshotL2` top-20 at 1 Hz per symbol (env `K2_SNAPSHOT_INTERVAL_MS`); `RawMessage` for every frame (`conn_id`, `conn_msg_seq`).
+- Metrics on :8082 (`metrics-exporter-prometheus`): `k2_capture_{messages,bytes,records_produced,produce_errors,gaps,checksum_failures,resyncs,reconnects,precision_loss}_total`, `k2_capture_exchange_to_recv_seconds` histogram (HELP states skew+internet caveat), `k2_capture_book_{depth,levels_total}`, `k2_capture_last_message_ts_seconds`. `k2-capture healthcheck` subcommand (distroless has no curl). `k2-capture record --exchange X --seconds N` fixture recorder (stdout JSONL).
+- Tests: `decimal.rs` table; `book.rs` apply/remove/top_n; Kraken checksum doc example; parser fixture tests; proptest invariants (best_bid<best_ask, no zero levels, monotonic top_n); `tests/replay.rs` over recorded sessions. CI `rust` job (fmt, clippy -D warnings, test, Swatinem cache) + docker matrix entry.
+- Dockerfile: cargo-chef + `gcr.io/distroless/cc-debian12:nonroot`, `[profile.release] lto="thin", codegen-units=1, panic="abort", strip=true`; target ~40 MB. Compose ×3 `capture-{ex}` 0.25 CPU / 256M (coinbase 512M), `cpuset` pinned away from CH/Spark, depends on redpanda-init only; Prometheus jobs `capture-{ex}`; `capture-alerts.yml` (CaptureDown, SequenceGaps, ChecksumFailure, ResyncStorm, FeedStale per stream, IngressLatencyHigh, BookDepthDegraded, ProduceErrors); dashboard `k2-l2-capture.json`.
+- **Parity & retirement:** run Rust trades alongside Kotlin for 24h; compare per-symbol counts/ids in ClickHouse and lake; then `git mv services/feed-handler-kotlin legacy/v2-kotlin/` with README, remove from compose/CI; ADR records why (one connection per exchange, one language for capture, 3 JVMs gone).
+
+## Verification
+
+- Every phase: `make test` (rust/python/clickhouse-schema), CI green, `docker compose up -d --build` from clean clone → all services healthy.
+- Capture: `rpk topic consume market.crypto.book.kraken` shows 1 Hz snapshots with `checksum_ok=true`; `curl :8082/metrics` counters; induced failures (corrupt level → resync; `kill -STOP` → Coinbase gap+reconnect).

@@ -1,8 +1,11 @@
 # Plans
 
 Design documents for multi-phase work: what is being built, in what order, and
-the exact command that proves each phase landed. One file per plan,
-`YYYY-MM-DD-<slug>.md`, dated when it was authored.
+the exact command that proves each phase landed. One directory per plan,
+`YYYY-MM-DD-<slug>/`, dated when it was authored: a `README.md` (context,
+decisions, ground truth, target architecture, phases table, verification,
+risks) plus one `NNN-<slug>.md` file per phase, `NNN` zero-padded from `000`
+and never renumbered.
 
 ## Conventions
 
@@ -26,4 +29,4 @@ the exact command that proves each phase landed. One file per plan,
 
 | Plan | Scope | Status |
 |------|-------|--------|
-| [2026-08-26-v3-quant-research-platform.md](./2026-08-26-v3-quant-research-platform.md) | v3: Rust capture tier, lake-first Iceberg system of record, ClickHouse as derived hot tier, DuckDB query layer | Phases A–F; tracked via ADR-018+ and git tags |
+| [2026-08-26-v3-quant-research-platform/](./2026-08-26-v3-quant-research-platform/README.md) | v3: Rust capture tier, lake-first Iceberg system of record, ClickHouse as derived hot tier, DuckDB query layer | Phases A–F; tracked via ADR-018+ and git tags |

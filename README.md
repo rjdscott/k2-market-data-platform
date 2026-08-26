@@ -242,7 +242,7 @@ flowchart LR
 
 Everything except the lake is derived and rebuildable. Same 16 CPU / 40 GB single host.
 
-**Phases** ([full plan](./docs/plans/2026-08-26-v3-quant-research-platform.md)):
+**Phases** ([full plan](./docs/plans/2026-08-26-v3-quant-research-platform/README.md)):
 
 - **A — public now.** v2 shipped as-is, honestly labelled; v3 built in the open.
 - **B — foundations.** Verify-first spikes, Avro contracts, Lakekeeper + MinIO, Spark image bump.
@@ -263,7 +263,7 @@ testing above 1×; Coinbase can lose a schema-registration race on cold start (f
 - [`docs/README.md`](./docs/README.md) — start here
 - [`docs/architecture/README.md`](./docs/architecture/README.md) — system design
 - [`docs/adr/`](./docs/adr/) — all 18 ADRs, including [ADR-018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md) (v3, Proposed)
-- [`docs/plans/2026-08-26-v3-quant-research-platform.md`](./docs/plans/2026-08-26-v3-quant-research-platform.md) — the v3 plan
+- [`docs/plans/2026-08-26-v3-quant-research-platform/`](./docs/plans/2026-08-26-v3-quant-research-platform/README.md) — the v3 plan
 - [`docs/operations/`](./docs/operations/) — runbooks, observability, cost model
 - [`docs/development/setup.md`](./docs/development/setup.md) — local development
 - [`docs/MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md) — the v1 → v2 story
