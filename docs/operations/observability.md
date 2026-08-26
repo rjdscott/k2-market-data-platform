@@ -54,6 +54,7 @@ Plus the JVM/process metrics Micrometer registers by default. Recording rule
 | ClickHouse Overview (v2) | `clickhouse-v2` | Query rate, memory gauge, insert rate, background merges — the warm tier in isolation |
 | Iceberg Offload Pipeline | `iceberg-offload` | Offload lag, success rate, rows/sec, duration quantiles, error rate, cycle status |
 | K2 Platform v2 — Migration Tracker | `k2-v2-migration` | Total CPU/RAM gauges against the 16-core budget, service up/down, Redpanda and ClickHouse rates |
+| K2 Capture (v3) | `k2-l2-capture` | Rust capture tier (Phase C): health (up, staleness, reconnects, gaps, checksum failures, resyncs), throughput (messages/bytes/records/produce errors), exchange→recv latency p50/p95/p99, book depth/levels/precision loss. `exchange` template variable filters all panels |
 
 ![Redpanda topics](../images/redpanda-console-topics.jpg)
 
