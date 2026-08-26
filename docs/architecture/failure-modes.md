@@ -99,10 +99,12 @@ successful produce survives a capture crash. In between there are 194 s (binance
 **Two caps close that window, and the smaller one wins.** The 32 MiB above is one;
 `message.timeout.ms=300000` in `sink.rs` is the other, failing any record still
 undelivered five minutes after enqueue whatever the queue is doing. At binance and kraken
-rates the queue fills first (`reason="queue_full"`); at coinbase's slower rate the timeout
-fires first (`reason="delivery"`). This is the shape *after* 2026-08-26: the timeout was
-30 s until then, which made the entire diagram's "delayed" state unreachable — measured,
-see the producer-queue-full row.
+rates the queue *should* fill first (`reason="queue_full"`); at coinbase's slower rate the
+timeout should fire first (`reason="delivery"`). **That split is arithmetic, not a
+measurement** — the only injected run on record was taken with the timeout at 30 s, which
+made the entire diagram's "delayed" state unreachable and every drop a `delivery`, and it
+stays unscored until `capture-queue-full.sh` is re-run against the 5-minute timeout. See
+the producer-queue-full row.
 
 ---
 

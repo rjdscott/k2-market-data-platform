@@ -272,10 +272,17 @@ grep.
 
 What changed is *which* cap binds, not whether loss happens. Past ~204 s of kraken
 outage the records are gone either way; what the 30 s cap threw away was the first 204 s,
-which were meant to be free. The new failure shape: `queue_full` is the first signal at
-binance and kraken rates, `delivery` at coinbase's slower rate, and a `delivery` tick
-during an outage now means the outage outran five minutes rather than thirty seconds.
-Evidence: [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv).
+which were meant to be free.
+
+**The new failure shape is a prediction, not a measurement.** With
+`message.timeout.ms=300000` the arithmetic says `queue_full` should now be the first
+signal at binance and kraken rates and `delivery` at coinbase's slower one — but the
+only run on record is the one above, taken at 30 s, and it is the run that proved this
+kind of arithmetic wrong. **It is unscored until `capture-queue-full.sh` is re-run
+against the 5-minute timeout**, and the 204 s row in
+[`../architecture/failure-modes.md`](../architecture/failure-modes.md) says so rather
+than quietly correcting itself. Evidence for the 30 s measurement:
+[`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv).
 
 ### Retirement, 2026-08-26
 
@@ -299,6 +306,16 @@ over the same window against the live topics, capture binary
 exchange `trade_id`s, not records**: venues re-send trades and both tiers carry
 the re-send identically, so repeats are reported in `dup-v2` / `dup-v3` and are
 never folded into Δ ([`../../scripts/parity/README.md`](../../scripts/parity/README.md)).
+
+**How to read the verdict column.** PASS/FAIL is the script's, per symbol, not a
+judgement written here: `|Δ| ≤ tolerance`, where **tolerance = `max(2, 0.1% of
+count)`**. `only-v2` / `only-v3` carry that same tolerance on the id-join path
+(Binance, Coinbase) but only the constant **`EDGE_ALLOWANCE = 2` on the Kraken
+multiset path** — Kraken has no `mismatch` column, so a real divergence has
+nowhere else to surface and the proportional slope would swallow it. Three things
+get no tolerance at all: `px/qty/side mismatch` must be 0, `exchange_ts` delta on
+a matched id must stay under 1,000 µs, and a symbol one tier saw and the other did
+not is a FAIL at any count (`scripts/parity/compare_trades.py::SymbolStats.passed`).
 
 **Binance — 12/12 PASS, and exactly:** 1,569,505 unique trade ids on each side,
 `only-v2` and `only-v3` both **0 on every symbol**, `px/qty/side mismatch` 0,
@@ -509,23 +526,11 @@ until one exists.
 
 Three numbers this ADR and its neighbours predicted were scored by the window and
 the chaos run. Two of them were wrong, and they are worth more than the ones that
-were right.
-
-#### Measured correction, 2026-08-26 — the 32 MiB buffer was unreachable
-
-[`../architecture/capacity-model.md`](../architecture/capacity-model.md) predicted
-**204 s** of producer slack before the first kraken record was lost to a broker
-outage — 32 MiB ÷ 164.3 kB/s of wire rate. `scripts/chaos/capture-queue-full.sh
---exchange kraken` measured the first drop at **102 s**, half that, and **0 of the
-231,744 dropped records carried `reason="queue_full"`** — every one was
-`reason="delivery"`. The queue was never the binding cap: `message.timeout.ms` was
-**30 s** at the time, so records expired on the clock while 32 MiB sat half empty.
-The capacity model was right about the bytes and the sink's own config made those
-bytes unreachable. `message.timeout.ms=300000` (5 min) landed in the Phase C PR,
-which puts the 204 s prediction back under test — **it is unscored until the
-script is re-run**, and the row in
-[`../architecture/failure-modes.md`](../architecture/failure-modes.md) says so
-rather than quietly correcting itself.
+were right. The first — capacity-model.md's **204 s** of producer slack before a
+kraken record is lost to a broker outage, measured at **102 s** with zero
+`reason="queue_full"` — is written up above under
+[*Measured correction, 2026-08-26*](#measured-correction-2026-08-26--the-32-mib-buffer-was-unreachable)
+and is not repeated here. The other two:
 
 #### Binance `depth20` runs at 88.2 frames/s, not the predicted 120
 
