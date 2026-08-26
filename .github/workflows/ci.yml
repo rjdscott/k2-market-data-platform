@@ -119,6 +119,16 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
+  docs:
+    name: Docs (link/word/rule gates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: bash scripts/check-docs.sh
+
   security:
     name: Security (Trivy)
     runs-on: ubuntu-latest

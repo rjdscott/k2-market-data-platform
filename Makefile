@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps test test-kotlin test-python test-rust
+.PHONY: help up down logs ps test test-kotlin test-python test-rust dev-up check-docs
 .DEFAULT_GOAL := help
 
 help:  ## Show available targets
@@ -6,6 +6,12 @@ help:  ## Show available targets
 
 up:  ## Start the full stack (builds images on first run)
 	docker compose up -d
+
+dev-up: ## Bring the stack up the safe way (override, rebuild, recreate mount holders, health, data-flow probe)
+	bash scripts/dev-up.sh
+
+check-docs: ## Doc gates (links, forbidden words, promtool, runbook paths, capacity-model gate)
+	bash scripts/check-docs.sh
 
 down:  ## Stop the stack (volumes kept)
 	docker compose down
