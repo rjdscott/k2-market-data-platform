@@ -30,7 +30,7 @@ dependencies {
     implementation("org.apache.avro:avro:1.12.0")
 
     // Logging
-    implementation("io.github.oshai:kotlin-logging-jvm:7.0.3")
+    implementation("io.github.oshai:kotlin-logging-jvm:8.0.4")
     implementation("ch.qos.logback:logback-classic:1.5.16")
 
     // Configuration
