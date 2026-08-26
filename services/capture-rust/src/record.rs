@@ -123,7 +123,8 @@ impl OutRecord {
     /// Every value [`OutRecord::topic_kind`] can return, and therefore every
     /// registry subject one capture process can need. `Sink::warm_up` fetches
     /// one schema per entry at startup so the frame path never meets a cold
-    /// cache; `topic_kinds_covers_every_variant` is what keeps the two in step.
+    /// cache; `sink::tests::warm_up_covers_every_subject_a_record_can_need` is
+    /// what keeps the two in step.
     pub const TOPIC_KINDS: [&'static str; 3] = ["trades", "book", "raw"];
 
     /// Last segment of the topic name: `market.crypto.v3.<this>.<exchange>`.
