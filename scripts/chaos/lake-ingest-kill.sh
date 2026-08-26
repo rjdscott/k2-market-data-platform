@@ -48,9 +48,18 @@ trap cleanup EXIT
 # not contain the script path, so SIGKILLing the driver leaves the JVM holding
 # the Kafka read and the staged files. pgrep then reports clean while the work
 # it was supposed to stop carries on.
+#
+# The DRIVER's pkill status is what this returns, and that is the whole point:
+# it is 1 when there was no ingest to kill, which is the case the `die` below
+# reports. Ending on `|| true` — as this did — made the function always exit 0,
+# so a run that killed nothing sailed past the guard and "measured" a commit
+# window it never entered. The JVM's pkill keeps its `|| true`: a driver killed
+# before Spark forked it leaves no JVM, and that is not a failure.
 kill_ingest() {
-  docker exec "$SPARK" pkill -9 -f "$LAKE/ingest.py"
+  local rc=0
+  docker exec "$SPARK" pkill -9 -f "$LAKE/ingest.py" || rc=$?
   docker exec "$SPARK" pkill -9 -f 'org.apache.spark.deploy.SparkSubmit' || true
+  return "$rc"
 }
 
 echo "→ starting an ingest in the background" >&2
