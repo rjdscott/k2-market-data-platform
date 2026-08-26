@@ -20,7 +20,7 @@ COPY schemas /app/schemas
 RUN gradle fatJar --no-daemon
 
 # Stage 2: Runtime
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:25-jre-alpine
 
 LABEL maintainer="K2 Platform Engineering"
 LABEL description="Kotlin feed handler for crypto market data streams"
