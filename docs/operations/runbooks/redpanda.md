@@ -9,15 +9,22 @@
 ## Overview
 
 Redpanda is the Kafka-compatible message broker in v2. It runs as a single-broker cluster
-(`k2-redpanda`) with 3 topics:
+(`k2-redpanda`) with two topics per exchange — raw exchange JSON, and normalized Avro:
 
-| Topic | Partitions | Consumers |
-|-------|-----------|-----------|
-| `binance-trades` | 40 | ClickHouse Kafka Engine |
-| `kraken-trades` | 20 | ClickHouse Kafka Engine |
-| `coinbase-trades` | 20 | ClickHouse Kafka Engine |
+| Topic | Partitions | Payload | Consumers |
+|-------|-----------:|---------|-----------|
+| `market.crypto.trades.binance.raw` | 40 | raw JSON | ClickHouse Kafka Engine |
+| `market.crypto.trades.binance` | 40 | Avro | — (reserved for downstream consumers) |
+| `market.crypto.trades.kraken.raw` | 20 | raw JSON | ClickHouse Kafka Engine |
+| `market.crypto.trades.kraken` | 20 | Avro | — |
+| `market.crypto.trades.coinbase.raw` | 20 | raw JSON | ClickHouse Kafka Engine |
+| `market.crypto.trades.coinbase` | 20 | Avro | — |
 
-Topics are initialized by the `redpanda-init` one-shot service on startup.
+Topics are created by the `redpanda-init` one-shot service at startup, which also hardens
+the internal `_schemas` topic (compact cleanup policy, infinite retention) to prevent
+`offset_out_of_range` on schema-registry restart.
+
+Ports: Kafka API `9092`, admin API `9644`, schema registry `8081`.
 
 **Redpanda Console**: http://localhost:8080
 
@@ -30,7 +37,7 @@ Topics are initialized by the `redpanda-init` one-shot service on startup.
 docker exec k2-redpanda rpk topic list
 
 # Describe a topic (partitions, offsets, replicas)
-docker exec k2-redpanda rpk topic describe binance-trades
+docker exec k2-redpanda rpk topic describe market.crypto.trades.binance.raw
 
 # Create a topic (normally done by redpanda-init)
 docker exec k2-redpanda rpk topic create my-topic --partitions 10 --replicas 1
@@ -39,10 +46,10 @@ docker exec k2-redpanda rpk topic create my-topic --partitions 10 --replicas 1
 docker exec k2-redpanda rpk topic delete my-topic
 
 # Produce a test message
-echo '{"test": "message"}' | docker exec -i k2-redpanda rpk topic produce binance-trades
+echo '{"test": "message"}' | docker exec -i k2-redpanda rpk topic produce market.crypto.trades.binance.raw
 
 # Consume messages from beginning
-docker exec k2-redpanda rpk topic consume binance-trades --offset start --num 5
+docker exec k2-redpanda rpk topic consume market.crypto.trades.binance.raw --offset start --num 5
 ```
 
 ---
@@ -56,10 +63,10 @@ Consumer lag indicates how far behind a consumer group is from the latest offset
 docker exec k2-redpanda rpk group list
 
 # Describe consumer group (show lag per partition)
-docker exec k2-redpanda rpk group describe clickhouse-binance-consumer
+docker exec k2-redpanda rpk group describe clickhouse_bronze_binance_consumer
 
 # Watch lag continuously
-watch -n 5 'docker exec k2-redpanda rpk group describe clickhouse-binance-consumer'
+watch -n 5 'docker exec k2-redpanda rpk group describe clickhouse_bronze_binance_consumer'
 ```
 
 **Expected state**: ClickHouse consumer groups should have lag < 10,000 in steady state.
@@ -76,18 +83,18 @@ If lag is growing continuously, ClickHouse insert rate is below producer rate �
 
 **Diagnosis**:
 ```bash
-docker compose -f docker-compose.v2.yml logs redpanda --tail=50
+docker compose logs redpanda --tail=50
 ```
 
 **Common causes**:
 - Port 9092 already in use: `lsof -i :9092` — stop the conflicting process
-- Volume corruption: inspect `docker/redpanda-data/`
+- Volume corruption: inspect the `redpanda-data` named volume (`docker volume inspect k2-market-data-platform_redpanda-data`)
 - Insufficient disk: `df -h` — Redpanda needs at least 5GB free
 
 **Resolution**:
 ```bash
 # Restart cleanly
-docker compose -f docker-compose.v2.yml up -d redpanda
+docker compose up -d redpanda
 ```
 
 ---
@@ -102,12 +109,12 @@ volume was wiped, topics are gone.
 **Resolution**:
 ```bash
 # Force redpanda-init to re-run
-docker compose -f docker-compose.v2.yml up redpanda-init
+docker compose up redpanda-init
 ```
 
 If `redpanda-init` has already exited (one-shot), recreate it:
 ```bash
-docker compose -f docker-compose.v2.yml up --force-recreate redpanda-init
+docker compose up --force-recreate redpanda-init
 ```
 
 ---
@@ -118,21 +125,25 @@ Use when an offset is corrupted or you need to replay data from a specific point
 
 ```bash
 # Reset consumer group to beginning (replay all messages)
-docker exec k2-redpanda rpk group seek clickhouse-binance-consumer \
-  --to start --topic binance-trades
+docker exec k2-redpanda rpk group seek clickhouse_bronze_binance_consumer \
+  --to start --topic market.crypto.trades.binance.raw
 
 # Reset to end (skip all backlog)
-docker exec k2-redpanda rpk group seek clickhouse-binance-consumer \
-  --to end --topic binance-trades
+docker exec k2-redpanda rpk group seek clickhouse_bronze_binance_consumer \
+  --to end --topic market.crypto.trades.binance.raw
 
 # Reset to specific offset
-docker exec k2-redpanda rpk group seek clickhouse-binance-consumer \
-  --to 12345 --topic binance-trades
+docker exec k2-redpanda rpk group seek clickhouse_bronze_binance_consumer \
+  --to 12345 --topic market.crypto.trades.binance.raw
 ```
 
-> **Warning**: Resetting to start will re-insert all historical messages into ClickHouse.
-> ClickHouse MergeTree deduplication (by primary key) prevents duplicates in the bronze
-> tables, but this will still cause a large re-insert load.
+> **Warning**: Resetting to start re-inserts every retained message into ClickHouse, and
+> the bronze tables are plain `MergeTree` — **they do not deduplicate**. The `ORDER BY`
+> key is a sort key, not a uniqueness constraint. Expect duplicate rows in bronze, which
+> propagate to silver and inflate gold candle counts. Only do this if you are prepared to
+> deduplicate afterwards, or if the affected partition is being rebuilt anyway. The
+> Kafka Engine table name is `k2.<exchange>_trades_queue` — confirm with
+> `SHOW TABLES FROM k2`.
 
 ---
 
@@ -164,24 +175,24 @@ docker exec k2-redpanda df -h /var/lib/redpanda/data
 **Diagnosis**:
 ```bash
 # Check ClickHouse Kafka Engine status
-docker exec -it k2-clickhouse clickhouse-client --query \
+docker exec -it k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --query \
   "SELECT * FROM system.kafka_consumers WHERE database = 'k2' FORMAT Vertical"
 
 # Check for ClickHouse insert errors
-docker exec -it k2-clickhouse clickhouse-client --query \
+docker exec -it k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --query \
   "SELECT * FROM system.errors WHERE name LIKE '%Kafka%' ORDER BY last_error_time DESC LIMIT 10"
 ```
 
 **Common resolution**:
 ```bash
 # Detach and re-attach the Kafka Engine table to force reconnect
-docker exec -it k2-clickhouse clickhouse-client --query \
-  "DETACH TABLE k2.kafka_bronze_binance_raw; ATTACH TABLE k2.kafka_bronze_binance_raw"
+docker exec -it k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --query \
+  "DETACH TABLE k2.binance_trades_queue; ATTACH TABLE k2.binance_trades_queue"
 ```
 
 If persistent, restart ClickHouse:
 ```bash
-docker compose -f docker-compose.v2.yml restart clickhouse
+docker compose restart clickhouse
 ```
 
 ---
@@ -207,7 +218,7 @@ Quick platform health verification:
 docker exec k2-redpanda rpk cluster info
 
 # Topic offsets (is data flowing?)
-docker exec k2-redpanda rpk topic offset-list binance-trades
+docker exec k2-redpanda rpk topic offset-list market.crypto.trades.binance.raw
 
 # Consumer groups summary
 docker exec k2-redpanda rpk group list
@@ -217,7 +228,7 @@ docker exec k2-redpanda rpk group list
 
 ## Related
 
-- [ADR-001: Replace Kafka with Redpanda](../../decisions/platform-v2/ADR-001-replace-kafka-with-redpanda.md)
-- [Binance Streaming Runbook](./binance-streaming.md)
-- [Kraken Streaming Runbook](./kraken-streaming.md)
-- [ClickHouse consumer issues](../../decisions/platform-v2/ADR-009-medallion-in-clickhouse.md)
+- [ADR-001: Replace Kafka with Redpanda](../../decisions/ADR-001-replace-kafka-with-redpanda.md)
+- [Feed handler failure recovery](./failure-recovery.md#3-feed-handler-crash)
+- [Adding a new exchange](../adding-new-exchanges.md)
+- [ClickHouse consumer issues](../../decisions/ADR-009-medallion-in-clickhouse.md)

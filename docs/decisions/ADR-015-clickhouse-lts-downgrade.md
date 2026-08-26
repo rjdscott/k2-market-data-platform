@@ -1,8 +1,8 @@
-# DECISION-015: ClickHouse Version Downgrade to 24.3 LTS
+# ADR-015: ClickHouse Version Downgrade to 24.3 LTS
 
-**Date**: 2026-02-12
-**Status**: Implemented
-**Context**: Phase 5 - Prefect → ClickHouse → Iceberg Offload
+**Status:** Accepted — Implemented (2026-02)
+**Date:** 2026-02-12
+**Context:** Phase 5 — Prefect → ClickHouse → Iceberg Offload
 
 ## Problem
 
@@ -34,7 +34,7 @@ During implementation of the Spark-based offload pipeline from ClickHouse to Ice
 ## Implementation
 
 ### Changes Made
-1. **docker-compose.v2.yml**:
+1. **`docker-compose.yml`**:
    - Changed `clickhouse/clickhouse-server:26.1` → `clickhouse/clickhouse-server:24.3-alpine`
    - Recreated container with fresh volumes (incompatible data format between versions)
 
@@ -91,6 +91,5 @@ spark-submit --packages com.clickhouse:clickhouse-jdbc:0.4.6 test_jdbc_clean.py
 
 ## Related ADRs
 
-- ADR-013: Iceberg + Hadoop Catalog (v2)
-- ADR-014: ClickHouse TTL + Incremental Offload
-- Phase 5 documentation: `docs/phases/v2/PHASE-5-prefect-iceberg-offload.md`
+- [ADR-013](ADR-013-pragmatic-iceberg-version-strategy.md) — Pragmatic Iceberg version strategy (Hadoop catalog)
+- [ADR-014](ADR-014-spark-based-iceberg-offload.md) — Spark-based Iceberg offload

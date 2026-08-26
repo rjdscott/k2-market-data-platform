@@ -1,6 +1,6 @@
 # ADR-001: Replace Apache Kafka with Redpanda
 
-**Status:** Proposed
+**Status:** Accepted — Implemented (2026-02)
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Streaming Infrastructure

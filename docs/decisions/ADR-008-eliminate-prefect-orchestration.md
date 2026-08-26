@@ -1,6 +1,6 @@
 # ADR-008: Eliminate Prefect — Replace with ClickHouse Materialized Views + Spring Scheduler
 
-**Status:** Proposed
+**Status:** Partially rejected — Superseded by [ADR-014](ADR-014-spark-based-iceberg-offload.md), [ADR-017](ADR-017-iceberg-maintenance-pipeline.md) — see Outcome
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Orchestration
@@ -126,3 +126,20 @@ class BatchScheduler(
 
 - [Spring Scheduling](https://spring.io/guides/gs/scheduling-tasks)
 - [Prefect Resource Requirements](https://docs.prefect.io/latest/)
+
+---
+
+## Outcome (2026-08)
+
+Half of this decision held. The other half was wrong, and was reversed once the batch workload became real.
+
+**The OHLCV half held completely.** ClickHouse `AggregatingMergeTree` materialized views replaced all five OHLCV batch flows — and then added a sixth timeframe. Candles for 1m/5m/15m/30m/1h/1d are computed on insert, with no scheduler, no flow run, and nothing to fail at 03:00. Latency went from minutes-to-hours to sub-millisecond after a trade lands in Silver. Prefect's *primary* workload genuinely evaporated, exactly as argued above.
+
+**The orchestration half did not.** Prefect was not eliminated. It runs today as three services — `prefect-server`, `prefect-worker`, `prefect-db` — driving the 15-minute ClickHouse → Iceberg offload ([ADR-014](ADR-014-spark-based-iceberg-offload.md)) and the 02:00 UTC Iceberg maintenance flow ([ADR-017](ADR-017-iceberg-maintenance-pipeline.md)). Two reasons:
+
+1. **The proposed home never existed.** `@Scheduled` was to be embedded in the Spring Boot API. [ADR-005](ADR-005-kotlin-spring-boot-api.md) was deferred and that API was never built. "Free" scheduling inside an existing JVM is not free when there is no JVM.
+2. **The remaining batch work was never "2-3 simple cron jobs".** This ADR asserted the leftovers were single-step, independent and DAG-free. The offload is none of those: per-table watermark state in PostgreSQL, per-table retry with idempotent resume from the held watermark, a fan-out/fan-in shape (3 bronze concurrent → silver sequential → 6 gold concurrent), and run history to answer "did 02:00 run, and what did it touch". Maintenance adds ordered stages (compact → expire → audit) with a fail-fast audit gate that must page a human. That is orchestration, not scheduling. Re-implementing it in Kotlin or bash would have been rebuilding Prefect, badly, without the UI or the run log.
+
+**Cost of being wrong:** 2.5 CPU / 2.5 GB of compose limits, of which roughly 1.5 CPU / 2 GB is net new — ADR-010 already budgeted a PostgreSQL for the Iceberg catalog, and that container is now the Prefect metadata and watermark store instead. About 10% of the CPU budget, absorbed comfortably because the Spring Boot API and the Kotlin Silver processor were never built ([ADR-010](ADR-010-resource-budget.md) Outcome).
+
+The resource arithmetic in this ADR was correct. The workload analysis was not. Orchestration and scheduling only look like the same thing until the jobs acquire state.

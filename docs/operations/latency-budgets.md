@@ -1,309 +1,112 @@
-# Latency Budgets & Backpressure Design
+# Latency Budgets
 
-**Last Updated**: 2026-01-09
-**Owners**: Platform Team
-**Scope**: End-to-end performance characteristics
+What "fast enough" means for this pipeline, where the budget is spent, and what was
+actually measured. The target that matters: a trade leaving an exchange should be visible
+in a gold OHLCV candle in **under 200 ms at p99**.
 
----
+## The 7-segment budget
 
-## Overview
+| # | Segment | Target |
+|---|---------|--------|
+| 1 | Exchange WebSocket → feed handler parse | <1 ms |
+| 2 | Feed handler → Redpanda produce | <2 ms |
+| 3 | Redpanda → ClickHouse Kafka Engine consume | <3 ms |
+| 4 | Raw queue → bronze MV (normalisation) | <1 ms |
+| 5 | Bronze → silver MV (unification) | <3 ms |
+| 6 | Silver → gold MV (OHLCV aggregation) | <1 ms |
+| | **Total, in-platform** | **<11 ms** |
 
-Every microsecond of latency costs trading firms money. But "make it fast" is not a design. This document defines our latency budgets per pipeline stage, what degrades first under load, and how we communicate backpressure upstream.
+Eleven milliseconds of processing inside a 200 ms end-to-end budget. The remaining ~190 ms
+is network round-trip to the exchange, which is not ours to optimise — it dominates, and
+that is the expected shape for a platform running outside a colocation facility.
 
-**Philosophy**: Explicit degradation beats unpredictable failure. We design systems that slow down gracefully rather than fall over.
+The design that makes this possible is [ADR-004](../decisions/ADR-004-eliminate-spark-streaming.md):
+v1 spent 5–15 **minutes** here because every hop went through a Spark Structured
+Streaming micro-batch. Replacing those with ClickHouse materialized views moved the whole
+transform chain in-process.
 
----
+## Load scenarios
 
-## End-to-End Latency Budget
+| Scenario | Rate | Target p99 | Pass criteria |
+|----------|------|-----------|---------------|
+| 1× baseline | ~50 msg/s | <200 ms | No degradation |
+| 5× | ~250 msg/s | <500 ms | All MVs keeping pace |
+| 10× stress | ~500 msg/s | <1 s | No data loss |
 
-**Total Budget**: Exchange → Query API = **500ms @ p99**
+## Measured (2026-02-19)
 
-### Breakdown by Stage
+Exchange → silver end-to-end lag, computed as
+`ingestion_timestamp - timestamp` on `k2.silver_trades` over a 1-hour window at 1×
+baseline. Reproduce it with the lag query in
+[data-inspection.md](./data-inspection.md#silver--unified-trades).
 
-| Stage | Component | p50 | p99 | p99.9 | Degrades To | Alert Threshold |
-|-------|-----------|-----|-----|-------|-------------|-----------------|
-| **1. Ingestion** | Feed handler → Kafka producer | 2ms | 10ms | 25ms | Drop non-critical symbols | p99 > 20ms |
-| **2. Kafka** | Producer → Consumer poll | 5ms | 20ms | 50ms | Increase batch size (higher latency) | Lag > 100K messages |
-| **3. Processing** | Consumer → Business logic | 10ms | 50ms | 100ms | Skip enrichment, pass-through | p99 > 80ms |
-| **4. Storage** | Iceberg write (buffered) | 50ms | 200ms | 500ms | Spill to local disk, async flush | p99 > 400ms |
-| **5. Query** | API request → Response | 100ms | 300ms | 800ms | Reduce query complexity, cache | p99 > 500ms |
+| Exchange | p50 | p95 | p99 | Max | n | Target <200 ms |
+|----------|-----|-----|-----|-----|---|----------------|
+| Binance | 91 ms | 183 ms | 191 ms | 193 ms | 12 | pass |
+| Coinbase | 87 ms | 188 ms | 197 ms | 199 ms | 13 | pass |
+| Kraken | 71 ms | 162 ms | 170 ms | 172 ms | 12 | pass |
 
-**Total**: 167ms @ p50, 580ms @ p99, 1475ms @ p99.9
+**Caveat — read this before quoting the numbers.** The stack was started cold and each
+exchange contributed only **12–13 trades**. At that sample size a "p99" is really the
+slowest observation, so these results are directionally valid but not statistically
+meaningful. They should be re-measured after a 24-hour burn-in.
 
-**Trade-off**: We intentionally pad budgets for headroom. Real-world p99 is typically 300-400ms.
+**5× and 10× load tests were not run.** The method is Redpanda topic replay at the target
+multiple; it remains outstanding work.
 
----
+Supporting observations from the same run:
 
-## Latency vs Throughput Trade-offs
+- **Kafka Engine consumers healthy** — 66 messages read and 9 commits in the first five
+  minutes from a cold start, no exceptions in `system.kafka_consumers`.
+- **Bronze → silver is effectively instant.** The delta between bronze and silver
+  `ingestion_timestamp` was not measurable at microsecond resolution.
+- **Bottleneck is network RTT**, averaging ~80 ms. Every in-platform segment is far below
+  its budget, so no tuning was applied at 1×.
+- ClickHouse 24.3 does not surface Kafka Engine background inserts in `system.query_log`
+  as `query_kind = 'Insert'`. They appear under the `InsertedRows` system event instead —
+  220,320 rows after startup, confirming the backlog replayed.
 
-### Kafka Configuration Tuning
+## Producer configuration
 
-**Low Latency Mode** (Default):
-```properties
-# Producer config
-linger.ms=5                    # Wait max 5ms before sending batch
-batch.size=16384               # Small batches (16KB)
-compression.type=lz4           # Fast compression
-acks=1                         # Leader acknowledgment only
+The feed handler's Kafka producer is tuned for latency over throughput, in
+[`application.conf`](../../services/feed-handler-kotlin/src/main/resources/application.conf):
 
-# Expected: p99 < 20ms, throughput ~50K msg/sec/partition
+```hocon
+acks = "all"                              # durability first
+enable-idempotence = true                 # exactly-once produce
+linger-ms = 10                            # 10ms max batching delay
+batch-size = 16384
+compression-type = "lz4"                  # fast, not maximal
+max-in-flight-requests-per-connection = 5
 ```
 
-**High Throughput Mode** (Activated under load):
-```properties
-# Producer config
-linger.ms=100                  # Wait 100ms to fill batch
-batch.size=1048576             # Large batches (1MB)
-compression.type=zstd          # Better compression ratio
-acks=1                         # Same durability
-
-# Expected: p99 ~150ms, throughput ~500K msg/sec/partition
-```
-
-**Automatic Switch Logic**:
-```python
-def adjust_producer_config(current_lag: int, msg_rate: int):
-    """Dynamically tune producer based on system state."""
-    if current_lag > 500_000:
-        # Heavy lag: prioritize throughput to catch up
-        return HighThroughputConfig
-    elif msg_rate > 100_000:
-        # High message rate: batch aggressively
-        return HighThroughputConfig
-    else:
-        # Normal operation: prioritize latency
-        return LowLatencyConfig
-```
-
----
-
-## Backpressure Cascade
-
-### What Degrades First?
-
-Under load, components degrade in this order:
-
-#### Level 1: **Soft Degradation** (Alert, No User Impact)
-- p99 latency increases (50ms → 100ms)
-- Metrics show elevated latency, on-call receives alert
-- System continues processing all messages
-
-**Trigger**: Consumer lag > 100K messages OR p99 latency > budget
-
-**Response**: Autoscale consumers (add instances to consumer group)
-
----
-
-#### Level 2: **Graceful Degradation** (Reduced Fidelity)
-- Drop non-critical market data symbols (only process top 500 liquid symbols)
-- Skip optional enrichment (e.g., company metadata lookup)
-- Disable audit logging (write to local buffer, flush later)
-
-**Trigger**: Consumer lag > 1M messages OR OOM warning (heap > 80%)
-
-**Response**:
-```python
-def apply_degraded_mode():
-    """Reduce processing overhead under extreme load."""
-    # 1. Filter symbols
-    critical_symbols = ['BHP', 'CBA', 'CSL', ...]  # Top 500
-    if message.symbol not in critical_symbols:
-        metrics.increment('dropped_low_priority_symbol')
-        return  # Drop message
-
-    # 2. Skip enrichment
-    skip_enrichment = True
-
-    # 3. Batch writes larger
-    iceberg_writer.batch_size = 10_000  # From 1,000
-```
-
-**Alert**: Page on-call, investigate root cause (slow consumer? Kafka broker issue?)
-
----
-
-#### Level 3: **Spill to Disk** (Durability Over Latency)
-- Stop writing to Iceberg (slow S3 writes)
-- Buffer messages to local SSD (NVMe)
-- Async background process flushes to Iceberg when load decreases
-
-**Trigger**: Iceberg write latency p99 > 1 second OR S3 throttling errors
-
-**Response**:
-```python
-class SpillToDiskWriter:
-    def __init__(self):
-        self.spill_path = '/mnt/nvme/spill/'
-        self.spill_active = False
-
-    def write(self, messages: list):
-        if self.should_spill():
-            # Write to local disk (fast)
-            with open(f'{self.spill_path}/{uuid4()}.parquet', 'wb') as f:
-                pq.write_table(pa.Table.from_pylist(messages), f)
-            metrics.increment('spilled_to_disk', len(messages))
-        else:
-            # Normal Iceberg write
-            iceberg_table.append(messages)
-
-    def should_spill(self) -> bool:
-        return (
-            iceberg_write_p99_latency > 1.0 or
-            s3_error_rate > 0.01
-        )
-```
-
-**Recovery**: Background job flushes spill files to Iceberg during off-peak hours
-
-**Capacity Planning**: Local SSD must hold 1 hour of peak traffic (~500GB @ 10M msg/sec)
-
----
-
-#### Level 4: **Circuit Breaker** (Stop Processing)
-- Halt Kafka consumption (pause partitions)
-- Return 503 Service Unavailable from query API
-- Human intervention required
-
-**Trigger**: Disk full (> 95%) OR unrecoverable error rate > 5%
-
-**Response**:
-```python
-def circuit_breaker():
-    """Last resort: stop processing to prevent cascading failure."""
-    kafka_consumer.pause_all_partitions()
-    log.critical("Circuit breaker OPEN: halted consumption")
-    metrics.gauge('circuit_breaker_state', 1)  # 1 = OPEN
-
-    # Notify on-call via PagerDuty
-    pagerduty.trigger_incident(
-        severity='critical',
-        summary='Market data pipeline circuit breaker activated'
-    )
-```
-
-**Recovery**: Manual restart after fixing root cause (clear disk space, fix S3 credentials, etc.)
-
----
-
-## Critical Metrics (On-Call Dashboard)
-
-### Red Metrics (Immediate Page)
-
-```
-# Consumer lag (per consumer group)
-kafka_consumer_lag_messages{group="strategy_alpha"} > 1_000_000
-
-# Iceberg write failures
-iceberg_write_errors_total{table="market_data.ticks"} > 10/min
-
-# Query API error rate
-query_api_errors_total / query_api_requests_total > 0.05  # 5% error rate
-
-# Circuit breaker state
-circuit_breaker_state == 1  # OPEN
-```
-
-### Yellow Metrics (Investigate Next Business Day)
-
-```
-# Elevated latency
-kafka_consumer_lag_seconds > 60
-
-# High memory usage
-jvm_memory_used_bytes / jvm_memory_max_bytes > 0.8
-
-# Spill to disk active
-spilled_to_disk_total > 0
-```
-
-### Green Metrics (Informational)
-
-```
-# Message throughput
-kafka_messages_consumed_total (rate 5m)
-
-# Storage growth
-iceberg_table_size_bytes{table="market_data.ticks"}
-
-# Query cache hit rate
-query_cache_hits_total / query_cache_requests_total
-```
-
----
-
-## Degradation Testing
-
-### Load Test Scenarios
-
-All scenarios run in staging environment weekly:
-
-#### 1. **Sustained High Load**
-- Generate 10x normal message rate for 1 hour
-- Verify: p99 latency stays < 1 second, no message loss
-- Expected: Level 1-2 degradation (latency increase, some enrichment skipped)
-
-#### 2. **Kafka Broker Slowdown**
-- Artificially delay Kafka broker responses by 500ms
-- Verify: Circuit breaker does NOT trigger, system queues messages
-- Expected: Level 2 degradation (batch size increases, latency increases)
-
-#### 3. **S3 Throttling**
-- Rate-limit S3 PutObject requests to 100/sec (vs normal 1000/sec)
-- Verify: Spill-to-disk activates, no data loss
-- Expected: Level 3 degradation (messages buffered locally)
-
-#### 4. **Full Disk**
-- Fill local disk to 96%
-- Verify: Circuit breaker opens, consumption halts, alert fires
-- Expected: Level 4 degradation (manual intervention required)
-
----
-
-## Capacity Planning Triggers
-
-**Autoscaling Rules**:
-
-| Metric | Threshold | Action | Cooldown |
-|--------|-----------|--------|----------|
-| Consumer lag > 500K | 5 minutes | Add +1 consumer instance | 10 min |
-| Consumer lag > 2M | 1 minute | Add +3 consumer instances | 10 min |
-| CPU > 70% | 10 minutes | Add +1 instance | 15 min |
-| Memory > 85% | 5 minutes | Restart instance (clear heap) | 20 min |
-| Query API p99 > 1s | 10 minutes | Add +1 API instance | 10 min |
-
-**Manual Review Triggers**:
-- Consumer lag consistently > 1M for 24 hours → Increase partition count
-- S3 costs > $10K/month → Enable intelligent tiering
-- Query API traffic doubles month-over-month → Evaluate caching layer
-
----
-
-## Example: Black Swan Event Response
-
-**Scenario**: Market crash → 100x normal message volume (e.g., flash crash)
-
-**Timeline**:
-```
-T+0:00  - Message rate spikes from 100K/sec → 10M/sec
-T+0:05  - Level 1 degradation: p99 latency 50ms → 300ms
-T+0:10  - Level 2 degradation: Drop low-priority symbols, skip enrichment
-T+0:15  - Autoscaler adds 10 consumer instances (1 → 11)
-T+0:20  - Consumer lag peaks at 5M messages
-T+0:30  - Level 3 degradation: Spill to disk active (S3 writes too slow)
-T+0:45  - Consumer lag decreasing (2M messages)
-T+1:00  - Message rate normalizes (200K/sec, 2x usual)
-T+1:30  - Level 2 degradation lifted (enrichment re-enabled)
-T+2:00  - Level 1 degradation lifted (p99 latency back to 50ms)
-T+3:00  - Background job flushes spill files to Iceberg
-T+4:00  - System fully recovered, autoscaler removes excess instances
-```
-
-**Outcome**: No data loss, 30 minutes of degraded fidelity (non-critical symbols dropped), 3 hours to full recovery
-
----
-
-## Related Documentation
-
-- [Platform Principles](./PLATFORM_PRINCIPLES.md) - Degrade gracefully principle
-- [Failure & Recovery](./FAILURE_RECOVERY.md) - Operational runbooks
-- [Market Data Guarantees](./MARKET_DATA_GUARANTEES.md) - Ordering semantics
+`linger-ms = 10` is the one knob worth understanding: it buys batching efficiency for at
+most 10 ms of added latency, which is under 5% of the 200 ms budget and roughly an order
+of magnitude below the network RTT it sits behind. Raising it is the first thing to try if
+throughput ever becomes the constraint instead of latency.
+
+## What degrades under load
+
+The stack has no explicit backpressure machinery — it relies on Redpanda as the buffer,
+which is the right trade at this scale:
+
+1. **Feed handler saturates** → the Kafka producer blocks; the WebSocket read loop stalls
+   and the exchange's own buffer absorbs it. Watch `feed_handler_errors_total`.
+2. **ClickHouse ingest saturates** → the Kafka Engine consumer lags. Data is safe in
+   Redpanda for the retention window; `ClickHouseBronzeInsertRateLow` fires. Watch
+   consumer lag with `rpk group describe`.
+3. **Materialized views saturate** → merge queue grows; `ClickHouseMergeQueueLarge` fires.
+   Queries degrade before ingest does.
+4. **Offload saturates** → cycles overrun the 15-minute schedule;
+   `IcebergOffloadCycleTooSlow` fires. The hot tier is unaffected — cold simply lags.
+
+Nothing here drops data silently. The failure mode at every level is *lag*, not loss,
+which is what the failure-mode testing in
+[runbooks/failure-recovery.md](./runbooks/failure-recovery.md) confirms.
+
+## Related
+
+- [observability.md](./observability.md) — the alerts that watch these thresholds
+- [data-inspection.md](./data-inspection.md) — the lag query used above
+- [ADR-004](../decisions/ADR-004-eliminate-spark-streaming.md) — why the budget is milliseconds and not minutes
+- [ADR-001](../decisions/ADR-001-replace-kafka-with-redpanda.md) — Redpanda's p99 vs Kafka's on segment 3

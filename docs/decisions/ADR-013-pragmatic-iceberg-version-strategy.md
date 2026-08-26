@@ -1,10 +1,10 @@
 # ADR-013: Pragmatic Iceberg Version Strategy - Use Proven Apache Images
 
-**Status**: Accepted (Supersedes ADR-012)
-**Date**: 2026-02-11
-**Deciders**: Platform Engineering
-**Related Phase**: Phase 5 (Cold Tier Restructure)
-**Related ADRs**: [ADR-012 (Spark/Iceberg Upgrade - Superseded)](ADR-012-spark-iceberg-version-upgrade.md), [ADR-006 (Spark Batch Only)](ADR-006-spark-batch-only.md), [ADR-007 (Iceberg Cold Storage)](ADR-007-iceberg-cold-storage.md)
+**Status:** Accepted (Supersedes ADR-012)
+**Date:** 2026-02-11
+**Deciders:** Platform Engineering
+**Related Phase:** Phase 5 (Cold Tier Restructure)
+**Related ADRs:** [ADR-012 (Spark/Iceberg Upgrade - Superseded)](ADR-012-spark-iceberg-version-upgrade.md), [ADR-006 (Spark Batch Only)](ADR-006-spark-batch-only.md), [ADR-007 (Iceberg Cold Storage)](ADR-007-iceberg-cold-storage.md)
 
 ---
 

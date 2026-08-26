@@ -6,6 +6,17 @@
 **Last Updated:** 2026-02-18
 **Maintained By:** Platform Engineering
 
+
+> **Metrics caveat (read first).** The `offload_*` metrics used below are exported by
+> `docker/offload/metrics.py`, which only starts its HTTP server on port 8000 when the
+> flow is run standalone. Under the Prefect worker no exporter runs and the
+> `iceberg-scheduler` scrape job is commented out in `docker/prometheus/prometheus.yml`,
+> so `curl localhost:8000/metrics` will fail and the Prometheus alerts named here cannot
+> fire. Until that is wired up, substitute the ground-truth sources: the watermark table
+> in PostgreSQL, Prefect run history (`prefect flow-run ls`), and
+> `docker logs k2-prefect-worker` / `docker logs k2-spark-iceberg`. See
+> [../observability.md](../observability.md#iceberg-offload-alertsyml--cold-tier-9).
+
 ---
 
 ## Summary
@@ -87,8 +98,8 @@ Run these checks in parallel:
 
 ```bash
 # 1. ClickHouse health
-docker exec k2-clickhouse clickhouse-client -q "SELECT 1"
-docker exec k2-clickhouse clickhouse-client -q "SELECT version()"
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "SELECT 1"
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "SELECT version()"
 
 # 2. Spark container
 docker ps | grep spark-iceberg
@@ -166,7 +177,7 @@ docker exec k2-spark-iceberg ping -c 5 k2-clickhouse
 2. **Test ClickHouse connectivity:**
    ```bash
    # From host
-   docker exec k2-clickhouse clickhouse-client -q "SELECT 1"
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "SELECT 1"
 
    # From Spark container (offload perspective)
    docker exec k2-spark-iceberg curl -s http://k2-clickhouse:8123/ping
@@ -380,8 +391,8 @@ docker exec k2-spark-iceberg ping -c 5 k2-clickhouse
 1. **Check data volume:**
    ```bash
    # Check rows in source table (last hour)
-   docker exec k2-clickhouse clickhouse-client -q \
-     "SELECT COUNT(*) FROM bronze_trades_binance
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+     "SELECT COUNT(*) FROM k2.bronze_trades_binance
       WHERE exchange_timestamp > now() - INTERVAL 1 HOUR"
 
    # Expected: <5M rows/hour normally
@@ -391,7 +402,7 @@ docker exec k2-spark-iceberg ping -c 5 k2-clickhouse
 2. **Check ClickHouse query performance:**
    ```bash
    # Check slow queries
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "SELECT query, elapsed
       FROM system.processes
       WHERE query LIKE '%bronze_trades%'
@@ -539,7 +550,7 @@ docker exec k2-spark-iceberg ping -c 5 k2-clickhouse
 docker ps --filter name=k2-prefect-worker --format "table {{.Names}}\t{{.Status}}"
 
 # 2. Check components (10 seconds)
-docker exec k2-clickhouse clickhouse-client -q "SELECT 1"
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "SELECT 1"
 docker ps | grep spark-iceberg
 
 # 3. Restart worker if needed (15 seconds)

@@ -1,6 +1,6 @@
 # ADR-002: Replace Python Feed Handlers with Kotlin
 
-**Status:** Proposed
+**Status:** Accepted — Implemented with deviations (2026-02) — see Outcome
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Data Ingestion
@@ -198,3 +198,14 @@ Savings: 0.5 CPU / 512MB (50% reduction)
 - [Confluent Kafka Client for JVM](https://docs.confluent.io/platform/current/clients/index.html)
 - [Structured Concurrency in Kotlin](https://kotlinlang.org/docs/coroutines-basics.html#structured-concurrency)
 - [GraalVM Native Image](https://www.graalvm.org/latest/reference-manual/native-image/)
+
+---
+
+## Outcome (2026-02)
+
+Built in Kotlin 2.3.10 as decided, with two deviations from the design above.
+
+- **Ktor 3.1.0, not Spring Boot.** A feed handler is a WebSocket client with a Kafka producer — no HTTP server, no DI container, no Actuator. Ktor's client plus a bare Micrometer registry on `:8082/metrics` covers it at a fraction of the startup time and heap. The "shared Spring ecosystem with the API layer" argument evaporated once ADR-005 was deferred and no Spring service was ever built.
+- **Three containers, not one JVM.** Each exchange runs its own `feed-handler-{binance,kraken,coinbase}` container at 0.5 CPU / 512 MB. Per-exchange isolation beat the shared-JVM memory saving: a crashed or rate-limited handler cannot take the others down — confirmed by failure-mode test 3 (Binance stopped; Kraken and Coinbase unaffected; ~30 s recovery).
+
+Measured under live load: ~0.03 CPU / 134 MiB per handler, an order of magnitude inside the limit.

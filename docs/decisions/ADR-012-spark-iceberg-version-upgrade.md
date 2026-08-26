@@ -1,11 +1,11 @@
 # ADR-012: Spark 4.1.1 and Iceberg 1.10.1 Version Upgrade
 
-**Status**: Superseded by [ADR-013](ADR-013-pragmatic-iceberg-version-strategy.md)
-**Date**: 2026-02-11
-**Superseded Date**: 2026-02-11 (same day, after 2+ hours compatibility troubleshooting)
-**Deciders**: Platform Engineering
-**Related Phase**: Phase 5 (Cold Tier Restructure)
-**Related ADRs**: [ADR-006 (Spark Batch Only)](ADR-006-spark-batch-only.md), [ADR-007 (Iceberg Cold Storage)](ADR-007-iceberg-cold-storage.md), [ADR-013 (Pragmatic Version Strategy - Supersedes this)](ADR-013-pragmatic-iceberg-version-strategy.md)
+**Status:** Superseded by [ADR-013](ADR-013-pragmatic-iceberg-version-strategy.md)
+**Date:** 2026-02-11
+**Superseded Date:** 2026-02-11 (same day, after 2+ hours compatibility troubleshooting)
+**Deciders:** Platform Engineering
+**Related Phase:** Phase 5 (Cold Tier Restructure)
+**Related ADRs:** [ADR-006 (Spark Batch Only)](ADR-006-spark-batch-only.md), [ADR-007 (Iceberg Cold Storage)](ADR-007-iceberg-cold-storage.md), [ADR-013 (Pragmatic Version Strategy - Supersedes this)](ADR-013-pragmatic-iceberg-version-strategy.md)
 
 ---
 

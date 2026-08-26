@@ -4,6 +4,8 @@
 **Author:** Platform Engineering
 **Perspective:** Risk/reward ranking of each component upgrade, assessed independently
 
+> **Note (added 2026-08):** This document was written on 2026-02-09, *before* any of the platform was built. Its effort estimates, resource projections and ROI scores are predictions, and they are deliberately left unedited — a forecast is only worth reading if you can check it against what happened. For predictions vs. measured outcomes, see [`../MIGRATION-JOURNEY.md`](../MIGRATION-JOURNEY.md); for per-decision outcomes, see the `Outcome` sections in each ADR.
+
 ---
 
 ## Assessment Framework

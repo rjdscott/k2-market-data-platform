@@ -1,132 +1,223 @@
 # K2 Market Data Platform
 
-A production cryptocurrency market data lakehouse for quantitative research, compliance, and analytics.
-Ingests live trades from 3 exchanges, stores 33M+ rows across ClickHouse (hot) and Iceberg (cold), and
-serves sub-second analytical queries.
+A crypto market-data lakehouse that ingests live trades from three exchanges and turns them into
+queryable OHLCV candles in under a second — on a single host, inside a 16-core / 40 GB budget.
 
-[![Redpanda](https://img.shields.io/badge/redpanda-25.3-red.svg)](https://redpanda.com/)
+[![CI](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Kotlin](https://img.shields.io/badge/kotlin-2.3-purple.svg)](https://kotlinlang.org/)
 [![ClickHouse](https://img.shields.io/badge/clickhouse-24.3_LTS-yellow.svg)](https://clickhouse.com/)
-[![Kotlin](https://img.shields.io/badge/kotlin-2.0-purple.svg)](https://kotlinlang.org/)
-[![Apache Spark](https://img.shields.io/badge/spark-3.5-yellow.svg)](https://spark.apache.org/)
-[![Apache Iceberg](https://img.shields.io/badge/iceberg-1.4-green.svg)](https://iceberg.apache.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Documentation Hub**: [docs/NAVIGATION.md](./docs/NAVIGATION.md) — role-based paths to any doc in < 2 min
+## What this demonstrates
 
----
+- **A rewrite justified by numbers, not taste.** v1: 18–20 containers, 35–40 CPU / 45–50 GB, 5–15 min
+  trade-to-queryable. v2: 13 services, 15.0 CPU / 21.75 GB, measured p99 170–197 ms. Each move is an ADR.
+- **Deleting the stream processor.** Five always-on Spark Structured Streaming jobs (~14 CPU / 20 GB)
+  replaced by ClickHouse Kafka engine tables and materialized views — **zero stream-processing code**.
+- **Exchange-native ingestion.** Three Kotlin/Ktor feed handlers, one container per exchange, each
+  owning one WebSocket dialect and emitting a shared Avro record. Adding an exchange is additive.
+- **A cold tier with real semantics.** Prefect drives Spark batch offload into Apache Iceberg (Hadoop catalog)
+  every 15 min, with PostgreSQL watermarks for idempotent appends and nightly compaction + audit.
+- **Operability as a deliverable.** 18 Prometheus alert rules, 4 Grafana dashboards, and six failure
+  modes deliberately induced and timed — max MTTR 32 s.
+- **A reversed decision, kept in the record.** ADR-008 argued for removing Prefect. It was wrong, and
+  the record says so rather than being quietly deleted.
 
-## Quick Start (v2)
+## Architecture
 
-**Prerequisites**: Docker (16GB RAM, 16 Cores recommended)
+```mermaid
+flowchart LR
+  E["Exchanges<br/>Binance · Kraken · Coinbase<br/>34 instruments"]:::kt
+  F["Feed handlers · 3 containers<br/>Kotlin 2.3 · Ktor 3.1"]:::kt
+  R["Redpanda 25.3<br/>6 topics · 160 partitions"]:::rp
+  subgraph CH["ClickHouse 24.3 LTS — hot tier"]
+    B["bronze tables<br/>one per exchange"]:::ch
+    S["silver_trades"]:::ch
+    G["ohlcv 1m · 5m · 15m<br/>30m · 1h · 1d"]:::ch
+  end
+  subgraph BATCH["Orchestrated batch"]
+    P["Prefect 3"]:::sp
+    K["Spark 3.5"]:::sp
+  end
+  I["Cold tier<br/>Iceberg · Hadoop catalog · cold.*"]:::st
+  subgraph OBS["Observability"]
+    M["Prometheus<br/>18 alert rules"]:::ob
+    D["Grafana<br/>4 dashboards"]:::ob
+  end
+
+  E -->|WebSocket| F
+  F -->|"raw JSON + Avro"| R
+  R -->|"Kafka engine · JSON"| B
+  B -->|materialized view| S
+  S -->|materialized view| G
+  P -->|every 15 min| K
+  G -->|JDBC · 10 tables| K
+  K -->|append| I
+  F -.->|/metrics| M
+  G -.->|:9363| M
+  K -.-> M
+  M --> D
+
+  classDef kt fill:#c7d2fe,stroke:#4338ca,color:#111827
+  classDef rp fill:#fecaca,stroke:#b91c1c,color:#111827
+  classDef ch fill:#fde68a,stroke:#b45309,color:#111827
+  classDef sp fill:#fed7aa,stroke:#c2410c,color:#111827
+  classDef st fill:#bbf7d0,stroke:#15803d,color:#111827
+  classDef ob fill:#e5e7eb,stroke:#374151,color:#111827
+```
+
+Each handler holds one WebSocket and produces every trade twice to Redpanda: the raw exchange JSON
+and a normalized Avro record registered in the built-in schema registry.
+ClickHouse consumes with Kafka engine tables; materialized views carry rows from per-exchange bronze into
+a unified `silver_trades` and on into six OHLCV tables — no scheduler, no streaming job, no application
+code in the hot path. Every 15 min a Prefect flow runs Spark to read ClickHouse over JDBC and append to
+Iceberg, with per-table watermarks in PostgreSQL so a failed run resumes rather than duplicates. The
+Iceberg warehouse is a Hadoop catalog on a local volume; MinIO is provisioned for the S3 path but the
+offload does not write to it yet ([ADR-013](./docs/decisions/ADR-013-pragmatic-iceberg-version-strategy.md)).
+
+## v1 → v2
+
+| | v1 | v2 |
+|---|---|---|
+| CPU / RAM (limits) | 35–40 cores / 45–50 GB | **15.0 cores / 21.75 GB** |
+| Services | 18–20 | **13** (+1 one-shot init) |
+| Always-on Spark | 5 streaming jobs, ~14 CPU / 20 GB | **none** — batch only |
+| Trade → queryable | 5–15 min | **p99 170–197 ms** |
+| Stack | Python · Kafka · Spark Streaming · DuckDB · FastAPI | Kotlin/Ktor · Redpanda · ClickHouse · Spark batch · Iceberg |
+
+v1 is preserved unmodified in [`legacy/v1/`](./legacy/v1/); the narrative is in
+[`docs/MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md).
+
+## Key decisions
+
+| ADR | Decision | Why it mattered |
+|---|---|---|
+| [ADR-001](./docs/decisions/ADR-001-replace-kafka-with-redpanda.md) | Kafka → Redpanda | One binary, built-in schema registry and console; −1.5 CPU / −1.8 GB |
+| [ADR-003](./docs/decisions/ADR-003-clickhouse-warm-storage.md) | ClickHouse as the hot tier | Made real-time aggregation a view instead of a job |
+| [ADR-004](./docs/decisions/ADR-004-eliminate-spark-streaming.md) | Kill Spark Structured Streaming | The single largest win: ~14 CPU / 20 GB reclaimed |
+| [ADR-009](./docs/decisions/ADR-009-medallion-in-clickhouse.md) | Medallion layers as ClickHouse MVs | Bronze → Silver → Gold becomes DDL, not a codebase |
+| [ADR-011](./docs/decisions/ADR-011-multi-exchange-bronze-architecture.md) | Per-exchange bronze tables | Exchange quirks stay isolated; adding Coinbase touched no existing table |
+| [ADR-008](./docs/decisions/ADR-008-eliminate-prefect-orchestration.md) | **Planned to remove Prefect — kept it** | Reversed in practice: retries, scheduling, and run history were worth 1.5 CPU. The ADR stands as written, with the outcome recorded. |
+
+## Quick start
+
+Requires Docker with ~16 GB RAM available.
 
 ```bash
 git clone https://github.com/rjdscott/k2-market-data-platform.git
 cd k2-market-data-platform
-docker compose -f docker-compose.v2.yml up -d
+cp .env.example .env      # set CLICKHOUSE_PASSWORD, MINIO_*, GRAFANA_PASSWORD, PREFECT_DB_*
+docker compose up -d      # or: make up
 ```
 
-Services take ~30 seconds to initialize. Verify:
+<!-- TIMING -->
+First run builds three images including a Gradle build — expect several minutes; subsequent starts, under a minute.
+
+**Verify it's flowing:**
 
 ```bash
-docker compose -f docker-compose.v2.yml ps
+docker compose ps
+docker logs k2-feed-handler-binance --tail 5
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
+  --query "SELECT exchange, count() FROM k2.silver_trades GROUP BY exchange"
 ```
 
----
+| Service | URL | Notes |
+|---|---|---|
+| Redpanda Console | http://localhost:8080 | topics, consumer lag, schema registry |
+| ClickHouse | http://localhost:8123 | HTTP interface; native on 9002 |
+| Prefect | http://localhost:4200 | offload + maintenance deployments |
+| MinIO Console | http://localhost:9001 | S3 endpoint (provisioned, not yet used by offload) |
+| Prometheus | http://localhost:9090 | targets and alert rules |
+| Grafana | http://localhost:3000 | `admin` / `$GRAFANA_PASSWORD` |
+| Spark Master | http://localhost:18080 | batch jobs |
 
-## Architecture (v2)
+## Observability
+
+Four provisioned Grafana dashboards: pipeline overview (`k2-pipeline-overview`), ClickHouse
+(`clickhouse-v2`), Iceberg offload (`iceberg-offload`), v2 migration tracker (`k2-v2-migration`).
+
+<!-- screenshot: docs/images/grafana-pipeline-overview.png -->
+<!-- screenshot: docs/images/grafana-iceberg-offload.png -->
+
+18 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 4 feed handler (down, error
+rate, reconnect churn, metrics endpoint), 5 ClickHouse (down, memory, query failures, bronze insert
+rate, merge queue), 9 Iceberg offload (lag, consecutive failures, cycle time, watermark staleness,
+scheduler down). Handlers expose Micrometer metrics on `:8082/metrics` plus a `/health` endpoint used as
+the container healthcheck; ClickHouse exposes its own on `:9363`. Details:
+[`docs/operations/observability.md`](./docs/operations/observability.md).
+
+## Reliability testing
+
+Six failure modes induced against the running stack, 2026-02-19 — all recovered without loss or corruption.
+
+| Failure injected | Recovery | Observed |
+|---|---|---|
+| Redpanda restart | ~10 s | All 3 ClickHouse consumers resumed from committed offsets |
+| ClickHouse restart | **~32 s** | `silver_trades` resumed; no gaps in bronze or gold |
+| Feed handler killed | ~30 s | Other two exchanges unaffected — isolation confirmed |
+| Spark killed mid-offload | next 15-min run | Watermark held; no duplicates on resume |
+| MinIO stopped | ~5 s | Hot tier kept ingesting; cold tier deferred cleanly |
+| Network partition | ~20–30 s | Consumers resumed from last committed offset, no corruption |
+
+Runbook: [`docs/operations/runbooks/failure-recovery.md`](./docs/operations/runbooks/failure-recovery.md).
+
+**Latency caveat:** the p99 figures (Binance 191 ms, Coinbase 197 ms, Kraken 170 ms, measured 2026-02-19
+as `ingestion_timestamp - exchange timestamp` on `silver_trades`) come from a cold-start sample of only
+12–13 trades per exchange — directionally valid, not statistically strong. A 24 h burn-in and 5×/10× load
+tests remain on the roadmap.
+
+## Tests & CI
+
+| Suite | Count | Run |
+|---|---|---|
+| Kotlin feed handler | 16 (`TradeNormalizer` 7, `InstrumentsLoader` 9) | `make test-kotlin` |
+| Python — Iceberg maintenance flow | 28 | `make test-python` |
+| Legacy v1 (reference only) | ~180 unit | `cd legacy/v1 && uv run pytest` |
+
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs four jobs per PR: **kotlin** (`gradlew build`),
+**python** (Ruff + pytest), **docker** (all three images), **security** (Trivy → SARIF). Strategy:
+[`docs/development/testing.md`](./docs/development/testing.md).
+
+## Repository layout
 
 ```
-Exchange APIs (Binance, Kraken, Coinbase)
-        │
-        ▼
-Kotlin Feed Handlers (Spring Boot, 1 per exchange)
-        │  WebSocket → normalized JSON
-        ▼
-Redpanda  (Kafka-compatible, 3 topics: 40/20/20 partitions)
-        │
-        ▼
-ClickHouse — Kafka Engine → Bronze tables
-        │      Materialized Views → Silver (silver_trades)
-        │      Materialized Views → Gold (OHLCV 1m/5m/15m/30m/1h/1d)
-        │
-        ▼ (Spark batch offload, every 15 min via Prefect)
-Iceberg (cold tier, MinIO-backed, cold.bronze_trades_*, cold.silver_trades, cold.gold_ohlcv_*)
+services/feed-handler-kotlin/   Kotlin/Ktor feed handler (one image, three containers)
+docker/clickhouse/schema/       Bronze → Silver → Gold DDL and materialized views
+docker/offload/                 Spark offload job + Prefect flows (offload, maintenance)
+docker/prometheus/rules/        18 alert rules
+docker/grafana/dashboards/      4 provisioned dashboards
+docker/spark/  docker/prefect/  Custom images
+config/instruments.yaml         Instrument registry — single source of truth
+schemas/avro/                   Normalized + raw trade Avro schemas
+tests/                          Python tests (maintenance flow)
+docs/                           Architecture, ADRs, operations, development
+legacy/v1/                      Archived v1 platform
+docker-compose.yml              The whole stack
 ```
 
-**Medallion layers**:
-- **Bronze** — raw normalized trades (Decimal types, per-exchange tables)
-- **Silver** — unified `silver_trades` view across all 3 exchanges
-- **Gold** — pre-computed OHLCV candles (6 timeframes)
-- **Cold** — Iceberg tables for historical depth beyond ClickHouse TTL
+## Status & roadmap
 
----
-
-## Services
-
-| Service | Purpose | URL |
-|---------|---------|-----|
-| `feed-handler-binance` | Kotlin WebSocket → Redpanda | internal |
-| `feed-handler-kraken` | Kotlin WebSocket → Redpanda | internal |
-| `feed-handler-coinbase` | Kotlin WebSocket → Redpanda | internal |
-| `redpanda` | Kafka-compatible message broker | broker:9092 |
-| `redpanda-console` | Topic browser / consumer lag | http://localhost:8080 |
-| `clickhouse` | OLAP database (hot tier) | http://localhost:8123 |
-| `spark-iceberg` | Batch offload jobs | http://localhost:8090 |
-| `prefect-server` | Orchestration (offload schedule) | http://localhost:4200 |
-| `prefect-worker` | Executes Prefect flows | internal |
-| `prefect-db` | Prefect metadata (PostgreSQL) | internal |
-| `minio` | Object storage (Iceberg warehouse) | http://localhost:9001 |
-| `prometheus` | Metrics collection | http://localhost:9090 |
-| `grafana` | Dashboards | http://localhost:3000 (admin/admin) |
-
-**Resource budget**: ~15.5 CPU / ~21.75 GB RAM (13 active services)
-
----
-
-## Technology Stack
-
-| Component | Technology | Version |
-|-----------|-----------|---------|
-| Message broker | Redpanda | 25.3 |
-| OLAP / hot tier | ClickHouse | 24.3 LTS |
-| Feed handlers | Kotlin + Spring Boot | Kotlin 2.0 |
-| Batch processing | Apache Spark | 3.5 |
-| Cold storage format | Apache Iceberg | 1.4 |
-| Object storage | MinIO | latest |
-| Orchestration | Prefect | 3.x |
-| Observability | Prometheus + Grafana | — |
-| Python env | uv | — |
-
----
-
-## Key Capabilities
-
-- **3 live exchanges**: Binance (12 pairs), Kraken (11 pairs), Coinbase (11 pairs)
-- **33M+ rows** in Iceberg cold tier; continuous hot tier in ClickHouse
-- **OHLCV analytics**: 6 timeframes computed via ClickHouse MVs (no batch jobs)
-- **Automatic offload**: Prefect schedules Spark every 15 minutes → Iceberg
-- **Sub-second queries**: ClickHouse point queries < 100ms, aggregations < 500ms
-- **ACID cold storage**: Iceberg with time-travel support
-
-For platform positioning and use-case fit: [docs/architecture/platform-positioning.md](./docs/architecture/platform-positioning.md)
-
----
+- **Phases 1–6 complete** — infrastructure, Redpanda, ClickHouse, streaming pipeline, Iceberg cold tier,
+  Kotlin feed handlers.
+- **Phase 7 (integration hardening): 3 of 5.** Done: latency benchmark, failure-mode testing, monitoring.
+  Outstanding: 24 h resource burn-in; runbooks beyond the Iceberg/offload set.
+- **Phase 8 (query API): not started.** ADR-005 proposed one; deliberately deferred, since ClickHouse's
+  HTTP interface has been enough. There is no query API in this repo. 5×/10× load tests and Alertmanager
+  routing are also not done.
+- **Known issues:** Coinbase can lose a schema-registration race on cold start (fix:
+  `docker compose up -d --force-recreate --no-deps feed-handler-coinbase`); the Iceberg copy of
+  `silver_trades` omits its `Array`/`Map` columns — a ClickHouse JDBC limitation.
 
 ## Documentation
 
-Role-based navigation: **[docs/NAVIGATION.md](./docs/NAVIGATION.md)**
+- [`docs/README.md`](./docs/README.md) — start here
+- [`docs/architecture/README.md`](./docs/architecture/README.md) — system design
+- [`docs/decisions/`](./docs/decisions/) — all 17 ADRs
+- [`docs/operations/`](./docs/operations/) — runbooks, observability, cost model
+- [`docs/development/setup.md`](./docs/development/setup.md) — local development
+- [`docs/MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md) — the v1 → v2 story
 
-| Area | Path |
-|------|------|
-| Architecture decisions (ADRs) | [docs/decisions/platform-v2/](./docs/decisions/platform-v2/) |
-| Current platform state | [docs/phases/v2/CURRENT-STATE.md](./docs/phases/v2/CURRENT-STATE.md) |
-| Operations & runbooks | [docs/operations/](./docs/operations/) |
-| Testing strategy | [docs/testing/](./docs/testing/) |
-| Adding a new exchange | [docs/operations/adding-new-exchanges.md](./docs/operations/adding-new-exchanges.md) |
+## License
 
----
-
-## v1 (legacy)
-
-The original v1 platform (Python / Kafka / Spark Streaming / DuckDB / FastAPI) is archived in
-[docs/archive/](./docs/archive/). It is preserved for historical reference and is no longer active.
+MIT — see [`LICENSE`](./LICENSE). © Rob Scott.

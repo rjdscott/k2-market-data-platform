@@ -1,574 +1,193 @@
-# Phase 5: Failure Recovery — Manual Test Procedures
+# Runbook: Failure Recovery
 
-**Date:** 2026-02-12
-**Phase:** 5 (Cold Tier Restructure)
-**Priority:** 3
-**Engineer:** Staff Data Engineer
-**Status:** Ready for Manual Execution
+Six failure modes, each deliberately induced and recovered on 2026-02-19. All six passed;
+the worst observed MTTR was 32 seconds. Recovery is automatic in every case — this runbook
+exists to tell you what "normal recovery" looks like so you can spot when it isn't.
 
----
+**Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-## Overview
-
-This document provides manual test procedures for validating exactly-once semantics and failure recovery in the Iceberg offload pipeline. These procedures are INTENTIONALLY MANUAL because:
-
-1. **Safety**: Destructive operations (killing containers) should be controlled and monitored
-2. **Observability**: Manual execution allows real-time observation of failure modes
-3. **Documentation**: Manual procedures force clear documentation of recovery steps
-4. **Production Readiness**: SREs need runbooks, not automated chaos
-
-## Prerequisites
-
-- Phase 5 offload pipeline operational (P1 & P2 validated)
-- Docker compose v2 stack running
-- ClickHouse with live trade data
-- PostgreSQL watermark tracking operational
-- Iceberg tables created
+| # | Failure | MTTR target | Measured |
+|---|---------|-------------|----------|
+| 1 | Redpanda restart | <2 min | ~10 s |
+| 2 | ClickHouse restart | <3 min | ~32 s |
+| 3 | Feed handler crash | <1 min | ~30 s |
+| 4 | Spark / Prefect offload failure | <15 min | next scheduled run |
+| 5 | MinIO unavailable | <5 min | ~5 s |
+| 6 | Network partition | <5 min | ~20–30 s |
 
 ---
 
-## Test 1: Network Interruption Recovery
+## 1. Redpanda restart
 
-### Objective
-Validate offload pipeline recovers gracefully from ClickHouse network interruption mid-read.
+**Symptom** — feed handler logs show produce failures; ClickHouse insert rate drops to zero.
 
-### Success Criteria
-- [ ] Offload fails gracefully when ClickHouse unavailable
-- [ ] Watermark NOT updated on failure
-- [ ] Retry succeeds after ClickHouse restored
-- [ ] Zero data loss
-- [ ] Zero duplicates
+**Detection** — `FeedHandlerHighErrorRate`, `ClickHouseBronzeInsertRateLow`.
 
-### Procedure
+**Expected behaviour** — feed handlers reconnect on their own; in-flight messages sit in
+the OS send queue; ClickHouse Kafka Engine consumers resume from their last committed offset.
 
-#### Setup (5 minutes)
+**Recovery**
 
-1. **Verify baseline state:**
-   ```bash
-   # Check ClickHouse row count
-   docker exec k2-clickhouse clickhouse-client \
-     --query="SELECT COUNT(*) FROM k2.bronze_trades_binance"
+```bash
+docker compose restart redpanda
+docker exec k2-redpanda rpk cluster health          # wait for healthy
+docker exec k2-redpanda rpk topic list              # topics intact?
 
-   # Check current watermark
-   docker exec k2-prefect-db psql -U prefect -d prefect \
-     -c "SELECT * FROM offload_watermarks WHERE table_name='bronze_trades_binance' ORDER BY created_at DESC LIMIT 1"
+# Confirm ingestion resumed
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+  "SELECT exchange, count() FROM k2.silver_trades WHERE timestamp > now() - INTERVAL 2 MINUTE GROUP BY exchange"
+```
 
-   # Check Iceberg row count
-   docker exec k2-spark-iceberg spark-sql \
-     --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
-     --conf spark.sql.catalog.demo.type=hadoop \
-     --conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse \
-     -e "SELECT COUNT(*) FROM demo.cold.bronze_trades_binance"
-   ```
-
-2. **Insert test data:**
-   ```bash
-   docker exec k2-clickhouse clickhouse-client --query="
-   INSERT INTO k2.bronze_trades_binance
-   SELECT
-     now() - INTERVAL (number % 60) SECOND as exchange_timestamp,
-     9000000 + number as sequence_number,
-     'binance' as exchange,
-     'BTCUSDT' as symbol,
-     true as is_buyer_maker,
-     46000.0 as price,
-     0.1 as quantity,
-     'nettest-' || toString(number) as trade_id,
-     now() as inserted_at
-   FROM system.numbers
-   LIMIT 500
-   "
-   ```
-
-#### Test Execution (10 minutes)
-
-3. **Start offload in background:**
-   ```bash
-   # Terminal 1: Start offload
-   docker exec k2-spark-iceberg bash -c "
-   python3 /home/iceberg/offload/offload_generic.py \
-     --source-table bronze_trades_binance \
-     --target-table cold.bronze_trades_binance \
-     --timestamp-col exchange_timestamp \
-     --sequence-col sequence_number \
-     --layer bronze
-   " &
-
-   OFFLOAD_PID=$!
-   echo "Offload PID: $OFFLOAD_PID"
-   ```
-
-4. **Kill ClickHouse mid-execution:**
-   ```bash
-   # Wait 2 seconds for read to start
-   sleep 2
-
-   # Kill ClickHouse
-   docker stop k2-clickhouse
-   echo "ClickHouse killed at: $(date)"
-   ```
-
-5. **Observe offload failure:**
-   ```bash
-   # Wait for offload to fail
-   wait $OFFLOAD_PID
-   EXIT_CODE=$?
-   echo "Offload exit code: $EXIT_CODE"  # Should be non-zero
-   ```
-
-6. **Verify watermark NOT updated:**
-   ```bash
-   docker exec k2-prefect-db psql -U prefect -d prefect \
-     -c "SELECT status, created_at FROM offload_watermarks WHERE table_name='bronze_trades_binance' ORDER BY created_at DESC LIMIT 3"
-
-   # Look for 'failed' or no new entry
-   ```
-
-7. **Restart ClickHouse:**
-   ```bash
-   docker start k2-clickhouse
-   echo "ClickHouse restarted at: $(date)"
-
-   # Wait for readiness
-   sleep 5
-   docker exec k2-clickhouse clickhouse-client --query="SELECT 1"
-   ```
-
-8. **Retry offload:**
-   ```bash
-   docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
-     --source-table bronze_trades_binance \
-     --target-table cold.bronze_trades_binance \
-     --timestamp-col exchange_timestamp \
-     --sequence-col sequence_number \
-     --layer bronze
-
-   echo "Retry completed at: $(date)"
-   ```
-
-#### Validation (5 minutes)
-
-9. **Verify data integrity:**
-   ```bash
-   # Check watermark updated
-   docker exec k2-prefect-db psql -U prefect -d prefect \
-     -c "SELECT * FROM offload_watermarks WHERE table_name='bronze_trades_binance' ORDER BY created_at DESC LIMIT 1"
-
-   # Verify row counts match
-   CH_COUNT=$(docker exec k2-clickhouse clickhouse-client --query="SELECT COUNT(*) FROM k2.bronze_trades_binance")
-   ICE_COUNT=$(docker exec k2-spark-iceberg spark-sql \
-     --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
-     --conf spark.sql.catalog.demo.type=hadoop \
-     --conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse \
-     -e "SELECT COUNT(*) FROM demo.cold.bronze_trades_binance" | grep -oE '[0-9]+' | head -1)
-
-   echo "ClickHouse: $CH_COUNT"
-   echo "Iceberg: $ICE_COUNT"
-
-   # Check for duplicates in Iceberg
-   docker exec k2-spark-iceberg spark-sql \
-     --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
-     --conf spark.sql.catalog.demo.type=hadoop \
-     --conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse \
-     -e "SELECT sequence_number, COUNT(*) as cnt FROM demo.cold.bronze_trades_binance GROUP BY sequence_number HAVING cnt > 1"
-
-   # Should return empty (no duplicates)
-   ```
-
-### Expected Results
-
-- ✅ First offload fails with network error
-- ✅ Watermark shows 'failed' status or no update
-- ✅ Retry succeeds after ClickHouse restored
-- ✅ All 500 test rows in Iceberg
-- ✅ Zero duplicates
-
-### Troubleshooting
-
-**If retry fails:**
-- Check ClickHouse logs: `docker logs k2-clickhouse | tail -50`
-- Verify ClickHouse is fully ready: `docker exec k2-clickhouse clickhouse-client --query="SELECT 1"`
-- Check Spark logs: `docker logs k2-spark-iceberg | tail -50`
-
-**If duplicates found:**
-- This indicates watermark was incorrectly updated during failure
-- Check watermark timestamps vs actual offload completion times
-- Review watermark update logic in `watermark_pg.py`
+**Measured** — 10 s. 12 new rows ingested post-restart; all three ClickHouse consumers resumed.
+No trade loss. If handlers do not reconnect within a minute, restart them (see §3).
 
 ---
 
-## Test 2: Spark Crash Recovery
+## 2. ClickHouse restart
 
-### Objective
-Validate no partial data written to Iceberg when Spark job crashes mid-write.
+**Symptom** — queries fail; Grafana ClickHouse panels go blank.
 
-### Success Criteria
-- [ ] Spark crash leaves NO partial data in Iceberg
-- [ ] Watermark NOT updated
-- [ ] Retry from same watermark succeeds
-- [ ] Iceberg atomic commits proven
+**Detection** — `ClickHouseDown`.
 
-### Procedure
+**Expected behaviour** — Redpanda retains messages for its retention window, so feed
+handlers keep producing normally. Consumers resume on restart and materialized views
+replay from the retained offsets — no data loss.
 
-#### Setup (2 minutes)
+**Recovery**
 
-1. **Get baseline:**
-   ```bash
-   ICE_COUNT_BEFORE=$(docker exec k2-spark-iceberg spark-sql \
-     --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
-     --conf spark.sql.catalog.demo.type=hadoop \
-     --conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse \
-     -e "SELECT COUNT(*) FROM demo.cold.bronze_trades_binance" | grep -oE '[0-9]+' | head -1)
+```bash
+docker compose restart clickhouse
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "SELECT 1"
 
-   echo "Iceberg rows before: $ICE_COUNT_BEFORE"
-   ```
+# Consumers reattached, no exceptions?
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+  "SELECT table, num_messages_read, last_exception FROM system.kafka_consumers WHERE database='k2' FORMAT Vertical"
 
-2. **Insert large test batch:**
-   ```bash
-   docker exec k2-clickhouse clickhouse-client --query="
-   INSERT INTO k2.bronze_trades_binance
-   SELECT
-     now() - INTERVAL (number % 60) SECOND as exchange_timestamp,
-     9100000 + number as sequence_number,
-     'binance' as exchange,
-     'ETHUSDT' as symbol,
-     false as is_buyer_maker,
-     3000.0 as price,
-     1.0 as quantity,
-     'crashtest-' || toString(number) as trade_id,
-     now() as inserted_at
-   FROM system.numbers
-   LIMIT 10000
-   "
-   ```
+# Prometheus listener back up (it starts with the server)
+curl -s localhost:9090/api/v1/targets | jq '.data.activeTargets[] | select(.labels.job=="clickhouse") | .health'
+```
 
-#### Test Execution (5 minutes)
-
-3. **Start offload:**
-   ```bash
-   docker exec k2-spark-iceberg bash -c "
-   python3 /home/iceberg/offload/offload_generic.py \
-     --source-table bronze_trades_binance \
-     --target-table cold.bronze_trades_binance \
-     --timestamp-col exchange_timestamp \
-     --sequence-col sequence_number \
-     --layer bronze
-   " &
-
-   OFFLOAD_PID=$!
-   ```
-
-4. **Kill Spark mid-write:**
-   ```bash
-   # Wait for job to start writing (3-5 seconds)
-   sleep 4
-
-   # Kill the offload process
-   kill -9 $OFFLOAD_PID
-   echo "Spark killed at: $(date)"
-   ```
-
-#### Validation (5 minutes)
-
-5. **Check for partial data:**
-   ```bash
-   ICE_COUNT_AFTER_KILL=$(docker exec k2-spark-iceberg spark-sql \
-     --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
-     --conf spark.sql.catalog.demo.type=hadoop \
-     --conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse \
-     -e "SELECT COUNT(*) FROM demo.cold.bronze_trades_binance" | grep -oE '[0-9]+' | head -1)
-
-   echo "Iceberg rows after kill: $ICE_COUNT_AFTER_KILL"
-   echo "Difference: $((ICE_COUNT_AFTER_KILL - ICE_COUNT_BEFORE))"
-
-   # Should be 0 (no partial commit) or 10000 (full commit before kill)
-   ```
-
-6. **Verify watermark:**
-   ```bash
-   docker exec k2-prefect-db psql -U prefect -d prefect \
-     -c "SELECT status, created_at FROM offload_watermarks WHERE table_name='bronze_trades_binance' ORDER BY created_at DESC LIMIT 2"
-   ```
-
-7. **Run full offload:**
-   ```bash
-   docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
-     --source-table bronze_trades_binance \
-     --target-table cold.bronze_trades_binance \
-     --timestamp-col exchange_timestamp \
-     --sequence-col sequence_number \
-     --layer bronze
-   ```
-
-8. **Verify final state:**
-   ```bash
-   ICE_COUNT_FINAL=$(docker exec k2-spark-iceberg spark-sql \
-     --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
-     --conf spark.sql.catalog.demo.type=hadoop \
-     --conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse \
-     -e "SELECT COUNT(*) FROM demo.cold.bronze_trades_binance" | grep -oE '[0-9]+' | head -1)
-
-   echo "Iceberg rows final: $ICE_COUNT_FINAL"
-   echo "Expected: $((ICE_COUNT_BEFORE + 10000))"
-   ```
-
-### Expected Results
-
-- ✅ After kill: No partial rows (diff = 0) OR full batch committed (diff = 10000)
-- ✅ Watermark not updated if kill happened mid-write
-- ✅ Final count = initial + 10000 (all data present)
-- ✅ Zero duplicates
+**Measured** — 32 s, the slowest of the six. `silver_trades` resumed cleanly and the
+Prometheus listener on 9363 came back with it. Check for row-count continuity across the
+outage window rather than assuming it.
 
 ---
 
-## Test 3: Watermark Corruption Recovery
+## 3. Feed handler crash
 
-### Objective
-Validate offload handles corrupted watermark gracefully.
+**Symptom** — one exchange stops appearing in `silver_trades`; the other two are fine.
 
-### Success Criteria
-- [ ] Corrupted watermark detected
-- [ ] System recovers (either full scan or fails safely)
-- [ ] No data loss
-- [ ] Clear error messages
+**Detection** — `FeedHandlerMetricsDown` for that exchange, or the container healthcheck
+flipping to unhealthy. (`FeedHandlerDown` is currently non-functional — see
+[observability.md](../observability.md#feed-handler-metrics).)
 
-### Procedure
+**Expected behaviour** — full cross-exchange isolation. The Redpanda topic stays alive,
+other handlers are untouched, and the crashed handler resumes on start.
 
-1. **Backup current watermark:**
-   ```bash
-   docker exec k2-prefect-db psql -U prefect -d prefect \
-     -c "COPY (SELECT * FROM offload_watermarks WHERE table_name='bronze_trades_binance' ORDER BY created_at DESC LIMIT 1) TO STDOUT" > /tmp/watermark_backup.csv
-   ```
+**Recovery**
 
-2. **Corrupt watermark:**
-   ```bash
-   docker exec k2-prefect-db psql -U prefect -d prefect \
-     -c "INSERT INTO offload_watermarks (table_name, max_timestamp, max_sequence_number, status, created_at) VALUES ('bronze_trades_binance', NULL, NULL, 'corrupted', NOW())"
-   ```
+```bash
+docker compose ps feed-handler-binance
+docker logs --tail 100 k2-feed-handler-binance
+docker compose start feed-handler-binance
 
-3. **Run offload:**
-   ```bash
-   docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
-     --source-table bronze_trades_binance \
-     --target-table cold.bronze_trades_binance \
-     --timestamp-col exchange_timestamp \
-     --sequence-col sequence_number \
-     --layer bronze 2>&1 | tee /tmp/corrupt_watermark_test.log
-   ```
+# If it was a config change rather than a crash:
+docker compose up -d --force-recreate --no-deps feed-handler-binance
+```
 
-4. **Observe behavior:**
-   - Does it fail with clear error?
-   - Does it perform full table scan?
-   - Does it skip the corrupted watermark?
+**Measured** — 30 s from `docker compose start`. Kraken and Coinbase were unaffected
+throughout.
 
-5. **Restore watermark if needed:**
-   ```bash
-   # Restore from backup
-   docker exec -i k2-prefect-db psql -U prefect -d prefect \
-     -c "DELETE FROM offload_watermarks WHERE status='corrupted'"
-   ```
-
-### Expected Results
-
-- ✅ Clear error message about corrupted watermark
-- ✅ Job either fails safely OR performs full scan with warning
-- ✅ No data loss
-- ✅ SRE can diagnose and fix from logs
+**Known trap** — if the handler is stuck in a schema-registration retry loop at startup
+(seen with Coinbase), `docker restart` will not clear it. Force-recreate for a fresh JVM.
 
 ---
 
-## Test 4: Duplicate Run Prevention
+## 4. Spark / Prefect offload failure
 
-### Objective
-Verify running same offload twice produces zero duplicates.
+**Symptom** — a Prefect flow run is marked Failed; cold-tier row counts stop advancing.
 
-### Success Criteria
-- [x] First run processes new data
-- [x] Second run processes zero rows (idempotent)
-- [x] Zero duplicates in Iceberg
-- [x] Watermark unchanged on second run
+**Detection** — `IcebergOffloadConsecutiveFailures`, `IcebergOffloadWatermarkStale`
+(both currently blind — see the offload-metrics gap in
+[observability.md](../observability.md#iceberg-offload-alertsyml--cold-tier-9); use Prefect
+run history in the meantime).
 
-### Procedure
+**Expected behaviour** — the watermark is only advanced *after* a successful Iceberg
+write, so a failed run leaves it untouched and the next scheduled run re-reads the same
+window. Idempotent by construction: no duplicates, no gap.
 
-1. **Insert test data:**
-   ```bash
-   docker exec k2-clickhouse clickhouse-client --query="
-   INSERT INTO k2.bronze_trades_binance
-   SELECT
-     now() - INTERVAL (number % 30) SECOND as exchange_timestamp,
-     9200000 + number as sequence_number,
-     'binance' as exchange,
-     'BTCUSDT' as symbol,
-     true as is_buyer_maker,
-     47000.0 as price,
-     0.05 as quantity,
-     'duptest-' || toString(number) as trade_id,
-     now() as inserted_at
-   FROM system.numbers
-   LIMIT 200
-   "
-   ```
+**Recovery** — usually none. Wait for the next 15-minute run.
 
-2. **Run offload (first time):**
-   ```bash
-   docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
-     --source-table bronze_trades_binance \
-     --target-table cold.bronze_trades_binance \
-     --timestamp-col exchange_timestamp \
-     --sequence-col sequence_number \
-     --layer bronze 2>&1 | tee /tmp/dup_test_run1.log
+```bash
+# Watermark should be unchanged, status 'failed'
+docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c \
+  "SELECT table_name, status, last_offload_timestamp, last_successful_run FROM offload_watermarks"
 
-   # Note rows written
-   ```
+# Force a run rather than waiting
+docker exec k2-prefect-server prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'
+```
 
-3. **Run offload (second time):**
-   ```bash
-   docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
-     --source-table bronze_trades_binance \
-     --target-table cold.bronze_trades_binance \
-     --timestamp-col exchange_timestamp \
-     --sequence-col sequence_number \
-     --layer bronze 2>&1 | tee /tmp/dup_test_run2.log
+**Measured** — watermark held at its pre-failure value; exactly-once confirmed on resume.
 
-   # Should write 0 rows
-   ```
-
-4. **Check for duplicates:**
-   ```bash
-   docker exec k2-spark-iceberg spark-sql \
-     --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
-     --conf spark.sql.catalog.demo.type=hadoop \
-     --conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse \
-     -e "SELECT sequence_number, COUNT(*) as cnt FROM demo.cold.bronze_trades_binance WHERE trade_id LIKE 'duptest-%' GROUP BY sequence_number HAVING cnt > 1"
-
-   # Should return empty
-   ```
-
-### Expected Results
-
-- ✅ Run 1: 200 rows written
-- ✅ Run 2: 0 rows written (watermark prevents re-read)
-- ✅ Zero duplicates found
-- ✅ Watermark identical after both runs
+If the watermark is stuck in `running` after a hard kill, see
+[iceberg-offload-watermark-recovery.md](./iceberg-offload-watermark-recovery.md).
 
 ---
 
-## Test 5: Late-Arriving Data
+## 5. MinIO unavailable
 
-### Objective
-Validate watermark prevents backfilling late-arriving data.
+**Symptom** — offload flows fail; the hot tier is completely unaffected.
 
-### Success Criteria
-- [ ] Late data (before watermark) is NOT read
-- [ ] Watermark behavior documented
-- [ ] Trade-off understood (no backfill vs exactly-once)
+**Detection** — offload flow failures in Prefect. There is no MinIO exporter.
 
-### Procedure
+**Expected behaviour** — offload fails cleanly with no partial Iceberg writes; ClickHouse
+ingest continues; the cold tier defers until MinIO is back.
 
-1. **Run baseline offload:**
-   ```bash
-   docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
-     --source-table bronze_trades_binance \
-     --target-table cold.bronze_trades_binance \
-     --timestamp-col exchange_timestamp \
-     --sequence-col sequence_number \
-     --layer bronze
-   ```
+**Recovery**
 
-2. **Get watermark timestamp:**
-   ```bash
-   WATERMARK=$(docker exec k2-prefect-db psql -U prefect -d prefect -t \
-     -c "SELECT max_timestamp FROM offload_watermarks WHERE table_name='bronze_trades_binance' ORDER BY created_at DESC LIMIT 1")
+```bash
+docker compose start minio
+curl -fsS localhost:9000/minio/health/live && echo OK
+```
 
-   echo "Current watermark: $WATERMARK"
-   ```
-
-3. **Insert late-arriving data:**
-   ```bash
-   # Use timestamp 1 hour BEFORE watermark
-   docker exec k2-clickhouse clickhouse-client --query="
-   INSERT INTO k2.bronze_trades_binance
-   SELECT
-     now() - INTERVAL 2 HOUR as exchange_timestamp,
-     9300000 + number as sequence_number,
-     'binance' as exchange,
-     'BTCUSDT' as symbol,
-     false as is_buyer_maker,
-     48000.0 as price,
-     0.2 as quantity,
-     'late-' || toString(number) as trade_id,
-     now() as inserted_at
-   FROM system.numbers
-   LIMIT 50
-   "
-   ```
-
-4. **Run offload again:**
-   ```bash
-   docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
-     --source-table bronze_trades_binance \
-     --target-table cold.bronze_trades_binance \
-     --timestamp-col exchange_timestamp \
-     --sequence-col sequence_number \
-     --layer bronze 2>&1 | tee /tmp/late_data_test.log
-
-   # Should read 0 rows (late data before watermark)
-   ```
-
-5. **Verify late data not in Iceberg:**
-   ```bash
-   docker exec k2-spark-iceberg spark-sql \
-     --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
-     --conf spark.sql.catalog.demo.type=hadoop \
-     --conf spark.sql.catalog.demo.warehouse=/home/iceberg/warehouse \
-     -e "SELECT COUNT(*) FROM demo.cold.bronze_trades_binance WHERE trade_id LIKE 'late-%'"
-
-   # Should return 0
-   ```
-
-### Expected Results
-
-- ✅ Late data NOT read (watermark prevents backfill)
-- ✅ 0 rows written on second offload
-- ✅ Late data remains in ClickHouse only
-- ⚠️  **Trade-off documented**: Exactly-once semantics prevent backfill
-
-### Design Note
-
-This is EXPECTED BEHAVIOR. Watermark-based exactly-once semantics intentionally prevent backfilling to avoid duplicates. If late-arriving data is critical, options are:
-
-1. Increase buffer window (currently 5 minutes)
-2. Manual backfill with watermark reset (operational procedure)
-3. Accept ClickHouse-only retention for late data
+**Measured** — ~5 s to restore. The hot tier gained 2 rows during a 30-second outage,
+confirming ingest was never in the blast radius.
 
 ---
 
-## Summary Checklist
+## 6. Network partition
 
-### Critical Tests (Must Pass)
-- [ ] Test 1: Network Interruption Recovery
-- [ ] Test 2: Spark Crash Recovery (no partial data)
-- [ ] Test 4: Duplicate Run Prevention (idempotency)
+**Symptom** — one container's consumers stall while everything else keeps running.
 
-### Important Tests (Should Pass)
-- [ ] Test 3: Watermark Corruption Recovery
-- [ ] Test 5: Late-Arriving Data Handling
+**Detection** — `FeedHandlerMetricsDown` or `ClickHouseDown` depending on which container
+is isolated.
 
-### Documentation
-- [ ] All test results captured in `docs/testing/failure-recovery-report-2026-02-12.md`
-- [ ] Failure modes documented
-- [ ] Recovery procedures validated
-- [ ] SRE runbooks updated with learnings
+**Expected behaviour** — the isolated container reconnects when the partition heals and
+consumers resume from their last committed offset. No corruption.
 
----
+**Recovery**
 
-**Last Updated:** 2026-02-12
-**Next Review:** After P3 completion
-**Related Docs:**
-- [Production Validation Report](production-validation-report-2026-02-12.md)
-- [Multi-Table Test Report](multi-table-offload-report-2026-02-12.md)
-- [Phase 5 Progress](../phases/v2/phase-5-cold-tier-restructure/PROGRESS.md)
+```bash
+docker network connect k2-net k2-clickhouse    # or whichever container was cut off
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+  "SELECT table, num_messages_read, last_exception FROM system.kafka_consumers WHERE database='k2' FORMAT Vertical"
+```
+
+**Measured** — 20–30 s from reconnect. All three Kafka Engine consumers recovered from
+their last committed offset with no data corruption.
 
 ---
 
-*This manual test guide follows staff-level engineering practices: safety first, clear procedures, expected results, troubleshooting guidance.*
+## Re-running these tests
+
+Each mode is induced with a single command — `docker compose restart <svc>`,
+`docker compose stop <svc>`, or `docker network disconnect k2-net <container>`. Take a row
+count before and after, and confirm continuity across the outage window rather than just
+"it came back up". Detailed offload-specific procedures live in the sibling
+`iceberg-*.md` runbooks.
+
+## Related
+
+- [../observability.md](../observability.md) — the alerts referenced above
+- [../latency-budgets.md](../latency-budgets.md) — why lag rather than loss is the failure mode
+- [README.md](./README.md) — full runbook index

@@ -1,172 +1,77 @@
 # ClickHouse Database Standard
 
-**Status**: ✅ Active
-**Last Updated**: 2026-02-12 (Migrated to k2)
-**Decision**: Use `k2` database for all K2 platform data
+**All K2 platform tables live in the `k2` database.** Nothing belongs in `default`.
 
-## Standard Database: `k2`
-
-All K2 Market Data Platform tables reside in the `k2` ClickHouse database.
-
-### Active Tables (default database)
-
-**Bronze Layer** (Raw data from Kafka):
-```sql
-k2.bronze_trades_binance       -- Binance raw trades
-k2.bronze_trades_binance_queue -- Kafka consumer (Binance)
-default.bronze_trades_kraken        -- Kraken raw trades
-default.bronze_trades_kraken_queue  -- Kafka consumer (Kraken)
+```
+Decision 2026-02-12: Standardise on the `k2` ClickHouse database
+Reason: named database gives isolation, database-level grants and `BACKUP DATABASE k2`
+Cost: one-off rename of ~1.1M rows from `default.*`, plus a docs sweep
+Alternative considered: stay on `default` (rejected — no ownership boundary)
 ```
 
-**Silver Layer** (Normalized & unified):
-```sql
-k2.silver_trades               -- Unified normalized trades
-k2.silver_trades_binance_mv    -- Materialized view (Binance)
-k2.silver_trades_kraken_mv     -- Materialized view (Kraken)
-```
+## Tables
 
-**Gold Layer** (OHLCV aggregations):
-```sql
-k2.ohlcv_1m / ohlcv_1m_mv     -- 1-minute candles
-k2.ohlcv_5m / ohlcv_5m_mv     -- 5-minute candles
-k2.ohlcv_1h / ohlcv_1h_mv     -- 1-hour candles
-k2.ohlcv_1d / ohlcv_1d_mv     -- 1-day candles
-```
+| Layer | Tables | Fed by |
+|-------|--------|--------|
+| Kafka Engine | one `*_queue` table per exchange | Redpanda `market.crypto.trades.<exchange>.raw` |
+| Bronze | `k2.bronze_trades_{binance,kraken,coinbase}` | a normalizing MV that parses the raw JSON |
+| Silver | `k2.silver_trades` | `k2.bronze_{exchange}_to_silver_mv`, one per exchange |
+| Gold | `k2.ohlcv_{1m,5m,15m,30m,1h,1d}` | `k2.ohlcv_<tf>_mv`, reading `silver_trades.timestamp` |
 
-## Historical Context
+Queue-table and bronze-MV names are not uniform across exchanges — they accreted as each
+exchange was added. `SHOW TABLES FROM k2` is the authority; the silver and gold names
+above are consistent.
 
-### Migration from `default` to `k2` (2026-02-12)
+Column-level detail is in [data-inspection.md](./data-inspection.md#schema-cheat-sheet).
 
-**Initial State**: All data in `default` database (1.1M+ trades)
+## Rules
 
-**Why Migrate**:
-- **Best Practice**: Named database for isolation and security
-- **Production Ready**: Dedicated database = clear ownership
-- **Security**: Easier to set database-level permissions
-- **Organization**: Clear boundary for K2 platform data
+- Always qualify: `SELECT … FROM k2.silver_trades`, never the bare table name. The
+  container sets `CLICKHOUSE_DB: k2`, but scripts and JDBC sessions do not always inherit it.
+- New tables and materialized views are created **in `k2`**, including queue tables.
+- Application config passes the database explicitly:
 
-**Migration Process**:
-1. Created `k2` database
-2. Paused feed handlers (zero downtime approach)
-3. Renamed all data tables: `default.*` → `k2.*`
-4. Recreated Kafka consumers and materialized views in `k2`
-5. Updated docker-compose configuration
-6. Resumed feed handlers
-7. Verified end-to-end pipeline
+  ```python
+  client = clickhouse_connect.get_client(host="clickhouse", database="k2")
+  ```
 
-**Result**: Clean migration with all 1.1M+ records preserved, pipeline operational
+- Credentials come from the environment (`CLICKHOUSE_PASSWORD`), never hardcoded.
+  See [`.env.example`](../../.env.example).
 
-### Benefits of `k2` Database
+## Schema files
 
-1. **Isolation**: Clear boundary for K2 platform data
-2. **Security**: Database-level permissions and access control
-3. **Organization**: Intent is obvious (`k2` = K2 platform)
-4. **Best Practice**: Aligns with production standards
-5. **Backup/Restore**: Granular control (`BACKUP DATABASE k2`)
+DDL lives in [`docker/clickhouse/schema/`](../../docker/clickhouse/schema/), numbered in
+the order it was applied. Files are **not** auto-run on container start — only
+[`docker/clickhouse/ddl/`](../../docker/clickhouse/ddl/) is mounted into
+`/docker-entrypoint-initdb.d`. A fresh volume needs the schema applied by hand; see
+[../development/setup.md](../development/setup.md).
 
-## Usage in Queries
-
-### ✅ Correct
-```sql
--- Always use default. prefix or implicit default
-SELECT * FROM k2.silver_trades;
-SELECT * FROM silver_trades;  -- implicit default
-```
-
-### ❌ Incorrect
-```sql
--- Do NOT use k2 database
-SELECT * FROM k2.silver_trades;  -- WRONG - k2 database dropped
-```
-
-## Usage in Documentation
-
-When documenting ClickHouse queries:
-- **Always**: Use `default.table_name` for clarity
-- **Avoid**: Assuming readers know implicit default behavior
-- **Update**: Any historical docs referencing `k2.*`
-
-## Usage in Code
-
-**Python/Application Code**:
-```python
-# Explicit database in queries
-query = "SELECT * FROM k2.silver_trades WHERE ..."
-
-# Or configure default database in connection
-client = clickhouse_connect.get_client(
-    host='clickhouse',
-    database='default'  # Explicit
-)
-```
-
-**Docker Compose**:
-```yaml
-environment:
-  CLICKHOUSE_DB: default          # Use default
-  CLICKHOUSE_USER: default        # Standard user
-  CLICKHOUSE_PASSWORD: clickhouse  # Standard password
-```
-
-## Migration from Legacy Docs
-
-If you find documentation referencing `k2.` tables:
-1. Replace `k2.bronze_trades` → `k2.bronze_trades_binance` or `default.bronze_trades_kraken`
-2. Replace `k2.silver_trades` → `k2.silver_trades`
-3. Replace `k2.ohlcv_*` → `k2.ohlcv_*`
-4. Replace `k2.bronze_trades_mv` → `k2.bronze_trades_binance_mv`
-
-## Schema Files
-
-**Active Implementation**: Uses `default` database
-**Reference Files**: `docker/clickhouse/schema/*-fixed.sql`
-**Historical Files**: `docker/clickhouse/schema/0*.sql` (reference `k2` database)
-
-See [docker/clickhouse/schema/README.md](../../docker/clickhouse/schema/README.md) for details.
+Some numbered files exist in both a plain and a `-fixed` variant, and a few early ones
+target `default`. The `k2`-qualified files are the ones that reflect production. The
+per-exchange bronze files (`11-bronze-coinbase.sql` and friends) are the cleanest
+reference for the current pattern.
 
 ## Verification
 
-Check current database state:
 ```bash
-# List all databases
-docker exec k2-clickhouse clickhouse-client --query "SHOW DATABASES"
+CH="docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD"
 
-# List tables in default
-docker exec k2-clickhouse clickhouse-client --query "SHOW TABLES FROM default"
+$CH -q "SHOW DATABASES"
+$CH -q "SHOW TABLES FROM k2"
 
-# Verify data exists
-docker exec k2-clickhouse clickhouse-client --query "
-SELECT
-    'default' as db,
-    table,
-    total_rows
-FROM system.tables
-WHERE database = 'default'
-  AND engine NOT LIKE '%View'
-  AND total_rows > 0
-ORDER BY table
-"
+# Nothing should have leaked into `default`
+$CH -q "SELECT table, total_rows FROM system.tables
+        WHERE database = 'default' AND total_rows > 0"
+
+# Row counts per layer
+$CH -q "SELECT table, total_rows FROM system.tables
+        WHERE database = 'k2' AND engine NOT LIKE '%View' AND total_rows > 0
+        ORDER BY table"
 ```
 
-Expected output:
-```
-default | bronze_trades_binance | 800000+
-default | bronze_trades_kraken  | 4000+
-default | silver_trades         | 700000+
-default | ohlcv_1m             | 200+
-...
-```
+## Related
 
-## See Also
-
-- [QUICK-REFERENCE.md](./QUICK-REFERENCE.md) - Updated with `default` database
-- [DATA-INSPECTION.md](./DATA-INSPECTION.md) - Updated queries
-- [docker/clickhouse/schema/README.md](../../docker/clickhouse/schema/README.md) - Schema evolution
-
-## Decision Record
-
-**Decision 2026-02-12**: Standardize on `default` ClickHouse database
-**Reason**: All production data already in `default`, simpler, no benefit to separate database
-**Cost**: Updated ~30 documentation files
-**Alternative**: Migrate 800K+ records to `k2` database (rejected - unnecessary work, no benefit)
-**Impact**: Eliminated confusion, clearer operational procedures
+- [ADR-009 — medallion architecture in ClickHouse](../decisions/ADR-009-medallion-in-clickhouse.md)
+- [ADR-011 — multi-exchange bronze architecture](../decisions/ADR-011-multi-exchange-bronze-architecture.md)
+- [ADR-015 — ClickHouse 24.3 LTS downgrade](../decisions/ADR-015-clickhouse-lts-downgrade.md)
+- [data-inspection.md](./data-inspection.md) — queries against these tables

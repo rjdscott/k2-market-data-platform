@@ -1,6 +1,6 @@
 # ADR-004: Eliminate Spark Streaming — Replace with Kotlin Stream Processors
 
-**Status:** Proposed
+**Status:** Accepted — Implemented with deviation (2026-02) — see Outcome
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Stream Processing
@@ -246,3 +246,15 @@ Savings: 13.5 CPU / 19.75GB (96.4% CPU reduction, 98.7% RAM reduction)
 - [ClickHouse Kafka Engine](https://clickhouse.com/docs/en/engines/table-engines/integrations/kafka)
 - [Kafka Streams Architecture](https://kafka.apache.org/documentation/streams/architecture)
 - [Micro-batch vs True Streaming](https://www.confluent.io/blog/apache-flink-apache-spark-dataflow-stream-processing-comparison/)
+
+---
+
+## Outcome (2026-02)
+
+The elimination held completely — v2 was greenfield, so the 5 streaming jobs (14 CPU / 20 GB) never entered the stack. The **replacement** differed from the design above:
+
+- **Bronze** — ClickHouse Kafka Engine + normalising MVs, as designed.
+- **Silver** — the planned Kotlin stream processor was never built. ClickHouse MVs do the Bronze → Silver unification in-database ([ADR-009](ADR-009-medallion-in-clickhouse.md), [ADR-011](ADR-011-multi-exchange-bronze-architecture.md)): one fewer service, one fewer network hop, and the transform is sub-millisecond.
+- **Gold** — ClickHouse `AggregatingMergeTree` MVs, as designed.
+
+So the medallion is not "split across ClickHouse and Kotlin" as this ADR's Negative consequences predicted — it lives entirely in ClickHouse. Measured p99 exchange → Silver: 170–197 ms across all three exchanges (small sample, cold start).

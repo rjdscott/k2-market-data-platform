@@ -1,21 +1,21 @@
-# K2 Iceberg Pipelines — Prefect Schedule Configuration
+# Prefect Schedules
 
-**Last Updated:** 2026-02-18
-**Phase:** 5 (Cold Tier Restructure)
-**Status:** ✅ Implementation complete — schedule deployment pending
+**Status:** deployed — both schedules active on the `iceberg-offload` work pool.
 
----
+Two Prefect 3.x deployments drive the cold tier, both executing against the shared
+`k2-spark-iceberg` container:
 
-## Overview
+| Deployment | Cron (UTC) | Purpose |
+|------------|------------|---------|
+| `iceberg-offload-main/iceberg-offload-15min` | `*/15 * * * *` | ClickHouse → Iceberg incremental offload (all 10 cold tables) |
+| `iceberg-maintenance-main/iceberg-maintenance-daily` | `0 2 * * *` | Compact + expire snapshots + audit for all 10 cold tables |
 
-The K2 platform runs two Prefect 3.x scheduled flows against the shared `k2-spark-iceberg` container:
+Both use the `iceberg-offload` work pool and the `k2-prefect-worker` process worker.
+Confirm they are live:
 
-| Flow | Cron | Purpose |
-|------|------|---------|
-| `iceberg-offload-15min` | `*/15 * * * *` | ClickHouse → Iceberg incremental offload (all 10 cold tables) |
-| `iceberg-maintenance-daily` | `0 2 * * *` | Compact + expire snapshots + audit for all 10 cold tables |
-
-Both use the `iceberg-offload` Prefect work pool and share the `k2-prefect-worker` process container.
+```bash
+docker exec k2-prefect-server prefect deployment ls
+```
 
 ---
 
@@ -46,7 +46,8 @@ Prefect Server (http://localhost:4200)
 
 ### What it does
 
-Incrementally offloads trade data from ClickHouse (hot, 30-day TTL) to Iceberg (cold, permanent).
+Incrementally offloads trade data from ClickHouse (hot — 7-day TTL on bronze, 30-day on
+silver, 1-year on gold) to Iceberg (cold, permanent).
 
 **Execution order**:
 1. **Bronze** — 3 concurrent Spark jobs (binance ‖ kraken ‖ coinbase)
@@ -84,8 +85,8 @@ prefect deploy --all  # Deploys both flows from prefect.yaml
 open http://localhost:4200
 
 # Check watermarks progressing
-docker exec k2-prefect-db psql -U prefect -d prefect -c \
-  "SELECT table_name, max_timestamp, status FROM offload_watermarks ORDER BY table_name"
+docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c \
+  "SELECT table_name, last_offload_timestamp, last_successful_run, status FROM offload_watermarks ORDER BY table_name"
 
 # Spark logs for a specific offload
 docker logs k2-spark-iceberg | grep -A 5 "Offload complete"
@@ -125,14 +126,14 @@ docker exec k2-prefect-worker python3 /opt/prefect/flows/deploy_maintenance.py
 
 ```bash
 # Last 10 audit results
-docker exec k2-prefect-db psql -U prefect -d prefect -c "
+docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c "
   SELECT run_timestamp, iceberg_table, ch_row_count, iceberg_row_count, delta_pct, status
   FROM maintenance_audit_log
   ORDER BY run_timestamp DESC
   LIMIT 10"
 
 # Check for any MISSING_DATA status
-docker exec k2-prefect-db psql -U prefect -d prefect -c "
+docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c "
   SELECT * FROM maintenance_audit_log
   WHERE status = 'missing_data'
   ORDER BY run_timestamp DESC
@@ -192,8 +193,8 @@ deployments:
 
 ```bash
 # Check last successful offload per table
-docker exec k2-prefect-db psql -U prefect -d prefect -c "
-  SELECT table_name, max_timestamp, NOW() - max_timestamp AS lag, status
+docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c "
+  SELECT table_name, last_offload_timestamp, NOW() - last_successful_run AS lag, status
   FROM offload_watermarks ORDER BY lag DESC"
 ```
 
@@ -205,13 +206,13 @@ docker logs k2-spark-iceberg --tail 50
 
 Common causes: Spark OOM (increase executor memory), ClickHouse down, MinIO unreachable.
 
-See also: [iceberg-offload-failure.md](runbooks/iceberg-offload-failure.md), [iceberg-offload-lag.md](runbooks/iceberg-offload-lag.md)
+See also: [iceberg-offload-failure.md](./runbooks/iceberg-offload-failure.md), [iceberg-offload-lag.md](./runbooks/iceberg-offload-lag.md)
 
 ### Maintenance audit failed (MISSING_DATA)
 
 ```bash
 # Check audit log for details
-docker exec k2-prefect-db psql -U prefect -d prefect -c "
+docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c "
   SELECT iceberg_table, ch_row_count, iceberg_row_count, delta_pct, notes
   FROM maintenance_audit_log
   WHERE status = 'missing_data'
@@ -239,18 +240,21 @@ The `iceberg-offload` pool is created automatically when the worker starts with 
 
 | Task | Command |
 |------|---------|
-| Deploy all schedules | `docker exec k2-prefect-worker python3 /opt/prefect/flows/deploy_production.py && python3 /opt/prefect/flows/deploy_maintenance.py` |
-| Trigger offload now | Prefect UI → Deployments → iceberg-offload-15min → Quick Run |
-| Trigger maintenance now | Prefect UI → Deployments → iceberg-maintenance-daily → Quick Run |
-| Check watermarks | `docker exec k2-prefect-db psql -U prefect -d prefect -c "SELECT * FROM offload_watermarks ORDER BY table_name"` |
-| Check audit log | `docker exec k2-prefect-db psql -U prefect -d prefect -c "SELECT * FROM maintenance_audit_log ORDER BY run_timestamp DESC LIMIT 20"` |
+| List deployments | `docker exec k2-prefect-server prefect deployment ls` |
+| (Re)deploy schedules | `docker exec k2-prefect-worker python3 /opt/prefect/flows/deploy_production.py` then `… deploy_maintenance.py` |
+| Trigger offload now | `docker exec k2-prefect-server prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'` |
+| Trigger maintenance now | `docker exec k2-prefect-server prefect deployment run 'iceberg-maintenance-main/iceberg-maintenance-daily'` |
+| Pause a schedule | `docker exec k2-prefect-server prefect deployment set-schedule iceberg-offload-main/iceberg-offload-15min --paused` |
+| Check watermarks | `docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c "SELECT * FROM offload_watermarks ORDER BY table_name"` |
+| Check audit log | `docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c "SELECT * FROM maintenance_audit_log ORDER BY run_timestamp DESC LIMIT 20"` |
 | Prefect UI | http://localhost:4200 |
 
 ---
 
 ## Related
 
-- [DECISION-017-iceberg-maintenance-pipeline.md](../../decisions/platform-v2/DECISION-017-iceberg-maintenance-pipeline.md) — Design rationale
-- [iceberg-offload-failure.md](runbooks/iceberg-offload-failure.md)
-- [iceberg-offload-watermark-recovery.md](runbooks/iceberg-offload-watermark-recovery.md)
-- [CURRENT-STATE.md](../../phases/v2/CURRENT-STATE.md) — Current schedule deployment status
+- [ADR-017 — Iceberg maintenance pipeline](../decisions/ADR-017-iceberg-maintenance-pipeline.md) — design rationale
+- [ADR-014 — Spark-based Iceberg offload](../decisions/ADR-014-spark-based-iceberg-offload.md) — why Spark batch, and the watermark design
+- [runbooks/iceberg-offload-failure.md](./runbooks/iceberg-offload-failure.md)
+- [runbooks/iceberg-offload-watermark-recovery.md](./runbooks/iceberg-offload-watermark-recovery.md)
+- [runbooks/iceberg-scheduler-recovery.md](./runbooks/iceberg-scheduler-recovery.md)

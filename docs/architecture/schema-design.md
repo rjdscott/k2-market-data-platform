@@ -1,476 +1,112 @@
-# Schema Design V2: Industry-Standard Hybrid Approach
+# Schema Design
 
-**Status**: Implemented (v1 hybrid schema)
-**Created**: 2026-01-13
-**Last Updated**: 2026-02-18
-**Author**: Rob Scott
+Four schemas matter here: the Avro contract a feed handler produces, and the three ClickHouse layers the medallion is built from. Cold-tier Iceberg tables mirror ClickHouse with two documented omissions.
 
-> **[v2 Note]** The platform now uses **ClickHouse-native schemas** rather than Avro/Iceberg directly.
-> The v2 bronze schema (all 3 exchanges) is:
-> `exchange_timestamp, sequence_number, symbol, price Decimal(18,8), quantity, quote_volume, event_time, kafka_offset, kafka_partition, ingestion_timestamp`
-> See [ADR-009](../decisions/platform-v2/ADR-009-medallion-in-clickhouse.md) for the medallion
-> design and `docker/clickhouse/schema/` for the DDL files. The hybrid approach described below
-> informed the v2 design but the implementation differs.
+DDL: `docker/clickhouse/schema/` (hot), `docker/iceberg/ddl/` (cold), [`schemas/avro/`](../../schemas/avro/) (wire).
 
 ---
 
-## Executive Summary
+## The wire contract — `NormalizedTrade`
 
-K2's v2 schemas adopt an **industry-standard hybrid approach** that supports multiple data sources (ASX, Binance, FIX), multiple asset classes (equities, crypto, futures), and provides extensibility through vendor-specific extensions.
+[`schemas/avro/normalized-trade.avsc`](../../schemas/avro/normalized-trade.avsc), namespace `com.k2.marketdata.crypto`, registered in Redpanda's built-in schema registry as `market.crypto.trades.<exchange>-value`.
 
-**Key Decision**: Use **core standard fields + vendor_data map** pattern instead of per-exchange schemas or fully vendor-specific schemas.
+| Field | Type | Notes |
+|---|---|---|
+| `schema_version` | string | Semantic version, default `1.0.0` |
+| `exchange` | string | Lowercase: `binance`, `kraken`, `coinbase` |
+| `symbol` | string | Exchange-native: `BTCUSDT`, `XBT/USD`, `BTCUSD` |
+| `canonical_symbol` | string | Cross-exchange: `BTC/USDT`, `BTC/USD` |
+| `trade_id` | string | Exchange-assigned, unique within an exchange |
+| `price`, `quantity`, `quote_volume` | string | **Strings on purpose** — see below |
+| `side` | enum `BUY`/`SELL` | Taker perspective |
+| `timestamp` | long (millis) | When the platform normalized it |
+| `exchange_timestamp` | long (millis) | When the exchange says it happened |
+| `metadata` | nullable record | `sequence_number`, `is_buyer_maker`, `buyer_order_id`, `seller_order_id` — all nullable, Binance-specific in practice |
 
----
+**Decimals as strings.** Avro's decimal logical type is a `bytes` field carrying an unscaled integer plus a schema-level scale — correct, but it forces every consumer to know the scale and reconstruct the value. Strings carry the exchange's own digits through untouched, and ClickHouse's `toDecimal64(s, 8)` parses them directly. It costs bytes on the wire and buys a payload you can read in Redpanda Console and diff against the exchange's REST API. Floats were never an option: `0.1 + 0.2` is not a price.
 
-## Design Goals
+**The `metadata` record is the extension point.** Rather than widening the record every time an exchange has a field nobody else does, exchange-specific values live in one nullable sub-record with nullable members — so a new field is a backward-compatible addition, not a breaking change.
 
-1. **Multi-source compatibility**: Support ASX (equities), Binance (crypto), FIX Protocol, future exchanges
-2. **Asset class neutrality**: Equities, crypto, futures, options within same schema
-3. **Precision requirements**: Support crypto micro-prices (8 decimals) and microsecond timestamps
-4. **Deduplication**: UUID-based message_id for idempotency
-5. **Standardization**: FIX Protocol and Common Market Data Standard alignment
-6. **Extensibility**: Vendor-specific fields without schema bloat
-
----
-
-## V1 → V2 Changes
-
-### Trade Schema
-
-| Field | V1 | V2 | Rationale |
-|-------|----|----|-----------|
-| Identifier | - | `message_id` (UUID) | Deduplication key |
-| Trade ID | - | `trade_id` (string) | Exchange trade identifier |
-| Volume/Quantity | `volume` (int64) | `quantity` (Decimal 18,8) | Support fractional shares/crypto |
-| Timestamp | `exchange_timestamp` (millis) | `timestamp` (micros) | HFT precision |
-| Precision | Decimal(18,6) | Decimal(18,8) | Crypto micro-prices (0.00000001 BTC) |
-| Currency | - | `currency` (string) | Multi-currency support (AUD, USD, USDT) |
-| Side | - | `side` (enum) | BUY/SELL/SELL_SHORT/UNKNOWN |
-| Asset Class | - | `asset_class` (enum) | equities/crypto/futures/options |
-| Vendor Fields | `company_id`, `qualifiers`, `venue` | `vendor_data` (map) | Extensible without schema changes |
-| Trade Conditions | - | `trade_conditions` (array) | Sale condition codes |
-
-### Quote Schema
-
-| Field | V1 | V2 | Rationale |
-|-------|----|----|-----------|
-| Identifier | - | `message_id` (UUID) | Deduplication key |
-| Quote ID | - | `quote_id` (string) | Exchange quote identifier |
-| Bid/Ask Size | `bid_volume`, `ask_volume` (int64) | `bid_quantity`, `ask_quantity` (Decimal 18,8) | Fractional support |
-| Timestamp | `exchange_timestamp` (millis) | `timestamp` (micros) | HFT precision |
-| Currency | - | `currency` (string) | Multi-currency |
-| Asset Class | - | `asset_class` (enum) | Multi-asset |
-| Vendor Fields | `company_id` | `vendor_data` (map) | Extensible |
+**Caveat:** this topic is produced but currently unread. The Bronze layer consumes the raw JSON topic instead ([streaming-sources.md](streaming-sources.md) explains why both exist).
 
 ---
 
-## V2 Schema Specification
+## Bronze — as the exchange sent it, typed
 
-### TradeV2
+Three tables, `bronze_trades_binance` / `_kraken` / `_coinbase`, with **identical column sets**. Separate tables per exchange rather than one normalized bronze is [ADR-011](../decisions/ADR-011-multi-exchange-bronze-architecture.md): native symbols and sequence semantics survive to a layer you can diff against the exchange's own documentation, which is what you want at 3am when a price looks wrong.
 
-```json
-{
-  "type": "record",
-  "name": "TradeV2",
-  "namespace": "com.k2.marketdata",
-  "fields": [
-    {"name": "message_id", "type": "string", "doc": "UUID for deduplication"},
-    {"name": "trade_id", "type": "string", "doc": "Exchange trade identifier"},
-    {"name": "symbol", "type": "string", "doc": "Trading symbol (BHP, BTCUSDT)"},
-    {"name": "exchange", "type": "string", "doc": "Exchange code (ASX, BINANCE)"},
-    {"name": "asset_class", "type": {"type": "enum", "symbols": ["equities", "crypto", "futures", "options"]}},
-    {"name": "timestamp", "type": {"type": "long", "logicalType": "timestamp-micros"}},
-    {"name": "price", "type": {"type": "bytes", "logicalType": "decimal", "precision": 18, "scale": 8}},
-    {"name": "quantity", "type": {"type": "bytes", "logicalType": "decimal", "precision": 18, "scale": 8}},
-    {"name": "currency", "type": "string", "doc": "Currency code (AUD, USD, USDT)"},
-    {"name": "side", "type": {"type": "enum", "symbols": ["BUY", "SELL", "SELL_SHORT", "UNKNOWN"]}},
-    {"name": "trade_conditions", "type": {"type": "array", "items": "string"}},
-    {"name": "source_sequence", "type": ["null", "long"], "default": null},
-    {"name": "ingestion_timestamp", "type": {"type": "long", "logicalType": "timestamp-micros"}},
-    {"name": "platform_sequence", "type": ["null", "long"], "default": null},
-    {"name": "vendor_data", "type": ["null", {"type": "map", "values": "string"}], "default": null}
-  ]
-}
+```sql
+exchange_timestamp  DateTime64(3)
+sequence_number     UInt64
+symbol              String          -- exchange-native
+price               Decimal(18, 8)
+quantity            Decimal(18, 8)
+quote_volume        Decimal(18, 8)
+event_time          DateTime64(3)
+kafka_offset        UInt64
+kafka_partition     UInt16
+ingestion_timestamp DateTime DEFAULT now()
 ```
 
-**Complete schemas**: See `src/k2/schemas/trade_v2.avsc` and `src/k2/schemas/quote_v2.avsc`
+`ENGINE = MergeTree`, `PARTITION BY toYYYYMMDD(exchange_timestamp)`, `ORDER BY (symbol, exchange_timestamp, sequence_number)`, `TTL toDateTime(exchange_timestamp) + INTERVAL 7 DAY`.
+
+Typing happens here, not in the handler: the normalizing materialized view does `JSONExtractString` → `toDecimal64(…, 8)` on the way in. Bronze is "raw" in provenance, not in type — a `String` price column would push parsing onto every downstream reader.
+
+`quote_volume` is derived (`price × quantity`) rather than carried, because only some exchanges send it. `kafka_offset` and `kafka_partition` are populated where the source path provides them and zero on the Coinbase MV, which is a known rough edge, not a design choice.
 
 ---
 
-## Field-by-Field Documentation
+## Silver — one table, all exchanges
 
-### Core Identification Fields
+`silver_trades`, fed by three MVs (`bronze_<exchange>_to_silver_mv`). `ENGINE = MergeTree`, `PARTITION BY (exchange, asset_class, toYYYYMMDD(timestamp))`, `ORDER BY (exchange, asset_class, canonical_symbol, timestamp)`, `TTL toDateTime(timestamp) + INTERVAL 30 DAY`.
 
-#### `message_id` (string, required)
-- **Purpose**: Unique message identifier for deduplication
-- **Format**: UUID v4 (36 characters, e.g., `550e8400-e29b-41d4-a716-446655440000`)
-- **Generation**: Auto-generated by message builders
-- **Usage**: Consumer deduplication (Bloom filter + Redis), idempotency keys
-- **Example**: `"550e8400-e29b-41d4-a716-446655440000"`
+| Group | Columns |
+|---|---|
+| Identity | `message_id UUID`, `trade_id String` |
+| Classification | `exchange`, `symbol`, `canonical_symbol` (all `LowCardinality(String)`), `asset_class Enum8`, `currency LowCardinality(String)` |
+| Trade | `price`, `quantity`, `quote_volume` — all `Decimal128(8)`; `side Enum8('BUY','SELL','SELL_SHORT','UNKNOWN')` |
+| Time | `timestamp`, `ingestion_timestamp`, `processed_at` — all `DateTime64(6, 'UTC')` |
+| Sequencing | `source_sequence Nullable(UInt64)`, `platform_sequence Nullable(UInt64)` |
+| Extension | `trade_conditions Array(String)`, `vendor_data Map(String, String)` |
+| Validation | `is_valid Boolean DEFAULT true`, `validation_errors Array(String)` |
 
-#### `trade_id` (string, required)
-- **Purpose**: Exchange-assigned trade identifier
-- **Format**: Exchange-specific (e.g., ASX: `"T-12345"`, Binance: `"28457"``)
-- **Generation**: From exchange data or auto-generated: `f"{exchange}-{timestamp_ms}"`
-- **Usage**: Linking to exchange audit trails
-- **Example**: `"ASX-1736762460000"` or `"BINANCE-28457"`
+Choices worth naming:
 
-### Core Trading Fields
-
-#### `symbol` (string, required)
-- **Purpose**: Trading symbol
-- **Format**: Exchange-specific conventions
-- **Examples**:
-  - ASX: `"BHP"`, `"RIO"`
-  - Binance: `"BTCUSDT"`, `"ETHUSDT"`
-  - FIX: `"IBM"`, `"AAPL"`
-- **Normalization**: Uppercase
-
-#### `exchange` (string, required)
-- **Purpose**: Exchange identifier
-- **Format**: Uppercase exchange codes
-- **Examples**: `"ASX"`, `"BINANCE"`, `"NYSE"`, `"NASDAQ"`
-- **Standardization**: ISO 10383 MIC codes preferred
-
-#### `asset_class` (enum, required)
-- **Purpose**: Asset class categorization
-- **Values**: `"equities"`, `"crypto"`, `"futures"`, `"options"`
-- **Usage**: Query filtering, routing logic
-- **Example**: `"equities"` for ASX, `"crypto"` for Binance
-
-#### `timestamp` (timestamp-micros, required)
-- **Purpose**: Exchange timestamp (when trade occurred)
-- **Precision**: Microseconds since Unix epoch
-- **Range**: 1970-01-01 to 2262-04-11 (64-bit signed)
-- **Conversion**: `int(datetime.timestamp() * 1_000_000)`
-- **Example**: `1736762460000000` (2026-01-13 12:01:00.000000 UTC)
-- **Note**: V1 used milliseconds, V2 uses microseconds for HFT precision
-
-#### `price` (decimal, required)
-- **Purpose**: Trade execution price
-- **Precision**: Decimal(18, 8) - 18 digits total, 8 after decimal
-- **Range**: ±999,999,999.99999999
-- **Use Cases**:
-  - Equities: $0.01 to $999,999.99 (typical)
-  - Crypto: 0.00000001 to 100,000.00 (Bitcoin micro-prices)
-- **Storage**: Avro bytes with decimal logical type
-- **Example**: `Decimal("45.67000000")` or `Decimal("0.00012345")`
-
-#### `quantity` (decimal, required)
-- **Purpose**: Trade volume/size
-- **Precision**: Decimal(18, 8)
-- **Use Cases**:
-  - Equities: Whole shares (100, 1000) or fractional (0.5)
-  - Crypto: Fractional BTC (0.00123456)
-- **Example**: `Decimal("1000.00000000")` or `Decimal("0.05000000")`
-
-#### `currency` (string, required)
-- **Purpose**: Price denomination currency
-- **Format**: ISO 4217 currency codes (3 uppercase letters)
-- **Examples**:
-  - Fiat: `"USD"`, `"AUD"`, `"EUR"`, `"JPY"`
-  - Crypto: `"USDT"`, `"BTC"`, `"ETH"`
-- **Default**: `"USD"` (can be overridden per exchange)
-
-#### `side` (enum, required)
-- **Purpose**: Trade aggressor side
-- **Values**:
-  - `"BUY"`: Aggressor bought (taker buy)
-  - `"SELL"`: Aggressor sold (taker sell)
-  - `"SELL_SHORT"`: Short sale
-  - `"UNKNOWN"`: Side not determinable
-- **Mapping**:
-  - CSV `"buy"` → `"BUY"`
-  - CSV `"sell"` → `"SELL"`
-  - Binance `is_buyer_maker=true` → `"SELL"` (maker bought, aggressor sold)
-- **Default**: `"UNKNOWN"`
-
-#### `trade_conditions` (array of strings, required)
-- **Purpose**: Sale condition codes (ASX, NASDAQ, etc.)
-- **Format**: Array of exchange-specific condition codes
-- **Examples**:
-  - ASX: `["0"]` (regular trade), `["P"]` (opening print)
-  - NASDAQ: `["@"]` (regular trade), `["I"]` (odd lot)
-- **Default**: `[]` (empty array)
-- **Usage**: Filter special trades (off-market, block trades)
-
-### Sequencing Fields
-
-#### `source_sequence` (long, optional)
-- **Purpose**: Exchange-assigned sequence number
-- **Usage**: Gap detection, ordering within symbol
-- **Example**: `12345`
-- **Default**: `null`
-- **Note**: V1 called this `sequence_number`
-
-#### `platform_sequence` (long, optional)
-- **Purpose**: K2 platform-assigned sequence number
-- **Usage**: Global ordering, replay cursors
-- **Example**: `67890`
-- **Default**: `null`
-- **Future**: Auto-incremented by Kafka producer
-
-#### `ingestion_timestamp` (timestamp-micros, required)
-- **Purpose**: K2 platform ingestion timestamp
-- **Generation**: Auto-set by message builders: `int(time.time() * 1_000_000)`
-- **Usage**: Latency measurement, audit trail
-- **Example**: `1736762460123456`
-
-### Vendor Extension Field
-
-#### `vendor_data` (map<string, string>, optional)
-- **Purpose**: Exchange-specific fields that don't fit core schema
-- **Format**: Key-value map, all values as strings
-- **Rationale**: Avoid schema bloat while preserving exchange-specific data
-- **Storage**: Serialized as JSON string in Iceberg (PyArrow limitation)
-- **Examples**:
-  - **ASX**: `{"company_id": "123", "qualifiers": "0", "venue": "X"}`
-  - **Binance**: `{"is_buyer_maker": "true", "event_type": "trade"}`
-  - **FIX**: `{"ExecID": "ABC123", "LastMkt": "XNYS"}`
-- **Default**: `null`
-- **Usage**:
-  - Audit trails requiring exchange-specific fields
-  - Debugging (preserve all upstream fields)
-  - Compliance (store regulatory identifiers)
+- **`LowCardinality` on every categorical.** Three exchange values and ~30 symbols across billions of rows — dictionary encoding turns those columns into single-byte lookups.
+- **`Decimal128(8)` at Silver, `Decimal(18,8)` at Bronze.** Bronze holds one exchange's raw values, where 18 digits is ample. Silver is the layer aggregations run over, and `Decimal128` keeps summed quote volumes from ever needing a widening cast.
+- **Microsecond timestamps at Silver, milliseconds at Bronze.** Bronze stores what the exchange sent; nobody publishes sub-millisecond trade times. Silver standardizes upward so the column type never has to change if a venue that does starts feeding in.
+- **`is_valid` rather than a quarantine table.** Every Gold MV filters `WHERE is_valid = true`. A bad row stays visible and joinable instead of vanishing into a side table nobody reads.
+- **`asset_class` is a constant.** Every row is `crypto`. It exists in the enum, the partition key and the sort key because retrofitting a partition dimension onto a populated table is expensive and adding one to an empty dimension is free.
 
 ---
 
-## Vendor Extension Patterns
+## Gold — OHLCV
 
-### ASX Equity Trade
+Six tables, `ohlcv_{1m,5m,15m,30m,1h,1d}`, each maintained by one MV reading `silver_trades`. `ENGINE = AggregatingMergeTree`, `PARTITION BY (exchange, toYYYYMM(window_start))`, `ORDER BY (exchange, canonical_symbol, window_start)`.
 
-```python
-trade = build_trade_v2(
-    symbol="BHP",
-    exchange="ASX",
-    asset_class="equities",
-    timestamp=datetime.utcnow(),
-    price=Decimal("45.67"),
-    quantity=Decimal("1000"),
-    currency="AUD",
-    side="BUY",
-    trade_id="ASX-12345",
-    vendor_data={
-        "company_id": "7078",      # ASX company identifier
-        "qualifiers": "0",         # Regular trade
-        "venue": "X",              # Primary exchange
-    }
-)
+```sql
+exchange, canonical_symbol, window_start,
+open_time, open_price, close_time, close_price,
+high_price, low_price,
+volume, quote_volume, trade_count
 ```
 
-### Binance Crypto Trade
+Open and close use `argMin(price, timestamp)` / `argMax(price, timestamp)` — first and last *by trade time*, not by arrival order. That distinction is the whole reason a late-arriving trade cannot corrupt a candle. `high`/`low` are plain `max`/`min`; `volume` and `quote_volume` are sums; `trade_count` is `count()`.
 
-```python
-trade = build_trade_v2(
-    symbol="BTCUSDT",
-    exchange="BINANCE",
-    asset_class="crypto",
-    timestamp=datetime.utcnow(),
-    price=Decimal("16500.00"),
-    quantity=Decimal("0.05"),
-    currency="USDT",
-    side="SELL",  # Aggressor sold (buyer was maker)
-    trade_id="28457",
-    vendor_data={
-        "is_buyer_maker": "true",  # Binance-specific
-        "event_type": "trade",
-    }
-)
-```
-
-### FIX Protocol Trade
-
-```python
-trade = build_trade_v2(
-    symbol="IBM",
-    exchange="NYSE",
-    asset_class="equities",
-    timestamp=datetime.utcnow(),
-    price=Decimal("142.50"),
-    quantity=Decimal("500"),
-    currency="USD",
-    side="BUY",
-    trade_id="NYSE-ABC123",
-    vendor_data={
-        "ExecID": "ABC123",        # FIX tag 17
-        "LastMkt": "XNYS",         # FIX tag 30
-        "OrderID": "ORD456",       # FIX tag 37
-    }
-)
-```
+Six independent MVs rather than a rollup chain (1m → 5m → 15m …) means each timeframe reads Silver directly. It costs six passes over the same insert instead of one, and buys the property that a bug or a rebuild in one timeframe cannot propagate into the others.
 
 ---
 
-## Migration Guide
+## Cold tier
 
-### For Producers
+The 10 Iceberg tables under `cold.*` mirror the ClickHouse column names and types exactly — the offload appends with no column transform, so any mismatch is a runtime failure rather than a silent coercion. The flow's column lists are explicit constants in `docker/offload/flows/iceberg_offload_flow.py`, so a new ClickHouse column is ignored until it is added in both places.
 
-```python
-# V1 (deprecated)
-record = {
-    "symbol": "BHP",
-    "exchange_timestamp": 1736762460000,  # millis
-    "price": 45.67,
-    "volume": 1000,
-    "qualifiers": 0,
-    "venue": "X",
-}
-
-# V2 (recommended)
-from k2.ingestion.message_builders import build_trade_v2
-
-record = build_trade_v2(
-    symbol="BHP",
-    exchange="ASX",
-    asset_class="equities",
-    timestamp=datetime.utcnow(),  # Or int (micros)
-    price=Decimal("45.67"),
-    quantity=Decimal("1000"),
-    currency="AUD",
-    side="BUY",
-    vendor_data={"qualifiers": "0", "venue": "X"}
-)
-```
-
-### For Consumers
-
-```python
-# V1 table (read-only)
-engine = QueryEngine(table_version="v1")
-trades = engine.query_trades(symbol="BHP")  # Uses market_data.trades
-
-# V2 table (default)
-engine = QueryEngine(table_version="v2")
-trades = engine.query_trades(symbol="BHP")  # Uses market_data.trades_v2
-```
-
-### For Batch Loaders
-
-```bash
-# V1 (legacy)
-python -m k2.ingestion.batch_loader load \
-  --csv data/asx_trades.csv \
-  --asset-class equities \
-  --exchange asx \
-  --data-type trades \
-  --schema-version v1
-
-# V2 (default)
-python -m k2.ingestion.batch_loader load \
-  --csv data/asx_trades.csv \
-  --asset-class equities \
-  --exchange asx \
-  --data-type trades \
-  --currency AUD \
-  --schema-version v2
-```
+**Two silver columns are absent from cold storage:** `trade_conditions Array(String)` and `vendor_data Map(String,String)`. The Spark ClickHouse JDBC driver (0.4.6) cannot deserialize either type, so the Iceberg schema drops them and the offload never selects them. `validation_errors` is dropped for the same reason. This is a real data-fidelity gap: those columns exist for 30 days in the hot tier and then are gone. Analytical queries have not needed them; if they did, the fix is a JSON-encoded string column rather than a driver upgrade.
 
 ---
 
-## Design Rationale
+## Evolution
 
-### Why Hybrid Approach?
+Adding a column: ClickHouse `ALTER TABLE … ADD COLUMN` is metadata-only on `MergeTree`, and Iceberg schema evolution is likewise metadata-only. The ordering that works is ClickHouse first, then Iceberg, then the offload flow's column list — reversed, the offload selects a column the source does not have yet and fails the cycle.
 
-**Alternative 1: Fully Normalized (Single Schema)**
-- ❌ Schema bloat: All exchanges' fields in every message
-- ❌ 100+ fields for comprehensive coverage
-- ❌ Breaking changes when adding new exchanges
-
-**Alternative 2: Per-Exchange Schemas**
-- ❌ Schema proliferation: trade_asx, trade_binance, trade_fix, ...
-- ❌ No cross-exchange queries
-- ❌ Difficult schema evolution
-
-**Chosen: Hybrid (Core + Vendor Extensions)**
-- ✅ Clean 15-field core schema
-- ✅ Extensible vendor_data for exchange-specific fields
-- ✅ Cross-exchange queries on core fields
-- ✅ Zero breaking changes when adding exchanges
-
-### Why Microseconds?
-
-- HFT-adjacent systems require <1ms latency tracking
-- Crypto exchanges report nanosecond precision
-- Future-proof for high-frequency analysis
-
-### Why Decimal(18,8)?
-
-- **Crypto micro-prices**: 0.00000001 BTC (1 satoshi)
-- **High-value assets**: $999,999,999.99999999
-- **Precision loss**: Float64 loses precision beyond 15-17 digits
-
----
-
-## Testing
-
-V2 schemas are validated by 20+ unit tests:
-
-```bash
-# Schema validation
-pytest tests-backup/unit/test_schemas.py::TestSchemasV2 -v
-
-# Message builder tests-backup
-pytest tests-backup/unit/test_message_builders.py -v
-
-# Integration tests-backup
-pytest tests-backup/integration/ -v -k v2
-```
-
-**Coverage**: 77% on message_builders.py, 100% on v2 schemas
-
----
-
-## Performance Impact
-
-### Schema Size
-
-| Schema | Size (bytes) | Fields | Notes |
-|--------|-------------|--------|-------|
-| TradeV1 | ~120 | 11 | ASX-specific |
-| TradeV2 | ~180 | 15 | +UUID, +enums, +vendor_data |
-| Overhead | +60 bytes | +4 | ~50% increase, acceptable for benefits |
-
-### Serialization
-
-- **Avro compression**: Efficient for repeated strings (exchange, symbol)
-- **Decimal encoding**: More efficient than string representation
-- **UUID overhead**: 36 bytes, negligible at scale
-
-### Query Performance
-
-- **No degradation**: PyArrow queries on Iceberg v2 tables same as v1
-- **Predicate pushdown**: Works on all core fields
-- **vendor_data**: JSON parsing only when accessed (lazy)
-
----
-
-## Future Extensions
-
-### Planned (Phase 1.5+)
-- **Order book data**: Depth-of-book messages
-- **Reference data**: Security master, corporate actions
-- **Aggregated bars**: OHLCV 1-min, 5-min, daily
-
-### Potential (Phase 2+)
-- **Options**: Strike, expiry, greeks
-- **Futures**: Contract month, settlement
-- **FX**: Spot, forward rates
-
----
-
-## References
-
-- FIX Protocol 5.0: https://www.fixtrading.org/
-- Common Market Data Standard: https://www.finos.org/
-- ISO 10383 MIC codes: https://www.iso20022.org/market-identifier-codes
-- ISO 4217 Currency codes: https://www.iso.org/iso-4217-currency-codes.html
-- Avro Specification: https://avro.apache.org/docs/current/specification.html
-
----
-
-## Changelog
-
-- **2026-01-13**: Initial v2 schema design and implementation
-- **2026-01-12**: Requirements gathering from Principal review
-- **2026-01-11**: Phase 1 completion with v1 schemas
-
+Changing a type is not free anywhere and has not been done. Removing a column from the middle of a Gold table means rebuilding its MV, since MV column position is bound at creation.

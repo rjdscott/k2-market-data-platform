@@ -236,8 +236,8 @@ rpk topic describe market.crypto.trades.{exchange}     --brokers redpanda:9092 >
   || rpk topic create market.crypto.trades.{exchange}     --partitions 20 --brokers redpanda:9092
 ```
 
-- [ ] Add the feed handler service (copy `feed-handler-coinbase` and change the name,
-      `K2_EXCHANGE` and the static IP — `.50`/`.51`/`.52` are taken):
+- [ ] Add the feed handler service (copy `feed-handler-coinbase` and change the name and
+      `K2_EXCHANGE`):
 
 ```yaml
 feed-handler-{exchange}:

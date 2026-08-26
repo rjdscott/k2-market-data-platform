@@ -1,6 +1,6 @@
 # ADR-007: Retain Apache Iceberg for Cold Storage Layer
 
-**Status:** Proposed
+**Status:** Accepted — Implemented with deviation (2026-02) — see Outcome
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Cold Storage
@@ -243,3 +243,14 @@ Savings: 1.5 CPU / 2GB
 - [ClickHouse Iceberg Integration](https://clickhouse.com/docs/en/engines/table-engines/integrations/iceberg)
 - [Iceberg vs Delta Lake vs Hudi](https://www.onehouse.ai/blog/apache-hudi-vs-delta-lake-vs-apache-iceberg)
 - [Iceberg Hidden Partitioning](https://iceberg.apache.org/docs/latest/partitioning/)
+
+---
+
+## Outcome (2026-02)
+
+Iceberg on MinIO was retained as the cold tier and holds all 10 tables (3 bronze, 1 silver, 6 gold). Two deviations:
+
+- **Hadoop catalog, not REST catalog + PostgreSQL.** The `iceberg-rest` container and its Postgres catalog store were dropped in favour of a file-based Hadoop catalog rooted at the MinIO warehouse ([ADR-013](ADR-013-pragmatic-iceberg-version-strategy.md)). For a single-writer batch offload this removes a service and a failure mode at no functional cost. PostgreSQL is still in the stack — as the Prefect metadata store and offload watermark table, not as the Iceberg catalog.
+- **15-minute offload, not hourly** ([ADR-014](ADR-014-spark-based-iceberg-offload.md)) — cold-tier freshness is ~15 min rather than the ~1 h designed here.
+
+Measured: 3.78 M rows offloaded in 16 s (236 K rows/s), 12:1 Zstd compression, 99.9%+ warm/cold row-count consistency.

@@ -1,6 +1,6 @@
 # ADR-009: Four-Layer Medallion Architecture in ClickHouse
 
-**Status:** Proposed
+**Status:** Accepted — Implemented (2026-02), amended by [ADR-011](ADR-011-multi-exchange-bronze-architecture.md) — see Outcome
 **Date:** 2026-02-09 (revised)
 **Decision Makers:** Platform Engineering Team
 **Category:** Data Architecture
@@ -526,3 +526,15 @@ Scenario: Suspect bad data from exchange
 - [ClickHouse ReplacingMergeTree (deduplication)](https://clickhouse.com/docs/en/engines/table-engines/mergetree-family/replacingmergetree)
 - [Netflix Data Mesh — Medallion Layers](https://netflixtechblog.com/data-mesh-a-data-movement-and-processing-platform-netflix-1288bcab2873)
 - [Uber Lakehouse — Raw Landing Zone](https://www.uber.com/blog/uber-big-data-platform/)
+
+---
+
+## Outcome (2026-02) — amended by ADR-011
+
+Built as **three layers, not four**.
+
+- **No RAW layer.** The Kafka Engine queue table reads raw JSON and a normalising MV writes straight into typed Bronze. Redpanda is itself the byte-for-byte replayable record of what each exchange sent, so a second copy in ClickHouse bought audit value we already had, at the price of 48 h of extra storage and one more MV hop.
+- **Bronze is per-exchange, not unified.** `bronze_trades_{binance,kraken,coinbase}` preserve each exchange's native shape; unification happens at Silver. See [ADR-011](ADR-011-multi-exchange-bronze-architecture.md).
+- **Silver is a ClickHouse MV, not a Kotlin processor** — the transform never left the database (see [ADR-004](ADR-004-eliminate-spark-streaming.md) Outcome).
+
+As-built: `bronze_trades_{binance,kraken,coinbase}` → `silver_trades` → `ohlcv_{1m,5m,15m,30m,1h,1d}`, all via cascading MVs. Six OHLCV timeframes shipped exactly as designed.

@@ -1,14 +1,14 @@
 # ADR-011: Multi-Exchange Bronze Architecture
 
-**Status**: Accepted
-**Date**: 2026-02-10
-**Context**: Platform v2 - Kraken Exchange Integration
+**Status:** Accepted
+**Date:** 2026-02-10
+**Context:** Platform v2 - Kraken Exchange Integration
 
 ## Context
 
 As we expand from Binance-only to multi-exchange support (Kraken, potentially others), we need to decide how to handle exchange-specific data formats in the Bronze layer while maintaining a unified Silver/Gold layer.
 
-**Key Challenge**: Different exchanges have different native formats:
+**Key Challenge:** Different exchanges have different native formats:
 - **Binance**: `BTCUSDT`, `trade_id` provided, millisecond timestamps
 - **Kraken**: `XBT/USD`, no `trade_id`, "seconds.microseconds" timestamps, different field names
 

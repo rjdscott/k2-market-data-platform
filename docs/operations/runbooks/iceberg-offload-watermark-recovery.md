@@ -287,12 +287,12 @@ docker exec k2-prefect-db psql -U prefect -d prefect -c \
    # This ensures we don't miss recent data
 
    # Get current timestamp from ClickHouse
-   CURRENT_TS=$(docker exec k2-clickhouse clickhouse-client -q "SELECT NOW() - INTERVAL 24 HOUR FORMAT TSV")
+   CURRENT_TS=$(docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "SELECT NOW() - INTERVAL 24 HOUR FORMAT TSV")
 
    # Initialize Binance watermark
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "SELECT MAX(sequence_number)
-      FROM bronze_trades_binance
+      FROM k2.bronze_trades_binance
       WHERE exchange_timestamp < now() - INTERVAL 24 HOUR
       FORMAT TSV" | \
      xargs -I {} docker exec k2-prefect-db psql -U prefect -d prefect -c \
@@ -300,9 +300,9 @@ docker exec k2-prefect-db psql -U prefect -d prefect -c \
         VALUES ('bronze_trades_binance', '$CURRENT_TS', {})"
 
    # Initialize Kraken watermark
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "SELECT MAX(sequence_number)
-      FROM bronze_trades_kraken
+      FROM k2.bronze_trades_kraken
       WHERE exchange_timestamp < now() - INTERVAL 24 HOUR
       FORMAT TSV" | \
      xargs -I {} docker exec k2-prefect-db psql -U prefect -d prefect -c \
@@ -448,8 +448,8 @@ docker exec k2-prefect-db psql -U prefect -d prefect -c \
       WHERE table_name = 'bronze_trades_binance'
       ORDER BY created_at DESC LIMIT 1" | xargs)
 
-   docker exec k2-clickhouse clickhouse-client -q \
-     "SELECT COUNT(*) FROM bronze_trades_binance
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+     "SELECT COUNT(*) FROM k2.bronze_trades_binance
       WHERE exchange_timestamp > '$LAST_TS'"
 
    # If COUNT > 0: Data exists, not being offloaded

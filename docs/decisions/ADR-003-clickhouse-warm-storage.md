@@ -1,6 +1,6 @@
 # ADR-003: Introduce ClickHouse as Warm Storage Layer
 
-**Status:** Proposed
+**Status:** Accepted — Implemented (2026-02); version as-built per [ADR-015](ADR-015-clickhouse-lts-downgrade.md)
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Storage Architecture

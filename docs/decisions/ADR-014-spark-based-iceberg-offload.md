@@ -1,10 +1,10 @@
 # ADR-014: Spark-Based Iceberg Offload (Not Kotlin Service)
 
-**Status**: Accepted (Supersedes Kotlin approach in Phase 5 plan)
-**Date**: 2026-02-11
-**Deciders**: Platform Engineering
-**Related Phase**: Phase 5 (Cold Tier Restructure)
-**Related ADRs**: [ADR-013 (Pragmatic Iceberg Strategy)](ADR-013-pragmatic-iceberg-version-strategy.md), [ADR-006 (Spark Batch Only)](ADR-006-spark-batch-only.md)
+**Status:** Accepted (Supersedes Kotlin approach in Phase 5 plan)
+**Date:** 2026-02-11
+**Deciders:** Platform Engineering
+**Related Phase:** Phase 5 (Cold Tier Restructure)
+**Related ADRs:** [ADR-013 (Pragmatic Iceberg Strategy)](ADR-013-pragmatic-iceberg-version-strategy.md), [ADR-006 (Spark Batch Only)](ADR-006-spark-batch-only.md)
 
 ---
 

@@ -10,6 +10,17 @@
 > Prefect 3.x in February 2026. All `systemctl` commands have been removed. See
 > `PREFECT-3-MIGRATION-2026-02-14.md` for migration details.
 
+
+> **Metrics caveat (read first).** The `offload_*` metrics used below are exported by
+> `docker/offload/metrics.py`, which only starts its HTTP server on port 8000 when the
+> flow is run standalone. Under the Prefect worker no exporter runs and the
+> `iceberg-scheduler` scrape job is commented out in `docker/prometheus/prometheus.yml`,
+> so `curl localhost:8000/metrics` will fail and the Prometheus alerts named here cannot
+> fire. Until that is wired up, substitute the ground-truth sources: the watermark table
+> in PostgreSQL, Prefect run history (`prefect flow-run ls`), and
+> `docker logs k2-prefect-worker` / `docker logs k2-spark-iceberg`. See
+> [../observability.md](../observability.md#iceberg-offload-alertsyml--cold-tier-9).
+
 ---
 
 ## Summary
@@ -292,7 +303,7 @@ docker exec k2-prefect-worker bash -c \
 
 ## Prevention
 
-1. **Auto-restart on failure** — Already configured in `docker-compose.v2.yml`:
+1. **Auto-restart on failure** — Already configured in `docker-compose.yml`:
    ```yaml
    restart: unless-stopped
    ```

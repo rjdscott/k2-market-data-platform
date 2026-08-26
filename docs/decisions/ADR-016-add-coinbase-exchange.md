@@ -1,8 +1,8 @@
-# DECISION-016: Add Coinbase Advanced Trade as 3rd Exchange
+# ADR-016: Add Coinbase Advanced Trade as 3rd Exchange
 
-**Date**: 2026-02-18
-**Status**: Accepted
-**Author**: Principal Data Engineer
+**Status:** Accepted — Implemented (2026-02)
+**Date:** 2026-02-18
+**Author:** Principal Data Engineer
 
 ---
 
@@ -57,7 +57,7 @@ Both provide global/non-US perspective. Adding a US-regulated exchange creates e
 |------|---------|
 | `services/feed-handler-kotlin/src/.../CoinbaseWebSocketClient.kt` | WebSocket client (mirrors KrakenWebSocketClient pattern) |
 | `docker/clickhouse/schema/11-bronze-coinbase.sql` | Kafka Engine queue + bronze table + MV |
-| `docs/decisions/platform-v2/DECISION-016-add-coinbase-exchange.md` | This file |
+| `docs/decisions/ADR-016-add-coinbase-exchange.md` | This file |
 
 ### Modified Files
 | File | Change |
@@ -66,7 +66,7 @@ Both provide global/non-US perspective. Adding a US-regulated exchange creates e
 | `services/.../Main.kt` | Added `"coinbase"` branch to exchange dispatcher |
 | `services/.../application.conf` | Added `coinbase {}` WebSocket URL config block |
 | `config/instruments.yaml` | Added `coinbase:` section with 11 pairs |
-| `docker-compose.v2.yml` | Added `feed-handler-coinbase` service + 2 Redpanda topics in `redpanda-init` |
+| `docker-compose.yml` | Added `feed-handler-coinbase` service + 2 Redpanda topics in `redpanda-init` |
 | `docker/iceberg/ddl/02-bronze-tables.sql` | Added `cold.bronze_trades_coinbase` Iceberg table |
 | `docker/offload/flows/iceberg_offload_flow.py` | Added `bronze_trades_coinbase` to `TABLE_CONFIG["bronze"]` |
 | `docker/postgres/ddl/offload-watermarks.sql` | Added `bronze_trades_coinbase` watermark seed |
@@ -106,7 +106,7 @@ LINK-USD, DOGE-USD, LTC-USD, AVAX-USD, ATOM-USD
 
 - [ ] `./gradlew test` passes (new `TradeNormalizerTest` + `InstrumentsLoaderTest`)
 - [ ] `./gradlew build` compiles without errors
-- [ ] `docker compose -f docker-compose.v2.yml up -d` starts all 13 services
+- [ ] `docker compose up -d` starts all 13 services
 - [ ] `rpk topic list | grep coinbase` shows 2 topics
 - [ ] `docker logs feed-handler-coinbase` shows "Subscription confirmed"
 - [ ] `rpk topic consume market.crypto.trades.coinbase.raw --num 5` shows trade JSON

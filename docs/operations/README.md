@@ -1,550 +1,66 @@
-# Operations Documentation
+# Operations
 
-**Last Updated**: 2026-02-09
-**Stability**: Medium - updated after incidents
-**Target Audience**: DevOps, SREs, On-Call Engineers
+Running, inspecting and recovering the v2 stack (Redpanda → ClickHouse → Iceberg).
+Everything here targets the as-built `docker-compose.yml` at the repo root.
 
-This directory contains operational procedures, runbooks, monitoring configuration, and performance tuning guides.
+## Guides
 
----
-
-## Overview
-
-Operations documentation helps you:
-- **Inspect live data** flowing through the platform
-- **Respond to incidents** using step-by-step runbooks
-- **Monitor system health** via dashboards and alerts
-- **Optimize performance** using tuning guides
-- **Prevent future issues** through post-incident reviews
-- **Maintain CI/CD pipeline** with automated testing and deployment
-
----
-
-## Quick Start (v2 Platform)
-
-### [QUICK-REFERENCE.md](./QUICK-REFERENCE.md) 🆕
-**Essential commands cheat sheet (2 min read)**
-
-One-page reference for the most common operations:
-- Stack management (start/stop/restart)
-- Web UI URLs and credentials
-- Redpanda quick commands (topics, consumers, schemas)
-- ClickHouse quick queries (data inspection, metrics)
-- Feed handler commands (logs, metrics, troubleshooting)
-- Health checks and monitoring
-- Emergency procedures
-
-**Perfect for**: Quick lookups during operations or troubleshooting
-
-### [DATA-INSPECTION.md](./DATA-INSPECTION.md) 🆕
-**Comprehensive data inspection guide**
-
-Deep dive into viewing and inspecting data at every layer:
-- Redpanda Topics - Browse messages, check consumer lag, view schemas
-- Schema Registry - List schemas, check compatibility, manage versions
-- Feed Handler Logs - Monitor metrics, debug connections, check errors
-- ClickHouse Data - Query bronze/silver/gold layers, export data, performance
-- Web UIs - Redpanda Console, Grafana dashboards, Prometheus metrics
-- Troubleshooting - Common issues and solutions
-- Data Quality - Validation checks, gap detection, schema verification
-
-**Perfect for**: Understanding data flow, debugging pipeline issues, quality assurance
-
----
-
-## Directory Structure
-
-```
-operations/
-├── runbooks/              # Incident response procedures
-├── monitoring/            # Dashboards, alerts, SLOs
-├── performance/           # Performance tuning guides
-└── ci-cd-pipeline.md      # CI/CD pipeline documentation
-```
-
----
-
-## CI/CD Pipeline
-
-### [ci-cd-quickstart.md](./ci-cd-quickstart.md)
-**Quick start for developers (5 min read)**
-
-Essential commands and workflow overview for developers:
-- `make test-pr` - Run before pushing
-- `make test-pr-full` - Run before requesting merge
-- PR review flow and labeling
-- Common failures and quick fixes
-- Test categories and markers
-- Troubleshooting tips
-
-**Perfect for**: Developers who need to know the basics quickly
-
-### [ci-cd-pipeline.md](./ci-cd-pipeline.md)
-**Comprehensive CI/CD documentation**
-
-Complete guide to the CI/CD pipeline:
-- Overview of multi-tier GitHub Actions pipeline
-- Workflow descriptions (PR validation, post-merge, nightly, etc.)
-- Configuration guide (secrets, permissions, GHCR setup)
-- Local testing with Makefile targets
-- Test isolation strategy and resource management
-- Monitoring and metrics tracking
-- Best practices for developers, reviewers, and operations
-
-**Perfect for**: Understanding the full pipeline architecture and configuration
-
-### [runbooks/ci-cd-troubleshooting.md](./runbooks/ci-cd-troubleshooting.md)
-**CI/CD troubleshooting runbook**
-
-Step-by-step troubleshooting for CI/CD issues:
-- 15+ common failure scenarios with diagnosis and resolution
-- PR validation failures (import errors, no tests collected, security scans)
-- Integration test failures (connection refused, timeouts, OOM)
-- Post-merge failures (coverage upload, Docker push, email notifications)
-- General workflow issues (flaky tests, disk space, slow execution)
-- Debugging techniques (enable debug logging, local testing with act)
-- Escalation procedures and prevention checklists
-
-**Perfect for**: Diagnosing and fixing CI/CD pipeline failures
-
----
+| Doc | What it covers |
+|-----|----------------|
+| [quick-reference.md](./quick-reference.md) | One-page cheat sheet: URLs, ports, credentials, stack commands |
+| [data-inspection.md](./data-inspection.md) | Runnable queries for every layer — Redpanda, bronze/silver/gold, Iceberg cold |
+| [observability.md](./observability.md) | Grafana dashboards, feed-handler metrics, all 18 Prometheus alert rules |
+| [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
+| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits — 15.0 CPU / 21.75 GB across 13 services |
+| [prefect-schedules.md](./prefect-schedules.md) | The two deployed Prefect schedules (15-min offload, daily maintenance) |
+| [clickhouse-database-standard.md](./clickhouse-database-standard.md) | Why everything lives in the `k2` database and how to keep it that way |
+| [adding-new-exchanges.md](./adding-new-exchanges.md) | End-to-end checklist for wiring up a 4th exchange |
+| [cost-model.md](./cost-model.md) | What this single host would cost as managed cloud services |
 
 ## Runbooks
 
-### What's a Runbook?
-Step-by-step procedures for diagnosing and resolving common operational issues.
+| Runbook | When to use |
+|---------|-------------|
+| [runbooks/failure-recovery.md](./runbooks/failure-recovery.md) | Any of the 6 tested failure modes (broker, DB, handler, offload, MinIO, network) |
+| [runbooks/redpanda.md](./runbooks/redpanda.md) | Topic, partition, consumer-group or schema-registry problems |
+| [runbooks/iceberg-offload-failure.md](./runbooks/iceberg-offload-failure.md) | `IcebergOffloadConsecutiveFailures` — offload runs erroring out |
+| [runbooks/iceberg-offload-lag.md](./runbooks/iceberg-offload-lag.md) | `IcebergOffloadLag*` — cold tier falling behind the 15-min SLO |
+| [runbooks/iceberg-offload-performance.md](./runbooks/iceberg-offload-performance.md) | `IcebergOffloadCycleSlow` / low throughput — cycles taking too long |
+| [runbooks/iceberg-offload-watermark-recovery.md](./runbooks/iceberg-offload-watermark-recovery.md) | `IcebergOffloadWatermarkStale` — watermarks stuck, or you need to rewind one |
+| [runbooks/iceberg-offload-monitoring.md](./runbooks/iceberg-offload-monitoring.md) | Reference for offload metrics, SLOs and dashboard panels |
+| [runbooks/iceberg-scheduler-recovery.md](./runbooks/iceberg-scheduler-recovery.md) | Prefect deployment paused, missing, or the worker stopped picking up runs |
 
-### Available Runbooks
+See [runbooks/README.md](./runbooks/README.md) for the full index.
+Archived v1 runbooks (Kafka, Spark Streaming, Prefect OHLCV) live in
+[`legacy/v1/docs/runbooks/`](../../legacy/v1/docs/runbooks/).
 
-#### [runbooks/failure-recovery.md](./runbooks/failure-recovery.md)
-**General failure recovery procedures**
+## Daily checks
 
-- Service restart procedures
-- Data recovery from backups
-- Rollback procedures
-- Health check validation
-
-#### [runbooks/disaster-recovery.md](./runbooks/disaster-recovery.md)
-**Disaster recovery procedures**
-
-- Full system recovery from backup
-- Multi-region failover (Phase 2+)
-- Data restoration procedures
-- RTO/RPO targets
-
-### Creating New Runbooks
-
-Use this template:
-```markdown
-# Runbook: [Incident Type]
-
-**Severity**: Critical | High | Medium | Low
-**Last Updated**: YYYY-MM-DD
-
-## Symptoms
-[What the operator sees]
-
-## Diagnosis
-[How to confirm this is the issue]
-
-## Resolution
-[Step-by-step fix]
-
-## Prevention
-[How to avoid in future]
-
-## Related Monitoring
-[Dashboard links, alerts]
-```
-
-### Runbook Validation
-
-All runbooks should be validated to ensure commands are executable and procedures work as expected.
-
-**Validation Script**: `scripts/ops/validate_runbooks.sh`
+Load secrets into your shell first: `set -a && . ./.env && set +a`
 
 ```bash
-# Validate all runbooks (syntax checks)
-./scripts/ops/validate_runbooks.sh
+# 1. Every container up and healthy
+make ps
 
-# Full validation (requires services running)
-./scripts/ops/validate_runbooks.sh --full
+# 2. All 3 feed handlers alive (metrics port is container-internal)
+for x in binance kraken coinbase; do
+  echo -n "$x: "; docker exec k2-feed-handler-$x curl -fsS localhost:8082/health; echo
+done
+
+# 3. Trades still arriving in the last 5 minutes
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+  "SELECT exchange, count() FROM k2.silver_trades WHERE timestamp > now() - INTERVAL 5 MINUTE GROUP BY exchange"
+
+# 4. Cold-tier offload keeping up (expect < 15 min)
+docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c \
+  "SELECT table_name, status, last_successful_run FROM offload_watermarks ORDER BY last_successful_run"
+
+# 5. Nothing firing
+curl -s localhost:9090/api/v1/alerts | jq '.data.alerts[] | {alertname: .labels.alertname, state}'
 ```
 
-**What's Validated**:
-- Required tools are installed (Docker, Kafka CLI, curl, jq, etc.)
-- Services are accessible (Kafka, MinIO, Prometheus, API)
-- Runbook files exist and have required sections
-- Alert rules are properly configured
-- Commands have valid syntax
-
-**Best Practices**:
-- Run validation after updating runbooks
-- Include validation in CI/CD pipeline
-- Test runbooks during disaster recovery drills
-- Update validation script when adding new runbooks
-
-See [scripts/ops/README.md](../../scripts/ops/README.md) for detailed usage.
-
----
-
-## Monitoring
-
-### Dashboards
-
-Grafana dashboards for system observability:
-
-**Main Dashboard**: `k2-platform-overview`
-- System health at-a-glance
-- Key metrics: throughput, latency, errors
-- Resource utilization
-
-**Component Dashboards**:
-- `k2-kafka-metrics` - Broker health, consumer lag
-- `k2-iceberg-metrics` - Write throughput, file counts
-- `k2-query-metrics` - Query latency, cache hit rate
-- `k2-api-metrics` - Request rate, response time, errors
-
-### Alerts
-
-**Critical Alerts** (Page immediately):
-- Kafka broker down
-- Consumer lag > 10,000 messages
-- API error rate > 5%
-- Disk usage > 90%
-
-**Warning Alerts** (Investigate during business hours):
-- Consumer lag > 1,000 messages
-- Query p99 latency > 10s
-- Iceberg compaction overdue
-
-### SLOs (Service Level Objectives)
-
-| Metric | Target | Measurement Window |
-|--------|--------|-------------------|
-| API Availability | 99.9% | 30 days |
-| Query p99 Latency | < 5s | 7 days |
-| Data Freshness | < 5 minutes | Real-time |
-| Consumer Lag | < 1000 messages | Real-time |
-
----
-
-## Performance Tuning
-
-### [performance/latency-budgets.md](./performance/latency-budgets.md)
-**Latency budgets and backpressure handling**
-
-- End-to-end latency budget (CSV → Query: < 10s)
-- Per-component latency breakdown
-- Backpressure cascade strategy
-- Degradation modes
-
-### Optimization Guides
-
-#### Query Optimization
-1. **Partition pruning**: Filter by date first
-2. **Projection pushdown**: Select only needed columns
-3. **Predicate pushdown**: Filter in storage layer
-4. **Result limiting**: Use LIMIT for exploratory queries
-
-#### Kafka Optimization
-1. **Producer batching**: Increase linger.ms for throughput
-2. **Consumer parallelism**: Match partitions to consumer count
-3. **Compression**: Use snappy for balance of speed/size
-4. **Retention policy**: Configure based on replay needs
-
-#### Iceberg Optimization
-1. **Compaction**: Run during off-hours
-2. **Partition evolution**: Add finer partitions as data grows
-3. **Metadata caching**: Enable Iceberg catalog cache
-4. **File size**: Target 128-256MB files
-
----
-
-## Common Issues and Solutions
-
-### Issue: High Consumer Lag
-
-**Symptoms**: Consumer lag dashboard shows > 10,000 messages
-
-**Quick Fix**:
-```bash
-# Check consumer status
-docker logs k2-consumer
-
-# Increase consumer parallelism (if < partition count)
-# Scale consumer replicas (future)
-
-# Temporary: Increase batch size
-# Edit consumer config, restart
-```
-
-**Root Causes**:
-- Slow Iceberg writes
-- Insufficient consumer parallelism
-- Network issues to MinIO
-
-**See**: [runbooks/kafka-consumer-lag.md](./runbooks/) (to be created)
-
-### Issue: Query Timeout
-
-**Symptoms**: API returns 504 Gateway Timeout
-
-**Quick Fix**:
-```bash
-# Check query engine logs
-docker logs k2-api
-
-# Check DuckDB memory usage
-# Reduce query scope (date range, symbol list)
-
-# Temporary: Increase timeout in API config
-```
-
-**Root Causes**:
-- Query too broad (no partition pruning)
-- Large partition scan
-- DuckDB memory limit reached
-
-**See**: [runbooks/query-timeout.md](./runbooks/) (to be created)
-
-### Issue: Schema Registry Unavailable
-
-**Symptoms**: Producer fails with "Schema Registry unreachable"
-
-**Quick Fix**:
-```bash
-# Check Schema Registry health
-curl http://localhost:8081
-
-# Restart Schema Registry
-docker restart schema-registry
-
-# Check network connectivity
-docker network inspect k2-network
-```
-
-**See**: [runbooks/schema-registry-down.md](./runbooks/) (to be created)
-
----
-
-## Incident Response Process
-
-### 1. Detect
-- Alerts fire in Grafana
-- User reports issue
-- Monitoring shows anomaly
-
-### 2. Triage
-- Determine severity (Critical/High/Medium/Low)
-- Identify affected components
-- Estimate user impact
-
-### 3. Diagnose
-- Follow relevant runbook
-- Check dashboards and logs
-- Verify symptoms match known issues
-
-### 4. Resolve
-- Execute runbook steps
-- Monitor resolution effectiveness
-- Validate system health post-fix
-
-### 5. Document
-- Update runbook if steps changed
-- Create post-mortem (if critical)
-- Update alerting if needed
-
----
-
-## On-Call Procedures
-
-### On-Call Rotation (Future - Phase 2+)
-- **Primary**: First responder, owns incident
-- **Secondary**: Backup if primary unavailable
-- **Escalation**: Tech lead for complex issues
-
-### Escalation Path
-1. On-call engineer (L1)
-2. Tech lead (L2)
-3. Principal engineer (L3)
-
-### Handoff Checklist
-- [ ] Review open incidents
-- [ ] Check system health dashboard
-- [ ] Review recent changes/deployments
-- [ ] Confirm contact info current
-- [ ] Test pager/alerting
-
----
-
-## Demo Reset
-
-For demonstration purposes, the platform includes a reset utility to clear all datastores between demos.
-
-### Reset Commands
-
-```bash
-# Preview what will be reset (dry-run)
-make demo-reset-dry-run
-
-# Full reset with confirmation prompt
-make demo-reset
-
-# Force reset (skip confirmation)
-make demo-reset-force
-
-# Selective reset with flags
-make demo-reset-custom KEEP_METRICS=1    # Preserve Prometheus/Grafana
-make demo-reset-custom KEEP_KAFKA=1       # Preserve Kafka messages
-make demo-reset-custom KEEP_ICEBERG=1     # Preserve Iceberg tables
-```
-
-### What Gets Reset
-
-| Component | Action | Notes |
-|-----------|--------|-------|
-| **Kafka** | Purge messages (keep topics) | Topic config preserved |
-| **Iceberg** | Drop and recreate tables | Schema recreated via init_infra.py |
-| **MinIO** | Clear warehouse/ bucket | Bucket structure preserved |
-| **PostgreSQL** | Truncate audit/lineage tables | Catalog metadata auto-managed |
-| **Prometheus** | Clear time-series data | Container restarted |
-| **Grafana** | Clear sessions | Dashboards preserved (provisioned) |
-
-### Demo Workflow
-
-```bash
-# 1. Before first demo of the day
-make docker-up && make init-infra
-
-# 2. Run demo
-make demo-quick
-
-# 3. Reset between demos
-make demo-reset-force
-
-# 4. Repeat steps 2-3 for subsequent demos
-```
-
-**Tip**: Use `--dry-run` first to preview what will be cleared before running actual reset.
-
----
-
-## Maintenance Windows
-
-### Scheduled Maintenance
-
-**Iceberg Compaction**: Daily at 02:00 UTC (low traffic)
-**Kafka Log Retention**: Weekly on Sunday 03:00 UTC
-**System Updates**: Monthly, first Saturday 00:00-04:00 UTC
-
-### Maintenance Checklist
-```bash
-# Pre-maintenance
-- [ ] Notify stakeholders (if user-facing)
-- [ ] Backup critical data
-- [ ] Verify rollback plan
-
-# During maintenance
-- [ ] Execute change
-- [ ] Monitor system health
-- [ ] Validate functionality
-
-# Post-maintenance
-- [ ] Run health checks
-- [ ] Update documentation
-- [ ] Close maintenance ticket
-```
-
----
-
-## Troubleshooting Tips
-
-### General Debugging Steps
-1. Check logs: `docker logs <service-name>`
-2. Check metrics: Grafana dashboards
-3. Check connectivity: `docker network inspect k2-network`
-4. Check disk space: `df -h`
-5. Check memory: `docker stats`
-
-### Log Locations
-- **API**: `docker logs k2-api`
-- **Consumer**: `docker logs k2-consumer`
-- **Kafka**: `docker logs kafka`
-- **Schema Registry**: `docker logs schema-registry`
-
-### Health Check Endpoints
-- **API**: `http://localhost:8000/health`
-- **Prometheus**: `http://localhost:9090/-/healthy`
-- **Grafana**: `http://localhost:3000/api/health`
-- **Schema Registry**: `http://localhost:8081`
-
----
-
-## Documentation Maintenance
-
-### Maintenance Philosophy
-
-1. **Documentation is Code**: Maintain docs with same rigor as code (version control, reviews, CI/CD)
-2. **Update as You Work**: Change docs in the same commit as code changes
-3. **Ownership is Clear**: Every doc category has a clear owner
-4. **Quality Over Quantity**: Better to have 100 accurate pages than 200 stale pages
-
-### Maintenance Schedules
-
-| Frequency | Tasks | Owner |
-|-----------|-------|-------|
-| **Continuous** | Update "Last Updated" dates, fix broken links | All engineers |
-| **Daily** | Update phase PROGRESS.md, log blockers | Phase lead |
-| **Weekly** | Review phase progress, check design currency | Tech lead |
-| **Monthly** | Full validation, stale date check, cross-reference audit | Documentation team |
-| **Quarterly** | Comprehensive review, archive outdated docs, runbook testing | All category owners |
-
-### Quick Maintenance Tasks
-
-```bash
-# Validate documentation links
-bash scripts/validate-docs.sh
-
-# Find stale docs (not updated in 6 months)
-find docs -name "*.md" -mtime +180 ! -path "*/archive/*"
-
-# Check for duplicate content
-grep -r "specific phrase" docs/ --include="*.md" | wc -l
-```
-
-### Documentation Update Triggers
-
-| Change | Documentation to Update |
-|--------|------------------------|
-| API endpoint added/changed | `docs/reference/api-reference.md` |
-| Schema field added/changed | `docs/reference/data-dictionary-v2.md` |
-| Config parameter added | `docs/reference/configuration.md` |
-| New operational scenario | Create/update runbook |
-| Architectural decision | Add ADR to `DECISIONS.md` |
-
-### Ownership Matrix
-
-| Category | Primary Owner | Update Frequency |
-|----------|---------------|------------------|
-| architecture/ | Principal/Staff Engineers | Quarterly |
-| design/ | Senior Engineers | Monthly |
-| operations/ | DevOps/SRE Team | After incidents, quarterly |
-| testing/ | QA Engineers | When strategy changes |
-| phases/ | Phase Lead | Daily/weekly (active phase) |
-| reference/ | Technical Lead | When APIs/schemas change |
-
----
-
-## Related Documentation
-
-- **Architecture**: [../architecture/](../architecture/)
-- **Design**: [../design/](../design/)
-- **Testing**: [../testing/](../testing/)
-- **Monitoring Config**: [./monitoring/](./monitoring/)
-
----
-
-**Maintained By**: DevOps Team
-**Review Frequency**: Quarterly or after major incidents
-**Last Review**: 2026-01-22
+## Related
+
+- [Architecture](../architecture/) — how the pipeline is designed
+- [Decisions](../decisions/) — ADR-001 … ADR-017
+- [Development](../development/) — [setup](../development/setup.md), [testing](../development/testing.md)

@@ -1,8 +1,8 @@
-# DECISION-017: Iceberg Daily Maintenance Pipeline Design
+# ADR-017: Iceberg Daily Maintenance Pipeline Design
 
-**Date**: 2026-02-18
-**Status**: Accepted
-**Author**: Principal Data Engineer
+**Status:** Accepted — Implemented (2026-02)
+**Date:** 2026-02-18
+**Author:** Principal Data Engineer
 
 ---
 

@@ -1,6 +1,6 @@
 # ADR-006: Retain Spark for Batch Processing Only
 
-**Status:** Proposed
+**Status:** Accepted — Implemented (2026-02) — see Outcome
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Batch Processing
@@ -251,3 +251,13 @@ When running: temporarily claims 2 CPU / 4GB from shared pool
 - [Iceberg Spark Integration](https://iceberg.apache.org/docs/latest/spark-getting-started/)
 - [Iceberg Maintenance Procedures](https://iceberg.apache.org/docs/latest/maintenance/)
 - [Docker Compose Profiles](https://docs.docker.com/compose/profiles/)
+
+---
+
+## Outcome (2026-02)
+
+The core decision held: Spark runs batch only, on-demand, never streaming. One container (`spark-iceberg`, 2 CPU / 4 GB) handles the whole cold tier.
+
+The **two-tier** split did not survive. There is no Kotlin Iceberg writer — Spark does both the frequent offload and the daily maintenance ([ADR-014](ADR-014-spark-based-iceberg-offload.md), [ADR-017](ADR-017-iceberg-maintenance-pipeline.md)). Once a working Spark + Iceberg stack existed, writing 500+ lines of Iceberg Java SDK code to duplicate `spark.read.jdbc(...).writeTo(...)` was engineering for its own sake. The proposed host for the `@Scheduled` writer — the Spring Boot API — was never built either (ADR-005).
+
+Two further deviations: offload runs every **15 minutes**, not hourly, and the Spark catalog is a **file-based Hadoop catalog** on MinIO, not the REST catalog shown in the config sample above (see [ADR-013](ADR-013-pragmatic-iceberg-version-strategy.md)).
