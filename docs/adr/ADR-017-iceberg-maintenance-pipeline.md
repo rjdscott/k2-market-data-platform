@@ -1,6 +1,6 @@
 # ADR-017: Iceberg Daily Maintenance Pipeline Design
 
-**Status:** Accepted — Implemented (2026-02)
+**Status:** Accepted — Implemented (2026-02); the PostgreSQL watermark and audit stores it maintains are **superseded by [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md)** for the v3 lake (the compact → expire → audit ordering is kept)
 **Date:** 2026-02-18
 **Author:** Principal Data Engineer
 

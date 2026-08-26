@@ -1,6 +1,6 @@
 # ADR-014: Spark-Based Iceberg Offload (Not Kotlin Service)
 
-**Status:** Accepted (Supersedes Kotlin approach in Phase 5 plan)
+**Status:** Accepted (Supersedes Kotlin approach in Phase 5 plan) — **superseded by [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md)**
 **Date:** 2026-02-11
 **Deciders:** Platform Engineering
 **Related Phase:** Phase 5 (Cold Tier Restructure)

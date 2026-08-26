@@ -1,6 +1,6 @@
 # ADR-009: Four-Layer Medallion Architecture in ClickHouse
 
-**Status:** Accepted — Implemented (2026-02), amended by [ADR-011](ADR-011-multi-exchange-bronze-architecture.md) — see Outcome
+**Status:** Accepted — Implemented (2026-02), amended by [ADR-011](ADR-011-multi-exchange-bronze-architecture.md) — see Outcome; medallion-in-ClickHouse and offload-from-ClickHouse clauses **superseded by [ADR-025](ADR-025-clickhouse-derived-hot-tier.md)**; string-numerics rule superseded by [ADR-020](ADR-020-avro-fixed-point-contracts.md)
 **Date:** 2026-02-09 (revised)
 **Decision Makers:** Platform Engineering Team
 **Category:** Data Architecture
