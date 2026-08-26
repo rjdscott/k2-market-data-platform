@@ -102,6 +102,7 @@ V3_PREFIX="${K2_V3_PREFIX:-market.crypto.v3}"
 # or fewer raw partitions — not a silently shorter retention.
 RAW_RETENTION_MS=172800000
 RAW_RETENTION_BYTES=536870912
+RAW_MAX_MESSAGE_BYTES=8388608   # largest measured frame 5,195,904 B (S5); agrees with sink.rs MESSAGE_MAX_BYTES
 
 # trades.*/book.* 7 d = 604800000 ms. These are derived and rebuildable from
 # raw, so they only need to outlive a Spark backfill window. No byte cap: Avro
@@ -146,13 +147,29 @@ for ex in $EXCHANGES; do
   for kind in raw trades book; do
     topic="${V3_PREFIX}.${kind}.${ex}"
 
-    rpk topic describe "$topic" --brokers "$BROKERS" >/dev/null 2>&1 \
-      || rpk topic create "$topic" --partitions 12 --brokers "$BROKERS"
+    if ! rpk topic describe "$topic" --brokers "$BROKERS" >/dev/null 2>&1; then
+      if [ "$kind" = "raw" ]; then
+        rpk topic create "$topic" --partitions 12 --brokers "$BROKERS" \
+          --topic-config "max.message.bytes=${RAW_MAX_MESSAGE_BYTES}"
+      else
+        rpk topic create "$topic" --partitions 12 --brokers "$BROKERS"
+      fi
+    fi
 
     if [ "$kind" = "raw" ]; then
+      # max.message.bytes=8 MiB: Coinbase's level2 subscribe snapshot is
+      # 5,195,904 bytes for BTC-USD (ADR-018 Appendix A, S5) and the Redpanda
+      # default (1,048,576, = kafka_batch_max_bytes) rejects it, so the archive
+      # lost the snapshot frame on every reconnect. Matches
+      # MESSAGE_MAX_BYTES in services/capture-rust/src/sink.rs and the WS cap
+      # in ws.rs. Topic-level overrides the cluster default (verified: rpk
+      # topic describe -c shows 8388608 DYNAMIC_TOPIC_CONFIG while
+      # kafka_batch_max_bytes stays 1048576, and a 5 MB record lands).
+      # Trades/book stay at the default: fixed-point Avro records are ~100 B.
       rpk topic alter-config "$topic" --brokers "$BROKERS" \
         --set "retention.ms=${RAW_RETENTION_MS}" \
-        --set "retention.bytes=${RAW_RETENTION_BYTES}" >/dev/null
+        --set "retention.bytes=${RAW_RETENTION_BYTES}" \
+        --set "max.message.bytes=${RAW_MAX_MESSAGE_BYTES}" >/dev/null
     else
       rpk topic alter-config "$topic" --brokers "$BROKERS" \
         --set "retention.ms=${DERIVED_RETENTION_MS}" >/dev/null

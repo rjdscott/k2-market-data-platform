@@ -24,6 +24,18 @@ use schema_registry_converter::schema_registry_common::SubjectNameStrategy;
 
 use crate::record::OutRecord;
 
+/// Largest single record the producer will enqueue, in bytes. Must agree with
+/// `ws::MAX_MESSAGE_BYTES` (8 MiB): a frame the socket accepts must be
+/// producible, or the raw archive silently loses exactly the frames that
+/// matter most. Coinbase's `level2` subscribe snapshot for BTC-USD measured
+/// 5,195,904 bytes / 43,974 levels (ADR-018 Appendix A, S5) — over
+/// librdkafka's 1,000,000-byte default, which rejected it at enqueue with
+/// `MessageSizeTooLarge` on every (re)connect. The topic side is
+/// `max.message.bytes=8388608` on `market.crypto.v3.raw.*` (docker/redpanda/init.sh).
+/// `// ponytail: ws.rs owns its own copy; a shared const across modules is not
+/// worth the cross-module coupling for two numbers a grep keeps in step.`
+pub const MESSAGE_MAX_BYTES: usize = 8 * 1024 * 1024;
+
 pub struct Sink {
     producer: FutureProducer,
     encoder: EasyAvroEncoder,
@@ -44,7 +56,11 @@ impl Sink {
             // 32 MB of local buffer. At the measured v2 rate this is minutes of
             // headroom across a broker restart, and it is the number the
             // container's memory limit is sized around.
+            // One 5.2 MB snapshot (S5) is ~16% of it; five products
+            // reconnecting at once fit with room to spare.
             .set("queue.buffering.max.kbytes", "32768")
+            // See `MESSAGE_MAX_BYTES`: the socket cap and the produce cap agree.
+            .set("message.max.bytes", MESSAGE_MAX_BYTES.to_string())
             // Exactly-once semantics on the producer side: a retry after a
             // timeout cannot duplicate a record, which matters because the lake
             // is append-only and nothing downstream dedups raw frames.
@@ -52,7 +68,9 @@ impl Sink {
             .set("acks", "all")
             // zstd is not in librdkafka's default codec set; the build enables
             // it explicitly (spike S6) and this is where it gets used. JSON
-            // payloads on the raw topic are what makes it worth the CPU.
+            // payloads on the raw topic are what makes it worth the CPU, and
+            // the multi-MB `level2` snapshots (repetitive price/size arrays)
+            // compress best of all — see the README for the measured ratio.
             .set("compression.type", "zstd")
             // Fail a record after 30 s rather than holding it forever: a record
             // that old is better dropped and counted than silently pinned in

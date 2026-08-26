@@ -219,3 +219,18 @@ buys), or ClickHouse moves off 24.x and `_headers` behaviour changes.
 ## Outcome
 
 _To be appended after the Phase C burn-in._
+
+**Outcome so far (2026-08-26, Phase C day 1) — the message-size contract.** The
+contracts say nothing about record size, and the first live day showed that
+silence is itself a contract: librdkafka's default `message.max.bytes`
+(1,000,000) and Redpanda's topic default (1,048,576) both sat under Coinbase's
+5,195,904-byte `level2` snapshot (ADR-018 S5), so `raw-message.avsc` — the
+system of record — silently lost the snapshot frame for the five largest
+products on every reconnect (`produce_errors_total{reason="enqueue"}` = 5 per
+connect, `MessageSizeTooLarge`). The fixed-point trade and book records were
+never at risk (~100 B–1 KB); only the verbatim raw frame carries venue-sized
+payloads. Fix: producer `message.max.bytes` and `market.crypto.v3.raw.*`
+`max.message.bytes` are both 8 MiB, equal to the WebSocket cap, and a
+4,803,578-byte snapshot has landed live (zstd -3 → 383,011 bytes). The size
+ceiling is now an explicit part of the raw contract; a venue frame above 8 MiB
+is a schema-change-sized event, not a config tweak.

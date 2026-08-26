@@ -116,6 +116,12 @@ has no per-product resync short of a fresh snapshot.
 
 Every one is also a `--flag`; `k2-capture run --help` is the authority.
 
+Fixed producer limits (not configurable — `sink.rs`): `message.max.bytes=8388608`
+(8 MiB, equal to the WebSocket cap in `ws.rs`; Coinbase's BTC-USD `level2`
+snapshot is 5.2 MB, ADR-018 S5, and `market.crypto.v3.raw.*` carries the same
+`max.message.bytes`), `queue.buffering.max.kbytes=32768`, `compression.type=zstd`
+— a captured 4,803,578-byte snapshot compressed to 383,011 bytes (12.5:1, `zstd -3`).
+
 ## Subcommands
 
 ```bash
