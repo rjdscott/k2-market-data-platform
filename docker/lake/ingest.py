@@ -461,6 +461,12 @@ def _decode_into(spark, source, table: str, project, raw_snapshot_id, run_ts) ->
         )
         parts.append(project(decoded))
 
+    # ponytail: if EVERY id in the range is unresolvable there is nothing to
+    # commit, so the position does not advance and the same rows file the same
+    # audit row on the next cycle. That is deliberate — the condition really is
+    # still true, and a later registration of the id recovers the records — but
+    # it repeats every 5 minutes until one decodable record arrives. Dedupe on
+    # (check_name, scope) if that ever becomes noise worth suppressing.
     for schema_id, detail in unresolvable:
         write_audit_row(
             spark,
