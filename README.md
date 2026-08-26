@@ -233,7 +233,7 @@ docker-compose.yml              The whole stack
 
 ## Where v2 falls short — and the v3 roadmap
 
-v2 is complete and running: three exchanges, medallion in ClickHouse, Iceberg cold tier, 13 v2 alert rules,
+v2 is complete and frozen: three exchanges, medallion in ClickHouse, Iceberg cold tier, 13 v2 alert rules,
 13 runbooks. It is a good streaming pipeline and a poor research archive. This is a **quantitative-research**
 platform reading public WebSocket feeds over the open internet — it is **not a trading path**, and no number
 here should be read as one. What a quant actually needs from it — completeness they can prove, aggregations

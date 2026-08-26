@@ -131,6 +131,9 @@ jobs:
         with:
           scan-type: fs
           scan-ref: .
+          # legacy/ is archived, unbuilt and shipped by nothing — a CVE in v1's
+          # lockfile or the retired Kotlin tier has no runtime to reach, so it
+          # would be an unfixable finding on every PR forever.
           skip-dirs: legacy
           severity: CRITICAL,HIGH
           format: sarif

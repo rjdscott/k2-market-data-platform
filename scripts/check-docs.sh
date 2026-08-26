@@ -8,11 +8,17 @@ cd "$(git rev-parse --show-toplevel)"
 # Every markdown file the link and forbidden-word gates cover. The per-service
 # READMEs are published on GitHub exactly as docs/ is, and
 # services/capture-rust/README.md is 12 KB dense with relative `docs/plans/...`
-# links — scanning docs/ and README.md alone left it ungated.
+# links — scanning docs/ and README.md alone left it ungated. So is
+# legacy/v2-kotlin/README.md, which is the retired tier's entry point and was
+# written after the archive, not with it.
+#
+# legacy/v1 is deliberately NOT scanned: it is archived unmodified (CLAUDE.md)
+# and its READMEs already point at v1-era paths that no longer exist. Gating it
+# would only be satisfiable by editing the archive.
 published_docs() {
   find docs -name '*.md'
   printf 'README.md\n'
-  find services docker schemas scripts -name 'README.md' 2>/dev/null
+  find services docker schemas scripts legacy/v2-kotlin -name 'README.md' 2>/dev/null
 }
 
 fail=0

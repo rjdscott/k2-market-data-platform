@@ -17,10 +17,12 @@ JDK 21, Micrometer on `:8082/metrics`, no Spring. The instrument list came from
 [`config/instruments.yaml`](../../config/instruments.yaml) via
 `InstrumentsLoader.kt` (native symbols only — the `canonical` column was v3's).
 
-Measured under live load: ~150 msg/s sustained across all three, ~0.03 CPU and
-134 MiB per container
+Measured under live load, quoted as the benchmark states it: ~150 msg/s across the
+three exchanges, and **one** resource data point — `feed-handler-binance`, *"the
+busiest of the three"*, at **~0.03 CPU / 134 MiB** against its 0.5 CPU / 512 MB limit
 ([`docs/benchmarks/2026-02-19-v2-baseline.md`](../../docs/benchmarks/2026-02-19-v2-baseline.md)).
-They were never the bottleneck. What retired them is what they could not be asked
+Kraken and Coinbase were never measured separately, so that is not a per-container
+figure. They were never the bottleneck. What retired them is what they could not be asked
 to do.
 
 ## The v2 topics it wrote
@@ -97,23 +99,28 @@ docker build -f legacy/v2-kotlin/Dockerfile -t k2-feed-handler:v2-archived .
 ```
 
 Running one against the live stack would resume writing to the frozen v2 topics,
-which is not what "frozen" means — do it against a throwaway broker, not this one:
+which is not what "frozen" means — do it against a throwaway broker, not this one. No
+`--network`, deliberately: joining the live stack's network is the mistake this
+paragraph warns about, and that network is not called `k2-net` anyway — compose prefixes
+it, `k2-market-data-platform_k2-net`.
 
 ```bash
-docker run --rm --network k2-net \
+docker run --rm \
   -e K2_EXCHANGE=kraken \
   -e K2_INSTRUMENTS_FILE=/app/config/instruments.yaml \
   -e K2_KAFKA_BOOTSTRAP_SERVERS=<your-throwaway-broker>:9092 \
   -e K2_KAFKA_SCHEMA_REGISTRY_URL=http://<your-throwaway-broker>:8081 \
-  -v "$PWD/config/instruments.yaml":/app/config/instruments.yaml:ro \
+  -v "$PWD/legacy/v2-kotlin/src/test/resources/instruments-v1.yaml":/app/config/instruments.yaml:ro \
   k2-feed-handler:v2-archived
 ```
 
 > **`config/instruments.yaml` moved on after this code did.** Kraken's natives
 > there are now the WS **v2** spellings (`BTC/USD`, `DOGE/USD`). These handlers
-> speak Kraken WS **v1**, which wants `XBT/USD` and `XDG/USD`, so a Kraken run
-> from the archive needs a local registry file with the v1 spellings. Binance and
-> Coinbase are unaffected.
+> speak Kraken WS **v1**, which wants `XBT/USD` and `XDG/USD`, which is why the
+> command above mounts
+> [`src/test/resources/instruments-v1.yaml`](src/test/resources/instruments-v1.yaml)
+> — the registry frozen at the retirement commit, and the same file the archive's
+> own tests assert against. Binance and Coinbase are unaffected.
 
 ## Known issues (left as-is)
 

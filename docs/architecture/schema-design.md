@@ -40,7 +40,7 @@ The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2*
 |---|---|---|
 | `schema_version` | string | Semantic version, default `1.0.0` |
 | `exchange` | string | Lowercase: `binance`, `kraken`, `coinbase` |
-| `symbol` | string | Exchange-native: `BTCUSDT`, `XBT/USD`, `BTCUSD` |
+| `symbol` | string | Exchange-native: `BTCUSDT`, `BTC/USD`, `BTC-USD` |
 | `canonical_symbol` | string | Cross-exchange: `BTC/USDT`, `BTC/USD` |
 | `trade_id` | string | Exchange-assigned, unique within an exchange |
 | `price`, `quantity`, `quote_volume` | string | **Strings on purpose** — see below |

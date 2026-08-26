@@ -1,10 +1,13 @@
 # CLAUDE.md
 
 The working contract for this repo. K2 is a single-host crypto market data
-platform: Rust capture (`services/capture-rust/`) → Redpanda → ClickHouse
-(medallion via materialized views) → Iceberg on MinIO, Spark batch offload
-under Prefect.
-v2 is at the repo root; v1 is archived unmodified in `legacy/v1/`.
+platform: Rust capture (`services/capture-rust/`) → Redpanda. The ClickHouse
+medallion and its Iceberg offload are **frozen as of 2026-08-26**: the Kotlin
+handlers that fed them retired in ADR-019 and nothing produces to the v2 topics,
+so `k2.*` and `cold.*` are readable history, not a live path, until the v3 lake
+(Phase D) and hot tier (Phase E) replace them.
+v2 is at the repo root; v1 is archived unmodified in `legacy/v1/`, the v2 Kotlin
+tier in `legacy/v2-kotlin/`.
 Read this before writing code or docs. Architecture: `docs/architecture/README.md`.
 
 ## Branch + PR discipline
