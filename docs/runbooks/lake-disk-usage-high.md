@@ -187,13 +187,13 @@ of raw, which is the real deadline.
 ```bash
 # 1. Reclaim what is safe to reclaim. There is no per-pass flag: ONE run does
 #    compaction, then snapshot expiry, then orphan removal, then the audits.
-#    Run it ONCE, naming the horizon you care about — these two lines are the
-#    same nightly pass with a different knob made explicit, not two steps.
+#    Run it ONCE. This is the nightly pass run early, not a separate tool:
+#    --orphan-hours 24 is the only horizon there is (see below), so naming it
+#    changes nothing and is left off.
 #    `maintenance.py` takes only --days / --retain-days / --orphan-hours /
 #    --audit-only; argparse exits 2 on anything else.
 #    not yet run — verify at the Phase D burn-in
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --retain-days 7
-docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --orphan-hours 24
 
 # 2. Docker's own reclaimable space — images and build cache, never volumes.  ✅ verified
 docker system df
@@ -212,8 +212,12 @@ and it is a safety property**: `remove_orphan_files` decides "unreferenced" from
 metadata at the instant it runs, so a file a concurrent writer has staged but not yet
 committed looks like an orphan, and deleting it corrupts the commit about to name it. A
 24 h horizon puts every candidate outside any in-flight write on this stack. `--orphan-hours`
-below 24 is refused. This is the only pass with anything to reclaim on `raw.messages`, which
-is never expired.
+below 24 is refused — by `maintenance.py`'s argparse and by Iceberg 1.8.1 itself, so 24 is
+not a default you can lower, it is the only horizon there is. **A partial write from this
+morning is therefore not reclaimable today.** The first nightly run after it turns 24 h old
+clears it and nothing clears it sooner; running the pass by hand now reclaims only orphans
+that were already old enough. This is still the only pass with anything to reclaim on
+`raw.messages`, which is never expired.
 
 Both are routine maintenance being run early rather than emergency measures, and neither
 touches a live row.

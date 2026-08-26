@@ -174,8 +174,10 @@ Three things worth stating here because they shape every one of those:
   nothing. Rather than bake `hadoop-aws` plus a ~190 MB `aws-java-sdk-bundle`
   into the image so a second S3 client can list what the first one already can,
   `maintenance.file_list_view()` lists the prefix with Iceberg's own `S3FileIO`
-  and hands it to the procedure through `file_list_view`. Force it sooner with
-  `maintenance.py --orphan-hours 24`.
+  and hands it to the procedure through `file_list_view`. There is no forcing it
+  sooner: 24 h is the only horizon `maintenance.py` and Iceberg 1.8.1 both
+  accept, so the first nightly run after an orphan turns 24 h old clears it and
+  nothing clears it before that.
 
 ---
 

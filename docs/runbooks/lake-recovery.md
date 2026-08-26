@@ -312,7 +312,12 @@ expiry, with a **24-hour floor** — a file a concurrent writer has staged but n
 committed is "unreferenced" by the procedure's definition, so anything younger than 24 h is
 left alone rather than deleted out from under the commit about to name it.
 
-To sweep early rather than waiting for 03:00 UTC:
+**Nothing clears them sooner than that, including running the pass by hand.** The floor is
+enforced twice — `maintenance.py` refuses `--orphan-hours` below 24 and so does Iceberg
+1.8.1 — so 24 is the only horizon available, and the files this outage just created are
+younger than it by definition. The command below is the nightly pass run early; against a
+fresh partial write it reclaims nothing, and that is the correct outcome rather than a
+misconfiguration:
 
 ```bash
 # not yet run — Phase D burn-in. --orphan-hours below 24 is refused.

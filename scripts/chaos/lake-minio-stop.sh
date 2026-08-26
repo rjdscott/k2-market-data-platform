@@ -90,9 +90,10 @@ echo "→ bucket bytes across the failed write: $bytes_before -> $bytes_after" >
 echo "→ orphaned by this run: $orphan_bytes bytes" >&2
 echo "  Zero is a legitimate answer — MinIO may have refused the very first PUT." >&2
 echo "  Files with no manifest referencing them are invisible to every reader and" >&2
-echo "  cost only disk. The nightly maintenance run calls remove_orphan_files with" >&2
-echo "  a 24 h floor, so these clear on the next one; the disk runbook has the" >&2
-echo "  command to do it sooner." >&2
+echo "  cost only disk. remove_orphan_files runs nightly with a 24 h floor, so the" >&2
+echo "  first nightly run AFTER these turn 24 h old clears them. Nothing clears them" >&2
+echo "  sooner: Iceberg 1.8.1 refuses --orphan-hours below 24, so a hand-run" >&2
+echo "  maintenance pass reclaims nothing this outage just created." >&2
 
 echo "→ recovery: one ingest with the object store back" >&2
 start=$SECONDS
