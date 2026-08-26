@@ -7,7 +7,7 @@ code once it is.
 
 | Tool | Needed for | Notes |
 |------|-----------|-------|
-| Docker Engine + Compose v2 | everything | Budget 16 CPU / 24 GB available to Docker. The stack declares 15.1 CPU / 21.875 GB of limits |
+| Docker Engine + Compose v2 | everything | Budget 16 CPU / 24 GB available to Docker. The stack declares 15.35 CPU / 22.125 GB of limits |
 | JDK 21 | running Kotlin tests or a handler outside Docker | Only that; `./gradlew` bootstraps Gradle itself |
 | [`uv`](https://docs.astral.sh/uv/) | Python offload-flow tests | Nothing else uses Python locally |
 | `jq`, `psql` | the diagnostic one-liners in the ops docs | optional |

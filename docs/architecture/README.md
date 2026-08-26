@@ -1,6 +1,6 @@
 # Architecture — As Built
 
-K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, ClickHouse turns them into a Bronze → Silver → Gold medallion using nothing but Kafka-engine tables and materialized views, and a Prefect-scheduled Spark job appends the results to Iceberg every 15 minutes. The whole stack runs in one Docker Compose file on **15.1 CPU / 21.875 GB across 14 long-lived containers** (+2 one-shot init containers), against a mandate of 16 cores / 40 GB.
+K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, ClickHouse turns them into a Bronze → Silver → Gold medallion using nothing but Kafka-engine tables and materialized views, and a Prefect-scheduled Spark job appends the results to Iceberg every 15 minutes. The whole stack runs in one Docker Compose file on **15.35 CPU / 22.125 GB across 15 long-lived containers** (+4 one-shot init containers), against a mandate of 16 cores / 40 GB.
 
 Everything below describes what actually runs on `main` today. Where the design intent and the built system diverge, the divergence is called out rather than papered over. The story of how it got here is in [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md).
 
@@ -204,10 +204,11 @@ The end-to-end p99 is dominated by network RTT to the exchanges (~80 ms average)
 | feed-handler-binance | 0.5 | 512 MB |
 | feed-handler-kraken | 0.5 | 512 MB |
 | feed-handler-coinbase | 0.5 | 512 MB |
+| lakekeeper | 0.25 | 256 MB |
 | iceberg-metrics | 0.1 | 128 MB |
-| **Total (14 services)** | **15.1** | **21.875 GB** |
+| **Total (15 services)** | **15.35** | **22.125 GB** |
 
-Two further entries, `redpanda-init` and `iceberg-init`, are one-shot containers (topic creation and Iceberg table bootstrap respectively) that exit after startup and are not counted in the total above. Budget and reasoning: [ADR-010](../adr/ADR-010-resource-budget.md), [docs/operations/docker-resources.md](../operations/docker-resources.md).
+Four further entries — `redpanda-init` (topic creation), `iceberg-init` (v2 cold.* Hadoop-catalog DDL), `lakekeeper-migrate` (v3 catalog DB schema) and `lake-init` (v3 bucket + warehouse + namespaces) — are one-shot containers that exit after startup and are not counted in the total above. Budget and reasoning: [ADR-010](../adr/ADR-010-resource-budget.md), [docs/operations/docker-resources.md](../operations/docker-resources.md).
 
 ---
 

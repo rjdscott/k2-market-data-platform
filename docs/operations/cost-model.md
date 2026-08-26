@@ -8,8 +8,8 @@ What this platform costs to run, and what the architecture decisions bought.
 
 ## What it costs today
 
-The whole stack is one Docker Compose deployment: **15.1 CPU / 21.875 GB across 14
-services** (+2 one-shot) (see [docker-resources.md](./docker-resources.md)). It runs on a
+The whole stack is one Docker Compose deployment: **15.35 CPU / 22.125 GB across 15
+services** (+4 one-shot) (see [docker-resources.md](./docker-resources.md)). It runs on a
 single developer workstation, so the marginal cost is electricity.
 
 That is the headline result, not an aside. v1 needed 35–40 CPU and 45–50 GB — more than
@@ -74,9 +74,9 @@ Scaling levers, in the order they would bite:
 
 | | v1 | v2 | Saving |
 |---|----|----|--------|
-| CPU (limits) | 35–40 | 15.1 | ~60% |
-| RAM (limits) | 45–50 GB | 21.875 GB | ~55% |
-| Services | 18–20 | 14 (+2 one-shot) | ~30% |
+| CPU (limits) | 35–40 | 15.35 | ~60% |
+| RAM (limits) | 45–50 GB | 22.125 GB | ~55% |
+| Services | 18–20 | 15 (+4 one-shot) | ~25% |
 | Always-on Spark | 14 CPU / 20 GB | 0 (batch only) | 100% |
 
 On the reserved-instance estimate above, roughly 60% less compute is roughly 60% less
