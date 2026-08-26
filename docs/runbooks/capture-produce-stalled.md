@@ -8,16 +8,14 @@ which `CaptureProduceErrors` fires for once the queue is full.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **Recovery times not yet measured — the Phase C chaos run fills them in.** The
-> capture tier (ADR-019) is built and running, and the commands marked ✅ were run
-> against it on 2026-08-26. What has not happened is a fault injection:
-> `scripts/chaos/capture-queue-full.sh` fills the queue and measures the boundary
-> between "stalled" and "dropping" against the predicted numbers below, and until it
-> runs every MTTR on this page reads "not yet".
+> **Measured 2026-08-26** by `scripts/chaos/capture-queue-full.sh --exchange kraken`
+> ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)),
+> and the run found the boundary this runbook is built around in the wrong place — see
+> §1's Measured block before trusting the predicted numbers below.
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | Produce stalled — broker down, queue filling, nothing dropped yet | < 2 min | not yet — `scripts/chaos/capture-queue-full.sh` fills this |
+| 1 | Produce stalled — broker down, queue filling, nothing dropped yet | < 2 min | **0 s** to resume producing once the broker returned (2026-08-26). But the stalled-but-not-dropping window was **102 s, not the predicted 204 s** — half the budget this runbook assumes |
 
 ---
 
@@ -117,7 +115,28 @@ became a [capture-down.md §2](./capture-down.md#2-produce-errors--records-built
 incident partway through; record the loss window in the completeness audit before
 closing.
 
-**Measured MTTR: not yet — `scripts/chaos/capture-queue-full.sh` fills this.**
+**Measured MTTR 2026-08-26** — `scripts/chaos/capture-queue-full.sh --exchange kraken`
+paused the broker for 388 s:
+
+| | |
+|---|---|
+| stalled-but-not-dropping window | **102 s** — against a predicted 204 s, **50 % short** |
+| `CaptureProduceErrors` fired | 256 s after the fault |
+| producing again after `docker unpause` | **0 s** |
+| records lost over the window | 231,744, **none of them `reason="queue_full"`** |
+
+**The clock this runbook gives you was half what it claimed, and for a reason worth
+knowing.** The 204 s comes from 32 MiB ÷ kraken's wire rate, and that arithmetic was
+right — but `message.timeout.ms` was 30 s, so records were failed on a timer long before
+the queue was anywhere near full, and every drop was counted `reason="delivery"`. The
+queue's slack was unreachable. Fixed the same day
+(`message.timeout.ms=300000`,
+[ADR-019 Outcome](../adr/ADR-019-rust-capture-tier.md#measured-correction-2026-08-26--the-32-mib-buffer-was-unreachable)),
+which should restore the full 204 s — **but that is a prediction again, not a
+measurement, until the script is re-run.** Until then, treat the clock above as
+unverified and check `reason` on the first drop: `queue_full` means the buffer did its
+job, `delivery` means it did not.
+Source: [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv).
 
 ---
 
@@ -127,6 +146,6 @@ _None yet. Appended with their date as they happen; never overwritten._
 
 ---
 
-**Last verified:** commands marked ✅ were run against the running capture tier on
-2026-08-26. No MTTR on this page is measured — nothing has been fault-injected. Stamp
-this line with a date and a commit at the Phase C chaos run.
+**Last verified:** 2026-08-26 (`make chaos`). The MTTR is measured; the 204 s stall
+budget is not, and is under test after the `message.timeout.ms` fix. Re-stamp on the
+re-run.

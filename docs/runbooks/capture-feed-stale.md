@@ -6,15 +6,17 @@ that is down or failing to produce, see [capture-down.md](./capture-down.md).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **No MTTR here is measured — the Phase C chaos run fills them in.** The capture
-> tier (ADR-019) is built and running. Commands marked ✅ were run against it on
-> 2026-08-26. What has not happened is a fault injection, so every **Measured** cell
-> below reads "not yet".
+> **Partly measured.** The first `make chaos` run (2026-08-26,
+> [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv))
+> measured the *recovery* side of row 1 but could not make `CaptureFeedStale` itself
+> fire — a paused container is unscrapeable, so Prometheus stale-marks the very gauge
+> this alert reads and `CaptureDown` fires instead. The detection half of row 1 and all
+> of row 2 remain unverified, and say so rather than borrowing a number.
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | One stream silent while the process stays healthy | < 3 min | not yet verified — Phase C chaos run |
-| 2 | Exchange-to-receive p99 elevated | investigate, no restart | not yet verified — Phase C chaos run |
+| 1 | One stream silent while the process stays healthy | < 3 min | recovery **8–10 s** to fresh frames after unpause, alert clear a further 18–22 s (2026-08-26, `capture-pause.sh` on coinbase and binance). Time-to-**detection** via this alert: not yet verified — the injection scores `CaptureDown` |
+| 2 | Exchange-to-receive p99 elevated | investigate, no restart | not yet verified — no injection exists; Phase F's noisy-neighbour experiment is the trigger |
 
 ---
 
@@ -167,15 +169,29 @@ job. Do not restart-loop against a down exchange.
 replay. The silent window is permanently absent from `raw.messages`; note it in the
 day's completeness audit.
 
-**Measured** — not yet verified. `scripts/chaos/capture-pause.sh` (Phase C)
-`docker pause`s a capture container to stall the read side without closing the socket,
-waits for **`CaptureDown`**, then measures the time from unpause until the >=1 Hz
-streams' `k2_capture_last_message_ts_seconds` are fresh again — `trade`/`market_trades`
-are excluded from that gate, because a quiet market would otherwise hold it open for up
-to 300 s. It cannot wait on *this* alert for the reason two paragraphs up: a paused
-container is unscrapeable, and its gauges are stale-marked before 60 s of silence has
-accrued. The reconnect and freshness numbers it measures are still this page's; the
-`t_fire` it measures is `CaptureDown`'s.
+**Measured 2026-08-26** — `scripts/chaos/capture-pause.sh` `docker pause`s a capture
+container to stall the read side without closing the socket, waits for **`CaptureDown`**,
+then measures the time from unpause until the >=1 Hz streams'
+`k2_capture_last_message_ts_seconds` are fresh again — `trade`/`market_trades` are
+excluded from that gate, because a quiet market would otherwise hold it open for up to
+300 s:
+
+| | coinbase | binance |
+|---|---|---|
+| `CaptureDown` fired after | 165 s | 152 s |
+| frames fresh after unpause | **10 s** | **8 s** |
+| alert cleared, a further | 18 s | 22 s |
+| `gaps_total` | 0 → 0 | 0 → 0 |
+| `reconnects_total` | 0 → 1 | 0 → 1 |
+
+**The freshness number is this page's; the `t_fire` is `CaptureDown`'s**, for the reason
+two paragraphs up: a paused container is unscrapeable, and its gauges are stale-marked
+before 60 s of silence has accrued. So the reconnect side of this runbook is verified
+(under 10 s, both venues, no manual step) and the **detection** side is not — no
+injection has yet made `CaptureFeedStale` fire, and only a real venue-side silence or
+`k2-replay` (Phase G) will. Note also `gaps_total` staying at 0: the reconnect starts a
+fresh sequence series, so a pause does not manufacture a gap.
+Source: [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv).
 
 ---
 
@@ -255,9 +271,10 @@ docker stats --no-stream k2-capture-binance k2-capture-kraken k2-capture-coinbas
 **Do not restart the container for this alert.** A restart loses a window of data and
 does not change transit time, a venue's clock, or this host's.
 
-**Measured** — not yet verified. Phase C's noisy-neighbour experiment (Spark
-compaction on its cpuset while capture ingress latency is sampled) produces the only
-number that belongs here: how much of this metric the platform can move on its own.
+**Measured** — not yet verified, and the 2026-08-26 chaos run did not touch it: no script
+injects latency. The noisy-neighbour experiment (Spark compaction on its cpuset while
+capture ingress latency is sampled) produces the only number that belongs here — how much
+of this metric the platform can move on its own — and it is Phase F's.
 
 ---
 
@@ -267,7 +284,8 @@ _None yet. Appended with their date as they happen; never overwritten._
 
 ---
 
-**Last verified:** commands marked ✅ were run against the running capture tier on
-2026-08-26; no MTTR on this page is measured, because nothing has been fault-injected. Commands
-marked ✅ were run against the v2 stack on 2026-08-26 with the service name
-substituted. Stamp this line with a date and a commit at the Phase C chaos run.
+**Last verified:** 2026-08-26 (`make chaos`). Recovery times are measured, from
+[`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv);
+commands marked ✅ were run against the running capture tier the same day. The detection
+time for `CaptureFeedStale` itself is still unmeasured — re-stamp when a venue-side
+silence or `k2-replay` fires it.

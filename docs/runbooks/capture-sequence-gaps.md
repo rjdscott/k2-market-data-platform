@@ -7,15 +7,17 @@ below because you need it to read the alert.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **No MTTR here is measured — the Phase C chaos run fills them in.** The capture
-> tier (ADR-019) is built and running. Commands marked ✅ were run against it on
-> 2026-08-26. What has not happened is a fault injection, so every **Measured** cell
-> below reads "not yet".
+> **The 2026-08-26 chaos run tried to induce a gap and could not**
+> ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)).
+> Pausing a capture container on either venue produced `gaps_total` 0 → 0 and
+> `reconnects_total` 0 → 1: the reconnect starts a fresh sequence series, so there is no
+> discontinuity for the detector to see. Recovery is measured; detection is not, and the
+> cells below say which is which rather than blurring them.
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | Sequence gap — messages lost | recovery automatic; **investigation < 30 min** | not yet verified — Phase C chaos run |
-| 2 | Resync storm — the book keeps being rebuilt | < 15 min | not yet verified — Phase C chaos run |
+| 1 | Sequence gap — messages lost | recovery automatic; **investigation < 30 min** | recovery (reconnect + rebuild) **8–10 s** after unpause, both venues (2026-08-26). Gap *detection*: not yet verified — no injection has made `gaps_total` move |
+| 2 | Resync storm — the book keeps being rebuilt | < 15 min | not yet verified — `capture-corrupt-frame.sh` is a SKIP until `k2-replay` (Phase G) |
 
 ---
 
@@ -110,11 +112,29 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.coinbase \
   --num 5 --offset end --use-schema-registry=value                    # ✅ verified (v2 topic)
 ```
 
-**Measured** — not yet verified. `scripts/chaos/capture-pause.sh` (Phase C)
-`kill -STOP`s the Coinbase container long enough to force the exchange to advance
-`sequence_num` past it, then measures the gap counter increment and the time to a
-rebuilt book after `SIGCONT`. That is the induced case; it also tells us whether the
-detector counts the reconnect boundary correctly.
+**Measured 2026-08-26, and the result is a negative one worth reading.**
+`scripts/chaos/capture-pause.sh` froze the Coinbase container for 165 s and the Binance
+one for 152 s — long enough for both venues to close the socket — and measured:
+
+| | coinbase | binance |
+|---|---|---|
+| `gaps_total` | **0 → 0** | **0 → 0** |
+| `reconnects_total` | 0 → 1 | 0 → 1 |
+| book rebuilt (fresh frames) after unpause | 10 s | 8 s |
+
+**Frames were lost and the gap counter did not move.** That is not a broken detector: a
+Coinbase reconnect restarts `sequence_num` from a fresh series, and a Binance reconnect
+restarts `lastUpdateId`, so there is nothing continuous across the outage to be
+discontinuous. The counter only fires on a skip *within* one connection — which is the
+case this runbook is actually for, and the case a pause cannot produce.
+
+**The operational consequence:** a reconnect is not a gap, and a gap is not a reconnect.
+When investigating, correlate `gaps_total` against
+`reconnects_total{reason="involuntary"}` before concluding anything — an outage that
+shows a reconnect and no gap has still lost data, and only the raw archive's `conn_id`
+boundary will show you the window. Inducing a real in-connection skip needs `k2-replay`
+(Phase G).
+Source: [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv).
 
 ---
 
@@ -170,10 +190,12 @@ quality is degraded; a higher threshold degrades it silently. If a venue genuine
 resyncs this often in normal operation, that is a fact worth recording in ADR-027's
 Outcome, with the measurement behind it.
 
-**Measured** — not yet verified. `scripts/chaos/capture-corrupt-frame.sh` (Phase C)
-injects a corrupt book level to force a resync, then repeats it to confirm the storm
-alert fires at the intended rate and that recovery time does not degrade across
-successive resyncs.
+**Measured** — not yet verified. `scripts/chaos/capture-corrupt-frame.sh` printed SKIP on
+the 2026-08-26 run, as designed: TLS leaves no seam to corrupt a live frame. When
+`k2-replay` (Phase G) exists it will inject a corrupt book level to force a resync, then
+repeat it to confirm the storm alert fires at the intended rate and that recovery time
+does not degrade across successive resyncs. Until then the only evidence is the unit test
+the SKIP banner names.
 
 ---
 
@@ -183,7 +205,7 @@ _None yet. Appended with their date as they happen; never overwritten._
 
 ---
 
-**Last verified:** commands marked ✅ were run against the running capture tier on
-2026-08-26; no MTTR on this page is measured, because nothing has been fault-injected. Commands
-marked ✅ were run against the v2 stack on 2026-08-26 with the service name
-substituted. Stamp this line with a date and a commit at the Phase C chaos run.
+**Last verified:** 2026-08-26 (`make chaos`). Recovery times are measured, from
+[`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv);
+gap *detection* and the resync-storm alert are not, and both wait on `k2-replay`
+(Phase G). Commands marked ✅ were run against the stack the same day.

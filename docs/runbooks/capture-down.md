@@ -7,17 +7,17 @@ up and scrapeable but whose feed has gone quiet — that is
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **No MTTR here is measured — the Phase C chaos run fills them in.** The capture
-> tier (ADR-019) is built and running. Commands marked ✅ were run against it on
-> 2026-08-26. What has not happened is a fault injection, so every **Measured** cell
-> below reads "not yet". `make chaos` (`scripts/chaos/*.sh`) induces each failure,
-> waits for the alert, and measures recovery — the **Measured** rows are filled from
-> that run, not from an estimate.
+> **The MTTRs below are measured**, from the first `make chaos` run on 2026-08-26
+> (16:40–16:57Z, binary `v3-phase-b-33-gf808d87`,
+> [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)).
+> Commands marked ✅ were run against the live capture tier the same day. Numbers here
+> are hand-copied from that run; a cell still reading "not yet verified" is one whose
+> fault was not injected.
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | Capture container down or crash-looping | < 2 min | not yet verified — Phase C chaos run |
-| 2 | Produce errors: records built, broker rejecting | < 5 min | not yet verified — Phase C chaos run |
+| 1 | Capture container down or crash-looping | < 2 min | **3 s** to recover once restarted (2026-08-26, `capture-kill.sh --exchange kraken`); `CaptureDown` fired 119 s into a deliberate 150 s hold |
+| 2 | Produce errors: records built, broker rejecting | < 5 min | **0 s** to resume producing after the broker returned, **14 s** to pass the mid-outage enqueue level (2026-08-26, `capture-queue-full.sh` / `redpanda-stop.sh`); `CaptureProduceErrors` fired 256 s in |
 
 ---
 
@@ -101,11 +101,23 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.kraken \
 completeness audit for the day, so a later query over that period reads a documented
 hole rather than an unexplained one.
 
-**Measured** — not yet verified. `scripts/chaos/capture-kill.sh` (Phase C) induces
-this by `docker kill`-ing one capture container, waits for `CaptureDown`, and
-measures recovery as the time until the container is scrapeable again *and* a fresh
-frame has arrived — `up == 1` alone would pass on a process that came back and never
-reconnected to the venue. That number, and its date, replace this line.
+**Measured 2026-08-26** — `scripts/chaos/capture-kill.sh --exchange kraken --hold 150`
+SIGKILLed the container, held it down, and measured recovery as the time until it was
+scrapeable again *and* a fresh frame had arrived (`up == 1` alone would pass on a process
+that came back and never reconnected to the venue):
+
+| | |
+|---|---|
+| time to `CaptureDown` firing | **119 s** — inside a deliberate 150 s hold, so this is the alert's own latency (`for: 2m` + one scrape), not a slow restart |
+| scrapeable after `docker compose up -d` | **3 s** |
+| fresh frames after that | **0 s** — the venue reconnect landed inside the same scrape interval |
+| `docker restart` count | 0 → 0, i.e. nothing crash-looped |
+
+**Time-to-recover: 3 s.** The number to remember is the asymmetry: detection takes ~2 min
+and recovery takes seconds, so almost all of the MTTR target is spent noticing. A
+container that is genuinely crash-looping shows the opposite shape — `CaptureDown` firing
+with the restart count climbing — and that is the case §1's exit-code step is for.
+Source: [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv).
 
 ---
 
@@ -168,10 +180,25 @@ Then, by cause:
 - **Nothing wrong upstream** → the fault is in the sink; capture the log line and
   open an issue rather than restart-looping.
 
-**Measured** — not yet verified. `scripts/chaos/redpanda-stop.sh` (Phase C) stops the
-broker mid-ingest, waits for `CaptureProduceErrors`, restarts it, and measures both
-recovery time and the records dropped in between — the second number is the one that
-matters here, and it is the reason this runbook exists.
+**Measured 2026-08-26** — two runs, both against kraken, one pausing the broker and one
+stopping it:
+
+| | |
+|---|---|
+| time to `CaptureProduceErrors` firing | **256 s** from the fault (`capture-queue-full.sh`, broker paused) — ~154 s after the first record was actually dropped |
+| producing again after `docker unpause` | **0 s** |
+| past the mid-outage enqueue level after `docker start` | **14 s** (`redpanda-stop.sh`), with **no capture restart** |
+| records lost, 388 s paused | **231,744** on kraken alone |
+| records lost, 45 s stopped | **7,821** on kraken alone |
+
+**The second number is the one that matters, and it is worse than the design said.** A
+45 s broker outage should have lost nothing — the 32 MiB queue buys 204 s at kraken's
+rate — but `message.timeout.ms` was 30 s, so records expired on the clock instead. That
+is fixed (`message.timeout.ms=300000`,
+[ADR-019 Outcome](../adr/ADR-019-rust-capture-tier.md#measured-correction-2026-08-26--the-32-mib-buffer-was-unreachable));
+the loss figures above are from *before* the fix and are the reason this runbook exists.
+Re-run to score the fix. Source:
+[`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv).
 
 ---
 
@@ -181,7 +208,7 @@ _None yet. Appended with their date as they happen; never overwritten._
 
 ---
 
-**Last verified:** commands marked ✅ were run against the running capture tier on
-2026-08-26; no MTTR on this page is measured, because nothing has been fault-injected. Commands
-marked ✅ were run against the v2 stack on 2026-08-26 with the service name
-substituted. Stamp this line with a date and a commit at the Phase C chaos run.
+**Last verified:** 2026-08-26 (`make chaos`). Both MTTRs on this page are measured, from
+[`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv);
+commands marked ✅ were run against the running capture tier the same day. Re-stamp when
+the queue-full script is re-run against `message.timeout.ms=300000`.

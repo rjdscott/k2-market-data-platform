@@ -22,20 +22,30 @@ failures are injected nightly"*.
 
 ## Status
 
-**None of these has been run** — `scripts/chaos/results/` does not exist yet, and
-that directory is the only thing that makes a recovery number real.
+**First run: 2026-08-26, 16:40–16:57Z**, binary `v3-phase-b-33-gf808d87` —
+[`results/2026-08-26.tsv`](results/2026-08-26.tsv). Five faults injected, one SKIP.
+`CaptureDown` and `CaptureProduceErrors` both fired on the faults they name; every
+recovery number now published in
+[`docs/architecture/failure-modes.md`](../../docs/architecture/failure-modes.md) and in
+the `docs/runbooks/capture-*.md` MTTR tables comes from that file.
 
-The blocker is no longer the capture tier: `k2-capture:v3` is built and
-`k2-capture-{binance,kraken,coinbase}` are up and healthy, so preflight passes
-today. What remains is that each script drops real market data from whichever
-venue it targets, and the two broker scripts drop it for the whole stack, so a run
-is scheduled deliberately rather than taken opportunistically — and never during a
-labelled burn-in or parity window, whose evidence it would destroy.
+Runs are still scheduled deliberately rather than taken opportunistically: each script
+drops real market data from whichever venue it targets, and the two broker scripts drop
+it for the whole stack. Never during a labelled burn-in or parity window, whose evidence
+it would destroy.
 
-They are committed unrun on purpose: the alert rules, the runbooks and the FMEA all
-already claim behaviour that only these scripts can check, and shipping the checker
-alongside the claim is the point. Until `results/` has a dated file, every
-**Measured** cell downstream of it stays empty rather than estimated.
+### What the first run found
+
+| Finding | Detail |
+|---|---|
+| **The 32 MiB producer queue was unreachable** | `capture-queue-full.sh --exchange kraken` predicted the first drop at 204 s and measured **102 s, −50 %**. Of 231,744 records lost across the 388 s fault window, **zero** carried `reason="queue_full"` — `message.timeout.ms` was 30 s, so every record expired on a timer while the buffer sat half empty, counted `delivery`. Fixed the same day: `message.timeout.ms=300000` ([ADR-019 Outcome](../../docs/adr/ADR-019-rust-capture-tier.md#measured-correction-2026-08-26--the-32-mib-buffer-was-unreachable)). **The 204 s prediction is now under test again — re-run to score it.** |
+| **A pause does not manufacture a sequence gap** | Both `capture-pause.sh` runs gave `gaps_total` 0 → 0 and `reconnects_total` 0 → 1. The reconnect starts a fresh sequence series, so there is no discontinuity to detect. Gap *detection* remains unproven and waits on `k2-replay` (Phase G). |
+| **Detection is slow, recovery is fast** | `CaptureDown` 119–165 s, `CaptureProduceErrors` 256 s; recovery 0–14 s across every script. Almost all of every MTTR is spent noticing. |
+| **Back-to-back runs cost a measurement** | `redpanda-stop.sh` ran one minute after `capture-queue-full.sh`, with `CaptureProduceErrors` still firing, so its `t_fire` reads 0 rather than an independent number. Space runs by the alert's `for:` window. |
+| **The broker survives a six-minute pause** | `rpk cluster health` clean after both, single-node Raft, no manual intervention. |
+
+Still unrun: `redpanda-stop.sh --cold-start` (the 2026-08-26 run took the default warm
+path) and `capture-corrupt-frame.sh` (SKIP by design until `k2-replay`).
 
 ---
 
@@ -45,7 +55,7 @@ alongside the claim is the point. Until `results/` has a dated file, every
 |---|---|---|---|
 | `capture-kill.sh` | `docker kill --signal=KILL` one capture container, held down past the alert window | `CaptureDown` | capture / SIGKILL |
 | `capture-pause.sh` | `docker pause` one capture container until its scrape target reads down | `CaptureDown` (a paused target is stale-marked, so `CaptureFeedStale` cannot fire on it) | capture / SIGSTOP; coinbase `sequence_num` gap; binance `lastUpdateId` regression; the *signal* of venue-side maintenance |
-| `capture-queue-full.sh` | `docker pause` the broker so librdkafka's 32 MiB queue fills and capture starts dropping | `CaptureProduceErrors` (`reason="queue_full"`) | capture → Redpanda / producer queue full |
+| `capture-queue-full.sh` | `docker pause` the broker so librdkafka's 32 MiB queue fills and capture starts dropping | `CaptureProduceErrors` — `reason="queue_full"` at binance/kraken rates, `reason="delivery"` at coinbase's, where `message.timeout.ms` binds first. The script prints which it expects and both counters | capture → Redpanda / producer queue full |
 | `redpanda-stop.sh` | `docker stop` the broker; `--cold-start` also recreates a capture container while it is down | `CaptureProduceErrors`, or `CaptureDown` under `--cold-start` (warm-up is fatal, so the container crash-loops rather than failing produces) | Redpanda / broker down; schema registry / down mid-run; schema registry / down at start |
 | `capture-corrupt-frame.sh` | none — prints SKIP and exits 0 | — | corrupt frame (**not automatable until `k2-replay`, Phase G**) |
 
@@ -53,7 +63,7 @@ All five take `--exchange binance|kraken|coinbase`, defaulting to `kraken`.
 `capture-kill.sh` also takes `--hold <seconds>` (default 150) and
 `redpanda-stop.sh` takes `--cold-start`.
 
-Three design notes worth knowing before reading them:
+Four design notes worth knowing before reading them:
 
 - **`capture-queue-full.sh` pauses the broker; `redpanda-stop.sh` stops it.** A
   paused broker leaves every TCP connection open and stops answering, so
@@ -64,11 +74,19 @@ Three design notes worth knowing before reading them:
   the single broker *and* the single schema registry, so the three Kotlin feed
   handlers, ClickHouse's Kafka-engine consumers, Console and Prefect all lose it
   too — capture is only the tier being measured. `capture-queue-full.sh
-  --exchange coinbase` is the longest: 446 s of predicted queue slack plus the
+  --exchange coinbase` is the longest: 300 s to the predicted first loss plus the
   alert's `for: 5m` and the wait puts the broker under `docker pause` for up to
-  ~36 minutes, and `redpanda-stop.sh` stops it for up to ~15. A pause beyond a
+  ~28 minutes, and `redpanda-stop.sh` stops it for up to ~15. A pause beyond a
   few minutes is itself a risk on single-node Raft, so both end by printing
-  `rpk cluster health` rather than assuming a clean return.
+  `rpk cluster health` rather than assuming a clean return. Measured 2026-08-26: a
+  388 s pause left `rpk cluster health` clean.
+- **Two caps decide when `capture-queue-full.sh` sees its first loss**, and the
+  script predicts which one binds. 32 MiB of queue is 194 / 204 / 446 s of slack
+  at the modelled wire rates; `message.timeout.ms=300000` in `sink.rs` is a flat
+  300 s. Smaller wins. Getting the other one back is a finding about the capacity
+  model or about `sink.rs` having drifted from `MESSAGE_TIMEOUT` at the top of the
+  script — which is exactly how the 2026-08-26 run caught a 30 s timeout making
+  the 32 MiB unreachable.
 - **`capture-corrupt-frame.sh` is a SKIP, not a stub.** It exists so `make chaos`
   reports the gap on every run rather than quietly not covering it. The reasons
   are in its header: TLS leaves no seam to flip a byte in a live frame, and
@@ -118,6 +136,15 @@ chaos script that can leave the stack broken is a fault of its own.
 `capture-corrupt-frame.sh` has no trap because it injects nothing: it prints its
 SKIP banner, appends a `skip` row and exits.
 
+> **Never `kill -9` a running chaos script.** The trap is armed *after* the fault is
+> injected and cleared *after* the restore, so a SIGKILL of the script — unlike `Ctrl-C`,
+> which the trap handles — skips the restore entirely and leaves whatever it broke
+> broken. This happened at 16:39Z on 2026-08-26: a killed run left
+> `k2-capture-kraken Exited (137)` with nothing to bring it back, and the real run had to
+> start from a repaired stack. If you must stop a run, `Ctrl-C` it and wait for the
+> restore line; if you already killed one, check `docker compose ps` for a stopped
+> container and `docker unpause k2-redpanda` before doing anything else.
+
 ---
 
 ## Results, and how they reach the FMEA
@@ -159,8 +186,10 @@ alongside the run date, in the same PR as the results file. It is deliberately n
 automated: a number that appears in a published document without someone reading
 the run it came from is exactly how v2 ended up with benchmark figures nobody could
 trace back to a command. The same hand-copy discipline fills the **Measured**
-column of the four `docs/runbooks/capture-*.md` MTTR tables, which today all read
-"not yet verified — Phase C chaos run".
+column of the `docs/runbooks/capture-*.md` MTTR tables and the *Measured MTTR* section of
+[`docs/runbooks/redpanda.md`](../../docs/runbooks/redpanda.md). Cells whose fault was not
+injected keep reading "not yet verified" with the concrete trigger that will fill them —
+a measured page and an honest page are the same page.
 
 The gate on the result is in
 [`003-phase-d-lake-tier.md`](../../docs/plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md#verification):

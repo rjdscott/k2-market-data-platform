@@ -8,16 +8,19 @@ dead container see [capture-down.md](./capture-down.md).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **No MTTR here is measured — the Phase C chaos run fills them in.** The capture
-> tier (ADR-019) is built and running. Commands marked ✅ were run against it on
-> 2026-08-26. What has not happened is a fault injection, so every **Measured** cell
-> below reads "not yet".
+> **Nothing on this page was measured by the 2026-08-26 chaos run**, and that is a
+> stated gap rather than a pending one. The run
+> ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv))
+> injected five faults; none of them can produce a checksum mismatch, a depth
+> degradation or a precision loss, because all three need chosen bytes pushed through
+> the running binary. `capture-corrupt-frame.sh` printed SKIP for exactly this reason.
+> Each cell below names the concrete thing that will fill it.
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | Kraken CRC32 book checksum mismatch | recovery automatic; **investigation < 30 min** | not yet verified — Phase C chaos run |
-| 2 | Book depth degraded — fewer levels than top-20 | < 30 min to classify | not yet verified — Phase C chaos run |
-| 3 | Precision loss — a value finer than 8 dp | **no restart; ADR required** | not yet verified — Phase C chaos run |
+| 1 | Kraken CRC32 book checksum mismatch | recovery automatic; **investigation < 30 min** | not yet verified — needs `k2-replay` (Phase G); `capture-corrupt-frame.sh` is a SKIP until then |
+| 2 | Book depth degraded — fewer levels than top-20 | < 30 min to classify | not yet verified — needs a burn-in window's `k2_capture_book_levels_total` series (Phase F), not a fault injection |
+| 3 | Precision loss — a value finer than 8 dp | **no restart; ADR required** | not yet verified — no injection possible; the counter's first tick in production is the measurement |
 
 ---
 
@@ -205,9 +208,10 @@ doubles the memory. An exit code `137` on `k2-capture-coinbase` is this bound be
 hit; raise the limit in `docker-compose.yml` **and** update ADR-010's Outcome and the
 budget comment in `docker-compose.yml`, as the project guardrails require.
 
-**Measured** — not yet verified. Phase C measures steady-state `k2_capture_book_levels_total`
-per exchange over the burn-in window and records the observed peak against the 512 MB
-limit in `docs/architecture/capacity-model.md`.
+**Measured** — not yet verified, and no chaos script can fill it: this is a steady-state
+observation, not a fault. Phase F's burn-in samples `k2_capture_book_levels_total` per
+exchange across the window and records the observed peak against the 512 MB limit in
+[`capacity-model.md` §5](../architecture/capacity-model.md).
 
 ---
 
@@ -281,7 +285,7 @@ _None yet. Appended with their date as they happen; never overwritten._
 
 ---
 
-**Last verified:** commands marked ✅ were run against the running capture tier on
-2026-08-26; no MTTR on this page is measured, because nothing has been fault-injected. Commands
-marked ✅ were run against the v2 stack on 2026-08-26 with the service name
-substituted. Stamp this line with a date and a commit at the Phase C chaos run.
+**Last verified:** 2026-08-26 (`make chaos`) — commands marked ✅ were run against the
+running capture tier that day, and the chaos run confirmed that none of the three
+failures on this page is injectable with the scripts that exist. No MTTR here is
+measured. Re-stamp when `k2-replay` (Phase G) lands.

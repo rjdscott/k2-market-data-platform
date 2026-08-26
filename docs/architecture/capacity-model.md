@@ -256,6 +256,26 @@ anyway so that a deeper or faster book stays recoverable by replay.
 | coinbase WS max-message-size buffer | **16 MB** | Set explicitly because Python's 1 MiB default died on the first snapshot (S5); 16 MiB is 3× the observed 5.2 MB | I3 |
 | coinbase transient snapshot parse | **~25 MB peak** | a `serde_json` DOM of a 5.2 MB document costs ~5× the input; **at connect only** | `5.2 MB × 5` |
 
+> **Note, 2026-08-26 — the queue-slack row above was scored and the prediction did not
+> hold.** `32 MiB ÷ 164.3 kB/s` gives kraken **204 s** before the first record is dropped.
+> The first chaos run
+> ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv))
+> measured the first drop at **102 s, −50 %**, with 231,744 records lost and **zero**
+> carrying `reason="queue_full"`.
+>
+> **The arithmetic was not what was wrong.** `sink.rs` also set
+> `message.timeout.ms=30000`, so records were failed on a 30 s timer regardless of how
+> much of the 32 MiB was free — the queue's slack was never reachable and the drops were
+> counted `delivery`. The prediction above is a bytes prediction and remains untested as
+> one; what the run tested was the *smaller* of two caps, which is not the row's claim.
+>
+> The row is left as predicted, as this page's convention requires. The timeout is now
+> 300 s ([ADR-019 Outcome](../adr/ADR-019-rust-capture-tier.md#measured-correction-2026-08-26--the-32-mib-buffer-was-unreachable)),
+> which puts the queue back in front at binance and kraken rates — coinbase's 446 s still
+> sits behind the 300 s timeout, so that venue's slack is capped by time by design.
+> **Revisit when** `capture-queue-full.sh --exchange kraken` is re-run against a binary
+> carrying `message.timeout.ms=300000`; that run scores the 204 s.
+
 **Predicted RSS against the limits:**
 
 | Container | Steady, predicted | Peak, predicted | Limit | Peak vs limit | Derived from |
