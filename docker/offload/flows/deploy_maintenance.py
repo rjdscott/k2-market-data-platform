@@ -23,9 +23,9 @@ def deploy_maintenance_schedule() -> None:
     print("=" * 70)
     print()
     print(f"Prefect API URL : {os.environ['PREFECT_API_URL']}")
-    print(f"Deployment name : iceberg-maintenance-daily")
-    print(f"Schedule        : 0 2 * * * (02:00 UTC daily)")
-    print(f"Work pool       : iceberg-offload  (shared with offload flow)")
+    print("Deployment name : iceberg-maintenance-daily")
+    print("Schedule        : 0 2 * * * (02:00 UTC daily)")
+    print("Work pool       : iceberg-offload  (shared with offload flow)")
     print()
 
     deployment_id = iceberg_maintenance_main.from_source(
@@ -34,7 +34,7 @@ def deploy_maintenance_schedule() -> None:
     ).deploy(
         name="iceberg-maintenance-daily",
         work_pool_name="iceberg-offload",
-        cron="0 2 * * *",          # 02:00 UTC daily
+        cron="0 2 * * *",  # 02:00 UTC daily
         tags=["iceberg", "maintenance", "production", "phase-5"],
         description=(
             "Daily Iceberg maintenance: compact → expire → audit. "

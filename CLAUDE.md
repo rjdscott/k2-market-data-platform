@@ -46,8 +46,8 @@ Keep these updated and concise.
 
 If you fail more than one → consider simpler approach.
 
-### 4) Decision Documentation (lightweight)
-When making non-trivial choices, add a short block:
+### 4) Decision & Doc Conventions
+Non-trivial choices get a short block in the PR/response:
 ```text
 Decision YYYY-MM-DD: <short title>
 Reason: <one-line>
@@ -55,17 +55,26 @@ Cost: <one-line>
 Alternative considered: <one-line>
 ```
 
-### 5) Python Environment & Testing Setup
-This project uses `uv` for Python environment management.
+Durable decisions become an ADR in `docs/decisions/` (`ADR-NNN-kebab-title.md`, next number wins).
+Amend or supersede an ADR rather than rewriting history — a reversed decision is worth more than a
+tidy one. Docs live in `docs/{architecture,decisions,operations,development}/`; **never commit session
+logs, handoffs, progress trackers, or phase status files** — they rot. Diagrams are Mermaid, not ASCII.
 
-Key commands:
-- `uv sync` — install/sync dependencies
-- `uv run pytest` — run tests in the uv environment
-- `uv run python -m <module>` — run Python modules
-- `uv add <package>` — add a dependency
-- `uv pip install <package>` — install package directly
+### 5) Repo Layout, Environments & Tests
+v2 (the live platform) is at the repo root; v1 is archived, unmodified, in `legacy/v1/`.
+`docker-compose.yml` at the root runs the whole stack (`make up` / `make down`).
 
-Always use `uv run` prefix when running tests or Python commands to ensure correct environment isolation.
+Python uses `uv`. The root has no `pyproject.toml`, so root tests run against ad-hoc deps:
+- `make test-python` → `uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests`
+- Lint: `uv run --no-project --with ruff ruff check docker/offload tests`
+- Legacy v1 is a real uv project: `cd legacy/v1 && uv sync --all-extras && uv run pytest`
+
+Kotlin feed handler (`services/feed-handler-kotlin/`, JDK 21):
+- `make test-kotlin` → `./gradlew test --no-daemon`
+- No local JDK 21? `docker run --rm -v "$PWD":/project -w /project/services/feed-handler-kotlin \`
+  `-e GRADLE_USER_HOME=/tmp/.gradle gradle:8.12-jdk21 gradle test --no-daemon`
+
+CI (`.github/workflows/ci.yml`) runs kotlin / python / docker / security on every PR — keep it green.
 
 **Package Installation Best Practice:**
 When adding new Python packages, always research the latest stable version first:

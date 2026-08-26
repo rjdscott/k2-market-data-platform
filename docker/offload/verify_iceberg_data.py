@@ -13,9 +13,9 @@ spark = (
     .getOrCreate()
 )
 
-print("\n" + "="*80)
+print("\n" + "=" * 80)
 print("Iceberg Table Verification: demo.cold.bronze_trades_binance")
-print("="*80)
+print("=" * 80)
 
 # Count and stats
 result = spark.sql("""

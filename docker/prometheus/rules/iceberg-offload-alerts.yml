@@ -23,7 +23,7 @@ groups:
             This indicates a persistent issue with the offload pipeline.
 
             **Immediate Actions:**
-            1. Check scheduler logs: `tail -100 /tmp/iceberg-offload-scheduler.log`
+            1. Check worker logs: `docker compose logs prefect-worker --tail 100`
             2. Verify ClickHouse connectivity: `docker exec k2-clickhouse clickhouse-client -q "SELECT 1"`
             3. Check Spark container health: `docker ps | grep spark-iceberg`
             4. Review watermark table for corruption
@@ -47,8 +47,8 @@ groups:
             **Impact:** Cold tier data is stale; queries may return incomplete results.
 
             **Check:**
-            - Scheduler running: `systemctl status iceberg-offload-scheduler`
-            - Recent cycles: `grep COMPLETED /tmp/iceberg-offload-scheduler.log | tail -5`
+            - Deployments registered: `docker exec k2-prefect-worker prefect deployment ls`
+            - Recent cycles: `docker compose logs prefect-worker --tail 100`
 
             **Runbook:** docs/operations/runbooks/iceberg-offload-lag.md
 
@@ -91,10 +91,10 @@ groups:
             This indicates the offload pipeline is hung or failing silently.
 
             **Actions:**
-            1. Check if scheduler is running
-            2. Review last cycle status in logs
+            1. Check deployments registered: `docker exec k2-prefect-worker prefect deployment ls`
+            2. Review last cycle status: `docker compose logs prefect-worker --tail 100`
             3. Manually inspect watermark table
-            4. Consider restarting scheduler if hung
+            4. Restart worker if hung: `docker compose restart prefect-worker`
 
             **Runbook:** docs/operations/runbooks/iceberg-offload-watermark-recovery.md
 
@@ -124,7 +124,7 @@ groups:
             **Impact:** Minor - cold tier may have small gaps, but not critical yet.
 
             **Actions:**
-            - Review error types: `grep ERROR /tmp/iceberg-offload-scheduler.log | tail -20`
+            - Review error types: `docker compose logs prefect-worker --tail 100`
             - Check for transient network issues
             - Monitor for escalation to critical threshold
 
@@ -207,9 +207,9 @@ groups:
             - Network connectivity issue
 
             **Actions:**
-            1. Check scheduler status: `systemctl status iceberg-offload-scheduler`
-            2. Check scheduler logs: `tail -50 /tmp/iceberg-offload-scheduler.log`
-            3. Restart if needed: `systemctl restart iceberg-offload-scheduler`
+            1. Check deployments registered: `docker exec k2-prefect-worker prefect deployment ls`
+            2. Check worker logs: `docker compose logs prefect-worker --tail 100`
+            3. Restart if needed: `docker compose restart prefect-worker`
 
             **Runbook:** docs/operations/runbooks/iceberg-scheduler-recovery.md
 

@@ -6,6 +6,17 @@
 **Last Updated:** 2026-02-12
 **Maintained By:** Platform Engineering
 
+
+> **Metrics caveat (read first).** The `offload_*` metrics used below are exported by
+> `docker/offload/metrics.py`, which only starts its HTTP server on port 8000 when the
+> flow is run standalone. Under the Prefect worker no exporter runs and the
+> `iceberg-scheduler` scrape job is commented out in `docker/prometheus/prometheus.yml`,
+> so `curl localhost:8000/metrics` will fail and the Prometheus alerts named here cannot
+> fire. Until that is wired up, substitute the ground-truth sources: the watermark table
+> in PostgreSQL, Prefect run history (`prefect flow-run ls`), and
+> `docker logs k2-prefect-worker` / `docker logs k2-spark-iceberg`. See
+> [../observability.md](../observability.md#iceberg-offload-alertsyml--cold-tier-9).
+
 ---
 
 ## Summary
@@ -48,14 +59,22 @@ This runbook covers resolution procedures when offload cycle duration exceeds ac
 
 ## Diagnosis
 
+> Offload output goes to the Prefect worker, not to a log file. Snapshot it once, then the
+> `grep`s below work as written:
+>
+> ```bash
+> docker logs k2-prefect-worker --since 3h > /tmp/k2-offload.log
+> export OFFLOAD_LOG=/tmp/k2-offload.log
+> ```
+
 ### Step 1: Measure Current Performance
 
 ```bash
 # Check recent cycle durations
-grep "Duration:" /tmp/iceberg-offload-scheduler.log | tail -10
+grep "Duration:" "$OFFLOAD_LOG" | tail -10
 
 # Calculate average duration (last 10 cycles)
-grep "Duration:" /tmp/iceberg-offload-scheduler.log | tail -10 | \
+grep "Duration:" "$OFFLOAD_LOG" | tail -10 | \
   awk '{print $NF}' | sed 's/s//' | \
   awk '{sum+=$1; n++} END {print "Average:", sum/n, "seconds"}'
 
@@ -71,7 +90,7 @@ curl -s http://localhost:8000/metrics | grep offload_cycle_duration_seconds_sum
 
 ```bash
 # Check individual table durations from recent cycle
-tail -100 /tmp/iceberg-offload-scheduler.log | \
+tail -100 "$OFFLOAD_LOG" | \
   grep "Offload completed" | \
   tail -5
 
@@ -90,15 +109,15 @@ tail -100 /tmp/iceberg-offload-scheduler.log | \
 
 ```bash
 # Check rows being offloaded per cycle
-grep "Rows offloaded:" /tmp/iceberg-offload-scheduler.log | tail -10
+grep "Rows offloaded:" "$OFFLOAD_LOG" | tail -10
 
 # Check ClickHouse data volume trend (last 6 hours)
-docker exec k2-clickhouse clickhouse-client -q \
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
   "SELECT
      toStartOfHour(exchange_timestamp) AS hour,
      COUNT(*) AS rows,
-     formatReadableSize(SUM(length(toString(trade_id)) + length(toString(price)))) AS size
-   FROM bronze_trades_binance
+     formatReadableSize(SUM(length(toString(price)) + length(toString(quantity)))) AS size
+   FROM k2.bronze_trades_binance
    WHERE exchange_timestamp > now() - INTERVAL 6 HOUR
    GROUP BY hour
    ORDER BY hour DESC"
@@ -149,7 +168,7 @@ docker exec k2-spark-iceberg ping -c 100 k2-clickhouse | tail -3
 
 ```bash
 # Check slow queries
-docker exec k2-clickhouse clickhouse-client -q \
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
   "SELECT
      query,
      elapsed,
@@ -160,7 +179,7 @@ docker exec k2-clickhouse clickhouse-client -q \
    ORDER BY elapsed DESC"
 
 # Check query log (recent slow queries)
-docker exec k2-clickhouse clickhouse-client -q \
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
   "SELECT
      query_duration_ms,
      query,
@@ -191,11 +210,11 @@ docker exec k2-clickhouse clickhouse-client -q \
 1. **Confirm data spike is temporary:**
    ```bash
    # Check trend (last 6 hours)
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "SELECT
         toStartOfHour(exchange_timestamp) AS hour,
         COUNT(*) AS rows
-      FROM bronze_trades_binance
+      FROM k2.bronze_trades_binance
       WHERE exchange_timestamp > now() - INTERVAL 6 HOUR
       GROUP BY hour
       ORDER BY hour DESC"
@@ -217,22 +236,24 @@ docker exec k2-clickhouse clickhouse-client -q \
 
 3. **Short-term mitigation (if critical):**
 
-   **Option A: Increase cycle interval temporarily**
+   **Option A: Widen the schedule temporarily**
    ```bash
-   # Edit scheduler.py
-   # Change: SCHEDULE_INTERVAL_MINUTES = 15
-   # To: SCHEDULE_INTERVAL_MINUTES = 20
-
-   sudo systemctl restart iceberg-offload-scheduler
+   # Change the cron in docker/offload/flows/prefect.yaml to "*/30 * * * *", then redeploy
+   docker exec k2-prefect-worker python3 /opt/prefect/flows/deploy_production.py
    ```
 
-   **Option B: Manual throttling**
+   **Option B: Pause the schedule and drive it manually**
    ```bash
-   # Stop scheduler temporarily
-   sudo systemctl stop iceberg-offload-scheduler
+   docker exec k2-prefect-server prefect deployment set-schedule \
+     iceberg-offload-main/iceberg-offload-15min --paused
 
-   # Run manual offload every 30 minutes until spike subsides
-   # (Prevents overlap, allows full completion)
+   # Run one cycle at a time until the spike subsides (prevents overlap)
+   docker exec k2-prefect-server prefect deployment run \
+     'iceberg-offload-main/iceberg-offload-15min'
+
+   # Re-enable when normal
+   docker exec k2-prefect-server prefect deployment set-schedule \
+     iceberg-offload-main/iceberg-offload-15min --active
    ```
 
 ---
@@ -274,7 +295,7 @@ docker exec k2-clickhouse clickhouse-client -q \
    **Issue 2b: ClickHouse memory pressure**
    ```bash
    # Check ClickHouse memory
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "SELECT
         formatReadableSize(total_bytes) AS total,
         formatReadableSize(free_bytes) AS free
@@ -286,7 +307,7 @@ docker exec k2-clickhouse clickhouse-client -q \
 
    # Wait for ClickHouse to be ready (10 seconds)
    sleep 10
-   docker exec k2-clickhouse clickhouse-client -q "SELECT 1"
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "SELECT 1"
    ```
 
    **Issue 2c: Competing processes**
@@ -380,7 +401,7 @@ docker exec k2-clickhouse clickhouse-client -q \
 1. **Identify slow query pattern:**
    ```bash
    # Get slowest queries
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "SELECT
         query_duration_ms / 1000 AS duration_sec,
         read_rows,
@@ -397,7 +418,7 @@ docker exec k2-clickhouse clickhouse-client -q \
 2. **Check for table fragmentation:**
    ```bash
    # Check parts count (fragmentation indicator)
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "SELECT
         table,
         COUNT(*) AS parts_count,
@@ -415,23 +436,23 @@ docker exec k2-clickhouse clickhouse-client -q \
 3. **Optimize fragmented tables:**
    ```bash
    # Run OPTIMIZE TABLE (merges parts)
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "OPTIMIZE TABLE k2.bronze_trades_binance FINAL"
 
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "OPTIMIZE TABLE k2.bronze_trades_kraken FINAL"
 
    # This can take 5-15 minutes depending on data volume
    # Monitor progress:
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "SELECT * FROM system.merges"
    ```
 
 4. **Check query plan (if specific query slow):**
    ```bash
    # Explain query plan
-   docker exec k2-clickhouse clickhouse-client -q \
-     "EXPLAIN SELECT * FROM bronze_trades_binance
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+     "EXPLAIN SELECT * FROM k2.bronze_trades_binance
       WHERE exchange_timestamp > now() - INTERVAL 1 HOUR
       AND sequence_number > 1000000
       ORDER BY exchange_timestamp, sequence_number"
@@ -449,7 +470,7 @@ If data volume sustains >7M rows/hour for multiple days, consider these optimiza
 
 1. **Increase Spark Resources:**
    ```yaml
-   # In docker-compose.v2.yml
+   # In docker-compose.yml
    spark-iceberg:
      environment:
        - SPARK_EXECUTOR_MEMORY=4g  # Increase from 2g
@@ -495,19 +516,19 @@ If data volume sustains >7M rows/hour for multiple days, consider these optimiza
    echo "=== Offload Performance Report (Last 7 Days) ==="
 
    echo "Average Cycle Duration:"
-   grep "Duration:" /tmp/iceberg-offload-scheduler.log | \
+   grep "Duration:" "$OFFLOAD_LOG" | \
      tail -672 | \  # 7 days * 96 cycles/day
      awk '{print $NF}' | sed 's/s//' | \
      awk '{sum+=$1; n++} END {printf "%.1f seconds\n", sum/n}'
 
    echo "P95 Cycle Duration:"
-   grep "Duration:" /tmp/iceberg-offload-scheduler.log | \
+   grep "Duration:" "$OFFLOAD_LOG" | \
      tail -672 | \
      awk '{print $NF}' | sed 's/s//' | sort -n | \
      awk '{arr[NR]=$1} END {print arr[int(NR*0.95)]}'
 
    echo "Cycles >5 minutes:"
-   grep "Duration:" /tmp/iceberg-offload-scheduler.log | \
+   grep "Duration:" "$OFFLOAD_LOG" | \
      tail -672 | \
      awk '{if ($NF+0 > 300) print}' | wc -l
    EOF
@@ -525,7 +546,7 @@ If data volume sustains >7M rows/hour for multiple days, consider these optimiza
 3. **Regular ClickHouse optimization:**
    ```bash
    # Monthly OPTIMIZE (add to cron)
-   0 2 1 * * docker exec k2-clickhouse clickhouse-client -q "OPTIMIZE TABLE k2.bronze_trades_binance FINAL"
+   0 2 1 * * docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "OPTIMIZE TABLE k2.bronze_trades_binance FINAL"
    ```
 
 4. **Capacity planning:**
@@ -554,7 +575,7 @@ If data volume sustains >7M rows/hour for multiple days, consider these optimiza
 - **Related:** `IcebergOffloadThroughputLow` (may indicate performance issue)
 
 ### Logs
-- **Scheduler:** `/tmp/iceberg-offload-scheduler.log`
+- **Offload flow:** `docker logs k2-prefect-worker` (snapshot to `$OFFLOAD_LOG`, see Diagnosis)
 - **Spark:** `docker logs k2-spark-iceberg`
 - **ClickHouse:** `docker logs k2-clickhouse`
 
@@ -569,7 +590,7 @@ If data volume sustains >7M rows/hour for multiple days, consider these optimiza
    # Monitor next 5 cycles (75 minutes)
    for i in {1..5}; do
      sleep 900  # 15 minutes
-     tail -3 /tmp/iceberg-offload-scheduler.log | grep "Duration:"
+     tail -3 "$OFFLOAD_LOG" | grep "Duration:"
    done
 
    # Expected: Duration <60 seconds
@@ -602,11 +623,11 @@ If data volume sustains >7M rows/hour for multiple days, consider these optimiza
 
 ```bash
 # 1. Check cycle duration (10 seconds)
-grep "Duration:" /tmp/iceberg-offload-scheduler.log | tail -5
+grep "Duration:" "$OFFLOAD_LOG" | tail -5
 
 # 2. Check data volume (10 seconds)
-docker exec k2-clickhouse clickhouse-client -q \
-  "SELECT COUNT(*) FROM bronze_trades_binance WHERE exchange_timestamp > now() - INTERVAL 1 HOUR"
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+  "SELECT COUNT(*) FROM k2.bronze_trades_binance WHERE exchange_timestamp > now() - INTERVAL 1 HOUR"
 
 # 3. Check resources (10 seconds)
 docker stats --no-stream | grep -E "clickhouse|spark"
@@ -615,7 +636,7 @@ docker stats --no-stream | grep -E "clickhouse|spark"
 docker exec k2-spark-iceberg ping -c 10 k2-clickhouse
 
 # 5. Optimize if needed (5 minutes)
-docker exec k2-clickhouse clickhouse-client -q "OPTIMIZE TABLE k2.bronze_trades_binance FINAL"
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "OPTIMIZE TABLE k2.bronze_trades_binance FINAL"
 ```
 
 **Total Diagnosis Time:** 5 minutes

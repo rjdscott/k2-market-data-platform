@@ -8,26 +8,26 @@ Last Updated: 2026-02-14
 """
 
 import re
-import sys
-from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Dict, List
 import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
 
 from prefect import flow, task
 from prefect.task_runners import ConcurrentTaskRunner
 
 # Import Prometheus metrics (optional - graceful degradation)
 try:
-    sys.path.insert(0, '/opt/prefect/offload')
+    sys.path.insert(0, "/opt/prefect/offload")
     from metrics import (
-        record_offload_success,
-        record_offload_failure,
         record_cycle_complete,
+        record_offload_failure,
+        record_offload_success,
         set_configured_tables,
         set_pipeline_info,
         start_metrics_server,
     )
+
     METRICS_ENABLED = True
 except ImportError:
     METRICS_ENABLED = False
@@ -35,8 +35,6 @@ except ImportError:
 
 # Add offload scripts to Python path
 sys.path.append(str(Path(__file__).parent.parent))
-
-from watermark_pg import WatermarkManager
 
 
 # ============================================================================
@@ -143,6 +141,7 @@ SPARK_SUBMIT_CMD = "/opt/spark/bin/spark-submit"
 # Prefect Tasks
 # ============================================================================
 
+
 @task(
     name="offload-table",
     description="Offload single table from ClickHouse to Iceberg",
@@ -157,8 +156,8 @@ def offload_table(
     timestamp_col: str,
     sequence_col: str,
     layer: str,
-    columns: str = "*"
-) -> Dict[str, any]:
+    columns: str = "*",
+) -> dict[str, any]:
     """
     Offload a single table from ClickHouse to Iceberg.
 
@@ -176,20 +175,30 @@ def offload_table(
         subprocess.CalledProcessError: If PySpark job fails
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
 
     logger.info(f"Starting offload: {source_table} → {target_table}")
     start_time = datetime.now()
 
     cmd = [
-        "docker", "exec", "k2-spark-iceberg",
-        "python3", "/home/iceberg/offload/offload_generic.py",
-        "--source-table", source_table,
-        "--target-table", target_table,
-        "--timestamp-col", timestamp_col,
-        "--sequence-col", sequence_col,
-        "--layer", layer,
-        "--columns", columns,
+        "docker",
+        "exec",
+        "k2-spark-iceberg",
+        "python3",
+        "/home/iceberg/offload/offload_generic.py",
+        "--source-table",
+        source_table,
+        "--target-table",
+        target_table,
+        "--timestamp-col",
+        timestamp_col,
+        "--sequence-col",
+        sequence_col,
+        "--layer",
+        layer,
+        "--columns",
+        columns,
     ]
 
     try:
@@ -199,7 +208,7 @@ def offload_table(
             capture_output=True,
             text=True,
             check=True,
-            timeout=600  # 10-minute timeout
+            timeout=600,  # 10-minute timeout
         )
 
         duration = (datetime.now() - start_time).total_seconds()
@@ -208,9 +217,9 @@ def offload_table(
         # Regex is more robust than split(':') since the log line format is stable
         # and handles varying amounts of whitespace or comma-formatting in the number.
         rows_written = 0
-        match = re.search(r'Rows offloaded:\s*([\d,]+)', result.stdout)
+        match = re.search(r"Rows offloaded:\s*([\d,]+)", result.stdout)
         if match:
-            rows_written = int(match.group(1).replace(',', ''))
+            rows_written = int(match.group(1).replace(",", ""))
 
         logger.info(f"✓ Offload completed: {source_table}")
         logger.info(f"  Duration: {duration:.2f}s")
@@ -219,10 +228,7 @@ def offload_table(
         # Record Prometheus metrics
         if METRICS_ENABLED:
             record_offload_success(
-                table=source_table,
-                layer=layer,
-                rows=rows_written,
-                duration=duration
+                table=source_table, layer=layer, rows=rows_written, duration=duration
             )
 
         return {
@@ -246,22 +252,19 @@ def offload_table(
                 table=source_table,
                 layer=layer,
                 error_type="process_error",
-                duration=duration
+                duration=duration,
             )
 
-        raise RuntimeError(f"Offload failed for {source_table}: {e.stderr}")
+        raise RuntimeError(f"Offload failed for {source_table}: {e.stderr}") from e
 
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         duration = (datetime.now() - start_time).total_seconds()
         logger.error(f"✗ Offload timeout: {source_table} (exceeded 10 minutes)")
 
         # Record Prometheus metrics
         if METRICS_ENABLED:
             record_offload_failure(
-                table=source_table,
-                layer=layer,
-                error_type="timeout",
-                duration=duration
+                table=source_table, layer=layer, error_type="timeout", duration=duration
             )
 
         raise
@@ -270,7 +273,7 @@ def offload_table(
 @task(
     name="check-watermark",
     description="Check if table has new data to offload",
-    tags=["iceberg", "watermark"]
+    tags=["iceberg", "watermark"],
 )
 def check_watermark(source_table: str) -> bool:
     """
@@ -283,6 +286,7 @@ def check_watermark(source_table: str) -> bool:
         True if new data available, False otherwise
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
 
     # For now, always return True (let PySpark job handle empty windows)
@@ -295,6 +299,7 @@ def check_watermark(source_table: str) -> bool:
 # Prefect Flows
 # ============================================================================
 
+
 @flow(
     name="offload-bronze-layer",
     description="Offload all Bronze tables in parallel",
@@ -303,7 +308,7 @@ def check_watermark(source_table: str) -> bool:
     retry_delay_seconds=300,
     log_prints=True,
 )
-def offload_bronze_layer() -> List[Dict]:
+def offload_bronze_layer() -> list[dict]:
     """
     Offload all Bronze tables from ClickHouse to Iceberg in parallel.
 
@@ -311,6 +316,7 @@ def offload_bronze_layer() -> List[Dict]:
         List of execution results for each table
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
 
     logger.info("=" * 80)
@@ -340,7 +346,7 @@ def offload_bronze_layer() -> List[Dict]:
     retries=1,
     retry_delay_seconds=300,
 )
-def offload_silver_layer() -> List[Dict]:
+def offload_silver_layer() -> list[dict]:
     """
     Offload Silver table from ClickHouse to Iceberg.
 
@@ -348,6 +354,7 @@ def offload_silver_layer() -> List[Dict]:
         List of execution results
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
 
     logger.info("=" * 80)
@@ -366,7 +373,7 @@ def offload_silver_layer() -> List[Dict]:
         )
         results.append(result)
 
-    logger.info(f"✓ Silver layer offload complete")
+    logger.info("✓ Silver layer offload complete")
     return results
 
 
@@ -377,7 +384,7 @@ def offload_silver_layer() -> List[Dict]:
     retries=1,
     retry_delay_seconds=300,
 )
-def offload_gold_layer() -> List[Dict]:
+def offload_gold_layer() -> list[dict]:
     """
     Offload all Gold OHLCV tables from ClickHouse to Iceberg in parallel.
 
@@ -385,6 +392,7 @@ def offload_gold_layer() -> List[Dict]:
         List of execution results for each table
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
 
     logger.info("=" * 80)
@@ -413,7 +421,7 @@ def offload_gold_layer() -> List[Dict]:
     version="3.1.0",
     log_prints=True,
 )
-def iceberg_offload_main() -> Dict[str, any]:
+def iceberg_offload_main() -> dict[str, any]:
     """
     Main orchestration flow for ClickHouse → Iceberg offload.
 
@@ -428,6 +436,7 @@ def iceberg_offload_main() -> Dict[str, any]:
         Dict with summary metrics
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
 
     start_time = datetime.now()
@@ -464,7 +473,9 @@ def iceberg_offload_main() -> Dict[str, any]:
     logger.info(f"  Total tables offloaded: {successful}/{total_tables}")
     logger.info(f"  Total rows: {total_rows:,}")
     logger.info(f"  Total duration: {total_duration:.2f}s")
-    logger.info(f"  Bronze: {len(bronze_results)} tables | Silver: {len(silver_results)} | Gold: {len(gold_results)} tables")
+    logger.info(
+        f"  Bronze: {len(bronze_results)} tables | Silver: {len(silver_results)} | Gold: {len(gold_results)} tables"
+    )
     logger.info("")
 
     # Record cycle metrics
@@ -476,7 +487,7 @@ def iceberg_offload_main() -> Dict[str, any]:
             tables_processed=total_tables,
             successful=successful,
             failed=failed,
-            total_rows=total_rows
+            total_rows=total_rows,
         )
 
     return {
@@ -506,11 +517,7 @@ if __name__ == "__main__":
             print("Prometheus metrics enabled on port 8000")
             set_configured_tables(len(TABLE_CONFIG["bronze"]))
             table_names = [t["source"] for t in TABLE_CONFIG["bronze"]]
-            set_pipeline_info(
-                version="3.0.0",
-                schedule_minutes=15,
-                tables=table_names
-            )
+            set_pipeline_info(version="3.0.0", schedule_minutes=15, tables=table_names)
 
     # Run flow
     iceberg_offload_main()

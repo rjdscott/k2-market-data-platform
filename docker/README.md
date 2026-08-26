@@ -1,177 +1,84 @@
-# K2 Platform v2 - Docker Configuration
+# Docker Configuration
 
-**Last Updated:** 2026-02-09
-**Version:** v2.0.0-phase1
-
----
-
-## Overview
-
-This directory contains configuration files for the K2 Market Data Platform v2 greenfield build. All configurations follow 2026 best practices for containerized data platforms.
-
----
+Configuration and support code for the K2 Market Data Platform stack, run via
+`docker-compose.yml` at the repo root. For system design see
+[../docs/architecture/README.md](../docs/architecture/README.md); for
+day-to-day operations see [../docs/operations/README.md](../docs/operations/README.md).
 
 ## Directory Structure
 
 ```
 docker/
-├── README.md                          # This file
-├── v1-baseline.yml                    # Snapshotted v1 (rollback safety)
-├── clickhouse/                        # ClickHouse configuration
-│   ├── config.xml                     # Server config (performance, network)
-│   └── users.xml                      # User definitions
-├── prometheus/                        # Prometheus monitoring
-│   └── prometheus.yml                 # Scrape configs for all services
-└── grafana/                           # Grafana dashboards
-    ├── provisioning/
-    │   ├── datasources/               # Auto-provision Prometheus datasource
-    │   └── dashboards/                # Auto-provision dashboards
-    └── dashboards/
-        └── v2-migration-tracker.json  # v2 migration monitoring dashboard
+├── clickhouse/           # ClickHouse server config + DDL bootstrap + schema history
+│   ├── config.xml        # Server config (Kafka Engine, compression, Prometheus exporter)
+│   ├── ddl/              # offload-watermarks table DDL
+│   └── schema/           # Ordered schema migration history (bronze/silver/gold)
+├── iceberg/
+│   ├── ddl/              # Iceberg catalog + bronze/silver/gold table DDL
+│   ├── validation/       # Table validation SQL
+│   └── warehouse/        # Bind-mounted Iceberg warehouse (cold storage, on disk)
+├── offload/              # ClickHouse -> Iceberg offload job
+│   ├── offload_generic.py       # Direct-append offload (Spark)
+│   ├── iceberg_maintenance.py   # Compaction, snapshot expiry, warm/cold audit
+│   ├── watermark_pg.py          # Watermark read/write against PostgreSQL
+│   └── flows/                   # Prefect flow + deployment definitions
+├── prefect/              # Prefect worker image (Dockerfile) + deployment storage
+├── spark/                # Spark image (Dockerfile, bundles ClickHouse JDBC driver)
+├── grafana/
+│   ├── provisioning/     # Auto-provisioned datasource (Prometheus) + dashboard loader
+│   └── dashboards/       # Dashboard JSON (pipeline overview, ClickHouse, Iceberg offload)
+├── prometheus/
+│   ├── prometheus.yml    # Scrape configs
+│   └── rules/            # Alerting rules (ClickHouse, feed handlers, Iceberg offload)
+└── postgres/
+    └── ddl/              # offload_watermarks table DDL (Prefect metadata DB)
 ```
 
----
+## Iceberg Offload
 
-## Configuration Files
+The ClickHouse -> Iceberg offload does not run on a systemd timer or cron —
+it is scheduled as Prefect deployments on the `iceberg-offload` work pool,
+executed by the `k2-prefect-worker` container:
 
-### ClickHouse (`clickhouse/`)
+- `iceberg-offload-15min` — runs `offload_generic.py` per table every 15 minutes
+- `iceberg-maintenance-daily` — runs `iceberg_maintenance.py` (compact/expire/audit) at 02:00 UTC
 
-**config.xml** - Server configuration
-- Optimized for market data (high-frequency inserts, time-series queries)
-- Background merge pool sized for real-time OHLCV computation
-- Kafka Engine settings for Redpanda integration
-- LZ4 compression (market data compresses 10:1 typical)
-
-**users.xml** - User management
-- `default`: Internal user (no password)
-- `k2_user`: Application user (password from `.env.v2`)
-
-### Prometheus (`prometheus/`)
-
-**prometheus.yml** - Scrape configuration
-- Scrapes: Redpanda (9644), ClickHouse (8123), Grafana (3000)
-- Future: Spring Boot API (/actuator/prometheus), Kotlin feed handlers
-- 15s default scrape interval, 10s for streaming layer
-
-### Grafana (`grafana/`)
-
-**Provisioning** - Auto-setup on startup
-- Datasource: Prometheus (default)
-- Dashboards: v2 migration tracker
-
-**v2-migration-tracker.json** - Main monitoring dashboard
-- Total CPU/RAM usage vs budget (16 CPU / 40GB)
-- Service health (up/down status)
-- Redpanda throughput (msg/sec)
-- ClickHouse query rate
-- Resource consumption per service
-
----
-
-## Versioning Strategy
-
-| File | Purpose | When Updated |
-|------|---------|--------------|
-| `v1-baseline.yml` | v1 snapshot (rollback) | Never (immutable safety net) |
-| `docker-compose.v2.yml` | v2 active config | Each phase |
-| `docker/v2-phase-{N}-*.yml` | Phase checkpoints | After each phase completes |
-
-See [../docs/phases/v2/INFRASTRUCTURE-VERSIONING.md](../docs/phases/v2/INFRASTRUCTURE-VERSIONING.md) for full rollback strategy.
-
----
-
-## Best Practices Applied
-
-### Security
-- Read-only config mounts (`:ro`)
-- Environment variable secrets (not hardcoded)
-- Named networks with explicit subnet
-- Minimal permissions (users.xml)
-
-### Observability
-- Health checks on all services (15s interval)
-- Prometheus scraping all components
-- Structured logging (JSON where possible)
-- Service labels (tier, version, service name)
-
-### Resource Management
-- Explicit CPU/memory limits and reservations
-- Resource budget tracking (see docker-compose.v2.yml footer)
-- ulimits for ClickHouse (262k file descriptors)
-
-### Reliability
-- Restart policies (`unless-stopped`)
-- Dependency ordering (`depends_on` with health conditions)
-- Named volumes (data persistence)
-- Proper start periods for slow-starting services
-
----
+Deployment definitions live in `offload/flows/`. Watermarks are tracked in
+the PostgreSQL `offload_watermarks` table (seeded via `postgres/ddl/`).
 
 ## Usage
 
-### Start v2 stack
 ```bash
-docker compose -f docker-compose.v2.yml up -d
-```
+make up            # start the full stack (docker compose up -d)
+make down           # stop the stack (volumes kept)
+make logs           # tail all service logs
+make ps             # show service status
 
-### View logs
-```bash
-docker compose -f docker-compose.v2.yml logs -f
+# Prefect deployments
+docker exec k2-prefect-worker prefect deployment ls
+docker exec k2-prefect-worker prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'
+docker compose logs prefect-worker --tail 100
 ```
-
-### Check health
-```bash
-docker compose -f docker-compose.v2.yml ps
-```
-
-### Stop v2 stack
-```bash
-docker compose -f docker-compose.v2.yml down
-```
-
-### Rollback to v1
-```bash
-docker compose -f docker/v1-baseline.yml up -d
-```
-
----
 
 ## Troubleshooting
 
-### ClickHouse won't start
-- Check ulimits: `docker exec k2-clickhouse ulimit -n` (should be 262144)
+**ClickHouse won't start**
 - Check logs: `docker logs k2-clickhouse`
 - Verify config syntax: `xmllint --noout docker/clickhouse/config.xml`
 
-### Redpanda health check failing
-- Wait 30s (start_period)
+**Redpanda health check failing**
 - Check cluster: `docker exec k2-redpanda rpk cluster health`
-- Verify memory: Should have 2GB allocated
+- Topics are created by the `redpanda-init` one-shot service on stack startup
+  (see `redpanda-init` in `docker-compose.yml`)
 
-### Grafana dashboards not appearing
+**Grafana dashboards not appearing**
 - Check provisioning logs: `docker logs k2-grafana | grep provision`
-- Verify dashboard JSON: `jq . docker/grafana/dashboards/v2-migration-tracker.json`
-- Refresh Grafana UI (sometimes needs manual refresh)
+- Verify dashboard JSON: `jq . docker/grafana/dashboards/<name>.json`
 
-### Prometheus not scraping
+**Prometheus not scraping / alerts not firing**
 - Check targets: http://localhost:9090/targets
-- Verify service names resolve: `docker exec k2-prometheus ping -c1 redpanda`
-- Check config: `docker exec k2-prometheus cat /etc/prometheus/prometheus.yml`
+- Validate rules: `docker run --rm -v $PWD/docker/prometheus/rules:/r --entrypoint promtool prom/prometheus:v3.2.0 check rules /r/*.yml`
 
----
-
-## Future Phases
-
-These directories will be created in subsequent phases:
-
-- `docker/api/` - Spring Boot API configuration (Phase 8)
-- `docker/feed-handlers/` - Kotlin feed handler config (Phase 6)
-- `docker/spark/` - Spark batch job config (Phase 5)
-- `docker/iceberg/` - Iceberg catalog config (Phase 5)
-
----
-
-**Related Documentation:**
-- [Phase 1 README](../docs/phases/v2/phase-1-infrastructure-baseline/README.md)
-- [Architecture v2](../docs/decisions/platform-v2/ARCHITECTURE-V2.md)
-- [Infrastructure Versioning](../docs/phases/v2/INFRASTRUCTURE-VERSIONING.md)
+**Iceberg offload stuck**
+- See [../docs/operations/runbooks/iceberg-offload-failure.md](../docs/operations/runbooks/iceberg-offload-failure.md)
+  and [../docs/operations/runbooks/iceberg-offload-lag.md](../docs/operations/runbooks/iceberg-offload-lag.md)

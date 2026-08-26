@@ -28,11 +28,9 @@ Error Policy:
 import re
 import subprocess
 from datetime import datetime
-from typing import Dict, List
 
 from prefect import flow, task
 from prefect.task_runners import ThreadPoolTaskRunner
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration — mirrors _AUDIT_TABLE_CONFIG in iceberg_maintenance.py
@@ -63,15 +61,16 @@ _DOCKER_EXEC = ["docker", "exec", "k2-spark-iceberg", "python3", _MAINTENANCE_SC
 
 # Per-task timeout (10 min for compaction; 5 min for expiry/audit).
 _COMPACT_TIMEOUT_S = 600
-_EXPIRE_TIMEOUT_S  = 300
-_AUDIT_TIMEOUT_S   = 600
+_EXPIRE_TIMEOUT_S = 300
+_AUDIT_TIMEOUT_S = 600
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: run a docker exec maintenance command
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _run_maintenance_cmd(cmd: List[str], timeout: int, logger) -> str:
+
+def _run_maintenance_cmd(cmd: list[str], timeout: int, logger) -> str:
     """
     Execute a docker exec command against k2-spark-iceberg and return stdout.
 
@@ -97,14 +96,13 @@ def _run_maintenance_cmd(cmd: List[str], timeout: int, logger) -> str:
             f"  stderr : {exc.stderr.strip()}"
         ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"Command timed out after {timeout}s: {' '.join(cmd)}"
-        ) from exc
+        raise RuntimeError(f"Command timed out after {timeout}s: {' '.join(cmd)}") from exc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Prefect Tasks
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @task(
     name="compact-table",
@@ -114,7 +112,7 @@ def _run_maintenance_cmd(cmd: List[str], timeout: int, logger) -> str:
     tags=["iceberg", "maintenance", "compact"],
     log_prints=True,
 )
-def compact_table(table: str, target_file_size_mb: int = 128) -> Dict:
+def compact_table(table: str, target_file_size_mb: int = 128) -> dict:
     """
     Run iceberg_maintenance.py compact for a single table.
 
@@ -122,22 +120,33 @@ def compact_table(table: str, target_file_size_mb: int = 128) -> Dict:
     needing to parse log output.
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
     logger.info(f"Compacting {table} (target={target_file_size_mb} MB) ...")
 
     cmd = _DOCKER_EXEC + [
         "compact",
-        "--table", table,
-        "--target-file-size-mb", str(target_file_size_mb),
+        "--table",
+        table,
+        "--target-file-size-mb",
+        str(target_file_size_mb),
     ]
     try:
         _run_maintenance_cmd(cmd, _COMPACT_TIMEOUT_S, logger)
         logger.info(f"✓ Compact complete: {table}")
-        return {"table": table, "status": "success", "timestamp": datetime.now().isoformat()}
+        return {
+            "table": table,
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+        }
     except RuntimeError as exc:
         logger.error(f"✗ Compact failed: {table} — {exc}")
-        return {"table": table, "status": "failed", "error": str(exc),
-                "timestamp": datetime.now().isoformat()}
+        return {
+            "table": table,
+            "status": "failed",
+            "error": str(exc),
+            "timestamp": datetime.now().isoformat(),
+        }
 
 
 @task(
@@ -152,7 +161,7 @@ def expire_snapshots(
     table: str,
     max_age_hours: int = 168,
     retain_last: int = 3,
-) -> Dict:
+) -> dict:
     """
     Run iceberg_maintenance.py expire for a single table.
 
@@ -160,23 +169,37 @@ def expire_snapshots(
     'history.expire.max-snapshot-age-ms' = 604800000.
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
-    logger.info(f"Expiring snapshots for {table} (max_age={max_age_hours}h, retain={retain_last}) ...")
+    logger.info(
+        f"Expiring snapshots for {table} (max_age={max_age_hours}h, retain={retain_last}) ..."
+    )
 
     cmd = _DOCKER_EXEC + [
         "expire",
-        "--table", table,
-        "--max-age-hours", str(max_age_hours),
-        "--retain-last", str(retain_last),
+        "--table",
+        table,
+        "--max-age-hours",
+        str(max_age_hours),
+        "--retain-last",
+        str(retain_last),
     ]
     try:
         _run_maintenance_cmd(cmd, _EXPIRE_TIMEOUT_S, logger)
         logger.info(f"✓ Expire complete: {table}")
-        return {"table": table, "status": "success", "timestamp": datetime.now().isoformat()}
+        return {
+            "table": table,
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+        }
     except RuntimeError as exc:
         logger.error(f"✗ Expire failed: {table} — {exc}")
-        return {"table": table, "status": "failed", "error": str(exc),
-                "timestamp": datetime.now().isoformat()}
+        return {
+            "table": table,
+            "status": "failed",
+            "error": str(exc),
+            "timestamp": datetime.now().isoformat(),
+        }
 
 
 @task(
@@ -187,7 +210,7 @@ def expire_snapshots(
     tags=["iceberg", "maintenance", "audit"],
     log_prints=True,
 )
-def run_audit(audit_window_hours: int = 24) -> Dict:
+def run_audit(audit_window_hours: int = 24) -> dict:
     """
     Run iceberg_maintenance.py audit (all 10 tables in one Spark session).
 
@@ -196,6 +219,7 @@ def run_audit(audit_window_hours: int = 24) -> Dict:
     alert without reading the PostgreSQL table.
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
     logger.info(f"Running warm-cold audit (window={audit_window_hours}h) ...")
 
@@ -214,7 +238,7 @@ def run_audit(audit_window_hours: int = 24) -> Dict:
 
     # Parse summary line: "OK=N  WARNING=N  MISSING=N  ERROR=N"
     missing_count = 0
-    error_count   = 0
+    error_count = 0
     m = re.search(r"MISSING=(\d+)", stdout)
     if m:
         missing_count = int(m.group(1))
@@ -222,9 +246,7 @@ def run_audit(audit_window_hours: int = 24) -> Dict:
     if e:
         error_count = int(e.group(1))
 
-    logger.info(
-        f"✓ Audit complete — missing_data={missing_count}, errors={error_count}"
-    )
+    logger.info(f"✓ Audit complete — missing_data={missing_count}, errors={error_count}")
     return {
         "status": "success",
         "missing_count": missing_count,
@@ -237,13 +259,14 @@ def run_audit(audit_window_hours: int = 24) -> Dict:
 # Sub-Flows
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @flow(
     name="compact-all-tables",
     description="Compact all 10 Iceberg tables (sequential)",
     task_runner=ThreadPoolTaskRunner(max_workers=1),
     log_prints=True,
 )
-def compact_all_tables(target_file_size_mb: int = 128) -> List[Dict]:
+def compact_all_tables(target_file_size_mb: int = 128) -> list[dict]:
     """
     Compact every Iceberg table sequentially.
 
@@ -253,6 +276,7 @@ def compact_all_tables(target_file_size_mb: int = 128) -> List[Dict]:
     I/O to MinIO, not CPU.
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
     logger.info(f"Starting compaction for {len(_ALL_TABLES)} tables ...")
 
@@ -275,17 +299,16 @@ def compact_all_tables(target_file_size_mb: int = 128) -> List[Dict]:
     task_runner=ThreadPoolTaskRunner(max_workers=1),
     log_prints=True,
 )
-def expire_all_snapshots(max_age_hours: int = 168, retain_last: int = 3) -> List[Dict]:
+def expire_all_snapshots(max_age_hours: int = 168, retain_last: int = 3) -> list[dict]:
     """Expire old snapshots sequentially across all Iceberg tables."""
     from prefect import get_run_logger
+
     logger = get_run_logger()
     logger.info(f"Starting snapshot expiry for {len(_ALL_TABLES)} tables ...")
 
     results = []
     for table in _ALL_TABLES:
-        result = expire_snapshots(
-            table=table, max_age_hours=max_age_hours, retain_last=retain_last
-        )
+        result = expire_snapshots(table=table, max_age_hours=max_age_hours, retain_last=retain_last)
         results.append(result)
 
     failed = [r for r in results if r["status"] == "failed"]
@@ -300,6 +323,7 @@ def expire_all_snapshots(max_age_hours: int = 168, retain_last: int = 3) -> List
 # Main Flow
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @flow(
     name="iceberg-maintenance-main",
     description="Daily Iceberg maintenance: compact → expire → audit",
@@ -311,7 +335,7 @@ def iceberg_maintenance_main(
     snapshot_max_age_hours: int = 168,
     snapshot_retain_last: int = 3,
     audit_window_hours: int = 24,
-) -> Dict:
+) -> dict:
     """
     Orchestrate the full daily maintenance window.
 
@@ -329,6 +353,7 @@ def iceberg_maintenance_main(
     Prefect marks the run as Failed and sends an alert.
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
     start_time = datetime.now()
 
@@ -353,9 +378,9 @@ def iceberg_maintenance_main(
     total_duration = (datetime.now() - start_time).total_seconds()
 
     compact_failed = sum(1 for r in compact_results if r["status"] == "failed")
-    expire_failed  = sum(1 for r in expire_results  if r["status"] == "failed")
-    audit_missing  = audit_result.get("missing_count", 0)
-    audit_errors   = audit_result.get("error_count", 0)
+    expire_failed = sum(1 for r in expire_results if r["status"] == "failed")
+    audit_missing = audit_result.get("missing_count", 0)
+    audit_errors = audit_result.get("error_count", 0)
 
     overall_status = "success"
     if compact_failed > 0 or expire_failed > 0:

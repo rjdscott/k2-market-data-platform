@@ -25,11 +25,11 @@ groups:
             in Redpanda (limited to Redpanda retention window).
 
             **Immediate Actions:**
-            1. Check status: `docker compose -f docker-compose.v2.yml ps clickhouse`
+            1. Check status: `docker compose ps clickhouse`
             2. Check logs: `docker logs k2-clickhouse --tail 100`
-            3. Restart: `docker compose -f docker-compose.v2.yml restart clickhouse`
+            3. Restart: `docker compose restart clickhouse`
 
-            **Runbook:** docs/operations/runbooks/clickhouse-recovery.md
+            **Runbook:** docs/operations/runbooks/failure-recovery.md
 
       # CRITICAL: ClickHouse memory near limit (>90% of limit)
       - alert: ClickHouseHighMemoryUsage

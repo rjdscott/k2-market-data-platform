@@ -1,245 +1,76 @@
-# Partitioning Strategy - K2 Market Data Platform
+# Partitioning Strategy
 
-**Last Updated**: 2026-01-18
-**Author**: Engineering Team
+Three layers of partitioning, each solving a different problem: Redpanda partitions for producer parallelism, ClickHouse partitions for TTL eviction and pruning, Iceberg partitions for file-count control on the cold tier. This is what is actually configured — the DDL is in `docker/clickhouse/schema/` and `docker/iceberg/ddl/`.
 
-## Overview
+## Redpanda
 
-This document outlines the partitioning strategy for the K2 Medallion Architecture (Bronze → Silver → Gold), with focus on crypto market data characteristics.
+| Topic pair | Partitions each | Why |
+|---|---|---|
+| `market.crypto.trades.binance{,.raw}` | 40 | Binance is ~100–200 trades/s across 12 pairs — an order of magnitude above the others |
+| `market.crypto.trades.kraken{,.raw}` | 20 | ~1–5 trades/s across 11 pairs |
+| `market.crypto.trades.coinbase{,.raw}` | 20 | Similar order to Kraken |
 
----
+Six topics, 160 partitions, created explicitly by the `redpanda-init` service so counts do not drift with auto-create defaults.
 
-## Crypto Market Data Characteristics
+These counts are provisioned for headroom, not for current load — a single ClickHouse Kafka-engine consumer (`kafka_num_consumers = 1`) keeps up with all of them today. Partition count is the one Kafka-family setting that cannot be reduced later without recreating the topic, so it is set for the volume this would handle, not the volume it handles.
 
-1. **Volume Distribution**: Highly skewed
-   - BTC/ETH: 40-50% of total volume
-   - Top 10 symbols: 80% of volume
-   - Long tail: 1000+ low-volume symbols
+Keying is by symbol, so all trades for an instrument land on one partition and stay in exchange order. Ordering across instruments is not preserved and is not needed — every downstream aggregation groups by symbol.
 
-2. **Query Patterns**:
-   - Time-range queries: "Last hour of trades" (very common)
-   - Symbol-specific queries: "All BTC trades today" (common)
-   - Exchange queries: "All Binance trades" (less common)
-   - Cross-symbol analytics: "Compare BTC vs ETH" (Gold layer)
+## ClickHouse
 
-3. **Data Freshness**:
-   - Bronze: 7-day retention (raw, reprocessable)
-   - Silver: 30-day retention (validated, per-exchange)
-   - Gold: Unlimited retention (unified analytics)
+The hot tier partitions by date and sorts by the access path. Partitions here do double duty: `TTL` drops whole partitions instead of rewriting parts, which is why the partition granularity matches the retention granularity.
 
----
+| Table | `PARTITION BY` | `ORDER BY` | `TTL` |
+|---|---|---|---|
+| `bronze_trades_{binance,kraken,coinbase}` | `toYYYYMMDD(exchange_timestamp)` | `(symbol, exchange_timestamp, sequence_number)` | 7 days |
+| `silver_trades` | `(exchange, asset_class, toYYYYMMDD(timestamp))` | `(exchange, asset_class, canonical_symbol, timestamp)` | 30 days |
+| `ohlcv_{1m,5m,15m,30m,1h,1d}` | `(exchange, toYYYYMM(window_start))` | `(exchange, canonical_symbol, window_start)` | 1–2 years |
 
-## Partitioning Best Practices
+Three things this encodes:
 
-### General Principles
+- **Bronze is per-exchange and partitioned by day only.** It is never queried across exchanges — that is Silver's job — so `exchange` in the partition key would be a constant. Daily partitions plus a 7-day TTL means bronze holds at most 7 parts per table.
+- **Silver adds `exchange` and `asset_class` to the partition key** because it is the unified table and almost every query filters to one venue. `asset_class` is a constant (`crypto`) today — it is in the key so that adding equities or futures later isolates them without a partition rewrite.
+- **Gold drops to monthly partitions.** A 1-minute candle table produces ~1,440 rows per symbol per day; daily partitions would create thousands of tiny parts for no pruning benefit. Monthly partitions with a year-plus TTL keep the part count in the low hundreds.
 
-1. **Query patterns drive partitioning** - Optimize for the 80% use case
-2. **Cardinality matters** - Balance between too few (large scans) and too many (overhead)
-3. **Time-series first** - Market data is inherently time-based
-4. **Iceberg advantages** - Hidden partitioning, partition evolution, efficient pruning
+**Gotcha, hit for real:** ClickHouse TTL expressions require `DateTime`/`Date`, not `DateTime64`. Every timestamp column here is `DateTime64`, so the live TTLs are written `TTL toDateTime(timestamp) + INTERVAL 30 DAY`. Without the cast the `CREATE TABLE` fails outright — the uncast versions in the older `docker/clickhouse/schema/` files are superseded by the `-fixed` ones for exactly this reason.
 
-### Anti-Patterns to Avoid
+## Iceberg
 
-❌ **High cardinality first**: `PARTITIONED BY (symbol, date)` creates too many directories
-❌ **Too granular**: `PARTITIONED BY (date, hour, symbol, side)` = partition explosion
-❌ **No partitioning**: Forces full table scans
-❌ **Wrong order**: Secondary partition not useful if primary doesn't prune
+Cold-tier partitioning solves a different problem — not eviction (nothing is evicted) but keeping the file count and the metadata tree small enough that planning stays fast.
 
----
+| Table | `PARTITIONED BY` |
+|---|---|
+| `cold.bronze_trades_{binance,kraken,coinbase}` | `days(exchange_timestamp)` |
+| `cold.silver_trades` | `days(timestamp), exchange, asset_class` |
+| `cold.gold_ohlcv_*` (6 tables) | `months(window_start), exchange` |
 
-## Bronze Layer Partitioning
+All ten tables: Parquet, zstd level 3, `write.target-file-size-bytes = 134217728` (128 MB). Measured compression on real Binance trade data is ~12:1.
 
-**Current Strategy**: `PARTITIONED BY (ingestion_date)`
+The offload runs every 15 minutes, which means each cycle writes small files into the current day's partition. That is what the daily maintenance flow exists for: at 02:00 UTC it runs binpack compaction toward the 128 MB target, then expires snapshots older than 7 days ([ADR-017](../decisions/ADR-017-iceberg-maintenance-pipeline.md)). Without compaction, a 15-minute cadence produces ~96 files per partition per day.
 
-**Rationale**:
-- Bronze is raw data for reprocessing (not queried directly)
-- Simple date partitioning enables efficient retention cleanup
-- No need for complex partitioning since Bronze → Silver is the primary flow
-- 7-day retention keeps partition count low (~7 partitions per exchange)
+**No symbol in any Iceberg partition spec.** Symbol is the obvious candidate and it is deliberately absent: `days × exchange × ~30 symbols` on Silver would be ~90 partitions per day, most of them holding a few hundred rows. Symbol is the sort key inside each file instead, so predicate pushdown still prunes row groups. Iceberg supports partition evolution, so `ADD PARTITION FIELD symbol` is available without rewriting data if the query pattern ever justifies it.
 
-**Partition Count**: ~14 partitions total (7 days × 2 exchanges)
+## What is not partitioned by
 
-**Verdict**: ✅ **Optimal for Bronze** - Keep as-is
+- **Not by symbol, anywhere in storage.** Volume is heavily skewed — BTC and ETH are a large fraction of all trades — so symbol partitions would be lopsided by construction, and the long tail would produce files too small to be worth opening.
+- **Not by hour.** Considered for Gold; at these row counts hourly partitions would be pure metadata overhead.
+- **No sub-partition on `asset_class` outside Silver.** Everything here is `crypto`. It is in the Silver spec because Silver is the layer that would carry equities or futures if the platform ever ingested them, and adding a partition field later is cheaper on an empty dimension than on a populated one.
 
----
-
-## Silver Layer Partitioning
-
-### Analysis of Options
-
-| Strategy | Query Efficiency | Partition Count | Skew Risk | Verdict |
-|----------|-----------------|-----------------|-----------|---------|
-| `(exchange_date)` | Time-range: Good<br>Symbol: Poor | ~30 | None | ❌ Too broad |
-| `(exchange_date, symbol)` | Time-range: Excellent<br>Symbol: Excellent | ~3,000 | Low | ✅ **Recommended** |
-| `(symbol, exchange_date)` | Time-range: Poor<br>Symbol: Excellent | ~3,000 | None | ❌ Wrong order |
-| `(exchange_date, hour, symbol)` | Time-range: Excellent<br>Symbol: Excellent | ~72,000 | Low | ❌ Too granular |
-
-### Recommended Strategy: `PARTITIONED BY (exchange_date, symbol)`
-
-**Rationale**:
-
-1. **Time-series first**:
-   - Date as primary partition aligns with time-series nature
-   - Enables efficient retention cleanup (drop old dates)
-   - Most queries filter by time range
-
-2. **Symbol as secondary**:
-   - Enables partition pruning for symbol-specific queries
-   - Common query: "Show me BTC trades from last 3 days" → prunes to 3 date partitions + 1 symbol
-   - Handles long-tail symbols efficiently (low-volume symbols create small files, Iceberg merges them)
-
-3. **Partition count manageable**:
-   - 30-day retention × ~100 active symbols = ~3,000 partitions per exchange
-   - Iceberg handles this well (metadata-driven, not directory-based like Hive)
-   - Auto-cleanup via retention policy
-
-4. **Handles skew gracefully**:
-   - High-volume symbols (BTC, ETH) get larger partition files
-   - Low-volume symbols get smaller files (Iceberg compaction handles this)
-   - No hot partition issues
-
-**Example Queries**:
+## Verifying
 
 ```sql
--- Excellent pruning: 1 date × 1 symbol = 1 partition
-SELECT * FROM silver_binance_trades
-WHERE exchange_date = '2026-01-18' AND symbol = 'BTCUSDT';
-
--- Good pruning: 3 dates × 1 symbol = 3 partitions
-SELECT * FROM silver_binance_trades
-WHERE exchange_date >= '2026-01-16' AND symbol = 'BTCUSDT';
-
--- Acceptable: 1 date × all symbols = ~100 partitions
-SELECT * FROM silver_binance_trades
-WHERE exchange_date = '2026-01-18';
+-- ClickHouse: parts and rows per partition
+SELECT table, partition, count() AS parts, sum(rows) AS rows
+FROM system.parts
+WHERE database = 'k2' AND active
+GROUP BY table, partition
+ORDER BY table, partition;
 ```
-
-**Partition File Sizes** (estimated):
-- High-volume symbol (BTC): 50-100MB per day
-- Medium-volume symbol (LINK): 5-10MB per day
-- Low-volume symbol (SHIB): 0.5-1MB per day
-
-Iceberg's compaction will merge small files automatically.
-
----
-
-## Gold Layer Partitioning
-
-**Current Strategy**: `PARTITIONED BY (exchange_date, exchange_hour)`
-
-**Rationale**:
-
-1. **Analytics workload**:
-   - Gold is for cross-exchange, cross-symbol analytics
-   - Queries typically scan multiple symbols: "Compare all majors"
-   - Time-range filtering is primary: "Last 24 hours across all exchanges"
-
-2. **Hourly granularity**:
-   - Enables efficient sub-day queries: "Show me 9am-10am today"
-   - Keeps partition files reasonably sized (1-hour batches)
-   - 24 hours × unlimited days = growing but manageable
-
-3. **No symbol partition**:
-   - Adding symbol would create 24 × symbols × days = explosion
-   - Gold queries typically don't filter by single symbol
-   - If needed, can add symbol as 3rd partition in future (Iceberg partition evolution)
-
-**Partition Count**: ~365 days × 24 hours = ~8,760 partitions per year (acceptable for analytics)
-
-**Example Queries**:
 
 ```sql
--- Excellent pruning: 1 date × 1 hour = 1 partition
-SELECT * FROM gold_crypto_trades
-WHERE exchange_date = '2026-01-18' AND exchange_hour = 9;
-
--- Good pruning: 1 date × 24 hours = 24 partitions
-SELECT * FROM gold_crypto_trades
-WHERE exchange_date = '2026-01-18';
-
--- Acceptable: 7 dates × 24 hours = 168 partitions
-SELECT * FROM gold_crypto_trades
-WHERE exchange_date >= '2026-01-12';
+-- Iceberg: file count and sizes per partition (run in the spark-iceberg container)
+SELECT partition, record_count, file_size_in_bytes
+FROM cold.silver_trades.files;
 ```
 
-**Verdict**: ✅ **Optimal for Gold** - Keep as-is
-
----
-
-## Comparison: Alternative Approaches
-
-### If We Added Symbol to Gold
-
-`PARTITIONED BY (exchange_date, exchange_hour, symbol)`
-
-**Pros**:
-- Symbol-specific queries prune to single symbol
-- Best possible query performance
-
-**Cons**:
-- 365 days × 24 hours × 100 symbols = **876,000 partitions per year**
-- Iceberg metadata overhead becomes significant
-- Most Gold queries DON'T filter by symbol (they analyze across symbols)
-- Partition evolution can add this later if query patterns change
-
-**Verdict**: ❌ **Not recommended** - Over-optimization, wrong query pattern
-
----
-
-## Implementation Recommendations
-
-### Silver Tables
-
-```sql
-CREATE TABLE silver_binance_trades (
-    -- ... fields ...
-    exchange_date DATE,
-    symbol STRING
-)
-USING iceberg
-PARTITIONED BY (exchange_date, symbol)
-TBLPROPERTIES (
-    'write.target-file-size-bytes' = '134217728',  -- 128 MB
-    'write.parquet.compression-codec' = 'zstd'
-)
-```
-
-### Monitoring
-
-Track these metrics to validate partitioning strategy:
-
-1. **Partition count**: Should stay under 5,000 per table
-2. **File sizes**: Target 128 MB per file, flag <10 MB (needs compaction)
-3. **Query pruning**: Use Iceberg metadata to track partition scans per query
-4. **Compaction frequency**: Schedule daily for Silver, weekly for Gold
-
-### Future Evolution
-
-If query patterns change (e.g., more symbol-specific queries in Gold):
-
-```sql
--- Iceberg allows partition evolution without rewriting data
-ALTER TABLE gold_crypto_trades
-ADD PARTITION FIELD symbol;
-```
-
-This is a major advantage over Hive-style partitioning.
-
----
-
-## Summary
-
-| Layer | Partitioning Strategy | Partition Count | Rationale |
-|-------|----------------------|-----------------|-----------|
-| **Bronze** | `(ingestion_date)` | ~14 | Simple, reprocessing-focused |
-| **Silver** | `(exchange_date, symbol)` | ~3,000 | Time + symbol queries |
-| **Gold** | `(exchange_date, exchange_hour)` | ~8,760/year | Time-range analytics |
-
-**Key Insight**: Partition by **query access pattern**, not by **data characteristics**. Silver is queried by time+symbol. Gold is queried by time across all symbols.
-
----
-
-**Decision**: 2026-01-18
-**Status**: Approved for implementation
-**Next Review**: After 30 days of production usage
-
+Rule of thumb used here: flag any Iceberg partition averaging under 10 MB per file as needing compaction, and any ClickHouse table over a few hundred active parts as needing its partition granularity revisited.

@@ -1,86 +1,46 @@
-# ClickHouse Schema Files
+# ClickHouse Schema — Migration History
 
-**Status**: ✅ **Active - Uses `k2` Database**
-**Last Updated**: 2026-02-12 (Migrated to k2)
-**Active Implementation**: Uses `k2` database (production standard)
+**Status**: 📚 Historical reference. **Nothing in this directory runs.**
 
-## Important Note on Database Usage
+## Where the schema actually comes from
 
-### Historical Context
+The live bootstrap is a single idempotent file:
 
-These schema files were originally designed to use a `k2` database in ClickHouse. However, during implementation, the actual working pipeline was built in the `default` database instead.
-
-### Current State (2026-02-12)
-
-**Active Pipeline** (✅ Production):
 ```
-Database: k2
-Tables:
-  - bronze_trades_binance (Binance raw data) - 1.1M+ records
-  - bronze_trades_kraken (Kraken raw data) - 6K+ records
-  - silver_trades (unified normalized trades) - 1.0M+ records
-  - ohlcv_1m/5m/1h/1d (OHLCV aggregations) - 300+ candles
+docker/clickhouse/ddl/01-k2-schema.sql
 ```
 
-**Schema Files in This Directory**:
-- Originally designed for `k2` database
-- Briefly implemented in `default` database
-- **Now**: Migrated back to `k2` database (2026-02-12)
-- Kept for reference and understanding design evolution
+It is mounted at `/docker-entrypoint-initdb.d` (see the `clickhouse` service in
+`docker-compose.yml`) and runs automatically on a **fresh** ClickHouse volume,
+creating the whole `k2` medallion pipeline in dependency order:
 
-### Actual Implementation
+| Layer | Objects |
+|---|---|
+| Kafka queues | `trades_{binance,kraken,coinbase}_queue` |
+| Bronze | `bronze_trades_{binance,kraken,coinbase}` + `bronze_trades_*_mv` |
+| Silver | `silver_trades` + `bronze_{exchange}_to_silver_mv` |
+| Gold | `ohlcv_{1m,5m,15m,30m,1h,1d}` + `ohlcv_*_mv` |
 
-The working implementation uses:
-- **Bronze/Silver/Gold layers**: Created via clickhouse-client
-- **Location**: `k2` database in ClickHouse (✅ Production standard)
-- **Initialization**: Tables created during migration, DDL files reference only
+25 objects total. Every statement is `IF NOT EXISTS`, so re-running it is a no-op.
 
-## File Reference
+**If you change the schema, change `ddl/01-k2-schema.sql`.** Do not add files here.
 
-### Original Design Files (k2 database)
-- `01-bronze-layer.sql` - Bronze layer with k2 database
-- `02-silver-gold-layers.sql` - Silver/Gold layers
-- `03-ohlcv-simple.sql` - Basic OHLCV
-- `04-ohlcv-additional-timeframes.sql` - Additional timeframes
-- `08-bronze-kraken.sql` - Kraken bronze layer
+## What this directory is
 
-### Fixed Files (default database)
-- `01-bronze-layer-fixed.sql` - Working bronze implementation
-- `02-silver-gold-fixed.sql` - Working silver/gold implementation
-- `08-bronze-kraken-fixed.sql` - Working Kraken implementation
+`01-*.sql` … `12-*.sql` are the migration trail that got the platform from v1 to
+the current shape: the `default` → `k2` database move, the v1 → v2 silver/gold
+cutover, and per-exchange onboarding (Kraken, then Coinbase). They are kept so the
+evolution is auditable, and because a few of them document *why* a column looks
+the way it does.
 
-### Migration Files
-- `05-silver-v2-migration.sql` - V1→V2 migration
-- `06-gold-layer-v2-migration.sql` - Gold layer migration
-- `07-v2-cutover.sql` - Cutover procedures
-- `09-silver-kraken-to-v2.sql` - Kraken V2 migration
-- `10-silver-binance.sql` - Binance silver layer
+They are **not** a usable bootstrap — several assume tables an earlier manual step
+created, some were retro-edited by a global rename, and the `-fixed` variants
+predate the v2 bronze cutover. Read them for history, not for truth.
 
-## Usage Guidelines
+## Related
 
-**For New Development**:
-1. Use `k2` database in all queries
-2. Reference `-fixed.sql` files for table structures (update to use k2 prefix)
-3. Always use explicit `k2.table_name` syntax
-
-**For Documentation**:
-1. All docs should reference `k2` database
-2. Update any references to `default.table_name` → `k2.table_name`
-
-**For Historical Reference**:
-1. Original `k2` database files show initial design intent
-2. Compare with `-fixed.sql` to see evolution
-
-## See Also
-
-- [../ddl/](../ddl/) - Files actually run on container init
-- [../../docs/operations/QUICK-REFERENCE.md](../../docs/operations/QUICK-REFERENCE.md) - Operational commands
-- [../../docs/operations/DATA-INSPECTION.md](../../docs/operations/DATA-INSPECTION.md) - Data inspection guide
-
-## Decision Record
-
-**Decision 2026-02-12**: Migrate to `k2` database
-**Reason**: Production best practice, isolation, security, organization
-**Cost**: 30-minute migration, documentation updates
-**Alternative**: Stay with `default` (rejected - not production-ready)
-**Result**: 1.1M records migrated successfully, pipeline operational
+- `../ddl/` — what actually runs on container init
+- `../../postgres/ddl/offload-watermarks.sql` — Iceberg offload watermarks live in
+  PostgreSQL, not ClickHouse (ADR-014)
+- `../../iceberg/warehouse/cold/` — cold-tier Iceberg schemas; bronze/silver/gold
+  column names and types must stay in lock step with `ddl/01-k2-schema.sql`

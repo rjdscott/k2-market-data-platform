@@ -13,9 +13,9 @@ spark = (
     .getOrCreate()
 )
 
-print("\n" + "="*80)
+print("\n" + "=" * 80)
 print("Creating Iceberg Table: k2.cold.bronze_trades_kraken")
-print("="*80)
+print("=" * 80)
 
 # Drop if exists
 spark.sql("DROP TABLE IF EXISTS k2.cold.bronze_trades_kraken")

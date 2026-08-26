@@ -26,7 +26,7 @@
 docker logs k2-spark-iceberg --tail 100
 
 # View watermarks (last successful offload)
-docker exec clickhouse-server clickhouse-client --query \
+docker exec clickhouse-server clickhouse-client --password "$CLICKHOUSE_PASSWORD" --query \
   "SELECT table_name, last_offload_timestamp, last_successful_run, status \
    FROM offload_watermarks ORDER BY last_successful_run DESC"
 
@@ -86,7 +86,7 @@ SELECT last_offload_timestamp FROM offload_watermarks WHERE table_name = 'bronze
 -- Returns: 2026-02-11 10:00:00
 
 -- During offload: Read only new data
-SELECT * FROM bronze_trades_binance
+SELECT * FROM k2.bronze_trades_binance
 WHERE exchange_timestamp > '2026-02-11 10:00:00'
 AND exchange_timestamp <= now() - INTERVAL 5 MINUTE;
 -- (5-minute buffer prevents TTL race)
@@ -207,7 +207,7 @@ docker logs k2-prefect-agent --tail 200
 docker logs k2-spark-iceberg --tail 500
 
 # Check specific error in watermark table
-docker exec clickhouse-server clickhouse-client --query \
+docker exec clickhouse-server clickhouse-client --password "$CLICKHOUSE_PASSWORD" --query \
   "SELECT table_name, last_error_message FROM offload_watermarks WHERE status = 'failed'"
 ```
 
@@ -346,7 +346,7 @@ VALUES ('bronze_trades_binance', '2026-02-11 00:00:00', 0, 'initialized');
 -- (Should match within 15-minute window)
 
 -- ClickHouse (source)
-SELECT 'bronze_trades_binance' AS table, COUNT(*) FROM bronze_trades_binance;
+SELECT 'bronze_trades_binance' AS table, COUNT(*) FROM k2.bronze_trades_binance;
 
 -- Iceberg (target) - run via Spark SQL
 SELECT 'bronze_trades_binance' AS table, COUNT(*) FROM cold.bronze_trades_binance;
@@ -460,5 +460,5 @@ def iceberg_offload_main():
 **Escalation**: If failure_count >5, engage platform team
 
 **Documentation**:
-- [ADR-014: Spark-Based Iceberg Offload](../../decisions/platform-v2/ADR-014-spark-based-iceberg-offload.md)
-- [Phase 5 Implementation Plan](../../phases/v2/phase-5-cold-tier-restructure/PHASE-5-IMPLEMENTATION-PLAN.md)
+- [ADR-014: Spark-Based Iceberg Offload](../../decisions/ADR-014-spark-based-iceberg-offload.md)
+- [Prefect schedules](../prefect-schedules.md)

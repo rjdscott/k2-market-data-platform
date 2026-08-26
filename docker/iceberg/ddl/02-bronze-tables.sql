@@ -8,12 +8,11 @@
 
 -- Prerequisites:
 -- 1. Spark 3.5+ with Iceberg extension loaded
--- 2. Iceberg REST catalog configured (http://iceberg-rest:8181)
--- 3. MinIO S3 credentials configured
--- 4. 'cold' catalog registered in Spark SQL
+-- 2. Iceberg Hadoop catalog (warehouse /home/iceberg/warehouse) — see docker/offload/offload_generic.py
+-- 3. 'cold' namespace created (see 01-catalog-schema.sql)
 
 -- ============================================================================
--- Bronze Layer: Per-Exchange Trade Tables (2 Tables)
+-- Bronze Layer: Per-Exchange Trade Tables (3 Tables)
 -- ============================================================================
 
 -- Design Philosophy:
@@ -32,9 +31,9 @@ CREATE TABLE IF NOT EXISTS cold.bronze_trades_binance (
     exchange_timestamp  TIMESTAMP COMMENT 'Exchange-reported trade timestamp (UTC)',
     sequence_number     BIGINT    COMMENT 'Binance trade sequence number',
     symbol              STRING    COMMENT 'Binance raw symbol (e.g., BTCUSDT)',
-    price               DECIMAL(38, 8) COMMENT 'Trade price',
-    quantity            DECIMAL(38, 8) COMMENT 'Trade quantity (base asset)',
-    quote_volume        DECIMAL(38, 8) COMMENT 'Quote volume (price * quantity)',
+    price               DECIMAL(18, 8) COMMENT 'Trade price',
+    quantity            DECIMAL(18, 8) COMMENT 'Trade quantity (base asset)',
+    quote_volume        DECIMAL(18, 8) COMMENT 'Quote volume (price * quantity)',
     event_time          TIMESTAMP COMMENT 'Exchange event timestamp',
     kafka_offset        BIGINT    COMMENT 'Redpanda partition offset',
     kafka_partition     INT       COMMENT 'Redpanda partition number',
@@ -61,9 +60,9 @@ CREATE TABLE IF NOT EXISTS cold.bronze_trades_kraken (
     exchange_timestamp  TIMESTAMP COMMENT 'Exchange-reported trade timestamp (UTC)',
     sequence_number     BIGINT    COMMENT 'Kraken sequence number',
     symbol              STRING    COMMENT 'Kraken symbol (XBT normalized to BTC, e.g., BTCUSD)',
-    price               DECIMAL(38, 8) COMMENT 'Trade price',
-    quantity            DECIMAL(38, 8) COMMENT 'Trade quantity (base asset)',
-    quote_volume        DECIMAL(38, 8) COMMENT 'Quote volume (price * quantity)',
+    price               DECIMAL(18, 8) COMMENT 'Trade price',
+    quantity            DECIMAL(18, 8) COMMENT 'Trade quantity (base asset)',
+    quote_volume        DECIMAL(18, 8) COMMENT 'Quote volume (price * quantity)',
     event_time          TIMESTAMP COMMENT 'Exchange event timestamp',
     kafka_offset        BIGINT    COMMENT 'Redpanda partition offset',
     kafka_partition     INT       COMMENT 'Redpanda partition number',
@@ -90,9 +89,9 @@ CREATE TABLE IF NOT EXISTS cold.bronze_trades_coinbase (
     exchange_timestamp  TIMESTAMP COMMENT 'Exchange-reported trade timestamp (UTC)',
     sequence_number     BIGINT    COMMENT 'Coinbase message-level sequence number',
     symbol              STRING    COMMENT 'Symbol without dash (e.g., BTCUSD)',
-    price               DECIMAL(38, 8) COMMENT 'Trade price',
-    quantity            DECIMAL(38, 8) COMMENT 'Trade quantity / size (base asset)',
-    quote_volume        DECIMAL(38, 8) COMMENT 'Quote volume (price * quantity)',
+    price               DECIMAL(18, 8) COMMENT 'Trade price',
+    quantity            DECIMAL(18, 8) COMMENT 'Trade quantity / size (base asset)',
+    quote_volume        DECIMAL(18, 8) COMMENT 'Quote volume (price * quantity)',
     event_time          TIMESTAMP COMMENT 'Exchange event timestamp (same as exchange_timestamp)',
     kafka_offset        BIGINT    COMMENT 'Redpanda partition offset',
     kafka_partition     INT       COMMENT 'Redpanda partition number',
@@ -130,10 +129,10 @@ COMMENT 'Coinbase bronze trades - v2 normalized schema (matches ClickHouse bronz
 -- SELECT * FROM cold.bronze_trades_binance.snapshots ORDER BY committed_at DESC LIMIT 5;
 
 -- ============================================================================
--- Expected File Layout in MinIO
+-- Expected File Layout (local warehouse)
 -- ============================================================================
 
--- s3a://k2-data/warehouse/cold/bronze/bronze_trades_binance/
+-- /home/iceberg/warehouse/cold/bronze_trades_binance/
 -- ├── metadata/
 -- │   ├── v1.metadata.json
 -- │   └── snap-12345-1-<uuid>.avro

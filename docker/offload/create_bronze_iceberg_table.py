@@ -6,13 +6,13 @@ Schema matches the ClickHouse bronze_trades_binance table structure.
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import (
-    StructType,
-    StructField,
-    TimestampType,
-    LongType,
-    StringType,
     DecimalType,
     IntegerType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
 )
 
 # Initialize Spark with Iceberg
@@ -54,9 +54,7 @@ df.writeTo("k2.cold.bronze_trades_binance").using("iceberg").partitionedBy(
     "days(exchange_timestamp)"
 ).tableProperty("write.format.default", "parquet").tableProperty(
     "write.parquet.compression-codec", "zstd"
-).tableProperty(
-    "write.parquet.compression-level", "3"
-).create()
+).tableProperty("write.parquet.compression-level", "3").create()
 
 print("✅ Created Iceberg table: k2.cold.bronze_trades_binance")
 

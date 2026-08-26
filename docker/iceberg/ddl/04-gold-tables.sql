@@ -232,10 +232,10 @@ COMMENT '1-day OHLCV candles for historical charting';
 -- SELECT * FROM cold.gold_ohlcv_1m.partitions LIMIT 10;
 
 -- ============================================================================
--- Expected File Layout in MinIO (Example: 1m)
+-- Expected File Layout (local warehouse, example: 1m)
 -- ============================================================================
 
--- s3a://k2-data/warehouse/cold/gold/gold_ohlcv_1m/
+-- /home/iceberg/warehouse/cold/gold_ohlcv_1m/
 -- ├── metadata/
 -- │   ├── v1.metadata.json
 -- │   └── snap-12345-1-<uuid>.avro

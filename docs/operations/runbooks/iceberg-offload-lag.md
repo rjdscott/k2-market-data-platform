@@ -6,6 +6,17 @@
 **Last Updated:** 2026-02-18
 **Maintained By:** Platform Engineering
 
+
+> **Metrics caveat (read first).** The `offload_*` metrics used below are exported by
+> `docker/offload/metrics.py`, which only starts its HTTP server on port 8000 when the
+> flow is run standalone. Under the Prefect worker no exporter runs and the
+> `iceberg-scheduler` scrape job is commented out in `docker/prometheus/prometheus.yml`,
+> so `curl localhost:8000/metrics` will fail and the Prometheus alerts named here cannot
+> fire. Until that is wired up, substitute the ground-truth sources: the watermark table
+> in PostgreSQL, Prefect run history (`prefect flow-run ls`), and
+> `docker logs k2-prefect-worker` / `docker logs k2-spark-iceberg`. See
+> [../observability.md](../observability.md#iceberg-offload-alertsyml--cold-tier-9).
+
 ---
 
 ## Summary
@@ -102,13 +113,13 @@ docker exec k2-prefect-db psql -U prefect -d prefect -c \
 
 ```bash
 # Check ClickHouse data volume (last hour)
-docker exec k2-clickhouse clickhouse-client -q \
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
   "SELECT
      'binance' AS exchange,
      COUNT(*) AS rows,
      MIN(exchange_timestamp) AS min_ts,
      MAX(exchange_timestamp) AS max_ts
-   FROM bronze_trades_binance
+   FROM k2.bronze_trades_binance
    WHERE exchange_timestamp > now() - INTERVAL 1 HOUR
    UNION ALL
    SELECT
@@ -116,7 +127,7 @@ docker exec k2-clickhouse clickhouse-client -q \
      COUNT(*),
      MIN(exchange_timestamp),
      MAX(exchange_timestamp)
-   FROM bronze_trades_kraken
+   FROM k2.bronze_trades_kraken
    WHERE exchange_timestamp > now() - INTERVAL 1 HOUR"
 ```
 
@@ -215,8 +226,8 @@ docker exec k2-clickhouse clickhouse-client -q \
       ORDER BY created_at DESC LIMIT 1"
 
    # Note the max_timestamp value, then check ClickHouse
-   docker exec k2-clickhouse clickhouse-client -q \
-     "SELECT COUNT(*) FROM bronze_trades_binance
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+     "SELECT COUNT(*) FROM k2.bronze_trades_binance
       WHERE exchange_timestamp > '2026-02-12 19:00:00'"  # Use watermark timestamp
 
    # If COUNT > 0: New data exists, watermark not updating
@@ -240,11 +251,11 @@ docker exec k2-clickhouse clickhouse-client -q \
 
    ```bash
    # Get current max timestamp from ClickHouse
-   MAX_TS=$(docker exec k2-clickhouse clickhouse-client -q \
-     "SELECT MAX(exchange_timestamp) FROM bronze_trades_binance FORMAT TSV")
+   MAX_TS=$(docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+     "SELECT MAX(exchange_timestamp) FROM k2.bronze_trades_binance FORMAT TSV")
 
-   MAX_SEQ=$(docker exec k2-clickhouse clickhouse-client -q \
-     "SELECT MAX(sequence_number) FROM bronze_trades_binance FORMAT TSV")
+   MAX_SEQ=$(docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+     "SELECT MAX(sequence_number) FROM k2.bronze_trades_binance FORMAT TSV")
 
    echo "Max Timestamp: $MAX_TS"
    echo "Max Sequence: $MAX_SEQ"
@@ -284,11 +295,11 @@ docker exec k2-clickhouse clickhouse-client -q \
 1. **Quantify data spike:**
    ```bash
    # Check hourly data volume trend
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "SELECT
         toStartOfHour(exchange_timestamp) AS hour,
         COUNT(*) AS rows
-      FROM bronze_trades_binance
+      FROM k2.bronze_trades_binance
       WHERE exchange_timestamp > now() - INTERVAL 6 HOUR
       GROUP BY hour
       ORDER BY hour DESC"
@@ -300,17 +311,17 @@ docker exec k2-clickhouse clickhouse-client -q \
 2. **Check if spike is temporary:**
    ```bash
    # Check last 15 minutes vs last hour
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "SELECT
         'last_15min' AS period,
         COUNT(*) AS rows
-      FROM bronze_trades_binance
+      FROM k2.bronze_trades_binance
       WHERE exchange_timestamp > now() - INTERVAL 15 MINUTE
       UNION ALL
       SELECT
         'last_hour',
         COUNT(*)
-      FROM bronze_trades_binance
+      FROM k2.bronze_trades_binance
       WHERE exchange_timestamp > now() - INTERVAL 1 HOUR"
 
    # If last_15min << last_hour: Spike subsiding
@@ -496,11 +507,11 @@ docker exec k2-clickhouse clickhouse-client -q \
 3. **Check for data gaps:**
    ```bash
    # Verify no data gaps in cold tier
-   docker exec k2-clickhouse clickhouse-client -q \
+   docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "SELECT
         toStartOfHour(exchange_timestamp) AS hour,
         COUNT(*) AS ch_rows
-      FROM bronze_trades_binance
+      FROM k2.bronze_trades_binance
       WHERE exchange_timestamp > now() - INTERVAL 6 HOUR
       GROUP BY hour
       ORDER BY hour"
