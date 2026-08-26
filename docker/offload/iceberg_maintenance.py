@@ -28,7 +28,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import psycopg2
@@ -271,7 +271,7 @@ def action_expire(
         retain_last: Minimum number of snapshots to keep (default 3).
         dry_run: If True, log the plan but do not execute the CALL statement.
     """
-    cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
 
     logger.info("=" * 70)
@@ -469,7 +469,7 @@ def action_audit(audit_window_hours: int) -> None:
     the Prefect flow decides whether to raise an alert based on the summary
     counts it parses from stdout.
     """
-    now_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     window_end = now_utc
     window_start = window_end - timedelta(hours=audit_window_hours)
 
@@ -486,7 +486,7 @@ def action_audit(audit_window_hours: int) -> None:
     conn = _pg_connection()
     _ensure_audit_table(conn)
 
-    run_timestamp = datetime.now(UTC)
+    run_timestamp = datetime.now(timezone.utc)
     results = []
 
     try:

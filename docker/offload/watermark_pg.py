@@ -8,7 +8,7 @@ Last Updated: 2026-02-11
 
 import logging
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -300,7 +300,7 @@ class WatermarkManager:
             table_name: Source table name
             stale_threshold_minutes: Minutes after which 'running' is considered stale
         """
-        stale_cutoff = datetime.now(UTC) - timedelta(minutes=stale_threshold_minutes)
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_threshold_minutes)
 
         try:
             with self._get_connection() as conn:

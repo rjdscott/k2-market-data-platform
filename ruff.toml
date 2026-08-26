@@ -1,5 +1,5 @@
 # Lint config for the v2 Python (docker/offload, tests). legacy/v1 has its own pyproject.
-target-version = "py312"
+target-version = "py39"  # docker/offload runs inside the Spark image (Python 3.9)
 line-length = 100
 
 [lint]
