@@ -19,10 +19,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
 
     // Ktor Client (WebSocket)
-    implementation("io.ktor:ktor-client-core:3.1.0")
-    implementation("io.ktor:ktor-client-cio:3.1.0")
-    implementation("io.ktor:ktor-client-websockets:3.1.0")
-    implementation("io.ktor:ktor-client-logging:3.1.0")
+    implementation("io.ktor:ktor-client-core:3.5.2")
+    implementation("io.ktor:ktor-client-cio:3.5.2")
+    implementation("io.ktor:ktor-client-websockets:3.5.2")
+    implementation("io.ktor:ktor-client-logging:3.5.2")
 
     // Kafka & Avro
     implementation("org.apache.kafka:kafka-clients:4.1.0")
@@ -41,8 +41,8 @@ dependencies {
 
     // Metrics — Micrometer Prometheus registry + Ktor HTTP server for /metrics endpoint
     implementation("io.micrometer:micrometer-registry-prometheus:1.14.5")
-    implementation("io.ktor:ktor-server-core:3.1.0")
-    implementation("io.ktor:ktor-server-netty:3.1.0")
+    implementation("io.ktor:ktor-server-core:3.5.2")
+    implementation("io.ktor:ktor-server-netty:3.5.2")
 
     // Testing
     testImplementation(kotlin("test"))
