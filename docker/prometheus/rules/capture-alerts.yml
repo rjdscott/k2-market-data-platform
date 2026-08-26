@@ -62,15 +62,34 @@ groups:
       # silently-rejected subscription has no series at all, so `time() -
       # <absent>` is empty and this rule cannot fire on the failure it exists for.
       #
-      # The `up` guard keeps one dead container to one alert. Without it a
-      # crashed process fires CaptureDown *plus* one CaptureFeedStale per
-      # continuous stream — five criticals for one incident, four of them
-      # pointing at the wrong runbook — because the gauges stay queryable for the
-      # whole staleness window after the process is gone.
+      # The guard keeps one dead container to one alert. Without it a crashed
+      # process fires CaptureDown *plus* one CaptureFeedStale per continuous
+      # stream — five criticals for one incident, four of them pointing at the
+      # wrong runbook — because the gauges stay queryable for the whole
+      # staleness window after the process is gone.
+      #
+      # It is `unless ALERTS{CaptureDown firing}` and not `and on (job) up == 1`
+      # because those two conditions are mutually exclusive in time. A frozen or
+      # dead container stops answering scrapes at once, so `up` goes to 0 inside
+      # one scrape_timeout (10 s) + interval — long before 60 s of staleness has
+      # accrued, let alone the 2 m `for`. The conjunction could therefore never
+      # be true, and this alert could not fire on the fault its own chaos script
+      # (`scripts/chaos/capture-pause.sh`) injects. Deferring to CaptureDown only
+      # once CaptureDown is *firing* keeps the de-duplication and leaves the
+      # window before it open, which is where a process that goes quiet and then
+      # dies is visible. Pinned by two cases in
+      # docker/prometheus/tests/capture-alerts.test.yml.
+      #
+      # Still not covered, and it is not this expression's to fix: on a failed
+      # scrape Prometheus stale-marks every series from that target, so
+      # `k2_capture_last_message_ts_seconds` disappears within a scrape or two of
+      # a `docker pause` and `time() - <absent>` is an empty vector. The fault
+      # this alert is really for is a venue that goes silent while the process
+      # stays scrapeable.
       - alert: CaptureFeedStale
         expr: |
           (time() - k2_capture_last_message_ts_seconds > 60)
-          and on (job) up == 1
+          unless on (job) ALERTS{alertname="CaptureDown", alertstate="firing"}
         for: 2m
         labels:
           severity: critical

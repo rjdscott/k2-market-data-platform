@@ -29,18 +29,33 @@ while trades keep flowing, or the reverse.
 
 ```promql
 (time() - k2_capture_last_message_ts_seconds > 60)
-and on (job) up == 1
+unless on (job) ALERTS{alertname="CaptureDown", alertstate="firing"}
 ```
 
 Fires after `for: 2m`. The metric is labelled `{exchange, stream}` with the venue's
 channel name (`trade`, `book`, `depth20`, `l2_data`, `market_trades`, `heartbeat(s)`),
 so the alert names which subscription went quiet.
 
-**The `up` guard is why a dead container is one alert and not five.** The gauges stay
-queryable for the whole staleness window after the process is gone, so without it a
+**The `unless` guard is why a dead container is one alert and not five.** The gauges
+stay queryable for the whole staleness window after the process is gone, so without it a
 crash fires `CaptureDown` *plus* one `CaptureFeedStale` per continuous stream — four of
-them on Kraken — routing one incident to two runbooks. If this alert is firing, the
-container is up: go to §1 below, not to [capture-down.md](./capture-down.md).
+them on Kraken — routing one incident to two runbooks. If `CaptureDown` is firing for
+the same job, this alert is suppressed: go to [capture-down.md](./capture-down.md).
+
+It suppresses on `CaptureDown` **firing**, not on `up == 1`, because those two never
+overlap. A container that is frozen or gone stops answering scrapes at once, so `up`
+drops to 0 within one `scrape_timeout` (10 s) plus the scrape interval — well before
+60 s of staleness has accrued, let alone this rule's 2 m `for`. `and on (job) up == 1`
+was therefore a condition that could never be true at the moment the rest of the
+expression became true. Deferring to `CaptureDown`'s own `for: 2m` keeps the
+de-duplication and leaves that window open. Both halves are pinned by cases in
+`docker/prometheus/tests/capture-alerts.test.yml`.
+
+**This alert is for a venue that goes quiet while the process stays scrapeable**, and
+that is a narrower thing than "no frames". On a failed scrape Prometheus stale-marks
+every series from the target, so a container that is paused, killed or unreachable has
+no `k2_capture_last_message_ts_seconds` at all within a scrape or two — `time() -
+<absent>` is an empty vector and cannot fire. Those faults are `CaptureDown`'s.
 
 Only continuous streams carry this gauge (`CONTINUOUS` in
 `services/capture-rust/src/main.rs`), and two kinds of channel are deliberately left
@@ -140,7 +155,11 @@ day's completeness audit.
 **Measured** — not yet verified. `scripts/chaos/capture-pause.sh` (Phase C)
 `kill -STOP`s a capture container to stall the read side without closing the socket,
 waits for `CaptureFeedStale`, then measures the time from `SIGCONT` until every
-stream's `k2_capture_last_message_ts_seconds` is fresh again.
+stream's `k2_capture_last_message_ts_seconds` is fresh again. Expect it to record
+`CaptureDown` rather than this alert for the reason two paragraphs up: a paused
+container is unscrapeable, and its gauges are stale-marked before 60 s of silence has
+accrued. The reconnect and freshness numbers it measures are still this page's; the
+`t_fire` it measures is `CaptureDown`'s.
 
 ---
 

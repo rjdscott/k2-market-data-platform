@@ -81,10 +81,62 @@ tests:
         values: '0+0x40'
       - series: 'k2_capture_last_message_ts_seconds{job="capture-kraken",exchange="kraken",stream="heartbeat"}'
         values: '0+0x40'
-      - series: 'up{job="capture-kraken",service="capture-kraken",tier="ingestion"}'
-        values: '0+0x40'
+      # CaptureDown already owns this incident. Injected as a series rather than
+      # produced by the CaptureDown rule (no `up` here at all) so the case pins
+      # the suppression itself: drop the `unless` from the rule and this fires
+      # three times.
+      - series: 'ALERTS{alertname="CaptureDown",alertstate="firing",job="capture-kraken",severity="critical",component="capture",tier="ingestion"}'
+        values: '1+0x40'
     alert_rule_test:
       - eval_time: 10m
+        alertname: CaptureFeedStale
+        exp_alerts: []
+
+  # The window `and on (job) up == 1` could not express. A frozen or dead
+  # container stops answering scrapes long before 60 s of staleness accrues, so
+  # the two halves of that conjunction were mutually exclusive and the alert
+  # could not fire on the fault `scripts/chaos/capture-pause.sh` injects. The
+  # `unless` form hands the incident to CaptureDown only when CaptureDown is
+  # actually firing, which is 2 minutes after the first failed scrape.
+  - interval: 30s
+    name: stale first, unscrapeable second - CaptureFeedStale holds until CaptureDown fires
+    input_series:
+      # Silent since the epoch: staleness crosses 60 s at t=90 s, so `for: 2m`
+      # puts this alert into firing at t=210 s.
+      - series: 'k2_capture_last_message_ts_seconds{job="capture-kraken",exchange="kraken",stream="book"}'
+        values: '0+0x40'
+      # Scrapes start failing at t=210 s; CaptureDown's own `for: 2m` means it
+      # does not fire until t=330 s.
+      - series: 'up{job="capture-kraken",service="capture-kraken",tier="ingestion"}'
+        values: '1+0x6 0+0x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CaptureDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: CaptureFeedStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: capture
+              tier: ingestion
+              job: capture-kraken
+              exchange: kraken
+              stream: book
+            exp_annotations:
+              summary: "No book frames from kraken for over 60s"
+              runbook: docs/runbooks/capture-feed-stale.md
+              description: |
+                The capture process for kraken is up and scrapeable, but
+                its book stream last delivered a frame
+                5m 0s ago.
+
+                This is the failure mode a liveness check misses: the process is
+                healthy, the WebSocket is open, and the exchange has gone quiet or the
+                subscription was silently dropped. All three venues are liquid enough
+                that a 60s silence on any subscribed stream is anomalous, not idle.
+      # CaptureDown is firing from t=330 s and takes the incident over.
+      - eval_time: 6m
         alertname: CaptureFeedStale
         exp_alerts: []
 
