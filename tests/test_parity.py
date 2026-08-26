@@ -14,15 +14,16 @@ What each test is actually guarding:
   - the Kraken path. Its whole point is that it does NOT join on trade_id; a
     regression that quietly reinstated the ID join would report a total mismatch
     on real data and a tester might "fix" it by loosening the tolerance.
-  - a px/qty mismatch forcing FAIL regardless of counts. This is the finding the
-    tolerance must never absorb.
+  - a px/qty/side mismatch forcing FAIL regardless of counts. This is the finding
+    the tolerance must never absorb — `side` included, because an inverted
+    aggressor is invisible in every other column.
   - the string -> fixed-point conversion, exactly, on a value with trailing
     zeros. float('78600.44') * 1e8 == 7860043999999.999, so a float
     implementation would fail this test — which is why it is here.
 """
 
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -30,13 +31,18 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "parity"))
 
 from compare_trades import (  # noqa: E402
+    MAX_TS_DELTA_US,
+    MIN_WINDOW_END_AGE_S,
+    TRUNCATION_NOTE,
     Norm,
     compare,
     normalise_v2,
     normalise_v3,
+    parse_args,
     render_markdown,
     to_fixed_1e8,
     to_micros,
+    to_side,
     tolerance_for,
 )
 
@@ -53,8 +59,22 @@ def mock_prefect_run_logger():
     yield
 
 
-def trade(symbol="BTC/USD", tid="1", price=100_00000000, qty=1_00000000, ts_us=1_700_000_000_000_000):
-    return Norm(canonical_symbol=symbol, trade_id=tid, price=price, qty=qty, exchange_ts_us=ts_us)
+def trade(
+    symbol="BTC/USD",
+    tid="1",
+    price=100_00000000,
+    qty=1_00000000,
+    side="buy",
+    ts_us=1_700_000_000_000_000,
+):
+    return Norm(
+        canonical_symbol=symbol,
+        trade_id=tid,
+        price=price,
+        qty=qty,
+        side=side,
+        exchange_ts_us=ts_us,
+    )
 
 
 def run(v2, v3, exchange="binance"):
@@ -118,9 +138,13 @@ def test_v3_datetime_becomes_micros():
 
 
 def test_naive_datetime_is_read_as_utc():
+    """
+    Pinned to an absolute value, not to `f(naive) == f(aware)`: that form holds
+    for any implementation that ignores tzinfo, including a constant.
+    """
     naive = datetime(2023, 11, 14, 22, 13, 20)
-    aware = naive.replace(tzinfo=timezone.utc)
-    assert to_micros(naive, unit="us") == to_micros(aware, unit="us")
+    assert to_micros(naive, unit="us") == 1_700_000_000_000_000
+    assert to_micros(naive.replace(tzinfo=timezone.utc), unit="us") == 1_700_000_000_000_000
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -136,10 +160,11 @@ def test_normalise_v2_record():
             "price": "78600.44000000",
             "quantity": "0.01500000",
             "quote_volume": "1179.0066",
+            "side": "BUY",
             "exchange_timestamp": 1_700_000_000_123,
         }
     )
-    assert n == Norm("BTC/USDT", "5551212", 7860044000000, 1_500_000, 1_700_000_000_123_000)
+    assert n == Norm("BTC/USDT", "5551212", 7860044000000, 1_500_000, "buy", 1_700_000_000_123_000)
 
 
 def test_normalise_v3_record():
@@ -149,10 +174,11 @@ def test_normalise_v3_record():
             "trade_id": 5551212,  # venues emit ints; the contract stringifies
             "price": 7860044000000,
             "qty": 1_500_000,
+            "side": "buy",
             "exchange_ts": 1_700_000_000_123_456,
         }
     )
-    assert n == Norm("BTC/USDT", "5551212", 7860044000000, 1_500_000, 1_700_000_000_123_456)
+    assert n == Norm("BTC/USDT", "5551212", 7860044000000, 1_500_000, "buy", 1_700_000_000_123_456)
 
 
 def test_the_two_contracts_meet_on_the_same_tuple():
@@ -166,6 +192,7 @@ def test_the_two_contracts_meet_on_the_same_tuple():
             "trade_id": "77",
             "price": "78600.44000000",
             "quantity": "0.01500000",
+            "side": "BUY",
             "exchange_timestamp": 1_700_000_000_123,
         }
     )
@@ -175,10 +202,99 @@ def test_the_two_contracts_meet_on_the_same_tuple():
             "trade_id": "77",
             "price": 7860044000000,
             "qty": 1_500_000,
+            "side": "buy",
             "exchange_ts": 1_700_000_000_123_000,
         }
     )
     assert v2 == v3
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Taker side
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_an_inverted_binance_side_does_not_pass():
+    """
+    The hazard trade.avsc names in `side`'s own doc: "Binance is_buyer_maker
+    inverted". Both tiers derive the taker side from the same boolean —
+    TradeNormalizer.kt:27 `if (event.isBuyerMaker) SELL else BUY`, binance.rs:313
+    `aggressor_side`. They agree today. If either flips, every Binance trade in
+    the lake is labelled with the wrong aggressor, and it is the same price, the
+    same quantity, the same id and the same timestamp — so counts, ID join, and
+    px/qty all stay perfectly green. Nothing else in this suite can see it.
+    """
+    raw_v2 = {
+        "canonical_symbol": "BTC/USDT",
+        "trade_id": "5551212",
+        "price": "78600.44000000",
+        "quantity": "0.01500000",
+        "side": "BUY",
+        "exchange_timestamp": 1_700_000_000_123,
+    }
+    raw_v3 = {
+        "canonical_symbol": "BTC/USDT",
+        "trade_id": "5551212",
+        "price": 7860044000000,
+        "qty": 1_500_000,
+        "side": "sell",  # inverted
+        "exchange_ts": 1_700_000_000_123_000,
+    }
+    s = run([normalise_v2(raw_v2)], [normalise_v3(raw_v3)])
+    assert (s.count_v2, s.count_v3, s.count_delta) == (1, 1, 0)
+    assert (s.only_v2, s.only_v3) == (0, 0), "the ID join matches: same trade"
+    assert s.mismatched == 1, "same trade, opposite aggressor, must be a mismatch"
+    assert not s.passed
+
+
+def test_the_two_enums_meet_on_one_vocabulary():
+    """v2 emits `BUY`/`SELL`, v3 emits `buy`/`sell` (the two .avsc enums)."""
+    v2 = normalise_v2(
+        {
+            "canonical_symbol": "BTC/USD",
+            "trade_id": "77",
+            "price": "1.00000000",
+            "quantity": "1.00000000",
+            "side": "SELL",
+            "exchange_timestamp": 1_700_000_000_000,
+        }
+    )
+    v3 = normalise_v3(
+        {
+            "canonical_symbol": "BTC/USD",
+            "trade_id": "77",
+            "price": 100_000_000,
+            "qty": 100_000_000,
+            "side": "sell",
+            "exchange_ts": 1_700_000_000_000_000,
+        }
+    )
+    assert v2.side == v3.side == "sell"
+    assert v2 == v3
+
+
+@pytest.mark.parametrize("raw,expected", [("BUY", "buy"), ("SELL", "sell"),
+                                          ("buy", "buy"), ("sell", "sell")])
+def test_both_enum_spellings_fold_onto_one_vocabulary(raw, expected):
+    assert to_side(raw) == expected
+
+
+def test_an_unrecognised_side_is_rejected_not_passed_through():
+    """A third spelling would compare unequal to both tiers and read as a mismatch
+    everywhere; failing loudly names the contract change instead."""
+    with pytest.raises(ValueError, match="not a taker side"):
+        to_side("MAKER")
+
+
+def test_kraken_multiset_carries_side_too():
+    """
+    Kraken has no ID join, so side has to ride in the multiset key or the venue
+    with the weakest join is also the one with no side coverage at all.
+    """
+    v2 = [trade(tid="KRAKEN-x", side="buy")]
+    flipped = [trade(tid="99", side="sell")]
+    s = run(v2, flipped, exchange="kraken")
+    assert (s.only_v2, s.only_v3) == (1, 1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -257,6 +373,21 @@ def test_ts_delta_is_measured_over_matched_ids_only():
     v3 = [trade(tid="1", ts_us=1_000_750)]
     s = run(v2, v3)
     assert s.max_ts_delta_us == 750
+    assert s.passed, "under a millisecond is v2's stored resolution, not a disagreement"
+
+
+def test_a_ts_delta_of_a_full_millisecond_fails():
+    """
+    The number used to be printed and gate nothing, so a v3 tier stamping recv_ts
+    into exchange_ts rendered a large delta next to a PASS. v2 floors to ms
+    (Instant.toEpochMilli), so a matched pair cannot legitimately reach 1000 µs.
+    """
+    v2 = [trade(tid="1", ts_us=1_000_000)]
+    v3 = [trade(tid="1", ts_us=1_001_000)]
+    s = run(v2, v3)
+    assert s.max_ts_delta_us == MAX_TS_DELTA_US
+    assert (s.count_delta, s.only_v2, s.only_v3, s.mismatched) == (0, 0, 0, 0)
+    assert not s.passed, "everything else agrees; only the clock disagrees"
 
 
 def test_one_side_seeing_nothing_never_passes_on_the_tolerance():
@@ -330,27 +461,50 @@ def test_kraken_multiset_matches_at_millisecond_granularity():
     assert run(v2, next_ms, exchange="kraken").only_v2 == 1
 
 
-def test_kraken_still_fails_on_a_real_price_divergence():
-    """
-    Skipping the id join must not make Kraken unfailable: a v3 price that no v2
-    trade carries shows up as one only-v2 plus one only-v3 in the multiset.
-    """
+def _kraken_pair(n, diverging=0):
+    """n matching trades on both sides, with the first `diverging` v3 prices wrong."""
     v2 = [trade(tid=f"KRAKEN-{i}", price=100_00000000 + i, ts_us=1_700_000_000_000_000 + i * 1000)
-          for i in range(10)]
+          for i in range(n)]
     v3 = [trade(tid=str(i), price=100_00000000 + i, ts_us=1_700_000_000_000_000 + i * 1000)
-          for i in range(10)]
-    v3[4] = trade(tid="4", price=999_00000000, ts_us=1_700_000_000_004_000)
+          for i in range(n)]
+    for i in range(diverging):
+        v3[i] = trade(tid=str(i), price=999_00000000 + i, ts_us=1_700_000_000_000_000 + i * 1000)
+    return v2, v3
+
+
+def test_a_single_kraken_price_divergence_is_indistinguishable_from_a_window_edge():
+    """
+    The carve-out, asserted rather than assumed. With no id join, one diverging
+    price is one only-v2 plus one only-v3 — arithmetically identical to a trade
+    that fell off one side of the window and another that fell off the other. It
+    passes, and the rendered header says so. This is the guarantee Kraken does
+    NOT get, and the test name has to say that, because a name promising the
+    opposite is worse than no test.
+    """
+    v2, v3 = _kraken_pair(10, diverging=1)
     s = run(v2, v3, exchange="kraken")
     assert (s.count_v2, s.count_v3, s.count_delta) == (10, 10, 0)
     assert (s.only_v2, s.only_v3) == (1, 1)
-    assert s.passed, "1 diverging trade is inside the floor-of-2 tolerance"
+    assert s.passed
 
-    # ...but a run of them is not, which is the behaviour that matters.
-    for i in range(5):
-        v3[i] = trade(tid=str(i), price=999_00000000 + i, ts_us=1_700_000_000_000_000 + i * 1000)
-    worse = run(v2, v3, exchange="kraken")
-    assert (worse.only_v2, worse.only_v3) == (5, 5)
-    assert not worse.passed
+
+def test_kraken_price_divergence_past_the_edge_allowance_fails():
+    """
+    What the carve-out must not become: 150 wrong prices on a 150k-trade symbol
+    sitting inside 0.1%. The multiset difference is capped at the constant edge
+    allowance, never at the proportional slope, so volume does not buy silence.
+    """
+    v2, v3 = _kraken_pair(10, diverging=3)
+    s = run(v2, v3, exchange="kraken")
+    assert (s.only_v2, s.only_v3) == (3, 3)
+    assert not s.passed
+
+    # The case the proportional slope used to swallow whole.
+    big2, big3 = _kraken_pair(150_000, diverging=150)
+    big = run(big2, big3, exchange="kraken")
+    assert big.tolerance == 150, "0.1% of 150k would have absorbed all 150"
+    assert big.side_allowance == 2
+    assert not big.passed
 
 
 def test_kraken_counts_still_gate():
@@ -376,6 +530,7 @@ def _header(exchange="binance", **over):
         "v3_consumed": 2,
         "join_on_id": exchange != "kraken",
         "notes": [],
+        "truncated": False,
     }
     return {**base, **over}
 
@@ -383,7 +538,7 @@ def _header(exchange="binance", **over):
 def test_markdown_table_has_the_agreed_columns_and_an_overall_verdict():
     stats = compare([trade(tid="1")], [trade(tid="1")], exchange="binance")
     out = render_markdown(stats, _header())
-    assert "| symbol | v2 | v3 | Δ | only-v2 | only-v3 | px/qty mismatch | verdict |" in out
+    assert "| symbol | v2 | v3 | Δ | only-v2 | only-v3 | px/qty/side mismatch | verdict |" in out
     assert "**OVERALL: PASS** — 1/1 symbols" in out
     assert "labelled sample, not a soak" in out
 
@@ -409,3 +564,59 @@ def test_markdown_surfaces_an_empty_v3_topic_as_a_note_not_a_crash():
     )
     assert "empty in window" in out
     assert "**OVERALL: FAIL**" in out
+
+
+def test_a_truncated_read_cannot_render_a_pass():
+    """
+    Every per-symbol row can be green and the artefact still be worthless: the
+    early-stop path is a short read, so its note has to reach the table AND sink
+    the verdict. A caveat printed next to a PASS is how a fake PASS gets pasted.
+    """
+    stats = compare([trade(tid="1")], [trade(tid="1")], exchange="binance")
+    assert all(s.passed for s in stats)
+    out = render_markdown(
+        stats,
+        _header(
+            truncated=True,
+            notes=[f"{TRUNCATION_NOTE} — `market.crypto.v3.trades.binance` returned no "
+                   "records for 15s with 2 of 8 partition(s) still short of the window end."],
+        ),
+    )
+    assert TRUNCATION_NOTE in out
+    assert "2 of 8 partition(s)" in out, "the note must name the scope of the shortfall"
+    assert "**OVERALL: FAIL**" in out
+    assert "read truncated — not evidence" in out
+
+
+def test_markdown_states_the_kraken_carve_out_in_the_header():
+    """README prose is not the artefact; the pasted table has to carry it."""
+    stats = compare([trade(tid="KRAKEN-1")], [trade(tid="7")], exchange="kraken")
+    out = render_markdown(stats, _header("kraken"))
+    assert "carve-out" in out
+    assert "never at the 0.1%" in out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI argument validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _args(start, end):
+    return parse_args(["--exchange", "binance", "--window-start", start, "--window-end", end])
+
+
+def test_a_window_ending_now_is_refused():
+    """
+    v3 is read only after v2 has fully drained, so a window still being written
+    into hands v3 the records produced during the v2 read and v2 none of them.
+    """
+    now = datetime.now(timezone.utc)
+    with pytest.raises(SystemExit):
+        _args((now - timedelta(hours=2)).isoformat(), now.isoformat())
+
+
+def test_a_window_ending_safely_in_the_past_is_accepted():
+    now = datetime.now(timezone.utc)
+    end = now - timedelta(seconds=MIN_WINDOW_END_AGE_S + 30)
+    args = _args((end - timedelta(hours=2)).isoformat(), end.isoformat())
+    assert args.window_end == end

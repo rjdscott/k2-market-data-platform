@@ -22,7 +22,7 @@
     {
       "name": "trade_id",
       "type": "string",
-      "doc": "The exchange's own trade identifier, stringified without reformatting. String because the venues disagree on type - Kraken v2 and Binance emit integers, Coinbase emits a UUID-shaped string - and a string holds all of them without a lossy cast. Unique per (exchange, symbol); never synthesised by K2. If an exchange stops providing one, that is a capture bug to fix, not a value to invent."
+      "doc": "The exchange's own trade identifier, stringified without reformatting. All three venues emit an integer today (Coinbase quotes it as a JSON string, e.g. \"62534799\" - verified across all 100 trades in services/capture-rust/tests/fixtures/coinbase-20s.jsonl, 0 non-numeric). String rather than long because the type is the venue's to change and a string holds any of them without a lossy cast; the UUIDs visible in a Coinbase frame are conn_id, which K2 generates per connection (main.rs:261), not the trade identifier. Unique per (exchange, symbol); never synthesised by K2. If an exchange stops providing one, that is a capture bug to fix, not a value to invent."
     },
     {
       "name": "price",

@@ -28,10 +28,20 @@ completed (registry down, empty window, unknown schema id).
       price/qty are fixed-point int64 at 1e-8, exchange_ts is a real
       timestamp-micros logicalType (fastavro hands back a tz-aware datetime).
 
-Both are normalised to `Norm(canonical_symbol, trade_id, price, qty,
+Both are normalised to `Norm(canonical_symbol, trade_id, price, qty, side,
 exchange_ts_us)` with prices as exact 1e-8 integers via `Decimal` — never a
 float, because a float round-trip of "78600.44000000" is exactly the silent
 corruption this comparison is supposed to be able to detect.
+
+`side` is the taker side, and both contracts already carry it: v2's `TradeSide`
+enum is `BUY`/`SELL` (normalized-trade.avsc:49), v3's `Side` enum is
+`buy`/`sell` (trade.avsc:38). They are case-folded onto one vocabulary and
+compared at zero tolerance. This is not decoration: both tiers derive the
+Binance side from the same `is_buyer_maker` boolean by inverting it
+(TradeNormalizer.kt:27, binance.rs:313), and trade.avsc's own doc names that
+inversion as the hazard. A tier that flipped it would emit the same id, price,
+quantity and timestamp for every trade, so counts, the ID join and px/qty would
+all stay green — side is the only column that can see it.
 
 ── Why a tolerance at all ───────────────────────────────────────────────────
 
@@ -56,10 +66,17 @@ meaningless, and a green result from it would be a lie. For Kraken the ID
 comparison is skipped and the verdict rests on counts plus a multiset
 comparison of `(price, qty, exchange_ts)` instead.
 
-That multiset is keyed on exchange_ts truncated to MILLISECONDS, because v2
-cannot represent anything finer: the v2 schema stores milliseconds and Kraken
-publishes microseconds. Comparing at microsecond granularity would fail on every
-single trade for a reason that has nothing to do with parity.
+That multiset is keyed on (price, qty, side, exchange_ts@ms) — truncated to
+MILLISECONDS because v2 cannot represent anything finer: the v2 schema stores
+milliseconds and Kraken publishes microseconds. Comparing at microsecond
+granularity would fail on every single trade for a reason that has nothing to do
+with parity.
+
+Because that path has no `mismatched` column, a Kraken price or side divergence
+can only surface as a multiset difference — which would otherwise be judged by
+the same proportional tolerance as a count delta, letting 150 wrong prices
+through on a 150k-trade symbol. So the multiset differences are gated at
+EDGE_ALLOWANCE, never at the 0.1% slope. See `SymbolStats.passed`.
 """
 
 from __future__ import annotations
@@ -88,15 +105,36 @@ EXCHANGES = ("binance", "kraken", "coinbase")
 # exchange, and therefore cannot be joined on. See the module docstring.
 SYNTHETIC_V2_ID_EXCHANGES = frozenset({"kraken"})
 
-# docker-compose.yml publishes 9092 (the INTERNAL listener, advertised as
-# `redpanda:9092`) and 8081. The external listener is configured on 19092 and
-# advertised as localhost:19092 but is not in the `ports:` list — see
-# scripts/parity/README.md, "Reaching the broker from the host".
+# docker-compose.yml:58 publishes the external listener (`19092:19092`), which is
+# advertised as `localhost:19092` (:67), so this resolves from the host.
 DEFAULT_BROKERS = "localhost:19092"
 DEFAULT_REGISTRY = "http://localhost:8081"
 
 POLL_TIMEOUT_S = 1.0
 IDLE_POLLS_BEFORE_GIVING_UP = 15
+
+# Marks a note produced by the early-stop path. A truncated read cannot produce a
+# verdict worth pasting, so `main` fails the run on it rather than rendering an
+# authoritative-looking table with a caveat nobody reads.
+TRUNCATION_NOTE = "**read truncated**"
+
+# Both producers are still writing into a window that ends near `now`, and they
+# are not read at the same instant: v3's `consume_window` runs only after v2's has
+# fully drained, and each truncates at its own high-watermark snapshot. A window
+# ending now therefore hands v3 every record produced during the v2 read and v2
+# none of them — a systematic one-sided deficit reported as a parity failure.
+MIN_WINDOW_END_AGE_S = 60
+
+# Largest `exchange_ts` disagreement a matched pair can show without it being a
+# real disagreement. v2 stores milliseconds (normalized-trade.avsc:64) and floors
+# to them (`Instant.parse(time).toEpochMilli()`, TradeNormalizer.kt:117) while v3
+# stores microseconds, so truncation alone can never reach a full millisecond.
+MAX_TS_DELTA_US = 1000
+
+# Cap on a Kraken multiset difference. Window-edge effects are bounded by how many
+# trades fall within the two tiers' stamping skew of the two boundaries — a small
+# constant — not by a fraction of the symbol's volume. See the module docstring.
+EDGE_ALLOWANCE = 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -112,6 +150,7 @@ class Norm:
     trade_id: str
     price: int  # fixed-point, scale 1e-8
     qty: int  # fixed-point, scale 1e-8
+    side: str  # taker side, case-folded: "buy" | "sell"
     exchange_ts_us: int  # microseconds since epoch, UTC
 
 
@@ -160,6 +199,21 @@ def to_micros(value: object, *, unit: str) -> int:
     raise ValueError(f"unknown timestamp unit {unit!r}")
 
 
+def to_side(value: object) -> str:
+    """
+    Either contract's taker-side enum -> one vocabulary.
+
+    v2's `TradeSide` is `BUY`/`SELL`, v3's `Side` is `buy`/`sell`; both are
+    documented as the taker (aggressor) side, so case is the only difference.
+    An unrecognised symbol is an error rather than a pass-through: the whole
+    value of this column is that a disagreement cannot be spelled away.
+    """
+    side = str(value).lower()
+    if side not in ("buy", "sell"):
+        raise ValueError(f"{value!r} is not a taker side (want buy/sell)")
+    return side
+
+
 def normalise_v2(record: dict) -> Norm:
     """com.k2.marketdata.crypto.NormalizedTrade -> Norm."""
     return Norm(
@@ -167,6 +221,7 @@ def normalise_v2(record: dict) -> Norm:
         trade_id=str(record["trade_id"]),
         price=to_fixed_1e8(record["price"]),
         qty=to_fixed_1e8(record["quantity"]),
+        side=to_side(record["side"]),
         exchange_ts_us=to_micros(record["exchange_timestamp"], unit="ms"),
     )
 
@@ -178,6 +233,7 @@ def normalise_v3(record: dict) -> Norm:
         trade_id=str(record["trade_id"]),
         price=int(record["price"]),
         qty=int(record["qty"]),
+        side=to_side(record["side"]),
         exchange_ts_us=to_micros(record["exchange_ts"], unit="us"),
     )
 
@@ -206,6 +262,18 @@ class SymbolStats:
         return tolerance_for(max(self.count_v2, self.count_v3))
 
     @property
+    def side_allowance(self) -> int:
+        """
+        Allowance on only-v2 / only-v3. On the ID-join path these are ID
+        differences and a px/qty/side divergence is caught separately at zero
+        tolerance, so the full tolerance applies. On the Kraken path there is no
+        `mismatched` column, so a divergence has nowhere else to show up and the
+        proportional slope would swallow it — 150 wrong prices on a 150k-trade
+        symbol sit inside 0.1%. There, the constant edge allowance is the cap.
+        """
+        return EDGE_ALLOWANCE if self.mismatched is None else self.tolerance
+
+    @property
     def passed(self) -> bool:
         # One side seeing the symbol and the other seeing nothing at all is never
         # a window-edge effect, so the tolerance must not apply to it. Without
@@ -214,11 +282,16 @@ class SymbolStats:
         # PASS rows gets pasted into the retirement PR as evidence of nothing.
         if (self.count_v2 == 0) != (self.count_v3 == 0):
             return False
-        tol = self.tolerance
+        # Both tiers read the same exchange timestamp off the same wire frame, so
+        # the only legitimate difference is v2's millisecond resolution. Anything
+        # at or past a full millisecond means they disagree about when the trade
+        # happened, which an ungated printed number would let a reader wave away.
+        if self.max_ts_delta_us is not None and self.max_ts_delta_us >= MAX_TS_DELTA_US:
+            return False
         return (
-            abs(self.count_delta) <= tol
-            and self.only_v2 <= tol
-            and self.only_v3 <= tol
+            abs(self.count_delta) <= self.tolerance
+            and self.only_v2 <= self.side_allowance
+            and self.only_v3 <= self.side_allowance
             and not self.mismatched  # None (skipped) and 0 both pass
         )
 
@@ -232,9 +305,9 @@ def tolerance_for(count: int) -> int:
     return max(2, int(count * 0.001))
 
 
-def _ms_bucket_key(n: Norm) -> tuple[int, int, int]:
+def _ms_bucket_key(n: Norm) -> tuple[int, int, str, int]:
     """Multiset key for the no-usable-ID path: v2 cannot resolve finer than ms."""
-    return (n.price, n.qty, n.exchange_ts_us // 1000)
+    return (n.price, n.qty, n.side, n.exchange_ts_us // 1000)
 
 
 def compare_symbol(v2: list[Norm], v3: list[Norm], *, join_on_id: bool) -> tuple:
@@ -242,8 +315,8 @@ def compare_symbol(v2: list[Norm], v3: list[Norm], *, join_on_id: bool) -> tuple
     Returns (only_v2, only_v3, mismatched, max_ts_delta_us) for one symbol.
 
     `join_on_id=False` is the Kraken path: no ID join is possible, so the two
-    sides are compared as multisets of (price, qty, exchange_ts@ms) and there is
-    no such thing as "same trade, different price" to count.
+    sides are compared as multisets of (price, qty, side, exchange_ts@ms) and
+    there is no such thing as "same trade, different price" to count.
     """
     if not join_on_id:
         c2, c3 = Counter(map(_ms_bucket_key, v2)), Counter(map(_ms_bucket_key, v3))
@@ -260,10 +333,12 @@ def compare_symbol(v2: list[Norm], v3: list[Norm], *, join_on_id: bool) -> tuple
         by_id_v3.setdefault(n.trade_id, n)
 
     common = by_id_v2.keys() & by_id_v3.keys()
+
+    def comparable(n: Norm) -> tuple[int, int, str]:
+        return (n.price, n.qty, n.side)
+
     mismatched = sum(
-        1
-        for tid in common
-        if (by_id_v2[tid].price, by_id_v2[tid].qty) != (by_id_v3[tid].price, by_id_v3[tid].qty)
+        1 for tid in common if comparable(by_id_v2[tid]) != comparable(by_id_v3[tid])
     )
     max_delta = max(
         (abs(by_id_v2[tid].exchange_ts_us - by_id_v3[tid].exchange_ts_us) for tid in common),
@@ -319,22 +394,34 @@ def render_markdown(stats: list[SymbolStats], header: dict) -> str:
         f" ({header['window_hours']:.2f} h — a labelled sample, not a soak)",
         f"- **v2 topic:** `{header['v2_topic']}` — {header['v2_consumed']:,} records consumed",
         f"- **v3 topic:** `{header['v3_topic']}` — {header['v3_consumed']:,} records consumed",
-        "- **tolerance:** `max(2, 0.1% of count)` per symbol on counts and on"
-        " only-v2/only-v3; px/qty mismatch must be 0",
+        "- **tolerance:** `max(2, 0.1% of count)` per symbol on the count delta;"
+        f" px/qty/side mismatch must be 0; `exchange_ts` delta must stay under"
+        f" {MAX_TS_DELTA_US:,} µs",
     ]
     if header["join_on_id"]:
-        lines.append("- **join:** exchange `trade_id`")
+        lines.append(
+            "- **join:** exchange `trade_id`. only-v2/only-v3 carry the same"
+            " tolerance as the count delta."
+        )
     else:
         lines.append(
             "- **join:** ID comparison **skipped** — v2 Kraken IDs are synthesised"
             " (`KRAKEN-<ms>-<hash>`, ADR-018 gap 5) and collide by construction."
-            " Compared as a multiset of `(price, qty, exchange_ts@ms)` instead."
+            " Compared as a multiset of `(price, qty, side, exchange_ts@ms)` instead."
+        )
+        lines.append(
+            "- **carve-out:** with no ID join there is no `px/qty/side mismatch`"
+            " column, so a Kraken price, quantity or side divergence can only"
+            f" appear as a multiset difference. Those are capped at"
+            f" {EDGE_ALLOWANCE} (the window-edge allowance), never at the 0.1%"
+            " slope — a divergence inside that cap is not distinguishable here"
+            " from a boundary trade."
         )
     if header["notes"]:
         lines += [f"- **note:** {n}" for n in header["notes"]]
     lines += [
         "",
-        "| symbol | v2 | v3 | Δ | only-v2 | only-v3 | px/qty mismatch | verdict |",
+        "| symbol | v2 | v3 | Δ | only-v2 | only-v3 | px/qty/side mismatch | verdict |",
         "|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for s in stats:
@@ -346,15 +433,20 @@ def render_markdown(stats: list[SymbolStats], header: dict) -> str:
         )
 
     passed = sum(1 for s in stats if s.passed)
-    lines += ["", f"**OVERALL: {'PASS' if passed == len(stats) else 'FAIL'}**"
-              f" — {passed}/{len(stats)} symbols"]
+    overall = passed == len(stats) and not header.get("truncated")
+    lines += ["", f"**OVERALL: {'PASS' if overall else 'FAIL'}**"
+              f" — {passed}/{len(stats)} symbols"
+              + (" (read truncated — not evidence)" if header.get("truncated") else "")]
 
     deltas = [s.max_ts_delta_us for s in stats if s.max_ts_delta_us is not None]
     if deltas:
+        worst = max(deltas)
+        verdict = "within v2 truncation" if worst < MAX_TS_DELTA_US else "**over the bound**"
         lines.append(
-            f"\nMax `exchange_ts` delta on matched IDs: {max(deltas):,} µs."
-            " v2 stores milliseconds, so anything under 1000 µs is v2 truncation,"
-            " not a disagreement about when the trade happened."
+            f"\nMax `exchange_ts` delta on matched IDs: {worst:,} µs — {verdict}."
+            f" v2 floors to milliseconds (`Instant.toEpochMilli()`), so a matched pair"
+            f" cannot legitimately differ by a full millisecond; {MAX_TS_DELTA_US:,} µs"
+            " or more fails the symbol rather than being noted and waved away."
         )
     return "\n".join(lines) + "\n"
 
@@ -439,13 +531,19 @@ def consume_window(consumer, topic: str, start_ms: int, end_ms: int, deserialize
         if msg is None:
             idle += 1
             if idle >= IDLE_POLLS_BEFORE_GIVING_UP:
-                print(
-                    f"warning: {topic}: no records for "
+                # This truncates the read, so it has to reach the artefact and not
+                # just the terminal: a one-sided truncation renders a fake FAIL and
+                # a symmetric one a fake PASS, either way with a table that looks
+                # authoritative and says nothing about being short.
+                truncated = (
+                    f"{TRUNCATION_NOTE} — `{topic}` returned no records for "
                     f"{IDLE_POLLS_BEFORE_GIVING_UP * POLL_TIMEOUT_S:.0f}s with "
-                    f"{len(pending)} partition(s) unfinished — stopping early",
-                    file=sys.stderr,
+                    f"{len(pending)} of {len(assignment)} partition(s) still short of "
+                    "the window end. Counts below are a lower bound on this topic and "
+                    "the verdict is not evidence."
                 )
-                break
+                print(f"warning: {truncated}", file=sys.stderr)
+                return records, consumed, truncated
             continue
         idle = 0
         if msg.error():
@@ -533,6 +631,15 @@ def parse_args(argv=None) -> argparse.Namespace:
     args = p.parse_args(argv)
     if args.window_end <= args.window_start:
         p.error("--window-end must be after --window-start")
+    age = (datetime.now(timezone.utc) - args.window_end).total_seconds()
+    if age < MIN_WINDOW_END_AGE_S:
+        p.error(
+            f"--window-end is {age:.0f}s in the past; it must be at least "
+            f"{MIN_WINDOW_END_AGE_S}s. The two topics are read one after the other, "
+            "so a window that is still being written into gives v3 every record "
+            "produced during the v2 read and v2 none of them — a one-sided deficit "
+            "that is an artefact of this tool, not a parity finding."
+        )
     return args
 
 
@@ -600,8 +707,9 @@ def main(argv=None) -> int:
         "v3_consumed": v3_consumed,
         "join_on_id": args.exchange not in SYNTHETIC_V2_ID_EXCHANGES,
         "notes": notes,
+        "truncated": any(n.startswith(TRUNCATION_NOTE) for n in notes),
     }
-    overall = all(s.passed for s in stats)
+    overall = all(s.passed for s in stats) and not header["truncated"]
 
     if args.json:
         print(json.dumps({**header, "overall": "PASS" if overall else "FAIL",

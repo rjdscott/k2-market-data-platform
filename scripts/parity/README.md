@@ -42,42 +42,22 @@ it cannot move a real consumer's offsets. It is safe to run against the live sta
 
 ### Reaching the broker from the host
 
-**The default `localhost:19092` does not currently work from the host, and that is a
-`docker-compose.yml` gap, not a bug in this script.** Redpanda is started with an
-external listener on `19092` advertised as `localhost:19092`, but only `9092` (the
-*internal* listener, advertised as `redpanda:9092`) appears in the service's `ports:`
-list. Verified 2026-08-26:
+The defaults work as they stand. `docker-compose.yml:58` publishes the external
+listener (`- "19092:19092"`) and `:67` advertises it as `localhost:19092`, so the
+address inside the bootstrap metadata resolves from the host. Verified 2026-08-26:
 
 ```
-$ python3 -c "import socket; socket.create_connection(('127.0.0.1',19092),2)"
-ConnectionRefusedError: [Errno 111] Connection refused
+$ docker port k2-redpanda | grep 19092
+19092/tcp -> 0.0.0.0:19092
 
-$ # against localhost:9092 instead — bootstrap succeeds, the broker does not
-%3|FAIL|rdkafka#producer-1| [thrd:redpanda:9092/0]: Failed to resolve 'redpanda:9092'
+$ python3 -c "import socket; socket.create_connection(('127.0.0.1',19092),3)"
+(no error — connection open)
 ```
 
-Bootstrap metadata comes back fine on `9092`; the *broker address inside it* is
-`redpanda:9092`, which does not resolve on the host, so the consume then fails. Two
-ways round it, in preference order:
-
-1. **Publish the external listener.** Add `- "19092:19092"` to the `redpanda`
-   service's `ports:` in `docker-compose.yml`. The listener already exists and is
-   already advertised as `localhost:19092`; nothing else changes. This is the fix,
-   and it is why the default here is `19092` rather than `9092`.
-2. **Run the script inside the compose network**, which is how the numbers below were
-   produced:
-
-   ```bash
-   docker run --rm -v "$PWD":/w -w /w \
-     --network k2-market-data-platform_k2-net python:3.12-slim \
-     sh -c "pip install -q 'confluent-kafka[avro]==2.15.0' && \
-            python scripts/parity/compare_trades.py --exchange kraken \
-              --brokers redpanda:9092 --registry http://redpanda:8081 \
-              --window-start ... --window-end ..."
-   ```
-
-Adding `redpanda` to `/etc/hosts` also works and is not recommended: it makes the
-script's behaviour depend on machine-local state that nothing in the repo declares.
+Do **not** point `--brokers` at `localhost:9092`. That is the *internal* listener,
+advertised as `redpanda:9092`: bootstrap metadata comes back, the broker address
+inside it does not resolve on the host, and the consume fails after the connection
+appears to succeed.
 
 ---
 
@@ -96,7 +76,11 @@ independently**. Pick it so that:
 - both producers were up and healthy for the whole of it — a capture container that
   restarts mid-window shows up as a large one-sided deficit, which is the tool
   working correctly and is not parity evidence;
-- it ends at least a minute in the past, so neither producer is still writing into it;
+- it ends at least a minute in the past, so neither producer is still writing into it.
+  **This is enforced, not advised**: `--window-end` less than 60 s old is a hard
+  error. The two topics are read one after the other, so a window still being
+  written into hands v3 every record produced during the v2 read and v2 none of
+  them — a systematic one-sided deficit that is an artefact of this tool;
 - it is inside the topics' retention (v2 topics are the live ones; v3 `trades.*` keep
   7 days).
 
@@ -113,8 +97,16 @@ reason.
 
 **PASS means:** over this window, for every canonical symbol, the two tiers agree on
 how many trades there were to within the stated tolerance, on which trades they were,
-and — with no tolerance at all — on the price and quantity of every trade both tiers
-saw.
+and — with no tolerance at all — on the price, quantity and **taker side** of every
+trade both tiers saw, and on when it happened to within v2's millisecond resolution.
+
+Side is in that list deliberately. Both tiers derive the Binance taker side by
+inverting the same `is_buyer_maker` boolean (`TradeNormalizer.kt:27`,
+`binance.rs:313`), and `trade.avsc` names that inversion as the hazard in the field's
+own doc. A tier that flipped it would emit the same id, price, quantity and timestamp
+for every trade — counts, the ID join and px/qty would all stay green. Side is the
+only column that can see it, so it is compared at zero tolerance and the mismatch
+column is named `px/qty/side mismatch`.
 
 **PASS does not mean:**
 
@@ -131,8 +123,15 @@ saw.
 
 ### The tolerance, and why it is not zero
 
-Per symbol: `max(2, 0.1% of count)` on the count delta and on each side's
-only-in-this-tier count. `px/qty mismatch` has **no** tolerance and must be 0.
+Per symbol: `max(2, 0.1% of count)` on the count delta, and on each side's
+only-in-this-tier count **on the ID-join path** (binance, coinbase).
+`px/qty/side mismatch` has **no** tolerance and must be 0. Neither does the
+`exchange_ts` delta on matched IDs: v2 floors to milliseconds
+(`Instant.parse(time).toEpochMilli()`, `TradeNormalizer.kt:117`) while v3 stores
+microseconds, so a matched pair cannot legitimately differ by a full millisecond —
+1,000 µs or more fails the symbol rather than being printed and waved away.
+
+**Kraken is the exception, and it is a real one** — see the carve-out below.
 
 The window is cut on each topic's own record timestamps, and the two producers stamp
 a trade at different points in their pipelines. A trade landing at 11:59:59.998 on one
@@ -156,13 +155,33 @@ Two trades in the same millisecond on the same pair get the same ID by construct
 so joining them against v3's real integer `trade_id` is not merely unavailable — it
 would be meaningless, and a green result from it would be a lie. So for Kraken:
 
-- the ID comparison is **skipped**, and the `px/qty mismatch` column prints `n/a`;
-- the two sides are compared as a **multiset of `(price, qty, exchange_ts)`**, with
-  `only-v2` / `only-v3` becoming multiset differences;
+- the ID comparison is **skipped**, and the `px/qty/side mismatch` column prints `n/a`;
+- the two sides are compared as a **multiset of `(price, qty, side, exchange_ts)`**,
+  with `only-v2` / `only-v3` becoming multiset differences;
 - the timestamp in that key is truncated to **milliseconds**, because v2 cannot
   represent anything finer — the v2 schema stores millis and Kraken publishes micros.
   Comparing at microsecond granularity would fail on every trade for a reason that has
   nothing to do with parity.
+
+#### The carve-out this costs
+
+With no ID join there is no `px/qty/side mismatch` column for Kraken, so a diverging
+price, quantity or side has nowhere to appear except as one `only-v2` plus one
+`only-v3` — arithmetically identical to a trade that fell off one edge of the window
+and another that fell off the other. **The zero-tolerance guarantee above therefore
+does not hold for Kraken**, and pretending otherwise is what a green table would be
+hiding.
+
+What it is gated at instead: Kraken's multiset differences are capped at the constant
+**edge allowance of 2**, never at the `0.1%` slope. Window-edge effects are bounded by
+how many trades land within the two tiers' stamping skew of the two boundaries — a
+small constant — not by a fraction of the symbol's volume. Without that cap, 150
+completely wrong prices on a 150,000-trade symbol sit inside 0.1% and PASS. With it,
+three do not. One or two still do, and that is the residual: on Kraken, a divergence
+of one or two trades is not distinguishable from a boundary effect by this tool.
+
+The rendered table states this in its own header, not only here — the artefact that
+gets pasted into the PR has to carry its own caveat.
 
 This is exactly the exception ADR-019 wrote down in advance: *"Kraken parity is
 asserted on counts and on v2's real integer `trade_id` being present and unique — not
@@ -182,7 +201,7 @@ opposite of what this directory is for. Explain it in the PR next to the table.
 Observed on a 2-minute two-sided Kraken window, 2026-08-26T12:20:59Z → 12:22:59Z,
 with both tiers up for the whole of it (214 records consumed on each side):
 
-| symbol | v2 | v3 | Δ | only-v2 | only-v3 | px/qty mismatch | verdict |
+| symbol | v2 | v3 | Δ | only-v2 | only-v3 | px/qty/side mismatch | verdict |
 |---|---:|---:|---:|---:|---:|---:|---|
 | ADA/USD | 28 | 28 | +0 | 0 | 0 | n/a | PASS |
 | BTC/USD | 98 | 98 | +0 | 0 | 0 | n/a | PASS |
@@ -217,7 +236,9 @@ the tables:
 - an explanation for **every** non-zero `only-v2` / `only-v3` — ADR-019's trigger is
   *"any divergence explained rather than tolerated"*, and a number inside the
   tolerance still wants a sentence;
-- the Kraken `n/a` column explained by the synthesised-ID paragraph above;
+- the Kraken `n/a` column explained by the synthesised-ID paragraph above, **and**
+  its carve-out stated — a Kraken table cannot assert the zero-tolerance px/qty/side
+  guarantee that binance and coinbase tables can;
 - a link back to this README for what PASS does not mean.
 
 If the tables are green, the ADR's retirement trigger is met and
