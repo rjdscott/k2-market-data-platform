@@ -100,13 +100,16 @@ run, and 16.875 GiB.
   steady-state footprint is closer to 12.60 CPU / 17.625 GiB — but the base image's
   always-on Master, Worker, History Server, Thrift Server and Jupyter idle at **633 MiB**
   before any driver starts (`docker stats --no-stream k2-spark-iceberg`, 2026-08-26). The
-  container is sized for **two** drivers on top of that — the 03:00 maintenance run
-  overlapping the 03:01 ingest tick, or an operator's `docker exec` during an incident —
-  which is why `docker/lake/spark_conf.py` pins the driver heap at 768m instead of
-  inheriting the image's 1 g, and why the `lake-ddl` one-shot sets
-  `K2_LAKE_DRIVER_MEMORY: 512m` in its own 1 GiB container. The 768m is a first sizing over
-  that measured baseline, not an observed peak: the Phase D cutover owes it a
-  `docker exec k2-spark-iceberg ps -o rss,cmd` taken during a run.
+  container was first sized for **two** drivers on top of that — the 03:00 maintenance
+  run overlapping the 03:01 ingest tick — which is why `docker/lake/spark_conf.py` pins
+  the ingest heap at 768m instead of inheriting the image's 1 g, and why the `lake-ddl`
+  one-shot sets `K2_LAKE_DRIVER_MEMORY: 512m` in its own 1 GiB container. Measured
+  2026-08-26: ingest peak driver RSS **1,243 MiB** (plan 003, deployment gate), but
+  compaction of `raw.messages` OOM'd at 768m twice — its rows are up to 5 MB each. So
+  the two drivers are now **serialised, not co-resident**: `maintenance.py` takes the
+  ingest `flock` blocking and runs with a **2g** heap (`K2_LAKE_MAINTENANCE_DRIVER_MEMORY`);
+  an ingest tick that lands during it exits 2 at the lock. Budget with one driver at a
+  time: 633 MiB + 2g + ~550 MiB overhead ≈ 3.2 GiB of 4 GiB.
 - **The three capture containers cost 0.75 CPU / 1 GiB combined** — 5% of CPU, 5% of RAM.
   That is half what the Kotlin handlers they replaced declared. RSS against these limits
   is **not yet measured** for the post-retirement stack ([ADR-010](../adr/ADR-010-resource-budget.md)

@@ -100,8 +100,16 @@ KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 # docker-compose.yml sets `K2_LAKE_DRIVER_MEMORY: 512m` for that service only.
 DRIVER_MEMORY = os.environ.get("K2_LAKE_DRIVER_MEMORY", "768m")
 
+# maintenance.py gets a bigger heap: rewriting raw.messages file groups whose
+# rows are up to 5 MB each OOM'd at 768m twice on 2026-08-26 (22:16Z with five
+# concurrent groups, 22:28Z with one). It can afford it because it holds the
+# ingest lock for its whole run, so it is never in the container with an ingest
+# driver: 2g + ~550 MiB JVM overhead + the 633 MiB idle baseline is ~3.2 GiB of
+# the 4 GiB cap.
+MAINTENANCE_DRIVER_MEMORY = os.environ.get("K2_LAKE_MAINTENANCE_DRIVER_MEMORY", "2g")
 
-def lake_session(app_name: str) -> SparkSession:
+
+def lake_session(app_name: str, driver_memory: str = DRIVER_MEMORY) -> SparkSession:
     """Spark session wired to the Lakekeeper REST catalog over MinIO."""
     access_key = os.environ["MINIO_ROOT_USER"]
     secret_key = os.environ["MINIO_ROOT_PASSWORD"]
@@ -111,7 +119,7 @@ def lake_session(app_name: str) -> SparkSession:
         # Read by pyspark BEFORE it launches the gateway JVM, so this really is
         # the heap and not just a reported value: with 1536m set here the driver
         # reports maxMemory() == 1536 MiB in this image (verified 2026-08-26).
-        .config("spark.driver.memory", DRIVER_MEMORY)
+        .config("spark.driver.memory", driver_memory)
         .config(
             "spark.sql.extensions",
             "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
@@ -224,3 +232,4 @@ if __name__ == "__main__":
         print(__doc__)
         sys.exit(2)
     _smoke()
+

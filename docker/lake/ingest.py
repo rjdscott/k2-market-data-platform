@@ -53,7 +53,6 @@ on the one Prefect's `concurrency_limit=1` covers.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
 import sys
@@ -62,13 +61,19 @@ import urllib.request
 from datetime import datetime, timezone
 from functools import reduce
 
+from lock import LOCK_PATH, acquire_lock
 from pyspark.sql import DataFrame, Row
 from pyspark.sql import functions as F
 from pyspark.sql.avro.functions import from_avro
 
 import offsets as O
 import wire
-from spark_conf import CATALOG, KAFKA_BROKERS, SCHEMA_REGISTRY_URL, lake_session
+from spark_conf import (
+    CATALOG,
+    KAFKA_BROKERS,
+    SCHEMA_REGISTRY_URL,
+    lake_session,
+)
 
 RAW_TABLE = f"{CATALOG}.raw.messages"
 TRADES_TABLE = f"{CATALOG}.bronze.trades"
@@ -88,7 +93,6 @@ CHECKS_TABLE = f"{CATALOG}.audit.checks"
 #
 # An exclusive non-blocking flock is the whole guard: the second run exits
 # non-zero immediately instead of duplicating the first one's work.
-LOCK_PATH = os.environ.get("K2_LAKE_LOCK", "/tmp/k2-lake-ingest.lock")  # noqa: S108
 
 # How far past its start offset one run may read each partition. The ceiling on
 # what a single ingest can pull, and therefore on how long it runs and how much
@@ -819,18 +823,6 @@ def probe(spark, window_seconds: int = 120) -> int:
     return 1 if bad else 0
 
 
-def _acquire_lock(path: str):
-    """Exclusive, non-blocking. Returns the held handle, or None if another
-    ingest holds it. The handle is returned so the caller keeps it open — the
-    lock dies with the file descriptor, and with the process, so a SIGKILL
-    releases it without leaving a stale lock behind."""
-    handle = open(path, "w")  # noqa: SIM115 - held for the life of the run
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        handle.close()
-        return None
-    return handle
 
 
 def main() -> int:
@@ -867,10 +859,10 @@ def main() -> int:
     # --probe writes nothing, so it does not contend with a running ingest.
     lock = None
     if not args.probe:
-        lock = _acquire_lock(LOCK_PATH)
+        lock = acquire_lock(LOCK_PATH)
         if lock is None:
             print(
-                f"another ingest holds {LOCK_PATH} — refusing to run a second one.\n"
+                f"another lake writer (ingest or maintenance) holds {LOCK_PATH} — refusing to run.\n"
                 "Two concurrent appends both commit and both write offsets; see LOCK_PATH above.",
                 file=sys.stderr,
             )

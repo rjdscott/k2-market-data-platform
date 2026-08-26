@@ -30,10 +30,18 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
+from lock import LOCK_PATH, acquire_lock
 from pyspark.sql import Row
 
 import offsets as O
-from spark_conf import CATALOG, S3_ENDPOINT, S3_PATH_STYLE, S3_REGION, lake_session
+from spark_conf import (
+    CATALOG,
+    MAINTENANCE_DRIVER_MEMORY,
+    S3_ENDPOINT,
+    S3_PATH_STYLE,
+    S3_REGION,
+    lake_session,
+)
 
 RAW_TABLE = f"{CATALOG}.raw.messages"
 TRADES_TABLE = f"{CATALOG}.bronze.trades"
@@ -79,13 +87,19 @@ def compact(spark, since: datetime) -> None:
     # sorted. Merging small files is the whole job.
     # min-input-files 5 stops a partition with two healthy files being rewritten
     # every night for no gain.
+    # max-concurrent-file-group-rewrites 1 + partial-progress: the default (5
+    # groups at once) OOM'd a 768m driver on 2026-08-26 at 22:16Z rewriting
+    # raw.kraken rows of up to 5 MB each; one group at a time fits, and partial
+    # progress keeps the groups already rewritten when a later one fails.
     _call(
         spark,
         f"CALL {CATALOG}.system.rewrite_data_files("
         f"  table => '{_bare(RAW_TABLE)}',"
         f"  strategy => 'binpack',"
         f"  where => 'kafka_ts >= {_where_ts(since)}',"
-        f"  options => map('min-input-files', '5', 'target-file-size-bytes', '268435456'))",
+        f"  options => map('min-input-files', '5', 'target-file-size-bytes', '268435456',"
+        f"                  'max-concurrent-file-group-rewrites', '1',"
+        f"                  'partial-progress.enabled', 'true'))",
     )
 
     for table, column in ((TRADES_TABLE, "exchange_ts"), (BOOK_TABLE, "snapshot_ts")):
@@ -98,7 +112,9 @@ def compact(spark, since: datetime) -> None:
             f"  table => '{_bare(table)}',"
             f"  strategy => 'sort',"
             f"  where => '{column} >= {_where_ts(since)}',"
-            f"  options => map('min-input-files', '5', 'target-file-size-bytes', '134217728'))",
+            f"  options => map('min-input-files', '5', 'target-file-size-bytes', '134217728',"
+            f"                  'max-concurrent-file-group-rewrites', '1',"
+            f"                  'partial-progress.enabled', 'true'))",
         )
 
 
@@ -529,8 +545,13 @@ def main() -> int:
     if args.orphan_hours < 24:
         parser.error("--orphan-hours below 24 is unsafe against a concurrent write; see remove_orphans()")
 
+    # Blocking: wait out the ingest that may be mid-commit, then keep every
+    # ingest tick out of the container until this driver has exited. Held for
+    # the life of the process, including --audit-only, which still runs Spark.
+    print(f"waiting for {LOCK_PATH}", flush=True)
+    lock = acquire_lock(LOCK_PATH, blocking=True)  # noqa: F841 - held until exit
     run_ts = datetime.now(timezone.utc)
-    spark = lake_session("k2-lake-maintenance")
+    spark = lake_session("k2-lake-maintenance", driver_memory=MAINTENANCE_DRIVER_MEMORY)
     try:
         if not args.audit_only:
             compact(spark, run_ts - timedelta(days=args.days))
