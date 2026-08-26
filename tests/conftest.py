@@ -25,6 +25,12 @@ sys.path.insert(0, str(_PROJECT_ROOT / "docker" / "offload" / "flows"))
 # iceberg_maintenance.py, offload_generic.py, watermark_pg.py, etc.
 sys.path.insert(0, str(_PROJECT_ROOT / "docker" / "offload"))
 
+# v3 lake: offsets.py and wire.py. Both are pure — no pyspark, no network — so
+# they import here even though ingest.py and maintenance.py next to them do not.
+# Same sys.path pattern as the offload dirs above, and for the same reason: the
+# `docker` namespace is taken by the docker-sdk package.
+sys.path.insert(0, str(_PROJECT_ROOT / "docker" / "lake"))
+
 
 @pytest.fixture(autouse=True)
 def mock_prefect_run_logger():

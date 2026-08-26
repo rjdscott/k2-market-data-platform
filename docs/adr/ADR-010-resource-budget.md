@@ -472,3 +472,36 @@ docker/prometheus/rules/capture-alerts.yml         10
 docker/prometheus/rules/clickhouse-alerts.yml       4
 docker/prometheus/rules/iceberg-offload-alerts.yml  9
 ```
+
+## Outcome addendum (v3 Phase D, 2026-08-26)
+
+The lake tier costs **0.10 CPU / 128M steady** — one service, `lake-metrics`, running
+`docker/lake/metrics.py --serve`. Ingest and maintenance are Prefect jobs dispatched into
+the existing `k2-spark-iceberg` container, so they consume its already-allocated 2.0 CPU /
+4 GB rather than adding a line. The one-shot `lake-ddl` adds 0.5 CPU / 1G at boot only.
+
+The exporter is 128M because it does **not** use PyIceberg. `import pyiceberg.io.pyarrow`
+alone measures 122 MB RSS in the Spark image, before any work; reading the same snapshot
+summaries from Lakekeeper's REST API with `urllib` measures 26.7 MB doing a full refresh
+against all four tables. That decision is what keeps this addendum's first line at 0.10
+rather than at 0.25 CPU / 512M.
+
+| Metric | As-built Phase C | As-built Phase D |
+|--------|------------------|------------------|
+| CPU limits (steady state) | 16.10 | **16.20** |
+| RAM limits (steady state) | 23.125 GB | **23.250 GB** |
+| Long-running services | 18 | **19** |
+| One-shot services | 4 | **5** (`lake-ddl` added) |
+| CPU / RAM at bootstrap peak | 17.60 / 24.625 GiB | **18.20 / 25.750 GiB** |
+| Headroom vs 16 CPU / 40 GB | −0.6% / 42% | **−1.3% CPU / 42% RAM steady** |
+
+Steady state is now 0.20 CPU over the 16-core target, and there are two overlapping
+parallel runs paying for it rather than one: Rust capture beside the Kotlin feed handlers
+(Phase C), and `lake-metrics` beside `iceberg-metrics` (Phase D). Both are the cost of
+comparing a replacement against the path it replaces before trusting it, and both end at
+their own cutover. Retiring the Kotlin handlers returns 1.5 CPU / 1.5 GB; retiring
+`iceberg-metrics` with the rest of `docker/offload/` returns a further 0.1 CPU / 128M,
+landing steady state at **14.60 CPU / 21.625 GB**.
+
+Numbers from `DOCKER_CONTEXT=default docker compose --env-file .env.example config` summed
+over `deploy.resources.limits`, 2026-08-26.
