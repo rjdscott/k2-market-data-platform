@@ -417,7 +417,7 @@ divergence explained rather than tolerated"*, so each one is named here:
    more than once and every copy agreed with its own first copy. On Kraken,
    `dup-v2` is the synthesised-id collision above and has no v3 counterpart.
 
-**Maintainer decision, 2026-08-27, recorded as a decision rather than a
+**Maintainer decision, 2026-08-26, recorded as a decision rather than a
 finding:** *"the gate is satisfied by explanation, not by a rerun — every
 divergence is attributable to the v2 tier or the venue, none to v3; a
 'reconnect-free window' would be selecting the sample to flatter v2."* Two of the
