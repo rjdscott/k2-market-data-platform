@@ -1,4 +1,4 @@
-FROM tabulario/spark-iceberg:3.5.0_1.4.2
+FROM tabulario/spark-iceberg:3.5.5_1.8.1
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Python dependencies
