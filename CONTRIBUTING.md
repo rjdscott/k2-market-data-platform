@@ -5,7 +5,7 @@ This is a personal portfolio project. Issues and questions are welcome; pull req
 ## Prerequisites
 
 - Docker Engine with Compose v2
-- JDK 21 (only for running the Kotlin tests outside Docker — `./gradlew` handles Gradle)
+- JDK 21 only if you want to run `./gradlew` directly; `make test-kotlin` uses the JDK 21 Docker image (Gradle 8.12 does not run on newer JDKs)
 - [`uv`](https://docs.astral.sh/uv/) (only for the Python offload-flow tests)
 
 ## Setup
@@ -22,7 +22,7 @@ make ps
 
 ```bash
 make test                # Kotlin + Python unit tests
-make test-kotlin         # cd services/feed-handler-kotlin && ./gradlew test
+make test-kotlin         # ./gradlew test inside gradle:8.12-jdk21
 make test-python         # uv run --no-project --with prefect --with pytest pytest tests
 ```
 

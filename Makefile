@@ -18,8 +18,9 @@ ps:  ## Show service status
 
 test: test-kotlin test-python  ## Run all unit tests
 
-test-kotlin:  ## Feed handler unit tests (needs JDK 21)
-	cd services/feed-handler-kotlin && ./gradlew test --no-daemon
+test-kotlin:  ## Feed handler unit tests (runs in the JDK 21 build image; no local JDK needed)
+	docker run --rm -v "$(CURDIR)":/project -w /project/services/feed-handler-kotlin \
+	  -e GRADLE_USER_HOME=/tmp/.gradle gradle:8.12-jdk21 ./gradlew test --no-daemon
 
 test-python:  ## Iceberg offload flow unit tests (needs uv)
 	uv run --no-project --with prefect --with pytest pytest tests -q
