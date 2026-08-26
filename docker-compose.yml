@@ -464,6 +464,11 @@ services:
         condition: service_healthy
       iceberg-init:
         condition: service_completed_successfully
+      # Same reason as iceberg-init above, for the v3 tables: the first
+      # lake-ingest-5min run fires within 5 minutes of boot, and on a clean
+      # clone it would hit TABLE_OR_VIEW_NOT_FOUND if the DDL had not landed.
+      lake-ddl:
+        condition: service_completed_successfully
     deploy:
       resources:
         limits:
