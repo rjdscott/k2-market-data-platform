@@ -1,8 +1,9 @@
 # Runbooks
 
-Incident procedures for the v2 stack. Runbooks record *how*; ADRs record *why*
-(`../adr/`). Every Prometheus alert annotation points at one of these; start from the
-alert that fired, or from the "when to use" column below.
+Incident procedures for the running v2 stack, plus the v3 capture tier being built
+alongside it. Runbooks record *how*; ADRs record *why* (`../adr/`). Every Prometheus
+alert annotation points at one of these; start from the alert that fired, or from the
+"when to use" column below.
 
 Load secrets before running any command here: `set -a && . ./.env && set +a`
 
@@ -17,10 +18,14 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 - No decision rationale here — link the ADR.
 - A PR that invalidates a runbook's steps updates it and its index row in the same PR.
 - Every alert in `docker/prometheus/rules/` names a runbook in its annotations, and that
-  path must resolve.
+  path must resolve. The v2 rule files carry it as a `**Runbook:**` line inside the
+  `description`; `capture-alerts.yml` promotes it to a first-class `runbook:`
+  annotation so the path is machine-checkable. New rule files use the annotation form.
 - Write it with the `/runbook` skill.
 
 ## Index
+
+### v2 stack
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
@@ -32,6 +37,24 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 | [iceberg-offload-watermark-recovery.md](./iceberg-offload-watermark-recovery.md) | Watermark stuck, stale, wedged in `running`, or needs rewinding to re-offload a window | `IcebergOffloadWatermarkStale` |
 | [iceberg-offload-monitoring.md](./iceberg-offload-monitoring.md) | Reference: offload metrics, SLO definitions, dashboard panels. Read before tuning thresholds | — |
 | [iceberg-scheduler-recovery.md](./iceberg-scheduler-recovery.md) | Prefect deployment paused or missing, worker not claiming runs, empty offload dashboard | `IcebergOffloadSchedulerDown` |
+
+### v3 capture tier (Phase C — written ahead of the code; see the note below)
+
+| Runbook | When to use | Triggering alert |
+|---------|-------------|------------------|
+| [capture-down.md](./capture-down.md) | A `k2-capture` container is down or crash-looping, or is running but failing to produce to Redpanda | `CaptureDown`, `CaptureProduceErrors` |
+| [capture-feed-stale.md](./capture-feed-stale.md) | Container up and scrapeable but a stream has gone silent; or exchange→receive p99 has stepped up | `CaptureFeedStale`, `CaptureIngressLatencyHigh` |
+| [capture-sequence-gaps.md](./capture-sequence-gaps.md) | Exchange sequence continuity broke (messages lost), or the book keeps being resynced | `CaptureSequenceGaps`, `CaptureResyncStorm` |
+| [capture-checksum-failure.md](./capture-checksum-failure.md) | Kraken CRC32 mismatch, book thinner than top-20, or a venue quoting finer than 8 dp | `CaptureChecksumFailure`, `CaptureBookDepthDegraded`, `CapturePrecisionLoss` |
+
+> **These four carry no measured MTTR yet, and say so on every row.** The capture tier
+> ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) is not built. Commands that could be
+> verified against the running v2 stack with a service name substituted are marked ✅;
+> the rest are written against the Phase C design. The Phase C chaos run
+> (`make chaos`) induces each failure, waits for the alert, and fills in the
+> **Measured** rows and the **Last verified** stamp. Until then they are procedures,
+> not measurements — which is exactly the distinction this directory's conventions
+> exist to protect.
 
 ## Triage
 

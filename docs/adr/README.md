@@ -1,6 +1,6 @@
 # Architectural Decision Records
 
-Eighteen ADRs covering the design and rebuild of the K2 Market Data Platform: Kotlin/Ktor feed handlers → Redpanda → ClickHouse (medallion via materialized views) → Iceberg with a Hadoop catalog on a bind-mounted local warehouse (MinIO provisioned, unused by the offload), with Spark batch offload orchestrated by Prefect. ADR-001 to ADR-010 were written up front in February 2026, before any of it was built; ADR-011 to ADR-017 came out of implementation. The status column below records what actually happened — including the one decision that was reversed (ADR-008) and the one never built (ADR-005). Each ADR that deviated from its own design carries an `Outcome` section at the end explaining why. ADR-018 opens the v3 series: an umbrella decision, still Proposed, arguing that the v2 shape is wrong for research work.
+Twenty-one ADRs covering the design and rebuild of the K2 Market Data Platform: Kotlin/Ktor feed handlers → Redpanda → ClickHouse (medallion via materialized views) → Iceberg with a Hadoop catalog on a bind-mounted local warehouse (MinIO provisioned, unused by the offload), with Spark batch offload orchestrated by Prefect. ADR-001 to ADR-010 were written up front in February 2026, before any of it was built; ADR-011 to ADR-017 came out of implementation. The status column below records what actually happened — including the one decision that was reversed (ADR-008) and the one never built (ADR-005). Each ADR that deviated from its own design carries an `Outcome` section at the end explaining why. ADR-018 opens the v3 series: an umbrella decision, still Proposed, arguing that the v2 shape is wrong for research work; ADR-019, ADR-020 and ADR-027 are the first of its follow-ons, landing with Phase C.
 
 Measured as-built: **15.1 CPU / 21.875 GB** across 14 long-running services (+2 one-shot), against a 16 CPU / 40 GB budget. End-to-end p99 trade → ClickHouse Silver: **170–197 ms** across Binance, Kraken and Coinbase. All 6 failure-mode tests pass, max MTTR 32 s. Every figure here traces to [`../benchmarks/2026-02-19-v2-baseline.md`](../benchmarks/2026-02-19-v2-baseline.md).
 
@@ -28,14 +28,14 @@ Measured as-built: **15.1 CPU / 21.875 GB** across 14 long-running services (+2 
 | ADR | Title | Status | Outcome |
 |-----|-------|--------|---------|
 | [001](ADR-001-replace-kafka-with-redpanda.md) | Replace Kafka with Redpanda | Accepted — Implemented | Redpanda v25.3.4 + Console v3.5.1; Kafka and Schema Registry never deployed |
-| [002](ADR-002-kotlin-feed-handlers.md) | Kotlin feed handlers | Accepted — Implemented, deviations | Kotlin 2.3.10 + **Ktor** (not Spring Boot), **3 containers** (not one JVM); ~0.03 CPU / 134 MiB each |
+| [002](ADR-002-kotlin-feed-handlers.md) | Kotlin feed handlers | Accepted — Implemented, deviations — **superseded by [ADR-019](ADR-019-rust-capture-tier.md)** | Kotlin 2.3.10 + **Ktor** (not Spring Boot), **3 containers** (not one JVM); ~0.03 CPU / 134 MiB each. Retires to `legacy/v2-kotlin/` when Phase C parity holds |
 | [003](ADR-003-clickhouse-warm-storage.md) | ClickHouse as warm storage | Accepted — Implemented | Runs 24.3 LTS, not the researched latest — see ADR-015 |
 | [004](ADR-004-eliminate-spark-streaming.md) | Eliminate Spark Streaming | Accepted — Implemented, deviation | 5 streaming jobs never built; replacement is **ClickHouse MVs**, not Kotlin processors |
 | [005](ADR-005-kotlin-spring-boot-api.md) | Spring Boot query API | **Deferred — Not implemented** | Scored 3/10 ROI; Phase 8 not started; no query API exists |
 | [006](ADR-006-spark-batch-only.md) | Spark for batch only | Accepted — Implemented | One on-demand Spark container; the planned Kotlin hourly writer was dropped (ADR-014) |
 | [007](ADR-007-iceberg-cold-storage.md) | Iceberg cold storage | Accepted — Implemented, deviation | **Hadoop catalog** on a bind-mounted local warehouse (MinIO provisioned, unused), not REST catalog + Postgres; 15-min offload, not hourly |
 | [008](ADR-008-eliminate-prefect-orchestration.md) | Eliminate Prefect | **Partially rejected** — superseded by ADR-014, ADR-017 | MVs did replace all 5 OHLCV flows; Prefect was **retained** for offload + maintenance |
-| [009](ADR-009-medallion-in-clickhouse.md) | Four-layer medallion in ClickHouse | Accepted — Implemented, amended by ADR-011 | Built as **3 layers, no RAW** — Redpanda is the replay log |
+| [009](ADR-009-medallion-in-clickhouse.md) | Four-layer medallion in ClickHouse | Accepted — Implemented, amended by ADR-011; string-numerics rule superseded by [ADR-020](ADR-020-avro-fixed-point-contracts.md) | Built as **3 layers, no RAW** — Redpanda is the replay log |
 | [010](ADR-010-resource-budget.md) | Resource budget (16 CPU / 40 GB) | Accepted — Implemented | Budget held: 15.1 CPU / 21.875 GB; composition differs (Prefect in, API + Silver processor out) |
 
 ## Implementation decisions (2026-02-10 → 2026-02-18)
@@ -55,6 +55,9 @@ Measured as-built: **15.1 CPU / 21.875 GB** across 14 long-running services (+2 
 | ADR | Title | Status | Outcome |
 |-----|-------|--------|---------|
 | [018](ADR-018-v3-lake-first-rust-capture.md) | v3: lake-first, Rust capture tier | **Proposed** | Umbrella for the v3 rebuild; supersedes ADR-002/007/009/013/014 when accepted, via follow-on ADRs 019–028 |
+| [019](ADR-019-rust-capture-tier.md) | Rust capture tier replaces Kotlin feed handlers | **Proposed** — supersedes [ADR-002](ADR-002-kotlin-feed-handlers.md) | Phase C. Not a latency argument: one connection per exchange for trades + book, recv_ts before parse, replay determinism, 42.8 MB vs 3 JVMs. Kotlin retires only on per-symbol parity over a labelled 2 h window |
+| [020](ADR-020-avro-fixed-point-contracts.md) | Avro-only contracts: fixed-point int64 @1e-8, recv_ts in body | **Proposed** — supersedes [ADR-009](ADR-009-medallion-in-clickhouse.md)'s string-numerics rule (scoped; the medallion decision goes to ADR-025) | Phase B/C. One wire format on the only path; `recv_ts_ns` in body *and* header, body authoritative; `market.crypto.v3.*` prefix because the v2 subject rejects the new schema |
+| [027](ADR-027-book-snapshot-and-sequencing.md) | L2 book snapshot model and per-exchange resync policy | **Proposed** | Phase C. Top-20 @ 1 Hz is the queryable product, deltas stay verbatim in `raw.messages`; three sequencing mechanisms kept explicit; states plainly what 1 Hz cannot see |
 
 ---
 
