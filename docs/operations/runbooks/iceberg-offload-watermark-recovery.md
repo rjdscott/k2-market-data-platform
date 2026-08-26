@@ -90,7 +90,7 @@ docker logs k2-prefect-worker --tail=50 | grep -i watermark
 
 **Expected:** Worker running, recent flow runs in COMPLETED state, no watermark errors
 
-**If worker not running:** Jump to [Scenario 1: Worker Not Running](#scenario-1-scheduler-not-running)
+**If worker not running:** Jump to [Scenario 1: Worker Not Running](#scenario-1-worker-not-running)
 
 ### Step 4: Check PostgreSQL Health
 

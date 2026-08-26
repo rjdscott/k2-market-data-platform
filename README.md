@@ -11,14 +11,14 @@ queryable OHLCV candles in under a second — on a single host, inside a 16-core
 ## What this demonstrates
 
 - **A rewrite justified by numbers, not taste.** v1: 18–20 containers, 35–40 CPU / 45–50 GB, 5–15 min
-  trade-to-queryable. v2: 13 services, 15.0 CPU / 21.75 GB, measured p99 170–197 ms. Each move is an ADR.
+  trade-to-queryable. v2: 14 services (+2 one-shot), 15.1 CPU / 21.875 GB, measured p99 170–197 ms. Each move is an ADR.
 - **Deleting the stream processor.** Five always-on Spark Structured Streaming jobs (~14 CPU / 20 GB)
   replaced by ClickHouse Kafka engine tables and materialized views — **zero stream-processing code**.
 - **Exchange-native ingestion.** Three Kotlin/Ktor feed handlers, one container per exchange, each
   owning one WebSocket dialect and emitting a shared Avro record. Adding an exchange is additive.
 - **A cold tier with real semantics.** Prefect drives Spark batch offload into Apache Iceberg (Hadoop catalog)
   every 15 min, with PostgreSQL watermarks for idempotent appends and nightly compaction + audit.
-- **Operability as a deliverable.** 18 Prometheus alert rules, 4 Grafana dashboards, and six failure
+- **Operability as a deliverable.** 17 Prometheus alert rules, 4 Grafana dashboards, and six failure
   modes deliberately induced and timed — max MTTR 32 s.
 - **A reversed decision, kept in the record.** ADR-008 argued for removing Prefect. It was wrong, and
   the record says so rather than being quietly deleted.
@@ -41,7 +41,7 @@ flowchart LR
   end
   I["Cold tier<br/>Iceberg · Hadoop catalog · cold.*"]:::st
   subgraph OBS["Observability"]
-    M["Prometheus<br/>18 alert rules"]:::ob
+    M["Prometheus<br/>17 alert rules"]:::ob
     D["Grafana<br/>4 dashboards"]:::ob
   end
 
@@ -51,10 +51,12 @@ flowchart LR
   B -->|materialized view| S
   S -->|materialized view| G
   P -->|every 15 min| K
-  G -->|JDBC · 10 tables| K
+  B -.->|JDBC| K
+  S -.->|JDBC| K
+  G -.->|"JDBC · 10 tables"| K
   K -->|append| I
   F -.->|/metrics| M
-  G -.->|:9363| M
+  CH -.->|:9363| M
   K -.-> M
   M --> D
 
@@ -79,8 +81,8 @@ offload does not write to it yet ([ADR-013](./docs/decisions/ADR-013-pragmatic-i
 
 | | v1 | v2 |
 |---|---|---|
-| CPU / RAM (limits) | 35–40 cores / 45–50 GB | **15.0 cores / 21.75 GB** |
-| Services | 18–20 | **13** (+2 one-shot init containers) |
+| CPU / RAM (limits) | 35–40 cores / 45–50 GB | **15.1 cores / 21.875 GB** |
+| Services | 18–20 | **14** (+2 one-shot init containers) |
 | Always-on Spark | 5 streaming jobs, ~14 CPU / 20 GB | **none** — batch only |
 | Trade → queryable | 5–15 min | **p99 170–197 ms** |
 | Stack | Python · Kafka · Spark Streaming · DuckDB · FastAPI | Kotlin/Ktor · Redpanda · ClickHouse · Spark batch · Iceberg |
@@ -107,11 +109,12 @@ Requires Docker with ~16 GB RAM available.
 git clone https://github.com/rjdscott/k2-market-data-platform.git
 cd k2-market-data-platform
 cp .env.example .env      # set CLICKHOUSE_PASSWORD, MINIO_*, GRAFANA_PASSWORD, PREFECT_DB_*
+set -a && . ./.env && set +a   # export for the verify commands below
 docker compose up -d      # or: make up
 ```
 
 First run builds three images (Gradle + two Python images — about a minute on a fast machine, plus
-image pulls); all 13 services report healthy roughly three minutes after `up`. Subsequent starts take
+image pulls); all 14 services report healthy roughly three minutes after `up`. Subsequent starts take
 under a minute. Measured on a clean clone, 2026-08-26.
 
 **Verify it's flowing:**
@@ -138,11 +141,11 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
 Four provisioned Grafana dashboards: pipeline overview (`k2-pipeline-overview`), ClickHouse
 (`clickhouse-v2`), Iceberg offload (`iceberg-offload`), v2 migration tracker (`k2-v2-migration`).
 
-<!-- screenshot: docs/images/grafana-pipeline-overview.png -->
-<!-- screenshot: docs/images/grafana-iceberg-offload.png -->
+![Pipeline overview dashboard](docs/images/grafana-pipeline-overview.jpg)
+![Prefect deployments](docs/images/prefect-deployments.jpg)
 
-18 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 4 feed handler (down, error
-rate, reconnect churn, metrics endpoint), 5 ClickHouse (down, memory, query failures, bronze insert
+17 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 3 feed handler (down, error
+rate, reconnect churn), 5 ClickHouse (down, memory, query failures, bronze insert
 rate, merge queue), 9 Iceberg offload (lag, consecutive failures, cycle time, watermark staleness,
 scheduler down). Handlers expose Micrometer metrics on `:8082/metrics` plus a `/health` endpoint used as
 the container healthcheck; ClickHouse exposes its own on `:9363`. Details:
@@ -184,9 +187,9 @@ tests remain on the roadmap.
 
 ```
 services/feed-handler-kotlin/   Kotlin/Ktor feed handler (one image, three containers)
-docker/clickhouse/schema/       Bronze → Silver → Gold DDL and materialized views
+docker/clickhouse/ddl/          Bronze → Silver → Gold DDL and materialized views (auto-applied)
 docker/offload/                 Spark offload job + Prefect flows (offload, maintenance)
-docker/prometheus/rules/        18 alert rules
+docker/prometheus/rules/        17 alert rules
 docker/grafana/dashboards/      4 provisioned dashboards
 docker/spark/  docker/prefect/  Custom images
 config/instruments.yaml         Instrument registry — single source of truth
@@ -201,8 +204,8 @@ docker-compose.yml              The whole stack
 
 - **Phases 1–6 complete** — infrastructure, Redpanda, ClickHouse, streaming pipeline, Iceberg cold tier,
   Kotlin feed handlers.
-- **Phase 7 (integration hardening): 3 of 5.** Done: latency benchmark, failure-mode testing, monitoring.
-  Outstanding: 24 h resource burn-in; runbooks beyond the Iceberg/offload set.
+- **Phase 7 (integration hardening): 4 of 5.** Done: latency benchmark, failure-mode testing, monitoring,
+  runbooks (8, in `docs/operations/runbooks/`). Outstanding: 24 h resource burn-in.
 - **Phase 8 (query API): not started.** ADR-005 proposed one; deliberately deferred, since ClickHouse's
   HTTP interface has been enough. There is no query API in this repo. 5×/10× load tests and Alertmanager
   routing are also not done.

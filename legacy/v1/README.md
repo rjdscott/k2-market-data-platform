@@ -8,7 +8,7 @@ Python end to end: Binance/Kraken WebSocket ingestion → Kafka (+ Schema Regist
 
 ## Why it was replaced
 
-The v2 mandate was a 16-core / 40 GB single-host budget. The decision records in [`docs/decisions/`](../../docs/decisions/) explain each move: Kafka → Redpanda (ADR-001), Python ingestion → Kotlin feed handlers (ADR-002), DuckDB → ClickHouse (ADR-003), Spark Streaming → ClickHouse materialized views (ADR-004, ADR-009), Spark kept batch-only for Iceberg offload (ADR-006). Measured result: 15 CPU / 21.75 GB across 13 services, trade-to-queryable p99 under 200 ms instead of 5–15 minutes.
+The v2 mandate was a 16-core / 40 GB single-host budget. The decision records in [`docs/decisions/`](../../docs/decisions/) explain each move: Kafka → Redpanda (ADR-001), Python ingestion → Kotlin feed handlers (ADR-002), DuckDB → ClickHouse (ADR-003), Spark Streaming → ClickHouse materialized views (ADR-004, ADR-009), Spark kept batch-only for Iceberg offload (ADR-006). Measured result: 15.1 CPU / 21.875 GB across 14 services (+2 one-shot), trade-to-queryable p99 under 200 ms instead of 5–15 minutes.
 
 ## Layout
 

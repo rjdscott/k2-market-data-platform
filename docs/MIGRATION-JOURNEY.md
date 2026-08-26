@@ -47,7 +47,7 @@ timeline
 | 4 | Streaming pipeline | Bronze → Silver → Gold entirely as materialized views | ✅ **The planned Kotlin Silver Processor was never built** — MVs made it unnecessary, saving a service | [004](decisions/ADR-004-eliminate-spark-streaming.md), [009](decisions/ADR-009-medallion-in-clickhouse.md) |
 | 5 | Cold tier / Iceberg | 10 Iceberg tables, Spark offload with PostgreSQL watermarks, Prefect 3 deployments, daily compaction + audit | ✅ 3.78M rows in 16 s (236k rows/s), 12:1 zstd compression, 99.9%+ warm/cold consistency | [006](decisions/ADR-006-spark-batch-only.md), [007](decisions/ADR-007-iceberg-cold-storage.md), [013](decisions/ADR-013-pragmatic-iceberg-version-strategy.md), [014](decisions/ADR-014-spark-based-iceberg-offload.md), [017](decisions/ADR-017-iceberg-maintenance-pipeline.md) |
 | 6 | Kotlin feed handlers | Ktor WebSocket clients, dual raw+Avro producers, shared instrument registry | ✅ Built early, during Phase 3, to unblock end-to-end validation. 0.034 CPU / 134 MiB measured for Binance | [002](decisions/ADR-002-kotlin-feed-handlers.md) |
-| 7 | Integration hardening | Latency benchmark ✅, resource burn-in 🟡, failure-mode testing ✅, monitoring 🟡, runbooks ⬜ | 🟡 3 of 5 steps complete | [015](decisions/ADR-015-clickhouse-lts-downgrade.md), [016](decisions/ADR-016-add-coinbase-exchange.md) |
+| 7 | Integration hardening | Latency benchmark ✅, resource burn-in 🟡, failure-mode testing ✅, monitoring ✅, runbooks ✅ (8: failure-recovery, iceberg-offload-{failure,lag,performance,monitoring,watermark-recovery}, iceberg-scheduler-recovery, redpanda) | 🟡 4 of 5 steps complete; remaining: 24 h burn-in, 5×/10× load test, Alertmanager routing | [015](decisions/ADR-015-clickhouse-lts-downgrade.md), [016](decisions/ADR-016-add-coinbase-exchange.md) |
 | 8 | Query API | — | ⬜ Not started | [005](decisions/ADR-005-kotlin-spring-boot-api.md) |
 
 ---
@@ -58,14 +58,14 @@ timeline
 
 | | v1 | v2 as-built | Change |
 |---|---|---|---|
-| CPU limits | 35–40 cores | **15.0** | −57 to −63% |
-| RAM limits | 45–50 GB | **21.75 GB** | −52 to −57% |
-| Long-lived services | 18–20 | **13** | −28 to −35% |
+| CPU limits | 35–40 cores | **15.1** | −57 to −63% |
+| RAM limits | 45–50 GB | **21.875 GB** | −52 to −56% |
+| Long-lived services | 18–20 | **14** (+2 one-shot) | −22 to −30% |
 | Always-on Spark | 14 CPU / 20 GB | 0 (batch only) | −100% |
 | Python processes | 4 | 0 in the data path | Prefect remains, control plane only |
 | Trade → queryable | 5–15 min | **<200 ms p99** | >1000x |
 
-Fits the mandate on both axes, with 1.0 CPU and 18.25 GB of headroom.
+Fits the mandate on both axes, with 0.9 CPU and 18.1 GB of headroom.
 
 ### Latency
 
@@ -113,7 +113,7 @@ The v2 investment analysis and ADRs were written on 2026-02-09, before any code.
 | Four-layer medallion: Raw → Bronze → Silver → Gold | Three layers. The Kafka-engine queue holds raw in flight but nothing persists it | ❌ Scoped down |
 | Iceberg REST catalog + PostgreSQL metadata | Hadoop file catalog on a bind mount. REST cost a day of version fights and bought nothing on one node ([ADR-013](decisions/ADR-013-pragmatic-iceberg-version-strategy.md)) | ❌ Simplified |
 | One feed-handler service | Three containers, one per exchange, from a single image | ❌ Changed — cross-exchange blast-radius isolation was worth 2 extra containers, and the failure test proved it |
-| 15.5 CPU / 19.5 GB across 11 services | 15.0 CPU / 21.75 GB across 13 services | ~ CPU came in under; RAM over by 2.25 GB, mostly Prometheus and the third exchange |
+| 15.5 CPU / 19.5 GB across 11 services | 15.1 CPU / 21.875 GB across 14 services (+2 one-shot) | ~ CPU came in under; RAM over by 2.375 GB, mostly Prometheus and the third exchange |
 | Two exchanges (Binance, Kraken) | Three — Coinbase added in Phase 7 ([ADR-016](decisions/ADR-016-add-coinbase-exchange.md)) | ✅ Scope grew, budget held |
 | ClickHouse 26.1 (latest) | 24.3 LTS — 26.1 broke Spark JDBC ([ADR-015](decisions/ADR-015-clickhouse-lts-downgrade.md)) | ❌ Newest lost to compatible |
 
@@ -125,7 +125,7 @@ Pattern in the misses: **every prediction that was wrong was wrong in the direct
 
 **Phase 7 — hardening (in progress)**
 - 24-hour resource burn-in: sampling loop ran, results never collected. Without it the latency figures stay caveated and the resource numbers stay limits-on-paper rather than observed steady state.
-- Alert fire test: 18 rules are loaded and none has been triggered on purpose. The 9 Iceberg-offload rules cannot fire at all — the exporter listens on `:8000` in `prefect-worker` but the Prometheus scrape job is commented out.
+- Alert fire test: 17 rules are loaded and none has been triggered on purpose.
 - 5 operational runbooks and doc finalisation.
 
 **Phase 8 — query API (not started)**

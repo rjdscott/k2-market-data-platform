@@ -1,8 +1,8 @@
 # Architectural Decision Records
 
-Seventeen ADRs covering the design and rebuild of the K2 Market Data Platform: Kotlin/Ktor feed handlers → Redpanda → ClickHouse (medallion via materialized views) → Iceberg on MinIO, with Spark batch offload orchestrated by Prefect. ADR-001 to ADR-010 were written up front in February 2026, before any of it was built; ADR-011 to ADR-017 came out of implementation. The status column below records what actually happened — including the two decisions that were reversed (ADR-008) and the one never built (ADR-005). Each ADR that deviated from its own design carries an `Outcome` section at the end explaining why.
+Seventeen ADRs covering the design and rebuild of the K2 Market Data Platform: Kotlin/Ktor feed handlers → Redpanda → ClickHouse (medallion via materialized views) → Iceberg with a Hadoop catalog on a bind-mounted local warehouse (MinIO provisioned, unused by the offload), with Spark batch offload orchestrated by Prefect. ADR-001 to ADR-010 were written up front in February 2026, before any of it was built; ADR-011 to ADR-017 came out of implementation. The status column below records what actually happened — including the one decision that was reversed (ADR-008) and the one never built (ADR-005). Each ADR that deviated from its own design carries an `Outcome` section at the end explaining why.
 
-Measured as-built: **15.0 CPU / 21.75 GB** across 13 long-running services, against a 16 CPU / 40 GB budget. End-to-end p99 trade → ClickHouse Silver: **170–197 ms** across Binance, Kraken and Coinbase. All 6 failure-mode tests pass, max MTTR 32 s.
+Measured as-built: **15.1 CPU / 21.875 GB** across 14 long-running services (+2 one-shot), against a 16 CPU / 40 GB budget. End-to-end p99 trade → ClickHouse Silver: **170–197 ms** across Binance, Kraken and Coinbase. All 6 failure-mode tests pass, max MTTR 32 s.
 
 ---
 
@@ -16,10 +16,10 @@ Measured as-built: **15.0 CPU / 21.75 GB** across 13 long-running services, agai
 | [004](ADR-004-eliminate-spark-streaming.md) | Eliminate Spark Streaming | Accepted — Implemented, deviation | 5 streaming jobs never built; replacement is **ClickHouse MVs**, not Kotlin processors |
 | [005](ADR-005-kotlin-spring-boot-api.md) | Spring Boot query API | **Deferred — Not implemented** | Scored 3/10 ROI; Phase 8 not started; no query API exists |
 | [006](ADR-006-spark-batch-only.md) | Spark for batch only | Accepted — Implemented | One on-demand Spark container; the planned Kotlin hourly writer was dropped (ADR-014) |
-| [007](ADR-007-iceberg-cold-storage.md) | Iceberg cold storage | Accepted — Implemented, deviation | **Hadoop catalog** on MinIO, not REST catalog + Postgres; 15-min offload, not hourly |
+| [007](ADR-007-iceberg-cold-storage.md) | Iceberg cold storage | Accepted — Implemented, deviation | **Hadoop catalog** on a bind-mounted local warehouse (MinIO provisioned, unused), not REST catalog + Postgres; 15-min offload, not hourly |
 | [008](ADR-008-eliminate-prefect-orchestration.md) | Eliminate Prefect | **Partially rejected** — superseded by ADR-014, ADR-017 | MVs did replace all 5 OHLCV flows; Prefect was **retained** for offload + maintenance |
 | [009](ADR-009-medallion-in-clickhouse.md) | Four-layer medallion in ClickHouse | Accepted — Implemented, amended by ADR-011 | Built as **3 layers, no RAW** — Redpanda is the replay log |
-| [010](ADR-010-resource-budget.md) | Resource budget (16 CPU / 40 GB) | Accepted — Implemented | Budget held: 15.0 CPU / 21.75 GB; composition differs (Prefect in, API + Silver processor out) |
+| [010](ADR-010-resource-budget.md) | Resource budget (16 CPU / 40 GB) | Accepted — Implemented | Budget held: 15.1 CPU / 21.875 GB; composition differs (Prefect in, API + Silver processor out) |
 
 ## Implementation decisions (2026-02-10 → 2026-02-18)
 
@@ -47,3 +47,5 @@ Measured as-built: **15.0 CPU / 21.75 GB** across 13 long-running services, agai
 ## Format
 
 ADRs are numbered sequentially and never rewritten after the fact. When an implementation diverged from its design, the original reasoning stays as written and an `Outcome` section is appended saying what was built instead and why. Superseded ADRs keep their number and point forward.
+
+Conventions and the template live with the `/adr` skill (`.claude/skills/adr/`); use it to write one — it handles numbering, the header block, supersession and the index tables above.

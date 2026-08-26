@@ -19,9 +19,10 @@ groups:
         annotations:
           summary: "Feed handler for {{ $labels.exchange }} is down (metrics endpoint unreachable)"
           description: |
-            Exchange {{ $labels.exchange }} has not produced a trade message in
-            {{ $value | humanizeDuration }}. This likely means the WebSocket connection
-            is down or the feed handler has crashed.
+            Prometheus has not been able to scrape the metrics endpoint for
+            {{ $labels.job }} for at least 2 minutes. This likely means the
+            container is down, crashed, or the metrics HTTP server on 8082
+            is unreachable.
 
             **Immediate Actions:**
             1. Check container: `docker logs k2-feed-handler-{{ $labels.exchange }} --tail 50`
@@ -76,25 +77,6 @@ groups:
             - Feed handler logs for reconnect reasons
             - Exchange API status page
             - Network latency between container and exchange
-
-      # INFO: Feed handler metrics server down
-      - alert: FeedHandlerMetricsDown
-        expr: up{job=~"feed-handler-.+"} == 0
-        for: 2m
-        labels:
-          severity: warning
-          component: feed-handler
-          tier: ingestion
-        annotations:
-          summary: "Prometheus cannot scrape {{ $labels.job }} metrics"
-          description: |
-            The /metrics endpoint on {{ $labels.job }} is unreachable.
-            This does NOT necessarily mean the feed handler is down — it may
-            just mean the metrics HTTP server failed.
-
-            **Check:**
-            1. Container health: `docker compose ps {{ $labels.job }}`
-            2. Port 8082 accessible: `docker exec k2-{{ $labels.job }} curl http://localhost:8082/health`
 
   - name: feed_handler_recording
     rules:

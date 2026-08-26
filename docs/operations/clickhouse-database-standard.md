@@ -40,16 +40,11 @@ Column-level detail is in [data-inspection.md](./data-inspection.md#schema-cheat
 
 ## Schema files
 
-DDL lives in [`docker/clickhouse/schema/`](../../docker/clickhouse/schema/), numbered in
-the order it was applied. Files are **not** auto-run on container start — only
-[`docker/clickhouse/ddl/`](../../docker/clickhouse/ddl/) is mounted into
-`/docker-entrypoint-initdb.d`. A fresh volume needs the schema applied by hand; see
-[../development/setup.md](../development/setup.md).
-
-Some numbered files exist in both a plain and a `-fixed` variant, and a few early ones
-target `default`. The `k2`-qualified files are the ones that reflect production. The
-per-exchange bronze files (`11-bronze-coinbase.sql` and friends) are the cleanest
-reference for the current pattern.
+DDL lives in [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql)
+(25 objects: `k2` database, watermark table, bronze/silver/gold) and auto-applies on a
+fresh volume via `/docker-entrypoint-initdb.d`.
+[`docker/clickhouse/schema/`](../../docker/clickhouse/schema/) is the historical migration
+trail — numbered in the order it was originally applied — and is not run.
 
 ## Verification
 

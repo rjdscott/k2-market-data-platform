@@ -11,8 +11,8 @@ day-to-day operations see [../docs/operations/README.md](../docs/operations/READ
 docker/
 ├── clickhouse/           # ClickHouse server config + DDL bootstrap + schema history
 │   ├── config.xml        # Server config (Kafka Engine, compression, Prometheus exporter)
-│   ├── ddl/              # offload-watermarks table DDL
-│   └── schema/           # Ordered schema migration history (bronze/silver/gold)
+│   ├── ddl/              # ClickHouse medallion bootstrap (01-k2-schema.sql), auto-run on init
+│   └── schema/           # Historical schema migration trail (not run)
 ├── iceberg/
 │   ├── ddl/              # Iceberg catalog + bronze/silver/gold table DDL
 │   ├── validation/       # Table validation SQL
@@ -26,7 +26,7 @@ docker/
 ├── spark/                # Spark image (Dockerfile, bundles ClickHouse JDBC driver)
 ├── grafana/
 │   ├── provisioning/     # Auto-provisioned datasource (Prometheus) + dashboard loader
-│   └── dashboards/       # Dashboard JSON (pipeline overview, ClickHouse, Iceberg offload)
+│   └── dashboards/       # Dashboard JSON (pipeline overview, ClickHouse, Iceberg offload, v2-migration-tracker)
 ├── prometheus/
 │   ├── prometheus.yml    # Scrape configs
 │   └── rules/            # Alerting rules (ClickHouse, feed handlers, Iceberg offload)

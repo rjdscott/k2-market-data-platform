@@ -778,10 +778,12 @@ services:
 # feed-handler-binance  | 0.5       | 512M         | Binance ingestion (12 pairs)
 # feed-handler-kraken   | 0.5       | 512M         | Kraken ingestion (11 pairs)
 # feed-handler-coinbase | 0.5       | 512M         | Coinbase ingestion (11 pairs)
+# iceberg-metrics       | 0.1       | 128M         | Offload alerts exporter (:8000)
+# iceberg-init          | -         | -            | One-shot Iceberg DDL bootstrap (exits)
 # ----------------------|-----------|--------------|---------------------------
-# TOTAL                 | 15.5 CPU  | 21.75 GB     | Full consolidated platform
+# TOTAL                 | 15.1 CPU  | 21.875 GB    | Full consolidated platform
 #
-# Remaining budget: 0.5 CPU / 18.25 GB for future expansion
+# Remaining budget: 0.9 CPU / 18.1 GB for future expansion
 # Target: 16 CPU / 40 GB total
 #
 # Instrument config: see config/instruments.yaml (single source of truth)

@@ -47,7 +47,8 @@ Prefect Server (http://localhost:4200)
 ### What it does
 
 Incrementally offloads trade data from ClickHouse (hot — 7-day TTL on bronze, 30-day on
-silver, 1-year on gold) to Iceberg (cold, permanent).
+silver, 1-year TTL on gold `ohlcv_{1m,5m,15m,30m,1h}`, 2-year on `ohlcv_1d`) to Iceberg
+(cold, permanent).
 
 **Execution order**:
 1. **Bronze** — 3 concurrent Spark jobs (binance ‖ kraken ‖ coinbase)

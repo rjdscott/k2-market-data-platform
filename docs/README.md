@@ -32,7 +32,7 @@ Everything here describes the system as built. Where intent and reality diverge,
 
 ## Development
 
-[development/testing.md](development/testing.md) — how to run the Kotlin and Python test suites, including the Docker-based Gradle invocation (there is no `gradlew` in this repo).
+[development/testing.md](development/testing.md) — how to run the Kotlin and Python test suites, including the Docker-based Gradle invocation (`make test-kotlin` runs `./gradlew test` inside the `gradle:8.12-jdk21` image, no local JDK needed).
 
 ## Migration journey
 

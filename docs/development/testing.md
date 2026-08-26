@@ -7,7 +7,7 @@ Where that leaves gaps, they are listed below rather than papered over.
 
 ```bash
 make test          # everything: Kotlin + Python
-make test-kotlin   # feed handler unit tests (needs JDK 21)
+make test-kotlin   # feed handler unit tests
 make test-python   # offload flow unit tests (needs uv)
 ```
 
@@ -36,7 +36,7 @@ CI uses:
 
 ```bash
 docker run --rm -v "$PWD":/project -w /project/services/feed-handler-kotlin \
-  -e GRADLE_USER_HOME=/tmp/.gradle gradle:8.12-jdk21 gradle test --no-daemon
+  -e GRADLE_USER_HOME=/tmp/.gradle gradle:8.12-jdk21 ./gradlew test --no-daemon
 ```
 
 HTML report: `services/feed-handler-kotlin/build/reports/tests/test/index.html`.

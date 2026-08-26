@@ -9,7 +9,7 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
-| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, feed-handler crash, offload failure, MinIO down, network partition | `ClickHouseDown`, `FeedHandlerMetricsDown`, `FeedHandlerHighErrorRate` |
+| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, feed-handler crash, offload failure, MinIO down, network partition | `ClickHouseDown`, `FeedHandlerDown`, `FeedHandlerHighErrorRate` |
 | [redpanda.md](./redpanda.md) | Topic, partition, consumer-group or schema-registry problems; broker health | `FeedHandlerHighErrorRate` |
 | [iceberg-offload-failure.md](./iceberg-offload-failure.md) | Offload runs erroring — ClickHouse unreachable, Spark crash, JDBC or timeout errors | `IcebergOffloadConsecutiveFailures` |
 | [iceberg-offload-lag.md](./iceberg-offload-lag.md) | Cold tier behind the 15-minute SLO and you need to catch up | `IcebergOffloadLagCritical`, `IcebergOffloadLagElevated` |
@@ -61,6 +61,8 @@ dangerous.
 Keep the shape consistent with the ones above: **symptom → detection (name the alert) →
 expected behaviour → recovery commands → measured MTTR**. A runbook whose commands have
 never been run is a liability; induce the failure and record what actually happened.
+
+Use the `/runbook` skill (`.claude/skills/runbook/`) — it carries this shape as a template, plus the last-verified stamp and the index update.
 
 ## v1 runbooks
 

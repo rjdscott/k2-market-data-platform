@@ -14,7 +14,7 @@ Every component that runs, the version pinned, what it does here, and the decisi
 | MinIO | RELEASE.2024-01-18T22-51-28Z | S3-compatible object store. Provisioned and credentialed; the offload currently writes to a bind-mounted warehouse instead | [ADR-007](../decisions/ADR-007-iceberg-cold-storage.md) |
 | PostgreSQL | 15-alpine | Prefect metadata **and** the `offload_watermarks` / `maintenance_audit_log` tables that make the offload idempotent | [ADR-014](../decisions/ADR-014-spark-based-iceberg-offload.md) |
 | Prefect | 3 (`prefecthq/prefect:3-python3.12`) | Schedules the 15-minute offload and the daily maintenance flow. Workers, not agents | [ADR-008](../decisions/ADR-008-eliminate-prefect-orchestration.md), [ADR-017](../decisions/ADR-017-iceberg-maintenance-pipeline.md) |
-| Prometheus | v3.2.0 | Scrapes feed handlers, ClickHouse, Redpanda, Grafana. 30-day retention, 18 alert rules | — |
+| Prometheus | v3.2.0 | Scrapes feed handlers, ClickHouse, Redpanda, Grafana. 30-day retention, 17 alert rules | — |
 | Grafana | 11.5.0 | 4 provisioned dashboards in `docker/grafana/dashboards/` | — |
 | Docker Compose | — | The only deployment target. One file, 14 service entries, explicit CPU/memory limits per service | [ADR-010](../decisions/ADR-010-resource-budget.md) |
 
@@ -33,7 +33,7 @@ Every component that runs, the version pinned, what it does here, and the decisi
 | Micrometer Prometheus registry | 1.14.5 | Metrics — package is `io.micrometer.prometheusmetrics` in this version |
 | kotlin-logging / Logback | 7.0.3 / 1.5.16 | Structured logging |
 
-Build is a multi-stage Dockerfile: `gradle:8.12-jdk21` produces a fat JAR, the runtime stage is a JRE-only Alpine image. There is no `gradlew` checked in — see [development/testing.md](../development/testing.md) for how tests are run.
+Build is a multi-stage Dockerfile: `gradle:8.12-jdk21` produces a fat JAR, the runtime stage is a JRE-only Alpine image. `./gradlew` is checked in — see [development/testing.md](../development/testing.md) for how tests are run.
 
 ## Batch / offload (Python)
 
@@ -42,7 +42,7 @@ Build is a multi-stage Dockerfile: `gradle:8.12-jdk21` produces a fat JAR, the r
 | PySpark | 3.5.0 (from base image) | Offload driver in `docker/offload/offload_generic.py` |
 | clickhouse-jdbc | 0.4.6 (`-all` fat jar) | Baked into the Spark image at build time so no job hits Maven Central at runtime |
 | psycopg2-binary | 2.9.9 | Watermark reads/writes against PostgreSQL |
-| prometheus-client | 0.21.1 | Offload metrics exporter in the Prefect worker |
+| prometheus-client | 0.21.1 | Offload metrics exporter, running in the `iceberg-metrics` service |
 
 ## Choices worth defending
 

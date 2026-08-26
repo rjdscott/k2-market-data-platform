@@ -6,7 +6,7 @@ Six rules the design is actually held to. Each one has a place in the codebase w
 
 ### 1. The resource budget is a hard constraint, not a goal
 
-16 cores, 40 GB, one host. Every service in [`docker-compose.yml`](../../docker-compose.yml) carries explicit `deploy.resources.limits`, and the total is checked at every phase boundary. As built: **15.0 CPU / 21.75 GB across 13 services**.
+16 cores, 40 GB, one host. Every service in [`docker-compose.yml`](../../docker-compose.yml) carries explicit `deploy.resources.limits`, and the total is checked at every phase boundary. As built: **15.1 CPU / 21.875 GB across 14 services** (+2 one-shot).
 
 This is first because it is the only principle that changed the architecture. "Reduce resource usage" produces tuning; a number you cannot exceed produces different decisions — five Spark Streaming jobs became materialized views, and a planned Kotlin stream processor was never written. Full accounting in [ADR-010](../decisions/ADR-010-resource-budget.md).
 
@@ -54,9 +54,9 @@ The strongest form of this: the best service is the one you notice you do not ha
 
 ### 6. Instrument it, then say what is not instrumented
 
-Feed handlers expose Micrometer metrics on `:8082/metrics`; ClickHouse exposes Prometheus on `:9363`; 18 alert rules are loaded from `docker/prometheus/rules/`; four Grafana dashboards are provisioned from source.
+Feed handlers expose Micrometer metrics on `:8082/metrics`; ClickHouse exposes Prometheus on `:9363`; 17 alert rules are loaded from `docker/prometheus/rules/`; four Grafana dashboards are provisioned from source.
 
-The second half is the part that matters. Two gaps are documented rather than glossed: the offload metrics exporter listens on `:8000` in the Prefect worker but its Prometheus scrape job is still commented out, so its 9 alert rules have no live series; and no alert has been deliberately fired end to end. An undocumented gap is worse than a known one, because only one of them gets fixed.
+The second half is the part that matters. One gap is documented rather than glossed: no alert has been deliberately fired end to end. An undocumented gap is worse than a known one, because only one of them gets fixed.
 
 ---
 

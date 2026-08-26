@@ -103,7 +103,7 @@ val wsClient = when (exchange.lowercase()) {
 
 ### 4. Bronze Layer Schema
 
-**File**: `docker/clickhouse/schema/XX-bronze-{exchange}.sql`
+**File**: append to [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql) (auto-applied on a fresh volume)
 
 - [ ] Create Kafka Engine table:
 
@@ -166,7 +166,7 @@ columns need it.
 
 ### 5. Silver Layer Normalization
 
-**File**: `docker/clickhouse/schema/XX-silver-{exchange}-to-v2.sql`
+**File**: append to [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql) (auto-applied on a fresh volume)
 
 - [ ] Create Materialized View to normalize Bronze → Silver:
 
@@ -321,9 +321,10 @@ feed-handler-{exchange}:
 # Build and start the new handler
 docker compose up -d --build feed-handler-{exchange}
 
-# Apply the new bronze + silver DDL
+# Apply the new bronze + silver DDL (already appended to docker/clickhouse/ddl/01-k2-schema.sql,
+# which only auto-runs on a fresh volume — apply by hand against an existing one)
 docker exec -i k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
-  --multiquery < docker/clickhouse/schema/XX-bronze-{exchange}.sql
+  --multiquery < docker/clickhouse/ddl/01-k2-schema.sql
 ```
 
 ### 2. Verify Feed Handler

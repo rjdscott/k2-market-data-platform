@@ -22,7 +22,7 @@ One file per measurement session, `YYYY-MM-DD.md`.
   trading-path latency measurement, and the file says so.
 - A measurement that couldn't be taken reads "not measured". Numbers are never
   carried forward from an older file.
-- Nothing is rounded to a nicer number. 15.0 CPU is not "about 15".
+- Nothing is rounded to a nicer number. 15.1 CPU is not "about 15".
 - **Snapshots are immutable.** A new measurement is a new dated file. If a
   published figure moved by more than ~10%, the new file's summary says so.
 - Use the `/benchmark-report` skill; it has the commands.

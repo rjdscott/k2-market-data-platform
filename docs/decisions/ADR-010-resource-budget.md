@@ -267,10 +267,10 @@ services:
 
 | Metric | ADR-010 projection | As-built (`docker-compose.yml`) |
 |--------|--------------------|---------------------------------|
-| CPU limits | 15.5 | **15.0** |
-| RAM limits | 19.5 GB | **21.75 GB** |
-| Long-running services | 11 | **13** (+1 one-shot `redpanda-init`) |
-| Fits 16 CPU / 40 GB? | Yes | **Yes** — 6% CPU / 46% RAM headroom |
+| CPU limits | 15.5 | **15.1** |
+| RAM limits | 19.5 GB | **21.875 GB** |
+| Long-running services | 11 | **14** (+2 one-shot: `redpanda-init`, `iceberg-init`) |
+| Fits 16 CPU / 40 GB? | Yes | **Yes** — 6% CPU / 45% RAM headroom |
 
 ### As-built service allocation
 
@@ -289,11 +289,12 @@ services:
 | feed-handler-binance | 0.5 | 512M |
 | feed-handler-kraken | 0.5 | 512M |
 | feed-handler-coinbase | 0.5 | 512M |
-| **Total** | **15.0** | **21.75 GB** |
+| iceberg-metrics | 0.1 | 128M |
+| **Total** | **15.1** | **21.875 GB** |
 
 ### Why the shape changed
 
-- **Prefect was retained, not eliminated** ([ADR-008](ADR-008-eliminate-prefect-orchestration.md) Outcome): +3 services, +2.5 CPU / +2.5 GB. Prometheus was also raised from 0.5 CPU / 512 MB to 1.0 CPU / 2 GB once it was scraping ClickHouse (`:9363`), three feed handlers and the offload flow against 18 alert rules.
+- **Prefect was retained, not eliminated** ([ADR-008](ADR-008-eliminate-prefect-orchestration.md) Outcome): +3 services, +2.5 CPU / +2.5 GB. Prometheus was also raised from 0.5 CPU / 512 MB to 1.0 CPU / 2 GB once it was scraping ClickHouse (`:9363`), three feed handlers and the offload flow against 17 alert rules.
 - **The Spring Boot API (2.0 / 1 GB) and the Kotlin Silver processor (1.0 / 512 MB) were never built** — ADR-005 deferred, Silver moved into ClickHouse MVs — releasing 3.0 CPU / 1.5 GB, roughly what Prefect and Prometheus took back. The Iceberg REST catalog also went ([ADR-007](ADR-007-iceberg-cold-storage.md) Outcome): −0.5 CPU / −512 MB.
 - **Feed handlers split 1 → 3 containers** ([ADR-002](ADR-002-kotlin-feed-handlers.md) Outcome) and `redpanda-console` was added, costing +1.5 CPU / +1.75 GB against a single 1.0 CPU / 512 MB line item.
 

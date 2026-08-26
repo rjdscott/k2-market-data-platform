@@ -29,9 +29,9 @@ transform chain in-process.
 
 | Scenario | Rate | Target p99 | Pass criteria |
 |----------|------|-----------|---------------|
-| 1× baseline | ~50 msg/s | <200 ms | No degradation |
-| 5× | ~250 msg/s | <500 ms | All MVs keeping pace |
-| 10× stress | ~500 msg/s | <1 s | No data loss |
+| 1× baseline | ~150 msg/s (100–200) | <200 ms | No degradation |
+| 5× | ~750 msg/s | <500 ms | All MVs keeping pace |
+| 10× stress | ~1500 msg/s | <1 s | No data loss |
 
 ## Measured (2026-02-19)
 
