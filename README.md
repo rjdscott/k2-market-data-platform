@@ -245,8 +245,10 @@ docker-compose.yml              The whole stack
 
 ## Where v2 falls short — and the v3 roadmap
 
-v2 is complete and frozen: three exchanges, medallion in ClickHouse, 4 v2 alert rules,
-11 runbooks. It is a good streaming pipeline and a poor research archive. This is a **quantitative-research**
+v2 is complete and frozen: three exchanges, medallion in ClickHouse, 4 v2 alert rules, 2 v2 runbooks
+(six more archived with the offload under [`legacy/v2-offload/`](./legacy/v2-offload/README.md), and the
+feed handler's under [`legacy/v2-kotlin/`](./legacy/v2-kotlin/README.md)).
+It is a good streaming pipeline and a poor research archive. This is a **quantitative-research**
 platform reading public WebSocket feeds over the open internet — it is **not a trading path**, and no number
 here should be read as one. What a quant actually needs from it — completeness they can prove, aggregations
 that are correct, and the ability to reproduce a figure from six months ago — v2 cannot deliver, for

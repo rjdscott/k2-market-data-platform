@@ -1,6 +1,9 @@
 # Prefect Schedules
 
-**Status:** deployed — both schedules active on the `lake` work pool.
+**Status:** not yet deployed — verify at the Phase D cutover. `prefect deployment ls` must
+show both deployments on work pool `lake`; nothing on this host has registered them yet,
+because Phase C's burn-in owns the containers they run in. Everything below is the design
+the code implements, not an observed state.
 
 Two Prefect 3.x deployments drive the v3 lake, both executing against the shared
 `k2-spark-iceberg` container:
@@ -11,7 +14,8 @@ Two Prefect 3.x deployments drive the v3 lake, both executing against the shared
 | `lake-maintenance/lake-maintenance-daily` | `0 3 * * *` | Compact, expire snapshots, remove orphans, audit — all four lake tables |
 
 Both run at **concurrency 1** on the `lake` work pool, claimed by the
-`k2-prefect-worker` process worker. Confirm they are live:
+`k2-prefect-worker` process worker. Confirm they are live — this is the cutover check, and
+it has not been run:
 
 ```bash
 docker exec k2-prefect-server prefect deployment ls
