@@ -17,18 +17,30 @@ import sys
 
 from pyspark.sql import SparkSession
 
-# Fixed for this stack — one host, one catalog, one bucket. Only the credentials
-# vary, and those come from the environment.
+# Every endpoint, region, path-style flag and catalog URI is read from the
+# environment with today's single-host value as the default. That is not
+# speculative config: it is the requirement from
+# docs/research/2026-08-26-v3-requirements-clarification.md Q9 — moving this
+# lake to S3 + Glue/Lakekeeper-on-ECS must be a change to the environment, not a
+# change to these files. Defaults keep `python3 spark_conf.py --smoke` working
+# with no environment at all.
 #
-# CATALOG_URI and WAREHOUSE must match LK and WAREHOUSE in docker/lake/init-lake.sh,
-# which hard-codes the same values for the same reason. That script creates what
-# this one connects to; change them together or every job points at a catalog
-# nothing bootstrapped.
-CATALOG = "lake"
-CATALOG_URI = "http://lakekeeper:8181/catalog"
-WAREHOUSE = "k2"
-S3_ENDPOINT = "http://minio:9000"
-S3_REGION = "local-01"
+# The defaults must match LK / WAREHOUSE / BUCKET in docker/lake/init-lake.sh,
+# which reads the same four names with the same defaults. That script creates
+# what this one connects to; override one side only and every job points at a
+# catalog nothing bootstrapped.
+CATALOG = os.environ.get("K2_LAKE_CATALOG", "lake")
+CATALOG_URI = os.environ.get("K2_LAKE_CATALOG_URI", "http://lakekeeper:8181/catalog")
+WAREHOUSE = os.environ.get("K2_LAKE_WAREHOUSE", "k2")
+S3_ENDPOINT = os.environ.get("K2_S3_ENDPOINT", "http://minio:9000")
+S3_REGION = os.environ.get("K2_S3_REGION", "local-01")
+# Path-style on MinIO, virtual-hosted on real S3. String, not bool: it goes
+# straight into a Spark conf value.
+S3_PATH_STYLE = os.environ.get("K2_S3_PATH_STYLE", "true")
+
+# Redpanda's schema registry. Stage 2 fetches Avro schemas by id from here.
+SCHEMA_REGISTRY_URL = os.environ.get("K2_SCHEMA_REGISTRY_URL", "http://redpanda:8081")
+KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 
 
 def lake_session(app_name: str) -> SparkSession:
@@ -48,7 +60,7 @@ def lake_session(app_name: str) -> SparkSession:
         .config(f"spark.sql.catalog.{CATALOG}.warehouse", WAREHOUSE)
         .config(f"spark.sql.catalog.{CATALOG}.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
         .config(f"spark.sql.catalog.{CATALOG}.s3.endpoint", S3_ENDPOINT)
-        .config(f"spark.sql.catalog.{CATALOG}.s3.path-style-access", "true")
+        .config(f"spark.sql.catalog.{CATALOG}.s3.path-style-access", S3_PATH_STYLE)
         .config(f"spark.sql.catalog.{CATALOG}.s3.access-key-id", access_key)
         .config(f"spark.sql.catalog.{CATALOG}.s3.secret-access-key", secret_key)
         .config(f"spark.sql.catalog.{CATALOG}.s3.region", S3_REGION)
