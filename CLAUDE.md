@@ -5,7 +5,7 @@ platform: Rust capture (`services/capture-rust/`) → Redpanda → ClickHouse
 (medallion via materialized views) → Iceberg on MinIO, Spark batch offload
 under Prefect.
 v2 is at the repo root; v1 is archived unmodified in `legacy/v1/`.
-Read this before writing code or docs. Architecture: `ARCHITECTURE-V2.md`.
+Read this before writing code or docs. Architecture: `docs/architecture/README.md`.
 
 ## Branch + PR discipline
 
