@@ -1,345 +1,265 @@
 #!/usr/bin/env python3
 """
-K2 Market Data Platform - Prometheus Metrics for Iceberg Offload
-Purpose: Export metrics for monitoring and alerting
-Version: v1.0
-Last Updated: 2026-02-12
+K2 Market Data Platform - Prometheus exporter for the Iceberg offload pipeline.
+
+Metrics are derived from the PostgreSQL `offload_watermarks` table, not from
+in-process counters. Prefect runs every flow in a short-lived subprocess, so
+anything counted inside a flow run dies with that run and is never scraped.
+The watermark row is the durable record of what the pipeline actually did.
+
+Runs as a long-lived sidecar next to the Prefect worker:
+
+    python /opt/prefect/offload/metrics.py --serve
+
+Config via the standard PREFECT_DB_* env vars (same as watermark_pg.py).
 """
 
+import argparse
 import logging
-from datetime import datetime
+import os
+import time
 
-from prometheus_client import (
-    Counter,
-    Gauge,
-    Histogram,
-    Info,
-    Summary,
-    start_http_server,
-)
+import psycopg2
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
+from psycopg2.extras import RealDictCursor
 
 logger = logging.getLogger(__name__)
 
+# Watermark table names map 1:1 onto medallion layers by prefix.
+_LAYER_PREFIXES = (("bronze_", "bronze"), ("silver_", "silver"), ("ohlcv_", "gold"))
+
+WATERMARK_QUERY = """
+    SELECT table_name,
+           last_offload_timestamp,
+           last_offload_row_count,
+           status,
+           last_run_duration_seconds,
+           updated_at
+    FROM offload_watermarks
+"""
 
 # ============================================================================
 # Metric Definitions
 # ============================================================================
 
-# Counter: Cumulative metrics (always increasing)
-offload_rows_total = Counter(
-    "offload_rows_total",
-    "Total number of rows offloaded to Iceberg",
-    ["table", "layer"],
-)
-
-offload_cycles_total = Counter(
-    "offload_cycles_total",
-    "Total number of offload cycles executed",
-    ["status"],  # success, failed, timeout
-)
-
-offload_errors_total = Counter(
-    "offload_errors_total", "Total number of offload errors", ["table", "error_type"]
-)
-
-# Gauge: Point-in-time metrics (can go up or down)
 offload_lag_minutes = Gauge(
-    "offload_lag_minutes", "Time since last successful offload (minutes)", ["table"]
+    "offload_lag_minutes", "Age of the offload watermark (minutes)", ["table"]
 )
 
 watermark_timestamp_seconds = Gauge(
     "watermark_timestamp_seconds",
-    "Unix timestamp of last successful watermark update",
+    "Unix timestamp of the current offload watermark",
     ["table"],
+)
+
+offload_last_duration_seconds = Gauge(
+    "offload_last_duration_seconds", "Duration of the last offload run", ["table"]
+)
+
+offload_last_rows_per_second = Gauge(
+    "offload_last_rows_per_second", "Throughput of the last offload run", ["table"]
 )
 
 offload_tables_configured = Gauge(
     "offload_tables_configured", "Number of tables configured for offload"
 )
 
-offload_last_success_timestamp = Gauge(
-    "offload_last_success_timestamp", "Unix timestamp of last successful offload cycle"
+offload_rows_total = Counter(
+    "offload_rows_total", "Rows offloaded to Iceberg", ["table", "layer"]
 )
 
-offload_last_failure_timestamp = Gauge(
-    "offload_last_failure_timestamp", "Unix timestamp of last failed offload cycle"
+offload_cycles_total = Counter(
+    "offload_cycles_total", "Finished offload runs by outcome", ["status"]
 )
 
-# Histogram: Distribution of values (with buckets)
+offload_errors_total = Counter(
+    "offload_errors_total", "Failed offload runs", ["table", "error_type"]
+)
+
 offload_duration_seconds = Histogram(
     "offload_duration_seconds",
-    "Duration of offload operations in seconds",
+    "Duration of offload runs in seconds",
     ["table", "layer"],
-    buckets=[1, 5, 10, 30, 60, 120, 300, 600],  # 1s, 5s, 10s, 30s, 1m, 2m, 5m, 10m
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600],
 )
 
-offload_cycle_duration_seconds = Histogram(
-    "offload_cycle_duration_seconds",
-    "Duration of complete offload cycles in seconds",
-    buckets=[5, 10, 15, 30, 60, 120, 300, 600, 900],  # 5s to 15m
-)
-
-# Summary: Similar to histogram but with quantiles
-offload_rows_per_second = Summary(
-    "offload_rows_per_second",
-    "Throughput of offload operations (rows/second)",
-    ["table"],
-)
-
-# Info: Static metadata
-offload_info = Info("offload_info", "Offload pipeline metadata")
-
 
 # ============================================================================
-# Metric Recording Functions
+# Refresh loop
 # ============================================================================
 
-
-def record_offload_start(table: str, layer: str = "bronze"):
-    """
-    Record the start of an offload operation.
-
-    Args:
-        table: Source table name
-        layer: Data layer (bronze, silver, gold)
-    """
-    logger.debug(f"Recording offload start: {table} ({layer})")
+# table -> updated_at of the last run already folded into the counters, so a
+# run is counted exactly once no matter how often we poll.
+_counted = {}
 
 
-def record_offload_success(
-    table: str,
-    layer: str,
-    rows: int,
-    duration: float,
-    watermark_timestamp: datetime = None,
-):
-    """
-    Record a successful offload operation.
-
-    Args:
-        table: Source table name
-        layer: Data layer
-        rows: Number of rows offloaded
-        duration: Duration in seconds
-        watermark_timestamp: Updated watermark timestamp
-    """
-    # Counter metrics
-    offload_rows_total.labels(table=table, layer=layer).inc(rows)
-
-    # Histogram metrics
-    offload_duration_seconds.labels(table=table, layer=layer).observe(duration)
-
-    # Summary metrics
-    if duration > 0:
-        throughput = rows / duration
-        offload_rows_per_second.labels(table=table).observe(throughput)
-
-    # Gauge metrics
-    if watermark_timestamp:
-        watermark_timestamp_seconds.labels(table=table).set(watermark_timestamp.timestamp())
-
-    logger.info(f"Recorded offload success: {table} ({rows:,} rows in {duration:.1f}s)")
+def _layer(table_name: str) -> str:
+    for prefix, layer in _LAYER_PREFIXES:
+        if table_name.startswith(prefix):
+            return layer
+    return "unknown"
 
 
-def record_offload_failure(table: str, layer: str, error_type: str, duration: float):
-    """
-    Record a failed offload operation.
-
-    Args:
-        table: Source table name
-        layer: Data layer
-        error_type: Type of error (timeout, connection, crash, etc.)
-        duration: Duration before failure (seconds)
-    """
-    # Counter metrics
-    offload_errors_total.labels(table=table, error_type=error_type).inc()
-
-    # Histogram metrics (record duration even on failure)
-    offload_duration_seconds.labels(table=table, layer=layer).observe(duration)
-
-    logger.warning(f"Recorded offload failure: {table} ({error_type}) after {duration:.1f}s")
+def _init_series(table: str, layer: str) -> None:
+    """Create the label children so panels have series before the first run."""
+    offload_rows_total.labels(table=table, layer=layer).inc(0)
+    offload_errors_total.labels(table=table, error_type="failed").inc(0)
+    offload_duration_seconds.labels(table=table, layer=layer)
+    for status in ("success", "failed"):
+        offload_cycles_total.labels(status=status).inc(0)
 
 
-def record_cycle_start():
-    """Record the start of an offload cycle."""
-    logger.debug("Recording cycle start")
+def refresh(conn) -> int:
+    """Re-derive all metrics from the watermark table. Returns row count."""
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(WATERMARK_QUERY)
+        rows = cur.fetchall()
 
+    now = time.time()
+    offload_tables_configured.set(len(rows))
 
-def record_cycle_complete(
-    status: str,
-    duration: float,
-    tables_processed: int,
-    successful: int,
-    failed: int,
-    total_rows: int,
-):
-    """
-    Record a complete offload cycle.
+    for row in rows:
+        table = row["table_name"]
+        layer = _layer(table)
+        watermark = row["last_offload_timestamp"].timestamp()
+        duration = row["last_run_duration_seconds"] or 0
+        row_count = row["last_offload_row_count"] or 0
 
-    Args:
-        status: Cycle status (success, partial, failed)
-        duration: Total cycle duration (seconds)
-        tables_processed: Number of tables processed
-        successful: Number of successful table offloads
-        failed: Number of failed table offloads
-        total_rows: Total rows offloaded in cycle
-    """
-    # Counter metrics
-    offload_cycles_total.labels(status=status).inc()
+        if table not in _counted:
+            _init_series(table, layer)
 
-    # Histogram metrics
-    offload_cycle_duration_seconds.observe(duration)
+        watermark_timestamp_seconds.labels(table=table).set(watermark)
+        offload_lag_minutes.labels(table=table).set((now - watermark) / 60)
+        offload_last_duration_seconds.labels(table=table).set(duration)
+        offload_last_rows_per_second.labels(table=table).set(
+            row_count / duration if duration else 0
+        )
 
-    # Gauge metrics
-    if successful == tables_processed:
-        offload_last_success_timestamp.set(datetime.now().timestamp())
-    if failed > 0:
-        offload_last_failure_timestamp.set(datetime.now().timestamp())
+        # Count each finished run once, on the transition of updated_at.
+        # 'running' rows are skipped: they resolve to success/failed shortly.
+        previous = _counted.get(table)
+        _counted[table] = row["updated_at"]
+        if previous is None or row["updated_at"] == previous or row["status"] == "running":
+            continue
 
-    logger.info(
-        f"Recorded cycle complete: {status} ({successful}/{tables_processed} tables, "
-        f"{total_rows:,} rows, {duration:.1f}s)"
-    )
-
-
-def update_offload_lag(table: str, lag_minutes: float):
-    """
-    Update the offload lag metric.
-
-    Args:
-        table: Table name
-        lag_minutes: Time since last successful offload (minutes)
-    """
-    offload_lag_minutes.labels(table=table).set(lag_minutes)
-    logger.debug(f"Updated offload lag: {table} = {lag_minutes:.1f} min")
-
-
-def set_configured_tables(count: int):
-    """
-    Set the number of configured tables.
-
-    Args:
-        count: Number of tables configured for offload
-    """
-    offload_tables_configured.set(count)
-    logger.debug(f"Set configured tables: {count}")
-
-
-def set_pipeline_info(version: str, schedule_minutes: int, tables: list):
-    """
-    Set static pipeline metadata.
-
-    Args:
-        version: Pipeline version
-        schedule_minutes: Schedule interval in minutes
-        tables: List of table names
-    """
-    offload_info.info(
-        {
-            "version": version,
-            "schedule_minutes": str(schedule_minutes),
-            "tables": ",".join(tables),
-            "start_time": datetime.now().isoformat(),
-        }
-    )
-    logger.info(
-        f"Set pipeline info: v{version}, {schedule_minutes}min schedule, {len(tables)} tables"
-    )
-
-
-# ============================================================================
-# Metrics Server
-# ============================================================================
-
-
-def start_metrics_server(port: int = 8000):
-    """
-    Start Prometheus metrics HTTP server.
-
-    Args:
-        port: Port to listen on (default: 8000)
-    """
-    try:
-        start_http_server(port)
-        logger.info(f"Prometheus metrics server started on port {port}")
-        logger.info(f"Metrics endpoint: http://localhost:{port}/metrics")
-        return True
-    except OSError as e:
-        if "Address already in use" in str(e):
-            logger.warning(f"Metrics server already running on port {port}")
-            return True
+        offload_cycles_total.labels(status=row["status"]).inc()
+        offload_duration_seconds.labels(table=table, layer=layer).observe(duration)
+        if row["status"] == "success":
+            offload_rows_total.labels(table=table, layer=layer).inc(row_count)
         else:
-            logger.error(f"Failed to start metrics server: {e}")
-            return False
-    except Exception as e:
-        logger.error(f"Failed to start metrics server: {e}")
-        return False
+            offload_errors_total.labels(table=table, error_type=row["status"]).inc()
+
+    return len(rows)
 
 
-# ============================================================================
-# Utility Functions
-# ============================================================================
+def _connect():
+    return psycopg2.connect(
+        host=os.environ.get("PREFECT_DB_HOST", "prefect-db"),
+        port=int(os.environ.get("PREFECT_DB_PORT", "5432")),
+        database=os.environ.get("PREFECT_DB_NAME", "prefect"),
+        user=os.environ.get("PREFECT_DB_USER", "prefect"),
+        password=os.environ["PREFECT_DB_PASSWORD"],
+        connect_timeout=10,
+    )
 
 
-def get_metrics_summary() -> dict:
-    """
-    Get summary of current metrics (for logging/debugging).
+def serve(port: int = 8000, interval: int = 15) -> None:
+    """Expose /metrics on `port`, refreshing from PostgreSQL every `interval`s."""
+    start_http_server(port)
+    logger.info("offload metrics exporter listening on :%d/metrics", port)
 
-    Returns:
-        Dict with current metric values
-    """
-    # Note: This is a simplified version for debugging
-    # Production monitoring should query Prometheus directly
-    return {
-        "info": "Metrics are exposed at /metrics endpoint",
-        "port": 8000,
-        "endpoint": "http://localhost:8000/metrics",
-    }
+    conn = None
+    while True:
+        try:
+            if conn is None or conn.closed:
+                conn = _connect()
+            count = refresh(conn)
+            logger.debug("refreshed metrics for %d tables", count)
+        except Exception as exc:  # noqa: BLE001 - exporter must never exit
+            # ponytail: reconnect on any error; the watermark table is the only
+            # dependency, so there is nothing finer-grained worth handling.
+            logger.warning("metrics refresh failed: %s", exc)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                conn = None
+        time.sleep(interval)
 
 
-# ============================================================================
-# Design Notes
-# ============================================================================
+def _self_check() -> None:
+    """Offline check of the counting logic (no DB required)."""
+    from datetime import datetime, timedelta, timezone
 
-# Metric Types Explained:
-# ─────────────────────────
-# - Counter: Cumulative count (monotonically increasing)
-#   Examples: total_rows_offloaded, total_errors
-#   Use: Rate calculations (rows/sec), error rates
-#
-# - Gauge: Point-in-time value (can go up or down)
-#   Examples: lag_minutes, watermark_timestamp
-#   Use: Current state, threshold alerts
-#
-# - Histogram: Distribution with predefined buckets
-#   Examples: duration_seconds (buckets: 1s, 5s, 10s, ...)
-#   Use: Percentiles (p50, p95, p99), SLO compliance
-#
-# - Summary: Distribution with calculated quantiles
-#   Examples: rows_per_second (p50, p90, p99)
-#   Use: Similar to histogram but with runtime quantiles
-#
-# - Info: Static metadata labels
-#   Examples: version, configuration
-#   Use: Context for metrics, debugging
+    _counted.clear()
+    now = datetime.now(timezone.utc)
 
-# Prometheus Query Examples:
-# ──────────────────────────
-# 1. Offload rate (rows/second):
-#    rate(offload_rows_total[5m])
-#
-# 2. Error rate (errors/minute):
-#    rate(offload_errors_total[5m]) * 60
-#
-# 3. Average duration (last 5 minutes):
-#    rate(offload_duration_seconds_sum[5m]) / rate(offload_duration_seconds_count[5m])
-#
-# 4. 95th percentile duration:
-#    histogram_quantile(0.95, offload_duration_seconds_bucket)
-#
-# 5. Current lag (minutes):
-#    offload_lag_minutes
-#
-# 6. Success rate (%):
-#    (rate(offload_cycles_total{status="success"}[5m]) /
-#     rate(offload_cycles_total[5m])) * 100
+    def row(status, updated, rows=100, duration=5):
+        return {
+            "table_name": "bronze_trades_binance",
+            "last_offload_timestamp": now - timedelta(minutes=3),
+            "last_offload_row_count": rows,
+            "status": status,
+            "last_run_duration_seconds": duration,
+            "updated_at": updated,
+        }
+
+    class FakeConn:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def cursor(self, **_):
+            outer = self
+
+            class Cur:
+                def __enter__(self_):
+                    return self_
+
+                def __exit__(self_, *a):
+                    return False
+
+                def execute(self_, _sql):
+                    pass
+
+                def fetchall(self_):
+                    return outer.rows
+
+            return Cur()
+
+    def rows_value():
+        return offload_rows_total.labels(table="bronze_trades_binance", layer="bronze")._value.get()
+
+    assert _layer("ohlcv_1m") == "gold"
+    assert _layer("silver_trades") == "silver"
+
+    refresh(FakeConn([row("success", now)]))
+    base = rows_value()
+    # Same updated_at -> not double counted.
+    refresh(FakeConn([row("success", now)]))
+    assert rows_value() == base, "re-poll must not double count"
+    # New run -> counted once.
+    refresh(FakeConn([row("success", now + timedelta(minutes=15))]))
+    assert rows_value() == base + 100, "new run must be counted"
+    # 'running' is not counted.
+    refresh(FakeConn([row("running", now + timedelta(minutes=16))]))
+    assert rows_value() == base + 100, "running must not be counted"
+    assert offload_lag_minutes.labels(table="bronze_trades_binance")._value.get() > 2
+    print("self-check ok")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--serve", action="store_true", help="run the HTTP exporter")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--interval", type=int, default=15, help="refresh seconds")
+    parser.add_argument("--self-check", action="store_true", help="run offline logic check")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if args.self_check:
+        _self_check()
+    elif args.serve:
+        serve(port=args.port, interval=args.interval)
+    else:
+        parser.error("nothing to do: pass --serve or --self-check")

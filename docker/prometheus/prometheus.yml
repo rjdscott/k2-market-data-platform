@@ -64,11 +64,18 @@ scrape_configs:
   #     - targets: ['k2-api:8081']
   #   metrics_path: '/actuator/prometheus'
 
-  # Iceberg Offload Scheduler — retired; Prefect worker handles offloads in v2
-  # Kept as reference; remove if Prometheus flags down alert becomes noise
-  # - job_name: 'iceberg-scheduler'
-  #   static_configs:
-  #     - targets: ['host.docker.internal:8000']
+  # Iceberg offload metrics — the iceberg-metrics service runs
+  # docker/offload/metrics.py --serve, deriving metrics from the
+  # offload_watermarks table. Job name kept as 'iceberg-scheduler' to match the
+  # existing alert rules and dashboards.
+  - job_name: 'iceberg-scheduler'
+    static_configs:
+      - targets: ['iceberg-metrics:8000']
+        labels:
+          service: 'iceberg-offload'
+          tier: 'cold-storage'
+    metrics_path: '/metrics'
+    scrape_interval: 30s
 
   # Kotlin feed handlers — Micrometer Prometheus endpoint on port 8082
   - job_name: 'feed-handler-binance'
