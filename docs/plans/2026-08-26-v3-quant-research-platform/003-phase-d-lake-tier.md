@@ -122,19 +122,17 @@ cannot be met by code alone, so they are named here rather than quietly dropped.
   debugging — and moving the maintenance cron off 03:00 is the cheaper fix than
   raising a stated 16 CPU / 40 GB constraint.
 
-- **The noisy-neighbour experiment (Scope bullet 8, Verification bullet 3) is not
-  delivered.** It needs a full day of `raw.messages` to compact over and a quiet
-  baseline of the same duration on an otherwise idle host — neither exists while
-  Phase C's burn-in owns the machine, and `docker inspect -f
-  '{{.HostConfig.CpusetCpus}}' k2-spark-iceberg k2-capture-binance` currently returns
-  two empty strings, because `spark-iceberg` carries no `cpuset` at all and the
-  capture services carry `${K2_CAPTURE_CPUSET:-}`. Assigning cpusets is a
-  `docker-compose.yml` change that recreates running containers, which is exactly what
-  cannot happen mid-burn-in. Deferred to the same deployment window as the exit
-  criteria: pin the cpusets, let `raw.messages` accumulate a day, then run the
-  comparison and put both numbers and the layout in `capacity-model.md` with their
-  commands. `make check-docs` gate (e) still reports *predicted-only* until they land,
-  which is the correct reading.
+- **The noisy-neighbour experiment (Scope bullet 8, Verification bullet 3) was deferred
+  from the build to the deployment, and ran on 2026-08-26.** At build time `spark-iceberg`
+  carried no `cpuset` and assigning one recreates running containers, which could not
+  happen mid-burn-in. Deployed: `K2_HEAVY_CPUSET=0-11` on ClickHouse / Spark / `lake-ddl`,
+  `K2_CAPTURE_CPUSET=12-14` on capture, applied 22:03Z. Measured: two 10-minute windows,
+  quiet then `maintenance.py --days 2`, both numbers, the delta, the layout and the
+  commands are the dated note at the foot of `capacity-model.md`. Verdict there: p50 flat,
+  p99 moved within the message-rate band, 0 produce errors — the pinning holds. The run
+  found compaction OOM-ing at 768m instead, fixed in the same PR. `make check-docs` gate (e)
+  still reports *predicted-only*: the note is a dated measurement, not a `measured` column,
+  which Phase F's benchmark file backs.
 
 - **The 80% disk alert measures the wrong filesystem on this host, and only on this
   host.** `k2_lake_disk_used_ratio` reads 0.344 inside the container against the

@@ -22,6 +22,51 @@ topics. Budget under test: 16 CPU / 40 GB single host ([ADR-010](../adr/ADR-010-
 spikes against live exchange sockets. Everything else is arithmetic on top of a stated
 guess. Section 8 says which command settles which row.
 
+> **Note, 2026-08-26 — noisy-neighbour experiment (plan 003, Scope bullet 8), measured.**
+> Capture pinned to cores `12-14` (`K2_CAPTURE_CPUSET`), ClickHouse / Spark / `lake-ddl` to
+> `0-11` (`K2_HEAVY_CPUSET`); `docker inspect -f '{{.HostConfig.CpusetCpus}}'
+> k2-spark-iceberg k2-capture-binance` → `0-11` / `12-14`. Two 10-minute windows, sampled
+> with the same PromQL, quiet baseline ending 22:15:31Z and then `maintenance.py --days 2`
+> (binpack of `raw.messages`, sort rewrites of both bronze tables, expiry, orphan scan,
+> audits) ending 22:25:33Z, with the 5-minute ingest cron running throughout both.
+> Scope: `v3, 15 svc`, one host, the first day of the archive.
+>
+> | `k2_capture_exchange_to_recv_seconds` | baseline p50 / p99 | compaction p50 / p99 | msg/s baseline → compaction |
+> |---|---|---|---|
+> | binance | 68 ms / 225 ms | 49 ms / 377 ms | 232 → 426 |
+> | kraken | 177 ms / 658 ms | 178 ms / 683 ms | 712 → 992 |
+> | coinbase | 182 ms / 30 s* | 188 ms / 821 ms | 156 → 172 |
+>
+> ```bash
+> # per window, w=10m; the exchange_to_recv histogram is exchange clock → host clock,
+> # so it carries clock skew and internet latency — compare windows, not absolutes
+> curl -s localhost:9090/api/v1/query --data-urlencode \
+>   'query=histogram_quantile(0.99, sum by (exchange,le)(rate(k2_capture_exchange_to_recv_seconds_bucket[10m])))'
+> curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (exchange)(rate(k2_capture_messages_total[10m]))'
+> curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (exchange)(increase(k2_capture_produce_errors_total[10m]))'
+> docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}'   # spark 1.35% → 0.51% at sample instants; capture 4–12%
+> ```
+>
+> **Reading.** p50 is flat across all three venues (±5 ms) while message rate rose 15–80%
+> between the windows — the compaction window landed on a busier ten minutes of market, which
+> is the noise band this comparison lives in. Binance p99 moved 225 → 377 ms and Kraken
+> 658 → 683 ms on 1.8× and 1.4× the rate; the sample at 10 min holds ~140k–600k events per
+> venue, so those p99s are stable numbers, and a 150 ms p99 shift on a queue that is 1.8×
+> deeper is what the cgroup quota alone predicts. Produce errors 0 on every venue in both
+> windows. \* Coinbase's baseline p99 of 30 s is the histogram's top bucket: the venue's
+> `level2` snapshot frames carry `event_time`s well behind wall clock on subscribe, and one
+> such frame in 10 minutes pins p99 to `+Inf` — the compaction window happened to have
+> none. It is a measurement artefact of the exchange clock, not an isolation result.
+>
+> **Verdict: no p99 regression attributable to compaction beyond the rate-driven band —
+> the pinning holds.** What the run *did* find was on the Spark side, not the capture side:
+> `rewrite_data_files` over `raw.messages` OOM'd a 768m driver on its 5 MB rows, twice
+> (22:16Z, 22:28Z), before finishing at a 2g heap in 102 s with a peak driver RSS of
+> **2,641 MiB** (40 → 5 raw files, 631 MB rewritten) — which is why `maintenance.py` now
+> holds the ingest lock and runs alone in the container
+> (`docker/lake/README.md`, "Concurrency must be 1"). One window each; the daily rate is
+> Phase F's.
+
 ---
 
 ## 1. Inputs
