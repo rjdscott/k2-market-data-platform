@@ -10,8 +10,13 @@
 # process that is nominally up while last_message_ts stops advancing. It does
 # not reproduce that row's cause; nothing local can silence a live venue.
 #
-# The freeze is held until CaptureFeedStale fires (60s staleness + `for: 2m`),
-# by which point the venue has usually closed the socket server-side. That is
+# The freeze is held until CaptureDown fires (`up == 0` for 2m). It is NOT held
+# for CaptureFeedStale: a paused container stops answering scrapes, Prometheus
+# stale-marks every series from that target within a scrape or two, and
+# `time() - <absent>` is an empty vector — the staleness rule cannot fire on
+# this injection by construction (failure-modes.md, SIGSTOP row). CaptureDown
+# is the alert a frozen process actually produces. By the time it fires the
+# venue has usually closed the socket server-side. That is
 # what makes the reconnect real rather than a resume: on unpause the client
 # reconnects, and the venue reports the lost window in its own dialect —
 # Coinbase as a sequence_num skip, Binance as a lastUpdateId regression, Kraken
@@ -29,8 +34,8 @@ RECONNECTS="sum(k2_capture_reconnects_total{exchange=\"$EXCHANGE\"})"
 
 preflight "$CONTAINER" k2-prometheus
 banner "capture-pause.sh --exchange $EXCHANGE" \
-  CaptureFeedStale docs/runbooks/capture-feed-stale.md \
-  "docker pause $CONTAINER until the feed reads stale"
+  CaptureDown docs/runbooks/capture-down.md \
+  "docker pause $CONTAINER until the scrape target reads down"
 
 gaps_before=$(prom_query "$GAPS"); gaps_before=${gaps_before:-0}
 reconnects_before=$(prom_query "$RECONNECTS"); reconnects_before=${reconnects_before:-0}
@@ -41,9 +46,9 @@ docker pause "$CONTAINER" >/dev/null
 # can leave the stack broken is a fault of its own.
 trap 'docker unpause "$CONTAINER" >/dev/null 2>&1 || true' EXIT
 
-t_fire=$(wait_for_alert CaptureFeedStale 300 "$EXCHANGE") \
-  || die "CaptureFeedStale did not fire within ${t_fire}s — check the metric is labelled {exchange,stream}"
-echo "→ CaptureFeedStale fired after ${t_fire}s" >&2
+t_fire=$(wait_for_alert CaptureDown 300 "$EXCHANGE") \
+  || die "CaptureDown did not fire within ${t_fire}s — check up{job=\"capture-$EXCHANGE\"} went to 0"
+echo "→ CaptureDown fired after ${t_fire}s" >&2
 
 echo "→ unpausing" >&2
 docker unpause "$CONTAINER" >/dev/null
@@ -56,11 +61,11 @@ t_fresh=$(wait_for_metric "$FRESH" lt 60 180) || die "no fresh frames after ${t_
 # measurement's clothes, and this number is hand-copied into the FMEA and the
 # runbook MTTR tables. If the alert does not clear, the run says so and the
 # recovery cell reads `unmeasured`.
-if t_clear=$(wait_for_alert_clear CaptureFeedStale 300 "$EXCHANGE"); then
+if t_clear=$(wait_for_alert_clear CaptureDown 300 "$EXCHANGE"); then
   t_recover=$((t_fresh + t_clear))
 else
   t_recover=unmeasured
-  echo "→ CaptureFeedStale for $EXCHANGE was still set ${t_clear}s after frames came back." >&2
+  echo "→ CaptureDown for $EXCHANGE was still set ${t_clear}s after frames came back." >&2
   echo "  Recovery NOT measured. Either the venue has a stream that is legitimately" >&2
   echo "  quieter than the 60s threshold — in which case the rule needs the fix, not" >&2
   echo "  the number — or something is still broken. Do not publish a recovery time" >&2
@@ -90,4 +95,4 @@ case $EXCHANGE in
 esac
 echo "→ data lost: every frame $EXCHANGE sent while frozen. Public feeds do not replay." >&2
 
-report "capture-pause.sh --exchange $EXCHANGE" CaptureFeedStale "$t_fire" "$t_recover"
+report "capture-pause.sh --exchange $EXCHANGE" CaptureDown "$t_fire" "$t_recover"
