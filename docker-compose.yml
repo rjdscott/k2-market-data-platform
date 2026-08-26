@@ -9,9 +9,6 @@
 networks:
   k2-net:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16
 
 #############################################################################
 # VOLUMES
@@ -55,8 +52,7 @@ services:
     container_name: k2-redpanda
     hostname: redpanda
     networks:
-      k2-net:
-        ipv4_address: 172.28.0.10
+      - k2-net
     ports:
       - "9092:9092"     # Kafka API
       - "9644:9644"     # Admin API
@@ -149,8 +145,7 @@ services:
     container_name: k2-clickhouse
     hostname: clickhouse
     networks:
-      k2-net:
-        ipv4_address: 172.28.0.20
+      - k2-net
     ports:
       - "8123:8123"     # HTTP interface
       - "9002:9000"     # Native protocol (9002 to avoid MinIO conflict)
@@ -198,8 +193,7 @@ services:
     container_name: k2-minio
     hostname: minio
     networks:
-      k2-net:
-        ipv4_address: 172.28.0.21
+      - k2-net
     ports:
       - "9000:9000"     # API
       - "9001:9001"     # Console
@@ -332,8 +326,7 @@ services:
     container_name: k2-prefect-db
     hostname: prefect-db
     networks:
-      k2-net:
-        ipv4_address: 172.28.0.30
+      - k2-net
     ports:
       - "5432:5432"
     volumes:
@@ -371,8 +364,7 @@ services:
     container_name: k2-prefect-server
     hostname: prefect-server
     networks:
-      k2-net:
-        ipv4_address: 172.28.0.31
+      - k2-net
     ports:
       - "4200:4200"
     volumes:
@@ -416,8 +408,7 @@ services:
     container_name: k2-prefect-worker
     hostname: prefect-worker
     networks:
-      k2-net:
-        ipv4_address: 172.28.0.32
+      - k2-net
     volumes:
       - ./docker/prefect:/root/.prefect
       - ./docker/offload:/opt/prefect/offload
@@ -460,8 +451,7 @@ services:
     container_name: k2-spark-iceberg
     hostname: spark-iceberg
     networks:
-      k2-net:
-        ipv4_address: 172.28.0.40
+      - k2-net
     ports:
       - "18080:8080"    # Spark Master UI (mapped to 18080 to avoid conflict)
       - "4040:4040"     # Spark Application UI
@@ -557,8 +547,7 @@ services:
     container_name: k2-feed-handler-binance
     hostname: feed-handler-binance
     networks:
-      k2-net:
-        ipv4_address: 172.28.0.50
+      - k2-net
     depends_on:
       redpanda:
         condition: service_healthy
@@ -606,8 +595,7 @@ services:
     container_name: k2-feed-handler-kraken
     hostname: feed-handler-kraken
     networks:
-      k2-net:
-        ipv4_address: 172.28.0.51
+      - k2-net
     depends_on:
       redpanda:
         condition: service_healthy
@@ -655,8 +643,7 @@ services:
     container_name: k2-feed-handler-coinbase
     hostname: feed-handler-coinbase
     networks:
-      k2-net:
-        ipv4_address: 172.28.0.52
+      - k2-net
     depends_on:
       redpanda:
         condition: service_healthy
