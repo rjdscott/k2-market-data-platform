@@ -478,10 +478,15 @@ def _accept_data_loss(
             scope=f"{topic}/{partition}",
             passed=False,
             observed=int(lost),
+            # O.GAP_OFFSETS, not a literal: the nightly offset_continuity audit
+            # nets this hole out by reading those two numbers back out of the
+            # detail (offsets.recorded_gaps). Reword them and the audit stops
+            # recognising its own incident, which relights a critical alert.
             detail=(
-                f"--accept-data-loss: {topic} partition {partition} committed {start}, "
-                f"broker LOG-START {log_start}, {lost} records evicted by Redpanda "
-                f"retention and permanently gone; resumed at {log_start} by run {app_id}"
+                f"--accept-data-loss: {topic} partition {partition} "
+                + O.GAP_OFFSETS.format(committed=start, log_start=log_start)
+                + f", {lost} records evicted by Redpanda retention and permanently "
+                f"gone; resumed at {log_start} by run {app_id}"
             ),
         )
         for topic, partition, start, log_start, lost in losses

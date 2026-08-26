@@ -21,6 +21,7 @@ guessing from Iceberg's own `operation` field.
 from __future__ import annotations
 
 import json
+import re
 
 # Kafka's sentinel offsets, as Spark's kafka source spells them in the
 # startingOffsets/endingOffsets JSON.
@@ -318,3 +319,71 @@ def offset_gaps(rows: list) -> list:
             }
         )
     return failures
+
+
+# The two offsets an `offset_gap` row is netted out by, as they appear in its
+# `detail`. `ingest._accept_data_loss` writes this substring and
+# `recorded_gaps` reads it back — one format, two directions, so that a drift
+# in the wording cannot silently switch the netting off and relight a critical
+# alert nobody can act on. tests/test_lake_offsets.py round-trips the pair.
+#
+# ponytail: the range lives in prose because audit.checks has no columns for
+# it, and adding two nullable columns to an append-only table for one row is
+# the bigger change. If a third writer ever files offset_gap rows, give the
+# table `first_missing`/`last_missing` and delete this regex.
+GAP_OFFSETS = "committed {committed}, broker LOG-START {log_start}"
+_GAP_OFFSETS_RE = re.compile(r"committed (\d+), broker LOG-START (\d+)")
+
+
+def recorded_gaps(rows: list) -> list:
+    """`offset_gap` rows -> the offset ranges they acknowledge as gone.
+
+    `rows` is `[(scope, detail)]` as `audit.checks` holds them; the result is
+    `[(topic, partition, first_missing, last_missing)]`.
+
+    `log_start` is the first offset that *survived*, so the acknowledged hole
+    ends one below it — the same `committed..log_start - 1` the repair prints.
+
+    A row this cannot parse is skipped rather than raising: the netting is an
+    optimisation on an alert, and an unparseable row must degrade to "the hole
+    is not covered", which fails the audit, rather than to a check that raises.
+    """
+    gaps = []
+    for scope, detail in rows:
+        found = _GAP_OFFSETS_RE.search(detail or "")
+        topic, _, partition = (scope or "").rpartition("/")
+        if not found or not partition.isdigit():
+            continue
+        gaps.append((topic, int(partition), int(found.group(1)), int(found.group(2)) - 1))
+    return gaps
+
+
+def uncovered_holes(holes: list, gaps: list) -> list:
+    """The holes in `raw.messages` that no recorded `offset_gap` accounts for.
+
+    Both arguments are `[(topic, partition, first_missing, last_missing)]` —
+    `holes` observed in the data, `gaps` acknowledged by `--accept-data-loss`.
+
+    A hole is covered when the recorded gaps for its own (topic, partition)
+    span every offset in it. Coverage is walked as a union rather than tested
+    against one gap at a time, because two evictions on the same partition with
+    no successful ingest between them record two abutting ranges and leave one
+    merged hole in the data — which is covered, and which containment in a
+    single gap would report as new loss.
+
+    Partial coverage is not coverage: a hole one offset wider than what was
+    acknowledged is a record nobody wrote down, and it fails.
+    """
+    covered: dict = {}
+    for topic, partition, first, last in gaps:
+        covered.setdefault((topic, int(partition)), []).append((int(first), int(last)))
+    out = []
+    for hole in holes:
+        topic, partition, first, last = hole
+        cursor = int(first)
+        for lo, hi in sorted(covered.get((topic, int(partition)), [])):
+            if lo <= cursor <= hi:
+                cursor = hi + 1
+        if cursor <= int(last):
+            out.append(hole)
+    return out

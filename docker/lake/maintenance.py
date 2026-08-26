@@ -220,6 +220,16 @@ def audit_offset_continuity(spark) -> list:
     an ingest skipped records, an overlap means it wrote some twice. Grouped over
     the whole table, not per day, so a gap sitting exactly on a `days(kafka_ts)`
     seam is caught rather than hidden by the partition boundary.
+
+    **A hole that was already written down is not a finding.** A
+    `--accept-data-loss` repair files an `offset_gap` row naming the exact range
+    Redpanda evicted, and that hole is permanent — so without netting, this check
+    fails on that partition every night forever and `LakeAuditFailed` (critical)
+    latches on a loss a person already acknowledged. An alert that can only ever
+    fire is an alert nobody reads, which costs more than the check is worth.
+    Recorded ranges are therefore netted out; **anything they do not cover still
+    fails**, which is the whole point — the check keeps its teeth for new loss on
+    a partition that has already lost records once.
     """
     rows = spark.sql(
         f"""
@@ -236,10 +246,81 @@ def audit_offset_continuity(spark) -> list:
         return [
             _result("offset_continuity", RAW_TABLE, True, 0, f"{len(rows)} partitions gapless")
         ]
-    return [
-        _result("offset_continuity", f["scope"], False, f["observed"], f["detail"])
-        for f in failures
+    recorded = O.recorded_gaps(
+        [
+            (r["scope"], r["detail"])
+            for r in spark.sql(
+                f"SELECT scope, detail FROM {CHECKS_TABLE} WHERE check_name = 'offset_gap'"
+            ).collect()
+        ]
+    )
+    return [_net_recorded(spark, f, recorded) for f in failures]
+
+
+def _net_recorded(spark, failure: dict, recorded: list) -> dict:
+    """One `offset_gaps` failure, minus the ranges `audit.checks` already holds.
+
+    The aggregate check above counts; it cannot say *where*. So the exact holes
+    are read only for a partition already flagged — the nightly healthy path
+    still does one group-by and no window function over 40 M rows.
+
+    Two conditions have to hold before a failure is downgraded to a pass, and
+    the second one is the subtle one:
+
+      * every hole is inside a recorded range, and
+      * the holes account for the whole shortfall.
+
+    `observed` is `missing - duplicated`, so a partition with 100 acknowledged
+    missing offsets and 100 rows written twice reports 0 and looks intact. If
+    the hole sizes do not add up to `observed` exactly, something other than the
+    recorded eviction is going on and the row keeps failing.
+    """
+    topic, _, partition = failure["scope"].rpartition("/")
+    if failure["observed"] <= 0 or not partition.isdigit():
+        # Negative is duplication — nothing to net, the contract broke.
+        return _result("offset_continuity", failure["scope"], False, failure["observed"], failure["detail"])
+
+    holes = [
+        (topic, int(partition), int(r["first_missing"]), int(r["last_missing"]))
+        for r in spark.sql(
+            f"""
+            SELECT prev + 1 AS first_missing, offset - 1 AS last_missing
+            FROM (
+              SELECT offset, lag(offset) OVER (
+                       PARTITION BY topic, partition ORDER BY offset
+                     ) AS prev
+              FROM {RAW_TABLE} WHERE topic = '{topic}' AND partition = {int(partition)}
+            )
+            WHERE prev IS NOT NULL AND offset > prev + 1
+            ORDER BY first_missing
+            """
+        ).collect()
     ]
+    uncovered = O.uncovered_holes(holes, recorded)
+    accounted = sum(last - first + 1 for _, _, first, last in holes)
+    if uncovered or accounted != failure["observed"]:
+        return _result(
+            "offset_continuity",
+            failure["scope"],
+            False,
+            failure["observed"],
+            "{}; {} of {} holes are NOT covered by a recorded offset_gap ({})".format(
+                failure["detail"], len(uncovered), len(holes), _ranges(uncovered) or "none"
+            ),
+        )
+    return _result(
+        "offset_continuity",
+        failure["scope"],
+        True,
+        failure["observed"],
+        f"{len(holes)} recorded gaps netted ({_ranges(holes)}); {accounted} records "
+        f"missing, all acknowledged by an offset_gap row in {CHECKS_TABLE} — "
+        "nothing else is",
+    )
+
+
+def _ranges(holes: list) -> str:
+    return ", ".join(f"{first}..{last}" for _, _, first, last in holes)
 
 
 def audit_duplicates(spark, table: str, keys: list) -> list:

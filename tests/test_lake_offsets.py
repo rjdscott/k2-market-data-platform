@@ -315,6 +315,81 @@ class TestOffsetGaps:
         assert [f["scope"] for f in failures] == ["t/0", "u/2"]
 
 
+# The row ingest.py filed at 21:48:59Z on 2026-08-26, verbatim — the one
+# recorded gap this netting exists for (docs/runbooks/lake-ingest-lag.md §3).
+KRAKEN_GAP_ROW = (
+    "market.crypto.v3.raw.kraken/0",
+    "--accept-data-loss: market.crypto.v3.raw.kraken partition 0 committed 1615463, "
+    "broker LOG-START 2784417, 1168954 records evicted by Redpanda retention and "
+    "permanently gone; resumed at 2784417 by run local-1787780940821",
+)
+
+
+class TestRecordedGaps:
+    def test_parses_the_row_the_repair_actually_wrote(self):
+        # log_start 2784417 is the first offset that SURVIVED, so the
+        # acknowledged hole ends at 2784416 — off by one here and the netting
+        # leaves a single-offset remainder that fails the audit forever.
+        assert O.recorded_gaps([KRAKEN_GAP_ROW]) == [
+            ("market.crypto.v3.raw.kraken", 0, 1_615_463, 2_784_416)
+        ]
+
+    def test_the_format_ingest_writes_is_the_format_this_reads(self):
+        # ingest._accept_data_loss builds its detail from GAP_OFFSETS. If the
+        # two ever drift, netting silently stops and a critical alert relights.
+        detail = "--accept-data-loss: " + O.GAP_OFFSETS.format(committed=10, log_start=20)
+        assert O.recorded_gaps([("t/3", detail)]) == [("t", 3, 10, 19)]
+
+    def test_an_unparseable_row_is_skipped_not_raised(self):
+        # A hand-filed row in some other wording must degrade to "not covered"
+        # — which fails the audit — never to a check that raises.
+        assert O.recorded_gaps([("t/0", "operator: we lost some records"), ("t/0", None)]) == []
+
+    def test_a_scope_without_a_partition_is_skipped(self):
+        assert O.recorded_gaps([("lake.raw.messages", KRAKEN_GAP_ROW[1])]) == []
+
+
+class TestUncoveredHoles:
+    """Which observed holes a recorded `offset_gap` accounts for.
+
+    A hole that is exactly acknowledged is not news; anything else is, and the
+    audit has to keep failing on it. Getting this backwards either relights an
+    alert nobody can act on or hides real loss behind an old incident.
+    """
+
+    KRAKEN_HOLE = ("market.crypto.v3.raw.kraken", 0, 1_615_463, 2_784_416)
+
+    def test_the_live_incident_is_netted_out(self):
+        assert O.uncovered_holes([self.KRAKEN_HOLE], O.recorded_gaps([KRAKEN_GAP_ROW])) == []
+
+    def test_nothing_recorded_covers_nothing(self):
+        assert O.uncovered_holes([self.KRAKEN_HOLE], []) == [self.KRAKEN_HOLE]
+
+    @pytest.mark.parametrize("hole", [("t", 0, 99, 200), ("t", 0, 100, 201), ("t", 0, 99, 201)])
+    def test_a_hole_wider_than_the_record_still_fails(self, hole):
+        # Partial coverage is not coverage: the offsets outside the recorded
+        # range are records nobody wrote down.
+        assert O.uncovered_holes([hole], [("t", 0, 100, 200)]) == [hole]
+
+    def test_a_hole_inside_the_record_is_covered(self):
+        assert O.uncovered_holes([("t", 0, 120, 180)], [("t", 0, 100, 200)]) == []
+
+    def test_two_abutting_records_cover_one_merged_hole(self):
+        # Two evictions with no successful ingest between them leave one hole
+        # in the data and two rows in audit.checks. Neither row contains it.
+        gaps = [("t", 0, 100, 200), ("t", 0, 201, 300)]
+        assert O.uncovered_holes([("t", 0, 100, 300)], gaps) == []
+        assert O.uncovered_holes([("t", 0, 100, 301)], gaps) == [("t", 0, 100, 301)]
+
+    def test_records_do_not_leak_across_partitions_or_topics(self):
+        holes = [("t", 1, 100, 200), ("u", 0, 100, 200)]
+        assert O.uncovered_holes(holes, [("t", 0, 100, 200)]) == holes
+
+    def test_only_the_uncovered_holes_come_back(self):
+        holes = [("t", 0, 100, 200), ("t", 0, 400, 500)]
+        assert O.uncovered_holes(holes, [("t", 0, 100, 200)]) == [("t", 0, 400, 500)]
+
+
 @pytest.mark.parametrize("partitions", [1, 12, 40])
 def test_a_bounded_cold_start_drains_without_skipping_or_repeating(partitions):
     """A backlog, drained over successive runs: no overlap, no hole, ends at 0.
