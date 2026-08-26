@@ -218,4 +218,43 @@ constraint attached.
 
 ## Outcome
 
-_To be appended after the Phase D burn-in._
+### Outcome so far — 2026-08-26
+
+**The archive's first permanent hole arrived before the burn-in did, and it came from the
+bus rather than from the lake.** `market.crypto.v3.raw.kraken` partition 0 evicted
+**1,168,954 records** that the ingest had not read: committed 1,615,463 against a broker
+`LOG-START-OFFSET` of 2,784,417. The cause was the ingest's per-run bound (50,000 offsets
+per partition) sitting below the partition's arrival rate (11,050 records/minute), so the
+drain lost ground on every cycle until Redpanda's 512 MiB-per-partition cap overtook it.
+
+**What this decision got right.** The hole is *recorded*, not absorbed. The ingest detects
+it at plan time, refuses to skip on its own, and the repair — `ingest.py
+--accept-data-loss` — writes one `offset_gap` row into `lake.audit.checks` (topic,
+partition, both offsets, count, run id) **before** advancing past the evicted range, and
+aborts without skipping if that row cannot be written. The nightly `offset_continuity`
+audit independently reports the same 1,168,954 on that partition, forever. Two records,
+written by two jobs, agreeing on one number: "never expired, and never silently holed"
+survives its first contact with reality. The claim this ADR could not have made is the one
+it never made — that no record is ever lost. What it promised is that a lost one is
+findable, and it is.
+
+**What the capacity model got wrong, and it is the number to carry forward.** The 48 h raw
+retention is not the binding limit; the byte cap is, and on the hottest partition it holds
+**7.01 h** — 4,887,694 records whose Kafka timestamps span 25,227,274 ms, 193.9 records/s,
+119.7 B/record on disk. The prediction said 29.4 h for the same 512 MiB because it divided
+the topic's bytes by twelve partitions, and keyed partitioning does not divide by twelve:
+partition 0 holds 558 MB while partitions 2, 5, 8 and 11 hold ~600 kB each, and the topic
+occupies 2.87 GB of the 6 GiB its caps allow. A per-partition byte cap under keyed
+partitioning is a cap on the busiest key.
+
+**And the decision that follows from it is this ADR's, not the broker's: 512 MiB stands.**
+The bus is a buffer sized for the 5-minute ingest cadence — 7 h is ~84 cycles of slack —
+and the archive is the lake, which is exactly what this ADR chose. The fix for a lake that
+cannot keep up belongs in the lake: the per-run bound is now 200,000 offsets per partition,
+~3.6× the measured rate. Revisit when `k2_lake_ingest_backlog_offsets` for any topic
+exceeds one hour of that topic's arrival rate for two consecutive cycles
+([lake-ingest-lag.md §3](../runbooks/lake-ingest-lag.md)); the disk-days trigger in
+"Revisit when" above is unchanged and still unmeasured.
+
+_The rest of the outcome — the zstd ratio on `payload`, the days-remaining number, the
+rebuild timing — is appended after the Phase D burn-in._

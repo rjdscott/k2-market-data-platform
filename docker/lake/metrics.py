@@ -71,6 +71,8 @@ JOB_MAINTENANCE = "maintenance"
 MAX_KAFKA_TS = "k2.max-kafka-ts"
 KAFKA_BACKLOG = "k2.kafka-backlog"
 AUDIT_FAILURES = "k2.audit-failures"
+UNRESOLVABLE_IDS = "k2.unresolvable-schema-ids"
+OFFSET_GAPS = "k2.offset-gaps"
 
 # ── timestamps, not ages ────────────────────────────────────────────────────
 #
@@ -125,6 +127,12 @@ audit_failures = Gauge(
 unresolvable_schema_ids = Gauge(
     "k2_lake_unresolvable_schema_ids_total",
     "Schema ids the registry would not serve in the most recent stage-2 run",
+)
+offset_gaps = Gauge(
+    "k2_lake_offset_gaps_total",
+    "Partitions the most recent ingest resumed past evicted records, with --accept-data-loss. "
+    "The durable record is the offset_gap row in lake.audit.checks; this gauge only says "
+    "it just happened",
 )
 disk_used_ratio = Gauge(
     "k2_lake_disk_used_ratio",
@@ -233,30 +241,43 @@ def latest_job_summary(snapshots: list, job: str) -> dict:
     return latest_job_snapshot(snapshots, job).get("summary", {})
 
 
-def fresh_ingest_failures(snapshots: list, now: float) -> float:
-    """Ingest-filed failures on audit.checks, or 0 once that summary is stale.
+def fresh_ingest_value(snapshots: list, key: str, now: float) -> float:
+    """One ingest-filed finding count on audit.checks, or 0 once it is stale.
 
-    Stage 2 commits an ingest row to `audit.checks` **only when it found an
-    unresolvable id** — a clean run writes nothing at all (`write_audit_rows`
-    in docker/lake/ingest.py). So the newest `k2.job=ingest` summary is not a
-    statement about now; it is the last time something went wrong. Read as-is,
-    the gauge latches: register the missing schema and the count still stands
-    until the next unrelated ingest finding, which on a quiet week is never —
-    `LakeUnresolvableSchemaId` would then stay firing for a fault that was
-    fixed in minutes.
+    The ingest commits a row to `audit.checks` **only when it found something**
+    — a clean run writes nothing at all (`write_audit_rows` in
+    docker/lake/ingest.py). So an ingest summary is not a statement about now;
+    it is the last time something went wrong. Read as-is, the gauge latches:
+    register the missing schema and the count still stands until the next
+    unrelated ingest finding, which on a quiet week is never —
+    `LakeUnresolvableSchemaId` would then stay firing for a fault that was fixed
+    in minutes.
 
-    Ageing it out is what makes the gauge readable in both directions. A
-    genuine case re-files the same row every 5-minute cycle for as long as the
-    id is unserved, so the summary stays inside this window and the gauge holds
-    above 0 indefinitely. A fixed one stops being re-filed, falls out of the
-    window within 15 minutes, and the alert resolves on its own.
+    Ageing it out is what makes the gauge readable in both directions. A genuine
+    unserved schema id re-files the same row every 5-minute cycle, so the
+    summary stays inside this window and the gauge holds above 0 indefinitely; a
+    fixed one stops being re-filed, falls out of the window within 15 minutes,
+    and the alert resolves on its own. An `offset_gap` is filed **once**, by the
+    one `--accept-data-loss` run that repaired it, so its gauge is a ~15-minute
+    pulse by construction and `LakeOffsetGap` is a notification rather than a
+    condition. The durable record is the row.
+
+    **Newest snapshot that carries THIS key**, not newest ingest snapshot. The
+    two findings interleave on one table, and reading whichever ingest commit
+    went last would let an offset_gap commit — which carries no schema-id count
+    — read as "no unserved ids" and clear a firing alert.
     """
-    snapshot = latest_job_snapshot(snapshots, JOB_INGEST)
-    if not snapshot:
+    matching = [
+        s
+        for s in snapshots
+        if s.get("summary", {}).get(JOB) == JOB_INGEST and key in s.get("summary", {})
+    ]
+    if not matching:
         return 0.0
-    if now - snapshot.get("timestamp-ms", 0) / 1000.0 > INGEST_SUMMARY_MAX_AGE:
+    newest = max(matching, key=lambda s: s.get("timestamp-ms", 0))
+    if now - newest.get("timestamp-ms", 0) / 1000.0 > INGEST_SUMMARY_MAX_AGE:
         return 0.0
-    return _num(snapshot.get("summary", {}), AUDIT_FAILURES)
+    return _num(newest.get("summary", {}), key)
 
 
 def _num(summary: dict, key: str) -> float:
@@ -317,15 +338,18 @@ def refresh(prefix: str, now: float) -> int:
             audit_failures.set(
                 _num(latest_job_summary(snapshots, JOB_MAINTENANCE), AUDIT_FAILURES)
             )
-            # ponytail: every ingest-written check is `unresolvable_schema_id`
-            # today, so its failure count IS the count of unserved schema ids.
-            # Add a second ingest-side check and this gauge needs its own
-            # summary property rather than sharing k2.audit-failures.
+            # The second ingest-side check arrived (`offset_gap`,
+            # --accept-data-loss), and with it the split the previous version of
+            # this comment predicted: each finding is counted into its own
+            # summary property and each gauge reads its own key, because a
+            # shared `k2.audit-failures` would have each finding overwriting the
+            # other's gauge.
             #
-            # Aged, unlike the audit gauge above: a clean audit run still
-            # commits a summary and so refreshes its own number, but a clean
-            # stage 2 commits nothing here at all.
-            unresolvable_schema_ids.set(fresh_ingest_failures(snapshots, now))
+            # Both are aged, unlike the audit gauge above: a clean audit run
+            # still commits a summary and so refreshes its own number, but a
+            # clean ingest commits nothing here at all.
+            unresolvable_schema_ids.set(fresh_ingest_value(snapshots, UNRESOLVABLE_IDS, now))
+            offset_gaps.set(fresh_ingest_value(snapshots, OFFSET_GAPS, now))
 
     _refresh_disk()
     scrape_errors.set(errors)
@@ -471,7 +495,12 @@ def _self_check() -> None:
     ingest_row = {
         "snapshot-id": 444,
         "timestamp-ms": 1787750504280,
-        "summary": {"operation": "append", JOB: JOB_INGEST, AUDIT_FAILURES: "1"},
+        "summary": {
+            "operation": "append",
+            JOB: JOB_INGEST,
+            AUDIT_FAILURES: "1",
+            UNRESOLVABLE_IDS: "1",
+        },
     }
     checks = [audit_run, ingest_row]
     assert _num(latest_job_summary(checks, JOB_MAINTENANCE), AUDIT_FAILURES) == 2.0
@@ -486,16 +515,36 @@ def _self_check() -> None:
     # still say 1 a week later, holding LakeUnresolvableSchemaId firing on a
     # fault that was fixed in minutes.
     filed = ingest_row["timestamp-ms"] / 1000.0
-    assert fresh_ingest_failures(checks, filed) == 1.0
+    assert fresh_ingest_value(checks, UNRESOLVABLE_IDS, filed) == 1.0
     # Still re-filed inside the window: a genuine unserved id, every 5 minutes.
-    assert fresh_ingest_failures(checks, filed + INGEST_SUMMARY_MAX_AGE - 1) == 1.0
+    assert fresh_ingest_value(checks, UNRESOLVABLE_IDS, filed + INGEST_SUMMARY_MAX_AGE - 1) == 1.0
     # Two cycles missed and then a third: registered, nothing re-filed, clear.
-    assert fresh_ingest_failures(checks, filed + INGEST_SUMMARY_MAX_AGE + 1) == 0.0
+    assert fresh_ingest_value(checks, UNRESOLVABLE_IDS, filed + INGEST_SUMMARY_MAX_AGE + 1) == 0.0
     # The audit gauge is NOT aged — a clean maintenance run commits its own
     # summary, so its number refreshes itself and must survive a stale ingest.
     assert _num(latest_job_summary(checks, JOB_MAINTENANCE), AUDIT_FAILURES) == 2.0
     # No ingest row has ever been filed: 0, not an exception.
-    assert fresh_ingest_failures([audit_run], filed) == 0.0
+    assert fresh_ingest_value([audit_run], UNRESOLVABLE_IDS, filed) == 0.0
+
+    # Two ingest-side findings on one table. The offset_gap commit is NEWER and
+    # carries no schema-id count; read off "the newest ingest snapshot" it would
+    # report 0 unserved ids and clear a firing LakeUnresolvableSchemaId while
+    # the id is still unserved. Each gauge reads the newest snapshot carrying
+    # its own key, so neither finding can speak for the other.
+    gap_row = {
+        "snapshot-id": 777,
+        "timestamp-ms": ingest_row["timestamp-ms"] + 30_000,
+        "summary": {"operation": "append", JOB: JOB_INGEST, AUDIT_FAILURES: "2", OFFSET_GAPS: "2"},
+    }
+    both_findings = [audit_run, ingest_row, gap_row]
+    filed_gap = gap_row["timestamp-ms"] / 1000.0
+    assert fresh_ingest_value(both_findings, OFFSET_GAPS, filed_gap) == 2.0
+    assert fresh_ingest_value(both_findings, UNRESOLVABLE_IDS, filed_gap) == 1.0
+    # And the gap gauge is a pulse: it is filed once, by the one repair run, so
+    # it ages out 15 minutes later and LakeOffsetGap resolves itself. The
+    # offset_gap ROW in audit.checks is the durable record, not this number.
+    assert fresh_ingest_value(both_findings, OFFSET_GAPS, filed_gap + INGEST_SUMMARY_MAX_AGE + 1) == 0.0
+    assert fresh_ingest_value(checks, OFFSET_GAPS, filed) == 0.0
 
     # The backlog gauge. A drained topic must report 0 rather than vanish from
     # the map — an absent series and a zero one read very differently on a

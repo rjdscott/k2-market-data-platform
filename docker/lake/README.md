@@ -40,7 +40,7 @@ flowchart TB
   RAW -.snapshot summaries.-> MET[metrics.py<br/>lake-metrics :8000]
   BR -.-> MET
   AUD -.-> MET
-  MET --> PROM[Prometheus<br/>8 lake alerts]
+  MET --> PROM[Prometheus<br/>12 lake alerts]
 ```
 
 Stage 1 archives all nine topics. Stage 2 decodes only `trades.*` and `book.*` —
@@ -70,6 +70,11 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
 
 # what is on the topics, without a table or a commit
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
+
+# records were evicted before the lake read them: record the gap and resume past
+# it. Pause the schedule first; the runbook is not optional here.
+# docs/runbooks/lake-ingest-lag.md §3
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --accept-data-loss
 
 # compaction, expiry, audits
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py
@@ -171,6 +176,18 @@ answered without walking the payload:
 |---|---|---|
 | which offsets did this run consume? | `max(offset)` over the written rows, which needed the same `latest` twice, which needed the cache | `bounded_offsets` decides them up front; the read is pinned on both ends |
 | how many rows did it write? | `df.count()` — a second full evaluation | `added-records` from the commit's own snapshot summary |
+
+**And a run whose start offsets are below what the broker still holds does not
+read at all.** `offsets.evicted` compares the two before Spark opens a
+connection, so the failure names every affected partition, both offsets and the
+record count on its first line rather than raising Kafka's
+`OffsetOutOfRangeException` inside the job. It never repairs on its own:
+`--accept-data-loss` is the only path past it, it writes one `offset_gap` row
+per partition into `audit.checks` *before* it advances anything, and it aborts
+without skipping if that row cannot be written. There is no environment
+variable, so the scheduled run keeps failing until a person types the flag —
+[lake-ingest-lag.md §3](../../docs/runbooks/lake-ingest-lag.md) has the whole
+procedure and the 2026-08-26 occurrence it was written from.
 
 What is left is one pass for the write and one single-column pass for
 `max(kafka_ts)`, which has to be known *before* the commit because it rides on

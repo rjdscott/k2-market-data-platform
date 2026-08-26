@@ -201,6 +201,64 @@ class TestEvicted:
         assert [(topic, p, n) for topic, p, _, _, n in losses] == [("t", 0, 90), ("t", 2, 180)]
 
 
+class TestSkipEvicted:
+    """`--accept-data-loss`, as the pure decision it is made of.
+
+    Live on 2026-08-26: `market.crypto.v3.raw.kraken/0` committed 1,615,463
+    against a broker LOG-START of 2,784,417, so every cron run failed at plan
+    time. The repair resumes that ONE partition at the log start and leaves the
+    other eleven where they were committed.
+    """
+
+    STARTS = {"t": {0: 1_615_463, 1: 152_000, 2: 2_674}}
+    EARLIEST = {"t": {0: 2_784_417, 1: 62_436, 2: 0}}
+
+    def repaired(self):
+        return O.skip_evicted(self.STARTS, O.evicted(self.STARTS, self.EARLIEST))
+
+    def test_an_evicted_partition_resumes_at_the_log_start(self):
+        assert self.repaired()["t"][0] == 2_784_417
+
+    def test_healthy_partitions_are_untouched(self):
+        # The failure this guards: a repair aimed at partition 0 that also moves
+        # its neighbours is a hole (forward) or a duplicate (backward) created by
+        # the fix rather than by the fault. Partition 1 sits ABOVE its log start
+        # and must stay exactly where it was committed.
+        assert self.repaired()["t"][1] == 152_000
+        assert self.repaired()["t"][2] == 2_674
+
+    def test_no_losses_is_the_identity(self):
+        assert O.skip_evicted(self.STARTS, []) == self.STARTS
+
+    def test_the_input_is_not_mutated(self):
+        self.repaired()
+        assert self.STARTS["t"][0] == 1_615_463
+
+    def test_the_repaired_start_is_no_longer_a_loss(self):
+        # What lets the run proceed: re-running the detector over the repaired
+        # map comes back empty, so the ingest does not fail on the partition it
+        # has just repaired.
+        assert O.evicted(self.repaired(), self.EARLIEST) == []
+
+    def test_rebounding_gives_a_forward_range(self):
+        # Why the repaired map goes back through `bounded_offsets` rather than
+        # being patched into the `starts` it already produced: that end was
+        # computed from the OLD start (1,615,463 + 200,000) and is BELOW the new
+        # one. Reusing it would hand Spark a negative range.
+        latest = {"t": {0: 7_672_112, 1: 980_135, 2: 2_802}}
+        starts, ends, backlog = O.bounded_offsets(self.repaired(), self.EARLIEST, latest, 200_000)
+        assert starts["t"][0] == 2_784_417
+        assert ends["t"][0] == 2_984_417
+        assert backlog["t"] > 0
+
+    def test_every_evicted_partition_moves_and_only_those(self):
+        starts = {"t": {0: 10, 1: 900, 2: 20}}
+        earliest = {"t": {0: 100, 1: 500, 2: 200}}
+        assert O.skip_evicted(starts, O.evicted(starts, earliest)) == {
+            "t": {0: 100, 1: 900, 2: 200}
+        }
+
+
 class TestLatestSummary:
     INGEST_A = {O.JOB: O.JOB_INGEST, O.KAFKA_OFFSETS: '{"t":{"0":10}}'}
     INGEST_B = {O.JOB: O.JOB_INGEST, O.KAFKA_OFFSETS: '{"t":{"0":20}}'}

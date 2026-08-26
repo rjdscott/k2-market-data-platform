@@ -52,7 +52,7 @@ flowchart LR
   end
   I["Iceberg lake · Lakekeeper + MinIO<br/>raw · bronze · audit"]:::st
   subgraph OBS["Observability"]
-    M["Prometheus<br/>25 alert rules"]:::ob
+    M["Prometheus<br/>26 alert rules"]:::ob
     D["Grafana<br/>5 dashboards"]:::ob
   end
 
@@ -176,10 +176,10 @@ K2 Lake v3 (`k2-lake`).
 ![Pipeline overview dashboard](docs/images/grafana-pipeline-overview.jpg)
 ![Prefect deployments](docs/images/prefect-deployments.jpg)
 
-25 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 4 ClickHouse (down, memory,
+26 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 4 ClickHouse (down, memory,
 query failures, merge queue), 10 v3 capture (down, feed stale, sequence gaps, checksum failure,
-produce errors/stalled, resync storm, ingress latency, book depth, precision loss), 11 v3 lake (ingest
-failed, audit failed, unresolvable schema id, ingest lag, bronze commit age, compaction stale, exporter
+produce errors/stalled, resync storm, ingress latency, book depth, precision loss), 12 v3 lake (ingest
+failed, audit failed, unresolvable schema id, offset gap, ingest lag, bronze commit age, compaction stale, exporter
 down/stalled, scrape errors, disk high/critical). The 3 feed-handler rules and
 `ClickHouseBronzeInsertRateLow` retired with the handlers (ADR-019) and are archived in
 [`legacy/v2-kotlin/runbooks/`](./legacy/v2-kotlin/runbooks/); the 9 Iceberg-offload rules were deleted
@@ -233,7 +233,7 @@ matrix: prefect, spark, capture), **compose** (`config -q` + every service decla
 services/capture-rust/          Rust k2-capture: trades + L2 book, one binary per exchange — the capture tier
 docker/clickhouse/ddl/          Bronze → Silver → Gold DDL and materialized views (auto-applied)
 docker/lake/                    Spark lake ingest + maintenance + metrics, DDL, Prefect flows (v3)
-docker/prometheus/rules/        25 alert rules
+docker/prometheus/rules/        26 alert rules
 docker/grafana/dashboards/      5 provisioned dashboards
 docker/spark/  docker/prefect/  Custom images
 config/instruments.yaml         Instrument registry — single source of truth

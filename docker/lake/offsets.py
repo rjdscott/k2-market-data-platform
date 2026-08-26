@@ -37,6 +37,15 @@ MAX_KAFKA_TS = "k2.max-kafka-ts"
 SRC_SNAPSHOT_ID = "k2.src-snapshot-id"
 AUDIT_FAILURES = "k2.audit-failures"
 
+# Per-finding counts, written by the two ingest-side audit paths. They are
+# separate properties rather than one shared `k2.audit-failures` because
+# docker/lake/metrics.py reads each gauge off the newest ingest snapshot that
+# CARRIES ITS KEY: with one shared count, an offset_gap commit would set
+# `k2_lake_unresolvable_schema_ids_total` to the number of evicted partitions,
+# and vice versa. One key per gauge is what keeps the two findings independent.
+UNRESOLVABLE_IDS = "k2.unresolvable-schema-ids"
+OFFSET_GAPS = "k2.offset-gaps"
+
 # Values for the JOB property.
 JOB_INGEST = "ingest"
 JOB_DECODE = "decode"
@@ -193,8 +202,9 @@ def evicted(starts: dict, earliest: dict) -> list:
 
     It never repairs. Advancing the start to `log_start` here would be Spark's
     `failOnDataLoss=false` behaviour written by hand — an unrecorded hole, the
-    one outcome the design exists to prevent. The recovery is a human decision
-    with a written record as its deliverable
+    one outcome the design exists to prevent. `skip_evicted` below is the
+    repair, and it is reachable only from `--accept-data-loss` and only after
+    the loss has been written into `audit.checks`
     (docs/runbooks/lake-ingest-lag.md §3).
     """
     losses = []
@@ -204,6 +214,33 @@ def evicted(starts: dict, earliest: dict) -> list:
             if int(start) < log_start:
                 losses.append((topic, partition, int(start), log_start, log_start - int(start)))
     return losses
+
+
+def skip_evicted(starts: dict, losses: list) -> dict:
+    """`starts` with each evicted partition moved forward to the broker's log start.
+
+    `losses` is what `evicted` returned. The `--accept-data-loss` decision, as
+    arithmetic: the records between the committed offset and `log_start` are
+    already gone, so the only choice left is where to resume, and the only
+    resume point that neither re-reads nothing forever nor skips a surviving
+    record is `log_start` itself.
+
+    **Only the partitions in `losses` move.** Everything else is copied
+    verbatim, including partitions of the same topic — a healthy partition
+    rewound or advanced by a repair aimed at its neighbour would be a hole or a
+    duplicate created by the fix rather than by the fault. The result is fed
+    back through `bounded_offsets`, which recomputes the ends and the backlog
+    from the new starts; keeping the old ends would leave partition 0 with an
+    end below its start.
+
+    The caller is responsible for the audit row. This function does not know
+    whether one was written, which is why it is not called from anywhere but
+    the flag's own branch in `ingest.stage_raw`.
+    """
+    repaired = {topic: dict(parts) for topic, parts in starts.items()}
+    for topic, partition, _start, log_start, _lost in losses:
+        repaired[topic][partition] = int(log_start)
+    return repaired
 
 
 def merge_committed(previous: dict, produced: dict) -> dict:

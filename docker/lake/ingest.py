@@ -8,6 +8,8 @@ K2 v3 lake ingest — Redpanda to Iceberg, in two stages, in one Spark session.
         --end-timestamp 2026-08-27T02:00:00Z          # backlog, one slice at a time
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
         --max-offsets-per-partition 200000            # drain a backlog faster
+    docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
+        --accept-data-loss                            # records evicted; skip and record
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
 
 **Stage 1 — Kafka to `raw.messages`.** Every one of the nine v3 topics, read as a
@@ -262,7 +264,13 @@ def fetch_schema(schema_id: int) -> str:
 # ── stage 1: Kafka -> raw.messages ──────────────────────────────────────────
 
 
-def stage_raw(spark, ingest_ts: datetime, end_timestamp: str, max_per_partition: int) -> int:
+def stage_raw(
+    spark,
+    ingest_ts: datetime,
+    end_timestamp: str,
+    max_per_partition: int,
+    accept_data_loss: bool = False,
+) -> int:
     """Append one bounded Kafka batch to `raw.messages`. Returns rows written."""
     committed = {}
     previous = O.latest_summary(snapshot_history(spark, RAW_TABLE), O.JOB_INGEST)
@@ -276,14 +284,6 @@ def stage_raw(spark, ingest_ts: datetime, end_timestamp: str, max_per_partition:
     earliest, latest, until = broker_offsets(spark, ALL_TOPICS, end_ms)
     starting = O.next_starting_offsets(committed, {t: len(p) for t, p in earliest.items()})
     starts, ends, backlog = O.bounded_offsets(starting, earliest, latest, max_per_partition, until)
-
-    # What this run is choosing NOT to read, per topic. On a caught-up 5-minute
-    # cycle every number is 0; on a cold start it is the drain, and it has to
-    # fall on every run or the bound is too small for the arrival rate. The same
-    # numbers ride on the commit as `k2.kafka-backlog` and come back out as
-    # `k2_lake_ingest_backlog_offsets`.
-    for topic in sorted(backlog):
-        print(f"stage 1: {topic} backlog remaining {backlog[topic]}")
 
     # Retention has overtaken the archive on these partitions: the records
     # between the committed offset and the broker's log start are gone and are
@@ -301,12 +301,30 @@ def stage_raw(spark, ingest_ts: datetime, end_timestamp: str, max_per_partition:
                 f"broker LOG-START {log_start}, {lost} records evicted",
                 file=sys.stderr,
             )
-        raise SystemExit(
-            f"failOnDataLoss: {len(losses)} partition(s) are below broker retention and "
-            f"{sum(loss[4] for loss in losses)} records are permanently gone. This is not "
-            "retried into success — record the gap in lake.audit.checks and resume "
-            "explicitly: docs/runbooks/lake-ingest-lag.md §3."
+        if not accept_data_loss:
+            raise SystemExit(
+                f"failOnDataLoss: {len(losses)} partition(s) are below broker retention and "
+                f"{sum(loss[4] for loss in losses)} records are permanently gone. This is not "
+                "retried into success — record the gap in lake.audit.checks and resume "
+                "explicitly with --accept-data-loss: docs/runbooks/lake-ingest-lag.md §3."
+            )
+        starts, ends, backlog = _accept_data_loss(
+            spark, losses, starts, earliest, latest, max_per_partition, until, ingest_ts
         )
+
+    # What this run is choosing NOT to read, per topic. On a caught-up 5-minute
+    # cycle every number is 0; on a cold start it is the drain, and it has to
+    # fall on every run or the bound is too small for the arrival rate. The same
+    # numbers ride on the commit as `k2.kafka-backlog` and come back out as
+    # `k2_lake_ingest_backlog_offsets`.
+    #
+    # Printed AFTER the data-loss branch, not before it: a repair advances the
+    # starts and so shrinks the backlog by the evicted count, and the first
+    # `--accept-data-loss` run (2026-08-26) printed a kraken backlog 1,168,954
+    # above the one it then committed. The log and the snapshot property have to
+    # be the same number or one of them is a lie.
+    for topic in sorted(backlog):
+        print(f"stage 1: {topic} backlog remaining {backlog[topic]}")
 
     # Decided in arithmetic, before Spark opens a connection: an empty range on
     # every partition is "no new records", and there is nothing to read, plan or
@@ -427,6 +445,63 @@ def stage_raw(spark, ingest_ts: datetime, end_timestamp: str, max_per_partition:
     written = added_records(spark, RAW_TABLE)
     print(f"stage 1: {written} rows -> {RAW_TABLE} (max kafka_ts {max_kafka_ts})")
     return written
+
+
+def _accept_data_loss(
+    spark, losses, starts, earliest, latest, max_per_partition, until, run_ts
+) -> tuple:
+    """Record the evicted range, then resume the affected partitions past it.
+
+    `--accept-data-loss` is the runbook's step 3 made executable, and the order
+    of the two halves is the whole design: **the record is written first, and a
+    record that cannot be written stops the run.** The two live in different
+    Iceberg tables — the findings in `audit.checks`, the resume point in
+    `raw.messages`'s next snapshot summary — so they cannot be one commit; what
+    can be guaranteed is the direction of the failure. Record-then-skip can
+    leave a recorded gap that the run then failed to skip, which is harmless
+    because the row states a fact about the *broker* (those records are gone
+    either way) and the next run re-derives it. Skip-then-record can leave an
+    unrecorded hole, which is precisely the outcome ADR-021 exists to prevent.
+    So `write_audit_rows` is checked here, unlike on the schema-id path where a
+    finding that cannot be filed must not become a second failure.
+
+    One row per partition, never one summarising row: the recovery question is
+    always "which partitions, and what range on each", and a single row holding
+    a list is a row nobody can query by scope.
+    """
+    app_id = spark.sparkContext.applicationId
+    rows = [
+        Row(
+            run_ts=run_ts,
+            job="ingest",
+            check_name="offset_gap",
+            scope=f"{topic}/{partition}",
+            passed=False,
+            observed=int(lost),
+            detail=(
+                f"--accept-data-loss: {topic} partition {partition} committed {start}, "
+                f"broker LOG-START {log_start}, {lost} records evicted by Redpanda "
+                f"retention and permanently gone; resumed at {log_start} by run {app_id}"
+            ),
+        )
+        for topic, partition, start, log_start, lost in losses
+    ]
+    if not write_audit_rows(spark, rows, {O.OFFSET_GAPS: str(len(rows))}):
+        raise SystemExit(
+            "--accept-data-loss: the gap could NOT be recorded in lake.audit.checks, so "
+            "nothing was skipped. Fix the audit table first — skipping without the record "
+            "is the unrecorded hole this flag exists to avoid (ADR-021)."
+        )
+    for topic, partition, start, log_start, lost in losses:
+        print(
+            f"stage 1: ACCEPTED DATA LOSS {topic}/{partition}: {lost} records "
+            f"({start}..{log_start - 1}) recorded in {CHECKS_TABLE} as offset_gap, "
+            f"resuming at {log_start}",
+            file=sys.stderr,
+        )
+    return O.bounded_offsets(
+        O.skip_evicted(starts, losses), earliest, latest, max_per_partition, until
+    )
 
 
 def _epoch_ms(value: str) -> int:
@@ -618,6 +693,7 @@ def _decode_into(spark, source, table: str, project, raw_snapshot_id, run_ts) ->
                 )
                 for schema_id, detail in unresolvable
             ],
+            {O.UNRESOLVABLE_IDS: str(len(unresolvable))},
         )
     if not parts:
         return 0
@@ -641,36 +717,47 @@ def _decode_into(spark, source, table: str, project, raw_snapshot_id, run_ts) ->
     return written
 
 
-def write_audit_rows(spark, rows: list) -> None:
-    """This run's findings into `audit.checks`, in ONE commit.
+def write_audit_rows(spark, rows: list, properties: dict) -> bool:
+    """This run's findings into `audit.checks`, in ONE commit. True if it landed.
 
     Same table as the nightly audit, `job='ingest'`, so "what did the pipeline
     find and when" stays one query.
 
-    Two properties ride on the commit and both are load-bearing.
+    Three properties ride on the commit and all three are load-bearing.
     `k2.job=ingest` is what keeps this snapshot out of
     `k2_lake_audit_failures_total`: that gauge is the nightly audit's count, and
     an ingest row landing as the current snapshot used to zero a firing
     `LakeAuditFailed` with no audit having passed. `k2.audit-failures` is the
     same property `maintenance.run_audits` writes, and it is why this is one
     commit rather than one per row — per row the count in the newest summary is
-    always 1, and `k2_lake_unresolvable_schema_ids_total` would report "at least
-    one" while claiming to be a count.
+    always 1, and a gauge reading it would report "at least one" while claiming
+    to be a count. `properties` carries the per-finding count that the gauge for
+    THIS finding is read from (`k2.unresolvable-schema-ids`, `k2.offset-gaps`):
+    two ingest-side findings now share this table, and one shared count would
+    have each of them setting the other's gauge — the case
+    docker/lake/offsets.py names next to those two constants.
 
-    Best-effort: a finding that cannot be recorded must not become a second
-    failure on top of the one it was reporting.
+    **Returning rather than raising is the point.** The schema-id path treats a
+    failed write as best-effort — a finding that cannot be recorded must not
+    become a second failure on top of the one it was reporting — while
+    `_accept_data_loss` treats it as fatal, because there the record is what
+    licenses the skip.
     """
     failures = sum(1 for r in rows if not r["passed"])
+    writer = (
+        spark.createDataFrame(rows)
+        .writeTo(CHECKS_TABLE)
+        .option(f"snapshot-property.{O.JOB}", "ingest")
+        .option(f"snapshot-property.{O.AUDIT_FAILURES}", str(failures))
+    )
+    for name, value in properties.items():
+        writer = writer.option(f"snapshot-property.{name}", value)
     try:
-        (
-            spark.createDataFrame(rows)
-            .writeTo(CHECKS_TABLE)
-            .option(f"snapshot-property.{O.JOB}", "ingest")
-            .option(f"snapshot-property.{O.AUDIT_FAILURES}", str(failures))
-            .append()
-        )
+        writer.append()
     except Exception as exc:  # noqa: BLE001 - the finding already printed above
-        print(f"stage 2: could not write {len(rows)} audit row(s) ({exc})")
+        print(f"could not write {len(rows)} audit row(s) ({exc})")
+        return False
+    return True
 
 
 # ── probe ───────────────────────────────────────────────────────────────────
@@ -755,6 +842,18 @@ def main() -> int:
         default=MAX_OFFSETS_PER_PARTITION,
         help="stop each partition this many offsets past where it started (0 = read to latest)",
     )
+    # No environment variable, deliberately, and no default anything can flip.
+    # A flag typed by a person at the moment of the decision is the whole
+    # control: an env var in a compose file would put "skip the missing records"
+    # in the scheduled path, where the next eviction would be absorbed silently
+    # forever. The scheduled run must keep failing until someone types this.
+    parser.add_argument(
+        "--accept-data-loss",
+        action="store_true",
+        help="resume partitions whose committed offset is below broker retention, after "
+        "recording each one as an offset_gap row in lake.audit.checks. "
+        "Records between the two offsets are already gone; see runbook §3",
+    )
     parser.add_argument("--probe", action="store_true", help="report topic framing, write nothing")
     args = parser.parse_args()
 
@@ -777,7 +876,13 @@ def main() -> int:
         if args.probe:
             return probe(spark)
         if args.stage in ("all", "raw"):
-            stage_raw(spark, ingest_ts, args.end_timestamp, args.max_offsets_per_partition)
+            stage_raw(
+                spark,
+                ingest_ts,
+                args.end_timestamp,
+                args.max_offsets_per_partition,
+                args.accept_data_loss,
+            )
         if args.stage in ("all", "bronze"):
             stage_bronze(spark, current_snapshot_id(spark, RAW_TABLE), ingest_ts)
     finally:

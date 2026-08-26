@@ -99,10 +99,30 @@ V3_PREFIX="${K2_V3_PREFIX:-market.crypto.v3}"
 # snapshots' worth of bytes, so reconnect churn is not the driver — continuous
 # delta traffic is, and that rate is unmeasured until Phase C.
 #
-# Which limit binds first is therefore an open question, and deliberately left
-# as one: 48 h is the target, 512 MiB/partition is the guarantee. If Phase C's
-# burn-in shows bytes evicting well inside 48 h, the fix is a bigger disk slice
-# or fewer raw partitions — not a silently shorter retention.
+# Which limit binds first was an open question. MEASURED 2026-08-26: the bytes
+# bind, and they bind at 7 h, not 48. `market.crypto.v3.raw.kraken` partition 0
+# held 4,887,694 records between LOG-START and HIGH-WATERMARK whose Kafka
+# timestamps are 25,227,274 ms apart — 7.01 h, 193.9 records/s, 119.7 B/record
+# on disk (docs/architecture/capacity-model.md §4d, note of that date).
+#
+# The arithmetic above is not what was wrong; its assumption was. It divides the
+# topic's bytes by twelve, and the traffic does not divide by twelve: records
+# are keyed by symbol, so partition 0 holds 558 MB while partitions 2, 5, 8 and
+# 11 hold ~600 kB each, and the topic uses 2.87 GB of the 6 GiB these caps
+# allow. A per-partition byte cap under keyed partitioning caps the busiest key.
+#
+# 512 MiB STANDS, deliberately. The bus is a buffer sized for the 5-minute
+# ingest cadence — 7 h is ~84 cycles of slack — and it is NOT the archive: the
+# lake is (ADR-021), and raw.messages is never expired. A lake that cannot keep
+# up is fixed in the lake, which is why the ingest's per-run bound is now
+# 200,000 offsets/partition, ~3.6x the measured arrival rate. Revisit these two
+# numbers when k2_lake_ingest_backlog_offsets for any topic exceeds one hour of
+# that topic's arrival rate for two consecutive cycles
+# (docs/runbooks/lake-ingest-lag.md §3) — and then by raising the disk slice or
+# cutting the raw partition count, never by a silently shorter retention.
+#
+# What it cost to learn: 1,168,954 records evicted unread from that partition on
+# 2026-08-26, recorded as an offset_gap row in lake.audit.checks.
 RAW_RETENTION_MS=172800000
 RAW_RETENTION_BYTES=536870912
 RAW_MAX_MESSAGE_BYTES=8388608   # largest measured frame 5,195,904 B (S5); agrees with sink.rs MESSAGE_MAX_BYTES

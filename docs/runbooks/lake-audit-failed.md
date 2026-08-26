@@ -27,7 +27,7 @@ the tier being down ([lake-recovery.md](./lake-recovery.md)).
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | `offset_continuity` — a hole in the archive | **investigation, not repair** | not yet verified — Phase D burn-in |
+| 1 | `offset_continuity` — a hole in the archive | **investigation, not repair** | occurred 2026-08-26 — one recorded hole, 1,168,954 records; see §1 |
 | 2 | `duplicate_identifiers` — a row landed twice | < 60 min | not yet verified — Phase D burn-in |
 | 3 | `sequence_gaps` — venue sequence discontinuity | **investigation, not repair** | not yet verified — Phase D burn-in |
 | 4 | `venue_replay` — informational; **cannot fail** | n/a — read the rate, do not repair it | not yet verified — Phase D burn-in |
@@ -113,10 +113,34 @@ WHERE topic = 'market.crypto.v3.raw.kraken' AND partition = 7
   AND offset BETWEEN 918430 AND 918460 ORDER BY offset;
 ```
 
-**If the gap is real**, its deliverable is a record, not a repair: the topic, partition,
-offset range, row count and wall-clock window, written into `lake.audit.checks` and into
-this runbook's incident log. Then fix the cause upstream — ingest downtime, or retention
-too short for the real rate.
+**First, check whether it is a gap that has already been recorded.** A
+`--accept-data-loss` repair files an `offset_gap` row in this same table, and from that
+moment `offset_continuity` fails on that partition **every night, forever** — the hole is
+permanent, so the check is right to keep reporting it. The two rows are the same fact
+written by two jobs, and they are reconciled by scope and count:
+
+```sql
+-- A continuity failure whose count matches a recorded offset_gap for the same
+-- scope is that incident, and needs no new investigation. Anything else is new.
+SELECT check_name, scope, observed, run_ts, detail FROM lake.audit.checks
+WHERE check_name IN ('offset_gap', 'offset_continuity') ORDER BY scope, run_ts;
+```
+
+Measured 2026-08-26: `market.crypto.v3.raw.kraken/0` carries an `offset_gap` of
+**1,168,954** and `offset_continuity` reports **1,168,954 missing** on the same partition —
+they agree, and that agreement is the answer. `LakeAuditFailed` therefore stays firing on
+that partition until the archive is rebuilt or the check learns to net out recorded gaps.
+
+# ponytail: netting recorded offset_gap rows out of audit_offset_continuity is
+# ~15 lines in maintenance.py and one test. It is not done, deliberately: a
+# permanently-red critical alert is a real cost, and so is an audit that can be
+# taught to expect a hole. Do it when a SECOND recorded gap exists — one is a
+# footnote in this runbook, two is a pattern the check should know about.
+
+**If the gap is real and not yet recorded**, its deliverable is a record, not a repair:
+[lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss--the-offsets-point-below-what-the-broker-holds)
+is the procedure, and `ingest.py --accept-data-loss` writes the row itself. Then fix the
+cause upstream — ingest downtime, or a per-run bound below the real arrival rate.
 
 **If the gap is not real**, the bug is in the audit, and it is worth naming the two
 lookalikes that will produce it. **Compaction snapshots carry no `k2.kafka-offsets`** and

@@ -257,6 +257,46 @@ anyway so that a deeper or faster book stays recoverable by replay.
 | **MinIO growth** | **209.7 GB/month** | Lake retention is *forever* — no TTL, no expiry; only snapshot expiry (7 d) trims metadata, never data | `6.89 × 30.44` |
 | MinIO, first year | **2.51 TB** | as above, at a constant 1× rate | `6.89 × 365 ÷ 1000` |
 
+> **Note, 2026-08-26 — the 48 h retention row was scored against the running stack and the
+> binding limit is not time, it is the per-partition byte cap, and it binds at 7 h.**
+> `market.crypto.v3.raw.kraken` partition 0 held **4,887,694 records** between its
+> `LOG-START-OFFSET` and `HIGH-WATERMARK`, whose Kafka timestamps are **25,227,274 ms
+> apart = 7.01 h** (193.9 records/s, 119.7 B/record on disk). Partition 6, which had just
+> begun evicting, measured 9.25 h. The predicted window for the same 512 MiB at this
+> page's own §4b rate — 5.25 GB/day on disk ÷ 12 partitions — is **29.4 h**, so the
+> measurement is 4.2× short of the prediction and 6.8× short of the 48 h target.
+>
+> ```console
+> $ docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.kraken
+> #   partition 0: LOG-START 2784417, HIGH-WATERMARK 7672111
+> $ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.kraken -p 0 \
+>     -o 2784417 -n 1 -f '%d\n'      # 1787755113319 = 2026-08-26T14:38:33Z
+> $ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.kraken -p 0 \
+>     -o 7672111 -n 1 -f '%d\n'      # 1787780340593 = 2026-08-26T21:39:00Z
+> $ docker exec k2-redpanda rpk cluster logdirs describe | grep raw.kraken
+> #   partition 0: 584,956,363 B   partitions 2/5/8/11: ~0.6 MB each
+> ```
+>
+> **The prediction's arithmetic was right and its assumption was not: it divided the
+> topic's bytes by twelve, and the traffic does not divide by twelve.** Records are keyed
+> by symbol, so the hot symbols' partitions carry everything: partition 0 holds 558 MB
+> while partitions 2, 5, 8 and 11 hold about 600 kB each, and the whole topic occupies
+> **2.87 GB of the 6 GiB its per-partition caps allow**. Half the allowance sits unused on
+> cold partitions while the hot ones evict. A per-partition byte cap under keyed
+> partitioning is a cap on the busiest key, not on the topic.
+>
+> The rows above are left as predicted, as this page's convention requires. What changed
+> is elsewhere: the ingest's per-run bound now defaults to 200,000 offsets per partition
+> (~3.6× the measured arrival rate) so the lake drains faster than the cap evicts, and
+> `docker/redpanda/init.sh` records this measured window next to `RAW_RETENTION_BYTES`.
+> **512 MiB stands** — the bus is a buffer for the 5-minute ingest cadence, not the
+> archive; the lake is the archive (ADR-021). The trigger for revisiting it is in
+> [lake-ingest-lag.md §3](../runbooks/lake-ingest-lag.md): `k2_lake_ingest_backlog_offsets`
+> for any topic above one hour of that topic's arrival rate, two cycles running.
+>
+> It cost 1,168,954 records on 2026-08-26 to learn this, once, on partition 0 — that
+> incident and its repair are in the same runbook section.
+
 ---
 
 ## 5. Memory

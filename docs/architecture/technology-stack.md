@@ -15,7 +15,7 @@ Every component that runs, the version pinned, what it does here, and the decisi
 | MinIO | RELEASE.2025-09-07T16-13-09Z | S3-compatible object store. Holds the lake bucket (`k2-lake`), which is now the only warehouse | [ADR-007](../adr/ADR-007-iceberg-cold-storage.md), [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) |
 | PostgreSQL | 15-alpine | Two databases on one server: Prefect's metadata, and Lakekeeper's catalog. No pipeline bookkeeping of its own — the lake's consumed offsets live in the Iceberg snapshot summary | [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md), [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md) |
 | Prefect | 3 (`prefecthq/prefect:3-python3.12`) | Schedules the two lake deployments on the `lake` work pool — `lake-ingest-5min` and `lake-maintenance-daily`. Workers, not agents | [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md) |
-| Prometheus | v3.2.0 | Scrapes capture ×3, ClickHouse, Redpanda, Grafana and `lake-metrics`. 30-day retention, 25 alert rules (4 v2 ClickHouse + 10 capture + 11 lake) | — |
+| Prometheus | v3.2.0 | Scrapes capture ×3, ClickHouse, Redpanda, Grafana and `lake-metrics`. 30-day retention, 26 alert rules (4 v2 ClickHouse + 10 capture + 12 lake) | — |
 | Grafana | 11.5.0 | 5 provisioned dashboards in `docker/grafana/dashboards/` | — |
 | Docker Compose | — | The only deployment target. One file, 15 long-running service entries (+4 one-shot init containers), explicit CPU/memory limits per service | [ADR-010](../adr/ADR-010-resource-budget.md) |
 

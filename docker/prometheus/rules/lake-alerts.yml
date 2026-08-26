@@ -212,6 +212,49 @@ groups:
             has the three causes in order of likelihood.
           runbook: docs/runbooks/lake-audit-failed.md
 
+      # WARNING: an ingest deliberately skipped records that had been evicted.
+      #
+      # k2_lake_offset_gaps_total counts the partitions the most recent
+      # --accept-data-loss run resumed past. Those records are gone — public
+      # WebSocket feeds do not replay — so this alert cannot ask anyone to
+      # recover them. It exists because the decision was a person's, taken at a
+      # keyboard, and a permanent hole in the archive should not be visible only
+      # in a terminal that has since been closed.
+      #
+      # It is a PULSE, and reading it as a condition is the mistake to avoid.
+      # The ingest files an offset_gap row exactly once, on the repairing run,
+      # so metrics.py's 15-minute ageing takes the gauge to 0 by itself and this
+      # resolves with nothing fixed. The durable record is the offset_gap row in
+      # lake.audit.checks — topic, partition, committed offset, broker
+      # LOG-START, count — which is queryable forever and is what the runbook
+      # and a later "why is there a hole here" query both read.
+      #
+      # `for: 5m` against that 15-minute window leaves ~10 minutes of firing.
+      # The 15m that LakeUnresolvableSchemaId uses would land on the ageing
+      # boundary and fire flakily or never: that gauge is re-filed every cycle
+      # while its fault lasts, and this one is not.
+      - alert: LakeOffsetGap
+        expr: |
+          k2_lake_offset_gaps_total > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "{{ $value }} partition(s) resumed past evicted records by the last ingest"
+          description: |
+            An ingest ran with --accept-data-loss: records Redpanda had already
+            evicted were skipped, deliberately, by a person. Every skipped range
+            is an offset_gap row in lake.audit.checks with the topic, partition,
+            committed offset, broker LOG-START and the count.
+
+            Nothing here recovers the records — they are gone. What is worth
+            checking is why the ingest fell that far behind, and whether the raw
+            retention window is still the right size for the arrival rate: §3 of
+            the runbook has both.
+          runbook: docs/runbooks/lake-ingest-lag.md
+
       # WARNING: the nightly file rewrite has not run.
       #
       # This measures the compaction JOB, not its side effect on mean file size,

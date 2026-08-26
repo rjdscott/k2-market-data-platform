@@ -488,3 +488,61 @@ tests:
       - eval_time: 55m
         alertname: LakeUnresolvableSchemaId
         exp_alerts: []
+
+  # ── LakeOffsetGap: a repair that skipped records ─────────────────────────
+  # k2_lake_offset_gaps_total is a PULSE, not a condition. The ingest files an
+  # offset_gap row exactly once — on the one --accept-data-loss run that
+  # resumed those partitions past the evicted range — so metrics.py's 15-minute
+  # ageing takes the gauge back to 0 by itself and this alert resolves without
+  # anything being fixed. That is deliberate: the durable record is the row in
+  # lake.audit.checks, which is queryable forever; the alert exists to say "a
+  # human just accepted a permanent hole" loudly enough that it is noticed.
+  #
+  # `for: 5m` against a 15-minute freshness window is what leaves a ~10-minute
+  # firing window. A `for` of 15m, as LakeUnresolvableSchemaId has, would land
+  # exactly on the ageing boundary and fire never or flakily — the two rules
+  # read gauges that look alike and behave differently, and this is the
+  # difference.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_offset_gaps_total'
+        values: '0+0x10 1+0x15 0+0x30'   # filed at t=11m, aged out at t=26m
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LakeOffsetGap
+        exp_alerts: []
+      - eval_time: 14m                   # 3 min in, under the 5-minute for
+        alertname: LakeOffsetGap
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LakeOffsetGap
+        exp_alerts:
+          - exp_labels: {severity: warning, component: lake, tier: cold}
+            exp_annotations:
+              summary: "1 partition(s) resumed past evicted records by the last ingest"
+              description: |
+                An ingest ran with --accept-data-loss: records Redpanda had already
+                evicted were skipped, deliberately, by a person. Every skipped range
+                is an offset_gap row in lake.audit.checks with the topic, partition,
+                committed offset, broker LOG-START and the count.
+
+                Nothing here recovers the records — they are gone. What is worth
+                checking is why the ingest fell that far behind, and whether the raw
+                retention window is still the right size for the arrival rate: §3 of
+                the runbook has both.
+              runbook: docs/runbooks/lake-ingest-lag.md
+      # Aged out by metrics.py, not fixed by anyone. Resolves on its own.
+      - eval_time: 40m
+        alertname: LakeOffsetGap
+        exp_alerts: []
+
+  # A clean ingest must never fire it — the gauge sits at 0 forever on a lake
+  # that has never skipped a record, which is every healthy lake.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_offset_gaps_total'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: LakeOffsetGap
+        exp_alerts: []
