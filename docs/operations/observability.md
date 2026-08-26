@@ -1,6 +1,6 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 33 alert rules (13 v2 + 10 v3 capture + 10 v3 lake)
+Prometheus scrapes the stack, Grafana renders it, and 34 alert rules (13 v2 + 10 v3 capture + 11 v3 lake)
 cover the things that actually break: capture goes down or silent, sequence gaps and book
 checksum failures, ClickHouse struggles, the cold-tier offload falls behind, and the lake
 ingest stops committing.
@@ -77,7 +77,7 @@ recording rules for this tier.
 
 ## Alert rules
 
-24 rules across three files. Every annotation carries the diagnostic commands and a
+34 rules across four files. Every annotation carries the diagnostic commands and a
 runbook link; the tables below are the index. The three `FeedHandler*` rules retired with
 the Kotlin handlers ([ADR-019](../adr/ADR-019-rust-capture-tier.md)); their file is
 archived at [`legacy/v2-kotlin/runbooks/feed-handler-alerts.yml`](../../legacy/v2-kotlin/runbooks/feed-handler-alerts.yml)
@@ -148,7 +148,7 @@ and a target label of the same name would win and rename the sample's to
 Alerts on capture series get `exchange` from the binary; alerts on `up` name the venue
 through `job` (`capture-<exchange>`).
 
-### `lake-alerts.yml` — v3 lake tier, Phase D (10)
+### `lake-alerts.yml` — v3 lake tier, Phase D (11)
 
 Every staleness expression is `time() - <a timestamp gauge>`, never a pre-computed age.
 `docker/lake/metrics.py` only recomputes on a successful catalog read, so an age gauge
@@ -159,6 +159,7 @@ freezes at its last small value during exactly the outage it is the backstop for
 | `LakeIngestFailed` | critical | `raw.messages` has taken no commit for 30m, sustained 5m — the data-loss clock, against Redpanda's 48 h raw retention |
 | `LakeAuditFailed` | critical | The last maintenance run stamped a non-zero failed-check count into the `audit.checks` snapshot summary |
 | `LakeDiskUsageCritical` | critical | `k2_lake_disk_used_ratio > 0.90` for 5m |
+| `LakeUnresolvableSchemaId` | warning | `k2_lake_unresolvable_schema_ids_total > 0` for 15m — a record names a writer schema the registry will not serve, so stage 2 skips that id and files an `audit.checks` row with `job='ingest'`. Its own gauge, keyed on `k2.job`, so it can neither clear nor be cleared by `LakeAuditFailed` |
 | `LakeIngestLagHigh` | warning | The newest Kafka record in `raw.messages` is over 15m old, sustained 10m |
 | `LakeCommitAgeHigh` | warning | A `bronze.*` table has taken no commit for 30m while the archive keeps moving — stage 2 is the failing half |
 | `LakeCompactionStale` | warning | No file-rewrite snapshot on `raw.messages` for 36 h: the nightly compaction has missed a run. Measures the job, not its side effect on file size — an alert on mean file size fires by construction for the table's first ~15 days |

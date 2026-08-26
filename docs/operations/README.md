@@ -9,7 +9,7 @@ Everything here targets the as-built `docker-compose.yml` at the repo root.
 |-----|----------------|
 | [quick-reference.md](./quick-reference.md) | One-page cheat sheet: URLs, ports, credentials, stack commands |
 | [data-inspection.md](./data-inspection.md) | Runnable queries for every layer — Redpanda, bronze/silver/gold, Iceberg cold |
-| [observability.md](./observability.md) | Grafana dashboards, capture-tier metrics, all 33 Prometheus alert rules |
+| [observability.md](./observability.md) | Grafana dashboards, capture-tier metrics, all 34 Prometheus alert rules |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
 | [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits — 14.60 CPU / 21.625 GiB across 15 services (+4 one-shot) |
 | [prefect-schedules.md](./prefect-schedules.md) | The two deployed Prefect schedules (15-min offload, daily maintenance) |

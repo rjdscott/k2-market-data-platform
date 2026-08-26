@@ -58,10 +58,19 @@ groups:
       # CRITICAL: an audit found something.
       #
       # k2_lake_audit_failures_total is the failed-check count stamped into the
-      # audit.checks snapshot summary by the run that wrote it, so this stays
-      # firing until a later maintenance run writes a clean one. That is the
-      # intended behaviour: a silent recovery would hide a duplicate that is
-      # still in the table.
+      # audit.checks snapshot summary by the NIGHTLY AUDIT — metrics.py reads it
+      # off the newest snapshot carrying `k2.job=maintenance`, never off the
+      # current one. So this stays firing until a later maintenance run writes a
+      # clean count. That is the intended behaviour: a silent recovery would
+      # hide a duplicate that is still in the table.
+      #
+      # The job key is not decoration. audit.checks has a second writer: stage 2
+      # files `unresolvable_schema_id` rows under `k2.job=ingest`, and those
+      # commits land on top of the audit's. Read off the current snapshot one of
+      # them would set this gauge to its own count — 0 for a clean run — and
+      # clear a firing alert with no audit having passed. That regression is
+      # asserted in tests/lake-alerts_test.yml. LakeUnresolvableSchemaId below
+      # is the ingest side's own alert, on its own gauge.
       - alert: LakeAuditFailed
         expr: |
           k2_lake_audit_failures_total > 0
@@ -157,6 +166,42 @@ groups:
             A genuinely quiet period looks the same and is not an incident;
             k2_lake_added_records tells the two apart.
           runbook: docs/runbooks/lake-ingest-lag.md
+
+      # WARNING: a record is framed with a schema id the registry will not serve.
+      #
+      # The ingest side of audit.checks, and the reason LakeAuditFailed can
+      # afford to ignore it. Stage 2 skips the id, files a row and carries on
+      # (raising would be a permanent outage from one frame, since raw.messages
+      # is never expired and the same range is re-read forever), so nothing
+      # pages — but nothing was alertable either until this rule existed.
+      #
+      # Warning, not critical: nothing is lost. The bytes are in raw.messages
+      # and a later registration of the id recovers them. What is wrong is that
+      # a bronze table is missing every record framed with that id, silently.
+      #
+      # 15 minutes is three ingest cycles. Stage 2 re-files the same row every
+      # cycle for as long as the id is unserved, so a genuine case holds the
+      # gauge above 0 indefinitely and a one-off recovers on the next commit.
+      - alert: LakeUnresolvableSchemaId
+        expr: |
+          k2_lake_unresolvable_schema_ids_total > 0
+        for: 15m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "{{ $value }} schema id(s) the registry would not serve in the last stage-2 run"
+          description: |
+            A record on a v3 topic names a writer schema this registry does not
+            hold, so stage 2 skipped that id and wrote an unresolvable_schema_id
+            row into lake.audit.checks with job='ingest'.
+
+            Every record framed with that id is archived in raw.messages and
+            absent from bronze. Register the schema, or find the producer that
+            is framing against a registry this one is not — §5 of the runbook
+            has the three causes in order of likelihood.
+          runbook: docs/runbooks/lake-audit-failed.md
 
       # WARNING: the nightly file rewrite has not run.
       #

@@ -15,7 +15,7 @@ Every component that runs, the version pinned, what it does here, and the decisi
 | MinIO | RELEASE.2025-09-07T16-13-09Z | S3-compatible object store. Holds the v3 lake bucket (`k2-lake`); the v2 offload still writes to the bind-mounted `docker/iceberg/warehouse` instead | [ADR-007](../adr/ADR-007-iceberg-cold-storage.md), [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) |
 | PostgreSQL | 15-alpine | Prefect metadata **and** the `offload_watermarks` / `maintenance_audit_log` tables that make the offload idempotent | [ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md) |
 | Prefect | 3 (`prefecthq/prefect:3-python3.12`) | Schedules the 15-minute offload and the daily maintenance flow. Workers, not agents | [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md), [ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md) |
-| Prometheus | v3.2.0 | Scrapes capture ×3, ClickHouse, Redpanda, Grafana, the offload and lake exporters. 30-day retention, 33 alert rules (13 v2 + 10 capture + 10 lake) | — |
+| Prometheus | v3.2.0 | Scrapes capture ×3, ClickHouse, Redpanda, Grafana, the offload and lake exporters. 30-day retention, 34 alert rules (13 v2 + 10 capture + 11 lake) | — |
 | Grafana | 11.5.0 | 4 provisioned dashboards in `docker/grafana/dashboards/` | — |
 | Docker Compose | — | The only deployment target. One file, 15 long-running service entries (+4 one-shot init containers), explicit CPU/memory limits per service | [ADR-010](../adr/ADR-010-resource-budget.md) |
 

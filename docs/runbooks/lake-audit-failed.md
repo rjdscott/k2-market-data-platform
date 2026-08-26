@@ -321,11 +321,21 @@ from one bad frame rather than one skipped id (`fetch_schema` /
 `UnresolvableSchema` in `docker/lake/ingest.py`). Everything else in the batch decodes
 normally; only that id is skipped.
 
-**Note what this does to the alert.** `k2_lake_audit_failures_total` is read off the
-*current* `audit.checks` snapshot summary, and the ingest's row is committed without a
-`k2.audit-failures` property — so an ingest-filed row sets the gauge to 0 and can clear a
-firing `LakeAuditFailed` without any audit having passed (`refresh()` in
-`docker/lake/metrics.py`). Trust the table, not the gauge, after one of these appears.
+**This has its own alert, and it does not disturb `LakeAuditFailed`.** `audit.checks` has
+two writers, so each gauge names the job whose number it claims to be:
+`k2_lake_audit_failures_total` is read off the newest snapshot carrying
+`k2.job=maintenance`, `k2_lake_unresolvable_schema_ids_total` off the newest carrying
+`k2.job=ingest` (`latest_job_summary()` in `docker/lake/metrics.py`). Reading either off
+the *current* snapshot is the bug that pair replaced: the ingest's commit lands on top of
+the audit's, so its own count — 0 for a clean run — used to become
+`k2_lake_audit_failures_total` and clear a firing `LakeAuditFailed` with no audit having
+passed. `LakeUnresolvableSchemaId` (warning, `for: 15m`) is this finding's own signal, and
+the regression is asserted in `docker/prometheus/rules/tests/lake-alerts_test.yml`.
+
+Stage 2 re-files the row every cycle while the id stays unserved, so the gauge holds above
+0 until the schema is registered — which is what makes a 15-minute `for` a threshold
+rather than a race against the next commit. All of a run's findings ride on one commit, so
+the gauge is the number of unserved ids that run saw, not 1 for whichever row went last.
 
 **Recovery** — the schema id is the whole diagnosis.
 

@@ -358,3 +358,88 @@ tests:
                 timestamp, the scope and a detail string — query it before touching
                 anything, because the three checks mean very different things.
               runbook: docs/runbooks/lake-audit-failed.md
+
+  # ── the two writers of audit.checks do not overwrite each other ──────────
+  # The regression this pair exists for. audit.checks takes commits from the
+  # nightly audit (k2.job=maintenance) AND from stage 2, which files an
+  # `unresolvable_schema_id` row under k2.job=ingest. The ingest commit lands
+  # LAST, so a gauge read off the CURRENT snapshot summary took the ingest's
+  # count — and an ingest row that carried no k2.audit-failures at all read as
+  # 0, silently clearing a firing LakeAuditFailed with no audit having passed.
+  #
+  # metrics.py now keys each gauge on k2.job, which in series terms is: the
+  # audit gauge holds at 2 across the ingest commit at t=30m, and the ingest's
+  # own finding arrives on its own series instead of on top of the audit's.
+  # Both alerts fire; neither cancels the other.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_audit_failures_total'
+        values: '2+0x120'                    # a failing nightly audit, unchanged
+      - series: 'k2_lake_unresolvable_schema_ids_total'
+        values: '0+0x30 1+0x90'              # stage 2 files a row at t=30m
+    alert_rule_test:
+      # Before the ingest snapshot: the audit alert is firing, alone.
+      - eval_time: 25m
+        alertname: LakeAuditFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, component: lake, tier: cold}
+            exp_annotations:
+              summary: "2 lake audit check(s) failed in the last maintenance run"
+              description: |
+                docker/lake/maintenance.py exited non-zero. One of offset continuity,
+                duplicate identifiers or sequence monotonicity did not hold.
+
+                The row naming the failure is in lake.audit.checks with the run
+                timestamp, the scope and a detail string — query it before touching
+                anything, because the three checks mean very different things.
+              runbook: docs/runbooks/lake-audit-failed.md
+      - eval_time: 25m
+        alertname: LakeUnresolvableSchemaId
+        exp_alerts: []
+      # After it: STILL firing, on the same value. This is the assertion.
+      - eval_time: 60m
+        alertname: LakeAuditFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, component: lake, tier: cold}
+            exp_annotations:
+              summary: "2 lake audit check(s) failed in the last maintenance run"
+              description: |
+                docker/lake/maintenance.py exited non-zero. One of offset continuity,
+                duplicate identifiers or sequence monotonicity did not hold.
+
+                The row naming the failure is in lake.audit.checks with the run
+                timestamp, the scope and a detail string — query it before touching
+                anything, because the three checks mean very different things.
+              runbook: docs/runbooks/lake-audit-failed.md
+      # And the unresolvable id is alertable in its own right, 15 min after it
+      # first appeared rather than never.
+      - eval_time: 40m
+        alertname: LakeUnresolvableSchemaId
+        exp_alerts: []                       # 10 min in, under the 15-minute for
+      - eval_time: 60m
+        alertname: LakeUnresolvableSchemaId
+        exp_alerts:
+          - exp_labels: {severity: warning, component: lake, tier: cold}
+            exp_annotations:
+              summary: "1 schema id(s) the registry would not serve in the last stage-2 run"
+              description: |
+                A record on a v3 topic names a writer schema this registry does not
+                hold, so stage 2 skipped that id and wrote an unresolvable_schema_id
+                row into lake.audit.checks with job='ingest'.
+
+                Every record framed with that id is archived in raw.messages and
+                absent from bronze. Register the schema, or find the producer that
+                is framing against a registry this one is not — §5 of the runbook
+                has the three causes in order of likelihood.
+              runbook: docs/runbooks/lake-audit-failed.md
+
+  # A clean stage-2 run must not fire it, and must not be able to touch the
+  # audit gauge either — the two series are independent by construction now.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_unresolvable_schema_ids_total'
+        values: '0+0x120'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: LakeUnresolvableSchemaId
+        exp_alerts: []

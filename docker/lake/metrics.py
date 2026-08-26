@@ -67,6 +67,7 @@ CHECKS_TABLE = "audit.checks"
 # jobs and this one is deliberately not.
 JOB = "k2.job"
 JOB_INGEST = "ingest"
+JOB_MAINTENANCE = "maintenance"
 MAX_KAFKA_TS = "k2.max-kafka-ts"
 AUDIT_FAILURES = "k2.audit-failures"
 
@@ -113,6 +114,10 @@ avg_file_bytes = Gauge(
 )
 audit_failures = Gauge(
     "k2_lake_audit_failures_total", "Failed checks in the most recent maintenance run"
+)
+unresolvable_schema_ids = Gauge(
+    "k2_lake_unresolvable_schema_ids_total",
+    "Schema ids the registry would not serve in the most recent stage-2 run",
 )
 disk_used_ratio = Gauge(
     "k2_lake_disk_used_ratio",
@@ -178,18 +183,24 @@ def latest_compaction_ts(snapshots: list) -> float:
     return 0.0
 
 
-def latest_ingest_summary(snapshots: list) -> dict:
-    """Newest summary written by the ingest job.
+def latest_job_summary(snapshots: list, job: str) -> dict:
+    """Newest summary written by `job`, keyed on the `k2.job` property.
 
-    Compaction and expiry snapshots are skipped by the `k2.job` property the
-    ingest sets — the same rule as docker/lake/offsets.py, and for the same
-    reason: after a nightly compaction the newest snapshot on raw.messages is a
-    rewrite that carries no offsets, and reading lag off it would report the
-    lake as hours behind every morning.
+    The same rule as docker/lake/offsets.py, and for the same reason: a table
+    takes commits from more than one writer, and reading a gauge off whichever
+    snapshot happens to be current reads whichever writer went last.
+
+    On raw.messages that is compaction — after a nightly rewrite the newest
+    snapshot carries no offsets, and reading lag off it would report the lake as
+    hours behind every morning. On audit.checks it is the ingest: stage 2 files
+    an `unresolvable_schema_id` row under `k2.job=ingest` and the nightly audit
+    files its count under `k2.job=maintenance`, so a current-snapshot read lets
+    an ingest row zero a firing LakeAuditFailed with no audit having passed.
+    Both gauges therefore name the job whose number they claim to be.
     """
     for snapshot in reversed(snapshots):
         summary = snapshot.get("summary", {})
-        if summary.get(JOB) == JOB_INGEST:
+        if summary.get(JOB) == job:
             return summary
     return {}
 
@@ -239,11 +250,23 @@ def refresh(prefix: str, now: float) -> int:
             last_compaction_ts.labels(table=label).set(compacted)
 
         if label == INGEST_TABLE:
-            stamp = latest_ingest_summary(snapshots).get(MAX_KAFKA_TS)
+            stamp = latest_job_summary(snapshots, JOB_INGEST).get(MAX_KAFKA_TS)
             if stamp:
                 max_kafka_ts.set(_epoch(stamp))
         if label == CHECKS_TABLE:
-            audit_failures.set(_num(summary, AUDIT_FAILURES))
+            # Two writers, two gauges, neither read off `current`. The nightly
+            # audit's count is the one LakeAuditFailed watches and only a later
+            # maintenance run may clear it.
+            audit_failures.set(
+                _num(latest_job_summary(snapshots, JOB_MAINTENANCE), AUDIT_FAILURES)
+            )
+            # ponytail: every ingest-written check is `unresolvable_schema_id`
+            # today, so its failure count IS the count of unserved schema ids.
+            # Add a second ingest-side check and this gauge needs its own
+            # summary property rather than sharing k2.audit-failures.
+            unresolvable_schema_ids.set(
+                _num(latest_job_summary(snapshots, JOB_INGEST), AUDIT_FAILURES)
+            )
 
     _refresh_disk()
     scrape_errors.set(errors)
@@ -333,9 +356,34 @@ def _self_check() -> None:
 
     # A compaction snapshot committed after the ingest must not hide the
     # ingest's timestamp — that is the whole point of keying on k2.job.
-    assert latest_ingest_summary([ingest, compaction])[MAX_KAFKA_TS] == "2026-08-26T12:50:00.289000"
-    assert latest_ingest_summary([compaction]) == {}
-    assert latest_ingest_summary([]) == {}
+    assert (
+        latest_job_summary([ingest, compaction], JOB_INGEST)[MAX_KAFKA_TS]
+        == "2026-08-26T12:50:00.289000"
+    )
+    assert latest_job_summary([compaction], JOB_INGEST) == {}
+    assert latest_job_summary([], JOB_INGEST) == {}
+
+    # The audit.checks regression: an ingest-written unresolvable_schema_id row
+    # commits AFTER a failing maintenance run, so it is the current snapshot.
+    # Read off `current`, its own count would set k2_lake_audit_failures_total
+    # to 1 — and a clean one to 0, silently clearing a firing LakeAuditFailed.
+    # Keyed on k2.job the two numbers stay separate.
+    audit_run = {
+        "snapshot-id": 333,
+        "timestamp-ms": 1787750404280,
+        "summary": {"operation": "append", JOB: JOB_MAINTENANCE, AUDIT_FAILURES: "2"},
+    }
+    ingest_row = {
+        "snapshot-id": 444,
+        "timestamp-ms": 1787750504280,
+        "summary": {"operation": "append", JOB: JOB_INGEST, AUDIT_FAILURES: "1"},
+    }
+    checks = [audit_run, ingest_row]
+    assert _num(latest_job_summary(checks, JOB_MAINTENANCE), AUDIT_FAILURES) == 2.0
+    assert _num(latest_job_summary(checks, JOB_INGEST), AUDIT_FAILURES) == 1.0
+    # No ingest row yet: the ingest gauge is 0 and the audit gauge is untouched.
+    assert _num(latest_job_summary([audit_run], JOB_INGEST), AUDIT_FAILURES) == 0.0
+    assert _num(latest_job_summary([audit_run], JOB_MAINTENANCE), AUDIT_FAILURES) == 2.0
 
     assert _epoch("2026-08-26T12:50:00.289000") == 1787748600.289
     assert _epoch("2026-08-26T12:50:00.289000+00:00") == 1787748600.289

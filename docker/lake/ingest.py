@@ -467,15 +467,21 @@ def _decode_into(spark, source, table: str, project, raw_snapshot_id, run_ts) ->
     # still true, and a later registration of the id recovers the records — but
     # it repeats every 5 minutes until one decodable record arrives. Dedupe on
     # (check_name, scope) if that ever becomes noise worth suppressing.
-    for schema_id, detail in unresolvable:
-        write_audit_row(
+    if unresolvable:
+        write_audit_rows(
             spark,
-            run_ts,
-            "unresolvable_schema_id",
-            f"{table}/schema_id={schema_id}",
-            passed=False,
-            observed=schema_id,
-            detail=detail,
+            [
+                Row(
+                    run_ts=run_ts,
+                    job="ingest",
+                    check_name="unresolvable_schema_id",
+                    scope=f"{table}/schema_id={schema_id}",
+                    passed=False,
+                    observed=int(schema_id),
+                    detail=detail,
+                )
+                for schema_id, detail in unresolvable
+            ],
         )
     if not parts:
         return 0
@@ -497,34 +503,36 @@ def _decode_into(spark, source, table: str, project, raw_snapshot_id, run_ts) ->
     return written
 
 
-def write_audit_row(spark, run_ts, check_name, scope, passed, observed, detail) -> None:
-    """One row into `audit.checks`, from a job that is not the nightly audit.
+def write_audit_rows(spark, rows: list) -> None:
+    """This run's findings into `audit.checks`, in ONE commit.
 
-    Same table, `job='ingest'`, so "what did the pipeline find and when" stays
-    one query. Best-effort: a finding that cannot be recorded must not become a
-    second failure on top of the one it was reporting.
+    Same table as the nightly audit, `job='ingest'`, so "what did the pipeline
+    find and when" stays one query.
+
+    Two properties ride on the commit and both are load-bearing.
+    `k2.job=ingest` is what keeps this snapshot out of
+    `k2_lake_audit_failures_total`: that gauge is the nightly audit's count, and
+    an ingest row landing as the current snapshot used to zero a firing
+    `LakeAuditFailed` with no audit having passed. `k2.audit-failures` is the
+    same property `maintenance.run_audits` writes, and it is why this is one
+    commit rather than one per row — per row the count in the newest summary is
+    always 1, and `k2_lake_unresolvable_schema_ids_total` would report "at least
+    one" while claiming to be a count.
+
+    Best-effort: a finding that cannot be recorded must not become a second
+    failure on top of the one it was reporting.
     """
+    failures = sum(1 for r in rows if not r["passed"])
     try:
         (
-            spark.createDataFrame(
-                [
-                    Row(
-                        run_ts=run_ts,
-                        job="ingest",
-                        check_name=check_name,
-                        scope=scope,
-                        passed=passed,
-                        observed=int(observed),
-                        detail=detail,
-                    )
-                ]
-            )
+            spark.createDataFrame(rows)
             .writeTo(CHECKS_TABLE)
             .option(f"snapshot-property.{O.JOB}", "ingest")
+            .option(f"snapshot-property.{O.AUDIT_FAILURES}", str(failures))
             .append()
         )
     except Exception as exc:  # noqa: BLE001 - the finding already printed above
-        print(f"stage 2: could not write the audit row ({exc})")
+        print(f"stage 2: could not write {len(rows)} audit row(s) ({exc})")
 
 
 # ── probe ───────────────────────────────────────────────────────────────────
