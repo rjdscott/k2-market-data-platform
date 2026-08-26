@@ -451,3 +451,40 @@ tests:
       - eval_time: 60m
         alertname: LakeUnresolvableSchemaId
         exp_alerts: []
+
+  # ── and it RECOVERS: the latch that ageing the gauge removed ─────────────
+  # Stage 2 commits a row to audit.checks only when it found an unresolvable
+  # id, so a clean run writes nothing and no later commit overwrites the bad
+  # summary. Read straight off it the gauge would hold 1 for a week and this
+  # alert would never resolve. fresh_ingest_failures() in metrics.py returns 0
+  # once that summary is older than three ingest cycles, which in series terms
+  # is exactly this: >0 while the id is re-filed every 5 minutes, back to 0
+  # within 15 minutes of the last bad cycle. The alert must follow it down.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_unresolvable_schema_ids_total'
+        values: '1+0x40 0+0x80'   # re-filed for 40 min, then registered
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LakeUnresolvableSchemaId
+        exp_alerts: []            # 10 min < the 15-minute `for`
+      - eval_time: 30m
+        alertname: LakeUnresolvableSchemaId
+        exp_alerts:
+          - exp_labels: {severity: warning, component: lake, tier: cold}
+            exp_annotations:
+              summary: "1 schema id(s) the registry would not serve in the last stage-2 run"
+              description: |
+                A record on a v3 topic names a writer schema this registry does not
+                hold, so stage 2 skipped that id and wrote an unresolvable_schema_id
+                row into lake.audit.checks with job='ingest'.
+
+                Every record framed with that id is archived in raw.messages and
+                absent from bronze. Register the schema, or find the producer that
+                is framing against a registry this one is not — §5 of the runbook
+                has the three causes in order of likelihood.
+              runbook: docs/runbooks/lake-audit-failed.md
+      # The summary has aged out. This is the assertion the fix exists for.
+      - eval_time: 55m
+        alertname: LakeUnresolvableSchemaId
+        exp_alerts: []

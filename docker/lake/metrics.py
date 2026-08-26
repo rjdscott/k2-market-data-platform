@@ -7,7 +7,7 @@ service; `docker/prometheus/rules/lake-alerts.yml` reads everything it exports.
     python3 /opt/prefect/lake/metrics.py --self-check    # offline, no catalog
 
 **Everything comes from Iceberg snapshot summaries.** Not from in-process
-counters, for the same reason `docker/offload/metrics.py` does not use them:
+counters, for the same reason the deleted `docker/offload/metrics.py` did not use them:
 Prefect runs each job in a short-lived subprocess that exits long before
 Prometheus scrapes anything it counted. The snapshot summary is the durable
 record of what the pipeline actually did, and the ingest already writes its
@@ -183,8 +183,13 @@ def latest_compaction_ts(snapshots: list) -> float:
     return 0.0
 
 
-def latest_job_summary(snapshots: list, job: str) -> dict:
-    """Newest summary written by `job`, keyed on the `k2.job` property.
+# How long the newest `k2.job=ingest` summary on audit.checks is taken to still
+# describe the present. Three 5-minute ingest cycles.
+INGEST_SUMMARY_MAX_AGE = 900.0
+
+
+def latest_job_snapshot(snapshots: list, job: str) -> dict:
+    """Newest snapshot written by `job`, keyed on the `k2.job` property.
 
     The same rule as docker/lake/offsets.py, and for the same reason: a table
     takes commits from more than one writer, and reading a gauge off whichever
@@ -199,10 +204,40 @@ def latest_job_summary(snapshots: list, job: str) -> dict:
     Both gauges therefore name the job whose number they claim to be.
     """
     for snapshot in reversed(snapshots):
-        summary = snapshot.get("summary", {})
-        if summary.get(JOB) == job:
-            return summary
+        if snapshot.get("summary", {}).get(JOB) == job:
+            return snapshot
     return {}
+
+
+def latest_job_summary(snapshots: list, job: str) -> dict:
+    """That snapshot's summary, or `{}`."""
+    return latest_job_snapshot(snapshots, job).get("summary", {})
+
+
+def fresh_ingest_failures(snapshots: list, now: float) -> float:
+    """Ingest-filed failures on audit.checks, or 0 once that summary is stale.
+
+    Stage 2 commits an ingest row to `audit.checks` **only when it found an
+    unresolvable id** — a clean run writes nothing at all (`write_audit_rows`
+    in docker/lake/ingest.py). So the newest `k2.job=ingest` summary is not a
+    statement about now; it is the last time something went wrong. Read as-is,
+    the gauge latches: register the missing schema and the count still stands
+    until the next unrelated ingest finding, which on a quiet week is never —
+    `LakeUnresolvableSchemaId` would then stay firing for a fault that was
+    fixed in minutes.
+
+    Ageing it out is what makes the gauge readable in both directions. A
+    genuine case re-files the same row every 5-minute cycle for as long as the
+    id is unserved, so the summary stays inside this window and the gauge holds
+    above 0 indefinitely. A fixed one stops being re-filed, falls out of the
+    window within 15 minutes, and the alert resolves on its own.
+    """
+    snapshot = latest_job_snapshot(snapshots, JOB_INGEST)
+    if not snapshot:
+        return 0.0
+    if now - snapshot.get("timestamp-ms", 0) / 1000.0 > INGEST_SUMMARY_MAX_AGE:
+        return 0.0
+    return _num(snapshot.get("summary", {}), AUDIT_FAILURES)
 
 
 def _num(summary: dict, key: str) -> float:
@@ -264,9 +299,11 @@ def refresh(prefix: str, now: float) -> int:
             # today, so its failure count IS the count of unserved schema ids.
             # Add a second ingest-side check and this gauge needs its own
             # summary property rather than sharing k2.audit-failures.
-            unresolvable_schema_ids.set(
-                _num(latest_job_summary(snapshots, JOB_INGEST), AUDIT_FAILURES)
-            )
+            #
+            # Aged, unlike the audit gauge above: a clean audit run still
+            # commits a summary and so refreshes its own number, but a clean
+            # stage 2 commits nothing here at all.
+            unresolvable_schema_ids.set(fresh_ingest_failures(snapshots, now))
 
     _refresh_disk()
     scrape_errors.set(errors)
@@ -384,6 +421,23 @@ def _self_check() -> None:
     # No ingest row yet: the ingest gauge is 0 and the audit gauge is untouched.
     assert _num(latest_job_summary([audit_run], JOB_INGEST), AUDIT_FAILURES) == 0.0
     assert _num(latest_job_summary([audit_run], JOB_MAINTENANCE), AUDIT_FAILURES) == 2.0
+
+    # The latch that ageing fixes. Stage 2 writes an ingest row ONLY when it
+    # found an unresolvable id, so once the schema is registered nothing
+    # overwrites this summary — read without a freshness test the gauge would
+    # still say 1 a week later, holding LakeUnresolvableSchemaId firing on a
+    # fault that was fixed in minutes.
+    filed = ingest_row["timestamp-ms"] / 1000.0
+    assert fresh_ingest_failures(checks, filed) == 1.0
+    # Still re-filed inside the window: a genuine unserved id, every 5 minutes.
+    assert fresh_ingest_failures(checks, filed + INGEST_SUMMARY_MAX_AGE - 1) == 1.0
+    # Two cycles missed and then a third: registered, nothing re-filed, clear.
+    assert fresh_ingest_failures(checks, filed + INGEST_SUMMARY_MAX_AGE + 1) == 0.0
+    # The audit gauge is NOT aged — a clean maintenance run commits its own
+    # summary, so its number refreshes itself and must survive a stale ingest.
+    assert _num(latest_job_summary(checks, JOB_MAINTENANCE), AUDIT_FAILURES) == 2.0
+    # No ingest row has ever been filed: 0, not an exception.
+    assert fresh_ingest_failures([audit_run], filed) == 0.0
 
     assert _epoch("2026-08-26T12:50:00.289000") == 1787748600.289
     assert _epoch("2026-08-26T12:50:00.289000+00:00") == 1787748600.289

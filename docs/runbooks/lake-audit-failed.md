@@ -352,10 +352,17 @@ the audit's, so its own count — 0 for a clean run — used to become
 passed. `LakeUnresolvableSchemaId` (warning, `for: 15m`) is this finding's own signal, and
 the regression is asserted in `docker/prometheus/rules/tests/lake-alerts_test.yml`.
 
-Stage 2 re-files the row every cycle while the id stays unserved, so the gauge holds above
-0 until the schema is registered — which is what makes a 15-minute `for` a threshold
-rather than a race against the next commit. All of a run's findings ride on one commit, so
-the gauge is the number of unserved ids that run saw, not 1 for whichever row went last.
+**How this alert clears, which is not the obvious way.** Stage 2 commits a row to
+`audit.checks` *only when it found an unresolvable id* — a clean run writes nothing there —
+so no later ingest overwrites the last bad summary, and a gauge read straight off it would
+latch at that count for as long as nothing else went wrong. It is therefore aged:
+`fresh_ingest_failures()` in `docker/lake/metrics.py` returns 0 once the newest
+`k2.job=ingest` summary is older than three ingest cycles (15 min). A genuine case re-files
+the same row every 5 minutes, stays fresh, holds the gauge above 0 indefinitely and keeps
+the alert firing. A fixed one stops being re-filed, ages out within 15 minutes of the last
+bad cycle, and the alert resolves on its own — there is no clean commit to clear it sooner,
+so do not wait for one. All of a run's findings ride on one commit, so the gauge is the
+number of unserved ids that run saw, not 1 for whichever row went last.
 
 **Recovery** — the schema id is the whole diagnosis.
 

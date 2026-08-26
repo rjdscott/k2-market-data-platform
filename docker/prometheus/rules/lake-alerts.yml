@@ -179,9 +179,18 @@ groups:
       # and a later registration of the id recovers them. What is wrong is that
       # a bronze table is missing every record framed with that id, silently.
       #
-      # 15 minutes is three ingest cycles. Stage 2 re-files the same row every
-      # cycle for as long as the id is unserved, so a genuine case holds the
-      # gauge above 0 indefinitely and a one-off recovers on the next commit.
+      # 15 minutes is three ingest cycles, and it is the same 15 minutes
+      # metrics.py ages the gauge over, for the same reason.
+      #
+      # How this clears matters, because it does not clear the obvious way.
+      # Stage 2 commits a row to audit.checks ONLY when it found an
+      # unresolvable id — a clean run writes nothing there — so no later commit
+      # overwrites the last bad summary. A genuine case re-files the same row
+      # every 5 minutes, keeps that summary fresh and holds the gauge above 0
+      # indefinitely: this fires and stays firing. Register the schema and
+      # nothing is re-filed, the summary ages past three cycles,
+      # `fresh_ingest_failures()` in docker/lake/metrics.py returns 0, and the
+      # alert resolves within 15 minutes of the last bad cycle.
       - alert: LakeUnresolvableSchemaId
         expr: |
           k2_lake_unresolvable_schema_ids_total > 0
