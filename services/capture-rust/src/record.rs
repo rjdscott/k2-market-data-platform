@@ -120,6 +120,12 @@ fn long_array(v: &[i64]) -> Value {
 }
 
 impl OutRecord {
+    /// Every value [`OutRecord::topic_kind`] can return, and therefore every
+    /// registry subject one capture process can need. `Sink::warm_up` fetches
+    /// one schema per entry at startup so the frame path never meets a cold
+    /// cache; `topic_kinds_covers_every_variant` is what keeps the two in step.
+    pub const TOPIC_KINDS: [&'static str; 3] = ["trades", "book", "raw"];
+
     /// Last segment of the topic name: `market.crypto.v3.<this>.<exchange>`.
     pub fn topic_kind(&self) -> &'static str {
         match self {
@@ -236,17 +242,13 @@ fn union(v: Option<Value>) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod samples {
+    //! Minimal valid samples of every variant. Outside `mod tests` because
+    //! `sink.rs` uses them too: the question "does warm_up cover every subject
+    //! an OutRecord can need" belongs to the sink, the variants belong here.
     use super::*;
 
-    fn field_names(schema: &Schema) -> Vec<String> {
-        match schema {
-            Schema::Record(r) => r.fields.iter().map(|f| f.name.clone()).collect(),
-            other => panic!("expected a record schema, got {other:?}"),
-        }
-    }
-
-    fn sample_trade() -> OutRecord {
+    pub(crate) fn sample_trade() -> OutRecord {
         OutRecord::Trade(TradeRecord {
             exchange: "kraken".into(),
             symbol: "XBT/USD".into(),
@@ -263,7 +265,7 @@ mod tests {
         })
     }
 
-    fn sample_book() -> OutRecord {
+    pub(crate) fn sample_book() -> OutRecord {
         OutRecord::Book(BookSnapshotRecord {
             exchange: "kraken".into(),
             symbol: "XBT/USD".into(),
@@ -283,7 +285,7 @@ mod tests {
         })
     }
 
-    fn sample_raw() -> OutRecord {
+    pub(crate) fn sample_raw() -> OutRecord {
         OutRecord::Raw(RawMessageRecord {
             exchange: "kraken".into(),
             stream: "book".into(),
@@ -293,6 +295,19 @@ mod tests {
             conn_msg_seq: 44,
             payload: b"{\"channel\":\"book\"}".to_vec(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::samples::*;
+    use super::*;
+
+    fn field_names(schema: &Schema) -> Vec<String> {
+        match schema {
+            Schema::Record(r) => r.fields.iter().map(|f| f.name.clone()).collect(),
+            other => panic!("expected a record schema, got {other:?}"),
+        }
     }
 
     /// The guard CLAUDE.md's "schema changes move together or not at all" rests

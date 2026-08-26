@@ -46,7 +46,7 @@ alongside the claim is the point. Until `results/` has a dated file, every
 | `capture-kill.sh` | `docker kill --signal=KILL` one capture container, held down past the alert window | `CaptureDown` | capture / SIGKILL |
 | `capture-pause.sh` | `docker pause` one capture container until its feed reads stale | `CaptureFeedStale` | capture / SIGSTOP; coinbase `sequence_num` gap; binance `lastUpdateId` regression; the *signal* of venue-side maintenance |
 | `capture-queue-full.sh` | `docker pause` the broker so librdkafka's 32 MiB queue fills and capture starts dropping | `CaptureProduceErrors` (`reason="queue_full"`) | capture → Redpanda / producer queue full |
-| `redpanda-stop.sh` | `docker stop` the broker; `--cold-start` also recreates a capture container while it is down | `CaptureProduceErrors` | Redpanda / broker down; schema registry / down mid-run; schema registry / down at start |
+| `redpanda-stop.sh` | `docker stop` the broker; `--cold-start` also recreates a capture container while it is down | `CaptureProduceErrors`, or `CaptureDown` under `--cold-start` (warm-up is fatal, so the container crash-loops rather than failing produces) | Redpanda / broker down; schema registry / down mid-run; schema registry / down at start |
 | `capture-corrupt-frame.sh` | none — prints SKIP and exits 0 | — | corrupt frame (**not automatable until `k2-replay`, Phase G**) |
 
 All five take `--exchange binance|kraken|coinbase`, defaulting to `kraken`.

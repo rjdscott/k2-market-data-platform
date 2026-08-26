@@ -260,6 +260,14 @@ async fn run(args: RunArgs) -> Result<()> {
         args.topic_prefix.clone(),
         exchange.as_str(),
     )?;
+    // Before the socket, not after: this is the one place a schema registry
+    // round trip is allowed to be slow. Once the frame loop is running the
+    // encoder must never have to fetch anything (sink.rs header), and a
+    // registry that is unreachable at start means no record can be built at
+    // all — so failing here and letting compose restart us is the honest
+    // outcome, not reading a venue we cannot produce.
+    sink.warm_up().await?;
+    tracing::info!("schema registry warm; every subject cached");
 
     let url = adapter.ws_url(
         &args

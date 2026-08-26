@@ -14,8 +14,11 @@
 # faults. Default mode shows the cached case (records keep being produced after
 # the broker is gone, because the ids are already in-process). --cold-start
 # shows the uncached case by force-recreating a capture container while the
-# broker is down: the encoder cannot fetch a schema id, so nothing is even
-# enqueued and the 32 MiB of queue slack does not exist.
+# broker is down: `Sink::warm_up` cannot fetch a schema id, and since that is
+# fatal the process exits before opening the socket and crash-loops. Nothing is
+# enqueued, the 32 MiB of queue slack does not exist, and the alert that names
+# it is CaptureDown - not CaptureProduceErrors, which needs a produce to fail
+# and there are none.
 #
 # BLAST RADIUS IS THE WHOLE STACK, NOT JUST CAPTURE. Redpanda is the single
 # broker and the single schema registry, so stopping it takes down every
@@ -41,8 +44,13 @@ MESSAGES="sum(k2_capture_messages_total{exchange=\"$EXCHANGE\"})"
 DROPS="sum(k2_capture_produce_errors_total{exchange=\"$EXCHANGE\"})"
 
 preflight "$CONTAINER" k2-redpanda k2-prometheus
+# Which alert this run is scored against. A cold start never reaches a produce,
+# so CaptureProduceErrors cannot fire; the container crash-loops instead.
+ALERT=CaptureProduceErrors
+[ "$COLD_START" = yes ] && ALERT=CaptureDown
+
 banner "redpanda-stop.sh --exchange $EXCHANGE cold_start=$COLD_START" \
-  CaptureProduceErrors docs/runbooks/capture-down.md \
+  "$ALERT" docs/runbooks/capture-down.md \
   "docker stop k2-redpanda — broker AND schema registry, one process, WHOLE STACK (feed handlers, ClickHouse, Console, Prefect)"
 
 produced_before=$(prom_query "$PRODUCED"); produced_before=${produced_before:-0}
@@ -74,10 +82,13 @@ if [ "$COLD_START" = yes ]; then
   produced_baseline=$produced_cold
   printf '→ after 90s cold: records produced %s, messages seen %s\n' \
     "$produced_cold" "$messages_cold" >&2
-  echo "  Expected: produced pinned at 0 while messages climbs. The encoder needs" >&2
-  echo "  a schema id for bytes 1-4 of the Confluent frame and cannot get one, so" >&2
-  echo "  no record is built and nothing is enqueued — loss starts at frame one," >&2
-  echo "  with none of the 32 MiB queue slack the broker-down row gets." >&2
+  echo "  Expected: BOTH at 0, and the container restarting. Sink::warm_up fetches" >&2
+  echo "  every subject's schema before the first connect and a failure is fatal," >&2
+  echo "  so with no registry the process exits at startup and never opens the" >&2
+  echo "  socket — loss starts before frame one, with none of the 32 MiB queue" >&2
+  echo "  slack the broker-down row gets. Restarts so far:" >&2
+  docker inspect -f '  {{.RestartCount}} restarts, last exit {{.State.ExitCode}}' \
+    "$CONTAINER" >&2 2>/dev/null || true
 else
   # The cached-registry row: ids are already in-process, so records are still
   # being built and enqueued even though the registry is unreachable.
@@ -91,8 +102,8 @@ else
   echo "  They are queued, not delivered; the queue-full row is where they die." >&2
 fi
 
-t_fire=$(wait_for_alert CaptureProduceErrors 900 "$EXCHANGE") \
-  || echo "→ CaptureProduceErrors did not fire within ${t_fire}s" >&2
+t_fire=$(wait_for_alert "$ALERT" 900 "$EXCHANGE") \
+  || echo "→ $ALERT did not fire within ${t_fire}s" >&2
 
 echo "→ starting k2-redpanda" >&2
 docker start k2-redpanda >/dev/null
@@ -122,4 +133,4 @@ docker exec k2-redpanda rpk cluster health 2>&1 | sed 's/^/  /' >&2 \
   || echo "  rpk cluster health did not answer — check k2-redpanda by hand before the next run." >&2
 
 report "redpanda-stop.sh --exchange $EXCHANGE cold_start=$COLD_START" \
-  CaptureProduceErrors "$t_fire" "$t_recover"
+  "$ALERT" "$t_fire" "$t_recover"

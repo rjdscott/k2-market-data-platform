@@ -316,12 +316,14 @@ silently losing one.
 - **Kraken `seq` is 0.** The venue publishes no sequence on v2; the checksum
   does that job, and better — it catches a mis-applied update, not just a
   missing one.
-- **One blocking call on the frame path, with a stated bound.** `sink.send()`
-  awaits the Avro encoder, which calls the schema registry the first time it
-  meets a subject. `reqwest`'s default is no timeout, so a registry that accepts
-  the connection and never answers would stall the socket read indefinitely —
-  the failure this design otherwise avoids. `REGISTRY_TIMEOUT` caps it at 5 s
-  and a timed-out encode is counted as `reason="encode"`.
-  `// ponytail: a warm-up encode per subject at startup takes the call off the
-  frame path entirely; the 5 s cap is what makes that an optimisation rather
-  than a correctness fix.`
+- **The schema registry is off the frame path, and where it is not, the bound
+  is stated.** `sink.send()` awaits the Avro encoder, which calls the registry
+  the first time it meets a subject. `reqwest`'s default is no timeout, so that
+  call could stall the socket read indefinitely. `Sink::warm_up()` fetches all
+  three subjects (`OutRecord::TOPIC_KINDS`) before the first WebSocket connect
+  and `run` treats a failure as fatal, so a healthy session never touches the
+  registry at all. `REGISTRY_TIMEOUT` still caps one encode at 5 s, for the one
+  case warm-up cannot pre-empt: a mid-session schema evolution against a sick
+  registry, where it is 5 s *per record* for as long as it stays sick — the
+  converter does not cache retriable errors. Bounded per record, unbounded in
+  aggregate; `sink.rs`'s header carries the negative-cache upgrade path.
