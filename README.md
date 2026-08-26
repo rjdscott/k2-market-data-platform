@@ -11,17 +11,19 @@ queryable OHLCV candles in under a second — on a single host, inside a 16-core
 ## What this demonstrates
 
 - **A rewrite justified by numbers, not taste.** v1: 18–20 containers, 35–40 CPU / 45–50 GB, 5–15 min
-  trade-to-queryable. v2: 14 services (+2 one-shot), 15.1 CPU / 21.875 GB, measured p99 170–197 ms. v3
-  foundations on this branch add Lakekeeper (+0.25 CPU / +256 MB) and 2 more one-shot init containers —
-  15.35 CPU / 22.125 GB across 15 (+4 one-shot) as deployed here. Each move is an ADR.
+  trade-to-queryable. v2 baseline: 14 services (+2 one-shot), 15.1 CPU / 21.875 GB, measured p99
+  170–197 ms. This branch runs **Phase C**: Rust `k2-capture` alongside the Kotlin handlers for a
+  labelled parity window ([ADR-019](./docs/adr/ADR-019-rust-capture-tier.md)) — steady state
+  18 long-running services (+4 one-shot), 16.10 CPU / 23.125 GB; Kotlin retires once parity is clean.
+  Each move is an ADR.
 - **Deleting the stream processor.** Five always-on Spark Structured Streaming jobs (~14 CPU / 20 GB)
   replaced by ClickHouse Kafka engine tables and materialized views — **zero stream-processing code**.
 - **Exchange-native ingestion.** Three Kotlin/Ktor feed handlers, one container per exchange, each
   owning one WebSocket dialect and emitting a shared Avro record. Adding an exchange is additive.
 - **A cold tier with real semantics.** Prefect drives Spark batch offload into Apache Iceberg (Hadoop catalog)
   every 15 min, with PostgreSQL watermarks for idempotent appends and nightly compaction + audit.
-- **Operability as a deliverable.** 17 Prometheus alert rules, 4 Grafana dashboards, and six failure
-  modes deliberately induced and timed — max MTTR 32 s.
+- **Operability as a deliverable.** 27 Prometheus alert rules (17 v2 + 10 v3 capture), 5 Grafana
+  dashboards, and six failure modes deliberately induced and timed — max MTTR 32 s.
 - **A reversed decision, kept in the record.** ADR-008 argued for removing Prefect. It was wrong, and
   the record says so rather than being quietly deleted.
 
@@ -43,8 +45,8 @@ flowchart LR
   end
   I["Cold tier<br/>Iceberg · Hadoop catalog · cold.*"]:::st
   subgraph OBS["Observability"]
-    M["Prometheus<br/>17 alert rules"]:::ob
-    D["Grafana<br/>4 dashboards"]:::ob
+    M["Prometheus<br/>27 alert rules"]:::ob
+    D["Grafana<br/>5 dashboards"]:::ob
   end
 
   E -->|WebSocket| F
@@ -89,8 +91,10 @@ offload does not write to it yet ([ADR-013](./docs/adr/ADR-013-pragmatic-iceberg
 | Trade → queryable | 5–15 min | **p99 170–197 ms** |
 | Stack | Python · Kafka · Spark Streaming · DuckDB · FastAPI | Kotlin/Ktor · Redpanda · ClickHouse · Spark batch · Iceberg |
 
-v3 foundations on this branch add Lakekeeper — +0.25 CPU / +256 MB — plus 2 more one-shot init
-containers: **15.35 CPU / 22.125 GB across 15 services (+4 one-shot) as deployed here**.
+This branch runs Phase C's parallel run — Rust `k2-capture` alongside the Kotlin handlers above,
+plus Lakekeeper and 4 one-shot init containers: **16.10 CPU / 23.125 GB across 18 long-running
+services (+4 one-shot) as deployed here**. Kotlin retires at the end of Phase C, once per-symbol
+parity is clean ([ADR-019](./docs/adr/ADR-019-rust-capture-tier.md)).
 
 v1 is preserved unmodified in [`legacy/v1/`](./legacy/v1/); the narrative is in
 [`docs/MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md).
@@ -148,18 +152,20 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
 
 ## Observability
 
-Four provisioned Grafana dashboards: pipeline overview (`k2-pipeline-overview`), ClickHouse
-(`clickhouse-v2`), Iceberg offload (`iceberg-offload`), v2 migration tracker (`k2-v2-migration`).
+Five provisioned Grafana dashboards: pipeline overview (`k2-pipeline-overview`), ClickHouse
+(`clickhouse-v2`), Iceberg offload (`iceberg-offload`), v2 migration tracker (`k2-v2-migration`),
+K2 Capture v3 (`k2-l2-capture`).
 
 ![Pipeline overview dashboard](docs/images/grafana-pipeline-overview.jpg)
 ![Prefect deployments](docs/images/prefect-deployments.jpg)
 
-17 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 3 feed handler (down, error
+27 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 3 feed handler (down, error
 rate, reconnect churn), 5 ClickHouse (down, memory, query failures, bronze insert
 rate, merge queue), 9 Iceberg offload (lag, consecutive failures, cycle time, watermark staleness,
-scheduler down). Handlers expose Micrometer metrics on `:8082/metrics` plus a `/health` endpoint used as
-the container healthcheck; ClickHouse exposes its own on `:9363`. Details:
-[`docs/operations/observability.md`](./docs/operations/observability.md).
+scheduler down), 10 v3 capture (down, feed stale, sequence gaps, checksum failure, produce errors/stalled,
+resync storm, ingress latency, book depth, precision loss). Handlers expose Micrometer metrics on
+`:8082/metrics` plus a `/health` endpoint used as the container healthcheck; ClickHouse exposes its own
+on `:9363`. Details: [`docs/operations/observability.md`](./docs/operations/observability.md).
 
 ## Reliability testing
 
@@ -186,21 +192,24 @@ tests remain on the roadmap.
 | Suite | Count | Run |
 |---|---|---|
 | Kotlin feed handler | 20 (`TradeNormalizer` 7, `InstrumentsLoader` 13) | `make test-kotlin` |
-| Python — Iceberg maintenance flow + v3 data contracts | 69 (28 + 41 in `tests/test_contracts.py`) | `make test-python` |
+| Rust capture | 52 (46 lib unit + 6 replay integration) | `make test-rust` |
+| Python — Iceberg maintenance flow + v3 data contracts + parity | 109 (28 + 41 in `tests/test_contracts.py` + 40 in `tests/test_parity.py`) | `make test-python` |
 | Legacy v1 (reference only) | ~180 unit | `cd legacy/v1 && uv run pytest` |
 
-[`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs four jobs per PR: **kotlin** (`gradlew build`),
-**python** (Ruff + pytest), **docker** (all three images), **security** (Trivy → SARIF). Strategy:
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs six jobs per PR: **kotlin** (`gradlew build`),
+**rust** (`cargo test`), **python** (Ruff + pytest), **docker** (4-way matrix: feed-handler, prefect,
+spark, capture), **docs** (`check-docs.sh`), **security** (Trivy → SARIF). Strategy:
 [`docs/development/testing.md`](./docs/development/testing.md).
 
 ## Repository layout
 
 ```
-services/feed-handler-kotlin/   Kotlin/Ktor feed handler (one image, three containers)
+services/feed-handler-kotlin/   Kotlin/Ktor feed handler (one image, three containers; v2, retiring)
+services/capture-rust/          Rust k2-capture: trades + L2 book, one binary per exchange (v3, Phase C)
 docker/clickhouse/ddl/          Bronze → Silver → Gold DDL and materialized views (auto-applied)
 docker/offload/                 Spark offload job + Prefect flows (offload, maintenance)
-docker/prometheus/rules/        17 alert rules
-docker/grafana/dashboards/      4 provisioned dashboards
+docker/prometheus/rules/        27 alert rules
+docker/grafana/dashboards/      5 provisioned dashboards
 docker/spark/  docker/prefect/  Custom images
 config/instruments.yaml         Instrument registry — single source of truth
 schemas/avro/                   v3 contracts (trade, book-snapshot-l2, raw-message); normalized-trade.avsc stays for the v2 Kotlin handlers
@@ -212,8 +221,8 @@ docker-compose.yml              The whole stack
 
 ## Where v2 falls short — and the v3 roadmap
 
-v2 is complete and running: three exchanges, medallion in ClickHouse, Iceberg cold tier, 17 alert rules,
-8 runbooks. It is a good streaming pipeline and a poor research archive. This is a **quantitative-research**
+v2 is complete and running: three exchanges, medallion in ClickHouse, Iceberg cold tier, 17 v2 alert rules,
+13 runbooks. It is a good streaming pipeline and a poor research archive. This is a **quantitative-research**
 platform reading public WebSocket feeds over the open internet — it is **not a trading path**, and no number
 here should be read as one. What a quant actually needs from it — completeness they can prove, aggregations
 that are correct, and the ability to reproduce a figure from six months ago — v2 cannot deliver, for
@@ -255,13 +264,17 @@ Everything except the lake is derived and rebuildable. Same 16 CPU / 40 GB singl
 **Phases** ([full plan](./docs/plans/2026-08-26-v3-quant-research-platform/README.md)):
 
 - **A — public now.** v2 shipped as-is, honestly labelled; v3 built in the open.
-- **B — foundations.** Verify-first spikes, Avro contracts, Lakekeeper + MinIO, Spark image bump.
-- **C — Rust capture.** `k2-capture` per exchange, trades + L2, 24 h parity run, Kotlin retired.
+- **B — foundations. Landed** (tag `v3-phase-b`). Verify-first spikes, Avro contracts, Lakekeeper + MinIO, Spark image bump.
+- **C — Rust capture. In progress on this branch.** `k2-capture` per exchange, trades + L2, parallel run
+  against Kotlin for a labelled parity window; Kotlin retires once parity is clean.
 - **D — lake tier.** Raw + bronze Iceberg tables, exactly-once ingest, completeness audits.
 - **E — hot tier.** ClickHouse rebuilt as derived: `ReplacingMergeTree`, OHLCV on read.
 - **F — notebooks & numbers.** DuckDB research notebooks, 24 h burn-in, published measurements.
 
 Design and rejected alternatives: [ADR-018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md) (Proposed).
+Phase C detail: [`services/capture-rust/README.md`](./services/capture-rust/README.md),
+[`docs/architecture/capacity-model.md`](./docs/architecture/capacity-model.md),
+[`docs/architecture/failure-modes.md`](./docs/architecture/failure-modes.md).
 
 **Still true of v2 today:** Phase 7 is 4 of 5 (24 h resource burn-in outstanding); there is no query API
 ([ADR-005](./docs/adr/ADR-005-kotlin-spring-boot-api.md), deferred); no Alertmanager routing and no load
@@ -272,7 +285,7 @@ testing above 1×; Coinbase can lose a schema-registration race on cold start (f
 
 - [`docs/README.md`](./docs/README.md) — start here
 - [`docs/architecture/README.md`](./docs/architecture/README.md) — system design
-- [`docs/adr/`](./docs/adr/) — all 18 ADRs, including [ADR-018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md) (v3, Proposed)
+- [`docs/adr/`](./docs/adr/) — all 21 ADRs, including [ADR-018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md) (v3, Proposed)
 - [`docs/plans/2026-08-26-v3-quant-research-platform/`](./docs/plans/2026-08-26-v3-quant-research-platform/README.md) — the v3 plan
 - [`docs/operations/`](./docs/operations/) — runbooks, observability, cost model
 - [`docs/development/setup.md`](./docs/development/setup.md) — local development

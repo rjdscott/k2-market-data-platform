@@ -1,6 +1,6 @@
 # Architecture — As Built
 
-K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, ClickHouse turns them into a Bronze → Silver → Gold medallion using nothing but Kafka-engine tables and materialized views, and a Prefect-scheduled Spark job appends the results to Iceberg every 15 minutes. The v2 pipeline runs in one Docker Compose file on **15.1 CPU / 21.875 GB across 14 long-lived containers** (+2 one-shot init containers), against a mandate of 16 cores / 40 GB. This branch also carries v3 foundations (Lakekeeper: +0.25 CPU / +256 MB, plus 2 more one-shot init containers), so what is actually deployed here is **15.35 CPU / 22.125 GB across 15 containers (+4 one-shot)**.
+K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, ClickHouse turns them into a Bronze → Silver → Gold medallion using nothing but Kafka-engine tables and materialized views, and a Prefect-scheduled Spark job appends the results to Iceberg every 15 minutes. The v2 pipeline runs in one Docker Compose file on **15.1 CPU / 21.875 GB across 14 long-lived containers** (+2 one-shot init containers), against a mandate of 16 cores / 40 GB. This branch runs Phase C: Rust `k2-capture` alongside the Kotlin handlers for a labelled parity window ([ADR-019](../adr/ADR-019-rust-capture-tier.md)), so what is actually deployed here is the steady state of that parallel run — **16.10 CPU / 23.125 GB across 18 long-running containers (+4 one-shot)**. Kotlin retires once per-symbol parity is clean.
 
 Everything below describes what actually runs on `main` today. Where the design intent and the built system diverge, the divergence is called out rather than papered over. The story of how it got here is in [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md).
 
@@ -22,7 +22,7 @@ flowchart LR
         FHC["feed-handler-coinbase"]
     end
 
-    RP["Redpanda v25.3.4<br/>v2: 6 topics · 160 partitions<br/>+v3: 9 topics · 108 partitions<br/>built-in schema registry"]
+    RP["Redpanda v25.3.4, schema registry<br/>v2: 6 topics, 160 partitions<br/>v3: 9 topics, 108 partitions"]
 
     subgraph CH["Hot store · ClickHouse 24.3 LTS"]
         Q["3 Kafka-engine queues<br/>JSONAsString"]
@@ -39,8 +39,8 @@ flowchart LR
     ICE["Iceberg cold.*<br/>10 tables · Hadoop catalog<br/>Parquet + zstd"]
 
     subgraph OBS["Observability"]
-        PR["Prometheus v3.2<br/>17 alert rules"]
-        GR["Grafana 11.5<br/>4 dashboards"]
+        PR["Prometheus v3.2<br/>27 alert rules"]
+        GR["Grafana 11.5<br/>5 dashboards"]
     end
 
     BIN -->|WebSocket| FHB
@@ -140,9 +140,9 @@ Two silver columns are absent from cold storage on purpose: `trade_conditions Ar
 
 ### Observability
 
-Prometheus v3.2 scrapes the three feed handlers (`:8082`), ClickHouse (`:9363`), Redpanda (`:9644`), and Grafana. Grafana 11.5 ships four provisioned dashboards in `docker/grafana/dashboards/`: pipeline overview, ClickHouse overview, Iceberg offload, v2 migration tracker.
+Prometheus v3.2 scrapes the three feed handlers (`:8082`), ClickHouse (`:9363`), Redpanda (`:9644`), the three v3 capture containers (`:8082`), and Grafana. Grafana 11.5 ships five provisioned dashboards in `docker/grafana/dashboards/`: pipeline overview, ClickHouse overview, Iceberg offload, v2 migration tracker, K2 Capture (v3).
 
-**17 alert rules** are loaded from `docker/prometheus/rules/`: 3 feed-handler, 5 ClickHouse, 9 Iceberg-offload. The `iceberg-scheduler` Prometheus job scrapes the offload metrics exporter on `iceberg-metrics:8000`, so all 9 offload alerts have live series. One honest gap remains: no alert has been fire-tested end to end. There is no Alertmanager.
+**27 alert rules** are loaded from `docker/prometheus/rules/`: 3 feed-handler, 5 ClickHouse, 9 Iceberg-offload (17 v2 total), plus 10 v3 capture-tier rules landing with Phase C. The `iceberg-scheduler` Prometheus job scrapes the offload metrics exporter on `iceberg-metrics:8000`, so all 9 offload alerts have live series. One honest gap remains: none of the alerts have been fire-tested end to end — `make chaos` is what proves the capture-tier ones. There is no Alertmanager.
 
 ---
 
@@ -205,11 +205,22 @@ The end-to-end p99 is dominated by network RTT to the exchanges (~80 ms average)
 | feed-handler-kraken | 0.5 | 512 MB |
 | feed-handler-coinbase | 0.5 | 512 MB |
 | iceberg-metrics | 0.1 | 128 MB |
-| **Subtotal, v2 (14 services)** | **15.1** | **21.875 GB** |
+| **Subtotal, v2 baseline (14 services)** | **15.1** | **21.875 GB** |
 | lakekeeper (v3) | 0.25 | 256 MB |
-| **Total, as deployed on this branch (15 services)** | **15.35** | **22.125 GB** |
+| capture-binance (v3, Phase C) | 0.25 | 256 MB |
+| capture-kraken (v3, Phase C) | 0.25 | 256 MB |
+| capture-coinbase (v3, Phase C) | 0.25 | 512 MB |
+| **Total, Phase C parallel run (18 long-running services)** | **16.10** | **23.125 GB** |
 
-Only `lakekeeper` is new since the v2 baseline — +0.25 CPU / +256 MB. Four further entries — `redpanda-init` (v2, topic creation), `iceberg-init` (v2 cold.* Hadoop-catalog DDL), `lakekeeper-migrate` (v3 catalog DB schema) and `lake-init` (v3 bucket + warehouse + namespaces) — are one-shot containers that exit after startup and are not counted in the totals above; v2 alone carries 2 of these, this branch's v3 foundations add 2 more (4 total). Budget and reasoning: [ADR-010](../adr/ADR-010-resource-budget.md), [docs/operations/docker-resources.md](../operations/docker-resources.md).
+`lakekeeper` and the three `capture-*` containers are new since the v2 baseline — +1.0 CPU / +1.25 GB.
+They run *alongside* the three Kotlin feed handlers above, not in place of them, for a labelled parity
+window ([ADR-019](../adr/ADR-019-rust-capture-tier.md)); the Kotlin handlers (−1.5 CPU / −1.5 GB) retire
+once per-symbol parity is clean, so the budget comes back down after Phase C ends. Four further entries —
+`redpanda-init` (v2, topic creation), `iceberg-init` (v2 cold.* Hadoop-catalog DDL), `lakekeeper-migrate`
+(v3 catalog DB schema) and `lake-init` (v3 bucket + warehouse + namespaces) — are one-shot containers that
+exit after startup and are not counted in the totals above; v2 alone carries 2 of these, v3 adds 2 more (4
+total). Budget and reasoning: [ADR-010](../adr/ADR-010-resource-budget.md),
+[docs/operations/docker-resources.md](../operations/docker-resources.md).
 
 | Forward look | [capacity-model.md](capacity-model.md) — msg/s per core, bytes/day per topic and lake table, and headroom against 16 CPU / 40 GB once the v3 capture tier lands. Predictions only, written before the burn-in that scores them. |
 |---|---|
@@ -240,7 +251,26 @@ The list above is what v2 chose not to build. Separately, an audit of the code f
 - The Avro schema puts `logicalType` beside `type` where Avro ignores it ([`normalized-trade.avsc:60`](../../schemas/avro/normalized-trade.avsc#L60)), and ClickHouse consumes raw JSON anyway ([`01-k2-schema.sql:39`](../../docker/clickhouse/ddl/01-k2-schema.sql#L39)).
 - Trades only, no L2 book, and raw topics keyed by exchange name ([`KafkaProducerService.kt:155`](../../services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/KafkaProducerService.kt#L155)) pin two exchanges to a single partition.
 
-v3 inverts the storage hierarchy — the lake becomes the system of record and everything else is derived and rebuildable — and replaces the Kotlin handlers with one Rust `k2-capture` binary per exchange doing trades and L2 book on a single connection:
+v3 inverts the storage hierarchy — the lake becomes the system of record and everything else is derived and rebuildable — and replaces the Kotlin handlers with one Rust `k2-capture` binary per exchange doing trades and L2 book on a single connection.
+
+**Today, honestly (Phase C, this branch):** Kotlin and Rust run in parallel for the parity window; the
+lake this branch writes to does not exist yet — that lands in Phase D.
+
+```mermaid
+flowchart TB
+  EX["Exchanges<br/>Binance · Kraken · Coinbase"]
+  KT["Kotlin feed handlers ×3<br/>v2, retiring"]
+  CAP["Rust k2-capture ×3<br/>v3, Phase C"]
+  RP[("Redpanda")]
+  CH["ClickHouse k2<br/>v2 topics, hot tier"]
+  LK["Phase D lake<br/>v3 topics, not yet built"]
+  EX --> KT --> RP
+  EX --> CAP --> RP
+  RP --> CH
+  RP --> LK
+```
+
+**Target (Phase F, end state):**
 
 ```mermaid
 flowchart LR

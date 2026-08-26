@@ -34,7 +34,7 @@ flowchart TB
   EX["Exchanges · public WS<br/>Binance · Kraken · Coinbase"]
   CAP["Capture · Rust k2-capture ×3<br/>recv_ts before parse<br/>seq/gap · CRC32 · top-20 @1 Hz"]
   RP[("Redpanda<br/>Avro + registry · symbol-keyed<br/>raw.* · trades.* · book.*")]
-  IB[("Iceberg · Lakekeeper + MinIO<br/>raw.messages, kept forever<br/>bronze.trades · bronze.book_snapshots_l2")]
+  IB[("Iceberg · Lakekeeper + MinIO<br/>raw.messages, forever<br/>bronze.trades, bronze.book_snapshots_l2")]
   CH["ClickHouse hot tier, derived<br/>hot.trades · hot.book_top20_1s<br/>bbo + ohlcv on read · 7d TTL"]
   DD["DuckDB / PyIceberg notebooks<br/>pinned snapshot ids"]
   EX --> CAP --> RP

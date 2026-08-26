@@ -1,8 +1,9 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 17 alert rules cover the three
-things that actually break: ingestion stops, ClickHouse struggles, the cold-tier offload
-falls behind.
+Prometheus scrapes the stack, Grafana renders it, and 27 alert rules (17 v2 + 10 v3 capture)
+cover the things that actually break: ingestion stops, ClickHouse struggles, the cold-tier
+offload falls behind, and — on this branch's Phase C capture tier — feed staleness, sequence
+gaps and book checksum failures.
 
 - Prometheus — http://localhost:9090 (`/targets`, `/alerts`)
 - Grafana — http://localhost:3000, `admin` / `$GRAFANA_PASSWORD`
@@ -60,7 +61,7 @@ Plus the JVM/process metrics Micrometer registers by default. Recording rule
 
 ## Alert rules
 
-17 rules across three files. Every annotation carries the diagnostic commands and a
+27 rules across four files. Every annotation carries the diagnostic commands and a
 runbook link; the tables below are the index.
 
 ### `feed-handler-alerts.yml` — ingestion (3)
@@ -105,6 +106,24 @@ backstop. `IcebergOffloadThroughputLow` uses a 1-hour window because offloads ru
 
 Recording rules: `iceberg_offload:cycle_count:5m`, `iceberg_offload:duration_avg:5m`,
 `iceberg_offload:rows_rate:5m`.
+
+### `capture-alerts.yml` — v3 capture tier, Phase C (10)
+
+| Alert | Severity | Fires when |
+|-------|----------|-----------|
+| `CaptureDown` | critical | Metrics endpoint unreachable for 2m |
+| `CaptureFeedStale` | critical | No frames on a stream (trades/book/raw) for 60s, sustained 2m |
+| `CaptureSequenceGaps` | critical | Any sequence gap in 10m, sustained 5m |
+| `CaptureChecksumFailure` | critical | Kraken CRC32 book mismatch in 10m, sustained 5m |
+| `CaptureProduceErrors` | critical | `rate(k2_capture_produce_errors_total[5m]) > 0.1` for 3m |
+| `CaptureProduceStalled` | critical | Reading frames but zero records produced for 1m — early warning before `CaptureProduceErrors` |
+| `CaptureResyncStorm` | warning | More than 3 book resyncs in 15m, sustained 5m |
+| `CaptureIngressLatencyHigh` | warning | Exchange→receive p99 above 2s for 10m — a "something changed" signal, not a latency SLO |
+| `CaptureBookDepthDegraded` | warning | Book depth below 10 levels for 10m |
+| `CapturePrecisionLoss` | warning | A venue quoted finer than the fixed-point 1e-8 scale in the last hour |
+
+Not yet fire-tested against a running capture tier — `make chaos` is what proves each one and
+its recovery cost; thresholds move then, not before.
 
 ### How the offload metrics are produced
 
