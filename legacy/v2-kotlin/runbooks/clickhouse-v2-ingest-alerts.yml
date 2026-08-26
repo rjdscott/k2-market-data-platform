@@ -1,4 +1,4 @@
-# ARCHIVED 2026-08-27 — the v2 ClickHouse ingest-rate rules.
+# ARCHIVED 2026-08-26 — the v2 ClickHouse ingest-rate rules.
 #
 # Removed from docker/prometheus/rules/clickhouse-alerts.yml when the Kotlin feed
 # handlers retired to legacy/v2-kotlin/ (ADR-019). Both rules read

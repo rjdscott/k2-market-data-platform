@@ -68,7 +68,7 @@ groups:
             This may indicate memory pressure, disk issues, or misconfiguration.
 
   # ClickHouseBronzeInsertRateLow and the clickhouse:insert_rate:5m recording rule
-  # were removed on 2026-08-27 and archived at
+  # were removed on 2026-08-26 and archived at
   # legacy/v2-kotlin/runbooks/clickhouse-v2-ingest-alerts.yml. Both read
   # ClickHouseProfileEvents_InsertedRows as a proxy for "is the Kafka engine
   # consuming", and the thing they proxied for was the Kotlin feed handlers'

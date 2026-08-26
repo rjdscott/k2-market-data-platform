@@ -5,7 +5,7 @@
 **Replaces**: `kafka-runbook.md` (Kafka replaced by Redpanda in v2 — ADR-001)
 
 Every `rpk` command below was run against the live single-broker cluster on
-2026-08-27 and the output pasted is what it printed. Commands that could not be
+2026-08-26 and the output pasted is what it printed. Commands that could not be
 run are marked inline; nothing here is paraphrased from memory.
 
 ---
@@ -73,7 +73,7 @@ docker exec k2-redpanda rpk topic delete my-topic
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance -n 3 -f '%p %o %k\n'
 ```
 
-`rpk topic list`, 2026-08-27:
+`rpk topic list`, 2026-08-26:
 
 ```
 NAME                               PARTITIONS  REPLICAS
@@ -129,7 +129,7 @@ docker exec k2-redpanda rpk group list
 docker exec k2-redpanda rpk group describe clickhouse_bronze_kraken
 ```
 
-`rpk group list`, 2026-08-27 — **read the group names carefully**:
+`rpk group list`, 2026-08-26 — **read the group names carefully**:
 
 ```
 BROKER  GROUP                                STATE
@@ -362,7 +362,7 @@ docker exec k2-redpanda rpk group list
 > "rpk topic"` on `redpandadata/redpanda:v25.3.4`. `rpk topic describe -p` is the command
 > that does the job.
 
-`rpk cluster health`, 2026-08-27:
+`rpk cluster health`, 2026-08-26:
 
 ```
 CLUSTER HEALTH OVERVIEW
