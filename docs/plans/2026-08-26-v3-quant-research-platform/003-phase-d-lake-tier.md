@@ -52,26 +52,38 @@ cannot be met by code alone, so they are named here rather than quietly dropped.
   deletes a planted orphan. Those are unit-level proofs of the mechanisms the exit
   criteria measure end to end; they are not the exit criteria.
 
-  **Watch `k2-spark-iceberg` RSS for the whole parallel window.** v2's
-  `iceberg-offload` (`*/15`) and v3's `lake-ingest-5min` both `docker exec` into
-  the same 2 CPU / 4 GiB container, so for as long as both are registered the
-  container hosts two Spark drivers. The two no longer start on the same minute
-  — the lake cron is `1-59/5`, not `*/5`, which collided at :00, :15, :30 and
-  :45 — and `spark.driver.memory` is pinned at 1 g so two heaps plus their JVM
-  overhead and Python drivers fit under the cap. Neither is a proof. A slow
-  offload can still overlap the next ingest, and the failure mode is an OOM-kill
-  of whichever driver asks for the last page, which reads as a random ingest
-  failure rather than as a memory problem. Sample it through the window:
+  **Measure the ingest driver's peak RSS at the cutover — `spark.driver.memory`
+  is a first sizing, not a measurement.** `k2-spark-iceberg` is capped at 2 CPU
+  / 4 GiB, and it is not empty before a job starts: the base image's always-on
+  JVMs (Master, Worker, History Server, Thrift Server, Jupyter) idle at 633 MiB
+  (`docker stats --no-stream k2-spark-iceberg`, 2026-08-26). Two drivers can
+  still be alive in there — `lake-maintenance-daily` at 03:00 and the 03:01
+  ingest tick are a minute apart and a compaction run outlives that easily, and
+  an operator's `docker exec` during an incident is the other way. So
+  `docker/lake/spark_conf.py` pins the heap at **768m**: `2 x (768 + ~550) +
+  ~400 Python + 633 baseline` is ~3.58 GiB of the cap, where the image's
+  inherited 1 g default is ~4.08 GiB and over it. That is arithmetic over one
+  measured baseline, not an observed peak, and the failure mode it guesses at is
+  an OOM-kill of whichever driver asks for the last page — which reads as a
+  random ingest failure rather than as a memory problem.
+
+  Take the real number during a run, not between them, and record it here and in
+  `docs/operations/docker-resources.md`:
 
   ```bash
-  # not yet run — Phase D burn-in. Peak, not instantaneous, is the number.
+  # not yet run — Phase D cutover. Peak DURING an ingest is the number; RSS in
+  # kB, one row per JVM and Python driver, so the baseline is visible alongside.
+  docker exec k2-spark-iceberg ps -o rss,cmd
   docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.CPUPerc}}' k2-spark-iceberg
   ```
 
-  A peak near 4 GiB, or `docker inspect -f '{{.State.OOMKilled}}' k2-spark-iceberg`
-  reporting `true` after a failed run, means the parallel window needs the
-  container raised before it needs debugging — and the right response is to end
-  the window early rather than raise the budget permanently.
+  Revisit trigger for the 768m itself: raise it back to `1g` if
+  `lake-ingest-5min` fails with an OOM-kill or `java.lang.OutOfMemoryError` in
+  the first week after cutover. A measured peak near 4 GiB, or `docker inspect
+  -f '{{.State.OOMKilled}}' k2-spark-iceberg` reporting `true` after a failed
+  run, means the container budget needs revisiting before the job needs
+  debugging — and moving the maintenance cron off 03:00 is the cheaper fix than
+  raising a stated 16 CPU / 40 GB constraint.
 
 - **The noisy-neighbour experiment (Scope bullet 8, Verification bullet 3) is not
   delivered.** It needs a full day of `raw.messages` to compact over and a quiet
@@ -139,12 +151,13 @@ shipped. The plan is left as written; the reasons are here.
   data is disposable (`../../research/2026-08-26-v3-requirements-clarification.md`, Q7), so
   there was nothing to protect by keeping the old path alive.
 
-  The "Watch `k2-spark-iceberg` RSS for the whole parallel window" note above is therefore
-  moot as written — there is no window and only one driver in that container. The sizing it
-  produced is kept: `spark.driver.memory` stays pinned at 1 g and the ingest cron stays
-  `1-59/5`, because two drivers can still coexist there (a maintenance run, or an
-  operator's `docker exec` during an incident) and the reasoning survives the parallel run
-  that prompted it.
+  The parallel window in the RSS note above is therefore gone, but the sizing it forced is
+  not: two drivers can still coexist in that container — the 03:00 maintenance run overlaps
+  the 03:01 ingest tick, and an operator's `docker exec` during an incident is a third — so
+  the cron stays `1-59/5` and `spark.driver.memory` stays pinned. It is pinned at **768m**
+  rather than the 1 g this note originally recorded, because the arithmetic left the base
+  image's 633 MiB of always-on JVMs out and two 1 g drivers plus that baseline do not fit
+  under 4 GiB. The peak-RSS measurement is still owed.
 
   Deleted with it: `docker/offload/`, `docker/iceberg/` (hadoop DDL, validation, the
   bind-mounted warehouse), `docker/postgres/ddl/offload-watermarks.sql`,

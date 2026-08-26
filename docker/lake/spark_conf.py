@@ -43,24 +43,43 @@ SCHEMA_REGISTRY_URL = os.environ.get("K2_SCHEMA_REGISTRY_URL", "http://redpanda:
 KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 
 # Driver heap, pinned rather than inherited. `spark-iceberg` is capped at 2 CPU
-# and 4 GiB, and two drivers can still be alive in it at once — the 5-minute
-# ingest, a maintenance run, or an operator's `docker exec` during an incident.
-# (Until Phase D a third could: v2's cold-tier offload, every 15 minutes. That
-# path is gone; the sizing it forced is kept, because the overlap is not.)
+# and 4 GiB, and that budget is NOT empty before a job starts: the base image
+# runs a standalone Master, a Worker, the History Server, a Thrift Server and
+# Jupyter for the whole life of the container. Idle, with no driver at all,
+# that is 633 MiB — `docker stats --no-stream k2-spark-iceberg`, 2026-08-26
+# (635.4 MiB on a re-read 2026-08-27). Every sum below starts from it.
 #
-# 1 g each is what fits. A driver JVM costs its heap plus roughly 400-600 MB of
-# metaspace, code cache, GC structures, thread stacks and direct buffers, and
-# each run carries a Python driver process on top: 2 x (1024 + ~550) MB plus
-# ~400 MB of Python lands near 3.5 GiB of the 4 GiB cap. 2 g each does not fit.
+# Two drivers can be alive in the container at once, and the cron does not
+# prevent it. `lake-ingest-5min` is `1-59/5` and `lake-maintenance-daily` is
+# `0 3 * * *`, so the two never start on the same minute — but 03:00 and 03:01
+# are one minute apart and a compaction run outlives that by a wide margin.
+# An operator's `docker exec` during an incident is the other way to get two.
 #
-# It equals today's image default — verified in the running container, where
-# `Runtime.getRuntime().maxMemory()` reports 1024 MiB with nothing set — so this
-# changes no behaviour. It makes the number a contract instead of an inherited
-# coincidence, next to the cron that is the other half of the same constraint.
-# Both are needed: the cron stops the two jobs starting together, this stops a
-# future image default raising the heap inside a container that cannot hold two
-# of them. docker/offload/ is deliberately untouched; it retires with Phase D.
-DRIVER_MEMORY = os.environ.get("K2_LAKE_DRIVER_MEMORY", "1g")
+# 768m each is what fits. A driver JVM costs its heap plus roughly 400-600 MB
+# of metaspace, code cache, GC structures, thread stacks and direct buffers,
+# and each run carries a Python driver process on top:
+#
+#     2 x (768 + ~550) + ~400 Python + 633 baseline  = ~3.58 GiB of the 4 GiB
+#     2 x (1024 + ~550) + ~400 Python + 633 baseline = ~4.08 GiB — over the cap
+#
+# The second line is the image's own default, and it is the arithmetic this
+# setting exists to fix: inheriting 1 g puts two drivers plus the always-on
+# JVMs past 4 GiB, and the failure mode is an OOM-kill of whichever driver
+# asks for the last page — which reads as a random ingest failure rather than
+# as a memory problem.
+#
+# **This is a first sizing, not a measurement.** No ingest has run under 768m
+# against real tables; the number is arithmetic over a measured baseline, not
+# an observed peak. Revisit trigger: raise it back to `1g` if
+# `lake-ingest-5min` fails with an OOM-kill or `java.lang.OutOfMemoryError`
+# in the first week after the Phase D cutover. The deployment gate in
+# docs/plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md
+# carries the command that replaces the estimate with a peak RSS.
+#
+# The other consumer is the `lake-ddl` one-shot, which gets its own container
+# with a 1 GiB limit — too small for 768m plus JVM overhead, so
+# docker-compose.yml sets `K2_LAKE_DRIVER_MEMORY: 512m` for that service only.
+DRIVER_MEMORY = os.environ.get("K2_LAKE_DRIVER_MEMORY", "768m")
 
 
 def lake_session(app_name: str) -> SparkSession:

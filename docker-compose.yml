@@ -680,6 +680,11 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # This container is capped at 1 GiB, not the 4 GiB spark-iceberg gets, so
+      # spark_conf.py's 768m default plus ~550 MB of JVM overhead would not fit.
+      # The DDL is nine catalog round-trips and no data, so the heap is not the
+      # constraint here — see the sizing comment in docker/lake/spark_conf.py.
+      K2_LAKE_DRIVER_MEMORY: 512m
     entrypoint: ["python3", "/home/iceberg/lake/apply_ddl.py"]
     depends_on:
       lake-init:

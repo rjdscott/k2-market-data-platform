@@ -92,11 +92,18 @@ run, and 16.875 GiB.
 - **ClickHouse takes 25% of CPU and 35% of RAM.** It absorbs the work v1 spent on five
   always-on Spark Streaming jobs — Kafka Engine ingest, Bronze→Silver→Gold materialized
   views and every analytical query run against the hot tier.
-- **Spark is batch-only.** Its 2.0 CPU / 4 GiB is idle except during the 5-minute lake
-  ingest and the nightly maintenance run, so the practical steady-state footprint is closer
-  to 12.60 CPU / 17.625 GiB. The container is sized for **two** drivers at once — a
-  scheduled ingest and an operator's `docker exec` during an incident — which is why
-  `docker/lake/spark_conf.py` pins the driver heap at 1 g rather than inheriting it.
+- **Spark is batch-only, but the container is never empty.** Its 2.0 CPU / 4 GiB runs a job
+  only during the 5-minute lake ingest and the nightly maintenance run, so the practical
+  steady-state footprint is closer to 12.60 CPU / 17.625 GiB — but the base image's
+  always-on Master, Worker, History Server, Thrift Server and Jupyter idle at **633 MiB**
+  before any driver starts (`docker stats --no-stream k2-spark-iceberg`, 2026-08-26). The
+  container is sized for **two** drivers on top of that — the 03:00 maintenance run
+  overlapping the 03:01 ingest tick, or an operator's `docker exec` during an incident —
+  which is why `docker/lake/spark_conf.py` pins the driver heap at 768m instead of
+  inheriting the image's 1 g, and why the `lake-ddl` one-shot sets
+  `K2_LAKE_DRIVER_MEMORY: 512m` in its own 1 GiB container. The 768m is a first sizing over
+  that measured baseline, not an observed peak: the Phase D cutover owes it a
+  `docker exec k2-spark-iceberg ps -o rss,cmd` taken during a run.
 - **The three capture containers cost 0.75 CPU / 1 GiB combined** — 5% of CPU, 5% of RAM.
   That is half what the Kotlin handlers they replaced declared. RSS against these limits
   is **not yet measured** for the post-retirement stack ([ADR-010](../adr/ADR-010-resource-budget.md)
