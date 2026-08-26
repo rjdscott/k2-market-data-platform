@@ -31,8 +31,17 @@ while trades keep flowing, or the reverse.
 time() - k2_capture_last_message_ts_seconds > 60
 ```
 
-Fires after `for: 2m`. The metric is labelled `{exchange, stream}`, so the alert names
-which of `trades` / `book` / `raw` went quiet.
+Fires after `for: 2m`. The metric is labelled `{exchange, stream}` with the venue's
+channel name (`trade`, `book`, `depth20`, `l2_data`, `market_trades`, `heartbeat(s)`,
+`instrument`), so the alert names which subscription went quiet.
+
+Only continuous streams carry this gauge. One-shot acknowledgements — Kraken
+`status`/`control`, Coinbase `subscriptions` — arrive once per (re)subscribe and
+are deliberately not stamped (`CONTINUOUS` in `services/capture-rust/src/main.rs`).
+The first 2 h window (2026-08-26 12:39Z) fired this alert on exactly those three
+acks two minutes after a healthy connect; that was the alert's only false positive
+and is the reason the allowlist exists. A firing on a name not in that list is a
+new stream the allowlist does not know about, not a stale feed.
 
 **Expected behaviour** — the WebSocket client sends and answers heartbeats and
 reconnects on its own backoff, so a dropped connection self-heals inside the 2-minute

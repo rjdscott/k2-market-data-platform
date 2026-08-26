@@ -27,6 +27,14 @@ use uuid::Uuid;
 
 /// Streams whose counters are created at zero on startup, so an alert can fire
 /// on a feed that has been silent since boot rather than on an absent series.
+///
+/// Only the *continuous* streams (`CONTINUOUS`) stamp
+/// `k2_capture_last_message_ts_seconds`. Kraken's `status`/`control` and
+/// Coinbase's `subscriptions` are one-shot acknowledgements: they arrive once per
+/// (re)subscribe and then legitimately never again, so a staleness gauge on
+/// them fires `CaptureFeedStale` ~2 minutes after every healthy connect. That
+/// happened on the first 2 h window (2026-08-26 12:39Z, all three acks) — a
+/// false alarm the healthcheck subcommand would also have inherited.
 const KRAKEN_STREAMS: &[&str] = &[
     "book",
     "trade",
@@ -37,6 +45,22 @@ const KRAKEN_STREAMS: &[&str] = &[
 ];
 const BINANCE_STREAMS: &[&str] = &["trade", "depth20"];
 const COINBASE_STREAMS: &[&str] = &["l2_data", "market_trades", "heartbeats", "subscriptions"];
+const CONTINUOUS: &[&str] = &[
+    "book",
+    "trade",
+    "instrument",
+    "heartbeat",
+    "depth20",
+    "l2_data",
+    "market_trades",
+    "heartbeats",
+];
+
+/// A stream that keeps delivering while the subscription is healthy, as opposed
+/// to a one-shot acknowledgement. Only these carry a staleness timestamp.
+fn is_continuous(stream: &str) -> bool {
+    CONTINUOUS.contains(&stream)
+}
 
 #[derive(Parser)]
 #[command(name = "k2-capture", version, about = "K2 v3 market data capture")]
@@ -265,9 +289,11 @@ async fn session(
                 counter!("k2_capture_bytes_total",
                     "exchange" => exchange, "stream" => handled.stream.clone())
                     .increment(frame.payload.len() as u64);
-                gauge!("k2_capture_last_message_ts_seconds",
-                    "exchange" => exchange, "stream" => handled.stream.clone())
-                    .set(frame.recv_ts_ns as f64 / 1e9);
+                if is_continuous(&handled.stream) {
+                    gauge!("k2_capture_last_message_ts_seconds",
+                        "exchange" => exchange, "stream" => handled.stream.clone())
+                        .set(frame.recv_ts_ns as f64 / 1e9);
+                }
 
                 for record in &handled.records {
                     if let OutRecord::Trade(t) = record {
@@ -434,4 +460,30 @@ async fn record(args: RecordArgs) -> Result<()> {
 struct FixtureLine<'a> {
     recv_ts_ns: i64,
     payload: std::borrow::Cow<'a, str>,
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+
+    #[test]
+    fn one_shot_acks_never_stamp_staleness() {
+        for ack in ["status", "control", "subscriptions"] {
+            assert!(!is_continuous(ack), "{ack} is a one-shot ack");
+        }
+        for ex in [KRAKEN_STREAMS, BINANCE_STREAMS, COINBASE_STREAMS] {
+            assert!(
+                ex.iter().any(|s| is_continuous(s)),
+                "every exchange has at least one continuous stream"
+            );
+        }
+        for s in CONTINUOUS {
+            assert!(
+                KRAKEN_STREAMS.contains(s)
+                    || BINANCE_STREAMS.contains(s)
+                    || COINBASE_STREAMS.contains(s),
+                "{s} is not a registered stream"
+            );
+        }
+    }
 }
