@@ -1,12 +1,14 @@
 ---
 name: plan
-description: Write a phase design document in docs/plans/YYYY-MM-DD-slug.md — context, decisions, target architecture (Mermaid), phases with exit criteria and verification commands, risks. Use when the user asks to plan multi-phase work, "write a plan", "break this into phases", or when work will span more than a week. Also use to append a "Phase X landed" line when a phase completes. Does NOT create progress logs, status tables or checkbox trackers — those are forbidden in this repo.
+description: Write a phase design document in docs/plans/YYYY-MM-DD-slug/ (a README.md plus one NNN-<slug>.md file per phase) — context, decisions, target architecture (Mermaid), phases with exit criteria and verification commands, risks. Use when the user asks to plan multi-phase work, "write a plan", "break this into phases", or when work will span more than a week. Also use to append a "Phase X landed" line when a phase completes. Does NOT create progress logs, status tables or checkbox trackers — those are forbidden in this repo.
 ---
 
 # plan — write a phase design document
 
-One file: `docs/plans/YYYY-MM-DD-<slug>.md`. Conventions in
-`docs/plans/README.md` — read it first.
+One directory: `docs/plans/YYYY-MM-DD-<slug>/`, a `README.md` (context,
+decisions, ground truth, target architecture, phases table, verification,
+risks) plus one `NNN-<slug>.md` file per phase (`NNN` zero-padded from `000`,
+never renumbered). Conventions in `docs/plans/README.md` — read it first.
 
 **A plan here is a design document, not a tracker.** K2 forbids committed
 progress logs, status tables, handoffs and phase-status files: they rot, and a
@@ -23,24 +25,27 @@ CI. If you feel the urge to add a checkbox table, don't.
    built on assumed file paths, image tags or API shapes fails in week two.
    Record what you verified in a **Ground truth** section with file:line
    citations, so implementation doesn't re-derive it.
-3. **Write the document**, these sections in order:
+3. **Write the document.** `README.md` carries, in order:
    - **Context** — where the repo is, what's wrong, what the user decided.
    - **Decisions** — user-confirmed choices, one line each, marked as such.
    - **Ground truth** — verified facts with citations.
    - **Target architecture** — a Mermaid diagram plus the principles it encodes.
-   - **Phase A…N** — one PR-sized, independently verifiable slice each,
-     ordered by dependency then risk (riskiest assumptions surface earliest).
-     Every phase ends with **Exit:** concrete criteria, and the exact
-     verification commands. 3–8 phases; more means it's two plans.
+   - **Phases** — a table of `NNN-<slug>.md` files, one per phase, dependency
+     then risk order (riskiest assumptions surface earliest), each with its
+     one-line scope and exit criterion.
    - **Verification (end-to-end)** — the commands that prove the whole thing.
    - **Risks / verify-first** — unknowns that must be spiked before code, each
      with its escape hatch.
+   Each `NNN-<slug>.md` phase file is one PR-sized, independently verifiable
+   slice: `**Depends on:**`, `**Delivers:**`, `**Exit:**` concrete criteria,
+   a `## Scope` section, and a `## Verification` section with the exact
+   commands. 3–8 phases; more means it's two plans.
 4. **Register it** in the index table in `docs/plans/README.md`.
 5. **Confirm with the user** before execution begins.
 
 ## When a phase completes
 
-Append exactly one dated line to that phase's section — nothing else:
+Append exactly one dated line to that phase's `NNN-<slug>.md` file — nothing else:
 
 ```
 _Phase C landed 2026-09-14 — commit a1b2c3d, tag v3.0.0-capture._
