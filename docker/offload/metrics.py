@@ -6,7 +6,14 @@ Version: v1.0
 Last Updated: 2026-02-12
 """
 
-from prometheus_client import Counter, Gauge, Histogram, Summary, Info, start_http_server
+from prometheus_client import (
+    Counter,
+    Gauge,
+    Histogram,
+    Summary,
+    Info,
+    start_http_server,
+)
 from datetime import datetime
 import logging
 
@@ -19,82 +26,73 @@ logger = logging.getLogger(__name__)
 
 # Counter: Cumulative metrics (always increasing)
 offload_rows_total = Counter(
-    'offload_rows_total',
-    'Total number of rows offloaded to Iceberg',
-    ['table', 'layer']
+    "offload_rows_total",
+    "Total number of rows offloaded to Iceberg",
+    ["table", "layer"],
 )
 
 offload_cycles_total = Counter(
-    'offload_cycles_total',
-    'Total number of offload cycles executed',
-    ['status']  # success, failed, timeout
+    "offload_cycles_total",
+    "Total number of offload cycles executed",
+    ["status"],  # success, failed, timeout
 )
 
 offload_errors_total = Counter(
-    'offload_errors_total',
-    'Total number of offload errors',
-    ['table', 'error_type']
+    "offload_errors_total", "Total number of offload errors", ["table", "error_type"]
 )
 
 # Gauge: Point-in-time metrics (can go up or down)
 offload_lag_minutes = Gauge(
-    'offload_lag_minutes',
-    'Time since last successful offload (minutes)',
-    ['table']
+    "offload_lag_minutes", "Time since last successful offload (minutes)", ["table"]
 )
 
 watermark_timestamp_seconds = Gauge(
-    'watermark_timestamp_seconds',
-    'Unix timestamp of last successful watermark update',
-    ['table']
+    "watermark_timestamp_seconds",
+    "Unix timestamp of last successful watermark update",
+    ["table"],
 )
 
 offload_tables_configured = Gauge(
-    'offload_tables_configured',
-    'Number of tables configured for offload'
+    "offload_tables_configured", "Number of tables configured for offload"
 )
 
 offload_last_success_timestamp = Gauge(
-    'offload_last_success_timestamp',
-    'Unix timestamp of last successful offload cycle'
+    "offload_last_success_timestamp", "Unix timestamp of last successful offload cycle"
 )
 
 offload_last_failure_timestamp = Gauge(
-    'offload_last_failure_timestamp',
-    'Unix timestamp of last failed offload cycle'
+    "offload_last_failure_timestamp", "Unix timestamp of last failed offload cycle"
 )
 
 # Histogram: Distribution of values (with buckets)
 offload_duration_seconds = Histogram(
-    'offload_duration_seconds',
-    'Duration of offload operations in seconds',
-    ['table', 'layer'],
-    buckets=[1, 5, 10, 30, 60, 120, 300, 600]  # 1s, 5s, 10s, 30s, 1m, 2m, 5m, 10m
+    "offload_duration_seconds",
+    "Duration of offload operations in seconds",
+    ["table", "layer"],
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600],  # 1s, 5s, 10s, 30s, 1m, 2m, 5m, 10m
 )
 
 offload_cycle_duration_seconds = Histogram(
-    'offload_cycle_duration_seconds',
-    'Duration of complete offload cycles in seconds',
-    buckets=[5, 10, 15, 30, 60, 120, 300, 600, 900]  # 5s to 15m
+    "offload_cycle_duration_seconds",
+    "Duration of complete offload cycles in seconds",
+    buckets=[5, 10, 15, 30, 60, 120, 300, 600, 900],  # 5s to 15m
 )
 
 # Summary: Similar to histogram but with quantiles
 offload_rows_per_second = Summary(
-    'offload_rows_per_second',
-    'Throughput of offload operations (rows/second)',
-    ['table']
+    "offload_rows_per_second",
+    "Throughput of offload operations (rows/second)",
+    ["table"],
 )
 
 # Info: Static metadata
-offload_info = Info(
-    'offload_info',
-    'Offload pipeline metadata'
-)
+offload_info = Info("offload_info", "Offload pipeline metadata")
 
 
 # ============================================================================
 # Metric Recording Functions
 # ============================================================================
+
 
 def record_offload_start(table: str, layer: str = "bronze"):
     """
@@ -112,7 +110,7 @@ def record_offload_success(
     layer: str,
     rows: int,
     duration: float,
-    watermark_timestamp: datetime = None
+    watermark_timestamp: datetime = None,
 ):
     """
     Record a successful offload operation.
@@ -137,17 +135,14 @@ def record_offload_success(
 
     # Gauge metrics
     if watermark_timestamp:
-        watermark_timestamp_seconds.labels(table=table).set(watermark_timestamp.timestamp())
+        watermark_timestamp_seconds.labels(table=table).set(
+            watermark_timestamp.timestamp()
+        )
 
     logger.info(f"Recorded offload success: {table} ({rows:,} rows in {duration:.1f}s)")
 
 
-def record_offload_failure(
-    table: str,
-    layer: str,
-    error_type: str,
-    duration: float
-):
+def record_offload_failure(table: str, layer: str, error_type: str, duration: float):
     """
     Record a failed offload operation.
 
@@ -163,7 +158,9 @@ def record_offload_failure(
     # Histogram metrics (record duration even on failure)
     offload_duration_seconds.labels(table=table, layer=layer).observe(duration)
 
-    logger.warning(f"Recorded offload failure: {table} ({error_type}) after {duration:.1f}s")
+    logger.warning(
+        f"Recorded offload failure: {table} ({error_type}) after {duration:.1f}s"
+    )
 
 
 def record_cycle_start():
@@ -177,7 +174,7 @@ def record_cycle_complete(
     tables_processed: int,
     successful: int,
     failed: int,
-    total_rows: int
+    total_rows: int,
 ):
     """
     Record a complete offload cycle.
@@ -202,8 +199,10 @@ def record_cycle_complete(
     if failed > 0:
         offload_last_failure_timestamp.set(datetime.now().timestamp())
 
-    logger.info(f"Recorded cycle complete: {status} ({successful}/{tables_processed} tables, "
-                f"{total_rows:,} rows, {duration:.1f}s)")
+    logger.info(
+        f"Recorded cycle complete: {status} ({successful}/{tables_processed} tables, "
+        f"{total_rows:,} rows, {duration:.1f}s)"
+    )
 
 
 def update_offload_lag(table: str, lag_minutes: float):
@@ -238,18 +237,23 @@ def set_pipeline_info(version: str, schedule_minutes: int, tables: list):
         schedule_minutes: Schedule interval in minutes
         tables: List of table names
     """
-    offload_info.info({
-        'version': version,
-        'schedule_minutes': str(schedule_minutes),
-        'tables': ','.join(tables),
-        'start_time': datetime.now().isoformat()
-    })
-    logger.info(f"Set pipeline info: v{version}, {schedule_minutes}min schedule, {len(tables)} tables")
+    offload_info.info(
+        {
+            "version": version,
+            "schedule_minutes": str(schedule_minutes),
+            "tables": ",".join(tables),
+            "start_time": datetime.now().isoformat(),
+        }
+    )
+    logger.info(
+        f"Set pipeline info: v{version}, {schedule_minutes}min schedule, {len(tables)} tables"
+    )
 
 
 # ============================================================================
 # Metrics Server
 # ============================================================================
+
 
 def start_metrics_server(port: int = 8000):
     """
@@ -279,6 +283,7 @@ def start_metrics_server(port: int = 8000):
 # Utility Functions
 # ============================================================================
 
+
 def get_metrics_summary() -> dict:
     """
     Get summary of current metrics (for logging/debugging).
@@ -291,7 +296,7 @@ def get_metrics_summary() -> dict:
     return {
         "info": "Metrics are exposed at /metrics endpoint",
         "port": 8000,
-        "endpoint": "http://localhost:8000/metrics"
+        "endpoint": "http://localhost:8000/metrics",
     }
 
 

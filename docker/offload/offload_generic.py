@@ -16,13 +16,12 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, max as spark_max
 
 # Add watermark utilities to path
-sys.path.append('/home/iceberg/offload')
+sys.path.append("/home/iceberg/offload")
 from watermark_pg import WatermarkManager, create_incremental_query
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,9 @@ logger = logging.getLogger(__name__)
 CLICKHOUSE_HOST = "clickhouse"
 CLICKHOUSE_PORT = "8123"
 CLICKHOUSE_DATABASE = "k2"  # Updated from 'default' to 'k2' (production database)
-CLICKHOUSE_URL = f"jdbc:clickhouse://{CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/{CLICKHOUSE_DATABASE}"
+CLICKHOUSE_URL = (
+    f"jdbc:clickhouse://{CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/{CLICKHOUSE_DATABASE}"
+)
 
 # Iceberg Catalog Configuration (Hadoop catalog from ADR-013)
 ICEBERG_WAREHOUSE = "/home/iceberg/warehouse"
@@ -48,13 +49,14 @@ BUFFER_MINUTES = 5  # Safety buffer to avoid TTL race + late arrivals
 # Main Offload Logic
 # ============================================================================
 
+
 def run_generic_offload(
     source_table: str,
     target_table: str,
     timestamp_col: str,
     sequence_col: str,
     layer: str,
-    columns: str = "*"
+    columns: str = "*",
 ):
     """
     Generic offload function for any ClickHouse table → Iceberg table.
@@ -70,7 +72,7 @@ def run_generic_offload(
     """
     start_time = datetime.now()
     logger.info("=" * 80)
-    logger.info(f"Generic Offload Job")
+    logger.info("Generic Offload Job")
     logger.info(f"Source: {source_table} (ClickHouse)")
     logger.info(f"Target: {target_table} (Iceberg)")
     logger.info(f"Layer: {layer}")
@@ -82,15 +84,21 @@ def run_generic_offload(
     # ────────────────────────────────────────────────────────────────────────
 
     try:
-        spark = SparkSession.builder \
-            .appName(f"K2-Offload-{source_table}") \
-            .config("spark.sql.catalog.k2", "org.apache.iceberg.spark.SparkCatalog") \
-            .config("spark.sql.catalog.k2.type", "hadoop") \
-            .config("spark.sql.catalog.k2.warehouse", ICEBERG_WAREHOUSE) \
-            .config("spark.sql.catalog.k2.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO") \
-            .config("spark.sql.defaultCatalog", "k2") \
-            .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
+        spark = (
+            SparkSession.builder.appName(f"K2-Offload-{source_table}")
+            .config("spark.sql.catalog.k2", "org.apache.iceberg.spark.SparkCatalog")
+            .config("spark.sql.catalog.k2.type", "hadoop")
+            .config("spark.sql.catalog.k2.warehouse", ICEBERG_WAREHOUSE)
+            .config(
+                "spark.sql.catalog.k2.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO"
+            )
+            .config("spark.sql.defaultCatalog", "k2")
+            .config(
+                "spark.sql.extensions",
+                "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+            )
             .getOrCreate()
+        )
         # spark.jars.packages removed: Iceberg runtime is pre-installed in the tabulario/spark-iceberg
         # base image (1.4.2) and the ClickHouse JDBC driver is baked into docker/spark/Dockerfile.
 
@@ -109,7 +117,7 @@ def run_generic_offload(
         pg_port=int(os.environ.get("PREFECT_DB_PORT", "5432")),
         pg_database=os.environ["PREFECT_DB_NAME"],
         pg_user=os.environ["PREFECT_DB_USER"],
-        pg_password=os.environ["PREFECT_DB_PASSWORD"]
+        pg_password=os.environ["PREFECT_DB_PASSWORD"],
     )
 
     try:
@@ -119,7 +127,9 @@ def run_generic_offload(
         wm.recover_stale_running(source_table)
         wm.mark_offload_running(source_table)
         last_timestamp, last_sequence = wm.get_watermark(source_table)
-        logger.info(f"✓ Watermark: timestamp={last_timestamp}, sequence={last_sequence}")
+        logger.info(
+            f"✓ Watermark: timestamp={last_timestamp}, sequence={last_sequence}"
+        )
 
     except Exception as e:
         logger.error(f"Failed to get watermark: {e}")
@@ -133,8 +143,7 @@ def run_generic_offload(
     # ────────────────────────────────────────────────────────────────────────
 
     window_start, window_end = wm.get_incremental_window(
-        last_watermark=last_timestamp,
-        buffer_minutes=BUFFER_MINUTES
+        last_watermark=last_timestamp, buffer_minutes=BUFFER_MINUTES
     )
 
     if window_end <= window_start:
@@ -155,10 +164,10 @@ def run_generic_offload(
             sequence_column=sequence_col,
             start_time=window_start,
             end_time=window_end,
-            columns=columns
+            columns=columns,
         )
 
-        logger.info(f"Reading incremental data from ClickHouse...")
+        logger.info("Reading incremental data from ClickHouse...")
 
         # Cache the DataFrame so ClickHouse is scanned exactly once.
         # Without cache: count() + max() + writeTo() each re-execute the JDBC read
@@ -170,8 +179,8 @@ def run_generic_offload(
             properties={
                 "driver": "com.clickhouse.jdbc.ClickHouseDriver",
                 "user": "default",
-                "password": os.environ["CLICKHOUSE_PASSWORD"]
-            }
+                "password": os.environ["CLICKHOUSE_PASSWORD"],
+            },
         ).cache()
 
         # Use max() as the empty-check — one action fills the cache and gives us
@@ -179,18 +188,18 @@ def run_generic_offload(
         # would scan ClickHouse a second time unnecessarily.
         max_row = clickhouse_df.select(
             spark_max(col(timestamp_col)).alias("max_timestamp"),
-            spark_max(col(sequence_col)).alias("max_sequence")
+            spark_max(col(sequence_col)).alias("max_sequence"),
         ).first()
 
-        if max_row['max_timestamp'] is None:
+        if max_row["max_timestamp"] is None:
             logger.info("No new rows to offload. Exiting cleanly.")
             clickhouse_df.unpersist()
             wm.close()
             spark.stop()
             sys.exit(0)
 
-        max_timestamp = max_row['max_timestamp']
-        max_sequence = max_row['max_sequence']
+        max_timestamp = max_row["max_timestamp"]
+        max_sequence = max_row["max_sequence"]
 
         logger.info(f"✓ Max timestamp: {max_timestamp}, Max sequence: {max_sequence}")
 
@@ -210,12 +219,9 @@ def run_generic_offload(
 
         # Append to Iceberg table (atomic commit).
         # clickhouse_df is still cached from Step 4; no second ClickHouse scan.
-        clickhouse_df.writeTo(target_table) \
-            .using("iceberg") \
-            .option("write-format", "parquet") \
-            .option("compression-codec", "zstd") \
-            .option("compression-level", "3") \
-            .append()
+        clickhouse_df.writeTo(target_table).using("iceberg").option(
+            "write-format", "parquet"
+        ).option("compression-codec", "zstd").option("compression-level", "3").append()
 
         # count() from cache — O(1), no re-scan of ClickHouse
         row_count = clickhouse_df.count()
@@ -244,15 +250,17 @@ def run_generic_offload(
             max_timestamp=max_timestamp,
             max_sequence=max_sequence,
             row_count=row_count,
-            duration_seconds=duration_seconds
+            duration_seconds=duration_seconds,
         )
 
-        logger.info(f"✓ Watermark updated successfully")
+        logger.info("✓ Watermark updated successfully")
 
     except Exception as e:
         logger.error(f"Failed to update watermark: {e}")
-        logger.warning("Data written to Iceberg but watermark update failed. "
-                       "Next run will re-read same data (Iceberg will deduplicate).")
+        logger.warning(
+            "Data written to Iceberg but watermark update failed. "
+            "Next run will re-read same data (Iceberg will deduplicate)."
+        )
 
     # ────────────────────────────────────────────────────────────────────────
     # Step 7: Cleanup and Summary
@@ -273,6 +281,7 @@ def run_generic_offload(
 # CLI Entry Point
 # ============================================================================
 
+
 def main():
     """Parse CLI arguments and run offload job."""
     parser = argparse.ArgumentParser(
@@ -282,35 +291,35 @@ def main():
     parser.add_argument(
         "--source-table",
         required=True,
-        help="ClickHouse source table name (e.g., bronze_trades_binance)"
+        help="ClickHouse source table name (e.g., bronze_trades_binance)",
     )
     parser.add_argument(
         "--target-table",
         required=True,
-        help="Iceberg target table name with catalog (e.g., cold.bronze_trades_binance)"
+        help="Iceberg target table name with catalog (e.g., cold.bronze_trades_binance)",
     )
     parser.add_argument(
         "--timestamp-col",
         required=True,
-        help="Timestamp column for incremental reads (e.g., exchange_timestamp)"
+        help="Timestamp column for incremental reads (e.g., exchange_timestamp)",
     )
     parser.add_argument(
         "--sequence-col",
         required=True,
-        help="Sequence column for ordering (e.g., sequence_number)"
+        help="Sequence column for ordering (e.g., sequence_number)",
     )
     parser.add_argument(
         "--layer",
         required=True,
         choices=["bronze", "silver", "gold"],
-        help="Data layer (for logging/monitoring)"
+        help="Data layer (for logging/monitoring)",
     )
     parser.add_argument(
         "--columns",
         default="*",
         help="Explicit comma-separated column list for the ClickHouse SELECT. "
-             "Use '*' (default) only when the Iceberg target schema matches ClickHouse exactly. "
-             "Prefer an explicit list to prevent schema drift from silently flowing into Iceberg."
+        "Use '*' (default) only when the Iceberg target schema matches ClickHouse exactly. "
+        "Prefer an explicit list to prevent schema drift from silently flowing into Iceberg.",
     )
 
     args = parser.parse_args()
@@ -322,7 +331,7 @@ def main():
             timestamp_col=args.timestamp_col,
             sequence_col=args.sequence_col,
             layer=args.layer,
-            columns=args.columns
+            columns=args.columns,
         )
         sys.exit(0)
 

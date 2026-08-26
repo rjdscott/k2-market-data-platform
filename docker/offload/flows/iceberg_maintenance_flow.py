@@ -63,13 +63,14 @@ _DOCKER_EXEC = ["docker", "exec", "k2-spark-iceberg", "python3", _MAINTENANCE_SC
 
 # Per-task timeout (10 min for compaction; 5 min for expiry/audit).
 _COMPACT_TIMEOUT_S = 600
-_EXPIRE_TIMEOUT_S  = 300
-_AUDIT_TIMEOUT_S   = 600
+_EXPIRE_TIMEOUT_S = 300
+_AUDIT_TIMEOUT_S = 600
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: run a docker exec maintenance command
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _run_maintenance_cmd(cmd: List[str], timeout: int, logger) -> str:
     """
@@ -106,6 +107,7 @@ def _run_maintenance_cmd(cmd: List[str], timeout: int, logger) -> str:
 # Prefect Tasks
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @task(
     name="compact-table",
     description="Rewrite small Parquet files for one Iceberg table (binpack)",
@@ -122,22 +124,33 @@ def compact_table(table: str, target_file_size_mb: int = 128) -> Dict:
     needing to parse log output.
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
     logger.info(f"Compacting {table} (target={target_file_size_mb} MB) ...")
 
     cmd = _DOCKER_EXEC + [
         "compact",
-        "--table", table,
-        "--target-file-size-mb", str(target_file_size_mb),
+        "--table",
+        table,
+        "--target-file-size-mb",
+        str(target_file_size_mb),
     ]
     try:
         _run_maintenance_cmd(cmd, _COMPACT_TIMEOUT_S, logger)
         logger.info(f"✓ Compact complete: {table}")
-        return {"table": table, "status": "success", "timestamp": datetime.now().isoformat()}
+        return {
+            "table": table,
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+        }
     except RuntimeError as exc:
         logger.error(f"✗ Compact failed: {table} — {exc}")
-        return {"table": table, "status": "failed", "error": str(exc),
-                "timestamp": datetime.now().isoformat()}
+        return {
+            "table": table,
+            "status": "failed",
+            "error": str(exc),
+            "timestamp": datetime.now().isoformat(),
+        }
 
 
 @task(
@@ -160,23 +173,37 @@ def expire_snapshots(
     'history.expire.max-snapshot-age-ms' = 604800000.
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
-    logger.info(f"Expiring snapshots for {table} (max_age={max_age_hours}h, retain={retain_last}) ...")
+    logger.info(
+        f"Expiring snapshots for {table} (max_age={max_age_hours}h, retain={retain_last}) ..."
+    )
 
     cmd = _DOCKER_EXEC + [
         "expire",
-        "--table", table,
-        "--max-age-hours", str(max_age_hours),
-        "--retain-last", str(retain_last),
+        "--table",
+        table,
+        "--max-age-hours",
+        str(max_age_hours),
+        "--retain-last",
+        str(retain_last),
     ]
     try:
         _run_maintenance_cmd(cmd, _EXPIRE_TIMEOUT_S, logger)
         logger.info(f"✓ Expire complete: {table}")
-        return {"table": table, "status": "success", "timestamp": datetime.now().isoformat()}
+        return {
+            "table": table,
+            "status": "success",
+            "timestamp": datetime.now().isoformat(),
+        }
     except RuntimeError as exc:
         logger.error(f"✗ Expire failed: {table} — {exc}")
-        return {"table": table, "status": "failed", "error": str(exc),
-                "timestamp": datetime.now().isoformat()}
+        return {
+            "table": table,
+            "status": "failed",
+            "error": str(exc),
+            "timestamp": datetime.now().isoformat(),
+        }
 
 
 @task(
@@ -196,6 +223,7 @@ def run_audit(audit_window_hours: int = 24) -> Dict:
     alert without reading the PostgreSQL table.
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
     logger.info(f"Running warm-cold audit (window={audit_window_hours}h) ...")
 
@@ -214,7 +242,7 @@ def run_audit(audit_window_hours: int = 24) -> Dict:
 
     # Parse summary line: "OK=N  WARNING=N  MISSING=N  ERROR=N"
     missing_count = 0
-    error_count   = 0
+    error_count = 0
     m = re.search(r"MISSING=(\d+)", stdout)
     if m:
         missing_count = int(m.group(1))
@@ -237,6 +265,7 @@ def run_audit(audit_window_hours: int = 24) -> Dict:
 # Sub-Flows
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @flow(
     name="compact-all-tables",
     description="Compact all 10 Iceberg tables (sequential)",
@@ -253,6 +282,7 @@ def compact_all_tables(target_file_size_mb: int = 128) -> List[Dict]:
     I/O to MinIO, not CPU.
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
     logger.info(f"Starting compaction for {len(_ALL_TABLES)} tables ...")
 
@@ -278,6 +308,7 @@ def compact_all_tables(target_file_size_mb: int = 128) -> List[Dict]:
 def expire_all_snapshots(max_age_hours: int = 168, retain_last: int = 3) -> List[Dict]:
     """Expire old snapshots sequentially across all Iceberg tables."""
     from prefect import get_run_logger
+
     logger = get_run_logger()
     logger.info(f"Starting snapshot expiry for {len(_ALL_TABLES)} tables ...")
 
@@ -299,6 +330,7 @@ def expire_all_snapshots(max_age_hours: int = 168, retain_last: int = 3) -> List
 # ─────────────────────────────────────────────────────────────────────────────
 # Main Flow
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @flow(
     name="iceberg-maintenance-main",
@@ -329,12 +361,15 @@ def iceberg_maintenance_main(
     Prefect marks the run as Failed and sends an alert.
     """
     from prefect import get_run_logger
+
     logger = get_run_logger()
     start_time = datetime.now()
 
     logger.info("╔" + "=" * 68 + "╗")
     logger.info("║" + " " * 18 + "K2 ICEBERG DAILY MAINTENANCE" + " " * 22 + "║")
-    logger.info("║" + " " * 12 + "compact → expire → audit  (02:00 UTC)" + " " * 19 + "║")
+    logger.info(
+        "║" + " " * 12 + "compact → expire → audit  (02:00 UTC)" + " " * 19 + "║"
+    )
     logger.info("╚" + "=" * 68 + "╝")
 
     # Step 1: Compaction
@@ -353,9 +388,9 @@ def iceberg_maintenance_main(
     total_duration = (datetime.now() - start_time).total_seconds()
 
     compact_failed = sum(1 for r in compact_results if r["status"] == "failed")
-    expire_failed  = sum(1 for r in expire_results  if r["status"] == "failed")
-    audit_missing  = audit_result.get("missing_count", 0)
-    audit_errors   = audit_result.get("error_count", 0)
+    expire_failed = sum(1 for r in expire_results if r["status"] == "failed")
+    audit_missing = audit_result.get("missing_count", 0)
+    audit_errors = audit_result.get("error_count", 0)
 
     overall_status = "success"
     if compact_failed > 0 or expire_failed > 0:

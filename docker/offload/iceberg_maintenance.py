@@ -58,9 +58,9 @@ CLICKHOUSE_URL = (
 
 # Defaults — overridable via CLI flags.
 DEFAULT_TARGET_FILE_SIZE_MB = 128
-DEFAULT_SNAPSHOT_MAX_AGE_HOURS = 168   # 7 days — matches DDL tblproperties
-DEFAULT_SNAPSHOT_RETAIN_LAST = 3       # Never drop below 3 snapshots
-DEFAULT_AUDIT_WINDOW_HOURS = 24        # "Yesterday" UTC window (run at 02:00 UTC)
+DEFAULT_SNAPSHOT_MAX_AGE_HOURS = 168  # 7 days — matches DDL tblproperties
+DEFAULT_SNAPSHOT_RETAIN_LAST = 3  # Never drop below 3 snapshots
+DEFAULT_AUDIT_WINDOW_HOURS = 24  # "Yesterday" UTC window (run at 02:00 UTC)
 
 # All 10 tables the audit compares.  Used only by the audit action; compaction
 # and expiry receive --table from the Prefect flow so they stay table-agnostic.
@@ -140,6 +140,7 @@ MISSING_DATA_PCT_THRESHOLD = 5.0
 # Spark Session Factory
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _build_spark(app_name: str) -> SparkSession:
     """
     Build a SparkSession with the same Hadoop/Iceberg catalog config used by
@@ -147,12 +148,13 @@ def _build_spark(app_name: str) -> SparkSession:
     identically.
     """
     spark = (
-        SparkSession.builder
-        .appName(app_name)
+        SparkSession.builder.appName(app_name)
         .config("spark.sql.catalog.k2", "org.apache.iceberg.spark.SparkCatalog")
         .config("spark.sql.catalog.k2.type", "hadoop")
         .config("spark.sql.catalog.k2.warehouse", ICEBERG_WAREHOUSE)
-        .config("spark.sql.catalog.k2.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO")
+        .config(
+            "spark.sql.catalog.k2.io-impl", "org.apache.iceberg.hadoop.HadoopFileIO"
+        )
         .config("spark.sql.defaultCatalog", "k2")
         .config(
             "spark.sql.extensions",
@@ -168,6 +170,7 @@ def _build_spark(app_name: str) -> SparkSession:
 # ─────────────────────────────────────────────────────────────────────────────
 # Action: compact
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def action_compact(table: str, target_file_size_mb: int, dry_run: bool) -> None:
     """
@@ -192,7 +195,7 @@ def action_compact(table: str, target_file_size_mb: int, dry_run: bool) -> None:
 
     logger.info("=" * 70)
     logger.info(f"COMPACT: {table}")
-    logger.info(f"  Strategy      : binpack")
+    logger.info("  Strategy      : binpack")
     logger.info(f"  Target size   : {target_file_size_mb} MB ({target_bytes:,} bytes)")
     logger.info(f"  Dry-run       : {dry_run}")
     logger.info("=" * 70)
@@ -217,9 +220,9 @@ def action_compact(table: str, target_file_size_mb: int, dry_run: bool) -> None:
         row = result.first()
 
         rewritten = row["rewritten_data_files_count"]
-        added     = row["added_data_files_count"]
+        added = row["added_data_files_count"]
         rewritten_bytes = row["rewritten_bytes_count"]
-        failed    = row["failed_data_files_count"]
+        failed = row["failed_data_files_count"]
 
         logger.info(f"✓ Compaction complete for {table}")
         logger.info(f"  Files rewritten : {rewritten}")
@@ -240,6 +243,7 @@ def action_compact(table: str, target_file_size_mb: int, dry_run: bool) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Action: expire
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def action_expire(
     table: str,
@@ -289,9 +293,9 @@ def action_expire(
         """)
         row = result.first()
 
-        deleted_data      = row["deleted_data_files_count"]
+        deleted_data = row["deleted_data_files_count"]
         deleted_manifests = row["deleted_manifest_files_count"]
-        deleted_lists     = row["deleted_manifest_lists_count"]
+        deleted_lists = row["deleted_manifest_lists_count"]
 
         logger.info(f"✓ Snapshot expiry complete for {table}")
         logger.info(f"  Data files deleted     : {deleted_data}")
@@ -308,6 +312,7 @@ def action_expire(
 # ─────────────────────────────────────────────────────────────────────────────
 # Action: audit
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _pg_connection() -> "psycopg2.connection":
     """Open a PostgreSQL connection using the standard PREFECT_DB_* env vars."""
@@ -391,8 +396,13 @@ def _audit_status(ch_count: int, iceberg_count: int) -> tuple[str, float | None,
     return status, round(delta_pct, 4), notes
 
 
-def _count_clickhouse(spark: SparkSession, ch_source: str, timestamp_col: str,
-                      window_start_str: str, window_end_str: str) -> int:
+def _count_clickhouse(
+    spark: SparkSession,
+    ch_source: str,
+    timestamp_col: str,
+    window_start_str: str,
+    window_end_str: str,
+) -> int:
     """
     Count rows in ClickHouse for *ch_source* within the audit window.
 
@@ -417,8 +427,13 @@ def _count_clickhouse(spark: SparkSession, ch_source: str, timestamp_col: str,
     return int(df.first()["cnt"])
 
 
-def _count_iceberg(spark: SparkSession, iceberg_table: str, timestamp_col: str,
-                   window_start_str: str, window_end_str: str) -> int:
+def _count_iceberg(
+    spark: SparkSession,
+    iceberg_table: str,
+    timestamp_col: str,
+    window_start_str: str,
+    window_end_str: str,
+) -> int:
     """
     Count rows in an Iceberg table within the audit window.
 
@@ -456,7 +471,7 @@ def action_audit(audit_window_hours: int) -> None:
     window_start = window_end - timedelta(hours=audit_window_hours)
 
     window_start_str = window_start.strftime("%Y-%m-%d %H:%M:%S")
-    window_end_str   = window_end.strftime("%Y-%m-%d %H:%M:%S")
+    window_end_str = window_end.strftime("%Y-%m-%d %H:%M:%S")
 
     logger.info("=" * 70)
     logger.info("AUDIT: Warm-Cold Consistency Check")
@@ -474,31 +489,39 @@ def action_audit(audit_window_hours: int) -> None:
     try:
         for cfg in _AUDIT_TABLE_CONFIG:
             iceberg_table = cfg["iceberg_table"]
-            ch_source     = cfg["ch_source"]
+            ch_source = cfg["ch_source"]
             timestamp_col = cfg["timestamp_col"]
-            layer         = cfg["layer"]
+            layer = cfg["layer"]
 
             logger.info(f"  Auditing {iceberg_table} ...")
             try:
-                ch_count      = _count_clickhouse(spark, ch_source, timestamp_col,
-                                                  window_start_str, window_end_str)
-                iceberg_count = _count_iceberg(spark, iceberg_table, timestamp_col,
-                                               window_start_str, window_end_str)
-                delta         = iceberg_count - ch_count
+                ch_count = _count_clickhouse(
+                    spark, ch_source, timestamp_col, window_start_str, window_end_str
+                )
+                iceberg_count = _count_iceberg(
+                    spark,
+                    iceberg_table,
+                    timestamp_col,
+                    window_start_str,
+                    window_end_str,
+                )
+                delta = iceberg_count - ch_count
                 status, delta_pct, notes = _audit_status(ch_count, iceberg_count)
 
-                results.append({
-                    "iceberg_table": iceberg_table,
-                    "ch_source": ch_source,
-                    "layer": layer,
-                    "ch_count": ch_count,
-                    "iceberg_count": iceberg_count,
-                    "delta": delta,
-                    "delta_pct": delta_pct,
-                    "status": status,
-                    "notes": notes,
-                    "error": None,
-                })
+                results.append(
+                    {
+                        "iceberg_table": iceberg_table,
+                        "ch_source": ch_source,
+                        "layer": layer,
+                        "ch_count": ch_count,
+                        "iceberg_count": iceberg_count,
+                        "delta": delta,
+                        "delta_pct": delta_pct,
+                        "status": status,
+                        "notes": notes,
+                        "error": None,
+                    }
+                )
                 logger.info(
                     f"    CH={ch_count:>10,}  Iceberg={iceberg_count:>10,}  "
                     f"Δ={delta:>+10,}  [{status.upper()}]"
@@ -506,18 +529,20 @@ def action_audit(audit_window_hours: int) -> None:
 
             except Exception as exc:
                 logger.error(f"    ✗ Audit failed for {iceberg_table}: {exc}")
-                results.append({
-                    "iceberg_table": iceberg_table,
-                    "ch_source": ch_source,
-                    "layer": layer,
-                    "ch_count": 0,
-                    "iceberg_count": 0,
-                    "delta": 0,
-                    "delta_pct": None,
-                    "status": "error",
-                    "notes": str(exc)[:500],
-                    "error": str(exc),
-                })
+                results.append(
+                    {
+                        "iceberg_table": iceberg_table,
+                        "ch_source": ch_source,
+                        "layer": layer,
+                        "ch_count": 0,
+                        "iceberg_count": 0,
+                        "delta": 0,
+                        "delta_pct": None,
+                        "status": "error",
+                        "notes": str(exc)[:500],
+                        "error": str(exc),
+                    }
+                )
 
         # ── Write all results to PostgreSQL ──────────────────────────────────
         with conn:
@@ -555,10 +580,10 @@ def action_audit(audit_window_hours: int) -> None:
         spark.stop()
 
     # ── Summary table ─────────────────────────────────────────────────────────
-    ok_count      = sum(1 for r in results if r["status"] == "ok")
+    ok_count = sum(1 for r in results if r["status"] == "ok")
     warning_count = sum(1 for r in results if r["status"] == "warning")
     missing_count = sum(1 for r in results if r["status"] == "missing_data")
-    error_count   = sum(1 for r in results if r["status"] == "error")
+    error_count = sum(1 for r in results if r["status"] == "error")
 
     print("\n" + "=" * 70)
     print("AUDIT SUMMARY")
@@ -573,7 +598,9 @@ def action_audit(audit_window_hours: int) -> None:
             f"{r['iceberg_count']:>10,}  [{status_tag}]"
         )
     print("  " + "-" * 66)
-    print(f"  OK={ok_count}  WARNING={warning_count}  MISSING={missing_count}  ERROR={error_count}")
+    print(
+        f"  OK={ok_count}  WARNING={warning_count}  MISSING={missing_count}  ERROR={error_count}"
+    )
     print("=" * 70 + "\n")
 
     if missing_count > 0 or error_count > 0:
@@ -590,6 +617,7 @@ def action_audit(audit_window_hours: int) -> None:
 # CLI Entry Point
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="K2 Iceberg daily maintenance (compact | expire | audit)"
@@ -599,41 +627,53 @@ def _build_parser() -> argparse.ArgumentParser:
     # compact ─────────────────────────────────────────────────────────────────
     p_compact = sub.add_parser("compact", help="Rewrite small data files (binpack)")
     p_compact.add_argument(
-        "--table", required=True,
+        "--table",
+        required=True,
         help="Iceberg table identifier (e.g. cold.bronze_trades_binance)",
     )
     p_compact.add_argument(
-        "--target-file-size-mb", type=int, default=DEFAULT_TARGET_FILE_SIZE_MB,
+        "--target-file-size-mb",
+        type=int,
+        default=DEFAULT_TARGET_FILE_SIZE_MB,
         help=f"Target Parquet file size in MB (default: {DEFAULT_TARGET_FILE_SIZE_MB})",
     )
     p_compact.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Log the plan without executing any Iceberg operations",
     )
 
     # expire ──────────────────────────────────────────────────────────────────
     p_expire = sub.add_parser("expire", help="Remove old snapshots and orphaned files")
     p_expire.add_argument(
-        "--table", required=True,
+        "--table",
+        required=True,
         help="Iceberg table identifier (e.g. cold.silver_trades)",
     )
     p_expire.add_argument(
-        "--max-age-hours", type=int, default=DEFAULT_SNAPSHOT_MAX_AGE_HOURS,
+        "--max-age-hours",
+        type=int,
+        default=DEFAULT_SNAPSHOT_MAX_AGE_HOURS,
         help=f"Remove snapshots older than N hours (default: {DEFAULT_SNAPSHOT_MAX_AGE_HOURS} = 7 days)",
     )
     p_expire.add_argument(
-        "--retain-last", type=int, default=DEFAULT_SNAPSHOT_RETAIN_LAST,
+        "--retain-last",
+        type=int,
+        default=DEFAULT_SNAPSHOT_RETAIN_LAST,
         help=f"Always keep at least N most recent snapshots (default: {DEFAULT_SNAPSHOT_RETAIN_LAST})",
     )
     p_expire.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Log the plan without executing any Iceberg operations",
     )
 
     # audit ───────────────────────────────────────────────────────────────────
     p_audit = sub.add_parser("audit", help="Compare ClickHouse vs Iceberg row counts")
     p_audit.add_argument(
-        "--audit-window-hours", type=int, default=DEFAULT_AUDIT_WINDOW_HOURS,
+        "--audit-window-hours",
+        type=int,
+        default=DEFAULT_AUDIT_WINDOW_HOURS,
         help=f"Audit window in hours, ending now (default: {DEFAULT_AUDIT_WINDOW_HOURS})",
     )
 

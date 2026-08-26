@@ -5,7 +5,9 @@ from pyspark.sql import SparkSession
 
 spark = (
     SparkSession.builder.appName("CreateKrakenIcebergTable")
-    .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0")
+    .config(
+        "spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0"
+    )
     .config("spark.sql.catalog.k2", "org.apache.iceberg.spark.SparkCatalog")
     .config("spark.sql.catalog.k2.type", "hadoop")
     .config("spark.sql.catalog.k2.warehouse", "/home/iceberg/warehouse")
@@ -13,9 +15,9 @@ spark = (
     .getOrCreate()
 )
 
-print("\n" + "="*80)
+print("\n" + "=" * 80)
 print("Creating Iceberg Table: k2.cold.bronze_trades_kraken")
-print("="*80)
+print("=" * 80)
 
 # Drop if exists
 spark.sql("DROP TABLE IF EXISTS k2.cold.bronze_trades_kraken")

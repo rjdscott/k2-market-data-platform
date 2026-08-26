@@ -23,9 +23,9 @@ def deploy_maintenance_schedule() -> None:
     print("=" * 70)
     print()
     print(f"Prefect API URL : {os.environ['PREFECT_API_URL']}")
-    print(f"Deployment name : iceberg-maintenance-daily")
-    print(f"Schedule        : 0 2 * * * (02:00 UTC daily)")
-    print(f"Work pool       : iceberg-offload  (shared with offload flow)")
+    print("Deployment name : iceberg-maintenance-daily")
+    print("Schedule        : 0 2 * * * (02:00 UTC daily)")
+    print("Work pool       : iceberg-offload  (shared with offload flow)")
     print()
 
     deployment_id = iceberg_maintenance_main.from_source(
@@ -34,7 +34,7 @@ def deploy_maintenance_schedule() -> None:
     ).deploy(
         name="iceberg-maintenance-daily",
         work_pool_name="iceberg-offload",
-        cron="0 2 * * *",          # 02:00 UTC daily
+        cron="0 2 * * *",  # 02:00 UTC daily
         tags=["iceberg", "maintenance", "production", "phase-5"],
         description=(
             "Daily Iceberg maintenance: compact → expire → audit. "
@@ -56,9 +56,13 @@ def deploy_maintenance_schedule() -> None:
     print("📋 Next steps:")
     print("   1. Verify in Prefect UI: http://localhost:4200")
     print("   2. Run a test cycle manually:")
-    print("      prefect deployment run 'iceberg-maintenance-main/iceberg-maintenance-daily'")
+    print(
+        "      prefect deployment run 'iceberg-maintenance-main/iceberg-maintenance-daily'"
+    )
     print("   3. Check maintenance_audit_log in PostgreSQL:")
-    print("      SELECT * FROM maintenance_audit_log ORDER BY run_timestamp DESC LIMIT 10;")
+    print(
+        "      SELECT * FROM maintenance_audit_log ORDER BY run_timestamp DESC LIMIT 10;"
+    )
     print()
     print("=" * 70)
 

@@ -18,7 +18,9 @@ from pyspark.sql.types import (
 # Initialize Spark with Iceberg
 spark = (
     SparkSession.builder.appName("CreateBronzeIcebergTable")
-    .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0")
+    .config(
+        "spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0"
+    )
     .config("spark.sql.catalog.k2", "org.apache.iceberg.spark.SparkCatalog")
     .config("spark.sql.catalog.k2.type", "hadoop")
     .config("spark.sql.catalog.k2.warehouse", "/home/iceberg/warehouse")
@@ -54,9 +56,7 @@ df.writeTo("k2.cold.bronze_trades_binance").using("iceberg").partitionedBy(
     "days(exchange_timestamp)"
 ).tableProperty("write.format.default", "parquet").tableProperty(
     "write.parquet.compression-codec", "zstd"
-).tableProperty(
-    "write.parquet.compression-level", "3"
-).create()
+).tableProperty("write.parquet.compression-level", "3").create()
 
 print("✅ Created Iceberg table: k2.cold.bronze_trades_binance")
 

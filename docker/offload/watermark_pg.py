@@ -10,13 +10,13 @@ import re
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime, timedelta, timezone
-from typing import Tuple, Optional
+from typing import Tuple
 import logging
 
 # Validates that a name is a safe SQL identifier (letters, digits, underscores only).
 # Applied to table_name and column names before embedding in JDBC query strings.
 # These values come from TABLE_CONFIG (not user input) but defence-in-depth costs nothing.
-_SAFE_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+_SAFE_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 def _validate_identifier(name: str, label: str) -> None:
@@ -26,9 +26,9 @@ def _validate_identifier(name: str, label: str) -> None:
             f"Unsafe {label} {name!r}: only letters, digits, and underscores are allowed."
         )
 
+
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -50,9 +50,14 @@ class WatermarkManager:
     - Industry standard - metadata DB pattern used by Airflow, Databricks, etc.
     """
 
-    def __init__(self, pg_host: str = "prefect-db", pg_port: int = 5432,
-                 pg_database: str = "prefect", pg_user: str = "prefect",
-                 pg_password: str = ""):
+    def __init__(
+        self,
+        pg_host: str = "prefect-db",
+        pg_port: int = 5432,
+        pg_database: str = "prefect",
+        pg_user: str = "prefect",
+        pg_password: str = "",
+    ):
         """
         Initialize watermark manager with PostgreSQL connection.
 
@@ -83,13 +88,15 @@ class WatermarkManager:
         each `with conn:` block exits.
         """
         if self._conn is None or self._conn.closed:
-            logger.debug(f"Opening PostgreSQL connection to {self.pg_host}:{self.pg_port}/{self.pg_database}")
+            logger.debug(
+                f"Opening PostgreSQL connection to {self.pg_host}:{self.pg_port}/{self.pg_database}"
+            )
             self._conn = psycopg2.connect(
                 host=self.pg_host,
                 port=self.pg_port,
                 database=self.pg_database,
                 user=self.pg_user,
-                password=self.pg_password
+                password=self.pg_password,
             )
         return self._conn
 
@@ -122,11 +129,14 @@ class WatermarkManager:
         try:
             with self._get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT last_offload_timestamp, last_offload_max_sequence
                         FROM offload_watermarks
                         WHERE table_name = %s
-                    """, (table_name,))
+                    """,
+                        (table_name,),
+                    )
 
                     row = cur.fetchone()
 
@@ -136,10 +146,12 @@ class WatermarkManager:
                             "Run offload-watermarks.sql to initialize."
                         )
 
-                    last_timestamp = row['last_offload_timestamp']
-                    last_sequence = row['last_offload_max_sequence']
+                    last_timestamp = row["last_offload_timestamp"]
+                    last_sequence = row["last_offload_max_sequence"]
 
-                    logger.info(f"Watermark retrieved: timestamp={last_timestamp}, sequence={last_sequence}")
+                    logger.info(
+                        f"Watermark retrieved: timestamp={last_timestamp}, sequence={last_sequence}"
+                    )
                     return last_timestamp, last_sequence
 
         except Exception as e:
@@ -152,7 +164,7 @@ class WatermarkManager:
         max_timestamp: datetime,
         max_sequence: int,
         row_count: int,
-        duration_seconds: int
+        duration_seconds: int,
     ) -> None:
         """
         Update watermark after successful Iceberg write (transactional).
@@ -167,15 +179,18 @@ class WatermarkManager:
             row_count: Number of rows written
             duration_seconds: Job duration in seconds
         """
-        logger.info(f"Updating watermark for {table_name}: "
-                    f"max_timestamp={max_timestamp}, max_sequence={max_sequence}, "
-                    f"row_count={row_count}, duration={duration_seconds}s")
+        logger.info(
+            f"Updating watermark for {table_name}: "
+            f"max_timestamp={max_timestamp}, max_sequence={max_sequence}, "
+            f"row_count={row_count}, duration={duration_seconds}s"
+        )
 
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cur:
                     # Transactional update (ACID guarantees)
-                    cur.execute("""
+                    cur.execute(
+                        """
                         UPDATE offload_watermarks
                         SET
                             last_offload_timestamp = %s,
@@ -187,7 +202,15 @@ class WatermarkManager:
                             failure_count = 0,
                             updated_at = NOW()
                         WHERE table_name = %s
-                    """, (max_timestamp, max_sequence, row_count, duration_seconds, table_name))
+                    """,
+                        (
+                            max_timestamp,
+                            max_sequence,
+                            row_count,
+                            duration_seconds,
+                            table_name,
+                        ),
+                    )
 
                     conn.commit()
 
@@ -209,11 +232,14 @@ class WatermarkManager:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         UPDATE offload_watermarks
                         SET status = 'running', updated_at = NOW()
                         WHERE table_name = %s
-                    """, (table_name,))
+                    """,
+                        (table_name,),
+                    )
                     conn.commit()
 
                     logger.info(f"Offload marked as running for {table_name}")
@@ -236,7 +262,8 @@ class WatermarkManager:
             with self._get_connection() as conn:
                 with conn.cursor() as cur:
                     # Increment failure count, record error
-                    cur.execute("""
+                    cur.execute(
+                        """
                         UPDATE offload_watermarks
                         SET
                             status = 'failed',
@@ -244,7 +271,9 @@ class WatermarkManager:
                             failure_count = failure_count + 1,
                             updated_at = NOW()
                         WHERE table_name = %s
-                    """, (error_message[:1000], table_name))  # Truncate error to 1000 chars
+                    """,
+                        (error_message[:1000], table_name),
+                    )  # Truncate error to 1000 chars
 
                     conn.commit()
 
@@ -255,9 +284,7 @@ class WatermarkManager:
             # Non-critical, error already logged
 
     def recover_stale_running(
-        self,
-        table_name: str,
-        stale_threshold_minutes: int = 30
+        self, table_name: str, stale_threshold_minutes: int = 30
     ) -> None:
         """
         Reset a stuck 'running' status to 'failed' before starting a new job run.
@@ -275,12 +302,15 @@ class WatermarkManager:
             table_name: Source table name
             stale_threshold_minutes: Minutes after which 'running' is considered stale
         """
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_threshold_minutes)
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(
+            minutes=stale_threshold_minutes
+        )
 
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         UPDATE offload_watermarks
                         SET
                             status = 'failed',
@@ -292,7 +322,9 @@ class WatermarkManager:
                         WHERE table_name = %s
                           AND status = 'running'
                           AND updated_at < %s
-                    """, (table_name, stale_cutoff))
+                    """,
+                        (table_name, stale_cutoff),
+                    )
 
                     if cur.rowcount > 0:
                         logger.warning(
@@ -304,13 +336,13 @@ class WatermarkManager:
                     conn.commit()
 
         except Exception as e:
-            logger.warning(f"Failed to recover stale running status for {table_name}: {e}")
+            logger.warning(
+                f"Failed to recover stale running status for {table_name}: {e}"
+            )
             # Non-critical: if this fails the job still proceeds normally
 
     def get_incremental_window(
-        self,
-        last_watermark: datetime,
-        buffer_minutes: int = 5
+        self, last_watermark: datetime, buffer_minutes: int = 5
     ) -> Tuple[datetime, datetime]:
         """
         Calculate time window for incremental read.
@@ -329,12 +361,16 @@ class WatermarkManager:
         start_time = last_watermark
         end_time = datetime.now(start_time.tzinfo) - timedelta(minutes=buffer_minutes)
 
-        logger.info(f"Incremental window: {start_time} to {end_time} "
-                    f"(buffer: {buffer_minutes} minutes)")
+        logger.info(
+            f"Incremental window: {start_time} to {end_time} "
+            f"(buffer: {buffer_minutes} minutes)"
+        )
 
         if end_time <= start_time:
-            logger.warning(f"No new data to offload (end_time <= start_time). "
-                           f"This is normal for low-volume periods.")
+            logger.warning(
+                "No new data to offload (end_time <= start_time). "
+                "This is normal for low-volume periods."
+            )
             return start_time, start_time  # Empty window
 
         return start_time, end_time
@@ -346,7 +382,7 @@ def create_incremental_query(
     sequence_column: str,
     start_time: datetime,
     end_time: datetime,
-    columns: str = "*"
+    columns: str = "*",
 ) -> str:
     """
     Generate incremental SELECT query for ClickHouse (used as a Spark JDBC subquery).
@@ -376,8 +412,8 @@ def create_incremental_query(
     # Timestamps are Python datetime objects from psycopg2 (never user input).
     # PostgreSQL returns TIMESTAMPTZ values as UTC-aware datetimes; we strip tz
     # before formatting because ClickHouse expects naive UTC timestamp strings.
-    start_str = start_time.strftime('%Y-%m-%d %H:%M:%S.%f')
-    end_str = end_time.strftime('%Y-%m-%d %H:%M:%S.%f')
+    start_str = start_time.strftime("%Y-%m-%d %H:%M:%S.%f")
+    end_str = end_time.strftime("%Y-%m-%d %H:%M:%S.%f")
 
     query = f"""
         (SELECT {columns}
@@ -387,8 +423,10 @@ def create_incremental_query(
          ORDER BY {timestamp_column}, {sequence_column}) AS incremental_query
     """
 
-    logger.info(f"Generated incremental query for {table_name}: "
-                f"{start_time} to {end_time} (columns: {columns})")
+    logger.info(
+        f"Generated incremental query for {table_name}: "
+        f"{start_time} to {end_time} (columns: {columns})"
+    )
 
     return query
 
@@ -397,12 +435,13 @@ def create_incremental_query(
 # PREFECT_DB_PASSWORD=prefect python3 watermark_pg.py
 if __name__ == "__main__":
     import os
+
     wm = WatermarkManager(
         pg_host=os.environ.get("PREFECT_DB_HOST", "localhost"),
         pg_port=int(os.environ.get("PREFECT_DB_PORT", "5432")),
         pg_database=os.environ.get("PREFECT_DB_NAME", "prefect"),
         pg_user=os.environ.get("PREFECT_DB_USER", "prefect"),
-        pg_password=os.environ["PREFECT_DB_PASSWORD"]
+        pg_password=os.environ["PREFECT_DB_PASSWORD"],
     )
 
     # Test: Get watermark

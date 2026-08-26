@@ -16,7 +16,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from iceberg_offload_flow import iceberg_offload_main
 
 # Set Prefect API URL (points to Prefect server)
-os.environ["PREFECT_API_URL"] = os.getenv("PREFECT_API_URL", "http://localhost:4200/api")
+os.environ["PREFECT_API_URL"] = os.getenv(
+    "PREFECT_API_URL", "http://localhost:4200/api"
+)
+
 
 def deploy_production_schedule():
     """
@@ -32,9 +35,9 @@ def deploy_production_schedule():
     print("=" * 80)
     print()
     print(f"Prefect API URL: {os.environ['PREFECT_API_URL']}")
-    print(f"Deployment Name: iceberg-offload-15min")
-    print(f"Schedule: */15 * * * * (every 15 minutes)")
-    print(f"Work Pool: iceberg-offload")
+    print("Deployment Name: iceberg-offload-15min")
+    print("Schedule: */15 * * * * (every 15 minutes)")
+    print("Work Pool: iceberg-offload")
     print()
 
     # Deploy the flow with 15-minute cron schedule using Prefect 3.x API
@@ -65,11 +68,18 @@ def deploy_production_schedule():
     print()
     print("🔧 Useful commands:")
     print("   - List deployments: prefect deployment ls")
-    print("   - Run manually: prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'")
-    print("   - Pause schedule: prefect deployment set-schedule iceberg-offload-main/iceberg-offload-15min --paused")
-    print("   - Resume schedule: prefect deployment set-schedule iceberg-offload-main/iceberg-offload-15min --active")
+    print(
+        "   - Run manually: prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'"
+    )
+    print(
+        "   - Pause schedule: prefect deployment set-schedule iceberg-offload-main/iceberg-offload-15min --paused"
+    )
+    print(
+        "   - Resume schedule: prefect deployment set-schedule iceberg-offload-main/iceberg-offload-15min --active"
+    )
     print()
     print("=" * 80)
+
 
 if __name__ == "__main__":
     try:
