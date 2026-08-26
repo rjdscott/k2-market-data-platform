@@ -32,7 +32,10 @@ done
 
 CONTAINER="k2-capture-$EXCHANGE"
 UP="up{job=\"capture-$EXCHANGE\"}"
-FRESH="time() - min(k2_capture_last_message_ts_seconds{exchange=\"$EXCHANGE\"})"
+# >=1 Hz streams only. `min()` takes the OLDEST stream, and `trade`/
+# `market_trades` are legitimately silent for up to 300 s (main.rs CONTINUOUS);
+# including them lets a quiet market time this gate out and `die` before `report`.
+FRESH="time() - min(k2_capture_last_message_ts_seconds{exchange=\"$EXCHANGE\",stream!~\"trade|market_trades\"})"
 
 preflight "$CONTAINER" k2-prometheus
 banner "capture-kill.sh --exchange $EXCHANGE --hold $HOLD" \

@@ -28,7 +28,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 EXCHANGE=$(parse_exchange "$@")
 CONTAINER="k2-capture-$EXCHANGE"
-FRESH="time() - min(k2_capture_last_message_ts_seconds{exchange=\"$EXCHANGE\"})"
+# Freshness is scored over the >=1 Hz streams only. `min()` takes the OLDEST
+# stream, and `trade`/`market_trades` are legitimately silent for up to 300 s
+# (main.rs CONTINUOUS) — including them means a quiet market holds this gate open
+# past its timeout and the script dies before it can `report`, turning a market
+# state into a failed chaos run.
+FRESH="time() - min(k2_capture_last_message_ts_seconds{exchange=\"$EXCHANGE\",stream!~\"trade|market_trades\"})"
 GAPS="sum(k2_capture_gaps_total{exchange=\"$EXCHANGE\"})"
 RECONNECTS="sum(k2_capture_reconnects_total{exchange=\"$EXCHANGE\"})"
 
@@ -66,10 +71,11 @@ if t_clear=$(wait_for_alert_clear CaptureDown 300 "$EXCHANGE"); then
 else
   t_recover=unmeasured
   echo "→ CaptureDown for $EXCHANGE was still set ${t_clear}s after frames came back." >&2
-  echo "  Recovery NOT measured. Either the venue has a stream that is legitimately" >&2
-  echo "  quieter than the 60s threshold — in which case the rule needs the fix, not" >&2
-  echo "  the number — or something is still broken. Do not publish a recovery time" >&2
-  echo "  for this run." >&2
+  echo "  Recovery NOT measured. CaptureDown is up{job=\"capture-$EXCHANGE\"} == 0, so" >&2
+  echo "  frames arriving is not what clears it — Prometheus has to scrape the target" >&2
+  echo "  successfully again and the alert then has to leave firing. Check the target" >&2
+  echo "  in Prometheus (/targets) and that the container is unpaused. Do not publish" >&2
+  echo "  a recovery time for this run." >&2
 fi
 
 # The interesting part is not that it recovered - it is how the venue reported
