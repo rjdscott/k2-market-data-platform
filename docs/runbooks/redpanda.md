@@ -33,11 +33,15 @@ on the topic table above.
 
 > **`market.crypto.trades.<ex>` and `market.crypto.trades.<ex>.raw` are frozen v2
 > topics** — 40 partitions each for Binance, 20 for Kraken and Coinbase, 160 in total.
-> Their only producers were the Kotlin feed handlers, retired on 2026-08-26
-> ([ADR-019](../adr/ADR-019-rust-capture-tier.md)). They still exist, still hold their
-> retained data, and the ClickHouse Kafka-engine consumers are still attached to them
-> with nothing arriving. `redpanda-init` still creates them. They are deleted with the
-> `k2` database at the Phase E cutover. Do not use them as a liveness signal.
+> Their only producers were the Kotlin feed handlers, and nothing has produced to them
+> **since the retirement deploy at `2026-08-26T18:58:29Z`**
+> ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) — that is the timestamp of the last
+> row the ClickHouse consumers wrote, `SELECT max(ingestion_timestamp) FROM
+> k2.bronze_trades_kraken`, and it is when this became true rather than when the PR was
+> written. They still exist, still hold their retained data, and the Kafka-engine
+> consumers are still attached with nothing arriving. `redpanda-init` still creates them.
+> They are deleted with the `k2` database at the Phase E cutover. Do not use them as a
+> liveness signal.
 
 Topics are created by the `redpanda-init` one-shot service at startup, which also hardens
 the internal `_schemas` topic (compact cleanup policy, infinite retention) to prevent
@@ -148,8 +152,9 @@ The table names are inconsistent too — Coinbase's is `trades_coinbase_queue`, 
 two are `<exchange>_trades_queue`. Confirm with `SHOW TABLES FROM k2` before typing one.
 
 **Expected state**: all three groups are on frozen v2 topics and their lag drains to 0 and
-stays there. Growing lag on any of them after 2026-08-26 would mean something is producing
-to a v2 topic, which nothing should be. **There are no consumer groups on the v3 topics
+stays there. Growing lag on any of them **after `2026-08-26T18:58:29Z`** — the retirement
+deploy, and the last moment anything produced to a v2 topic — would mean something is
+producing to one again, which nothing should be. **There are no consumer groups on the v3 topics
 yet** — the lake ingest arrives in Phase D and the hot tier in Phase E, so `rpk group list`
 showing three v2 groups and nothing else is the correct picture today.
 
@@ -187,8 +192,9 @@ the current stack.
 **Symptoms**: `rpk topic list` shows no topics; capture containers log produce errors and
 `k2_capture_produce_errors_total` climbs.
 
-**Cause**: `redpanda-init` one-shot service only runs on first start. If Redpanda's data
-volume was wiped, topics are gone.
+**Cause**: Redpanda's data volume was wiped, so the topics are gone. `redpanda-init` is a
+`restart: "no"` one-shot: `docker compose up` starts it again and it is idempotent, but it
+does not re-run on its own while the stack is already up.
 
 **Resolution**:
 ```bash
@@ -303,26 +309,30 @@ docker exec k2-redpanda rpk cluster partitions balance
 
 Broker restart, measured against the **v3 capture tier** by
 `scripts/chaos/redpanda-stop.sh --exchange kraken` and
-`scripts/chaos/capture-queue-full.sh --exchange kraken` on 2026-08-26
-([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)).
+`scripts/chaos/capture-queue-full.sh --exchange kraken` on 2026-08-26.
 The v2 feed handlers lost the broker at the same instant and are **not** measured here —
 they have no equivalent counter.
 
-| # | Failure | Measured |
-|---|---------|----------|
-| 1 | Broker stopped (`docker stop`, 45 s), then started | producers past their mid-outage level **14 s** after the broker returned, with **no producer restart**. `rpk cluster health` clean |
-| 2 | Broker paused (`docker pause`, 388 s), then unpaused | producing again **0 s** after unpause — the first scrape already showed recovery. `rpk cluster health` clean, on a single-node Raft cluster frozen for over six minutes |
-| 3 | Records lost during the outage | **7,821** (45 s stopped) and **231,744** (388 s paused), kraken alone. Public feeds do not replay; the windows are permanently absent |
-| 4 | Time for `CaptureProduceErrors` to fire | **256 s** from the fault (`for: 5m` on a `[10m]` `increase`) |
-| 5 | Consumer-group recovery, ClickHouse and the v2 handlers | not yet verified — no script measures the consumer side |
+**Every row cites the file the number is actually in.** The results TSV holds five
+columns and no more — `ts`, `script`, `expected_alert`, `t_fire_s`, `t_recover_s` — so
+the fault durations and the loss counts are not in it and must not be cited to it.
+
+| # | Failure | Measured | Source |
+|---|---------|----------|--------|
+| 1 | Broker stopped (`docker stop`, 45 s), then started | producers past their mid-outage level **14 s** after the broker returned, with **no producer restart** | `t_recover_s` for `redpanda-stop.sh`, [`results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv) |
+| 2 | Broker paused (`docker pause`, 388 s), then unpaused | producing again **0 s** after unpause — the first scrape already showed recovery | `t_recover_s` for `capture-queue-full.sh`, same file |
+| 3 | `rpk cluster health` after both | clean, on a single-node Raft cluster frozen for over six minutes | [`scripts/chaos/README.md`](../../scripts/chaos/README.md) — *"The broker survives a six-minute pause"* |
+| 4 | Records lost during the outage | **7,821** (45 s stopped) and **231,744** (388 s paused), kraken alone. Public feeds do not replay; the windows are permanently absent | [`failure-modes.md`](../architecture/failure-modes.md) — the *Broker down* row for 7,821, the *Producer queue full* row for 231,744. **Not in the TSV** |
+| 5 | Time for `CaptureProduceErrors` to fire | **256 s** from the fault (`for: 5m` on a `[10m]` `increase`) | `t_fire_s` for `capture-queue-full.sh`, [`results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv) |
+| 6 | Consumer-group recovery, ClickHouse and the v2 handlers | not yet verified — no script measures the consumer side | — |
 
 **Two things this establishes.** The broker comes back clean from both a stop and a
 multi-minute pause without manual intervention, and **nothing downstream needs
 restarting** — the "restart the producers after the broker returns" instinct is wrong and
-costs a second data-loss window. What it does *not* establish is the consumer side; row 5
+costs a second data-loss window. What it does *not* establish is the consumer side; row 6
 stays open.
 
-**A caveat on row 3.** Those loss figures predate the `message.timeout.ms` 30 s → 5 min
+**A caveat on row 4.** Those loss figures predate the `message.timeout.ms` 30 s → 5 min
 fix in `sink.rs`
 ([ADR-019 Outcome](../adr/ADR-019-rust-capture-tier.md#measured-correction-2026-08-26--the-32-mib-buffer-was-unreachable)):
 a 45 s outage should have lost nothing at all. Re-run to score the fix.
@@ -367,22 +377,23 @@ Leaderless partitions (0):        []
 Under-replicated partitions (0):  []
 ```
 
-`rpk topic describe market.crypto.v3.trades.binance -p`, same run:
+`rpk topic describe market.crypto.v3.trades.binance -p`, re-run in full at
+**2026-08-26T19:19Z**, nothing elided:
 
 ```
 PARTITION  LEADER  EPOCH  REPLICAS  LOG-START-OFFSET  HIGH-WATERMARK
-0          0       3      [0]       0                 211223
-1          0       3      [0]       0                 652659
-2          0       3      [0]       0                 0
-3          0       3      [0]       0                 275810
-4          0       3      [0]       0                 83305
-5          0       3      [0]       0                 0
-6          0       3      [0]       0                 0
-7          0       3      [0]       0                 1431827
-8          0       3      [0]       0                 0
-9          0       3      [0]       0                 44241
-10         0       3      [0]       0                 170707
-11         0       3      [0]       0                 5060
+0          0       6      [0]       0                 305044
+1          0       6      [0]       0                 984123
+2          0       6      [0]       0                 0
+3          0       6      [0]       0                 414142
+4          0       6      [0]       0                 130998
+5          0       6      [0]       0                 0
+6          0       6      [0]       0                 0
+7          0       6      [0]       0                 2101978
+8          0       6      [0]       0                 0
+9          0       6      [0]       0                 64810
+10         0       6      [0]       0                 261785
+11         0       6      [0]       0                 7995
 ```
 
 **Empty partitions are normal, not a fault.** Records are keyed by symbol, so
@@ -392,13 +403,39 @@ runs of the command.
 
 ### The v2 key bug, visible from here
 
-The same command on `market.crypto.trades.kraken.raw` returns exactly one non-empty
-partition of 20:
+The same command on `market.crypto.trades.kraken.raw`, same run
+(**2026-08-26T19:19Z**), returns exactly one non-empty partition of 20 — all 20 rows,
+nothing elided:
 
 ```
 PARTITION  LEADER  EPOCH  REPLICAS  LOG-START-OFFSET  HIGH-WATERMARK
-10         0       8      [0]       61743             141352
+0          0       11     [0]       0                 0
+1          0       11     [0]       0                 0
+2          0       11     [0]       0                 0
+3          0       11     [0]       0                 0
+4          0       11     [0]       0                 0
+5          0       11     [0]       0                 0
+6          0       11     [0]       0                 0
+7          0       11     [0]       0                 0
+8          0       11     [0]       0                 0
+9          0       11     [0]       0                 0
+10         0       11     [0]       61743             168572
+11         0       11     [0]       0                 0
+12         0       11     [0]       0                 0
+13         0       11     [0]       0                 0
+14         0       11     [0]       0                 0
+15         0       11     [0]       0                 0
+16         0       11     [0]       0                 0
+17         0       11     [0]       0                 0
+18         0       11     [0]       0                 0
+19         0       11     [0]       0                 0
 ```
+
+The high watermark on partition 10 is **frozen at 168,572** and stays there: this topic
+has had no producer since `2026-08-26T18:58:29Z`. The log-start offset of 61,743 is
+retention having already expired the head of the log — `retention.ms=604800000` (7 d,
+`rpk topic describe market.crypto.trades.kraken.raw -c`), which is also the deadline on
+re-reading any of this: the whole topic empties around **2026-09-02**.
 
 Kraken and Coinbase raw records were keyed by the *exchange name* rather than the symbol
 (`KafkaProducerService.produceRawJson`), so both topics hashed every record onto one
