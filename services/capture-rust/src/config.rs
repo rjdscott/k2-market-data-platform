@@ -102,19 +102,44 @@ impl Instruments {
         if instruments.is_empty() {
             bail!("registry lists no instruments for {exchange}");
         }
+        Self::from_list(instruments)
+    }
+
+    fn from_list(instruments: Vec<Instrument>) -> Result<Self> {
         let mut by_native = BTreeMap::new();
         for i in &instruments {
             if by_native
                 .insert(i.native.clone(), i.canonical.clone())
                 .is_some()
             {
-                bail!("{exchange} lists native symbol {} twice", i.native);
+                bail!("native symbol {} is listed twice", i.native);
             }
         }
         Ok(Self {
             instruments,
             by_native,
         })
+    }
+
+    /// Rewrite every native symbol through `rename`, keeping the canonical
+    /// mapping and the registry order.
+    ///
+    /// For an adapter whose protocol spells a symbol differently from the
+    /// registry - Kraken WS v2 against a registry that must keep the v1
+    /// spellings while the v1 handlers still run. Goes through `from_list`, so
+    /// two natives that collide after renaming fail here rather than silently
+    /// dropping one instrument.
+    pub fn map_natives(&self, rename: impl Fn(&str) -> String) -> Result<Self> {
+        let renamed = self
+            .instruments
+            .iter()
+            .map(|i| Instrument {
+                native: rename(&i.native),
+                canonical: i.canonical.clone(),
+                book_depth: i.book_depth,
+            })
+            .collect();
+        Self::from_list(renamed)
     }
 
     /// Keep only the listed native symbols - the fixture recorder trims a

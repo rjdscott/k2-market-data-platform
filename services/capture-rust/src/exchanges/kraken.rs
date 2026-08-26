@@ -80,16 +80,41 @@ pub struct KrakenAdapter {
     pending: BTreeMap<String, Vec<PendingFrame>>,
 }
 
+/// Kraken WS v1 and v2 spell two base assets differently, and
+/// `config/instruments.yaml` has to keep the v1 spellings for as long as the
+/// Kotlin v1 handlers read the same file. So the v2 adapter translates on the
+/// way in: `XBT/USD` in the registry subscribes as `BTC/USD` on the wire, and
+/// `Trade.symbol` / `BookSnapshotL2.symbol` carry `BTC/USD` - "as the exchange
+/// spells it on the wire", which is what the `.avsc` contract says. The
+/// registry's `canonical` is untouched and stays authoritative.
+///
+/// A prefix match on the base asset only, never a substring: `XBT/` -> `BTC/`
+/// leaves a quote currency or an unrelated ticker containing `XBT` alone.
+///
+// ponytail: remove with the Kotlin handlers - instruments.yaml then carries v2 spellings
+const V1_TO_V2_BASE: &[(&str, &str)] = &[("XBT/", "BTC/"), ("XDG/", "DOGE/")];
+
+/// Registry spelling -> v2 wire spelling. Unknown symbols pass through
+/// unchanged, which is every symbol but two.
+fn to_v2_symbol(registry_native: &str) -> String {
+    for (v1, v2) in V1_TO_V2_BASE {
+        if let Some(rest) = registry_native.strip_prefix(v1) {
+            return format!("{v2}{rest}");
+        }
+    }
+    registry_native.to_string()
+}
+
 impl KrakenAdapter {
-    pub fn new(instruments: Instruments) -> Self {
-        Self {
-            instruments,
+    pub fn new(instruments: Instruments) -> anyhow::Result<Self> {
+        Ok(Self {
+            instruments: instruments.map_natives(to_v2_symbol)?,
             conn_id: String::new(),
             conn_msg_seq: 0,
             precision: BTreeMap::new(),
             books: BTreeMap::new(),
             pending: BTreeMap::new(),
-        }
+        })
     }
 
     pub fn begin_connection(&mut self, conn_id: &str) {
@@ -718,7 +743,8 @@ mod tests {
     fn adapter() -> KrakenAdapter {
         let yaml =
             "version: 2\ninstruments:\n  kraken:\n    - { native: BTC/USD, canonical: BTC/USD }\n";
-        let mut a = KrakenAdapter::new(Instruments::parse(yaml, Exchange::Kraken).unwrap());
+        let mut a =
+            KrakenAdapter::new(Instruments::parse(yaml, Exchange::Kraken).unwrap()).unwrap();
         a.begin_connection("test-conn");
         a
     }
@@ -820,6 +846,59 @@ mod tests {
         );
         let msgs = a.resubscribe_messages("BTC/USD");
         assert!(msgs[0].contains("unsubscribe") && msgs[1].contains("\"snapshot\":true"));
+    }
+
+    /// `config/instruments.yaml` must keep the v1 spellings while the Kotlin
+    /// handlers read it, so the v2 adapter has to translate both ways: subscribe
+    /// with the v2 name, and match the frames that come back on it.
+    #[test]
+    fn v1_registry_spellings_subscribe_and_match_as_v2() {
+        let yaml = "version: 2\ninstruments:\n  kraken:\n                        - { native: XBT/USD, canonical: BTC/USD }\n                        - { native: XDG/USD, canonical: DOGE/USD }\n                        - { native: ETH/USD, canonical: ETH/USD }\n";
+        let mut a =
+            KrakenAdapter::new(Instruments::parse(yaml, Exchange::Kraken).unwrap()).unwrap();
+        a.begin_connection("test-conn");
+
+        assert_eq!(
+            a.symbols(),
+            vec!["BTC/USD", "DOGE/USD", "ETH/USD"],
+            "registry order kept, base assets translated, ETH left alone"
+        );
+        let book_subscribe = &a.subscribe_messages()[1];
+        assert!(book_subscribe.contains("\"BTC/USD\""));
+        assert!(
+            !book_subscribe.contains("XBT"),
+            "a v1 spelling reached the wire"
+        );
+
+        // A frame on the v2 wire name resolves to the registry's canonical.
+        let frame = r#"{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"buy","price":78568.7,"qty":0.001,"ord_type":"limit","trade_id":1,"timestamp":"2026-08-26T11:34:06.075373Z"}]}"#;
+        let h = a.handle_frame(frame.as_bytes(), 1);
+        let OutRecord::Trade(t) = &h.records[1] else {
+            panic!("no trade record for the v2 spelling")
+        };
+        assert_eq!(t.symbol, "BTC/USD", "wire spelling, per the .avsc contract");
+        assert_eq!(t.canonical_symbol, "BTC/USD");
+
+        let doge = r#"{"channel":"trade","type":"update","data":[{"symbol":"DOGE/USD","side":"sell","price":0.1,"qty":1.0,"ord_type":"limit","trade_id":2,"timestamp":"2026-08-26T11:34:06.075373Z"}]}"#;
+        let h = a.handle_frame(doge.as_bytes(), 2);
+        let OutRecord::Trade(t) = &h.records[1] else {
+            panic!("no trade record for XDG -> DOGE")
+        };
+        assert_eq!(
+            (t.symbol.as_str(), t.canonical_symbol.as_str()),
+            ("DOGE/USD", "DOGE/USD")
+        );
+    }
+
+    /// A registry that lists both spellings of one instrument would silently
+    /// lose one after translation; it fails at construction instead.
+    #[test]
+    fn a_registry_listing_both_spellings_is_rejected() {
+        let yaml = "version: 2\ninstruments:\n  kraken:\n                        - { native: XBT/USD, canonical: BTC/USD }\n                        - { native: BTC/USD, canonical: BTC/USD }\n";
+        let err = KrakenAdapter::new(Instruments::parse(yaml, Exchange::Kraken).unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("twice"), "{err}");
     }
 
     #[test]

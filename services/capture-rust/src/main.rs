@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
 
 fn build_adapter(exchange: Exchange, instruments: Instruments) -> Result<Adapter> {
     match exchange {
-        Exchange::Kraken => Ok(Adapter::Kraken(KrakenAdapter::new(instruments))),
+        Exchange::Kraken => Ok(Adapter::Kraken(KrakenAdapter::new(instruments)?)),
         other => bail!(
             "no adapter for {other} yet - Binance and Coinbase land later in Phase C \
              against the contract in src/exchanges/mod.rs"

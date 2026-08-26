@@ -49,7 +49,7 @@ fn adapter() -> Adapter {
         Exchange::Kraken,
     )
     .expect("test registry");
-    Adapter::Kraken(KrakenAdapter::new(instruments))
+    Adapter::Kraken(KrakenAdapter::new(instruments).expect("adapter"))
 }
 
 /// Everything one pass over the fixture produced.

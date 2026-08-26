@@ -173,13 +173,31 @@ Two things about that fixture are worth knowing before you regenerate it:
 - One line is not verbatim. The `instrument` snapshot's `pairs` array is
   filtered to the recorded symbol and `assets` emptied, taking the frame from
   639 KB to under 1 KB. Its shape and every field the adapter reads are intact.
-- It uses `tests/fixtures/instruments-kraken-v2.yaml`, not
-  `config/instruments.yaml`. **Kraken WS v2 does not accept `XBT/USD` or
-  `XDG/USD`** — those are the v1 spellings the Kotlin handlers correctly use,
-  and v2 answers them with `{"error":"Currency pair not supported XBT/USD"}`.
-  On v2 they are `BTC/USD` and `DOGE/USD`. Reconciling the two is a registry
-  decision, not a capture decision, so it is documented in that file rather than
-  worked around here.
+- It uses `tests/fixtures/instruments-kraken-v2.yaml`, which spells the symbols
+  the way the v2 wire does. `config/instruments.yaml` works equally well — see
+  the alias table below — but the fixture registry keeps the recorded frames and
+  the file that produced them spelled identically.
+
+---
+
+## The v1/v2 symbol alias
+
+**Kraken WS v2 does not accept `XBT/USD` or `XDG/USD`** — it answers
+`{"error":"Currency pair not supported XBT/USD"}`. Those are the v1 spellings,
+and they are correct in `config/instruments.yaml` for as long as the Kotlin
+handlers read the same file: `KrakenWebSocketClient.kt` speaks the v1 channelID
+protocol, where `XBT/USD` is the right name.
+
+So `KrakenAdapter::new` translates the registry's natives once, through an
+explicit two-row table — `XBT/` → `BTC/`, `XDG/` → `DOGE/`, a prefix match on the
+base asset only. Everything downstream sees the v2 spelling: the subscribe frame
+sends `BTC/USD`, and `Trade.symbol` / `BookSnapshotL2.symbol` carry `BTC/USD`,
+which is what "as the exchange spells it on the wire" means in the `.avsc`. The
+registry's `canonical` is untouched and stays authoritative. A registry that
+listed both spellings of one instrument fails at construction rather than
+silently losing one.
+
+`// ponytail: remove with the Kotlin handlers — instruments.yaml then carries v2 spellings`
 
 ---
 
