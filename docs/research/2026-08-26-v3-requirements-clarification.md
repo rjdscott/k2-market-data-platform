@@ -223,6 +223,69 @@ never captured to the v3 standard in the first place.
 
 ---
 
+## Q8 — Raw archive retention on a single host
+
+**Asked.** Prompted by [the capacity model](../architecture/capacity-model.md#7-bottleneck-prediction):
+the plan keeps `raw.messages` forever, and the host fills its ~212 GiB free in
+~26 days at the predicted rate. Bound it in the lake — 30 d or 7 d TTL — or
+keep it forever?
+
+**Answered: keep forever.** Phase D adds a disk-usage alert at 80% with a
+runbook. No lake TTL on `raw.messages`. Disk expansion (an external volume) is
+an operator action, not a platform policy.
+
+**Rejected: 30 d raw TTL.** The replay window becomes 30 d — the archive stops
+being the system of record for anything older than that, and bronze cannot be
+rebuilt past it. **Rejected: 7 d TTL.** Same failure, worse window.
+
+**Consequences.** The capacity model's "bottleneck is disk, on a calendar"
+prediction stands and becomes an operational SLO input — Phase F publishes
+disk days-remaining as a number with its command. ADR-021 (raw-first archive)
+must state the single-host disk limit honestly rather than implying unbounded
+storage. The 80% alert's runbook must include the `mc du` / `df` commands from
+[capacity model §8](../architecture/capacity-model.md#8-how-this-table-is-settled)
+and the two options an operator actually has: add disk, or a manual purge with
+an audit row.
+
+**Revisit when:** disk-days-remaining < 30 measured, or a second host exists.
+
+**Lands in:** Phase D (80% disk alert), Phase F (days-remaining as a published
+number), ADR-021.
+
+---
+
+## Q9 — Scale target
+
+**Asked (2026-08-26).** Is single-host Docker the design target, or a stand-in?
+
+**Answered: a stand-in.** Every tier must carry a stated AWS scale-out path to
+TB/PB: raw archive forever on S3 with a Glacier/Deep Archive lifecycle — this
+is what makes Q8's "keep forever" viable beyond one disk — MSK or Redpanda
+Cloud for the bus, ClickHouse on EC2/ClickHouse Cloud for the hot tier, EMR
+Serverless for lake ingest/maintenance, one Fargate task per exchange
+(multi-AZ) for capture, Lakekeeper on ECS with RDS Postgres. Partition spec,
+target file size, manifest counts and compaction cadence get justified at PB
+scale, not just today's 6.5 GB/day. Code keeps the S3 endpoint/region/
+path-style/catalog URI env-driven and never assumes one host.
+
+**Rejected: "single host is the product."** ADR-018's non-goal list keeps *no
+HA on this host*, not *cannot scale* — conflating the two would fossilize a
+budget constraint into an architectural ceiling. **Rejected: build the AWS
+deployment now.** Out of scope, no budget.
+
+**Consequences.** New design doc `docs/architecture/scale-out-path.md` (Phase
+D, once the lake tables exist) with a per-component mapping table and what
+changes vs what does not — the lake-as-system-of-record contract, the Avro
+contracts and the capture binary do not change. The capacity model gets an
+"at 100× / PB" column in Phase F. Everything in both documents is labelled
+"designed, not exercised."
+
+**Revisit when:** a second host or an AWS account is provisioned.
+
+**Lands in:** Phase D (`scale-out-path.md`), Phase F (capacity model column).
+
+---
+
 ## Non-goals, reaffirmed
 
 Unchanged from ADR-018 and restated here because every answer above was given

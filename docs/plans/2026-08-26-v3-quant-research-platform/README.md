@@ -123,6 +123,7 @@ Each lands in the same PR as the code it describes; none is a status log.
 | `docs/architecture/capacity-model.md` | architecture | msg/s per core, bytes/day per table, headroom against 16 CPU / 40 GB — predicted before measurement, then scored | C predicts · F measures |
 | `docs/architecture/partitioning-strategy.md` (rewrite) | architecture | Kafka key + partition count, Iceberg spec + sort order, ClickHouse `ORDER BY`/`PARTITION BY`, each with its rejected alternative | D (Kafka, Iceberg) · E (ClickHouse) |
 | `docs/architecture/failure-modes.md` | architecture | FMEA: component × failure × detection signal × blast radius × recovery × the proof script | D (capture, lake) · E (hot tier) |
+| `docs/architecture/scale-out-path.md` | architecture | per-tier AWS mapping to TB/PB (S3 + Glacier lifecycle, MSK/Redpanda Cloud, ClickHouse EC2/Cloud, EMR Serverless, Fargate capture, Lakekeeper on ECS + RDS); what changes vs what does not; partition/file-size/compaction justified at PB — designed, not exercised (Q9) | D |
 | `docs/operations/slos.md` | operations | three SLOs, their error budgets, and what spending a budget forces | F |
 | `docs/audits/<date>-ohlcv-correctness.md` | audits | blameless post-mortem of the v2 OHLCV `SummingMergeTree` bug — what was claimed, what ran, why no test caught it | F |
 | `docs/research/<date>-replay-fidelity-limits.md` | research | what top-20 @1 Hz over public WS can and cannot honestly simulate | G |
