@@ -1,0 +1,236 @@
+# promtool unit tests for the v3 capture-tier alert rules.
+#
+#     make check-alerts
+#     docker run --rm -v "$PWD/docker/prometheus":/p --entrypoint promtool \
+#       prom/prometheus test rules /p/tests/capture-alerts.test.yml
+#
+# Scope: the three rules whose expressions were wrong in a way live series could
+# not reveal. Each one has a case that fires and a case that must NOT, because
+# every one of these bugs was a rule that looked healthy on a healthy stack:
+#
+#   CaptureFeedStale          fired four permanent criticals from 74 s into the
+#                             first burn-in, and could not fire at all on a
+#                             subscription that was rejected before its gauge
+#                             existed.
+#   CaptureProduceStalled     watched the enqueue counter, which climbs at full
+#                             rate through the outage the alert was written for.
+#   CaptureBookDepthDegraded  used min_over_time, which latches on the empty book
+#                             a successful resync leaves behind.
+#
+# `time()` in a unit test is seconds since the epoch at eval_time, so a gauge
+# pinned at 0 is "last seen at the epoch" and reads as exactly eval_time stale.
+rule_files:
+  - ../rules/capture-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ── CaptureFeedStale ─────────────────────────────────────────────────────
+  - interval: 30s
+    name: a continuous stream that stopped, on a container that is still up
+    input_series:
+      - series: 'k2_capture_last_message_ts_seconds{job="capture-kraken",exchange="kraken",stream="book"}'
+        values: '0+0x40'
+      - series: 'up{job="capture-kraken",service="capture-kraken",tier="ingestion"}'
+        values: '1+0x40'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CaptureFeedStale
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: CaptureFeedStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: capture
+              tier: ingestion
+              job: capture-kraken
+              exchange: kraken
+              stream: book
+            exp_annotations:
+              summary: "No book frames from kraken for 5m 0s"
+              runbook: docs/runbooks/capture-feed-stale.md
+              description: |
+                The capture process for kraken is up and scrapeable, but
+                its book stream last delivered a frame
+                5m 0s ago.
+
+                This is the failure mode a liveness check misses: the process is
+                healthy, the WebSocket is open, and the exchange has gone quiet or the
+                subscription was silently dropped. The bound is per stream and is the
+                same one the process enforces on itself (`CONTINUOUS`, main.rs): 60s
+                for book and heartbeat channels, which all three venues run at 1 Hz or
+                better whatever the market is doing, and 300s for trade channels,
+                where silence can be a thin instrument rather than a dead feed.
+
+  - interval: 30s
+    name: a stream keeping pace never fires
+    input_series:
+      - series: 'k2_capture_last_message_ts_seconds{job="capture-kraken",exchange="kraken",stream="book"}'
+        values: '0+30x40'
+      - series: 'up{job="capture-kraken",service="capture-kraken",tier="ingestion"}'
+        values: '1+0x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CaptureFeedStale
+        exp_alerts: []
+
+  # The bound that differs per stream. Kraken `trade` measured a 20.4 s worst-case
+  # silence over 3 h, but a quiet hour on a thin instrument is a market state and
+  # not a dead subscription - and the answer this alert routes to is a reconnect
+  # plus 11 book resubscriptions. `main.rs` CONTINUOUS holds the same two numbers
+  # for the session watchdog; if these two ever disagree, one of them is lying
+  # about what "dead" means.
+  - interval: 30s
+    name: a trade channel quiet for four minutes is a quiet market, not a fault
+    input_series:
+      - series: 'k2_capture_last_message_ts_seconds{job="capture-kraken",exchange="kraken",stream="trade"}'
+        values: '0+0x40'
+      - series: 'up{job="capture-kraken",service="capture-kraken",tier="ingestion"}'
+        values: '1+0x40'
+    alert_rule_test:
+      # Well past the 60 s a book gets, and this is the case a flat threshold
+      # fired on.
+      - eval_time: 4m
+        alertname: CaptureFeedStale
+        exp_alerts: []
+
+  - interval: 30s
+    name: a trade channel past 300s is a dead subscription
+    input_series:
+      - series: 'k2_capture_last_message_ts_seconds{job="capture-coinbase",exchange="coinbase",stream="market_trades"}'
+        values: '0+0x60'
+      - series: 'up{job="capture-coinbase",service="capture-coinbase",tier="ingestion"}'
+        values: '1+0x60'
+    alert_rule_test:
+      # 300 s crossed at 5m, `for: 2m` on top.
+      - eval_time: 6m30s
+        alertname: CaptureFeedStale
+        exp_alerts: []
+      - eval_time: 7m30s
+        alertname: CaptureFeedStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: capture
+              tier: ingestion
+              job: capture-coinbase
+              exchange: coinbase
+              stream: market_trades
+            exp_annotations:
+              summary: "No market_trades frames from coinbase for 7m 30s"
+              runbook: docs/runbooks/capture-feed-stale.md
+              description: |
+                The capture process for coinbase is up and scrapeable, but
+                its market_trades stream last delivered a frame
+                7m 30s ago.
+
+                This is the failure mode a liveness check misses: the process is
+                healthy, the WebSocket is open, and the exchange has gone quiet or the
+                subscription was silently dropped. The bound is per stream and is the
+                same one the process enforces on itself (`CONTINUOUS`, main.rs): 60s
+                for book and heartbeat channels, which all three venues run at 1 Hz or
+                better whatever the market is doing, and 300s for trade channels,
+                where silence can be a thin instrument rather than a dead feed.
+
+  # ── CaptureProduceStalled ────────────────────────────────────────────────
+  - interval: 15s
+    name: enqueueing at full rate while nothing is delivered
+    input_series:
+      - series: 'k2_capture_records_produced_total{job="capture-kraken",exchange="kraken",kind="trade"}'
+        values: '0+100x80'
+      - series: 'k2_capture_records_delivered_total{job="capture-kraken",exchange="kraken"}'
+        values: '1000+0x80'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CaptureProduceStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: capture
+              tier: ingestion
+              exchange: kraken
+            exp_annotations:
+              summary: "capture is receiving but not producing — librdkafka queue is filling; data is lost in ~194–446 s (capacity-model §4)"
+              runbook: docs/runbooks/capture-produce-stalled.md
+              description: |
+                kraken is still building and enqueueing records
+                (k2_capture_records_produced_total climbing) but
+                k2_capture_records_delivered_total — the broker's own acknowledgements
+                — has been flat for a full minute. Nothing is dropping yet - the queue
+                (32 MiB, ADR-019) is filling silently, and CaptureProduceErrors will not
+                fire until it is full and starts dropping. This alert is the window
+                before that: 194 s (binance), 204 s (kraken) or 446 s (coinbase) from the
+                moment production stopped to the first permanent drop
+                (capacity-model.md §4).
+
+  - interval: 15s
+    name: deliveries keeping up with produces never fires
+    input_series:
+      - series: 'k2_capture_records_produced_total{job="capture-kraken",exchange="kraken",kind="trade"}'
+        values: '0+100x80'
+      - series: 'k2_capture_records_delivered_total{job="capture-kraken",exchange="kraken"}'
+        values: '0+100x80'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CaptureProduceStalled
+        exp_alerts: []
+
+  # ── CaptureBookDepthDegraded ─────────────────────────────────────────────
+  - interval: 1m
+    name: a book that never reaches ten levels a side
+    input_series:
+      - series: 'k2_capture_book_depth{job="capture-kraken",exchange="kraken",symbol="ADA/USD"}'
+        values: '4+0x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CaptureBookDepthDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: capture
+              tier: ingestion
+              job: capture-kraken
+              exchange: kraken
+              symbol: ADA/USD
+            exp_annotations:
+              summary: "Book collapsed below 20 total levels for kraken ADA/USD"
+              runbook: docs/runbooks/capture-checksum-failure.md
+              description: |
+                kraken ADA/USD did not reach 20 resting
+                levels across both sides at any point in the last 10 minutes — under
+                10 a side, against a canonical top-20-per-side product (ADR-027).
+
+                Two causes, and they need opposite responses: a genuinely thin
+                instrument is correct data and the fix is an exclusion for that symbol,
+                not a lower threshold; a book that thinned after a resync or a
+                reconnect is a capture bug. Check k2_capture_resyncs_total and the
+                conn_id in recent snapshots before changing anything.
+
+  - interval: 1m
+    name: a healthy book, and what the empty sample from a resync does to each form
+    input_series:
+      # 50 levels for ten minutes, emptied for one sample by a resync at 10m,
+      # then 50 again. This is the routine recovery path, not a fault.
+      - series: 'k2_capture_book_depth{job="capture-kraken",exchange="kraken",symbol="BTC/USD"}'
+        values: '50 50 50 50 50 50 50 50 50 50 0 50 50 50 50 50 50 50 50 50 50 50 50 50 50 50'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CaptureBookDepthDegraded
+        exp_alerts: []
+    promql_expr_test:
+      # Why the rule uses max_over_time. Five minutes after a one-sample resync
+      # the min form still reports an empty book and the max form reports the
+      # real one. `for: 10m` is all that stops the min form firing on a routine
+      # recovery, and "one evaluation short of a false critical" is not a margin
+      # worth keeping on a rule whose whole meaning is "this book collapsed".
+      - expr: min_over_time(k2_capture_book_depth{symbol="BTC/USD"}[10m])
+        eval_time: 15m
+        exp_samples:
+          - labels: '{job="capture-kraken",exchange="kraken",symbol="BTC/USD"}'
+            value: 0
+      - expr: max_over_time(k2_capture_book_depth{symbol="BTC/USD"}[10m])
+        eval_time: 15m
+        exp_samples:
+          - labels: '{job="capture-kraken",exchange="kraken",symbol="BTC/USD"}'
+            value: 50

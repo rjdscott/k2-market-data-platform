@@ -34,7 +34,7 @@ flowchart TB
   EX["Exchanges · public WS<br/>Binance · Kraken · Coinbase"]
   CAP["Capture · Rust k2-capture ×3<br/>recv_ts before parse<br/>seq/gap · CRC32 · top-20 @1 Hz"]
   RP[("Redpanda<br/>Avro + registry · symbol-keyed<br/>raw.* · trades.* · book.*")]
-  IB[("Iceberg · Lakekeeper + MinIO<br/>raw.messages, kept forever<br/>bronze.trades · bronze.book_snapshots_l2")]
+  IB[("Iceberg · Lakekeeper + MinIO<br/>raw.messages, forever<br/>bronze.trades, bronze.book_snapshots_l2")]
   CH["ClickHouse hot tier, derived<br/>hot.trades · hot.book_top20_1s<br/>bbo + ohlcv on read · 7d TTL"]
   DD["DuckDB / PyIceberg notebooks<br/>pinned snapshot ids"]
   EX --> CAP --> RP
@@ -123,6 +123,7 @@ Each lands in the same PR as the code it describes; none is a status log.
 | `docs/architecture/capacity-model.md` | architecture | msg/s per core, bytes/day per table, headroom against 16 CPU / 40 GB — predicted before measurement, then scored | C predicts · F measures |
 | `docs/architecture/partitioning-strategy.md` (rewrite) | architecture | Kafka key + partition count, Iceberg spec + sort order, ClickHouse `ORDER BY`/`PARTITION BY`, each with its rejected alternative | D (Kafka, Iceberg) · E (ClickHouse) |
 | `docs/architecture/failure-modes.md` | architecture | FMEA: component × failure × detection signal × blast radius × recovery × the proof script | D (capture, lake) · E (hot tier) |
+| `docs/architecture/scale-out-path.md` | architecture | per-tier AWS mapping to TB/PB (S3 + Glacier lifecycle, MSK/Redpanda Cloud, ClickHouse EC2/Cloud, EMR Serverless, Fargate capture, Lakekeeper on ECS + RDS); what changes vs what does not; partition/file-size/compaction justified at PB — designed, not exercised (Q9) | D |
 | `docs/operations/slos.md` | operations | three SLOs, their error budgets, and what spending a budget forces | F |
 | `docs/audits/<date>-ohlcv-correctness.md` | audits | blameless post-mortem of the v2 OHLCV `SummingMergeTree` bug — what was claimed, what ran, why no test caught it | F |
 | `docs/research/<date>-replay-fidelity-limits.md` | research | what top-20 @1 Hz over public WS can and cannot honestly simulate | G |
@@ -136,7 +137,7 @@ Each lands in the same PR as the code it describes; none is a status log.
 |---|---|---|---|
 | `000-phase-a-ship-v2-public.md` | A | Ship v2 public now (this week) | Fresh-clone quickstart green; links and grep sweep clean |
 | `001-phase-b-foundations.md` | B | v3 foundations (P0/P1, ~1 week) | Registry + schemas registered; Lakekeeper works; v2 still green |
-| `002-phase-c-rust-capture.md` | C | Rust capture tier (services/capture-rust/, ~2 weeks) | 3 exchanges clean 24h; limits measured and cut |
+| `002-phase-c-rust-capture.md` | C | Rust capture tier (services/capture-rust/, ~2 weeks) | 3 exchanges × 2 h window clean (labelled; 24 h continuous run is a Phase F+ revisit trigger); limits measured and cut |
 | `003-phase-d-lake-tier.md` | D | Lake tier (docker/lake/, ~1.5 weeks; replaces docker/offload/) | Two ingests, second adds 0; no dupes/gaps; audits pass |
 | `004-phase-e-hot-tier.md` | E | Hot tier (ClickHouse, ~1 week) | Dashboards on hot tier; hot.ohlcv matches DuckDB-over-Iceberg |
 | `005-phase-f-notebooks-numbers-docs.md` | F | Notebooks, audits, numbers, docs (~1 week) | v3.0.0 tagged; numbers table published and traceable |

@@ -1,0 +1,61 @@
+[package]
+name = "k2-capture"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+description = "K2 v3 market-data capture: one WebSocket per exchange, raw + trades + L2 book to Redpanda as Confluent Avro."
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "k2-capture"
+path = "src/main.rs"
+
+[dependencies]
+# Wire + async. current_thread runtime only: one connection per process, and a
+# single-threaded scheduler makes the frame order in a cgroup-throttled
+# container the same order a replay sees.
+tokio = { version = "1.48", default-features = false, features = ["rt", "macros", "net", "io-util", "time", "signal", "sync"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+
+# Kafka. Feature set is S6's verified line: `libz` links dynamically and
+# distroless/cc has no libz.so.1, `zstd` is not in librdkafka's defaults, and
+# `cmake-build` alone fails because `default = ["libz","tokio"]`.
+rdkafka = { version = "0.39", default-features = false, features = ["cmake-build", "libz-static", "zstd", "tokio"] }
+
+# Confluent framing (magic byte + schema id) is library work, not ours - S3.
+# `easy` is what gates EasyAvroEncoder; `avro` alone compiles and hides it.
+# `rustls_tls` instead of the default `native_tls`: tokio-tungstenite already
+# brings rustls, and taking the default would link OpenSSL as well - two TLS
+# stacks in a 45 MB image, and a libssl.so the distroless runtime would have to
+# supply.
+schema_registry_converter = { version = "5.0", default-features = false, features = ["avro", "easy", "futures", "rustls_tls"] }
+apache-avro = "0.22"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+serde_yaml = "0.9"
+
+crc32fast = "1.5"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+uuid = { version = "1", features = ["v4"] }
+clap = { version = "4", features = ["derive", "env"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.17", default-features = false, features = ["http-listener"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# anyhow only: every error in this crate is either propagated with context or
+# counted and dropped. Nothing matches on an error variant, so a thiserror enum
+# would be a type nobody reads.
+anyhow = "1"
+
+[dev-dependencies]
+proptest = "1"
+sha2 = "0.10"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

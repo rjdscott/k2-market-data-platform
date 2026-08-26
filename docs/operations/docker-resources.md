@@ -2,11 +2,23 @@
 
 Every service in [`docker-compose.yml`](../../docker-compose.yml) declares both a hard
 `limit` and a guaranteed `reservation`. The design target was a single 16-core / 40 GB
-host; the as-built stack fits with room to spare.
+host; the as-built stack fits with room to spare — except during the v3 Phase C parallel
+run below, where it deliberately does not.
 
-**As built: 15.35 CPU / 22.125 GB across every long-running resource-limited service (15)**
-(plus four one-shot containers that exit after startup: `redpanda-init`, `iceberg-init`,
-`lakekeeper-migrate`, `lake-init`).
+**As built (v2 baseline): 15.35 CPU / 22.125 GB across every long-running resource-limited
+service (15)** (plus four one-shot containers that exit after startup: `redpanda-init`,
+`iceberg-init`, `lakekeeper-migrate`, `lake-init`).
+
+**As built (v3 Phase C, parallel run): 16.10 CPU / 23.125 GB across 18 long-running
+services.** [Phase C](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md)
+runs three Rust `capture-{binance,kraken,coinbase}` containers alongside the three Kotlin
+feed handlers for a labelled 2-hour parity window before the Kotlin handlers retire, so both sets of
+ingestion containers are billed against the budget at once. This pushes steady state 0.10
+CPU over the 16-core target; it is temporary by design —
+[ADR-019](../adr/ADR-019-rust-capture-tier.md) decides the replacement and gates Kotlin's
+retirement on that labelled 2-hour parity check passing; its Outcome section, appended
+once the check is clean, documents giving back the 1.5 CPU / 1.5 GB and restoring
+headroom.
 
 ## Allocation
 
@@ -27,13 +39,24 @@ host; the as-built stack fits with room to spare.
 | `feed-handler-kraken` | ingestion | 0.5 | 0.25 | 512 MB | 256 MB |
 | `feed-handler-coinbase` | ingestion | 0.5 | 0.25 | 512 MB | 256 MB |
 | `iceberg-metrics` | observability | 0.1 | — | 128 MB | — |
-| **Total (15 services)** | | **15.35** | **7.45** | **22.125 GB** | **11.0 GB** |
+| **Subtotal (v2 baseline, 15 services)** | | **15.35** | **7.45** | **22.125 GB** | **11.0 GB** |
+| `capture-binance` | ingestion (v3 Phase C) | 0.25 | 0.1 | 256 MB | 128 MB |
+| `capture-kraken` | ingestion (v3 Phase C) | 0.25 | 0.1 | 256 MB | 128 MB |
+| `capture-coinbase` | ingestion (v3 Phase C) | 0.25 | 0.1 | 512 MB | 128 MB |
+| **Total (18 services, Phase C parallel run)** | | **16.10** | **7.75** | **23.125 GB** | **11.375 GB** |
 | `redpanda-init` | init (one-shot) | — | — | — | — |
 | `iceberg-init` | init (one-shot) | — | — | — | — |
 | `lakekeeper-migrate` | init (one-shot) | — | — | — | — |
 | `lake-init` | init (one-shot) | — | — | — | — |
 
-Headroom against the 16 CPU / 40 GB envelope: **0.65 CPU (4%) and 17.875 GB (45%)**.
+Headroom against the 16 CPU / 40 GB envelope (v2 baseline, no capture tier):
+**0.65 CPU (4%) and 17.875 GB (45%)**.
+
+Headroom during the v3 Phase C parallel run (capture-* running alongside the Kotlin
+handlers it is validated against): **−0.10 CPU (steady state is over budget by design
+for the parity window) and 16.875 GB (42%)**. Retiring the three Kotlin feed handlers
+(−1.5 CPU / −1.5 GB, ADR-019) drops steady state to 14.60 CPU / 21.625 GB — 1.40 CPU
+(9%) and 18.375 GB (46%) headroom restored, and then some.
 
 ## Where the budget goes
 

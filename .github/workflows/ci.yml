@@ -41,6 +41,45 @@ jobs:
           path: services/feed-handler-kotlin/build/reports/tests/test
           retention-days: 7
 
+  rust:
+    name: Rust (capture)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: services/capture-rust
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned to the channel services/capture-rust/rust-toolchain.toml declares.
+      # `@stable` was a no-op: rustup honours the toolchain file, so the action's
+      # `components:` never applied and 1.98.0 was downloaded on every run anyway
+      # (rust-cache caches build artefacts, not toolchains).
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/capture-rust
+
+      # rdkafka's cmake build and zstd-sys both need a C toolchain. libcurl
+      # headers too: the runner ships libcurl.so, librdkafka's cmake detects it
+      # and enables the OAuth/OIDC code path, and the build then fails on
+      # `curl/curl.h` (run 32994901727). The Docker builder has no libcurl at
+      # all, so it never hit this; here the header package is the fix.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq cmake clang libclang-dev libcurl4-openssl-dev
+
+      - run: cargo fmt --check
+
+      # --locked: the Docker build compiles against the committed Cargo.lock, so
+      # CI must too. Without it a transitive minor bump can be green here and a
+      # different dependency set in the image.
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+      - run: cargo test --locked
+
   python:
     name: Python (offload + tests)
     runs-on: ubuntu-latest
@@ -71,20 +110,40 @@ jobs:
             dockerfile: docker/prefect/Dockerfile
           - name: spark
             dockerfile: docker/spark/Dockerfile
+          - name: capture
+            dockerfile: services/capture-rust/Dockerfile
+            # Only this image declares the ARG; passing it to the others would
+            # just print an unconsumed-build-arg warning on three legs.
+            build_args: K2_GIT_SHA=${{ github.sha }}
 
     steps:
       - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v4
 
-      # All three Dockerfiles COPY from repo root, so context is `.` (matches docker-compose.yml).
+      # Every one of these COPYs from the repo root, so the context is `.` and
+      # matches docker-compose.yml. capture-rust is NOT a standalone crate: it
+      # compiles the wire contract in from the repo with
+      # `include_str!("../../../schemas/avro/trade.avsc")` (src/record.rs), and
+      # its Dockerfile.dockerignore is what keeps the context small.
       - uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: false
+          build-args: ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  docs:
+    name: Docs (link/word/rule gates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: bash scripts/check-docs.sh
 
   security:
     name: Security (Trivy)

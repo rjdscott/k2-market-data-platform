@@ -39,6 +39,21 @@ volumes:
     driver: local
 
 
+# ── shared build definition for the three capture-* services ────────────────
+# Context is the REPOSITORY ROOT, not the crate: src/record.rs compiles the wire
+# contract in with `include_str!("../../../schemas/avro/trade.avsc")`, and
+# services/capture-rust/Dockerfile.dockerignore is what keeps the context small.
+# All three services build the same image; an anchor keeps them from drifting.
+x-capture-build: &capture-build
+  context: .
+  dockerfile: services/capture-rust/Dockerfile
+  args:
+    # Stamped into k2_capture_build_info. `git describe --always --dirty` rather
+    # than a bare sha: an image built from a dirty tree must not claim to be the
+    # commit it was started from. `make build-capture` and scripts/dev-up.sh
+    # export it; unset ships `unknown`, which is honest.
+    K2_GIT_SHA: ${K2_GIT_SHA:-unknown}
+
 #############################################################################
 # SERVICES - STREAMING BACKBONE
 #############################################################################
@@ -55,6 +70,7 @@ services:
       - k2-net
     ports:
       - "9092:9092"     # Kafka API
+      - "19092:19092"   # Kafka API, external listener advertised as localhost:19092 (host tooling: scripts/parity)
       - "9644:9644"     # Admin API
       - "8081:8081"     # Schema Registry
     volumes:
@@ -912,6 +928,162 @@ services:
       com.k2.version: "v2"
 
 #############################################################################
+# SERVICES - RUST CAPTURE (v3 PHASE C — parallel run alongside Kotlin)
+#############################################################################
+# See docs/plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md.
+# Three `k2-capture:v3` containers run alongside the three Kotlin feed handlers
+# above for a labelled 2-hour parity window (per-symbol trade counts/ids compared
+# in ClickHouse and the lake — ADR-019). The Kotlin handlers are only retired once
+# that comparison is clean; ADR-019's Outcome records the retirement and the
+# CPU/RAM given back.
+#
+# `./config` is a *directory* bind mount here (all of config/, not just
+# instruments.yaml). Directory mounts go stale the same way the file-level
+# mount does — see docker/README.md "A bind-mounted script runs its old
+# contents after you edited it": a write-then-rename edit survives only if
+# `--force-recreate` covers every service still holding the directory.
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Binance Capture - Rust k2-capture (trades + L2 book, one connection)
+  # ───────────────────────────────────────────────────────────────────────
+  capture-binance:
+    build: *capture-build
+    image: k2-capture:v3
+    container_name: k2-capture-binance
+    hostname: capture-binance
+    networks:
+      - k2-net
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+    environment:
+      - K2_EXCHANGE=binance
+      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
+      - K2_KAFKA_BROKERS=redpanda:9092
+      - K2_SCHEMA_REGISTRY_URL=http://redpanda:8081
+      - K2_METRICS_PORT=8082
+      - K2_SNAPSHOT_INTERVAL_MS=1000
+      - K2_TOPIC_PREFIX=market.crypto.v3
+      - RUST_LOG=info
+    volumes:
+      - ./config:/app/config:ro
+    cpuset: ${K2_CAPTURE_CPUSET-12-14}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "/k2-capture", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "capture"
+      com.k2.exchange: "binance"
+      com.k2.tier: "hot"
+      com.k2.version: "v3"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Kraken Capture - Rust k2-capture (trades + L2 book, one connection)
+  # ───────────────────────────────────────────────────────────────────────
+  capture-kraken:
+    build: *capture-build
+    image: k2-capture:v3
+    container_name: k2-capture-kraken
+    hostname: capture-kraken
+    networks:
+      - k2-net
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+    environment:
+      - K2_EXCHANGE=kraken
+      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
+      - K2_KAFKA_BROKERS=redpanda:9092
+      - K2_SCHEMA_REGISTRY_URL=http://redpanda:8081
+      - K2_METRICS_PORT=8082
+      - K2_SNAPSHOT_INTERVAL_MS=1000
+      - K2_TOPIC_PREFIX=market.crypto.v3
+      - RUST_LOG=info
+    volumes:
+      - ./config:/app/config:ro
+    cpuset: ${K2_CAPTURE_CPUSET-12-14}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "/k2-capture", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "capture"
+      com.k2.exchange: "kraken"
+      com.k2.tier: "hot"
+      com.k2.version: "v3"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Coinbase Capture - Rust k2-capture (trades + L2 book, one connection)
+  # ───────────────────────────────────────────────────────────────────────
+  # 512M not 256M: Coinbase's full-depth BTreeMap<i64,i64> book (vs. Binance's
+  # top-20 no-state and Kraken's depth=25) is the larger resident structure.
+  capture-coinbase:
+    build: *capture-build
+    image: k2-capture:v3
+    container_name: k2-capture-coinbase
+    hostname: capture-coinbase
+    networks:
+      - k2-net
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+    environment:
+      - K2_EXCHANGE=coinbase
+      - K2_INSTRUMENTS_FILE=/app/config/instruments.yaml
+      - K2_KAFKA_BROKERS=redpanda:9092
+      - K2_SCHEMA_REGISTRY_URL=http://redpanda:8081
+      - K2_METRICS_PORT=8082
+      - K2_SNAPSHOT_INTERVAL_MS=1000
+      - K2_TOPIC_PREFIX=market.crypto.v3
+      - RUST_LOG=info
+    volumes:
+      - ./config:/app/config:ro
+    cpuset: ${K2_CAPTURE_CPUSET-12-14}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "/k2-capture", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "capture"
+      com.k2.exchange: "coinbase"
+      com.k2.tier: "hot"
+      com.k2.version: "v3"
+
+#############################################################################
 # RESOURCE SUMMARY (Consolidated - Full Platform)
 #############################################################################
 # Service               | CPU Limit | Memory Limit | Purpose
@@ -931,8 +1103,15 @@ services:
 # feed-handler-kraken   | 0.5       | 512M         | Kraken ingestion (11 pairs)
 # feed-handler-coinbase | 0.5       | 512M         | Coinbase ingestion (11 pairs)
 # iceberg-metrics       | 0.1       | 128M         | Offload alerts exporter (:8000)
+# capture-binance       | 0.25      | 256M         | Rust capture, Binance (v3 Phase C, parallel run)
+# capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (v3 Phase C, parallel run)
+# capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (v3 Phase C, parallel run)
+#
+# The three capture-* containers are also cpuset-pinned to cores 12-14
+# (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
+# it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (15 long-running) | 15.35 CPU | 22.125 GB | Full consolidated platform
+# STEADY STATE (18 long-running) | 16.10 CPU | 23.125 GB | Full platform, Phase C parallel run
 #
 # One-shots — NOT free. They declare limits and they run concurrently with the
 # steady state at boot, so the budget that matters at `docker compose up` is the
@@ -945,15 +1124,24 @@ services:
 #   ----------------------------------------------------------------------------
 #   one-shot subtotal  1.5  | 1.5G
 #
-# Bootstrap peak: 16.85 CPU / 23.625 GiB  (`docker compose config` limit sum — all
-# 19 services). That is over the 16 CPU target for the one-shots' lifetime, which
-# is seconds. The feed handlers gate only on redpanda-init; the other three
-# one-shots can overlap live traffic. CPU limits are a ceiling on scheduling,
-# not a reservation, so the overcommit is a burst not a failure.
+# Bootstrap peak: 17.60 CPU / 24.625 GiB  (`docker compose config` limit sum — all
+# 22 services). The feed handlers AND the three capture-* containers gate only on
+# redpanda-init; the other three one-shots can overlap live traffic. CPU limits
+# are a ceiling on scheduling, not a reservation, so the overcommit is a burst
+# not a failure.
 #
-# Steady-state headroom: 0.65 CPU / 17.875 GB for future expansion
+# STEADY STATE ITSELF now exceeds the 16 CPU target — by 0.10 CPU — for as long
+# as Phase C runs Rust capture and the Kotlin feed handlers side by side (the
+# parity window in
+# docs/plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md).
+# This is deliberate and temporary: it is the cost of comparing two producers
+# before trusting the new one. Retiring the three Kotlin feed handlers gives
+# back 1.5 CPU / 1.5 GB (feed-handler-{binance,kraken,coinbase} above), landing
+# steady state at 14.60 CPU / 21.625 GB — headroom restored and then some.
+# ADR-019's Outcome records that retirement once the labelled 2-hour parity check is clean.
+#
 # Target: 16 CPU / 40 GB total
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-08-26 (Phase B: +lakekeeper)
+# Last updated: 2026-08-26 (v3 Phase C: +capture-{binance,kraken,coinbase}, parallel run with Kotlin)
 #############################################################################

@@ -1,8 +1,9 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 17 alert rules cover the three
-things that actually break: ingestion stops, ClickHouse struggles, the cold-tier offload
-falls behind.
+Prometheus scrapes the stack, Grafana renders it, and 27 alert rules (17 v2 + 10 v3 capture)
+cover the things that actually break: ingestion stops, ClickHouse struggles, the cold-tier
+offload falls behind, and — on this branch's Phase C capture tier — feed staleness, sequence
+gaps and book checksum failures.
 
 - Prometheus — http://localhost:9090 (`/targets`, `/alerts`)
 - Grafana — http://localhost:3000, `admin` / `$GRAFANA_PASSWORD`
@@ -54,12 +55,13 @@ Plus the JVM/process metrics Micrometer registers by default. Recording rule
 | ClickHouse Overview (v2) | `clickhouse-v2` | Query rate, memory gauge, insert rate, background merges — the warm tier in isolation |
 | Iceberg Offload Pipeline | `iceberg-offload` | Offload lag, success rate, rows/sec, duration quantiles, error rate, cycle status |
 | K2 Platform v2 — Migration Tracker | `k2-v2-migration` | Total CPU/RAM gauges against the 16-core budget, service up/down, Redpanda and ClickHouse rates |
+| K2 Capture (v3) | `k2-l2-capture` | Rust capture tier (Phase C): health (up, staleness, reconnects, gaps, checksum failures, resyncs), throughput (messages/bytes/records/produce errors), exchange→recv latency p50/p95/p99, book depth/levels/precision loss. `exchange` template variable filters all panels |
 
 ![Redpanda topics](../images/redpanda-console-topics.jpg)
 
 ## Alert rules
 
-17 rules across three files. Every annotation carries the diagnostic commands and a
+27 rules across four files. Every annotation carries the diagnostic commands and a
 runbook link; the tables below are the index.
 
 ### `feed-handler-alerts.yml` — ingestion (3)
@@ -104,6 +106,35 @@ backstop. `IcebergOffloadThroughputLow` uses a 1-hour window because offloads ru
 
 Recording rules: `iceberg_offload:cycle_count:5m`, `iceberg_offload:duration_avg:5m`,
 `iceberg_offload:rows_rate:5m`.
+
+### `capture-alerts.yml` — v3 capture tier, Phase C (10)
+
+| Alert | Severity | Fires when |
+|-------|----------|-----------|
+| `CaptureDown` | critical | Metrics endpoint unreachable for 2m |
+| `CaptureFeedStale` | critical | No frames on a *continuous* stream for its own bound, sustained `for: 2m` — 60s for `book`/`depth20`/`l2_data`/`heartbeat(s)`, 300s for `trade`/`market_trades`, the same two numbers `CONTINUOUS` in `main.rs` gives the watchdog and the healthcheck. No `up` guard: a dead target's series are stale-marked, so this alert has no input to fire on and the incident is `CaptureDown`'s by construction |
+| `CaptureSequenceGaps` | critical | Any sequence gap in 10m, sustained 5m |
+| `CaptureChecksumFailure` | critical | Kraken CRC32 book mismatch in 10m, sustained 5m. Kraken only — Binance and Coinbase publish no checksum and have no series |
+| `CaptureProduceErrors` | critical | `increase(k2_capture_produce_errors_total[10m]) > 0` for 5m — any produce error at all; there is no spill-to-disk, so a rate floor would tolerate permanent loss |
+| `CaptureProduceStalled` | critical | Enqueueing records but zero **delivered** for 1m — early warning before `CaptureProduceErrors`. `records_produced_total` counts the local enqueue and climbs right through a broker outage; `records_delivered_total` is the one that goes flat |
+| `CaptureResyncStorm` | warning | More than 3 book resyncs in 15m, sustained 5m |
+| `CaptureIngressLatencyHigh` | warning | Exchange→receive p99 above 2s for 10m — a "something changed" signal, not a latency SLO. **Trades only**, on every venue; no book frame enters the histogram |
+| `CaptureBookDepthDegraded` | warning | `max_over_time(k2_capture_book_depth[10m]) < 20` for 10m — the gauge is total levels across **both** sides, so 20 is 10 a side |
+| `CapturePrecisionLoss` | warning | A venue quoted finer than the fixed-point 1e-8 scale in the last hour |
+
+These are evaluated against live series, but **not one has yet been shown to fire on the
+fault it names** — `make chaos` is what proves that and the recovery cost, and it has not
+run (`scripts/chaos/results/` does not exist). Thresholds move then, not before.
+`CaptureFeedStale`, `CaptureProduceStalled` and `CaptureBookDepthDegraded` additionally
+carry `promtool` unit tests in
+[`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml)
+(`make check-alerts`); those pin the expression, never the recovery time.
+
+The three `capture-*` scrape jobs set no `exchange` target label, unlike the Kotlin
+feed-handler jobs: the capture binary emits its own `exchange` on every series, and a
+target label of the same name would win and rename the sample's to `exported_exchange`.
+Alerts on capture series get `exchange` from the binary; alerts on `up` name the venue
+through `job` (`capture-<exchange>`).
 
 ### How the offload metrics are produced
 

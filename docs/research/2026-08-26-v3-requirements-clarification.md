@@ -135,6 +135,157 @@ the SLO document says so instead of implying a redundancy that does not exist.
 
 ---
 
+## Q5 — Cutover authority: who signs off on the destructive steps?
+
+**Asked.** Three steps in the plan are destructive and not reversible from git
+alone: retiring Kotlin to `legacy/v2-kotlin/`, removing `docker/offload/` plus
+the hadoop warehouse bind mount, and dropping the `k2` database and deleting
+the `.raw` JSON topics. Does each of these need a human yes per step, or is
+one authorization enough to run the plan unattended?
+
+**Answered: once, now.** Conditional on the plan's own comparison gates for
+each step — parity counts, audits green, CI green — the maintainer authorizes
+all three cutovers in advance, each landing in its own PR with the comparison
+evidence pasted into the PR body. No further approval is sought once a gate
+is met.
+
+**Rejected: per-step approval.** It blocks unattended execution for a
+decision that was already made — the gates exist precisely so the yes/no is
+mechanical, not judgment-per-step. **Rejected: never cut over, run v2 beside
+v3 through Phase G.** ADR-010's Outcome section already shows the budget is
+tight: steady-state v2 sits at 15.35 CPU, and adding capture (+0.75 CPU) for
+a parallel run brings it to 16.10 CPU — over the 16 CPU budget documented
+there. Running both stacks side by side through Phase G is not an option this
+host has room for; the gated, once-now authorization is what makes a
+16 CPU/40 GB single host survive the migration at all.
+
+**Lands in:** Phase C (Kotlin retirement), Phase D (`docker/offload/` +
+warehouse removal), Phase E (drop `k2`, delete `.raw` topics) — each cutover
+its own PR, comparison evidence pasted, ADR-010 Outcome cited.
+
+---
+
+## Q6 — Burn-in windows: real wall-clock duration, or shortened?
+
+**Asked.** The plan as drafted specifies 24 h per exchange for the Phase C
+capture burn-in and 3 days of lake audits for Phase D. Run those for real, or
+shorten them for unattended execution?
+
+**Answered: 2 h windows, every published number labelled with its window.**
+Every burn-in and audit window across the plan becomes 2 h, and every number
+that comes out of one states the window explicitly in the document that
+publishes it — "over 2 h on 2026-08-27", never "per day" or a bare rate that
+implies a longer observation. The phase files are amended in place to say
+2 h rather than 24 h/3 days.
+
+**Rejected: real 24 h windows.** Wall-clock-bound execution with nothing to
+verify in between means roughly a week sitting idle waiting on burn-ins
+across Phases C–D alone. **Rejected: 24 h for Phase C only, shortened
+elsewhere.** A window that changes meaning phase to phase is worse than one
+that is short everywhere and says so everywhere — consistency here is what
+lets a reader trust the label instead of re-deriving what each number covers.
+
+**Second-order consequences accepted.** Tail behaviour is not observed in any
+Phase C/D number: the 23 h Binance scheduled reconnect, daily compaction
+seams, and overnight liquidity patterns fall outside a 2 h window by
+construction, and every document that publishes a number from these windows
+must say so rather than imply completeness. The Phase F SLO error budgets
+built on this data are therefore provisional, not final, until a longer
+window exists. **Revisit when:** the first 24 h continuous run is performed —
+that is the trigger, not a calendar date.
+
+**Lands in:** `002-phase-c-rust-capture.md`, `003-phase-d-lake-tier.md`,
+`005-phase-f-notebooks-numbers-docs.md`, this plan's `README.md` (each
+burn-in/audit window reduced to 2 h, labelled); the "Revisit when" trigger
+carries into `docs/operations/slos.md` when Phase F writes it.
+
+---
+
+## Q7 — v2 data: migrate the existing ClickHouse and Iceberg data into the lake?
+
+**Asked.** v2's `k2` ClickHouse database and its bind-mounted Iceberg
+warehouse hold real captured trades. Is that data worth carrying into the v3
+lake, or does the lake start empty?
+
+**Answered: disposable, no migration.** v3's lake starts from nothing;
+nothing from v2's `k2` database or its Iceberg warehouse is copied forward.
+
+**Rejected: migrating v2 bronze/silver into the v3 lake.** v2's data was
+written by a JDBC offload with no `recv_ts_ns` and no sequence/gap detection
+— it is a lossy copy of a lossy copy. Importing it would plant rows in
+`raw.messages` that look like the verbatim archive the rest of the platform
+is built to trust, while actually carrying none of its provenance guarantees.
+That pollutes the one property the lake exists to have — every row traceable
+to the exact frame that produced it — for the sake of keeping data that was
+never captured to the v3 standard in the first place.
+
+**Lands in:** Phase D (lake starts empty, no v2 import step in scope).
+
+---
+
+## Q8 — Raw archive retention on a single host
+
+**Asked.** Prompted by [the capacity model](../architecture/capacity-model.md#7-bottleneck-prediction):
+the plan keeps `raw.messages` forever, and the host fills its ~212 GiB free in
+~26 days at the predicted rate. Bound it in the lake — 30 d or 7 d TTL — or
+keep it forever?
+
+**Answered: keep forever.** Phase D adds a disk-usage alert at 80% with a
+runbook. No lake TTL on `raw.messages`. Disk expansion (an external volume) is
+an operator action, not a platform policy.
+
+**Rejected: 30 d raw TTL.** The replay window becomes 30 d — the archive stops
+being the system of record for anything older than that, and bronze cannot be
+rebuilt past it. **Rejected: 7 d TTL.** Same failure, worse window.
+
+**Consequences.** The capacity model's "bottleneck is disk, on a calendar"
+prediction stands and becomes an operational SLO input — Phase F publishes
+disk days-remaining as a number with its command. ADR-021 (raw-first archive)
+must state the single-host disk limit honestly rather than implying unbounded
+storage. The 80% alert's runbook must include the `mc du` / `df` commands from
+[capacity model §8](../architecture/capacity-model.md#8-how-this-table-is-settled)
+and the two options an operator actually has: add disk, or a manual purge with
+an audit row.
+
+**Revisit when:** disk-days-remaining < 30 measured, or a second host exists.
+
+**Lands in:** Phase D (80% disk alert), Phase F (days-remaining as a published
+number), ADR-021.
+
+---
+
+## Q9 — Scale target
+
+**Asked (2026-08-26).** Is single-host Docker the design target, or a stand-in?
+
+**Answered: a stand-in.** Every tier must carry a stated AWS scale-out path to
+TB/PB: raw archive forever on S3 with a Glacier/Deep Archive lifecycle — this
+is what makes Q8's "keep forever" viable beyond one disk — MSK or Redpanda
+Cloud for the bus, ClickHouse on EC2/ClickHouse Cloud for the hot tier, EMR
+Serverless for lake ingest/maintenance, one Fargate task per exchange
+(multi-AZ) for capture, Lakekeeper on ECS with RDS Postgres. Partition spec,
+target file size, manifest counts and compaction cadence get justified at PB
+scale, not just today's 6.5 GB/day. Code keeps the S3 endpoint/region/
+path-style/catalog URI env-driven and never assumes one host.
+
+**Rejected: "single host is the product."** ADR-018's non-goal list keeps *no
+HA on this host*, not *cannot scale* — conflating the two would fossilize a
+budget constraint into an architectural ceiling. **Rejected: build the AWS
+deployment now.** Out of scope, no budget.
+
+**Consequences.** New design doc `docs/architecture/scale-out-path.md` (Phase
+D, once the lake tables exist) with a per-component mapping table and what
+changes vs what does not — the lake-as-system-of-record contract, the Avro
+contracts and the capture binary do not change. The capacity model gets an
+"at 100× / PB" column in Phase F. Everything in both documents is labelled
+"designed, not exercised."
+
+**Revisit when:** a second host or an AWS account is provisioned.
+
+**Lands in:** Phase D (`scale-out-path.md`), Phase F (capacity model column).
+
+---
+
 ## Non-goals, reaffirmed
 
 Unchanged from ADR-018 and restated here because every answer above was given

@@ -30,6 +30,15 @@ the feed handlers.
 Never commit `.env`. Everything reads its secrets from it; nothing in the repo hardcodes a
 password.
 
+### The safe bring-up (after the first run)
+
+`make up` is the raw `docker compose up -d`. For everyday use, `make dev-up` runs the
+maintainer's bring-up checklist instead: it works around a busy host port 4200, recreates
+any service holding a directory bind mount that changed in the last commit (see the
+[bind-mount gotcha](../../docker/README.md#troubleshooting)), waits for health, and probes
+that trades are actually flowing before declaring success. `bash scripts/dev-up.sh --dry-run`
+prints what it would do without touching anything.
+
 ### Applying the ClickHouse schema
 
 The full schema (25 objects: `k2` database, watermark table, bronze/silver/gold) auto-applies

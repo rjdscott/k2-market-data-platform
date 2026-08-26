@@ -1,0 +1,11 @@
+a52ef1d2137a4392f2264831d524f751641e4938bd7f5cd8a759f28206330b73
+
+# SHA-256 of `serde_json::to_vec(&records)` over one replay of
+# binance-10s.jsonl - see tests/replay_binance.rs::replay_is_deterministic.
+#
+# Golden value for "same input, same bytes out". It changes only when the
+# fixture changes or a record's shape changes; either way the new value goes
+# here with a line saying what moved. It is not a hash of the fixture file.
+#
+# 2026-08-26  first recorded: 539 frames (438 trade, 101 depth20), BTCUSDT
+#             only, 10 s, 9 sampled snapshots, 0 lastUpdateId regressions.

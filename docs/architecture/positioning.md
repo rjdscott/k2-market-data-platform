@@ -4,7 +4,7 @@ What this platform is for, what it is measurably good at, and the workloads it i
 
 ## What it is
 
-A single-host crypto market-data platform that takes live exchange trades and makes them queryable as OHLCV candles in **under 200 ms p99**, then lands them in an open table format for history. It runs three exchanges on 15.1 CPU / 21.875 GB (v2; this branch's v3 foundations add Lakekeeper — +0.25 CPU / +256 MB — for 15.35 CPU / 22.125 GB as deployed here).
+A single-host crypto market-data platform that takes live exchange trades and makes them queryable as OHLCV candles in **under 200 ms p99**, then lands them in an open table format for history. It runs three exchanges on 15.1 CPU / 21.875 GB (v2 baseline); this branch runs Phase C — Rust `k2-capture` alongside the Kotlin handlers for a labelled parity window ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) — for a steady state of 16.10 CPU / 23.125 GB across 18 long-running services, until Kotlin retires.
 
 The design centre is the **warm path**: fast enough that a dashboard or a monitor reads current market state without feeling stale, durable enough that a year of history is one `SELECT` away, and small enough to run on one machine. That is a narrower target than "market data platform" usually implies, and the narrowness is the point.
 
@@ -13,7 +13,7 @@ The design centre is the **warm path**: fast enough that a dashboard or a monito
 ```mermaid
 flowchart TB
     L1["<b>Hot · under 10 µs</b><br/>Execution, market making<br/>C++, FPGA, kernel bypass"]
-    L2["<b>Warm · ms to sub-second</b><br/>Monitoring, near-real-time analytics,<br/>OHLCV, intraday research<br/><b>← K2 lives here</b>"]
+    L2["<b>Warm · ms-sub-second</b><br/>Monitoring, analytics<br/>OHLCV, research<br/><b>K2 lives here</b>"]
     L3["<b>Cold · seconds to minutes</b><br/>Backtesting, compliance, ML features<br/>Lakehouse, warehouse"]
 
     L1 -->|"post-trade"| L2

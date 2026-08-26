@@ -107,3 +107,46 @@ scrape_configs:
           tier: 'ingestion'
     metrics_path: '/metrics'
     scrape_interval: 10s
+
+  # Rust capture tier (v3 Phase C) — metrics-exporter-prometheus on port 8082,
+  # same port as the Kotlin handlers above since the two run against different
+  # containers during the parallel run. See
+  # docs/plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md.
+  #
+  # NO `exchange:` target label here, unlike the Kotlin jobs above. The capture
+  # binary emits its own `exchange` label on every series, and with the default
+  # `honor_labels: false` a target label of the same name wins and the sample's
+  # own is renamed `exported_exchange` — so every capture series carried both,
+  # while `k2_capture_build_info` (which the binary emits without `exchange`)
+  # carried only the target one. Two label sets for one concept. Dropping the
+  # target label is the fix rather than `honor_labels: true`, which would leave
+  # `up` — a synthetic series with no sample labels to honour — without an
+  # exchange either way, and would let a venue's own metrics rewrite `job` and
+  # break CaptureDown. Alerts on capture series get `exchange` from the binary;
+  # alerts on `up` identify the venue by `job`.
+  - job_name: 'capture-binance'
+    static_configs:
+      - targets: ['capture-binance:8082']
+        labels:
+          service: 'capture-binance'
+          tier: 'ingestion'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  - job_name: 'capture-kraken'
+    static_configs:
+      - targets: ['capture-kraken:8082']
+        labels:
+          service: 'capture-kraken'
+          tier: 'ingestion'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  - job_name: 'capture-coinbase'
+    static_configs:
+      - targets: ['capture-coinbase:8082']
+        labels:
+          service: 'capture-coinbase'
+          tier: 'ingestion'
+    metrics_path: '/metrics'
+    scrape_interval: 15s

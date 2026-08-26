@@ -1,6 +1,6 @@
 # ADR-002: Replace Python Feed Handlers with Kotlin
 
-**Status:** Accepted — Implemented with deviations (2026-02) — see Outcome
+**Status:** Accepted — Implemented with deviations (2026-02) — see Outcome; [Superseded by ADR-019](ADR-019-rust-capture-tier.md)
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Data Ingestion

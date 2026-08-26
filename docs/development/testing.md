@@ -6,9 +6,10 @@ flow — and leans on manual failure-mode testing for everything that needs a li
 Where that leaves gaps, they are listed below rather than papered over.
 
 ```bash
-make test          # everything: Kotlin + Python
+make test          # everything: Kotlin + Python + Rust
 make test-kotlin   # feed handler unit tests
 make test-python   # offload flow unit tests (needs uv)
+make test-rust     # capture unit + replay integration tests (runs in rust:1-bookworm)
 ```
 
 ## Inventory
@@ -17,9 +18,12 @@ make test-python   # offload flow unit tests (needs uv)
 |-------|------:|----------|----------------|
 | Kotlin — `TradeNormalizerTest` | 7 | [`services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/TradeNormalizerTest.kt`](../../services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/TradeNormalizerTest.kt) | Per-exchange symbol normalisation and trade mapping to the canonical schema |
 | Kotlin — `InstrumentsLoaderTest` | 13 | [`InstrumentsLoaderTest.kt`](../../services/feed-handler-kotlin/src/test/kotlin/com/k2/feedhandler/InstrumentsLoaderTest.kt) | Parsing `config/instruments.yaml` (v2 schema), per-exchange lookup, missing-file and malformed-YAML handling |
+| Rust — capture lib unit | 46 | [`services/capture-rust/src/`](../../services/capture-rust/src/) | `decimal`, `record`, `config`, `ws`, `book`, `exchanges/{binance,kraken,coinbase}` — fixed-point conversion, book state, per-exchange framing |
+| Rust — capture replay integration | 6 | [`services/capture-rust/tests/`](../../services/capture-rust/tests/) | `replay.rs` (2), `replay_binance.rs` (2), `replay_coinbase.rs` (2) — golden-fixture replay through the same `handle_frame()` path live capture runs |
 | Python — Iceberg maintenance flow | 28 | [`tests/test_iceberg_maintenance_flow.py`](../../tests/test_iceberg_maintenance_flow.py) | Compact / expire / audit tasks, the parent flows, failure policy, and script helpers — all with the Spark subprocess mocked |
 | Python — v3 data contracts | 41 | [`tests/test_contracts.py`](../../tests/test_contracts.py) | Structural checks on `schemas/avro/*.avsc` and `config/instruments.yaml` — sibling `logicalType`, fixed-point prices, nullable defaults, duplicate/malformed canonical symbols |
-| **v2 total** | **90** | | |
+| Python — v3 parity | 40 | [`tests/test_parity.py`](../../tests/test_parity.py) | Per-symbol trade count/id comparison between Kotlin and Rust capture output — the Phase C exit gate (ADR-019) |
+| **v2+v3 total (Kotlin + Rust + Python)** | **181** | | |
 | Legacy v1 | 180 | [`legacy/v1/tests/unit/`](../../legacy/v1/tests/unit/) | Archived. Kept for reference; not run in CI |
 
 ## Running them
@@ -62,14 +66,16 @@ uv run --no-project --with ruff ruff check docker/offload tests
 
 ## CI
 
-[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs four jobs on every PR and
-on pushes to `main`:
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs six jobs on every PR and
+on pushes to `main`: **kotlin**, **rust**, **python**, **docker** (×4 matrix), **docs**, **security**.
 
 | Job | What it does |
 |-----|--------------|
 | **Kotlin (feed handler)** | `./gradlew build` on JDK 21 — compiles and runs the 20 tests. Uploads the HTML test report on failure |
-| **Python (offload + tests)** | `ruff check` then `pytest tests -q` under `uv` |
-| **Docker build** | Builds all three Dockerfiles (feed handler, Prefect worker, Spark) with GHA layer caching. Catches broken build contexts, not runtime behaviour |
+| **Rust (capture)** | `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test` — runs the 52 tests |
+| **Python (offload + tests)** | `ruff check` then `pytest tests -q` under `uv` — runs the 109 tests |
+| **Docker build** | 4-way matrix: feed handler, Prefect worker, Spark, capture (own build context), with GHA layer caching. Catches broken build contexts, not runtime behaviour |
+| **Docs** | `bash scripts/check-docs.sh` — link/word/rule gates, promtool, runbook annotation paths, capacity-model gate, mermaid width |
 | **Security (Trivy)** | Filesystem scan for CRITICAL/HIGH findings, SARIF uploaded to GitHub code scanning. `legacy/` is skipped |
 
 No job starts the stack, so nothing in CI exercises a real Redpanda, ClickHouse or

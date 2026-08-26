@@ -1,7 +1,7 @@
 # Runbook: Redpanda Operations
 
 **Severity**: High (message broker — impacts all 3 exchanges if down)
-**Last Updated**: 2026-02-18
+**Last Updated**: 2026-08-26
 **Replaces**: `kafka-runbook.md` (Kafka replaced by Redpanda in v2 — ADR-001)
 
 ---
@@ -206,6 +206,38 @@ If adding a second broker (future scale-out), use:
 ```bash
 docker exec k2-redpanda rpk cluster partitions balance
 ```
+
+---
+
+## Measured MTTR
+
+Broker restart, measured against the **v3 capture tier** by
+`scripts/chaos/redpanda-stop.sh --exchange kraken` and
+`scripts/chaos/capture-queue-full.sh --exchange kraken` on 2026-08-26
+([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)).
+The v2 feed handlers lost the broker at the same instant and are **not** measured here —
+they have no equivalent counter.
+
+| # | Failure | Measured |
+|---|---------|----------|
+| 1 | Broker stopped (`docker stop`, 45 s), then started | producers past their mid-outage level **14 s** after the broker returned, with **no producer restart**. `rpk cluster health` clean |
+| 2 | Broker paused (`docker pause`, 388 s), then unpaused | producing again **0 s** after unpause — the first scrape already showed recovery. `rpk cluster health` clean, on a single-node Raft cluster frozen for over six minutes |
+| 3 | Records lost during the outage | **7,821** (45 s stopped) and **231,744** (388 s paused), kraken alone. Public feeds do not replay; the windows are permanently absent |
+| 4 | Time for `CaptureProduceErrors` to fire | **256 s** from the fault (`for: 5m` on a `[10m]` `increase`) |
+| 5 | Consumer-group recovery, ClickHouse and the v2 handlers | not yet verified — no script measures the consumer side |
+
+**Two things this establishes.** The broker comes back clean from both a stop and a
+multi-minute pause without manual intervention, and **nothing downstream needs
+restarting** — the "restart the producers after the broker returns" instinct is wrong and
+costs a second data-loss window. What it does *not* establish is the consumer side; row 5
+stays open.
+
+**A caveat on row 3.** Those loss figures predate the `message.timeout.ms` 30 s → 5 min
+fix in `sink.rs`
+([ADR-019 Outcome](../adr/ADR-019-rust-capture-tier.md#measured-correction-2026-08-26--the-32-mib-buffer-was-unreachable)):
+a 45 s outage should have lost nothing at all. Re-run to score the fix.
+
+**Last verified:** 2026-08-26 (`make chaos`).
 
 ---
 
