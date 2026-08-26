@@ -77,7 +77,10 @@ label was wrong. Run on 2026-08-27.
 `capture-coinbase` gets twice the memory of the other two because Coinbase's `level2`
 channel is full depth, not top-20 — its subscribe snapshot alone is 5.2 MB
 ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) Appendix A, S5). All three are
-`cpuset`-pinned to cores 12–14 (`K2_CAPTURE_CPUSET`).
+`cpuset`-pinned to cores 12–14 (`K2_CAPTURE_CPUSET`); ClickHouse, Spark and the `lake-ddl`
+one-shot are pinned to the disjoint range 0–11 (`K2_HEAVY_CPUSET`), so a compaction or a heavy
+query cannot share a core with capture — verified by `docker inspect -f '{{.HostConfig.CpusetCpus}}'`
+and measured by the noisy-neighbour experiment in `docs/architecture/capacity-model.md`.
 
 The one-shots are **not free**. They declare limits and they run concurrently with the
 steady state at `docker compose up`, so the bootstrap peak is the number the host has to

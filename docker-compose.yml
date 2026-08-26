@@ -159,6 +159,10 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.3-alpine
     container_name: k2-clickhouse
+    # Pinned off the capture cores (12-14) so a compaction or a heavy query
+    # cannot steal a capture container's cycles; the Phase D noisy-neighbour
+    # experiment (capacity-model.md) is what makes this claim measurable.
+    cpuset: ${K2_HEAVY_CPUSET-0-11}
     hostname: clickhouse
     networks:
       - k2-net
@@ -493,6 +497,10 @@ services:
       dockerfile: docker/spark/Dockerfile
     image: k2-spark-iceberg:3.5.5_1.8.1  # local tag after build
     container_name: k2-spark-iceberg
+    # Pinned off the capture cores (12-14) so a compaction or a heavy query
+    # cannot steal a capture container's cycles; the Phase D noisy-neighbour
+    # experiment (capacity-model.md) is what makes this claim measurable.
+    cpuset: ${K2_HEAVY_CPUSET-0-11}
     hostname: spark-iceberg
     networks:
       - k2-net
@@ -673,6 +681,10 @@ services:
   lake-ddl:
     image: k2-spark-iceberg:3.5.5_1.8.1  # built by the spark-iceberg service
     container_name: k2-lake-ddl
+    # Pinned off the capture cores (12-14) so a compaction or a heavy query
+    # cannot steal a capture container's cycles; the Phase D noisy-neighbour
+    # experiment (capacity-model.md) is what makes this claim measurable.
+    cpuset: ${K2_HEAVY_CPUSET-0-11}
     networks:
       - k2-net
     volumes:
