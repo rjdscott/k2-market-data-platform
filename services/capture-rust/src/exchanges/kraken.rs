@@ -244,7 +244,8 @@ impl KrakenAdapter {
                             .insert(p.symbol.to_string(), (p.price_precision, p.qty_precision));
                     }
                 }
-                out.actions.extend(self.drain_pending());
+                let actions = self.drain_pending(&mut out.records);
+                out.actions.extend(actions);
             }
             Body::Trade(trades) => {
                 for t in trades {
@@ -256,12 +257,14 @@ impl KrakenAdapter {
             Body::Book(frames) => {
                 for f in frames {
                     if self.precision.contains_key(f.symbol) {
-                        out.actions.extend(self.apply_book(
+                        let actions = self.apply_book(
                             &f,
                             frame_type,
                             recv_ts_ns,
                             conn_msg_seq,
-                        ));
+                            &mut out.records,
+                        );
+                        out.actions.extend(actions);
                     } else {
                         self.park(f.symbol, recv_ts_ns, conn_msg_seq, bytes);
                     }
@@ -348,12 +351,16 @@ impl KrakenAdapter {
     }
 
     /// Apply one book frame and verify the checksum it carries.
+    ///
+    /// On a mismatch it pushes one last snapshot onto `records`, stamped
+    /// `checksum_ok=false`, *before* dropping the book — see the mismatch branch.
     fn apply_book(
         &mut self,
         f: &BookData<'_>,
         frame_type: &str,
         recv_ts_ns: i64,
         conn_msg_seq: i64,
+        records: &mut Vec<OutRecord>,
     ) -> Vec<Action> {
         if self.instruments.canonical(f.symbol).is_none() {
             return Vec::new();
@@ -409,28 +416,39 @@ impl KrakenAdapter {
 
         if computed == f.checksum {
             state.checksum_ok = Some(true);
-            Vec::new()
-        } else {
-            state.checksum_ok = Some(false);
-            // The book is not trustworthy any more. Dropping it stops a wrong
-            // book being sampled at 1 Hz until the resync lands; `snapshot`
-            // then returns None rather than a plausible-looking lie.
-            state.book.clear();
-            metrics::counter!(
-                "k2_capture_checksum_failures_total",
-                "exchange" => EXCHANGE,
-                "symbol" => f.symbol.to_string(),
-            )
-            .increment(1);
-            metrics::counter!("k2_capture_resyncs_total", "exchange" => EXCHANGE).increment(1);
-            tracing::warn!(
-                symbol = f.symbol,
-                expected = f.checksum,
-                computed,
-                "kraken book checksum mismatch, resyncing"
-            );
-            vec![Action::Resubscribe(f.symbol.to_string())]
+            return Vec::new();
         }
+        state.checksum_ok = Some(false);
+        // The last true thing this book can say is that it is wrong, and it has
+        // to say it before it is dropped. Without this emission `checksum_ok`
+        // was a tri-state field that only ever held `true` or `null`: the
+        // mismatch branch cleared the book and `snapshot` returns `None` on an
+        // empty book, so a consumer filtering `checksum_ok = false` to find the
+        // bad windows found nothing, ever. `recv_ts_ns` is the sample clock here
+        // rather than the 1 Hz sampler's, which keeps `handle_frame` pure.
+        if let Some(marked) = self.snapshot(f.symbol, recv_ts_ns) {
+            records.push(OutRecord::Book(marked));
+        }
+        // Dropping the book stops a wrong book being sampled at 1 Hz until the
+        // resync lands; `snapshot` then returns None rather than a
+        // plausible-looking lie.
+        if let Some(state) = self.books.get_mut(f.symbol) {
+            state.book.clear();
+        }
+        metrics::counter!(
+            "k2_capture_checksum_failures_total",
+            "exchange" => EXCHANGE,
+            "symbol" => f.symbol.to_string(),
+        )
+        .increment(1);
+        metrics::counter!("k2_capture_resyncs_total", "exchange" => EXCHANGE).increment(1);
+        tracing::warn!(
+            symbol = f.symbol,
+            expected = f.checksum,
+            computed,
+            "kraken book checksum mismatch, resyncing"
+        );
+        vec![Action::Resubscribe(f.symbol.to_string())]
     }
 
     /// Park a book frame that arrived before its pair's precision did.
@@ -452,7 +470,7 @@ impl KrakenAdapter {
 
     /// Replay parked frames for every symbol whose precision has now arrived,
     /// in receipt order.
-    fn drain_pending(&mut self) -> Vec<Action> {
+    fn drain_pending(&mut self, records: &mut Vec<OutRecord>) -> Vec<Action> {
         let ready: Vec<String> = self
             .pending
             .keys()
@@ -476,6 +494,7 @@ impl KrakenAdapter {
                             frame_type,
                             pf.recv_ts_ns,
                             pf.conn_msg_seq,
+                            records,
                         ));
                     }
                 }
@@ -810,15 +829,45 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_checksum_resyncs_and_marks_the_snapshot() {
+    fn a_bad_checksum_emits_a_marked_snapshot_then_resyncs() {
         let mut a = adapter();
         a.handle_frame(instrument_frame().as_bytes(), 1);
         let frame = r#"{"channel":"book","type":"snapshot","data":[{"symbol":"BTC/USD","bids":[{"price":45283.5,"qty":0.1}],"asks":[{"price":45285.2,"qty":0.001}],"checksum":1,"timestamp":"2026-08-26T07:44:36.205375Z"}]}"#;
         let h = a.handle_frame(frame.as_bytes(), 2);
         assert_eq!(h.actions, vec![Action::Resubscribe("BTC/USD".into())]);
+
+        // The whole point of the tri-state field: a consumer filtering
+        // `checksum_ok = false` has to find something. Without this emission the
+        // field only ever held `true` or `null`, because the mismatch branch
+        // clears the book and `snapshot` returns None on an empty one.
+        let marked: Vec<_> = h
+            .records
+            .iter()
+            .filter_map(|r| match r {
+                OutRecord::Book(b) => Some(b),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(marked.len(), 1, "exactly one snapshot marks the bad book");
+        assert_eq!(marked[0].checksum_ok, Some(false));
+        assert_eq!(marked[0].symbol, "BTC/USD");
+        assert_eq!(
+            marked[0].bid_px,
+            vec![4_528_350_000_000],
+            "the book as it actually stood when the checksum failed"
+        );
+        assert_eq!(
+            marked[0].snapshot_ts_ns, 2,
+            "receipt time, not a clock read"
+        );
+        assert!(
+            matches!(h.records[0], OutRecord::Raw(_)),
+            "raw is still emitted first"
+        );
+
         assert!(
             a.snapshot("BTC/USD", 3).is_none(),
-            "a book that failed its checksum is dropped, not sampled"
+            "and afterwards the book is dropped, not sampled again"
         );
         let msgs = a.resubscribe_messages("BTC/USD");
         assert!(msgs[0].contains("unsubscribe") && msgs[1].contains("\"snapshot\":true"));

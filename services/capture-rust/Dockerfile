@@ -30,8 +30,10 @@ WORKDIR /repo/services/capture-rust
 FROM chef AS planner
 COPY services/capture-rust/Cargo.toml services/capture-rust/Cargo.lock ./
 COPY services/capture-rust/rust-toolchain.toml ./
+# No `tests/`: chef does not build dev-dependencies and the builder stage never
+# copies tests either, so including them here only busts the recipe cache layer
+# whenever a test changes.
 COPY services/capture-rust/src ./src
-COPY services/capture-rust/tests ./tests
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ── Stage 2: build the dependencies, then the crate ─────────────────────────

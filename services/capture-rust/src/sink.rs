@@ -10,6 +10,18 @@
 //! blocking the frame loop stops reading the socket, which makes the venue drop
 //! us, which loses more than the records we were trying to save.
 //! `// ponytail: spill-to-file when an outage costs data.`
+//!
+//! One thing here does still block the frame loop, and the bound on it is
+//! explicit rather than accidental: `send` awaits the Avro encoder, and the
+//! encoder makes an HTTP call to the schema registry the first time it meets a
+//! subject (and again after a schema change). `reqwest`'s default is no timeout
+//! at all, so a registry that accepts the connection and never answers would
+//! stall the socket read for as long as it felt like — the exact failure this
+//! module header says the design avoids. `REGISTRY_TIMEOUT` caps that stall; a
+//! timed-out encode is counted as `reason="encode"` and the loop carries on.
+//! `// ponytail: a warm-up encode per subject at startup would take the call off
+//! the frame path entirely; the 5 s cap is what makes that an optimisation
+//! rather than a correctness fix.`
 
 use std::time::Duration;
 
@@ -35,6 +47,13 @@ use crate::record::OutRecord;
 /// `// ponytail: ws.rs owns its own copy; a shared const across modules is not
 /// worth the cross-module coupling for two numbers a grep keeps in step.`
 pub const MESSAGE_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// How long an Avro encode may wait on the schema registry before it is a
+/// failure. This sits on the frame path (see the module header), so it is a cap
+/// on how long a sick registry can stop us reading the venue's socket. 5 s is
+/// two orders of magnitude above the observed local round trip and an order of
+/// magnitude below the 60 s at which the venue-silence watchdog reconnects.
+const REGISTRY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct Sink {
     producer: FutureProducer,
@@ -79,9 +98,14 @@ impl Sink {
             .create()
             .context("creating the Kafka producer")?;
 
+        let sr = SrSettings::new_builder(schema_registry_url.to_string())
+            .set_timeout(REGISTRY_TIMEOUT)
+            .build()
+            .context("building the schema registry client")?;
+
         Ok(Self {
             producer,
-            encoder: EasyAvroEncoder::new(SrSettings::new(schema_registry_url.to_string())),
+            encoder: EasyAvroEncoder::new(sr),
             topic_prefix,
             exchange,
         })
@@ -135,16 +159,33 @@ impl Sink {
                 // serialise production on the round trip to the broker; ignoring
                 // it entirely would make a broker-side rejection invisible. So:
                 // await it on a detached task purely to count.
+                //
+                // `records_produced_total` above counts the *enqueue*, which is
+                // why it keeps climbing at full rate through a broker outage.
+                // `records_delivered_total` here is the one that goes flat, and
+                // it is what `CaptureProduceStalled` alerts on.
                 let exchange = self.exchange;
                 tokio::spawn(async move {
-                    if let Ok(Err((e, _))) = delivery.await {
-                        tracing::warn!(error = %e, "kafka delivery failed");
-                        metrics::counter!(
-                            "k2_capture_produce_errors_total",
-                            "exchange" => exchange,
-                            "reason" => "delivery",
-                        )
-                        .increment(1);
+                    match delivery.await {
+                        Ok(Ok(_)) => {
+                            metrics::counter!(
+                                "k2_capture_records_delivered_total",
+                                "exchange" => exchange,
+                            )
+                            .increment(1);
+                        }
+                        Ok(Err((e, _))) => {
+                            tracing::warn!(error = %e, "kafka delivery failed");
+                            metrics::counter!(
+                                "k2_capture_produce_errors_total",
+                                "exchange" => exchange,
+                                "reason" => "delivery",
+                            )
+                            .increment(1);
+                        }
+                        // The producer was dropped before the report landed:
+                        // neither delivered nor rejected, and nothing to say.
+                        Err(_) => {}
                     }
                 });
             }

@@ -32,11 +32,15 @@ const RECV_LAG_BUCKETS: &[f64] = &[
 ];
 
 /// Install the exporter and register every metric this binary emits.
+/// `checksummed_symbols` is the symbol list for a venue that publishes a book
+/// checksum, and empty for one that does not. Binance and Coinbase publish none,
+/// so seeding 23 permanently-zero `k2_capture_checksum_failures_total` series
+/// for them advertised a capability that does not exist.
 pub fn install(
     port: u16,
     exchange: &'static str,
     streams: &[&'static str],
-    symbols: &[String],
+    checksummed_symbols: &[String],
 ) -> Result<()> {
     let addr: SocketAddr = ([0, 0, 0, 0], port).into();
     PrometheusBuilder::new()
@@ -50,7 +54,7 @@ pub fn install(
         .with_context(|| format!("binding the metrics listener on {addr}"))?;
 
     describe();
-    zero(exchange, streams, symbols);
+    zero(exchange, streams, checksummed_symbols);
     gauge!("k2_capture_build_info", "version" => env!("CARGO_PKG_VERSION"), "git_sha" => GIT_SHA)
         .set(1.0);
     Ok(())
@@ -91,8 +95,16 @@ fn describe() {
         "Book resubscriptions requested after the local book became untrustworthy."
     );
     describe_counter!(
+        "k2_capture_records_delivered_total",
+        "Records the broker acknowledged, by exchange. This is the counter that \
+         stops moving when Redpanda goes away; records_produced_total counts the \
+         local enqueue and keeps climbing through an outage."
+    );
+    describe_counter!(
         "k2_capture_reconnects_total",
-        "WebSocket reconnects, including the scheduled and the involuntary."
+        "WebSocket reconnects, by exchange and reason. scheduled means K2 closed \
+         the socket at its configured maximum connection age (Binance, 23 h, \
+         ahead of the venue's own 24 h cut-off); involuntary is everything else."
     );
     describe_counter!(
         "k2_capture_precision_loss_total",
@@ -131,11 +143,26 @@ fn describe() {
 }
 
 /// Create the series that alerts fire on, at zero, before anything happens.
-fn zero(exchange: &'static str, streams: &[&'static str], symbols: &[String]) {
+///
+/// Every counter an alert reads has to be here. `increase(x[1h]) > 0` needs two
+/// samples of `x`: a series born at 1 and flat afterwards yields 0, so the
+/// *first* event is exactly the one an unseeded counter misses — and the first
+/// precision-loss event is the one whose alert description says it needs an ADR.
+fn zero(exchange: &'static str, streams: &[&'static str], checksummed_symbols: &[String]) {
     for stream in streams {
         counter!("k2_capture_messages_total", "exchange" => exchange, "stream" => *stream)
             .increment(0);
         counter!("k2_capture_bytes_total", "exchange" => exchange, "stream" => *stream)
+            .increment(0);
+        // Any frame can turn out to be one we cannot parse, so every stream gets
+        // an unknown_frames series. `count_unknown` labels by stream.
+        counter!("k2_capture_unknown_frames_total", "exchange" => exchange, "stream" => *stream)
+            .increment(0);
+    }
+    // `exchanges::count_unknown` also emits these two synthetic stream names for
+    // a frame whose channel we do not recognise, or that was not JSON at all.
+    for stream in ["unknown", "unparseable"] {
+        counter!("k2_capture_unknown_frames_total", "exchange" => exchange, "stream" => stream)
             .increment(0);
     }
     for kind in ["raw", "trade", "book"] {
@@ -146,14 +173,29 @@ fn zero(exchange: &'static str, streams: &[&'static str], symbols: &[String]) {
         counter!("k2_capture_produce_errors_total", "exchange" => exchange, "reason" => reason)
             .increment(0);
     }
+    // One per `DecimalError` variant, matching `exchanges::count_decimal_error`.
+    for reason in [
+        "too_many_dp",
+        "scientific",
+        "malformed",
+        "overflow",
+        "negative",
+    ] {
+        counter!("k2_capture_precision_loss_total", "exchange" => exchange, "reason" => reason)
+            .increment(0);
+    }
+    for reason in ["scheduled", "involuntary"] {
+        counter!("k2_capture_reconnects_total", "exchange" => exchange, "reason" => reason)
+            .increment(0);
+    }
     for name in [
         "k2_capture_gaps_total",
         "k2_capture_resyncs_total",
-        "k2_capture_reconnects_total",
+        "k2_capture_records_delivered_total",
     ] {
         counter!(name, "exchange" => exchange).increment(0);
     }
-    for symbol in symbols {
+    for symbol in checksummed_symbols {
         counter!(
             "k2_capture_checksum_failures_total",
             "exchange" => exchange,

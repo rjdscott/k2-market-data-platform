@@ -45,8 +45,10 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.17", default-features = false, features = ["http-listener"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# anyhow only: every error in this crate is either propagated with context or
+# counted and dropped. Nothing matches on an error variant, so a thiserror enum
+# would be a type nobody reads.
 anyhow = "1"
-thiserror = "2"
 
 [dev-dependencies]
 proptest = "1"

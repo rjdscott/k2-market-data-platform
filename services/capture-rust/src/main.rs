@@ -29,12 +29,19 @@ use uuid::Uuid;
 /// on a feed that has been silent since boot rather than on an absent series.
 ///
 /// Only the *continuous* streams (`CONTINUOUS`) stamp
-/// `k2_capture_last_message_ts_seconds`. Kraken's `status`/`control` and
-/// Coinbase's `subscriptions` are one-shot acknowledgements: they arrive once per
-/// (re)subscribe and then legitimately never again, so a staleness gauge on
-/// them fires `CaptureFeedStale` ~2 minutes after every healthy connect. That
-/// happened on the first 2 h window (2026-08-26 12:39Z, all three acks) — a
-/// false alarm the healthcheck subcommand would also have inherited.
+/// `k2_capture_last_message_ts_seconds`, and only those are watched by the
+/// session watchdog and the healthcheck. Everything else here is either a
+/// one-shot acknowledgement or a low-rate reference channel:
+///
+/// * Kraken `status` / `control`, Coinbase `subscriptions` — one acknowledgement
+///   per (re)subscribe and then legitimately never again. A staleness gauge on
+///   them fires `CaptureFeedStale` ~2 minutes after every healthy connect; that
+///   happened on the first 2 h window (2026-08-26 12:39Z, all three acks).
+/// * Kraken `instrument` — a reference snapshot at subscribe plus the occasional
+///   reference change. Measured over 10 minutes on 2026-08-26 it ran at
+///   0.0017 frames/s (2 frames in 29 minutes) against a 60 s threshold, while
+///   every genuinely continuous stream ran at >= 1.0/s. It is a fourth permanent
+///   critical false positive, not a liveness signal.
 const KRAKEN_STREAMS: &[&str] = &[
     "book",
     "trade",
@@ -48,7 +55,6 @@ const COINBASE_STREAMS: &[&str] = &["l2_data", "market_trades", "heartbeats", "s
 const CONTINUOUS: &[&str] = &[
     "book",
     "trade",
-    "instrument",
     "heartbeat",
     "depth20",
     "l2_data",
@@ -57,9 +63,45 @@ const CONTINUOUS: &[&str] = &[
 ];
 
 /// A stream that keeps delivering while the subscription is healthy, as opposed
-/// to a one-shot acknowledgement. Only these carry a staleness timestamp.
+/// to a one-shot acknowledgement or a low-rate reference channel. Only these
+/// carry a staleness timestamp.
 fn is_continuous(stream: &str) -> bool {
     CONTINUOUS.contains(&stream)
+}
+
+/// Continuous streams for one venue - what the staleness gauge, the session
+/// watchdog and the healthcheck all agree to watch.
+fn continuous_streams_for(exchange: Exchange) -> Vec<&'static str> {
+    streams_for(exchange)
+        .iter()
+        .copied()
+        .filter(|s| is_continuous(s))
+        .collect()
+}
+
+/// Binance closes a WebSocket 24 h after it opens, mid-frame, with no warning.
+/// Pre-empting it at 23 h turns an involuntary disconnect into a scheduled one:
+/// the socket is closed cleanly between frames, the producer queue is not
+/// carrying a half-parsed book, and the reconnect happens at a moment we chose.
+/// Kraken and Coinbase publish no such lifetime, so they get none.
+const BINANCE_MAX_CONNECTION_AGE: Duration = Duration::from_secs(23 * 3600);
+
+fn max_connection_age(exchange: Exchange) -> Option<Duration> {
+    match exchange {
+        Exchange::Binance => Some(BINANCE_MAX_CONNECTION_AGE),
+        Exchange::Kraken | Exchange::Coinbase => None,
+    }
+}
+
+/// Has this connection reached the age at which we close it ourselves?
+///
+/// Split out from `session` so it is testable without a socket: `session` needs
+/// a live venue, this needs two integers.
+fn connection_expired(exchange: Exchange, opened_ns: i64, now_ns: i64) -> bool {
+    match max_connection_age(exchange) {
+        Some(max) => now_ns.saturating_sub(opened_ns) >= max.as_nanos() as i64,
+        None => false,
+    }
 }
 
 #[derive(Parser)]
@@ -183,12 +225,34 @@ async fn run(args: RunArgs) -> Result<()> {
 
     let mut adapter = build_adapter(exchange, instruments)?;
     let symbols = adapter.symbols();
+    // Only Kraken publishes a book checksum, so only Kraken gets a
+    // `k2_capture_checksum_failures_total` series per symbol. Seeding 23 of them
+    // for Binance and Coinbase advertised a capability those venues do not have.
+    let checksummed: &[String] = match exchange {
+        Exchange::Kraken => &symbols,
+        Exchange::Binance | Exchange::Coinbase => &[],
+    };
+    let continuous = continuous_streams_for(exchange);
     k2_metrics::install(
         args.metrics_port,
         exchange.as_str(),
         streams_for(exchange),
-        &symbols,
+        checksummed,
     )?;
+
+    // Seed the staleness gauge for every continuous stream at process start.
+    // The gauge is otherwise created by the first frame, so a subscription the
+    // venue silently rejects has no series at all — `time() - <absent>` is an
+    // empty vector, `CaptureFeedStale` cannot fire on it, and `CaptureDown`
+    // stays green because the process is perfectly healthy. Seeding at *now*
+    // rather than at 0 means a healthy start does not fire either: the series
+    // ages out of the 60 s threshold only if no frame ever arrives.
+    let started_s = now_ns() as f64 / 1e9;
+    for stream in &continuous {
+        gauge!("k2_capture_last_message_ts_seconds",
+            "exchange" => exchange.as_str(), "stream" => *stream)
+        .set(started_s);
+    }
 
     let sink = Sink::new(
         &args.kafka_brokers,
@@ -218,13 +282,19 @@ async fn run(args: RunArgs) -> Result<()> {
         )
         .await;
 
-        match outcome {
+        let reason = match outcome {
             Ok(Session::Shutdown) => break,
-            Ok(Session::Disconnected) => {}
-            Err(e) => tracing::warn!(error = %e, "capture session ended"),
-        }
+            Ok(Session::Scheduled) => "scheduled",
+            Ok(Session::Disconnected) => "involuntary",
+            Err(e) => {
+                tracing::warn!(error = %e, "capture session ended");
+                "involuntary"
+            }
+        };
 
-        counter!("k2_capture_reconnects_total", "exchange" => exchange.as_str()).increment(1);
+        counter!("k2_capture_reconnects_total",
+            "exchange" => exchange.as_str(), "reason" => reason)
+        .increment(1);
         let wait = backoff.next_delay();
         tracing::info!(?wait, "reconnecting");
         tokio::select! {
@@ -239,7 +309,10 @@ async fn run(args: RunArgs) -> Result<()> {
 }
 
 enum Session {
+    /// The venue, the network or the watchdog ended it.
     Disconnected,
+    /// We ended it, on purpose, at the scheduled connection age.
+    Scheduled,
     Shutdown,
 }
 
@@ -256,8 +329,11 @@ async fn session(
     shutdown: &mut Shutdown,
     backoff: &mut Backoff,
 ) -> Result<Session> {
-    let exchange = adapter.exchange().as_str();
+    let venue = adapter.exchange();
+    let exchange = venue.as_str();
+    let continuous = continuous_streams_for(venue);
     let mut feed = Feed::connect(url).await?;
+    let opened_ns = now_ns();
     let conn_id = Uuid::new_v4().to_string();
     adapter.begin_connection(&conn_id);
     tracing::info!(conn_id, url, "connected");
@@ -269,7 +345,12 @@ async fn session(
 
     let mut ticker = tokio::time::interval(snapshot_interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut last_frame_ns = now_ns();
+    // Per continuous stream, not one number for the whole socket. Kraken's 1 Hz
+    // heartbeat keeps a single `last_frame_ns` fresh forever, so a `book`
+    // subscription the venue silently stopped serving would never be noticed
+    // and the connection would never be recycled.
+    let mut last_frame_ns: std::collections::HashMap<&'static str, i64> =
+        continuous.iter().map(|s| (*s, opened_ns)).collect();
     // Work queued inside the select and performed after it: the select holds a
     // mutable borrow of `feed` for as long as its branches are alive.
     let mut to_send: Vec<String> = Vec::new();
@@ -281,8 +362,10 @@ async fn session(
                     tracing::info!("peer closed the connection");
                     return Ok(Session::Disconnected);
                 };
-                last_frame_ns = frame.recv_ts_ns;
                 let handled = adapter.handle_frame(&frame.payload, frame.recv_ts_ns);
+                if let Some(slot) = last_frame_ns.get_mut(handled.stream.as_str()) {
+                    *slot = frame.recv_ts_ns;
+                }
 
                 counter!("k2_capture_messages_total",
                     "exchange" => exchange, "stream" => handled.stream.clone()).increment(1);
@@ -337,12 +420,33 @@ async fn session(
                     .set(adapter.total_levels() as f64);
 
                 // A venue that stops sending without closing the socket looks
-                // healthy at the TCP layer forever. Kraken's own heartbeat is
-                // ~1 Hz, so 60 s of silence is a dead connection, not a quiet
-                // market.
-                if now - last_frame_ns > 60_000_000_000 {
-                    tracing::warn!("no frames for 60s, reconnecting");
+                // healthy at the TCP layer forever. Every continuous stream runs
+                // at >= 1 frame/s across all three venues (measured 2026-08-26,
+                // 10 min), so 60 s of silence on ANY ONE of them is a dead
+                // subscription, not a quiet market — and a dead subscription is
+                // exactly what a whole-socket timer cannot see.
+                if let Some((stream, since)) = last_frame_ns
+                    .iter()
+                    .find(|(_, ts)| now - **ts > 60_000_000_000)
+                {
+                    tracing::warn!(
+                        stream,
+                        silent_s = (now - *since) / 1_000_000_000,
+                        "no frames on a continuous stream for 60s, reconnecting"
+                    );
                     return Ok(Session::Disconnected);
+                }
+
+                // Binance closes the socket itself at 24 h. Getting there first
+                // is the difference between a disconnect we chose and one that
+                // lands mid-frame. See `connection_expired`.
+                if connection_expired(venue, opened_ns, now) {
+                    tracing::info!(
+                        age_s = (now - opened_ns) / 1_000_000_000,
+                        "scheduled reconnect: connection reached its maximum age"
+                    );
+                    feed.close().await;
+                    return Ok(Session::Scheduled);
                 }
             }
             _ = shutdown.wait() => {
@@ -389,23 +493,47 @@ impl Shutdown {
 async fn healthcheck(args: HealthArgs) -> Result<()> {
     let body = http_get("127.0.0.1", args.metrics_port, "/metrics").await?;
     let now = now_ns() as f64 / 1e9;
-    let freshest = body
-        .lines()
+    let oldest = oldest_stream_ts(&body);
+
+    // The OLDEST stream, not the newest. Taking the max meant Kraken's 1 Hz
+    // heartbeat reported the container healthy while `book` and `trade` were
+    // both silent — the healthcheck was green on precisely the failure it
+    // exists to catch. Only continuous streams carry this gauge (see
+    // `CONTINUOUS`), and `run` seeds all of them at process start, so an absent
+    // series is a broken exporter rather than a stream that has yet to speak.
+    match oldest {
+        Some(ts) if now - ts <= args.max_age_seconds as f64 => {
+            println!("ok: oldest stream {:.1}s behind", now - ts);
+            Ok(())
+        }
+        Some(ts) => {
+            eprintln!(
+                "stale: a stream has had no frame for {:.1}s (limit {}s)",
+                now - ts,
+                args.max_age_seconds
+            );
+            std::process::exit(1);
+        }
+        None => {
+            // A non-zero exit is the whole interface here; the message is for
+            // whoever reads `docker inspect`.
+            eprintln!("stale: no k2_capture_last_message_ts_seconds series on /metrics");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Oldest `k2_capture_last_message_ts_seconds` in a Prometheus exposition body,
+/// or `None` when the metric is absent entirely. Pure, so the "green while the
+/// primary feed is dead" bug has a test that does not need a running exporter.
+fn oldest_stream_ts(body: &str) -> Option<f64> {
+    body.lines()
         .filter(|l| l.starts_with("k2_capture_last_message_ts_seconds{"))
         .filter_map(|l| l.rsplit(' ').next())
         .filter_map(|v| v.parse::<f64>().ok())
-        .fold(f64::NEG_INFINITY, f64::max);
-
-    let age = now - freshest;
-    if freshest.is_finite() && age <= args.max_age_seconds as f64 {
-        println!("ok: newest frame {age:.1}s ago");
-        Ok(())
-    } else {
-        // A non-zero exit is the whole interface here; the message is for
-        // whoever reads `docker inspect`.
-        eprintln!("stale: no frame within {}s", args.max_age_seconds);
-        std::process::exit(1);
-    }
+        .fold(None, |acc: Option<f64>, v| {
+            Some(acc.map_or(v, |a| a.min(v)))
+        })
 }
 
 /// Record frames verbatim as JSONL, one object per line, for a replay fixture.
@@ -468,8 +596,12 @@ mod stream_tests {
 
     #[test]
     fn one_shot_acks_never_stamp_staleness() {
-        for ack in ["status", "control", "subscriptions"] {
-            assert!(!is_continuous(ack), "{ack} is a one-shot ack");
+        // `instrument` is here for the same reason as the acks, with a different
+        // cause: Kraken sends it at subscribe and then only on a reference
+        // change (2 frames in 29 minutes, 2026-08-26). At 0.0017/s against a
+        // 60 s threshold it is a guaranteed critical, not a liveness signal.
+        for ack in ["status", "control", "subscriptions", "instrument"] {
+            assert!(!is_continuous(ack), "{ack} is not a continuous stream");
         }
         for ex in [KRAKEN_STREAMS, BINANCE_STREAMS, COINBASE_STREAMS] {
             assert!(
@@ -483,6 +615,49 @@ mod stream_tests {
                     || BINANCE_STREAMS.contains(s)
                     || COINBASE_STREAMS.contains(s),
                 "{s} is not a registered stream"
+            );
+        }
+    }
+
+    #[test]
+    fn the_healthcheck_reads_the_oldest_stream_not_the_newest() {
+        // Kraken mid-failure: heartbeat is 1 Hz and current, book and trade have
+        // been silent for an hour. Taking the max reported 1_000_000_000 and the
+        // container stayed `healthy`.
+        let body = "\
+# HELP k2_capture_last_message_ts_seconds when this stream last saw a frame
+k2_capture_last_message_ts_seconds{exchange=\"kraken\",stream=\"heartbeat\"} 1000000000
+k2_capture_last_message_ts_seconds{exchange=\"kraken\",stream=\"book\"} 999996400
+k2_capture_last_message_ts_seconds{exchange=\"kraken\",stream=\"trade\"} 999996400
+k2_capture_messages_total{exchange=\"kraken\",stream=\"book\"} 12
+";
+        assert_eq!(oldest_stream_ts(body), Some(999_996_400.0));
+        assert_eq!(
+            oldest_stream_ts("k2_capture_messages_total{exchange=\"kraken\"} 1\n"),
+            None,
+            "an absent gauge is not a fresh feed"
+        );
+    }
+
+    #[test]
+    fn only_binance_reconnects_on_a_schedule() {
+        let day = 24 * 3600 * 1_000_000_000i64;
+        let twenty_three_h = 23 * 3600 * 1_000_000_000i64;
+
+        assert!(!connection_expired(
+            Exchange::Binance,
+            0,
+            twenty_three_h - 1
+        ));
+        assert!(connection_expired(Exchange::Binance, 0, twenty_three_h));
+        assert!(
+            connection_expired(Exchange::Binance, 0, day),
+            "24 h is the venue's own cut-off; we must be gone before it"
+        );
+        for quiet in [Exchange::Kraken, Exchange::Coinbase] {
+            assert!(
+                !connection_expired(quiet, 0, 30 * day),
+                "{quiet} publishes no connection lifetime, so K2 invents none"
             );
         }
     }
