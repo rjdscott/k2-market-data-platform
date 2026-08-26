@@ -55,6 +55,7 @@ services:
       - k2-net
     ports:
       - "9092:9092"     # Kafka API
+      - "19092:19092"   # Kafka API, external listener advertised as localhost:19092 (host tooling: scripts/parity)
       - "9644:9644"     # Admin API
       - "8081:8081"     # Schema Registry
     volumes:
