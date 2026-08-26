@@ -237,6 +237,7 @@ async fn run(args: RunArgs) -> Result<()> {
         args.metrics_port,
         exchange.as_str(),
         streams_for(exchange),
+        &symbols,
         checksummed,
     )?;
 

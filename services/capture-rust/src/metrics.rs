@@ -32,14 +32,16 @@ const RECV_LAG_BUCKETS: &[f64] = &[
 ];
 
 /// Install the exporter and register every metric this binary emits.
-/// `checksummed_symbols` is the symbol list for a venue that publishes a book
-/// checksum, and empty for one that does not. Binance and Coinbase publish none,
-/// so seeding 23 permanently-zero `k2_capture_checksum_failures_total` series
-/// for them advertised a capability that does not exist.
+/// `symbols` is every instrument this process subscribes to; `checksummed_symbols`
+/// is the subset for a venue that publishes a book checksum, and empty for one
+/// that does not. Binance and Coinbase publish none, so seeding 23
+/// permanently-zero `k2_capture_checksum_failures_total` series for them
+/// advertised a capability that does not exist.
 pub fn install(
     port: u16,
     exchange: &'static str,
     streams: &[&'static str],
+    symbols: &[String],
     checksummed_symbols: &[String],
 ) -> Result<()> {
     let addr: SocketAddr = ([0, 0, 0, 0], port).into();
@@ -54,7 +56,7 @@ pub fn install(
         .with_context(|| format!("binding the metrics listener on {addr}"))?;
 
     describe();
-    zero(exchange, streams, checksummed_symbols);
+    zero(exchange, streams, symbols, checksummed_symbols);
     gauge!("k2_capture_build_info", "version" => env!("CARGO_PKG_VERSION"), "git_sha" => GIT_SHA)
         .set(1.0);
     Ok(())
@@ -148,7 +150,12 @@ fn describe() {
 /// samples of `x`: a series born at 1 and flat afterwards yields 0, so the
 /// *first* event is exactly the one an unseeded counter misses — and the first
 /// precision-loss event is the one whose alert description says it needs an ADR.
-fn zero(exchange: &'static str, streams: &[&'static str], checksummed_symbols: &[String]) {
+fn zero(
+    exchange: &'static str,
+    streams: &[&'static str],
+    symbols: &[String],
+    checksummed_symbols: &[String],
+) {
     for stream in streams {
         counter!("k2_capture_messages_total", "exchange" => exchange, "stream" => *stream)
             .increment(0);
@@ -202,5 +209,62 @@ fn zero(exchange: &'static str, streams: &[&'static str], checksummed_symbols: &
             "symbol" => symbol.clone(),
         )
         .increment(0);
+    }
+    // A gauge, and it needs seeding for the same reason the counters do: the
+    // frame path only creates it once `adapter.depth(symbol)` returns a book, so
+    // a symbol whose book subscription is silently never served has no series at
+    // all — and `max_over_time(<absent>[10m]) < 20` is an empty vector, which is
+    // precisely the collapse CaptureBookDepthDegraded exists to catch. Seeded at
+    // 0, not at a plausible depth: a healthy connect overwrites it within the
+    // first snapshot tick, well inside the alert's 10 m window.
+    for symbol in symbols {
+        gauge!(
+            "k2_capture_book_depth",
+            "exchange" => exchange,
+            "symbol" => symbol.clone(),
+        )
+        .set(0.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every series an alert reads has to exist before the event it alerts on,
+    /// or the rule evaluates an empty vector — which is to say it never fires.
+    /// This renders the exposition straight after `zero` and asserts the series
+    /// are there, `k2_capture_book_depth` included: it is a gauge the frame path
+    /// creates lazily, so a book subscription the venue silently never serves
+    /// had no series at all and `CaptureBookDepthDegraded` could not fire for
+    /// exactly the symbol it was written for.
+    #[test]
+    fn zero_seeds_every_series_an_alert_reads() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let symbols = vec!["BTC/USD".to_string()];
+        metrics::with_local_recorder(&recorder, || {
+            zero("kraken", &["book", "trade"], &symbols, &symbols);
+        });
+        let rendered = handle.render();
+
+        for want in [
+            "k2_capture_book_depth",
+            "k2_capture_checksum_failures_total",
+            "k2_capture_gaps_total",
+            "k2_capture_produce_errors_total",
+            "k2_capture_precision_loss_total",
+            "k2_capture_records_delivered_total",
+            "k2_capture_resyncs_total",
+        ] {
+            assert!(rendered.contains(want), "{want} is not seeded:\n{rendered}");
+        }
+        // Per symbol, not one series for the venue: the alert is per book.
+        assert!(
+            rendered
+                .lines()
+                .any(|l| l.starts_with("k2_capture_book_depth{") && l.contains("BTC/USD")),
+            "book depth is not seeded per symbol:\n{rendered}"
+        );
     }
 }

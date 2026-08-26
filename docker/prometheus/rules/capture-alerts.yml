@@ -300,6 +300,14 @@ groups:
       # and not a recovery, and the difference is pinned in
       # docker/prometheus/tests/capture-alerts.test.yml.
       #
+      # The gauge is seeded at 0 per symbol in `metrics.rs` `zero`, next to the
+      # checksum counters and for the same reason: the frame path only creates it
+      # once the book has levels, so a symbol whose book subscription the venue
+      # silently never served had no series, and `max_over_time(<absent>[10m])`
+      # is an empty vector. The rule could not fire for exactly the symbol it was
+      # written for. A healthy connect overwrites the 0 on the first snapshot
+      # tick, well inside this window.
+      #
       # What this does NOT catch: a deep book thinning without collapsing.
       # Coinbase runs full depth (13,000-15,000 levels on liquid symbols,
       # measured 2026-08-26 over the 12:38-13:07Z window), so a fall to 50 levels
