@@ -68,7 +68,7 @@ CHECKS_TABLE = f"{CATALOG}.audit.checks"
 #
 # Prefect's `concurrency_limit=1` only gates runs Prefect launched, and the
 # runbooks, the chaos scripts and `make lake-verify` all dispatch by hand while
-# the */5 cron is armed. Two concurrent `writeTo(...).append()` calls do NOT
+# the 5-minute cron is armed. Two concurrent `writeTo(...).append()` calls do NOT
 # conflict: measured on a scratch table with this DDL's
 # `commit.retry.num-retries=10`, the loser raised CatalogCommitConflicts,
 # Iceberg re-applied it on the new base, and BOTH landed — 10 rows from two
@@ -222,6 +222,16 @@ def stage_raw(spark, ingest_ts: datetime, end_timestamp: str) -> int:
         # `endingTimestamp` stays: it is what keeps a backlog slice from reading
         # to `latest` on the partitions it *can* bound. The filter alone would
         # be correct and would read the whole topic to discard most of it.
+        #
+        # What it does NOT close: Kafka timestamps are not monotonic within a
+        # partition, so a record past the bound sitting between two records
+        # under it is dropped here while the committed end offset is the max of
+        # the ones kept — the next run starts beyond it and that record is never
+        # archived. Only `--end-timestamp` is exposed to it (the scheduled path
+        # reads to `latest` and keeps everything), it needs out-of-order writes
+        # across the exact instant chosen, and the nightly `offset_continuity`
+        # audit reports it as a gap — so it is recorded here rather than fixed
+        # with a second pass over the range.
         loaded = loaded.where(F.col("timestamp") <= F.timestamp_millis(F.lit(end_ms)))
 
     rows = loaded.select(

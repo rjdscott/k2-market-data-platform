@@ -202,6 +202,14 @@ tests:
                 drifted — they are the symptom, this is the cause. Run the
                 compaction by hand rather than waiting for the next nightly: the
                 runbook has the command.
+
+                CHECK THE INGEST FIRST. This measures the newest file-rewrite
+                snapshot, and rewrite_data_files commits one only when it had files
+                to merge — min-input-files is 5, over recent partitions. An ingest
+                that stopped stops producing small files, so the nightly run finds
+                nothing to rewrite and this fires as a CONSEQUENCE. If
+                LakeIngestFailed or LakeIngestLagHigh is also firing, that is the
+                incident and this is its shadow.
               runbook: docs/runbooks/lake-ingest-lag.md
 
   # ── LakeDiskUsageHigh / Critical, on a synthetic ratio ───────────────────

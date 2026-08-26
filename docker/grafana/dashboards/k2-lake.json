@@ -912,6 +912,175 @@
           "legendFormat": "tables unreadable"
         }
       ]
+    },
+    {
+      "id": 17,
+      "type": "row",
+      "title": "Maintenance and exporter",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "panels": []
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "id": 18,
+      "type": "timeseries",
+      "title": "Compaction age by table",
+      "description": "Seconds since each table's newest file-rewrite snapshot \u2014 the nightly compaction job itself, not its side effect on mean file size. A daily sawtooth is healthy. Past 129600s (36h) on raw.messages LakeCompactionStale fires. Read it beside 'Rows added per commit': a stalled ingest produces no small files, so the rewrite finds nothing to merge and commits no snapshot, and this climbs as a consequence rather than a cause. No series exists until a table has been compacted once.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "s",
+          "mappings": [],
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "pointSize": 5,
+            "gradientMode": "none"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 86400
+              },
+              {
+                "color": "red",
+                "value": 129600
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "time() - k2_lake_last_compaction_ts_seconds",
+          "refId": "A",
+          "legendFormat": "{{table}}"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "id": 19,
+      "type": "timeseries",
+      "title": "Exporter refresh age",
+      "description": "Seconds since lake-metrics last completed a full refresh. Flat near 30s is healthy \u2014 that is the poll interval. A climbing line means the exporter is up and producing nothing, which is the shape of a Lakekeeper outage: the warehouse-prefix lookup throws before any table is read, so `up` stays 1, scrape errors stay 0 and every other panel on this page freezes at its last value. Past 300s LakeExporterStalled fires, ~10min into the outage against LakeIngestFailed's 35.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "s",
+          "mappings": [],
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "pointSize": 5,
+            "gradientMode": "none"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 120
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "time() - k2_lake_last_refresh_ts_seconds",
+          "refId": "A",
+          "legendFormat": "lake-metrics"
+        }
+      ]
     }
   ],
   "refresh": "30s",

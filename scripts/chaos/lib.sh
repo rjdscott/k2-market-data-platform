@@ -166,7 +166,7 @@ wait_healthy() {
 
 # ── the scheduled ingest ────────────────────────────────────────────────────
 #
-# Every lake fault below races the `*/5 * * * *` lake-ingest-5min deployment.
+# Every lake fault below races the `1-59/5 * * * *` lake-ingest-5min deployment.
 # Two things go wrong if it lands inside the window: `docker/lake/ingest.py`'s
 # flock makes the second run exit 2, which reads as the fault having broken the
 # ingest; and the before/after row-count assertions in lake-lakekeeper-stop.sh
@@ -181,11 +181,19 @@ LAKE_DEPLOYMENT="${K2_LAKE_DEPLOYMENT:-lake-ingest/lake-ingest-5min}"
 PREFECT_CONTAINER="${K2_PREFECT_CONTAINER:-k2-prefect-server}"
 LAKE_SCHEDULE_IDS=""
 
-# _lake_schedules -> whitespace-separated schedule ids for LAKE_DEPLOYMENT.
+# _lake_schedules -> whitespace-separated ids of the ACTIVE schedules for
+# LAKE_DEPLOYMENT.
+#
+# `active` matters because the ids are also what the trap resumes. A schedule
+# the maintainer had already paused by hand is not ours to un-pause, and
+# recording it here means a chaos run ends by starting a 5-minute ingest that
+# was deliberately off. Filtering on the way in is the fix — pause_lake_ingest
+# and resume_lake_ingest then act on exactly the set this run turned off.
 _lake_schedules() {
   docker exec "$PREFECT_CONTAINER" \
     prefect deployment schedule ls "$LAKE_DEPLOYMENT" -o json 2>/dev/null \
-    | python3 -c 'import json,sys; print(" ".join(s["id"] for s in json.load(sys.stdin)))' \
+    | python3 -c 'import json,sys
+print(" ".join(s["id"] for s in json.load(sys.stdin) if s.get("active")))' \
       2>/dev/null || true
 }
 
@@ -196,7 +204,7 @@ pause_lake_ingest() {
   local id
   LAKE_SCHEDULE_IDS=$(_lake_schedules)
   if [ -z "$LAKE_SCHEDULE_IDS" ]; then
-    echo "→ NOTE: no schedule found for $LAKE_DEPLOYMENT — nothing to pause." >&2
+    echo "→ NOTE: no ACTIVE schedule for $LAKE_DEPLOYMENT — nothing to pause." >&2
     echo "  If the 5-minute ingest IS running, this test may race it." >&2
     return 0
   fi
