@@ -112,7 +112,7 @@ Recording rules: `iceberg_offload:cycle_count:5m`, `iceberg_offload:duration_avg
 | Alert | Severity | Fires when |
 |-------|----------|-----------|
 | `CaptureDown` | critical | Metrics endpoint unreachable for 2m |
-| `CaptureFeedStale` | critical | No frames on a *continuous* stream for 60s, sustained 2m, and `up == 1` for that job — a dead container is `CaptureDown`, not four of these |
+| `CaptureFeedStale` | critical | No frames on a *continuous* stream for its own bound, sustained `for: 2m` — 60s for `book`/`depth20`/`l2_data`/`heartbeat(s)`, 300s for `trade`/`market_trades`, the same two numbers `CONTINUOUS` in `main.rs` gives the watchdog and the healthcheck. No `up` guard: a dead target's series are stale-marked, so this alert has no input to fire on and the incident is `CaptureDown`'s by construction |
 | `CaptureSequenceGaps` | critical | Any sequence gap in 10m, sustained 5m |
 | `CaptureChecksumFailure` | critical | Kraken CRC32 book mismatch in 10m, sustained 5m. Kraken only — Binance and Coinbase publish no checksum and have no series |
 | `CaptureProduceErrors` | critical | `increase(k2_capture_produce_errors_total[10m]) > 0` for 5m — any produce error at all; there is no spill-to-disk, so a rate floor would tolerate permanent loss |
