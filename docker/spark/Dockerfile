@@ -1,9 +1,14 @@
-# K2 Spark image — v2 ClickHouse→Iceberg offload + v3 Redpanda→lake batch ingest.
+# K2 Spark image — v3 Redpanda→lake batch ingest and maintenance.
 #
 # Base bumped 3.5.0_1.4.2 → 3.5.5_1.8.1 for Phase B (ADR-018): Iceberg 1.8.1 is
 # the client Lakekeeper 0.13.3 is verified against, and it brings
 # iceberg-aws-bundle (S3FileIO) which the REST catalog needs.
 # 3.5.6_1.9.0 does not exist on Docker Hub — 3.5.5_1.8.1 is the newest tag.
+#
+# Phase D deleted the v2 offload, and psycopg2-binary (the PostgreSQL watermark
+# table) and clickhouse-jdbc-0.4.6-all.jar (the JDBC read) went with it. Nothing
+# under docker/lake/ imports either: the ingest reads Redpanda and writes
+# Iceberg, and carries its position in the Iceberg snapshot summary (ADR-022).
 #
 # Pinned by digest, not by tag alone: a tag is mutable and this image is not
 # ours, so an upstream repush would silently change the Spark and Iceberg jars
@@ -19,42 +24,16 @@ FROM tabulario/spark-iceberg:3.5.5_1.8.1@sha256:790a72e744e0d09f161e1b4c7c2f7962
 # http://rest:8181 AND makes it spark.sql.defaultCatalog. `rest` does not resolve
 # in this stack, so any session that touches the default catalog dies with
 # UnknownHostException. Strip both settings so each job's own catalog stands
-# alone — v2's `k2` (hadoop, docker/offload/offload_generic.py) and v3's `lake`
-# (REST, docker/lake/spark_conf.py). Everything else in that file (eventLog,
-# the Iceberg extensions, catalogImplementation) is kept.
+# alone — today only v3's `lake` (REST, docker/lake/spark_conf.py). Everything
+# else in that file (eventLog, the Iceberg extensions, catalogImplementation) is
+# kept.
 RUN sed -i '/spark\.sql\.catalog\.demo/d; /spark\.sql\.defaultCatalog/d' \
       "$SPARK_HOME/conf/spark-defaults.conf" \
  && ! grep -q 'demo' "$SPARK_HOME/conf/spark-defaults.conf"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Python dependencies
-# ─────────────────────────────────────────────────────────────────────────────
-# v2 ONLY: watermark_pg.py tracks offload state in PostgreSQL. Phase D moves
-# exactly-once into the Iceberg snapshot summary and the watermark table goes
-# away — this line and the ClickHouse JDBC driver below go with it.
-RUN pip3 install --no-cache-dir psycopg2-binary==2.9.9
-
-# ─────────────────────────────────────────────────────────────────────────────
 # JARs — baked at build time, not resolved from Maven at job runtime
 # ─────────────────────────────────────────────────────────────────────────────
-# v2 ONLY (see above): ClickHouse JDBC, `-all` classifier so httpclient5 etc.
-# are shaded in and no spark.jars.packages resolution is needed.
-# Pinned to 0.4.6 (2026-02-18) — the version ADR-015's 24.3 downgrade was tested
-# against. Upgrading requires an integration test.
-#
-# sha256 pinned by the same method as the five jars below (2026-08-26): Maven
-# Central publishes only a .sha1 sidecar for this artifact, so the jar was
-# downloaded once, its published .sha1 verified against the bytes, and the
-# sha256 computed from that same byte stream. Both checks agreed —
-#   published/computed sha1: 6efc73bb044a64add5555d676a8074b8389632e6
-# Reproduce with:
-#   curl -fsSLO <url> && curl -fsSL <url>.sha1 && sha1sum <jar> && sha256sum <jar>
-RUN curl -fsSL \
-    "https://repo1.maven.org/maven2/com/clickhouse/clickhouse-jdbc/0.4.6/clickhouse-jdbc-0.4.6-all.jar" \
-    -o "$SPARK_HOME/jars/clickhouse-jdbc-0.4.6-all.jar" \
- && echo "ccd7dc983d7ed4ee1e1a4ad12a91f5912718ae15f4b6078efd66862f758ff7e9  $SPARK_HOME/jars/clickhouse-jdbc-0.4.6-all.jar" \
-    | sha256sum -c -
-
 # v3: Kafka source + Avro codec. The base image has neither, and Phase C reads
 # Redpanda by offset range and decodes Confluent-framed Avro.
 #

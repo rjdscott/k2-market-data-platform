@@ -69,10 +69,13 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q
    FROM system.parts WHERE database='k2' AND active GROUP BY table ORDER BY sum(bytes_on_disk) DESC"
 ```
 
-**Offload lag and throughput**
+**Lake ingest lag and audit state** — the gauges the lake-metrics exporter
+derives from the Iceberg snapshot summaries, plus the latest audit rows.
 ```bash
-docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c \
-  "SELECT table_name, status, NOW() - last_successful_run AS lag FROM offload_watermarks ORDER BY lag DESC"
+curl -s localhost:9090/api/v1/query --data-urlencode \
+  'query=time() - k2_lake_max_kafka_ts_seconds' | jq -r '.data.result[]|"\(.metric.table) \(.value[1])"'
+docker exec k2-spark-iceberg spark-sql -e \
+  "SELECT * FROM lake.audit.checks ORDER BY checked_at DESC LIMIT 20"
 ```
 
 **Query timings** — the queries a reader would actually run (an OHLCV window,

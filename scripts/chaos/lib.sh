@@ -173,9 +173,8 @@ wait_healthy() {
 # and lake-minio-stop.sh see a legitimate commit and call it a partial one.
 #
 # The Prefect 3.6 CLI pauses a SCHEDULE, by id, not a deployment — `prefect
-# deployment pause` does not exist and `--all` would pause v2's offload too, in
-# the middle of the parallel-run window. So: read the schedule ids, pause each,
-# and resume them from a trap.
+# deployment pause` does not exist, and `--all` would take out lake-maintenance
+# as well. So: read the schedule ids, pause each, and resume them from a trap.
 
 LAKE_DEPLOYMENT="${K2_LAKE_DEPLOYMENT:-lake-ingest/lake-ingest-5min}"
 PREFECT_CONTAINER="${K2_PREFECT_CONTAINER:-k2-prefect-server}"

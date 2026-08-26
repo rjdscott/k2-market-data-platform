@@ -86,20 +86,6 @@ def _is_fixed_point(name: str) -> bool:
     return name in FIXED_POINT_FIELDS or name.endswith(FIXED_POINT_SUFFIXES)
 
 
-@pytest.fixture(autouse=True)
-def mock_prefect_run_logger():
-    """
-    Neutralise the autouse fixture of the same name in tests/conftest.py.
-
-    That one patches `prefect.get_run_logger` for the offload-flow tests, which
-    makes Prefect a hard import for every test in this directory. Nothing in
-    this module touches Prefect, ClickHouse or a running stack, and it should
-    stay runnable with nothing but pytest and pyyaml — a same-named fixture in
-    a test module overrides the conftest one, autouse included.
-    """
-    yield
-
-
 @pytest.fixture(scope="module")
 def instruments() -> dict:
     return yaml.safe_load(INSTRUMENTS_YAML.read_text())

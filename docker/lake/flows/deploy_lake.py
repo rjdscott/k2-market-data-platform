@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
 Register (upsert) the two v3 lake deployments. Run by the `prefect-worker`
-service at start, after the two v2 offload deployments and before the worker
-starts — the v2 deployments stay registered through the parallel-run window.
+service at start, before the worker itself starts.
 
     python /opt/prefect/lake-flows/deploy_lake.py
 
-Work pool `iceberg-offload` is reused rather than a new `lake` pool created: it
-already exists, already has a running worker, and a second process-type pool on
-the same host would be a second thing to create, monitor and forget to start.
+These are the only deployments on the stack. v2's pair went with
+docker/offload/, and the `iceberg-offload` work pool they ran on went with them:
+this file and the compose command both name `lake`.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ from lake_flows import lake_ingest, lake_maintenance  # noqa: E402 - after sys.p
 os.environ.setdefault("PREFECT_API_URL", "http://localhost:4200/api")
 
 SOURCE = "/opt/prefect/lake-flows"
-WORK_POOL = "iceberg-offload"
+WORK_POOL = "lake"
 
 
 def main() -> int:
@@ -35,22 +34,16 @@ def main() -> int:
     ).deploy(
         name="lake-ingest-5min",
         work_pool_name=WORK_POOL,
-        # Minutes 1, 6, 11 … 56 — offset by one from `*/5`, on purpose.
+        # Minutes 1, 6, 11 … 56 — offset by one from `*/5`, and kept that way.
         #
-        # v2's iceberg-offload runs `*/15` (docker/offload/flows/
-        # deploy_production.py) and both dispatch `docker exec k2-spark-iceberg`
-        # into the SAME 2 CPU / 4 GiB container. On `*/5` the two collided at
-        # :00, :15, :30 and :45 — four times an hour, every hour of the
-        # parallel-run window — starting two Spark drivers at once in a
-        # container sized for about one and a half. One minute of offset is the
-        # whole fix and it costs nothing: the ingest resumes from the offsets in
-        # its own last snapshot, so *when* a cycle runs changes nothing about
-        # what it reads. The cadence is still 5 minutes.
-        #
-        # The other half of the same constraint is spark.driver.memory in
-        # docker/lake/spark_conf.py. The offset stops the two jobs starting
-        # together; the pinned 1 g heap keeps a slow offload that overlaps the
-        # next ingest from exhausting the container anyway.
+        # The offset was introduced when v2's `iceberg-offload` (`*/15`) shared
+        # this container: on `*/5` the two collided at :00, :15, :30 and :45 and
+        # started two Spark drivers at once in a 2 CPU / 4 GiB box. That path is
+        # gone, so the collision is gone with it — but the offset still costs
+        # nothing (the ingest resumes from the offsets in its own last snapshot,
+        # so *when* a cycle runs changes nothing about what it reads) and it
+        # keeps this job off the top of the minute that every cron on a host
+        # crowds into. The cadence is 5 minutes either way.
         cron="1-59/5 * * * *",
         # 1, and belt-and-braces rather than the contract. Two ingests at once
         # both read the same committed offsets and both write the same records —

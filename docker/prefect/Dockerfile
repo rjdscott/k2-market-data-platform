@@ -3,7 +3,7 @@ FROM prefecthq/prefect:3-python3.12
 # ─────────────────────────────────────────────────────────────────────────────
 # System dependencies
 # ─────────────────────────────────────────────────────────────────────────────
-# docker-cli: the worker orchestrates offload jobs via `docker exec k2-spark-iceberg`.
+# docker-cli: the worker dispatches lake jobs via `docker exec k2-spark-iceberg`.
 # (Debian 13 splits the CLI out of docker.io; we only need the client.)
 # Installing here (build time) instead of the command: entrypoint (runtime) avoids
 # a ~60s apt-get run on every container restart.
@@ -14,8 +14,10 @@ RUN apt-get update \
 # ─────────────────────────────────────────────────────────────────────────────
 # Python dependencies
 # ─────────────────────────────────────────────────────────────────────────────
-# psycopg2-binary: flow imports watermark_pg for watermark checks in the worker.
-# prometheus-client: metrics.py publishes offload metrics to Prometheus.
+# prometheus-client: docker/lake/metrics.py serves the lake gauges in the
+# lake-metrics service, which reuses this image.
+# psycopg2-binary: no longer imported by anything in this repo — it went with
+# docker/offload/watermark_pg.py in Phase D — but tests/ still install it via
+# `make test-python`, so it is dropped here and nowhere else.
 RUN pip install --no-cache-dir \
-    psycopg2-binary==2.9.9 \
     prometheus-client==0.21.1

@@ -31,8 +31,8 @@ ps:  ## Show service status
 test: test-python test-rust  ## Run all unit tests
 
 
-test-python:  ## Iceberg offload flow unit tests (needs uv)
-	uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q
+test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs uv)
+	uv run --no-project --with pytest --with pyyaml pytest tests -q
 
 # The WHOLE repo is mounted, not just the crate: src/record.rs compiles the wire
 # contract in with `include_str!("../../../schemas/avro/trade.avsc")` and the
@@ -71,8 +71,8 @@ check-alerts:  ## promtool: syntax-check every rule file and run the capture ale
 	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint promtool prom/prometheus \
 	  test rules /p/tests/capture-alerts.test.yml
 
-lint:  ## Ruff over the v2 offload, the v3 lake and the tests (same scope as CI)
-	uv run --no-project --with ruff ruff check docker/lake docker/offload tests
+lint:  ## Ruff over the v3 lake and the tests (same scope as CI)
+	uv run --no-project --with ruff ruff check docker/lake tests
 
 lake-verify:  ## Phase D exit criteria against the LIVE stack: offsets gapless, raw == bronze, double-run adds 0
 	bash scripts/lake-verify.sh

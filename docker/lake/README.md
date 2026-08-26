@@ -103,8 +103,8 @@ print(O.latest_summary(snapshot_history(s, RAW_TABLE), O.JOB_INGEST)[O.KAFKA_OFF
 s.stop()"
 ```
 
-**Why not a watermark table.** v2 kept its position in a PostgreSQL
-`offload_watermarks` row (`docker/offload/watermark_pg.py`). That is two facts
+**Why not a watermark table.** v2 kept its position in a PostgreSQL watermark
+row, written separately from the data (ADR-014, deleted in Phase D). That is two facts
 in two systems, and every failure between writing one and writing the other is
 a duplicate or a hole — a job that commits its data and then dies re-reads the
 same range on the next run, a job that updates the watermark first and then

@@ -205,8 +205,8 @@ services:
   # MinIO - S3-compatible object storage for Iceberg
   # ───────────────────────────────────────────────────────────────────────
   # Until Phase B, MinIO was provisioned but carried no data — the v2 Iceberg
-  # warehouse is a bind-mounted hadoop catalog (docker/iceberg/warehouse, see
-  # ADR-013). The v3 `k2-lake` bucket behind Lakekeeper is its first real user.
+  # warehouse was a bind-mounted hadoop catalog (ADR-013), deleted in Phase D.
+  # The v3 `k2-lake` bucket behind Lakekeeper is its first real user.
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z  # console still present at :9001
     container_name: k2-minio
@@ -441,37 +441,31 @@ services:
       - k2-net
     volumes:
       - ./docker/prefect:/root/.prefect
-      - ./docker/offload:/opt/prefect/offload
-      - ./docker/offload/flows:/opt/prefect/flows
       - ./docker/lake/flows:/opt/prefect/lake-flows:ro   # v3 lake deployments
       - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for container orchestration
     environment:
       PREFECT_API_URL: http://prefect-server:4200/api
       PYTHONPATH: /opt/prefect
       DOCKER_API_VERSION: "1.44"
-    # Register (upsert) the four scheduled deployments, then start the worker.
-    # v2's two and v3's two share one work pool and one worker: a second
-    # process-type pool on the same host is a second thing to start and forget.
-    # The v2 pair stays registered through the parallel-run window.
+    # Register (upsert) the two lake deployments, then start the worker.
+    # v2's `iceberg-offload` pool and its two deployments went with
+    # docker/offload/: a fresh clone must not register deployments whose code no
+    # longer exists. A stack upgraded in place still shows the dead pool until
+    # `prefect work-pool delete iceberg-offload` is run once by hand.
     command: >
-      sh -c "prefect work-pool create iceberg-offload --type process 2>/dev/null || true
-      && python /opt/prefect/flows/deploy_production.py
-      && python /opt/prefect/flows/deploy_maintenance.py
+      sh -c "prefect work-pool create lake --type process 2>/dev/null || true
       && python /opt/prefect/lake-flows/deploy_lake.py
-      && prefect worker start --pool iceberg-offload --type process"
+      && prefect worker start --pool lake --type process"
     depends_on:
       prefect-server:
         condition: service_healthy
-      iceberg-init:
-        condition: service_completed_successfully
-      # NOT gated on lake-ddl, and that is deliberate. The worker also carries
-      # v2's two offload deployments, and lake-ddl is `restart: "no"`: gating
-      # here meant one transient v3 DDL failure at boot took v2's offload down
-      # with it, during the exact parallel-run window whose purpose is keeping
-      # v2 trustworthy. The v3 cost of not gating is bounded and self-healing —
-      # the first lake-ingest-5min tick may hit TABLE_OR_VIEW_NOT_FOUND, the
-      # flow retries once after 60 s, and the next tick is five minutes later,
-      # against LakeIngestFailed's 35-minute threshold.
+      # NOT gated on lake-ddl, and that is deliberate: lake-ddl is
+      # `restart: "no"`, so gating here means one transient DDL failure at boot
+      # leaves the worker down until someone notices. The cost of not gating is
+      # bounded and self-healing — the first lake-ingest-5min tick may hit
+      # TABLE_OR_VIEW_NOT_FOUND, the flow retries once after 60 s, and the next
+      # tick is five minutes later, against LakeIngestFailed's 35-minute
+      # threshold.
     deploy:
       resources:
         limits:
@@ -486,54 +480,12 @@ services:
       com.k2.tier: "control-plane"
       com.k2.version: "v2"
 
-  # ───────────────────────────────────────────────────────────────────────
-  # Iceberg offload metrics exporter — Prometheus job 'iceberg-scheduler'
-  # ───────────────────────────────────────────────────────────────────────
-  # Derives every offload metric from the offload_watermarks table rather than
-  # from in-process counters: Prefect runs each flow in a short-lived
-  # subprocess that exits long before Prometheus scrapes it.
-  #
-  # Deliberately a separate service, not a sidecar in prefect-worker: if the
-  # worker crashes, this keeps reporting the rising offload lag that the
-  # alerts exist to catch. Reuses the worker image (psycopg2 + prometheus
-  # -client are already installed there), so it costs no extra build.
-  iceberg-metrics:
-    image: k2-prefect-worker:3-python3.12  # built by the prefect-worker service
-    container_name: k2-iceberg-metrics
-    hostname: iceberg-metrics
-    networks:
-      - k2-net
-    volumes:
-      - ./docker/offload:/opt/prefect/offload:ro
-    environment:
-      PREFECT_DB_HOST: prefect-db
-      PREFECT_DB_PORT: "5432"
-      PREFECT_DB_NAME: ${PREFECT_DB_NAME}
-      PREFECT_DB_USER: ${PREFECT_DB_USER}
-      PREFECT_DB_PASSWORD: ${PREFECT_DB_PASSWORD}
-    command: ["python", "/opt/prefect/offload/metrics.py", "--serve"]
-    depends_on:
-      prefect-db:
-        condition: service_healthy
-      prefect-worker:
-        condition: service_started  # only for the image build
-    deploy:
-      resources:
-        limits:
-          cpus: '0.1'
-          memory: 128M
-    restart: unless-stopped
-    labels:
-      com.k2.service: "observability"
-      com.k2.tier: "control-plane"
-      com.k2.version: "v2"
-
 #############################################################################
-# SERVICES - ETL / OFFLOAD LAYER
+# SERVICES - ETL LAYER
 #############################################################################
 
   # ───────────────────────────────────────────────────────────────────────
-  # Spark + Iceberg - ETL engine for cold tier offload
+  # Spark + Iceberg - batch engine for the v3 lake ingest and maintenance
   # ───────────────────────────────────────────────────────────────────────
   spark-iceberg:
     build:
@@ -549,10 +501,7 @@ services:
       - "4040:4040"     # Spark Application UI
       - "8888:8888"     # Jupyter (if needed)
     volumes:
-      - ./docker/iceberg/warehouse:/home/iceberg/warehouse
-      - ./docker/offload:/home/iceberg/offload
-      - ./docker/offload/flows:/home/iceberg/offload/flows
-      - ./docker/lake:/home/iceberg/lake          # v3 lake catalog session builder
+      - ./docker/lake:/home/iceberg/lake          # ingest, maintenance, DDL, session builder
     environment:
       # MinIO / S3 credentials (Iceberg cold storage)
       - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
@@ -563,20 +512,12 @@ services:
       # them to the `lake` catalog's S3FileIO explicitly, not via the AWS chain.
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-      # ClickHouse credentials (read by offload_generic.py via os.environ)
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
-      # PostgreSQL / watermark credentials (read by offload_generic.py via os.environ)
-      - PREFECT_DB_HOST=prefect-db
-      - PREFECT_DB_PORT=5432
-      - PREFECT_DB_NAME=${PREFECT_DB_NAME}
-      - PREFECT_DB_USER=${PREFECT_DB_USER}
-      - PREFECT_DB_PASSWORD=${PREFECT_DB_PASSWORD}
+    # ClickHouse and PostgreSQL credentials went with docker/offload/: the lake
+    # ingest reads Redpanda and writes Iceberg, and carries its exactly-once
+    # state in the snapshot summary (ADR-022). Phase E's ClickHouse reload pulls
+    # from the lake rather than being pushed into, so nothing here needs them.
     depends_on:
       minio:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-      prefect-db:
         condition: service_healthy
     deploy:
       resources:
@@ -590,42 +531,15 @@ services:
     labels:
       com.k2.service: "etl"
       com.k2.tier: "cold"
-      com.k2.version: "v2"
-
-  # ───────────────────────────────────────────────────────────────────────
-  # Iceberg Init - One-shot service to create the cold.* Iceberg tables
-  # Runs once at startup; prefect-worker depends on service_completed_successfully
-  # so the first offload can never hit TABLE_OR_VIEW_NOT_FOUND on a clean clone.
-  # Idempotent (CREATE ... IF NOT EXISTS) — safe to re-run on an existing warehouse.
-  # ───────────────────────────────────────────────────────────────────────
-  iceberg-init:
-    image: k2-spark-iceberg:3.5.5_1.8.1  # built by the spark-iceberg service
-    container_name: k2-iceberg-init
-    networks:
-      - k2-net
-    volumes:
-      - ./docker/iceberg/warehouse:/home/iceberg/warehouse
-      - ./docker/iceberg/ddl:/home/iceberg/ddl:ro
-    entrypoint: ["/bin/bash", "/home/iceberg/ddl/00-run-all-ddl.sh"]
-    depends_on:
-      - spark-iceberg
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
-    restart: "no"
-    labels:
-      com.k2.service: "etl"
-      com.k2.tier: "cold"
-      com.k2.version: "v2"
+      com.k2.version: "v3"
 
 #############################################################################
 # SERVICES - v3 LAKE CATALOG (ADR-018)
 #############################################################################
-# Lakekeeper replaces v2's bind-mounted hadoop catalog (ADR-013) as the Iceberg
+# Lakekeeper replaced v2's bind-mounted hadoop catalog (ADR-013) as the Iceberg
 # catalog, making Iceberg-on-MinIO the system of record rather than a JDBC copy
-# of ClickHouse. Runs alongside the v2 `k2` hadoop catalog until Phase D.
+# of ClickHouse. The hadoop catalog and the offload that fed it were deleted in
+# Phase D — see the Outcome sections of ADR-014 and ADR-017.
 #
 # Its metadata lives in a `lakekeeper` database on the existing prefect-db —
 # see docker/postgres/ddl/10-lakekeeper-db.sql. PostgreSQL init scripts only run
@@ -749,11 +663,6 @@ services:
   # ───────────────────────────────────────────────────────────────────────
   # Lake DDL - One-shot: the four Iceberg tables (docker/lake/ddl/lake.sql)
   # ───────────────────────────────────────────────────────────────────────
-  # The v3 counterpart of `iceberg-init`, which creates v2's cold.* tables in
-  # the hadoop catalog. Both stay for the parallel-run window; `iceberg-init`
-  # and the whole of docker/offload/ retire together in a follow-up PR once the
-  # comparison is clean (plan 003-phase-d, "Delete").
-  #
   # Runs in the Spark image because the DDL uses Iceberg's Spark extensions —
   # `SET IDENTIFIER FIELDS`, `WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY`
   # — which the REST API does not expose. That is why table DDL costs a JVM
@@ -792,9 +701,11 @@ services:
   # Lake metrics exporter — Prometheus job 'lake-metrics'
   # ───────────────────────────────────────────────────────────────────────
   # Derives every metric from Iceberg snapshot summaries over the Lakekeeper
-  # REST API. Same reasoning as iceberg-metrics above — Prefect runs each job in
-  # a subprocess that exits before any scrape, so in-process counters are never
-  # seen — and the same image, which already carries prometheus-client.
+  # REST API rather than from in-process counters: Prefect runs each job in a
+  # subprocess that exits long before Prometheus scrapes it. A separate service,
+  # not a sidecar in prefect-worker, so a worker crash still leaves the rising
+  # commit age visible. Reuses the worker image, which already carries
+  # prometheus-client, so it costs no extra build.
   #
   # NOT the Spark image, even though docker/lake/*.py otherwise runs there:
   # reading the catalog through PyIceberg needs a FileIO, and
@@ -1050,12 +961,11 @@ services:
 # minio                 | 1.0       | 1G           | S3-compatible storage
 # prometheus            | 1.0       | 2G           | Metrics collection
 # grafana               | 0.5       | 512M         | Visualization
-# prefect-db            | 1.0       | 1G           | Metadata + watermarks + catalog DB
+# prefect-db            | 1.0       | 1G           | Prefect metadata + Lakekeeper catalog DB
 # prefect-server        | 1.0       | 1G           | Orchestration UI/API (Prefect 3.x)
 # prefect-worker        | 0.5       | 512M         | Workflow executor (Prefect 3.x)
-# spark-iceberg         | 2.0       | 4G           | ETL engine
+# spark-iceberg         | 2.0       | 4G           | Batch engine (lake ingest + maintenance)
 # lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018)
-# iceberg-metrics       | 0.1       | 128M         | v2 offload alerts exporter (:8000)
 # lake-metrics          | 0.1       | 128M         | v3 lake alerts exporter (:8000)
 # capture-binance       | 0.25      | 256M         | Rust capture, Binance (12 pairs, trades + L2)
 # capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (11 pairs, trades + L2)
@@ -1065,29 +975,30 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (16 long-running) | 14.70 CPU | 21.750 GiB | Full platform, v3 capture + both exporters
+# STEADY STATE (15 long-running) | 14.60 CPU | 21.625 GiB | Full platform, v3 capture + v3 lake
 #
 # One-shots — NOT free. They declare limits and they run concurrently with the
 # steady state at boot, so the budget that matters at `docker compose up` is the
 # bootstrap peak, not the steady state:
 #
 #   redpanda-init      0.25 | 128M  topics + Avro subjects (docker/redpanda/init.sh)
-#   iceberg-init       0.5  | 1G    v2 cold.* hadoop-catalog DDL (docker/iceberg/ddl/)
 #   lakekeeper-migrate 0.5  | 256M  v3 catalog DB schema
 #   lake-init          0.25 | 128M  v3 bucket + warehouse + namespaces (docker/lake/init-lake.sh)
 #   lake-ddl           0.5  | 1G    v3 raw/bronze/audit table DDL (docker/lake/ddl/lake.sql)
 #   ----------------------------------------------------------------------------
-#   one-shot subtotal  2.0  | 2.5G
+#   one-shot subtotal  1.5  | 1.5G
 #
-# Bootstrap peak: 16.20 CPU / 23.250 GiB — all 21 services. The three capture-*
-# containers gate only on redpanda-init; the other four one-shots can overlap
+# Bootstrap peak: 16.10 CPU / 23.125 GiB — all 19 services. The three capture-*
+# containers gate only on redpanda-init; the other three one-shots can overlap
 # live traffic. CPU limits are a ceiling on scheduling, not a reservation, so a
-# momentary overcommit at boot would be a burst, not a failure.
+# momentary overcommit at boot would be a burst, not a failure — and at 16.10
+# against a 16.0 target the peak is 0.10 CPU over for the length of a bootstrap.
 #
 # Retiring the three Kotlin feed handlers (ADR-019) gave back exactly the
-# 1.5 CPU / 1.5 GB they declared. Retiring iceberg-metrics with the rest of
-# docker/offload/ (plan 003-phase-d, "Delete") gives back another
-# 0.1 CPU / 128M — landing steady state at 14.60 CPU / 21.625 GiB.
+# 1.5 CPU / 1.5 GB they declared, and deleting docker/offload/ took
+# `iceberg-metrics` (0.1 CPU / 128M) and `iceberg-init` (0.5 CPU / 1G one-shot)
+# with it. Steady state is 14.60 CPU / 21.625 GiB across 15 — 1.40 CPU of
+# headroom under the target, where the Phase C+D parallel runs were over it.
 #
 # Recompute after any limit change (the ADR-010 Outcome addendum carries the
 # same command and its dated output):
@@ -1097,5 +1008,5 @@ services:
 # Target: 16 CPU / 40 GB total
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-08-26 (v3 Phase D: +lake-ddl one-shot, +lake-metrics; v2 offload kept until it is deleted)
+# Last updated: 2026-08-27 (v3 Phase D: v2 offload path deleted — -iceberg-metrics, -iceberg-init)
 #############################################################################

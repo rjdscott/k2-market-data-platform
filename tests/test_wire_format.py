@@ -9,7 +9,7 @@ The second half is the one that earns its place. CLAUDE.md's schema-change rule
 says the Avro schema, the DDL and the docs move in one PR or not at all, and the
 failure mode it warns about is silence: a field added to trade.avsc that never
 reaches bronze.trades does not break a build, it produces a column of nothing at
-the offload boundary hours later. These tests are that rule, executable.
+the ingest boundary hours later. These tests are that rule, executable.
 """
 
 import json

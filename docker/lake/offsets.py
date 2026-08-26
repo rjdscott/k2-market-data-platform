@@ -8,8 +8,8 @@ offsets a run consumed are written into the Iceberg snapshot summary *by the
 same commit that writes the data*, so the offsets and the rows they produced are
 one atomic fact. A watermark row in PostgreSQL is two facts in two systems, and
 every failure between them is a duplicate or a hole — which is exactly what v2's
-`docker/offload/watermark_pg.py` had to be careful about and this design does
-not.
+offload watermark table had to be careful about and this design does not
+(ADR-022; the offload itself was deleted in Phase D).
 
 Reading back is therefore "what does the latest ingest snapshot say", and the
 word *ingest* is load-bearing: compaction and snapshot expiry also produce

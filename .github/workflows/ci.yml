@@ -53,7 +53,7 @@ jobs:
       - run: cargo test --locked
 
   python:
-    name: Python (lake + offload + tests)
+    name: Python (lake + tests)
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -63,10 +63,10 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
 
       - name: Ruff
-        run: uv run --no-project --with ruff ruff check docker/lake docker/offload tests
+        run: uv run --no-project --with ruff ruff check docker/lake tests
 
       - name: Pytest
-        run: uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q
+        run: uv run --no-project --with pytest --with pyyaml pytest tests -q
 
   docker:
     name: Docker build (${{ matrix.name }})

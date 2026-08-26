@@ -3,9 +3,9 @@
 K2 v3 — the one Spark session builder for the Iceberg lake.
 
 Every v3 Spark job (raw ingest, bronze build, maintenance) gets its session from
-`lake_session()`, so the `lake` catalog config lives here and nowhere else. v2's
-`docker/offload/offload_generic.py` keeps building its own `k2` hadoop-catalog
-session until Phase D retires that path — the two coexist deliberately.
+`lake_session()`, so the `lake` catalog config lives here and nowhere else. It
+is the only catalog on the stack: v2's `k2` hadoop catalog and the offload that
+built its own session went in Phase D.
 
 Smoke test (the runnable check for this file):
 
@@ -43,11 +43,10 @@ SCHEMA_REGISTRY_URL = os.environ.get("K2_SCHEMA_REGISTRY_URL", "http://redpanda:
 KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 
 # Driver heap, pinned rather than inherited. `spark-iceberg` is capped at 2 CPU
-# and 4 GiB, and during the v2/v3 parallel window TWO drivers can be alive in it
-# at once: v2's iceberg-offload every 15 minutes and v3's lake ingest every 5.
-# They no longer start on the same minute (see the cron in
-# docker/lake/flows/deploy_lake.py), but a slow offload still overlaps the next
-# ingest, so both heaps have to fit together.
+# and 4 GiB, and two drivers can still be alive in it at once — the 5-minute
+# ingest, a maintenance run, or an operator's `docker exec` during an incident.
+# (Until Phase D a third could: v2's iceberg-offload every 15 minutes. That path
+# is gone; the sizing it forced is kept, because the overlap is not.)
 #
 # 1 g each is what fits. A driver JVM costs its heap plus roughly 400-600 MB of
 # metaspace, code cache, GC structures, thread stacks and direct buffers, and

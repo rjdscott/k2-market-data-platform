@@ -225,9 +225,10 @@ spark-jars/
 # Flink JARs (large connector files, download locally)
 flink-jars/*.jar
 
-# Iceberg warehouse data
-docker/iceberg/warehouse/*
-!docker/iceberg/warehouse/.gitkeep
+# v2's hadoop-catalog Iceberg warehouse. docker/iceberg/ was deleted with the
+# rest of the offload path (ADR-014/ADR-017 Outcome); this stays so a working
+# copy left over from a pre-deletion checkout never gets committed back.
+docker/iceberg/warehouse/
 
 # ClickHouse backup files
 docker/clickhouse/*.backup
@@ -239,7 +240,5 @@ docker/clickhouse/*.backup
 logs/
 docker/prefect/storage/*
 !docker/prefect/storage/.gitkeep
-docker/iceberg/warehouse/*
-!docker/iceberg/warehouse/.gitkeep
 .benchmarks/
 .claude/settings.local.json
