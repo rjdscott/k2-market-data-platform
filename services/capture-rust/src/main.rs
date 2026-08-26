@@ -52,21 +52,49 @@ const KRAKEN_STREAMS: &[&str] = &[
 ];
 const BINANCE_STREAMS: &[&str] = &["trade", "depth20"];
 const COINBASE_STREAMS: &[&str] = &["l2_data", "market_trades", "heartbeats", "subscriptions"];
-const CONTINUOUS: &[&str] = &[
-    "book",
-    "trade",
-    "heartbeat",
-    "depth20",
-    "l2_data",
-    "market_trades",
-    "heartbeats",
+/// Continuous streams, and how long each may go silent before the session
+/// watchdog recycles the socket. One table, because three things read it: the
+/// watchdog in `session`, the `healthcheck` subcommand, and (by hand)
+/// `CaptureFeedStale` in docker/prometheus/rules/capture-alerts.yml. A bound
+/// that lives in only one of them is a bound the other two disagree with.
+///
+/// **Not one number for every stream.** 60 s is right for the channels that run
+/// at >= 1 Hz whatever the market is doing - book updates and heartbeats - and
+/// wrong for trades. Kraken `trade`'s longest silence over a 3 h window on
+/// 2026-08-26 was 20.4 s, comfortably inside 60 s on an active day; but "no
+/// trades printed" is a market state, not a fault, and a quiet hour on a thin
+/// instrument can exceed a minute. Crossing this line costs a reconnect and 11
+/// book resubscriptions, which is an expensive answer to a quiet market. 300 s
+/// is ~15x the measured worst case for the trade channels.
+///
+/// `instrument` is deliberately absent, as are the subscribe acks: at
+/// 0.0017 frames/s (2 frames in 29 minutes, measured 2026-08-26) it is a
+/// reference channel, and any finite bound on it is a false positive waiting to
+/// happen rather than a longer one.
+const CONTINUOUS: &[(&str, Duration)] = &[
+    ("book", Duration::from_secs(60)),
+    ("depth20", Duration::from_secs(60)),
+    ("l2_data", Duration::from_secs(60)),
+    ("heartbeat", Duration::from_secs(60)),
+    ("heartbeats", Duration::from_secs(60)),
+    ("trade", Duration::from_secs(300)),
+    ("market_trades", Duration::from_secs(300)),
 ];
+
+/// How long this stream may be silent before it is treated as dead, or `None`
+/// if it is not a continuous stream at all.
+fn stale_after(stream: &str) -> Option<Duration> {
+    CONTINUOUS
+        .iter()
+        .find(|(name, _)| *name == stream)
+        .map(|(_, limit)| *limit)
+}
 
 /// A stream that keeps delivering while the subscription is healthy, as opposed
 /// to a one-shot acknowledgement or a low-rate reference channel. Only these
 /// carry a staleness timestamp.
 fn is_continuous(stream: &str) -> bool {
-    CONTINUOUS.contains(&stream)
+    stale_after(stream).is_some()
 }
 
 /// Continuous streams for one venue - what the staleness gauge, the session
@@ -154,10 +182,13 @@ struct RunArgs {
 struct HealthArgs {
     #[arg(long, env = "K2_METRICS_PORT", default_value_t = 8082)]
     metrics_port: u16,
-    /// A feed quieter than this is considered dead. 60 s is well past the
-    /// slowest instrument channel and well inside a compose restart window.
-    #[arg(long, default_value_t = 60)]
-    max_age_seconds: u64,
+    /// Judge every stream against this many seconds instead of its own bound.
+    /// Unset is the right thing and is what compose uses: the bounds differ per
+    /// stream (`CONTINUOUS`) because `book` is dead after a quiet minute and
+    /// `trade` is not. Here for a one-off `docker exec` that wants a tighter or
+    /// looser read without a rebuild.
+    #[arg(long)]
+    max_age_seconds: Option<u64>,
 }
 
 #[derive(Args)]
@@ -434,19 +465,18 @@ async fn session(
                     .set(adapter.total_levels() as f64);
 
                 // A venue that stops sending without closing the socket looks
-                // healthy at the TCP layer forever. Every continuous stream runs
-                // at >= 1 frame/s across all three venues (measured 2026-08-26,
-                // 10 min), so 60 s of silence on ANY ONE of them is a dead
-                // subscription, not a quiet market — and a dead subscription is
-                // exactly what a whole-socket timer cannot see.
-                if let Some((stream, since)) = last_frame_ns
-                    .iter()
-                    .find(|(_, ts)| now - **ts > 60_000_000_000)
-                {
+                // healthy at the TCP layer forever, and a dead subscription is
+                // exactly what a whole-socket timer cannot see. The bound is per
+                // stream (`CONTINUOUS`): a book that stops for a minute is dead,
+                // a trade channel that stops for a minute is a quiet market.
+                if let Some((stream, since)) = last_frame_ns.iter().find(|(stream, ts)| {
+                    stale_after(stream).is_some_and(|limit| now - **ts > limit.as_nanos() as i64)
+                }) {
                     tracing::warn!(
                         stream,
                         silent_s = (now - *since) / 1_000_000_000,
-                        "no frames on a continuous stream for 60s, reconnecting"
+                        limit_s = stale_after(stream).map(|l| l.as_secs()),
+                        "a continuous stream passed its silence bound, reconnecting"
                     );
                     return Ok(Session::Disconnected);
                 }
@@ -507,47 +537,65 @@ impl Shutdown {
 async fn healthcheck(args: HealthArgs) -> Result<()> {
     let body = http_get("127.0.0.1", args.metrics_port, "/metrics").await?;
     let now = now_ns() as f64 / 1e9;
-    let oldest = oldest_stream_ts(&body);
+    let ages = stream_ages(&body, now);
 
-    // The OLDEST stream, not the newest. Taking the max meant Kraken's 1 Hz
-    // heartbeat reported the container healthy while `book` and `trade` were
-    // both silent — the healthcheck was green on precisely the failure it
-    // exists to catch. Only continuous streams carry this gauge (see
-    // `CONTINUOUS`), and `run` seeds all of them at process start, so an absent
-    // series is a broken exporter rather than a stream that has yet to speak.
-    match oldest {
-        Some(ts) if now - ts <= args.max_age_seconds as f64 => {
-            println!("ok: oldest stream {:.1}s behind", now - ts);
-            Ok(())
+    // EVERY stream, each against its own bound - not the oldest against one
+    // number. Taking the max meant Kraken's 1 Hz heartbeat reported the
+    // container healthy while `book` and `trade` were both silent; taking the
+    // min against a flat 60 s meant a quiet five minutes on `trade` reported a
+    // perfectly healthy container unhealthy. Only continuous streams carry this
+    // gauge (see `CONTINUOUS`), and `run` seeds all of them at process start, so
+    // an absent series is a broken exporter, not a stream yet to speak.
+    if ages.is_empty() {
+        // A non-zero exit is the whole interface here; the message is for
+        // whoever reads `docker inspect`.
+        eprintln!("stale: no k2_capture_last_message_ts_seconds series on /metrics");
+        std::process::exit(1);
+    }
+
+    let mut stale: Vec<String> = Vec::new();
+    for (stream, age) in &ages {
+        let limit = health_limit(stream, args.max_age_seconds);
+        if *age > limit {
+            stale.push(format!("{stream} {age:.1}s (limit {limit:.0}s)"));
         }
-        Some(ts) => {
-            eprintln!(
-                "stale: a stream has had no frame for {:.1}s (limit {}s)",
-                now - ts,
-                args.max_age_seconds
-            );
-            std::process::exit(1);
-        }
-        None => {
-            // A non-zero exit is the whole interface here; the message is for
-            // whoever reads `docker inspect`.
-            eprintln!("stale: no k2_capture_last_message_ts_seconds series on /metrics");
-            std::process::exit(1);
-        }
+    }
+    if stale.is_empty() {
+        let worst = ages
+            .iter()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("ages is not empty");
+        println!("ok: {} is the stalest, {:.1}s behind", worst.0, worst.1);
+        Ok(())
+    } else {
+        eprintln!("stale: {}", stale.join(", "));
+        std::process::exit(1);
     }
 }
 
-/// Oldest `k2_capture_last_message_ts_seconds` in a Prometheus exposition body,
-/// or `None` when the metric is absent entirely. Pure, so the "green while the
-/// primary feed is dead" bug has a test that does not need a running exporter.
-fn oldest_stream_ts(body: &str) -> Option<f64> {
+/// The bound this stream is judged against: the CLI override if given, else the
+/// stream's own entry in `CONTINUOUS`, else 60 s for a stream the table has
+/// never heard of (a new subscription nobody added to the table - judged, not
+/// ignored).
+fn health_limit(stream: &str, override_s: Option<u64>) -> f64 {
+    match override_s {
+        Some(s) => s as f64,
+        None => stale_after(stream).map_or(60.0, |d| d.as_secs_f64()),
+    }
+}
+
+/// `(stream, seconds behind)` for every `k2_capture_last_message_ts_seconds` in
+/// a Prometheus exposition body. Pure, so the "green while the primary feed is
+/// dead" bug and its opposite both have a test that needs no running exporter.
+fn stream_ages(body: &str, now: f64) -> Vec<(String, f64)> {
     body.lines()
         .filter(|l| l.starts_with("k2_capture_last_message_ts_seconds{"))
-        .filter_map(|l| l.rsplit(' ').next())
-        .filter_map(|v| v.parse::<f64>().ok())
-        .fold(None, |acc: Option<f64>, v| {
-            Some(acc.map_or(v, |a| a.min(v)))
+        .filter_map(|l| {
+            let (labels, value) = l.rsplit_once(' ')?;
+            let stream = labels.split_once("stream=\"")?.1.split_once('"')?.0;
+            Some((stream.to_string(), now - value.parse::<f64>().ok()?))
         })
+        .collect()
 }
 
 /// Record frames verbatim as JSONL, one object per line, for a replay fixture.
@@ -623,7 +671,7 @@ mod stream_tests {
                 "every exchange has at least one continuous stream"
             );
         }
-        for s in CONTINUOUS {
+        for (s, _) in CONTINUOUS {
             assert!(
                 KRAKEN_STREAMS.contains(s)
                     || BINANCE_STREAMS.contains(s)
@@ -634,23 +682,74 @@ mod stream_tests {
     }
 
     #[test]
-    fn the_healthcheck_reads_the_oldest_stream_not_the_newest() {
-        // Kraken mid-failure: heartbeat is 1 Hz and current, book and trade have
-        // been silent for an hour. Taking the max reported 1_000_000_000 and the
-        // container stayed `healthy`.
+    fn the_healthcheck_judges_every_stream_against_its_own_bound() {
+        // Kraken, 90 s after trades went quiet: heartbeat is 1 Hz and current,
+        // book is current, trade has printed nothing. Reading only the newest
+        // stream reported healthy while book and trade were both dead; reading
+        // the oldest against a flat 60 s reports unhealthy on a quiet market.
+        let now = 1_000_000_000.0;
         let body = "\
 # HELP k2_capture_last_message_ts_seconds when this stream last saw a frame
 k2_capture_last_message_ts_seconds{exchange=\"kraken\",stream=\"heartbeat\"} 1000000000
-k2_capture_last_message_ts_seconds{exchange=\"kraken\",stream=\"book\"} 999996400
-k2_capture_last_message_ts_seconds{exchange=\"kraken\",stream=\"trade\"} 999996400
+k2_capture_last_message_ts_seconds{exchange=\"kraken\",stream=\"book\"} 999999999
+k2_capture_last_message_ts_seconds{exchange=\"kraken\",stream=\"trade\"} 999999910
 k2_capture_messages_total{exchange=\"kraken\",stream=\"book\"} 12
 ";
-        assert_eq!(oldest_stream_ts(body), Some(999_996_400.0));
-        assert_eq!(
-            oldest_stream_ts("k2_capture_messages_total{exchange=\"kraken\"} 1\n"),
-            None,
+        let ages = stream_ages(body, now);
+        assert_eq!(ages.len(), 3, "one entry per gauge line: {ages:?}");
+        for (stream, age) in &ages {
+            let over = *age > health_limit(stream, None);
+            assert!(!over, "{stream} at {age}s is inside its bound");
+        }
+        // The same body with the old flat 60 s: trade alone trips it, which is
+        // the false unhealthy this split exists to stop.
+        let tripped: Vec<&String> = ages
+            .iter()
+            .filter(|(stream, age)| *age > health_limit(stream, Some(60)))
+            .map(|(stream, _)| stream)
+            .collect();
+        assert_eq!(tripped, vec!["trade"]);
+
+        // A dead book is still caught at 60 s, on the same body shape.
+        let dead_book = body.replace("stream=\"book\"} 999999999", "stream=\"book\"} 999999900");
+        assert!(
+            stream_ages(&dead_book, now)
+                .iter()
+                .any(|(stream, age)| stream == "book" && *age > health_limit(stream, None))
+        );
+
+        assert!(
+            stream_ages("k2_capture_messages_total{exchange=\"kraken\"} 1\n", now).is_empty(),
             "an absent gauge is not a fresh feed"
         );
+    }
+
+    /// Every stream the session watchdog will ever track has a bound, and the
+    /// two that a quiet market can legitimately silence have the longer one.
+    /// The watchdog, the healthcheck and `CaptureFeedStale` all read this table;
+    /// a stream in `continuous_streams_for` with no entry would panic-free
+    /// silently never trip the watchdog at all.
+    #[test]
+    fn every_watched_stream_has_a_silence_bound() {
+        for venue in [Exchange::Kraken, Exchange::Binance, Exchange::Coinbase] {
+            for stream in continuous_streams_for(venue) {
+                assert!(
+                    stale_after(stream).is_some(),
+                    "{venue} watches {stream} with no silence bound"
+                );
+            }
+        }
+        for quiet in ["trade", "market_trades"] {
+            assert_eq!(
+                stale_after(quiet),
+                Some(Duration::from_secs(300)),
+                "{quiet} is a market state when silent, not a fault"
+            );
+        }
+        for busy in ["book", "depth20", "l2_data", "heartbeat", "heartbeats"] {
+            assert_eq!(stale_after(busy), Some(Duration::from_secs(60)), "{busy}");
+        }
+        assert_eq!(stale_after("instrument"), None, "a reference channel");
     }
 
     #[test]

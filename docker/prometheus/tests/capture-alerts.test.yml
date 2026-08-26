@@ -48,7 +48,7 @@ tests:
               exchange: kraken
               stream: book
             exp_annotations:
-              summary: "No book frames from kraken for over 60s"
+              summary: "No book frames from kraken for 5m 0s"
               runbook: docs/runbooks/capture-feed-stale.md
               description: |
                 The capture process for kraken is up and scrapeable, but
@@ -57,8 +57,11 @@ tests:
 
                 This is the failure mode a liveness check misses: the process is
                 healthy, the WebSocket is open, and the exchange has gone quiet or the
-                subscription was silently dropped. All three venues are liquid enough
-                that a 60s silence on any subscribed stream is anomalous, not idle.
+                subscription was silently dropped. The bound is per stream and is the
+                same one the process enforces on itself (`CONTINUOUS`, main.rs): 60s
+                for book and heartbeat channels, which all three venues run at 1 Hz or
+                better whatever the market is doing, and 300s for trade channels,
+                where silence can be a thin instrument rather than a dead feed.
 
   - interval: 30s
     name: a stream keeping pace never fires
@@ -124,7 +127,7 @@ tests:
               exchange: kraken
               stream: book
             exp_annotations:
-              summary: "No book frames from kraken for over 60s"
+              summary: "No book frames from kraken for 5m 0s"
               runbook: docs/runbooks/capture-feed-stale.md
               description: |
                 The capture process for kraken is up and scrapeable, but
@@ -133,12 +136,73 @@ tests:
 
                 This is the failure mode a liveness check misses: the process is
                 healthy, the WebSocket is open, and the exchange has gone quiet or the
-                subscription was silently dropped. All three venues are liquid enough
-                that a 60s silence on any subscribed stream is anomalous, not idle.
+                subscription was silently dropped. The bound is per stream and is the
+                same one the process enforces on itself (`CONTINUOUS`, main.rs): 60s
+                for book and heartbeat channels, which all three venues run at 1 Hz or
+                better whatever the market is doing, and 300s for trade channels,
+                where silence can be a thin instrument rather than a dead feed.
       # CaptureDown is firing from t=330 s and takes the incident over.
       - eval_time: 6m
         alertname: CaptureFeedStale
         exp_alerts: []
+
+  # The bound that differs per stream. Kraken `trade` measured a 20.4 s worst-case
+  # silence over 3 h, but a quiet hour on a thin instrument is a market state and
+  # not a dead subscription - and the answer this alert routes to is a reconnect
+  # plus 11 book resubscriptions. `main.rs` CONTINUOUS holds the same two numbers
+  # for the session watchdog; if these two ever disagree, one of them is lying
+  # about what "dead" means.
+  - interval: 30s
+    name: a trade channel quiet for four minutes is a quiet market, not a fault
+    input_series:
+      - series: 'k2_capture_last_message_ts_seconds{job="capture-kraken",exchange="kraken",stream="trade"}'
+        values: '0+0x40'
+      - series: 'up{job="capture-kraken",service="capture-kraken",tier="ingestion"}'
+        values: '1+0x40'
+    alert_rule_test:
+      # Well past the 60 s a book gets, and this is the case a flat threshold
+      # fired on.
+      - eval_time: 4m
+        alertname: CaptureFeedStale
+        exp_alerts: []
+
+  - interval: 30s
+    name: a trade channel past 300s is a dead subscription
+    input_series:
+      - series: 'k2_capture_last_message_ts_seconds{job="capture-coinbase",exchange="coinbase",stream="market_trades"}'
+        values: '0+0x60'
+      - series: 'up{job="capture-coinbase",service="capture-coinbase",tier="ingestion"}'
+        values: '1+0x60'
+    alert_rule_test:
+      # 300 s crossed at 5m, `for: 2m` on top.
+      - eval_time: 6m30s
+        alertname: CaptureFeedStale
+        exp_alerts: []
+      - eval_time: 7m30s
+        alertname: CaptureFeedStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: capture
+              tier: ingestion
+              job: capture-coinbase
+              exchange: coinbase
+              stream: market_trades
+            exp_annotations:
+              summary: "No market_trades frames from coinbase for 7m 30s"
+              runbook: docs/runbooks/capture-feed-stale.md
+              description: |
+                The capture process for coinbase is up and scrapeable, but
+                its market_trades stream last delivered a frame
+                7m 30s ago.
+
+                This is the failure mode a liveness check misses: the process is
+                healthy, the WebSocket is open, and the exchange has gone quiet or the
+                subscription was silently dropped. The bound is per stream and is the
+                same one the process enforces on itself (`CONTINUOUS`, main.rs): 60s
+                for book and heartbeat channels, which all three venues run at 1 Hz or
+                better whatever the market is doing, and 300s for trade channels,
+                where silence can be a thin instrument rather than a dead feed.
 
   # ── CaptureProduceStalled ────────────────────────────────────────────────
   - interval: 15s

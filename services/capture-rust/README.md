@@ -140,7 +140,7 @@ snapshot is 5.2 MB, ADR-018 S5, and `market.crypto.v3.raw.*` carries the same
 
 ```bash
 k2-capture run                       # capture and produce
-k2-capture healthcheck               # exit 0 if EVERY continuous stream saw a frame in 60 s
+k2-capture healthcheck               # exit 0 if EVERY continuous stream is inside its own bound
 k2-capture record --exchange kraken --seconds 20 --symbols BTC/USD > f.jsonl
 ```
 
@@ -149,10 +149,21 @@ k2-capture record --exchange kraken --seconds 20 --symbols BTC/USD > f.jsonl
 reads, so the two cannot disagree. It exists as a subcommand because the runtime
 image is distroless: no shell, no curl.
 
-It takes the **oldest** stream's timestamp, not the newest. Taking the newest
-meant Kraken's 1 Hz heartbeat reported the container healthy while `book` and
-`trade` were both silent — green on exactly the failure the check exists for. An
-absent gauge is a failure too, not a pass.
+It checks **every** stream against **its own** bound from `CONTINUOUS`, and both
+halves of that have been wrong. Taking the newest meant Kraken's 1 Hz heartbeat
+reported the container healthy while `book` and `trade` were both silent — green
+on exactly the failure the check exists for. Taking the oldest against a flat
+60 s reports a healthy container unhealthy every time trades go quiet for a
+minute, which on a thin instrument is a market state and not a fault. An absent
+gauge is a failure too, not a pass. `--max-age-seconds` overrides every bound
+with one number, for a one-off `docker exec`; compose passes nothing.
+
+The bounds: 60 s for `book`, `depth20`, `l2_data`, `heartbeat` and `heartbeats`,
+which run at 1 Hz or better on all three venues whatever the market is doing;
+300 s for `trade` and `market_trades`, where silence can be a thin instrument.
+Kraken `trade`'s longest measured gap was 20.4 s over a 3 h window. The same
+table is what the session watchdog recycles the socket on, and what
+`CaptureFeedStale` is written against.
 
 ---
 

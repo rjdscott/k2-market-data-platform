@@ -86,9 +86,22 @@ groups:
       # a `docker pause` and `time() - <absent>` is an empty vector. The fault
       # this alert is really for is a venue that goes silent while the process
       # stays scrapeable.
+      #
+      # TWO THRESHOLDS, ONE ALERT, and they are the process's own. `main.rs`
+      # `CONTINUOUS` is the table the session watchdog reads, and this expression
+      # has to say the same thing or the alert and the process disagree about
+      # what dead means: 60s for the channels that run at >= 1 Hz whatever the
+      # market does (book, depth20, l2_data, heartbeat(s)) and 300s for the trade
+      # channels, where a quiet market is not a fault. A flat 60s here fires on a
+      # thin instrument's quiet hour; the watchdog on the same flat bound
+      # answered it by recycling the socket and resubscribing 11 books.
       - alert: CaptureFeedStale
         expr: |
-          (time() - k2_capture_last_message_ts_seconds > 60)
+          (
+            (time() - k2_capture_last_message_ts_seconds{stream!~"trade|market_trades"} > 60)
+            or
+            (time() - k2_capture_last_message_ts_seconds{stream=~"trade|market_trades"} > 300)
+          )
           unless on (job) ALERTS{alertname="CaptureDown", alertstate="firing"}
         for: 2m
         labels:
@@ -96,7 +109,7 @@ groups:
           component: capture
           tier: ingestion
         annotations:
-          summary: "No {{ $labels.stream }} frames from {{ $labels.exchange }} for over 60s"
+          summary: "No {{ $labels.stream }} frames from {{ $labels.exchange }} for {{ $value | humanizeDuration }}"
           description: |
             The capture process for {{ $labels.exchange }} is up and scrapeable, but
             its {{ $labels.stream }} stream last delivered a frame
@@ -104,8 +117,11 @@ groups:
 
             This is the failure mode a liveness check misses: the process is
             healthy, the WebSocket is open, and the exchange has gone quiet or the
-            subscription was silently dropped. All three venues are liquid enough
-            that a 60s silence on any subscribed stream is anomalous, not idle.
+            subscription was silently dropped. The bound is per stream and is the
+            same one the process enforces on itself (`CONTINUOUS`, main.rs): 60s
+            for book and heartbeat channels, which all three venues run at 1 Hz or
+            better whatever the market is doing, and 300s for trade channels,
+            where silence can be a thin instrument rather than a dead feed.
           runbook: docs/runbooks/capture-feed-stale.md
 
       # CRITICAL: Exchange sequence numbers skipped - messages were lost.

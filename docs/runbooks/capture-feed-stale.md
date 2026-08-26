@@ -28,13 +28,31 @@ while trades keep flowing, or the reverse.
 [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml):
 
 ```promql
-(time() - k2_capture_last_message_ts_seconds > 60)
+(
+  (time() - k2_capture_last_message_ts_seconds{stream!~"trade|market_trades"} > 60)
+  or
+  (time() - k2_capture_last_message_ts_seconds{stream=~"trade|market_trades"} > 300)
+)
 unless on (job) ALERTS{alertname="CaptureDown", alertstate="firing"}
 ```
 
 Fires after `for: 2m`. The metric is labelled `{exchange, stream}` with the venue's
 channel name (`trade`, `book`, `depth20`, `l2_data`, `market_trades`, `heartbeat(s)`),
 so the alert names which subscription went quiet.
+
+**The bound is per stream, and it is the process's own.** `CONTINUOUS` in
+`services/capture-rust/src/main.rs` is one table of `(stream, Duration)` read by three
+things — the session watchdog, `k2-capture healthcheck`, and this rule by hand:
+
+| streams | bound | why |
+|---|---|---|
+| `book`, `depth20`, `l2_data`, `heartbeat`, `heartbeats` | 60 s | these run at 1 Hz or better on all three venues whatever the market is doing, so a quiet minute is a dead subscription |
+| `trade`, `market_trades` | 300 s | Kraken `trade`'s longest measured silence was 20.4 s over 3 h, but "nothing printed" is a market state; a quiet hour on a thin instrument is not a fault, and the answer this alert routes to costs a reconnect plus 11 book resubscriptions |
+
+A flat 60 s on the trade channels fired on quiet markets and had the watchdog recycle
+a perfectly healthy socket to answer it. If you change one of these numbers, change it
+in the table and in this rule together — `docker/prometheus/tests/capture-alerts.test.yml`
+holds a case on each side of both thresholds.
 
 **The `unless` guard is why a dead container is one alert and not five.** The gauges
 stay queryable for the whole staleness window after the process is gone, so without it a
@@ -83,12 +101,13 @@ see: the socket is open, the process is fine, and the **subscription** is dead �
 exchange accepted a `subscribe` and stopped delivering, or a silent half-open TCP
 connection is holding the read side open with nothing arriving.
 
-All three venues are liquid enough on the captured instruments that 60 seconds of
-silence on a subscribed stream is anomalous rather than idle. The process enforces the
-same 60 s on itself: the session watchdog reconnects when **any one** continuous stream
-goes 60 s without a frame, per stream rather than per socket, because Kraken's 1 Hz
-heartbeat would otherwise keep a socket with a dead `book` subscription alive forever.
-`k2-capture healthcheck` reads the **oldest** stream's gauge for the same reason.
+The process enforces the same bounds on itself: the session watchdog reconnects when
+**any one** continuous stream passes its own threshold, per stream rather than per
+socket, because Kraken's 1 Hz heartbeat would otherwise keep a socket with a dead `book`
+subscription alive forever. `k2-capture healthcheck` reads the same table and judges
+every stream against its own bound, for both halves of that: the max reported healthy
+while `book` and `trade` were dead, and the min against a flat 60 s reported unhealthy
+on a quiet market.
 
 Binance also performs a scheduled reconnect at 23 hours of connection life
 (`BINANCE_MAX_CONNECTION_AGE` in `main.rs`, ahead of the venue's own 24 h cut-off);
