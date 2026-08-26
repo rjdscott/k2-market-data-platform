@@ -1,376 +1,128 @@
-# K2 Platform - Quick Reference Cheat Sheet
+# Quick Reference
 
-**Version**: v2 (2026-02-09)
-
----
-
-## Stack Management
+One page of the commands you actually use. Everything runs from the repo root against
+`docker-compose.yml`. Load secrets into your shell first:
 
 ```bash
-# Start v2 stack + feed handlers
-docker compose -p k2-v2 \
-  -f docker-compose.v2.yml \
-  -f services/feed-handler-kotlin/docker-compose.feed-handlers.yml \
-  up -d
-
-# Stop all
-docker compose -p k2-v2 \
-  -f docker-compose.v2.yml \
-  -f services/feed-handler-kotlin/docker-compose.feed-handlers.yml \
-  down
-
-# View all services
-docker compose -p k2-v2 \
-  -f docker-compose.v2.yml \
-  -f services/feed-handler-kotlin/docker-compose.feed-handlers.yml \
-  ps
-
-# Rebuild feed handler
-docker compose -p k2-v2 \
-  -f docker-compose.v2.yml \
-  -f services/feed-handler-kotlin/docker-compose.feed-handlers.yml \
-  up -d --build feed-handler-binance
-
-# View logs
-docker logs -f k2-feed-handler-binance
-docker logs -f k2-redpanda
-docker logs -f k2-clickhouse
-
-# Check resources
-docker stats
+cp .env.example .env      # first time only — then fill in real values
+set -a && . ./.env && set +a
 ```
 
----
+## Stack
 
-## Web UIs
+```bash
+make up          # docker compose up -d  (builds images on first run)
+make down        # stop, keep volumes
+make ps          # service status
+make logs        # tail everything
+make test        # Kotlin + Python unit tests
+
+docker compose logs -f feed-handler-binance          # one service
+docker compose up -d --build feed-handler-binance    # rebuild after a Kotlin change
+docker compose up -d --force-recreate --no-deps feed-handler-binance   # after editing instruments.yaml
+docker stats --no-stream                             # live CPU / RAM
+```
+
+## URLs and credentials
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| Redpanda Console | http://localhost:8080 | None |
-| Grafana | http://localhost:3000 | admin / admin |
-| Prometheus | http://localhost:9090 | None |
+| Redpanda Console | http://localhost:8080 | none |
+| Grafana | http://localhost:3000 | `admin` / `$GRAFANA_PASSWORD` |
+| Prometheus | http://localhost:9090 | none |
+| Prefect | http://localhost:4200 | none |
+| MinIO Console | http://localhost:9001 | `$MINIO_ROOT_USER` / `$MINIO_ROOT_PASSWORD` |
+| ClickHouse HTTP | http://localhost:8123 | `default` / `$CLICKHOUSE_PASSWORD` |
+| Spark Master UI | http://localhost:18080 | none |
+| Spark Application UI | http://localhost:4040 | only while a job is running |
 
----
+Also listening: Redpanda Kafka API `9092`, Admin API `9644`, Schema Registry `8081`;
+ClickHouse native `9002`, Prometheus metrics `9363`; MinIO S3 API `9000`; PostgreSQL (Prefect + watermarks) `15432` on localhost only.
+Feed-handler `/health` and `/metrics` are on port **8082 inside the container only** — not published.
 
-## Redpanda Quick Commands
+## Redpanda
 
 ```bash
-# List topics
+docker exec k2-redpanda rpk cluster health
 docker exec k2-redpanda rpk topic list
+docker exec k2-redpanda rpk topic describe market.crypto.trades.binance -p
 
-# Describe topic
-docker exec k2-redpanda rpk topic describe market.crypto.trades.binance
+# Peek at the raw feed
+docker exec k2-redpanda rpk topic consume market.crypto.trades.binance.raw --num 5 --format '%v\n'
 
-# Consume last 10 messages
-docker exec k2-redpanda rpk topic consume market.crypto.trades.binance.raw \
-  --num 10 --format '%v\n---\n'
-
-# Tail topic (stream mode)
-docker exec k2-redpanda rpk topic consume market.crypto.trades.binance.raw \
-  --format '%v\n'
-
-# Check consumer groups
+# Consumer groups (ClickHouse Kafka Engine)
 docker exec k2-redpanda rpk group list
+docker exec k2-redpanda rpk group describe clickhouse_bronze_binance_consumer
 
-# Check consumer lag
-docker exec k2-redpanda rpk group describe clickhouse_bronze_consumer
-
-# List schemas
-docker exec k2-redpanda curl -s http://localhost:8081/subjects | jq '.'
-
-# Get latest schema
-docker exec k2-redpanda curl -s \
-  http://localhost:8081/subjects/market.crypto.trades.binance-value/versions/latest \
-  | jq '.schema | fromjson'
+# Schema registry
+docker exec k2-redpanda curl -s localhost:8081/subjects | jq
 ```
 
----
-
-## ClickHouse Quick Commands
+## ClickHouse
 
 ```bash
-# Interactive client
-docker exec -it k2-clickhouse clickhouse-client
+CH="docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD"
 
-# One-liner query
-docker exec k2-clickhouse clickhouse-client --query "<SQL>"
+$CH -q "SHOW TABLES FROM k2"
+$CH -q "SELECT count() FROM k2.bronze_trades_binance"
 
-# Show tables
-docker exec k2-clickhouse clickhouse-client --query "SHOW TABLES FROM k2"
+# Trades in the last 5 minutes, by exchange
+$CH -q "SELECT exchange, count() FROM k2.silver_trades
+        WHERE timestamp > now() - INTERVAL 5 MINUTE GROUP BY exchange"
 
-# Count trades (Binance)
-docker exec k2-clickhouse clickhouse-client --query "
-SELECT exchange, count(*) FROM k2.bronze_trades_binance GROUP BY exchange
-"
+# Latest 1m candles
+$CH -q "SELECT exchange, canonical_symbol, window_start, open_price, high_price,
+               low_price, close_price, volume, trade_count
+        FROM k2.ohlcv_1m ORDER BY window_start DESC LIMIT 10 FORMAT Pretty"
 
-# Recent trades
-docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM k2.silver_trades ORDER BY processed_at DESC LIMIT 10 FORMAT Pretty
-"
-
-# OHLCV bars
-docker exec k2-clickhouse clickhouse-client --query "
-SELECT exchange, canonical_symbol, window_start, window_end,
-       open_price, high_price, low_price, close_price, volume, trade_count
-FROM k2.ohlcv_1m WHERE window_start >= now() - INTERVAL 1 HOUR
-ORDER BY window_start DESC LIMIT 20 FORMAT Pretty
-"
-
-# Check Kafka consumers
-docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM system.kafka_consumers FORMAT Pretty
-"
+# Kafka Engine consumer health
+$CH -q "SELECT table, num_messages_read, num_commits, last_exception
+        FROM system.kafka_consumers WHERE database = 'k2' FORMAT Vertical"
 
 # Table sizes
-docker exec k2-clickhouse clickhouse-client --query "
-SELECT table, formatReadableSize(sum(bytes)) as size, sum(rows) as rows
-FROM system.parts WHERE database = 'k2' AND active
-GROUP BY table ORDER BY sum(bytes) DESC FORMAT Pretty
-"
+$CH -q "SELECT table, formatReadableSize(sum(bytes)) AS size, sum(rows) AS rows
+        FROM system.parts WHERE database = 'k2' AND active
+        GROUP BY table ORDER BY sum(bytes) DESC FORMAT Pretty"
 ```
 
----
+Interactive shell: `docker exec -it k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD"`
 
-## Feed Handler Quick Commands
+## Feed handlers
 
 ```bash
-# View metrics (last 60s)
-docker logs --since 60s k2-feed-handler-binance | grep "Metrics"
+for x in binance kraken coinbase; do
+  echo -n "$x: "; docker exec k2-feed-handler-$x curl -fsS localhost:8082/health; echo
+done
 
-# Check connection status
-docker logs --since 60s k2-feed-handler-binance | grep -E "Connected|Subscribed"
-
-# View errors only
-docker logs k2-feed-handler-binance 2>&1 | grep -i "error\|exception"
-
-# Restart feed handler
-docker restart k2-feed-handler-binance
-
-# View environment variables
+docker exec k2-feed-handler-binance curl -s localhost:8082/metrics | grep feed_handler_
+docker logs --since 5m k2-feed-handler-binance | grep -iE 'error|reconnect'
 docker exec k2-feed-handler-binance env | grep K2_
-
-# Check Java process
-docker exec k2-feed-handler-binance ps aux
 ```
 
----
-
-## Health Checks
+## Cold tier (Iceberg / Prefect)
 
 ```bash
-# All services healthy?
-docker compose -p k2-v2 -f docker-compose.v2.yml ps | grep -v "healthy"
+# Deployed schedules
+docker exec k2-prefect-server prefect deployment ls
 
-# Feed handler producing?
-docker logs --since 60s k2-feed-handler-binance | grep "Metrics"
+# Trigger an offload now
+docker exec k2-prefect-server prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'
 
-# Topics exist?
-docker exec k2-redpanda rpk topic list | grep "market.crypto.trades"
+# Watermarks (exactly-once bookkeeping, PostgreSQL)
+docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" \
+  -c "SELECT table_name, status, last_offload_timestamp, last_successful_run FROM offload_watermarks"
 
-# Messages in topics?
-docker exec k2-redpanda rpk topic describe market.crypto.trades.binance -a
-
-# ClickHouse receiving data?
-docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM k2.bronze_trades_binance"
-
-# Redpanda Console accessible?
-curl -s http://localhost:8080 | grep -q "redpanda" && echo "✓ Console OK" || echo "✗ Console down"
+# Query the Iceberg cold tier (hadoop catalog on /home/iceberg/warehouse)
+docker exec -it k2-spark-iceberg spark-sql \
+  --conf spark.sql.catalog.k2=org.apache.iceberg.spark.SparkCatalog \
+  --conf spark.sql.catalog.k2.type=hadoop \
+  --conf spark.sql.catalog.k2.warehouse=/home/iceberg/warehouse \
+  -e "SELECT count(*) FROM k2.cold.silver_trades"
 ```
 
----
+## When something breaks
 
-## Troubleshooting One-Liners
-
-```bash
-# Check container is running
-docker ps --filter "name=k2-feed-handler-binance" --format "{{.Status}}"
-
-# Check resource usage
-docker stats --no-stream k2-feed-handler-binance
-
-# Check network connectivity
-docker exec k2-feed-handler-binance nc -zv redpanda 9092
-
-# View last error
-docker logs k2-feed-handler-binance 2>&1 | grep -i "error" | tail -5
-
-# Check disk space
-docker exec k2-clickhouse df -h
-
-# Check ClickHouse is responsive
-docker exec k2-clickhouse clickhouse-client --query "SELECT 1"
-
-# View Redpanda cluster info
-docker exec k2-redpanda rpk cluster info
-```
-
----
-
-## Data Export
-
-```bash
-# Export trades to CSV
-docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM k2.silver_trades LIMIT 10000 FORMAT CSV
-" > trades.csv
-
-# Export trades to JSON
-docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM k2.silver_trades LIMIT 10000 FORMAT JSONEachRow
-" > trades.json
-
-# Export OHLCV to CSV
-docker exec k2-clickhouse clickhouse-client --query "
-SELECT * FROM k2.ohlcv_1m WHERE window_start >= now() - INTERVAL 1 DAY FORMAT CSV
-" > ohlcv_1d.csv
-
-# Backup topic sample
-docker exec k2-redpanda rpk topic consume market.crypto.trades.binance.raw \
-  --num 1000 --format '%v\n' > backup_sample.jsonl
-```
-
----
-
-## Performance Monitoring
-
-```bash
-# Watch topic message rate
-watch -n 1 'docker exec k2-redpanda rpk topic describe market.crypto.trades.binance -a | grep -A 3 "high watermark"'
-
-# Watch feed handler metrics
-watch -n 5 'docker logs --since 70s k2-feed-handler-binance 2>&1 | grep "Metrics" | tail -1'
-
-# Watch ClickHouse row count
-watch -n 5 'docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM k2.bronze_trades_binance"'
-
-# Watch consumer lag
-watch -n 2 'docker exec k2-redpanda rpk group describe clickhouse_bronze_consumer'
-
-# Watch container resources
-watch -n 2 'docker stats --no-stream k2-feed-handler-binance k2-redpanda k2-clickhouse'
-```
-
----
-
-## Emergency Procedures
-
-### Feed handler stuck/crashed
-```bash
-# View recent logs
-docker logs --tail 100 k2-feed-handler-binance
-
-# Restart
-docker restart k2-feed-handler-binance
-
-# Rebuild if config changed
-docker compose -p k2-v2 -f docker-compose.v2.yml \
-  -f services/feed-handler-kotlin/docker-compose.feed-handlers.yml \
-  up -d --build feed-handler-binance
-```
-
-### ClickHouse not ingesting
-```bash
-# Check Kafka consumers
-docker exec k2-clickhouse clickhouse-client --query "SELECT * FROM system.kafka_consumers FORMAT Pretty"
-
-# Restart materialized views
-docker exec k2-clickhouse clickhouse-client --query "SYSTEM START VIEW k2.bronze_trades_binance_mv"
-
-# Check for errors
-docker logs k2-clickhouse 2>&1 | grep -i "error" | tail -20
-```
-
-### High consumer lag
-```bash
-# Check lag
-docker exec k2-redpanda rpk group describe clickhouse_bronze_consumer
-
-# Check ClickHouse resources
-docker stats k2-clickhouse
-
-# Increase parallelism (edit docker-compose, then restart)
-# Or temporarily pause feed handler
-docker pause k2-feed-handler-binance
-```
-
-### Out of disk space
-```bash
-# Check usage
-docker system df
-
-# Clean old data
-docker system prune -a --volumes
-
-# Check ClickHouse data
-docker exec k2-clickhouse du -sh /var/lib/clickhouse/
-
-# Adjust TTL or retention in ClickHouse tables
-```
-
----
-
-## Common Workflows
-
-### Adding a new symbol to Binance feed handler
-1. Edit `services/feed-handler-kotlin/docker-compose.feed-handlers.yml`
-2. Update `K2_SYMBOLS` env var: `K2_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT`
-3. Restart: `docker restart k2-feed-handler-binance`
-
-### Checking end-to-end data flow
-```bash
-# 1. Feed handler producing?
-docker logs --since 60s k2-feed-handler-binance | grep "Metrics"
-
-# 2. Messages in topics?
-docker exec k2-redpanda rpk topic describe market.crypto.trades.binance -a
-
-# 3. ClickHouse ingesting?
-docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM k2.bronze_trades_binance"
-
-# 4. OHLCV aggregations working?
-docker exec k2-clickhouse clickhouse-client --query "SELECT count(*) FROM k2.ohlcv_1m"
-```
-
-### Debugging schema issues
-```bash
-# 1. Check registered schemas
-docker exec k2-redpanda curl -s http://localhost:8081/subjects | jq '.'
-
-# 2. View latest schema
-docker exec k2-redpanda curl -s \
-  http://localhost:8081/subjects/market.crypto.trades.binance-value/versions/latest \
-  | jq '.schema | fromjson'
-
-# 3. Check feed handler can access schema registry
-docker exec k2-feed-handler-binance curl -s http://redpanda:8081/subjects | jq '.'
-
-# 4. View schema errors in feed handler
-docker logs k2-feed-handler-binance 2>&1 | grep -i "schema"
-```
-
----
-
-## Useful Aliases
-
-Add to `~/.bashrc` or `~/.zshrc`:
-
-```bash
-# K2 Platform aliases
-alias k2-up='docker compose -p k2-v2 -f docker-compose.v2.yml -f services/feed-handler-kotlin/docker-compose.feed-handlers.yml up -d'
-alias k2-down='docker compose -p k2-v2 -f docker-compose.v2.yml -f services/feed-handler-kotlin/docker-compose.feed-handlers.yml down'
-alias k2-ps='docker compose -p k2-v2 -f docker-compose.v2.yml -f services/feed-handler-kotlin/docker-compose.feed-handlers.yml ps'
-alias k2-logs='docker logs -f k2-feed-handler-binance'
-alias k2-metrics='docker logs --since 60s k2-feed-handler-binance | grep "Metrics"'
-alias k2-topics='docker exec k2-redpanda rpk topic list'
-alias k2-ch='docker exec -it k2-clickhouse clickhouse-client'
-alias k2-console='echo "http://localhost:8080"'
-```
-
----
-
-## See Also
-
-- [DATA-INSPECTION.md](./DATA-INSPECTION.md) - Comprehensive inspection guide
-- [docker-compose.v2.yml](../../docker-compose.v2.yml) - Infrastructure configuration
-- [ADR-001](../decisions/platform-v2/ADR-001-redpanda-over-kafka.md) - Why Redpanda
-- [ARCHITECTURE-V2.md](../ARCHITECTURE-V2.md) - System architecture
+Start at [runbooks/failure-recovery.md](./runbooks/failure-recovery.md); the alert
+that fired names its own runbook in the annotation. Deeper query recipes are in
+[data-inspection.md](./data-inspection.md); dashboards and alert definitions in
+[observability.md](./observability.md).
