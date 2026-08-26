@@ -42,6 +42,27 @@ S3_PATH_STYLE = os.environ.get("K2_S3_PATH_STYLE", "true")
 SCHEMA_REGISTRY_URL = os.environ.get("K2_SCHEMA_REGISTRY_URL", "http://redpanda:8081")
 KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 
+# Driver heap, pinned rather than inherited. `spark-iceberg` is capped at 2 CPU
+# and 4 GiB, and during the v2/v3 parallel window TWO drivers can be alive in it
+# at once: v2's iceberg-offload every 15 minutes and v3's lake ingest every 5.
+# They no longer start on the same minute (see the cron in
+# docker/lake/flows/deploy_lake.py), but a slow offload still overlaps the next
+# ingest, so both heaps have to fit together.
+#
+# 1 g each is what fits. A driver JVM costs its heap plus roughly 400-600 MB of
+# metaspace, code cache, GC structures, thread stacks and direct buffers, and
+# each run carries a Python driver process on top: 2 x (1024 + ~550) MB plus
+# ~400 MB of Python lands near 3.5 GiB of the 4 GiB cap. 2 g each does not fit.
+#
+# It equals today's image default — verified in the running container, where
+# `Runtime.getRuntime().maxMemory()` reports 1024 MiB with nothing set — so this
+# changes no behaviour. It makes the number a contract instead of an inherited
+# coincidence, next to the cron that is the other half of the same constraint.
+# Both are needed: the cron stops the two jobs starting together, this stops a
+# future image default raising the heap inside a container that cannot hold two
+# of them. docker/offload/ is deliberately untouched; it retires with Phase D.
+DRIVER_MEMORY = os.environ.get("K2_LAKE_DRIVER_MEMORY", "1g")
+
 
 def lake_session(app_name: str) -> SparkSession:
     """Spark session wired to the Lakekeeper REST catalog over MinIO."""
@@ -50,6 +71,10 @@ def lake_session(app_name: str) -> SparkSession:
 
     return (
         SparkSession.builder.appName(app_name)
+        # Read by pyspark BEFORE it launches the gateway JVM, so this really is
+        # the heap and not just a reported value: with 1536m set here the driver
+        # reports maxMemory() == 1536 MiB in this image (verified 2026-08-26).
+        .config("spark.driver.memory", DRIVER_MEMORY)
         .config(
             "spark.sql.extensions",
             "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",

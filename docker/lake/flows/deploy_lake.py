@@ -35,7 +35,23 @@ def main() -> int:
     ).deploy(
         name="lake-ingest-5min",
         work_pool_name=WORK_POOL,
-        cron="*/5 * * * *",
+        # Minutes 1, 6, 11 … 56 — offset by one from `*/5`, on purpose.
+        #
+        # v2's iceberg-offload runs `*/15` (docker/offload/flows/
+        # deploy_production.py) and both dispatch `docker exec k2-spark-iceberg`
+        # into the SAME 2 CPU / 4 GiB container. On `*/5` the two collided at
+        # :00, :15, :30 and :45 — four times an hour, every hour of the
+        # parallel-run window — starting two Spark drivers at once in a
+        # container sized for about one and a half. One minute of offset is the
+        # whole fix and it costs nothing: the ingest resumes from the offsets in
+        # its own last snapshot, so *when* a cycle runs changes nothing about
+        # what it reads. The cadence is still 5 minutes.
+        #
+        # The other half of the same constraint is spark.driver.memory in
+        # docker/lake/spark_conf.py. The offset stops the two jobs starting
+        # together; the pinned 1 g heap keeps a slow offload that overlaps the
+        # next ingest from exhausting the container anyway.
+        cron="1-59/5 * * * *",
         # 1, and belt-and-braces rather than the contract. Two ingests at once
         # both read the same committed offsets and both write the same records —
         # the snapshot summary makes a *sequence* of runs exactly-once, not a

@@ -52,6 +52,27 @@ cannot be met by code alone, so they are named here rather than quietly dropped.
   deletes a planted orphan. Those are unit-level proofs of the mechanisms the exit
   criteria measure end to end; they are not the exit criteria.
 
+  **Watch `k2-spark-iceberg` RSS for the whole parallel window.** v2's
+  `iceberg-offload` (`*/15`) and v3's `lake-ingest-5min` both `docker exec` into
+  the same 2 CPU / 4 GiB container, so for as long as both are registered the
+  container hosts two Spark drivers. The two no longer start on the same minute
+  — the lake cron is `1-59/5`, not `*/5`, which collided at :00, :15, :30 and
+  :45 — and `spark.driver.memory` is pinned at 1 g so two heaps plus their JVM
+  overhead and Python drivers fit under the cap. Neither is a proof. A slow
+  offload can still overlap the next ingest, and the failure mode is an OOM-kill
+  of whichever driver asks for the last page, which reads as a random ingest
+  failure rather than as a memory problem. Sample it through the window:
+
+  ```bash
+  # not yet run — Phase D burn-in. Peak, not instantaneous, is the number.
+  docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.CPUPerc}}' k2-spark-iceberg
+  ```
+
+  A peak near 4 GiB, or `docker inspect -f '{{.State.OOMKilled}}' k2-spark-iceberg`
+  reporting `true` after a failed run, means the parallel window needs the
+  container raised before it needs debugging — and the right response is to end
+  the window early rather than raise the budget permanently.
+
 - **The noisy-neighbour experiment (Scope bullet 8, Verification bullet 3) is not
   delivered.** It needs a full day of `raw.messages` to compact over and a quiet
   baseline of the same duration on an otherwise idle host — neither exists while
