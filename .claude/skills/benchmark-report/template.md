@@ -38,8 +38,8 @@ Budget: 16 CPU / 40 GB. Headroom: … .
 
 ## Cold tier
 
-| Table | Offload lag | Rows offloaded | Throughput | Command |
-|-------|-------------|----------------|------------|---------|
+| Table | Ingest lag | Rows added | Files | Command |
+|-------|------------|------------|-------|---------|
 
 ## Query timings
 

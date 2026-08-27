@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture
+.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -31,8 +31,8 @@ ps:  ## Show service status
 test: test-python test-rust  ## Run all unit tests
 
 
-test-python:  ## Iceberg offload flow unit tests (needs uv)
-	uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q
+test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs uv)
+	uv run --no-project --with pytest --with pyyaml pytest tests -q
 
 # The WHOLE repo is mounted, not just the crate: src/record.rs compiles the wire
 # contract in with `include_str!("../../../schemas/avro/trade.avsc")` and the
@@ -65,13 +65,19 @@ test-legacy-kotlin:  ## Archived v2 Kotlin feed handler tests (legacy/v2-kotlin;
 build-capture:  ## Build k2-capture:v3 from the repo root, stamping the git sha
 	docker compose build capture-binance
 
-check-alerts:  ## promtool: syntax-check every rule file and run the capture alert unit tests
+check-alerts:  ## promtool: syntax-check every rule file and run the capture + lake alert unit tests
 	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus \
 	  -c 'promtool check rules /p/rules/*.yml'
-	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint promtool prom/prometheus \
-	  test rules /p/tests/capture-alerts.test.yml
+	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus \
+	  -c 'promtool test rules /p/tests/*.test.yml /p/rules/tests/*_test.yml'
 
-chaos:  ## Inject each capture failure, wait for its alert, measure recovery (LOCAL ONLY - breaks the running stack)
+lint:  ## Ruff over the v3 lake and the tests (same scope as CI)
+	uv run --no-project --with ruff ruff check docker/lake tests
+
+lake-verify:  ## Phase D exit criteria against the LIVE stack: offsets gapless, raw == bronze, double-run adds 0
+	bash scripts/lake-verify.sh
+
+chaos:  ## Inject each capture and lake failure, wait for its alert, measure recovery (LOCAL ONLY - breaks the running stack)
 	@echo "chaos: breaks the running stack and drops real market data - public feeds do not replay it."
 	@echo "       Maintainer-run, never CI (docs/research/2026-08-26-v3-requirements-clarification.md Q3)."
 	scripts/chaos/capture-kill.sh        --exchange kraken
@@ -80,5 +86,9 @@ chaos:  ## Inject each capture failure, wait for its alert, measure recovery (LO
 	scripts/chaos/capture-queue-full.sh  --exchange kraken
 	scripts/chaos/redpanda-stop.sh       --exchange kraken
 	scripts/chaos/capture-corrupt-frame.sh
+	scripts/chaos/lake-lakekeeper-stop.sh
+	scripts/chaos/lake-minio-stop.sh
+	scripts/chaos/lake-ingest-kill.sh
+	scripts/chaos/lake-corrupt-payload.sh
 	@echo "results: scripts/chaos/results/$$(date -u +%F).tsv"
 	@echo "copy the measured recovery times into docs/architecture/failure-modes.md by hand, with the date"

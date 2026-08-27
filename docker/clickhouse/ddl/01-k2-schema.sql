@@ -15,9 +15,10 @@
 -- are NOT executed at boot. This file is the current truth; if you change the
 -- schema, change it here.
 --
--- Column names/types of bronze_*, silver_trades and ohlcv_* must stay in lock
--- step with the Iceberg cold tables (docker/iceberg/warehouse/cold/*) — the
--- Spark offload does a direct append with no column transform.
+-- These tables no longer feed the Iceberg lake, and have not since v3 Phase D:
+-- docker/lake/ingest.py reads Redpanda directly and ClickHouse is a derived,
+-- rebuildable hot tier (ADR-025). Changing a column here does not move a lake
+-- column, and does not need to.
 --
 -- Kafka-engine tables are created lazily; no broker connection is needed at
 -- init time. Expect broker-retry noise in the log until redpanda is up.

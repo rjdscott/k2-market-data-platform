@@ -8,10 +8,10 @@ What this platform costs to run, and what the architecture decisions bought.
 
 ## What it costs today
 
-The stack is one Docker Compose deployment: **14.60 CPU / 21.625 GiB across 15
-long-running services**, rising to 16.10 CPU / 23.125 GiB across all 19 while the four
+The stack is one Docker Compose deployment: **14.60 CPU / 25.625 GiB across 15
+long-running services**, rising to 16.10 CPU / 27.125 GiB across all 19 while the four
 one-shot init containers overlap at bootstrap (see
-[docker-resources.md](./docker-resources.md) and the Kotlin-retirement addendum to
+[docker-resources.md](./docker-resources.md) and the Outcome addenda to
 [ADR-010](../adr/ADR-010-resource-budget.md)). It runs on a single developer workstation,
 so the marginal cost is electricity.
 
@@ -81,14 +81,16 @@ Scaling levers, in the order they would bite:
 | | v1 | today | Saving |
 |---|----|----|--------|
 | CPU (limits) | 35–40 | 14.60 | ~60% |
-| RAM (limits) | 45–50 GB | 21.625 GiB | ~55% |
+| RAM (limits) | 45–50 GB | 25.625 GiB | ~55% |
 | Services | 18–20 | 15 (+4 one-shot) | ~20% |
 | Always-on Spark | 14 CPU / 20 GB | 0 (batch only) | 100% |
 
 Almost all of that saving is v1 → v2 and belongs to ADR-004; the v3 changes since are
-close to a wash — Lakekeeper added 0.25 CPU / 256 MB, and swapping the three Kotlin feed
-handlers for three Rust capture containers gave back 0.75 CPU / 0.5 GiB
-([ADR-010](../adr/ADR-010-resource-budget.md) Outcome).
+close to a wash — Lakekeeper added 0.25 CPU / 256 MB and the lake tier's exporter
+0.1 CPU / 128 MB, swapping the three Kotlin feed handlers for three Rust capture
+containers gave back 0.75 CPU / 0.5 GiB, and deleting the v2 offload took its own exporter
+(0.1 CPU / 128 MB) with it
+([ADR-010](../adr/ADR-010-resource-budget.md) Outcome addenda).
 
 On the reserved-instance estimate above, roughly 60% less compute is roughly 60% less
 compute bill — call it **$500–700/month avoided at this scale**, and proportionally more

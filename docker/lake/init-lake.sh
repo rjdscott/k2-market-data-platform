@@ -13,16 +13,23 @@
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 set -euo pipefail
 
-# Constants, not env indirection: nothing in docker-compose.yml ever set
-# LAKEKEEPER_URL / LAKE_WAREHOUSE / LAKE_BUCKET, so the `${VAR:-default}` form
-# was three names for one value each and an invitation to set one of them and
-# silently diverge from the Spark side. These MUST match CATALOG_URI / WAREHOUSE
-# in docker/lake/spark_conf.py, which hard-codes the same three for the same
-# reason — change them together or the jobs point at a catalog nothing created.
-LK=http://lakekeeper:8181
-WAREHOUSE=k2
-BUCKET=k2-lake
-PROJECT_ID=00000000-0000-0000-0000-000000000000
+# Env-driven with today's single-host values as defaults, matching
+# docker/lake/spark_conf.py name for name and default for default. Phase D made
+# these variables rather than constants because
+# docs/research/2026-08-26-v3-requirements-clarification.md Q9 requires that
+# pointing this lake at real S3 and a hosted catalog be a change to the
+# environment and nothing else. The defaults are what keeps that free: set
+# nothing and this is the same script it was.
+#
+# Change a default here and you must change it in spark_conf.py too — this
+# script creates what those jobs connect to.
+LK=${K2_LAKEKEEPER_URL:-http://lakekeeper:8181}
+WAREHOUSE=${K2_LAKE_WAREHOUSE:-k2}
+BUCKET=${K2_LAKE_BUCKET:-k2-lake}
+S3_ENDPOINT=${K2_S3_ENDPOINT:-http://minio:9000}
+S3_REGION=${K2_S3_REGION:-local-01}
+S3_PATH_STYLE=${K2_S3_PATH_STYLE:-true}
+PROJECT_ID=${K2_LAKE_PROJECT_ID:-00000000-0000-0000-0000-000000000000}
 
 # POST $1 with body $2; succeed on 2xx or on any status listed in $3.
 # ponytail: no jq in this image and none needed — we only ever branch on the code.
@@ -46,7 +53,7 @@ echo "  bucket:    s3://$BUCKET"
 echo "=========================================="
 
 echo "[1/4] MinIO bucket"
-mc alias set k2 http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" > /dev/null
+mc alias set k2 "$S3_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" > /dev/null
 mc mb --ignore-existing "k2/$BUCKET"
 
 # 4xx here means "already bootstrapped" — the endpoint closes after first use.
@@ -75,9 +82,9 @@ post "$LK/management/v1/warehouse" "$(cat <<JSON
     "type": "s3",
     "bucket": "$BUCKET",
     "key-prefix": "warehouse/$WAREHOUSE",
-    "endpoint": "http://minio:9000",
-    "region": "local-01",
-    "path-style-access": true,
+    "endpoint": "$S3_ENDPOINT",
+    "region": "$S3_REGION",
+    "path-style-access": $S3_PATH_STYLE,
     "flavor": "s3-compat",
     "sts-enabled": false
   },

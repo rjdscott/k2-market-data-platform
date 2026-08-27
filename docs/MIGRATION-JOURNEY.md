@@ -65,10 +65,11 @@ timeline
 | Python processes | 4 | 0 in the data path | Prefect remains, control plane only |
 | Trade → queryable | 5–15 min | **<200 ms p99** | >1000x |
 
-Fits the mandate on both axes, with 0.9 CPU and 18.125 GB of headroom. (v3 foundations on
-`feat/v3-foundations` add Lakekeeper — +0.25 CPU / +256 MB — for 15.35 CPU / 22.125 GB across
-15 services (+4 one-shot) as deployed on that branch; see
-[architecture/README.md](architecture/README.md).)
+Fits the mandate on both axes, with 0.9 CPU and 18.125 GB of headroom. (v3's capture tier runs alongside the
+Kotlin handlers it replaces on `feat/v3-lake-tier`, and the v3 lake tier stands where the v2
+offload was, for 16.10 CPU / 23.125 GiB across 18 long-running services (+4 one-shot) as
+deployed on that branch; see [architecture/README.md](architecture/README.md) and the
+postscript at the end of this file.)
 
 ### Latency
 
@@ -156,3 +157,44 @@ Single broker, single ClickHouse node, single host, no replication. Iceberg on a
 7. **Isolate at the blast-radius boundary, not the deployment boundary.** One feed-handler image, three containers. It costs two container slots and buys the property that a Binance parser bug cannot stop Kraken — which the failure test then confirmed rather than assumed.
 
 8. **Measure before claiming.** Three of the headline v2 predictions are still marked ❓ in the table above because nothing measured them. That is a worse outcome than a missed target, and it is why the burn-in and the fire test are the top of the remaining list rather than the bottom.
+
+---
+
+## Postscript — the cold tier is deleted (2026-08-27)
+
+Everything above is the v1 → v2 record and stays as written. One line of it is no longer
+true of the running stack: the Phase 5 cold tier — 10 `cold.*` Iceberg tables, the Spark
+offload reading ClickHouse over JDBC, the PostgreSQL `offload_watermarks` table, the
+nightly compact/expire/audit flow, the Hadoop catalog on a bind-mounted warehouse — was
+deleted in v3 Phase D. So were the nine alert rules, the Grafana dashboard, the
+`iceberg-metrics` and `iceberg-init` containers, and the 28 unit tests that covered the
+maintenance flow. The six operational runbooks are archived unmodified in
+[`legacy/v2-offload/`](../legacy/v2-offload/README.md).
+
+Lesson 6 above — "idempotency is cheaper than exactly-once" — is the one this reverses,
+and it is worth saying precisely how. The watermark was not wrong; it made "kill Spark
+mid-run" a non-event exactly as claimed. It was two facts in two systems, and the crash
+window between writing the data and advancing the number could only be chosen, never
+closed. Writing the consumed Kafka offsets *into the same Iceberg commit that writes the
+rows* ([ADR-022](adr/ADR-022-exactly-once-via-snapshot-offsets.md)) removes the second
+system rather than making the window smaller, and costs less code than the watermark
+module it replaces. The cheaper thing turned out to be the stronger one.
+
+The larger reversal is not about mechanism at all. Phase 5 asked how to copy ClickHouse
+into Iceberg and answered it well — 236k rows/s, 12:1 compression, 99.9% consistency, all
+still true. It did not ask whether the archive should be a copy of a serving database. It
+should not: the lake inherited ClickHouse's normalisation, its 7-day TTL and the two
+`Array`/`Map` columns the JDBC driver could not read, so nothing in it was reproducible
+from source. v3 inverts the hierarchy — Redpanda frames land in `raw.messages` verbatim
+and every other tier is derived from that ([ADR-021](adr/ADR-021-raw-first-archive-and-lineage.md),
+[ADR-018](adr/ADR-018-v3-lake-first-rust-capture.md)). The Outcome sections of
+[ADR-014](adr/ADR-014-spark-based-iceberg-offload.md) and
+[ADR-017](adr/ADR-017-iceberg-maintenance-pipeline.md) carry the full reasoning, including
+why the planned 2-hour parallel run before deletion was dropped rather than run: the two
+paths write different tables, from different sources, into different catalogs, so no
+row-count comparison between them could have said anything either way.
+
+Budget: steady state drops from 16.20 to **16.10 CPU / 23.125 GiB across 18 long-running
+services**, one-shots from 5 to 4, bootstrap peak from 18.20 to **17.60 CPU / 24.625 GiB**
+(`DOCKER_CONTEXT=default docker compose --env-file .env.example config`, limits summed,
+2026-08-27).

@@ -54,21 +54,27 @@ prom_query() {
 #   * `job` (`capture-<exchange>`) - the scrape target's label, which is all
 #     `up`-based alerts such as CaptureDown carry.
 # Neither label is present on both kinds, which is why the match is an `or`.
+#
+# The lake alerts have no venue at all - `raw.messages` is one table fed by every
+# exchange - so an empty or omitted <exchange> means "any instance of this alert".
+# That is not a loosening of the capture rule: a lake alert firing is a lake alert
+# firing, and there is no wrong venue to attribute it to.
 alert_state() {
   curl -sf "$PROM/api/v1/alerts" 2>/dev/null \
-    | jq -r --arg n "$1" --arg ex "$2" '
+    | jq -r --arg n "$1" --arg ex "${2:-}" '
         [ .data.alerts[]
           | select(.labels.alertname == $n)
-          | select(.labels.exchange == $ex or .labels.job == "capture-" + $ex)
+          | select($ex == "" or .labels.exchange == $ex
+                   or .labels.job == "capture-" + $ex)
           | .state ]
         | (map(select(. == "firing"))[0] // .[0] // empty)' || true
 }
 
-# wait_for_alert <name> <timeout_s> <exchange> -> prints elapsed seconds; 1 on timeout.
+# wait_for_alert <name> <timeout_s> [exchange] -> prints elapsed seconds; 1 on timeout.
 # Non-zero on timeout is a real outcome, not an error: some faults are designed
 # to self-heal inside the alert's `for:` window and never fire.
 wait_for_alert() {
-  local name=$1 timeout=$2 exchange=$3 start elapsed
+  local name=$1 timeout=$2 exchange=${3:-} start elapsed
   start=$SECONDS
   while :; do
     if [ "$(alert_state "$name" "$exchange")" = "firing" ]; then
@@ -84,11 +90,11 @@ wait_for_alert() {
   done
 }
 
-# wait_for_alert_clear <name> <timeout_s> <exchange> -> prints elapsed seconds;
+# wait_for_alert_clear <name> <timeout_s> [exchange] -> prints elapsed seconds;
 # 1 on timeout. A timeout here is NOT a recovery time: see capture-pause.sh for
 # what a caller must do with it.
 wait_for_alert_clear() {
-  local name=$1 timeout=$2 exchange=$3 start elapsed
+  local name=$1 timeout=$2 exchange=${3:-} start elapsed
   start=$SECONDS
   while :; do
     if [ -z "$(alert_state "$name" "$exchange")" ]; then
@@ -126,6 +132,100 @@ wait_for_metric() {
     fi
     sleep 2
   done
+}
+
+# wait_healthy <container> <timeout_s> — block until Docker calls it healthy.
+#
+# The replacement for `sleep 20` after a `docker start`. A fixed sleep is wrong
+# in both directions: dead time when the container is back in 3 s, and a FALSE
+# FAILURE when it is not, because the assertion that follows then reads an empty
+# string out of a container still starting and reports it as the fault under
+# test. Both scripts that restart a container assert on its output immediately
+# afterwards, so this is the difference between measuring the fault and
+# measuring the restart.
+#
+# `.State.Health.Status`, not `.State.Running`: running means the process
+# started, healthy means it is answering. Every container this is called on
+# declares a healthcheck; one that did not would report `<no value>` forever and
+# time out, which is the honest outcome rather than a silent pass.
+wait_healthy() {
+  local name=$1 timeout=$2 start status
+  start=$SECONDS
+  while :; do
+    status=$(docker inspect -f '{{.State.Health.Status}}' "$name" 2>/dev/null || true)
+    if [ "$status" = healthy ]; then
+      echo "→ $name healthy after $((SECONDS - start))s" >&2
+      return 0
+    fi
+    if [ $((SECONDS - start)) -ge "$timeout" ]; then
+      die "$name is '$status' after ${timeout}s, not healthy — the stack did not come back"
+    fi
+    sleep 2
+  done
+}
+
+# ── the scheduled ingest ────────────────────────────────────────────────────
+#
+# Every lake fault below races the `1-59/5 * * * *` lake-ingest-5min deployment.
+# Two things go wrong if it lands inside the window: `docker/lake/ingest.py`'s
+# flock makes the second run exit 2, which reads as the fault having broken the
+# ingest; and the before/after row-count assertions in lake-lakekeeper-stop.sh
+# and lake-minio-stop.sh see a legitimate commit and call it a partial one.
+#
+# The Prefect 3.6 CLI pauses a SCHEDULE, by id, not a deployment — `prefect
+# deployment pause` does not exist, and `--all` would take out lake-maintenance
+# as well. So: read the schedule ids, pause each, and resume them from a trap.
+
+LAKE_DEPLOYMENT="${K2_LAKE_DEPLOYMENT:-lake-ingest/lake-ingest-5min}"
+PREFECT_CONTAINER="${K2_PREFECT_CONTAINER:-k2-prefect-server}"
+LAKE_SCHEDULE_IDS=""
+
+# _lake_schedules -> whitespace-separated ids of the ACTIVE schedules for
+# LAKE_DEPLOYMENT.
+#
+# `active` matters because the ids are also what the trap resumes. A schedule
+# the maintainer had already paused by hand is not ours to un-pause, and
+# recording it here means a chaos run ends by starting a 5-minute ingest that
+# was deliberately off. Filtering on the way in is the fix — pause_lake_ingest
+# and resume_lake_ingest then act on exactly the set this run turned off.
+_lake_schedules() {
+  docker exec "$PREFECT_CONTAINER" \
+    prefect deployment schedule ls "$LAKE_DEPLOYMENT" -o json 2>/dev/null \
+    | python3 -c 'import json,sys
+print(" ".join(s["id"] for s in json.load(sys.stdin) if s.get("active")))' \
+      2>/dev/null || true
+}
+
+# pause_lake_ingest — never fatal. A stack where the deployment is not
+# registered is a legitimate one to run chaos against; it just has nothing to
+# pause, and saying so beats dying.
+pause_lake_ingest() {
+  local id
+  LAKE_SCHEDULE_IDS=$(_lake_schedules)
+  if [ -z "$LAKE_SCHEDULE_IDS" ]; then
+    echo "→ NOTE: no ACTIVE schedule for $LAKE_DEPLOYMENT — nothing to pause." >&2
+    echo "  If the 5-minute ingest IS running, this test may race it." >&2
+    return 0
+  fi
+  for id in $LAKE_SCHEDULE_IDS; do
+    docker exec "$PREFECT_CONTAINER" \
+      prefect deployment schedule pause "$LAKE_DEPLOYMENT" "$id" >/dev/null 2>&1 \
+      || echo "→ WARNING: could not pause schedule $id" >&2
+  done
+  echo "→ paused $LAKE_DEPLOYMENT for the duration of this run" >&2
+}
+
+# resume_lake_ingest — idempotent, so it is safe in a trap that may fire twice.
+resume_lake_ingest() {
+  local id
+  [ -n "$LAKE_SCHEDULE_IDS" ] || return 0
+  for id in $LAKE_SCHEDULE_IDS; do
+    docker exec "$PREFECT_CONTAINER" \
+      prefect deployment schedule resume "$LAKE_DEPLOYMENT" "$id" >/dev/null 2>&1 \
+      || echo "→ WARNING: could not resume schedule $id — resume it by hand" >&2
+  done
+  LAKE_SCHEDULE_IDS=""
+  echo "→ resumed $LAKE_DEPLOYMENT" >&2
 }
 
 # ── reporting ───────────────────────────────────────────────────────────────

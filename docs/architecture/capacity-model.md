@@ -22,6 +22,51 @@ topics. Budget under test: 16 CPU / 40 GB single host ([ADR-010](../adr/ADR-010-
 spikes against live exchange sockets. Everything else is arithmetic on top of a stated
 guess. Section 8 says which command settles which row.
 
+> **Note, 2026-08-26 — noisy-neighbour experiment (plan 003, Scope bullet 8), measured.**
+> Capture pinned to cores `12-14` (`K2_CAPTURE_CPUSET`), ClickHouse / Spark / `lake-ddl` to
+> `0-11` (`K2_HEAVY_CPUSET`); `docker inspect -f '{{.HostConfig.CpusetCpus}}'
+> k2-spark-iceberg k2-capture-binance` → `0-11` / `12-14`. Two 10-minute windows, sampled
+> with the same PromQL, quiet baseline ending 22:15:31Z and then `maintenance.py --days 2`
+> (binpack of `raw.messages`, sort rewrites of both bronze tables, expiry, orphan scan,
+> audits) ending 22:25:33Z, with the 5-minute ingest cron running throughout both.
+> Scope: `v3, 15 svc`, one host, the first day of the archive.
+>
+> | `k2_capture_exchange_to_recv_seconds` | baseline p50 / p99 | compaction p50 / p99 | msg/s baseline → compaction |
+> |---|---|---|---|
+> | binance | 68 ms / 225 ms | 49 ms / 377 ms | 232 → 426 |
+> | kraken | 177 ms / 658 ms | 178 ms / 683 ms | 712 → 992 |
+> | coinbase | 182 ms / 30 s* | 188 ms / 821 ms | 156 → 172 |
+>
+> ```bash
+> # per window, w=10m; the exchange_to_recv histogram is exchange clock → host clock,
+> # so it carries clock skew and internet latency — compare windows, not absolutes
+> curl -s localhost:9090/api/v1/query --data-urlencode \
+>   'query=histogram_quantile(0.99, sum by (exchange,le)(rate(k2_capture_exchange_to_recv_seconds_bucket[10m])))'
+> curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (exchange)(rate(k2_capture_messages_total[10m]))'
+> curl -s localhost:9090/api/v1/query --data-urlencode 'query=sum by (exchange)(increase(k2_capture_produce_errors_total[10m]))'
+> docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}'   # spark 1.35% → 0.51% at sample instants; capture 4–12%
+> ```
+>
+> **Reading.** p50 is flat across all three venues (±5 ms) while message rate rose 15–80%
+> between the windows — the compaction window landed on a busier ten minutes of market, which
+> is the noise band this comparison lives in. Binance p99 moved 225 → 377 ms and Kraken
+> 658 → 683 ms on 1.8× and 1.4× the rate; the sample at 10 min holds ~140k–600k events per
+> venue, so those p99s are stable numbers, and a 150 ms p99 shift on a queue that is 1.8×
+> deeper is what the cgroup quota alone predicts. Produce errors 0 on every venue in both
+> windows. \* Coinbase's baseline p99 of 30 s is the histogram's top bucket: the venue's
+> `level2` snapshot frames carry `event_time`s well behind wall clock on subscribe, and one
+> such frame in 10 minutes pins p99 to `+Inf` — the compaction window happened to have
+> none. It is a measurement artefact of the exchange clock, not an isolation result.
+>
+> **Verdict: no p99 regression attributable to compaction beyond the rate-driven band —
+> the pinning holds.** What the run *did* find was on the Spark side, not the capture side:
+> `rewrite_data_files` over `raw.messages` OOM'd a 768m driver on its 5 MB rows, twice
+> (22:16Z, 22:28Z), before finishing at a 2g heap in 102 s with a peak driver RSS of
+> **2,641 MiB** (40 → 5 raw files, 631 MB rewritten) — which is why `maintenance.py` now
+> holds the ingest lock and runs alone in the container
+> (`docker/lake/README.md`, "Concurrency must be 1"). One window each; the daily rate is
+> Phase F's.
+
 ---
 
 ## 1. Inputs
@@ -38,7 +83,25 @@ guess. Section 8 says which command settles which row.
 | I8 | `RawMessage.payload` | the frame **byte for byte**, never compressed in-field, never re-serialised | [`schemas/avro/raw-message.avsc`](../../schemas/avro/raw-message.avsc) |
 | I9 | Capture container limits | `capture-binance` / `capture-kraken` 0.25 CPU / 256 M; `capture-coinbase` 0.25 CPU / 512 M | [`002-phase-c-rust-capture.md`](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md) Scope |
 | I10 | Steady-state budget before the Phase C cutover (v2 + Lakekeeper) | **15.35 CPU / 22.125 GB**; bootstrap peak **16.85 CPU / 23.625 GiB** | [ADR-010 Outcome addendum](../adr/ADR-010-resource-budget.md#outcome-addendum-v3-phase-b-2026-08-26) |
+
+> **I10, as of 2026-08-26 (Phase D).** The predictions below were computed against the Phase B
+> figures in the row above and are left as computed. Since then the three Kotlin feed handlers
+> retired ([ADR-019](../adr/ADR-019-rust-capture-tier.md)), this branch added `lake-metrics` and the
+> `lake-ddl` one-shot, and deleted the v2 offload's exporter and its init one-shot: steady state is
+> now **14.60 CPU / 21.625 GiB across 15 long-running services** and the bootstrap peak
+> **16.10 CPU / 23.125 GiB across 19** —
+> `docker compose --env-file .env.example config`, limits summed
+> ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
+
 | I11 | Host filesystem free space | **212 GiB free of 961 GiB** on `/` (Docker root) | `df -BG /var/lib/docker`, 2026-08-26 |
+
+> **I11, unit note — the predicted values below are left as computed.** `df -BG` counts in
+> 2³⁰ blocks, so this row is GiB and is right; §7 rank 1 then subtracts a GB figure from it
+> and divides by GB/day, which mixes the two. The conversion is **212 GiB = 227.6 GB**, and
+> the same disk read again later the same day gives **194 GiB (208.3 GB) free of 961 GiB,
+> 79% used** — `df -BG /var/lib/docker`, 2026-08-26T15:44Z. The prediction is restated with
+> both corrections under §7 rank 1; neither number here is edited.
+
 | I12 | librdkafka producer queue cap | `queue.buffering.max.kbytes=32768` = **32 MiB** | [`002-phase-c-rust-capture.md`](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md) Scope |
 
 ### Stated guesses — the inputs with no measurement behind them at all
@@ -239,6 +302,46 @@ anyway so that a deeper or faster book stays recoverable by replay.
 | **MinIO growth** | **209.7 GB/month** | Lake retention is *forever* — no TTL, no expiry; only snapshot expiry (7 d) trims metadata, never data | `6.89 × 30.44` |
 | MinIO, first year | **2.51 TB** | as above, at a constant 1× rate | `6.89 × 365 ÷ 1000` |
 
+> **Note, 2026-08-26 — the 48 h retention row was scored against the running stack and the
+> binding limit is not time, it is the per-partition byte cap, and it binds at 7 h.**
+> `market.crypto.v3.raw.kraken` partition 0 held **4,887,694 records** between its
+> `LOG-START-OFFSET` and `HIGH-WATERMARK`, whose Kafka timestamps are **25,227,274 ms
+> apart = 7.01 h** (193.9 records/s, 119.7 B/record on disk). Partition 6, which had just
+> begun evicting, measured 9.25 h. The predicted window for the same 512 MiB at this
+> page's own §4b rate — 5.25 GB/day on disk ÷ 12 partitions — is **29.4 h**, so the
+> measurement is 4.2× short of the prediction and 6.8× short of the 48 h target.
+>
+> ```console
+> $ docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.kraken
+> #   partition 0: LOG-START 2784417, HIGH-WATERMARK 7672111
+> $ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.kraken -p 0 \
+>     -o 2784417 -n 1 -f '%d\n'      # 1787755113319 = 2026-08-26T14:38:33Z
+> $ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.kraken -p 0 \
+>     -o 7672111 -n 1 -f '%d\n'      # 1787780340593 = 2026-08-26T21:39:00Z
+> $ docker exec k2-redpanda rpk cluster logdirs describe | grep raw.kraken
+> #   partition 0: 584,956,363 B   partitions 2/5/8/11: ~0.6 MB each
+> ```
+>
+> **The prediction's arithmetic was right and its assumption was not: it divided the
+> topic's bytes by twelve, and the traffic does not divide by twelve.** Records are keyed
+> by symbol, so the hot symbols' partitions carry everything: partition 0 holds 558 MB
+> while partitions 2, 5, 8 and 11 hold about 600 kB each, and the whole topic occupies
+> **2.87 GB of the 6 GiB its per-partition caps allow**. Half the allowance sits unused on
+> cold partitions while the hot ones evict. A per-partition byte cap under keyed
+> partitioning is a cap on the busiest key, not on the topic.
+>
+> The rows above are left as predicted, as this page's convention requires. What changed
+> is elsewhere: the ingest's per-run bound now defaults to 200,000 offsets per partition
+> (~3.6× the measured arrival rate) so the lake drains faster than the cap evicts, and
+> `docker/redpanda/init.sh` records this measured window next to `RAW_RETENTION_BYTES`.
+> **512 MiB stands** — the bus is a buffer for the 5-minute ingest cadence, not the
+> archive; the lake is the archive (ADR-021). The trigger for revisiting it is in
+> [lake-ingest-lag.md §3](../runbooks/lake-ingest-lag.md): `k2_lake_ingest_backlog_offsets`
+> for any topic above one hour of that topic's arrival rate, two cycles running.
+>
+> It cost 1,168,954 records on 2026-08-26 to learn this, once, on partition 0 — that
+> incident and its repair are in the same runbook section.
+
 ---
 
 ## 5. Memory
@@ -340,12 +443,20 @@ Each resource, and the multiple of today's 1× rate at which it binds:
 | Rank | Resource | Binds at, predicted | Assumption | Derived from |
 |---|---|---|---|---|
 | **1** | **Host disk, from lake growth** | **not a multiple — a date: ~26 days** | The lake has no TTL by design. Growth is a *calendar* problem, not a load problem, and it is the only unbounded line on this page. | `(212 GiB free − 34.6 GB Redpanda) ÷ 6.89 GB/day` (I11, §4d) |
+
+> **Rank 1, unit note — the ~26 days above is left as computed.** Its arithmetic subtracts
+> GB from GiB: 212 GiB is 227.6 GB, so on the same inputs it is `(227.6 − 34.6) ÷ 6.89` =
+> **28.0 days**, not 26. On today's free space — 194 GiB = 208.3 GB, `df -BG /var/lib/docker`,
+> 2026-08-26T15:44Z — it is `(208.3 − 34.6) ÷ 6.89` = **25.2 days**. Both corrections point
+> the same way as the original conclusion and neither changes it: disk binds first, on a
+> calendar, inside a month.
+
 | 2 | Redpanda disk at 48 h raw retention | **~5.8×**, if 200 GB is allocated to it | Time-based retention scales disk linearly with rate | `200 GB ÷ 34.6 GB` (§4d) |
 | 3 | `capture-coinbase` RSS | **~12.5×** on **book depth** — *not* on message rate | Only the book scales with depth: fixed cost is `(8+8+32+16)×1.2 + 25×1.2 = 106.8 MB`, book cost `27.1×1.2 = 32.5 MB`. A market-wide depth increase binds this; a trade-rate spike does not touch it. | `(512 − 106.8) ÷ 32.5` (§5) |
 | 4 | Total CPU budget headroom | **~19×** on capture usage alone | 1.40 cores of headroom ÷ 0.074 predicted usage — but this is headroom for *everything*, not just capture | `1.40 ÷ 0.074` (§3b, §6) |
 | 5 | Capture CPU (`capture-kraken`, the busiest) | **~32×** | G5 holds and the 0.25 CPU quota is the ceiling | `12,500 frames/s ÷ 389.5 frames/s` (§3) |
 | 6 | Redpanda broker CPU | **~113×** | ADR-010's "2 cores handles 100 K msg/s" | `100,000 ÷ 883.8 records/s` |
-| 7 | ClickHouse hot-tier ingest | **>100×** | 884 records/s against a store that absorbed 236 K rows/s on the v2 offload path | [v2 baseline, cold tier throughput](../benchmarks/2026-02-19-v2-baseline.md) |
+| 7 | ClickHouse hot-tier ingest | **>100×** | 884 records/s against a store measured at 236 K rows/s on the v2 baseline. That path is deleted; the number is kept as the last measurement of what this ClickHouse absorbs, not as a live claim | [v2 baseline, cold tier throughput](../benchmarks/2026-02-19-v2-baseline.md) |
 
 **The prediction, in one sentence: disk binds first, and it binds on a calendar rather
 than on a multiple — ~26 days from a cold start on the current host, because

@@ -48,18 +48,6 @@ from compare_trades import (  # noqa: E402
 )
 
 
-@pytest.fixture(autouse=True)
-def mock_prefect_run_logger():
-    """
-    Neutralise the autouse fixture of the same name in tests/conftest.py, which
-    patches `prefect.get_run_logger` for the offload-flow tests and makes Prefect
-    a hard import for everything in this directory. Nothing here touches Prefect.
-    A same-named fixture in a test module overrides the conftest one, autouse
-    included — same trick as tests/test_contracts.py.
-    """
-    yield
-
-
 def trade(
     symbol="BTC/USD",
     tid="1",

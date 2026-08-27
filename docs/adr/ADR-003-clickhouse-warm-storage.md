@@ -1,6 +1,6 @@
 # ADR-003: Introduce ClickHouse as Warm Storage Layer
 
-**Status:** Accepted — Implemented (2026-02); version as-built per [ADR-015](ADR-015-clickhouse-lts-downgrade.md)
+**Status:** Accepted — Implemented (2026-02); version as-built per [ADR-015](ADR-015-clickhouse-lts-downgrade.md); the 30-day MergeTree, primary-query-engine and TTL-to-Iceberg clauses **superseded by [ADR-025](ADR-025-clickhouse-derived-hot-tier.md)** (scoped — the rest stands)
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Storage Architecture

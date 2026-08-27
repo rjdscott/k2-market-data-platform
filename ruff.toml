@@ -1,7 +1,14 @@
-# Lint config for the v2 Python (docker/offload, tests). legacy/v1 has its own pyproject.
-target-version = "py39"  # docker/offload runs inside the Spark image (Python 3.9)
+# Lint config for the v3 Python (docker/lake, tests). legacy/v1 has its own pyproject.
+target-version = "py39"  # docker/lake runs inside the Spark image (Python 3.9)
 line-length = 100
 
 [lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]  # formatter owns line length
+
+[lint.isort]
+# docker/lake/*.py import each other by bare module name — they run inside the
+# Spark image with the script's own directory on sys.path, not as a package.
+# Without this, isort files them under third-party and interleaves `import wire`
+# with `import pyspark`.
+known-first-party = ["lake_flows", "metrics", "offsets", "spark_conf", "wire"]

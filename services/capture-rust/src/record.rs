@@ -4,7 +4,7 @@
 //! embedded at compile time with `include_str!` rather than copied into this
 //! crate, so there is exactly one definition of the wire format in the repo and
 //! a schema edit that this crate has not been taught about fails
-//! `schemas_match_the_structs` at `cargo test` rather than at the offload
+//! `schemas_match_the_structs` at `cargo test` rather than at the ingest
 //! boundary hours later.
 //!
 //! Values are handed to `schema_registry_converter` as `(field_name, Value)`

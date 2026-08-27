@@ -1,6 +1,6 @@
 # ADR-013: Pragmatic Iceberg Version Strategy - Use Proven Apache Images
 
-**Status:** Accepted (Supersedes ADR-012)
+**Status:** Accepted (Supersedes ADR-012) — **superseded by [ADR-023](ADR-023-lakekeeper-rest-catalog.md)**
 **Date:** 2026-02-11
 **Deciders:** Platform Engineering
 **Related Phase:** Phase 5 (Cold Tier Restructure)

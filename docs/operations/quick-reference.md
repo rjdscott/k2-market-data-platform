@@ -31,13 +31,14 @@ docker stats --no-stream                             # live CPU / RAM
 | Grafana | http://localhost:3000 | `admin` / `$GRAFANA_PASSWORD` |
 | Prometheus | http://localhost:9090 | none |
 | Prefect | http://localhost:4200 | none |
+| Lakekeeper (Iceberg REST catalog) | http://localhost:18181 | none (`/health`, `/catalog/v1/...`) |
 | MinIO Console | http://localhost:9001 | `$MINIO_ROOT_USER` / `$MINIO_ROOT_PASSWORD` |
 | ClickHouse HTTP | http://localhost:8123 | `default` / `$CLICKHOUSE_PASSWORD` |
 | Spark Master UI | http://localhost:18080 | none |
 | Spark Application UI | http://localhost:4040 | only while a job is running |
 
 Also listening: Redpanda Kafka API `9092`, Admin API `9644`, Schema Registry `8081`;
-ClickHouse native `9002`, Prometheus metrics `9363`; MinIO S3 API `9000`; PostgreSQL (Prefect + watermarks) `15432` on localhost only.
+ClickHouse native `9002`, Prometheus metrics `9363`; MinIO S3 API `9000`; PostgreSQL (Prefect + Lakekeeper) `15432` on localhost only.
 Capture `/metrics` is on port **8082 inside the container only** — not published. There is
 no `/health` endpoint: liveness is the `k2-capture healthcheck` subcommand, because the
 image is distroless and has no curl.
@@ -113,26 +114,38 @@ docker logs --since 5m k2-capture-binance | grep -iE 'error|reconnect'
 docker inspect k2-capture-binance --format '{{range .Config.Env}}{{println .}}{{end}}' | grep K2_
 ```
 
-## Cold tier (Iceberg / Prefect)
+## Lake tier (Iceberg / Prefect)
 
 ```bash
 # Deployed schedules
 docker exec k2-prefect-server prefect deployment ls
+docker exec k2-prefect-server prefect flow-run ls --limit 5
 
-# Trigger an offload now
-docker exec k2-prefect-server prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'
+# Trigger an ingest / a maintenance run now
+docker exec k2-prefect-server prefect deployment run 'lake-ingest/lake-ingest-5min'
+docker exec k2-prefect-server prefect deployment run 'lake-maintenance/lake-maintenance-daily'
 
-# Watermarks (exactly-once bookkeeping, PostgreSQL)
-docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" \
-  -c "SELECT table_name, status, last_offload_timestamp, last_successful_run FROM offload_watermarks"
+# Or run either directly in the Spark container
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-only
 
-# Query the Iceberg cold tier (hadoop catalog on /home/iceberg/warehouse)
-docker exec -it k2-spark-iceberg spark-sql \
-  --conf spark.sql.catalog.k2=org.apache.iceberg.spark.SparkCatalog \
-  --conf spark.sql.catalog.k2.type=hadoop \
-  --conf spark.sql.catalog.k2.warehouse=/home/iceberg/warehouse \
-  -e "SELECT count(*) FROM k2.cold.silver_trades"
+# Catalog health, and what it holds
+curl -s localhost:18181/health | jq .
+PREFIX=$(curl -fsS 'localhost:18181/catalog/v1/config?warehouse=k2' | jq -r '.defaults.prefix')
+curl -fsS "localhost:18181/catalog/v1/$PREFIX/namespaces" | jq -c .
+#   {"namespaces":[["raw"],["bronze"],["audit"],["scratch"]]}
+
+# Ingest lag and per-table commit age (timestamps, aged in PromQL)
+curl -s --get localhost:9090/api/v1/query \
+  --data-urlencode 'query=time() - k2_lake_max_kafka_ts_seconds' | jq -r '.data.result[].value[1]'
+
+# Round-trip the catalog: create, append, read, drop
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/spark_conf.py --smoke
 ```
+
+Exactly-once bookkeeping lives in the Iceberg snapshot summary
+(`k2.kafka-offsets`), not in a watermark table —
+[ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md).
 
 ## When something breaks
 

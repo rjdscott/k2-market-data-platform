@@ -358,10 +358,9 @@ with [`11-bronze-coinbase.sql`](../../docker/clickhouse/schema/11-bronze-coinbas
 cleanest worked pair. The design is [ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md);
 the last exchange added through it is [ADR-016](../adr/ADR-016-add-coinbase-exchange.md).
 
-The same applies to the Iceberg cold tier: `cold.bronze_trades_*` and the offload
-`TABLE_CONFIG` in
-[`docker/offload/flows/iceberg_offload_flow.py`](../../docker/offload/flows/iceberg_offload_flow.py)
-mirror the frozen v2 schema and gain nothing from a new venue.
+The v2 Iceberg cold tier that mirrored it is gone: `docker/offload/` and the `cold.*` tables
+were deleted in Phase D ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The
+lake that replaced them needs nothing per venue — see the lake step in the checklist above.
 
 ---
 
@@ -381,6 +380,7 @@ mirror the frozen v2 schema and gain nothing from a new venue.
 
 ## Post-Integration Checklist
 
+- [ ] **Nothing for the lake.** [`docker/lake/ingest.py`](../../docker/lake/ingest.py) builds its topic list as `K2_EXCHANGES × {raw, trades, book}`, so the new topics are picked up by the next 5-minute cycle. There is no Iceberg table to create, no DDL and no bookkeeping row to seed: `lake.raw.messages` and `lake.bronze.*` are unified across venues with `exchange` as a partition field ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)), and a topic absent from the previous commit's `k2.kafka-offsets` has no stored position, so the ingest starts it at the beginning of the topic ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). If `K2_EXCHANGES` has been set explicitly anywhere, add the exchange there too — it defaults to `binance,kraken,coinbase`
 - [ ] Update the instrument and exchange counts in `config/instruments.yaml`'s header and
       the root `README.md`
 - [ ] Update [docker-resources.md](./docker-resources.md), the `docker-compose.yml`

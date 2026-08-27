@@ -326,168 +326,6 @@
         "x": 0,
         "y": 11
       },
-      "id": 103,
-      "title": "\ud83e\uddca Iceberg Offload (Cold Tier)",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 20
-              },
-              {
-                "color": "red",
-                "value": 30
-              }
-            ]
-          },
-          "unit": "m"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 0,
-        "y": 12
-      },
-      "id": 30,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      },
-      "pluginVersion": "9.0.0",
-      "title": "Offload Lag per Table (minutes)",
-      "type": "stat",
-      "targets": [
-        {
-          "expr": "offload_lag_minutes",
-          "legendFormat": "{{table}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 8,
-        "y": 12
-      },
-      "id": 31,
-      "options": {
-        "legend": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "displayMode": "table",
-          "placement": "right"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "pluginVersion": "9.0.0",
-      "title": "Offload Cycle Duration",
-      "type": "timeseries",
-      "targets": [
-        {
-          "expr": "offload_last_duration_seconds",
-          "legendFormat": "duration",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "rps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 12
-      },
-      "id": 32,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean"
-          ],
-          "displayMode": "table",
-          "placement": "right"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "pluginVersion": "9.0.0",
-      "title": "Rows Offloaded / sec",
-      "type": "timeseries",
-      "targets": [
-        {
-          "expr": "rate(offload_rows_total[5m])",
-          "legendFormat": "{{table}}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 16
-      },
       "id": 104,
       "title": "\ud83d\udcf6 Redpanda",
       "type": "row"
@@ -510,7 +348,7 @@
         "h": 5,
         "w": 12,
         "x": 0,
-        "y": 17
+        "y": 12
       },
       "id": 40,
       "options": {
@@ -572,7 +410,7 @@
         "h": 5,
         "w": 6,
         "x": 12,
-        "y": 17
+        "y": 12
       },
       "id": 41,
       "options": {

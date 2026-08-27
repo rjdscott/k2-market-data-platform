@@ -66,15 +66,15 @@ scrape_configs:
   #     - targets: ['k2-api:8081']
   #   metrics_path: '/actuator/prometheus'
 
-  # Iceberg offload metrics — the iceberg-metrics service runs
-  # docker/offload/metrics.py --serve, deriving metrics from the
-  # offload_watermarks table. Job name kept as 'iceberg-scheduler' to match the
-  # existing alert rules and dashboards.
-  - job_name: 'iceberg-scheduler'
+  # v3 lake metrics — the lake-metrics service runs docker/lake/metrics.py
+  # --serve, deriving every gauge from Iceberg snapshot summaries read over the
+  # Lakekeeper REST API. It replaced the v2 'iceberg-scheduler' job, which was
+  # deleted with docker/offload/ in Phase D.
+  - job_name: 'lake-metrics'
     static_configs:
-      - targets: ['iceberg-metrics:8000']
+      - targets: ['lake-metrics:8000']
         labels:
-          service: 'iceberg-offload'
+          service: 'lake-metrics'
           tier: 'cold-storage'
     metrics_path: '/metrics'
     scrape_interval: 30s

@@ -1,6 +1,6 @@
 # ADR-017: Iceberg Daily Maintenance Pipeline Design
 
-**Status:** Accepted — Implemented (2026-02)
+**Status:** Accepted — Implemented (2026-02); the PostgreSQL watermark and audit stores it maintains are **superseded by [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md)** for the v3 lake (the compact → expire → audit ordering is kept); implementation deleted 2026-08-27, see Outcome
 **Date:** 2026-02-18
 **Author:** Principal Data Engineer
 
@@ -111,3 +111,30 @@ Using Prefect (rather than a systemd cron or simple scheduler) gives:
 - [x] Run manual audit: completed 2026-02-18 — 20 rows in `maintenance_audit_log` (4 OK, 3 WARNING, 3 MISSING_DATA)
 - [x] Confirm `maintenance_audit_log` entries created: bronze/silver tables `status=ok`; gold OHLCV discrepancies expected (ClickHouse background part merges vs Iceberg accumulation)
 - [x] Confirm compaction works: `cold.bronze_trades_kraken` — 39 files → 3 files, 2.1 MB rewritten, 0 failures (2026-02-18)
+
+---
+
+## Outcome (2026-08-27)
+
+Deleted with the offload it maintained, in v3 Phase D. The design outlived the
+implementation: `docker/lake/maintenance.py` runs the same three stages in the same order
+— compact, then expire, then audit — for the same reasons this ADR gives, and the ordering
+argument is the part that transferred unchanged. What did not transfer is where the
+results live. The audits no longer write to a PostgreSQL `maintenance_audit_log`; they
+write to the `audit.checks` Iceberg table alongside the data they check, which removes the
+second store this design depended on
+([ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md)). Compaction is binpack on
+`raw.messages` and a sort rewrite on `bronze.*`, and the audits are stronger than the
+row-count comparison here: offset continuity per topic/partition, duplicates on the
+identifier fields, and sequence gaps.
+
+One prediction in the Context section is worth reading back. It warned that a silent
+offload regression could go undetected for days without a periodic count comparison. The
+regression that actually mattered was not silent-and-gradual but structural — the archive
+was a copy of a serving database — and no row-count audit between the two would ever have
+caught it, because both sides agreed. That is the argument for auditing against the source
+of record rather than against the tier immediately upstream.
+
+The plan called for a 2-hour parallel run before deletion. It was dropped for the reason
+recorded in [ADR-014](ADR-014-spark-based-iceberg-offload.md)'s Outcome. The runbooks are
+archived in `legacy/v2-offload/`.

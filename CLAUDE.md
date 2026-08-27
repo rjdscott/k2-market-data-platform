@@ -1,13 +1,14 @@
 # CLAUDE.md
 
 The working contract for this repo. K2 is a single-host crypto market data
-platform: Rust capture (`services/capture-rust/`) → Redpanda. The ClickHouse
-medallion and its Iceberg offload are **frozen as of 2026-08-26**: the Kotlin
-handlers that fed them retired in ADR-019 and nothing produces to the v2 topics,
-so `k2.*` and `cold.*` are readable history, not a live path, until the v3 lake
-(Phase D) and hot tier (Phase E) replace them.
+platform: Rust capture (`services/capture-rust/`) → Redpanda → a Spark batch
+ingest into an Iceberg lake on MinIO under Prefect, catalogued by Lakekeeper.
+The ClickHouse medallion is **frozen as of 2026-08-26**: the Kotlin handlers that
+fed it retired in ADR-019 and nothing produces to the v2 topics, so `k2.*` is
+readable history, not a live path, until the Phase E hot tier replaces it. The v2
+ClickHouse→Iceberg offload that wrote `cold.*` is deleted (Phase D).
 v2 is at the repo root; v1 is archived unmodified in `legacy/v1/`, the v2 Kotlin
-tier in `legacy/v2-kotlin/`.
+tier in `legacy/v2-kotlin/`, and the deleted v2 offload in `legacy/v2-offload/`.
 Read this before writing code or docs. Architecture: `docs/architecture/README.md`.
 
 ## Branch + PR discipline
@@ -35,7 +36,7 @@ conventions live next to the artifact rather than in this file.
 | `/plan` | multi-phase work needs a design doc with phase exit criteria |
 | `/audit` | sweeping a whole surface at a point in time (not a single diff) |
 | `/runbook` | a repeatable operation, or an incident worth teaching |
-| `/schema-change` | a data contract moves: Avro, ClickHouse DDL, Iceberg DDL |
+| `/schema-change` | a data contract moves: Avro, ClickHouse DDL, lake DDL |
 | `/benchmark-report` | publishing measured numbers anyone will quote |
 | `/release-check` | before tagging: fresh-clone gate |
 | `/code-review` | a single diff or PR. This is not an audit |
@@ -93,11 +94,12 @@ considered before committing*.
   `docs/benchmarks/<date>.md`; that file carries the command per row.
   `/benchmark-report` enforces this.
 - **Schema changes move together or not at all**: Avro (`schemas/avro/*.avsc`)
-  + ClickHouse DDL (`docker/clickhouse/ddl/01-k2-schema.sql`) + Iceberg DDL
-  (`docker/iceberg/ddl/*.sql`) + offload `--columns` lists + docs
-  (`docs/architecture/schema-design.md`, `partitioning-strategy.md`) + tests,
-  in one PR. Use `/schema-change`; a half-migrated contract fails silently at
-  the offload boundary, not at build time.
+  + ClickHouse DDL (`docker/clickhouse/ddl/01-k2-schema.sql`) + lake DDL
+  (`docker/lake/ddl/lake.sql`) + the projections in `docker/lake/ingest.py`
+  + docs (`docs/architecture/schema-design.md`, `partitioning-strategy.md`)
+  + tests, in one PR. Use `/schema-change`; a half-migrated contract fails
+  silently at the ingest boundary, not at build time. `tests/test_wire_format.py`
+  is that rule made executable — run it.
 - **Resource-limit changes** update the ADR-010 Outcome section *and* the
   summary comment in `docker-compose.yml`. The 16 CPU / 40 GB single-host
   budget is a stated constraint of the project, not an accident.
@@ -110,7 +112,7 @@ considered before committing*.
 
 ```bash
 make test          # python + rust
-make test-python   # uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests
+make test-python   # uv run --no-project --with pytest --with pyyaml pytest tests -q
 make test-rust     # rust:1-bookworm container; no local cargo needed
 ```
 
@@ -119,7 +121,7 @@ make test-rust     # rust:1-bookworm container; no local cargo needed
   deliberately outside `make test` and outside CI — the archive is verifiable,
   not merely present.
 - Python has no root `pyproject.toml` — root tests run against ad-hoc `uv`
-  deps, as above. Lint: `uv run --no-project --with ruff ruff check docker/offload tests`.
+  deps, as above. Lint: `make lint` — `uv run --no-project --with ruff ruff check docker/lake tests`.
 - Legacy v1 is a real uv project: `cd legacy/v1 && uv sync --all-extras && uv run pytest`.
 - New Python deps: pin the version (`uv add pkg==x.y.z`), check the current
   stable release first, note the choice if it's constrained by compatibility.

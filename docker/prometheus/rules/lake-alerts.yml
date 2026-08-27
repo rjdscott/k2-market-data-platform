@@ -1,0 +1,419 @@
+# K2 Market Data Platform v3 - lake tier alert rules
+# Purpose: Alert on ingest liveness, lag, audit failures, small files and disk
+#          headroom for the Iceberg lake (ADR-018, ADR-021).
+# Metrics:  docker/lake/metrics.py, served by the `lake-metrics` service on :8000
+# Scrape:   job lake-metrics
+# Last Updated: 2026-08-26
+#
+# Every metric here is derived from an Iceberg snapshot summary, so an alert
+# firing means the *commit history* says something is wrong — not that a
+# counter in a process that already exited said so.
+#
+# NOT yet observed firing. The thresholds below are designed against the
+# predicted rates in docs/architecture/capacity-model.md and the 5-minute
+# ingest cadence; `scripts/chaos/lake-*.sh` is what earns the right to move one.
+#
+# Every staleness expression is `time() - <a timestamp gauge>`, never a
+# pre-computed age. docker/lake/metrics.py recomputes an age only on a
+# SUCCESSFUL catalog read, so an age gauge freezes at its last small value
+# during exactly the outage it is the backstop for, and `> 1800` can never be
+# reached. A timestamp ages whether the exporter is reading or not.
+
+groups:
+  - name: lake_critical
+    interval: 30s
+    rules:
+
+      # CRITICAL: the archive itself has stopped growing.
+      #
+      # Separate from LakeCommitAgeHigh because the consequence is different in
+      # kind. raw.messages is the system of record and Redpanda holds only 48 h
+      # of raw (docker/redpanda/init.sh), so this alert starts a clock that ends
+      # in permanent data loss. A stale bronze table does not — bronze is
+      # rebuildable from raw for as long as raw is intact.
+      #
+      # 30 minutes is six missed 5-minute cycles: long enough that a single slow
+      # backlog slice does not page, short enough to leave 47 h of the replay
+      # window to act in.
+      - alert: LakeIngestFailed
+        expr: |
+          time() - k2_lake_last_commit_ts_seconds{table="raw.messages"} > 1800
+        for: 5m
+        labels:
+          severity: critical
+          component: lake
+          tier: cold
+        annotations:
+          summary: "raw.messages has not committed for {{ $value | humanizeDuration }}"
+          description: |
+            The lake ingest is scheduled every 5 minutes and raw.messages has not
+            taken a commit in over 30. Either the Prefect flow is failing, the
+            Spark container is gone, or Lakekeeper is refusing commits.
+
+            This is the data-loss clock: Redpanda keeps 48 h of the raw topics,
+            so anything not ingested before that window closes is gone for good.
+            Check the flow run first — its logs carry the script's own stdout.
+          runbook: docs/runbooks/lake-recovery.md
+
+      # CRITICAL: an audit found something.
+      #
+      # k2_lake_audit_failures_total is the failed-check count stamped into the
+      # audit.checks snapshot summary by the NIGHTLY AUDIT — metrics.py reads it
+      # off the newest snapshot carrying `k2.job=maintenance`, never off the
+      # current one. So this stays firing until a later maintenance run writes a
+      # clean count. That is the intended behaviour: a silent recovery would
+      # hide a duplicate that is still in the table.
+      #
+      # The job key is not decoration. audit.checks has a second writer: stage 2
+      # files `unresolvable_schema_id` rows under `k2.job=ingest`, and those
+      # commits land on top of the audit's. Read off the current snapshot one of
+      # them would set this gauge to its own count — 0 for a clean run — and
+      # clear a firing alert with no audit having passed. That regression is
+      # asserted in tests/lake-alerts_test.yml. LakeUnresolvableSchemaId below
+      # is the ingest side's own alert, on its own gauge.
+      - alert: LakeAuditFailed
+        expr: |
+          k2_lake_audit_failures_total > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: lake
+          tier: cold
+        annotations:
+          summary: "{{ $value }} lake audit check(s) failed in the last maintenance run"
+          description: |
+            docker/lake/maintenance.py exited non-zero. One of offset continuity,
+            duplicate identifiers or sequence monotonicity did not hold.
+
+            The row naming the failure is in lake.audit.checks with the run
+            timestamp, the scope and a detail string — query it before touching
+            anything, because the three checks mean very different things.
+          runbook: docs/runbooks/lake-audit-failed.md
+
+      # CRITICAL: the disk that holds the lake is nearly full.
+      #
+      # raw.messages is never expired by design (requirements clarification Q8),
+      # so this is the failure mode the retention policy accepts in exchange for
+      # an unbounded replay window. At 90% the operator has hours, not days.
+      - alert: LakeDiskUsageCritical
+        expr: |
+          k2_lake_disk_used_ratio > 0.90
+        for: 5m
+        labels:
+          severity: critical
+          component: lake
+          tier: cold
+        annotations:
+          summary: "Lake filesystem {{ $labels.path }} is {{ $value | humanizePercentage }} full"
+          description: |
+            Past 90%. MinIO will start refusing writes and the ingest will fail
+            with it, which turns a storage problem into a data-loss problem
+            inside the 48 h Redpanda window.
+
+            Add disk, or purge with an audit row — not a silent delete. Both
+            options and their commands are in the runbook.
+          runbook: docs/runbooks/lake-disk-usage-high.md
+
+  - name: lake_warning
+    interval: 30s
+    rules:
+
+      # WARNING: data is reaching the lake, but late.
+      #
+      # Distinct from LakeIngestFailed: commits are landing, they are just
+      # behind. The normal cause is a backlog slice after an outage, which
+      # resolves itself as the ingest catches up — hence a warning and a
+      # 10-minute `for`.
+      - alert: LakeIngestLagHigh
+        expr: |
+          time() - k2_lake_max_kafka_ts_seconds > 900
+        for: 10m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "Newest record in the lake is {{ $value | humanizeDuration }} old"
+          description: |
+            The newest Kafka record in raw.messages is over 15 minutes old, on a
+            5-minute schedule. Lag that is falling is a backlog draining; lag
+            that is flat or rising is a cycle that no longer keeps up with the
+            feed, which is a capacity question rather than an incident.
+          runbook: docs/runbooks/lake-ingest-lag.md
+
+      # WARNING: a bronze table has gone stale while raw keeps moving.
+      #
+      # Stage 2 decodes each bronze table independently, so one can fail — a
+      # schema the registry cannot serve, a body that fails FAILFAST — while the
+      # other and the archive carry on. Nothing is lost while this fires: bronze
+      # is a function of raw and replays from it.
+      - alert: LakeCommitAgeHigh
+        expr: |
+          time() - k2_lake_last_commit_ts_seconds{table=~"bronze\\..*"} > 1800
+        for: 10m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "{{ $labels.table }} has not committed for {{ $value | humanizeDuration }}"
+          description: |
+            A bronze table has taken no commit in over 30 minutes. If
+            raw.messages is still committing, stage 2 is the failing half —
+            check the flow run for a FAILFAST decode error or a schema id the
+            registry could not serve.
+
+            A genuinely quiet period looks the same and is not an incident;
+            k2_lake_added_records tells the two apart.
+          runbook: docs/runbooks/lake-ingest-lag.md
+
+      # WARNING: a record is framed with a schema id the registry will not serve.
+      #
+      # The ingest side of audit.checks, and the reason LakeAuditFailed can
+      # afford to ignore it. Stage 2 skips the id, files a row and carries on
+      # (raising would be a permanent outage from one frame, since raw.messages
+      # is never expired and the same range is re-read forever), so nothing
+      # pages — but nothing was alertable either until this rule existed.
+      #
+      # Warning, not critical: nothing is lost. The bytes are in raw.messages
+      # and a later registration of the id recovers them. What is wrong is that
+      # a bronze table is missing every record framed with that id, silently.
+      #
+      # 15 minutes is three ingest cycles, and it is the same 15 minutes
+      # metrics.py ages the gauge over, for the same reason.
+      #
+      # How this clears matters, because it does not clear the obvious way.
+      # Stage 2 commits a row to audit.checks ONLY when it found an
+      # unresolvable id — a clean run writes nothing there — so no later commit
+      # overwrites the last bad summary. A genuine case re-files the same row
+      # every 5 minutes, keeps that summary fresh and holds the gauge above 0
+      # indefinitely: this fires and stays firing. Register the schema and
+      # nothing is re-filed, the summary ages past three cycles,
+      # `fresh_ingest_failures()` in docker/lake/metrics.py returns 0, and the
+      # alert resolves within 15 minutes of the last bad cycle.
+      - alert: LakeUnresolvableSchemaId
+        expr: |
+          k2_lake_unresolvable_schema_ids_total > 0
+        for: 15m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "{{ $value }} schema id(s) the registry would not serve in the last stage-2 run"
+          description: |
+            A record on a v3 topic names a writer schema this registry does not
+            hold, so stage 2 skipped that id and wrote an unresolvable_schema_id
+            row into lake.audit.checks with job='ingest'.
+
+            Every record framed with that id is archived in raw.messages and
+            absent from bronze. Register the schema, or find the producer that
+            is framing against a registry this one is not — §5 of the runbook
+            has the three causes in order of likelihood.
+          runbook: docs/runbooks/lake-audit-failed.md
+
+      # WARNING: an ingest deliberately skipped records that had been evicted.
+      #
+      # k2_lake_offset_gaps_total counts the partitions the most recent
+      # --accept-data-loss run resumed past. Those records are gone — public
+      # WebSocket feeds do not replay — so this alert cannot ask anyone to
+      # recover them. It exists because the decision was a person's, taken at a
+      # keyboard, and a permanent hole in the archive should not be visible only
+      # in a terminal that has since been closed.
+      #
+      # It is a PULSE, and reading it as a condition is the mistake to avoid.
+      # The ingest files an offset_gap row exactly once, on the repairing run,
+      # so metrics.py's 15-minute ageing takes the gauge to 0 by itself and this
+      # resolves with nothing fixed. The durable record is the offset_gap row in
+      # lake.audit.checks — topic, partition, committed offset, broker
+      # LOG-START, count — which is queryable forever and is what the runbook
+      # and a later "why is there a hole here" query both read.
+      #
+      # `for: 5m` against that 15-minute window leaves ~10 minutes of firing.
+      # The 15m that LakeUnresolvableSchemaId uses would land on the ageing
+      # boundary and fire flakily or never: that gauge is re-filed every cycle
+      # while its fault lasts, and this one is not.
+      - alert: LakeOffsetGap
+        expr: |
+          k2_lake_offset_gaps_total > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "{{ $value }} partition(s) resumed past evicted records by the last ingest"
+          description: |
+            An ingest ran with --accept-data-loss: records Redpanda had already
+            evicted were skipped, deliberately, by a person. Every skipped range
+            is an offset_gap row in lake.audit.checks with the topic, partition,
+            committed offset, broker LOG-START and the count.
+
+            Nothing here recovers the records — they are gone. What is worth
+            checking is why the ingest fell that far behind, and whether the raw
+            retention window is still the right size for the arrival rate: §3 of
+            the runbook has both.
+          runbook: docs/runbooks/lake-ingest-lag.md
+
+      # WARNING: the nightly file rewrite has not run.
+      #
+      # This measures the compaction JOB, not its side effect on mean file size,
+      # and that distinction is the whole rule. The obvious version —
+      # `k2_lake_avg_file_bytes{table="raw.messages"} < 32MiB` — fires by
+      # construction for the first two weeks of the table's life: 288 cycles/day
+      # x 9 topics under write.distribution-mode=hash is ~2592 new ~2.5 MB files
+      # a day, and a table-wide MEAN cannot clear 32 MiB until the compacted
+      # archive outweighs them, which solves to ~15 days. capacity-model.md puts
+      # the disk runway at ~26 days, so that alert would be noise for 15 of them
+      # — and "noisy for the first fortnight" is how an alert gets muted.
+      #
+      # `rewrite_data_files` cannot carry a `k2.job` property (it does not go
+      # through writeTo), so metrics.py keys on Iceberg's own `operation` field
+      # for a rewrite snapshot. 36 h is one missed nightly plus slack.
+      #
+      # No series exists until the table has been compacted once, so a fresh
+      # table cannot fire this either.
+      - alert: LakeCompactionStale
+        expr: |
+          time() - k2_lake_last_compaction_ts_seconds{table="raw.messages"} > 129600
+        for: 30m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "raw.messages has not been compacted for {{ $value | humanizeDuration }}"
+          description: |
+            The nightly rewrite (03:00 UTC, lake-maintenance-daily) has not
+            produced a rewrite snapshot on raw.messages in over 36 hours, so it
+            has missed at least one run. Each 5-minute ingest adds a file per
+            partition it touched; without the rewrite every query pays per-file
+            open cost over thousands of files and manifest metadata grows faster
+            than the data.
+
+            k2_lake_avg_file_bytes and k2_lake_files_total say how far it has
+            drifted — they are the symptom, this is the cause. Run the
+            compaction by hand rather than waiting for the next nightly: the
+            runbook has the command.
+
+            CHECK THE INGEST FIRST. This measures the newest file-rewrite
+            snapshot, and rewrite_data_files commits one only when it had files
+            to merge — min-input-files is 5, over recent partitions. An ingest
+            that stopped stops producing small files, so the nightly run finds
+            nothing to rewrite and this fires as a CONSEQUENCE. If
+            LakeIngestFailed or LakeIngestLagHigh is also firing, that is the
+            incident and this is its shadow.
+          runbook: docs/runbooks/lake-ingest-lag.md
+
+      # WARNING: the exporter is up and producing nothing.
+      #
+      # The companion to LakeExporterDown, and the one that actually covers a
+      # Lakekeeper outage. metrics.py resolves the warehouse prefix from the
+      # catalog before every refresh and re-resolves it on any error, so with
+      # Lakekeeper down the refresh loop throws before it touches a table:
+      # k2_lake_scrape_errors_total never rises, `up` stays 1, and every gauge
+      # holds its last value. The refresh timestamp is the one thing that moves,
+      # by not moving.
+      #
+      # 5 minutes is ten refresh intervals. This fires ~10 minutes into a
+      # catalog outage, against LakeIngestFailed's 35, which is what makes it
+      # the fastest lake signal rather than a duplicate of one.
+      - alert: LakeExporterStalled
+        expr: |
+          time() - k2_lake_last_refresh_ts_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "lake-metrics last completed a refresh {{ $value | humanizeDuration }} ago"
+          description: |
+            The exporter is being scraped but has not finished a refresh in over
+            5 minutes, so every lake gauge is stale. The usual cause is
+            Lakekeeper being unreachable: the prefix lookup fails and the loop
+            retries every 30 s without ever reaching a table.
+
+            Check Lakekeeper first, then the exporter's own log. It never exits
+            on a catalog error by design, so "up but silent" is its outage state.
+          runbook: docs/runbooks/lake-recovery.md
+
+      # WARNING: some tables are readable and some are not.
+      #
+      # Distinct from LakeExporterStalled: the refresh is completing, so the
+      # catalog is up, but one or more of the four tables could not be read —
+      # missing (lake-ddl has not run), dropped, or failing its own load.
+      - alert: LakeScrapeErrors
+        expr: |
+          k2_lake_scrape_errors_total > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "lake-metrics could not read {{ $value }} of its 4 tables"
+          description: |
+            The exporter names the table it failed on in its own log, at
+            WARNING. On a fresh stack this is lake-ddl not having run yet and it
+            clears by itself; at any other time a table the alerts above depend
+            on is gone.
+          runbook: docs/runbooks/lake-recovery.md
+
+      # WARNING: the exporter is gone, so every alert above is blind.
+      #
+      # Its own severity is warning, not critical, on purpose: nothing is broken
+      # in the lake, but nothing above this line can fire either. Treat it as
+      # "the alerts have stopped", not "the lake has stopped".
+      - alert: LakeExporterDown
+        expr: |
+          up{job="lake-metrics"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "lake-metrics is unreachable — every lake alert is blind"
+          description: |
+            Prometheus has not scraped lake-metrics for 5 minutes. The lake may
+            be perfectly healthy; there is no longer any way to tell.
+
+            The exporter never exits on a catalog error by design, so an
+            unreachable target means the container is down rather than
+            Lakekeeper being unreachable — LakeExporterStalled covers that.
+          runbook: docs/runbooks/lake-recovery.md
+
+      # WARNING: the 80% disk alert requirements clarification Q8 asks for.
+      #
+      # The RULE is proven; the METRIC is host-dependent, and both halves are
+      # stated because only one of them is delivered here. That the rule fires
+      # at 0.81 and not at 0.79 is asserted in
+      # docker/prometheus/rules/tests/lake-alerts_test.yml, so on bare metal or
+      # EC2 — where os.statvfs on the MinIO volume IS the real disk — this is
+      # correct and this is the Q8 requirement met.
+      #
+      # On the Docker Desktop host this repo is developed on it is not.
+      # statvfs inside the container reports the VM's thin-provisioned disk
+      # (used_ratio 0.342) while the host reads 79%, so here the alert would
+      # page 45 points late. docker/lake/README.md, "What the disk metric
+      # actually measures", carries the numbers and the commands.
+      - alert: LakeDiskUsageHigh
+        expr: |
+          k2_lake_disk_used_ratio > 0.80
+        for: 15m
+        labels:
+          severity: warning
+          component: lake
+          tier: cold
+        annotations:
+          summary: "Lake filesystem {{ $labels.path }} is {{ $value | humanizePercentage }} full"
+          description: |
+            raw.messages is kept forever with no TTL, so this threshold is the
+            agreed cost of an unbounded replay window rather than a surprise
+            (requirements clarification Q8). The two options are add disk, or
+            purge with an audit row — never a silent delete.
+
+            k2_lake_bytes_total per table and k2_lake_disk_free_bytes give the
+            days-remaining arithmetic.
+          runbook: docs/runbooks/lake-disk-usage-high.md

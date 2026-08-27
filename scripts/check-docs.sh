@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The doc gates run by hand before every release/PR, as code.
 # Scope: docs/ + README.md + the per-service READMEs (the "published docs"
-# surface) unless a check says otherwise.
+# surface) unless a check says otherwise, plus the Prometheus rules, which carry
+# runbook paths and alert semantics the docs quote.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -78,6 +79,25 @@ else
   note "(c) docker not found — skipping promtool check rules"
 fi
 
+# (c2) promtool test rules — the alert unit tests (needs Docker)
+# `check rules` only says the YAML parses. These say the thresholds mean what
+# the comments claim: that a stopped stream crosses CaptureFeedStale on its own
+# per-stream bound, that a frozen gauge still crosses LakeIngestFailed, and that
+# a healthy small-file day fires nothing. Two directories, one gate: the capture
+# tests were written as `tests/*.test.yml`, the lake ones as
+# `rules/tests/*_test.yml`, and both are run rather than renamed because every
+# runbook and FMEA row that cites one cites it by path.
+if command -v docker >/dev/null 2>&1; then
+  if docker run --rm --entrypoint sh -v "$PWD/docker/prometheus:/p" prom/prometheus:v3.2.0 \
+      -c 'promtool test rules /p/tests/*.test.yml /p/rules/tests/*_test.yml'; then
+    pass "(c2) promtool test rules"
+  else
+    bad "(c2) promtool test rules failed"
+  fi
+else
+  note "(c2) docker not found — skipping promtool test rules"
+fi
+
 # (d) every runbook: annotation path in rules resolves to a file
 out=$(mktemp)
 grep -rhoE 'runbook: *\S+' docker/prometheus/rules/*.yml 2>/dev/null \
@@ -111,18 +131,6 @@ elif [ "$(grep -ciE '\|[[:space:]]*measured[[:space:]]*\|' "$cm")" -gt 0 ]; then
   fi
 else
   pass "(e) capacity-model gate (predicted-only, no measured column yet)"
-fi
-
-# (c2) promtool test rules — the capture alert unit tests
-if command -v docker >/dev/null 2>&1; then
-  if docker run --rm --entrypoint promtool -v "$PWD/docker/prometheus:/p" prom/prometheus:v3.2.0 \
-      test rules /p/tests/capture-alerts.test.yml; then
-    pass "(c2) promtool test rules (capture)"
-  else
-    bad "(c2) promtool test rules (capture) failed"
-  fi
-else
-  note "(c2) docker not found — skipping promtool test rules"
 fi
 
 # (f) no status tables/checkboxes in docs/plans

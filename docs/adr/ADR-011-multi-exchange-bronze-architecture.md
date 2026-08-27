@@ -1,6 +1,6 @@
 # ADR-011: Multi-Exchange Bronze Architecture
 
-**Status:** Accepted
+**Status:** Accepted — **superseded by [ADR-024](ADR-024-unified-bronze-tables-in-the-lake.md) for the lake only**; still in force for ClickHouse until Phase E
 **Date:** 2026-02-10
 **Context:** Platform v2 - Kraken Exchange Integration
 

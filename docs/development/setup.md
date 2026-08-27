@@ -7,8 +7,8 @@ code once it is.
 
 | Tool | Needed for | Notes |
 |------|-----------|-------|
-| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 24 GB memory so every `deploy.resources.limits` can be honoured (`docker info --format '{{.MemTotal}}'`); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 14.60 CPU / 21.625 GiB of limits, 16.10 CPU / 23.125 GiB at the bootstrap peak |
-| [`uv`](https://docs.astral.sh/uv/) | Python offload-flow tests | Nothing else uses Python locally |
+| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 28 GB memory so every `deploy.resources.limits` can be honoured (`docker info --format '{{.MemTotal}}'` — **Docker Desktop defaults far lower and silently clips every limit above the VM size**; Settings → Resources → Memory); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 14.60 CPU / 25.625 GiB of limits across 15 long-running services and peaks at 16.10 CPU / 27.125 GiB across 19 while the four one-shot init containers run (v2 alone: 15.1 CPU / 21.875 GB) |
+| [`uv`](https://docs.astral.sh/uv/) | the Python unit tests and ruff | Nothing else uses Python locally |
 | `jq`, `psql` | the diagnostic one-liners in the ops docs | optional |
 
 ## First run
@@ -20,12 +20,13 @@ make ps
 ```
 
 `make up` builds three images on the first run — the Rust `k2-capture` binary, the Prefect
-worker, and the Spark image (which downloads the ClickHouse JDBC driver). Allow **several
-minutes**; subsequent starts are seconds. Services come up healthy in dependency order —
-Redpanda, then `redpanda-init` creates the topics, registers the nine v3 Avro subjects and
-exits (9 live v3 topics · 108 partitions, `market.crypto.v3.{raw,trades,book}.<ex>`, plus
-the 6 frozen v2 topics · 160 partitions it still creates so the `k2` Kafka-engine queues
-have something to attach to) — then the three `capture-*` containers.
+worker, and the Spark image (which bakes the Kafka and Avro jars, each pinned by sha256).
+Allow **several minutes**; subsequent starts are seconds. Services come up healthy in
+dependency order — Redpanda, then `redpanda-init` creates the topics, registers the nine v3
+Avro subjects and exits (9 live v3 topics · 108 partitions,
+`market.crypto.v3.{raw,trades,book}.<ex>`, plus the 6 frozen v2 topics · 160 partitions it
+still creates so the `k2` Kafka-engine queues have something to attach to) — then the three
+`capture-*` containers.
 
 Never commit `.env`. Everything reads its secrets from it; nothing in the repo hardcodes a
 password.
@@ -41,7 +42,8 @@ prints what it would do without touching anything.
 
 ### Applying the ClickHouse schema
 
-The full schema (25 objects: `k2` database, watermark table, bronze/silver/gold) auto-applies
+The full schema (26 objects: the `k2` database, 13 bronze/silver/gold tables and 12
+materialized views) auto-applies
 from [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql) on
 a fresh volume via `/docker-entrypoint-initdb.d`. `docker/clickhouse/schema/` is the historical
 migration trail and is not run.
@@ -119,31 +121,37 @@ second one, or both will produce to the same topics.
 
 Tests: `make test-rust` — see [testing.md](./testing.md).
 
-## Python offload inner loop
+## Python lake inner loop
 
-The offload scripts are bind-mounted into both the Spark and Prefect worker containers,
-so edits take effect without a rebuild.
+The lake scripts are bind-mounted into both the Spark and Prefect worker containers, so
+edits take effect without a rebuild.
 
 ```bash
-# Run one table's offload directly, with logs in the foreground
-docker exec k2-spark-iceberg python3 /home/iceberg/offload/offload_generic.py \
-  --source-table bronze_trades_binance \
-  --target-table cold.bronze_trades_binance \
-  --timestamp-col exchange_timestamp \
-  --sequence-col sequence_number \
-  --layer bronze
+# Run one ingest directly, with logs in the foreground. No arguments needed:
+# the topic list comes from K2_EXCHANGES and the read range from the offsets in
+# the last commit's Iceberg snapshot summary.
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py
 
-# Trigger the whole flow through Prefect
-docker exec k2-prefect-server prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'
+# One stage at a time while iterating on the decode
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --stage raw
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --stage bronze
 
-# Unit tests (mocked subprocess — no stack needed)
-uv run --no-project --with prefect --with psycopg2-binary --with pytest pytest tests -q
+# Report what framing each topic is actually carrying, writing nothing
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
+
+# Trigger the scheduled flow through Prefect instead
+docker exec k2-prefect-server prefect deployment run 'lake-ingest/lake-ingest-5min'
+
+# Unit tests (pure Python — no stack needed)
+uv run --no-project --with pytest --with pyyaml pytest tests -q
 ```
 
-After changing a flow's schedule or parameters, redeploy it:
+An ingest takes an exclusive `flock`, so a hand-run that collides with the 5-minute cron
+exits non-zero rather than duplicating its work. After changing a flow's schedule or
+parameters, redeploy both:
 
 ```bash
-docker exec k2-prefect-worker python3 /opt/prefect/flows/deploy_production.py
+docker exec k2-prefect-worker python /opt/prefect/lake-flows/deploy_lake.py
 ```
 
 ## Logs
@@ -152,7 +160,7 @@ docker exec k2-prefect-worker python3 /opt/prefect/flows/deploy_production.py
 |--------|-------|
 | Any container | `docker compose logs -f <service>` or `make logs` |
 | Capture | `docker logs -f k2-capture-binance` — `tracing` to stderr, filtered by `RUST_LOG`. No log files: nothing is bind-mounted out |
-| Offload flow runs | `docker logs k2-prefect-worker`, plus run history at http://localhost:4200 |
+| Lake flow runs | `docker logs k2-prefect-worker`, plus run history at http://localhost:4200 |
 | Spark job output | `docker logs k2-spark-iceberg`; the Application UI is on http://localhost:4040 while a job runs |
 | ClickHouse server | `docker logs k2-clickhouse` |
 

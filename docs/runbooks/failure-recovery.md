@@ -9,8 +9,13 @@ exists to tell you what "normal recovery" looks like so you can spot when it isn
 > 30 s MTTR are archived verbatim at
 > [`legacy/v2-kotlin/runbooks/feed-handler-crash.md`](../../legacy/v2-kotlin/runbooks/feed-handler-crash.md);
 > the live equivalent for the Rust capture tier is [capture-down.md](./capture-down.md),
-> whose MTTR is not yet measured. The other five modes are unaffected — none of them
-> depended on which process was producing.
+> whose MTTR is not yet measured.
+>
+> **§4 and §5 no longer describe what was measured in February either.** The batch job they
+> were induced against was the v2 ClickHouse→Iceberg offload, which is deleted; both now
+> point at the v3 lake path that replaced it, and that path's numbers come from the Phase D
+> burn-in rather than from 2026-02-19. The remaining three infrastructure failures are
+> unchanged and still measured.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
@@ -19,7 +24,7 @@ exists to tell you what "normal recovery" looks like so you can spot when it isn
 | 1 | Redpanda restart | <2 min | ~10 s |
 | 2 | ClickHouse restart | <3 min | ~32 s |
 | 3 | Capture container crash | <1 min | ~30 s (Kotlin, 2026-02-19; not re-measured on Rust) |
-| 4 | Spark / Prefect offload failure | <15 min | next scheduled run |
+| 4 | Spark / Prefect batch-job failure | <15 min | next scheduled run |
 | 5 | MinIO unavailable | <5 min | ~5 s |
 | 6 | Network partition | <5 min | ~20–30 s |
 
@@ -109,44 +114,48 @@ and until it runs this is an inherited number, not a measurement of what is depl
 
 ---
 
-## 4. Spark / Prefect offload failure
+## 4. Spark / Prefect batch-job failure
 
-**Symptom** — a Prefect flow run is marked Failed; cold-tier row counts stop advancing.
+**Symptom** — a Prefect flow run for `lake-ingest-5min` is marked Failed; lake row counts
+stop advancing.
 
-**Detection** — `IcebergOffloadConsecutiveFailures`, `IcebergOffloadWatermarkStale` (see
-[observability.md](../operations/observability.md#iceberg-offload-alertsyml--cold-tier-9)); also
-visible in Prefect run history.
+**Detection** — `LakeIngestFailed`, then `LakeIngestLagHigh` from
+[`docker/prometheus/rules/lake-alerts.yml`](../../docker/prometheus/rules/lake-alerts.yml)
+(see [observability.md](../operations/observability.md#alert-rules)); also visible in
+Prefect run history.
 
-**Expected behaviour** — the watermark is only advanced *after* a successful Iceberg
-write, so a failed run leaves it untouched and the next scheduled run re-reads the same
-window. Idempotent by construction: no duplicates, no gap.
+**Expected behaviour** — the consumed Kafka offsets are written into the Iceberg snapshot
+summary by the same commit that writes the rows ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)),
+so a run that never committed left the offsets where they were and the next scheduled run
+re-reads the same range. Idempotent by construction: no duplicates, no gap.
 
-**Recovery** — usually none. Wait for the next 15-minute run.
+**Recovery** — usually none. Wait for the next 5-minute run.
 
 ```bash
-# Watermark should be unchanged, status 'failed'
-docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d "$PREFECT_DB_NAME" -c \
-  "SELECT table_name, status, last_offload_timestamp, last_successful_run FROM offload_watermarks"
-
 # Force a run rather than waiting
-docker exec k2-prefect-server prefect deployment run 'iceberg-offload-main/iceberg-offload-15min'
+docker exec k2-prefect-server prefect deployment run 'lake-ingest/lake-ingest-5min'
 ```
 
-**Measured** — watermark held at its pre-failure value; exactly-once confirmed on resume.
-
-If the watermark is stuck in `running` after a hard kill, see
-[iceberg-offload-watermark-recovery.md](./iceberg-offload-watermark-recovery.md).
+**Measured** — not yet verified for the lake path; the Phase D burn-in
+(`scripts/chaos/lake-ingest-kill.sh`) is what fills this in. The full procedure, including
+the three invariant checks that prove a re-run was safe, is
+[lake-recovery.md §5](./lake-recovery.md#5-ingest-killed-mid-run) — this section is the
+triage entry point, not a second copy of it.
 
 ---
 
 ## 5. MinIO unavailable
 
-**Symptom** — offload flows fail; the hot tier is completely unaffected.
+**Symptom** — lake ingest and maintenance runs fail; the hot tier is completely unaffected.
 
-**Detection** — offload flow failures in Prefect. There is no MinIO exporter.
+**Detection** — `LakeIngestFailed` and Prefect flow-run failures. There is no MinIO
+exporter, and `LakeExporterDown` does not fire: `docker/lake/metrics.py` reads the catalog,
+never MinIO.
 
-**Expected behaviour** — offload fails cleanly with no partial Iceberg writes; ClickHouse
-ingest continues; the cold tier defers until MinIO is back.
+**Expected behaviour** — the ingest fails cleanly with no committed Iceberg snapshot;
+ClickHouse ingest continues; the lake defers until MinIO is back. Uncommitted Parquet files
+are orphans no reader sees, reclaimed by the nightly maintenance pass — see
+[lake-recovery.md §4](./lake-recovery.md#4-minio-down).
 
 **Recovery**
 
@@ -155,8 +164,10 @@ docker compose start minio
 curl -fsS localhost:9000/minio/health/live && echo OK
 ```
 
-**Measured** — ~5 s to restore. The hot tier gained 2 rows during a 30-second outage,
-confirming ingest was never in the blast radius.
+**Measured** — ~5 s to restore, against the v2 offload. The hot tier gained 2 rows during a
+30-second outage, confirming ingest was never in the blast radius; that isolation is a
+property of the topology and did not change with the lake, but the lake-side recovery time
+is Phase D's to measure.
 
 ---
 
@@ -188,8 +199,8 @@ their last committed offset with no data corruption.
 Each mode is induced with a single command — `docker compose restart <svc>`,
 `docker compose stop <svc>`, or `docker network disconnect k2-net <container>`. Take a row
 count before and after, and confirm continuity across the outage window rather than just
-"it came back up". Detailed offload-specific procedures live in the sibling
-`iceberg-*.md` runbooks.
+"it came back up". Detailed lake-specific procedures live in the sibling `lake-*.md`
+runbooks, and `make chaos` scripts the lake and capture inductions.
 
 ## Related
 

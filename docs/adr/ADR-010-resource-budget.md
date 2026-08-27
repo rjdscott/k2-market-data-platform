@@ -472,3 +472,147 @@ docker/prometheus/rules/capture-alerts.yml         10
 docker/prometheus/rules/clickhouse-alerts.yml       4
 docker/prometheus/rules/iceberg-offload-alerts.yml  9
 ```
+
+## Outcome addendum (v3 Phase D, 2026-08-26)
+
+The lake tier costs **0.10 CPU / 128M steady** — one service, `lake-metrics`, running
+`docker/lake/metrics.py --serve`. Ingest and maintenance are Prefect jobs dispatched into
+the existing `k2-spark-iceberg` container, so they consume its already-allocated 2.0 CPU /
+4 GB rather than adding a line. The one-shot `lake-ddl` adds 0.5 CPU / 1G at boot only.
+
+The exporter is 128M because it does **not** use PyIceberg. `import pyiceberg.io.pyarrow`
+alone measures 122 MB RSS in the Spark image, before any work; reading the same snapshot
+summaries from Lakekeeper's REST API with `urllib` measures 26.7 MB doing a full refresh
+against all four tables. That decision is what keeps this addendum's first line at 0.10
+rather than at 0.25 CPU / 512M.
+
+| Metric | As-built Phase C | As-built Phase D |
+|--------|------------------|------------------|
+| CPU limits (steady state) | 16.10 | **16.20** |
+| RAM limits (steady state) | 23.125 GB | **23.250 GB** |
+| Long-running services | 18 | **19** |
+| One-shot services | 4 | **5** (`lake-ddl` added) |
+| CPU / RAM at bootstrap peak | 17.60 / 24.625 GiB | **18.20 / 25.750 GiB** |
+| Headroom vs 16 CPU / 40 GB | −0.6% / 42% | **−1.3% CPU / 42% RAM steady** |
+
+Steady state is now 0.20 CPU over the 16-core target, and there are two overlapping
+parallel runs paying for it rather than one: Rust capture beside the Kotlin feed handlers
+(Phase C), and `lake-metrics` beside `iceberg-metrics` (Phase D). Both are the cost of
+comparing a replacement against the path it replaces before trusting it, and both end at
+their own cutover. Retiring the Kotlin handlers returns 1.5 CPU / 1.5 GB; retiring
+`iceberg-metrics` with the rest of `docker/offload/` returns a further 0.1 CPU / 128M,
+landing steady state at **14.60 CPU / 21.625 GB**.
+
+Numbers from `DOCKER_CONTEXT=default docker compose --env-file .env.example config` summed
+over `deploy.resources.limits`, 2026-08-26.
+
+## Outcome addendum (v3 Phase D cutover, 2026-08-27)
+
+The addendum above budgeted for a parallel run that did not happen. `docker/offload/` was
+deleted rather than compared (the reason is in
+[ADR-014](ADR-014-spark-based-iceberg-offload.md)'s Outcome), so `lake-metrics` never ran
+beside `iceberg-metrics` and the second of the two overlaps was paid for on paper only.
+
+| Metric | Phase D as budgeted | Phase D cutover, as built |
+|--------|---------------------|---------------------------|
+| CPU limits (steady state) | 16.20 | **16.10** |
+| RAM limits (steady state) | 23.250 GiB | **23.125 GiB** |
+| Long-running services | 19 | **18** (`iceberg-metrics` gone) |
+| One-shot services | 5 | **4** (`iceberg-init` gone) |
+| CPU / RAM at bootstrap peak | 18.20 / 25.750 GiB | **17.60 / 24.625 GiB** |
+| Headroom vs 16 CPU / 40 GB | −1.3% CPU / 42% RAM | **−0.6% CPU / 42% RAM** |
+
+Steady state is back to 0.10 CPU over the 16-core target with **one** parallel run paying
+for it — Rust capture beside the Kotlin feed handlers — which is exactly where the Phase C
+addendum left it. Retiring `feed-handler-{binance,kraken,coinbase}` returns the remaining
+1.5 CPU / 1.5 GiB and lands steady state at **14.60 CPU / 21.625 GiB across 15**: 1.40 CPU
+(9%) and 18.375 GiB (46%) of headroom. That is the same end state the Phase D addendum
+predicted, reached one step earlier because the offload exporter never had to be retired
+separately.
+
+Deleting the offload also removed `clickhouse-jdbc-0.4.6-all.jar` and `psycopg2-binary`
+from the Spark image and `psycopg2-binary` from the Prefect image. Neither shows up in this
+table — image size is not in the budget — but both were carried solely for the JDBC read
+and the watermark table.
+
+Numbers from `DOCKER_CONTEXT=default docker compose --env-file .env.example config` summed
+over `deploy.resources.limits`, 2026-08-27.
+
+## Outcome addendum (Phase D rebased onto the Kotlin retirement, 2026-08-27)
+
+The two addenda above were written while `feed-handler-{binance,kraken,coinbase}` were
+still in `docker-compose.yml`. They land after the retirement
+([ADR-019](ADR-019-rust-capture-tier.md)), not before it, so their steady-state rows are
+superseded rather than wrong when written: both cutovers are now done in the same compose
+file — the Kotlin handlers are gone, and so is `docker/offload/`.
+
+| Metric | Phase D cutover, as budgeted above | As built, on the retired capture tier |
+|--------|------------------------------------|----------------------------------------|
+| CPU limits (steady state) | 16.10 | **14.60** |
+| RAM limits (steady state) | 23.125 GiB | **21.625 GiB** |
+| Long-running services | 18 | **15** |
+| One-shot services | 4 | **4** — `redpanda-init`, `lakekeeper-migrate`, `lake-init`, `lake-ddl` |
+| CPU / RAM at bootstrap peak | 17.60 / 24.625 GiB across 22 | **16.10 / 23.125 GiB across 19** |
+| Headroom vs 16 CPU / 40 GB | −0.6% CPU / 42% RAM | **+8.8% CPU / 46% RAM** |
+
+**No parallel run is being paid for any more.** Both overlaps the Phase B, C and D addenda
+budgeted for have ended: the capture comparison ended when the handlers retired, and the
+lake comparison never ran because `docker/offload/` was deleted rather than compared. The
+bootstrap peak is still 0.10 CPU over the 16-core target for the length of a bootstrap, on
+the same ceiling-not-reservation argument every addendum above makes.
+
+Provenance — sum of `deploy.resources.limits` over the rendered compose file, split by
+whether a service is a one-shot (`restart: "no"`), 2026-08-27:
+
+```bash
+DOCKER_CONTEXT=default docker compose --env-file .env.example config --format json \
+  | python3 -c 'import json,sys
+s=json.load(sys.stdin)["services"]
+def lim(v):
+    r=v.get("deploy",{}).get("resources",{}).get("limits",{})
+    return float(r.get("cpus",0) or 0), int(r.get("memory",0) or 0)
+g={"steady":[],"one-shot":[]}
+for n,v in s.items(): g["one-shot" if v.get("restart")=="no" else "steady"].append((n,)+lim(v))
+for k in ("steady","one-shot",):
+    c=sum(r[1] for r in g[k]); m=sum(r[2] for r in g[k])
+    print("%-9s %2d services  %6.2f CPU  %7.3f GiB" % (k,len(g[k]),c,m/1024**3))
+a=g["steady"]+g["one-shot"]
+print("%-9s %2d services  %6.2f CPU  %7.3f GiB" % ("TOTAL",len(a),sum(r[1] for r in a),sum(r[2] for r in a)/1024**3))'
+```
+
+```
+steady    15 services   14.60 CPU   21.625 GiB
+one-shot   4 services    1.50 CPU    1.500 GiB
+TOTAL     19 services   16.10 CPU   23.125 GiB
+```
+
+**Alert rules go from 23 to 25** — the nine `IcebergOffload*` rules went with
+`docker/offload/`, and eleven v3 lake rules replaced them. Composition is 4 v2 ClickHouse +
+10 v3 capture + 11 v3 lake:
+
+```bash
+for f in docker/prometheus/rules/*.yml; do
+  printf '%-50s %2d\n' "$f" "$(grep -c '^[[:space:]]*- alert:' "$f")"
+done
+```
+
+```
+docker/prometheus/rules/capture-alerts.yml         10
+docker/prometheus/rules/clickhouse-alerts.yml       4
+docker/prometheus/rules/lake-alerts.yml            11
+```
+
+### Outcome addendum — 2026-08-26, spark-iceberg 4G → 8G
+
+`rewrite_data_files` over `raw.messages` (rows up to 5 MB) OOM'd a 768m driver heap
+twice and finished at 2g with a peak driver RSS of 2,641 MiB (`capacity-model.md`, dated
+note). `maintenance.py` now runs alone behind the ingest lock, and the container limit
+went 4G → 8G so an operator's `docker exec` fits beside it. Steady state **14.60 CPU /
+25.625 GiB across 15**, bootstrap peak **16.10 CPU / 27.125 GiB across 19**; headroom
+14.375 GiB (36%) at steady state.
+
+Found while doing it: the Docker Desktop VM on the maintainer host had **7.6 GiB** —
+every limit above it, ClickHouse's 8G included, was clipped (`docker stats` showed
+`/ 7.648GiB`). The 40 GB envelope is a statement about the host, and a host must be
+checked with `docker info --format '{{.MemTotal}}'`, not assumed. Resized to 39.2 GiB the
+same day; `docs/development/setup.md` now says ≥ 28 GB engine memory and why.

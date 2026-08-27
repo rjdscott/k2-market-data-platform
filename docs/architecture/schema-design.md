@@ -1,8 +1,8 @@
 # Schema Design
 
-Two contracts live here at once. **v3** is the wire format going forward — three Avro records under `com.k2.market.v3`, described below. **v2** is what is running today: `NormalizedTrade` plus the three ClickHouse medallion layers and their Iceberg mirrors. v2 stays documented, unedited, until Phase C retires the Kotlin handlers; nothing new should be built against it.
+Two contracts live here at once. **v3** is the wire format going forward — three Avro records under `com.k2.market.v3`, described below, and the Iceberg lake they land in. **v2** is what is still running in the hot tier: `NormalizedTrade` plus the three ClickHouse medallion layers. Its Iceberg mirrors are gone, deleted with the offload in Phase D. v2 stays documented, unedited, until Phase C retires the Kotlin handlers; nothing new should be built against it.
 
-DDL: `docker/clickhouse/schema/` (hot), `docker/iceberg/ddl/` (cold), [`schemas/avro/`](../../schemas/avro/) (wire).
+DDL: [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql) (hot), [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) (lake), [`schemas/avro/`](../../schemas/avro/) (wire).
 
 ---
 
@@ -125,14 +125,16 @@ Six independent MVs rather than a rollup chain (1m → 5m → 15m …) means eac
 
 ## Cold tier
 
-The 10 Iceberg tables under `cold.*` mirror the ClickHouse column names and types exactly — the offload appends with no column transform, so any mismatch is a runtime failure rather than a silent coercion. The flow's column lists are explicit constants in `docker/offload/flows/iceberg_offload_flow.py`, so a new ClickHouse column is ignored until it is added in both places.
+The lake does not mirror ClickHouse. Four Iceberg tables — `lake.raw.messages`, `lake.bronze.trades`, `lake.bronze.book_snapshots_l2` and `lake.audit.checks` — are created by [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), and they are fed from Redpanda rather than from the serving database ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)). `raw.messages` stores the Kafka value byte for byte, Confluent framing included; `bronze.*` is decoded from it against the exact writer schema fetched by id, in FAILFAST mode.
 
-**Two silver columns are absent from cold storage:** `trade_conditions Array(String)` and `vendor_data Map(String,String)`. The Spark ClickHouse JDBC driver (0.4.6) cannot deserialize either type, so the Iceberg schema drops them and the offload never selects them. `validation_errors` is dropped for the same reason. This is a real data-fidelity gap: those columns exist for 30 days in the hot tier and then are gone. Analytical queries have not needed them; if they did, the fix is a JSON-encoded string column rather than a driver upgrade.
+Unlike the v2 tables it replaced, the lake is unified across venues — `exchange` is a column, not a table name — and the columns come from the Avro contract in `schemas/avro/`, not from a ClickHouse `DESCRIBE`. `tests/test_wire_format.py` asserts that contract between `schemas/avro/*.avsc` and `lake.sql`, which is CLAUDE.md's schema-change rule made executable.
+
+**The v2 fidelity gap is closed by construction.** The old offload dropped `trade_conditions Array(String)`, `vendor_data Map(String,String)` and `validation_errors` because the Spark ClickHouse JDBC driver could not deserialize them, so those columns lived 30 days in the hot tier and then were gone. Nothing decodes on the way into `raw.messages`, so there is no driver to lose them to: whatever the venue sent is still there, and a bronze column that turns out to be missing is a re-decode rather than a data loss ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)).
 
 ---
 
 ## Evolution
 
-Adding a column: ClickHouse `ALTER TABLE … ADD COLUMN` is metadata-only on `MergeTree`, and Iceberg schema evolution is likewise metadata-only. The ordering that works is ClickHouse first, then Iceberg, then the offload flow's column list — reversed, the offload selects a column the source does not have yet and fails the cycle.
+Adding a column: ClickHouse `ALTER TABLE … ADD COLUMN` is metadata-only on `MergeTree`, and Iceberg schema evolution is likewise metadata-only. On the lake side the ordering that works is the Avro schema first, then `docker/lake/ddl/lake.sql`, then the projection in `docker/lake/ingest.py` — reversed, the ingest projects a field the schema does not carry and fails the cycle. `tests/test_wire_format.py` fails if the first two drift apart, which is the point of running it in CI.
 
 Changing a type is not free anywhere and has not been done. Removing a column from the middle of a Gold table means rebuilding its MV, since MV column position is bound at creation.
