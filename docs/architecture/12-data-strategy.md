@@ -7,9 +7,8 @@
 Decided with the maintainer on 2026-08-27, after the first day of running Phase D. This page
 is the *strategy*: which data lives where, why, and what each tier is for. The mechanics are
 in [schema-design.md](13-schema-design.md) (contracts), [partitioning-strategy.md](14-partitioning-strategy.md)
-(layout) and the ADRs it cites. Phase E implements it; until then the running stack is the
-Phase D shape ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)) and this page
-says so where it differs.
+(layout) and the ADRs it cites. Phase E implemented it on 2026-08-27; the running stack is
+this shape ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)).
 
 **Frame.** This repository is a single-host, production-quality *demonstration* of the
 design. Every mechanism is real and measured; the host is not. The same layers map onto a
@@ -21,7 +20,7 @@ from this host, with their commands.
 
 ```mermaid
 flowchart TB
-  R["RAW · what arrived<br/>raw.messages, raw.pcap"]
+  R["RAW · what arrived<br/>raw.messages, raw.pcap (designed, not built)"]
   B["BRONZE · vendor schema, columnar<br/>one table per venue × message"]
   S["SILVER · typed + annotated<br/>per venue, every delivery kept"]
   G["GOLD · canonical, cross-venue<br/>trades, book_top20, dims, ohlcv, bbo"]
@@ -31,7 +30,7 @@ flowchart TB
 
 | Layer | Contract | Lives in | Retention | Who reads it |
 |---|---|---|---|---|
-| **Raw** | the frame as received: bytes verbatim, `recv_ts_ns`, `conn_id`/`conn_msg_seq`, Kafka lineage; later the pcap beside it | Iceberg (`raw.*`) | forever | replay, regulatory "what did you receive", forensics |
+| **Raw** | the frame as received: bytes verbatim, `recv_ts_ns`, `conn_id`/`conn_msg_seq`, Kafka lineage; `raw.pcap` beside it is designed, not built | Iceberg (`raw.*`) | forever | replay, regulatory "what did you receive", forensics |
 | **Bronze** | the venue's own schema, columnar: one table per venue × message type, field names and types as sent, no renaming | Iceberg (`bronze.*`) | forever | anyone who needs the venue's semantics untouched |
 | **Silver** | bronze, typed and annotated: fixed-point, UTC, canonical symbol *added* beside the native one, flags `checksum_ok` / `venue_replay` / `seq_gap` / `precision_loss`, lineage to the bronze row; every delivery kept | Iceberg (`silver.*`) | forever | investigations, per-venue research, gold's source |
 | **Gold** | canonical model: one schema, one row per logical trade, cross-venue in one query; reference dims; materialised products `ohlcv_{1m,5m,1h,1d}`, `bbo_1s` | Iceberg (`gold.*`) **and** ClickHouse (`gold.*`) | forever in both | backtesting, dashboards, notebooks |
@@ -57,15 +56,16 @@ Decided as a hybrid, and the reasons are the trade-offs, not a preference:
 
 | | ClickHouse gold, no TTL *(chosen)* | + silver in ClickHouse *(rejected)* | Lake + DuckDB only *(rejected as the serving tier)* |
 |---|---|---|---|
-| Backtesting | `ASOF JOIN`, sparse index on `(exchange, symbol, ts)`, vectorised; gold is already one row per trade so **no `FINAL`** on the hot path | silver keeps replays → dedup on read (`FINAL`) on every wide range | DuckDB has `ASOF` too; one process per notebook, no server; fine for one analyst |
-| Concurrency | analysts + Grafana on one server, `quant` readonly profile with memory/thread quotas | as left | none shared, and no shared cache either |
+| Backtesting | `ASOF JOIN` (join each trade to the latest quote at or before it), sparse index on `(exchange, symbol, ts)`, vectorised; gold is already one row per trade so **no `FINAL`** on the hot path | silver keeps replays → dedup on read (`FINAL`) on every wide range | DuckDB has `ASOF` too; one process per notebook, no server; fine for one analyst |
+| Concurrency | analysts on one server, `quant` readonly profile with memory/thread quotas | as left | none shared, and no shared cache either |
 | Storage/day at measured rates¹ | ≈ 0.5 GB/day (~180 GB/yr) | ≈ 1–1.4 GB/day (~450 GB/yr) | 0 extra, the lake is the record anyway |
 | Rebuild | gold only, from the lake: hours | gold + silver: days | n/a |
 | Venue-level questions | from the lake (or `iceberg()` from ClickHouse on demand) | in ClickHouse | in the lake |
 
 ¹ 8.6 M trades and 1.5 M book rows on 2026-08-26 (`make lake-verify`, `raw == trades 8,630,658`,
 `raw == book 1,484,606`), ClickHouse compression assumed ~10:1 for trades and ~7:1 for the
-80-float book rows, a prediction until Phase E measures `system.parts`.
+80-float book rows. ClickHouse gold size is not yet in a benchmark file; measure it with
+`system.parts` and record it before quoting a ratio.
 
 What decides it: **gold is the backtest surface by definition** (canonical symbol, one row per
 trade, BBO at 1 s, cross-venue). Silver's job is provenance and venue nuance, it is read when
@@ -81,12 +81,14 @@ changes on a bigger box is in [scale-out-path.md](17-scale-out-path.md).
 ## Retention and the disk
 
 "Indefinite" is a policy; the disk is a fact. This host has 961 GB, **79 % used on
-2026-08-26** (`df -h /`). At the predicted ~10 GB/day for four lake layers plus ~0.5 GB/day
-in ClickHouse, the free space is roughly two months. Before Phase E lands:
-
-- a larger volume for `/var/lib/docker` (or MinIO and ClickHouse data on their own disk), and
-- the disk gauges on both tiers: `k2_lake_disk_used_ratio` (exists; blind on Docker Desktop , 
-  [capacity-model.md](15-capacity-model.md)) and a ClickHouse `system.parts` bytes gauge (Phase E).
+2026-08-26** (`df -h /`). At 13.6 GB/day predicted
+([capacity model § 4c](15-capacity-model.md#4c-per-lake-table-per-day)) and 9.8 GB/day
+measured ([B4](../benchmarks/2026-08-27.md#b4)), the reusable space is about 60 days
+([benchmarks § Disk](../benchmarks/2026-08-27.md#disk): 630 GB, most of it locked inside an
+unshrinkable `Docker.raw`). Decided 2026-08-27: no second volume, this host is a
+demonstration. Still open: a ClickHouse `system.parts` bytes gauge, not built. The lake side
+has `k2_lake_disk_used_ratio`, which exists but is blind on Docker Desktop
+([capacity-model.md](15-capacity-model.md)).
 
 **Revisit when** either gauge crosses 80 %, or the measured ClickHouse gold growth exceeds
 1 GB/day for a week, then either the box grows or the hot window gets a TTL again, and the
@@ -99,8 +101,8 @@ For the regulatory/replay claim to hold *at the wire*, not only at the WebSocket
 rotated into `raw.pcap`; the Rust capture exports its TLS key log behind an env flag, keys
 encrypted at rest; and one script that decrypts a window, extracts the WS frames and diffs
 them against `raw.messages`. The demonstration is two numbers per frame, kernel receive time
-and user-space receive time, and a zero-length diff. Designed in the Phase E ADR, built
-after it.
+and user-space receive time, and a zero-length diff. Designed in
+[ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md), built after it.
 
 ## What this is not
 
@@ -121,7 +123,7 @@ security master adds, and the trigger that makes each worth building:
 |---|---|---|
 | stable surrogate `instrument_id` | identity that survives a venue rename (Kraken XBT→BTC), a delisting, symbol reuse | the first rename or delisting in the registry, or a fourth venue |
 | `dim_asset` | asset codes with venue aliases and decimals | two venues disagree on an asset code the yaml cannot express |
-| attributes with validity (SCD2: tick, lot, precision, status, listed/delisted) | as-of joins for queue-position and fee features; `bronze.kraken_instrument` already holds Kraken's | a gold product needs tick or lot size, or derivatives arrive (symbol ≠ instrument) |
+| attributes with validity (SCD2, a dimension row per validity interval with valid-from/valid-to: tick, lot, precision, status, listed/delisted) | as-of joins for queue-position and fee features; `bronze.kraken_instrument` already holds Kraken's | a gold product needs tick or lot size, or derivatives arrive (symbol ≠ instrument) |
 | exposure families | "BTC spot against a USD-like quote" across venues, with the stablecoin basis explicit | the first cross-venue research notebook that wants it |
 
 Rule kept from the start so none of this forces a rewrite: silver stays thin, the

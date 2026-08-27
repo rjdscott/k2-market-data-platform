@@ -68,8 +68,9 @@ flowchart TB
   `checksum_failures`, `resyncs`, `reconnects{reason}`, `produce_errors{reason}`,
   `precision_loss`), the `exchange_to_recv_seconds` histogram with buckets to 30 s, and
   `last_message_ts_seconds` per stream so staleness is `time() − gauge`, not a rate.
-- **Lake** metrics come from Iceberg snapshot summaries via PyIceberg (`metrics.py`): last
-  commit timestamp, `max_kafka_ts`, backlog offsets, last compaction, rows / files / bytes
+- **Lake** metrics come from Iceberg snapshot summaries, read over the catalog's REST API
+  with `urllib` (`metrics.py`; PyIceberg's `PyArrowFileIO` costs 122 MB of RSS on import
+  alone, against a 128 MB container limit): last commit timestamp, `max_kafka_ts`, backlog offsets, last compaction, rows / files / bytes
   per table. If the catalog is down the gauge freezes and the age grows: the alert you want.
 - **ClickHouse** ships its own `/metrics`; the two gold-feed rules watch
   `ClickHouseProfileEvents_KafkaMessagesFailed` and topic movement versus table growth.
@@ -79,11 +80,14 @@ flowchart TB
   `docker/prometheus/tests/*.test.yml` and `rules/tests/*_test.yml`, both run by gate (c2).
   Prometheus loads rules at start or `SIGHUP`, so the docs say so.
 - **Dashboards** are JSON in `docker/grafana/dashboards/`: pipeline overview, capture, lake,
-  ClickHouse. Grafana queries ClickHouse as the read-only `quant` user.
+  ClickHouse. All four query Prometheus; no ClickHouse datasource is provisioned. Notebooks
+  and `make parity-ohlcv` use the read-only `quant` user.
 - **Chaos** scripts in `scripts/chaos/` stop or corrupt one thing, watch the alert that should
   fire, time recovery, and append a row to `scripts/chaos/results/`. Measured: lake ingest
-  killed 42 s, MinIO stopped 38 s, Lakekeeper stopped 37 s, ClickHouse stopped for 150 s: `ClickHouseDown` at 160 s, healthy 7 s after restart,
-  corrupt feed record isolated in 4 s ([benchmarks § MTTR](../benchmarks/2026-08-27.md#mttr)).
+  killed 42 s, MinIO stopped 38 s, Lakekeeper stopped 37 s
+  ([benchmarks § MTTR](../benchmarks/2026-08-27.md#mttr)); ClickHouse stopped for 150 s,
+  `ClickHouseDown` at 160 s and healthy 7 s after restart, corrupt feed record isolated in
+  4 s ([`scripts/chaos/results/2026-08-27.tsv`](../../scripts/chaos/results/2026-08-27.tsv)).
 
 ## Practices
 
@@ -96,7 +100,7 @@ flowchart TB
 | Build provenance exported | `k2_capture_build_info{git_sha}` |
 | Alerts proven against the fault they name | `make chaos`; each `16-failure-modes.md` row cites the script and the measured time |
 | Dashboards versioned | provisioned from JSON in the repo, not hand-edited in the UI |
-| Least-privilege reads | Grafana uses the `quant` profile |
+| Least-privilege reads | notebooks and `make parity-ohlcv` use the `quant` readonly profile |
 
 ## Trade-offs
 

@@ -54,7 +54,7 @@ flowchart TB
   QB -->|MV| BK["gold.book_top20<br/>ReplacingMergeTree(ver)<br/>latest sample in the second wins"]
   QT & QB -.->|"undecodable"| FE["gold.feed_errors"]
   TR --> LV["ohlcv_live(bucket) · bbo_live<br/>views over FINAL"]
-  LK[("lake gold.*")] -.->|"iceberg() pull"| PR["ohlcv_* · bbo_1s<br/>MergeTree · src_snapshot_id"]
+  LK[("lake gold.*")] -.->|"iceberg() pull"| PR["ohlcv_* · bbo_1s<br/>ReplacingMergeTree(src_snapshot_id)"]
   U["quant profile<br/>readonly · 3 GiB · 2 threads"] --- LV & PR
 ```
 
@@ -65,7 +65,8 @@ flowchart TB
   ordered by `(exchange, canonical_symbol, exchange_ts, trade_id)`; `first_seen` is
   `UInt64max − recv_ts_ns`, so the row that survives a merge is the *earliest* delivery. A
   venue replay, a consumer restart, or a lake reload that overlaps the topic head all
-  collapse to one row under `FINAL`.
+  collapse to one row under `FINAL` (ClickHouse's read-time merge, which applies the
+  `ReplacingMergeTree` rule before returning rows).
 - **Candles on read.** `ohlcv_live(bucket)` is a parameterised view: `argMin`/`argMax` over
   `FINAL` with the total order `(exchange_ts, recv_ts_ns, trade_id)` (lake gold uses `trade_seq`) so open and close are
   deterministic. v2's `SummingMergeTree` candles resolved open/close per insert block;
@@ -73,8 +74,8 @@ flowchart TB
 - **History by pull.** `ohlcv_*` and `bbo_1s` (per-second best bid/offer with spread,
   imbalance and microprice: [BBO and book features](02-market-data-concepts.md#bbo-and-book-features))
   are loaded from lake gold through the `iceberg()` table function, with the
-  [Iceberg snapshot](03-data-engineering-concepts.md#iceberg-snapshots) read from recorded
-  in `src_snapshot_id`; 10.4 M trades in 4.4 s
+  [Iceberg snapshot](03-data-engineering-concepts.md#iceberg-snapshots) they were read from
+  recorded in `src_snapshot_id`; 10.4 M trades in 4.4 s
   ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)). Never computed here.
 - **Errors are rows.** `kafka_handle_error_mode = 'stream'` sends an undecodable record to
   `gold.feed_errors` with its bytes; the partition keeps moving.
@@ -94,7 +95,7 @@ flowchart TB
 | Idempotent ingestion | `ReplacingMergeTree` keys on the logical trade; `FINAL` count == distinct count asserted |
 | Deterministic aggregates | total order in `ohlcv_live`; three-way parity `make parity-ohlcv` at a pinned snapshot, 0 differ |
 | Poison records isolated | `kafka_handle_error_mode='stream'` → `feed_errors`; `ClickHouseKafkaMessagesFailed` alert; chaos `clickhouse-corrupt-record.sh` (4 s) |
-| Least privilege | `quant` readonly profile in `users.xml`; dashboards and notebooks use it |
+| Least privilege | `quant` readonly profile in `users.xml`; notebooks and `make parity-ohlcv` use it |
 | Memory bounded below the container | `config.xml` server cap 6.5 GiB under an 8 GiB limit |
 | Rebuildable, timed | `clickhouse-rebuild-from-lake.md` with the command and the measured time |
 | Feed liveness alerted | `ClickHouseGoldFeedStale` (topics moving, tables not); `clickhouse-stop.sh`: `ClickHouseDown` at 160 s under a 150 s stop, healthy 7 s after restart |
