@@ -1,31 +1,23 @@
 # K2 Market Data Platform
 
-A crypto market-data platform for quantitative research: three exchanges captured verbatim, an
-Iceberg lake as the system of record, ClickHouse as a derived serving tier, on one host, inside a
-16 CPU / 40 GB budget. Public WebSocket feeds over the internet; **not a trading path**.
+A market data platform for quantitative research. Three crypto exchanges are captured
+verbatim over public WebSocket feeds, archived to an Iceberg lake that is the system of
+record, and served from ClickHouse as a derived tier. One host, 16 CPU / 40 GB. Not a
+trading path.
 
 [![CI](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.98-orange.svg)](https://www.rust-lang.org/)
 [![ClickHouse](https://img.shields.io/badge/clickhouse-24.3_LTS-yellow.svg)](https://clickhouse.com/)
 
-## What it does
+## Overview
 
-- **Captures everything, once, with provenance.** One Rust `k2-capture` process per exchange holds a
-  single WebSocket carrying trades and L2 book, stamps `recv_ts_ns` before parsing, verifies Kraken's
-  CRC32 book checksum on every update, and tracks each venue's sequence numbers. Every frame is
-  published verbatim; decoded records use fixed-point `int64` at 1e-8, never floats.
-- **Keeps the record in the lake, not the database.** Every 5 min a Spark batch reads Redpanda by
-  offset range into Iceberg: `raw` (verbatim, never expired) → `bronze` (per venue, vendor schema) →
-  `silver` (typed, flagged, every delivery kept) → `gold` (one row per trade, OHLCV, BBO). Each layer
-  is derived only from the one above it and rebuilt from raw on demand; consumed offsets are committed
-  in the same snapshot as the rows, so a killed run resumes rather than duplicates.
-- **Serves from ClickHouse, which can be thrown away.** `gold.*` in ClickHouse is fed live from the
-  Avro topics and reloaded from the lake; the lake wins on conflict. OHLCV over deduplicated trades is a
-  view, so a venue replay cannot corrupt a candle.
-- **Proves it.** Nightly audits per layer (offset continuity, parity, duplicates, checksum),
-  three-way OHLCV parity at a pinned snapshot, chaos scripts with measured recovery times, and a
-  fresh-clone release check before every tag.
+| Property | How |
+|---|---|
+| Complete | One Rust process per venue holds a single socket carrying trades and L2 book, stamps `recv_ts_ns` before parsing, verifies Kraken's CRC32 on every update, tracks each venue's sequence numbers, and publishes every frame verbatim. |
+| Reproducible | Every 5 minutes Spark reads Redpanda by offset range into Iceberg: `raw` (never expired) to `bronze` (per venue, vendor schema) to `silver` (typed, flagged) to `gold` (one row per trade, OHLCV, BBO). Consumed offsets are committed in the same snapshot as the rows; any layer rebuilds from the one above. |
+| Disposable serving | ClickHouse `gold` is fed live from the topics and reloaded from the lake. Dedup is a `ReplacingMergeTree` key; candles are computed on read, so a replay cannot corrupt one. |
+| Proven | Nightly audits per layer, three-way OHLCV parity at a pinned snapshot, 28 alert rules as code, chaos scripts with measured recovery, a fresh-clone release check before every tag. |
 
 ## Architecture
 
@@ -64,58 +56,71 @@ flowchart TB
   classDef ob fill:#f3f4f6,stroke:#6b7280,color:#111827
 ```
 
-15 long-running services (+4 one-shot init) at 14.60 CPU / 25.625 GiB of limits
-(`docker compose --env-file .env.example config`, limits summed , 
-[docker-resources.md](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
-Component deep dives: [`docs/architecture/README.md`](./docs/architecture/README.md).
+15 long-running services and 4 one-shot init containers, 14.60 CPU / 25.625 GiB of declared
+limits ([how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 
-## Decisions that shaped it
+**Read the book.** [`docs/architecture/`](./docs/architecture/README.md) is written as numbered
+chapters: what the platform is and is not, the market data and data engineering concepts it
+rests on, then one chapter per component with the problem, the options, the decision, how it
+works, and the practices that enforce it.
+
+## Key decisions
 
 | ADR | Decision | Why |
 |---|---|---|
-| [018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md) | Lake is the system of record; everything else derived | v2's lake was a JDBC copy of the serving DB, it inherited its TTL, normalisation and dropped columns |
-| [019](./docs/adr/ADR-019-rust-capture-tier.md) | Rust capture replaces three JVM handlers | One connection per venue carrying trades *and* book; `recv_ts` before parse; retired on a measured parity gate |
-| [020](./docs/adr/ADR-020-avro-fixed-point-contracts.md) | Avro + registry, `int64` @1e-8, `BACKWARD_TRANSITIVE` | v2 stored prices as strings and its registry proved nothing |
+| [018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md) | The lake is the system of record; everything else is derived | v2's lake was a JDBC copy of the serving database and inherited its TTL and dropped columns |
+| [019](./docs/adr/ADR-019-rust-capture-tier.md) | One Rust process per venue replaces three JVM handlers | Trades and book on one connection, `recv_ts` before parse, retired on a measured parity gate |
+| [020](./docs/adr/ADR-020-avro-fixed-point-contracts.md) | Avro with registry, `int64` at 1e-8, `BACKWARD_TRANSITIVE` | v2 stored prices as strings and never read its own Avro topic |
 | [022](./docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md) | Kafka offsets committed inside the Iceberg snapshot | One atomic commit replaces a watermark table and its failure modes |
-| [026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) | raw / bronze-per-venue / silver-per-venue / gold-canonical; ClickHouse serves gold with no TTL | Typed venue fields survive; OHLCV on read fixes v2's `SummingMergeTree` candles resolving open/close arbitrarily |
-| [027](./docs/adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync policy | Raw holds the deltas; the product is what research joins against |
-| [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect, **reversed** | Wrong call, kept on the record with its Outcome |
+| [026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) | Four lake layers; ClickHouse serves gold with no TTL | Venue fields survive to silver; candles on read fix v2's per-block open/close bug |
+| [027](./docs/adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync | Raw keeps the deltas; the product is what research joins against |
+| [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect: reversed | A wrong call kept on the record with its outcome |
 
-All 27 ADRs and their supersession chain: [`docs/adr/`](./docs/adr/README.md).
+All 27 ADRs: [`docs/adr/`](./docs/adr/README.md).
 
 ## Measured
 
-From [`docs/benchmarks/2026-08-27.md`](./docs/benchmarks/2026-08-27.md), a 6.5 h capture window
-across three venues; each row there carries the command that produced it.
+From [`docs/benchmarks/2026-08-27.md`](./docs/benchmarks/2026-08-27.md), a 6.5 h capture
+window; every row there carries the command that produced it.
 
-| Measure | Binance | Kraken | Coinbase |
+| | Binance | Kraken | Coinbase |
 |---|---:|---:|---:|
 | Frames/s, window average | 187 | 606 | 130 |
-| Exchange → receive p50 / p99 (ms, per frame) | 42 / 207 | 177 / 459 | 184 / see note |
-| Sequence gaps · checksum failures · produce errors | 0 ·, · 0 | 0 · 0 of 14.1 M · 0 | 0 ·, · 0 |
+| Exchange to receive, p50 / p99 (ms) | 42 / 207 | 177 / 459 | 184 / see note |
+| Sequence gaps | 0 | 0 | 0 |
+| Checksum failures | n/a | 0 of 14.1 M | n/a |
+| Produce errors | 0 | 0 | 0 |
 
-Coinbase's p99 is dominated by the venue's on-subscribe trade snapshot, not transit; the capture now
-excludes it from the histogram. Lake bronze rebuild from raw: 61.9 M rows in 520 s; per-venue bronze
-stores at 0.59× the raw archive; lake growth ≈ 9.8 GB/day. ClickHouse pull of 10.4 M gold trades from
-the lake: 4.4 s. Chaos recovery: lake ingest killed 42 s, MinIO stopped 38 s, Lakekeeper stopped 37 s,
-ClickHouse stopped for 150 s: alert at 160 s, healthy 7 s after restart; corrupt feed record isolated in 4 s
-([failure-modes.md](./docs/architecture/16-failure-modes.md)).
+Coinbase's p99 was the venue's on-subscribe trade snapshot, not transit; the capture now
+excludes it from the histogram.
+
+| Operation | Result |
+|---|---|
+| Lake bronze rebuild from raw | 61.9 M rows in 520 s |
+| Per-venue bronze vs raw archive | 0.59× |
+| Lake growth | about 9.8 GB/day |
+| ClickHouse pull of gold trades from the lake | 10.4 M rows in 4.4 s |
+| Chaos: lake ingest killed / MinIO stopped / Lakekeeper stopped | 42 s / 38 s / 37 s |
+| Chaos: ClickHouse stopped 150 s | alert at 160 s, healthy 7 s after restart |
+| Chaos: corrupt feed record | isolated in 4 s |
+
+Detail per failure: [failure modes](./docs/architecture/16-failure-modes.md).
 
 ## Quick start
 
-Needs a Docker engine with ≥ 24 GB memory (`docker info --format '{{.MemTotal}}'`) so every limit is
-honoured; measured usage is far lower.
+Requires a Docker engine with at least 24 GB of memory so every declared limit is honoured;
+measured usage is far lower.
 
 ```bash
 git clone https://github.com/rjdscott/k2-market-data-platform.git && cd k2-market-data-platform
 cp .env.example .env            # set every change-me value; LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 set -a && . ./.env && set +a
-docker compose up -d            # first run builds capture, prefect and spark images
-docker compose ps               # all 15 healthy within ~3 min
+docker compose up -d            # first run builds the capture, prefect and spark images
+docker compose ps               # all 15 healthy within about 3 minutes
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
 ```
 
-Every layer is populated within five minutes on a fresh clone (release check, 2026-08-27).
+Every lake layer is populated within five minutes of a fresh clone (release check, 2026-08-27).
 
 | Service | URL |
 |---|---|
@@ -134,42 +139,45 @@ Research: `make notebooks` starts JupyterLab with DuckDB over the lake
 
 | Suite | Run |
 |---|---|
-| Rust capture, 60 (unit, binary, replay over recorded sessions) | `make test-rust` |
-| Python, 229 (contracts, wire format, lake offsets, bronze/silver decode, book replay, parity) | `make test-python` |
-| ClickHouse schema, 9 assertions incl. the v2 OHLCV regression | `make test-clickhouse` |
-| Prometheus rule unit tests + doc checks | `bash scripts/check-docs.sh` |
+| Rust capture: 60 tests, including replay over recorded sessions | `make test-rust` |
+| Python: 229 tests over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
+| ClickHouse schema: 9 assertions, including the v2 OHLCV regression | `make test-clickhouse` |
+| Prometheus rule unit tests and documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make chaos` |
 
-CI ([`ci.yml`](./.github/workflows/ci.yml)): rust (fmt, clippy `-D warnings`, test), python (Ruff,
-pytest), clickhouse-schema, docker build matrix, compose config, docs checks, Trivy.
+CI ([`ci.yml`](./.github/workflows/ci.yml)) runs rust (fmt, clippy `-D warnings`, test),
+python (Ruff, pytest), clickhouse-schema, a docker build matrix, compose validation, the
+documentation gates and Trivy on every pull request.
 
 ## Repository layout
 
 ```
 services/capture-rust/     k2-capture: one binary, three exchanges
 docker/lake/               Spark ingest, layer builders, audits, DDL, Prefect flows
-docker/clickhouse/ddl/     gold contract (CI-tested) + Kafka feeds
+docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds
 docker/prometheus/rules/   28 alert rules with unit tests
 schemas/avro/              raw-message, trade, book-snapshot-l2
-config/instruments.yaml    instrument registry, single source of truth
+config/instruments.yaml    instrument registry, the single source of truth
 scripts/chaos/             failure injection, timed
 notebooks/                 DuckDB research notebooks
-docs/                      architecture, ADRs, runbooks, benchmarks, plans
-legacy/                    v1 (Python), v2 Kotlin handlers, v2 ClickHouse DDL, v2 offload, archived, unmodified
+docs/                      the architecture book, ADRs, runbooks, benchmarks, plans
+legacy/                    v1, v2 Kotlin handlers, v2 ClickHouse DDL, v2 offload: archived, unmodified
 ```
 
 ## Not built
 
-No query API; no replication or failover, one broker, one ClickHouse, one host; no Alertmanager
-routing; no load test above 1×; pcap capture and a cross-venue security master are designed
-([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md),
-[data-strategy.md](./docs/architecture/12-data-strategy.md)) and not started.
+No query API. No replication or failover: one broker, one ClickHouse, one host. No
+Alertmanager routing. No load test above 1×. A pcap sidecar and a cross-venue security
+master are designed ([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md),
+[data strategy](./docs/architecture/12-data-strategy.md)) and not started.
 
 ## Documentation
 
-[`docs/README.md`](./docs/README.md) is the map: architecture and component deep dives, ADRs,
-runbooks, dated benchmarks and audits, the v3 plan, and
-[`MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md) for the v1 → v2 → v3 story.
+- [`docs/architecture/`](./docs/architecture/README.md): the book, start at chapter 00
+- [`docs/adr/`](./docs/adr/README.md): why, one decision per file, never edited once accepted
+- [`docs/runbooks/`](./docs/runbooks/README.md): how, one per alert family, with measured recovery
+- [`docs/benchmarks/`](./docs/benchmarks/README.md): every published number and its command
+- [`docs/MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md): v1 to v2 to v3, with what each phase measured
 
 ## License
 
