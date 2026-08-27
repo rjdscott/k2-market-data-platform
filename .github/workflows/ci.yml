@@ -28,7 +28,7 @@ jobs:
       # `@stable` was a no-op: rustup honours the toolchain file, so the action's
       # `components:` never applied and 1.98.0 was downloaded on every run anyway
       # (rust-cache caches build artefacts, not toolchains).
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: clippy, rustfmt
 
