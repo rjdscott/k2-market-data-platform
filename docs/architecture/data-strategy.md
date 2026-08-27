@@ -17,10 +17,12 @@ from this host, with their commands.
 
 ```mermaid
 flowchart TB
-  R["RAW · what arrived<br/>raw.messages, raw.pcap"] --> B["BRONZE · vendor schema, columnar<br/>bronze.&lt;venue&gt;_&lt;msg&gt;"]
-  B --> S["SILVER · typed + annotated, per venue<br/>silver.trades_&lt;venue&gt;, silver.book_&lt;venue&gt;"]
-  S --> G["GOLD · canonical, cross-venue<br/>gold.trades, gold.book_top20, dims, ohlcv, bbo"]
-  G --> CH["ClickHouse gold · indefinite<br/>backtesting + dashboards"]
+  R["RAW · what arrived<br/>raw.messages, raw.pcap"]
+  B["BRONZE · vendor schema, columnar<br/>one table per venue × message"]
+  S["SILVER · typed + annotated<br/>per venue, every delivery kept"]
+  G["GOLD · canonical, cross-venue<br/>trades, book_top20, dims, ohlcv, bbo"]
+  CH["ClickHouse gold · indefinite<br/>backtesting + dashboards"]
+  R --> B --> S --> G --> CH
 ```
 
 | Layer | Contract | Lives in | Retention | Who reads it |
