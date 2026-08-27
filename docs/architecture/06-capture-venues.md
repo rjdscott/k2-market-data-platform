@@ -14,19 +14,16 @@ answers that differently. Binance publishes a monotonic `lastUpdateId`; Kraken p
 must match yours) to every book frame; Coinbase publishes one `sequence_num` shared by every
 channel on the connection.
 
-Three detectors, three blast radii. Binance can lose one symbol's book and repair it alone.
-Kraken learns within one update that a book is wrong but not which update was missed. A
-Coinbase gap cannot be attributed to any product, so it invalidates every book on the
-socket. A single resync policy either under-reacts on one venue or over-reacts on another,
-and both show up as [completeness](02-market-data-concepts.md#completeness) you cannot
-defend.
+Three signals, three blast radii, so one resync policy either under-reacts on one venue or
+over-reacts on another, and both show up as
+[completeness](02-market-data-concepts.md#completeness) you cannot defend.
 
 ## Options
 
 | Option | Why it lost | Reference |
 |---|---|---|
-| Normalise everything behind one generic adapter interface, one sequencing model | Requires inventing a sequence number for Kraken and a checksum for Binance; both inventions become fields a later query trusts. The v2 Kotlin tier was that shape: it parsed Coinbase's `sequence_num` and discarded it, and synthesised Kraken trade ids from `timestamp + pair.hashCode()` | [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md), [ADR-019](../adr/ADR-019-rust-capture-tier.md) |
-| Resync every venue by reconnecting the socket | Correct for Coinbase, wasteful for the other two: it drops 12 healthy Binance books to repair one, and re-downloads every Kraken book for one symbol's checksum mismatch | [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md) |
+| Normalise everything behind one generic adapter interface, one sequencing model | Requires inventing a sequence number for Kraken and a checksum for Binance; both inventions become fields a later query trusts. The v2 Kotlin tier was that shape: it parsed Coinbase's `sequence_num` and discarded it, and synthesised Kraken trade ids as `"KRAKEN-${timestampMs}-${pair.hashCode()}"` | [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md), [ADR-019](../adr/ADR-019-rust-capture-tier.md) |
+| Resync every venue by reconnecting the socket | Correct for Coinbase, wasteful for the other two: it drops 11 healthy Binance books to repair one, and re-downloads every Kraken book for one symbol's checksum mismatch | [02 sequencing](02-market-data-concepts.md#sequencing) |
 | **Per-venue policy matched to the venue's own continuity signal** (chosen) | Three explicit policies in one table, no shared abstraction over three implementations | [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md) |
 
 ## Decision
@@ -54,12 +51,12 @@ research subject.
 |---|---|---|---|
 | Endpoint | `wss://stream.binance.com:9443/stream` | `wss://ws.kraken.com/v2` | `wss://advanced-trade-ws.coinbase.com` |
 | Streams on the one socket | `<sym>@trade`, `<sym>@depth20@100ms` via `/stream?streams=`, no subscribe frame | `instrument`, `book` (depth 25), `trade`; `heartbeat` and `status` arrive unsubscribed | `market_trades`, `level2`, `heartbeats` |
-| Book model | complete top-20 partial every 100 ms; no local state | snapshot + deltas, local book | snapshot + absolute-quantity updates, local full-depth `BTreeMap` |
+| Book model | complete top-20 partial every 100 ms; the last frame replaces the book outright, no deltas | snapshot + deltas, local book | snapshot + absolute-quantity updates, local full-depth `BTreeMap` |
 | Continuity signal | `lastUpdateId` strictly increasing per symbol | CRC32 over top-10 asks then bids on every `book` frame; no sequence numbers | `sequence_num`, one counter across every channel on the connection |
 | On failure | drop that book; `Resubscribe`, the next partial is a complete top-20 | emit one last snapshot with `checksum_ok=false`, drop the book, unsubscribe + subscribe that symbol | drop every book; `Reconnect`, a gap cannot be attributed to one product |
-| Trade id | venue `t` | venue `trade_id` (v1 had none, v2 was a reason to move) | venue `trade_id`; the subscribe-time snapshot carries history, excluded from the latency histogram |
+| Trade id | venue `t` | venue `trade_id` (WS v1 published none and the Kotlin tier synthesised one; WS v2's integer id is part of why the tier moved, [ADR-019](../adr/ADR-019-rust-capture-tier.md)) | venue `trade_id`; the subscribe-time snapshot carries history, excluded from the latency histogram |
 | `native` / `canonical` | `BTCUSDT` / `BTC/USDT` | `BTC/USD` / `BTC/USD` | `BTC-USD` / `BTC/USD` |
-| Connection lifetime | venue closes at 24 h; capture reconnects at 23 h (`reason="scheduled"`) | none published | none published |
+| Connection lifetime | venue closes at 24 h; capture reconnects at 23 h (`reason="scheduled"`) | none published (`main.rs:123-130`: only Binance gets a max age) | none published (`main.rs:123-130`: only Binance gets a max age) |
 
 ### Kraken
 
@@ -74,13 +71,13 @@ flowchart TB
   Q -->|no| X["emit snapshot checksum_ok = false<br/>drop book · resubscribe<br/>checksum_failures_total"]
 ```
 
-The digit rendering (`decimal.checksum_digits`) depends on each pair's `price_precision`
-and `qty_precision` from the `instrument` channel, which is why `instrument` is the first
-subscription sent; frames arriving before their precision does are parked (up to
-`MAX_PENDING_FRAMES = 512` per symbol) rather than checked against a guess, and Kraken's
-documented example (`3310070434`) is a unit test. Subscription depth is 25, the shallowest
-the checksum is defined over (overridable per instrument via `book_depth`), while the
-emitted snapshot is top-20
+The digit rendering (`decimal::checksum_digits`, `decimal.rs:137`) depends on each pair's
+`price_precision` and `qty_precision` from the `instrument` channel, which is why
+`instrument` is the first subscription sent; frames arriving before their precision does are
+parked (up to `MAX_PENDING_FRAMES = 512` per symbol) rather than checked against a guess,
+and Kraken's documented example (`3310070434`) is a unit test. Subscription depth is 25,
+the shallowest depth Kraken lets a checksummed book be kept at (`kraken.rs:40-42`;
+overridable per instrument via `book_depth`), while the emitted snapshot is top-20
 ([top-of-book sampling](02-market-data-concepts.md#top-of-book-sampling)); levels past the
 subscription depth are truncated on apply, because a level the venue stops reporting would
 corrupt a later checksum. The lake replays the same algorithm over every archived frame
@@ -98,12 +95,13 @@ error rather than as silent aliasing (`kraken::tests::a_v1_spelling_is_not_alias
 
 The combined endpoint carries the subscription in the URL, so there is no subscribe frame
 and no ack to wait for. `@depth20@100ms` is a *partial* stream: every frame is a complete
-top-20, so the adapter holds no book state beyond the last `lastUpdateId` per symbol and
-recovery from a regression is simply the next frame. That id means nothing across a
-connection boundary, so it is reset on reconnect rather than compared. Binance closes a
-connection at 24 h; `BINANCE_MAX_CONNECTION_AGE` pre-empts that at 23 h (`main.rs:124`),
-turning an involuntary disconnect into a scheduled one, and
-`k2_capture_reconnects_total{reason}` keeps the two distinguishable in a postmortem.
+top-20, so the adapter keeps only the last frame's top-20 and its `lastUpdateId` per symbol
+(`binance.rs:47-56`), never applies a delta, and recovers from a regression with the next
+frame. That id means nothing across a connection boundary, so it is reset on reconnect
+rather than compared. Binance closes a connection at 24 h; `BINANCE_MAX_CONNECTION_AGE`
+pre-empts that at 23 h (`main.rs:124`), turning an involuntary disconnect into a scheduled
+one, and `k2_capture_reconnects_total{reason}` keeps the two distinguishable in a
+postmortem.
 
 ### Coinbase
 
@@ -115,8 +113,8 @@ and drops its books; `snapshot` then returns `None` rather than a plausible-look
 until the new connection's snapshots land. No checksum is published, so `checksum_ok` is
 `None`, meaning unanswerable, never collapsed to `true`.
 
-There is no top-N option either: the `level2` subscribe snapshot is the whole book, measured
-at 5,195,904 bytes / 43,974 levels for `BTC-USD`, which is what sized the 8 MiB
+Coinbase offers no top-N subscription: the `level2` subscribe snapshot is the whole book,
+measured at 5,195,904 bytes / 43,974 levels for `BTC-USD`, which is what sized the 8 MiB
 `max.message.bytes` on the `raw` topics ([07-wire-contracts.md](07-wire-contracts.md)). The
 local `BTreeMap` holds full depth, top-20 is a truncation at sample time, and
 `k2_capture_book_levels_total` is updated after every apply so memory is watched rather than
@@ -135,9 +133,9 @@ procedure is [operations/adding-new-exchanges.md](../operations/adding-new-excha
 |---|---|
 | Registry | venue and instruments in [`config/instruments.yaml`](../../config/instruments.yaml), `native` exactly as the venue spells it on the wire, `canonical` as `BASE/QUOTE` |
 | Code | an `Exchange` variant plus default URL in `src/config.rs`, and `src/exchanges/<venue>.rs` implementing `handle_frame`, `subscribe_messages`, `snapshot` and the venue's own continuity check, wired into `exchanges/mod.rs` |
-| Test | a fixture from `k2-capture record --exchange <venue>` and a `tests/replay_<venue>.rs` hashing two passes against a committed golden value |
+| Test | a fixture from `k2-capture record --exchange <venue>` and a `tests/replay_<venue>.rs` (Kraken's is `tests/replay.rs`) hashing two passes against a committed golden value |
 | Topics | the three v3 topics and their Avro subjects in [`docker/redpanda/init.sh`](../../docker/redpanda/init.sh) |
-| Runtime | a `capture-<venue>` service in `docker-compose.yml` (0.25 CPU / 256M, more for full-depth books), a scrape job with no `exchange` target label, and the `exchange=~` selectors in [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml) plus the dashboard |
+| Runtime | a `capture-<venue>` service in `docker-compose.yml` (0.25 CPU / 256M; Coinbase's full-depth book gets 512M, `docker-compose.yml:959-960`), and a scrape job with no `exchange` target label (`prometheus.yml:87`). Nothing else: the alerts select `up{job=~"capture-.*"}` and read `$labels.exchange`, and the dashboard's `$exchange` variable is `label_values(k2_capture_messages_total, exchange)`, so both pick the venue up from its first scrape |
 | Lake | nothing: bronze is unified with `exchange` as a column and [`docker/lake/ingest.py`](../../docker/lake/ingest.py) builds its topic list as `K2_EXCHANGES × {raw, trades, book}` ([08-lake-ingest.md](08-lake-ingest.md)) |
 
 Two traps, both hit for real. `config/instruments.yaml` is a file-level bind mount, so the
@@ -145,15 +143,17 @@ container pins the inode and a write-then-rename edit leaves it reading the old 
 `docker compose up -d --force-recreate --no-deps <service>` fixes it, `docker restart` does
 not. And the registry race: capture containers gate on `redpanda-init` with
 `service_completed_successfully`, then the sink warms one subject per record kind before the
-first WebSocket connect, with a 5 s timeout so a hung registry cannot stall the socket read.
+first WebSocket connect and fails the process if it cannot (`main.rs:304-310`); any registry
+fetch that still happens on the frame path is capped at 5 s (`sink.rs:70`).
 
 ## What is measured
 
-Per venue counters, all on `:8082/metrics` and prefixed `k2_capture_`: `gaps_total`,
-`checksum_failures_total` (Kraken only, no series is seeded for the other two),
-`resyncs_total`, `reconnects_total{reason}`, `produce_errors_total{reason}`,
-`precision_loss_total`, `unknown_frames_total`, `exchange_to_recv_seconds` histogram,
-`book_depth`, `book_levels_total`. Every series carries the venue's own `exchange` label, so
+Per venue series, all on `:8082/metrics` and prefixed `k2_capture_`: counters `gaps_total`,
+`checksum_failures_total` (Kraken only; no series is seeded for the other two,
+`main.rs:267-273`), `resyncs_total`, `reconnects_total{reason}`,
+`produce_errors_total{reason}`, `precision_loss_total`, `unknown_frames_total`; gauges
+`last_message_ts_seconds{stream}`, `book_depth{symbol}`, `book_levels_total`; histogram
+`exchange_to_recv_seconds`. Every series carries the venue's own `exchange` label, so
 the scrape jobs set none ([11-observability.md](11-observability.md)). The 6.5 h window on
 2026-08-27 read 0 gaps and 0 checksum failures over 14.1 M Kraken frames
 ([benchmarks](../benchmarks/2026-08-27.md#ingestion--capture-tier)).
@@ -163,29 +163,28 @@ the scrape jobs set none ([11-observability.md](11-observability.md)). The 6.5 h
 | Practice | Where it is enforced |
 |---|---|
 | Continuity checked on every frame | `lastUpdateId` / CRC32 / `sequence_num` in each adapter; `CaptureSequenceGaps`, `CaptureChecksumFailure` alerts |
-| Failure is visible before it is repaired | Kraken marked snapshot emitted **before** the book is dropped (`kraken.rs`); consumers can filter `checksum_ok = false` |
+| Failure is visible before it is repaired | Kraken marked snapshot emitted **before** the book is dropped (`kraken.rs:410-418`); consumers can filter `checksum_ok = false` |
 | Resync is the venue's job, not ours | no book is rebuilt from guesses; a fresh venue snapshot is the only repair |
 | Venue example is a test | `decimal.rs` / `kraken.rs` tests against Kraken's published checksum example |
-| Recorded sessions replay | `k2-capture record` fixtures in `tests/fixtures/`, sha256-pinned, run in CI |
-| Pre-empt known limits | Binance 23 h scheduled reconnect; 8 MiB frame cap sized to Coinbase's snapshot |
+| Recorded sessions replay | `k2-capture record` fixtures in `services/capture-rust/tests/fixtures/`, sha256-pinned, run by `cargo test --locked` in CI |
+| Pre-empt known limits | Binance 23 h scheduled reconnect (`main.rs:124`); Coinbase snapshot size measured before the frame cap was set (`ws.rs:28`, `init.sh:128`) |
 
 ## Trade-offs
 
-Three policies means three code paths and three sets of venue docs to keep current, and the
-honest limit of this shape is around ten venues.
+Three policies means three code paths and three sets of venue docs to keep current; the
+enum-not-trait shape (`exchanges/mod.rs:3-11`) is revisited when a fourth venue lands.
 
 Coinbase's connection-wide resync is the expensive one: one lost frame costs every book on
 the socket, and that cost grows with the instrument count. Splitting products across
 connections is the upgrade path, not taken yet.
 
-There is no dead-letter queue and no spill to disk. When librdkafka's 32 MiB queue fills,
-records are dropped and counted rather than blocking the frame loop, because a blocked loop
-stops us reading the socket and the venue drops us, losing more than it saved
-([backpressure and loss](03-data-engineering-concepts.md#backpressure-and-loss)). An
-unparseable frame is still archived verbatim to the `raw` topic and counted in
-`unknown_frames_total`, so a normalisation bug stays
-[rebuildable](03-data-engineering-concepts.md#rebuildability). At 34 instruments this has
-cost nothing; at ten venues the DLQ is the first thing to add.
+Loss policy is chapter [05](05-capture.md#trade-offs): drop-on-full, counted, no spill and
+no dead-letter queue (a side topic for records that could not be delivered). Venue dialect
+adds one thing: a frame no adapter recognises is still archived verbatim to `raw` and
+counted in `k2_capture_unknown_frames_total` (`exchanges/mod.rs:229-235`), so a
+normalisation bug stays [rebuildable](03-data-engineering-concepts.md#rebuildability). At 34
+instruments this has cost nothing; a second venue with a connection-wide sequence is the
+trigger to add a dead-letter topic.
 
 ## Key points
 
@@ -195,6 +194,5 @@ cost nothing; at ten venues the DLQ is the first thing to add.
   *contents*, not just its ordering; it needs per-pair precision before it can run at all.
 - A book that fails its check is emitted once with `checksum_ok = false` before it is
   dropped, so the bad window is queryable instead of looking like quiet.
-- Nothing is translated or synthesised: `native` is the bytes on the wire, an unknown symbol
-  fails loudly, and arithmetic is
+- Nothing is synthesised: an unknown symbol fails loudly, and arithmetic is
   [fixed-point](02-market-data-concepts.md#fixed-point-numbers) `i64` at 1e-8 throughout.
