@@ -6,6 +6,11 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    ignore:
+      # The tag IS the toolchain version; Dependabot bumped it to 1.100.0 before
+      # that Rust existed and main went red (2026-08-27). Bump by hand when a
+      # release is out, together with the Dockerfile's rust image.
+      - dependency-name: "dtolnay/rust-toolchain"
     open-pull-requests-limit: 3
     labels: ["dependencies", "github-actions"]
     commit-message:
