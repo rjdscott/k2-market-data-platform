@@ -1,14 +1,14 @@
 # 17. Scale-out path: single host to AWS at TB/PB
 
 > **You will learn** how each tier maps to AWS at TB/PB scale, designed, not exercised.
-> **Read this if** architects; readers asking 'what would change at 400×'.
+> **Read this if** architects; readers asking 'what would change at 200×'.
 > **Before this** chapter 04, 12.
 
 > **Designed, not exercised.** Nothing on this page has been deployed, benchmarked or
 > costed against a real AWS account. There is no account and the cloud deployment is
 > explicitly out of scope
 > ([Q9](../research/2026-08-26-v3-requirements-clarification.md#q9--scale-target)). This
-> is a design document whose purpose is to keep the single-host implementation honest , 
+> is a design document whose purpose is to keep the single-host implementation honest:
 > every claim below is a claim about *this repository's code*, which can be checked, not
 > about AWS behaviour, which cannot be checked from here.
 
@@ -18,7 +18,7 @@ would change in the code, and what would not?* The answer the design is built to
 "five environment variables and a Terraform repository", and the value of writing it down
 now is that it fails loudly whenever a hard-coded endpoint sneaks in.
 
-Scope: the v3 tiers as built in Phases B–D. The 16 CPU / 40 GB single-host constraint
+Scope: the v3 tiers as built in Phases B–E. The 16 CPU / 40 GB single-host constraint
 ([ADR-010](../adr/ADR-010-resource-budget.md)) is a *deliberate* constraint of the
 project, not a ceiling on the architecture, ADR-018's non-goal list keeps *no HA on this
 host*, which is a different sentence from *cannot scale*.
@@ -51,7 +51,7 @@ change in this repository to get there.
 | **Lake storage** | MinIO, one container, one bucket | **S3**, with a lifecycle policy on the data prefix (§4). This is what makes [Q8](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host)'s *keep forever* viable past one disk | `K2_S3_ENDPOINT` (unset → real S3), `K2_S3_REGION`, `K2_S3_PATH_STYLE=false` (virtual-hosted addressing on real S3) | `S3FileIO` is already the file IO. Not `s3a://`, not HadoopFileIO, the v3 lake has never used a filesystem path |
 | **Catalog** | Lakekeeper v0.13.3 + PostgreSQL, one container each | **Lakekeeper on ECS + RDS PostgreSQL Multi-AZ**, or AWS Glue Data Catalog | `K2_LAKE_CATALOG_URI`, `K2_LAKE_WAREHOUSE`, catalog auth. Glue instead of Lakekeeper is a catalog-type change in `spark_conf.py` and an `ATTACH` change in the notebooks, the larger of the two options | the REST protocol, so Spark, DuckDB and ClickHouse keep addressing tables the same way ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)) |
 | **Ingest + maintenance** | one Spark container, Prefect-triggered every 5 min | **EMR Serverless**, one application, jobs submitted per run. Bursty compute is exactly its billing shape | the Prefect deployment's dispatch, `docker exec k2-spark-iceberg` becomes an EMR job submission; that line is the whole change | `ingest.py`, `offsets.py`, `maintenance.py` and the offsets-in-snapshot mechanism ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). Exactly-once comes from the Iceberg commit, so it does not care what launched the job |
-| **Hot tier** | ClickHouse 24.3 LTS, one node, gold only, no TTL | **ClickHouse on EC2 (a cluster) or ClickHouse Cloud.** The TTL window is a cost dial, not a data decision, because the tier originates nothing | connection strings; the `iceberg()` rebuild path gains an S3 URL and IAM instead of MinIO keys | **the contract**: derived, rebuildable, reload-by-pull through `iceberg()`, the `s3()` glob banned ([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)) |
+| **Hot tier** | ClickHouse 24.3 LTS, one node, gold only, no TTL | **ClickHouse on EC2 (a cluster) or ClickHouse Cloud.** Retention here is a cost dial, not a data decision, because the tier originates nothing; today it is unbounded | connection strings; the `iceberg()` rebuild path gains an S3 URL and IAM instead of MinIO keys | **the contract**: derived, rebuildable, reload-by-pull through `iceberg()`, the `s3()` glob banned ([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)) |
 | **Orchestration** | Prefect 3 server + worker + PostgreSQL, self-hosted | **Prefect Cloud**, or the same three containers on ECS + RDS | the API URL and the work-pool type | the flows, the schedules, and concurrency 1 on ingest, which is a correctness setting, not a politeness one |
 | **Observability** | Prometheus + Grafana, self-hosted, no Alertmanager | **AMP + AMG** (managed Prometheus and Grafana), remote-write from the tasks | scrape config becomes remote-write; Alertmanager finally exists | the metric names, the alert rules, the `runbook:` annotations, the dashboards |
 | **Notebooks** | DuckDB 1.4.4 + PyIceberg, local | **SageMaker / any notebook host**, same libraries; **Athena** for SQL over the same tables without a cluster | the `ATTACH` endpoint and credentials | DuckDB reads Iceberg through the same REST catalog it does today (spike S10); the queries are unchanged |
@@ -102,8 +102,9 @@ That is a deletion, which is the right direction.
 
 Every number below derives from the predicted 1× rates in
 [`15-capacity-model.md`](15-capacity-model.md), which are themselves **predictions, not
-measurements**, §4c there predicts `raw.messages` at 6.47 GB/day, `bronze.trades` at
-0.156 GB/day and `bronze.book_snapshots_l2` at 0.264 GB/day, and flags the raw
+measurements**, §4c there predicts **13.6 GB/day across all the lake tables**, of which
+`raw.messages` is 6.47, the six `bronze.<venue>_<msg>` tables 3.5, the book layers 2.7
+and the remaining tables 0.86, and flags the raw
 compression ratio (G3) as the row most likely to be wrong. Every multiplication of a
 prediction inherits its error. The working is shown so a reader can substitute measured
 inputs later and re-derive rather than re-guess.
@@ -114,16 +115,17 @@ inputs later and re-derive rather than re-guess.
 
 ```
 1,000,000 GB / 365 d          = 2,740 GB/day
-2,740 GB/day ÷ 6.89 GB/day    = 398×   →  call it 400× today's rate
+2,740 GB/day ÷ 13.6 GB/day    = 201×   →  call it 200× today's rate
 ```
 
-**Assumption A2, the shape of that 400×.** It comes from breadth, not from a busier
+**Assumption A2, the shape of that 200×.** It comes from breadth, not from a busier
 BTC: roughly **20 venues × ~500 instruments ≈ 10,000 instruments**, against today's
-3 venues × 34. That matters because it changes what scales, partition counts and topic
-counts scale with venues and symbols; per-connection CPU does not.
+3 venues × 34. Those instruments are tail instruments, so 10,000 of them carry 200× the
+bytes rather than 294×. That matters because it changes what scales, partition counts
+and topic counts scale with venues and symbols; per-connection CPU does not.
 
-At 400×: **~280,000 frames/s in**, **~354,000 records/s out**
-(699.8 and 883.8 /s at 1×, capacity model §2c), and **2.59 TB/day** into `raw.messages`.
+At 200×: **~140,000 frames/s in**, **~177,000 records/s out**
+(699.8 and 883.8 /s at 1×, capacity model §2c), and **1.29 TB/day** into `raw.messages`.
 
 ### 3.2 Files per day, and why the small-file problem inverts
 
@@ -133,37 +135,37 @@ section, as in the capacity model; the DDL's `write.target-file-size-bytes` valu
 binary equivalents (128 MiB, 256 MiB), a 5 % difference that moves no conclusion below.
 
 ```
-raw.messages, 400×:  2,588 GB/day ÷ 256 MB per file   = 10,109 files/day
-per commit:          2,588 GB ÷ 288 commits           = 8.99 GB  → ~35 files
+raw.messages, 200×:  1,294 GB/day ÷ 256 MB per file   = 5,055 files/day
+per commit:          1,294 GB ÷ 288 commits           = 4.49 GB  → ~18 files
 ```
 
-**Thirty-five files of 256 MB per commit, without compaction.** This is the single most
+**Eighteen files of 256 MB per commit, without compaction.** This is the single most
 useful thing on the page: the small-file problem is a *small-scale* problem. On this host,
-a 5-minute commit writes a few MB and the nightly binpack exists to fix that. At 400×,
+a 5-minute commit writes a few MB and the nightly binpack exists to fix that. At 200×,
 every commit is already writing target-sized files, so raw compaction becomes a no-op
 guarded by a minimum-file-size filter, and the maintenance job's real work shifts to
 **sort rewrites** (clustering `bronze.*` by symbol) and **manifest rewrites**.
 
 ```
-bronze.trades, 400×: 62.4 GB/day ÷ 20 exchange partitions = 3.12 GB/partition/day
-                     3,120 MB ÷ 128 MB                    = ~24 files/partition/day
+bronze.<venue>_<msg>, 200×: 700 GB/day ÷ ~40 tables = 17.5 GB/table/day, one day partition
+                            17,500 MB ÷ 128 MB      = ~137 files/partition/day
 ```
 
 At that point `bronze.*` should move to a 256 MB target too, 128 MB exists today only
-because 0.156 GB/day cannot fill a bigger file.
+because 3.5 GB/day spread over six tables cannot fill a bigger file.
 
 ### 3.3 Partition spec, re-derived
 
 The rule this design uses: **a partition should hold at least one target-sized file, and
 a table should not accumulate partitions faster than its metadata can be planned.**
 
-| Spec | 1× (today) | 400× | Verdict |
+| Spec | 1× (today) | 200× | Verdict |
 |---|---|---|---|
-| `raw.messages` `days(kafka_ts), topic` | 9 partitions/day, ~26 files/day, ~0.72 GB per partition | 60 partitions/day (20 venues × 3 streams), ~43 GB per partition | holds at both ends |
-| `raw.messages` `hours(kafka_ts), topic` | 216 partitions/day, **30 MB per partition**, a tenth of a target file | 1,440 partitions/day, **1.8 GB per partition**, 7 target files | wrong today, **right at scale** |
-| `bronze.trades` `exchange, days(ts)` | 3 partitions/day, ~52 MB each | 20 partitions/day, ~3.1 GB each | holds at both ends |
-| `bronze.book_snapshots_l2` `exchange, days(ts)` | 3 partitions/day, ~88 MB each | 20 partitions/day, ~5.3 GB each | holds at both ends |
-| `bronze.*` + `symbol` | 34 partitions/day (34 exchange–symbol pairs), ~4.6 MB of trades each and most holding hundreds of rows | 10,000 instruments → **10,000 partitions/day** | wrong at both ends, catastrophically so at scale |
+| `raw.messages` `days(kafka_ts), topic` | 9 partitions/day, ~26 files/day, ~0.72 GB per partition | 60 partitions/day (20 venues × 3 streams), ~22 GB per partition | holds at both ends |
+| `raw.messages` `hours(kafka_ts), topic` | 216 partitions/day, **30 MB per partition**, a tenth of a target file | 1,440 partitions/day, **~0.9 GB per partition**, 3–4 target files | wrong today, **right at scale** |
+| `bronze.<venue>_<msg>` `days(recv_ts)` | 6 tables, 1 partition/day each, ~583 MB each | ~40 tables (20 venues × 2 message types), ~17.5 GB each | holds at both ends |
+| `silver.trades_<venue>` `days(exchange_ts)` | 3 tables, 1 partition/day each, ~83 MB each | 20 tables, ~2.5 GB each | thin today, holds at scale |
+| `bronze.*` + `symbol` | 34 partitions/day (34 exchange–symbol pairs), ~7 MB of trades each and most holding hundreds of rows | 10,000 instruments → **10,000 partitions/day** | wrong at both ends, catastrophically so at scale |
 
 **The `hours()` crossover is a computable trigger, not a judgement.** A per-topic hour
 partition holds `6.47 GB/day ÷ 9 topics ÷ 24 h = 30 MB` today. It reaches one 256 MB
@@ -186,16 +188,16 @@ and Iceberg's default `commit.manifest.target-size-bytes` is **8 MiB** (8,388,60
 
 ```
 1×:    9,490 files/year   ÷ 16,777  = 1 manifest covers a year
-400×:  3.69 M files/year  ÷ 16,777  = ~220 manifests for a year of raw
+200×:  1.85 M files/year  ÷ 16,777  = ~110 manifests for a year of raw
 ```
 
-Two hundred manifests in a snapshot's manifest list is comfortable, planning reads the
+A hundred-odd manifests in a snapshot's manifest list is comfortable, planning reads the
 list, prunes manifests by their partition summaries, and opens only the ones whose
 `kafka_ts` and `topic` ranges intersect the query. It stops being comfortable when
 manifests are *not* clustered by partition, which is what happens when hundreds of small
 commits each add their own: 288 commits/day × 365 = 105,000 manifests a year if nothing
 rewrites them. **`rewrite_manifests`, grouped by partition, is therefore a required
-maintenance step at scale and merely a nice-to-have today**, the difference between 220
+maintenance step at scale and merely a nice-to-have today**, the difference between 110
 and 105,000 is entirely whether that job runs.
 
 ### 3.5 Compaction cadence
@@ -203,11 +205,11 @@ and 105,000 is entirely whether that job runs.
 | Scale | Raw compaction | Bronze compaction | Manifest rewrite | Snapshot expiry |
 |---|---|---|---|---|
 | 1× (today) | nightly binpack → 256 MB; this is the job that matters | nightly sort rewrite, last 2 days | not needed (1 manifest) | nightly, keep 7 days |
-| 400× | **skip**, files already land at target; run binpack with a min-file-size filter so it is a metadata scan, not 2.6 TB of rewriting | nightly sort rewrite, last 2 days, partition-parallel on EMR Serverless | **nightly, grouped by partition**, the job that matters at this scale | nightly; expiry now reclaims real money in S3 |
+| 200× | **skip**, files already land at target; run binpack with a min-file-size filter so it is a metadata scan, not 1.3 TB of rewriting | nightly sort rewrite, last 2 days, partition-parallel on EMR Serverless | **nightly, grouped by partition**, the job that matters at this scale | nightly; expiry now reclaims real money in S3 |
 
 The point of the table: **the maintenance job's centre of gravity moves from data to
 metadata as the platform grows.** A cadence tuned on this host and shipped unchanged to
-400× would rewrite 2.6 TB a night to fix a problem that no longer exists, while leaving
+200× would rewrite 1.3 TB a night to fix a problem that no longer exists, while leaving
 the problem that does.
 
 One constraint that survives every scale, and is easy to get wrong: **snapshot expiry must
@@ -253,13 +255,15 @@ deployment that does not exist would have no provenance and would be quoted anyw
 can be said honestly is the *shape*, which terms dominate, and which are noise:
 
 - **Storage dominates, and it grows on a calendar.** `raw.messages` writes 6.47 GB/day of
-  the 6.89 GB/day all four lake tables write between them, **94 % of the lake's growth**
-  ([capacity model §4c](15-capacity-model.md#4c-per-lake-table-per-day)), and nothing deletes it,
+  the 13.6 GB/day all the lake tables write between them, **48 % of the lake's growth
+  predicted** ([capacity model §4c](15-capacity-model.md#4c-per-lake-table-per-day)) and
+  **62 % measured**, 3.77 GB of 6.09 GB over the first archive slice
+  ([B4](../benchmarks/2026-08-27.md#b4)), and nothing deletes it,
   so the storage line rises monotonically while every other line is roughly flat in
   steady state. The lifecycle policy in §4 is therefore the single largest lever on total
   cost, and the only one that trades money against a stated guarantee.
 - **Capture is negligible, and stays negligible.** Three tasks at a predicted 0.074 CPU
-  and ~0.26 GB combined (capacity model §3b, §5); at 400× it is 20 tasks of the same
+  and ~0.26 GB combined (capacity model §3b, §5); at 200× it is 20 tasks of the same
   size, because capture scales with *venues*, not with volume, one connection per venue
   is a correctness property, and the per-frame cost is ~20 µs against a 12,500 frames/s
   quota.
@@ -271,9 +275,10 @@ can be said honestly is the *shape*, which terms dominate, and which are noise:
   files) and cross-AZ data transfer between capture tasks, the bus and the ingest jobs.
   Both scale with *file count* and *topology*, not with bytes, so neither shows up in a
   capacity model built on GB/day.
-- **The hot tier is a dial.** ClickHouse holds 7 days and originates nothing, so its cost
-  is a retention choice with no data consequence, the only tier on this page where
-  spending less loses nothing but freshness.
+- **The hot tier is a dial.** ClickHouse serves gold with no TTL and originates nothing,
+  so a retention window, if one is ever reintroduced ([12](12-data-strategy.md)), is a
+  cost choice with no data consequence, the only tier on this page where spending less
+  loses nothing but freshness.
 
 ---
 

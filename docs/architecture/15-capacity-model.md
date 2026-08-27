@@ -6,7 +6,7 @@
 
 **Status: predictions only. Written 2026-08-26, in Phase C, before the first burn-in
 sample exists.** Every row below is a forecast, labelled `predicted`, naming the
-assumption it rests on and the input it was derived from. Phase F adds two columns , 
+assumption it rests on and the input it was derived from. Phase F adds two columns,
 `measured` and `error %`, from the 24 h burn-in ([`005-phase-f-notebooks-numbers-docs.md`](../plans/2026-08-26-v3-quant-research-platform/005-phase-f-notebooks-numbers-docs.md)).
 
 **The predicted values are never edited afterwards.** A row that turns out 3× wrong
@@ -62,7 +62,7 @@ guess. Section 8 says which command settles which row.
 > such frame in 10 minutes pins p99 to `+Inf`, the compaction window happened to have
 > none. It is a measurement artefact of the exchange clock, not an isolation result.
 >
-> **Verdict: no p99 regression attributable to compaction beyond the rate-driven band , 
+> **Verdict: no p99 regression attributable to compaction beyond the rate-driven band;
 > the pinning holds.** What the run *did* find was on the Spark side, not the capture side:
 > `rewrite_data_files` over `raw.messages` OOM'd a 768m driver on its 5 MB rows, twice
 > (22:16Z, 22:28Z), before finishing at a 2g heap in 102 s with a peak driver RSS of
@@ -87,17 +87,17 @@ guess. Section 8 says which command settles which row.
 | I8 | `RawMessage.payload` | the frame **byte for byte**, never compressed in-field, never re-serialised | [`schemas/avro/raw-message.avsc`](../../schemas/avro/raw-message.avsc) |
 | I9 | Capture container limits | `capture-binance` / `capture-kraken` 0.25 CPU / 256 M; `capture-coinbase` 0.25 CPU / 512 M | [`002-phase-c-rust-capture.md`](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md) Scope |
 | I10 | Steady-state budget before the Phase C cutover (v2 + Lakekeeper) | **15.35 CPU / 22.125 GB**; bootstrap peak **16.85 CPU / 23.625 GiB** | [ADR-010 Outcome addendum](../adr/ADR-010-resource-budget.md#outcome-addendum-v3-phase-b-2026-08-26) |
+| I11 | Host filesystem free space | **212 GiB free of 961 GiB** on `/` (Docker root) | `df -BG /var/lib/docker`, 2026-08-26 |
+| I12 | librdkafka producer queue cap | `queue.buffering.max.kbytes=32768` = **32 MiB** | [`002-phase-c-rust-capture.md`](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md) Scope |
 
 > **I10, as of 2026-08-26 (Phase D).** The predictions below were computed against the Phase B
 > figures in the row above and are left as computed. Since then the three Kotlin feed handlers
-> retired ([ADR-019](../adr/ADR-019-rust-capture-tier.md)), this branch added `lake-metrics` and the
+> retired ([ADR-019](../adr/ADR-019-rust-capture-tier.md)), Phase D added `lake-metrics` and the
 > `lake-ddl` one-shot, and deleted the v2 offload's exporter and its init one-shot: steady state is
-> now **14.60 CPU / 21.625 GiB across 15 long-running services** and the bootstrap peak
-> **16.10 CPU / 23.125 GiB across 19** , 
+> now **14.60 CPU / 25.625 GiB across 15 long-running services** and the bootstrap peak
+> **16.10 CPU / 27.125 GiB across 19**:
 > `docker compose --env-file .env.example config`, limits summed
 > ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
-
-| I11 | Host filesystem free space | **212 GiB free of 961 GiB** on `/` (Docker root) | `df -BG /var/lib/docker`, 2026-08-26 |
 
 > **I11, unit note, the predicted values below are left as computed.** `df -BG` counts in
 > 2³⁰ blocks, so this row is GiB and is right; §7 rank 1 then subtracts a GB figure from it
@@ -105,8 +105,6 @@ guess. Section 8 says which command settles which row.
 > the same disk read again later the same day gives **194 GiB (208.3 GB) free of 961 GiB,
 > 79% used**, `df -BG /var/lib/docker`, 2026-08-26T15:44Z. The prediction is restated with
 > both corrections under §7 rank 1; neither number here is edited.
-
-| I12 | librdkafka producer queue cap | `queue.buffering.max.kbytes=32768` = **32 MiB** | [`002-phase-c-rust-capture.md`](../plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md) Scope |
 
 ### Stated guesses: the inputs with no measurement behind them at all
 
@@ -152,7 +150,7 @@ cheap in record count and expensive in bytes, and trades are the reverse.
 | binance `@trade` | **52.9 /s** | as above | `12 × 4.41` |
 | kraken v2 `trade` | **48.5 /s** | as above | `11 × 4.41` |
 | coinbase `market_trades` | **48.5 /s** | as above | `11 × 4.41` |
-| **All trades in** | **150 /s** |, | sum, and equal to I4 by construction |
+| **All trades in** | **150 /s** | | sum, and equal to I4 by construction |
 
 **Corroboration, unplanned.** Spike S5 saw 133 `market_trades` frames in 15 s over
 2 symbols, `133 ÷ 15 ÷ 2 = 4.43` trades/s/symbol, against 4.41 derived independently
@@ -166,7 +164,7 @@ from the v2 benchmark and the instrument count. Two unrelated inputs agreeing to
 | binance `@depth20@100ms` | **120 /s** | Fixed 100 ms cadence per symbol; no decay applies, because the stream ticks whether or not the book moved | I6 × I5: `10 × 12 = 120` |
 | kraken v2 `book` depth 25 | **340.9 /s** | BTC/USD at the spike rate; the other 10 symbols at G1 | I1, G1: `78.7 × (1 + 10/3) = 340.9` |
 | coinbase `level2` | **87.8 /s** | The 2 spike symbols are majors at `527 ÷ 15 ÷ 2 = 17.57` /s each; the other 9 at G1 | I2, G1: `17.57 × (2 + 9/3) = 87.8` |
-| **All book frames in** | **548.7 /s** |, | sum |
+| **All book frames in** | **548.7 /s** | | sum |
 
 The Kraken number is the one to watch: a depth-25 event stream on one major produces
 **7.9× more frames than Binance's entire 12-symbol depth stream per symbol**
@@ -183,7 +181,7 @@ binance ping/pong ~0 /s.
 | binance | **172.9 /s** | **237.9 /s** | 1 raw + 1 trade per trade frame; 1 raw per book frame; 12 snapshots/s | in `52.9 + 120 + 0`; out `172.9 + 52.9 + 12` |
 | kraken | **389.5 /s** | **449.0 /s** | as above, 11 snapshots/s | in `48.5 + 340.9 + 0.1`; out `389.5 + 48.5 + 11` |
 | coinbase | **137.3 /s** | **196.8 /s** | as above, 11 snapshots/s; heartbeats are archived, not dropped (I8) | in `48.5 + 87.8 + 0.93`; out `137.3 + 48.5 + 11` |
-| **Total** | **699.8 /s** | **883.8 /s** |, | sum |
+| **Total** | **699.8 /s** | **883.8 /s** | | sum |
 
 For scale: v2 moved 150 msg/s of trades only. v3 predicts **~700 frames/s in and
 ~884 records/s out**, a **4.7× / 5.9×** increase, bought entirely by adding L2 and by
@@ -279,7 +277,10 @@ Weighted average payload per exchange, predicted: binance **834 B**
 | **raw, all three** | **32.34 GB** | **12.94 GB** | G2 | sum |
 | `market.crypto.v3.trades.*` (3 topics) | **1.555 GB** | **0.544 GB** | trades compress worse than raw JSON, already dense binary, so 0.35 rather than 0.40 | `120 B × 150/s × 86,400 = 1.555 GB`, `× 0.35` |
 | `market.crypto.v3.book.*` (3 topics) | **1.763 GB** | **0.705 GB** | G2 | `600 B × 34/s × 86,400 = 1.763 GB`, `× 0.40` |
-| **All 9 v3 topics** | **35.66 GB/day** | **14.19 GB/day** |, | sum |
+| **All 9 v3 topics** | **35.66 GB/day** | **14.19 GB/day** | | sum |
+
+> **Scored 2026-08-27:** 33.07 GB/day uncompressed across the three raw topics against
+> 32.34 predicted, +2.3 % ([C4](../benchmarks/2026-08-27.md#c4)).
 
 **Raw is 91 % of the uncompressed bytes and 91 % of the disk.** That is the price of
 "the lake is the system of record" and it is being paid deliberately: `BookSnapshotL2`
@@ -299,8 +300,8 @@ anyway so that a deeper or faster book stays recoverable by replay.
 | `gold.trades` (Phase E, predicted 2026-08-27 before the first gold rebuild) | **0.18 GB/day** | The non-replay rows of silver (≈ 97 %), fewer columns, two BIGINTs where silver has two DECIMAL(28,10)s: ~0.9× the silver trades size | `0.20 × 0.9` |
 | `gold.ohlcv_*` ×4 | **< 0.01 GB/day** | 34 instruments × 1,440 minutes = 49 K rows/day for 1m, ~30 B each compressed; the coarser three are negligible | `34 × 1440 × 30 B` |
 | `silver.book_<venue>` ×3 (predicted 2026-08-27 before the first books rebuild) | **2.1 GB/day** | the three bronze book tables (kraken_book, binance_depth20, coinbase_level2) held 1.85 GB for ≈ 14.9 h (3.0 GB/day); typed decimals and structs compress a little better than the string pairs: ~0.7× | `3.0 × 0.7` |
-| `gold.book_top20` + `gold.bbo_1s` | **0.6 GB/day** | 34 instruments × 86,400 s = 2.9 M rows/day of 80 Int64 levels; ClickHouse's feed-fed copy of the same shape measured 330 MiB for 2.0 M rows (4.65×), so ~0.5 GB/day for the book and ~0.1 for the BBO | `2.9 M × 165 B + 2.9 M × 40 B` |
-| **All lake tables** | **13.6 GB/day** |, | sum, with bronze per venue, silver trades and books, gold; 6.89 without them |
+| `gold.book_top20` + `gold.bbo_1s` | **0.6 GB/day** | 34 instruments × 86,400 s = 2.9 M rows/day of 80 Int64 levels, so ~0.5 GB/day for the book and ~0.1 for the BBO. ClickHouse's feed-fed copy of the same shape is not yet in a benchmark file | `2.9 M × 165 B + 2.9 M × 40 B` |
+| **All lake tables** | **13.6 GB/day** | | sum, with bronze per venue, silver trades and books, gold; 6.89 without them |
 
 ### 4d. Retention → disk
 
@@ -424,10 +425,11 @@ Coinbase 512 M limit exists for I3, not for the steady state, and if Phase F sho
 | vs the current 16.85 / 23.625 GiB peak | **−0.75 CPU** | **−0.50 GB** | `16.85 − 16.10` |
 
 > **Scored, 2026-08-26.** Phase C landed and the Kotlin handlers are out of
-> `docker-compose.yml`. The measured declaration is **14.60 CPU / 21.625 GiB across
-> 15 steady services**, bootstrap peak **16.10 CPU / 23.125 GiB across 19**, both
-> predictions exact, because every term in them is a declared limit rather than an
-> estimate. Provenance and the command:
+> `docker-compose.yml`. The measured declaration is **14.60 CPU / 25.625 GiB across
+> 15 steady services**, bootstrap peak **16.10 CPU / 27.125 GiB across 19**; the CPU
+> predictions are exact, because every CPU term in them is a declared limit rather than
+> an estimate, and the RAM lines are 4 GiB above prediction because `spark-iceberg`'s
+> declared limit rose from 4G to 8G in Phase D (`e2a2651`). Provenance and the command:
 > [ADR-010 Kotlin-retirement addendum](../adr/ADR-010-resource-budget.md#outcome-addendum-kotlin-retirement-2026-08-26).
 > The predicted values above are left as written.
 
@@ -441,7 +443,7 @@ Three things worth saying plainly:
    resolve. The acceptance argument is unchanged and still the right one: a CPU limit
    is a ceiling on scheduling, not a reservation, and the one-shots live for seconds.
 3. **Limits are not usage.** Predicted *actual* capture usage is 0.074 CPU / ~0.26 GB
-   across all three containers (§3b, §5) against 0.75 CPU / 1.0 GB of declared limit , 
+   across all three containers (§3b, §5) against 0.75 CPU / 1.0 GB of declared limit:
    a 10× overprovision that exists so a burst does not throttle the only tier with no
    upstream backpressure.
 
@@ -454,6 +456,12 @@ Each resource, and the multiple of today's 1× rate at which it binds:
 | Rank | Resource | Binds at, predicted | Assumption | Derived from |
 |---|---|---|---|---|
 | **1** | **Host disk, from lake growth** | **not a multiple, a date: ~26 days** | The lake has no TTL by design. Growth is a *calendar* problem, not a load problem, and it is the only unbounded line on this page. | `(212 GiB free − 34.6 GB Redpanda) ÷ 6.89 GB/day` (I11, §4d) |
+| 2 | Redpanda disk at 48 h raw retention | **~5.8×**, if 200 GB is allocated to it | Time-based retention scales disk linearly with rate | `200 GB ÷ 34.6 GB` (§4d) |
+| 3 | `capture-coinbase` RSS | **~12.5×** on **book depth**, *not* on message rate | Only the book scales with depth: fixed cost is `(8+8+32+16)×1.2 + 25×1.2 = 106.8 MB`, book cost `27.1×1.2 = 32.5 MB`. A market-wide depth increase binds this; a trade-rate spike does not touch it. | `(512 − 106.8) ÷ 32.5` (§5) |
+| 4 | Total CPU budget headroom | **~19×** on capture usage alone | 1.40 cores of headroom ÷ 0.074 predicted usage, but this is headroom for *everything*, not just capture | `1.40 ÷ 0.074` (§3b, §6) |
+| 5 | Capture CPU (`capture-kraken`, the busiest) | **~32×** | G5 holds and the 0.25 CPU quota is the ceiling | `12,500 frames/s ÷ 389.5 frames/s` (§3) |
+| 6 | Redpanda broker CPU | **~113×** | ADR-010's "2 cores handles 100 K msg/s" | `100,000 ÷ 883.8 records/s` |
+| 7 | ClickHouse hot-tier ingest | **>100×** | 884 records/s against a store measured at 236 K rows/s on the v2 baseline. That path is deleted; the number is kept as the last measurement of what this ClickHouse absorbs, not as a live claim | [v2 baseline, cold tier throughput](../benchmarks/2026-02-19-v2-baseline.md) |
 
 > **Rank 1, unit note, the ~26 days above is left as computed.** Its arithmetic subtracts
 > GB from GiB: 212 GiB is 227.6 GB, so on the same inputs it is `(227.6 − 34.6) ÷ 6.89` =
@@ -477,13 +485,6 @@ Each resource, and the multiple of today's 1× rate at which it binds:
 > stopping capture, not tiering raw. **Revisit when** `df /` passes 80 % or the guest
 > passes 500 GB used, whichever first (`docker run --rm --privileged --pid=host alpine
 > nsenter -t 1 -m -u -n -i df -h /var/lib/docker`).
-
-| 2 | Redpanda disk at 48 h raw retention | **~5.8×**, if 200 GB is allocated to it | Time-based retention scales disk linearly with rate | `200 GB ÷ 34.6 GB` (§4d) |
-| 3 | `capture-coinbase` RSS | **~12.5×** on **book depth**, *not* on message rate | Only the book scales with depth: fixed cost is `(8+8+32+16)×1.2 + 25×1.2 = 106.8 MB`, book cost `27.1×1.2 = 32.5 MB`. A market-wide depth increase binds this; a trade-rate spike does not touch it. | `(512 − 106.8) ÷ 32.5` (§5) |
-| 4 | Total CPU budget headroom | **~19×** on capture usage alone | 1.40 cores of headroom ÷ 0.074 predicted usage, but this is headroom for *everything*, not just capture | `1.40 ÷ 0.074` (§3b, §6) |
-| 5 | Capture CPU (`capture-kraken`, the busiest) | **~32×** | G5 holds and the 0.25 CPU quota is the ceiling | `12,500 frames/s ÷ 389.5 frames/s` (§3) |
-| 6 | Redpanda broker CPU | **~113×** | ADR-010's "2 cores handles 100 K msg/s" | `100,000 ÷ 883.8 records/s` |
-| 7 | ClickHouse hot-tier ingest | **>100×** | 884 records/s against a store measured at 236 K rows/s on the v2 baseline. That path is deleted; the number is kept as the last measurement of what this ClickHouse absorbs, not as a live claim | [v2 baseline, cold tier throughput](../benchmarks/2026-02-19-v2-baseline.md) |
 
 **The prediction, in one sentence: disk binds first, and it binds on a calendar rather
 than on a multiple, ~26 days from a cold start on the current host, because
