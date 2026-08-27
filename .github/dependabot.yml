@@ -36,3 +36,15 @@ updates:
     commit-message:
       prefix: "build"
       include: "scope"
+
+  # legacy/v1 is archived and runs nowhere (SECURITY.md). Alerts on its lockfile
+  # stay visible in the Security tab; this entry exists only to switch off the
+  # security-update PRs for that manifest, which is what a 0 limit does — the
+  # lockfile was upgraded in-constraint once (#84) and the residue is recorded
+  # in legacy/v1/README.md. Without this entry Dependabot opens one PR per
+  # advisory against an archive.
+  - package-ecosystem: "uv"
+    directory: "/legacy/v1"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 0
