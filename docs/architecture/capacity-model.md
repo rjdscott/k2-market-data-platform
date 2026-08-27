@@ -124,7 +124,7 @@ guess. Section 8 says which command settles which row.
 dominated by the raw topic rather than by the products:
 
 ```mermaid
-flowchart LR
+flowchart TB
   F["WS frame<br/>recv_ts_ns stamped"]
   R["RawMessage<br/>always · verbatim payload"]
   T["Trade<br/>if a trade frame"]

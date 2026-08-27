@@ -31,11 +31,11 @@ K2 spans the warm tier and the cold tier: ClickHouse is the warm store and Icebe
 
 ## Fits
 
-**Live market monitoring.** Candles are current within ~200 ms of the trade. A dashboard on `ohlcv_1m` shows the market as it is, not as it was a batch window ago. This is the workload the architecture was actually shaped around.
+**Live market monitoring.** `gold.ohlcv_live` and `gold.bbo_live` are computed on read over deduplicated trades and books that arrive within a few hundred milliseconds of the venue (measured p99 per venue in [benchmarks/2026-08-27](../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-receive)).
 
-**Intraday and historical research.** 30 days of validated tick-level trades in ClickHouse, unbounded history in Iceberg, six pre-aggregated timeframes maintained incrementally. Aggregations that would scan raw trades already exist as tables.
+**Intraday and historical research.** Every trade and 1 Hz top-20 book in ClickHouse `gold` with no TTL; every frame ever received in the lake, forever, with four OHLCV timeframes and BBO materialised from it and DuckDB over the Parquet for anything else.
 
-**Cross-exchange comparison.** Three venues normalized to one `canonical_symbol` in `silver_trades`. Comparing BTC/USD across Binance, Kraken and Coinbase is a `GROUP BY exchange` — the normalization that makes that work is the platform's main piece of domain logic.
+**Cross-exchange comparison.** Three venues on one `canonical_symbol` in `gold.trades` and `gold.book_top20`; comparing BTC/USD across Binance, Kraken and Coinbase is a `GROUP BY exchange`, with the venue's native symbol and fields still one layer down in silver.
 
 **Learning the medallion pattern end to end.** Bronze/Silver/Gold, hot/cold tiering, idempotent batch ingest with the offsets in the snapshot summary, table-format maintenance — all present, all small enough to read in an afternoon.
 
