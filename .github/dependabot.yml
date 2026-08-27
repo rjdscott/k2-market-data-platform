@@ -36,6 +36,12 @@ updates:
     directory: "/services/capture-rust"
     schedule:
       interval: "weekly"
+    ignore:
+      # 0.x minor bumps are breaking in cargo semantics. sha2 0.10 -> 0.11 changed
+      # the digest output type and broke the replay tests (2026-08-27); take it by
+      # hand with the {:x} call sites, not from a bot.
+      - dependency-name: "sha2"
+        update-types: ["version-update:semver-minor"]
     open-pull-requests-limit: 3
     labels: ["dependencies", "rust"]
     commit-message:

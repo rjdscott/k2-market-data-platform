@@ -52,7 +52,7 @@ anyhow = "1"
 
 [dev-dependencies]
 proptest = "1"
-sha2 = "0.11"
+sha2 = "0.10"  # 0.11 changes the digest output type; the replay tests format it with {:x}
 
 [profile.release]
 lto = "thin"
