@@ -1,7 +1,7 @@
 # 09. Lake layers: raw, bronze, silver, gold
 
 > **You will learn** what raw, bronze, silver and gold each hold, the identifier at each layer, and why the boundaries sit where they do.
-> **Read this if** anyone querying the lake.
+> **Read this if** you query the lake.
 > **Before this** chapter 08.
 
 ## Problem
@@ -61,7 +61,7 @@ flowchart TB
 |---|---|---|---|
 | `raw` | what did K2 receive, byte for byte, and when | `(topic, partition, offset)`; `(conn_id, conn_msg_seq)` | regulatory-grade record; every other layer is a function of it |
 | `bronze` | what did the venue say, in its own vocabulary | lineage to the raw row | a field the venue sent is never normalised away before it can be inspected; schema drift is detectable per venue |
-| `silver` | what does it mean, and can it be trusted | lineage to bronze; flags `venue_replay`, `seq_gap`, `precision_loss`, `checksum_ok` | forensics: every delivery, including replays, with the reason it is suspect |
+| `silver` | what does it mean, and can it be trusted | lineage to bronze; flags `venue_replay`, `seq_gap`, `precision_loss` (trades), `checksum_ok` (books) | forensics: every delivery, including replays, with the reason it is suspect |
 | `gold` | what does research join against | `(exchange, canonical_symbol, trade_id)`, unique here and nowhere below | one schema across venues; dedup happens once, where the audit proves it |
 
 Each layer reads its parent by Iceberg snapshot id ([snapshots](03-data-engineering-concepts.md#iceberg-snapshots)); venue fields arrive as added nullable columns only ([schema evolution](03-data-engineering-concepts.md#schema-evolution)).
@@ -71,16 +71,20 @@ trade_id)` unique and the data disproved it twice in a day (reconnect replay, th
 in-connection re-send). Below gold the only honest identifier is *lineage*, the pointer from a
 derived row back to the archived record that produced it
 ([lineage and identifiers](03-data-engineering-concepts.md#lineage-and-identifiers)); gold is
-where "one logical trade" is *made* true, and `gold_trades` is the audit that proves it
+where "one logical trade" is *made* true, and the `duplicate_identifiers` audit on `gold.trades` is what proves it
 ([audits as tests](03-data-engineering-concepts.md#audits-as-tests)).
 
 ### Storage choices
 
 - **Partitions.** `raw` by `days(kafka_ts), topic`, time first so a replay lands in one
   partition; `bronze` and `silver.book_*` by `days(recv_ts)`, the one clock every frame carries;
-  `silver.trades_*` by `days(exchange_ts)`; `gold` by `exchange` then day of `exchange_ts` ([pruning](03-data-engineering-concepts.md#partitioning-and-pruning)).
+  `silver.trades_*` by `days(exchange_ts)`; `gold.trades` by `exchange, days(exchange_ts)`;
+  `ohlcv_{1m,5m,1h}` by `exchange, months(window_start)` and `ohlcv_1d` by `exchange`;
+  `book_top20` and `bbo_1s` by `exchange, days(second)`
+  ([pruning](03-data-engineering-concepts.md#partitioning-and-pruning)).
 - **Files.** `write.distribution-mode = hash`, targets 256 MB (raw) / 128 MB (derived),
-  copy-on-write. Nightly binpack on raw and a sort-rewrite of the last two days of every
+  copy-on-write (a change rewrites the file, no delete files). Nightly binpack (merge small
+  files) on raw and a sort-rewrite of the last two days of every
   derived table (bronze, silver, gold trades, book_top20, bbo_1s)
   ([compaction](03-data-engineering-concepts.md#files-and-compaction)).
 - **Column metrics.** Off by default (`write.metadata.metrics.default = none`); on for the
@@ -94,6 +98,8 @@ where "one logical trade" is *made* true, and `gold_trades` is the audit that pr
 - **Sizes, 2026-08-27.** Per-venue bronze stores at 0.59× the raw archive; the lake grows
   ≈ 9.8 GB/day; runway on this host ≈ 60 days
   ([benchmarks](../benchmarks/2026-08-27.md#lake), [capacity-model.md](15-capacity-model.md)).
+  The benchmark rebuild covered the six tables that existed on 2026-08-27;
+  `bronze.kraken_instrument` was added later.
 
 ## Practices
 
@@ -102,9 +108,9 @@ where "one logical trade" is *made* true, and `gold_trades` is the audit that pr
 | Immutable record at the bottom | `raw.messages` never expired; `offset_continuity` audit; `LakeOffsetGap` alert |
 | Schema per venue, drift detected | `bronze_schema_drift` audit fails on undeclared keys; `spark.sql.caseSensitive = true` |
 | Every delivery kept with a reason | silver flags computed against a 1-day lookback; `silver_flags` reported nightly |
-| Dedup once, proven | `gold_trades` audit: count == distinct identifier |
+| Dedup once, proven | `duplicate_identifiers` audit on `gold.trades`: count == distinct `(exchange, canonical_symbol, trade_id)` |
 | Products carry provenance | `src_snapshot_id` on every `ohlcv_*` / `bbo_1s` row; parity pinned to a snapshot in `tests/parity/pinned.json` |
-| DDL is the contract | [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) applied by the `lake-ddl` one-shot; `tests/test_wire_format.py` |
+| DDL is the contract | [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) applied by the `lake-ddl` one-shot; `tests/test_lake_bronze.py` |
 | Add-nullable-only evolution | schema changes move Avro + lake DDL + ClickHouse DDL + projections together (`/schema-change`) |
 | Rebuild is a command, timed | `make lake-rebuild LAYER=…`; times in the benchmark |
 
@@ -119,7 +125,6 @@ where "one logical trade" is *made* true, and `gold_trades` is the audit that pr
 
 ## Key points
 
-- Four layers because the archive is asked four questions; each layer answers one, derived only from the layer above it.
 - Below gold the identifier is lineage. Only gold claims one row per logical trade, because only gold can prove it.
 - Bronze and silver stay per venue so nothing a venue sent is normalised away; the cost is that cross-venue work starts at gold.
 - `raw.messages` is never expired, so every layer below it is a cached answer `make lake-rebuild` recomputes.

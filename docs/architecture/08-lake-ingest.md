@@ -1,10 +1,11 @@
 # 08. Lake ingest: Redpanda to Iceberg, exactly once
 
 > **You will learn** how Redpanda reaches Iceberg exactly once, and how each layer is derived incrementally.
-> **Read this if** engineers touching `docker/lake/`, anyone debugging a lake audit.
+> **Read this if** you touch `docker/lake/` or you are debugging a lake audit.
 > **Before this** chapter 07.
 
-`docker/lake/ingest.py` is the only writer of new data into the lake. Every 5 minutes it reads
+`docker/lake/ingest.py` is the only writer of new data into the lake. Every 5 minutes (cron
+`1-59/5`, off the top of the minute) it reads
 Redpanda by explicit offset range, appends every record verbatim to `raw.messages`, then derives
 bronze, silver and gold from that archive. Design: [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md); operations: [`docker/lake/README.md`](../../docker/lake/README.md).
 
@@ -26,9 +27,9 @@ buffer is a standing choice between duplicates and loss.
 
 | Option | Why it lost | Reference |
 |---|---|---|
-| Spark Structured Streaming with its own checkpoint | The framework's own answer, and a resident streaming runtime against a 16 CPU single-host budget; ADR-004 deleted precisely this to recover 13.5 CPU. The checkpoint is still a second store with the same atomicity gap against the Iceberg commit, in a format that is Spark's business, not ours ([batch vs streaming](03-data-engineering-concepts.md#batch-vs-streaming): a bounded run you can re-run, against a process you can only restart). | [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md), [ADR-006](../adr/ADR-006-spark-batch-only.md) |
+| Spark Structured Streaming with its own checkpoint | The framework's own answer, and a resident streaming runtime against a 16 CPU single-host budget; ADR-004 deleted precisely this to recover 13.5 CPU. The checkpoint is still a second store with the same atomicity gap against the Iceberg commit, in a format that is Spark's business, not ours ([batch vs streaming](03-data-engineering-concepts.md#batch-vs-streaming): a bounded run you can re-run, against a process you can only restart). | [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md); [ADR-006](../adr/ADR-006-spark-batch-only.md) fixed batch-only as the Spark contract |
 | A watermark table in PostgreSQL | What v2's offload did. Two stores, no transaction, so the crash window survives; and the watermark was a timestamp, so lateness was guesswork. It also put PostgreSQL on the archive's critical path: no Prefect database, no advancing system of record. | [ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md), [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) |
-| Kafka Connect with an Iceberg sink connector | An always-on JVM cluster to run, size and monitor for a job that fires 12 times an hour, committing on a cadence of its own into an offset store of its own: the two-store problem bought back at a higher resting cost. The lake wants one writer under one lock, not an autonomous one. No ADR of its own; it never survived the resident-cost line ADR-004 drew and ADR-010 budgets. | [ADR-010](../adr/ADR-010-resource-budget.md) |
+| Kafka Connect with an Iceberg sink connector | An always-on JVM cluster to run, size and monitor for a job that fires 12 times an hour, committing on a cadence of its own into an offset store of its own: the two-store problem bought back at a higher resting cost. The lake wants one writer under one lock, not an autonomous one. No ADR of its own; it never survived the resident-cost line those two ADRs draw. | none; resident-cost line from [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md) and [ADR-010](../adr/ADR-010-resource-budget.md) |
 | **Offsets committed in the Iceberg snapshot summary** (chosen) | Nothing left to disagree: the position is a property of the commit that wrote the rows. It costs one rule, "latest snapshot carrying `k2.job = ingest`", which is why `offsets.py` is pure Python and unit-tested. | [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) |
 
 ## Decision
@@ -100,11 +101,11 @@ range).
 | bronze | `bronze.py` | decodes raw JSON per venue with `from_json` in PERMISSIVE mode into the venue's own field names; unparseable frames are counted, not dropped | the lake must not depend on the capture's parser; a venue field is never lost before silver |
 | silver | `silver.py` | types and flags (`venue_replay`, `seq_gap`, `precision_loss`) by scoring `batch ∪ last 1 day of silver` with window functions | replay and gap detection need history; one day bounds the scan |
 | gold | `gold.py` | first delivery per `(exchange, canonical_symbol, trade_id)`; dims from `config/instruments.yaml`; OHLCV `MERGE`d for the buckets the batch touched, total order `(exchange_ts, recv_ts_ns, trade_seq)` | a late delivery must re-open its candle, and open/close ties must resolve the same way in every engine |
-| books | `books.py` | one streaming replay per connection: Kraken CRC32 verified per update, end-of-second top-20 and BBO sampled from the same pass; `gold.book_state` carries the book across runs | replaying once is cheaper than twice, and a checksum proves the replay is the venue's book |
+| books | `books.py` | one streaming replay per connection: Kraken CRC32 verified per update, end-of-second top-20 sampled from the same pass, `gold.bbo_1s` projected from it in SQL; `gold.book_state` carries the book across runs | replaying once is cheaper than twice, and a checksum proves the replay is the venue's book |
 
 `rebuild.py --layer bronze|silver|gold|books` drops a layer and recomputes it from its parent
-over the whole archive; bronze 520 s, books 2,367 s
-([benchmarks](../benchmarks/2026-08-27.md#lake)). That is what keeping raw buys: every layer above
+over the whole archive; bronze 520 s ([benchmarks](../benchmarks/2026-08-27.md#lake)), books 2,367 s
+([`docker/lake/README.md`](../../docker/lake/README.md) section Books). That is what keeping raw buys: every layer above
 it is [rebuildable](03-data-engineering-concepts.md#rebuildability), so a bug in a projection is a re-run rather than a loss.
 
 ## Proof
@@ -115,11 +116,11 @@ and `LakeAuditFailed` fires ([runbook](../runbooks/lake-audit-failed.md)). These
 
 | Audit | Asserts |
 |---|---|
-| `offset_continuity` | per partition, the committed ranges tile with no hole other than recorded `offset_gap` rows |
-| `bronze_parity`, `bronze_unparseable`, `bronze_schema_drift` | raw frames in == bronze rows out per venue; no undeclared keys |
+| `offset_continuity` | per `(topic, partition)`, `raw.messages` offsets are contiguous from min to max; the only permitted holes are ranges recorded as `offset_gap` in `audit.checks` |
+| `bronze_unparseable`, `bronze_schema_drift`, `duplicate_identifiers` | no frame the parser rejected (venue columns NULL); no undeclared keys; no repeated `(src_topic, src_partition, src_offset)` lineage |
 | `silver_parity`, `silver_flags` | bronze == silver row counts; flag rates reported |
-| `gold_trades`, `ohlcv_parity` | one row per identifier; candles recompute from gold trades to the same values |
-| `book_parity`, `kraken_checksum` | book rows tile the deltas; failed checksums outside acknowledged windows are zero |
+| `gold_parity`, `ohlcv_parity`, `duplicate_identifiers` | per venue, `gold.trades` rows == the non-replay rows of silver at the snapshot gold last read; candles recompute from gold trades to the same values; one row per `(exchange, canonical_symbol, trade_id)` |
+| `silver_parity` (book tables), `kraken_checksum` | `silver.book_*` rows == the events exploded from the bronze snapshot it last read; failed checksums outside acknowledged windows are zero |
 
 `kraken_checksum` re-verifies the venue's own [checksum](02-market-data-concepts.md#checksums) in
 the lake: the replayed book either is the one Kraken had, or it is not. Independently,
@@ -150,7 +151,8 @@ ClickHouse and DuckDB candles at a pinned snapshot.
 
 ## Key points
 
-- The position lives in the archive's own commit: no second store to disagree, no recovery procedure for one.
+- A partition the committed offset map has never seen starts at `EARLIEST`: for an archive that is never
+  expired, the beginning is always the right place to begin.
 - Offsets, not timestamps: an offset has an exact successor, so runs abut with nothing to guess at.
 - "Latest snapshot with `k2.job = ingest`", never "latest snapshot": compaction commits too.
 - Every layer below raw resumes by parent snapshot id, and can be dropped and rebuilt from raw.
