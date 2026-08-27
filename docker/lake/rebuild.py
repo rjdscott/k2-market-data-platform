@@ -6,6 +6,7 @@ Rebuild a lake layer from its parent over the whole archive.
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer bronze --exchange kraken
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer bronze --dry-run
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer silver
+    docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer gold
 
 `make lake-rebuild LAYER=bronze` is the same thing from the host.
 
@@ -24,8 +25,8 @@ LakeIngestFailed noise:
     ... rebuild ...
     docker exec k2-prefect-server prefect deployment schedule resume lake-ingest/lake-ingest-5min <schedule-id>
 
-Bronze and silver. Gold gets a branch here when it exists; the shape (pin
-parent, drop, recreate, decode by day, record) is the same.
+Bronze, silver and gold: the shape (pin parent, drop, recreate, decode, record)
+is the same for each.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ import time
 from datetime import datetime, timezone
 
 import bronze
+import gold
 import silver
 from apply_ddl import apply, table_statements
 from catalog import current_snapshot_id
@@ -105,7 +107,7 @@ def recreate(spark, name: str, attempts: int = 10) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--layer", choices=("bronze", "silver"), required=True)
+    parser.add_argument("--layer", choices=("bronze", "silver", "gold"), required=True)
     parser.add_argument("--exchange", choices=sorted({t.exchange for t in bronze.VENUE_TABLES}), help="one venue only")
     parser.add_argument("--dry-run", action="store_true", help="print the plan, drop nothing, write nothing")
     args = parser.parse_args()
@@ -113,14 +115,33 @@ def main() -> int:
     exchanges = [args.exchange] if args.exchange else sorted({t.exchange for t in bronze.VENUE_TABLES})
     if args.layer == "bronze":
         tables = [t for t in bronze.VENUE_TABLES if t.exchange in exchanges]
-    else:
+    elif args.layer == "silver":
         tables = [t for t in silver.TRADES if t.exchange in exchanges]
+    else:
+        tables = list(gold.TABLES)
 
     print(f"waiting for {LOCK_PATH}", flush=True)
     lock = acquire_lock(LOCK_PATH, blocking=True)  # noqa: F841 - held until exit
     run_ts = datetime.now(timezone.utc)
     spark = lake_session("k2-lake-rebuild", driver_memory=MAINTENANCE_DRIVER_MEMORY)
     try:
+        if args.layer == "gold":
+            print(f"rebuild gold: {len(tables)} table(s) from silver's current snapshots")
+            if args.dry_run:
+                for t in tables:
+                    print(f"  DROP TABLE {t} PURGE; then recreate")
+                return 0
+            for t in tables:
+                drop(spark, t)
+            for t in tables:
+                recreate(spark, t.split(".")[-1])
+            started = datetime.now()
+            totals = gold.rebuild(spark, run_ts)
+            elapsed = (datetime.now() - started).total_seconds()
+            print(f"\nrebuild gold: done in {elapsed:.0f} s")
+            for table, n in sorted(totals.items()):
+                print(f"  {table:<40} {n:>14,} rows")
+            return 0
         if args.layer == "silver":
             print(f"rebuild silver: {len(tables)} table(s) for {exchanges}, from their bronze tables' current snapshots")
             if args.dry_run:

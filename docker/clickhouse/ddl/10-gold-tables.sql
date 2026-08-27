@@ -141,7 +141,10 @@ ORDER BY (topic, partition, offset);
 -- SummingMergeTree whose open/close were argMin/argMax *within each insert
 -- block*, so a minute that arrived in two blocks kept whichever block's open
 -- happened to survive the merge — a wrong number that looked right. A view
--- over FINAL sees the whole minute every time. scripts/clickhouse-schema-test.sh
+-- over FINAL sees the whole minute every time. open/close are decided by
+-- (exchange_ts, recv_ts_ns, trade id) — the same total order the lake's
+-- gold.py uses, so the two compare at tolerance zero; the id breaks the tie
+-- for trades one frame delivered at one instant. scripts/clickhouse-schema-test.sh
 -- inserts a minute in two blocks and asserts the open comes from the earlier
 -- one. The materialised `gold.ohlcv_*` tables land with the lake's gold layer
 -- and are loaded from it, never computed here.
@@ -151,10 +154,10 @@ SELECT
     exchange,
     canonical_symbol,
     toStartOfInterval(exchange_ts, INTERVAL {bucket:UInt32} SECOND) AS window_start,
-    argMin(price_e8, (exchange_ts, recv_ts_ns))   AS open_e8,
+    argMin(price_e8, (exchange_ts, recv_ts_ns, toUInt64OrZero(trade_id))) AS open_e8,
     max(price_e8)                                  AS high_e8,
     min(price_e8)                                  AS low_e8,
-    argMax(price_e8, (exchange_ts, recv_ts_ns))   AS close_e8,
+    argMax(price_e8, (exchange_ts, recv_ts_ns, toUInt64OrZero(trade_id))) AS close_e8,
     toDecimal128(open_e8,  10) / toDecimal128(100000000, 0) AS open,
     toDecimal128(high_e8,  10) / toDecimal128(100000000, 0) AS high,
     toDecimal128(low_e8,   10) / toDecimal128(100000000, 0) AS low,
@@ -166,6 +169,109 @@ SELECT
     max(exchange_ts)                               AS close_time
 FROM gold.trades FINAL
 GROUP BY exchange, canonical_symbol, window_start;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- gold.ohlcv_{1m,5m,1h,1d} — the candles the LAKE computed (lake.gold.ohlcv_*,
+-- docker/lake/gold.py), loaded by pull (docs/runbooks/clickhouse-rebuild-from-
+-- lake.md). Never computed here: gold.ohlcv_live above is for the head, these
+-- are the record. ReplacingMergeTree on the lake snapshot id so a reload
+-- carrying a newer candle for the same bucket replaces the older one.
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS gold.ohlcv_1m
+(
+    exchange         LowCardinality(String),
+    canonical_symbol LowCardinality(String),
+    window_start     DateTime64(6, 'UTC'),
+    open_e8          Int64,
+    high_e8          Int64,
+    low_e8           Int64,
+    close_e8         Int64,
+    open             Decimal(38, 10) ALIAS toDecimal128(open_e8,  10) / toDecimal128(100000000, 0),
+    high             Decimal(38, 10) ALIAS toDecimal128(high_e8,  10) / toDecimal128(100000000, 0),
+    low              Decimal(38, 10) ALIAS toDecimal128(low_e8,   10) / toDecimal128(100000000, 0),
+    close            Decimal(38, 10) ALIAS toDecimal128(close_e8, 10) / toDecimal128(100000000, 0),
+    volume           Decimal(38, 10),
+    quote_volume     Decimal(38, 10),
+    trade_count      UInt64,
+    open_time        DateTime64(6, 'UTC'),
+    close_time       DateTime64(6, 'UTC'),
+    src_snapshot_id  UInt64                  COMMENT 'The lake gold.trades snapshot the candle was computed from; the version — a reload with a newer snapshot replaces the row'
+)
+ENGINE = ReplacingMergeTree(src_snapshot_id)
+PARTITION BY toYYYYMM(window_start)
+ORDER BY (exchange, canonical_symbol, window_start);
+
+CREATE TABLE IF NOT EXISTS gold.ohlcv_5m
+(
+    exchange         LowCardinality(String),
+    canonical_symbol LowCardinality(String),
+    window_start     DateTime64(6, 'UTC'),
+    open_e8          Int64,
+    high_e8          Int64,
+    low_e8           Int64,
+    close_e8         Int64,
+    open             Decimal(38, 10) ALIAS toDecimal128(open_e8,  10) / toDecimal128(100000000, 0),
+    high             Decimal(38, 10) ALIAS toDecimal128(high_e8,  10) / toDecimal128(100000000, 0),
+    low              Decimal(38, 10) ALIAS toDecimal128(low_e8,   10) / toDecimal128(100000000, 0),
+    close            Decimal(38, 10) ALIAS toDecimal128(close_e8, 10) / toDecimal128(100000000, 0),
+    volume           Decimal(38, 10),
+    quote_volume     Decimal(38, 10),
+    trade_count      UInt64,
+    open_time        DateTime64(6, 'UTC'),
+    close_time       DateTime64(6, 'UTC'),
+    src_snapshot_id  UInt64                  COMMENT 'The lake gold.trades snapshot the candle was computed from; the version — a reload with a newer snapshot replaces the row'
+)
+ENGINE = ReplacingMergeTree(src_snapshot_id)
+PARTITION BY toYYYYMM(window_start)
+ORDER BY (exchange, canonical_symbol, window_start);
+
+CREATE TABLE IF NOT EXISTS gold.ohlcv_1h
+(
+    exchange         LowCardinality(String),
+    canonical_symbol LowCardinality(String),
+    window_start     DateTime64(6, 'UTC'),
+    open_e8          Int64,
+    high_e8          Int64,
+    low_e8           Int64,
+    close_e8         Int64,
+    open             Decimal(38, 10) ALIAS toDecimal128(open_e8,  10) / toDecimal128(100000000, 0),
+    high             Decimal(38, 10) ALIAS toDecimal128(high_e8,  10) / toDecimal128(100000000, 0),
+    low              Decimal(38, 10) ALIAS toDecimal128(low_e8,   10) / toDecimal128(100000000, 0),
+    close            Decimal(38, 10) ALIAS toDecimal128(close_e8, 10) / toDecimal128(100000000, 0),
+    volume           Decimal(38, 10),
+    quote_volume     Decimal(38, 10),
+    trade_count      UInt64,
+    open_time        DateTime64(6, 'UTC'),
+    close_time       DateTime64(6, 'UTC'),
+    src_snapshot_id  UInt64                  COMMENT 'The lake gold.trades snapshot the candle was computed from; the version — a reload with a newer snapshot replaces the row'
+)
+ENGINE = ReplacingMergeTree(src_snapshot_id)
+PARTITION BY toYYYYMM(window_start)
+ORDER BY (exchange, canonical_symbol, window_start);
+
+CREATE TABLE IF NOT EXISTS gold.ohlcv_1d
+(
+    exchange         LowCardinality(String),
+    canonical_symbol LowCardinality(String),
+    window_start     DateTime64(6, 'UTC'),
+    open_e8          Int64,
+    high_e8          Int64,
+    low_e8           Int64,
+    close_e8         Int64,
+    open             Decimal(38, 10) ALIAS toDecimal128(open_e8,  10) / toDecimal128(100000000, 0),
+    high             Decimal(38, 10) ALIAS toDecimal128(high_e8,  10) / toDecimal128(100000000, 0),
+    low              Decimal(38, 10) ALIAS toDecimal128(low_e8,   10) / toDecimal128(100000000, 0),
+    close            Decimal(38, 10) ALIAS toDecimal128(close_e8, 10) / toDecimal128(100000000, 0),
+    volume           Decimal(38, 10),
+    quote_volume     Decimal(38, 10),
+    trade_count      UInt64,
+    open_time        DateTime64(6, 'UTC'),
+    close_time       DateTime64(6, 'UTC'),
+    src_snapshot_id  UInt64                  COMMENT 'The lake gold.trades snapshot the candle was computed from; the version — a reload with a newer snapshot replaces the row'
+)
+ENGINE = ReplacingMergeTree(src_snapshot_id)
+PARTITION BY toYYYYMM(window_start)
+ORDER BY (exchange, canonical_symbol, window_start);
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- gold.bbo_live — best bid/offer and the three derived numbers a desk asks

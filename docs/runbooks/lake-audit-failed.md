@@ -38,6 +38,8 @@ the tier being down ([lake-recovery.md](./lake-recovery.md)).
 | 8 | `bronze_parity` — filed by the ingest: frames in ≠ rows out + control frames | < 60 min | not yet verified — Phase E |
 | 9 | `silver_parity` — silver rows ≠ trades in the bronze snapshot silver last read | < 60 min (rebuild the venue) | not yet verified — Phase E |
 | 10 | `silver_flags` — informational; **cannot fail** | n/a — read the rates | not yet verified — Phase E |
+| 11 | `gold_parity` — gold rows per venue ≠ silver first deliveries | < 60 min (rebuild gold) | not yet verified — Phase E |
+| 12 | `ohlcv_parity` — a stored 1m candle ≠ recomputed from gold.trades | < 60 min (rebuild gold) | not yet verified — Phase E |
 
 ---
 
@@ -537,6 +539,31 @@ One line per venue: rows, venue replays, trade-id gaps, ids never received, rows
 beyond 8 decimals. It cannot fail; it is here so a *change* is visible — a jump in
 gaps is a capture-tier question (`k2_capture_reconnects_total`, produce errors), a
 jump in replays is reconnect churn.
+
+## 11. `gold_parity` — gold does not equal silver's first deliveries
+
+**Symptom** — `check_name = 'gold_parity'`, `scope = lake.gold.trades/<venue>`, `observed` =
+gold rows − silver `venue_replay = false` rows at the silver snapshot gold last read.
+
+**What it means** — gold.trades is a projection of silver with no rule of its own; a
+mismatch is a partial commit or a stage that read a range twice. There is nothing to
+reconcile by hand:
+
+```bash
+make lake-rebuild LAYER=gold          # drops and recreates gold.* from silver, ~minutes
+```
+
+## 12. `ohlcv_parity` — a stored candle disagrees with the trades
+
+**Symptom** — `check_name = 'ohlcv_parity'`, `scope = lake.gold.ohlcv_1m`, `observed` = the
+number of yesterday's (exchange, symbol, minute) buckets whose stored open/high/low/close/
+count differ from a fresh aggregation of `gold.trades`, or exist on one side only.
+
+**What it means** — a late trade landed and the `MERGE` for its bucket did not, or a
+bucket was written from a partial view. The candle tables are derived and cheap:
+`make lake-rebuild LAYER=gold` recomputes every bucket. If it recurs, the bucket-key
+derivation in `gold.stage_ohlcv` and `gold.candles` disagree — that is a code bug, not
+a data one.
 
 ## After any failure: do not silence the audit
 

@@ -26,7 +26,8 @@ compares them before the old path is deleted.
 | `bronze.py` | Stage 2b: the six per-venue tables, decoded from the venue JSON in `raw.*` — vendor field names and types as sent |
 | `silver.py` | Stage 2c: `silver.trades_<venue>` — bronze frames typed, one row per trade, canonical symbol from the registry, replay / gap / precision flags |
 | `instruments.py` | The registry (`config/instruments.yaml`) as silver needs it: native → canonical, failing loudly on an unknown symbol |
-| `rebuild.py` | `make lake-rebuild LAYER=bronze|silver`: drop, recreate and re-decode a layer from its parent, one day per venue at a time |
+| `gold.py` | Stage 2d: `gold.trades` (one row per logical trade = silver's first deliveries), `gold.dim_*` from the registry, `gold.ohlcv_{1m,5m,1h,1d}` recomputed per touched bucket and MERGEd |
+| `rebuild.py` | `make lake-rebuild LAYER=bronze|silver|gold`: drop, recreate and re-decode a layer from its parent, one day per venue at a time |
 | `maintenance.py` | Nightly compaction, snapshot expiry, and the audits. Non-zero exit on a failure |
 | `metrics.py` | The `lake-metrics` exporter. Reads snapshot summaries over the catalog's REST API |
 | `flows/` | The two Prefect deployments: `lake-ingest-5min`, `lake-maintenance-daily` |
@@ -41,10 +42,13 @@ flowchart TB
   RAW -->|stage 2<br/>strip 5 bytes, from_avro| BR[(bronze.trades<br/>bronze.book_snapshots_l2)]
   RAW -->|stage 2b<br/>from_avro, from_json| BV[(bronze.venue_msgtype ×6<br/>vendor schema as sent)]
   BV -->|stage 2c<br/>type, flag, registry| SV[(silver.trades_venue ×3<br/>one row per trade)]
+  SV -->|stage 2d<br/>first deliveries, candles| GD[(gold.trades · dim_* · ohlcv_*<br/>canonical, 1e-8 fixed point)]
   RAW --> MNT[maintenance.py<br/>compact · expire · audit]
   BR --> MNT
   BV --> MNT
   SV --> MNT
+  GD --> MNT
+  GD -.iceberg() pull.-> CH[ClickHouse gold]
   MNT --> AUD[(audit.checks)]
   RAW -.snapshot summaries.-> MET[metrics.py<br/>lake-metrics :8000]
   BR -.-> MET
@@ -54,8 +58,9 @@ flowchart TB
 
 Stage 1 archives all nine topics. Stage 2 decodes `trades.*` and `book.*` into
 the unified pair; stage 2b decodes the `raw.*` JSON frames into six per-venue
-tables; stage 2c types the bronze trade frames into three silver tables.
-`raw.messages` keeps every frame verbatim either way.
+tables; stage 2c types the bronze trade frames into three silver tables; stage 2d
+projects gold from silver and materialises the candles. `raw.messages` keeps every
+frame verbatim either way.
 
 ---
 
@@ -216,6 +221,48 @@ ids per symbol, computed straight from bronze before silver existed:
 
 `seq_gap IS NULL` on 12 / 11 / 11 rows — the first trade of each symbol in the archive,
 where "intact" is unknowable.
+
+## Gold — canonical trades, dims, candles (Phase E, ADR-026)
+
+`gold.py` is a projection plus a materialisation, and deliberately nothing more:
+
+- **`gold.trades`** — silver's `venue_replay = false` rows, all three venues, one
+  schema, `price_e8` / `qty_e8` as 1e-8 fixed point (the wire's and ClickHouse gold's
+  representation; exact because silver's `precision_loss` guards the 8-decimal
+  assumption). The identifier `(exchange, canonical_symbol, trade_id)` is unique by
+  construction — silver already chose the earliest delivery — and the nightly audit
+  asserts it. `seq_gap` / `missing_before` ride along; `venue_replay` does not (false
+  by construction). Per venue, incrementally by silver snapshot; the position of each
+  venue is a separate `k2.src-snapshot-id.<venue>` property carried forward on every
+  commit.
+- **`gold.dim_instrument`, `gold.dim_venue`** — `config/instruments.yaml`, overwritten
+  each run: a dimension is a statement about now, the file is its history.
+- **`gold.ohlcv_{1m,5m,1h,1d}`** — every bucket a batch of trades touches is
+  recomputed over **all** of `gold.trades` for that bucket and `MERGE`d in, so a late
+  trade replaces its candle rather than adding a second partial row — v2's
+  `SummingMergeTree` failure closed at the source. `open`/`close` are decided by
+  `(exchange_ts, recv_ts_ns)`, the rule ClickHouse's `gold.ohlcv_live` applies, and
+  each row carries the `gold.trades` snapshot it was computed from. Copy-on-write
+  `MERGE`, so no delete files ever face DuckDB or `iceberg()`.
+
+Nightly: `duplicate_identifiers` on the logical key, `gold_parity` (gold rows per
+venue == silver first deliveries at the snapshot gold read), `ohlcv_parity` (yesterday's
+stored 1m candles == candles recomputed from `gold.trades`, tolerance zero).
+
+ClickHouse's `gold` database is loaded from these tables by pull
+(`docs/runbooks/clickhouse-rebuild-from-lake.md`) and fed live from the topics for the
+head; `scripts/parity-ohlcv.sh` is the three-way check — ClickHouse on-read, lake
+materialised, DuckDB over silver — at a pinned snapshot (`tests/parity/pinned.json`).
+
+**Measured 2026-08-27, first rebuild** (`make lake-rebuild LAYER=gold`, 2g heap): **60 s**
+for 10,410,270 trades + 31,324 / 6,733 / 609 / 68 candles, peak driver RSS 2,472 MiB;
+the incremental tick after it: every venue level, dims reloaded, 6 s. Nightly audits
+34/34 green including `gold_parity` (8,667,999 / 155,455 / 1,586,816 rows == silver's
+first deliveries per venue) and `ohlcv_parity` (21,458 stored 1m candles == recomputed
+for 2026-08-26). Three-way parity for 2026-08-27: **9,866 buckets, 0 differ** — after two
+findings the first run produced: DuckDB bucketing in the host's time zone (all 29,407
+buckets off against ClickHouse) and open/close ties inside one frame (3,829 buckets),
+both fixed at the source and recorded in the scripts.
 
 ## The exactly-once contract
 

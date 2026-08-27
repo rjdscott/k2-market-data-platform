@@ -60,6 +60,7 @@ no longer exists — do not follow them against this stack.
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
+| [clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md) | ClickHouse `gold` lost, or disagreeing with the lake: reload trades and candles through `iceberg()` (measured 4.4 s for 10.4 M trades), then the three-way OHLCV parity check | `ClickHouseDown`, `ClickHouseGoldFeedStale`, `ClickHouseKafkaMessagesFailed` |
 | [lake-recovery.md](./lake-recovery.md) | Rebuilding ClickHouse from the lake, Redpanda replay as a cold start, Lakekeeper down, MinIO down, an ingest killed mid-run, the nightly rewrite not running | `ClickHouseDown`, `LakeIngestFailed`, `LakeExporterDown`, `LakeExporterStalled`, `LakeScrapeErrors`, `LakeCompactionStale` |
 | [lake-disk-usage-high.md](./lake-disk-usage-high.md) | Host disk at 80 % or 90 %. The archive is kept forever, so this is a capacity decision with a lead time — **never** a TTL | `LakeDiskUsageHigh`, `LakeDiskUsageCritical` |
 | [lake-ingest-lag.md](./lake-ingest-lag.md) | Ingest behind cadence, scheduler stopped, `failOnDataLoss`, small files accumulating | `LakeIngestLagHigh`, `LakeCommitAgeHigh`, `LakeIngestFailed` |

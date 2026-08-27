@@ -65,6 +65,7 @@ from datetime import datetime, timezone
 from functools import reduce
 
 import bronze
+import gold
 import silver
 from catalog import (  # noqa: F401 - re-exported for scripts/ and chaos/
     CHECKS_TABLE,
@@ -731,6 +732,9 @@ def main() -> int:
             # (docker/lake/silver.py); each silver table reads its bronze
             # table incrementally, the same way bronze reads raw.
             silver.stage(spark, ingest_ts)
+            # Stage 2d: gold — one row per logical trade from silver, dims from
+            # the registry, candles recomputed for the buckets the batch touched.
+            gold.stage(spark, ingest_ts)
     finally:
         spark.stop()
         if lock is not None:
