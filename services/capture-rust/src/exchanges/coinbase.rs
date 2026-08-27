@@ -147,6 +147,7 @@ impl CoinbaseAdapter {
                 payload: bytes.to_vec(),
             })],
             actions: Vec::new(),
+            history: false,
         };
 
         let Some(envelope) = envelope else {
@@ -165,6 +166,7 @@ impl CoinbaseAdapter {
                 self.publish_levels();
             }
             Body::Trades(events) => {
+                out.history = events.iter().any(|e| e.typ == "snapshot");
                 for t in events.iter().flat_map(|e| &e.trades) {
                     if let Some(rec) =
                         self.trade_record(t, recv_ts_ns, conn_msg_seq, envelope.sequence_num)
@@ -432,6 +434,9 @@ struct L2Level<'a> {
 
 #[derive(Deserialize)]
 struct TradeEvent<'a> {
+    /// `snapshot` on subscribe (recent history), `update` live.
+    #[serde(borrow, default, rename = "type")]
+    typ: &'a str,
     #[serde(borrow, default)]
     trades: Vec<TradeData<'a>>,
 }
@@ -537,6 +542,12 @@ mod tests {
             panic!()
         };
         assert_eq!(raw.symbol.as_deref(), Some("ATOM-USD"));
+        assert!(h.history, "a snapshot event is the venue replaying history");
+
+        let live = frame.replace("\"type\":\"snapshot\"", "\"type\":\"update\"");
+        let h = a.handle_frame(live.as_bytes(), 10_000);
+        assert_eq!(h.records.len(), 3);
+        assert!(!h.history, "an update event is live");
     }
 
     #[test]

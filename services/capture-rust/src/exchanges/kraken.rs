@@ -213,6 +213,7 @@ impl KrakenAdapter {
                 payload: bytes.to_vec(),
             })],
             actions: Vec::new(),
+            history: false,
         };
 
         let frame_type = envelope.as_ref().and_then(|e| e.typ).unwrap_or("");

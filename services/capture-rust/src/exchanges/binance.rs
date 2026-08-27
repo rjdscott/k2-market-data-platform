@@ -150,6 +150,7 @@ impl BinanceAdapter {
                 payload: bytes.to_vec(),
             })],
             actions: Vec::new(),
+            history: false,
         };
 
         if matches!(stream, "unknown" | "unparseable") {
