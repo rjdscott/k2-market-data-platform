@@ -289,7 +289,12 @@ def replay_partition(rows, exchange: str, precisions: dict, states: dict, run_ts
                   src_offset=r["src_offset"], src_index=r["src_index"])
 
     if current is not None and st is not None and st["live"]:
-        # the second containing the last frame is complete only when a later frame proves it; emit up to it
+        # Emit every second BEFORE the one containing the last frame. That last
+        # second is incomplete — a later frame may still land in it — so it is
+        # carried in gold.book_state and emitted by the next tick's first flush.
+        # A connection that never sends another frame therefore never gets its
+        # final second: one sample per connection end, by design, not a hole in
+        # a live book.
         yield from flush_seconds(st["recv_ts_ns"])
         yield ("state", state_row())
 
