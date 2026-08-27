@@ -32,6 +32,34 @@ The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2*
 
 ---
 
+## v3 layers — decided 2026-08-27, DDL lands in Phase E
+
+The strategy is [data-strategy.md](data-strategy.md); this is the contract per layer. What
+runs today is the Phase D shape — `raw.messages` plus a *unified* `bronze.trades` /
+`bronze.book_snapshots_l2` ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md))
+— and Phase E rebuilds it from raw into these four layers. Nothing below exists as DDL yet;
+when it does, this section links each table to its `CREATE TABLE`.
+
+| Layer | Tables | Column contract | Lineage | Identifier |
+|---|---|---|---|---|
+| **Raw** | `raw.messages` (exists), `raw.pcap` (after E) | frame bytes verbatim, `recv_ts_ns`, `conn_id`, `conn_msg_seq`, `topic`/`partition`/`offset`, `schema_id`, headers | Kafka coordinates | `(topic, partition, offset)` |
+| **Bronze** | one per venue × message type: `bronze.kraken_trade`, `bronze.kraken_book`, `bronze.binance_trade`, `bronze.binance_depth20`, `bronze.coinbase_market_trades`, `bronze.coinbase_level2` | the venue's field names and JSON types as sent — strings stay strings, no renames, no unit changes; nested arrays as `ARRAY<STRUCT>` | `src_topic`, `src_partition`, `src_offset` → raw | raw lineage + position within the frame |
+| **Silver** | `silver.trades_<venue>`, `silver.book_<venue>` | bronze typed: `DECIMAL(28,10)` from strings, `TIMESTAMP` UTC micros, `canonical_symbol` *added* beside the native symbol, `side` normalised to `buy`/`sell` with the native value kept, flags `checksum_ok`, `venue_replay`, `seq_gap`, `precision_loss`; every delivery kept | `src_*` → bronze row | bronze lineage (every delivery is a row) |
+| **Gold** | `gold.trades`, `gold.book_top20`, `gold.dim_instrument`, `gold.dim_venue`, `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bbo_1s` | one schema for all venues: `exchange`, `canonical_symbol`, fixed-point `BIGINT` @1e-8 (`price`, `qty`), `exchange_ts`, `recv_ts_ns`, `trade_id`, `side`; one row per logical trade (venue replays collapsed here) | `src_*` → silver row that won the dedup | `(exchange, canonical_symbol, trade_id)` — true here, and only here |
+| **ClickHouse gold** | `gold.*` mirrored, `ReplacingMergeTree`, **no TTL** | as lake gold | `src_snapshot_id` of the lake commit it was loaded from | as lake gold |
+
+Rules: each layer is derived only from the one above; lineage points one layer up; vendor
+fields are never dropped (bronze columns, kept through silver); dedup is a gold concern;
+schema evolution is add-nullable-only at every layer, with `raw.messages` frozen.
+
+**Why identifier uniqueness lives in gold and nowhere below.** The v3-D unified bronze
+declared `(exchange, symbol, trade_id)` unique and the data disproved it twice in a day
+(reconnect replay, then in-connection re-send — ADR-024 amendment). Below gold, the only
+honest identifier is lineage; gold is where "one logical trade" is *made* true, and the
+audit that proves it runs there.
+
+---
+
 ## v2 — the wire contract, `NormalizedTrade` *(superseded)*
 
 [`schemas/avro/normalized-trade.avsc`](../../schemas/avro/normalized-trade.avsc), namespace `com.k2.marketdata.crypto`, registered in Redpanda's built-in schema registry as `market.crypto.trades.<exchange>-value`.
@@ -57,7 +85,7 @@ The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2*
 
 ---
 
-## Bronze — as the exchange sent it, typed
+## Bronze — as the exchange sent it, typed *(v2 ClickHouse, frozen — superseded by the v3 layers above; retained as the record of what ran until 2026-08-26)*
 
 Three tables, `bronze_trades_binance` / `_kraken` / `_coinbase`, with **identical column sets**. Separate tables per exchange rather than one normalized bronze is [ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md): native symbols and sequence semantics survive to a layer you can diff against the exchange's own documentation, which is what you want at 3am when a price looks wrong.
 
@@ -82,7 +110,7 @@ Typing happens here, not in the handler: the normalizing materialized view does 
 
 ---
 
-## Silver — one table, all exchanges
+## Silver — one table, all exchanges *(v2 ClickHouse, frozen — superseded by the v3 layers above; retained as the record of what ran until 2026-08-26)*
 
 `silver_trades`, fed by three MVs (`bronze_<exchange>_to_silver_mv`). `ENGINE = MergeTree`, `PARTITION BY (exchange, asset_class, toYYYYMMDD(timestamp))`, `ORDER BY (exchange, asset_class, canonical_symbol, timestamp)`, `TTL toDateTime(timestamp) + INTERVAL 30 DAY`.
 
@@ -106,7 +134,7 @@ Choices worth naming:
 
 ---
 
-## Gold — OHLCV
+## Gold — OHLCV *(v2 ClickHouse, frozen — superseded by the v3 layers above; retained as the record of what ran until 2026-08-26)*
 
 Six tables, `ohlcv_{1m,5m,15m,30m,1h,1d}`, each maintained by one MV reading `silver_trades`. `ENGINE = AggregatingMergeTree`, `PARTITION BY (exchange, toYYYYMM(window_start))`, `ORDER BY (exchange, canonical_symbol, window_start)`.
 
@@ -123,7 +151,7 @@ Six independent MVs rather than a rollup chain (1m → 5m → 15m …) means eac
 
 ---
 
-## Cold tier
+## Cold tier *(v3 Phase D as running; Phase E replaces it with the four layers above)*
 
 The lake does not mirror ClickHouse. Four Iceberg tables — `lake.raw.messages`, `lake.bronze.trades`, `lake.bronze.book_snapshots_l2` and `lake.audit.checks` — are created by [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), and they are fed from Redpanda rather than from the serving database ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)). `raw.messages` stores the Kafka value byte for byte, Confluent framing included; `bronze.*` is decoded from it against the exact writer schema fetched by id, in FAILFAST mode.
 
