@@ -1,8 +1,12 @@
-# Data strategy — layers, serving, retention
+# 12 — Data strategy — layers, serving, retention
+
+> **You will learn** why four lake layers, what ClickHouse keeps and for how long, retention against the disk.
+> **Read this if** architects, anyone proposing a new table or tier.
+> **Before this** chapter 09, 10.
 
 Decided with the maintainer on 2026-08-27, after the first day of running Phase D. This page
 is the *strategy*: which data lives where, why, and what each tier is for. The mechanics are
-in [schema-design.md](schema-design.md) (contracts), [partitioning-strategy.md](partitioning-strategy.md)
+in [schema-design.md](13-schema-design.md) (contracts), [partitioning-strategy.md](14-partitioning-strategy.md)
 (layout) and the ADRs it cites. Phase E implements it; until then the running stack is the
 Phase D shape ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)) and this page
 says so where it differs.
@@ -10,7 +14,7 @@ says so where it differs.
 **Frame.** This repository is a single-host, production-quality *demonstration* of the
 design. Every mechanism is real and measured; the host is not. The same layers map onto a
 cloud deployment with horizontal and vertical scaling per tier — that mapping is
-[scale-out-path.md](scale-out-path.md), *designed, not exercised*. Numbers on this page are
+[scale-out-path.md](17-scale-out-path.md), *designed, not exercised*. Numbers on this page are
 from this host, with their commands.
 
 ## The layers
@@ -72,7 +76,7 @@ signal to promote the field into gold, not to copy silver into ClickHouse.
 Serving-load isolation on this host: backtests run under a `quant` profile (readonly,
 `max_memory_usage` ≈ 3 GiB, `max_threads` 2) so a six-month scan cannot evict the ingest.
 One heavy backtest at a time is the honest capacity of a 4 CPU / 8 GiB ClickHouse; what
-changes on a bigger box is in [scale-out-path.md](scale-out-path.md).
+changes on a bigger box is in [scale-out-path.md](17-scale-out-path.md).
 
 ## Retention and the disk
 
@@ -82,7 +86,7 @@ in ClickHouse, the free space is roughly two months. Before Phase E lands:
 
 - a larger volume for `/var/lib/docker` (or MinIO and ClickHouse data on their own disk), and
 - the disk gauges on both tiers: `k2_lake_disk_used_ratio` (exists; blind on Docker Desktop —
-  [capacity-model.md](capacity-model.md)) and a ClickHouse `system.parts` bytes gauge (Phase E).
+  [capacity-model.md](15-capacity-model.md)) and a ClickHouse `system.parts` bytes gauge (Phase E).
 
 **Revisit when** either gauge crosses 80 %, or the measured ClickHouse gold growth exceeds
 1 GB/day for a week — then either the box grows or the hot window gets a TTL again, and the
@@ -103,7 +107,7 @@ after it.
 Not a trading path: public WebSocket feeds over the internet, one host, no HA. The layers
 above are about **fidelity and reproducibility**, which is what quant research and
 regulatory replay need; latency is measured and reported, never optimised for
-([positioning.md](positioning.md)).
+([positioning.md](01-what-k2-is.md)).
 
 ## Deferred to v3.1: a security master
 

@@ -375,7 +375,7 @@ table that used to bridge the two went with the Kotlin handlers.
   the top-20-at-1 Hz product and the per-venue resync policies
 - [`services/capture-rust/README.md`](../../services/capture-rust/README.md) — the adapter
   contract, the environment table, and the build/test loop
-- [Streaming sources](../architecture/streaming-sources.md) — per-exchange protocol notes
+- [Streaming sources](../architecture/06-capture-venues.md) — per-exchange protocol notes
 
 ---
 

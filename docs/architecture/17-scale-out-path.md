@@ -1,4 +1,8 @@
-# Scale-out path — single host to AWS at TB/PB
+# 17 — Scale-out path — single host to AWS at TB/PB
+
+> **You will learn** how each tier maps to AWS at TB/PB scale — designed, not exercised.
+> **Read this if** architects; readers asking 'what would change at 400×'.
+> **Before this** chapter 04, 12.
 
 > **Designed, not exercised.** Nothing on this page has been deployed, benchmarked or
 > costed against a real AWS account. There is no account and the cloud deployment is
@@ -97,7 +101,7 @@ That is a deletion, which is the right direction.
 ## 3. The arithmetic at PB scale
 
 Every number below derives from the predicted 1× rates in
-[`capacity-model.md`](capacity-model.md), which are themselves **predictions, not
+[`15-capacity-model.md`](15-capacity-model.md), which are themselves **predictions, not
 measurements** — §4c there predicts `raw.messages` at 6.47 GB/day, `bronze.trades` at
 0.156 GB/day and `bronze.book_snapshots_l2` at 0.264 GB/day, and flags the raw
 compression ratio (G3) as the row most likely to be wrong. Every multiplication of a
@@ -164,7 +168,7 @@ a table should not accumulate partitions faster than its metadata can be planned
 **The `hours()` crossover is a computable trigger, not a judgement.** A per-topic hour
 partition holds `6.47 GB/day ÷ 9 topics ÷ 24 h = 30 MB` today. It reaches one 256 MB
 target file at `256 ÷ 30 ≈ 8.5×` today's rate. That is the number in this page's
-*Revisit when*, and it is why [`partitioning-strategy.md`](partitioning-strategy.md)
+*Revisit when*, and it is why [`14-partitioning-strategy.md`](14-partitioning-strategy.md)
 rejects `hours()` today without claiming it is wrong in general.
 
 **Symbol stays out of the partition spec at every scale**, and the reason strengthens
@@ -250,7 +254,7 @@ can be said honestly is the *shape* — which terms dominate, and which are nois
 
 - **Storage dominates, and it grows on a calendar.** `raw.messages` writes 6.47 GB/day of
   the 6.89 GB/day all four lake tables write between them — **94 % of the lake's growth**
-  ([capacity model §4c](capacity-model.md#4c-per-lake-table-per-day)) — and nothing deletes it,
+  ([capacity model §4c](15-capacity-model.md#4c-per-lake-table-per-day)) — and nothing deletes it,
   so the storage line rises monotonically while every other line is roughly flat in
   steady state. The lifecycle policy in §4 is therefore the single largest lever on total
   cost, and the only one that trades money against a stated guarantee.
@@ -304,8 +308,8 @@ make visible.
 
 - [Q9, v3 requirements clarification](../research/2026-08-26-v3-requirements-clarification.md#q9--scale-target) — the question this answers, and the *designed, not exercised* label
 - [Q8](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host) — keep forever, and why §4's lifecycle is what makes it viable past one disk
-- [capacity-model.md](capacity-model.md) — every 1× input multiplied above, with its assumption
-- [partitioning-strategy.md](partitioning-strategy.md) — the same specs argued at today's scale
+- [capacity-model.md](15-capacity-model.md) — every 1× input multiplied above, with its assumption
+- [partitioning-strategy.md](14-partitioning-strategy.md) — the same specs argued at today's scale
 - [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md) — the archive contract that survives the move
 - [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) — why the ingest job does not care what launched it
 - [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md) — the catalog choice, and why it maps to ECS + RDS or Glue

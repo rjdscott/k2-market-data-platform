@@ -112,7 +112,7 @@ words rather than hedging. Cited from ADR-028 (non-goals) and from the notebooks
 README so the limits arrive with the data.
 
 **Cross-referencing.** ADR-029 links the fidelity research doc, the parity test
-path and the fixture directory; `docs/architecture/failure-modes.md` gains two
+path and the fixture directory; `docs/architecture/16-failure-modes.md` gains two
 rows (replay hash mismatch → parser drift, blast radius = research results
 diverge silently; parity job disabled or skipped → the guard is gone).
 

@@ -96,7 +96,7 @@ considered before committing*.
 - **Schema changes move together or not at all**: Avro (`schemas/avro/*.avsc`)
   + ClickHouse DDL (`docker/clickhouse/ddl/01-k2-schema.sql`) + lake DDL
   (`docker/lake/ddl/lake.sql`) + the projections in `docker/lake/ingest.py`
-  + docs (`docs/architecture/schema-design.md`, `partitioning-strategy.md`)
+  + docs (`docs/architecture/13-schema-design.md`, `14-partitioning-strategy.md`)
   + tests, in one PR. Use `/schema-change`; a half-migrated contract fails
   silently at the ingest boundary, not at build time. `tests/test_wire_format.py`
   is that rule made executable — run it.

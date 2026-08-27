@@ -99,7 +99,7 @@ excludes it from the histogram. Lake bronze rebuild from raw: 61.9 M rows in 520
 stores at 0.59× the raw archive; lake growth ≈ 9.8 GB/day. ClickHouse pull of 10.4 M gold trades from
 the lake: 4.4 s. Chaos recovery: lake ingest killed 42 s, MinIO stopped 38 s, Lakekeeper stopped 37 s,
 ClickHouse stopped 160 s to healthy, corrupt feed record isolated in 4 s
-([failure-modes.md](./docs/architecture/failure-modes.md)).
+([failure-modes.md](./docs/architecture/16-failure-modes.md)).
 
 ## Quick start
 
@@ -135,7 +135,7 @@ Research: `make notebooks` starts JupyterLab with DuckDB over the lake
 | Suite | Run |
 |---|---|
 | Rust capture — 60 (unit, binary, replay over recorded sessions) | `make test-rust` |
-| Python — 334 (contracts, wire format, lake offsets, bronze/silver decode, book replay, parity) | `make test-python` |
+| Python — 229 (contracts, wire format, lake offsets, bronze/silver decode, book replay, parity) | `make test-python` |
 | ClickHouse schema — 9 assertions incl. the v2 OHLCV regression | `make test-clickhouse` |
 | Prometheus rule unit tests + doc checks | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make chaos` |
@@ -163,7 +163,7 @@ legacy/                    v1 (Python), v2 Kotlin handlers, v2 ClickHouse DDL, v
 No query API; no replication or failover — one broker, one ClickHouse, one host; no Alertmanager
 routing; no load test above 1×; pcap capture and a cross-venue security master are designed
 ([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md),
-[data-strategy.md](./docs/architecture/data-strategy.md)) and not started.
+[data-strategy.md](./docs/architecture/12-data-strategy.md)) and not started.
 
 ## Documentation
 

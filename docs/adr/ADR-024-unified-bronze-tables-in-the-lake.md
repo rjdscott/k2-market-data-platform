@@ -35,7 +35,7 @@ field-for-field across all three ([ADR-020](ADR-020-avro-fixed-point-contracts.m
 so three tables would hold three copies of one schema. Every cross-venue query, which is
 what a research platform mostly asks, becomes a three-way `UNION ALL` in every notebook.
 Three tables at ~0.156 GB/day combined
-([capacity model §4c](../architecture/capacity-model.md#4c-per-lake-table-per-day))
+([capacity model §4c](../architecture/15-capacity-model.md#4c-per-lake-table-per-day))
 means each venue's daily partition is tens of megabytes against a 128 MB target file
 size, so compaction can never reach the target and the small-file problem is designed in.
 And a fourth exchange becomes a table, a DDL file, a compaction entry and an audit entry
@@ -67,7 +67,7 @@ The specs, as applied by `docker/lake/ddl/lake.sql`:
 Both are `write.distribution-mode = hash`, copy-on-write, Parquet + zstd, and carry
 `src_topic` / `src_partition` / `src_offset` lineage plus `ingest_ts`. Full column
 commentary is in the DDL; the partitioning argument in
-[`../architecture/partitioning-strategy.md`](../architecture/partitioning-strategy.md).
+[`../architecture/14-partitioning-strategy.md`](../architecture/14-partitioning-strategy.md).
 
 ---
 
@@ -103,7 +103,7 @@ single-instrument scan skip most files, and Parquet row-group statistics narrow 
 inside the ones it opens. The price is honest — pruning by sort order is *statistical*
 where partitioning is *exact*, so a query for a rare symbol still opens files that might
 contain it. At this table's size that is a few milliseconds; at PB scale the arithmetic
-is redone in [`../architecture/scale-out-path.md`](../architecture/scale-out-path.md).
+is redone in [`../architecture/17-scale-out-path.md`](../architecture/17-scale-out-path.md).
 Iceberg supports partition evolution, so `ADD PARTITION FIELD` remains available without
 rewriting data if a query pattern ever justifies it — this is a reversible decision, and
 it is the reason it can be made quickly.
@@ -220,8 +220,8 @@ and this ADR's scoped coexistence with ADR-011 ends.
 - [ADR-020](ADR-020-avro-fixed-point-contracts.md) — the one contract that makes unification cheap, and why the lake widens `int64` @1e-8 to `DECIMAL(28,10)`
 - [ADR-027](ADR-027-book-snapshot-and-sequencing.md) — why `exchange_ts` is null on Binance book rows, why `seq = 0` on Kraken, and why the deltas are not a table
 - [ADR-025](ADR-025-clickhouse-derived-hot-tier.md) — Phase E, where the hot tier stops disagreeing with this
-- [`../architecture/partitioning-strategy.md`](../architecture/partitioning-strategy.md) — the full partitioning argument across Kafka, Iceberg and (from Phase E) ClickHouse
-- [`../architecture/capacity-model.md`](../architecture/capacity-model.md#4c-per-lake-table-per-day) — the 0.156 GB/day and 0.264 GB/day predictions the file-size arithmetic rests on
+- [`../architecture/14-partitioning-strategy.md`](../architecture/14-partitioning-strategy.md) — the full partitioning argument across Kafka, Iceberg and (from Phase E) ClickHouse
+- [`../architecture/15-capacity-model.md`](../architecture/15-capacity-model.md#4c-per-lake-table-per-day) — the 0.156 GB/day and 0.264 GB/day predictions the file-size arithmetic rests on
 
 ---
 

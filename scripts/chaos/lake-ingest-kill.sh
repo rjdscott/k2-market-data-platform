@@ -2,7 +2,7 @@
 # shellcheck source-path=SCRIPTDIR
 # SIGKILL an ingest mid-run, then prove the lake is still exactly-once.
 #
-# Proves one row in docs/architecture/failure-modes.md:
+# Proves one row in docs/architecture/16-failure-modes.md:
 #   lake ingest / killed mid-run
 #
 # This is the Phase D exit criterion "kill mid-run -> no dupes/gaps", executed.

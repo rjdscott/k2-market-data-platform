@@ -216,7 +216,7 @@ from that page's command.
    The 48 h prediction divided by twelve and the traffic does not. It cost 1,168,954 records,
    once, before the ingest bound was raised above the arrival rate and the loss was filed as
    an `offset_gap` row the continuity audit nets out
-   ([capacity-model.md](architecture/capacity-model.md), [lake-ingest-lag.md §3](runbooks/lake-ingest-lag.md)).
+   ([capacity-model.md](architecture/15-capacity-model.md), [lake-ingest-lag.md §3](runbooks/lake-ingest-lag.md)).
 
 2. **Row size breaks JVMs, not row count.** Coinbase `level2` snapshots are ~5 MB each. They
    OOM'd the ingest on a cold start (payloads cached) and compaction twice (five file groups
@@ -247,7 +247,7 @@ from that page's command.
    chaos scripts did run, all four passed on the second or third attempt — every failure was
    the *script* (a log read from the wrong side of a bind mount, a `printf` without `\x`
    escapes, a cron run holding the lock) and each is written into the script
-   ([failure-modes.md](architecture/failure-modes.md), [`scripts/chaos/results/`](../scripts/chaos/results/)).
+   ([failure-modes.md](architecture/16-failure-modes.md), [`scripts/chaos/results/`](../scripts/chaos/results/)).
 
 7. **Going public is an event, not a toggle.** Code Scanning switched on with the visibility
    flag, Dependabot opened fifteen PRs, and merging four crate bumps with `--auto` on a repo

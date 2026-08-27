@@ -3,7 +3,7 @@
 # Fill librdkafka's producer queue until capture starts dropping records.
 #
 # Proves the row `capture → Redpanda / producer queue full` in
-# docs/architecture/failure-modes.md — the one place in this tier where data is
+# docs/architecture/16-failure-modes.md — the one place in this tier where data is
 # lost rather than delayed, and where the loss is bounded by a computable number.
 #
 # The fault is `docker pause k2-redpanda`, not `docker stop`: a paused broker
@@ -24,7 +24,7 @@
 # `rpk cluster health` rather than assuming the broker came back clean.
 #
 # It also scores a prediction, and TWO caps race to be the one that binds.
-# capacity-model.md §4a-4b puts the wire rate at 173.3 / 164.3 / 75.2 kB/s for
+# 15-capacity-model.md §4a-4b puts the wire rate at 173.3 / 164.3 / 75.2 kB/s for
 # binance / kraken / coinbase, so 32 MiB of queue is 194 / 204 / 446 s of slack
 # before a record is dropped `reason=queue_full`. Independently, sink.rs sets
 # `message.timeout.ms=300000`, so a record expires 300 s after enqueue whatever

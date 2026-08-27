@@ -49,7 +49,7 @@ same argument that put `recv_ts_ns` before the parser in ADR-018.
 model worth writing before the system exists, given it will be partly wrong?
 
 **Answered: predict, then measure, and keep the error.**
-`docs/architecture/capacity-model.md` is written in Phase C — *before* the first
+`docs/architecture/15-capacity-model.md` is written in Phase C — *before* the first
 burn-in sample — with a `predicted` column only: msg/s per stream, msg/s per core
 for one capture container, bytes/day per topic and per lake table, headroom
 arithmetic against the 16 CPU / 40 GB budget, each row naming the assumption it
@@ -85,7 +85,7 @@ kill and pause each capture container, stop Redpanda, pause ClickHouse, stop
 Lakekeeper mid-ingest, corrupt a frame. Each script prints the alert it expects
 to fire, waits for it, then measures time-to-recovery from the metric that
 defines "recovered". The measured recovery time is written back into the row of
-`docs/architecture/failure-modes.md` that the script proves — so the FMEA's
+`docs/architecture/16-failure-modes.md` that the script proves — so the FMEA's
 recovery column is measured, in the same way runbook MTTRs are measured here
 rather than estimated.
 
@@ -103,7 +103,7 @@ on the dates recorded", not "these failures are injected nightly". The dates go 
 the document. Revisit when a self-hosted runner with ≥32 GB exists.
 
 **Lands in:** Phase D (capture, lake, Redpanda targets), Phase E (ClickHouse
-targets), `docs/architecture/failure-modes.md`.
+targets), `docs/architecture/16-failure-modes.md`.
 
 ---
 
@@ -225,7 +225,7 @@ never captured to the v3 standard in the first place.
 
 ## Q8 — Raw archive retention on a single host
 
-**Asked.** Prompted by [the capacity model](../architecture/capacity-model.md#7-bottleneck-prediction):
+**Asked.** Prompted by [the capacity model](../architecture/15-capacity-model.md#7-bottleneck-prediction):
 the plan keeps `raw.messages` forever, and the host fills its ~212 GiB free in
 ~26 days at the predicted rate. Bound it in the lake — 30 d or 7 d TTL — or
 keep it forever?
@@ -243,7 +243,7 @@ prediction stands and becomes an operational SLO input — Phase F publishes
 disk days-remaining as a number with its command. ADR-021 (raw-first archive)
 must state the single-host disk limit honestly rather than implying unbounded
 storage. The 80% alert's runbook must include the `mc du` / `df` commands from
-[capacity model §8](../architecture/capacity-model.md#8-how-this-table-is-settled)
+[capacity model §8](../architecture/15-capacity-model.md#8-how-this-table-is-settled)
 and the two options an operator actually has: add disk, or a manual purge with
 an audit row.
 
@@ -273,7 +273,7 @@ HA on this host*, not *cannot scale* — conflating the two would fossilize a
 budget constraint into an architectural ceiling. **Rejected: build the AWS
 deployment now.** Out of scope, no budget.
 
-**Consequences.** New design doc `docs/architecture/scale-out-path.md` (Phase
+**Consequences.** New design doc `docs/architecture/17-scale-out-path.md` (Phase
 D, once the lake tables exist) with a per-component mapping table and what
 changes vs what does not — the lake-as-system-of-record contract, the Avro
 contracts and the capture binary do not change. The capacity model gets an
@@ -282,7 +282,7 @@ contracts and the capture binary do not change. The capacity model gets an
 
 **Revisit when:** a second host or an AWS account is provisioned.
 
-**Lands in:** Phase D (`scale-out-path.md`), Phase F (capacity model column).
+**Lands in:** Phase D (`17-scale-out-path.md`), Phase F (capacity model column).
 
 ---
 

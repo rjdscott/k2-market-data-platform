@@ -1,10 +1,14 @@
-# Observability
+# 11 — Observability
+
+> **You will learn** what is measured, which rules watch it, and how each failure mode was proven.
+> **Read this if** operators, anyone adding an alert.
+> **Before this** chapter 04.
 
 Prometheus scrapes every tier, 28 rules each own a runbook and a unit test, four Grafana
 dashboards are provisioned from the repo, and the failure modes the rules watch are induced
 on purpose with timed recovery. No Alertmanager: rules are evaluated and shown, not routed.
-Operator detail: [operations/observability.md](../../operations/observability.md); the FMEA:
-[failure-modes.md](../failure-modes.md).
+Operator detail: [operations/observability.md](../operations/observability.md); the FMEA:
+[failure-modes.md](16-failure-modes.md).
 
 ```mermaid
 flowchart TB
@@ -41,7 +45,7 @@ flowchart TB
   should fire, time recovery, and append a row to `scripts/chaos/results/`. Measured:
   lake ingest killed 42 s, MinIO stopped 38 s, Lakekeeper stopped 37 s, ClickHouse stopped
   160 s to healthy, corrupt feed record isolated in 4 s
-  ([benchmarks § MTTR](../../benchmarks/2026-08-27.md#mttr), [failure-modes.md](../failure-modes.md)).
+  ([benchmarks § MTTR](../benchmarks/2026-08-27.md#mttr), [failure-modes.md](16-failure-modes.md)).
 
 ## Practices
 
@@ -52,7 +56,7 @@ flowchart TB
 | Staleness as timestamp, not rate | `k2_capture_last_message_ts_seconds`, `k2_lake_last_commit_ts_seconds`; `CaptureFeedStale`, `LakeCommitAgeHigh` |
 | Counters carry the reason | `reconnects_total{reason}`, `produce_errors_total{reason}` |
 | Build provenance exported | `k2_capture_build_info{git_sha}` |
-| Alerts proven against the fault they name | `make chaos`; each `failure-modes.md` row cites the script and the measured time |
+| Alerts proven against the fault they name | `make chaos`; each `16-failure-modes.md` row cites the script and the measured time |
 | Dashboards versioned | provisioned from JSON in the repo, not hand-edited in the UI |
 | Least-privilege reads | Grafana uses the `quant` profile |
 

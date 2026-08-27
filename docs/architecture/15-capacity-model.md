@@ -1,4 +1,8 @@
-# Capacity model — v3 capture and lake tiers
+# 15 — Capacity model — v3 capture and lake tiers
+
+> **You will learn** predicted versus measured bytes/day, CPU and disk runway.
+> **Read this if** capacity planning, benchmark readers.
+> **Before this** chapter 04.
 
 **Status: predictions only. Written 2026-08-26, in Phase C, before the first burn-in
 sample exists.** Every row below is a forecast, labelled `predicted`, naming the

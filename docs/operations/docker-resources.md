@@ -80,7 +80,7 @@ channel is full depth, not top-20 — its subscribe snapshot alone is 5.2 MB
 `cpuset`-pinned to cores 12–14 (`K2_CAPTURE_CPUSET`); ClickHouse, Spark and the `lake-ddl`
 one-shot are pinned to the disjoint range 0–11 (`K2_HEAVY_CPUSET`), so a compaction or a heavy
 query cannot share a core with capture — verified by `docker inspect -f '{{.HostConfig.CpusetCpus}}'`
-and measured by the noisy-neighbour experiment in `docs/architecture/capacity-model.md`.
+and measured by the noisy-neighbour experiment in `docs/architecture/15-capacity-model.md`.
 
 The one-shots are **not free**. They declare limits and they run concurrently with the
 steady state at `docker compose up`, so the bootstrap peak is the number the host has to

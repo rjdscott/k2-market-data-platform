@@ -3,7 +3,7 @@
 # Put three un-framed records on a v3 raw topic and prove they neither crash
 # the ingest nor reach bronze (the per-venue tables decoded from that topic).
 #
-# Proves one row in docs/architecture/failure-modes.md:
+# Proves one row in docs/architecture/16-failure-modes.md:
 #   lake ingest / corrupt or un-framed Avro payload
 #
 # Unlike scripts/chaos/capture-corrupt-frame.sh — which is a SKIP, because TLS

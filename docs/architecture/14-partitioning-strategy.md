@@ -1,4 +1,8 @@
-# Partitioning Strategy
+# 14 — Partitioning Strategy
+
+> **You will learn** partition specs, sort orders, file sizes and ClickHouse keys, with the arithmetic.
+> **Read this if** anyone whose query is slow or whose table is growing.
+> **Before this** chapter 09, 10.
 
 Two tiers partition data in v3, and they solve different problems. **Redpanda partitions
 buy producer and consumer parallelism, and decide what stays ordered.** **Iceberg
@@ -83,10 +87,10 @@ notice.
 
 **Skew is real and is accepted here.** BTC-quoted majors dominate volume, so the
 partitions holding them are hotter than the tail. At the predicted ~700 frames/s in
-([capacity model §2c](capacity-model.md#2c-raw-frames-in-and-records-out)) against a
+([capacity model §2c](15-capacity-model.md#2c-raw-frames-in-and-records-out)) against a
 broker sized for ~100 K msg/s ([ADR-010](../adr/ADR-010-resource-budget.md)'s "2 cores
 handles 100K msg/s" — the figure rank 6 of [capacity model
-§7](capacity-model.md#7-bottleneck-prediction) uses to put broker CPU at ~113× today's
+§7](15-capacity-model.md#7-bottleneck-prediction) uses to put broker CPU at ~113× today's
 rate), per-partition skew is not near anything that binds, and the fix if it ever is —
 more partitions — is available only at topic-recreation cost, so it is a decision to make
 once with headroom rather than to tune.
@@ -172,7 +176,7 @@ having in full.
 symbols across them ([`config/instruments.yaml`](../../config/instruments.yaml)) — so
 `exchange × day × symbol` is 34 partitions per day against a table that writes
 **0.156 GB/day** for trades and **0.264 GB/day** for book snapshots
-([capacity model §4c](capacity-model.md#4c-per-lake-table-per-day)). Even split evenly
+([capacity model §4c](15-capacity-model.md#4c-per-lake-table-per-day)). Even split evenly
 that is `0.156 GB ÷ 34 = 4.6 MB` per trades partition per day, well under any file size
 worth writing. And it would not split evenly: BTC-quoted majors would hold most of it;
 the tail would hold partitions of a few hundred rows each. Those are files too small to
@@ -206,7 +210,7 @@ a day, ~79,000 a year, on a single host holding the catalog metadata for all of 
 it would buy is a tighter time prune, and the day partition plus the `(topic, partition,
 offset)` sort order already narrows an intraday read to a handful of files. Hourly is
 metadata for a pruning gain that is already paid for. The arithmetic is redone in
-[`scale-out-path.md`](scale-out-path.md) §3.3, where it comes out differently: an hourly
+[`17-scale-out-path.md`](17-scale-out-path.md) §3.3, where it comes out differently: an hourly
 partition reaches one 256 MB target file at **8.5×** today's rate, and at the **400×** PB
 case it is the right spec.
 
@@ -214,7 +218,7 @@ case it is the right spec.
 
 `raw.messages` targets 256 MB because it is the high-volume table — 6.47 GB/day predicted
 of the 6.89 GB/day all four lake tables write between them, **94 % of the lake's growth**
-([capacity model §4c](capacity-model.md#4c-per-lake-table-per-day)) — and larger files
+([capacity model §4c](15-capacity-model.md#4c-per-lake-table-per-day)) — and larger files
 mean fewer manifest entries per snapshot and
 fewer object-store round trips per scan. `bronze.*` target 128 MB because at 0.156 and
 0.264 GB/day a 256 MB target would never be reached and compaction would produce one
@@ -243,7 +247,7 @@ and both partition pruning and sort-order pruning get slower without getting wro
 
 **Rewritten at the Phase E cutover, 2026-08-27.** The v2 hot tier (`k2.*`, 7-day TTL,
 `SummingMergeTree` candles) is gone — [legacy/v2-clickhouse/](../../legacy/v2-clickhouse/README.md)
-keeps its DDL, and `git log -p -- docs/architecture/partitioning-strategy.md` this page's
+keeps its DDL, and `git log -p -- docs/architecture/14-partitioning-strategy.md` this page's
 earlier description. What serves now is the `gold` database of
 [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md):
 [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql).
@@ -323,6 +327,6 @@ They are design expectations until then.
 - [ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md) — the unified bronze decision and the symbol-in-sort-order trade-off
 - [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) — the ClickHouse tier serves gold, indefinitely, from the lake
 - [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md) — why the book table's time axis is the sampler clock
-- [capacity-model.md](capacity-model.md) — the bytes/day predictions every file-size argument above rests on
-- [scale-out-path.md](scale-out-path.md) — the same partition arithmetic redone at PB scale
+- [capacity-model.md](15-capacity-model.md) — the bytes/day predictions every file-size argument above rests on
+- [scale-out-path.md](17-scale-out-path.md) — the same partition arithmetic redone at PB scale
 - [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) — the DDL this page describes, with per-column commentary

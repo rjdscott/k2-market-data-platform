@@ -4,7 +4,7 @@ Nine scripts: eight break the running stack on purpose, wait for the alert that 
 supposed to notice, measure how long recovery took, and put the stack back; the
 ninth records an honest gap it cannot yet inject. They
 are the `proof` column of
-[`docs/architecture/failure-modes.md`](../../docs/architecture/failure-modes.md):
+[`docs/architecture/16-failure-modes.md`](../../docs/architecture/16-failure-modes.md):
 an FMEA whose recovery times are estimates is a wish list, and these are what turn
 that column into measurements.
 
@@ -26,7 +26,7 @@ failures are injected nightly"*.
 [`results/2026-08-26.tsv`](results/2026-08-26.tsv). Five faults injected, one SKIP.
 `CaptureDown` and `CaptureProduceErrors` both fired on the faults they name; every
 recovery number now published in
-[`docs/architecture/failure-modes.md`](../../docs/architecture/failure-modes.md) and in
+[`docs/architecture/16-failure-modes.md`](../../docs/architecture/16-failure-modes.md) and in
 the `docs/runbooks/capture-*.md` MTTR tables comes from that file.
 
 Runs are still scheduled deliberately rather than taken opportunistically: each script
@@ -217,7 +217,7 @@ not written into `docs/` — that surface holds the conclusion, not the raw log.
 
 **The FMEA is updated by hand, with the date.** Copy the measured recovery time
 into the matching row of
-[`docs/architecture/failure-modes.md`](../../docs/architecture/failure-modes.md),
+[`docs/architecture/16-failure-modes.md`](../../docs/architecture/16-failure-modes.md),
 alongside the run date, in the same PR as the results file. It is deliberately not
 automated: a number that appears in a published document without someone reading
 the run it came from is exactly how v2 ended up with benchmark figures nobody could

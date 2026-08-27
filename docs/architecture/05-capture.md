@@ -1,11 +1,15 @@
-# Capture — `k2-capture`
+# 05 — Capture — `k2-capture`
 
-One Rust binary ([`services/capture-rust/`](../../../services/capture-rust/README.md)), one
+> **You will learn** how one Rust process turns a venue WebSocket into three Avro topics without losing or reinterpreting a frame.
+> **Read this if** engineers touching `services/capture-rust/`, reviewers of the ingestion path.
+> **Before this** chapter 04.
+
+One Rust binary ([`services/capture-rust/`](../../services/capture-rust/README.md)), one
 container per venue, one WebSocket per container carrying trades and L2 book. Its job is to
 receive everything, stamp it, and hand it to Redpanda without interpretation getting in the
 way: every frame is published verbatim before anything is parsed. Why Rust and not the JVM
-tier it replaced: [ADR-019](../../adr/ADR-019-rust-capture-tier.md). Venue specifics:
-[capture-venues.md](capture-venues.md).
+tier it replaced: [ADR-019](../adr/ADR-019-rust-capture-tier.md). Venue specifics:
+[capture-venues.md](06-capture-venues.md).
 
 ## Frame loop
 
@@ -71,4 +75,4 @@ flowchart TB
 - **No local persistence.** A spill-to-disk buffer would add a second store to reconcile;
   Redpanda's retention (48 h raw) is the buffer.
 - **Public feeds.** Latency includes the internet and venue clock skew, and is published as
-  such ([benchmarks](../../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-receive)).
+  such ([benchmarks](../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-receive)).

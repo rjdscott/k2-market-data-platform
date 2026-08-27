@@ -1,4 +1,8 @@
-# Technology Stack
+# A1 — Technology Stack
+
+> **You will learn** every component, its pinned version, its job, and the ADR that chose it.
+> **Read this if** reference; no reading order.
+> **Before this** nothing.
 
 Every component that runs, the version pinned, what it does here, and the decision record that chose it. Versions are read from [`docker-compose.yml`](../../docker-compose.yml), the Dockerfiles under `docker/`, and [`services/capture-rust/Cargo.toml`](../../services/capture-rust/Cargo.toml).
 

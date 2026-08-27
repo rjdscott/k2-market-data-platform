@@ -347,7 +347,7 @@ mod tests {
     }
 
     /// Four producer settings are quoted as numbers in `README.md`, ADR-019 and
-    /// `docs/architecture/failure-modes.md` — the 5-minute delivery cap, the
+    /// `docs/architecture/16-failure-modes.md` — the 5-minute delivery cap, the
     /// 32 MiB of queue slack the delayed→lost boundary is computed from, the
     /// 8 MiB frame cap that must equal `ws::MAX_MESSAGE_BYTES`, and idempotence.
     /// Changing one silently makes those documents wrong, and the only place

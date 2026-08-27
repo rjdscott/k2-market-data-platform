@@ -1,11 +1,15 @@
-# Lake ingest — Redpanda to Iceberg, exactly once
+# 08 — Lake ingest — Redpanda to Iceberg, exactly once
+
+> **You will learn** how Redpanda reaches Iceberg exactly once, and how each layer is derived incrementally.
+> **Read this if** engineers touching `docker/lake/`, anyone debugging a lake audit.
+> **Before this** chapter 07.
 
 `docker/lake/ingest.py` is the only writer of new data into the lake. Every 5 minutes it
 reads Redpanda by explicit offset range, appends every record verbatim to `raw.messages`,
 then derives bronze, silver and gold from that archive. It is idempotent by construction:
 the position it consumed to is written into the same Iceberg commit as the rows, so a run
-killed at any instant either happened or did not. Design: [ADR-022](../../adr/ADR-022-exactly-once-via-snapshot-offsets.md);
-operations: [`docker/lake/README.md`](../../../docker/lake/README.md).
+killed at any instant either happened or did not. Design: [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md);
+operations: [`docker/lake/README.md`](../../docker/lake/README.md).
 
 ## Shape
 
@@ -64,12 +68,12 @@ range).
 
 `rebuild.py --layer bronze|silver|gold|books` drops a layer and recomputes it from its parent
 over the whole archive; bronze 520 s, books 2,367 s
-([benchmarks](../../benchmarks/2026-08-27.md#lake)).
+([benchmarks](../benchmarks/2026-08-27.md#lake)).
 
 ## Proof
 
 `maintenance.py` runs nightly and writes every assertion to `audit.checks`; any failure
-exits non-zero and `LakeAuditFailed` fires ([runbook](../../runbooks/lake-audit-failed.md)).
+exits non-zero and `LakeAuditFailed` fires ([runbook](../runbooks/lake-audit-failed.md)).
 
 | Audit | Asserts |
 |---|---|
@@ -103,6 +107,6 @@ compares lake, ClickHouse and DuckDB candles at a pinned snapshot.
   turn. Serial by lock is a capacity ceiling, not a correctness one.
 - **Retention is the deadline.** `raw.*` topics keep 48 h; an ingest outage longer than that
   is a recorded, acknowledged hole, never a silent one
-  ([failure-modes.md § lake](../failure-modes.md#lake-tier)).
+  ([failure-modes.md § lake](16-failure-modes.md#lake-tier)).
 - **Bronze keeps vendor schemas.** Cross-venue work waits for gold; in exchange nothing a
   venue sent is normalised away before it can be inspected.

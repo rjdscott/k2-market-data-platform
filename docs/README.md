@@ -46,17 +46,16 @@ The system as built, for readers who want the detail rather than the argument.
 
 | Doc | What's in it |
 |---|---|
-| [architecture/README.md](architecture/README.md) | As-built system: diagram, per-component build / mechanics / trade-offs, footprint, known gaps |
-| [architecture/components/](architecture/components/) | Deep dives per component — how it is built, how it works, what it trades away, and a practices table naming where each is enforced |
-| [architecture/technology-stack.md](architecture/technology-stack.md) | Every component, its version, its job, and the ADR that chose it |
-| [architecture/schema-design.md](architecture/schema-design.md) | Bronze / Silver / Gold columns, the Avro normalized-trade contract, precision choices |
-| [architecture/partitioning-strategy.md](architecture/partitioning-strategy.md) | Redpanda keys and partition counts, Iceberg partition specs and sort orders, and why symbol is in neither. The ClickHouse section lands with Phase E |
-| [architecture/scale-out-path.md](architecture/scale-out-path.md) | Every tier's AWS equivalent at TB/PB, what changes vs what does not, and the partition/file/manifest arithmetic at 400×. *Designed, not exercised* |
-| [architecture/capacity-model.md](architecture/capacity-model.md) | Predicted msg/s, bytes/day and headroom for the v3 capture and lake tiers, each row naming its assumption |
-| [architecture/failure-modes.md](architecture/failure-modes.md) | FMEA: one row per component × failure, with its detection signal, blast radius, recovery step and proof |
-| [architecture/streaming-sources.md](architecture/streaming-sources.md) | How a capture process works, the per-venue dialects, and what a fourth exchange costs |
-| [architecture/platform-principles.md](architecture/platform-principles.md) | The handful of rules the design is actually held to |
-| [architecture/positioning.md](architecture/positioning.md) | What this platform is for — and the workloads it is deliberately wrong for |
+| [architecture/](architecture/README.md) | The book: numbered chapters from purpose to scale-out, one per component, each with a practices table |
+| [architecture/A1-technology-stack.md](architecture/A1-technology-stack.md) | Every component, its version, its job, and the ADR that chose it |
+| [architecture/13-schema-design.md](architecture/13-schema-design.md) | Bronze / Silver / Gold columns, the Avro normalized-trade contract, precision choices |
+| [architecture/14-partitioning-strategy.md](architecture/14-partitioning-strategy.md) | Redpanda keys and partition counts, Iceberg partition specs and sort orders, and why symbol is in neither. The ClickHouse section lands with Phase E |
+| [architecture/17-scale-out-path.md](architecture/17-scale-out-path.md) | Every tier's AWS equivalent at TB/PB, what changes vs what does not, and the partition/file/manifest arithmetic at 400×. *Designed, not exercised* |
+| [architecture/15-capacity-model.md](architecture/15-capacity-model.md) | Predicted msg/s, bytes/day and headroom for the v3 capture and lake tiers, each row naming its assumption |
+| [architecture/16-failure-modes.md](architecture/16-failure-modes.md) | FMEA: one row per component × failure, with its detection signal, blast radius, recovery step and proof |
+| [architecture/06-capture-venues.md](architecture/06-capture-venues.md) | How a capture process works, the per-venue dialects, and what a fourth exchange costs |
+| [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | The handful of rules the design is actually held to |
+| [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | What this platform is for — and the workloads it is deliberately wrong for |
 | [operations/](operations/) | Running the stack: [quick reference](operations/quick-reference.md), [Docker budget](operations/docker-resources.md), [observability](operations/observability.md), [latency budgets](operations/latency-budgets.md), [Prefect schedules](operations/prefect-schedules.md), [data inspection](operations/data-inspection.md), [adding an exchange](operations/adding-new-exchanges.md), [cost model](operations/cost-model.md) |
 | [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md) — prerequisites, and how to run the Rust and Python suites |
 

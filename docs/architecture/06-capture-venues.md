@@ -1,4 +1,66 @@
-# Streaming Sources
+# 06 — Capture — venue dialects
+
+> **You will learn** what Binance, Kraken and Coinbase each send, how continuity is checked, and what happens when it breaks.
+> **Read this if** anyone adding a venue or reading a gap/checksum alert.
+> **Before this** chapter 05.
+
+What each venue sends, what continuity signal it offers, and what `k2-capture` does when
+that signal breaks. The process is in [capture.md](05-capture.md); the policy is
+[ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md); the code is
+`services/capture-rust/src/exchanges/{binance,kraken,coinbase}.rs`.
+
+| | Binance | Kraken (WS v2) | Coinbase (Advanced Trade) |
+|---|---|---|---|
+| Streams on the one socket | `<sym>@trade`, `<sym>@depth20@100ms` via `/stream?streams=` — no subscribe frame | `trade`, `book` (depth 25), `instrument`, `heartbeat`, `status` | `market_trades`, `level2`, `heartbeats` |
+| Book model | complete top-20 partial every 100 ms; no local state | snapshot + deltas, local book | snapshot + absolute-quantity updates, local full-depth `BTreeMap` |
+| Continuity signal | `lastUpdateId` strictly increasing per symbol | CRC32 over top-10 asks then bids on every `book` frame; no sequence numbers | `sequence_num`, one counter across every channel on the connection |
+| On failure | drop that book; `Resubscribe` — the next partial is a complete top-20 | emit one last snapshot with `checksum_ok=false`, drop the book, unsubscribe + subscribe that symbol | drop every book; `Reconnect` — a gap cannot be attributed to one product |
+| Trade id | venue `t` | venue `trade_id` (v1 had none — v2 was a reason to move) | venue `trade_id`; the subscribe-time snapshot carries history, excluded from the latency histogram |
+| Connection lifetime | venue closes at 24 h; capture reconnects at 23 h (`reason="scheduled"`) | none published | none published |
+
+## Kraken checksum
+
+```mermaid
+flowchart TB
+  F["book frame"] --> A["apply deltas to local book"]
+  A --> T["top-10 asks, then top-10 bids"]
+  T --> D["price · qty as integers<br/>precision from the instrument channel<br/>leading zeros stripped"]
+  D --> C["CRC32 of the concatenated digits"]
+  C --> Q{"== venue checksum?"}
+  Q -->|yes| S["snapshot at the next 1 Hz tick<br/>checksum_ok = true"]
+  Q -->|no| X["emit snapshot checksum_ok = false<br/>drop book · resubscribe<br/>checksum_failures_total"]
+```
+
+The digit rendering (`decimal.checksum_digits`) depends on each pair's `price_precision`
+and `qty_precision`, taken from the `instrument` channel; frames that arrive before the
+precision is known are held (up to 512) rather than checked against a guess. The
+documented Kraken example (`3310070434`) is a unit test. The lake replays the same
+algorithm over every archived frame ([lake-layers.md](09-lake-layers.md)), so a checksum that
+passed live and fails in replay means the archive has a hole.
+
+## What is measured
+
+Per venue counters, all on `:8082/metrics`: `gaps_total`, `checksum_failures_total`,
+`resyncs_total`, `reconnects_total{reason}`, `produce_errors_total{reason}`,
+`precision_loss_total`, `exchange_to_recv_seconds` histogram, `book_depth`,
+`book_levels_total`. The 6.5 h window on 2026-08-27 read 0 gaps on all three venues and
+0 checksum failures over 14.1 M Kraken frames
+([benchmarks](../benchmarks/2026-08-27.md#ingestion--capture-tier)).
+
+## Practices
+
+| Practice | Where it is enforced |
+|---|---|
+| Continuity checked on every frame | `lastUpdateId` / CRC32 / `sequence_num` in each adapter; `CaptureSequenceGaps`, `CaptureChecksumFailure` alerts |
+| Failure is visible before it is repaired | Kraken marked snapshot emitted **before** the book is dropped (`kraken.rs`); consumers can filter `checksum_ok = false` |
+| Resync is the venue's job, not ours | no book is rebuilt from guesses; a fresh venue snapshot is the only repair |
+| Venue example is a test | `decimal.rs` / `kraken.rs` tests against Kraken's published checksum example |
+| Recorded sessions replay | `k2-capture record` fixtures in `tests/fixtures/`, sha256-pinned, run in CI |
+| Pre-empt known limits | Binance 23 h scheduled reconnect; 8 MiB frame cap sized to Coinbase's snapshot |
+
+---
+
+## Streaming sources — per-venue reference
 
 How exchange data gets into the platform, and what a fourth exchange would cost. Three sources are live: **Binance (12 pairs), Kraken (11), Coinbase (11)** — the full list is [`config/instruments.yaml`](../../config/instruments.yaml), which is the single source of truth for all three.
 
@@ -8,7 +70,7 @@ Implementation: [`services/capture-rust/`](../../services/capture-rust/README.md
 
 ---
 
-## Shape of a capture process
+### Shape of a capture process
 
 ```mermaid
 flowchart TB
@@ -53,7 +115,7 @@ Depth beyond 20 exists to keep the book correct — Kraken's checksum is defined
 
 ---
 
-## Symbol normalization
+### Symbol normalization
 
 Each exchange names the same instrument differently, and any cross-venue join needs one key, so the mapping has to be exact — and it is **data, not code**. [`config/instruments.yaml`](../../config/instruments.yaml) lists every instrument as a `native` (the bytes on the wire, byte for byte) and a `canonical` (`BASE/QUOTE`). A symbol the registry does not list is a hard error, never a guess.
 
@@ -69,7 +131,7 @@ Each exchange names the same instrument differently, and any cross-venue join ne
 
 ---
 
-## Why v2's Avro topic was never read
+### Why v2's Avro topic was never read
 
 Worth keeping as a lesson rather than a design note, because the mistake is easy to repeat.
 
@@ -79,7 +141,7 @@ v3 does not repeat the shape. `market.crypto.v3.trades.<ex>` is Avro, and it is 
 
 ---
 
-## Topics and partitions
+### Topics and partitions
 
 Created explicitly by [`docker/redpanda/init.sh`](../../docker/redpanda/init.sh) as the `redpanda-init` one-shot service, not by auto-create, so partition counts are deterministic:
 
@@ -92,11 +154,11 @@ Created explicitly by [`docker/redpanda/init.sh`](../../docker/redpanda/init.sh)
 | `market.crypto.trades.kraken[.raw]` | 20 each | default | **frozen** |
 | `market.crypto.trades.coinbase[.raw]` | 20 each | default | **frozen** |
 
-12 partitions is one per instrument at the current registry — enough for per-symbol ordering with parallel consumers, and uniform across venues on purpose, where v2's 40/20/20 encoded an instrument count that had already drifted. The six frozen v2 topics are still created (the `k2` Kafka-engine queues error on a missing topic) and still hold their retained data; Phase E deletes them. The 8 MiB message cap on `raw` is not optional: a Coinbase `level2` subscribe snapshot measured 5,195,904 bytes, and Redpanda's 1 MiB default silently rejected it. Rationale in [partitioning-strategy.md](partitioning-strategy.md). The same init job hardens `_schemas` to `cleanup.policy=compact` with infinite retention — without it, a schema-registry restart after the default 24 h local retention window produced `offset_out_of_range` and the registry came up empty.
+12 partitions is one per instrument at the current registry — enough for per-symbol ordering with parallel consumers, and uniform across venues on purpose, where v2's 40/20/20 encoded an instrument count that had already drifted. The six frozen v2 topics are still created (the `k2` Kafka-engine queues error on a missing topic) and still hold their retained data; Phase E deletes them. The 8 MiB message cap on `raw` is not optional: a Coinbase `level2` subscribe snapshot measured 5,195,904 bytes, and Redpanda's 1 MiB default silently rejected it. Rationale in [partitioning-strategy.md](14-partitioning-strategy.md). The same init job hardens `_schemas` to `cleanup.policy=compact` with infinite retention — without it, a schema-registry restart after the default 24 h local retention window produced `offset_out_of_range` and the registry came up empty.
 
 ---
 
-## Metrics
+### Metrics
 
 `metrics-exporter-prometheus` on `:8082/metrics`, scraped as `capture-{binance,kraken,coinbase}`. Every series carries the venue's own `exchange` label, which is why the scrape jobs deliberately set no `exchange` target label. The full list is in [`services/capture-rust/README.md`](../../services/capture-rust/README.md#metrics-and-liveness); the ones alerts read:
 
@@ -113,7 +175,7 @@ The `k2-capture healthcheck` subcommand backs the Compose healthcheck; the distr
 
 ---
 
-## Adding a fourth exchange
+### Adding a fourth exchange
 
 Coinbase was added this way in Phase 7 ([ADR-016](../adr/ADR-016-add-coinbase-exchange.md)). The full procedure is [operations/adding-new-exchanges.md](../operations/adding-new-exchanges.md); the shape of it:
 
@@ -135,6 +197,7 @@ Two traps, both hit for real:
 
 ---
 
-## Deliberately absent
+### Deliberately absent
 
 No dead-letter queue, no spill-to-disk when librdkafka's 32 MB queue fills (records are dropped and counted instead — blocking the frame loop would stop us reading the socket and the venue would drop us, losing more than it saved), no authenticated or private channels, no quote or ticker ingestion. Every process subscribes to public streams only. A frame that fails to parse is still archived verbatim to the `raw` topic and counted in `k2_capture_unknown_frames_total` — it is not dropped, which is the one thing v2 did here that v3 does not. At three exchanges and 34 instruments this has not cost anything; at a hundred instruments across ten venues, the DLQ is the first thing to add.
+

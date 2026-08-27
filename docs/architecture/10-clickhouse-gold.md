@@ -1,10 +1,14 @@
-# ClickHouse `gold` — the served tier
+# 10 — ClickHouse `gold` — the served tier
+
+> **You will learn** the served tier: dedup as a merge-tree key, candles on read, reload from the lake.
+> **Read this if** dashboard and notebook authors, anyone tuning ClickHouse.
+> **Before this** chapter 09.
 
 ClickHouse 24.3 LTS holds one database, `gold`, and nothing else. It is fed live from the
 Avro topics for freshness and reloaded from the lake for correctness; it can be dropped and
-rebuilt, and the lake wins on conflict ([ADR-025](../../adr/ADR-025-clickhouse-derived-hot-tier.md),
-[ADR-026](../../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)). DDL:
-[`docker/clickhouse/ddl/`](../../../docker/clickhouse/README.md).
+rebuilt, and the lake wins on conflict ([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md),
+[ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)). DDL:
+[`docker/clickhouse/ddl/`](../../docker/clickhouse/README.md).
 
 ```mermaid
 flowchart TB
@@ -34,7 +38,7 @@ flowchart TB
   `scripts/clickhouse-schema-test.sh` inserts one minute in two blocks and asserts the open.
 - **History by pull.** `ohlcv_*` and `bbo_1s` are loaded from lake gold through the
   `iceberg()` table function with `src_snapshot_id` recorded; 10.4 M trades in 4.4 s
-  ([runbook](../../runbooks/clickhouse-rebuild-from-lake.md)). Never computed here.
+  ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)). Never computed here.
 - **Errors are rows.** `kafka_handle_error_mode = 'stream'` sends an undecodable record to
   `gold.feed_errors` with its bytes; the partition keeps moving.
   `kafka_skip_broken_messages` does not cover a registry miss (schema id 0) — stream mode does.
@@ -65,4 +69,4 @@ flowchart TB
   `write.metadata.compression-codec=none` on the source tables plus
   `iceberg_engine_ignore_schema_evolution=1`.
 - **No TTL.** Gold grows with the archive; the revisit trigger is 80 % of the data volume
-  or > 1 GB/day growth ([data-strategy.md](../data-strategy.md)).
+  or > 1 GB/day growth ([data-strategy.md](12-data-strategy.md)).

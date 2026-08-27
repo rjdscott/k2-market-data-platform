@@ -1,11 +1,15 @@
-# Lake layers — raw, bronze, silver, gold
+# 09 — Lake layers — raw, bronze, silver, gold
+
+> **You will learn** what raw, bronze, silver and gold each hold, the identifier at each layer, and why the boundaries sit where they do.
+> **Read this if** anyone querying the lake.
+> **Before this** chapter 08.
 
 Iceberg tables on a Lakekeeper REST catalog over MinIO, Parquet + zstd. Each layer is
 derived only from the one above it and is rebuilt from `raw.messages` on demand; the
 boundary between layers is where a specific question gets answered. Decision:
-[ADR-026](../../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md); columns:
-[schema-design.md](../schema-design.md); partitioning: [partitioning-strategy.md](../partitioning-strategy.md);
-how rows move: [lake-ingest.md](lake-ingest.md).
+[ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md); columns:
+[schema-design.md](13-schema-design.md); partitioning: [partitioning-strategy.md](14-partitioning-strategy.md);
+how rows move: [lake-ingest.md](08-lake-ingest.md).
 
 ```mermaid
 flowchart TB
@@ -48,7 +52,7 @@ in-connection re-send). Below gold the only honest identifier is lineage; gold i
   book across runs.
 - **Sizes, 2026-08-27.** Per-venue bronze stores at 0.59× the raw archive; the lake grows
   ≈ 9.8 GB/day; runway on this host ≈ 60 days
-  ([benchmarks](../../benchmarks/2026-08-27.md#lake), [capacity-model.md](../capacity-model.md)).
+  ([benchmarks](../benchmarks/2026-08-27.md#lake), [capacity-model.md](15-capacity-model.md)).
 
 ## Practices
 
@@ -71,4 +75,4 @@ in-connection re-send). Below gold the only honest identifier is lineage; gold i
 - **Cross-venue queries start at gold.** Silver keeps venue vocabulary on purpose; a
   research question that needs a silver-only field routinely is the trigger to promote it.
 - **No security master yet.** `canonical_symbol` comes from `config/instruments.yaml`; a
-  cross-venue instrument dimension is designed and deferred ([data-strategy.md](../data-strategy.md)).
+  cross-venue instrument dimension is designed and deferred ([data-strategy.md](12-data-strategy.md)).

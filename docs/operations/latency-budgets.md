@@ -87,7 +87,7 @@ scale:
 
 Nothing here drops data silently — the one level that drops (1) counts every record it
 loses; below capture the failure mode is lag, not loss
-([failure-modes.md](../architecture/failure-modes.md)).
+([failure-modes.md](../architecture/16-failure-modes.md)).
 
 ## Related
 

@@ -1,4 +1,8 @@
-# Schema Design
+# 13 — Schema Design
+
+> **You will learn** every column in every layer and the wire contracts.
+> **Read this if** anyone writing a query or a schema change.
+> **Before this** chapter 07, 09.
 
 Two contracts live here at once. **v3** is the wire format going forward — three Avro records under `com.k2.market.v3`, described below, and the Iceberg lake they land in. **v2** is what is still running in the hot tier: `NormalizedTrade` plus the three ClickHouse medallion layers. Its Iceberg mirrors are gone, deleted with the offload in Phase D. v2 stays documented, unedited, until Phase C retires the Kotlin handlers; nothing new should be built against it.
 
@@ -34,7 +38,7 @@ The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2*
 
 ## v3 layers — as built
 
-The strategy is [data-strategy.md](data-strategy.md); this is the contract per layer. Every
+The strategy is [data-strategy.md](12-data-strategy.md); this is the contract per layer. Every
 table is created by [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), applied by the
 `lake-ddl` one-shot; ClickHouse `gold` by [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql).
 

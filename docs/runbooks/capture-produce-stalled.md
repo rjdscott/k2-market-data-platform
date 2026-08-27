@@ -78,7 +78,7 @@ There is no spill-to-disk in this tier — the librdkafka queue
 (`queue.buffering.max.kbytes=32768`, 32 MiB, ADR-019) is the only buffer, and it drops
 on full with a counter. From the moment production stopped, time to the first
 permanent drop, at the predicted per-container wire rate
-([capacity-model.md §4](../architecture/capacity-model.md)):
+([capacity-model.md §4](../architecture/15-capacity-model.md)):
 
 | Exchange | Time to first drop |
 |---|---|
@@ -88,7 +88,7 @@ permanent drop, at the predicted per-container wire rate
 
 Binance is the tightest window. Inside it, nothing is lost yet; past it, the loss is
 permanent and unrecoverable — public WebSocket feeds do not replay
-([failure-modes.md](../architecture/failure-modes.md), Redpanda broker-down row).
+([failure-modes.md](../architecture/16-failure-modes.md), Redpanda broker-down row).
 
 **Recovery**
 

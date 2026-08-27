@@ -378,7 +378,7 @@ step this section used to describe in prose is a command that files the record i
 **The cause here was the second of the two above**: the byte cap binding well inside 48 h
 on one hot partition. It is a capacity finding — measured on 2026-08-26, that partition
 holds **7.0 h** of records at the 512 MiB cap, not 48 ([capacity-model.md
-§4b](../architecture/capacity-model.md)):
+§4b](../architecture/15-capacity-model.md)):
 
 ```console
 $ docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.kraken   # ✅ verified
@@ -434,7 +434,7 @@ compacted once, so a fresh table cannot fire it either.
 **Expected behaviour** — the 5-minute cadence writes ~288 commits per table per day, each
 one small, and nightly compaction is what converges them toward the target (256 MB for
 `raw.messages`, 128 MB for `bronze.*` —
-[partitioning-strategy.md](../architecture/partitioning-strategy.md)). If maintenance ran,
+[partitioning-strategy.md](../architecture/14-partitioning-strategy.md)). If maintenance ran,
 this self-corrects overnight. If it did not, nothing corrects it.
 
 **Recovery**
@@ -565,7 +565,7 @@ revisiting it is in §3.
 - [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md) — why a lost window has to be recorded rather than absorbed
 - [lake-recovery.md](./lake-recovery.md) — a killed run, Lakekeeper down, MinIO down
 - [lake-audit-failed.md](./lake-audit-failed.md) — when the continuity audit finds the hole instead of the ingest job
-- [`../architecture/partitioning-strategy.md`](../architecture/partitioning-strategy.md) — target file sizes and the sort-order pruning that §4 protects
+- [`../architecture/14-partitioning-strategy.md`](../architecture/14-partitioning-strategy.md) — target file sizes and the sort-order pruning that §4 protects
 - [`docker/redpanda/init.sh`](../../docker/redpanda/init.sh) — the 48 h / 512 MiB retention arithmetic and why it is deliberately unresolved
 
 ---

@@ -36,7 +36,7 @@ table, and the second option is attractive precisely because it looks cheap.
 The constraint that shapes all three: one host, and the capacity model predicts
 `raw.messages` at **6.47 GB/day** after zstd-3 — disk binds first, *on a calendar*, at
 roughly **26 days** from a cold start
-([`../architecture/capacity-model.md`](../architecture/capacity-model.md#7-bottleneck-prediction)).
+([`../architecture/15-capacity-model.md`](../architecture/15-capacity-model.md#7-bottleneck-prediction)).
 
 Free space is the one input to that arithmetic that moves while you read it, so it is
 quoted here with the command and the instant rather than as a constant:
@@ -140,7 +140,7 @@ rather than left to the capacity model. At the predicted 6.47 GB/day, the curren
 disk holds roughly 26 days from empty. The mitigations are: add disk, or move object
 storage to S3 with a Glacier/Deep Archive lifecycle — which is what makes "keep forever"
 viable past one disk and is designed in
-[`../architecture/scale-out-path.md`](../architecture/scale-out-path.md). Neither is a
+[`../architecture/17-scale-out-path.md`](../architecture/17-scale-out-path.md). Neither is a
 TTL, and neither happens automatically.
 
 ---
@@ -150,7 +150,7 @@ TTL, and neither happens automatically.
 | Option | Why not |
 |--------|---------|
 | **30-day or 7-day TTL on `raw.messages`** | Bounds the disk problem and unbounds a worse one: the replay window becomes the TTL, so `bronze.*` cannot be rebuilt past it and the archive stops being the system of record for anything older. The platform's one distinguishing property would hold for a month. Rejected in [Q8](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host); the disk alert plus an operator decision replaces it. |
-| **Parse at capture and store only typed rows** (no verbatim payload) | ~5× cheaper on disk — raw is 91 % of the predicted bytes ([capacity model §4b](../architecture/capacity-model.md#4b-per-topic-per-day)) — and it is v2's mistake with a faster parser. Every parse bug becomes permanent, every schema question becomes unanswerable, and replay-through-the-production-parser (Q1) has nothing to replay. |
+| **Parse at capture and store only typed rows** (no verbatim payload) | ~5× cheaper on disk — raw is 91 % of the predicted bytes ([capacity model §4b](../architecture/15-capacity-model.md#4b-per-topic-per-day)) — and it is v2's mistake with a faster parser. Every parse bug becomes permanent, every schema question becomes unanswerable, and replay-through-the-production-parser (Q1) has nothing to replay. |
 | **A `bronze.book_deltas` table alongside the snapshots** | Storage and rebuild cost far beyond one host (S5: 5.2 MB for one opening snapshot, before deltas, before 34 instruments), and it pushes book reconstruction into every consumer — a second implementation of `book.rs` in SQL, which is the research/production drift Q1 rejected. Recoverable by replay, so this is deferred rather than lost. |
 | **Lineage by content hash** of the payload instead of offsets | Survives a topic being recreated, which offsets do not. Costs a hash per record on the capture path, is not a coordinate you can seek to, and answers "is this the same bytes" rather than "where did this come from" — the second question is the one asked during an incident. |
 | **A separate lineage/provenance table** joining bronze rows to raw rows | A join table for a relationship that is already a three-column key, plus a second thing that can be inconsistent with the tables it describes. The columns cost ~20 bytes per bronze row and cannot drift. |
@@ -169,7 +169,7 @@ history rather than over fixtures.
 **Harder — and the number that makes it concrete: disk.** `raw.messages` is predicted at
 6.47 GB/day forever, 91 % of the platform's byte growth, and nothing deletes it. On the
 current host that is ~26 days from empty
-([capacity model §7](../architecture/capacity-model.md#7-bottleneck-prediction)). The
+([capacity model §7](../architecture/15-capacity-model.md#7-bottleneck-prediction)). The
 platform's binding constraint moves from CPU (v2's) to bytes, and it binds on a calendar
 rather than at a load multiple — which means it cannot be outrun by tuning, only by
 buying disk or moving to object storage that is priced for it. Also harder: any question
@@ -211,7 +211,7 @@ constraint attached.
 - [ADR-025](ADR-025-clickhouse-derived-hot-tier.md) — the other consumer of "derived and rebuildable"
 - [ADR-027](ADR-027-book-snapshot-and-sequencing.md) — why the deltas stay in `raw.messages` and top-20 @ 1 Hz is the product
 - [Q8, v3 requirements clarification](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host) — keep forever, with an 80 % disk alert
-- [`../architecture/capacity-model.md`](../architecture/capacity-model.md) — the 6.47 GB/day prediction and the ~26-day disk bottleneck
+- [`../architecture/15-capacity-model.md`](../architecture/15-capacity-model.md) — the 6.47 GB/day prediction and the ~26-day disk bottleneck
 - [`../runbooks/lake-disk-usage-high.md`](../runbooks/lake-disk-usage-high.md) — what an operator does instead of a TTL
 
 ---

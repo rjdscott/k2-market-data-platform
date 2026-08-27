@@ -2,7 +2,7 @@
 # shellcheck source-path=SCRIPTDIR
 # Stop the broker under a running capture tier.
 #
-# Proves three rows in docs/architecture/failure-modes.md:
+# Proves three rows in docs/architecture/16-failure-modes.md:
 #   Redpanda / broker down                      — default mode
 #   schema registry / down mid-run (cached ids) — the opening seconds of the same run
 #   schema registry / down at process start     — --cold-start

@@ -146,7 +146,7 @@ full depth — 13,000-15,000 levels on liquid symbols, sampled over the 2026-08-
 12:38-13:07Z window — so a fall from 15,000 to 50 levels is a severe degradation that
 never approaches this floor. Catching that needs a per-venue, per-symbol baseline;
 Phase F's measured depth distributions in
-[capacity-model.md](../architecture/capacity-model.md) are the trigger to revisit it.
+[capacity-model.md](../architecture/15-capacity-model.md) are the trigger to revisit it.
 Until then, step 3 below is the manual version of that check.
 
 **Expected behaviour** — nothing self-heals, because this alert cannot tell on its own
@@ -211,7 +211,7 @@ budget comment in `docker-compose.yml`, as the project guardrails require.
 **Measured** — not yet verified, and no chaos script can fill it: this is a steady-state
 observation, not a fault. Phase F's burn-in samples `k2_capture_book_levels_total` per
 exchange across the window and records the observed peak against the 512 MB limit in
-[`capacity-model.md` §5](../architecture/capacity-model.md).
+[`15-capacity-model.md` §5](../architecture/15-capacity-model.md).
 
 ---
 
