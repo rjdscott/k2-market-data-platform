@@ -31,6 +31,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import bronze
+import gold
 import silver
 from catalog import snapshot_history
 from lock import LOCK_PATH, acquire_lock
@@ -107,7 +108,7 @@ def compact(spark, since: datetime) -> None:
         f"                  'partial-progress.enabled', 'true'))",
     )
 
-    per_venue = [(t.table, "recv_ts") for t in bronze.VENUE_TABLES] + [(t.table, "exchange_ts") for t in silver.TRADES]
+    per_venue = [(t.table, "recv_ts") for t in bronze.VENUE_TABLES] + [(t.table, "exchange_ts") for t in silver.TRADES] + [(gold.TRADES, "exchange_ts")]
     for table, column in [(TRADES_TABLE, "exchange_ts"), (BOOK_TABLE, "snapshot_ts")] + per_venue:
         # No sort_order argument: the tables declare theirs in lake.sql and the
         # procedure uses the declared one. Repeating it here is a second place
@@ -133,7 +134,7 @@ def expire(spark, retain_days: int) -> None:
     covers a long outage without unbounded metadata growth.
     """
     older_than = datetime.now(timezone.utc) - timedelta(days=retain_days)
-    for table in (RAW_TABLE, TRADES_TABLE, BOOK_TABLE, CHECKS_TABLE, *bronze.TABLES, *silver.TABLES):
+    for table in (RAW_TABLE, TRADES_TABLE, BOOK_TABLE, CHECKS_TABLE, *bronze.TABLES, *silver.TABLES, *gold.TABLES):
         _call(
             spark,
             f"CALL {CATALOG}.system.expire_snapshots("
@@ -595,6 +596,58 @@ def audit_silver_flags(spark, spec: silver.TradeSpec) -> list:
     ]
 
 
+def audit_gold_trades(spark) -> list:
+    """gold.trades == the non-replay rows of silver, per venue, at the silver snapshots gold last read."""
+    previous = O.latest_summary(snapshot_history(spark, gold.TRADES), O.JOB_DECODE) or {}
+    out = []
+    for spec in silver.TRADES:
+        src = previous.get(f"{O.SRC_SNAPSHOT_ID}.{spec.exchange}")
+        if src is None:
+            out.append(_result("gold_parity", f"{gold.TRADES}/{spec.exchange}", True, 0, "gold has not read this venue yet"))
+            continue
+        expected = spark.read.format("iceberg").option("snapshot-id", src).load(spec.table).where("NOT venue_replay").count()
+        actual = spark.table(gold.TRADES).where(F.col("exchange") == spec.exchange).count()
+        ok = expected == actual
+        out.append(_result("gold_parity", f"{gold.TRADES}/{spec.exchange}", ok, actual - expected,
+                           f"{actual} gold rows for {expected} first deliveries in {spec.table} @ {src}" if ok
+                           else f"{actual} gold rows but {spec.table} @ {src} has {expected} first deliveries"))
+    return out
+
+
+def audit_ohlcv(spark) -> list:
+    """The stored 1m candles equal candles recomputed from gold.trades, for the last full day.
+
+    Tolerance zero, on every column that is a number: a stored candle a late
+    trade should have replaced, or a MERGE that missed a bucket, shows up here.
+    """
+    table, seconds = gold.OHLCV["1m"]
+    row = spark.sql(
+        f"""
+        WITH day AS (SELECT date_sub(current_date(), 1) AS d),
+        fresh AS (
+          SELECT exchange, canonical_symbol,
+                 to_timestamp(floor(unix_timestamp(exchange_ts) / {seconds}) * {seconds}) AS window_start,
+                 min_by(price_e8, struct(exchange_ts, recv_ts_ns, trade_seq)) AS open_e8, max(price_e8) AS high_e8,
+                 min(price_e8) AS low_e8, max_by(price_e8, struct(exchange_ts, recv_ts_ns, trade_seq)) AS close_e8,
+                 count(*) AS trade_count
+          FROM {gold.TRADES}, day WHERE to_date(exchange_ts) = day.d
+          GROUP BY 1, 2, 3),
+        stored AS (SELECT * FROM {table}, day WHERE to_date(window_start) = day.d)
+        SELECT count(*) AS mismatches,
+               (SELECT count(*) FROM fresh) AS n_fresh, (SELECT count(*) FROM stored) AS n_stored
+        FROM fresh f FULL OUTER JOIN stored s
+          ON f.exchange = s.exchange AND f.canonical_symbol = s.canonical_symbol AND f.window_start = s.window_start
+        WHERE s.exchange IS NULL OR f.exchange IS NULL
+           OR f.open_e8 != s.open_e8 OR f.high_e8 != s.high_e8 OR f.low_e8 != s.low_e8
+           OR f.close_e8 != s.close_e8 OR f.trade_count != s.trade_count
+        """
+    ).collect()[0]
+    bad = int(row["mismatches"])
+    return [_result("ohlcv_parity", table, bad == 0, bad,
+                    f"{row['n_stored']} stored 1m candles == {row['n_fresh']} recomputed for yesterday" if bad == 0
+                    else f"{bad} candle(s) differ between stored and recomputed for yesterday ({row['n_stored']} stored, {row['n_fresh']} fresh)")]
+
+
 def _result(check: str, scope: str, passed: bool, observed: int, detail: str) -> dict:
     return {
         "check_name": check,
@@ -645,6 +698,10 @@ AUDITS = (
         ("silver_parity", t.table, lambda s, t=t: audit_silver_parity(s, t)),
         ("silver_flags", t.table, lambda s, t=t: audit_silver_flags(s, t)),
     )
+) + (
+    ("duplicate_identifiers", gold.TRADES, lambda s: audit_duplicates(s, gold.TRADES, list(gold.IDENTIFIER_FIELDS))),
+    ("gold_parity", gold.TRADES, audit_gold_trades),
+    ("ohlcv_parity", gold.OHLCV["1m"][0], audit_ohlcv),
 )
 
 

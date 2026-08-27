@@ -1,5 +1,5 @@
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- K2 v3 lake — the Iceberg tables (raw, unified bronze, six bronze-per-venue, silver trades per venue, audit), applied by docker/lake/apply_ddl.py
+-- K2 v3 lake — the Iceberg tables (raw, unified bronze, six bronze-per-venue, silver trades per venue, gold, audit), applied by docker/lake/apply_ddl.py
 -- (the `lake-ddl` one-shot compose service). Idempotent: every statement is
 -- CREATE ... IF NOT EXISTS or an ALTER that converges to a fixed value, so a
 -- re-run against a live warehouse is a no-op.
@@ -715,6 +715,295 @@ ALTER TABLE lake.silver.trades_coinbase SET IDENTIFIER FIELDS src_topic, src_par
 
 ALTER TABLE lake.silver.trades_coinbase
     WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, exchange_ts;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Gold — Phase E, ADR-026. The canonical cross-venue surface: one schema, one
+-- row per logical trade, fixed point 1e-8 like the wire and ClickHouse gold,
+-- and the products a backtest reads first. Derived from silver only, by
+-- docker/lake/gold.py; ClickHouse's gold database is loaded from these tables
+-- (docs/runbooks/clickhouse-rebuild-from-lake.md) and fed live from the topics
+-- for the head.
+--
+-- write.metadata.compression-codec = none on every gold table: ClickHouse 24.3's
+-- iceberg() cannot read the gzip-compressed metadata.json Lakekeeper writes by
+-- default ("JSON object/array should start with corresponding opening bracket",
+-- measured 2026-08-27), and gold is the layer ClickHouse pulls.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- gold.trades — one row per logical trade, every venue.
+--
+-- The logical trade is (exchange, canonical_symbol, trade_id) — the identifier
+-- fields — and the row is the EARLIEST delivery of it: silver keeps every
+-- delivery and marks the later ones venue_replay = true, so gold is the
+-- venue_replay = false rows of silver, one to one. Nothing is aggregated or
+-- rounded on the way; price and qty are silver's exact decimals as 1e-8
+-- fixed point, which every reader (DuckDB, ClickHouse `iceberg()`, pandas)
+-- turns back into a decimal by one division. The flags a researcher needs are
+-- carried (seq_gap, missing_before: the hole BEFORE this trade), venue_replay
+-- is not (it is false by construction).
+--
+-- Partitioned by exchange, days(exchange_ts): the research axis, and exchange
+-- has three values. Sorted (canonical_symbol, exchange_ts) inside.
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.gold.trades (
+    exchange         STRING  NOT NULL COMMENT 'binance | kraken | coinbase',
+    canonical_symbol STRING  NOT NULL COMMENT 'BASE/QUOTE from config/instruments.yaml',
+    symbol           STRING  NOT NULL COMMENT 'Venue-native symbol',
+    trade_id         STRING  NOT NULL COMMENT 'The venue trade id, as sent',
+    trade_seq        BIGINT  NOT NULL COMMENT 'trade_id as a number',
+    price_e8         BIGINT  NOT NULL COMMENT 'Price x 1e8, exact (silver DECIMAL(28,10) has no more than 8 decimals on any venue here. precision_loss in silver says when that stops being true)',
+    qty_e8           BIGINT  NOT NULL COMMENT 'Base quantity x 1e8',
+    side             STRING  NOT NULL COMMENT 'Taker side: buy | sell',
+    exchange_ts      TIMESTAMP NOT NULL COMMENT 'Venue clock, UTC microseconds',
+    recv_ts_ns       BIGINT  NOT NULL COMMENT 'K2 receive clock of the winning delivery',
+    conn_id          STRING  NOT NULL,
+    conn_msg_seq     BIGINT  NOT NULL,
+    seq_gap          BOOLEAN          COMMENT 'From silver: trade ids missing before this one (NULL = unknowable)',
+    missing_before   BIGINT,
+    src_topic        STRING  NOT NULL COMMENT 'Lineage to the silver row, which is the bronze row, which is the raw.messages row',
+    src_partition    INT     NOT NULL,
+    src_offset       BIGINT  NOT NULL,
+    src_index        INT     NOT NULL,
+    ingest_ts        TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (exchange, days(exchange_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.compression-codec'              = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.exchange_ts'         = 'full',
+    'write.metadata.metrics.column.trade_seq'           = 'full',
+    'write.metadata.metrics.column.src_offset'          = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Canonical trades, one row per logical trade (earliest delivery). Rebuildable from silver.'
+);
+
+ALTER TABLE lake.gold.trades SET IDENTIFIER FIELDS exchange, canonical_symbol, trade_id;
+
+ALTER TABLE lake.gold.trades
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, exchange_ts;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- gold.dim_instrument / gold.dim_venue — config/instruments.yaml as tables,
+-- rewritten from the file on every gold run (overwrite, not append: a
+-- dimension is a statement about now, and the file is its history).
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.gold.dim_instrument (
+    exchange         STRING  NOT NULL,
+    symbol           STRING  NOT NULL COMMENT 'native, byte for byte as the venue spells it',
+    canonical_symbol STRING  NOT NULL,
+    base             STRING  NOT NULL,
+    quote            STRING  NOT NULL,
+    book_depth       INT     NOT NULL COMMENT 'The L2 subscription depth in force: the per-instrument override or the venue default',
+    loaded_at        TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (exchange)
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.compression-codec'              = 'none',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'config/instruments.yaml, as of the last gold run.'
+);
+
+CREATE TABLE IF NOT EXISTS lake.gold.dim_venue (
+    exchange         STRING  NOT NULL,
+    book_depth       INT     NOT NULL COMMENT 'Default L2 depth. 0 = the venue sends the whole book (Coinbase)',
+    instruments      INT     NOT NULL COMMENT 'How many instruments are subscribed',
+    loaded_at        TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (exchange)
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.compression-codec'              = 'none',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'One row per venue, from config/instruments.yaml.'
+);
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- gold.ohlcv_{1m,5m,1h,1d} — candles materialised from gold.trades, one table
+-- per bucket. Every bucket a batch of trades touches is recomputed over ALL of
+-- gold.trades for that bucket and MERGEd in, so a late trade replaces the
+-- candle instead of adding a second row for it — the v2 SummingMergeTree
+-- failure, closed at the source. open/close are decided by (exchange_ts,
+-- recv_ts_ns), the same rule ClickHouse's gold.ohlcv_live applies, which is
+-- what the three-way parity check compares.
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.gold.ohlcv_1m (
+    exchange         STRING  NOT NULL,
+    canonical_symbol STRING  NOT NULL,
+    window_start     TIMESTAMP NOT NULL COMMENT 'Bucket start, UTC. The bucket is the table (1m, 5m, 1h, 1d)',
+    open_e8          BIGINT  NOT NULL COMMENT 'First trade by (exchange_ts, recv_ts_ns), fixed point 1e-8',
+    high_e8          BIGINT  NOT NULL,
+    low_e8           BIGINT  NOT NULL,
+    close_e8         BIGINT  NOT NULL COMMENT 'Last trade by (exchange_ts, recv_ts_ns)',
+    volume           DECIMAL(38,10) NOT NULL COMMENT 'Sum of qty, base currency, exact',
+    quote_volume     DECIMAL(38,10) NOT NULL COMMENT 'Sum of price x qty, quote currency, exact',
+    trade_count      BIGINT  NOT NULL,
+    open_time        TIMESTAMP NOT NULL COMMENT 'exchange_ts of the first trade in the bucket',
+    close_time       TIMESTAMP NOT NULL COMMENT 'exchange_ts of the last trade in the bucket',
+    src_snapshot_id  BIGINT  NOT NULL COMMENT 'The gold.trades snapshot this bucket was computed from. Rows for a bucket are replaced, never appended, when later trades land in it',
+    computed_at      TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (exchange, months(window_start))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.compression-codec'              = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.window_start'        = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'OHLCV 1m from gold.trades, one row per (exchange, symbol, bucket), replaced on late trades.'
+);
+
+ALTER TABLE lake.gold.ohlcv_1m SET IDENTIFIER FIELDS exchange, canonical_symbol, window_start;
+
+CREATE TABLE IF NOT EXISTS lake.gold.ohlcv_5m (
+    exchange         STRING  NOT NULL,
+    canonical_symbol STRING  NOT NULL,
+    window_start     TIMESTAMP NOT NULL COMMENT 'Bucket start, UTC. The bucket is the table (1m, 5m, 1h, 1d)',
+    open_e8          BIGINT  NOT NULL COMMENT 'First trade by (exchange_ts, recv_ts_ns), fixed point 1e-8',
+    high_e8          BIGINT  NOT NULL,
+    low_e8           BIGINT  NOT NULL,
+    close_e8         BIGINT  NOT NULL COMMENT 'Last trade by (exchange_ts, recv_ts_ns)',
+    volume           DECIMAL(38,10) NOT NULL COMMENT 'Sum of qty, base currency, exact',
+    quote_volume     DECIMAL(38,10) NOT NULL COMMENT 'Sum of price x qty, quote currency, exact',
+    trade_count      BIGINT  NOT NULL,
+    open_time        TIMESTAMP NOT NULL COMMENT 'exchange_ts of the first trade in the bucket',
+    close_time       TIMESTAMP NOT NULL COMMENT 'exchange_ts of the last trade in the bucket',
+    src_snapshot_id  BIGINT  NOT NULL COMMENT 'The gold.trades snapshot this bucket was computed from. Rows for a bucket are replaced, never appended, when later trades land in it',
+    computed_at      TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (exchange, months(window_start))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.compression-codec'              = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.window_start'        = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'OHLCV 5m from gold.trades, one row per (exchange, symbol, bucket), replaced on late trades.'
+);
+
+ALTER TABLE lake.gold.ohlcv_5m SET IDENTIFIER FIELDS exchange, canonical_symbol, window_start;
+
+CREATE TABLE IF NOT EXISTS lake.gold.ohlcv_1h (
+    exchange         STRING  NOT NULL,
+    canonical_symbol STRING  NOT NULL,
+    window_start     TIMESTAMP NOT NULL COMMENT 'Bucket start, UTC. The bucket is the table (1m, 5m, 1h, 1d)',
+    open_e8          BIGINT  NOT NULL COMMENT 'First trade by (exchange_ts, recv_ts_ns), fixed point 1e-8',
+    high_e8          BIGINT  NOT NULL,
+    low_e8           BIGINT  NOT NULL,
+    close_e8         BIGINT  NOT NULL COMMENT 'Last trade by (exchange_ts, recv_ts_ns)',
+    volume           DECIMAL(38,10) NOT NULL COMMENT 'Sum of qty, base currency, exact',
+    quote_volume     DECIMAL(38,10) NOT NULL COMMENT 'Sum of price x qty, quote currency, exact',
+    trade_count      BIGINT  NOT NULL,
+    open_time        TIMESTAMP NOT NULL COMMENT 'exchange_ts of the first trade in the bucket',
+    close_time       TIMESTAMP NOT NULL COMMENT 'exchange_ts of the last trade in the bucket',
+    src_snapshot_id  BIGINT  NOT NULL COMMENT 'The gold.trades snapshot this bucket was computed from. Rows for a bucket are replaced, never appended, when later trades land in it',
+    computed_at      TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (exchange, months(window_start))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.compression-codec'              = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.window_start'        = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'OHLCV 1h from gold.trades, one row per (exchange, symbol, bucket), replaced on late trades.'
+);
+
+ALTER TABLE lake.gold.ohlcv_1h SET IDENTIFIER FIELDS exchange, canonical_symbol, window_start;
+
+CREATE TABLE IF NOT EXISTS lake.gold.ohlcv_1d (
+    exchange         STRING  NOT NULL,
+    canonical_symbol STRING  NOT NULL,
+    window_start     TIMESTAMP NOT NULL COMMENT 'Bucket start, UTC. The bucket is the table (1m, 5m, 1h, 1d)',
+    open_e8          BIGINT  NOT NULL COMMENT 'First trade by (exchange_ts, recv_ts_ns), fixed point 1e-8',
+    high_e8          BIGINT  NOT NULL,
+    low_e8           BIGINT  NOT NULL,
+    close_e8         BIGINT  NOT NULL COMMENT 'Last trade by (exchange_ts, recv_ts_ns)',
+    volume           DECIMAL(38,10) NOT NULL COMMENT 'Sum of qty, base currency, exact',
+    quote_volume     DECIMAL(38,10) NOT NULL COMMENT 'Sum of price x qty, quote currency, exact',
+    trade_count      BIGINT  NOT NULL,
+    open_time        TIMESTAMP NOT NULL COMMENT 'exchange_ts of the first trade in the bucket',
+    close_time       TIMESTAMP NOT NULL COMMENT 'exchange_ts of the last trade in the bucket',
+    src_snapshot_id  BIGINT  NOT NULL COMMENT 'The gold.trades snapshot this bucket was computed from. Rows for a bucket are replaced, never appended, when later trades land in it',
+    computed_at      TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (exchange)
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.compression-codec'              = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.window_start'        = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'OHLCV 1d from gold.trades, one row per (exchange, symbol, bucket), replaced on late trades.'
+);
+
+ALTER TABLE lake.gold.ohlcv_1d SET IDENTIFIER FIELDS exchange, canonical_symbol, window_start;
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- audit.checks — one row per check per maintenance run. Append-only history, so
