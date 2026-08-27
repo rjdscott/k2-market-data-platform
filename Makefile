@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild
+.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -28,7 +28,7 @@ logs:  ## Tail all service logs
 ps:  ## Show service status
 	docker compose ps
 
-test: test-python test-rust  ## Run all unit tests
+test: test-python test-rust test-clickhouse  ## Run all unit tests
 
 
 test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs uv)
@@ -43,6 +43,9 @@ test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs
 # next run (or the IDE) fails with EACCES on .cargo-build-lock. The volumes also
 # keep a rebuild at seconds instead of minutes (librdkafka and rustls compile
 # from source).
+test-clickhouse:  ## gold schema semantics on a throwaway clickhouse:24.3 (OHLCV regression, FINAL dedup, BBO math, quant user)
+	bash scripts/clickhouse-schema-test.sh
+
 test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo needed)
 	docker run --rm -v "$(CURDIR)":/repo -w /repo/services/capture-rust \
 	  -v k2-capture-cargo:/usr/local/cargo/registry \

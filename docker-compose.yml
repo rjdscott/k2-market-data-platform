@@ -174,13 +174,16 @@ services:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
       - ./docker/clickhouse/config.xml:/etc/clickhouse-server/config.d/k2-config.xml:ro
-      # - ./docker/clickhouse/users.xml:/etc/clickhouse-server/users.d/k2-users.xml:ro  # Removed: using default auth with CLICKHOUSE_PASSWORD env var
+      # Profiles (default 6 GB, quant 3 GiB read-only) and the quant user.
+      # Password from K2_QUANT_PASSWORD below; CLICKHOUSE_* still make `default`.
+      - ./docker/clickhouse/users.xml:/etc/clickhouse-server/users.d/k2-users.xml:ro
       - ./docker/clickhouse/ddl:/docker-entrypoint-initdb.d:ro
     environment:
       CLICKHOUSE_DB: k2
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      K2_QUANT_PASSWORD: ${K2_QUANT_PASSWORD}
     deploy:
       resources:
         limits:
