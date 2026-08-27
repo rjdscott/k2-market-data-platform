@@ -178,6 +178,7 @@ wait_healthy() {
 
 LAKE_DEPLOYMENT="${K2_LAKE_DEPLOYMENT:-lake-ingest/lake-ingest-5min}"
 PREFECT_CONTAINER="${K2_PREFECT_CONTAINER:-k2-prefect-server}"
+SPARK_CONTAINER="${K2_SPARK_CONTAINER:-k2-spark-iceberg}"
 LAKE_SCHEDULE_IDS=""
 
 # _lake_schedules -> whitespace-separated ids of the ACTIVE schedules for
@@ -213,6 +214,16 @@ pause_lake_ingest() {
       || echo "→ WARNING: could not pause schedule $id" >&2
   done
   echo "→ paused $LAKE_DEPLOYMENT for the duration of this run" >&2
+  # Pausing the schedule does not stop a run already in flight, and every lake
+  # writer takes the same flock (docker/lake/lock.py) — an ingest this script
+  # starts while one is running exits 2 at the lock, which the first
+  # lake-corrupt-payload run misread as "blocked by the bad record" (2026-08-27).
+  local waited=0
+  while docker exec "$SPARK_CONTAINER" pgrep -f 'lake/(ingest|maintenance)\.py' >/dev/null 2>&1; do
+    [ "$waited" -eq 0 ] && echo "→ waiting for the in-flight lake job to finish" >&2
+    sleep 5; waited=$((waited + 5))
+    [ "$waited" -ge 300 ] && die "a lake job has held the lock for 5 min — not starting another under it"
+  done
 }
 
 # resume_lake_ingest — idempotent, so it is safe in a trap that may fire twice.

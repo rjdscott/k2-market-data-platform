@@ -1,0 +1,5 @@
+ts	script	expected_alert	t_fire_s	t_recover_s
+2026-08-27T03:06:17Z	lake-ingest-kill.sh kill_after=25s phase=commit	none expected	0	42
+2026-08-27T03:10:04Z	lake-minio-stop.sh	LakeIngestFailed	0	38
+2026-08-27T03:19:10Z	lake-lakekeeper-stop.sh phase=commit stop_first=no	LakeExporterStalled	0	37
+2026-08-27T03:21:05Z	lake-corrupt-payload.sh topic=market.crypto.v3.trades.kraken	none expected	0	38
