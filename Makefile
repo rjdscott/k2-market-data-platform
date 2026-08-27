@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv
+.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv notebooks notebooks-run
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -85,6 +85,12 @@ lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, eve
 # docker/lake/rebuild.py). EXCHANGE=kraken limits it to one venue.
 lake-rebuild:  ## Rebuild LAYER=bronze|silver|gold|books from its parent over the whole archive (LIVE stack; minutes to hours)
 	docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer $(or $(LAYER),bronze) $(if $(EXCHANGE),--exchange $(EXCHANGE),)
+
+notebooks:  ## JupyterLab on :8889 over the lake (DuckDB via Lakekeeper + MinIO on the published ports)
+	cd notebooks && uv sync -q && uv run jupyter lab --port 8889 --no-browser
+
+notebooks-run:  ## Execute the four notebooks headless — the runnable check (needs the stack up)
+	cd notebooks && uv sync -q && for nb in 0*.ipynb; do uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=600 $$nb || exit 1; done
 
 parity-ohlcv:  ## Three-way OHLCV parity (ClickHouse on-read, lake gold, DuckDB over silver) at tests/parity/pinned.json
 	scripts/parity-ohlcv.sh
