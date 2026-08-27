@@ -79,8 +79,8 @@ products and comparisons. A candle built on floats can report a close that never
 slow, awkward across languages). Integers at a fixed scale: store `price × 10^8` as a
 64-bit integer.
 
-**K2.** `int64` at 1e-8 on the wire (`price_e8`), in ClickHouse and in lake gold; decimal
-views on read. A venue value with more than 8 decimals is counted as precision loss, never
+**K2.** `int64` at 1e-8 on the wire (Avro `long` fields `price`, `qty`), in ClickHouse and in
+lake gold (`price_e8`, `qty_e8`); decimal views on read. A venue value with more than 8 decimals is counted as precision loss, never
 rounded silently. Eight places cover every crypto venue's tick and lot sizes with room.
 See [07](07-wire-contracts.md), [10](10-clickhouse-gold.md).
 

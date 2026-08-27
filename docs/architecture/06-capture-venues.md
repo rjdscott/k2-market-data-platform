@@ -109,11 +109,11 @@ turning an involuntary disconnect into a scheduled one, and
 
 `sequence_num` is connection-wide across every channel, so the continuity check is one
 `expected == got` per frame. A gap invalidates every book on the connection: `level2` sends
-absolute `new_quantity` per level, so a book that lost one delta is wrong forever and there
-is no per-product resync short of a fresh snapshot. The adapter reports one
-`Action::Reconnect` and drops its books; `snapshot` then returns `None` rather than a
-plausible-looking lie until the new connection's snapshots land. No checksum is published,
-so `checksum_ok` is `None`, meaning unanswerable, never collapsed to `true`.
+absolute `new_quantity` per level, so a book that lost one delta is wrong forever with no
+per-product resync short of a fresh snapshot. The adapter reports one `Action::Reconnect`
+and drops its books; `snapshot` then returns `None` rather than a plausible-looking lie
+until the new connection's snapshots land. No checksum is published, so `checksum_ok` is
+`None`, meaning unanswerable, never collapsed to `true`.
 
 There is no top-N option either: the `level2` subscribe snapshot is the whole book, measured
 at 5,195,904 bytes / 43,974 levels for `BTC-USD`, which is what sized the 8 MiB

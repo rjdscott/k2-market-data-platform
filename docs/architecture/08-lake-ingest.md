@@ -6,8 +6,7 @@
 
 `docker/lake/ingest.py` is the only writer of new data into the lake. Every 5 minutes it reads
 Redpanda by explicit offset range, appends every record verbatim to `raw.messages`, then derives
-bronze, silver and gold from that archive. Design:
-[ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md); operations: [`docker/lake/README.md`](../../docker/lake/README.md).
+bronze, silver and gold from that archive. Design: [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md); operations: [`docker/lake/README.md`](../../docker/lake/README.md).
 
 ## Problem
 
@@ -16,12 +15,12 @@ holding each of them exactly once ([exactly-once](03-data-engineering-concepts.m
 every source record lands in the target once, however the job dies). An offset stored twice and an
 offset nobody stored must both be impossible.
 
-"Read the stream and checkpoint somewhere" fails on where *somewhere* is. Rows land in one store
-and the position in another, no transaction spans the pair, so a crash between the two writes is
-either a re-read on resume (duplicates) or an advance over rows never written (a hole); ordering
-them chooses which, never whether. v2 shipped that shape and needed a recovery runbook for its
-position store's state machine. A *timestamp* watermark is worse: with no exact successor, its
-lateness buffer is a standing choice between duplicates and loss.
+"Read the stream and checkpoint somewhere" fails on where *somewhere* is. Rows land in one store and
+the position in another, no transaction spans the pair, so a crash between the two writes is either a
+re-read on resume (duplicates) or an advance over rows never written (a hole); ordering them chooses
+which, never whether. v2 shipped that shape and needed a recovery runbook for its position store's
+own state machine. A *timestamp* watermark is worse still: with no exact successor, its lateness
+buffer is a standing choice between duplicates and loss.
 
 ## Options
 
@@ -41,8 +40,7 @@ half-happen.**
 An [Iceberg snapshot](03-data-engineering-concepts.md#iceberg-snapshots) is an immutable listing of
 the table's files, swapped in atomically, so a property hung on it lives or dies with the rows it
 describes. Re-running an ingest that did not commit is a no-op; re-running one that did is impossible,
-because its own commit moved the start: [idempotency](03-data-engineering-concepts.md#idempotency)
-by construction, not by deduplication.
+because its own commit moved the start: [idempotency](03-data-engineering-concepts.md#idempotency) by construction, not by deduplication.
 
 ## How it works
 
