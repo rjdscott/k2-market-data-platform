@@ -321,7 +321,7 @@ is the gate that proves the capture-tier ones and it has not been run.
 - [`docs/plans/2026-08-26-v3-quant-research-platform/`](./docs/plans/2026-08-26-v3-quant-research-platform/README.md) — the v3 plan
 - [`docs/operations/`](./docs/operations/) — runbooks, observability, cost model
 - [`docs/development/setup.md`](./docs/development/setup.md) — local development
-- [`docs/MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md) — the v1 → v2 story
+- [`docs/MIGRATION-JOURNEY.md`](./docs/MIGRATION-JOURNEY.md) — the v1 → v2 story, and what the first day of v3 taught
 
 ## License
 

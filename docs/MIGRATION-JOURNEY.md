@@ -198,3 +198,67 @@ Budget: steady state drops from 16.20 to **16.10 CPU / 23.125 GiB across 18 long
 services**, one-shots from 5 to 4, bootstrap peak from 18.20 to **17.60 CPU / 24.625 GiB**
 (`DOCKER_CONTEXT=default docker compose --env-file .env.example config`, limits summed,
 2026-08-27).
+
+---
+
+## Postscript — what the first day of v3 taught (2026-08-27)
+
+Phases C and D shipped on 2026-08-26 ([`v3-phase-c`](plans/2026-08-26-v3-quant-research-platform/002-phase-c-rust-capture.md),
+[`v3-phase-d`](plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md)) and the
+first 24 hours of running them found seven things the three review passes had not. Each is
+recorded where the contract puts it — the ADR outcome, the runbook, the FMEA row, the
+capacity-model note — and this section only tells the story in order. Every number below is
+from that page's command.
+
+1. **A per-partition byte cap under keyed partitioning is a cap on the busiest key.**
+   `raw.kraken` partition 0 held 558 MB while partitions 2/5/8/11 held ~600 kB; the 512 MiB
+   cap evicted the hot partition after 7 h while the topic sat at 2.9 GB of a 6 GiB allowance.
+   The 48 h prediction divided by twelve and the traffic does not. It cost 1,168,954 records,
+   once, before the ingest bound was raised above the arrival rate and the loss was filed as
+   an `offset_gap` row the continuity audit nets out
+   ([capacity-model.md](architecture/capacity-model.md), [lake-ingest-lag.md §3](runbooks/lake-ingest-lag.md)).
+
+2. **Row size breaks JVMs, not row count.** Coinbase `level2` snapshots are ~5 MB each. They
+   OOM'd the ingest on a cold start (payloads cached) and compaction twice (five file groups
+   at once, then one) at a 768m heap — while 53× the batch size moved the ingest's peak RSS
+   by *less than nothing*. Maintenance now runs at 2g and holds the ingest lock so the two
+   drivers never share the container ([docker/lake/README.md](../docker/lake/README.md),
+   [ADR-010 Outcome](adr/ADR-010-resource-budget.md)).
+
+3. **The venue disproved the schema twice.** `bronze.trades` was declared unique on
+   `(exchange, symbol, trade_id)`; a 30-minute sample showed Coinbase replaying trades after a
+   reconnect, so `conn_id` was added. The first full day showed 5,034 trades re-sent *inside
+   one connection*, 15 s apart, in two distinct frames. The only uniqueness an archive of
+   frames can promise is lineage — which record produced this row — so that is the identifier
+   now, and venue replay is a count the audit reports rather than a constraint it enforces
+   ([ADR-024](adr/ADR-024-unified-bronze-tables-in-the-lake.md), [lake-audit-failed.md §2](runbooks/lake-audit-failed.md)).
+
+4. **An audit that cannot be reconciled is an alarm people learn to ignore.** The first real
+   loss would have latched `LakeAuditFailed` forever, hiding every later one behind it.
+   Recorded loss nets out; anything unrecorded still fails.
+
+5. **A limit is fiction until the host is checked.** The stack declared 21.6 GiB of limits on a
+   Docker Desktop VM of 7.6 GiB, and `docker stats` had been printing the denominator
+   (`/ 7.648GiB` against ClickHouse's 8G) for the whole project. Resized to 39 GiB;
+   [setup.md](development/setup.md) now states the requirement with the command.
+
+6. **Your own deploy is a chaos test.** Both "kill mid-run" proofs came from `docker compose
+   up` landing on a live ingest, before the script written for it ever ran. When the four lake
+   chaos scripts did run, all four passed on the second or third attempt — every failure was
+   the *script* (a log read from the wrong side of a bind mount, a `printf` without `\x`
+   escapes, a cron run holding the lock) and each is written into the script
+   ([failure-modes.md](architecture/failure-modes.md), [`scripts/chaos/results/`](../scripts/chaos/results/)).
+
+7. **Going public is an event, not a toggle.** Code Scanning switched on with the visibility
+   flag, Dependabot opened fifteen PRs, and merging four crate bumps with `--auto` on a repo
+   with no branch protection put a nonexistent Rust toolchain and a breaking `sha2` minor on
+   `main` inside an hour. The policy that came out of it is in
+   [`.github/dependabot.yml`](../.github/dependabot.yml)'s comments: archives get alerts but
+   no PRs, version-pinning action tags are never auto-bumped, and nothing merges before CI.
+
+The pattern across all seven: the review passes checked the code against the design; running
+the stack checked the design against the world. Review found none of these. Running found
+all of them in a day, for a fraction of the cost.
+
+Budget after the day: **14.60 CPU / 25.625 GiB across 15 long-running services**, bootstrap
+peak 16.10 CPU / 27.125 GiB across 19 (`docker compose config`, limits summed, 2026-08-27).
