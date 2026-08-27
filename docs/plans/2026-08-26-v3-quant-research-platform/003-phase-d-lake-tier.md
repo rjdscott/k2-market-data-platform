@@ -142,6 +142,46 @@ cannot be met by code alone, so they are named here rather than quietly dropped.
   not at 0.79 — and on bare metal or EC2 the metric is honest and Q8's requirement is
   met. Closing it here needs a host-side exporter, which is a separate decision.
 
+## Exit gate, measured 2026-08-27
+
+The three exit criteria at the top of this page, scored against the live stack after the
+first day of the archive. Scope: `v3, 15 svc`, one host, Docker Desktop VM 39.2 GiB.
+
+- **Two consecutive ingests, second adds 0 — passed.** `make lake-verify` at 00:57–01:05Z
+  (window end `2026-08-27T00:57:45Z`, `lake-ingest-5min` paused by the script): cycle 1
+  drained the window; cycle 2 reported `stage 1: no new records` on all 9 topics and
+  `level with raw.messages, nothing to decode` on both bronze tables. Checks: `9/9 topics`
+  covered; `raw == trades 8,630,658 vs 8,630,658`; `raw == book 1,484,606 vs 1,484,606`;
+  `summary matches table 58,619,699 = COUNT(*)`; `offsets gapless` with the one recorded
+  gap netted (below). Its first run, nine minutes earlier, failed on that gap because the
+  script had its own copy of the check — it now calls the audit's.
+- **Kill mid-run → no dupes, no gaps — passed, twice, both unplanned.** 22:03:35Z a
+  `docker compose up` recreated `spark-iceberg` for the cpuset change during a cron run;
+  22:46:03Z the 8G recreate landed on a run 4 s old (`ingest.py exited 137 after 4s`),
+  Prefect retried at 22:47:51Z and completed. The next `offset_continuity` and
+  `duplicate_identifiers` (lineage key) both passed, and lake-verify's raw == bronze held.
+  An uncommitted run leaves nothing behind but its Spark logs (ADR-022).
+- **Audits pass over a 2 h window — passed on hand runs, nightly not yet observed.**
+  `maintenance.py --audit-only` at 22:40Z: `5 audits passed, 1 informational`; the same
+  five inside lake-verify at 01:05Z. That brackets 2 h 25 m, on runs an operator started.
+  The first scheduled 03:00Z run had not happened when this section was written; the
+  post-merge check is `k2_lake_audit_failures_total == 0` and `LakeCompactionStale` quiet
+  on 2026-08-27 morning. Before 22:40Z the audit had **failed on every run** — first on
+  the unrecorded eviction, then on Coinbase's in-connection replay — and both fixes are
+  in this branch, found by the audit doing its job.
+- **One recorded data loss.** `market.crypto.v3.raw.kraken/0` offsets 1,615,463–2,784,416
+  (1,168,954 records, ~14:38–17:30Z on 2026-08-26) evicted by the 512 MiB per-partition
+  cap while the first run bound (50,000) was below the arrival rate. Filed by
+  `--accept-data-loss` at 21:48:59Z as an `offset_gap` row in `lake.audit.checks`; netted
+  by the continuity audit; the trigger and repair are in `lake-ingest-lag.md` §3.
+
+**Deferred past this PR, deliberately:** the four lake chaos scripts (`make chaos` lake
+targets — need a quiet stack and a person watching, and the two unplanned kills above
+already cover `lake-ingest-kill`); the first observed nightly maintenance run; a fourth
+review pass over the live evidence; `/release-check` from a fresh clone (last run before
+Phase C merged — the compose file changed since). Each is a follow-up, not a gate that
+was quietly waved through.
+
 ## Diverged from the plan, deliberately
 
 Three Scope details are described above as they were designed and are not what
