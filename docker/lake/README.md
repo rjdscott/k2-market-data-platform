@@ -100,9 +100,9 @@ container). The full-archive rebuild runs at the 2g maintenance heap, one day
 per venue at a time:
 
 ```bash
-docker exec k2-prefect-server prefect deployment schedule pause lake-ingest/lake-ingest-5min --all
+docker exec k2-prefect-server prefect deployment schedule pause lake-ingest/lake-ingest-5min <schedule-id>   # id from: prefect deployment schedule ls lake-ingest/lake-ingest-5min
 make lake-rebuild LAYER=bronze            # or EXCHANGE=kraken for one venue
-docker exec k2-prefect-server prefect deployment schedule resume lake-ingest/lake-ingest-5min --all
+docker exec k2-prefect-server prefect deployment schedule resume lake-ingest/lake-ingest-5min <schedule-id>
 ```
 
 ---

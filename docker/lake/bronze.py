@@ -392,6 +392,13 @@ def stage(spark, raw_snapshot_id, run_ts: datetime) -> int:
                 f"docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer bronze --exchange {exchange}"
             )
         start = starts[0]
+        # Stage 1 added nothing since this venue's last decode: an incremental
+        # read whose start equals its end raises "not a parent ancestor of end
+        # snapshot", which reads like corruption and means "level". Measured
+        # 2026-08-27 on the first tick after a rebuild.
+        if start and str(start) == str(raw_snapshot_id):
+            print(f"stage 2b: bronze.{exchange}_* level with raw.messages, nothing to decode")
+            continue
         written = decode(spark, _source(spark, raw_snapshot_id, start, exchange), raw_snapshot_id, run_ts, exchange)
         total += sum(written.values())
     return total

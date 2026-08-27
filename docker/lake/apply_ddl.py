@@ -136,7 +136,8 @@ def apply(spark, stmts: list[str]) -> None:
 
 def table_statements(table: str) -> list[str]:
     """The statements in ddl/lake.sql that create or alter `<catalog>.<ns>.<table>`."""
-    return [s for s in statements(DDL_FILE.read_text()) if re.search(rf"\b{re.escape(table)}\b", s)]
+    target = rf"(?:CREATE TABLE IF NOT EXISTS|ALTER TABLE)\s+{re.escape(CATALOG)}\.\w+\.{re.escape(table)}\b"
+    return [s for s in statements(DDL_FILE.read_text()) if re.search(target, s)]
 
 
 if __name__ == "__main__":

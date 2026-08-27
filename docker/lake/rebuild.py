@@ -19,9 +19,9 @@ carries the pinned parent snapshot id, so when the lock is released the
 rather than corrupt anything, but an hour of exit-2 runs is an hour of
 LakeIngestFailed noise:
 
-    docker exec k2-prefect-server prefect deployment schedule pause lake-ingest/lake-ingest-5min --all
+    docker exec k2-prefect-server prefect deployment schedule pause lake-ingest/lake-ingest-5min <schedule-id>   # id from: prefect deployment schedule ls lake-ingest/lake-ingest-5min
     ... rebuild ...
-    docker exec k2-prefect-server prefect deployment schedule resume lake-ingest/lake-ingest-5min --all
+    docker exec k2-prefect-server prefect deployment schedule resume lake-ingest/lake-ingest-5min <schedule-id>
 
 Bronze only, today. Silver and gold get a branch here when they exist; the
 shape (pin parent, drop, recreate, decode by day, record) is the same.
@@ -49,6 +49,36 @@ def archive_days(spark, exchanges: list) -> list:
         f"SELECT DISTINCT to_date(kafka_ts) AS d FROM {bronze.RAW_TABLE} WHERE {topics} ORDER BY d"
     ).collect()
     return [r["d"] for r in rows]
+
+
+def drop(spark, table: str, attempts: int = 10) -> None:
+    """DROP ... PURGE, treating Lakekeeper's post-drop 400 as the success it is.
+
+    Spark's `DROP TABLE ... PURGE` asks the catalog to drop with
+    `purgeRequested=true`, then tries to delete the data files itself by loading
+    the table again. Lakekeeper has already dropped it and queued its own purge,
+    so that second load fails with `BadRequestException: Malformed request:
+    Table does not exist or user does not have permission to view it at location
+    s3://.../metadata/0000N-....metadata.json` — every table, every time
+    (2026-08-27, six for six). The table IS gone and the files DO go: the
+    catalog's purge task deletes the prefix. So the exception is read as "check
+    whether the drop happened", and only a table that still exists is retried.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            if spark.catalog.tableExists(table):
+                spark.sql(f"REFRESH TABLE {table}")
+            print(f"DROP TABLE {table} PURGE", flush=True)
+            spark.sql(f"DROP TABLE IF EXISTS {table} PURGE")
+            return
+        except Exception as exc:  # noqa: BLE001 - retried, then re-raised below
+            if not spark.catalog.tableExists(table):
+                print(f"drop {table}: dropped; the catalog purges the files asynchronously", flush=True)
+                return
+            if attempt == attempts:
+                raise
+            print(f"drop {table}: attempt {attempt} failed ({str(exc).splitlines()[0][:120]}); retrying in 3 s", flush=True)
+            time.sleep(3)
 
 
 def recreate(spark, name: str, attempts: int = 10) -> None:
@@ -98,8 +128,7 @@ def main() -> int:
             print("nothing to rebuild from: raw.messages is empty")
             return 0
         for t in tables:
-            print(f"DROP TABLE {t.table} PURGE", flush=True)
-            spark.sql(f"DROP TABLE IF EXISTS {t.table} PURGE")
+            drop(spark, t.table)
         for t in tables:
             recreate(spark, t.name)
         started = datetime.now()
