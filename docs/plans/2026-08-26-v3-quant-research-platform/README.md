@@ -142,7 +142,7 @@ Each lands in the same PR as the code it describes; none is a status log.
 | `001-phase-b-foundations.md` | B | v3 foundations (P0/P1, ~1 week) | Registry + schemas registered; Lakekeeper works; v2 still green |
 | `002-phase-c-rust-capture.md` | C | Rust capture tier (services/capture-rust/, ~2 weeks) | 3 exchanges × 2 h window clean (labelled; 24 h continuous run is a Phase F+ revisit trigger); limits measured and cut |
 | `003-phase-d-lake-tier.md` | D | Lake tier (docker/lake/, ~1.5 weeks; replaces the v2 cold-tier path) | Two ingests, second adds 0; no dupes/gaps; audits pass |
-| `004-phase-e-hot-tier.md` | E | Hot tier (ClickHouse, ~1 week) | Dashboards on hot tier; hot.ohlcv matches DuckDB-over-Iceberg |
+| `004-phase-e-hot-tier.md` | E | Four lake layers + gold served from ClickHouse (ADR-026, ~2 weeks) | Every layer rebuilt from raw with audits green; three-way OHLCV parity at a pinned snapshot; `k2` dropped |
 | `005-phase-f-notebooks-numbers-docs.md` | F | Notebooks, audits, numbers, docs (~1 week) | v3.0.0 tagged; numbers table published and traceable |
 | `006-phase-g-replay-parity.md` | G | `k2-replay` + the research/production parity contract (~1 week) | Replay byte-identical to a fixed hash; three-way OHLCV parity green in CI at tolerance zero |
 
