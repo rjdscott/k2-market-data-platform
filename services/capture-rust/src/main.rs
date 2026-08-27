@@ -20,6 +20,7 @@ use k2_capture::config::{Exchange, Instruments};
 use k2_capture::exchanges::{Action, Adapter, BinanceAdapter, CoinbaseAdapter, KrakenAdapter};
 use k2_capture::metrics as k2_metrics;
 use k2_capture::record::OutRecord;
+use k2_capture::resync::ResyncOnDrain;
 use k2_capture::sink::Sink;
 use k2_capture::ws::{Backoff, Feed, http_get, now_ns};
 use metrics::{counter, gauge, histogram};
@@ -95,6 +96,14 @@ fn stale_after(stream: &str) -> Option<Duration> {
 /// carry a staleness timestamp.
 fn is_continuous(stream: &str) -> bool {
     stale_after(stream).is_some()
+}
+
+/// A stream whose frames are deltas to a book the lake replays: a dropped raw
+/// frame here desyncs that replay until the next snapshot (resync.rs). Binance's
+/// `depth20` is a complete snapshot per frame, so a hole there costs one sample
+/// and nothing after it.
+fn is_book_stream(stream: &str) -> bool {
+    matches!(stream, "book" | "l2_data")
 }
 
 /// Continuous streams for one venue - what the staleness gauge, the session
@@ -399,6 +408,7 @@ async fn session(
     // Work queued inside the select and performed after it: the select holds a
     // mutable borrow of `feed` for as long as its branches are alive.
     let mut to_send: Vec<String> = Vec::new();
+    let mut resync = ResyncOnDrain::default();
 
     loop {
         tokio::select! {
@@ -434,7 +444,17 @@ async fn session(
                         histogram!("k2_capture_exchange_to_recv_seconds", "exchange" => exchange)
                             .record(lag);
                     }
-                    sink.send(record).await;
+                    let sent = sink.send(record).await;
+                    // A dropped RAW book frame is a hole in the archive's book:
+                    // the lake's replay of this connection is wrong from here
+                    // until a fresh snapshot. Remember the symbol; the ticker
+                    // resubscribes once the queue has drained (resync.rs).
+                    if let (false, OutRecord::Raw(r)) = (sent, record)
+                        && is_book_stream(&r.stream)
+                        && let Some(symbol) = &r.symbol
+                    {
+                        resync.dropped(symbol);
+                    }
                 }
                 for action in handled.actions {
                     match action {
@@ -453,6 +473,11 @@ async fn session(
             }
             _ = ticker.tick() => {
                 let now = now_ns();
+                for symbol in resync.drained() {
+                    tracing::warn!(symbol, "producer dropped this symbol's book frames; queue drained, resubscribing for a fresh snapshot");
+                    counter!("k2_capture_resyncs_total", "exchange" => exchange).increment(1);
+                    to_send.extend(adapter.resubscribe_messages(&symbol));
+                }
                 for symbol in symbols {
                     if let Some(snapshot) = adapter.snapshot(symbol, now) {
                         sink.send(&OutRecord::Book(snapshot)).await;

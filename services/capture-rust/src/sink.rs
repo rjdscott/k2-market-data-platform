@@ -191,7 +191,11 @@ impl Sink {
     }
 
     /// Encode and enqueue one record. Never blocks the caller on the broker.
-    pub async fn send(&self, record: &OutRecord) {
+    /// `true` if the record was handed to the producer; `false` if it was dropped
+    /// here (encode failure, full queue, rejected enqueue) and will never reach the
+    /// topic. Delivery failures after a successful enqueue are counted but not
+    /// returned — they are asynchronous.
+    pub async fn send(&self, record: &OutRecord) -> bool {
         let topic = self.topic(record.topic_kind());
         let strategy = strategy_for(topic.clone());
 
@@ -200,7 +204,7 @@ impl Sink {
             Err(e) => {
                 tracing::error!(topic, error = ?e, "avro encode failed, record dropped");
                 self.count_error("encode");
-                return;
+                return false;
             }
         };
 
@@ -259,13 +263,16 @@ impl Sink {
                         Err(_) => {}
                     }
                 });
+                true
             }
             Err((KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull), _)) => {
                 self.count_error("queue_full");
+                false
             }
             Err((e, _)) => {
                 tracing::warn!(error = ?e, "producer rejected a record");
                 self.count_error("enqueue");
+                false
             }
         }
     }
