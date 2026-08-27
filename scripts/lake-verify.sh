@@ -101,6 +101,7 @@ sys.path.insert(0, sys.argv[1])
 
 import offsets as O
 from ingest import ALL_TOPICS, BOOK_TABLE, RAW_TABLE, TRADES_TABLE, snapshot_history, topics
+from maintenance import audit_offset_continuity
 from spark_conf import lake_session
 
 spark = lake_session("k2-lake-verify")
@@ -135,15 +136,12 @@ try:
           + (f"; QUIET (no records yet): {quiet}" if quiet else "")
           + (f"; UNKNOWN: {unknown}" if unknown else ""))
 
-    # (1b) gapless, over the whole table so a gap on a days() partition seam is
-    # not hidden by the boundary it sits on.
-    rows = spark.sql(f"""
-        SELECT topic, partition, count(*) AS n, min(offset) AS lo, max(offset) AS hi
-        FROM {RAW_TABLE} GROUP BY topic, partition
-    """).collect()
-    gaps = O.offset_gaps([(r["topic"], r["partition"], r["n"], r["lo"], r["hi"]) for r in rows])
-    check("offsets gapless", not gaps,
-          f"{len(rows)} partitions clean" if not gaps else f"{len(gaps)}: {gaps[0]['detail']}")
+    # (1b) gapless — the nightly audit's own check, so a hole a person already
+    # acknowledged with --accept-data-loss (an offset_gap row) nets out here
+    # exactly as it does at 03:00, and anything it does not cover still fails.
+    # One definition, docker/lake/maintenance.py; this gate does not get its own.
+    for r in audit_offset_continuity(spark):
+        check("offsets gapless", r["passed"], f"{r['scope']}: {r['detail']}")
 
     # (2) every raw row on a decodable topic became exactly one bronze row.
     for kind, table in (("trades", TRADES_TABLE), ("book", BOOK_TABLE)):

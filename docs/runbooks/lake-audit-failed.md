@@ -162,9 +162,9 @@ ok   offset_continuity  market.crypto.v3.raw.kraken/0
      acknowledged by an offset_gap row in lake.audit.checks — nothing else is
 ```
 
-`scripts/lake-verify.sh`'s `offsets gapless` check does **not** net — it is a Phase D exit
-gate run by hand, not an alert, and a red line there on this partition is expected until
-the archive is rebuilt. Reconcile it against the same query.
+`scripts/lake-verify.sh`'s `offsets gapless` line calls this same `audit_offset_continuity`,
+so it nets the same rows and prints the same detail — one definition, not two. Its first
+run on 2026-08-27 failed on exactly the acknowledged 1,168,954 before that was true.
 
 **If the gap is real and not yet recorded**, its deliverable is a record, not a repair:
 [lake-ingest-lag.md §3](./lake-ingest-lag.md#3-failondataloss--the-offsets-point-below-what-the-broker-holds)
