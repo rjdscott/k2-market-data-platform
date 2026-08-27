@@ -24,7 +24,9 @@ compares them before the old path is deleted.
 | `catalog.py` | Snapshot bookkeeping, the registry fetch by id, and how a running job files an audit row. Shared by the next three |
 | `ingest.py` | Stage 1 Kafka → `raw.messages`, stage 2 `raw.messages` → unified `bronze.*`, stage 2b → per venue |
 | `bronze.py` | Stage 2b: the six per-venue tables, decoded from the venue JSON in `raw.*` — vendor field names and types as sent |
-| `rebuild.py` | `make lake-rebuild LAYER=bronze`: drop, recreate and re-decode a layer from its parent, one day per venue at a time |
+| `silver.py` | Stage 2c: `silver.trades_<venue>` — bronze frames typed, one row per trade, canonical symbol from the registry, replay / gap / precision flags |
+| `instruments.py` | The registry (`config/instruments.yaml`) as silver needs it: native → canonical, failing loudly on an unknown symbol |
+| `rebuild.py` | `make lake-rebuild LAYER=bronze|silver`: drop, recreate and re-decode a layer from its parent, one day per venue at a time |
 | `maintenance.py` | Nightly compaction, snapshot expiry, and the audits. Non-zero exit on a failure |
 | `metrics.py` | The `lake-metrics` exporter. Reads snapshot summaries over the catalog's REST API |
 | `flows/` | The two Prefect deployments: `lake-ingest-5min`, `lake-maintenance-daily` |
@@ -38,9 +40,11 @@ flowchart TB
   RP[Redpanda<br/>9 v3 topics] -->|stage 1<br/>verbatim bytes| RAW[(raw.messages<br/>never expired)]
   RAW -->|stage 2<br/>strip 5 bytes, from_avro| BR[(bronze.trades<br/>bronze.book_snapshots_l2)]
   RAW -->|stage 2b<br/>from_avro, from_json| BV[(bronze.venue_msgtype ×6<br/>vendor schema as sent)]
+  BV -->|stage 2c<br/>type, flag, registry| SV[(silver.trades_venue ×3<br/>one row per trade)]
   RAW --> MNT[maintenance.py<br/>compact · expire · audit]
   BR --> MNT
   BV --> MNT
+  SV --> MNT
   MNT --> AUD[(audit.checks)]
   RAW -.snapshot summaries.-> MET[metrics.py<br/>lake-metrics :8000]
   BR -.-> MET
@@ -50,7 +54,8 @@ flowchart TB
 
 Stage 1 archives all nine topics. Stage 2 decodes `trades.*` and `book.*` into
 the unified pair; stage 2b decodes the `raw.*` JSON frames into six per-venue
-tables. `raw.messages` keeps every frame verbatim either way.
+tables; stage 2c types the bronze trade frames into three silver tables.
+`raw.messages` keeps every frame verbatim either way.
 
 ---
 
@@ -153,6 +158,64 @@ five minutes at concurrency 1, `lake-maintenance-daily` at 03:00 UTC. The flows
 add no logic; see `flows/lake_flows.py` for why.
 
 ---
+
+## Silver per venue — trades (Phase E, ADR-026)
+
+`silver.py` turns each venue's bronze trade frames into one typed row per trade:
+
+| Table | From | Row = | Adds |
+|---|---|---|---|
+| `silver.trades_binance` | `bronze.binance_trade` | the frame's one trade | `event_time`, `buyer_is_maker`, `ignore_flag`, `stream` kept as sent |
+| `silver.trades_kraken` | `bronze.kraken_trade` | `data[i]` | `ord_type`, `frame_type` |
+| `silver.trades_coinbase` | `bronze.coinbase_market_trades` | `events[i].trades[j]` | `envelope_ts`, `sequence_num`, `event_type` (`snapshot` = history replayed on subscribe) |
+
+Shared columns are ours: `price` / `qty` `DECIMAL(28,10)` (exact from the bronze
+value), `exchange_ts` `TIMESTAMP` UTC micros, `side` normalised to `buy` / `sell`
+beside `side_native`, `canonical_symbol` from **`config/instruments.yaml`** (mounted
+into the container; an unknown native symbol stops the run — the registry's own
+rule), lineage to the bronze row plus `src_index`, the position in the frame.
+
+**Three flags, all measurements, none of them drops a row:**
+
+- `venue_replay` — an earlier delivery of the same `(symbol, trade_id)` exists
+  (lower `recv_ts_ns`, or equal and earlier lineage). Every delivery is kept; gold
+  keeps the first.
+- `seq_gap` / `missing_before` — the previous `trade_seq` for the symbol is not
+  adjacent. All three venues number trades sequentially per symbol (measured
+  2026-08-27 over the archive: Binance 8,667,843 consecutive ids vs 144 jumps,
+  Coinbase 1,586,733 vs 72, Kraken 155,303 vs 141), so a jump is trades the archive
+  never received — a capture restart, a produce-error drop, a retention eviction —
+  and `missing_before` counts them. `NULL` when no earlier trade is inside the
+  lookback: unknown is not intact.
+- `precision_loss` — more than 8 decimals in `price` or `qty`, which the wire's and
+  gold's 1e-8 fixed point cannot carry.
+
+The flags need history, so each batch is scored against **`batch ∪ silver rows of
+the last day`** (two window functions) and only the batch is written; replays are
+excluded from the gap window so a re-sent old trade is not a jump backwards. The
+rebuild replays bronze one `recv_ts` day at a time, oldest first, so day N's lookback
+is day N−1's freshly written rows.
+
+Nightly (`maintenance.py`): `duplicate_identifiers` on the lineage + `src_index`,
+`silver_parity` (rows == the exploded trade count of the bronze snapshot silver last
+read), and the informational `silver_flags` line (replay, gap, missing-id and
+precision counts) so a change in any rate is visible.
+
+**Measured 2026-08-27, first rebuild** (`make lake-rebuild LAYER=silver`, whole
+archive, 2g heap): **99 s** for 10,439,378 rows across the three tables, peak driver
+RSS 2,548 MiB; the incremental tick after it reported every table level with its
+bronze source in 6 s; the nightly audit set (now 29 checks + 4 informational) all
+green. The flags against an independent baseline — a `lag()` over distinct trade
+ids per symbol, computed straight from bronze before silver existed:
+
+| Venue | Rows | Replays (`venue_replay`) | Gaps / ids never received | Baseline gaps / ids | Beyond 8 dp |
+|---|---:|---:|---:|---:|---:|
+| Binance | 8,668,587 | 588 — all in 16:56:31–16:56:54Z on 2026-08-26, 3 symbols, one connection, identical `recv_ts_ns`: the producer re-sent frames during the `redpanda-stop` chaos, not a venue replay | 144 / 200,280 | 144 / 200,280 | 0 |
+| Kraken | 155,455 | 0 | 141 / 8,013 | 141 / 8,013 | 0 |
+| Coinbase | 1,615,336 | 28,520 (= rows − distinct `(symbol, trade_id)`) | 72 / 41,424 | 72 / 41,424 | 0 |
+
+`seq_gap IS NULL` on 12 / 11 / 11 rows — the first trade of each symbol in the archive,
+where "intact" is unknowable.
 
 ## The exactly-once contract
 

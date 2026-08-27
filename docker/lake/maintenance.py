@@ -31,6 +31,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import bronze
+import silver
+from catalog import snapshot_history
 from lock import LOCK_PATH, acquire_lock
 from pyspark.sql import Row
 from pyspark.sql import functions as F
@@ -105,7 +107,7 @@ def compact(spark, since: datetime) -> None:
         f"                  'partial-progress.enabled', 'true'))",
     )
 
-    per_venue = [(t.table, "recv_ts") for t in bronze.VENUE_TABLES]
+    per_venue = [(t.table, "recv_ts") for t in bronze.VENUE_TABLES] + [(t.table, "exchange_ts") for t in silver.TRADES]
     for table, column in [(TRADES_TABLE, "exchange_ts"), (BOOK_TABLE, "snapshot_ts")] + per_venue:
         # No sort_order argument: the tables declare theirs in lake.sql and the
         # procedure uses the declared one. Repeating it here is a second place
@@ -131,7 +133,7 @@ def expire(spark, retain_days: int) -> None:
     covers a long outage without unbounded metadata growth.
     """
     older_than = datetime.now(timezone.utc) - timedelta(days=retain_days)
-    for table in (RAW_TABLE, TRADES_TABLE, BOOK_TABLE, CHECKS_TABLE, *bronze.TABLES):
+    for table in (RAW_TABLE, TRADES_TABLE, BOOK_TABLE, CHECKS_TABLE, *bronze.TABLES, *silver.TABLES):
         _call(
             spark,
             f"CALL {CATALOG}.system.expire_snapshots("
@@ -547,6 +549,52 @@ def audit_schema_drift(spark, t: bronze.VenueTable) -> list:
     ]
 
 
+def audit_silver_parity(spark, spec: silver.TradeSpec) -> list:
+    """Every trade in the bronze frames is a silver row: rows == the exploded count.
+
+    Counted over the bronze snapshot silver last read (`k2.src-snapshot-id`),
+    not over bronze's current one, so a bronze commit that landed after the
+    last silver tick is not reported as missing rows.
+    """
+    previous = O.latest_summary(snapshot_history(spark, spec.table), O.JOB_DECODE)
+    src = previous.get(O.SRC_SNAPSHOT_ID) if previous else None
+    if src is None:
+        return [_result("silver_parity", spec.table, True, 0, "silver has not read bronze yet")]
+    frames = spark.read.format("iceberg").option("snapshot-id", src).load(spec.source)
+    frames.createOrReplaceTempView("__b")
+    expected = spark.sql(spec.explode).count()
+    actual = spark.table(spec.table).count()
+    ok = expected == actual
+    detail = (
+        f"{actual} rows for {expected} trades in {spec.source} @ {src}"
+        if ok
+        else f"{actual} rows but {spec.source} @ {src} carries {expected} trades"
+    )
+    return [_result("silver_parity", spec.table, ok, actual - expected, detail)]
+
+
+def audit_silver_flags(spark, spec: silver.TradeSpec) -> list:
+    """The replay and gap rates, as numbers. Informational: neither is a fault of the lake."""
+    row = spark.sql(
+        f"""
+        SELECT count(*) AS rows, sum(CASE WHEN venue_replay THEN 1 ELSE 0 END) AS replays,
+               sum(CASE WHEN seq_gap THEN 1 ELSE 0 END) AS gaps, coalesce(sum(missing_before), 0) AS missing,
+               sum(CASE WHEN precision_loss THEN 1 ELSE 0 END) AS lossy
+        FROM {spec.table}
+        """
+    ).collect()[0]
+    return [
+        _result(
+            "silver_flags",
+            spec.table,
+            True,
+            int(row["gaps"]),
+            f"{row['rows']} rows: {row['replays']} venue replays, {row['gaps']} trade-id gaps "
+            f"({row['missing']} ids never received), {row['lossy']} beyond 8 decimals",
+        )
+    ]
+
+
 def _result(check: str, scope: str, passed: bool, observed: int, detail: str) -> dict:
     return {
         "check_name": check,
@@ -560,7 +608,7 @@ def _result(check: str, scope: str, passed: bool, observed: int, detail: str) ->
 # venue_replay has no pass/fail semantics — it publishes a rate so a *change* in
 # it is visible. Counting it as a passing audit inflates the summary line with a
 # check that cannot fail, so it is named here and reported separately.
-INFORMATIONAL = {"venue_replay"}
+INFORMATIONAL = {"venue_replay", "silver_flags"}
 
 # (check name, scope, callable). The scope is here rather than only inside the
 # check so that a check which RAISES still has somewhere to file its failure.
@@ -588,6 +636,14 @@ AUDITS = (
         ("duplicate_identifiers", t.table, lambda s, t=t: audit_duplicates(s, t.table, list(bronze.IDENTIFIER_FIELDS))),
         ("bronze_unparseable", t.table, lambda s, t=t: audit_unparseable(s, t)),
         ("bronze_schema_drift", t.table, lambda s, t=t: audit_schema_drift(s, t)),
+    )
+) + tuple(
+    row
+    for t in silver.TRADES
+    for row in (
+        ("duplicate_identifiers", t.table, lambda s, t=t: audit_duplicates(s, t.table, list(silver.IDENTIFIER_FIELDS))),
+        ("silver_parity", t.table, lambda s, t=t: audit_silver_parity(s, t)),
+        ("silver_flags", t.table, lambda s, t=t: audit_silver_flags(s, t)),
     )
 )
 

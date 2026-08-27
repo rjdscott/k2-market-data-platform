@@ -34,6 +34,10 @@ FAILFAST mode. `trades.*` and `book.*` feed the unified `bronze.trades` /
 `raw.*` JSON frames into the six per-venue tables of ADR-026. The unified pair
 stays until the per-venue rebuild proves parity against it (plan 004).
 
+**Stage 2c — `bronze.<venue>_*` to `silver.trades_<venue>`** (docker/lake/silver.py):
+typed, canonical symbol from the registry, replay / gap / precision flags, every
+delivery kept.
+
 **Exactly once, with no watermark table.** Both stages write their position into
 the Iceberg snapshot summary in the same commit as the data — `k2.kafka-offsets`
 for stage 1, `k2.src-snapshot-id` for stage 2. See docker/lake/offsets.py for
@@ -61,6 +65,7 @@ from datetime import datetime, timezone
 from functools import reduce
 
 import bronze
+import silver
 from catalog import (  # noqa: F401 - re-exported for scripts/ and chaos/
     CHECKS_TABLE,
     UnresolvableSchema,
@@ -722,6 +727,10 @@ def main() -> int:
             # Stage 2b: the same raw range, decoded from the venue JSON into the
             # six bronze-per-venue tables (docker/lake/bronze.py, ADR-026).
             bronze.stage(spark, raw_snapshot_id, ingest_ts)
+            # Stage 2c: bronze frames typed and flagged into silver.trades_*
+            # (docker/lake/silver.py); each silver table reads its bronze
+            # table incrementally, the same way bronze reads raw.
+            silver.stage(spark, ingest_ts)
     finally:
         spark.stop()
         if lock is not None:
