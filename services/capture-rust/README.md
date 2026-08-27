@@ -38,7 +38,8 @@ identical.
 | `exchanges/kraken.rs` | Kraken spot WS v2: `instrument` + `trade` + `book depth=25`, CRC32 verified |
 | `exchanges/binance.rs` | Binance spot combined stream: `<sym>@trade` + `<sym>@depth20@100ms`, stateless top-20, `lastUpdateId` monotonic |
 | `exchanges/coinbase.rs` | Coinbase Advanced Trade: `level2` (full depth) + `market_trades` + `heartbeats`, connection-wide `sequence_num` |
-| `sink.rs` | rdkafka `FutureProducer` + `schema_registry_converter`, drop-on-full, delivery reports counted on a detached task |
+| `sink.rs` | rdkafka `FutureProducer` + `schema_registry_converter`, drop-on-full (`send` returns whether the record was enqueued), delivery reports counted on a detached task |
+| `resync.rs` | resubscribe a symbol's book once the producer queue drains after dropping one of its raw frames — the archive's replay, not the capture's book, is what a drop breaks |
 | `metrics.rs` | Prometheus exposition on `:8082`, every metric `describe_`d |
 | `ws.rs` | the socket, the `recv_ts_ns` stamp, backoff, and a ten-line HTTP GET |
 
@@ -104,6 +105,20 @@ first would leave `checksum_ok` reachable only as `true` or `null` and a
 consumer filtering `checksum_ok = false` would find nothing, ever. Between the
 marked snapshot and the resync landing, that symbol emits no snapshots at all —
 a gap, rather than a plausible-looking lie.
+
+**A dropped raw book frame is a resync too — for the archive's sake.** When the producer
+queue is full, `sink.send` drops the record and returns `false`; the capture's own book is
+unharmed (it saw the frame), but `raw.messages` now has a hole, and the lake replays every
+book from `raw.messages`. Measured on 2026-08-26: after the `capture-queue-full` and
+`redpanda-stop` chaos runs, 386,962 Kraken frames failed the lake's replayed checksum, every
+one downstream of a drop, and the failures ran to the end of each connection because
+nothing ever took a fresh snapshot (`docker/lake/README.md` § Books). `resync.rs` remembers
+the symbol of every dropped `book` / `l2_data` raw frame and, at the first 1 Hz tick after
+a tick with **no** drop — the queue has demonstrably drained — sends
+`resubscribe_messages` for each, counted in `resyncs_total`. Not on the drop itself: the
+queue is full because the broker is slow, and a Coinbase snapshot is 5 MB; resubscribing
+into a full queue turns one hole into a storm. Binance `depth20` frames are complete
+snapshots, so a hole there costs one sample and is not resynced.
 
 **Binance also reconnects on a schedule.** The venue closes any combined stream
 24 h after it opens, mid-frame; `connection_expired()` gets there first at 23 h

@@ -16,5 +16,6 @@ pub mod decimal;
 pub mod exchanges;
 pub mod metrics;
 pub mod record;
+pub mod resync;
 pub mod sink;
 pub mod ws;
