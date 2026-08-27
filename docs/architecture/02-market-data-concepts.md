@@ -65,7 +65,7 @@ hundreds of milliseconds; neither is separable after the fact unless both are st
 Stamp the receive time as the very first act on frame arrival and carry both.
 
 **K2.** `recv_ts_ns` is taken before parsing, travels in the record body and a Kafka header,
-and partitions bronze and silver. `exchange_ts` partitions gold. Latency is reported as
+and partitions bronze and silver books; `exchange_ts` partitions silver trades and gold. Latency is reported as
 venue to receive, per venue, with the caveat that it includes transit and skew.
 See [05](05-capture.md), [15](15-capacity-model.md).
 

@@ -109,10 +109,10 @@ it is [rebuildable](03-data-engineering-concepts.md#rebuildability), so a bug in
 
 ## Proof
 
-`maintenance.py` runs nightly and writes every assertion to `audit.checks`; any failure
-exits non-zero and `LakeAuditFailed` fires ([runbook](../runbooks/lake-audit-failed.md)). These are
-[audits as tests](03-data-engineering-concepts.md#audits-as-tests): assertions about last night's
-data, not about the code CI ran.
+`maintenance.py` runs nightly and writes every assertion to `audit.checks`; any failure exits non-zero
+and `LakeAuditFailed` fires ([runbook](../runbooks/lake-audit-failed.md)). These are
+[audits as tests](03-data-engineering-concepts.md#audits-as-tests): assertions about last night's data,
+not about the code CI ran.
 
 | Audit | Asserts |
 |---|---|
@@ -153,9 +153,8 @@ ClickHouse and DuckDB candles at a pinned snapshot.
 
 ## Key points
 
-- The archive's position lives in the archive's own commit, so there is no second store to disagree
-  with it and no recovery procedure for one.
+- The position lives in the archive's own commit: no second store to disagree, no recovery procedure for one.
 - Offsets, not timestamps: an offset has an exact successor, so runs abut with nothing to guess at.
 - "Latest snapshot with `k2.job = ingest`", never "latest snapshot": compaction commits too.
-- Every layer below raw resumes by parent snapshot id and can be dropped and rebuilt from raw.
+- Every layer below raw resumes by parent snapshot id, and can be dropped and rebuilt from raw.
 - Loss enters only through retention, and only a human typing `--accept-data-loss` records it.
