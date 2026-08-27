@@ -47,6 +47,7 @@ The system as built, for readers who want the detail rather than the argument.
 | Doc | What's in it |
 |---|---|
 | [architecture/README.md](architecture/README.md) | As-built system: diagram, per-component build / mechanics / trade-offs, footprint, known gaps |
+| [architecture/components/](architecture/components/) | Deep dives per component — how it is built, how it works, what it trades away. First: [lake-ingest.md](architecture/components/lake-ingest.md) |
 | [architecture/technology-stack.md](architecture/technology-stack.md) | Every component, its version, its job, and the ADR that chose it |
 | [architecture/schema-design.md](architecture/schema-design.md) | Bronze / Silver / Gold columns, the Avro normalized-trade contract, precision choices |
 | [architecture/partitioning-strategy.md](architecture/partitioning-strategy.md) | Redpanda keys and partition counts, Iceberg partition specs and sort orders, and why symbol is in neither. The ClickHouse section lands with Phase E |
