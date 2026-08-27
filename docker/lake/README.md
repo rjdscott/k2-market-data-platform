@@ -93,7 +93,11 @@ added that has no column. Both in `docs/runbooks/lake-audit-failed.md` §6–§7
 and `E`. The session builder sets it for every lake job; every other column is
 lowercase and referenced as written.
 
-Measured, one day of `raw.binance` (2026-08-26) at the 768m ingest heap,
+Measured 2026-08-27: the whole archive (61,888,291 rows, six tables) rebuilt in
+**520 s** at the 2g heap, peak driver RSS 2,643 MiB; the nightly audit set — now
+23 checks plus the informational replay rate — ran in 290 s including lock wait,
+all green; every slice balanced (`docs/benchmarks/2026-08-27.md` § Lake).
+One day of `raw.binance` (2026-08-26) at the 768m ingest heap,
 2026-08-27: 9,725,802 frames → 6,619,758 `binance_trade` + 3,106,044
 `binance_depth20` rows in 321 s, peak driver RSS 1,220 MiB (`ps -o rss=` in the
 container). The full-archive rebuild runs at the 2g maintenance heap, one day

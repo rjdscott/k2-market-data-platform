@@ -33,8 +33,8 @@ the tier being down ([lake-recovery.md](./lake-recovery.md)).
 | 3 | `sequence_gaps` — venue sequence discontinuity | **investigation, not repair** | not yet verified — Phase D burn-in |
 | 4 | `venue_replay` — informational; **cannot fail** | n/a — read the rate, do not repair it | not yet verified — Phase D burn-in |
 | 5 | `unresolvable_schema_id` — filed by the ingest, not by the audit | < 60 min | not yet verified — Phase D burn-in |
-| 6 | `bronze_unparseable` — a venue frame did not parse as the declared shape | < 1 day (a schema change + a table rebuild) | not yet verified — Phase E |
-| 7 | `bronze_schema_drift` — the venue sends a key the table does not declare | < 1 day (same) | not yet verified — Phase E |
+| 6 | `bronze_unparseable` — a venue frame did not parse as the declared shape | < 1 day (a schema change + a table rebuild) | pass verified 2026-08-27 (0 rows on all six tables after the 61.9 M-row rebuild); a failure not yet induced |
+| 7 | `bronze_schema_drift` — the venue sends a key the table does not declare | < 1 day (same) | pass and **fail** verified 2026-08-27: 23/23 audits green in 290 s; with `M`,`m` removed from `binance_trade`'s declared keys the check failed with `$.data: ['M', 'm']` |
 | 8 | `bronze_parity` — filed by the ingest: frames in ≠ rows out + control frames | < 60 min | not yet verified — Phase E |
 
 ---
