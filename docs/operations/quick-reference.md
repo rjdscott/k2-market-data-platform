@@ -50,15 +50,14 @@ docker exec k2-redpanda rpk cluster health
 docker exec k2-redpanda rpk topic list
 docker exec k2-redpanda rpk topic describe market.crypto.v3.trades.binance -p
 
-# Peek at the live feed (the six market.crypto.trades.* v2 topics are frozen — no producer).
-# v3 values are Confluent-framed Avro, so print the key, not the value; Console decodes values.
+# Peek at the live feed. Values are Confluent-framed Avro, so print the key, not the value;
+# Redpanda Console decodes values.
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance -n 3 -f '%p %o %k\n'
 
-# Consumer groups (ClickHouse Kafka Engine, all on frozen v2 topics — lag should sit at 0).
-# The names do not match the exchanges: Binance's group is `clickhouse_bronze_offload_test`.
-# See docs/runbooks/redpanda.md for the mapping.
+# Consumer groups: the two ClickHouse gold feeds (k2-gold-trades on trades.*, k2-gold-book
+# on book.*). The lake ingest reads by offset range and has no group.
 docker exec k2-redpanda rpk group list
-docker exec k2-redpanda rpk group describe clickhouse_bronze_offload_test
+docker exec k2-redpanda rpk group describe k2-gold-trades
 
 # Schema registry
 docker exec k2-redpanda curl -s localhost:8081/subjects | jq
@@ -66,36 +65,44 @@ docker exec k2-redpanda curl -s localhost:8081/subjects | jq
 
 ## ClickHouse
 
-The `k2` database is **frozen** — it holds history and gains no rows, and its TTLs keep
-expiring them ([../architecture/README.md](../architecture/README.md)). These queries all
-still work; a `WHERE timestamp > now() - INTERVAL 5 MINUTE` will just be empty.
+ClickHouse serves the `gold` database — canonical, deduplicated, every venue in one schema
+([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)). `gold.trades` and
+`gold.book_top20` are `ReplacingMergeTree`: read them with `FINAL` when the number has to be
+exact. The v2 `k2` database was dropped at the Phase E cutover on 2026-08-27
+([`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md)).
 
 ```bash
 CH="docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD"
 
-$CH -q "SHOW TABLES FROM k2"
-$CH -q "SELECT count() FROM k2.bronze_trades_binance"
+$CH -q "SHOW TABLES FROM gold"
+$CH -q "SELECT count() FROM gold.trades FINAL"
 
 # Trades in the last 5 minutes, by exchange
-$CH -q "SELECT exchange, count() FROM k2.silver_trades
-        WHERE timestamp > now() - INTERVAL 5 MINUTE GROUP BY exchange"
+$CH -q "SELECT exchange, count() FROM gold.trades FINAL
+        WHERE exchange_ts > now() - INTERVAL 5 MINUTE GROUP BY exchange"
 
-# Latest 1m candles
-$CH -q "SELECT exchange, canonical_symbol, window_start, open_price, high_price,
-               low_price, close_price, volume, trade_count
-        FROM k2.ohlcv_1m ORDER BY window_start DESC LIMIT 10 FORMAT Pretty"
+# Latest 1m candles, computed on read over the deduplicated trades
+$CH -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close, volume, trade_count
+        FROM gold.ohlcv_live(bucket = 60) WHERE canonical_symbol = 'BTC/USDT'
+        ORDER BY window_start DESC LIMIT 10 FORMAT Pretty"
 
-# Kafka Engine consumer health
-$CH -q "SELECT table, num_messages_read, num_commits, last_exception
-        FROM system.kafka_consumers WHERE database = 'k2' FORMAT Vertical"
+# Best bid/offer, last few seconds
+$CH -q "SELECT exchange, canonical_symbol, second, bid, ask, spread_bps
+        FROM gold.bbo_live WHERE canonical_symbol = 'BTC/USDT' ORDER BY second DESC LIMIT 10 FORMAT Pretty"
+
+# Kafka Engine consumer health (q_trades, q_book); a record the feed could not decode is in gold.feed_errors
+$CH -q "SELECT table, num_messages_read, num_commits, last_poll_time, exceptions.text
+        FROM system.kafka_consumers WHERE database = 'gold' FORMAT Vertical"
+$CH -q "SELECT count() FROM gold.feed_errors"
 
 # Table sizes
 $CH -q "SELECT table, formatReadableSize(sum(bytes)) AS size, sum(rows) AS rows
-        FROM system.parts WHERE database = 'k2' AND active
+        FROM system.parts WHERE database = 'gold' AND active
         GROUP BY table ORDER BY sum(bytes) DESC FORMAT Pretty"
 ```
 
-Interactive shell: `docker exec -it k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD"`
+Interactive shell: `docker exec -it k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD"`;
+research reads use `--user quant --password "$K2_QUANT_PASSWORD"` (read-only, `gold` only).
 
 ## Capture tier
 

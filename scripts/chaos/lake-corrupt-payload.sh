@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck source-path=SCRIPTDIR
-# Put one un-framed record on a v3 topic and prove it neither crashes the
-# ingest nor reaches bronze.
+# Put three un-framed records on a v3 raw topic and prove they neither crash
+# the ingest nor reach bronze (the per-venue tables decoded from that topic).
 #
 # Proves one row in docs/architecture/failure-modes.md:
 #   lake ingest / corrupt or un-framed Avro payload
@@ -14,7 +14,8 @@
 # The designed behaviour has three parts and all three are asserted:
 #   1. the bytes are archived verbatim, with schema_id NULL — raw.messages is
 #      the system of record and refusing to record something is not an option
-#   2. bronze gains nothing from it — stage 2 filters schema_id IS NULL
+#   2. bronze gains nothing from it — stage 2 filters schema_id IS NULL, and the
+#      per-run balance line (frames = decoded + control) excludes unframed rows
 #   3. the ingest exits 0 — a poison record that failed the run would block
 #      every following cycle on the same offset, turning one bad record into a
 #      total outage
@@ -35,7 +36,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 SPARK=k2-spark-iceberg
 LAKE=/home/iceberg/lake
-TOPIC="${K2_CHAOS_TOPIC:-market.crypto.v3.trades.kraken}"
+TOPIC="${K2_CHAOS_TOPIC:-market.crypto.v3.raw.kraken}"
 MARKER="k2-chaos-$(date -u +%s)"
 
 preflight "$SPARK" k2-redpanda k2-lakekeeper k2-prometheus
@@ -50,23 +51,23 @@ trap resume_lake_ingest EXIT
 pause_lake_ingest
 
 # bronze BEFORE, because the assertion below is a count difference. The
-# original version searched bronze.trades for the marker in `trade_id`, which
+# original version searched the unified bronze.trades for the marker, which
 # could never fail: a leaked un-framed record would have crashed the Avro
 # decode long before it reached a column, so the query was asserting that a
 # crash had not happened by a means that could not observe one.
 bronze_before=$(docker exec -i "$SPARK" python3 - <<'PY' 2>/dev/null | tail -1
 import sys
 sys.path.insert(0, "/home/iceberg/lake")
-from ingest import TRADES_TABLE
+import bronze
 from spark_conf import lake_session
 spark = lake_session("k2-chaos-bronze-before")
 try:
-    print(spark.sql(f"SELECT count(*) FROM {TRADES_TABLE}").collect()[0][0])
+    print(sum(spark.sql(f"SELECT count(*) FROM {t.table}").collect()[0][0] for t in bronze.VENUE_TABLES if t.exchange == "kraken"))
 finally:
     spark.stop()
 PY
 )
-echo "→ before: $bronze_before rows in bronze.trades" >&2
+echo "→ before: $bronze_before rows across bronze.kraken_*" >&2
 
 # THREE records, not one. `{"chaos":...}` has magic 0x7b, the easy case, and it
 # is the only one the first version of this script injected. The two that
@@ -102,10 +103,12 @@ echo "→ checking where the records landed" >&2
 docker exec -i "$SPARK" python3 - "$MARKER" "$TOPIC" "$bronze_before" <<'PY' >&2
 import sys
 sys.path.insert(0, "/home/iceberg/lake")
-from ingest import RAW_TABLE, TRADES_TABLE
+import bronze
+from ingest import RAW_TABLE
 from spark_conf import lake_session
 
 marker, topic, before = sys.argv[1], sys.argv[2], int(sys.argv[3])
+KRAKEN = [t.table for t in bronze.VENUE_TABLES if t.exchange == "kraken"]
 spark = lake_session("k2-chaos-corrupt")
 try:
     archived = spark.sql(f"""
@@ -140,19 +143,19 @@ try:
     # The leak assertion, as a difference. bronze may legitimately have grown
     # from real traffic in the same ingest; what it must not have grown by is
     # the three records that cannot be decoded.
-    after = spark.sql(f"SELECT count(*) FROM {TRADES_TABLE}").collect()[0][0]
-    print(f"    bronze.trades {before} -> {after}")
+    after = sum(spark.sql(f"SELECT count(*) FROM {t}").collect()[0][0] for t in KRAKEN)
+    print(f"    bronze.kraken_* {before} -> {after}")
     decodable = spark.sql(f"""
         SELECT count(*) FROM {RAW_TABLE}
         WHERE topic = '{topic}' AND schema_id IS NOT NULL
     """).collect()[0][0]
-    orphans = spark.sql(f"""
-        SELECT count(*) FROM {TRADES_TABLE} t
+    orphans = sum(spark.sql(f"""
+        SELECT count(*) FROM {t} t
         WHERE t.src_topic = '{topic}' AND NOT EXISTS (
           SELECT 1 FROM {RAW_TABLE} r
           WHERE r.topic = t.src_topic AND r.partition = t.src_partition
             AND r.offset = t.src_offset AND r.schema_id IS NOT NULL)
-    """).collect()[0][0]
+    """).collect()[0][0] for t in KRAKEN)
     print(f"    bronze rows on {topic} with no framed raw row behind them: {orphans}")
     assert orphans == 0, "an un-framed record reached bronze"
     print(f"    ({decodable} framed rows on this topic in the archive)")

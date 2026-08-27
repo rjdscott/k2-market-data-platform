@@ -1,6 +1,6 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 26 alert rules (4 v2 + 10 v3 capture + 12 v3 lake)
+Prometheus scrapes the stack, Grafana renders it, and 28 alert rules (6 ClickHouse + 10 capture + 12 lake)
 cover the things that actually break: capture goes down or silent, sequence gaps and book
 checksum failures, ClickHouse struggles, and the lake ingest falls behind or its nightly
 audit fails.
@@ -76,7 +76,7 @@ recording rules for this tier.
 
 ## Alert rules
 
-25 rules across three files. Every annotation carries the diagnostic commands and a
+28 alert rules across three files (plus two ClickHouse recording rules). **Prometheus loads rule files at start and on SIGHUP only** — after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when `ClickHouseKafkaMessagesFailed` could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
 runbook link; the tables below are the index. The three `FeedHandler*` rules retired with
 the Kotlin handlers ([ADR-019](../adr/ADR-019-rust-capture-tier.md)); their file is
 archived at [`legacy/v2-kotlin/runbooks/feed-handler-alerts.yml`](../../legacy/v2-kotlin/runbooks/feed-handler-alerts.yml)
@@ -86,14 +86,18 @@ longer exists ([ADR-019](../adr/ADR-019-rust-capture-tier.md) Outcome said they 
 with it, and they did). Its six runbooks are archived at
 [`legacy/v2-offload/runbooks/`](../../legacy/v2-offload/runbooks/).
 
-### `clickhouse-alerts.yml` — warm tier (4)
+### `clickhouse-alerts.yml` — served tier (6)
 
 | Alert | Severity | Fires when |
 |-------|----------|-----------|
-| `ClickHouseDown` | critical | `up{job="clickhouse"} == 0` for 2m |
+| `ClickHouseDown` | critical | `up{job="clickhouse"} == 0` for 2m — measured firing 160 s after a stop (`scripts/chaos/clickhouse-stop.sh`, 2026-08-27) |
 | `ClickHouseHighMemoryUsage` | critical | Resident memory >85% of system RAM for 5m |
 | `ClickHouseQueryFailureRateHigh` | critical | `rate(FailedQuery[5m]) > 0.1` for 3m |
 | `ClickHouseMergeQueueLarge` | warning | >10 background merge tasks queued for 5m |
+| `ClickHouseGoldFeedStale` | warning | the gold Kafka consumers read nothing for 10 min **while** capture reports fresh trades (both conditions, so a stopped capture is not a broken feed), for 5m |
+| `ClickHouseKafkaMessagesFailed` | warning | `increase(ClickHouseProfileEvents_KafkaMessagesFailed[15m]) > 0` — a record skipped into `gold.feed_errors`; measured firing on the next evaluation after the record (`scripts/chaos/clickhouse-corrupt-record.sh`, 2026-08-27) |
+
+promtool cases for the two gold rules: `docker/prometheus/rules/tests/clickhouse-gold-alerts_test.yml`.
 
 Recording rule: `clickhouse:query_duration_mean:5m`. (`clickhouse:insert_rate:5m` was archived with
 `ClickHouseBronzeInsertRateLow` — same expression, and no dashboard ever read it.)

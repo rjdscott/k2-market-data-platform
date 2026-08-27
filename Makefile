@@ -77,7 +77,7 @@ check-alerts:  ## promtool: syntax-check every rule file and run the capture + l
 lint:  ## Ruff over the v3 lake and the tests (same scope as CI)
 	uv run --no-project --with ruff ruff check docker/lake tests
 
-lake-verify:  ## Phase D exit criteria against the LIVE stack: offsets gapless, raw == bronze, double-run adds 0
+lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, every layer level with its parent, double-run adds 0
 	bash scripts/lake-verify.sh
 
 # Drops and re-decodes a whole lake layer from its parent, under the writer
@@ -102,5 +102,7 @@ chaos:  ## Inject each capture and lake failure, wait for its alert, measure rec
 	scripts/chaos/lake-minio-stop.sh
 	scripts/chaos/lake-ingest-kill.sh
 	scripts/chaos/lake-corrupt-payload.sh
+	scripts/chaos/clickhouse-stop.sh
+	scripts/chaos/clickhouse-corrupt-record.sh
 	@echo "results: scripts/chaos/results/$$(date -u +%F).tsv"
 	@echo "copy the measured recovery times into docs/architecture/failure-modes.md by hand, with the date"

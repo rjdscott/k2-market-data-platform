@@ -1,26 +1,31 @@
 # Runbook: Redpanda Operations
 
 **Severity**: High (message broker — impacts all 3 exchanges if down)
-**Last Updated**: 2026-08-26
+**Last Updated**: 2026-08-27
 **Replaces**: `kafka-runbook.md` (Kafka replaced by Redpanda in v2 — ADR-001)
 
 Every `rpk` command below was run against the live single-broker cluster on
-2026-08-26 and the output pasted is what it printed. Commands that could not be
-run are marked inline; nothing here is paraphrased from memory.
+2026-08-26 or 2026-08-27 and the output pasted is what it printed, dated. Commands that
+could not be run are marked inline; nothing here is paraphrased from memory.
+
+> **The six v2 topics are gone.** `market.crypto.trades.<ex>` and
+> `market.crypto.trades.<ex>.raw` were deleted on 2026-08-27 at the Phase E cutover,
+> together with the ClickHouse `k2` database that consumed them
+> ([`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md)). Outputs below dated
+> 2026-08-26 still show them; they are kept as the record of that day.
 
 ---
 
 ## Overview
 
 Redpanda is the Kafka-compatible message broker. It runs as a single-broker cluster
-(`k2-redpanda`) carrying nine live v3 topics — raw frames, trades and L2 book per
-exchange — plus six frozen v2 topics.
+(`k2-redpanda`) carrying nine v3 topics — raw frames, trades and L2 book per exchange.
 
 | Topic | Partitions | Payload | Consumers |
 |-------|-----------:|---------|-----------|
-| `market.crypto.v3.raw.<ex>` | 12 | Avro `RawMessage` — every frame verbatim | — (Phase D lake ingest) |
-| `market.crypto.v3.trades.<ex>` | 12 | Avro `Trade` | — (Phase E hot tier) |
-| `market.crypto.v3.book.<ex>` | 12 | Avro `BookSnapshotL2`, top-20 at 1 Hz | — (Phase E hot tier) |
+| `market.crypto.v3.raw.<ex>` | 12 | Avro `RawMessage` — every frame verbatim | lake ingest, by offset range (no consumer group) |
+| `market.crypto.v3.trades.<ex>` | 12 | Avro `Trade` | lake ingest; ClickHouse `gold.q_trades`, group `k2-gold-trades` |
+| `market.crypto.v3.book.<ex>` | 12 | Avro `BookSnapshotL2`, top-20 at 1 Hz | lake ingest; ClickHouse `gold.q_book`, group `k2-gold-book` |
 
 `<ex>` ∈ {`binance`, `kraken`, `coinbase`} — 9 topics, 108 partitions, produced by the
 three `k2-capture-*` containers. Keys are plain UTF-8: `trades.*` and `book.*` key on the
@@ -31,17 +36,12 @@ is 48 h + 512 MiB/partition on `raw.*` and 7 d on `trades.*`/`book.*`, set by
 [`docker/redpanda/init.sh`](../../docker/redpanda/init.sh), which is also the authority
 on the topic table above.
 
-> **`market.crypto.trades.<ex>` and `market.crypto.trades.<ex>.raw` are frozen v2
-> topics** — 40 partitions each for Binance, 20 for Kraken and Coinbase, 160 in total.
-> Their only producers were the Kotlin feed handlers, and nothing has produced to them
-> **since the retirement deploy at `2026-08-26T18:58:29Z`**
-> ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) — that is the timestamp of the last
-> row the ClickHouse consumers wrote, `SELECT max(ingestion_timestamp) FROM
-> k2.bronze_trades_kraken`, and it is when this became true rather than when the PR was
-> written. They still exist, still hold their retained data, and the Kafka-engine
-> consumers are still attached with nothing arriving. `redpanda-init` still creates them.
-> They are deleted with the `k2` database at the Phase E cutover. Do not use them as a
-> liveness signal.
+> **History.** `market.crypto.trades.<ex>` and `market.crypto.trades.<ex>.raw` were the
+> six v2 topics — 40 partitions each for Binance, 20 for Kraken and Coinbase, 160 in
+> total. Their only producers were the Kotlin feed handlers; the last record landed at
+> `2026-08-26T18:58:29Z`, the retirement deploy ([ADR-019](../adr/ADR-019-rust-capture-tier.md)),
+> read at the time as `max(ingestion_timestamp)` on `k2.bronze_trades_kraken`. They were
+> deleted with the `k2` database on 2026-08-27; `redpanda-init` no longer creates them.
 
 Topics are created by the `redpanda-init` one-shot service at startup, which also hardens
 the internal `_schemas` topic (compact cleanup policy, infinite retention) to prevent
@@ -73,27 +73,24 @@ docker exec k2-redpanda rpk topic delete my-topic
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance -n 3 -f '%p %o %k\n'
 ```
 
-`rpk topic list`, 2026-08-26:
+`rpk topic list`, 2026-08-27, after the cutover:
 
 ```
-NAME                               PARTITIONS  REPLICAS
-_schemas                           1           1
-market.crypto.trades.binance       40          1     <- frozen v2
-market.crypto.trades.binance.raw   40          1     <- frozen v2
-market.crypto.trades.coinbase      20          1     <- frozen v2
-market.crypto.trades.coinbase.raw  20          1     <- frozen v2
-market.crypto.trades.kraken        20          1     <- frozen v2
-market.crypto.trades.kraken.raw    20          1     <- frozen v2
-market.crypto.v3.book.binance      12          1
-market.crypto.v3.book.coinbase     12          1
-market.crypto.v3.book.kraken       12          1
-market.crypto.v3.raw.binance       12          1
-market.crypto.v3.raw.coinbase      12          1
-market.crypto.v3.raw.kraken        12          1
-market.crypto.v3.trades.binance    12          1
-market.crypto.v3.trades.coinbase   12          1
-market.crypto.v3.trades.kraken     12          1
+NAME                              PARTITIONS  REPLICAS
+_schemas                          1           1
+market.crypto.v3.book.binance     12          1
+market.crypto.v3.book.coinbase    12          1
+market.crypto.v3.book.kraken      12          1
+market.crypto.v3.raw.binance      12          1
+market.crypto.v3.raw.coinbase     12          1
+market.crypto.v3.raw.kraken       12          1
+market.crypto.v3.trades.binance   12          1
+market.crypto.v3.trades.coinbase  12          1
+market.crypto.v3.trades.kraken    12          1
 ```
+
+Until 2026-08-27 the same command also listed the six v2 topics (`market.crypto.trades.<ex>`
+and `.raw`, 40/40/20/20/20/20 partitions).
 
 The v3 values are Avro with a Confluent framing prefix, so `rpk topic consume` without a
 format string prints binary. `-f '%p %o %k\n'` gives partition, offset and the symbol key,
@@ -126,37 +123,33 @@ registry. `rpk` will not.
 docker exec k2-redpanda rpk group list
 
 # Describe a group (lag per partition)
-docker exec k2-redpanda rpk group describe clickhouse_bronze_kraken
+docker exec k2-redpanda rpk group describe k2-gold-trades
 ```
 
-`rpk group list`, 2026-08-26 — **read the group names carefully**:
+`rpk group list`, 2026-08-27:
 
 ```
-BROKER  GROUP                                STATE
-0       clickhouse_bronze_coinbase_consumer  Stable
-0       clickhouse_bronze_kraken             Stable
-0       clickhouse_bronze_offload_test       Stable
+BROKER  GROUP           STATE
+0       k2-gold-book    Stable
+0       k2-gold-trades  Stable
 ```
 
-Three groups, three naming conventions, and the Binance one is called
-`clickhouse_bronze_offload_test`. Mapping, read off each group's `CLIENT-ID`
-(`rpk group describe <group>`) because the names do not tell you:
-
-| Consumer group | ClickHouse table | Topic |
+| Consumer group | ClickHouse table | Topics |
 |---|---|---|
-| `clickhouse_bronze_offload_test` | `k2.binance_trades_queue` | `market.crypto.trades.binance.raw` |
-| `clickhouse_bronze_kraken` | `k2.kraken_trades_queue` | `market.crypto.trades.kraken.raw` |
-| `clickhouse_bronze_coinbase_consumer` | `k2.trades_coinbase_queue` | `market.crypto.trades.coinbase.raw` |
+| `k2-gold-trades` | `gold.q_trades` → `gold.trades` | `market.crypto.v3.trades.{binance,kraken,coinbase}` |
+| `k2-gold-book` | `gold.q_book` → `gold.book_top20` | `market.crypto.v3.book.{binance,kraken,coinbase}` |
 
-The table names are inconsistent too — Coinbase's is `trades_coinbase_queue`, the other
-two are `<exchange>_trades_queue`. Confirm with `SHOW TABLES FROM k2` before typing one.
+Both are declared in [`docker/clickhouse/ddl/20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql).
+The lake ingest reads every v3 topic by offset range and keeps its position in the Iceberg
+snapshot summary, so it never appears here ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)).
 
-**Expected state**: all three groups are on frozen v2 topics and their lag drains to 0 and
-stays there. Growing lag on any of them **after `2026-08-26T18:58:29Z`** — the retirement
-deploy, and the last moment anything produced to a v2 topic — would mean something is
-producing to one again, which nothing should be. **There are no consumer groups on the v3 topics
-yet** — the lake ingest arrives in Phase D and the hot tier in Phase E, so `rpk group list`
-showing three v2 groups and nothing else is the correct picture today.
+**Expected state**: both groups `Stable` with lag near zero while capture is producing.
+Lag that grows while capture is delivering is `ClickHouseGoldFeedStale`'s territory
+([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md#alerts)); a group in
+state `Empty` means the Kafka-engine table is detached or ClickHouse is down. Until
+2026-08-27 this list showed the three v2 groups (`clickhouse_bronze_offload_test`,
+`clickhouse_bronze_kraken`, `clickhouse_bronze_coinbase_consumer`) on the `.raw` topics;
+they went with the `k2` database.
 
 ---
 
@@ -202,9 +195,9 @@ does not re-run on its own while the stack is already up.
 docker compose up --force-recreate redpanda-init
 ```
 
-It re-creates all 15 topics and re-registers the nine v3 Avro subjects, and exits 0 on a
-cluster that already has them. It also re-creates the six frozen v2 topics, on purpose:
-the ClickHouse Kafka-engine tables error on a missing topic.
+It re-creates the nine v3 topics and re-registers the nine v3 Avro subjects, and exits 0
+on a cluster that already has them. The `gold.q_*` Kafka-engine tables error on a missing
+topic, so run it before restarting ClickHouse.
 
 *Not yet run against the current stack — verify at the Phase C burn-in.*
 
@@ -215,25 +208,28 @@ the ClickHouse Kafka-engine tables error on a missing topic.
 Use when an offset is corrupted or you need to replay data from a specific point.
 
 ```bash
-# Reset consumer group to beginning (replay all messages)
-docker exec k2-redpanda rpk group seek clickhouse_bronze_offload_test \
-  --to start --topic market.crypto.trades.binance.raw
+# Detach the consumer first — a seek on a group with live members is refused
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "DETACH TABLE gold.q_trades"
+
+# Reset consumer group to beginning (replay all retained messages)
+docker exec k2-redpanda rpk group seek k2-gold-trades \
+  --to start --topic market.crypto.v3.trades.binance
 
 # Reset to end (skip all backlog)
-docker exec k2-redpanda rpk group seek clickhouse_bronze_offload_test \
-  --to end --topic market.crypto.trades.binance.raw
+docker exec k2-redpanda rpk group seek k2-gold-trades \
+  --to end --topic market.crypto.v3.trades.binance
+
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "ATTACH TABLE gold.q_trades"
 ```
 
-*Not yet run — a seek is a write and this pass was read-only.* The group name above is the
-real one (see the mapping table); the runbook previously named
-`clickhouse_bronze_binance_consumer`, which does not exist on this cluster.
+*Not yet run — a seek is a write and this pass was read-only.*
 
-> **Warning**: Resetting to start re-inserts every retained message into ClickHouse, and
-> the bronze tables are plain `MergeTree` — **they do not deduplicate**. The `ORDER BY`
-> key is a sort key, not a uniqueness constraint. Expect duplicate rows in bronze, which
-> propagate to silver and inflate gold candle counts. Since 2026-08-26 there is a second
-> reason not to: the v2 tier is frozen, so a replay would be the only thing writing to it,
-> and Phase E drops the database anyway.
+> A replay into `gold.trades` is safe: it is `ReplacingMergeTree` keyed on the logical
+> trade, so re-delivered rows collapse under `FINAL` and the earliest delivery wins. Counts
+> *without* `FINAL` will double until the merge runs. The v2 warning that used to live here
+> — bronze was plain `MergeTree` and a replay duplicated every row — went with the `k2`
+> database. For anything older than the topic's 7-day retention, reload from the lake
+> instead: [clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md).
 
 ---
 
@@ -251,43 +247,45 @@ docker exec k2-redpanda df -h /var/lib/redpanda/data
 1. Check retention settings — the v3 `raw.*` topics cap at 512 MiB per partition
    (`retention.bytes`) as well as 48 h, so they are bounded by design. Confirm with
    `rpk topic describe market.crypto.v3.raw.binance`.
-2. The six frozen v2 topics are the first thing to reclaim: they have no producer and are
-   scheduled for deletion at Phase E. 160 partitions of retained trade JSON.
+2. `trades.*` / `book.*` are 7 d, time-only; they are rebuildable from the lake, so a
+   shorter `retention.ms` on them is the cheap lever if 1 is not enough.
 3. If persistent, expand the Docker volume or add disk.
 
-*Steps 1 is read-only and verified; 2 and 3 are not yet run.*
+*Step 1 is read-only and verified; 2 and 3 are not yet run.* (The six v2 topics, 160
+partitions of retained trade JSON, were the first thing reclaimed — deleted 2026-08-27.)
 
 ---
 
 ### ClickHouse Consumer Not Consuming
 
-**Symptoms**: consumer lag grows indefinitely on a v2 group; no new rows in bronze tables.
-
-> Since 2026-08-26 this is expected, not a fault: nothing produces to the v2 topics. Lag
-> should sit at 0 because there is nothing to consume. Investigate only if lag is
-> *growing*, which would mean an unexpected producer.
+**Symptoms**: lag grows on `k2-gold-trades` / `k2-gold-book` while capture is delivering;
+`gold.trades` stops advancing. `ClickHouseGoldFeedStale` fires after 10 minutes of that.
 
 **Diagnosis**:
 ```bash
 docker exec -it k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --query \
-  "SELECT * FROM system.kafka_consumers WHERE database = 'k2' FORMAT Vertical"
+  "SELECT table, num_messages_read, num_commits, last_poll_time, exceptions.text
+   FROM system.kafka_consumers WHERE database = 'gold' FORMAT Vertical"
+
+# A record the decoder rejected does not stall the feed — it lands here, bytes included
+docker exec -it k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --query \
+  "SELECT seen_at, topic, partition, offset, error FROM gold.feed_errors ORDER BY seen_at DESC LIMIT 10"
 
 docker exec -it k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --query \
   "SELECT * FROM system.errors WHERE name LIKE '%Kafka%' ORDER BY last_error_time DESC LIMIT 10"
 ```
 
-*Not yet run — this pass had no ClickHouse credential. Verify at the Phase C burn-in.*
-The equivalent information without ClickHouse auth is `rpk group describe <group>`, whose
-`CLIENT-ID` column names the attached ClickHouse table; that is verified above.
+The first query was run on 2026-08-27 (two consumers per table, `exceptions.text: []`).
+The equivalent without ClickHouse auth is `rpk group describe <group>`.
 
 **Common resolution**:
 ```bash
-docker exec -it k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --query \
-  "DETACH TABLE k2.binance_trades_queue; ATTACH TABLE k2.binance_trades_queue"
+docker exec -it k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --multiquery --query \
+  "DETACH TABLE gold.q_trades; ATTACH TABLE gold.q_trades"
 ```
 
-*Not yet run.* Note the table name is `k2.binance_trades_queue` for Binance but
-`k2.trades_coinbase_queue` for Coinbase — check `SHOW TABLES FROM k2` first.
+*Not yet run.* `gold.q_book` is the other feed table; both are in
+[`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql).
 
 ---
 
@@ -324,7 +322,7 @@ the fault durations and the loss counts are not in it and must not be cited to i
 | 3 | `rpk cluster health` after both | clean, on a single-node Raft cluster frozen for over six minutes | [`scripts/chaos/README.md`](../../scripts/chaos/README.md) — *"The broker survives a six-minute pause"* |
 | 4 | Records lost during the outage | **7,821** (45 s stopped) and **231,744** (388 s paused), kraken alone. Public feeds do not replay; the windows are permanently absent | [`failure-modes.md`](../architecture/failure-modes.md) — the *Broker down* row for 7,821, the *Producer queue full* row for 231,744. **Not in the TSV** |
 | 5 | Time for `CaptureProduceErrors` to fire | **256 s** from the fault (`for: 5m` on a `[10m]` `increase`) | `t_fire_s` for `capture-queue-full.sh`, [`results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv) |
-| 6 | Consumer-group recovery, ClickHouse and the v2 handlers | not yet verified — no script measures the consumer side | — |
+| 6 | Consumer-group recovery, the ClickHouse `k2-gold-*` groups | not yet verified — no script measures the consumer side | — |
 
 **Two things this establishes.** The broker comes back clean from both a stop and a
 multi-minute pause without manual intervention, and **nothing downstream needs
@@ -401,11 +399,11 @@ PARTITION  LEADER  EPOCH  REPLICAS  LOG-START-OFFSET  HIGH-WATERMARK
 is what that looks like. What matters is that the non-empty watermarks advance between two
 runs of the command.
 
-### The v2 key bug, visible from here
+### The v2 key bug, as it was visible from here (topic deleted 2026-08-27)
 
 The same command on `market.crypto.trades.kraken.raw`, same run
-(**2026-08-26T19:19Z**), returns exactly one non-empty partition of 20 — all 20 rows,
-nothing elided:
+(**2026-08-26T19:19Z**), returned exactly one non-empty partition of 20 — all 20 rows,
+nothing elided. The topic no longer exists; this is the record of what it showed:
 
 ```
 PARTITION  LEADER  EPOCH  REPLICAS  LOG-START-OFFSET  HIGH-WATERMARK
@@ -431,11 +429,10 @@ PARTITION  LEADER  EPOCH  REPLICAS  LOG-START-OFFSET  HIGH-WATERMARK
 19         0       11     [0]       0                 0
 ```
 
-The high watermark on partition 10 is **frozen at 168,572** and stays there: this topic
-has had no producer since `2026-08-26T18:58:29Z`. The log-start offset of 61,743 is
-retention having already expired the head of the log — `retention.ms=604800000` (7 d,
-`rpk topic describe market.crypto.trades.kraken.raw -c`), which is also the deadline on
-re-reading any of this: the whole topic empties around **2026-09-02**.
+The high watermark on partition 10 was **frozen at 168,572**: the topic had had no producer
+since `2026-08-26T18:58:29Z`. The log-start offset of 61,743 was retention having already
+expired the head of the log (`retention.ms=604800000`, 7 d). The topic was deleted the
+next day with the rest of the v2 tier.
 
 Kraken and Coinbase raw records were keyed by the *exchange name* rather than the symbol
 (`KafkaProducerService.produceRawJson`), so both topics hashed every record onto one
@@ -448,7 +445,8 @@ worth knowing about before reading any v2 partition count as capacity.
 ## Related
 
 - [ADR-001: Replace Kafka with Redpanda](../adr/ADR-001-replace-kafka-with-redpanda.md)
-- [ADR-019: Rust capture tier](../adr/ADR-019-rust-capture-tier.md) — why the v2 topics are frozen
+- [ADR-019: Rust capture tier](../adr/ADR-019-rust-capture-tier.md) — why the v2 topics lost their producer
+- [ADR-026: gold served from ClickHouse](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) — the cutover that deleted them
 - [Capture container crash recovery](./failure-recovery.md#3-capture-container-crash)
 - [capture-produce-stalled.md](./capture-produce-stalled.md) — capture cannot reach the broker
 - [Adding a new exchange](../operations/adding-new-exchanges.md)

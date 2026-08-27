@@ -8,7 +8,7 @@ catalog, no Avro library.
 The second half is the one that earns its place. CLAUDE.md's schema-change rule
 says the Avro schema, the DDL and the docs move in one PR or not at all, and the
 failure mode it warns about is silence: a field added to trade.avsc that never
-reaches bronze.trades does not break a build, it produces a column of nothing at
+reaches a bronze table does not break a build, it produces a column of nothing at
 the ingest boundary hours later. These tests are that rule, executable.
 """
 
@@ -149,7 +149,7 @@ class TestFixedPoint:
         # and never looked at the intermediate. The bug was in the intermediate:
         # `CAST(v AS DECIMAL(28,10))` before the divide has 18 integer digits and
         # int64 max needs 19, so with ansi off every |v| >= 1e18 became NULL —
-        # into bronze.trades.qty, which is NOT NULL. At 1e-8 that is 1e10 units,
+        # into a NOT NULL DECIMAL(28,10) column. At 1e-8 that is 1e10 units,
         # an ordinary meme-coin quantity.
         #
         # Measured in k2-spark-iceberg on 2026-08-26:
@@ -181,7 +181,7 @@ class TestFixedPoint:
         # half of DECIMAL(28,10) silently truncates real prices, so the DDL's
         # numbers are asserted against the arithmetic rather than trusted.
         declared = re.search(r"price\s+DECIMAL\((\d+),(\d+)\)", _DDL.read_text())
-        assert declared, "bronze.trades.price is no longer DECIMAL(p,s)"
+        assert declared, "the lake price column is no longer DECIMAL(p,s)"
         precision, scale = int(declared.group(1)), int(declared.group(2))
 
         assert scale >= wire.FIXED_POINT_SCALE, "scale drops digits the wire carries"
@@ -216,53 +216,68 @@ class TestRawMessages:
         assert re.search(r"payload\s+BINARY\s+NOT NULL", _DDL.read_text())
 
 
+_CH_KAFKA = Path(__file__).parent.parent / "docker" / "clickhouse" / "ddl" / "20-gold-kafka.sql"
+
+
+def _ch_queue_columns(table):
+    """Column names of one `CREATE TABLE IF NOT EXISTS gold.<table>` block in 20-gold-kafka.sql."""
+    body = re.search(
+        rf"CREATE TABLE IF NOT EXISTS gold\.{re.escape(table)}\n\((.*?)\n\)\nENGINE = Kafka",
+        _CH_KAFKA.read_text(),
+        re.DOTALL,
+    )
+    assert body, f"no Kafka-engine CREATE TABLE for gold.{table} in {_CH_KAFKA}"
+    return [m.group(1) for m in re.finditer(r"^\s{4}(\w+)\s+[A-Z]", body.group(1), re.MULTILINE)]
+
+
 class TestTradeContract:
-    def test_every_avro_field_has_a_column(self):
-        missing = set(_avro_fields("trade.avsc")) - set(_ddl_columns("bronze.trades"))
-        assert not missing, f"trade.avsc fields with no bronze.trades column: {sorted(missing)}"
+    """trade.avsc is consumed by ClickHouse's AvroConfluent queue table, column for column.
 
-    def test_lineage_columns_are_present(self):
-        columns = set(_ddl_columns("bronze.trades"))
-        assert {"src_topic", "src_partition", "src_offset"} <= columns
+    Since the Phase E cutover the lake decodes the venue JSON and never the Avro
+    topics, so the Avro contract's reader is the served tier. AvroConfluent maps
+    fields to columns BY NAME and rejects a record whose columns it cannot fill,
+    so a field added to the schema and not to the queue table is a stalled feed
+    (gold.feed_errors), and a column added to the queue table that no field
+    feeds is a decode error on every record. Both directions, therefore.
+    """
 
-    def test_the_only_extra_columns_are_lineage_and_ingest_time(self):
-        # Catches the reverse drift: a column added to the table that no field
-        # feeds, which decodes to null on every row forever.
-        extra = set(_ddl_columns("bronze.trades")) - set(_avro_fields("trade.avsc"))
-        assert extra == {"src_topic", "src_partition", "src_offset", "ingest_ts"}
+    def test_every_avro_field_is_a_queue_column(self):
+        missing = set(_avro_fields("trade.avsc")) - set(_ch_queue_columns("q_trades"))
+        assert not missing, f"trade.avsc fields with no gold.q_trades column: {sorted(missing)}"
+
+    def test_no_queue_column_without_a_field(self):
+        extra = set(_ch_queue_columns("q_trades")) - set(_avro_fields("trade.avsc"))
+        assert not extra, f"gold.q_trades columns no trade.avsc field feeds: {sorted(extra)}"
 
 
 class TestBookContract:
-    # The wire carries four parallel arrays; the lake stores two arrays of
-    # struct<px, qty>. That is the one deliberate reshaping between the two
-    # files, so it is written down here as the mapping it is.
-    ZIPPED = {"bid_px": "bids", "bid_qty": "bids", "ask_px": "asks", "ask_qty": "asks"}
+    def test_every_avro_field_is_a_queue_column_and_nothing_else(self):
+        avro, cols = set(_avro_fields("book-snapshot-l2.avsc")), set(_ch_queue_columns("q_book"))
+        assert avro == cols, f"book-snapshot-l2.avsc vs gold.q_book: missing {sorted(avro - cols)}, extra {sorted(cols - avro)}"
 
-    def test_every_avro_field_reaches_a_column(self):
-        columns = set(_ddl_columns("bronze.book_snapshots_l2"))
-        for field in _avro_fields("book-snapshot-l2.avsc"):
-            target = self.ZIPPED.get(field, field)
-            assert target in columns, f"book-snapshot-l2.avsc field {field} has no column"
-
-    def test_snapshot_ts_is_derived_and_the_nanoseconds_are_kept(self):
-        # snapshot_ts carries the partition; snapshot_ts_ns stays authoritative
-        # because a microsecond TIMESTAMP cannot hold the sampler's clock.
-        columns = set(_ddl_columns("bronze.book_snapshots_l2"))
-        assert {"snapshot_ts", "snapshot_ts_ns"} <= columns
-
-    def test_the_table_is_partitioned_on_a_clock_that_is_never_null(self):
-        # exchange_ts is null for every binance row (partial-depth carries no
-        # venue timestamp), so partitioning on it would put a third of the rows
-        # in the null partition.
-        assert "PARTITIONED BY (exchange, days(snapshot_ts))" in _DDL.read_text()
-
-    def test_the_levels_are_decimal_pairs(self):
-        assert "ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>>" in _DDL.read_text()
+    def test_the_lake_levels_are_decimal_pairs(self):
+        # silver.book_* keeps levels as struct<px, qty> decimals; gold.book_top20
+        # keeps the wire's parallel int64 arrays so ClickHouse loads it as is.
+        ddl = _DDL.read_text()
+        assert "ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>>" in ddl
+        assert "bid_px_e8        ARRAY<BIGINT> NOT NULL" in ddl
 
 
 class TestTablePolicies:
     @pytest.mark.parametrize(
-        "table", ["raw.messages", "bronze.trades", "bronze.book_snapshots_l2", "audit.checks"]
+        "table",
+        [
+            "raw.messages",
+            "bronze.binance_trade",
+            "bronze.kraken_book",
+            "bronze.coinbase_level2",
+            "silver.trades_kraken",
+            "silver.book_kraken",
+            "gold.trades",
+            "gold.ohlcv_1m",
+            "gold.book_top20",
+            "audit.checks",
+        ],
     )
     def test_every_table_is_copy_on_write(self, table):
         # Merge-on-read would put positional delete files in front of readers

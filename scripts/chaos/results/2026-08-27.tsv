@@ -3,3 +3,7 @@ ts	script	expected_alert	t_fire_s	t_recover_s
 2026-08-27T03:10:04Z	lake-minio-stop.sh	LakeIngestFailed	0	38
 2026-08-27T03:19:10Z	lake-lakekeeper-stop.sh phase=commit stop_first=no	LakeExporterStalled	0	37
 2026-08-27T03:21:05Z	lake-corrupt-payload.sh topic=market.crypto.v3.trades.kraken	none expected	0	38
+2026-08-27T08:14:25Z	lake-corrupt-payload.sh topic=market.crypto.v3.raw.kraken	none expected	0	14
+2026-08-27T08:16:34Z	clickhouse-corrupt-record.sh topic=market.crypto.v3.trades.kraken	ClickHouseKafkaMessagesFailed	none	123
+2026-08-27T08:21:53Z	clickhouse-stop.sh --hold 150	ClickHouseDown	160	7
+2026-08-27T08:22:24Z	clickhouse-corrupt-record.sh topic=market.crypto.v3.trades.kraken	ClickHouseKafkaMessagesFailed	0	4

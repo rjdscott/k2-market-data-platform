@@ -16,6 +16,13 @@ exists to tell you what "normal recovery" looks like so you can spot when it isn
 > point at the v3 lake path that replaced it, and that path's numbers come from the Phase D
 > burn-in rather than from 2026-02-19. The remaining three infrastructure failures are
 > unchanged and still measured.
+>
+> **The ClickHouse tables the February measurements read were dropped on 2026-08-27** at
+> the Phase E cutover (`k2.silver_trades` and the rest of the `k2` database —
+> [`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md)). The verification
+> queries below are written against the served `gold` tier that replaced them
+> ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)); the "Measured"
+> rows are the dated v2 observations, kept as written.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
@@ -37,7 +44,8 @@ exists to tell you what "normal recovery" looks like so you can spot when it isn
 **Detection** — `CaptureProduceErrors`, `CaptureProduceStalled`.
 
 **Expected behaviour** — capture reconnects on its own; in-flight messages sit in the
-librdkafka queue; ClickHouse Kafka Engine consumers resume from their last committed offset.
+librdkafka queue; the ClickHouse `gold.q_trades` / `gold.q_book` consumers resume from
+their last committed offset.
 
 **Recovery**
 
@@ -48,11 +56,12 @@ docker exec k2-redpanda rpk topic list              # topics intact?
 
 # Confirm ingestion resumed
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count() FROM k2.silver_trades WHERE timestamp > now() - INTERVAL 2 MINUTE GROUP BY exchange"
+  "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange"
 ```
 
-**Measured** — 10 s. 12 new rows ingested post-restart; all three ClickHouse consumers resumed.
-No trade loss. If handlers do not reconnect within a minute, restart them (see §3).
+**Measured** — 10 s, 2026-02-19, on the v2 tier: 12 new rows ingested post-restart; all three
+ClickHouse consumers resumed. No trade loss. If capture does not reconnect within a minute,
+restart it (see §3).
 
 ---
 
@@ -62,9 +71,10 @@ No trade loss. If handlers do not reconnect within a minute, restart them (see �
 
 **Detection** — `ClickHouseDown`.
 
-**Expected behaviour** — Redpanda retains messages for its retention window, so feed
-handlers keep producing normally. Consumers resume on restart and materialized views
-replay from the retained offsets — no data loss.
+**Expected behaviour** — Redpanda retains messages for its retention window, so capture
+keeps producing normally. The `gold.q_*` consumers resume on restart and the MVs replay
+from the retained offsets; `ReplacingMergeTree` makes any overlap one row under `FINAL` —
+no data loss, no duplicates.
 
 **Recovery**
 
@@ -74,14 +84,14 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q
 
 # Consumers reattached, no exceptions?
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT table, num_messages_read, last_exception FROM system.kafka_consumers WHERE database='k2' FORMAT Vertical"
+  "SELECT table, num_messages_read, exceptions.text FROM system.kafka_consumers WHERE database='gold' FORMAT Vertical"
 
 # Prometheus listener back up (it starts with the server)
 curl -s localhost:9090/api/v1/targets | jq '.data.activeTargets[] | select(.labels.job=="clickhouse") | .health'
 ```
 
-**Measured** — 32 s, the slowest of the six. `silver_trades` resumed cleanly and the
-Prometheus listener on 9363 came back with it. Check for row-count continuity across the
+**Measured** — 32 s, the slowest of the six (2026-02-19, v2: `k2.silver_trades` resumed
+cleanly and the Prometheus listener on 9363 came back with it). Check for row-count continuity across the
 outage window rather than assuming it.
 
 ---
@@ -186,11 +196,11 @@ consumers resume from their last committed offset. No corruption.
 ```bash
 docker network connect k2-net k2-clickhouse    # or whichever container was cut off
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT table, num_messages_read, last_exception FROM system.kafka_consumers WHERE database='k2' FORMAT Vertical"
+  "SELECT table, num_messages_read, exceptions.text FROM system.kafka_consumers WHERE database='gold' FORMAT Vertical"
 ```
 
-**Measured** — 20–30 s from reconnect. All three Kafka Engine consumers recovered from
-their last committed offset with no data corruption.
+**Measured** — 20–30 s from reconnect (2026-02-19, v2). All three Kafka Engine consumers
+recovered from their last committed offset with no data corruption.
 
 ---
 

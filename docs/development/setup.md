@@ -42,11 +42,14 @@ prints what it would do without touching anything.
 
 ### Applying the ClickHouse schema
 
-The full schema (26 objects: the `k2` database, 13 bronze/silver/gold tables and 12
-materialized views) auto-applies
-from [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql) on
-a fresh volume via `/docker-entrypoint-initdb.d`. `docker/clickhouse/schema/` is the historical
-migration trail and is not run.
+The `gold` database auto-applies on a fresh volume via `/docker-entrypoint-initdb.d`:
+[`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql)
+(the tables and views — the contract CI tests) then
+[`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql) (the Kafka-engine feeds).
+Applying them to a running server is in
+[`docker/clickhouse/README.md`](../../docker/clickhouse/README.md#applying-it-to-a-running-server).
+The v2 `k2` medallion was dropped on 2026-08-27; its DDL is archived in
+[`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md).
 
 ## Verifying data is flowing
 
@@ -64,8 +67,8 @@ curl -sG localhost:9090/api/v1/query \
   --data-urlencode 'query=sum by (exchange, kind) (rate(k2_capture_records_produced_total[5m]))' | jq
 ```
 
-The `k2` ClickHouse database is **frozen** — it holds v2 history and gains no rows, so
-none of the `k2.*` queries in the ops docs will show recent data. See
+ClickHouse serves `gold`; the v2 `k2` database was dropped on 2026-08-27, so any `k2.*`
+query is an error, not an empty result. See
 [../architecture/README.md](../architecture/README.md). More query recipes:
 [../operations/data-inspection.md](../operations/data-inspection.md).
 

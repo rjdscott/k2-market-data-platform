@@ -4,13 +4,18 @@ What "fast enough" means for this pipeline, where the budget is spent, and what 
 actually measured. The target that matters: a trade leaving an exchange should be visible
 in a gold OHLCV candle in **under 200 ms at p99**.
 
-> **Segments 3–6 no longer carry live traffic.** The v2 hot tier froze on 2026-08-26 —
-> nothing produces to `market.crypto.trades.<ex>[.raw]`, so the ClickHouse medallion holds
-> history and gains no rows. See [../architecture/README.md](../architecture/README.md).
-> Segments 1–2 are live and are now the Rust `k2-capture` tier's; the measured numbers
-> below are the v2 Kotlin pipeline's, kept as the dated record of what that path did.
+> **The budget and the measurements below are the v2 pipeline's, kept as a dated record.**
+> Segments 3–6 were the ClickHouse `k2` medallion; it froze on 2026-08-26 when the Kotlin
+> handlers retired and was **dropped on 2026-08-27** at the Phase E cutover
+> ([`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md)). Segments 1–2 are live
+> and are the Rust `k2-capture` tier's. The served tier today is `gold`
+> ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)): Redpanda →
+> `gold.q_trades` (AvroConfluent Kafka engine) → one MV → `gold.trades`, with OHLCV computed
+> on read (`gold.ohlcv_live`) rather than by a chain of MVs. Its end-to-end latency has not
+> been measured yet; the query to do it is in
+> [data-inspection.md](./data-inspection.md#trades--goldtrades).
 
-## The 7-segment budget
+## The 7-segment budget (v2, as designed)
 
 | # | Segment | Target |
 |---|---------|--------|
@@ -43,8 +48,9 @@ transform chain in-process.
 
 Exchange → silver end-to-end lag, computed as
 `ingestion_timestamp - timestamp` on `k2.silver_trades` over a 1-hour window at 1×
-baseline. Reproduce it with the lag query in
-[data-inspection.md](./data-inspection.md#silver--unified-trades).
+baseline. That table was dropped on 2026-08-27, so the query cannot be re-run; the
+equivalent on `gold.trades` (`recv_ts_ns` against `exchange_ts`) is in
+[data-inspection.md](./data-inspection.md#trades--goldtrades).
 
 | Exchange | p50 | p95 | p99 | Max | n | Target <200 ms |
 |----------|-----|-----|-----|-----|---|----------------|
@@ -104,16 +110,16 @@ which is the right trade at this scale:
    while produces climb), then `k2_capture_produce_errors_total{reason="queue_full"}`
    ticks and `CaptureProduceErrors` fires. This is the one level where the failure mode
    is loss rather than lag — see [../runbooks/capture-produce-stalled.md](../runbooks/capture-produce-stalled.md).
-2. **ClickHouse ingest saturates** → the Kafka Engine consumer lags. Data is safe in
-   Redpanda for the retention window. There is no alert on this any more:
-   `ClickHouseBronzeInsertRateLow` was the proxy and it was archived with the v2
-   tier it measured ([ADR-019](../adr/ADR-019-rust-capture-tier.md) Outcome). The
-   v3 hot tier gets its own in Phase E; until then, watch consumer lag by hand
-   with `rpk group describe`.
-3. **Materialized views saturate** → merge queue grows; `ClickHouseMergeQueueLarge` fires.
-   Queries degrade before ingest does.
-4. **Offload saturates** → cycles overrun the 15-minute schedule;
-   `IcebergOffloadCycleTooSlow` fires. The hot tier is unaffected — cold simply lags.
+2. **ClickHouse ingest saturates** → the `gold.q_trades` / `gold.q_book` consumers lag.
+   Data is safe in Redpanda for the retention window (7 d on `trades.*`/`book.*`), and
+   the lake holds it for good. `ClickHouseGoldFeedStale` fires when the consumers go
+   silent while capture is still delivering; a lagging-but-moving consumer is visible in
+   `rpk group describe k2-gold-trades`.
+3. **Merges saturate** → merge queue grows; `ClickHouseMergeQueueLarge` fires. Queries
+   degrade before ingest does, and `FINAL` gets more expensive until the merges catch up.
+4. **Lake ingest saturates** → the 5-minute cycles fall behind the topics;
+   `LakeIngestLagHigh` fires. The served tier is unaffected — the lake simply lags, and
+   `raw.*` retention (48 h) is the deadline on catching up.
 
 Nothing here drops data silently — the one level that drops (1) counts every record it
 loses. Below the capture tier the failure mode is *lag*, not loss, which is what the

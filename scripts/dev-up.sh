@@ -124,7 +124,7 @@ fi
 step "(f) data-flow probe"
 if [ "$DRY_RUN" = "1" ]; then
   # shellcheck disable=SC2016 # literal preview text — $CLICKHOUSE_PASSWORD is not meant to expand here
-  echo '[dry-run] docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD -q "SELECT exchange, count() FROM k2.silver_trades WHERE timestamp > now() - INTERVAL 2 MINUTE GROUP BY exchange"'
+  echo '[dry-run] docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD -q "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange"'
   echo '[dry-run] for each running capture-* service: docker run --rm --network <its-network> curlimages/curl:8.14.1 -s http://<service>:8082/metrics | grep k2_capture_last_message_ts_seconds'
 else
   set -a
@@ -133,9 +133,9 @@ else
   set +a
 
   ch_out=$(docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-    "SELECT exchange, count() FROM k2.silver_trades WHERE timestamp > now() - INTERVAL 2 MINUTE GROUP BY exchange" 2>&1) || true
+    "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange" 2>&1) || true
   if [ -z "$ch_out" ]; then
-    result "(f) clickhouse silver_trades" "WARN (no rows in the last 2 minutes — handlers may be warming up)"
+    result "(f) clickhouse gold.trades" "WARN (no rows in the last 2 minutes — capture may be warming up)"
   else
     echo "$ch_out" | while IFS=$'\t' read -r exch cnt; do
       if [ -n "${cnt:-}" ] && [ "$cnt" -gt 0 ] 2>/dev/null; then

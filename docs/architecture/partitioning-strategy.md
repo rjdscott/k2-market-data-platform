@@ -4,8 +4,7 @@ Two tiers partition data in v3, and they solve different problems. **Redpanda pa
 buy producer and consumer parallelism, and decide what stays ordered.** **Iceberg
 partitions control file count and prune scans; they evict nothing, because nothing in the
 lake is ever evicted** ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)). The
-third tier — ClickHouse — is rewritten in Phase E and is deliberately not described here;
-see [ClickHouse](#clickhouse) below.
+third tier — ClickHouse — serves the lake's gold layer; see [ClickHouse](#clickhouse) below.
 
 What follows is what the DDL and the topic bootstrap actually configure:
 [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) and
@@ -38,10 +37,9 @@ market.crypto.v3.trades.binance    12          1
 …
 ```
 
-The six v2 topics (`market.crypto.trades.<ex>{,.raw}`, 40/20/20 partitions) are still
-live and go away at the Phase E cutover. Counted from that listing, the two generations
-together are **15 market topics and 268 partitions** — `9 × 12` for v3 plus
-`2 × (40 + 20 + 20)` for v2.
+The six v2 topics (`market.crypto.trades.<ex>{,.raw}`, 40/20/20 partitions) were deleted at
+the Phase E cutover on 2026-08-27; the cluster now carries the nine v3 topics only, 108
+partitions. Until then the count was `9 × 12 = 108` for v3 plus `2 × (40 + 20 + 20)` for v2.
 
 ### The key is the symbol, not the exchange
 
@@ -243,21 +241,38 @@ and both partition pruning and sort-order pruning get slower without getting wro
 
 ## ClickHouse
 
-**Rewritten in Phase E.** The v2 hot tier — `bronze_trades_{binance,kraken,coinbase}`,
-`silver_trades`, six `ohlcv_*` tables, their partition keys and their TTLs — is superseded
-by [ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md) and is not described on this
-page, because a partitioning document that describes tables about to be dropped is worse
-than one that says which tier is not yet written.
+**Rewritten at the Phase E cutover, 2026-08-27.** The v2 hot tier (`k2.*`, 7-day TTL,
+`SummingMergeTree` candles) is gone — [legacy/v2-clickhouse/](../../legacy/v2-clickhouse/README.md)
+keeps its DDL, and `git log -p -- docs/architecture/partitioning-strategy.md` this page's
+earlier description. What serves now is the `gold` database of
+[ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md):
+[`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql).
+No table has a TTL.
 
-Two facts about the replacement are already fixed and are worth stating here, because
-they constrain what Phase E can choose: the hot tier holds **7 days** and originates
-nothing, and it is a `ReplacingMergeTree` keyed so that re-consuming a topic converges
-rather than duplicates. Everything else — partition granularity, sort keys, the OHLCV read
-model (ADR-026, reserved) — lands with Phase E and this section is rewritten then.
+| Table | Engine | `PARTITION BY` | `ORDER BY` | Why |
+|---|---|---|---|---|
+| `gold.trades` | `ReplacingMergeTree(first_seen)` | `toYYYYMM(exchange_ts)` | `(exchange, canonical_symbol, exchange_ts, trade_id)` | the logical trade is the key; a venue replay or a feed/reload overlap collapses under `FINAL` to the **earliest delivery** (`first_seen` = inverted receive time). Monthly partitions keep `FINAL` a per-partition merge (the `quant` profile sets `do_not_merge_across_partitions_select_final`) and keep part counts flat at ~10 M rows/day |
+| `gold.book_top20` | `ReplacingMergeTree(ver)` | `toYYYYMM(second)` | `(exchange, canonical_symbol, second)` | one row per venue-symbol-second; the later sample in a second wins, and a lake reload (state at the end of the second, `ver` = last nanosecond) out-ranks the feed's mid-second sample |
+| `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bbo_1s` | `ReplacingMergeTree(src_snapshot_id)` | `toYYYYMM(window_start)` / `toYYYYMM(second)` | `(exchange, canonical_symbol, window_start)` | loaded from the lake, never computed here; a reload carrying a newer lake snapshot for a bucket replaces the row |
+| `gold.feed_errors` | `MergeTree` | — | `(topic, partition, offset)` | every record AvroConfluent could not decode, with its bytes |
 
-The v2 tables are described accurately in the git history of this file; `git log -p --
-docs/architecture/partitioning-strategy.md` is the honest way to read them, rather than a
-stale copy kept here.
+**Why not partition by exchange, as the lake does.** ClickHouse's partition is a merge
+boundary and a `FINAL` boundary, not a pruning device the way an Iceberg partition is;
+`exchange` leads the `ORDER BY` instead, so a per-venue scan is a primary-key range and the
+sparse index prunes it. Three venues in one monthly partition merge as one set of parts;
+three per-venue partitions would triple the part count for the same rows.
+
+**Why the sort key carries `exchange_ts` before `trade_id`.** A backtest reads a symbol's
+trades in time order; the key makes that a sequential read of one primary-key range, and
+`ohlcv_live(bucket)` groups on `toStartOfInterval(exchange_ts, …)` over the same order. The
+trade id is last because it only has to make the key unique, and the venues number trades
+sequentially per symbol so ties in `exchange_ts` resolve in venue order.
+
+**OHLCV on read.** `gold.ohlcv_live(bucket = <seconds>)` is a parameterised view over
+`gold.trades FINAL`; the materialised candles are the lake's and are loaded. The v2 tier
+materialised candles into a `SummingMergeTree` whose open/close were resolved per insert
+block, which is the wrong number when a minute spans two blocks; `make test-clickhouse`
+asserts the view gets that minute right on every PR.
 
 ---
 
@@ -306,7 +321,7 @@ They are design expectations until then.
 - [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md) — why `raw.messages` is never evicted, and why it prunes on coordinates only
 - [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) — the offset continuity the raw sort order exists to serve
 - [ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md) — the unified bronze decision and the symbol-in-sort-order trade-off
-- [ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md) — why the ClickHouse section is deferred to Phase E
+- [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) — the ClickHouse tier serves gold, indefinitely, from the lake
 - [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md) — why the book table's time axis is the sampler clock
 - [capacity-model.md](capacity-model.md) — the bytes/day predictions every file-size argument above rests on
 - [scale-out-path.md](scale-out-path.md) — the same partition arithmetic redone at PB scale

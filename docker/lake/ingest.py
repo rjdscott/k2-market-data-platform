@@ -26,13 +26,15 @@ the driver died on `java.lang.OutOfMemoryError` (2026-08-26). Pinning the end
 offsets in pure code (`offsets.bounded_offsets`) means nothing has to be cached
 to know what a run consumed, and it caps what one run can pull.
 
-**Stage 2 — `raw.messages` to `bronze.*`.** An Iceberg incremental read of the
-snapshots stage 1 just added, the Confluent header stripped, the Avro body
-decoded against the exact writer schema fetched from the registry by id, in
-FAILFAST mode. `trades.*` and `book.*` feed the unified `bronze.trades` /
-`bronze.book_snapshots_l2`; **stage 2b** (docker/lake/bronze.py) decodes the
-`raw.*` JSON frames into the six per-venue tables of ADR-026. The unified pair
-stays until the per-venue rebuild proves parity against it (plan 004).
+**Stage 2 — `raw.messages` to `bronze.<venue>_*`.** An Iceberg incremental read
+of the snapshots stage 1 just added; the RawMessage Avro decoded against the
+exact writer schema fetched from the registry by id, then the venue's own JSON
+frame parsed into the per-venue vendor-schema tables (docker/lake/bronze.py,
+ADR-026). The Avro `trades.*` / `book.*` topics are archived in raw.messages but
+never decoded by the lake: they are the capture's parse, and the lake's whole
+point is to be independent of it. (The Phase D unified `bronze.trades` /
+`bronze.book_snapshots_l2` were dropped at the Phase E cutover once the
+per-venue rebuild had proved parity against them — docs/benchmarks/2026-08-27.md.)
 
 **Stage 2c — `bronze.<venue>_*` to `silver.trades_<venue>`** (docker/lake/silver.py):
 typed, canonical symbol from the registry, replay / gap / precision flags, every
@@ -62,7 +64,6 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
-from functools import reduce
 
 import books
 import bronze
@@ -79,9 +80,8 @@ from catalog import (  # noqa: F401 - re-exported for scripts/ and chaos/
     write_audit_rows,
 )
 from lock import LOCK_PATH, acquire_lock
-from pyspark.sql import DataFrame, Row
+from pyspark.sql import Row
 from pyspark.sql import functions as F
-from pyspark.sql.avro.functions import from_avro
 
 import offsets as O
 import wire
@@ -92,8 +92,6 @@ from spark_conf import (
 )
 
 RAW_TABLE = f"{CATALOG}.raw.messages"
-TRADES_TABLE = f"{CATALOG}.bronze.trades"
-BOOK_TABLE = f"{CATALOG}.bronze.book_snapshots_l2"
 
 # One ingest at a time, per container, on every dispatch path.
 #
@@ -409,209 +407,6 @@ def _epoch_ms(value: str) -> int:
     return int(parsed.timestamp() * 1000)
 
 
-# ── stage 2: raw.messages -> bronze.* ───────────────────────────────────────
-
-# (topic kind, target table, projection). Two entries, one loop — the alternative
-# is the same fifteen lines twice with `trade` swapped for `book`.
-_TRADE_COLUMNS = [
-    "exchange",
-    "symbol",
-    "canonical_symbol",
-    "trade_id",
-    "side",
-    "exchange_ts",
-    "recv_ts_ns",
-    "seq",
-    "conn_id",
-    "conn_msg_seq",
-]
-
-
-def _project_trades(df: DataFrame) -> DataFrame:
-    return df.select(
-        *[F.col(f"d.{c}").alias(c) for c in _TRADE_COLUMNS[:4]],
-        F.expr(wire.fixed_point_expr("d.price")).alias("price"),
-        F.expr(wire.fixed_point_expr("d.qty")).alias("qty"),
-        *[F.col(f"d.{c}").alias(c) for c in _TRADE_COLUMNS[4:]],
-        F.col("topic").alias("src_topic"),
-        F.col("partition").alias("src_partition"),
-        F.col("offset").alias("src_offset"),
-        F.col("ingest_ts"),
-    )
-
-
-def _levels_expr(px: str, qty: str) -> str:
-    """`array<struct<px, qty>>` from the wire's two parallel int64 arrays."""
-    return (
-        "transform(arrays_zip(d.{px}, d.{qty}), lvl -> struct("
-        "  {px_dec} AS px,"
-        "  {qty_dec} AS qty))"
-    ).format(
-        px=px,
-        qty=qty,
-        px_dec=wire.fixed_point_expr(f"lvl.{px}"),
-        qty_dec=wire.fixed_point_expr(f"lvl.{qty}"),
-    )
-
-
-def _project_book(df: DataFrame) -> DataFrame:
-    return df.select(
-        F.col("d.exchange").alias("exchange"),
-        F.col("d.symbol").alias("symbol"),
-        F.col("d.canonical_symbol").alias("canonical_symbol"),
-        F.col("d.depth").alias("depth"),
-        F.col("d.seq").alias("seq"),
-        F.col("d.checksum_ok").alias("checksum_ok"),
-        F.expr(_levels_expr("bid_px", "bid_qty")).alias("bids"),
-        F.expr(_levels_expr("ask_px", "ask_qty")).alias("asks"),
-        F.col("d.exchange_ts").alias("exchange_ts"),
-        F.col("d.recv_ts_ns").alias("recv_ts_ns"),
-        F.col("d.snapshot_ts_ns").alias("snapshot_ts_ns"),
-        # Nanoseconds to a microsecond TIMESTAMP so the table can partition and
-        # range-scan on it. snapshot_ts_ns above stays the authoritative value —
-        # this is the queryable projection of it, not a replacement.
-        F.expr("timestamp_micros(d.snapshot_ts_ns div 1000)").alias("snapshot_ts"),
-        F.col("d.conn_id").alias("conn_id"),
-        F.col("d.conn_msg_seq").alias("conn_msg_seq"),
-        F.col("topic").alias("src_topic"),
-        F.col("partition").alias("src_partition"),
-        F.col("offset").alias("src_offset"),
-        F.col("ingest_ts"),
-    )
-
-
-BRONZE = (
-    ("trades", TRADES_TABLE, _project_trades),
-    ("book", BOOK_TABLE, _project_book),
-)
-
-
-def stage_bronze(spark, raw_snapshot_id, run_ts: datetime) -> int:
-    """Decode the new `raw.messages` snapshots into `bronze.*`. Returns rows written."""
-    if raw_snapshot_id is None:
-        print("stage 2: raw.messages has no snapshots yet")
-        return 0
-
-    total = 0
-    for kind, table, project in BRONZE:
-        previous = O.latest_summary(snapshot_history(spark, table), O.JOB_DECODE)
-        start = previous.get(O.SRC_SNAPSHOT_ID) if previous else None
-
-        # Stage 1 added nothing, so this table is already level with the archive.
-        # Guarding here rather than letting the read fail: an incremental scan
-        # whose start equals its end raises "not a parent ancestor of end
-        # snapshot", which reads like corruption and means "up to date".
-        if start and str(start) == str(raw_snapshot_id):
-            print(f"stage 2: {table} is level with raw.messages, nothing to decode")
-            continue
-
-        reader = spark.read.format("iceberg")
-        if start:
-            # Incremental: (start, end], start exclusive. Iceberg fails loudly if
-            # `start` is no longer an ancestor of `end`, which is what happens
-            # when snapshot expiry outruns this job — a real condition worth an
-            # error rather than a silent full re-read.
-            reader = reader.option("start-snapshot-id", start).option(
-                "end-snapshot-id", raw_snapshot_id
-            )
-        else:
-            # First run for this table: the whole archive as of `raw_snapshot_id`.
-            reader = reader.option("snapshot-id", raw_snapshot_id)
-
-        source = reader.load(RAW_TABLE).where(
-            F.col("topic").isin(topics(kind)) & F.col("schema_id").isNotNull()
-        )
-        # Not cached. This DataFrame carries `payload`, and caching a payload
-        # column is what killed stage 1 (see `stage_raw`). What the cache was
-        # buying — one scan instead of three — is bought instead by making the
-        # other two passes cheap: the schema-id probe below projects a single
-        # int column, which Parquet prunes to, and the row count comes from the
-        # commit summary rather than from a `count()` over the decode.
-        total += _decode_into(spark, source, table, project, raw_snapshot_id, run_ts)
-    return total
-
-
-def _decode_into(spark, source, table: str, project, raw_snapshot_id, run_ts) -> int:
-    schema_ids = [r[0] for r in source.select("schema_id").distinct().collect()]
-    if not schema_ids:
-        print(f"stage 2: nothing new for {table}")
-        return 0
-
-    # One decode per writer schema, then union. Today every subject has one
-    # version so this loop runs once; it is a loop because the day a schema
-    # evolves, a batch spans both versions and decoding it with either one
-    # alone is wrong.
-    parts, unresolvable = [], []
-    for schema_id in sorted(schema_ids):
-        try:
-            schema = fetch_schema(schema_id)
-        except UnresolvableSchema as exc:
-            # Skip the id, keep the rest of the batch, and leave the reason in
-            # audit.checks. Raising here would kill this run and every run
-            # after it: the record is already in raw.messages and stage 2
-            # re-reads the same snapshot range until it succeeds, so one
-            # unregistered id would be a permanent outage.
-            print(f"stage 2: SKIPPING {exc} — filing an audit row")
-            unresolvable.append((schema_id, str(exc)))
-            continue
-        decoded = source.where(F.col("schema_id") == schema_id).withColumn(
-            "d",
-            from_avro(
-                F.expr(wire.body_expr("payload")),
-                schema,
-                # FAILFAST: a body that does not decode is corruption, and a
-                # PERMISSIVE null row would put a silently empty trade into
-                # a table whose whole purpose is to be trustworthy.
-                {"mode": "FAILFAST"},
-            ),
-        )
-        parts.append(project(decoded))
-
-    # ponytail: if EVERY id in the range is unresolvable there is nothing to
-    # commit, so the position does not advance and the same rows file the same
-    # audit row on the next cycle. That is deliberate — the condition really is
-    # still true, and a later registration of the id recovers the records — but
-    # it repeats every 5 minutes until one decodable record arrives. Dedupe on
-    # (check_name, scope) if that ever becomes noise worth suppressing.
-    if unresolvable:
-        write_audit_rows(
-            spark,
-            [
-                Row(
-                    run_ts=run_ts,
-                    job="ingest",
-                    check_name="unresolvable_schema_id",
-                    scope=f"{table}/schema_id={schema_id}",
-                    passed=False,
-                    observed=int(schema_id),
-                    detail=detail,
-                )
-                for schema_id, detail in unresolvable
-            ],
-            {O.UNRESOLVABLE_IDS: str(len(unresolvable))},
-        )
-    if not parts:
-        return 0
-
-    # Written once, counted afterwards from Iceberg's own summary. The `count()`
-    # that used to precede this was a full second Avro decode of the range, and
-    # the `persist(DISK_ONLY)` that made it cheaper serialised decoded book
-    # snapshots — 100 levels of two struct arrays per row — through the
-    # in-memory columnar cache. Same failure as stage 1, one table downstream.
-    out = reduce(DataFrame.unionByName, parts)
-    (
-        out.writeTo(table)
-        .option(f"snapshot-property.{O.JOB}", O.JOB_DECODE)
-        .option(f"snapshot-property.{O.SRC_SNAPSHOT_ID}", str(raw_snapshot_id))
-        .append()
-    )
-    written = added_records(spark, table)
-    print(
-        f"stage 2: {written} rows -> {table} (schema ids {sorted(schema_ids)}, src snapshot {raw_snapshot_id})"
-    )
-    return written
-
-
 # ── probe ───────────────────────────────────────────────────────────────────
 
 
@@ -725,9 +520,8 @@ def main() -> int:
             )
         if args.stage in ("all", "bronze"):
             raw_snapshot_id = current_snapshot_id(spark, RAW_TABLE)
-            stage_bronze(spark, raw_snapshot_id, ingest_ts)
-            # Stage 2b: the same raw range, decoded from the venue JSON into the
-            # six bronze-per-venue tables (docker/lake/bronze.py, ADR-026).
+            # Stage 2: the raw range decoded from the venue JSON into the
+            # bronze-per-venue tables (docker/lake/bronze.py, ADR-026).
             bronze.stage(spark, raw_snapshot_id, ingest_ts)
             # Stage 2c: bronze frames typed and flagged into silver.trades_*
             # (docker/lake/silver.py); each silver table reads its bronze

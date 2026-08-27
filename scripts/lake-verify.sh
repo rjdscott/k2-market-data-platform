@@ -100,8 +100,11 @@ import sys
 sys.path.insert(0, sys.argv[1])
 
 import offsets as O
-from ingest import ALL_TOPICS, BOOK_TABLE, RAW_TABLE, TRADES_TABLE, snapshot_history, topics
-from maintenance import audit_offset_continuity
+import books
+import gold
+import silver
+from ingest import ALL_TOPICS, RAW_TABLE, snapshot_history
+from maintenance import audit_book_parity, audit_gold_trades, audit_offset_continuity, audit_silver_parity
 from spark_conf import lake_session
 
 spark = lake_session("k2-lake-verify")
@@ -143,14 +146,20 @@ try:
     for r in audit_offset_continuity(spark):
         check("offsets gapless", r["passed"], f"{r['scope']}: {r['detail']}")
 
-    # (2) every raw row on a decodable topic became exactly one bronze row.
-    for kind, table in (("trades", TRADES_TABLE), ("book", BOOK_TABLE)):
-        quoted = ", ".join(f"'{t}'" for t in topics(kind))
-        raw_n = spark.sql(
-            f"SELECT count(*) FROM {RAW_TABLE} WHERE topic IN ({quoted}) AND schema_id IS NOT NULL"
-        ).collect()[0][0]
-        bronze_n = spark.sql(f"SELECT count(*) FROM {table}").collect()[0][0]
-        check(f"raw == {kind}", raw_n == bronze_n, f"raw {raw_n} vs bronze {bronze_n}")
+    # (2) every layer is level with its parent, by the nightly audit's own
+    # definitions — one definition each, docker/lake/maintenance.py: silver rows
+    # == the trades/frames of the bronze snapshot silver last read, gold rows ==
+    # silver's first deliveries. (Raw == bronze is asserted per run by the
+    # ingest itself: the `frames = decoded + control` balance line, filed as
+    # bronze_parity when it does not hold.)
+    for spec in silver.TRADES:
+        for r in audit_silver_parity(spark, spec):
+            check(f"silver == bronze ({spec.exchange})", r["passed"], r["detail"])
+    for spec in books.BOOKS:
+        for r in audit_book_parity(spark, spec):
+            check(f"silver book == bronze ({spec.exchange})", r["passed"], r["detail"])
+    for r in audit_gold_trades(spark):
+        check("gold == silver first deliveries", r["passed"], f"{r['scope']}: {r['detail']}")
 
     # (3) the summary agrees with the table. Idempotency itself is asserted by
     # the caller — cycle 2 printing "no new records" is a fatal grep above, and

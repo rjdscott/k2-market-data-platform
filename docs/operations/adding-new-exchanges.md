@@ -9,10 +9,11 @@ A step-by-step checklist for adding a fourth venue to the v3 Rust capture tier.
 
 > **A new exchange feeds the v3 topics only.** The v2 medallion — the six
 > `market.crypto.trades.*` topics, `k2.bronze_trades_*`, `k2.silver_trades` and the six
-> `k2.ohlcv_*` tables — is **frozen** as of 2026-08-26 and gains no rows from any producer,
-> new or old. See [../architecture/README.md](../architecture/README.md). What that tier
-> looked like is kept below under [The frozen v2 medallion](#the-frozen-v2-medallion), for
-> when the v3 hot tier is built in Phase E; none of it is a step you perform today.
+> `k2.ohlcv_*` tables — froze on 2026-08-26 and was **dropped on 2026-08-27** at the Phase E
+> cutover; nothing below creates a v2 object. Downstream of the topics, the ClickHouse
+> `gold` feeds (step 8) and the lake's per-venue decoders (post-integration) are the two
+> places a fourth venue has to be named. What the v2 tier looked like is kept under
+> [The retired v2 medallion](#the-retired-v2-medallion).
 
 The Kotlin handlers this checklist used to describe are archived at
 [`legacy/v2-kotlin/README.md`](../../legacy/v2-kotlin/README.md)
@@ -229,6 +230,22 @@ on their own.
 
 ---
 
+### 8. ClickHouse gold feeds
+
+**File**: [`docker/clickhouse/ddl/20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql)
+
+- [ ] Add `market.crypto.v3.trades.{exchange}` to `gold.q_trades`'s `kafka_topic_list` and
+      `market.crypto.v3.book.{exchange}` to `gold.q_book`'s. The list is literal — a topic
+      not named there is never read, and nothing alerts on a venue that was never attached.
+      `gold.trades` / `gold.book_top20` need no change: `exchange` is a column, not a table
+- [ ] Re-attach the feeds on the running server — a Kafka-engine table's settings are fixed
+      at CREATE, so drop and recreate `gold.q_trades` / `gold.q_book` and their MVs from the
+      file ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md#applying-it-to-a-running-server));
+      the group resumes from its committed offsets on the existing topics and starts the new
+      one at `kafka_auto_offset_reset`
+
+---
+
 ## Testing Steps
 
 ### 1. Build and deploy
@@ -272,6 +289,19 @@ Then check that `k2_capture_gaps_total`, `k2_capture_produce_errors_total` and
 `k2_capture_precision_loss_total` are all present **and zero** for the new venue. Present
 matters as much as zero: every one of them is seeded at startup precisely so its first
 event is detectable, and an absent series means the seeding was missed.
+
+### 5. Verify the served tier
+
+```bash
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+  "SELECT exchange, count(), max(exchange_ts) FROM gold.trades FINAL
+   WHERE exchange_ts > now() - INTERVAL 5 MINUTE GROUP BY exchange"
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+  "SELECT count() FROM gold.feed_errors WHERE topic LIKE '%{exchange}'"
+```
+
+The new venue appears as a fourth `exchange` value; a non-zero `feed_errors` count for its
+topics means the Avro the adapter produced is not what `20-gold-kafka.sql` declares.
 
 ---
 
@@ -340,11 +370,12 @@ table that used to bridge the two went with the Kotlin handlers.
 
 ---
 
-## The frozen v2 medallion
+## The retired v2 medallion
 
-Kept for reference and for whoever builds the v3 hot tier in Phase E. **None of this is a
-step for a new exchange today** — the `k2` database takes no new producers and is dropped
-at the Phase E cutover.
+Kept as history. **None of this is a step for a new exchange** — the `k2` database was
+dropped on 2026-08-27 at the Phase E cutover, and its DDL lives in
+[`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md); the served tier that
+replaced it is [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md).
 
 Each v2 exchange had a Kafka-engine queue on `market.crypto.trades.{exchange}.raw`, a
 normalizing materialized view into an exchange-native `k2.bronze_trades_{exchange}`
@@ -352,9 +383,9 @@ normalizing materialized view into an exchange-native `k2.bronze_trades_{exchang
 bronze into the unified `k2.silver_trades` — canonical symbol, `Decimal128(8)` prices, a
 `BUY`/`SELL` enum, and the venue's own fields preserved in a `vendor_data` map. Six gold
 `ohlcv_*` tables aggregated silver. The whole chain is in
-[`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql),
-with [`11-bronze-coinbase.sql`](../../docker/clickhouse/schema/11-bronze-coinbase.sql) and
-[`12-silver-coinbase.sql`](../../docker/clickhouse/schema/12-silver-coinbase.sql) as the
+[`legacy/v2-clickhouse/01-k2-schema.sql`](../../legacy/v2-clickhouse/01-k2-schema.sql),
+with [`11-bronze-coinbase.sql`](../../legacy/v2-clickhouse/schema/11-bronze-coinbase.sql) and
+[`12-silver-coinbase.sql`](../../legacy/v2-clickhouse/schema/12-silver-coinbase.sql) as the
 cleanest worked pair. The design is [ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md);
 the last exchange added through it is [ADR-016](../adr/ADR-016-add-coinbase-exchange.md).
 
@@ -380,7 +411,8 @@ lake that replaced them needs nothing per venue — see the lake step in the che
 
 ## Post-Integration Checklist
 
-- [ ] **Nothing for the lake.** [`docker/lake/ingest.py`](../../docker/lake/ingest.py) builds its topic list as `K2_EXCHANGES × {raw, trades, book}`, so the new topics are picked up by the next 5-minute cycle. There is no Iceberg table to create, no DDL and no bookkeeping row to seed: `lake.raw.messages` and `lake.bronze.*` are unified across venues with `exchange` as a partition field ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)), and a topic absent from the previous commit's `k2.kafka-offsets` has no stored position, so the ingest starts it at the beginning of the topic ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). If `K2_EXCHANGES` has been set explicitly anywhere, add the exchange there too — it defaults to `binance,kraken,coinbase`
+- [ ] **The lake's raw archive needs nothing.** [`docker/lake/ingest.py`](../../docker/lake/ingest.py) builds its topic list as `K2_EXCHANGES × {raw, trades, book}`, so the new topics are archived into `lake.raw.messages` by the next 5-minute cycle; a topic absent from the previous commit's `k2.kafka-offsets` has no stored position, so the ingest starts it at the beginning ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). If `K2_EXCHANGES` has been set explicitly anywhere, add the exchange there too — it defaults to `binance,kraken,coinbase`
+- [ ] **The lake's decoded layers are per venue** ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)): a `bronze.{exchange}_<msgtype>` entry in `VENUE_TABLES` in [`docker/lake/bronze.py`](../../docker/lake/bronze.py), a `silver.trades_{exchange}` entry in `TRADES` in [`docker/lake/silver.py`](../../docker/lake/silver.py) (and the book replay in `books.py` if the venue publishes L2), plus the matching DDL in [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql). `gold.*` is unified and needs no change. Until those land, the venue is archived but not decoded — `raw.messages` keeps every frame, so the decode is a replay, not a loss
 - [ ] Update the instrument and exchange counts in `config/instruments.yaml`'s header and
       the root `README.md`
 - [ ] Update [docker-resources.md](./docker-resources.md), the `docker-compose.yml`
