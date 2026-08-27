@@ -76,6 +76,14 @@ pub struct Handled {
     /// Raw first, then anything derived from it, in emission order.
     pub records: Vec<OutRecord>,
     pub actions: Vec<Action>,
+    /// The frame is the venue replaying history on subscribe — Coinbase's
+    /// `market_trades` `snapshot` event carries the last hour or two of trades.
+    /// They are archived and emitted like any other (they arrived), but their
+    /// `exchange_ts` is hours old, so they must not be observed as receive
+    /// latency: measured 2026-08-27, 24,706 such trades put Coinbase's p99 at
+    /// the histogram's 30 s ceiling while its live p99 was 0.47 s
+    /// (docs/benchmarks/2026-08-27.md). Silver flags them as `venue_replay`.
+    pub history: bool,
 }
 
 /// One venue's frame decoder and book state machine.

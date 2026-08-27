@@ -424,10 +424,12 @@ async fn session(
                 }
 
                 for record in &handled.records {
-                    if let OutRecord::Trade(t) = record {
-                        // Venue clock to our clock. Negative values are real and
-                        // are kept: they mean the venue's clock is ahead of ours,
-                        // which is exactly what this histogram is for.
+                    // Venue clock to our clock. Negative values are real and
+                    // are kept: they mean the venue's clock is ahead of ours,
+                    // which is exactly what this histogram is for. A history
+                    // replay (`handled.history`) is not: its trades are hours
+                    // old by construction and would put the p99 at the ceiling.
+                    if let (OutRecord::Trade(t), false) = (record, handled.history) {
                         let lag = (t.recv_ts_ns as f64 / 1e9) - (t.exchange_ts as f64 / 1e6);
                         histogram!("k2_capture_exchange_to_recv_seconds", "exchange" => exchange)
                             .record(lag);
