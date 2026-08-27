@@ -82,6 +82,18 @@ exits non-zero and `LakeAuditFailed` fires ([runbook](../../runbooks/lake-audit-
 Independently, `make lake-verify` runs the parity checks on demand and `make parity-ohlcv`
 compares lake, ClickHouse and DuckDB candles at a pinned snapshot.
 
+## Practices
+
+| Practice | Where it is enforced |
+|---|---|
+| Position and data in one commit | `snapshot-property.k2.kafka-offsets` on the `raw.messages` append (`ingest.py`); `test_lake_offsets.py` |
+| Exactly-once by construction, tested | `make lake-verify`: a second run adds 0 rows; chaos `lake-ingest-kill.sh` (42 s, no duplicates) |
+| Loss needs a human | `--accept-data-loss` is a CLI flag only; scheduled runs fail until typed; each hole is an `offset_gap` audit row |
+| One writer | `lock.py` `flock`; ingest exits 2 if held, maintenance waits |
+| Layers read parents by snapshot id | `k2.src-snapshot-id` in `bronze.py`, `silver.py`, `gold.py`, `books.py` |
+| Nightly proof, alerted | `maintenance.py` audits → `audit.checks`; non-zero exit → `LakeAuditFailed` |
+| Pure logic unit-tested off Spark | `offsets.py`, `book.py`, `instruments.py` have no pyspark import; `tests/test_lake_*.py` |
+
 ## Trade-offs
 
 - **Batch, five minutes.** Freshness in the lake is bounded by the cron; ClickHouse covers

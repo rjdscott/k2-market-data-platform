@@ -71,6 +71,8 @@ Three invariants hold the shape together:
 
 ## Capture — `k2-capture`
 
+Deep dive: [components/capture.md](components/capture.md), [components/capture-venues.md](components/capture-venues.md).
+
 **Built.** One Rust crate ([`services/capture-rust/`](../../services/capture-rust/README.md)), one
 image, three containers selected by `--exchange`. Single-threaded tokio (`current_thread`) because the
 CPU quota is 0.25; librdkafka's producer queue (32 MiB) is the only buffer. Runs on
@@ -93,6 +95,8 @@ Internet feeds: exchange→receive latency includes transit and venue clock skew
 such ([benchmarks](../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-receive)).
 
 ## Streaming backbone — Redpanda
+
+Deep dive: [components/redpanda-contracts.md](components/redpanda-contracts.md).
 
 **Built.** Single broker, `--smp 1 --memory 1500M`, schema registry and console built in
 ([ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md)). Topics are created by the `redpanda-init`
@@ -126,6 +130,8 @@ bronze rebuild takes 520 s, books 2,367 s ([benchmarks](../benchmarks/2026-08-27
 
 ## Lake layers — Iceberg on Lakekeeper + MinIO
 
+Deep dive: [components/lake-layers.md](components/lake-layers.md).
+
 **Built.** DDL in [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql); catalog is Lakekeeper's
 REST API over MinIO ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)); Parquet + zstd.
 
@@ -148,6 +154,8 @@ larger than gold and lake-only. Disk on one host is the binding constraint: ≈ 
 
 ## Served tier — ClickHouse `gold`
 
+Deep dive: [components/clickhouse-gold.md](components/clickhouse-gold.md).
+
 **Built.** [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql)
 is the contract, tested in CI (`make test-clickhouse`); `20-gold-kafka.sql` adds `AvroConfluent`
 Kafka engines over the trades and book topics with `kafka_handle_error_mode='stream'`, so an undecodable
@@ -167,6 +175,8 @@ in two blocks is the regression guard. ClickHouse 24.3 cannot speak to a REST ca
 pull is by metadata path and needs uncompressed metadata on the source tables.
 
 ## Observability
+
+Deep dive: [components/observability.md](components/observability.md).
 
 Prometheus scrapes capture (`:8082`), ClickHouse (`:9363`), Redpanda (`:9644`), the lake exporter
 (`lake-metrics:8000`, PyIceberg over snapshot summaries) and itself. 28 rules in
