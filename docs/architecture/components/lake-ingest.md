@@ -18,7 +18,7 @@ flowchart TB
   BR[("bronze.&lt;venue&gt;_&lt;msg&gt;<br/>commit + k2.src-snapshot-id")]
   S3["stage 2c · silver<br/>type, flag against 1-day lookback"]
   SV[("silver.trades_* · book_*")]
-  S4["stage 2d/2e · gold + books<br/>first delivery per trade<br/>MERGE touched candles<br/>book replay → top-20 · bbo_1s"]
+  S4["stage 2d/2e · gold + books<br/>first delivery per trade · MERGE candles<br/>book replay → top-20 · bbo_1s"]
   GD[("gold.*")]
   RP --> S1 --> RAW --> S2 --> BR --> S3 --> SV --> S4 --> GD
 ```
