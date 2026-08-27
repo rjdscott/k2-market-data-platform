@@ -248,3 +248,5 @@ shipped. The plan is left as written; the reasons are here.
   in the Outcome sections of [ADR-014](../../adr/ADR-014-spark-based-iceberg-offload.md)
   and [ADR-017](../../adr/ADR-017-iceberg-maintenance-pipeline.md), and the budget in
   [ADR-010](../../adr/ADR-010-resource-budget.md)'s Phase D cutover addendum.
+
+_Phase D landed 2026-08-27 — commit e2a2651, tag v3-phase-d._
