@@ -111,4 +111,4 @@ chaos:  ## Inject each capture and lake failure, wait for its alert, measure rec
 	scripts/chaos/clickhouse-stop.sh
 	scripts/chaos/clickhouse-corrupt-record.sh
 	@echo "results: scripts/chaos/results/$$(date -u +%F).tsv"
-	@echo "copy the measured recovery times into docs/architecture/failure-modes.md by hand, with the date"
+	@echo "copy the measured recovery times into docs/architecture/16-failure-modes.md by hand, with the date"

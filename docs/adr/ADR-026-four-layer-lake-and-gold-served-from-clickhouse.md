@@ -37,7 +37,7 @@ for raw + unified bronze (8.1 GB after ~30 h, `du -sh /data` in `k2-minio`); mea
 volume 8.63 M trades and 1.48 M book snapshots (`make lake-verify`, 2026-08-27T01:05Z).
 Iceberg 1.8 has no materialized views — a "unified view" in the lake is a table and a job.
 This repository is a production-quality single-host *demonstration*; the cloud mapping is
-[scale-out-path.md](../architecture/scale-out-path.md), designed and not exercised.
+[scale-out-path.md](../architecture/17-scale-out-path.md), designed and not exercised.
 
 ---
 
@@ -59,8 +59,8 @@ designed here and built in the phase after E.
 | Silver | `silver.trades_<venue>`, `silver.book_<venue>` | typed (fixed-point, UTC), canonical symbol *added*, flags `checksum_ok`/`venue_replay`/`seq_gap`/`precision_loss`, every delivery kept | Iceberg, forever |
 | Gold | `gold.trades`, `gold.book_top20`, `gold.dim_*`, `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bbo_1s` | one schema, one row per logical trade, cross-venue | Iceberg **and** ClickHouse, forever |
 
-Column-level contracts: [schema-design.md § v3 layers](../architecture/schema-design.md);
-strategy and serving trade-offs: [data-strategy.md](../architecture/data-strategy.md).
+Column-level contracts: [schema-design.md § v3 layers](../architecture/13-schema-design.md);
+strategy and serving trade-offs: [data-strategy.md](../architecture/12-data-strategy.md).
 
 ---
 
@@ -137,8 +137,8 @@ Supersedes [ADR-024](ADR-024-unified-bronze-tables-in-the-lake.md) in full and
 
 ## References
 
-- [data-strategy.md](../architecture/data-strategy.md) — the serving trade-off table and retention.
-- [schema-design.md § v3 layers](../architecture/schema-design.md) — per-layer column contract.
+- [data-strategy.md](../architecture/12-data-strategy.md) — the serving trade-off table and retention.
+- [schema-design.md § v3 layers](../architecture/13-schema-design.md) — per-layer column contract.
 - [Plan 004 — Phase E](../plans/2026-08-26-v3-quant-research-platform/004-phase-e-hot-tier.md) — implements this.
 - [ADR-021](ADR-021-raw-first-archive-and-lineage.md) (raw first), [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md) (offsets in the snapshot), [ADR-024](ADR-024-unified-bronze-tables-in-the-lake.md) amendment (the measurements that undid the unified key).
 - `docs/runbooks/lake-audit-failed.md` §2, `scripts/chaos/results/2026-08-27.tsv`.

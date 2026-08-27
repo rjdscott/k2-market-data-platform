@@ -1,11 +1,15 @@
-# Lake ingest — Redpanda to Iceberg, exactly once
+# 08. Lake ingest: Redpanda to Iceberg, exactly once
+
+> **You will learn** how Redpanda reaches Iceberg exactly once, and how each layer is derived incrementally.
+> **Read this if** engineers touching `docker/lake/`, anyone debugging a lake audit.
+> **Before this** chapter 07.
 
 `docker/lake/ingest.py` is the only writer of new data into the lake. Every 5 minutes it
 reads Redpanda by explicit offset range, appends every record verbatim to `raw.messages`,
 then derives bronze, silver and gold from that archive. It is idempotent by construction:
 the position it consumed to is written into the same Iceberg commit as the rows, so a run
-killed at any instant either happened or did not. Design: [ADR-022](../../adr/ADR-022-exactly-once-via-snapshot-offsets.md);
-operations: [`docker/lake/README.md`](../../../docker/lake/README.md).
+killed at any instant either happened or did not. Design: [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md);
+operations: [`docker/lake/README.md`](../../docker/lake/README.md).
 
 ## Shape
 
@@ -27,10 +31,10 @@ One process, one Spark session, one file lock (`lock.py`): a second writer exits
 than interleaving appends; nightly maintenance takes the same lock blocking, so compaction
 never shares the 8 GiB container with an ingest.
 
-## Stage 1 — offsets in the snapshot
+## Stage 1: offsets in the snapshot
 
 1. **Where to start.** `offsets.latest_summary()` finds the newest `raw.messages` snapshot
-   whose summary carries `k2.job = ingest` — maintenance snapshots (compaction, expiry) have
+   whose summary carries `k2.job = ingest`, maintenance snapshots (compaction, expiry) have
    no `k2.job` and are skipped by that property, not by guessing at Iceberg's `operation`
    field. Its `k2.kafka-offsets` map holds Kafka *end* offsets (exclusive), so the next
    start is the same number copied, no ±1. A partition the map has never seen starts at
@@ -44,10 +48,10 @@ never shares the 8 GiB container with an ingest.
    `offset_gap` row in `audit.checks` before skipping it. There is deliberately no
    environment variable for this: the scheduled path can never absorb a loss silently.
 4. **The commit.** One `append` carrying `k2.job`, `k2.kafka-offsets` (merged over the
-   previous map — a committed offset is never dropped), `k2.kafka-backlog` and
+   previous map, a committed offset is never dropped), `k2.kafka-backlog` and
    `k2.max-kafka-ts`. Rows and position are the same atomic metadata swap in Lakekeeper.
 
-## Stages 2–2e — incremental by parent snapshot
+## Stages 2–2e: incremental by parent snapshot
 
 Each layer reads its parent with `start-snapshot-id` = the id it last committed
 (`k2.src-snapshot-id` on its own newest snapshot) and `end-snapshot-id` = the parent's
@@ -64,12 +68,12 @@ range).
 
 `rebuild.py --layer bronze|silver|gold|books` drops a layer and recomputes it from its parent
 over the whole archive; bronze 520 s, books 2,367 s
-([benchmarks](../../benchmarks/2026-08-27.md#lake)).
+([benchmarks](../benchmarks/2026-08-27.md#lake)).
 
 ## Proof
 
 `maintenance.py` runs nightly and writes every assertion to `audit.checks`; any failure
-exits non-zero and `LakeAuditFailed` fires ([runbook](../../runbooks/lake-audit-failed.md)).
+exits non-zero and `LakeAuditFailed` fires ([runbook](../runbooks/lake-audit-failed.md)).
 
 | Audit | Asserts |
 |---|---|
@@ -97,12 +101,12 @@ compares lake, ClickHouse and DuckDB candles at a pinned snapshot.
 ## Trade-offs
 
 - **Batch, five minutes.** Freshness in the lake is bounded by the cron; ClickHouse covers
-  the head from the topics. A streaming writer would need its own checkpoint store — the
+  the head from the topics. A streaming writer would need its own checkpoint store, the
   thing the snapshot-summary design removes.
 - **One writer, one container.** Ingest, rebuilds and maintenance share 2 CPU / 8 GiB in
   turn. Serial by lock is a capacity ceiling, not a correctness one.
 - **Retention is the deadline.** `raw.*` topics keep 48 h; an ingest outage longer than that
   is a recorded, acknowledged hole, never a silent one
-  ([failure-modes.md § lake](../failure-modes.md#lake-tier)).
+  ([failure-modes.md § lake](16-failure-modes.md#lake-tier)).
 - **Bronze keeps vendor schemas.** Cross-venue work waits for gold; in exchange nothing a
   venue sent is normalised away before it can be inspected.

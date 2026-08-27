@@ -104,7 +104,7 @@ for the rebuild path (spike S11). On a bind mount, only the container that has t
 can read anything.
 
 **It is also the shape that scales without a rewrite.** The Lakekeeper-on-ECS + RDS,
-data-on-S3 mapping in [`../architecture/scale-out-path.md`](../architecture/scale-out-path.md)
+data-on-S3 mapping in [`../architecture/17-scale-out-path.md`](../architecture/17-scale-out-path.md)
 is a change of five environment variables, because the catalog protocol and the file IO
 are the same on both sides. The Hadoop catalog has no such mapping — `s3a://` under a
 Hadoop catalog reintroduces the same non-atomic pointer, on a store with weaker
@@ -194,7 +194,7 @@ property stops being insurance and starts being load-bearing.
 - [ADR-018](ADR-018-v3-lake-first-rust-capture.md) — Appendix A: S7 (image tag), S8 (Lakekeeper ↔ Spark client), S9 (bootstrap body), S10 (DuckDB attach), S11 (ClickHouse `iceberg()`)
 - [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md) — the atomic commit this exists to provide
 - [ADR-025](ADR-025-clickhouse-derived-hot-tier.md) — the rebuild path that needs tables addressable from outside Spark
-- [`../architecture/scale-out-path.md`](../architecture/scale-out-path.md) — the ECS + RDS + S3 mapping, and the env vars that flip it
+- [`../architecture/17-scale-out-path.md`](../architecture/17-scale-out-path.md) — the ECS + RDS + S3 mapping, and the env vars that flip it
 - [`../runbooks/lake-recovery.md`](../runbooks/lake-recovery.md) — Lakekeeper down, MinIO down
 
 ---

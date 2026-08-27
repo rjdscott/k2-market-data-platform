@@ -15,7 +15,7 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 - Exact copy-pasteable commands, never paraphrases. Verify them before writing them down;
   a runbook nobody ran is fiction.
 - MTTR is measured by inducing the failure, not estimated.
-- No decision rationale here — link the ADR.
+- No decision rationale here, link the ADR.
 - A PR that invalidates a runbook's steps updates it and its index row in the same PR.
 - Every alert in `docker/prometheus/rules/` names a runbook in its annotations, and that
   path must resolve. The v2 rule files carry it as a `**Runbook:**` line inside the
@@ -35,9 +35,9 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 The six runbooks for the v2 ClickHouse→Iceberg offload were archived with the code they
 described; they are kept unmodified in
 [`legacy/v2-offload/runbooks/`](../../legacy/v2-offload/README.md) and describe a path that
-no longer exists — do not follow them against this stack.
+no longer exists, do not follow them against this stack.
 
-### v3 capture tier (Phase C — written ahead of the code; see the note below)
+### v3 capture tier (Phase C: written ahead of the code; see the note below)
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
@@ -53,22 +53,22 @@ no longer exists — do not follow them against this stack.
 > chaos run
 > (`make chaos`) induces each failure, waits for the alert, and fills in the
 > **Measured** rows and the **Last verified** stamp. Until then they are procedures,
-> not measurements — which is exactly the distinction this directory's conventions
+> not measurements, which is exactly the distinction this directory's conventions
 > exist to protect.
 
-### v3 lake tier (Phase D — written alongside the code; see the note below)
+### v3 lake tier (Phase D: written alongside the code; see the note below)
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
 | [clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md) | ClickHouse `gold` lost, or disagreeing with the lake: reload trades and candles through `iceberg()` (measured 4.4 s for 10.4 M trades), then the three-way OHLCV parity check | `ClickHouseDown`, `ClickHouseGoldFeedStale`, `ClickHouseKafkaMessagesFailed` |
 | [lake-recovery.md](./lake-recovery.md) | Rebuilding ClickHouse from the lake, Redpanda replay as a cold start, Lakekeeper down, MinIO down, an ingest killed mid-run, the nightly rewrite not running | `ClickHouseDown`, `LakeIngestFailed`, `LakeExporterDown`, `LakeExporterStalled`, `LakeScrapeErrors`, `LakeCompactionStale` |
-| [lake-disk-usage-high.md](./lake-disk-usage-high.md) | Host disk at 80 % or 90 %. The archive is kept forever, so this is a capacity decision with a lead time — **never** a TTL | `LakeDiskUsageHigh`, `LakeDiskUsageCritical` |
+| [lake-disk-usage-high.md](./lake-disk-usage-high.md) | Host disk at 80 % or 90 %. The archive is kept forever, so this is a capacity decision with a lead time, **never** a TTL | `LakeDiskUsageHigh`, `LakeDiskUsageCritical` |
 | [lake-ingest-lag.md](./lake-ingest-lag.md) | Ingest behind cadence, scheduler stopped, `failOnDataLoss`, small files accumulating | `LakeIngestLagHigh`, `LakeCommitAgeHigh`, `LakeIngestFailed` |
-| [lake-audit-failed.md](./lake-audit-failed.md) | The nightly audit failed: offset continuity, duplicate identifiers, or venue sequence gaps — six checks across four kinds, one of them informational | `LakeAuditFailed` |
+| [lake-audit-failed.md](./lake-audit-failed.md) | The nightly audit failed: offset continuity, duplicate identifiers, or venue sequence gaps, six checks across four kinds, one of them informational | `LakeAuditFailed` |
 
 > **Two of the lake failures are investigations, not repairs**, and the runbooks say so on
-> the row: a real offset gap and a venue sequence gap are unrecoverable — public feeds do
-> not replay — so the deliverable is a *recorded* window in `lake.audit.checks`, not a
+> the row: a real offset gap and a venue sequence gap are unrecoverable, public feeds do
+> not replay, so the deliverable is a *recorded* window in `lake.audit.checks`, not a
 > restart. The one rule that spans all four:
 > [`iceberg()` only, the `s3()` glob is banned](./lake-recovery.md#the-one-rule-on-this-page),
 > because the glob returns plausible wrong numbers after any compaction.
@@ -113,7 +113,7 @@ The v3 lake inverts that priority, and it is worth knowing before triaging one. 
 is the system of record ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)), so
 lake lag is a **countdown against Redpanda's 48 h raw retention** rather than an
 inconvenience, while the v3 hot tier is derived and rebuildable
-([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)) — losing it costs a restore,
+([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)), losing it costs a restore,
 not data. Once Phase E lands, "hot tier first" stops being the right instinct.
 
 ## Escalation
@@ -123,7 +123,7 @@ not data. Once Phase E lands, "hot tier first" stops being the right instinct.
 | Recovery not achieved within the runbook's MTTR + 30 min | Escalate to the platform owner |
 | Root cause is a code bug | Open an issue, link the runbook section that failed |
 | More than 3 occurrences in 24 h | Stop restarting; find the cause |
-| Data loss suspected | Escalate immediately — reconcile hot vs cold using [../operations/data-inspection.md](../operations/data-inspection.md#clickhouse-vs-lake-reconciliation) before taking any destructive action |
+| Data loss suspected | Escalate immediately, reconcile hot vs cold using [../operations/data-inspection.md](../operations/data-inspection.md#clickhouse-vs-lake-reconciliation) before taking any destructive action |
 
 ## Archived v2 Kotlin runbooks
 
@@ -135,7 +135,7 @@ follow it against this stack.
 
 ## v1 runbooks
 
-The 14 archived v1 runbooks — Kafka, Spark Streaming, Prefect OHLCV pipeline, blue-green
-deploys, checkpoint corruption — are kept for reference in
+The 14 archived v1 runbooks, Kafka, Spark Streaming, Prefect OHLCV pipeline, blue-green
+deploys, checkpoint corruption, are kept for reference in
 [`legacy/v1/docs/runbooks/`](../../legacy/v1/docs/runbooks/). They describe an
 architecture that no longer exists; do not follow them against the v2 stack.

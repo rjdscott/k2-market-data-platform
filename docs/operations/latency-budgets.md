@@ -20,7 +20,7 @@ Two read paths follow: **live** (`gold.ohlcv_live`, `gold.bbo_live`, computed on
 `FINAL`) sees a trade after segments 1–4a; **research** (lake `gold.*`, DuckDB) after 1–4b plus
 the layer stages of the same run.
 
-## Measured — segment 1, 2026-08-27
+## Measured: segment 1, 2026-08-27
 
 Per frame, from the capture histogram, 6.5 h window, three venues
 ([benchmarks/2026-08-27.md § Latency](../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-receive)
@@ -46,7 +46,7 @@ The v2 pipeline's 7-segment budget and its 2026-02-19 measurements are a dated r
 
 The capture tier's librdkafka producer is configured in
 [`sink.rs`](../../services/capture-rust/src/sink.rs); the settings are fixed rather than
-tunable — one buffer, sized against the container's memory limit:
+tunable, one buffer, sized against the container's memory limit:
 
 ```rust
 queue.buffering.max.kbytes = 32768        // 32 MB, the only buffer
@@ -59,7 +59,7 @@ message.timeout.ms         = 30000        // drop and count rather than pin fore
 
 `message.timeout.ms = 30000` is the one worth understanding: a record still unsent after
 30 s is failed and counted rather than held, because a record that stale is better lost
-visibly than pinned behind a dead broker. No `linger.ms` tuning — the venue's frame arrival
+visibly than pinned behind a dead broker. No `linger.ms` tuning, the venue's frame arrival
 rate, not batching, sets the cadence.
 
 ## What degrades under load
@@ -72,7 +72,7 @@ scale:
    drop us instead, losing more. `CaptureProduceStalled` fires first (deliveries flat
    while produces climb), then `k2_capture_produce_errors_total{reason="queue_full"}`
    ticks and `CaptureProduceErrors` fires. The one level where the failure mode is loss
-   rather than lag — [capture-produce-stalled.md](../runbooks/capture-produce-stalled.md).
+   rather than lag, [capture-produce-stalled.md](../runbooks/capture-produce-stalled.md).
    After the queue drains, a book stream resubscribes for a fresh snapshot.
 2. **ClickHouse ingest saturates** → the `gold.q_trades` / `gold.q_book` consumers lag.
    Data is safe in Redpanda for the retention window (7 d on `trades.*` / `book.*`) and in
@@ -85,12 +85,12 @@ scale:
    `LakeIngestLagHigh` fires. The served tier is unaffected; `raw.*` retention (48 h) is the
    deadline on catching up.
 
-Nothing here drops data silently — the one level that drops (1) counts every record it
+Nothing here drops data silently, the one level that drops (1) counts every record it
 loses; below capture the failure mode is lag, not loss
-([failure-modes.md](../architecture/failure-modes.md)).
+([failure-modes.md](../architecture/16-failure-modes.md)).
 
 ## Related
 
-- [observability.md](./observability.md) — the alerts that watch these thresholds
-- [data-inspection.md](./data-inspection.md) — the lag queries
-- [ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md) — Redpanda's p99 vs Kafka's on segment 3
+- [observability.md](./observability.md), the alerts that watch these thresholds
+- [data-inspection.md](./data-inspection.md), the lag queries
+- [ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md), Redpanda's p99 vs Kafka's on segment 3

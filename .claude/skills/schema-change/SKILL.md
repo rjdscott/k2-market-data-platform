@@ -17,7 +17,7 @@ so a mismatch surfaces as a null column hours later, not as a build error.
 | 2 | Lake DDL (`raw`/`bronze`/`audit`) | `docker/lake/ddl/lake.sql` |
 | 3 | Ingest decode | `docker/lake/ingest.py` — the stage-2 select list |
 | 4 | ClickHouse DDL (derived hot tier) | `docker/clickhouse/ddl/01-k2-schema.sql` |
-| 5 | Docs | `docs/architecture/schema-design.md`, `docs/architecture/partitioning-strategy.md` |
+| 5 | Docs | `docs/architecture/13-schema-design.md`, `docs/architecture/14-partitioning-strategy.md` |
 
 ## Checklist
 
@@ -57,8 +57,8 @@ Work top to bottom; do not skip a row because "nothing reads it yet".
    Materialized views do **not** pick up new columns — an MV that must carry
    the field is dropped and recreated, and that gap loses rows unless you
    backfill. Say so in the PR.
-5. **Docs** — `schema-design.md` (the field table) and, if partitioning or
-   sort order moved, `partitioning-strategy.md`.
+5. **Docs** — `13-schema-design.md` (the field table) and, if partitioning or
+   sort order moved, `14-partitioning-strategy.md`.
 6. **Tests** — a test that would fail if the field were dropped:
    `make test-rust` for capture changes, `make test-python` for the contract
    and wire-format tests. (Not `make test-kotlin` — that tier retired in ADR-019.)

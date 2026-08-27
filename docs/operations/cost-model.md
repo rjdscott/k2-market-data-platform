@@ -15,13 +15,13 @@ one-shot init containers overlap at bootstrap (see
 [ADR-010](../adr/ADR-010-resource-budget.md)). It runs on a single developer workstation,
 so the marginal cost is electricity.
 
-That is the headline result, not an aside. v1 needed 35–40 CPU and 45–50 GB — more than
-2× a 16-core budget — because five always-on Spark Structured Streaming jobs consumed
+That is the headline result, not an aside. v1 needed 35–40 CPU and 45–50 GB, more than
+2× a 16-core budget, because five always-on Spark Structured Streaming jobs consumed
 14 CPU / 20 GB before a single trade was processed. Removing them
 ([ADR-004](../adr/ADR-004-eliminate-spark-streaming.md)) is what moved the platform
 from "needs a cluster" to "runs on one box".
 
-## Cloud equivalent — same footprint
+## Cloud equivalent: same footprint
 
 Lift-and-shift onto one VM, keeping the compose file as-is:
 
@@ -30,7 +30,7 @@ Lift-and-shift onto one VM, keeping the compose file as-is:
 | Compute | 16 vCPU / 32 GB general-purpose instance, on demand | $500–600 |
 | Same, 1-year reserved | | $300–380 |
 | Block storage | 500 GB gp3 | ~$40 |
-| Data transfer in | exchange WebSocket feeds — ingress is free on the major clouds | $0 |
+| Data transfer in | exchange WebSocket feeds, ingress is free on the major clouds | $0 |
 | **Total, on demand** | | **≈$550–650** |
 | **Total, reserved** | | **≈$350–420** |
 
@@ -39,7 +39,7 @@ unflattering because the platform is nowhere near saturated: it was sized for a 
 envelope and measured at ~3.2 CPU under real load. The same host would absorb an order of
 magnitude more throughput before the bill changed.
 
-## Cloud equivalent — managed services
+## Cloud equivalent: managed services
 
 Replacing each component with its managed counterpart, for comparison:
 
@@ -54,7 +54,7 @@ Replacing each component with its managed counterpart, for comparison:
 | **Total** | | | **≈$500–1,000** |
 
 Managed costs **more** than the single VM at this scale and only starts winning once
-operational effort — patching, scaling, on-call — exceeds the delta. That crossover is
+operational effort, patching, scaling, on-call, exceeds the delta. That crossover is
 about team size, not throughput.
 
 ## Where cost would actually go
@@ -66,12 +66,12 @@ Scaling levers, in the order they would bite:
    tier ~12:1, so a year of trades is tens of gigabytes, not terabytes. Storage is the
    cheapest axis and deliberately so.
 2. **More exchanges.** Each one is a `k2-capture` container at 0.25 CPU / 256 MB (512 MB
-   for a full-depth venue like Coinbase) plus three more Redpanda topics — near-zero
+   for a full-depth venue like Coinbase) plus three more Redpanda topics, near-zero
    marginal cost. See [adding-new-exchanges.md](./adding-new-exchanges.md).
 3. **Query concurrency.** ClickHouse is the first thing to need a bigger box. It already
    holds 27% of CPU and 37% of RAM.
 4. **Throughput.** Last, not first. The capture tier's saturation point has not been
-   measured — the v2 handlers were never the bottleneck at ~150 msg/s
+   measured, the v2 handlers were never the bottleneck at ~150 msg/s
    ([2026-02-19 baseline](../benchmarks/2026-02-19-v2-baseline.md)) and the Rust tier
    that replaced them is smaller, but the headroom multiple is unmeasured until a load
    test runs.
@@ -86,20 +86,20 @@ Scaling levers, in the order they would bite:
 | Always-on Spark | 14 CPU / 20 GB | 0 (batch only) | 100% |
 
 Almost all of that saving is v1 → v2 and belongs to ADR-004; the v3 changes since are
-close to a wash — Lakekeeper added 0.25 CPU / 256 MB and the lake tier's exporter
+close to a wash, Lakekeeper added 0.25 CPU / 256 MB and the lake tier's exporter
 0.1 CPU / 128 MB, swapping the three Kotlin feed handlers for three Rust capture
 containers gave back 0.75 CPU / 0.5 GiB, and deleting the v2 offload took its own exporter
 (0.1 CPU / 128 MB) with it
 ([ADR-010](../adr/ADR-010-resource-budget.md) Outcome addenda).
 
 On the reserved-instance estimate above, roughly 60% less compute is roughly 60% less
-compute bill — call it **$500–700/month avoided at this scale**, and proportionally more
+compute bill, call it **$500–700/month avoided at this scale**, and proportionally more
 at any larger one. The saving comes from deleting a distributed compute framework that a
 stateless per-record transform never needed, which is a design decision rather than a
 procurement one.
 
 ## Related
 
-- [docker-resources.md](./docker-resources.md) — the footprint these numbers price
-- [ADR-010 — resource budget](../adr/ADR-010-resource-budget.md) — the 16-core constraint that forced the design
-- [ADR-004 — eliminate Spark Streaming](../adr/ADR-004-eliminate-spark-streaming.md) — where the saving came from
+- [docker-resources.md](./docker-resources.md), the footprint these numbers price
+- [ADR-010, resource budget](../adr/ADR-010-resource-budget.md), the 16-core constraint that forced the design
+- [ADR-004, eliminate Spark Streaming](../adr/ADR-004-eliminate-spark-streaming.md), where the saving came from

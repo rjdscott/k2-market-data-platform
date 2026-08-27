@@ -75,14 +75,14 @@ Principles: (1) capture everything verbatim, timestamp before parse; (2) lake is
 Five standards the platform is built to demonstrate. Each names its artefacts and
 the phase they land in; an artefact that does not exist means that phase is not done.
 
-- **Depth with explicit trade-offs, not defaults.** `docs/architecture/partitioning-strategy.md`
+- **Depth with explicit trade-offs, not defaults.** `docs/architecture/14-partitioning-strategy.md`
   rewritten across all three tiers — Kafka key + partition count, Iceberg partition spec +
   sort order, ClickHouse `ORDER BY`/`PARTITION BY` — every row carrying the rejected
   alternative and why it lost (Kafka + Iceberg rows in Phase D, ClickHouse rows in Phase E).
-  `docs/architecture/failure-modes.md` as an FMEA table: component × failure × detection
+  `docs/architecture/16-failure-modes.md` as an FMEA table: component × failure × detection
   signal × blast radius × recovery step (naming its runbook) × the test or `make chaos`
   script that proves it (capture/lake rows Phase D, hot-tier rows Phase E).
-  `docs/architecture/capacity-model.md`: per-core msg/s, bytes/day per table, headroom
+  `docs/architecture/15-capacity-model.md`: per-core msg/s, bytes/day per table, headroom
   arithmetic against 16 CPU / 40 GB (predicted column Phase C, measured column Phase F).
   Resource isolation is `cpuset` pinning (`002-phase-c-rust-capture.md` Scope) *plus* one
   measured noisy-neighbour experiment — Spark compaction on its cpuset while capture
@@ -123,10 +123,10 @@ Each lands in the same PR as the code it describes; none is a status log.
 
 | Document | Surface | What it settles | Phase |
 |---|---|---|---|
-| `docs/architecture/capacity-model.md` | architecture | msg/s per core, bytes/day per table, headroom against 16 CPU / 40 GB — predicted before measurement, then scored | C predicts · F measures |
-| `docs/architecture/partitioning-strategy.md` (rewrite) | architecture | Kafka key + partition count, Iceberg spec + sort order, ClickHouse `ORDER BY`/`PARTITION BY`, each with its rejected alternative | D (Kafka, Iceberg) · E (ClickHouse) |
-| `docs/architecture/failure-modes.md` | architecture | FMEA: component × failure × detection signal × blast radius × recovery × the proof script | D (capture, lake) · E (hot tier) |
-| `docs/architecture/scale-out-path.md` | architecture | per-tier AWS mapping to TB/PB (S3 + Glacier lifecycle, MSK/Redpanda Cloud, ClickHouse EC2/Cloud, EMR Serverless, Fargate capture, Lakekeeper on ECS + RDS); what changes vs what does not; partition/file-size/compaction justified at PB — designed, not exercised (Q9) | D |
+| `docs/architecture/15-capacity-model.md` | architecture | msg/s per core, bytes/day per table, headroom against 16 CPU / 40 GB — predicted before measurement, then scored | C predicts · F measures |
+| `docs/architecture/14-partitioning-strategy.md` (rewrite) | architecture | Kafka key + partition count, Iceberg spec + sort order, ClickHouse `ORDER BY`/`PARTITION BY`, each with its rejected alternative | D (Kafka, Iceberg) · E (ClickHouse) |
+| `docs/architecture/16-failure-modes.md` | architecture | FMEA: component × failure × detection signal × blast radius × recovery × the proof script | D (capture, lake) · E (hot tier) |
+| `docs/architecture/17-scale-out-path.md` | architecture | per-tier AWS mapping to TB/PB (S3 + Glacier lifecycle, MSK/Redpanda Cloud, ClickHouse EC2/Cloud, EMR Serverless, Fargate capture, Lakekeeper on ECS + RDS); what changes vs what does not; partition/file-size/compaction justified at PB — designed, not exercised (Q9) | D |
 | `docs/operations/slos.md` | operations | three SLOs, their error budgets, and what spending a budget forces | F |
 | `docs/audits/<date>-ohlcv-correctness.md` | audits | blameless post-mortem of the v2 OHLCV `SummingMergeTree` bug — what was claimed, what ran, why no test caught it | F |
 | `docs/research/<date>-replay-fidelity-limits.md` | research | what top-20 @1 Hz over public WS can and cannot honestly simulate | G |
@@ -153,7 +153,7 @@ Each lands in the same PR as the code it describes; none is a status log.
 - Lake: snapshot summary offsets gapless; raw count == bronze count; double-run adds 0; audits pass; DuckDB notebook 01–04 run clean.
 - Hot: CI schema tests; `hot.ohlcv` matches DuckDB over Iceberg; FINAL vs non-FINAL counts; rebuild `hot.*` from lake timed.
 - Numbers table complete and traceable to commands; grep sweep (no "Spring Boot", no `docker-compose.v2`, no TODO in published docs).
-- Standards: `make chaos` runs every injected fault and each one's expected alert fires, with the recovery time recorded in `docs/architecture/failure-modes.md`; `capacity-model.md` shows predicted, measured and error % for every row; `k2-replay` of the golden fixtures reproduces the committed output hash; the three-way OHLCV parity job is green in CI at tolerance zero.
+- Standards: `make chaos` runs every injected fault and each one's expected alert fires, with the recovery time recorded in `docs/architecture/16-failure-modes.md`; `15-capacity-model.md` shows predicted, measured and error % for every row; `k2-replay` of the golden fixtures reproduces the committed output hash; the three-way OHLCV parity job is green in CI at tolerance zero.
 
 ## Risks / verify-first
 

@@ -2,7 +2,7 @@
 # shellcheck source-path=SCRIPTDIR
 # Stop the object store under a running ingest.
 #
-# Proves one row in docs/architecture/failure-modes.md:
+# Proves one row in docs/architecture/16-failure-modes.md:
 #   MinIO / down
 #
 # Different from the Lakekeeper row and worth its own script. With the catalog

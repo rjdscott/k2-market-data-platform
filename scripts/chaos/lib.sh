@@ -244,7 +244,7 @@ resume_lake_ingest() {
 # report <script> <expected-alert> <t_fire_s> <t_recover_s>
 # One line per run, appended to scripts/chaos/results/<date>.tsv. These are
 # evidence, so they are committed rather than gitignored; the FMEA row in
-# docs/architecture/failure-modes.md is updated BY HAND from this file, with the
+# docs/architecture/16-failure-modes.md is updated BY HAND from this file, with the
 # date, so that a published recovery number always names the run it came from.
 #
 # The two time cells are not always numbers, and that is deliberate: `none` (the

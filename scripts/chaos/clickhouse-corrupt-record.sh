@@ -5,7 +5,7 @@
 # its bytes, the partition keeps moving, and ClickHouseKafkaMessagesFailed says
 # it happened.
 #
-# Proves one row in docs/architecture/failure-modes.md:
+# Proves one row in docs/architecture/16-failure-modes.md:
 #   ClickHouse (served tier) / undecodable record on a feed topic
 #
 # This is the failure the first live feed hit twice on 2026-08-27 (docker/

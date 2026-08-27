@@ -4,7 +4,7 @@
 # and measure how long until the served tier is answering and its Kafka feeds
 # are re-assigned.
 #
-# Proves one row in docs/architecture/failure-modes.md:
+# Proves one row in docs/architecture/16-failure-modes.md:
 #   ClickHouse (served tier) / container down
 #
 # What is at stake is nothing: gold is derived. The feeds resume from the

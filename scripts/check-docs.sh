@@ -113,7 +113,7 @@ fi
 rm -f "$out"
 
 # (e) capacity-model gate: predicted-only until a benchmark file covers capacity
-cm=docs/architecture/capacity-model.md
+cm=docs/architecture/15-capacity-model.md
 if [ ! -f "$cm" ]; then
   bad "(e) $cm not found"
 elif [ "$(grep -c "predicted" "$cm")" -eq 0 ]; then

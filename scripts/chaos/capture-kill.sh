@@ -3,7 +3,7 @@
 # SIGKILL one capture container.
 #
 # Proves the row `capture (any venue) / SIGKILL` in
-# docs/architecture/failure-modes.md.
+# docs/architecture/16-failure-modes.md.
 #
 # Two behaviours in one fault, and the runbook predicts both:
 #   --hold 0    SIGKILL only. `restart: unless-stopped` brings it back inside one

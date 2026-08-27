@@ -2,7 +2,7 @@
 # shellcheck source-path=SCRIPTDIR
 # Stop the Iceberg catalog under a running ingest.
 #
-# Proves one row in docs/architecture/failure-modes.md:
+# Proves one row in docs/architecture/16-failure-modes.md:
 #   Lakekeeper / down mid-commit
 #
 # What is actually being checked is that the failure is CLEAN. Iceberg's commit

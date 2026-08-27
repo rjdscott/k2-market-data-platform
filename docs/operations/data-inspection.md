@@ -31,7 +31,7 @@ Research reads go through the read-only `quant` user: `--user quant --password "
 | BBO, from the lake | `gold.bbo_1s` | `second` | `exchange`, `canonical_symbol`, `bid`/`ask` (aliases), `mid`, `spread_bps`, `imbalance`, `microprice` |
 | Views, on read | `gold.ohlcv_live(bucket = <seconds>)`, `gold.bbo_live` | `window_start` / `second` | same columns as the tables above, computed over `gold.trades FINAL` / `gold.book_top20 FINAL` |
 | Lake archive | `lake.raw.messages` | `kafka_ts` | `topic`, `partition`, `offset`, `ingest_ts`, `key`, `schema_id`, `payload`, `headers` |
-| Lake bronze | `lake.bronze.<venue>_<msgtype>` (7 tables) | per venue | the venue's own field names and JSON types, one row per frame — [`docker/lake/README.md`](../../docker/lake/README.md#bronze-per-venue-phase-e-adr-026) |
+| Lake bronze | `lake.bronze.<venue>_<msgtype>` (7 tables) | per venue | the venue's own field names and JSON types, one row per frame, [`docker/lake/README.md`](../../docker/lake/README.md#bronze-per-venue-phase-e-adr-026) |
 | Lake silver | `lake.silver.trades_<venue>`, `lake.silver.book_<venue>` | `exchange_ts` / `snapshot_ts` | typed, one row per trade / per frame, canonical symbol, replay / gap / checksum flags |
 | Lake gold | `lake.gold.trades`, `lake.gold.dim_*`, `lake.gold.ohlcv_*`, `lake.gold.book_top20`, `lake.gold.bbo_1s` | `exchange_ts` / `window_start` / `second` | the canonical layer ClickHouse `gold` is loaded from |
 | Lake audit | `lake.audit.checks` | `run_ts` | `job`, `check_name`, `scope`, `passed`, `observed`, `detail` |
@@ -46,12 +46,12 @@ lake's `DECIMAL(28,10)` columns are the same value, divided by 1e8 once, at writ
 ```bash
 docker exec k2-redpanda rpk topic list
 
-# LIVE — the v3 topics. Values are Confluent-framed Avro, so rpk prints binary;
+# LIVE: the v3 topics. Values are Confluent-framed Avro, so rpk prints binary;
 # the key is the useful thing here (canonical symbol on trades/book, wire symbol on raw).
 docker exec k2-redpanda rpk topic describe market.crypto.v3.trades.binance -p
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance -n 3 -f '%p %o %k\n'
 
-# To read a v3 VALUE, use Redpanda Console (http://localhost:8080) — it resolves the
+# To read a v3 VALUE, use Redpanda Console (http://localhost:8080): it resolves the
 # schema id against the registry. rpk will not. Or read the schema itself:
 docker exec k2-redpanda curl -s localhost:8081/subjects | jq
 docker exec k2-redpanda curl -s \
@@ -64,7 +64,7 @@ docker exec k2-redpanda rpk group list
 docker exec k2-redpanda rpk group describe k2-gold-trades
 ```
 
-## Trades — `gold.trades`
+## Trades: `gold.trades`
 
 ```bash
 # Volume and freshness, per exchange (FINAL: one row per logical trade)
@@ -100,17 +100,17 @@ $CH -q "SELECT exchange,
 # Deliveries vs trades: the gap is venue replays and topic overlap, collapsed by FINAL
 $CH -q "SELECT count(), (SELECT count() FROM gold.trades FINAL) FROM gold.trades"
 
-# Kafka Engine health — a non-empty exceptions.text is the thing to look for; a record the
+# Kafka Engine health: a non-empty exceptions.text is the thing to look for; a record the
 # decoder rejected is in gold.feed_errors with its bytes
 $CH -q "SELECT table, consumer_id, num_messages_read, num_commits, last_poll_time, exceptions.text
         FROM system.kafka_consumers WHERE database = 'gold' FORMAT Vertical"
 $CH -q "SELECT seen_at, topic, partition, offset, error FROM gold.feed_errors ORDER BY seen_at DESC LIMIT 10"
 ```
 
-## Candles and BBO — `gold.ohlcv_*`, `gold.ohlcv_live`, `gold.bbo_*`
+## Candles and BBO: `gold.ohlcv_*`, `gold.ohlcv_live`, `gold.bbo_*`
 
 ```bash
-# Latest 1m candles, computed on read over the deduplicated trades — any bucket in seconds
+# Latest 1m candles, computed on read over the deduplicated trades: any bucket in seconds
 $CH -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close, volume, trade_count
         FROM gold.ohlcv_live(bucket = 60)
         WHERE canonical_symbol = 'BTC/USDT' AND window_start > now() - INTERVAL 1 HOUR
@@ -133,21 +133,21 @@ $CH -q "SELECT exchange, canonical_symbol, second, bid, ask, spread_bps, imbalan
 ```
 
 `gold.ohlcv_live` is a view over `gold.trades FINAL`, so a minute that arrived in two insert
-blocks is still one correct candle — the v2 `SummingMergeTree` candles could not promise
+blocks is still one correct candle, the v2 `SummingMergeTree` candles could not promise
 that, which is why the v3 tables are loaded from the lake and never aggregated here
 ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)).
 
-## Lake tier — Iceberg via Spark
+## Lake tier: Iceberg via Spark
 
 The lake lives on a **Lakekeeper REST catalog** over MinIO
-([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)) — one catalog, named `lake`, with the
+([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)), one catalog, named `lake`, with the
 `raw`, `bronze`, `silver`, `gold` and `audit` namespaces. Its configuration lives in exactly one place,
 [`docker/lake/spark_conf.py`](../../docker/lake/spark_conf.py); every v3 Spark job gets its
 session from `lake_session()`, so query it the same way rather than reassembling a dozen
 `--conf` flags:
 
 ```bash
-# Round-trip the catalog first — create, append, read, drop. Proves the session
+# Round-trip the catalog first: create, append, read, drop. Proves the session
 # and the snapshot-property mechanism the offsets ride on.
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/spark_conf.py --smoke
 
@@ -176,7 +176,7 @@ SELECT snapshot_id, committed_at, operation,
        summary['k2.kafka-offsets'] AS offsets
 FROM lake.raw.messages.snapshots ORDER BY committed_at DESC LIMIT 10;
 
--- File layout — nightly maintenance compacts raw.messages toward 256 MB,
+-- File layout, nightly maintenance compacts raw.messages toward 256 MB,
 -- bronze.* toward 128 MB
 SELECT partition, count(*) AS files,
        round(avg(file_size_in_bytes) / 1048576, 1) AS avg_mb
@@ -188,7 +188,7 @@ FROM lake.audit.checks ORDER BY run_ts DESC LIMIT 20;
 ```
 
 **Reading the lake from ClickHouse: `iceberg()` only.** The
-`s3('…/data/*.parquet')` glob is banned — it reads the object listing rather than the
+`s3('…/data/*.parquet')` glob is banned, it reads the object listing rather than the
 current Iceberg metadata and returns files no live snapshot references, which fails as a
 plausible number rather than as an error. See
 [lake-recovery.md](../runbooks/lake-recovery.md).
@@ -197,7 +197,7 @@ plausible number rather than as an error. See
 
 ClickHouse `gold` is derived from the same topics the lake archives, and the lake's
 `gold.trades` is what a reload puts back into it, so on an overlapping window the two must
-agree **exactly** — the lake wins on conflict ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)).
+agree **exactly**, the lake wins on conflict ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)).
 They did on 2026-08-27: 1,978,901 / 273,060 / 33,246 (binance / coinbase / kraken) on
 00:00–05:00Z, both sides ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md#measured-2026-08-27-first-live-apply-commit-of-pr-98)).
 
@@ -214,7 +214,7 @@ WHERE exchange_ts >= TIMESTAMP '2026-08-27 00:00:00' AND exchange_ts < TIMESTAMP
 GROUP BY exchange;
 ```
 
-A difference means the ClickHouse feed skipped or double-counted something — check
+A difference means the ClickHouse feed skipped or double-counted something, check
 `gold.feed_errors` first, then reload the window from the lake
 ([clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md)).
 
@@ -243,6 +243,6 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.binance --num 100
 
 ## Related
 
-- [quick-reference.md](./quick-reference.md) — the short version of this page
-- [observability.md](./observability.md) — metrics and alerts rather than row-level data
-- [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md) — when inspection shows a gap
+- [quick-reference.md](./quick-reference.md), the short version of this page
+- [observability.md](./observability.md), metrics and alerts rather than row-level data
+- [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md), when inspection shows a gap

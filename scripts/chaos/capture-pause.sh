@@ -2,7 +2,7 @@
 # shellcheck source-path=SCRIPTDIR
 # Freeze one capture container (SIGSTOP, via `docker pause`).
 #
-# Proves three rows in docs/architecture/failure-modes.md:
+# Proves three rows in docs/architecture/16-failure-modes.md:
 #   capture / SIGSTOP                      — the freeze itself
 #   capture · coinbase / sequence_num gap  — --exchange coinbase
 #   capture · binance / lastUpdateId regression — --exchange binance

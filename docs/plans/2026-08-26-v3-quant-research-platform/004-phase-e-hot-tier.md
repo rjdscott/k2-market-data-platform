@@ -1,7 +1,7 @@
 # Phase E — Four lake layers and gold served from ClickHouse (~2 weeks)
 
 **Depends on:** Phase D
-**Decision it implements:** [ADR-026](../../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md); strategy in [data-strategy.md](../../architecture/data-strategy.md), column contracts in [schema-design.md § v3 layers](../../architecture/schema-design.md).
+**Decision it implements:** [ADR-026](../../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md); strategy in [data-strategy.md](../../architecture/12-data-strategy.md), column contracts in [schema-design.md § v3 layers](../../architecture/13-schema-design.md).
 **Delivers:** the lake relaid as raw → bronze (per venue, vendor schema) → silver (per venue, typed) → gold (canonical + products), all rebuilt from `raw.messages`; ClickHouse rebuilt as a `gold` database with no TTL, loaded by pull from lake gold and by the Avro topics for freshness; `k2` and the `.raw` JSON topics dropped.
 **Exit:** every layer rebuilt from raw with per-layer audits green over the whole archive; `gold.trades` one-row-per-trade audit green; ClickHouse `gold.ohlcv_1m` == lake `gold.ohlcv_1m` == DuckDB-over-silver for a pinned snapshot at tolerance zero; full ClickHouse rebuild from lake gold timed; dashboards on `gold`; `k2` dropped.
 
@@ -33,11 +33,11 @@
 
 **Cutover and deletion**
 
-- Dashboards repointed to `gold`; `k2` database, its queue tables and MVs dropped; `.raw` JSON topics deleted (pre-authorised, requirements clarification Q5). `partitioning-strategy.md` gets its ClickHouse rows; `failure-modes.md` gets the ClickHouse rows (container down, Kafka-engine consumer stalled, dedup backlog, volume lost → timed rebuild, Avro schema change mid-stream) with `make chaos` targets and measured recovery times; `docker-resources.md` and ADR-010 Outcome updated if any limit moves.
+- Dashboards repointed to `gold`; `k2` database, its queue tables and MVs dropped; `.raw` JSON topics deleted (pre-authorised, requirements clarification Q5). `14-partitioning-strategy.md` gets its ClickHouse rows; `16-failure-modes.md` gets the ClickHouse rows (container down, Kafka-engine consumer stalled, dedup backlog, volume lost → timed rebuild, Avro schema change mid-stream) with `make chaos` targets and measured recovery times; `docker-resources.md` and ADR-010 Outcome updated if any limit moves.
 
 **Parity, three-way now.** `gold.ohlcv_1m` in ClickHouse, `gold.ohlcv_1m` in the lake, and DuckDB computing OHLCV from `silver.trades_*` (dedup applied in the query) — for a pinned lake snapshot id, never `latest` — must agree at tolerance zero. The query triple and the snapshot id are committed as the seed of the Phase G CI parity job.
 
-**Disk precondition — measured 2026-08-27, decided.** 79 % of 961 GB used on 2026-08-26 and ~10 GB/day predicted for four layers plus ClickHouse gold. The host has one NVMe and no second volume; Docker Desktop's `Docker.raw` holds 506 GB allocated for 66 GB used and cannot shrink (no `discard=unmap`), so ≈ 630 GB is reusable — **≈ 60 days of runway**, not six months ([capacity-model.md § 6](../../architecture/capacity-model.md), 2026-08-27 note). Maintainer decision: Phase E lands on the root disk; this host is a demonstration and the lever is stopping capture (captures stopped at the 24 h mark, 2026-08-27T22:45Z). The capacity model gets one predicted row per layer before the first rebuild and the measured column after. Revisit trigger: `df /` at 80 % or guest `/var/lib/docker` at 500 GB used.
+**Disk precondition — measured 2026-08-27, decided.** 79 % of 961 GB used on 2026-08-26 and ~10 GB/day predicted for four layers plus ClickHouse gold. The host has one NVMe and no second volume; Docker Desktop's `Docker.raw` holds 506 GB allocated for 66 GB used and cannot shrink (no `discard=unmap`), so ≈ 630 GB is reusable — **≈ 60 days of runway**, not six months ([capacity-model.md § 6](../../architecture/15-capacity-model.md), 2026-08-27 note). Maintainer decision: Phase E lands on the root disk; this host is a demonstration and the lever is stopping capture (captures stopped at the 24 h mark, 2026-08-27T22:45Z). The capacity model gets one predicted row per layer before the first rebuild and the measured column after. Revisit trigger: `df /` at 80 % or guest `/var/lib/docker` at 500 GB used.
 
 ## Verification
 
@@ -45,5 +45,5 @@
 - Rebuild: `make lake-rebuild` for each layer over the whole archive, timed; parity audits green; `gold.trades` count == distinct `(exchange, canonical_symbol, trade_id)`.
 - Three-way OHLCV parity at a pinned snapshot: `grep -rn "snapshot-id" tests/parity/` returns a literal, `grep -rn "latest" tests/parity/` returns nothing.
 - ClickHouse full rebuild from lake gold timed and written into `clickhouse-rebuild-from-lake.md` with the command; `FINAL` vs non-`FINAL` counts equal on `gold.trades`.
-- `partitioning-strategy.md` has no v2 table names (`grep -nE "silver_trades|bronze_trades_|cold\." …` empty); every new `failure-modes.md` row has a measured recovery time; `make chaos` includes the ClickHouse targets.
-- Capacity model: one predicted row per layer committed before the first rebuild (`git log --diff-filter=M -1 -- docs/architecture/capacity-model.md` predates the rebuild commit).
+- `14-partitioning-strategy.md` has no v2 table names (`grep -nE "silver_trades|bronze_trades_|cold\." …` empty); every new `16-failure-modes.md` row has a measured recovery time; `make chaos` includes the ClickHouse targets.
+- Capacity model: one predicted row per layer committed before the first rebuild (`git log --diff-filter=M -1 -- docs/architecture/15-capacity-model.md` predates the rebuild commit).

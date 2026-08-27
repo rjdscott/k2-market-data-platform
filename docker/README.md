@@ -22,7 +22,7 @@ docker/
 │   ├── offsets.py        # Consumed offsets in the Iceberg snapshot summary (ADR-022)
 │   ├── wire.py           # Confluent framing + schema-registry lookup
 │   ├── metrics.py        # Prometheus exporter (the lake-metrics service)
-│   ├── spark_conf.py     # lake_session() — the only `lake` catalog config; --smoke self-check
+│   ├── spark_conf.py     # lake_session(), the only `lake` catalog config; --smoke self-check
 │   └── flows/            # Prefect flow + deployment definitions (deploy_lake.py)
 ├── redpanda/             # Topic + Avro subject bootstrap (init.sh, run by redpanda-init)
 ├── prefect/              # Prefect worker image (Dockerfile) + deployment storage
@@ -43,7 +43,7 @@ docker/
 |---------|------|--------------|
 | `redpanda`, `redpanda-console` | long-running | Streaming backbone + web UI |
 | `clickhouse` | long-running | Warm tier: Kafka Engine ingest, bronze/silver/gold MVs |
-| `minio` | long-running | S3 object storage — holds the v3 `k2-lake` bucket |
+| `minio` | long-running | S3 object storage, holds the v3 `k2-lake` bucket |
 | `lakekeeper` | long-running | **v3** Iceberg REST catalog ([ADR-018](../docs/adr/ADR-018-v3-lake-first-rust-capture.md)); `127.0.0.1:18181` |
 | `spark-iceberg` | long-running | Batch engine for the v3 lake ingest and maintenance |
 | `prefect-db`, `prefect-server`, `prefect-worker` | long-running | Orchestration + Prefect and Lakekeeper metadata |
@@ -56,7 +56,7 @@ docker/
 
 ## The v3 lake
 
-`lake-init` is idempotent — a re-run reports 400 `CatalogAlreadyBootstrapped` and 400
+`lake-init` is idempotent, a re-run reports 400 `CatalogAlreadyBootstrapped` and 400
 `CreateWarehouseStorageProfileOverlap`, both tolerated, and exits 0.
 
 ```bash
@@ -79,13 +79,13 @@ docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d postgres -c 'CREATE DATA
 
 ## Lake pipeline
 
-The lake jobs do not run on a systemd timer or cron — they are scheduled as Prefect
+The lake jobs do not run on a systemd timer or cron, they are scheduled as Prefect
 deployments on the `lake` work pool, dispatched by the `k2-prefect-worker` container into
 `k2-spark-iceberg`:
 
-- `lake-ingest/lake-ingest-5min` — runs `lake/ingest.py`, cron `1-59/5 * * * *`,
+- `lake-ingest/lake-ingest-5min`, runs `lake/ingest.py`, cron `1-59/5 * * * *`,
   concurrency 1
-- `lake-maintenance/lake-maintenance-daily` — runs `lake/maintenance.py`
+- `lake-maintenance/lake-maintenance-daily`, runs `lake/maintenance.py`
   (compact / expire / remove orphans / audit), nightly
 
 Deployment definitions live in `lake/flows/deploy_lake.py`, which the worker re-runs at
@@ -128,7 +128,7 @@ docker compose logs prefect-worker --tail 100
 
 **A bind-mounted script runs its old contents after you edited it**
 
-*Directory* mounts go stale too — the same write-then-rename problem CLAUDE.md
+*Directory* mounts go stale too, the same write-then-rename problem CLAUDE.md
 documents for the file-level `config/instruments.yaml` mount. An editor (and the
 Edit tool) saves by write-to-temp-then-rename, which produces a new inode, and
 the file-sharing layer keeps serving the old one.
@@ -150,10 +150,10 @@ That is why `docker/lake` looked immune to `--force-recreate`: it is mounted by
 recreating `lake-init` alone leaves `spark-iceberg` pinning the stale copy.
 
 ```bash
-# docker/lake — recreate BOTH holders
+# docker/lake: recreate BOTH holders
 docker compose up -d --force-recreate --no-deps spark-iceberg lake-init
 
-# docker/redpanda — only redpanda-init mounts it, so one service is enough
+# docker/redpanda: only redpanda-init mounts it, so one service is enough
 docker compose up -d --force-recreate --no-deps redpanda-init
 
 # Which services mount the directory you edited:

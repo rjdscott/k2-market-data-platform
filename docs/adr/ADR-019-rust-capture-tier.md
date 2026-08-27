@@ -280,7 +280,7 @@ signal at binance and kraken rates and `delivery` at coinbase's slower one — b
 only run on record is the one above, taken at 30 s, and it is the run that proved this
 kind of arithmetic wrong. **It is unscored until `capture-queue-full.sh` is re-run
 against the 5-minute timeout**, and the 204 s row in
-[`../architecture/failure-modes.md`](../architecture/failure-modes.md) says so rather
+[`../architecture/16-failure-modes.md`](../architecture/16-failure-modes.md) says so rather
 than quietly correcting itself. Evidence for the 30 s measurement:
 [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv).
 
@@ -488,7 +488,7 @@ its own. Summing the `%CPU` column above, the three capture containers came to
 what breaks, so the failure paths were injected rather than argued
 ([`../../scripts/chaos/README.md`](../../scripts/chaos/README.md); results in
 `scripts/chaos/results/2026-08-26.tsv`, rows written up in
-[`../architecture/failure-modes.md`](../architecture/failure-modes.md)):
+[`../architecture/16-failure-modes.md`](../architecture/16-failure-modes.md)):
 
 | Injection | Expected alert | Fired after | Recovered after |
 |---|---|---:|---:|
@@ -526,7 +526,7 @@ until one exists.
 
 Three numbers this ADR and its neighbours predicted were scored by the window and
 the chaos run. Two of them were wrong, and they are worth more than the ones that
-were right. The first — capacity-model.md's **204 s** of producer slack before a
+were right. The first — 15-capacity-model.md's **204 s** of producer slack before a
 kraken record is lost to a broker outage, measured at **102 s** with zero
 `reason="queue_full"` — is written up above under
 [*Measured correction, 2026-08-26*](#measured-correction-2026-08-26--the-32-mib-buffer-was-unreachable)

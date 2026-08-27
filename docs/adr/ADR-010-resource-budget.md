@@ -605,7 +605,7 @@ docker/prometheus/rules/lake-alerts.yml            11
 ### Outcome addendum — 2026-08-26, spark-iceberg 4G → 8G
 
 `rewrite_data_files` over `raw.messages` (rows up to 5 MB) OOM'd a 768m driver heap
-twice and finished at 2g with a peak driver RSS of 2,641 MiB (`capacity-model.md`, dated
+twice and finished at 2g with a peak driver RSS of 2,641 MiB (`15-capacity-model.md`, dated
 note). `maintenance.py` now runs alone behind the ingest lock, and the container limit
 went 4G → 8G so an operator's `docker exec` fits beside it. Steady state **14.60 CPU /
 25.625 GiB across 15**, bootstrap peak **16.10 CPU / 27.125 GiB across 19**; headroom

@@ -10,7 +10,7 @@
 ```
 Decision 2026-02-12: Standardise on a named ClickHouse database (`k2`), never `default`
 Reason: named database gives isolation, database-level grants and `BACKUP DATABASE`
-Alternative considered: stay on `default` (rejected — no ownership boundary)
+Alternative considered: stay on `default` (rejected, no ownership boundary)
 
 Decision 2026-08-27: `gold` replaces `k2` (ADR-026). Same rule, new name: the database is
 the served layer's name, and the `quant` user is granted `gold` and nothing else.
@@ -23,7 +23,7 @@ the served layer's name, and the `quant` user is granted `gold` and nothing else
 | Feeds (Kafka engine) | `gold.q_trades`, `gold.q_book` | `market.crypto.v3.trades.<ex>`, `market.crypto.v3.book.<ex>` (AvroConfluent) |
 | Served | `gold.trades`, `gold.book_top20` (`ReplacingMergeTree`) | `gold.q_trades_mv`, `gold.q_book_mv`; reloadable from the lake |
 | Rejects | `gold.feed_errors` | `gold.q_trades_errors_mv`, `gold.q_book_errors_mv` |
-| Lake-loaded | `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bbo_1s` | a pull from the lake's `gold.*` — [clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md) |
+| Lake-loaded | `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bbo_1s` | a pull from the lake's `gold.*`, [clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md) |
 | Views | `gold.ohlcv_live(bucket = <seconds>)`, `gold.bbo_live` | computed on read over `FINAL` |
 
 `SHOW TABLES FROM gold` is the authority. Column-level detail is in
@@ -38,7 +38,7 @@ the served layer's name, and the `quant` user is granted `gold` and nothing else
 - New tables, views and materialized views are created **in `gold`**, including the
   Kafka-engine feed tables.
 - Research reads use the read-only `quant` user (`K2_QUANT_PASSWORD`), which sees `gold`
-  only. Credentials come from the environment, never hardcoded — see
+  only. Credentials come from the environment, never hardcoded, see
   [`.env.example`](../../.env.example).
 
 ## Schema files
@@ -72,13 +72,13 @@ $CH -q "SELECT table, total_rows FROM system.tables
 $CH -q "SELECT count() FROM gold.trades FINAL"
 ```
 
-`default.offload_watermarks` — the v2 offload's watermark table, orphaned when `docker/offload/`
-was deleted in Phase D and read by nothing — was found by this check on 2026-08-27 and dropped
+`default.offload_watermarks`, the v2 offload's watermark table, orphaned when `docker/offload/`
+was deleted in Phase D and read by nothing, was found by this check on 2026-08-27 and dropped
 the same day (`DROP TABLE default.offload_watermarks`); the leak check is clean.
 
 ## Related
 
-- [ADR-026 — four-layer lake, gold served from ClickHouse](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)
-- [ADR-025 — ClickHouse derived and rebuildable](../adr/ADR-025-clickhouse-derived-hot-tier.md)
-- [ADR-015 — ClickHouse 24.3 LTS downgrade](../adr/ADR-015-clickhouse-lts-downgrade.md)
-- [data-inspection.md](./data-inspection.md) — queries against these tables
+- [ADR-026, four-layer lake, gold served from ClickHouse](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)
+- [ADR-025, ClickHouse derived and rebuildable](../adr/ADR-025-clickhouse-derived-hot-tier.md)
+- [ADR-015, ClickHouse 24.3 LTS downgrade](../adr/ADR-015-clickhouse-lts-downgrade.md)
+- [data-inspection.md](./data-inspection.md), queries against these tables

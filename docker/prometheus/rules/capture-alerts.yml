@@ -314,7 +314,7 @@ groups:
       # measured 2026-08-26 over the 12:38-13:07Z window), so a fall to 50 levels
       # is a severe degradation that stays far above this floor. Detecting that
       # needs a per-venue, per-symbol baseline. Revisit when Phase F publishes
-      # measured depth distributions per venue in capacity-model.md.
+      # measured depth distributions per venue in 15-capacity-model.md.
       - alert: CaptureBookDepthDegraded
         expr: |
           max_over_time(k2_capture_book_depth[10m]) < 20

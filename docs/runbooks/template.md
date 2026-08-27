@@ -12,12 +12,12 @@ One or two lines: when to use this, and what it does not cover.
 
 ## 1. <Scenario name>
 
-**Symptom** — what the operator sees.
+**Symptom**, what the operator sees.
 
-**Detection** — `AlertName` from `docker/prometheus/rules/<file>.yml`. (Or:
-"manual only — no alert covers this", stated plainly.)
+**Detection**, `AlertName` from `docker/prometheus/rules/<file>.yml`. (Or:
+"manual only, no alert covers this", stated plainly.)
 
-**Expected behaviour** — what recovers on its own, and why.
+**Expected behaviour**, what recovers on its own, and why.
 
 **Recovery**
 
@@ -31,14 +31,14 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q
   "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange"
 ```
 
-**Measured** — <duration>, <date>. What was observed: row counts, consumer
+**Measured**, <duration>, <date>. What was observed: row counts, consumer
 state, whether anything was lost. What to do if it exceeds this.
 
 ---
 
 ## Failure modes / incidents
 
-- **YYYY-MM-DD** — what happened, what the runbook got wrong, what fixed it.
+- **YYYY-MM-DD**, what happened, what the runbook got wrong, what fixed it.
   Appended, never overwritten.
 
 ---

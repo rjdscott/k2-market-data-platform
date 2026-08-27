@@ -29,7 +29,7 @@ v2 has two wire formats and consumes neither of them as designed.
   ```
 
   That was the right call for v2 and is recorded as such in
-  [`../architecture/schema-design.md`](../architecture/schema-design.md) ("Decimals as
+  [`../architecture/13-schema-design.md`](../architecture/13-schema-design.md) ("Decimals as
   strings" — readable in Redpanda Console, diffable against the exchange REST API,
   and `toDecimal64(s, 8)` parses it directly). It stops being right when three
   runtimes with three different decimal implementations have to agree on the value.
@@ -187,7 +187,7 @@ forever.
 
 **On what this supersedes.** The v2 Avro contract was never recorded in an ADR — it
 lives in `schemas/avro/normalized-trade.avsc` and in
-[`../architecture/schema-design.md`](../architecture/schema-design.md). The nearest
+[`../architecture/13-schema-design.md`](../architecture/13-schema-design.md). The nearest
 ADR-level statement of the same rule is
 [ADR-009](ADR-009-medallion-in-clickhouse.md)'s Raw layer, which specified
 `price String -- String! Not cast to numeric yet` on precision-preservation grounds.
@@ -208,7 +208,7 @@ buys), or ClickHouse moves off 24.x and `_headers` behaviour changes.
 ## Related
 
 - [`../../schemas/README.md`](../../schemas/README.md) — the contract itself: subjects, evolution rules, worked arithmetic, registration commands
-- [`../architecture/schema-design.md`](../architecture/schema-design.md) — v3 and v2 records side by side; "Decimals as strings" is the v2 rule this replaces
+- [`../architecture/13-schema-design.md`](../architecture/13-schema-design.md) — v3 and v2 records side by side; "Decimals as strings" is the v2 rule this replaces
 - [ADR-018](ADR-018-v3-lake-first-rust-capture.md) — the umbrella; Appendix A carries spikes S1 (checksum), S2 (precision from the feed), S3 (registry client) and S4 (`AvroConfluent` on 24.3), and its Deviations table records the `v3` prefix
 - [ADR-019](ADR-019-rust-capture-tier.md) — the producer, and why `recv_ts_ns` is taken before parse
 - [ADR-027](ADR-027-book-snapshot-and-sequencing.md) — why `BookSnapshotL2` carries parallel `int64` arrays and the hot tier widens them
