@@ -1,4 +1,4 @@
-# 07 — Redpanda and the wire contracts
+# 07. Redpanda and the wire contracts
 
 > **You will learn** the nine topics, the three Avro records, keying, retention and registry compatibility.
 > **Read this if** producers and consumers of the topics; schema changes.

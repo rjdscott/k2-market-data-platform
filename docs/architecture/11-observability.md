@@ -1,4 +1,4 @@
-# 11 — Observability
+# 11. Observability
 
 > **You will learn** what is measured, which rules watch it, and how each failure mode was proven.
 > **Read this if** operators, anyone adding an alert.
@@ -32,11 +32,11 @@ flowchart TB
   goes to zero and stays there.
 - **Lake** metrics come from Iceberg snapshot summaries via PyIceberg (`metrics.py`):
   last commit timestamp, `max_kafka_ts`, backlog offsets, last compaction, rows / files /
-  bytes per table. Every "age" is exported as a timestamp and aged in PromQL — if the
+  bytes per table. Every "age" is exported as a timestamp and aged in PromQL, if the
   catalog is down the gauge freezes and the age keeps growing, which is the alert you want.
 - **ClickHouse** ships its own `/metrics`; the two gold-feed rules watch
   `ClickHouseProfileEvents_KafkaMessagesFailed` and topic movement versus table growth.
-- **Rules** are three files by tier — 10 capture, 12 lake, 6 ClickHouse. Each has `for`,
+- **Rules** are three files by tier, 10 capture, 12 lake, 6 ClickHouse. Each has `for`,
   a severity, a `runbook` annotation that must resolve to a file, and a `promtool test`
   case in `rules/tests/`. Prometheus loads rules at start or `SIGHUP`, so the docs say so.
 - **Dashboards** are JSON in `docker/grafana/dashboards/`: pipeline overview, capture, lake,

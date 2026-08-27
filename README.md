@@ -1,7 +1,7 @@
 # K2 Market Data Platform
 
 A crypto market-data platform for quantitative research: three exchanges captured verbatim, an
-Iceberg lake as the system of record, ClickHouse as a derived serving tier — on one host, inside a
+Iceberg lake as the system of record, ClickHouse as a derived serving tier, on one host, inside a
 16 CPU / 40 GB budget. Public WebSocket feeds over the internet; **not a trading path**.
 
 [![CI](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml)
@@ -65,7 +65,7 @@ flowchart TB
 ```
 
 15 long-running services (+4 one-shot init) at 14.60 CPU / 25.625 GiB of limits
-(`docker compose --env-file .env.example config`, limits summed —
+(`docker compose --env-file .env.example config`, limits summed , 
 [docker-resources.md](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 Component deep dives: [`docs/architecture/README.md`](./docs/architecture/README.md).
 
@@ -73,13 +73,13 @@ Component deep dives: [`docs/architecture/README.md`](./docs/architecture/README
 
 | ADR | Decision | Why |
 |---|---|---|
-| [018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md) | Lake is the system of record; everything else derived | v2's lake was a JDBC copy of the serving DB — it inherited its TTL, normalisation and dropped columns |
+| [018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md) | Lake is the system of record; everything else derived | v2's lake was a JDBC copy of the serving DB, it inherited its TTL, normalisation and dropped columns |
 | [019](./docs/adr/ADR-019-rust-capture-tier.md) | Rust capture replaces three JVM handlers | One connection per venue carrying trades *and* book; `recv_ts` before parse; retired on a measured parity gate |
 | [020](./docs/adr/ADR-020-avro-fixed-point-contracts.md) | Avro + registry, `int64` @1e-8, `BACKWARD_TRANSITIVE` | v2 stored prices as strings and its registry proved nothing |
 | [022](./docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md) | Kafka offsets committed inside the Iceberg snapshot | One atomic commit replaces a watermark table and its failure modes |
 | [026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) | raw / bronze-per-venue / silver-per-venue / gold-canonical; ClickHouse serves gold with no TTL | Typed venue fields survive; OHLCV on read fixes v2's `SummingMergeTree` candles resolving open/close arbitrarily |
 | [027](./docs/adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync policy | Raw holds the deltas; the product is what research joins against |
-| [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect — **reversed** | Wrong call, kept on the record with its Outcome |
+| [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect, **reversed** | Wrong call, kept on the record with its Outcome |
 
 All 27 ADRs and their supersession chain: [`docs/adr/`](./docs/adr/README.md).
 
@@ -92,7 +92,7 @@ across three venues; each row there carries the command that produced it.
 |---|---:|---:|---:|
 | Frames/s, window average | 187 | 606 | 130 |
 | Exchange → receive p50 / p99 (ms, per frame) | 42 / 207 | 177 / 459 | 184 / see note |
-| Sequence gaps · checksum failures · produce errors | 0 · — · 0 | 0 · 0 of 14.1 M · 0 | 0 · — · 0 |
+| Sequence gaps · checksum failures · produce errors | 0 ·, · 0 | 0 · 0 of 14.1 M · 0 | 0 ·, · 0 |
 
 Coinbase's p99 is dominated by the venue's on-subscribe trade snapshot, not transit; the capture now
 excludes it from the histogram. Lake bronze rebuild from raw: 61.9 M rows in 520 s; per-venue bronze
@@ -134,9 +134,9 @@ Research: `make notebooks` starts JupyterLab with DuckDB over the lake
 
 | Suite | Run |
 |---|---|
-| Rust capture — 60 (unit, binary, replay over recorded sessions) | `make test-rust` |
-| Python — 229 (contracts, wire format, lake offsets, bronze/silver decode, book replay, parity) | `make test-python` |
-| ClickHouse schema — 9 assertions incl. the v2 OHLCV regression | `make test-clickhouse` |
+| Rust capture, 60 (unit, binary, replay over recorded sessions) | `make test-rust` |
+| Python, 229 (contracts, wire format, lake offsets, bronze/silver decode, book replay, parity) | `make test-python` |
+| ClickHouse schema, 9 assertions incl. the v2 OHLCV regression | `make test-clickhouse` |
 | Prometheus rule unit tests + doc checks | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make chaos` |
 
@@ -151,16 +151,16 @@ docker/lake/               Spark ingest, layer builders, audits, DDL, Prefect fl
 docker/clickhouse/ddl/     gold contract (CI-tested) + Kafka feeds
 docker/prometheus/rules/   28 alert rules with unit tests
 schemas/avro/              raw-message, trade, book-snapshot-l2
-config/instruments.yaml    instrument registry — single source of truth
+config/instruments.yaml    instrument registry, single source of truth
 scripts/chaos/             failure injection, timed
 notebooks/                 DuckDB research notebooks
 docs/                      architecture, ADRs, runbooks, benchmarks, plans
-legacy/                    v1 (Python), v2 Kotlin handlers, v2 ClickHouse DDL, v2 offload — archived, unmodified
+legacy/                    v1 (Python), v2 Kotlin handlers, v2 ClickHouse DDL, v2 offload, archived, unmodified
 ```
 
 ## Not built
 
-No query API; no replication or failover — one broker, one ClickHouse, one host; no Alertmanager
+No query API; no replication or failover, one broker, one ClickHouse, one host; no Alertmanager
 routing; no load test above 1×; pcap capture and a cross-venue security master are designed
 ([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md),
 [data-strategy.md](./docs/architecture/12-data-strategy.md)) and not started.
@@ -173,4 +173,4 @@ runbooks, dated benchmarks and audits, the v3 plan, and
 
 ## License
 
-MIT — see [`LICENSE`](./LICENSE). © Rob Scott.
+MIT, see [`LICENSE`](./LICENSE). © Rob Scott.

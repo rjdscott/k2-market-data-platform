@@ -4,7 +4,7 @@ One page of the commands you actually use. Everything runs from the repo root ag
 `docker-compose.yml`. Load secrets into your shell first:
 
 ```bash
-cp .env.example .env      # first time only — then fill in real values
+cp .env.example .env      # first time only, then fill in real values
 set -a && . ./.env && set +a
 ```
 
@@ -39,7 +39,7 @@ docker stats --no-stream                             # live CPU / RAM
 
 Also listening: Redpanda Kafka API `9092`, Admin API `9644`, Schema Registry `8081`;
 ClickHouse native `9002`, Prometheus metrics `9363`; MinIO S3 API `9000`; PostgreSQL (Prefect + Lakekeeper) `15432` on localhost only.
-Capture `/metrics` is on port **8082 inside the container only** — not published. There is
+Capture `/metrics` is on port **8082 inside the container only**, not published. There is
 no `/health` endpoint: liveness is the `k2-capture healthcheck` subcommand, because the
 image is distroless and has no curl.
 
@@ -65,7 +65,7 @@ docker exec k2-redpanda curl -s localhost:8081/subjects | jq
 
 ## ClickHouse
 
-ClickHouse serves the `gold` database — canonical, deduplicated, every venue in one schema
+ClickHouse serves the `gold` database, canonical, deduplicated, every venue in one schema
 ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)). `gold.trades` and
 `gold.book_top20` are `ReplacingMergeTree`: read them with `FINAL` when the number has to be
 exact. The v2 `k2` database was dropped at the Phase E cutover on 2026-08-27
@@ -151,7 +151,7 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/spark_conf.py --smoke
 ```
 
 Exactly-once bookkeeping lives in the Iceberg snapshot summary
-(`k2.kafka-offsets`), not in a watermark table —
+(`k2.kafka-offsets`), not in a watermark table , 
 [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md).
 
 ## When something breaks

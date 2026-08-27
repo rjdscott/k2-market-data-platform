@@ -1,22 +1,22 @@
 # K2 Documentation
 
 Everything here describes the system as built. Where intent and reality diverge, the docs
-say so — the divergence is usually the interesting part.
+say so, the divergence is usually the interesting part.
 
 ## Ten-minute review path
 
 For a reviewer opening this repo cold, in order:
 
-1. [Root README](../README.md) — what the platform is, and how to run it.
-2. [architecture/README.md](architecture/README.md) — each component: how it is built,
+1. [Root README](../README.md), what the platform is, and how to run it.
+2. [architecture/README.md](architecture/README.md), each component: how it is built,
    how it works, what it trades away; and what is *not* built.
-3. [adr/ADR-026](adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) — the
+3. [adr/ADR-026](adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md), the
    decision that shaped the lake and the serving tier, with its rejected alternatives.
-4. [adr/ADR-008](adr/ADR-008-eliminate-prefect-orchestration.md) — a decision argued,
+4. [adr/ADR-008](adr/ADR-008-eliminate-prefect-orchestration.md), a decision argued,
    accepted, and reversed in practice. The `Outcome` section is the point.
-5. [benchmarks/2026-08-27.md](benchmarks/2026-08-27.md) — the numbers quoted everywhere
+5. [benchmarks/2026-08-27.md](benchmarks/2026-08-27.md), the numbers quoted everywhere
    else, the command behind each, and the window they came from.
-6. [audits/2026-08-26-doc-accuracy.md](audits/2026-08-26-doc-accuracy.md) — 31 findings
+6. [audits/2026-08-26-doc-accuracy.md](audits/2026-08-26-doc-accuracy.md), 31 findings
    from an adversarial pass over these docs, published rather than quietly fixed.
 
 ## The pipeline
@@ -55,13 +55,13 @@ The system as built, for readers who want the detail rather than the argument.
 | [architecture/16-failure-modes.md](architecture/16-failure-modes.md) | FMEA: one row per component × failure, with its detection signal, blast radius, recovery step and proof |
 | [architecture/06-capture-venues.md](architecture/06-capture-venues.md) | How a capture process works, the per-venue dialects, and what a fourth exchange costs |
 | [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | The handful of rules the design is actually held to |
-| [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | What this platform is for — and the workloads it is deliberately wrong for |
+| [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | What this platform is for, and the workloads it is deliberately wrong for |
 | [operations/](operations/) | Running the stack: [quick reference](operations/quick-reference.md), [Docker budget](operations/docker-resources.md), [observability](operations/observability.md), [latency budgets](operations/latency-budgets.md), [Prefect schedules](operations/prefect-schedules.md), [data inspection](operations/data-inspection.md), [adding an exchange](operations/adding-new-exchanges.md), [cost model](operations/cost-model.md) |
-| [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md) — prerequisites, and how to run the Rust and Python suites |
+| [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md), prerequisites, and how to run the Rust and Python suites |
 
 ## Migration journey
 
-[MIGRATION-JOURNEY.md](MIGRATION-JOURNEY.md) — why v1 was replaced, what each phase
+[MIGRATION-JOURNEY.md](MIGRATION-JOURNEY.md), why v1 was replaced, what each phase
 shipped, the measured resource / latency / MTTR results, a scorecard of predictions
 against reality, and what is still unfinished.
 

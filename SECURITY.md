@@ -2,7 +2,7 @@
 
 This is a personal portfolio project designed to run on a single host. It is **not** hardened for production use:
 
-- Every service authenticates with the passwords in `.env`. Copy `.env.example` and change all of them before starting the stack — the defaults are placeholders, not secrets.
+- Every service authenticates with the passwords in `.env`. Copy `.env.example` and change all of them before starting the stack, the defaults are placeholders, not secrets.
 - No TLS between services or on any exposed port.
 - ClickHouse, Redpanda, MinIO, Prefect, Prometheus and Grafana listen on `localhost` only via Docker port mappings; do not expose them to a network without adding authentication and TLS.
 - Container images are pinned but not rebuilt on a schedule; Dependabot and a Trivy scan in CI surface known CVEs but nothing auto-patches.

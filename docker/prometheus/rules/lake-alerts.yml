@@ -10,7 +10,7 @@
 # counter in a process that already exited said so.
 #
 # NOT yet observed firing. The thresholds below are designed against the
-# predicted rates in docs/architecture/capacity-model.md and the 5-minute
+# predicted rates in docs/architecture/15-capacity-model.md and the 5-minute
 # ingest cadence; `scripts/chaos/lake-*.sh` is what earns the right to move one.
 #
 # Every staleness expression is `time() - <a timestamp gauge>`, never a
@@ -263,7 +263,7 @@ groups:
       # construction for the first two weeks of the table's life: 288 cycles/day
       # x 9 topics under write.distribution-mode=hash is ~2592 new ~2.5 MB files
       # a day, and a table-wide MEAN cannot clear 32 MiB until the compacted
-      # archive outweighs them, which solves to ~15 days. capacity-model.md puts
+      # archive outweighs them, which solves to ~15 days. 15-capacity-model.md puts
       # the disk runway at ~26 days, so that alert would be noise for 15 of them
       # — and "noisy for the first fortnight" is how an alert gets muted.
       #

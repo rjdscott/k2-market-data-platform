@@ -1,7 +1,7 @@
 # Runbook: Investigate a capture sequence gap, and a resync storm
 
 Covers a break in exchange sequence continuity (messages lost between the venue and
-this host), and repeated book resyncs. Sequencing differs per exchange — the policy
+this host), and repeated book resyncs. Sequencing differs per exchange, the policy
 table is in [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md) and reproduced
 below because you need it to read the alert.
 
@@ -16,19 +16,19 @@ below because you need it to read the alert.
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | Sequence gap — messages lost | recovery automatic; **investigation < 30 min** | recovery (reconnect + rebuild) **8–10 s** after unpause, both venues (2026-08-26). Gap *detection*: not yet verified — no injection has made `gaps_total` move |
-| 2 | Resync storm — the book keeps being rebuilt | < 15 min | not yet verified — `capture-corrupt-frame.sh` is a SKIP until `k2-replay` (Phase G) |
+| 1 | Sequence gap, messages lost | recovery automatic; **investigation < 30 min** | recovery (reconnect + rebuild) **8–10 s** after unpause, both venues (2026-08-26). Gap *detection*: not yet verified, no injection has made `gaps_total` move |
+| 2 | Resync storm, the book keeps being rebuilt | < 15 min | not yet verified, `capture-corrupt-frame.sh` is a SKIP until `k2-replay` (Phase G) |
 
 ---
 
 ## 1. Sequence gap
 
-**Symptom** — usually none that is visible. Data keeps flowing, dashboards look
+**Symptom**, usually none that is visible. Data keeps flowing, dashboards look
 normal, and a counter has moved. That is the point of the counter: v2 had no gap
 detection at all, so a dropped message was silent
 ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) Context).
 
-**Detection** — `CaptureSequenceGaps` from
+**Detection**, `CaptureSequenceGaps` from
 [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml):
 
 ```promql
@@ -37,13 +37,13 @@ increase(k2_capture_gaps_total[10m]) > 0
 
 Fires after `for: 5m`.
 
-**What "a gap" means per exchange** — three mechanisms, not one:
+**What "a gap" means per exchange**, three mechanisms, not one:
 
 | Exchange | Continuity signal | Gap looks like | Automatic policy |
 |----------|-------------------|----------------|------------------|
 | **Binance** | `lastUpdateId` on `<sym>@depth20@100ms` | `lastUpdateId` regresses or repeats backwards | Reconnect; the next partial-depth frame is itself a complete top-20, so no snapshot fetch is needed |
-| **Kraken v2** | none — the book stream carries no sequence number | n/a; drift is caught by CRC32 instead → [capture-checksum-failure.md](./capture-checksum-failure.md) | n/a |
-| **Coinbase** | `sequence_num`, **connection-wide across all channels** | numeric skip in `sequence_num` | Reconnect and rebuild from a fresh `level2` snapshot — a connection-wide counter cannot be resynced per symbol |
+| **Kraken v2** | none, the book stream carries no sequence number | n/a; drift is caught by CRC32 instead → [capture-checksum-failure.md](./capture-checksum-failure.md) | n/a |
+| **Coinbase** | `sequence_num`, **connection-wide across all channels** | numeric skip in `sequence_num` | Reconnect and rebuild from a fresh `level2` snapshot, a connection-wide counter cannot be resynced per symbol |
 
 Coinbase's counter spanning all channels rather than one per channel was established
 by measurement, not documentation: spike S5 saw `sequence_num 0 → 676` across 677
@@ -51,15 +51,15 @@ frames of `l2_data`, `market_trades` and `heartbeats` together, 0 gaps
 ([ADR-018 Appendix A](../adr/ADR-018-v3-lake-first-rust-capture.md#s5--coinbase-level2-without-jwt)).
 A gap on Coinbase therefore does not tell you which stream lost a message.
 
-**Expected behaviour** — the reconnect and rebuild are automatic and complete in
+**Expected behaviour**, the reconnect and rebuild are automatic and complete in
 seconds; by the time the alert fires the book is already correct again. **Nothing you
-do restores the lost messages** — public feeds do not replay, so the frames are gone
+do restores the lost messages**, public feeds do not replay, so the frames are gone
 from `raw.messages` permanently. This alert exists so the loss is recorded rather than
 recovered.
 
 That makes this an investigation, not a repair. Gaps = 0 is a Phase C exit criterion
 (ADR-019), so a non-zero counter is either a real loss window that must be documented,
-or a bug in the gap detector — and those need opposite responses.
+or a bug in the gap detector, and those need opposite responses.
 
 **Recovery**
 
@@ -94,13 +94,13 @@ Then classify, because the response differs:
   the correlation is exact rather than approximate; Kraken and Coinbase have no such
   timer and will only ever show `reason="involuntary"`. Confirm the timestamps line up
   and close it. If the gap
-  detector is counting reconnect boundaries as gaps, that is a **capture bug** — the
+  detector is counting reconnect boundaries as gaps, that is a **capture bug**, the
   boundary is detectable via `conn_id` and should be excluded.
 - **Gap with no reconnect** → a real loss on a live connection. Record the window.
 - **Repeated gaps** → go to §2 below; something is causing them rather than one event
   having happened.
 
-**Record the gap — this is the actual deliverable of this runbook.** Note the
+**Record the gap, this is the actual deliverable of this runbook.** Note the
 exchange, the window, the count, and whether a reconnect explains it, in the day's
 completeness audit. A query over that period must read a documented hole rather than
 an unexplained one; that traceability is the whole reason the archive exists.
@@ -114,7 +114,7 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.coinbase \
 
 **Measured 2026-08-26, and the result is a negative one worth reading.**
 `scripts/chaos/capture-pause.sh` froze the Coinbase container for 165 s and the Binance
-one for 152 s — long enough for both venues to close the socket — and measured:
+one for 152 s, long enough for both venues to close the socket, and measured:
 
 | | coinbase | binance |
 |---|---|---|
@@ -125,12 +125,12 @@ one for 152 s — long enough for both venues to close the socket — and measur
 **Frames were lost and the gap counter did not move.** That is not a broken detector: a
 Coinbase reconnect restarts `sequence_num` from a fresh series, and a Binance reconnect
 restarts `lastUpdateId`, so there is nothing continuous across the outage to be
-discontinuous. The counter only fires on a skip *within* one connection — which is the
+discontinuous. The counter only fires on a skip *within* one connection, which is the
 case this runbook is actually for, and the case a pause cannot produce.
 
 **The operational consequence:** a reconnect is not a gap, and a gap is not a reconnect.
 When investigating, correlate `gaps_total` against
-`reconnects_total{reason="involuntary"}` before concluding anything — an outage that
+`reconnects_total{reason="involuntary"}` before concluding anything, an outage that
 shows a reconnect and no gap has still lost data, and only the raw archive's `conn_id`
 boundary will show you the window. Inducing a real in-connection skip needs `k2-replay`
 (Phase G).
@@ -140,10 +140,10 @@ Source: [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/202
 
 ## 2. Resync storm
 
-**Symptom** — the book keeps being rebuilt. Individual recoveries all succeed, and
+**Symptom**, the book keeps being rebuilt. Individual recoveries all succeed, and
 they keep happening.
 
-**Detection** — `CaptureResyncStorm` from
+**Detection**, `CaptureResyncStorm` from
 [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml):
 
 ```promql
@@ -152,7 +152,7 @@ increase(k2_capture_resyncs_total[15m]) > 3
 
 Fires after `for: 5m`.
 
-**Expected behaviour** — one resync is the policy working and is unremarkable. Four in
+**Expected behaviour**, one resync is the policy working and is unremarkable. Four in
 fifteen minutes is the policy being invoked repeatedly, which means resyncing is not
 fixing the underlying cause. Each resync also leaves a `conn_id` boundary across which
 `seq` continuity is meaningless, so a storm degrades book quality even though every
@@ -181,16 +181,16 @@ Read the correlation:
 | Also rising | Meaning | Go to |
 |-------------|---------|-------|
 | `checksum_failures_total` (Kraken) | The book is genuinely drifting; the checksum path may be at fault | [capture-checksum-failure.md](./capture-checksum-failure.md) |
-| `gaps_total` (Coinbase / Binance) | Messages are being lost repeatedly — network or a starved container | §1 above, then the CPU check |
+| `gaps_total` (Coinbase / Binance) | Messages are being lost repeatedly, network or a starved container | §1 above, then the CPU check |
 | `reconnects_total{reason="involuntary"}` only | The connection is unstable; the book rebuild is a consequence, not the problem | [capture-feed-stale.md](./capture-feed-stale.md), and check the venue status page |
-| Nothing else | Resyncs are being triggered without a detected cause — a capture bug | Capture the log lines and open an issue |
+| Nothing else | Resyncs are being triggered without a detected cause, a capture bug | Capture the log lines and open an issue |
 
 **Do not raise the resync threshold to silence this.** The alert fires because book
 quality is degraded; a higher threshold degrades it silently. If a venue genuinely
 resyncs this often in normal operation, that is a fact worth recording in ADR-027's
 Outcome, with the measurement behind it.
 
-**Measured** — not yet verified. `scripts/chaos/capture-corrupt-frame.sh` printed SKIP on
+**Measured**, not yet verified. `scripts/chaos/capture-corrupt-frame.sh` printed SKIP on
 the 2026-08-26 run, as designed: TLS leaves no seam to corrupt a live frame. When
 `k2-replay` (Phase G) exists it will inject a corrupt book level to force a resync, then
 repeat it to confirm the storm alert fires at the intended rate and that recovery time

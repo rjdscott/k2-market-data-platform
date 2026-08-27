@@ -29,7 +29,7 @@ make lint                # uv run --no-project --with ruff ruff check docker/lak
 
 CI (`.github/workflows/ci.yml`) runs the same two suites plus a Docker build of every image, the doc gates and a Trivy scan.
 
-`make test-legacy-kotlin` runs the archived v2 Kotlin feed-handler tests against `legacy/v2-kotlin/` ([ADR-019](docs/adr/ADR-019-rust-capture-tier.md)). It needs the `gradle:8.12-jdk21` Docker image and is deliberately outside `make test` and outside CI — that code is archived, not maintained.
+`make test-legacy-kotlin` runs the archived v2 Kotlin feed-handler tests against `legacy/v2-kotlin/` ([ADR-019](docs/adr/ADR-019-rust-capture-tier.md)). It needs the `gradle:8.12-jdk21` Docker image and is deliberately outside `make test` and outside CI, that code is archived, not maintained.
 
 ## Conventions
 

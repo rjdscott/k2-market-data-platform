@@ -2,7 +2,7 @@
 
 Covers a `k2-capture` container that Prometheus cannot scrape, and one that is
 running but failing to produce to Redpanda. It does **not** cover a container that is
-up and scrapeable but whose feed has gone quiet — that is
+up and scrapeable but whose feed has gone quiet, that is
 [capture-feed-stale.md](./capture-feed-stale.md).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
@@ -23,10 +23,10 @@ up and scrapeable but whose feed has gone quiet — that is
 
 ## 1. Capture container down
 
-**Symptom** — no data from one exchange. Grafana's capture panels flatline for that
+**Symptom**, no data from one exchange. Grafana's capture panels flatline for that
 venue; `hot.trades` stops receiving rows for it while the other two carry on.
 
-**Detection** — `CaptureDown` from
+**Detection**, `CaptureDown` from
 [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml):
 
 ```promql
@@ -35,16 +35,16 @@ up{job=~"capture-.*"} == 0
 
 Fires after `for: 2m`.
 
-**Expected behaviour** — Docker restarts the container on failure, and the capture
+**Expected behaviour**, Docker restarts the container on failure, and the capture
 process reconnects to the exchange on its own backoff, so a single crash self-heals
 in well under the alert's 2-minute window and never fires. An alert that *does* fire
-means the process is failing to start or crash-looping — the restart is not working,
+means the process is failing to start or crash-looping, the restart is not working,
 so restarting it again is unlikely to be the fix on its own.
 
 **What is lost:** everything the exchange sent during the outage. Public WebSocket
 feeds do not replay, so that window is permanently absent from `raw.messages` and
 from every table derived from it. This is a completeness gap, and it belongs in the
-audit record — see step 5.
+audit record, see step 5.
 
 **Recovery**
 
@@ -67,10 +67,10 @@ Read the exit code before restarting anything:
 
 | Exit | Meaning | Next step |
 |------|---------|-----------|
-| `0` | Clean SIGTERM shutdown — someone or something stopped it | `docker compose up -d capture-kraken` |
+| `0` | Clean SIGTERM shutdown, someone or something stopped it | `docker compose up -d capture-kraken` |
 | `137` | OOM-killed | Go to [capture-checksum-failure.md §2](./capture-checksum-failure.md#2-book-depth-degraded) for the Coinbase book memory bound, then raise the limit in `docker-compose.yml` |
-| `101` | Rust panic — the message is the last log line | Do not restart into a loop; the panic will repeat |
-| `1` | Startup failure — usually config, registry or broker | Step 4 |
+| `101` | Rust panic, the message is the last log line | Do not restart into a loop; the panic will repeat |
+| `1` | Startup failure, usually config, registry or broker | Step 4 |
 
 ```bash
 # 4. Startup dependencies, in the order the process needs them
@@ -101,37 +101,37 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.kraken \
 completeness audit for the day, so a later query over that period reads a documented
 hole rather than an unexplained one.
 
-**Measured 2026-08-26** — `scripts/chaos/capture-kill.sh --exchange kraken --hold 150`
+**Measured 2026-08-26**, `scripts/chaos/capture-kill.sh --exchange kraken --hold 150`
 SIGKILLed the container, held it down, and measured recovery as the time until it was
 scrapeable again *and* a fresh frame had arrived (`up == 1` alone would pass on a process
 that came back and never reconnected to the venue):
 
 | | |
 |---|---|
-| time to `CaptureDown` firing | **119 s** — inside a deliberate 150 s hold, so this is the alert's own latency (`for: 2m` + one scrape), not a slow restart |
+| time to `CaptureDown` firing | **119 s**, inside a deliberate 150 s hold, so this is the alert's own latency (`for: 2m` + one scrape), not a slow restart |
 | scrapeable after `docker compose up -d` | **3 s** |
-| fresh frames after that | **0 s** — the venue reconnect landed inside the same scrape interval |
+| fresh frames after that | **0 s**, the venue reconnect landed inside the same scrape interval |
 | `docker restart` count | 0 → 0, i.e. nothing crash-looped |
 
 **Time-to-recover: 3 s.** The number to remember is the asymmetry: detection takes ~2 min
 and recovery takes seconds, so almost all of the MTTR target is spent noticing. A
-container that is genuinely crash-looping shows the opposite shape — `CaptureDown` firing
-with the restart count climbing — and that is the case §1's exit-code step is for.
+container that is genuinely crash-looping shows the opposite shape, `CaptureDown` firing
+with the restart count climbing, and that is the case §1's exit-code step is for.
 Source: [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv).
 
 ---
 
-## 2. Produce errors — records built, broker rejecting
+## 2. Produce errors: records built, broker rejecting
 
-**Symptom** — the capture container is up and enqueueing records
+**Symptom**, the capture container is up and enqueueing records
 (`k2_capture_records_produced_total` climbing) but `k2_capture_records_delivered_total`
 is flat or lagging it. Note which counter is which: `records_produced_total` counts the
 *local enqueue* into librdkafka's queue and keeps climbing through a broker outage;
 `records_delivered_total` is incremented from the delivery report and is the one that
-stops. `CaptureProduceStalled` fires on that divergence *before* anything is dropped —
+stops. `CaptureProduceStalled` fires on that divergence *before* anything is dropped , 
 see [capture-produce-stalled.md](./capture-produce-stalled.md).
 
-**Detection** — `CaptureProduceErrors` from
+**Detection**, `CaptureProduceErrors` from
 [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml):
 
 ```promql
@@ -139,11 +139,11 @@ increase(k2_capture_produce_errors_total[10m]) > 0
 ```
 
 Fires after `for: 5m`. The counter is seeded at zero for all four `reason` values at
-startup, so the **first** produce error trips this — there is no rate floor, because a
+startup, so the **first** produce error trips this, there is no rate floor, because a
 rate floor of `0.1/s` tolerates 8,640 permanently-lost records a day and this tier has
 no spill-to-disk.
 
-**Expected behaviour** — librdkafka retries internally and rides out a brief broker
+**Expected behaviour**, librdkafka retries internally and rides out a brief broker
 hiccup without the counter moving far. **It does not spill to disk.** Its queue is the
 only buffer in this tier (`queue.buffering.max.kbytes=32768`), and it drops on full
 with a counter (ADR-019). So a sustained produce-error rate is permanent data loss
@@ -152,7 +152,7 @@ rather than backpressure, and the clock is running.
 **Recovery**
 
 ```bash
-# 1. Broker first — this is the common cause
+# 1. Broker first: this is the common cause
 docker exec k2-redpanda rpk cluster health                            # ✅ verified (v2)
 docker exec k2-redpanda rpk group list                                # ✅ verified (v2)
 df -h /var/lib/docker                                                 # a full disk stops writes
@@ -180,20 +180,20 @@ Then, by cause:
 - **Nothing wrong upstream** → the fault is in the sink; capture the log line and
   open an issue rather than restart-looping.
 
-**Measured 2026-08-26** — two runs, both against kraken, one pausing the broker and one
+**Measured 2026-08-26**, two runs, both against kraken, one pausing the broker and one
 stopping it:
 
 | | |
 |---|---|
-| time to `CaptureProduceErrors` firing | **256 s** from the fault (`capture-queue-full.sh`, broker paused) — ~154 s after the first record was actually dropped |
+| time to `CaptureProduceErrors` firing | **256 s** from the fault (`capture-queue-full.sh`, broker paused), ~154 s after the first record was actually dropped |
 | producing again after `docker unpause` | **0 s** |
 | past the mid-outage enqueue level after `docker start` | **14 s** (`redpanda-stop.sh`), with **no capture restart** |
 | records lost, 388 s paused | **231,744** on kraken alone |
 | records lost, 45 s stopped | **7,821** on kraken alone |
 
 **The second number is the one that matters, and it is worse than the design said.** A
-45 s broker outage should have lost nothing — the 32 MiB queue buys 204 s at kraken's
-rate — but `message.timeout.ms` was 30 s, so records expired on the clock instead. That
+45 s broker outage should have lost nothing, the 32 MiB queue buys 204 s at kraken's
+rate, but `message.timeout.ms` was 30 s, so records expired on the clock instead. That
 is fixed (`message.timeout.ms=300000`,
 [ADR-019 Outcome](../adr/ADR-019-rust-capture-tier.md#measured-correction-2026-08-26--the-32-mib-buffer-was-unreachable));
 the loss figures above are from *before* the fix and are the reason this runbook exists.

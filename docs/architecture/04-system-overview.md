@@ -1,4 +1,4 @@
-# 04 — System overview
+# 04. System overview
 
 > **You will learn** the whole system on one diagram, its three invariants, and one section per tier.
 > **Read this if** anyone who needs the shape before the detail.
@@ -73,7 +73,7 @@ Three invariants hold the shape together:
 3. **Correctness is measured, not asserted.** Sequence and checksum counters at capture, per-layer
    audits in the lake, three-way OHLCV parity at a pinned snapshot, chaos scripts with timed recovery.
 
-## Capture — `k2-capture`
+## Capture: `k2-capture`
 
 
 **Built.** One Rust crate ([`services/capture-rust/`](../../services/capture-rust/README.md)), one
@@ -97,7 +97,7 @@ venue would close anyway. No spill-to-disk; the lake, not capture, is where comp
 Internet feeds: exchange→receive latency includes transit and venue clock skew and is published as
 such ([benchmarks](../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-receive)).
 
-## Streaming backbone — Redpanda
+## Streaming backbone: Redpanda
 
 
 **Built.** Single broker, `--smp 1 --memory 1500M`, schema registry and console built in
@@ -105,11 +105,11 @@ such ([benchmarks](../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-r
 one-shot, never auto-created: `market.crypto.v3.{raw,trades,book}.<venue>`, 12 partitions each,
 keyed by canonical symbol. Retention: raw 48 h, derived 7 d.
 
-**Trade-offs.** Retention is a buffer, not storage — an ingest outage longer than 48 h loses raw
+**Trade-offs.** Retention is a buffer, not storage, an ingest outage longer than 48 h loses raw
 frames, and the `raw` audit says so ([failure-modes.md](16-failure-modes.md)). Single broker: recovery is
 restart, measured, not failover.
 
-## Lake ingest — Spark under Prefect
+## Lake ingest: Spark under Prefect
 
 
 **Built.** [`docker/lake/`](../../docker/lake/README.md): `ingest.py` runs the stages, one module per
@@ -118,8 +118,8 @@ layer (`bronze.py`, `silver.py`, `gold.py`, `books.py`), `maintenance.py` compac
 (`1-59/5 * * * *`) and `lake-maintenance-daily` (`0 3 * * *`) `docker exec` into the one Spark
 container; a file lock serialises writers.
 
-**How it works.** Stage 1 reads Redpanda by explicit offset range — from the offsets recorded in the
-last ingest snapshot's summary to `latest` — and appends every record verbatim to `raw.messages`,
+**How it works.** Stage 1 reads Redpanda by explicit offset range, from the offsets recorded in the
+last ingest snapshot's summary to `latest`, and appends every record verbatim to `raw.messages`,
 writing the consumed offsets into the same Iceberg commit ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)).
 Each later stage reads its parent incrementally by snapshot id (`k2.src-snapshot-id`) and commits the
 id it read up to. A run killed at any instant leaves either the old snapshot or the new one; the next
@@ -129,7 +129,7 @@ run resumes from whichever it finds.
 head. One Spark container at 2 CPU / 8 GiB serves ingest, rebuilds and maintenance in turn; a full
 bronze rebuild takes 520 s, books 2,367 s ([benchmarks](../benchmarks/2026-08-27.md#lake)).
 
-## Lake layers — Iceberg on Lakekeeper + MinIO
+## Lake layers: Iceberg on Lakekeeper + MinIO
 
 
 **Built.** DDL in [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql); catalog is Lakekeeper's
@@ -147,12 +147,12 @@ Columns: [schema-design.md](13-schema-design.md). Partitioning and file sizing:
 [partitioning-strategy.md](14-partitioning-strategy.md). Why four layers and what each is for:
 [data-strategy.md](12-data-strategy.md), [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md).
 
-**Trade-offs.** Bronze keeps vendor schemas, so a Kraken field is not a Binance field until silver —
+**Trade-offs.** Bronze keeps vendor schemas, so a Kraken field is not a Binance field until silver , 
 cross-venue queries pay for that at gold. Silver keeps every delivery, including replays, so it is
 larger than gold and lake-only. Disk on one host is the binding constraint: ≈ 9.8 GB/day, runway
 ≈ 60 days at the 2026-08-27 fill ([capacity-model.md](15-capacity-model.md)).
 
-## Served tier — ClickHouse `gold`
+## Served tier: ClickHouse `gold`
 
 
 **Built.** [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql)
@@ -178,7 +178,7 @@ pull is by metadata path and needs uncompressed metadata on the source tables.
 
 Prometheus scrapes capture (`:8082`), ClickHouse (`:9363`), Redpanda (`:9644`), the lake exporter
 (`lake-metrics:8000`, PyIceberg over snapshot summaries) and itself. 28 rules in
-[`docker/prometheus/rules/`](../../docker/prometheus/rules/) — 10 capture, 12 lake, 6 ClickHouse — each
+[`docker/prometheus/rules/`](../../docker/prometheus/rules/), 10 capture, 12 lake, 6 ClickHouse, each
 with a runbook in [`../runbooks/`](../runbooks/README.md) and a `promtool` unit test. Four Grafana
 dashboards: pipeline overview, capture, lake, ClickHouse. No Alertmanager: rules are evaluated and
 shown, not routed. Detail: [operations/observability.md](../operations/observability.md).

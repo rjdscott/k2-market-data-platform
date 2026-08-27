@@ -1,4 +1,4 @@
-# 05 — Capture — `k2-capture`
+# 05. Capture: `k2-capture`
 
 > **You will learn** how one Rust process turns a venue WebSocket into three Avro topics without losing or reinterpreting a frame.
 > **Read this if** engineers touching `services/capture-rust/`, reviewers of the ingestion path.
@@ -70,7 +70,7 @@ flowchart TB
   the socket and the venue would disconnect, losing more. Loss is counted and the lake's
   audit records the hole.
 - **One connection per venue.** Simplest possible failure domain; the cost is that a venue
-  disconnect takes trades and book together — and the resubscribe path is exercised in
+  disconnect takes trades and book together, and the resubscribe path is exercised in
   `make chaos`.
 - **No local persistence.** A spill-to-disk buffer would add a second store to reconcile;
   Redpanda's retention (48 h raw) is the buffer.

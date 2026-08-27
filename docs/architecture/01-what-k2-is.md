@@ -1,4 +1,4 @@
-# 01 — What K2 is — and is not
+# 01. What K2 is, and what it is not
 
 > **You will learn** what the platform is for, what it deliberately is not, and the rules the design is held to.
 > **Read this if** everyone, first.
@@ -8,7 +8,7 @@ What this platform is for, what it is measurably good at, and the workloads it i
 
 ## What it is
 
-A single-host crypto market-data platform that takes live exchange trades and makes them queryable as OHLCV candles in **under 200 ms p99**, then lands them in an open table format for history. It runs three exchanges on 15.1 CPU / 21.875 GB (v2 baseline); with the capture tier swapped for v3's Rust `k2-capture` ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) and Phase D finished — the v2 ClickHouse→Iceberg offload deleted, the v3 lake the only lake ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)) — the steady state is **14.60 CPU / 21.625 GiB across 15 long-running services** (bootstrap peak 16.10 CPU / 23.125 GiB across 19, with the four one-shots). The capture tier now carries L2 order books the v2 one never had. Source: `docker compose --env-file .env.example config`, limits summed ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
+A single-host crypto market-data platform that takes live exchange trades and makes them queryable as OHLCV candles in **under 200 ms p99**, then lands them in an open table format for history. It runs three exchanges on 15.1 CPU / 21.875 GB (v2 baseline); with the capture tier swapped for v3's Rust `k2-capture` ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) and Phase D finished, the v2 ClickHouse→Iceberg offload deleted, the v3 lake the only lake ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)), the steady state is **14.60 CPU / 21.625 GiB across 15 long-running services** (bootstrap peak 16.10 CPU / 23.125 GiB across 19, with the four one-shots). The capture tier now carries L2 order books the v2 one never had. Source: `docker compose --env-file .env.example config`, limits summed ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
 
 The design centre is the **warm path**: fast enough that a dashboard or a monitor reads current market state without feeling stale, durable enough that a year of history is one `SELECT` away, and small enough to run on one machine. That is a narrower target than "market data platform" usually implies, and the narrowness is the point.
 
@@ -31,7 +31,7 @@ flowchart TB
     class L3 cold
 ```
 
-K2 spans the warm tier and the cold tier: ClickHouse is the warm store and Iceberg is the cold one. They are siblings rather than a chain — since Phase D both are fed from Redpanda, ClickHouse by its Kafka-engine consumers and the lake by a 5-minute Spark batch ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)) — so the archive is not a copy of a serving database, and losing the hot tier costs a rebuild rather than data ([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)). It is nowhere near the hot tier and is not trying to be — it sits after execution, never in front of it.
+K2 spans the warm tier and the cold tier: ClickHouse is the warm store and Iceberg is the cold one. They are siblings rather than a chain, since Phase D both are fed from Redpanda, ClickHouse by its Kafka-engine consumers and the lake by a 5-minute Spark batch ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)), so the archive is not a copy of a serving database, and losing the hot tier costs a rebuild rather than data ([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)). It is nowhere near the hot tier and is not trying to be, it sits after execution, never in front of it.
 
 ## Fits
 
@@ -41,7 +41,7 @@ K2 spans the warm tier and the cold tier: ClickHouse is the warm store and Icebe
 
 **Cross-exchange comparison.** Three venues on one `canonical_symbol` in `gold.trades` and `gold.book_top20`; comparing BTC/USD across Binance, Kraken and Coinbase is a `GROUP BY exchange`, with the venue's native symbol and fields still one layer down in silver.
 
-**Learning the medallion pattern end to end.** Bronze/Silver/Gold, hot/cold tiering, idempotent batch ingest with the offsets in the snapshot summary, table-format maintenance — all present, all small enough to read in an afternoon.
+**Learning the medallion pattern end to end.** Bronze/Silver/Gold, hot/cold tiering, idempotent batch ingest with the offsets in the snapshot summary, table-format maintenance, all present, all small enough to read in an afternoon.
 
 ## Does not fit
 
@@ -51,7 +51,7 @@ K2 spans the warm tier and the cold tier: ClickHouse is the warm store and Icebe
 
 **Order management.** No FIX, no order lifecycle, no fills or allocations. K2 ingests public trade prints; it has no concept of *your* orders.
 
-**Anything needing high availability.** One broker, one ClickHouse node, one host, no replication. Failure testing proved every component recovers from a restart in under 32 seconds — it proved nothing about surviving a dead disk, because nothing here would.
+**Anything needing high availability.** One broker, one ClickHouse node, one host, no replication. Failure testing proved every component recovers from a restart in under 32 seconds, it proved nothing about surviving a dead disk, because nothing here would.
 
 **Order-book depth, quotes, or non-crypto assets.** Trades only, crypto only. The Silver schema carries `asset_class` and `currency` so equities or futures *could* be added, but no such path has been built or tested.
 
@@ -59,12 +59,12 @@ K2 spans the warm tier and the cold tier: ClickHouse is the warm store and Icebe
 
 | | Value | Confidence |
 |---|---|---|
-| Trade → queryable candle, p99 | 191 / 197 / 170 ms (Binance / Coinbase / Kraken) | Directional — n ≈ 12–13, cold start, 24 h burn-in unfinished |
-| Cold-tier freshness | Under 15 minutes | Solid — scheduled cadence, verified running |
-| Offload throughput | 3.78M rows in 16 s (236k rows/s) | Solid — measured on real data |
+| Trade → queryable candle, p99 | 191 / 197 / 170 ms (Binance / Coinbase / Kraken) | Directional, n ≈ 12–13, cold start, 24 h burn-in unfinished |
+| Cold-tier freshness | Under 15 minutes | Solid, scheduled cadence, verified running |
+| Offload throughput | 3.78M rows in 16 s (236k rows/s) | Solid, measured on real data |
 | Compression, Parquet + zstd 3 | ~12:1 | Solid |
-| Warm/cold row consistency | 99.9%+ | Solid — audited 2026-02-15 and 02-18 |
-| Recovery from component failure | Max MTTR 32 s across 6 injected failures | Solid — all six tested |
+| Warm/cold row consistency | 99.9%+ | Solid, audited 2026-02-15 and 02-18 |
+| Recovery from component failure | Max MTTR 32 s across 6 injected failures | Solid, all six tested |
 | Query latency | **Unmeasured** | No API exists; the "2–5 ms" figure in the v2 design was never verified |
 | Sustained throughput ceiling | **Unmeasured** | Handlers run at the rate the exchanges send; 5x/10x load tests never run |
 
@@ -87,7 +87,7 @@ K2's claim is narrow and specific: sub-second trade-to-candle, open formats end 
 
 ## Principles
 
-Six rules the design is actually held to. Each one has a place in the codebase where it is enforced or a place where it was violated and cost something — otherwise it would be a slogan, not a principle.
+Six rules the design is actually held to. Each one has a place in the codebase where it is enforced or a place where it was violated and cost something, otherwise it would be a slogan, not a principle.
 
 ---
 
@@ -95,7 +95,7 @@ Six rules the design is actually held to. Each one has a place in the codebase w
 
 16 cores, 40 GB, one host. Every service in [`docker-compose.yml`](../../docker-compose.yml) carries explicit `deploy.resources.limits`, and the total is checked at every phase boundary. As built (v2): **15.1 CPU / 21.875 GB across 14 services** (+2 one-shot). v3 added Lakekeeper (+0.25 CPU / +256 MB) and the lake tier's `lake-metrics` exporter (+0.1 CPU / +128 MB), swapped three Kotlin feed handlers (−1.5 CPU / −1.5 GB) for three Rust capture containers (+0.75 CPU / +1 GB), and deleted the v2 offload's exporter (−0.1 CPU / −128 MB): **14.60 CPU / 21.625 GiB across 15 (+4 one-shot, 1.50 CPU / 1.500 GiB, bootstrap peak 16.10 / 23.125 across 19) as deployed here**. Every figure: `docker compose --env-file .env.example config`, limits summed ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
 
-This is first because it is the only principle that changed the architecture. "Reduce resource usage" produces tuning; a number you cannot exceed produces different decisions — five Spark Streaming jobs became materialized views, and a planned Kotlin stream processor was never written. Full accounting in [ADR-010](../adr/ADR-010-resource-budget.md).
+This is first because it is the only principle that changed the architecture. "Reduce resource usage" produces tuning; a number you cannot exceed produces different decisions, five Spark Streaming jobs became materialized views, and a planned Kotlin stream processor was never written. Full accounting in [ADR-010](../adr/ADR-010-resource-budget.md).
 
 **Where it bites:** a new service must displace an existing one or justify its slot. That is the intended friction.
 
@@ -105,9 +105,9 @@ This is first because it is the only principle that changed the architecture. "R
 
 Every batch job must be safe to kill and re-run. The lake ingest reads Redpanda by offset range and writes the offsets it consumed into the Iceberg snapshot summary of the very commit that wrote those rows ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). A run killed mid-flight either committed both or neither, so the next 5-minute cycle either repeats the same range or starts at its successor.
 
-v2 got this from a PostgreSQL watermark advanced after the write — one number that moves last. The lake removes even that: there is no second store to order against, so there is no intermediate state to get wrong. Files written by a run that never committed are orphans no reader can see, and the nightly maintenance pass reclaims them with a 24-hour floor.
+v2 got this from a PostgreSQL watermark advanced after the write, one number that moves last. The lake removes even that: there is no second store to order against, so there is no intermediate state to get wrong. Files written by a run that never committed are orphans no reader can see, and the nightly maintenance pass reclaims them with a 24-hour floor.
 
-**Where it bites:** the property holds for a *sequence* of runs, not for two concurrent ones — two racing appends both commit and the loser's offsets overwrite the winner's. `lake-ingest-5min` is deployed at concurrency 1 and `ingest.py` takes an exclusive `flock`, because the Prefect setting only gates the runs Prefect launched.
+**Where it bites:** the property holds for a *sequence* of runs, not for two concurrent ones, two racing appends both commit and the loser's offsets overwrite the winner's. `lake-ingest-5min` is deployed at concurrency 1 and `ingest.py` takes an exclusive `flock`, because the Prefect setting only gates the runs Prefect launched.
 
 ---
 
@@ -117,7 +117,7 @@ Every frame is archived verbatim to `market.crypto.v3.raw.<ex>` before anything 
 
 The reason is debugging. When a price looks wrong, the question is always "did the exchange send this, or did we do it?", and that question is only answerable if the pre-transform bytes still exist.
 
-**Where it bites:** it costs a second produce per trade and a second copy of storage. And the principle is imperfectly applied — nothing durably persists pre-normalization rows in ClickHouse, which is why the four-layer medallion in [ADR-009](../adr/ADR-009-medallion-in-clickhouse.md) shipped as three.
+**Where it bites:** it costs a second produce per trade and a second copy of storage. And the principle is imperfectly applied, nothing durably persists pre-normalization rows in ClickHouse, which is why the four-layer medallion in [ADR-009](../adr/ADR-009-medallion-in-clickhouse.md) shipped as three.
 
 ---
 
@@ -125,17 +125,17 @@ The reason is debugging. When a price looks wrong, the question is always "did t
 
 One `k2-capture` image, three containers. Deploying one service with an exchange loop would be simpler; it would also mean a Binance parser bug stops Kraken.
 
-Verified rather than assumed: stopping the Binance container left Kraken and Coinbase ingesting normally, and Binance resumed within 30 seconds (measured 2026-02-19 against the Kotlin handler this tier replaced; not re-measured on Rust — `make chaos` is the gate that would). Cost: two extra container slots. Same reasoning gave each exchange its own bronze table and its own Kafka-engine consumer group in the v2 tier.
+Verified rather than assumed: stopping the Binance container left Kraken and Coinbase ingesting normally, and Binance resumed within 30 seconds (measured 2026-02-19 against the Kotlin handler this tier replaced; not re-measured on Rust, `make chaos` is the gate that would). Cost: two extra container slots. Same reasoning gave each exchange its own bronze table and its own Kafka-engine consumer group in the v2 tier.
 
 ---
 
 ### 5. Use what is already running before adding something new
 
-ClickHouse already consumed from Kafka and already maintained incremental aggregates, so it did the stream processing — deleting five Spark Streaming jobs and a planned Kotlin Silver Processor. Redpanda has a schema registry built in, so there is no Confluent registry. Spark was already present for batch, so no Iceberg SDK service was written ([ADR-006](../adr/ADR-006-spark-batch-only.md)).
+ClickHouse already consumed from Kafka and already maintained incremental aggregates, so it did the stream processing, deleting five Spark Streaming jobs and a planned Kotlin Silver Processor. Redpanda has a schema registry built in, so there is no Confluent registry. Spark was already present for batch, so no Iceberg SDK service was written ([ADR-006](../adr/ADR-006-spark-batch-only.md)).
 
 The strongest form of this: the best service is the one you notice you do not have to write. Three planned services were deleted from the plan mid-build for exactly this reason, and none was missed.
 
-**Where it bites:** it concentrates load. ClickHouse is now the store *and* the processor — its 4 CPU / 8 GB is the largest slice of the budget, and a ClickHouse outage stops the pipeline end to end (32 s recovery, measured).
+**Where it bites:** it concentrates load. ClickHouse is now the store *and* the processor, its 4 CPU / 8 GB is the largest slice of the budget, and a ClickHouse outage stops the pipeline end to end (32 s recovery, measured).
 
 ---
 
@@ -156,5 +156,5 @@ The second half is the part that matters. One gap is documented rather than glos
 5. Are the pre-transform inputs still recoverable? (3)
 6. What does it export, and what is still dark? (6)
 
-Answers that are non-obvious become an ADR in [`docs/adr/`](../adr/) — including the ones that later turn out wrong. [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md) argued for deleting Prefect; Prefect is still running. It is kept as written, and the reversal is explained in [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md) rather than edited out.
+Answers that are non-obvious become an ADR in [`docs/adr/`](../adr/), including the ones that later turn out wrong. [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md) argued for deleting Prefect; Prefect is still running. It is kept as written, and the reversal is explained in [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md) rather than edited out.
 

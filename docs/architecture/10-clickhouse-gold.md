@@ -1,4 +1,4 @@
-# 10 — ClickHouse `gold` — the served tier
+# 10. ClickHouse `gold`: the served tier
 
 > **You will learn** the served tier: dedup as a merge-tree key, candles on read, reload from the lake.
 > **Read this if** dashboard and notebook authors, anyone tuning ClickHouse.
@@ -41,7 +41,7 @@ flowchart TB
   ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)). Never computed here.
 - **Errors are rows.** `kafka_handle_error_mode = 'stream'` sends an undecodable record to
   `gold.feed_errors` with its bytes; the partition keeps moving.
-  `kafka_skip_broken_messages` does not cover a registry miss (schema id 0) — stream mode does.
+  `kafka_skip_broken_messages` does not cover a registry miss (schema id 0), stream mode does.
 - **Fixed point on disk, decimals on read.** `price_e8 Int64` is stored; `price Decimal(38,10)`
   is an `ALIAS`, so storage stays 8 bytes and arithmetic stays exact.
 - **Limits.** Container 4 CPU / 8 GiB; `max_server_memory_usage` 6.5 GiB; `background_pool_size` 8

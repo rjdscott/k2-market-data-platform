@@ -9,7 +9,7 @@ Two Prefect 3.x deployments drive the v3 lake, both executing against the shared
 | Deployment | Cron (UTC) | Purpose |
 |------------|------------|---------|
 | `lake-ingest/lake-ingest-5min` | `1-59/5 * * * *` | Redpanda → `raw.messages` → `bronze.*` → `silver.*` → `gold.*`, every 5 minutes |
-| `lake-maintenance/lake-maintenance-daily` | `0 3 * * *` | Compact, expire snapshots, remove orphans, audit — every lake table |
+| `lake-maintenance/lake-maintenance-daily` | `0 3 * * *` | Compact, expire snapshots, remove orphans, audit, every lake table |
 
 Both run at **concurrency 1** on the `lake` work pool, claimed by the
 `k2-prefect-worker` process worker. Confirm they are live:
@@ -20,7 +20,7 @@ docker exec k2-prefect-server prefect deployment ls
 
 The deployments are registered (upserted) by
 [`docker/lake/flows/deploy_lake.py`](../../docker/lake/flows/deploy_lake.py), which the
-`prefect-worker` service runs at start, before the worker itself starts — so a fresh
+`prefect-worker` service runs at start, before the worker itself starts, so a fresh
 `docker compose up` arrives with both schedules armed and nothing to deploy by hand.
 
 > A stack **upgraded in place** from v2 keeps the old, now-empty work pool in the Prefect UI
@@ -47,7 +47,7 @@ flowchart TD
 
 **The flows add no logic.** Position, idempotency and exit codes all live in
 `docker/lake/{ingest,maintenance}.py`; the flow contributes a schedule, a concurrency limit
-and a failure Prometheus can see. There is no watermark table — both stages write their
+and a failure Prometheus can see. There is no watermark table, both stages write their
 position into the Iceberg snapshot summary in the same commit as the data
 ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)).
 
@@ -59,10 +59,10 @@ position into the Iceberg snapshot summary in the same commit as the data
 
 One bounded cycle over the nine v3 topics, in two stages inside one Spark session:
 
-1. **Stage 1 — Kafka → `raw.messages`.** Every topic read as a bounded batch from the
+1. **Stage 1, Kafka → `raw.messages`.** Every topic read as a bounded batch from the
    offsets the last ingest committed, to `endingOffsets=latest`. The Kafka value is stored
    byte for byte, Confluent framing included ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)).
-2. **Stage 2 — `raw.messages` → `bronze.*`.** An Iceberg incremental read of the snapshots
+2. **Stage 2, `raw.messages` → `bronze.*`.** An Iceberg incremental read of the snapshots
    stage 1 just added, header stripped, Avro decoded against the writer schema fetched from
    the registry **by id**, in FAILFAST mode. Only `trades.*` and `book.*` are decoded;
    `raw.*` frames stay verbatim.
@@ -80,7 +80,7 @@ into.
 **Concurrency 1 is a correctness setting, not a politeness one.** Two ingests over the same
 window both commit and the second one's offsets overwrite the first's. The deployment limit
 only gates runs *Prefect* launched, so the real guard is the exclusive `flock` on
-`/tmp/k2-lake-ingest.lock` taken at the top of `ingest.py`'s `main()` — it covers the
+`/tmp/k2-lake-ingest.lock` taken at the top of `ingest.py`'s `main()`, it covers the
 runbooks, the chaos scripts and `make lake-verify` too. A run refused by the lock exits 2
 and wrote nothing; see [lake-ingest-lag.md §5](../runbooks/lake-ingest-lag.md#5-a-flow-run-failed-with-exited-2--the-ingest-lock-held).
 
@@ -90,7 +90,7 @@ and wrote nothing; see [lake-ingest-lag.md §5](../runbooks/lake-ingest-lag.md#5
 |------|---------|
 | [`docker/lake/ingest.py`](../../docker/lake/ingest.py) | The two-stage ingest (invoked via `docker exec`) |
 | [`docker/lake/offsets.py`](../../docker/lake/offsets.py) | Offset encode/decode and the gap arithmetic the audit reuses |
-| [`docker/lake/spark_conf.py`](../../docker/lake/spark_conf.py) | The one Spark session builder — Lakekeeper REST catalog over MinIO |
+| [`docker/lake/spark_conf.py`](../../docker/lake/spark_conf.py) | The one Spark session builder, Lakekeeper REST catalog over MinIO |
 | [`docker/lake/flows/lake_flows.py`](../../docker/lake/flows/lake_flows.py) | Both Prefect flows |
 | [`docker/lake/flows/deploy_lake.py`](../../docker/lake/flows/deploy_lake.py) | Registers both deployments |
 
@@ -100,7 +100,7 @@ and wrote nothing; see [lake-ingest-lag.md §5](../runbooks/lake-ingest-lag.md#5
 docker exec k2-prefect-worker python3 /opt/prefect/lake-flows/deploy_lake.py
 ```
 
-It is an upsert and it is idempotent — the worker runs the same command at every start.
+It is an upsert and it is idempotent, the worker runs the same command at every start.
 
 ### Monitor
 
@@ -134,7 +134,7 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --stage raw
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
   --end-timestamp '2026-08-26T10:00:00Z'
 
-# Framing check — reports one recent record per topic, writes nothing
+# Framing check: reports one recent record per topic, writes nothing
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
 ```
 
@@ -155,7 +155,7 @@ Runs once per day at 03:00 UTC with `days=2`, `retain_days=7`. Four stages, in o
 
 **Exit code is the product.** Any failed audit exits non-zero → the flow run fails →
 `LakeAuditFailed` fires. Every check also lands as a row in `lake.audit.checks`, including
-a check that *raised*, and the failed-check count rides in that commit's snapshot summary —
+a check that *raised*, and the failed-check count rides in that commit's snapshot summary , 
 which is what `docker/lake/metrics.py` reads. The task has **no retry**: a failed audit is a
 finding, not a blip.
 
@@ -183,7 +183,7 @@ FROM lake.audit.checks WHERE passed = false ORDER BY run_ts DESC LIMIT 10;
 ```
 
 ```bash
-# Compaction age per table — LakeCompactionStale is the alert over this
+# Compaction age per table: LakeCompactionStale is the alert over this
 curl -s --get localhost:9090/api/v1/query \
   --data-urlencode 'query=time() - k2_lake_last_compaction_ts_seconds' | \
   jq -r '.data.result[] | "\(.metric.table) \(.value[1])"'
@@ -195,7 +195,7 @@ curl -s --get localhost:9090/api/v1/query \
 # The full nightly pass
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py
 
-# Audits only — no compaction, no expiry, no orphan removal
+# Audits only: no compaction, no expiry, no orphan removal
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-only
 
 # Catch up after a missed night: widen the compaction window
@@ -253,7 +253,7 @@ docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.binance
 docker stats --no-stream k2-spark-iceberg
 ```
 
-**Do not raise the cadence to catch up** — a faster schedule against a concurrency-1
+**Do not raise the cadence to catch up**, a faster schedule against a concurrency-1
 deployment queues runs rather than parallelising them, and raising the concurrency is the
 one change that breaks the exactly-once argument. Slice the window with `--end-timestamp`
 instead.
@@ -262,7 +262,7 @@ See also: [lake-ingest-lag.md](../runbooks/lake-ingest-lag.md).
 
 ### A run failed with `exited 2`
 
-The ingest lock was held by another run — a hand-run ingest, a chaos script, or a backlog
+The ingest lock was held by another run, a hand-run ingest, a chaos script, or a backlog
 slice still going when the cycle fired. **The refused run wrote nothing** and the next cycle
 succeeds normally. Nothing to repair;
 [lake-ingest-lag.md §5](../runbooks/lake-ingest-lag.md#5-a-flow-run-failed-with-exited-2--the-ingest-lock-held)
@@ -270,7 +270,7 @@ covers the case where it repeats.
 
 ### A run failed on `failOnDataLoss`
 
-The committed offsets point below what the broker still holds — a permanent hole, not a
+The committed offsets point below what the broker still holds, a permanent hole, not a
 restartable error. **Stop and read**
 [lake-ingest-lag.md §3](../runbooks/lake-ingest-lag.md#3-failondataloss--the-offsets-point-below-what-the-broker-holds)
 before doing anything: the deliverable is a recorded gap window, not a restart.
@@ -284,7 +284,7 @@ FROM lake.audit.checks WHERE passed = false ORDER BY run_ts DESC LIMIT 10;
 
 `offset_continuity` failing means the archive has a hole or an overlap;
 `duplicate_identifiers` means the ingest wrote a record twice. `venue_replay` is
-informational and cannot fail — a venue replaying trades after a reconnect is expected.
+informational and cannot fail, a venue replaying trades after a reconnect is expected.
 See [lake-audit-failed.md](../runbooks/lake-audit-failed.md).
 
 ### Worker not picking up runs
@@ -323,9 +323,9 @@ pool is fixed by restarting the worker container.
 
 ## Related
 
-- [ADR-022 — exactly-once via snapshot offsets](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) — why there is no watermark table and why concurrency 1 is a correctness setting
-- [ADR-018 — v3 lake-first architecture](../adr/ADR-018-v3-lake-first-rust-capture.md) — why the archive is the system of record
-- [ADR-023 — Lakekeeper REST catalog](../adr/ADR-023-lakekeeper-rest-catalog.md) — the catalog both jobs commit through
-- [../runbooks/lake-ingest-lag.md](../runbooks/lake-ingest-lag.md) — lag, a stopped scheduler, `failOnDataLoss`, missed compaction, the ingest lock
-- [../runbooks/lake-recovery.md](../runbooks/lake-recovery.md) — a killed run, Lakekeeper down, MinIO down
-- [../runbooks/lake-audit-failed.md](../runbooks/lake-audit-failed.md) — when the nightly audit fails
+- [ADR-022, exactly-once via snapshot offsets](../adr/ADR-022-exactly-once-via-snapshot-offsets.md), why there is no watermark table and why concurrency 1 is a correctness setting
+- [ADR-018, v3 lake-first architecture](../adr/ADR-018-v3-lake-first-rust-capture.md), why the archive is the system of record
+- [ADR-023, Lakekeeper REST catalog](../adr/ADR-023-lakekeeper-rest-catalog.md), the catalog both jobs commit through
+- [../runbooks/lake-ingest-lag.md](../runbooks/lake-ingest-lag.md), lag, a stopped scheduler, `failOnDataLoss`, missed compaction, the ingest lock
+- [../runbooks/lake-recovery.md](../runbooks/lake-recovery.md), a killed run, Lakekeeper down, MinIO down
+- [../runbooks/lake-audit-failed.md](../runbooks/lake-audit-failed.md), when the nightly audit fails

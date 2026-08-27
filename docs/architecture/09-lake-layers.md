@@ -1,4 +1,4 @@
-# 09 — Lake layers — raw, bronze, silver, gold
+# 09. Lake layers: raw, bronze, silver, gold
 
 > **You will learn** what raw, bronze, silver and gold each hold, the identifier at each layer, and why the boundaries sit where they do.
 > **Read this if** anyone querying the lake.
@@ -29,7 +29,7 @@ flowchart TB
 | `raw` | what did K2 receive, byte for byte, and when | `(topic, partition, offset)`; `(conn_id, conn_msg_seq)` | regulatory-grade record; every other layer is a function of it |
 | `bronze` | what did the venue say, in its own vocabulary | lineage to the raw row | a field the venue sent is never normalised away before it can be inspected; schema drift is detectable per venue |
 | `silver` | what does it mean, and can it be trusted | lineage to bronze; flags `venue_replay`, `seq_gap`, `precision_loss`, `checksum_ok` | forensics: every delivery, including replays, with the reason it is suspect |
-| `gold` | what does research join against | `(exchange, canonical_symbol, trade_id)` — unique here and nowhere below | one schema across venues; dedup happens once, where the audit proves it |
+| `gold` | what does research join against | `(exchange, canonical_symbol, trade_id)`, unique here and nowhere below | one schema across venues; dedup happens once, where the audit proves it |
 
 **Why uniqueness lives in gold.** The Phase D unified bronze declared `(exchange, symbol,
 trade_id)` unique and the data disproved it twice in a day (reconnect replay, then
@@ -38,7 +38,7 @@ in-connection re-send). Below gold the only honest identifier is lineage; gold i
 
 ## Storage choices
 
-- **Partitions.** `raw` by `days(kafka_ts), topic` — time first so a replay lands in one
+- **Partitions.** `raw` by `days(kafka_ts), topic`, time first so a replay lands in one
   partition; `bronze`/`silver` by `days(recv_ts)`, the one clock every frame carries; `gold`
   by `exchange` then day of `exchange_ts`.
 - **Files.** `write.distribution-mode = hash`, targets 256 MB (raw) / 128 MB (derived),

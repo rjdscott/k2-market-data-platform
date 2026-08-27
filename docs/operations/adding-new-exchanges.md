@@ -23,7 +23,7 @@ The Kotlin handlers this checklist used to describe are archived at
 - [ ] Symbol format documented, exactly as the venue spells it on the wire
       (`BTCUSDT`, `BTC/USD`, `BTC-USD`)
 - [ ] Timestamp format documented
-- [ ] Continuity signal identified: a sequence number, a checksum, or neither — this is
+- [ ] Continuity signal identified: a sequence number, a checksum, or neither, this is
       what decides the resync policy in step 1
 
 ## Implementation Checklist
@@ -40,12 +40,12 @@ The Kotlin handlers this checklist used to describe are archived at
 - [ ] Decide the continuity policy: `Action::Resubscribe(symbol)` if a gap is
       attributable to one product, `Action::Reconnect` if it is connection-wide
 
-`handle_frame` must be **pure** — no I/O, no clock reads, no randomness, no `HashMap`
+`handle_frame` must be **pure**, no I/O, no clock reads, no randomness, no `HashMap`
 iteration on an emit path. That purity is what lets the replay test in step 7 feed
 archived frames back through the same code and assert the bytes out are identical. The
 four obligations are spelled out at the top of `exchanges/mod.rs`:
 
-1. A `RawMessage` for **every** frame, first, payload byte-for-byte — including frames
+1. A `RawMessage` for **every** frame, first, payload byte-for-byte, including frames
    that failed to parse.
 2. The adapter owns `conn_msg_seq`; `begin_connection` resets it.
 3. Book state is internal and leaves only through `snapshot()`.
@@ -69,7 +69,7 @@ partial-depth stream.
       `default_ws_url()`
 - [ ] Add the `Adapter::` construction arm and a `{EXCHANGE}_STREAMS` list in `main.rs`
 - [ ] Add each stream name the venue uses to `CONTINUOUS` **only if it genuinely runs
-      continuously**, with its own staleness bound — 60 s for a book/heartbeat channel,
+      continuously**, with its own staleness bound, 60 s for a book/heartbeat channel,
       300 s for a trade channel
 
 `CONTINUOUS` is one table read by three things: the session watchdog, the
@@ -91,19 +91,19 @@ has no series and the alert cannot fire on the failure it exists for.
     - { native: BTC-USD, canonical: BTC/USD }
 ```
 
-`native` is **exactly the bytes on the wire**, byte for byte — it is what goes in the
+`native` is **exactly the bytes on the wire**, byte for byte, it is what goes in the
 subscribe frame and what comes back on every message. `canonical` is `BASE/QUOTE`,
 uppercase, and is the Kafka key and the lake join key. Nothing translates a symbol
 anywhere in the crate; a native the file does not list is a loud failure, not a guess.
-Keep the quote currency as the venue quotes it — `BTC/USDT` and `BTC/USD` are different
+Keep the quote currency as the venue quotes it, `BTC/USDT` and `BTC/USD` are different
 instruments, not two spellings of one.
 
-- [ ] Update the instrument count in the file header — `tests/test_contracts.py` asserts it
+- [ ] Update the instrument count in the file header, `tests/test_contracts.py` asserts it
 
 > **Bind-mount gotcha:** `instruments.yaml` is mounted file-by-file, which pins the inode.
 > Editors that write-then-rename produce a new inode and the container keeps reading the
 > old file. After editing, run
-> `docker compose up -d --force-recreate --no-deps capture-{exchange}` —
+> `docker compose up -d --force-recreate --no-deps capture-{exchange}` , 
 > `docker restart` will **not** pick up the change.
 
 ---
@@ -119,13 +119,13 @@ instruments, not two spellings of one.
 
 No new schema is needed: all three venues share `raw-message.avsc`, `trade.avsc` and
 `book-snapshot-l2.avsc`. If the venue needs a *field* nobody has, that is a schema change
-across every place the contract lives — use `/schema-change`, not this checklist.
+across every place the contract lives, use `/schema-change`, not this checklist.
 
 ---
 
 ### 5. Compose service
 
-**File**: [`docker-compose.yml`](../../docker-compose.yml) (repo root — all services live
+**File**: [`docker-compose.yml`](../../docker-compose.yml) (repo root, all services live
 in one file)
 
 - [ ] Copy `capture-coinbase`, change the name, `hostname`, `container_name` and
@@ -177,7 +177,7 @@ capture-{exchange}:
     com.k2.version: "v3"
 ```
 
-The healthcheck is the binary's own subcommand, not `curl` — the runtime image is
+The healthcheck is the binary's own subcommand, not `curl`, the runtime image is
 distroless and has neither a shell nor curl.
 
 - [ ] Update the resource summary comment at the top of `docker-compose.yml` and the
@@ -191,7 +191,7 @@ distroless and has neither a shell nor curl.
 
 - [ ] Add a scrape job in [`docker/prometheus/prometheus.yml`](../../docker/prometheus/prometheus.yml)
       targeting `capture-{exchange}:8082`, named `capture-{exchange}`, with
-      `service`/`tier` labels and **no `exchange` target label** — the binary emits its own
+      `service`/`tier` labels and **no `exchange` target label**, the binary emits its own
       `exchange` on every series, and a target label of the same name would rename the
       sample's to `exported_exchange`
 
@@ -216,11 +216,11 @@ on their own.
       the fixture through the live adapter's `handle_frame`, assert the book invariants
       (top-20, sorted, uncrossed, no zero quantities) and the venue's own continuity
       check, then hash two passes against a committed golden value
-- [ ] Load `config/instruments.yaml` directly in the test — no test-only copy of the
+- [ ] Load `config/instruments.yaml` directly in the test, no test-only copy of the
       registry
 - [ ] If the fixture had to be trimmed to keep it committable, say exactly what was
       trimmed in the test's module docs, as all three existing ones do
-- [ ] `make test` green before opening the PR — see
+- [ ] `make test` green before opening the PR, see
       [../development/testing.md](../development/testing.md)
 
 ---
@@ -230,10 +230,10 @@ on their own.
 **File**: [`docker/clickhouse/ddl/20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql)
 
 - [ ] Add `market.crypto.v3.trades.{exchange}` to `gold.q_trades`'s `kafka_topic_list` and
-      `market.crypto.v3.book.{exchange}` to `gold.q_book`'s. The list is literal — a topic
+      `market.crypto.v3.book.{exchange}` to `gold.q_book`'s. The list is literal, a topic
       not named there is never read, and nothing alerts on a venue that was never attached.
       `gold.trades` / `gold.book_top20` need no change: `exchange` is a column, not a table
-- [ ] Re-attach the feeds on the running server — a Kafka-engine table's settings are fixed
+- [ ] Re-attach the feeds on the running server, a Kafka-engine table's settings are fixed
       at CREATE, so drop and recreate `gold.q_trades` / `gold.q_book` and their MVs from the
       file ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md#applying-it-to-a-running-server));
       the group resumes from its committed offsets on the existing topics and starts the new
@@ -258,7 +258,7 @@ docker exec k2-capture-{exchange} /k2-capture healthcheck
 ```
 
 `healthcheck` exits non-zero and names the offending stream if any continuous stream is
-past its bound — which is also the fastest way to find a `CONTINUOUS` entry you got wrong
+past its bound, which is also the fastest way to find a `CONTINUOUS` entry you got wrong
 in step 2.
 
 ### 3. Verify the topics
@@ -275,7 +275,7 @@ docker exec k2-redpanda curl -s localhost:8081/subjects | jq
 curl -sG localhost:9090/api/v1/query \
   --data-urlencode 'query=sum by (exchange, kind) (rate(k2_capture_records_produced_total[5m]))' | jq
 
-# Delivered, not just produced — produced climbs straight through a broker outage
+# Delivered, not just produced: produced climbs straight through a broker outage
 curl -sG localhost:9090/api/v1/query \
   --data-urlencode 'query=sum by (exchange) (rate(k2_capture_records_delivered_total[5m]))' | jq
 ```
@@ -320,7 +320,7 @@ topics means the Avro the adapter produced is not what `20-gold-kafka.sql` decla
 - Symbol format: dash separator (BTC-USD)
 - Book: full depth, truncated locally
 - Continuity: one `sequence_num` across every channel, so a gap cannot be attributed to a
-  product — drop every book and reconnect
+  product, drop every book and reconnect
 - **Examples**: Coinbase Advanced Trade, Gemini
 
 ---
@@ -348,11 +348,11 @@ table that used to bridge the two went with the Kotlin handlers.
   - [ ] Subscription acknowledged, or silently rejected? A rejected subscription looks
         healthy until `k2_capture_last_message_ts_seconds` for that stream goes stale
   - [ ] `k2_capture_unknown_frames_total` climbing? The adapter is not recognising frames
-        it is receiving — they are still archived, so the fix is replayable
+        it is receiving, they are still archived, so the fix is replayable
 
 - [ ] **Produce**:
   - [ ] `records_produced_total` climbing but `records_delivered_total` flat? The broker or
-        the registry is the problem, not the venue — `CaptureProduceStalled`
+        the registry is the problem, not the venue, `CaptureProduceStalled`
   - [ ] `produce_errors_total{reason="queue_full"}` ticking? Records are being **lost**;
         there is no spill-to-disk
 
@@ -367,22 +367,22 @@ table that used to bridge the two went with the Kotlin handlers.
 
 ## References
 
-- [ADR-019 — Rust capture tier](../adr/ADR-019-rust-capture-tier.md) — why the capture tier
+- [ADR-019, Rust capture tier](../adr/ADR-019-rust-capture-tier.md), why the capture tier
   is Rust, and the gate the Kotlin handlers retired on
-- [ADR-018 — v3 lake-first architecture](../adr/ADR-018-v3-lake-first-rust-capture.md) —
+- [ADR-018, v3 lake-first architecture](../adr/ADR-018-v3-lake-first-rust-capture.md) , 
   why `raw` is the system of record and everything else is derived from it
-- [ADR-027 — book snapshot and sequencing](../adr/ADR-027-book-snapshot-and-sequencing.md) —
+- [ADR-027, book snapshot and sequencing](../adr/ADR-027-book-snapshot-and-sequencing.md) , 
   the top-20-at-1 Hz product and the per-venue resync policies
-- [`services/capture-rust/README.md`](../../services/capture-rust/README.md) — the adapter
+- [`services/capture-rust/README.md`](../../services/capture-rust/README.md), the adapter
   contract, the environment table, and the build/test loop
-- [Streaming sources](../architecture/06-capture-venues.md) — per-exchange protocol notes
+- [Streaming sources](../architecture/06-capture-venues.md), per-exchange protocol notes
 
 ---
 
 ## Post-Integration Checklist
 
-- [ ] **The lake's raw archive needs nothing.** [`docker/lake/ingest.py`](../../docker/lake/ingest.py) builds its topic list as `K2_EXCHANGES × {raw, trades, book}`, so the new topics are archived into `lake.raw.messages` by the next 5-minute cycle; a topic absent from the previous commit's `k2.kafka-offsets` has no stored position, so the ingest starts it at the beginning ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). If `K2_EXCHANGES` has been set explicitly anywhere, add the exchange there too — it defaults to `binance,kraken,coinbase`
-- [ ] **The lake's decoded layers are per venue** ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)): a `bronze.{exchange}_<msgtype>` entry in `VENUE_TABLES` in [`docker/lake/bronze.py`](../../docker/lake/bronze.py), a `silver.trades_{exchange}` entry in `TRADES` in [`docker/lake/silver.py`](../../docker/lake/silver.py) (and the book replay in `books.py` if the venue publishes L2), plus the matching DDL in [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql). `gold.*` is unified and needs no change. Until those land, the venue is archived but not decoded — `raw.messages` keeps every frame, so the decode is a replay, not a loss
+- [ ] **The lake's raw archive needs nothing.** [`docker/lake/ingest.py`](../../docker/lake/ingest.py) builds its topic list as `K2_EXCHANGES × {raw, trades, book}`, so the new topics are archived into `lake.raw.messages` by the next 5-minute cycle; a topic absent from the previous commit's `k2.kafka-offsets` has no stored position, so the ingest starts it at the beginning ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). If `K2_EXCHANGES` has been set explicitly anywhere, add the exchange there too, it defaults to `binance,kraken,coinbase`
+- [ ] **The lake's decoded layers are per venue** ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)): a `bronze.{exchange}_<msgtype>` entry in `VENUE_TABLES` in [`docker/lake/bronze.py`](../../docker/lake/bronze.py), a `silver.trades_{exchange}` entry in `TRADES` in [`docker/lake/silver.py`](../../docker/lake/silver.py) (and the book replay in `books.py` if the venue publishes L2), plus the matching DDL in [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql). `gold.*` is unified and needs no change. Until those land, the venue is archived but not decoded, `raw.messages` keeps every frame, so the decode is a replay, not a loss
 - [ ] Update the instrument and exchange counts in `config/instruments.yaml`'s header and
       the root `README.md`
 - [ ] Update [docker-resources.md](./docker-resources.md), the `docker-compose.yml`

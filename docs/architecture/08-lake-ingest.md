@@ -1,4 +1,4 @@
-# 08 — Lake ingest — Redpanda to Iceberg, exactly once
+# 08. Lake ingest: Redpanda to Iceberg, exactly once
 
 > **You will learn** how Redpanda reaches Iceberg exactly once, and how each layer is derived incrementally.
 > **Read this if** engineers touching `docker/lake/`, anyone debugging a lake audit.
@@ -31,10 +31,10 @@ One process, one Spark session, one file lock (`lock.py`): a second writer exits
 than interleaving appends; nightly maintenance takes the same lock blocking, so compaction
 never shares the 8 GiB container with an ingest.
 
-## Stage 1 — offsets in the snapshot
+## Stage 1: offsets in the snapshot
 
 1. **Where to start.** `offsets.latest_summary()` finds the newest `raw.messages` snapshot
-   whose summary carries `k2.job = ingest` — maintenance snapshots (compaction, expiry) have
+   whose summary carries `k2.job = ingest`, maintenance snapshots (compaction, expiry) have
    no `k2.job` and are skipped by that property, not by guessing at Iceberg's `operation`
    field. Its `k2.kafka-offsets` map holds Kafka *end* offsets (exclusive), so the next
    start is the same number copied, no ±1. A partition the map has never seen starts at
@@ -48,10 +48,10 @@ never shares the 8 GiB container with an ingest.
    `offset_gap` row in `audit.checks` before skipping it. There is deliberately no
    environment variable for this: the scheduled path can never absorb a loss silently.
 4. **The commit.** One `append` carrying `k2.job`, `k2.kafka-offsets` (merged over the
-   previous map — a committed offset is never dropped), `k2.kafka-backlog` and
+   previous map, a committed offset is never dropped), `k2.kafka-backlog` and
    `k2.max-kafka-ts`. Rows and position are the same atomic metadata swap in Lakekeeper.
 
-## Stages 2–2e — incremental by parent snapshot
+## Stages 2–2e: incremental by parent snapshot
 
 Each layer reads its parent with `start-snapshot-id` = the id it last committed
 (`k2.src-snapshot-id` on its own newest snapshot) and `end-snapshot-id` = the parent's
@@ -101,7 +101,7 @@ compares lake, ClickHouse and DuckDB candles at a pinned snapshot.
 ## Trade-offs
 
 - **Batch, five minutes.** Freshness in the lake is bounded by the cron; ClickHouse covers
-  the head from the topics. A streaming writer would need its own checkpoint store — the
+  the head from the topics. A streaming writer would need its own checkpoint store, the
   thing the snapshot-summary design removes.
 - **One writer, one container.** Ingest, rebuilds and maintenance share 2 CPU / 8 GiB in
   turn. Serial by lock is a capacity ceiling, not a correctness one.

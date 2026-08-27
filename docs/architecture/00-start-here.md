@@ -1,12 +1,12 @@
-# 00 — Start here
+# 00. Start here
 
 > **You will learn** how this book is organised and where to jump in.
 > **Read this if** you are new to the repo.
 > **Before this** nothing.
 
 `docs/architecture/` is written as a book: numbered chapters in the order a new joiner
-should meet them, each one openable on its own. Every chapter starts with three lines —
-what you will learn, who should read it, what to read first — so you can skip.
+should meet them, each one openable on its own. Every chapter starts with three lines , 
+what you will learn, who should read it, what to read first, so you can skip.
 
 **The journey.** Chapter 01 says what the platform is for and what it refuses to be.
 Chapters 02–03 explain the market-data and data-engineering ideas the rest assumes.
@@ -26,4 +26,4 @@ capacity, failure modes, scale-out. A1 is the versions table.
 **Conventions.** Every number cites [`../benchmarks/`](../benchmarks/README.md); every
 decision cites [`../adr/`](../adr/README.md); every practice names the file, test or alert
 that enforces it. Diagrams are Mermaid, top to bottom. If a page and the code disagree,
-the code is right and the page has a bug — open a PR.
+the code is right and the page has a bug, open a PR.

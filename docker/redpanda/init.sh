@@ -103,7 +103,7 @@ V3_PREFIX="${K2_V3_PREFIX:-market.crypto.v3}"
 # bind, and they bind at 7 h, not 48. `market.crypto.v3.raw.kraken` partition 0
 # held 4,887,694 records between LOG-START and HIGH-WATERMARK whose Kafka
 # timestamps are 25,227,274 ms apart — 7.01 h, 193.9 records/s, 119.7 B/record
-# on disk (docs/architecture/capacity-model.md §4d, note of that date).
+# on disk (docs/architecture/15-capacity-model.md §4d, note of that date).
 #
 # The arithmetic above is not what was wrong; its assumption was. It divides the
 # topic's bytes by twelve, and the traffic does not divide by twelve: records
