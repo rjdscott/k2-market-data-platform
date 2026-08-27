@@ -6,8 +6,8 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 |---|---|---|
 | 00 | [Start here](00-start-here.md) | how the book is organised, three reading paths |
 | 01 | [What K2 is](01-what-k2-is.md) | purpose, non-goals, principles, what it is deliberately wrong for |
-| 02 | Market data concepts | books, sequences, checksums, timestamps, fixed point, OHLCV/BBO, *next* |
-| 03 | Data engineering concepts | exactly-once, snapshots, medallion, evolution, pruning, *next* |
+| 02 | [Market data concepts](02-market-data-concepts.md) | books, sequences, checksums, clocks, fixed point, symbols, candles, BBO, completeness |
+| 03 | [Data engineering concepts](03-data-engineering-concepts.md) | exactly-once, idempotency, snapshots, layers, lineage, evolution, partitioning, compaction, audits |
 | 04 | [System overview](04-system-overview.md) | the diagram, three invariants, one section per tier |
 | 05 | [Capture](05-capture.md) | one Rust process per venue: frame loop, sink, image |
 | 06 | [Capture, venues](06-capture-venues.md) | Binance, Kraken, Coinbase dialects; sequencing, checksum, resync |
@@ -24,6 +24,6 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 | 17 | [Scale-out path](17-scale-out-path.md) | AWS mapping at TB/PB, designed, not exercised |
 | A1 | [Technology stack](A1-technology-stack.md) | versions and the ADR behind each |
 
-Chapters 02 and 03 are the next PR. Decisions live in [`../adr/`](../adr/README.md),
+Decisions live in [`../adr/`](../adr/README.md),
 numbers in [`../benchmarks/`](../benchmarks/README.md), procedures in
 [`../runbooks/`](../runbooks/README.md).
