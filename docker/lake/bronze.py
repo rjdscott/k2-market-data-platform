@@ -7,6 +7,7 @@ venue's own field names and JSON types (ADR-026, plan 004).
     bronze.binance_depth20          market.crypto.v3.raw.binance   stream = depth20
     bronze.kraken_trade             market.crypto.v3.raw.kraken    stream = trade
     bronze.kraken_book              market.crypto.v3.raw.kraken    stream = book
+    bronze.kraken_instrument        market.crypto.v3.raw.kraken    stream = instrument (reference data)
     bronze.coinbase_market_trades   market.crypto.v3.raw.coinbase  stream = market_trades
     bronze.coinbase_level2          market.crypto.v3.raw.coinbase  stream = l2_data
 
@@ -32,7 +33,7 @@ in Spark is that a capture bug is repairable here without a replay: if the two
 disagree, bronze is the one that read the frame as sent.
 
 **What is NOT here.** Control frames — `heartbeat`, `subscriptions`, `status`,
-`instrument`, `control` — stay verbatim in `raw.messages` and are counted, not
+`control` — stay verbatim in `raw.messages` and are counted, not
 decoded: their value is forensic ("why did ETH go quiet at 03:12"), and a table
 per venue-control-shape is a table nobody queries. The per-run parity line
 accounts for every one of them, so "not decoded" is never "lost".
@@ -156,6 +157,26 @@ VENUE_TABLES = (
         {
             "$": {"channel", "type", "data"},
             "$.data[0]": {"symbol", "bids", "asks", "checksum", "timestamp"},
+        },
+    ),
+    VenueTable(
+        "kraken_instrument",
+        "kraken",
+        "instrument",
+        "channel STRING, type STRING, data STRUCT<assets: ARRAY<STRUCT<id: STRING, status: STRING, precision: INT, "
+        "precision_display: INT, borrowable: BOOLEAN, collateral_value: DECIMAL(28,10), class: STRING, margin_rate: DECIMAL(28,10)>>, "
+        "pairs: ARRAY<STRUCT<symbol: STRING, base: STRING, quote: STRING, status: STRING, qty_precision: INT, qty_increment: DECIMAL(28,10), "
+        "price_precision: INT, cost_precision: INT, marginable: BOOLEAN, has_index: BOOLEAN, ws_display_price_precision: INT, "
+        "cost_min: DECIMAL(28,10), margin_initial: DECIMAL(28,10), position_limit_long: BIGINT, position_limit_short: BIGINT, "
+        "tick_size: DECIMAL(28,10), price_increment: DECIMAL(28,10), qty_min: DECIMAL(28,10)>>>",
+        "channel",
+        {
+            "$": {"channel", "type", "data"},
+            "$.data": {"assets", "pairs"},
+            "$.data.pairs[0]": {"symbol", "base", "quote", "status", "qty_precision", "qty_increment", "price_precision",
+                                "cost_precision", "marginable", "has_index", "ws_display_price_precision", "cost_min",
+                                "margin_initial", "position_limit_long", "position_limit_short", "tick_size",
+                                "price_increment", "qty_min"},
         },
     ),
     VenueTable(

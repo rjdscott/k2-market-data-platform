@@ -274,6 +274,34 @@ PARTITION BY toYYYYMM(window_start)
 ORDER BY (exchange, canonical_symbol, window_start);
 
 -- ───────────────────────────────────────────────────────────────────────────
+-- gold.bbo_1s — the lake's per-second BBO (lake.gold.bbo_1s, projected from
+-- lake.gold.book_top20 which is replayed from every venue frame). Loaded by
+-- pull like the candles; gold.bbo_live below is the same arithmetic on the
+-- topic-fed book_top20 for the head.
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS gold.bbo_1s
+(
+    exchange         LowCardinality(String),
+    canonical_symbol LowCardinality(String),
+    second           DateTime('UTC'),
+    bid_e8           Int64,
+    bid_qty_e8       Int64,
+    ask_e8           Int64,
+    ask_qty_e8       Int64,
+    bid              Decimal(38, 10) ALIAS toDecimal128(bid_e8, 10) / toDecimal128(100000000, 0),
+    ask              Decimal(38, 10) ALIAS toDecimal128(ask_e8, 10) / toDecimal128(100000000, 0),
+    mid              Float64,
+    spread_bps       Float64,
+    imbalance        Float64,
+    microprice       Float64,
+    checksum_ok      Nullable(Bool),
+    src_snapshot_id  UInt64
+)
+ENGINE = ReplacingMergeTree(src_snapshot_id)
+PARTITION BY toYYYYMM(second)
+ORDER BY (exchange, canonical_symbol, second);
+
+-- ───────────────────────────────────────────────────────────────────────────
 -- gold.bbo_live — best bid/offer and the three derived numbers a desk asks
 -- for first, straight off the top level of each 1 Hz snapshot. Float64 for
 -- the derived values: they are ratios, not prices. Int64 products of an e8

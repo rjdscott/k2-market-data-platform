@@ -30,6 +30,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
+import books
 import bronze
 import gold
 import silver
@@ -108,7 +109,12 @@ def compact(spark, since: datetime) -> None:
         f"                  'partial-progress.enabled', 'true'))",
     )
 
-    per_venue = [(t.table, "recv_ts") for t in bronze.VENUE_TABLES] + [(t.table, "exchange_ts") for t in silver.TRADES] + [(gold.TRADES, "exchange_ts")]
+    per_venue = (
+        [(t.table, "recv_ts") for t in bronze.VENUE_TABLES]
+        + [(t.table, "exchange_ts") for t in silver.TRADES]
+        + [(t.table, "recv_ts") for t in books.BOOKS]
+        + [(gold.TRADES, "exchange_ts"), (books.GOLD_BOOK, "second"), (books.GOLD_BBO, "second")]
+    )
     for table, column in [(TRADES_TABLE, "exchange_ts"), (BOOK_TABLE, "snapshot_ts")] + per_venue:
         # No sort_order argument: the tables declare theirs in lake.sql and the
         # procedure uses the declared one. Repeating it here is a second place
@@ -134,7 +140,7 @@ def expire(spark, retain_days: int) -> None:
     covers a long outage without unbounded metadata growth.
     """
     older_than = datetime.now(timezone.utc) - timedelta(days=retain_days)
-    for table in (RAW_TABLE, TRADES_TABLE, BOOK_TABLE, CHECKS_TABLE, *bronze.TABLES, *silver.TABLES, *gold.TABLES):
+    for table in (RAW_TABLE, TRADES_TABLE, BOOK_TABLE, CHECKS_TABLE, *bronze.TABLES, *silver.TABLES, *gold.TABLES, *books.TABLES):
         _call(
             spark,
             f"CALL {CATALOG}.system.expire_snapshots("
@@ -648,6 +654,54 @@ def audit_ohlcv(spark) -> list:
                     else f"{bad} candle(s) differ between stored and recomputed for yesterday ({row['n_stored']} stored, {row['n_fresh']} fresh)")]
 
 
+def audit_book_parity(spark, spec: books.BookSpec) -> list:
+    """silver.book_<venue> rows == the frames/events of the bronze snapshot it last read."""
+    previous = O.latest_summary(snapshot_history(spark, spec.table), O.JOB_DECODE)
+    src = previous.get(O.SRC_SNAPSHOT_ID) if previous else None
+    if src is None:
+        return [_result("silver_parity", spec.table, True, 0, "silver has not read bronze yet")]
+    frames = spark.read.format("iceberg").option("snapshot-id", src).load(spec.source)
+    frames.createOrReplaceTempView("__b")
+    expected = spark.sql(spec.explode).count()
+    actual = spark.table(spec.table).count()
+    ok = expected == actual
+    return [_result("silver_parity", spec.table, ok, actual - expected,
+                    f"{actual} rows for {expected} frames in {spec.source} @ {src}" if ok
+                    else f"{actual} rows but {spec.source} @ {src} carries {expected} frames")]
+
+
+# An operator acknowledges a window of checksum failures with a row like
+#   job='operator', check_name='checksum_failure_acknowledged', scope='lake.silver.book_kraken',
+#   detail='from 2026-08-26T16:00:00Z to 2026-08-26T18:00:00Z: <why>'
+# and this audit nets those frames out, exactly as offset_continuity nets a
+# recorded offset_gap. The failures stay in the table and in the count below;
+# what changes is that a known, explained hole stops paging every night.
+def acknowledged_windows(spark, scope: str) -> list:
+    rows = spark.sql(
+        f"SELECT detail FROM {CHECKS_TABLE} WHERE job = 'operator' AND check_name = 'checksum_failure_acknowledged' AND scope = '{scope}'"
+    ).collect()
+    return [w for w in (O.ack_window(r["detail"]) for r in rows) if w]
+
+
+def audit_kraken_checksum(spark) -> list:
+    """Kraken book frames whose replayed book did not hash to the venue's checksum. Zero is the bar, net of acknowledged windows."""
+    scope = f"{CATALOG}.silver.book_kraken"
+    windows = acknowledged_windows(spark, scope)
+    acked = " OR ".join(f"(recv_ts >= '{a}' AND recv_ts < '{b}')" for a, b in windows) or "false"
+    row = spark.sql(
+        f"""SELECT count(*) AS frames, sum(CASE WHEN checksum_ok THEN 1 ELSE 0 END) AS ok,
+                   sum(CASE WHEN checksum_ok = false THEN 1 ELSE 0 END) AS bad,
+                   sum(CASE WHEN checksum_ok = false AND ({acked}) THEN 1 ELSE 0 END) AS bad_acked,
+                   sum(CASE WHEN checksum_ok IS NULL THEN 1 ELSE 0 END) AS unknown
+            FROM {scope}"""
+    ).collect()[0]
+    bad, acked_n = int(row["bad"] or 0), int(row["bad_acked"] or 0)
+    net = bad - acked_n
+    return [_result("kraken_checksum", scope, net == 0, net,
+                    f"{row['frames']} frames: {row['ok']} verified, {bad} failed ({acked_n} inside {len(windows)} acknowledged window(s), {net} not), "
+                    f"{row['unknown']} unverifiable (no precision or before the connection's snapshot)")]
+
+
 def _result(check: str, scope: str, passed: bool, observed: int, detail: str) -> dict:
     return {
         "check_name": check,
@@ -702,6 +756,16 @@ AUDITS = (
     ("duplicate_identifiers", gold.TRADES, lambda s: audit_duplicates(s, gold.TRADES, list(gold.IDENTIFIER_FIELDS))),
     ("gold_parity", gold.TRADES, audit_gold_trades),
     ("ohlcv_parity", gold.OHLCV["1m"][0], audit_ohlcv),
+) + tuple(
+    row
+    for t in books.BOOKS
+    for row in (
+        ("duplicate_identifiers", t.table, lambda s, t=t: audit_duplicates(s, t.table, list(books.IDENTIFIER_FIELDS))),
+        ("silver_parity", t.table, lambda s, t=t: audit_book_parity(s, t)),
+    )
+) + (
+    ("kraken_checksum", f"{CATALOG}.silver.book_kraken", audit_kraken_checksum),
+    ("duplicate_identifiers", books.GOLD_BOOK, lambda s: audit_duplicates(s, books.GOLD_BOOK, ["exchange", "canonical_symbol", "second"])),
 )
 
 

@@ -7,6 +7,7 @@ Rebuild a lake layer from its parent over the whole archive.
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer bronze --dry-run
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer silver
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer gold
+    docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer books   # silver.book_* + gold.book_top20/bbo_1s
 
 `make lake-rebuild LAYER=bronze` is the same thing from the host.
 
@@ -36,6 +37,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
+import books
 import bronze
 import gold
 import silver
@@ -107,7 +109,7 @@ def recreate(spark, name: str, attempts: int = 10) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--layer", choices=("bronze", "silver", "gold"), required=True)
+    parser.add_argument("--layer", choices=("bronze", "silver", "gold", "books"), required=True)
     parser.add_argument("--exchange", choices=sorted({t.exchange for t in bronze.VENUE_TABLES}), help="one venue only")
     parser.add_argument("--dry-run", action="store_true", help="print the plan, drop nothing, write nothing")
     args = parser.parse_args()
@@ -117,6 +119,8 @@ def main() -> int:
         tables = [t for t in bronze.VENUE_TABLES if t.exchange in exchanges]
     elif args.layer == "silver":
         tables = [t for t in silver.TRADES if t.exchange in exchanges]
+    elif args.layer == "books":
+        tables = [t.table for t in books.BOOKS if t.exchange in exchanges] + [books.GOLD_BOOK, books.GOLD_BBO, books.STATE]
     else:
         tables = list(gold.TABLES)
 
@@ -125,6 +129,23 @@ def main() -> int:
     run_ts = datetime.now(timezone.utc)
     spark = lake_session("k2-lake-rebuild", driver_memory=MAINTENANCE_DRIVER_MEMORY)
     try:
+        if args.layer == "books":
+            print(f"rebuild books: {len(tables)} table(s) for {exchanges}, from the bronze book tables' current snapshots")
+            if args.dry_run:
+                for t in tables:
+                    print(f"  DROP TABLE {t} PURGE; then recreate")
+                return 0
+            for t in tables:
+                drop(spark, t)
+            for t in tables:
+                recreate(spark, t.split(".")[-1])
+            started = datetime.now()
+            totals = books.rebuild(spark, run_ts, exchanges)
+            elapsed = (datetime.now() - started).total_seconds()
+            print(f"\nrebuild books: done in {elapsed:.0f} s")
+            for table, n in sorted(totals.items()):
+                print(f"  {table:<40} {n:>14,} rows")
+            return 0
         if args.layer == "gold":
             print(f"rebuild gold: {len(tables)} table(s) from silver's current snapshots")
             if args.dry_run:

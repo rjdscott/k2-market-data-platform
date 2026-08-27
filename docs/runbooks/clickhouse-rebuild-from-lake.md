@@ -67,9 +67,34 @@ SETTINGS iceberg_engine_ignore_schema_evolution = 1;
 ```
 
 `seq` is 0 from the lake: gold.trades in the lake does not carry the venue sequence
-(silver does), and nothing in ClickHouse reads it. The book snapshots (`gold.book_top20`)
-have no lake source until the lake's gold book layer lands; for those the feeds' 7-day
-retention is the whole history today.
+(silver does), and nothing in ClickHouse reads it.
+
+The book snapshots come from `lake.gold.book_top20` — replayed from every venue frame,
+not the capture's 1 Hz sampler — column for column (the same four `*_e8` arrays):
+
+```sql
+INSERT INTO gold.book_top20
+    (exchange, symbol, canonical_symbol, depth, seq, checksum_ok, bid_px, bid_qty, ask_px, ask_qty,
+     exchange_ts, recv_ts_ns, snapshot_ts_ns, snapshot_ts, second, conn_id, conn_msg_seq,
+     src_topic, src_partition, src_offset, ver)
+SELECT exchange, symbol, canonical_symbol, depth, seq, checksum_ok, bid_px_e8, bid_qty_e8, ask_px_e8, ask_qty_e8,
+       NULL, recv_ts_ns, toUnixTimestamp(second) * 1000000000 + 999999999, second, second, conn_id, conn_msg_seq,
+       src_topic, src_partition, src_offset, toUInt64(toUnixTimestamp(second)) * 1000000000 + 999999999
+FROM iceberg('http://minio:9000/k2-lake/warehouse/k2/<book_top20-uuid>/', '<MINIO_ROOT_USER>', '<MINIO_ROOT_PASSWORD>')
+WHERE second >= '<from>' AND second < '<to>'
+SETTINGS iceberg_engine_ignore_schema_evolution = 1;
+```
+
+The lake row is the state at the END of its second, so its version (`ver`, the sampler
+clock) is set to the last nanosecond of that second: it out-ranks any feed sample taken
+inside the second, which is the intended "lake wins" for a fully replayed book.
+
+**Measured 2026-08-27:** 1,951,135 lake book-seconds pulled into a scratch table in
+**2.914 s**; `gold.bbo_1s` (1,951,129 rows) in 0.985 s. Against the feed's own samples
+over 2026-08-27 00:00–05:00 the top-of-book prices agree in 88.6 % (Binance) / 66.8 %
+(Kraken) / 65.9 % (Coinbase) of seconds — the two are sampled at different instants inside
+the second, so this is not a tolerance-zero check; the Kraken checksum in
+`silver.book_kraken` is.
 
 **Measured 2026-08-27** (first run, `clickhouse-client --time`): the whole lake
 `gold.trades` — 10,410,270 rows, no `WHERE` — into a scratch copy of `gold.trades` in
@@ -89,7 +114,7 @@ SELECT exchange, canonical_symbol, window_start, open_e8, high_e8, low_e8, close
        volume, quote_volume, trade_count, open_time, close_time, src_snapshot_id
 FROM iceberg('http://minio:9000/k2-lake/warehouse/k2/<ohlcv_1m-uuid>/', '<MINIO_ROOT_USER>', '<MINIO_ROOT_PASSWORD>')
 SETTINGS iceberg_engine_ignore_schema_evolution = 1;
--- same for ohlcv_5m, ohlcv_1h, ohlcv_1d
+-- same for ohlcv_5m, ohlcv_1h, ohlcv_1d; and gold.bbo_1s from lake.gold.bbo_1s (same column names)
 ```
 
 **Measured 2026-08-27:** `ohlcv_1m` 31,324 rows in 0.030 s; `5m` / `1h` / `1d` each
