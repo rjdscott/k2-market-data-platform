@@ -56,6 +56,13 @@ TABLES = {
     "raw.messages": ("raw", "messages"),
     "bronze.trades": ("bronze", "trades"),
     "bronze.book_snapshots_l2": ("bronze", "book_snapshots_l2"),
+    # Phase E bronze per venue (docker/lake/bronze.py, ADR-026)
+    "bronze.binance_trade": ("bronze", "binance_trade"),
+    "bronze.binance_depth20": ("bronze", "binance_depth20"),
+    "bronze.kraken_trade": ("bronze", "kraken_trade"),
+    "bronze.kraken_book": ("bronze", "kraken_book"),
+    "bronze.coinbase_market_trades": ("bronze", "coinbase_market_trades"),
+    "bronze.coinbase_level2": ("bronze", "coinbase_level2"),
     "audit.checks": ("audit", "checks"),
 }
 

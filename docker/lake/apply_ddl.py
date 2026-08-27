@@ -117,16 +117,26 @@ def main() -> int:
 
     spark = lake_session("k2-lake-ddl")
     try:
-        for ns in namespaces(stmts):
-            spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {CATALOG}.{ns}")
-        for i, stmt in enumerate(stmts, 1):
-            head = " ".join(stmt.split())[:90]
-            print(f"[{i}/{len(stmts)}] {head}", flush=True)
-            spark.sql(stmt)
+        apply(spark, stmts)
     finally:
         spark.stop()
     print(f"✓ {len(stmts)} statements applied to catalog `{CATALOG}`")
     return 0
+
+
+def apply(spark, stmts: list[str]) -> None:
+    """Run the statements in order, creating their namespaces first. Idempotent."""
+    for ns in namespaces(stmts):
+        spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {CATALOG}.{ns}")
+    for i, stmt in enumerate(stmts, 1):
+        head = " ".join(stmt.split())[:90]
+        print(f"[{i}/{len(stmts)}] {head}", flush=True)
+        spark.sql(stmt)
+
+
+def table_statements(table: str) -> list[str]:
+    """The statements in ddl/lake.sql that create or alter `<catalog>.<ns>.<table>`."""
+    return [s for s in statements(DDL_FILE.read_text()) if re.search(rf"\b{re.escape(table)}\b", s)]
 
 
 if __name__ == "__main__":

@@ -1,0 +1,1 @@
+{"channel":"trade","type":"update","data":[{"symbol":"ETH/USD","side":"sell","price":2485.79,"qty":0.00221133,"ord_type":"limit","trade_id":65240262,"timestamp":"2026-08-27T04:53:31.635648Z"},{"symbol":"ETH/USD","side":"sell","price":2485.79,"qty":0.01268967,"ord_type":"limit","trade_id":65240263,"timestamp":"2026-08-27T04:53:31.635648Z"}]}

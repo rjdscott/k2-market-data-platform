@@ -30,10 +30,13 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
+import bronze
 from lock import LOCK_PATH, acquire_lock
 from pyspark.sql import Row
+from pyspark.sql import functions as F
 
 import offsets as O
+import wire
 from spark_conf import (
     CATALOG,
     MAINTENANCE_DRIVER_MEMORY,
@@ -74,7 +77,7 @@ def _where_ts(moment: datetime) -> str:
 
 
 def compact(spark, since: datetime) -> None:
-    """Binpack `raw.messages`, sort-rewrite the two bronze tables.
+    """Binpack `raw.messages`, sort-rewrite the unified and per-venue bronze tables.
 
     Both are bounded to recent partitions. Everything older was compacted by a
     previous run and rewriting it again would rewrite the whole archive nightly
@@ -102,7 +105,8 @@ def compact(spark, since: datetime) -> None:
         f"                  'partial-progress.enabled', 'true'))",
     )
 
-    for table, column in ((TRADES_TABLE, "exchange_ts"), (BOOK_TABLE, "snapshot_ts")):
+    per_venue = [(t.table, "recv_ts") for t in bronze.VENUE_TABLES]
+    for table, column in [(TRADES_TABLE, "exchange_ts"), (BOOK_TABLE, "snapshot_ts")] + per_venue:
         # No sort_order argument: the tables declare theirs in lake.sql and the
         # procedure uses the declared one. Repeating it here is a second place
         # to get it wrong.
@@ -127,7 +131,7 @@ def expire(spark, retain_days: int) -> None:
     covers a long outage without unbounded metadata growth.
     """
     older_than = datetime.now(timezone.utc) - timedelta(days=retain_days)
-    for table in (RAW_TABLE, TRADES_TABLE, BOOK_TABLE, CHECKS_TABLE):
+    for table in (RAW_TABLE, TRADES_TABLE, BOOK_TABLE, CHECKS_TABLE, *bronze.TABLES):
         _call(
             spark,
             f"CALL {CATALOG}.system.expire_snapshots("
@@ -460,6 +464,89 @@ def audit_sequence(spark, table: str) -> list:
     return [_result("sequence_gaps", table, count == 0, count, detail)]
 
 
+def audit_unparseable(spark, t: bronze.VenueTable) -> list:
+    """Frames bronze.py wrote with their venue columns NULL: the JSON did not parse as the declared shape.
+
+    The decode is PERMISSIVE on purpose (bronze.py): a rejected frame lands with
+    lineage and NULL payload columns rather than blocking the snapshot range.
+    This is where it becomes a failure — with the offsets, so the frame can be
+    read back out of raw.messages and the DDL fixed to match what the venue
+    actually sent.
+    """
+    rows = spark.sql(
+        f"SELECT src_partition, src_offset FROM {t.table} WHERE {t.required} IS NULL "
+        f"ORDER BY src_partition, src_offset LIMIT 10"
+    ).collect()
+    if not rows:
+        return [_result("bronze_unparseable", t.table, True, 0, "every frame parsed as the declared shape")]
+    count = spark.sql(f"SELECT count(*) FROM {t.table} WHERE {t.required} IS NULL").collect()[0][0]
+    first = ", ".join(f"{r['src_partition']}/{r['src_offset']}" for r in rows)
+    return [
+        _result(
+            "bronze_unparseable",
+            t.table,
+            False,
+            count,
+            f"{count} frame(s) with {t.required} IS NULL; first (partition/offset): {first}. "
+            f"Read them back from raw.messages by (src_topic, src_partition, src_offset)",
+        )
+    ]
+
+
+# Sample size for the schema-drift audit, as a TABLESAMPLE percentage of the
+# venue's last day of raw frames. 0.1 % of a 13 M-frame Kraken day is ~13,000
+# frames, which is plenty to see a key the venue added to every frame and not
+# enough to see one it adds to one frame in a million — which is what the
+# unparseable audit above is for, since a shape change that breaks the parse
+# shows up there on every row it touches.
+DRIFT_SAMPLE_PERCENT = 0.1
+
+
+def audit_schema_drift(spark, t: bronze.VenueTable) -> list:
+    """Keys the venue now sends that the bronze table does not declare.
+
+    A PERMISSIVE `from_json` silently drops a key it has no column for, which is
+    the one way bronze can lose vendor data without any row going NULL. So the
+    check reads the *raw* frames, not bronze: a sample of the venue's last day,
+    RawMessage-decoded, `json_object_keys` at each path the table declares,
+    minus the declared keys. Anything left is a column to add (a schema
+    change: /schema-change) and a rebuild of the table.
+    """
+    from catalog import fetch_schema
+    from pyspark.sql.avro.functions import from_avro
+
+    sample = spark.sql(
+        f"SELECT schema_id, payload FROM {RAW_TABLE} TABLESAMPLE ({DRIFT_SAMPLE_PERCENT} PERCENT) "
+        f"WHERE topic LIKE '%.raw.{t.exchange}' AND schema_id IS NOT NULL "
+        f"AND kafka_ts >= current_timestamp() - INTERVAL 1 DAY"
+    )
+    schema_ids = [r[0] for r in sample.select("schema_id").distinct().collect()]
+    if not schema_ids:
+        return [_result("bronze_schema_drift", t.table, True, 0, "no raw frames in the last day to sample")]
+    seen = {}
+    for schema_id in schema_ids:
+        frames = sample.where(F.col("schema_id") == schema_id).select(
+            from_avro(F.expr(wire.body_expr("payload")), fetch_schema(schema_id)).alias("r")
+        )
+        frames = frames.where(F.col("r.stream") == t.stream).select(F.col("r.payload").cast("string").alias("p"))
+        for path in t.keys:
+            expr = "json_object_keys(p)" if path == "$" else f"json_object_keys(get_json_object(p, '{path}'))"
+            keys = frames.select(F.explode(F.expr(expr)).alias("k")).distinct().collect()
+            seen.setdefault(path, set()).update(r["k"] for r in keys)
+    extra = bronze.drift(seen, t.keys)
+    if not extra:
+        return [_result("bronze_schema_drift", t.table, True, 0, f"sampled {DRIFT_SAMPLE_PERCENT}% of the last day: no undeclared keys")]
+    return [
+        _result(
+            "bronze_schema_drift",
+            t.table,
+            False,
+            sum(len(v) for v in extra.values()),
+            "undeclared keys the venue sends: " + "; ".join(f"{p}: {k}" for p, k in extra.items()) + ". Add the column (/schema-change), rebuild the table",
+        )
+    ]
+
+
 def _result(check: str, scope: str, passed: bool, observed: int, detail: str) -> dict:
     return {
         "check_name": check,
@@ -494,6 +581,14 @@ AUDITS = (
     ("venue_replay", TRADES_TABLE, audit_venue_replay),
     ("sequence_gaps", TRADES_TABLE, lambda s: audit_sequence(s, TRADES_TABLE)),
     ("sequence_gaps", BOOK_TABLE, lambda s: audit_sequence(s, BOOK_TABLE)),
+) + tuple(
+    row
+    for t in bronze.VENUE_TABLES
+    for row in (
+        ("duplicate_identifiers", t.table, lambda s, t=t: audit_duplicates(s, t.table, list(bronze.IDENTIFIER_FIELDS))),
+        ("bronze_unparseable", t.table, lambda s, t=t: audit_unparseable(s, t)),
+        ("bronze_schema_drift", t.table, lambda s, t=t: audit_schema_drift(s, t)),
+    )
 )
 
 

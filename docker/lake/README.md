@@ -15,13 +15,16 @@ compares them before the old path is deleted.
 
 | File | What it does |
 |---|---|
-| `ddl/lake.sql` | The four tables: `raw.messages`, both `bronze.*`, and `audit.checks` |
+| `ddl/lake.sql` | Every table: `raw.messages`, the unified `bronze.*` pair, the six per-venue `bronze.<venue>_<msgtype>`, and `audit.checks` |
 | `apply_ddl.py` | Applies that file. The `lake-ddl` one-shot runs it; idempotent, so a re-run is a no-op |
 | `spark_conf.py` | The one Spark session builder. Every catalog and S3 setting lives here, env-driven |
 | `init-lake.sh` | The `lake-init` one-shot: MinIO bucket, Lakekeeper bootstrap, warehouse, namespaces |
 | `offsets.py` | Pure offset bookkeeping. The exactly-once contract, and the only file with no Spark import |
 | `wire.py` | The Confluent framing, as a Python parser and as the Spark SQL the executors run |
-| `ingest.py` | Stage 1 Kafka → `raw.messages`, stage 2 `raw.messages` → `bronze.*` |
+| `catalog.py` | Snapshot bookkeeping, the registry fetch by id, and how a running job files an audit row. Shared by the next three |
+| `ingest.py` | Stage 1 Kafka → `raw.messages`, stage 2 `raw.messages` → unified `bronze.*`, stage 2b → per venue |
+| `bronze.py` | Stage 2b: the six per-venue tables, decoded from the venue JSON in `raw.*` — vendor field names and types as sent |
+| `rebuild.py` | `make lake-rebuild LAYER=bronze`: drop, recreate and re-decode a layer from its parent, one day per venue at a time |
 | `maintenance.py` | Nightly compaction, snapshot expiry, and the audits. Non-zero exit on a failure |
 | `metrics.py` | The `lake-metrics` exporter. Reads snapshot summaries over the catalog's REST API |
 | `flows/` | The two Prefect deployments: `lake-ingest-5min`, `lake-maintenance-daily` |
@@ -34,8 +37,10 @@ compares them before the old path is deleted.
 flowchart TB
   RP[Redpanda<br/>9 v3 topics] -->|stage 1<br/>verbatim bytes| RAW[(raw.messages<br/>never expired)]
   RAW -->|stage 2<br/>strip 5 bytes, from_avro| BR[(bronze.trades<br/>bronze.book_snapshots_l2)]
+  RAW -->|stage 2b<br/>from_avro, from_json| BV[(bronze.venue_msgtype ×6<br/>vendor schema as sent)]
   RAW --> MNT[maintenance.py<br/>compact · expire · audit]
   BR --> MNT
+  BV --> MNT
   MNT --> AUD[(audit.checks)]
   RAW -.snapshot summaries.-> MET[metrics.py<br/>lake-metrics :8000]
   BR -.-> MET
@@ -43,10 +48,62 @@ flowchart TB
   MET --> PROM[Prometheus<br/>12 lake alerts]
 ```
 
-Stage 1 archives all nine topics. Stage 2 decodes only `trades.*` and `book.*` —
-the `raw.*` frames stay verbatim, because rebuilding a book from deltas is a
-different job with different failure modes, and `raw.messages` keeps every delta
-so it stays possible.
+Stage 1 archives all nine topics. Stage 2 decodes `trades.*` and `book.*` into
+the unified pair; stage 2b decodes the `raw.*` JSON frames into six per-venue
+tables. `raw.messages` keeps every frame verbatim either way.
+
+---
+
+## Bronze per venue (Phase E, ADR-026)
+
+Six tables, one per (venue, message type), decoded by `bronze.py` from the
+venue's own JSON in `raw.messages` — never from the Avro `trades.*`/`book.*`
+topics, so a bug in the Rust parser is repairable here without a replay:
+
+| Table | Source stream | Row = | Numbers |
+|---|---|---|---|
+| `bronze.binance_trade` | `raw.binance`, `trade` | one `<sym>@trade` frame | strings as sent |
+| `bronze.binance_depth20` | `raw.binance`, `depth20` | one `@depth20@100ms` frame, `bids`/`asks` as `[["px","qty"],…]` | strings as sent |
+| `bronze.kraken_trade` | `raw.kraken`, `trade` | one frame, N trades in `data[]` | `DECIMAL(28,10)` — the digits of the JSON number, not a re-rounded double |
+| `bronze.kraken_book` | `raw.kraken`, `book` | one snapshot or update frame, `checksum` as sent | `DECIMAL(28,10)` |
+| `bronze.coinbase_market_trades` | `raw.coinbase`, `market_trades` | one frame, N trades under `events[].trades[]` | strings as sent |
+| `bronze.coinbase_level2` | `raw.coinbase`, `l2_data` | one frame; a snapshot is the whole book, up to 4.9 MB | strings as sent |
+
+Every table adds the same lineage: `symbol` (the capture's attribution),
+`recv_ts_ns` / `recv_ts`, `conn_id`, `conn_msg_seq`, `src_topic` / `src_partition` /
+`src_offset` (the identifier — one row per archived frame), `ingest_ts`. Partition
+`days(recv_ts)`, sorted `(symbol, recv_ts_ns)`.
+
+**What stays in raw only.** Control frames — `heartbeat`, `subscriptions`, `status`,
+`instrument`, `control` — are counted, not decoded. Every run prints the balance
+per venue and files `bronze_parity` if it does not hold:
+
+```
+stage 2b: binance: 9725802 frames = 9725802 decoded + 0 control (none)
+```
+
+**Parsing is PERMISSIVE, and the audit is strict.** A frame that does not match the
+declared shape lands with lineage and NULL venue columns rather than blocking the
+snapshot range for every run after it; the nightly `bronze_unparseable` audit fails
+on any such row, and `bronze_schema_drift` samples 0.1 % of the last day's raw
+frames to catch the one thing a PERMISSIVE parse loses silently — a key the venue
+added that has no column. Both in `docs/runbooks/lake-audit-failed.md` §6–§7.
+
+**Why `spark.sql.caseSensitive=true`.** Binance's trade payload carries both `e`
+and `E`. The session builder sets it for every lake job; every other column is
+lowercase and referenced as written.
+
+Measured, one day of `raw.binance` (2026-08-26) at the 768m ingest heap,
+2026-08-27: 9,725,802 frames → 6,619,758 `binance_trade` + 3,106,044
+`binance_depth20` rows in 321 s, peak driver RSS 1,220 MiB (`ps -o rss=` in the
+container). The full-archive rebuild runs at the 2g maintenance heap, one day
+per venue at a time:
+
+```bash
+docker exec k2-prefect-server prefect deployment schedule pause lake-ingest/lake-ingest-5min --all
+make lake-rebuild LAYER=bronze            # or EXCHANGE=kraken for one venue
+docker exec k2-prefect-server prefect deployment schedule resume lake-ingest/lake-ingest-5min --all
+```
 
 ---
 

@@ -289,7 +289,8 @@ anyway so that a deeper or faster book stays recoverable by replay.
 | `raw.messages` | **6.47 GB/day** | G3 — opaque `bytes` column, only the block codec helps | `32.34 × 0.20` |
 | `bronze.trades` | **0.156 GB/day** | G4 — dictionary on `symbol`/`exchange`/`side`, delta on timestamps, near-constant int64 magnitudes | `1.555 × 0.10` |
 | `bronze.book_snapshots_l2` | **0.264 GB/day** | G4 — the four int64 arrays are tightly clustered in magnitude | `1.763 × 0.15` |
-| **All lake tables** | **6.89 GB/day** | — | sum |
+| `bronze.<venue>_<msgtype>` ×6 (Phase E, predicted 2026-08-27 **before** the first rebuild) | **3.5 GB/day**, sum of six | The `raw.*` topics are 91 % of raw's bytes (§4b), 5.9 GB/day on disk; re-encoded columnar the same content should land at ~0.60 of that: Binance and Coinbase keep prices as *strings* (dictionary helps little on unique values), Kraken's DECIMALs and every repeated key/symbol/side column dictionary well, and the 5-byte framing plus Avro envelope are gone. Measured per table after `make lake-rebuild LAYER=bronze`, in this table's next row | `6.47 × 0.91 × 0.60` |
+| **All lake tables** | **10.4 GB/day** | — | sum, with the six per-venue tables; 6.89 without them |
 
 ### 4d. Retention → disk
 

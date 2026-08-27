@@ -1,5 +1,5 @@
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- K2 v3 lake — the four Iceberg tables, applied by docker/lake/apply_ddl.py
+-- K2 v3 lake — the Iceberg tables (raw, unified bronze, six bronze-per-venue, audit), applied by docker/lake/apply_ddl.py
 -- (the `lake-ddl` one-shot compose service). Idempotent: every statement is
 -- CREATE ... IF NOT EXISTS or an ALTER that converges to a fixed value, so a
 -- re-run against a live warehouse is a no-op.
@@ -245,6 +245,279 @@ ALTER TABLE lake.bronze.book_snapshots_l2
 
 ALTER TABLE lake.bronze.book_snapshots_l2
     WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, snapshot_ts;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Bronze per venue — Phase E, ADR-026. Six tables, one per (venue, message
+-- type), decoded from the raw.<venue> JSON frames by docker/lake/bronze.py.
+--
+-- The rule for every column that is not lineage: the venue's field name, the
+-- venue's JSON type, the venue's nesting. Strings stay strings (Binance and
+-- Coinbase quote prices as strings), JSON numbers become DECIMAL(28,10) (the
+-- lossless reading of a number literal), objects become STRUCT, arrays become
+-- ARRAY. No renames, no unit conversion, no canonical symbol — those are
+-- silver. One row per frame, so (src_topic, src_partition, src_offset) is one
+-- to one with raw.messages and the identifier.
+--
+-- PARTITIONED BY days(recv_ts): the one clock every frame carries. Sorted
+-- (symbol, recv_ts_ns) within a partition so a per-instrument scan prunes on
+-- the symbol column's file bounds; metrics on symbol, recv_ts and src_offset
+-- only — the nested payload columns are the bulk of the row and nothing prunes
+-- on their bounds.
+--
+-- Case matters: bronze.binance_trade.data has both `e` and `E`. The Spark
+-- session sets spark.sql.caseSensitive=true (docker/lake/spark_conf.py) and
+-- this file must be applied under it.
+--
+-- The unified bronze.trades / bronze.book_snapshots_l2 above stay until the
+-- rebuild from raw proves parity against them (plan 004); then they go.
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ───────────────────────────────────────────────────────────────────────────
+-- bronze.binance_trade
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.bronze.binance_trade (
+    stream           STRING           COMMENT 'Combined-stream name as sent: btcusdt@trade',
+    data             STRUCT<e: STRING, E: BIGINT, s: STRING, t: BIGINT, p: STRING, q: STRING, T: BIGINT, m: BOOLEAN, M: BOOLEAN>
+                                      COMMENT 'The venue payload verbatim: e event type, E event time ms, s symbol, t trade id, p price, q qty (both strings as sent), T trade time ms, m buyer-is-maker, M ignore flag',
+    symbol           STRING           COMMENT 'RawMessage.symbol: the instrument the capture attributed the frame to, venue spelling. NULL = the frame concerns no single instrument',
+    recv_ts_ns       BIGINT  NOT NULL COMMENT 'K2 receive clock, nanoseconds, taken before parse. The only clock guaranteed present on every frame',
+    recv_ts          TIMESTAMP NOT NULL COMMENT 'recv_ts_ns truncated to microseconds — the partition and range-scan column. recv_ts_ns stays authoritative',
+    conn_id          STRING  NOT NULL COMMENT 'WebSocket connection episode',
+    conn_msg_seq     BIGINT  NOT NULL COMMENT 'K2 frame counter on conn_id; (conn_id, conn_msg_seq) is the archive primary key',
+    src_topic        STRING  NOT NULL COMMENT 'Lineage: the raw.messages row this frame is',
+    src_partition    INT     NOT NULL COMMENT 'Lineage',
+    src_offset       BIGINT  NOT NULL COMMENT 'Lineage. (src_topic, src_partition, src_offset) is unique here AND in raw.messages: one row per archived frame',
+    ingest_ts        TIMESTAMP NOT NULL COMMENT 'When the decode run that wrote this row started'
+)
+USING iceberg
+PARTITIONED BY (days(recv_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.symbol'          = 'full',
+    'write.metadata.metrics.column.recv_ts'         = 'full',
+    'write.metadata.metrics.column.src_offset'      = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Binance combined-stream `<sym>@trade` frames, one row per frame, field names as sent'
+);
+
+ALTER TABLE lake.bronze.binance_trade SET IDENTIFIER FIELDS src_topic, src_partition, src_offset;
+
+ALTER TABLE lake.bronze.binance_trade
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, recv_ts_ns;
+-- ───────────────────────────────────────────────────────────────────────────
+-- bronze.binance_depth20
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.bronze.binance_depth20 (
+    stream           STRING           COMMENT 'Combined-stream name as sent: btcusdt@depth20@100ms',
+    data             STRUCT<lastUpdateId: BIGINT, bids: ARRAY<ARRAY<STRING>>, asks: ARRAY<ARRAY<STRING>>>
+                                      COMMENT 'lastUpdateId, then bids/asks as [["price","qty"], ...] exactly as sent — the pairing is positional on the wire and stays positional here',
+    symbol           STRING           COMMENT 'RawMessage.symbol: the instrument the capture attributed the frame to, venue spelling. NULL = the frame concerns no single instrument',
+    recv_ts_ns       BIGINT  NOT NULL COMMENT 'K2 receive clock, nanoseconds, taken before parse. The only clock guaranteed present on every frame',
+    recv_ts          TIMESTAMP NOT NULL COMMENT 'recv_ts_ns truncated to microseconds — the partition and range-scan column. recv_ts_ns stays authoritative',
+    conn_id          STRING  NOT NULL COMMENT 'WebSocket connection episode',
+    conn_msg_seq     BIGINT  NOT NULL COMMENT 'K2 frame counter on conn_id; (conn_id, conn_msg_seq) is the archive primary key',
+    src_topic        STRING  NOT NULL COMMENT 'Lineage: the raw.messages row this frame is',
+    src_partition    INT     NOT NULL COMMENT 'Lineage',
+    src_offset       BIGINT  NOT NULL COMMENT 'Lineage. (src_topic, src_partition, src_offset) is unique here AND in raw.messages: one row per archived frame',
+    ingest_ts        TIMESTAMP NOT NULL COMMENT 'When the decode run that wrote this row started'
+)
+USING iceberg
+PARTITIONED BY (days(recv_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.symbol'          = 'full',
+    'write.metadata.metrics.column.recv_ts'         = 'full',
+    'write.metadata.metrics.column.src_offset'      = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Binance `<sym>@depth20@100ms` partial-book frames, one row per frame, levels as the two-string arrays the venue sends'
+);
+
+ALTER TABLE lake.bronze.binance_depth20 SET IDENTIFIER FIELDS src_topic, src_partition, src_offset;
+
+ALTER TABLE lake.bronze.binance_depth20
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, recv_ts_ns;
+-- ───────────────────────────────────────────────────────────────────────────
+-- bronze.kraken_trade
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.bronze.kraken_trade (
+    channel          STRING           COMMENT 'trade',
+    type             STRING           COMMENT 'snapshot | update',
+    data             ARRAY<STRUCT<symbol: STRING, side: STRING, price: DECIMAL(28,10), qty: DECIMAL(28,10), ord_type: STRING, trade_id: BIGINT, timestamp: STRING>>
+                                      COMMENT 'The trades in the frame, in the order sent. price/qty are JSON numbers on the wire; DECIMAL(28,10) stores their digits exactly — a DOUBLE would re-round them',
+    symbol           STRING           COMMENT 'RawMessage.symbol: the instrument the capture attributed the frame to, venue spelling. NULL = the frame concerns no single instrument',
+    recv_ts_ns       BIGINT  NOT NULL COMMENT 'K2 receive clock, nanoseconds, taken before parse. The only clock guaranteed present on every frame',
+    recv_ts          TIMESTAMP NOT NULL COMMENT 'recv_ts_ns truncated to microseconds — the partition and range-scan column. recv_ts_ns stays authoritative',
+    conn_id          STRING  NOT NULL COMMENT 'WebSocket connection episode',
+    conn_msg_seq     BIGINT  NOT NULL COMMENT 'K2 frame counter on conn_id; (conn_id, conn_msg_seq) is the archive primary key',
+    src_topic        STRING  NOT NULL COMMENT 'Lineage: the raw.messages row this frame is',
+    src_partition    INT     NOT NULL COMMENT 'Lineage',
+    src_offset       BIGINT  NOT NULL COMMENT 'Lineage. (src_topic, src_partition, src_offset) is unique here AND in raw.messages: one row per archived frame',
+    ingest_ts        TIMESTAMP NOT NULL COMMENT 'When the decode run that wrote this row started'
+)
+USING iceberg
+PARTITIONED BY (days(recv_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.symbol'          = 'full',
+    'write.metadata.metrics.column.recv_ts'         = 'full',
+    'write.metadata.metrics.column.src_offset'      = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Kraken v2 `trade` channel frames (snapshot and update), one row per frame; N trades in data[]'
+);
+
+ALTER TABLE lake.bronze.kraken_trade SET IDENTIFIER FIELDS src_topic, src_partition, src_offset;
+
+ALTER TABLE lake.bronze.kraken_trade
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, recv_ts_ns;
+-- ───────────────────────────────────────────────────────────────────────────
+-- bronze.kraken_book
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.bronze.kraken_book (
+    channel          STRING           COMMENT 'book',
+    type             STRING           COMMENT 'snapshot | update',
+    data             ARRAY<STRUCT<symbol: STRING, bids: ARRAY<STRUCT<price: DECIMAL(28,10), qty: DECIMAL(28,10)>>, asks: ARRAY<STRUCT<price: DECIMAL(28,10), qty: DECIMAL(28,10)>>, checksum: BIGINT, timestamp: STRING>>
+                                      COMMENT 'One element per frame in practice. bids/asks are the levels the frame carries (a snapshot: 25 per side; an update: the changed ones). checksum is the venue CRC32 as sent — silver verifies it, bronze records it',
+    symbol           STRING           COMMENT 'RawMessage.symbol: the instrument the capture attributed the frame to, venue spelling. NULL = the frame concerns no single instrument',
+    recv_ts_ns       BIGINT  NOT NULL COMMENT 'K2 receive clock, nanoseconds, taken before parse. The only clock guaranteed present on every frame',
+    recv_ts          TIMESTAMP NOT NULL COMMENT 'recv_ts_ns truncated to microseconds — the partition and range-scan column. recv_ts_ns stays authoritative',
+    conn_id          STRING  NOT NULL COMMENT 'WebSocket connection episode',
+    conn_msg_seq     BIGINT  NOT NULL COMMENT 'K2 frame counter on conn_id; (conn_id, conn_msg_seq) is the archive primary key',
+    src_topic        STRING  NOT NULL COMMENT 'Lineage: the raw.messages row this frame is',
+    src_partition    INT     NOT NULL COMMENT 'Lineage',
+    src_offset       BIGINT  NOT NULL COMMENT 'Lineage. (src_topic, src_partition, src_offset) is unique here AND in raw.messages: one row per archived frame',
+    ingest_ts        TIMESTAMP NOT NULL COMMENT 'When the decode run that wrote this row started'
+)
+USING iceberg
+PARTITIONED BY (days(recv_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.symbol'          = 'full',
+    'write.metadata.metrics.column.recv_ts'         = 'full',
+    'write.metadata.metrics.column.src_offset'      = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Kraken v2 `book` channel frames (snapshot and update), one row per frame; checksum as sent, never verified here'
+);
+
+ALTER TABLE lake.bronze.kraken_book SET IDENTIFIER FIELDS src_topic, src_partition, src_offset;
+
+ALTER TABLE lake.bronze.kraken_book
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, recv_ts_ns;
+-- ───────────────────────────────────────────────────────────────────────────
+-- bronze.coinbase_market_trades
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.bronze.coinbase_market_trades (
+    channel          STRING           COMMENT 'market_trades',
+    timestamp        STRING           COMMENT 'Venue envelope time, RFC 3339 as sent',
+    sequence_num     BIGINT           COMMENT 'Connection-wide sequence across every channel on the connection, so +1 continuity only holds when heartbeats and level2 are counted too',
+    events           ARRAY<STRUCT<type: STRING, trades: ARRAY<STRUCT<product_id: STRING, trade_id: STRING, price: STRING, size: STRING, time: STRING, side: STRING>>>>
+                                      COMMENT 'events[].type is snapshot | update; the trades nested under each, strings as sent (side is BUY | SELL uppercase here)',
+    symbol           STRING           COMMENT 'RawMessage.symbol: the instrument the capture attributed the frame to, venue spelling. NULL = the frame concerns no single instrument',
+    recv_ts_ns       BIGINT  NOT NULL COMMENT 'K2 receive clock, nanoseconds, taken before parse. The only clock guaranteed present on every frame',
+    recv_ts          TIMESTAMP NOT NULL COMMENT 'recv_ts_ns truncated to microseconds — the partition and range-scan column. recv_ts_ns stays authoritative',
+    conn_id          STRING  NOT NULL COMMENT 'WebSocket connection episode',
+    conn_msg_seq     BIGINT  NOT NULL COMMENT 'K2 frame counter on conn_id; (conn_id, conn_msg_seq) is the archive primary key',
+    src_topic        STRING  NOT NULL COMMENT 'Lineage: the raw.messages row this frame is',
+    src_partition    INT     NOT NULL COMMENT 'Lineage',
+    src_offset       BIGINT  NOT NULL COMMENT 'Lineage. (src_topic, src_partition, src_offset) is unique here AND in raw.messages: one row per archived frame',
+    ingest_ts        TIMESTAMP NOT NULL COMMENT 'When the decode run that wrote this row started'
+)
+USING iceberg
+PARTITIONED BY (days(recv_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.symbol'          = 'full',
+    'write.metadata.metrics.column.recv_ts'         = 'full',
+    'write.metadata.metrics.column.src_offset'      = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Coinbase Advanced Trade `market_trades` channel frames (snapshot and update), one row per frame; N trades in events[].trades[]'
+);
+
+ALTER TABLE lake.bronze.coinbase_market_trades SET IDENTIFIER FIELDS src_topic, src_partition, src_offset;
+
+ALTER TABLE lake.bronze.coinbase_market_trades
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, recv_ts_ns;
+-- ───────────────────────────────────────────────────────────────────────────
+-- bronze.coinbase_level2
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.bronze.coinbase_level2 (
+    channel          STRING           COMMENT 'l2_data (the data channel name for a level2 subscription)',
+    timestamp        STRING           COMMENT 'Venue envelope time, RFC 3339 as sent',
+    sequence_num     BIGINT           COMMENT 'Connection-wide sequence; see coinbase_market_trades',
+    events           ARRAY<STRUCT<type: STRING, product_id: STRING, updates: ARRAY<STRUCT<side: STRING, event_time: STRING, price_level: STRING, new_quantity: STRING>>>>
+                                      COMMENT 'events[].type is snapshot | update; updates[] carry absolute new_quantity per price_level, side is bid | offer, all strings as sent',
+    symbol           STRING           COMMENT 'RawMessage.symbol: the instrument the capture attributed the frame to, venue spelling. NULL = the frame concerns no single instrument',
+    recv_ts_ns       BIGINT  NOT NULL COMMENT 'K2 receive clock, nanoseconds, taken before parse. The only clock guaranteed present on every frame',
+    recv_ts          TIMESTAMP NOT NULL COMMENT 'recv_ts_ns truncated to microseconds — the partition and range-scan column. recv_ts_ns stays authoritative',
+    conn_id          STRING  NOT NULL COMMENT 'WebSocket connection episode',
+    conn_msg_seq     BIGINT  NOT NULL COMMENT 'K2 frame counter on conn_id; (conn_id, conn_msg_seq) is the archive primary key',
+    src_topic        STRING  NOT NULL COMMENT 'Lineage: the raw.messages row this frame is',
+    src_partition    INT     NOT NULL COMMENT 'Lineage',
+    src_offset       BIGINT  NOT NULL COMMENT 'Lineage. (src_topic, src_partition, src_offset) is unique here AND in raw.messages: one row per archived frame',
+    ingest_ts        TIMESTAMP NOT NULL COMMENT 'When the decode run that wrote this row started'
+)
+USING iceberg
+PARTITIONED BY (days(recv_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.symbol'          = 'full',
+    'write.metadata.metrics.column.recv_ts'         = 'full',
+    'write.metadata.metrics.column.src_offset'      = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Coinbase Advanced Trade `level2` channel frames (`l2_data`, snapshot and update), one row per frame; a snapshot frame is the whole book and runs to 5 MB'
+);
+
+ALTER TABLE lake.bronze.coinbase_level2 SET IDENTIFIER FIELDS src_topic, src_partition, src_offset;
+
+ALTER TABLE lake.bronze.coinbase_level2
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, recv_ts_ns;
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- audit.checks — one row per check per maintenance run. Append-only history, so

@@ -1,0 +1,1 @@
+{"channel":"l2_data","timestamp":"2026-08-27T04:53:31.410870846Z","sequence_num":1203111,"events":[{"type":"update","product_id":"ETH-USD","updates":[{"side":"bid","event_time":"2026-08-27T04:53:31.3937Z","price_level":"2485.37","new_quantity":"0.00375396"},{"side":"offer","event_time":"2026-08-27T04:53:31.3937Z","price_level":"2486.97","new_quantity":"0.04"}]}]}

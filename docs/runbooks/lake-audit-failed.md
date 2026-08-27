@@ -1,13 +1,14 @@
 # Runbook: A lake audit failed
 
-The nightly maintenance run ends in **six checks of four kinds** over the lake — two of the
-kinds run against both bronze tables — and any failure exits non-zero, fails the Prefect run
-and raises an alert. `docker/lake/maintenance.py`'s `AUDITS` tuple is the list:
-`offset_continuity` on `raw.messages`, `duplicate_identifiers` on each of `bronze.trades`
-and `bronze.book_snapshots_l2`, `venue_replay` on `bronze.trades`, and `sequence_gaps` on
-each bronze table. They ask different questions, have different causes, and two of the four
-kinds are **findings to record** rather than faults to repair — telling them apart is what
-this runbook is for.
+The nightly maintenance run ends in **24 checks of six kinds** over the lake, and any
+failure exits non-zero, fails the Prefect run and raises an alert.
+`docker/lake/maintenance.py`'s `AUDITS` tuple is the list: `offset_continuity` on
+`raw.messages`; `duplicate_identifiers` on each of `bronze.trades`,
+`bronze.book_snapshots_l2` and the six per-venue bronze tables; `venue_replay` on
+`bronze.trades`; `sequence_gaps` on each unified bronze table; and, per venue table,
+`bronze_unparseable` and `bronze_schema_drift` (§6, §7). They ask different questions,
+have different causes, and some are **findings to record** rather than faults to repair —
+telling them apart is what this runbook is for.
 
 `venue_replay` is the odd one out and it is here so that it cannot be mistaken for a
 failure: it is **informational**, has no pass/fail semantics, and is excluded from the
@@ -32,6 +33,9 @@ the tier being down ([lake-recovery.md](./lake-recovery.md)).
 | 3 | `sequence_gaps` — venue sequence discontinuity | **investigation, not repair** | not yet verified — Phase D burn-in |
 | 4 | `venue_replay` — informational; **cannot fail** | n/a — read the rate, do not repair it | not yet verified — Phase D burn-in |
 | 5 | `unresolvable_schema_id` — filed by the ingest, not by the audit | < 60 min | not yet verified — Phase D burn-in |
+| 6 | `bronze_unparseable` — a venue frame did not parse as the declared shape | < 1 day (a schema change + a table rebuild) | not yet verified — Phase E |
+| 7 | `bronze_schema_drift` — the venue sends a key the table does not declare | < 1 day (same) | not yet verified — Phase E |
+| 8 | `bronze_parity` — filed by the ingest: frames in ≠ rows out + control frames | < 60 min | not yet verified — Phase E |
 
 ---
 
@@ -457,6 +461,57 @@ the archive, so the repair is a replay rather than a loss. Fix the registry firs
 **Measured** — not yet verified.
 
 ---
+
+## 6. `bronze_unparseable` — a frame is in the table with its venue columns NULL
+
+**Symptom** — `check_name = 'bronze_unparseable'`, `scope` one of the six
+`lake.bronze.<venue>_<msgtype>` tables, `observed` = the row count, `detail` naming the
+first ten `(src_partition, src_offset)` pairs.
+
+**What it means** — `docker/lake/bronze.py` parses the venue JSON with `from_json` in
+PERMISSIVE mode, so a frame whose shape differs from the table's DDL lands with lineage
+intact and every venue column NULL instead of failing the run. Nothing is lost —
+`raw.messages` holds the bytes — but the table is lying by omission until the DDL matches
+what the venue sent.
+
+```sql
+-- the frames, verbatim, from the archive
+SELECT r.topic, r.partition, r.offset, CAST(substring(r.payload, 6) AS STRING)
+FROM lake.raw.messages r
+WHERE r.topic = '<src_topic>' AND r.partition = <src_partition> AND r.offset IN (<src_offset>, ...);
+```
+
+Decide from the payload: a new nesting or type is a `/schema-change` on the table's
+`VenueTable.schema` in `bronze.py` **and** its DDL in `lake.sql`, then
+`make lake-rebuild LAYER=bronze EXCHANGE=<venue>`; a genuinely malformed frame from the
+venue is a finding to record (`job = 'operator'`) and leave.
+
+## 7. `bronze_schema_drift` — the venue added a key
+
+**Symptom** — `check_name = 'bronze_schema_drift'`, `detail` listing the JSON path and the
+undeclared keys, e.g. `$.data[0]: ['liquidity']`.
+
+**What it means** — the one way a PERMISSIVE parse loses data silently: a key with no
+column is dropped without a NULL to show for it. The check samples 0.1 % of the venue's
+last day of **raw** frames (not bronze) and diffs `json_object_keys` at each declared path
+against `VenueTable.keys`. A key the venue *stopped* sending is not reported — the column
+reads NULL, nothing was lost.
+
+Add the column (nullable — a schema change, so `/schema-change`), refresh the fixture in
+`tests/fixtures/bronze/`, and rebuild the table so the archive's earlier frames get the
+column too. Until the rebuild, `raw.messages` is the only place the key exists.
+
+## 8. `bronze_parity` — filed by the ingest when the frames do not balance
+
+**Symptom** — `job = 'ingest'`, `check_name = 'bronze_parity'`, `scope = bronze.<venue>`,
+`observed` = frames in − (rows written + control frames).
+
+**What it means** — every run prints one line per venue:
+`stage 2b: kraken: 61,412 frames = 61,240 decoded + 172 control (heartbeat=170, status=2)`.
+When the sum does not match, a frame went missing between the raw read and the six writes,
+which should be impossible: the same `from_avro` output feeds both the routed writes and
+the control count. Treat it as a bug in `bronze.py` — re-run the decode for the venue
+with `make lake-rebuild LAYER=bronze EXCHANGE=<venue>` after reading the run's log.
 
 ## After any failure: do not silence the audit
 
