@@ -31,6 +31,13 @@ uv run pytest            # unit tests only; integration/e2e need the v1 Docker s
 
 ## Known issues (left as-is)
 
+- **Dependency CVEs, scanned 2026-08-27.** `uv.lock` was upgraded in-constraint (185
+  packages, 180 tests green) after the repo went public. Two HIGH findings remain and
+  will not be fixed here: `ecdsa 0.19.2` (CVE-2024-23342, no fixed release; pulled in by
+  `python-jose`) and `protobuf 4.25.9` (CVE-2026-0994, fix is 5.29.6+; pinned below 5 by
+  `opentelemetry-exporter-jaeger`). Nothing in this tree runs anywhere, so the exposure
+  is zero; CI's Trivy job skips `legacy/` for that reason and this line is where the
+  residue is recorded instead. Re-scan: `cd legacy/v1 && trivy fs --scanners vuln uv.lock`.
 - `pyspark==4.1.1` is pinned while the v1 Spark cluster was 3.5 — the comment in `pyproject.toml` is stale.
 - `jupyter`, `pytest-*` and `docker` sit in the runtime dependency list rather than the `dev` extra.
 - Roughly 1,100 `print()` calls in Spark jobs and scripts instead of `structlog`.
