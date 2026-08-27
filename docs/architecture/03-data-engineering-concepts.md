@@ -106,7 +106,7 @@ partitions that metadata dominates.
 tiny files). Partition by time at day granularity plus the one dimension queries always
 name, and rely on per-file column statistics for the rest.
 
-**K2.** Raw by `days(kafka_ts), topic`; bronze and silver by `days(recv_ts)`; gold by
+**K2.** Raw by `days(kafka_ts), topic`; bronze and silver books by `days(recv_ts)`; silver trades by `days(exchange_ts)`; gold by
 `exchange, days(exchange_ts)`. Column metrics are off by default and switched on only for
 the columns range scans use, so manifests stay small. ClickHouse keys mirror the query
 shape: `(exchange, canonical_symbol, exchange_ts, trade_id)`. See [14](14-partitioning-strategy.md).
@@ -120,7 +120,7 @@ footer read and a manifest entry, and query time grows with file count rather th
 forever). Commit small, rewrite later into target-sized files behind a lock.
 
 **K2.** Ingest commits every 5 minutes; nightly maintenance binpacks raw to 256 MB and
-sort-rewrites the last two days of bronze to 128 MB, expires old snapshots and removes
+sort-rewrites the last two days of every derived table to 128 MB, expires old snapshots and removes
 orphans, all behind the same writer lock the ingest takes. See [08](08-lake-ingest.md),
 [14](14-partitioning-strategy.md).
 
