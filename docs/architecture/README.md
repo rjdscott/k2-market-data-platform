@@ -224,6 +224,7 @@ reasoning: [ADR-010](../adr/ADR-010-resource-budget.md),
 | Forward look | [capacity-model.md](capacity-model.md) — msg/s per core, bytes/day per topic and lake table, and headroom against 16 CPU / 40 GB once the v3 capture tier lands. Predictions only, written before the burn-in that scores them. |
 |---|---|
 | Scale-out | [scale-out-path.md](scale-out-path.md) — every tier's AWS equivalent at TB/PB, what changes versus what does not, and the partition/file/manifest arithmetic redone at 400×. Labelled *designed, not exercised*: nothing in it has been deployed. |
+| Data strategy | [data-strategy.md](data-strategy.md) — the four lake layers, ClickHouse as indefinite gold serving, retention vs the disk, pcap after E; decided 2026-08-27 |
 | Failure modes | [failure-modes.md](failure-modes.md) — FMEA over the v3 capture and lake tiers and Redpanda as they see it: each failure's detection signal, what it loses versus delays, its runbook, and the [`scripts/chaos/`](../../scripts/chaos/README.md) script that proves it. Hot-tier rows land with Phase E. |
 
 ---
