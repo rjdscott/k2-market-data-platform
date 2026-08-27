@@ -8,14 +8,14 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 | 01 | [What K2 is](01-what-k2-is.md) | purpose, non-goals, principles, what it is deliberately wrong for |
 | 02 | [Market data concepts](02-market-data-concepts.md) | books, sequences, checksums, clocks, fixed point, symbols, candles, BBO, completeness |
 | 03 | [Data engineering concepts](03-data-engineering-concepts.md) | exactly-once, idempotency, snapshots, layers, lineage, evolution, partitioning, compaction, audits |
-| 04 | [System overview](04-system-overview.md) | the diagram, three invariants, one section per tier |
+| 04 | [System overview](04-system-overview.md) | the diagram, three invariants, the data path end to end |
 | 05 | [Capture](05-capture.md) | one Rust process per venue: frame loop, sink, image |
 | 06 | [Capture, venues](06-capture-venues.md) | Binance, Kraken, Coinbase dialects; sequencing, checksum, resync |
 | 07 | [Wire contracts](07-wire-contracts.md) | topics, Avro records, keying, retention, registry |
 | 08 | [Lake ingest](08-lake-ingest.md) | Redpanda to Iceberg exactly once; incremental layers; audits |
 | 09 | [Lake layers](09-lake-layers.md) | raw, bronze, silver, gold, what each holds and why |
 | 10 | [ClickHouse gold](10-clickhouse-gold.md) | dedup contract, candles on read, reload from the lake |
-| 11 | [Observability](11-observability.md) | metrics, 28 rules with runbooks and tests, chaos |
+| 11 | [Observability](11-observability.md) | metrics, 28 rules as code with runbooks and promtool tests, chaos with timed recovery |
 | 12 | [Data strategy](12-data-strategy.md) | why four layers; what ClickHouse keeps; retention vs disk |
 | 13 | [Schema design](13-schema-design.md) | every column, every layer, the wire contracts |
 | 14 | [Partitioning strategy](14-partitioning-strategy.md) | partitions, sort orders, file sizes, ClickHouse keys |

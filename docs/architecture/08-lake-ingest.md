@@ -4,14 +4,47 @@
 > **Read this if** engineers touching `docker/lake/`, anyone debugging a lake audit.
 > **Before this** chapter 07.
 
-`docker/lake/ingest.py` is the only writer of new data into the lake. Every 5 minutes it
-reads Redpanda by explicit offset range, appends every record verbatim to `raw.messages`,
-then derives bronze, silver and gold from that archive. It is idempotent by construction:
-the position it consumed to is written into the same Iceberg commit as the rows, so a run
-killed at any instant either happened or did not. Design: [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md);
-operations: [`docker/lake/README.md`](../../docker/lake/README.md).
+`docker/lake/ingest.py` is the only writer of new data into the lake. Every 5 minutes it reads
+Redpanda by explicit offset range, appends every record verbatim to `raw.messages`, then derives
+bronze, silver and gold from that archive. Design:
+[ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md); operations: [`docker/lake/README.md`](../../docker/lake/README.md).
 
-## Shape
+## Problem
+
+A topic is a position, not a dataset. Redpanda hands out records by offset; the lake must end up
+holding each of them exactly once ([exactly-once](03-data-engineering-concepts.md#exactly-once):
+every source record lands in the target once, however the job dies). An offset stored twice and an
+offset nobody stored must both be impossible.
+
+"Read the stream and checkpoint somewhere" fails on where *somewhere* is. Rows land in one store
+and the position in another, no transaction spans the pair, so a crash between the two writes is
+either a re-read on resume (duplicates) or an advance over rows never written (a hole); ordering
+them chooses which, never whether. v2 shipped that shape and needed a recovery runbook for its
+position store's state machine. A *timestamp* watermark is worse: with no exact successor, its
+lateness buffer is a standing choice between duplicates and loss.
+
+## Options
+
+| Option | Why it lost | Reference |
+|---|---|---|
+| Spark Structured Streaming with its own checkpoint | The framework's own answer, and a resident streaming runtime against a 16 CPU single-host budget; ADR-004 deleted precisely this to recover 13.5 CPU. The checkpoint is still a second store with the same atomicity gap against the Iceberg commit, in a format that is Spark's business, not ours ([batch vs streaming](03-data-engineering-concepts.md#batch-vs-streaming): a bounded run you can re-run, against a process you can only restart). | [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md), [ADR-006](../adr/ADR-006-spark-batch-only.md) |
+| A watermark table in PostgreSQL | What v2's offload did. Two stores, no transaction, so the crash window survives; and the watermark was a timestamp, so lateness was guesswork. It also put PostgreSQL on the archive's critical path: no Prefect database, no advancing system of record. | [ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md), [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) |
+| Kafka Connect with an Iceberg sink connector | An always-on JVM cluster to run, size and monitor for a job that fires 12 times an hour, committing on a cadence of its own into an offset store of its own: the two-store problem bought back at a higher resting cost. The lake wants one writer under one lock, not an autonomous one. No ADR of its own; it never survived the resident-cost line ADR-004 drew and ADR-010 budgets. | [ADR-010](../adr/ADR-010-resource-budget.md) |
+| **Offsets committed in the Iceberg snapshot summary** (chosen) | Nothing left to disagree: the position is a property of the commit that wrote the rows. It costs one rule, "latest snapshot carrying `k2.job = ingest`", which is why `offsets.py` is pure Python and unit-tested. | [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) |
+
+## Decision
+
+**We store the consumed Kafka offsets in the snapshot summary of the same Iceberg commit that
+wrote the rows, and read the next run's start back out of it, because one atomic commit cannot
+half-happen.**
+
+An [Iceberg snapshot](03-data-engineering-concepts.md#iceberg-snapshots) is an immutable listing of
+the table's files, swapped in atomically, so a property hung on it lives or dies with the rows it
+describes. Re-running an ingest that did not commit is a no-op; re-running one that did is impossible,
+because its own commit moved the start: [idempotency](03-data-engineering-concepts.md#idempotency)
+by construction, not by deduplication.
+
+## How it works
 
 ```mermaid
 flowchart TB
@@ -31,7 +64,7 @@ One process, one Spark session, one file lock (`lock.py`): a second writer exits
 than interleaving appends; nightly maintenance takes the same lock blocking, so compaction
 never shares the 8 GiB container with an ingest.
 
-## Stage 1: offsets in the snapshot
+### Stage 1: offsets in the snapshot
 
 1. **Where to start.** `offsets.latest_summary()` finds the newest `raw.messages` snapshot
    whose summary carries `k2.job = ingest`, maintenance snapshots (compaction, expiry) have
@@ -51,9 +84,14 @@ never shares the 8 GiB container with an ingest.
    previous map, a committed offset is never dropped), `k2.kafka-backlog` and
    `k2.max-kafka-ts`. Rows and position are the same atomic metadata swap in Lakekeeper.
 
-## Stages 2–2e: incremental by parent snapshot
+### Stages 2–2e: incremental by parent snapshot
 
-Each layer reads its parent with `start-snapshot-id` = the id it last committed
+Below raw is the usual [medallion](03-data-engineering-concepts.md#medallion-layers) progression, each
+layer a pure function of its parent plus the
+[lineage columns](03-data-engineering-concepts.md#lineage-and-identifiers) that trace a gold row back
+to the frame it came from, and flags that record what a venue did rather than smoothing it away
+([replays](02-market-data-concepts.md#trades-and-replays): a venue re-sending a trade it already
+sent, which is not a duplicate the lake made). Each layer reads its parent with `start-snapshot-id` = the id it last committed
 (`k2.src-snapshot-id` on its own newest snapshot) and `end-snapshot-id` = the parent's
 current id, then writes that end id into its own commit. Same contract as stage 1, one
 level up. Start == end means nothing new and the stage is skipped (Spark rejects the empty
@@ -68,12 +106,15 @@ range).
 
 `rebuild.py --layer bronze|silver|gold|books` drops a layer and recomputes it from its parent
 over the whole archive; bronze 520 s, books 2,367 s
-([benchmarks](../benchmarks/2026-08-27.md#lake)).
+([benchmarks](../benchmarks/2026-08-27.md#lake)). That is what keeping raw buys: every layer above
+it is [rebuildable](03-data-engineering-concepts.md#rebuildability), so a bug in a projection is a re-run rather than a loss.
 
 ## Proof
 
 `maintenance.py` runs nightly and writes every assertion to `audit.checks`; any failure
-exits non-zero and `LakeAuditFailed` fires ([runbook](../runbooks/lake-audit-failed.md)).
+exits non-zero and `LakeAuditFailed` fires ([runbook](../runbooks/lake-audit-failed.md)). These are
+[audits as tests](03-data-engineering-concepts.md#audits-as-tests): assertions about last night's
+data, not about the code CI ran.
 
 | Audit | Asserts |
 |---|---|
@@ -83,8 +124,10 @@ exits non-zero and `LakeAuditFailed` fires ([runbook](../runbooks/lake-audit-fai
 | `gold_trades`, `ohlcv_parity` | one row per identifier; candles recompute from gold trades to the same values |
 | `book_parity`, `kraken_checksum` | book rows tile the deltas; failed checksums outside acknowledged windows are zero |
 
-Independently, `make lake-verify` runs the parity checks on demand and `make parity-ohlcv`
-compares lake, ClickHouse and DuckDB candles at a pinned snapshot.
+`kraken_checksum` re-verifies the venue's own [checksum](02-market-data-concepts.md#checksums) in
+the lake: the replayed book either is the one Kraken had, or it is not. Independently,
+`make lake-verify` runs the parity checks on demand and `make parity-ohlcv` compares lake,
+ClickHouse and DuckDB candles at a pinned snapshot.
 
 ## Practices
 
@@ -100,13 +143,21 @@ compares lake, ClickHouse and DuckDB candles at a pinned snapshot.
 
 ## Trade-offs
 
-- **Batch, five minutes.** Freshness in the lake is bounded by the cron; ClickHouse covers
-  the head from the topics. A streaming writer would need its own checkpoint store, the
-  thing the snapshot-summary design removes.
+- **Batch, five minutes.** Freshness in the lake is bounded by the cron; ClickHouse covers the head
+  from the topics. A streaming writer would need its own checkpoint store, the thing this design removes.
 - **One writer, one container.** Ingest, rebuilds and maintenance share 2 CPU / 8 GiB in
   turn. Serial by lock is a capacity ceiling, not a correctness one.
-- **Retention is the deadline.** `raw.*` topics keep 48 h; an ingest outage longer than that
-  is a recorded, acknowledged hole, never a silent one
-  ([failure-modes.md § lake](16-failure-modes.md#lake-tier)).
+- **Retention is the deadline.** `raw.*` topics keep 48 h, the only door
+  [loss](03-data-engineering-concepts.md#backpressure-and-loss) can enter by, and it enters loudly:
+  a longer outage is a recorded, acknowledged hole ([failure modes](16-failure-modes.md#lake-tier)).
 - **Bronze keeps vendor schemas.** Cross-venue work waits for gold; in exchange nothing a
   venue sent is normalised away before it can be inspected.
+
+## Key points
+
+- The archive's position lives in the archive's own commit, so there is no second store to disagree
+  with it and no recovery procedure for one.
+- Offsets, not timestamps: an offset has an exact successor, so runs abut with nothing to guess at.
+- "Latest snapshot with `k2.job = ingest`", never "latest snapshot": compaction commits too.
+- Every layer below raw resumes by parent snapshot id and can be dropped and rebuilt from raw.
+- Loss enters only through retention, and only a human typing `--accept-data-loss` records it.
