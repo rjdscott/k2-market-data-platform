@@ -110,6 +110,9 @@ else
   # evidence. An ingest that reached neither an error nor a commit is a third
   # outcome worth failing on.
   ingest_rc=1
+  # The detached run wrote its log INSIDE the container; bring it host-side
+  # before reading it (the first run grepped a file that did not exist).
+  docker exec "$SPARK" cat /tmp/chaos-ingest.log >/tmp/chaos-ingest.log 2>/dev/null || true
   grep -qaiE 'error|exception|traceback' /tmp/chaos-ingest.log \
     || die "the ingest left no error in its log with the catalog stopped — it is not talking to the catalog it claims to"
 fi

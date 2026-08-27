@@ -249,4 +249,4 @@ shipped. The plan is left as written; the reasons are here.
   and [ADR-017](../../adr/ADR-017-iceberg-maintenance-pipeline.md), and the budget in
   [ADR-010](../../adr/ADR-010-resource-budget.md)'s Phase D cutover addendum.
 
-_Phase D landed 2026-08-27 — commit e2a2651, tag v3-phase-d._
+_Phase D landed 2026-08-27 — commit e2a2651, tag v3-phase-d. Follow-ups measured the same night: first nightly maintenance exit 0 after 249 s at 03:04Z with 0 audit failures; the four lake chaos scripts green (`scripts/chaos/results/2026-08-27.tsv`, proof cells in failure-modes.md)._
