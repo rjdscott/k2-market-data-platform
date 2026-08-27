@@ -1,6 +1,6 @@
 # ADR-025: ClickHouse as a derived, rebuildable hot tier, reloaded by pull from the lake
 
-**Status:** Proposed
+**Status:** Proposed — 7-day-TTL clause superseded by [ADR-026](ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)
 **Date:** 2026-08-26
 **Author:** Rob Scott
 **Category:** Storage
