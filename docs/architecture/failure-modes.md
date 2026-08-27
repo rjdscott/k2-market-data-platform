@@ -27,7 +27,7 @@ unchallenged. Three honest states appear in that column:
 |---|---|
 | a test path | the assertion runs today, in `make test` or CI |
 | `scripts/chaos/<name>.sh — run <date>, <measurement>` | the injection was executed against the live stack on that date and the numbers in the row come from it. The raw log is `scripts/chaos/results/<date>.tsv`, committed |
-| `scripts/chaos/<name>.sh (written; not yet run)` | the injection exists and has never been executed. One capture row is still in this state (`capture-corrupt-frame.sh`); every Lake tier row was run on 2026-08-27 |
+| `scripts/chaos/<name>.sh (written; not yet run)` | the injection exists and has never been executed. One capture row (`redpanda-stop.sh --cold-start`) is still in this state; every Lake tier row was run on 2026-08-27 |
 | a stated reason it is not injectable | the fault cannot be induced locally without proving something other than the fault — the cell says which, and what stands in for it |
 
 **Recovery times on this page are measured, as of 2026-08-26.** The first `make chaos`
@@ -172,10 +172,9 @@ follow.
 - **The hot tier.** Unbuilt. The placeholder comment above names the rows and the phase
   that writes them, deliberately as a comment rather than empty table rows — a blank
   cell would trip the `awk` gate, which is the correct outcome for a row that does not
-  ship. The six lake rows below the capture rows ARE in the table, and every one of
-  their proof cells says "written; not yet run": the lake tier is code-complete and its
-  `raw`/`bronze`/`audit` tables have not been created on any host, so nothing on those
-  rows has been executed. That is a deployment gate, not a documentation one.
+  ship. The six lake rows below the capture rows were written as "not yet run" while the
+  tables did not exist on any host, and were all executed on 2026-08-27 once Phase D was
+  deployed — the proof cells carry the measured numbers.
 - **Correlated failure**, with one exception. Every row but the engine-restart one is a
   single component failing alone. On a single host with one broker, one ClickHouse and
   one MinIO, a machine reboot fires most of this page at once — the engine-restart row
