@@ -37,7 +37,7 @@
 
 **Parity, three-way now.** `gold.ohlcv_1m` in ClickHouse, `gold.ohlcv_1m` in the lake, and DuckDB computing OHLCV from `silver.trades_*` (dedup applied in the query) — for a pinned lake snapshot id, never `latest` — must agree at tolerance zero. The query triple and the snapshot id are committed as the seed of the Phase G CI parity job.
 
-**Disk precondition.** 79 % of 961 GB used on 2026-08-26 and ~10 GB/day predicted for four layers plus ClickHouse gold. Phase E does not land on this host until MinIO and ClickHouse data live on a volume with ≥ 6 months of runway at the measured rate; the capacity model gets one predicted row per layer before the first rebuild and the measured column after.
+**Disk precondition — measured 2026-08-27, decided.** 79 % of 961 GB used on 2026-08-26 and ~10 GB/day predicted for four layers plus ClickHouse gold. The host has one NVMe and no second volume; Docker Desktop's `Docker.raw` holds 506 GB allocated for 66 GB used and cannot shrink (no `discard=unmap`), so ≈ 630 GB is reusable — **≈ 60 days of runway**, not six months ([capacity-model.md § 6](../../architecture/capacity-model.md), 2026-08-27 note). Maintainer decision: Phase E lands on the root disk; this host is a demonstration and the lever is stopping capture (captures stopped at the 24 h mark, 2026-08-27T22:45Z). The capacity model gets one predicted row per layer before the first rebuild and the measured column after. Revisit trigger: `df /` at 80 % or guest `/var/lib/docker` at 500 GB used.
 
 ## Verification
 
