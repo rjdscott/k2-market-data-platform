@@ -145,6 +145,13 @@ def lake_session(app_name: str, driver_memory: str = DRIVER_MEMORY) -> SparkSess
         # reason. The image happens to be Etc/UTC today; this makes it a
         # contract instead of a coincidence.
         .config("spark.sql.session.timeZone", "UTC")
+        # Case-sensitive column resolution, for one reason: Binance's trade
+        # payload carries both `e` (event type) and `E` (event time), and
+        # bronze.binance_trade keeps the venue's field names as sent. With the
+        # default (insensitive) resolver the two are one duplicate column and
+        # the CREATE TABLE fails. Every other lake column is lowercase and
+        # referenced as written, so nothing else notices the switch.
+        .config("spark.sql.caseSensitive", "true")
         # LAST_WIN, not the default EXCEPTION. `map_from_entries` over Kafka
         # headers throws on a duplicate key, and it throws on the *archive*
         # write — so one foreign producer sending two headers of the same name

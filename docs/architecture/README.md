@@ -278,8 +278,11 @@ flowchart TB
 ### Phase D — the lake tier (this branch)
 
 Phase D is where "the lake is the system of record" stops being a sentence in an ADR and
-becomes four Iceberg tables. Spark reads Redpanda **by offset range** — not as a stream —
-lands every frame verbatim in `raw.messages`, then decodes that archive into `bronze.*`.
+becomes Iceberg tables. Spark reads Redpanda **by offset range** — not as a stream —
+lands every frame verbatim in `raw.messages`, then decodes that archive into `bronze.*` —
+since Phase E, six per-venue tables that keep the venue's own field names and JSON types
+([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)), beside
+the Phase D unified pair until the rebuild proves parity.
 Nothing reads ClickHouse; the JDBC offload that made the v2 lake a copy of a serving
 database was deleted with `docker/offload/`, and its runbooks are archived in
 [`legacy/v2-offload/`](../../legacy/v2-offload/README.md).
@@ -316,7 +319,7 @@ Four things about this diagram are decisions rather than drawing:
   file-based catalog has no atomic commit, no multi-writer, and cannot be read by
   ClickHouse ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)).
 
-The four tables, with per-column commentary, are in
+The tables, with per-column commentary, are in
 [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql); their partition specs and the
 rejected alternatives are in [partitioning-strategy.md](partitioning-strategy.md); the AWS
 mapping — *designed, not exercised* — is in [scale-out-path.md](scale-out-path.md).

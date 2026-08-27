@@ -151,10 +151,10 @@ Runs once per day at 03:00 UTC with `days=2`, `retain_days=7`. Four stages, in o
 
 | Stage | Action |
 |-------|--------|
-| `compact` | Binpack `raw.messages` to 256 MB; **sort**-rewrite both `bronze.*` tables to 128 MB, bounded to the last `--days` of partitions |
-| `expire` | Drop snapshots older than `--retain-days` on all four tables, retaining at least 10 |
+| `compact` | Binpack `raw.messages` to 256 MB; **sort**-rewrite every `bronze.*` table (the unified pair and the six per-venue tables) to 128 MB, bounded to the last `--days` of partitions |
+| `expire` | Drop snapshots older than `--retain-days` on every table, retaining at least 10 |
 | `remove_orphans` | Delete objects under each table's prefix that no snapshot references, with a **24-hour floor** |
-| `audit` | Offset continuity, duplicate identifiers, sequence monotonicity, plus the informational venue-replay rate |
+| `audit` | Offset continuity, duplicate identifiers, sequence monotonicity, the informational venue-replay rate; per venue table, `bronze_unparseable` and `bronze_schema_drift` |
 
 **Exit code is the product.** Any failed audit exits non-zero → the flow run fails →
 `LakeAuditFailed` fires. Every check also lands as a row in `lake.audit.checks`, including

@@ -462,8 +462,8 @@ gauges for the tables that *did* load are current; the others hold whatever they
 **Detection** — `LakeScrapeErrors`: `k2_lake_scrape_errors_total > 0`, `for: 5m`.
 
 **What it means** — the catalog is up (or the refresh would not be finishing at all, which
-is §6) and one or more of the four tables — `raw.messages`, `bronze.trades`,
-`bronze.book_snapshots_l2`, `audit.checks` — could not be loaded. `refresh()` counts the
+is §6) and one or more of the tables in `metrics.py`'s `TABLES` — `raw.messages`, the
+`bronze.*` tables, `audit.checks` — could not be loaded. `refresh()` counts the
 failure, logs it and carries on rather than crashing the loop, because the other tables'
 metrics are still worth serving and `LakeExporterDown` must keep meaning "the exporter is
 gone", not "one table is".

@@ -32,7 +32,7 @@ The `v3` path segment is not decoration. `market.crypto.trades.<ex>` is the *v2*
 
 ---
 
-## v3 layers — decided 2026-08-27, DDL lands in Phase E
+## v3 layers — decided 2026-08-27; bronze DDL landed in Phase E, silver and gold follow
 
 The strategy is [data-strategy.md](data-strategy.md); this is the contract per layer. What
 runs today is the Phase D shape — `raw.messages` plus a *unified* `bronze.trades` /
@@ -153,7 +153,7 @@ Six independent MVs rather than a rollup chain (1m → 5m → 15m …) means eac
 
 ## Cold tier *(v3 Phase D as running; Phase E replaces it with the four layers above)*
 
-The lake does not mirror ClickHouse. Four Iceberg tables — `lake.raw.messages`, `lake.bronze.trades`, `lake.bronze.book_snapshots_l2` and `lake.audit.checks` — are created by [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), and they are fed from Redpanda rather than from the serving database ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)). `raw.messages` stores the Kafka value byte for byte, Confluent framing included; `bronze.*` is decoded from it against the exact writer schema fetched by id, in FAILFAST mode.
+The lake does not mirror ClickHouse. The Iceberg tables — `lake.raw.messages`, the Phase D unified `lake.bronze.trades` / `lake.bronze.book_snapshots_l2`, the six Phase E per-venue `lake.bronze.<venue>_<msgtype>` tables, and `lake.audit.checks` — are created by [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), and they are fed from Redpanda rather than from the serving database ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)). `raw.messages` stores the Kafka value byte for byte, Confluent framing included; `bronze.*` is decoded from it against the exact writer schema fetched by id, in FAILFAST mode.
 
 Unlike the v2 tables it replaced, the lake is unified across venues — `exchange` is a column, not a table name — and the columns come from the Avro contract in `schemas/avro/`, not from a ClickHouse `DESCRIBE`. `tests/test_wire_format.py` asserts that contract between `schemas/avro/*.avsc` and `lake.sql`, which is CLAUDE.md's schema-change rule made executable.
 

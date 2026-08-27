@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify
+.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -76,6 +76,12 @@ lint:  ## Ruff over the v3 lake and the tests (same scope as CI)
 
 lake-verify:  ## Phase D exit criteria against the LIVE stack: offsets gapless, raw == bronze, double-run adds 0
 	bash scripts/lake-verify.sh
+
+# Drops and re-decodes a whole lake layer from its parent, under the writer
+# lock, one day per venue at a time. Pause lake-ingest-5min first (see
+# docker/lake/rebuild.py). EXCHANGE=kraken limits it to one venue.
+lake-rebuild:  ## Rebuild LAYER=bronze from raw.messages over the whole archive (LIVE stack; hours)
+	docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer $(or $(LAYER),bronze) $(if $(EXCHANGE),--exchange $(EXCHANGE),)
 
 chaos:  ## Inject each capture and lake failure, wait for its alert, measure recovery (LOCAL ONLY - breaks the running stack)
 	@echo "chaos: breaks the running stack and drops real market data - public feeds do not replay it."
