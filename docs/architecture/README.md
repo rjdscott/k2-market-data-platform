@@ -1,383 +1,208 @@
-# Architecture — As Built
+# Architecture — as built
 
-K2 is a single-host crypto market-data platform: three exchange WebSocket feeds land in Redpanda, and a Prefect-scheduled Spark job reads Redpanda by offset range into an Iceberg lake every 5 minutes. ClickHouse serves the `gold` tier — canonical trades and 1 Hz books fed from the v3 topics, candles and BBO loaded from the lake — since the Phase E cutover on 2026-08-27; the v2 Bronze → Silver → Gold medallion it replaced is dropped (below). The whole thing runs in one Docker Compose file on **14.60 CPU / 25.625 GiB across 15 long-running containers** (+4 one-shot init containers declaring a further 1.50 CPU / 1.500 GiB, for a bootstrap peak of 16.10 CPU / 27.125 GiB across 19), against a mandate of 16 cores / 40 GB. Phase D deleted the v2 ClickHouse→Iceberg offload ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md), and the Outcome sections of [ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md) and [ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md)). Source for every figure: `docker compose --env-file .env.example config`, limits summed ([command](../operations/docker-resources.md#how-these-numbers-are-produced)).
+How each component is built, how it works, and what it trades away. Versions are the
+image tags in [`docker-compose.yml`](../../docker-compose.yml). Decisions live in
+[`../adr/`](../adr/README.md), numbers in [`../benchmarks/`](../benchmarks/README.md); this page
+cites both and repeats neither.
 
-> **The v2 hot tier is gone.** The three Kotlin feed handlers were the only producers of `market.crypto.trades.<ex>[.raw]`; they retired to [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md) on 2026-08-26 when the Rust capture tier matched them on per-symbol parity ([ADR-019](../adr/ADR-019-rust-capture-tier.md)), which froze `k2.bronze_trades_*`, `k2.silver_trades` and the six `k2.ohlcv_*` tables at the retirement timestamp. On **2026-08-27** the Phase E cutover dropped the `k2` database, its Kafka-engine queues and the six v2 topics together, and dropped the Phase D unified `lake.bronze.trades` / `lake.bronze.book_snapshots_l2` pair once the per-venue layers had proven parity ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)). The v2 DDL is kept, unexecuted, in [`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md). The `market.crypto.v3.{raw,trades,book}.<ex>` topics are the only feed; ClickHouse serves `gold` ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)). Where this page still describes `k2.*`, it is describing what ran until 2026-08-26 and is dated as such.
-
-Everything below describes what actually runs on this branch. Where the design intent and the built system diverge, the divergence is called out rather than papered over. The story of how it got here is in [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md).
-
----
-
-## System diagram
+## System
 
 ```mermaid
 flowchart TB
-    subgraph EX["Exchanges"]
-        BIN["Binance<br/>12 pairs"]
-        KRK["Kraken<br/>11 pairs"]
-        CBS["Coinbase<br/>11 pairs"]
+    subgraph EX["Exchanges · public WebSocket"]
+        BIN["Binance · 12 pairs"]
+        KRK["Kraken · 11 pairs"]
+        CBS["Coinbase · 11 pairs"]
     end
-
-    subgraph FH["Ingestion · Rust k2-capture"]
+    subgraph CAP["Capture · Rust k2-capture, one container per venue"]
         FHB["capture-binance"]
         FHK["capture-kraken"]
         FHC["capture-coinbase"]
     end
-
-    RP["Redpanda v25.3.4, schema registry<br/>9 v3 topics, 108 partitions<br/>Avro, Confluent-framed"]
-
-    subgraph CH["Served tier · ClickHouse 24.3 LTS · gold"]
-        MED["gold.trades · book_top20<br/>ohlcv_* · bbo_1s from lake<br/>ohlcv_live · bbo_live on read"]
+    RP[("Redpanda v25.3.4 + schema registry<br/>9 topics · 12 partitions each · Avro")]
+    subgraph BATCH["Prefect 3 → Spark 3.5.5 / Iceberg 1.8.1"]
+        ING["ingest every 5 min<br/>offset range → raw → bronze → silver → gold"]
+        MNT["maintenance nightly<br/>compact · expire · audit"]
     end
-
-    subgraph BATCH["Orchestration + batch"]
-        PF["Prefect 3<br/>server · worker · Postgres"]
-        SP["Spark 3.5 + Iceberg<br/>offset-range read, append write"]
-    end
-
-    ICE["Iceberg lake · Lakekeeper<br/>raw · bronze · silver · gold · audit<br/>Parquet + zstd"]
-
+    ICE[("Iceberg lake · Lakekeeper v0.13.3 + MinIO<br/>raw · bronze · silver · gold · audit")]
+    CH["ClickHouse 24.3 LTS · gold<br/>live from topics · reloaded from lake"]
+    NB["DuckDB notebooks"]
     subgraph OBS["Observability"]
-        PR["Prometheus v3.2<br/>28 alert rules"]
-        GR["Grafana 11.5<br/>5 dashboards"]
+        PR["Prometheus v3.2 · 28 rules"]
+        GR["Grafana 11.5 · 4 dashboards"]
     end
 
-    BIN -->|WebSocket| FHB
-    KRK -->|WebSocket| FHK
-    CBS -->|WebSocket| FHC
-    FHB -->|"raw + trades + book"| RP
-    FHK -->|"raw + trades + book"| RP
-    FHC -->|"raw + trades + book"| RP
-    RP -->|"trades + book, Avro"| MED
-    PF -->|"cron 1-59/5"| SP
-    RP -->|"offset range"| SP
-    SP -->|append| ICE
-    ICE -.->|"reload, iceberg()"| MED
-    FHB -.->|"capture :8082"| PR
-    MED -.->|"ClickHouse :9363"| PR
-    PR --> GR
+    BIN --> FHB
+    KRK --> FHK
+    CBS --> FHC
+    FHB & FHK & FHC -->|"raw · trades · book"| RP
+    RP -->|"trades + book"| CH
+    RP -->|"offset range"| ING --> ICE
+    MNT --> ICE
+    ICE -.->|"iceberg()"| CH
+    ICE --> NB
+    CAP & CH & ING -.-> PR --> GR
 
-    classDef exchange fill:#e5e7eb,stroke:#4b5563,color:#1f2937
-    classDef rust fill:#c7d2fe,stroke:#4338ca,color:#1f2937
-    classDef stream fill:#fde68a,stroke:#b45309,color:#1f2937
+    classDef ex fill:#e5e7eb,stroke:#4b5563,color:#1f2937
+    classDef rs fill:#c7d2fe,stroke:#4338ca,color:#1f2937
+    classDef rp fill:#fde68a,stroke:#b45309,color:#1f2937
     classDef ch fill:#bbf7d0,stroke:#15803d,color:#1f2937
-    classDef batch fill:#fed7aa,stroke:#c2410c,color:#1f2937
-    classDef storage fill:#bae6fd,stroke:#0369a1,color:#1f2937
-    classDef obs fill:#e9d5ff,stroke:#7e22ce,color:#1f2937
-
-    class BIN,KRK,CBS exchange
-    class FHB,FHK,FHC rust
-    class RP stream
-    class MED ch
-    class PF,SP batch
-    class ICE storage
-    class PR,GR obs
+    classDef sp fill:#fed7aa,stroke:#c2410c,color:#1f2937
+    classDef lk fill:#bae6fd,stroke:#0369a1,color:#1f2937
+    classDef ob fill:#e9d5ff,stroke:#7e22ce,color:#1f2937
+    class BIN,KRK,CBS ex
+    class FHB,FHK,FHC rs
+    class RP rp
+    class CH ch
+    class ING,MNT sp
+    class ICE,NB lk
+    class PR,GR ob
 ```
 
----
+Three invariants hold the shape together:
 
-## Tiers
+1. **The lake is the record; everything else is derived.** ClickHouse, the notebooks and every
+   product table can be dropped and rebuilt from `raw.messages`
+   ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)).
+2. **One wire format.** Avro with the registry, `int64` at 1e-8, `recv_ts_ns` in the body
+   ([ADR-020](../adr/ADR-020-avro-fixed-point-contracts.md)). Nothing parses JSON downstream of capture.
+3. **Correctness is measured, not asserted.** Sequence and checksum counters at capture, per-layer
+   audits in the lake, three-way OHLCV parity at a pinned snapshot, chaos scripts with timed recovery.
 
-### Ingestion — Rust `k2-capture`
+## Capture — `k2-capture`
 
-Three containers from one image ([`services/capture-rust/`](../../services/capture-rust/README.md)), differing only by `--exchange`. One `k2-capture` binary per venue on `gcr.io/distroless/cc-debian12:nonroot`, one WebSocket connection carrying trades *and* L2 book, `recv_ts_ns` stamped as the first statement on frame receipt, fixed-point `i64` at 1e-8 end to end. Each container produces to three topics: `market.crypto.v3.raw.<ex>` (every frame verbatim), `.trades.<ex>` (Avro `Trade`) and `.book.<ex>` (Avro `BookSnapshotL2`, top-20 at 1 Hz).
+**Built.** One Rust crate ([`services/capture-rust/`](../../services/capture-rust/README.md)), one
+image, three containers selected by `--exchange`. Single-threaded tokio (`current_thread`) because the
+CPU quota is 0.25; librdkafka's producer queue (32 MiB) is the only buffer. Runs on
+`distroless/cc` as non-root; a `healthcheck` subcommand stands in for `curl`.
 
-- Instruments come from [`config/instruments.yaml`](../../config/instruments.yaml) — one file, all three exchanges, native *and* canonical spellings, no per-service duplication and no mapping in code.
-- Prometheus metrics on `:8082/metrics` (`k2_capture_messages_total`, `_gaps_total`, `_checksum_failures_total`, `_records_delivered_total`, `_exchange_to_recv_seconds`, …); the `k2-capture healthcheck` subcommand backs the Compose healthcheck, because distroless has no `curl`.
-- Why Rust, and what the JVM tier could not be asked to do: [ADR-019](../adr/ADR-019-rust-capture-tier.md). The wire contract is [ADR-020](../adr/ADR-020-avro-fixed-point-contracts.md); the book product and resync policy are [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md).
+**How it works.** One WebSocket per venue carries trades and L2 book together. `recv_ts_ns` is the
+first statement after a frame leaves the socket. Each frame is published verbatim to `raw.<venue>`,
+then parsed by a pure `handle_frame(bytes, recv_ts) -> records` that runs identically in production
+and in the replay tests. Per venue: Kraken v2 with CRC32 verification of every book update against
+the venue's published checksum; Binance `depth20@100ms` partials with `lastUpdateId` regression checks
+and a scheduled reconnect before the 24 h cap; Coinbase `level2` full books in a `BTreeMap` with
+`sequence_num` gap detection and resync. Top-20 snapshots are emitted at 1 Hz per symbol
+([ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md)). After a produce-error drop on a book
+stream, capture resubscribes for a fresh snapshot once the queue drains.
 
-**Retired: the Kotlin feed handlers.** Three JVM containers (Kotlin 2.3.10, Ktor 3.1.0, `kafka-clients` 4.1.0) dual-produced raw exchange JSON to `market.crypto.trades.<ex>.raw` and a `NormalizedTrade` Avro record to `market.crypto.trades.<ex>` from February to August 2026. They were the only producer of the v2 topics, and their retirement is what froze the v2 ClickHouse medallion, dropped at the cutover. Code, topic inventory and their measured footprint: [`legacy/v2-kotlin/README.md`](../../legacy/v2-kotlin/README.md); the decision is [ADR-002](../adr/ADR-002-kotlin-feed-handlers.md), superseded by [ADR-019](../adr/ADR-019-rust-capture-tier.md).
+**Trade-offs.** Drop-on-full rather than back-pressure: a stalled broker costs records (counted in
+`k2_capture_produce_errors_total`, recovered by the lake's audit) rather than a frozen socket that the
+venue would close anyway. No spill-to-disk; the lake, not capture, is where completeness is proven.
+Internet feeds: exchange→receive latency includes transit and venue clock skew and is published as
+such ([benchmarks](../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-receive)).
 
-**As-built quirk, inherited:** the Bronze layer consumed the *raw JSON* topics, never the normalized Avro ones. The Avro path was live and schema-registered for its whole life and nothing downstream ever read it — normalization ended up in ClickHouse instead (see below). v3 does not repeat the shape: `.trades.<ex>` is Avro and is what `gold.q_trades` reads.
+## Streaming backbone — Redpanda
 
-### Streaming backbone — Redpanda
+**Built.** Single broker, `--smp 1 --memory 1500M`, schema registry and console built in
+([ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md)). Topics are created by the `redpanda-init`
+one-shot, never auto-created: `market.crypto.v3.{raw,trades,book}.<venue>`, 12 partitions each,
+keyed by canonical symbol. Retention: raw 48 h, derived 7 d.
 
-Single-broker Redpanda v25.3.4 in `dev-container` mode, `--smp 1 --memory 1500M`, with the schema registry built in — no separate Confluent registry process ([ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md)).
+**Trade-offs.** Retention is a buffer, not storage — an ingest outage longer than 48 h loses raw
+frames, and the `raw` audit says so ([failure-modes.md](failure-modes.md)). Single broker: recovery is
+restart, measured, not failover.
 
-Topics are created explicitly by the `redpanda-init` one-shot service rather than by auto-create, so partition counts are deterministic: 9 v3 topics at 12 partitions each — `market.crypto.v3.{raw,trades,book}.<ex>` for each exchange — for 108 partitions; `rpk topic list` shows those nine plus `_schemas`. The 6 v2 topics (40 partitions per Binance topic, 20 per Kraken and Coinbase topic, 160 total) were deleted on 2026-08-27 with the `k2` database. That job also hardens `_schemas` to `cleanup.policy=compact` with infinite retention, which fixed a real failure where the registry hit `offset_out_of_range` after a restart.
+## Lake ingest — Spark under Prefect
 
-### Served tier — ClickHouse `gold`
+**Built.** [`docker/lake/`](../../docker/lake/README.md): `ingest.py` runs the stages, one module per
+layer (`bronze.py`, `silver.py`, `gold.py`, `books.py`), `maintenance.py` compacts and audits,
+`rebuild.py` recomputes any layer from its parent. Prefect deployments `lake-ingest-5min`
+(`1-59/5 * * * *`) and `lake-maintenance-daily` (`0 3 * * *`) `docker exec` into the one Spark
+container; a file lock serialises writers.
 
-ClickHouse 24.3 LTS ([ADR-015](../adr/ADR-015-clickhouse-lts-downgrade.md)) serves the `gold` database indefinitely, with no TTL ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)). It is derived: everything in it is rebuildable from the lake, and the lake wins on conflict ([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)). There is still no stream-processing framework ([ADR-004](../adr/ADR-004-eliminate-spark-streaming.md)) — two Kafka-engine tables and four MVs are the whole in-database pipeline.
+**How it works.** Stage 1 reads Redpanda by explicit offset range — from the offsets recorded in the
+last ingest snapshot's summary to `latest` — and appends every record verbatim to `raw.messages`,
+writing the consumed offsets into the same Iceberg commit ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)).
+Each later stage reads its parent incrementally by snapshot id (`k2.src-snapshot-id`) and commits the
+id it read up to. A run killed at any instant leaves either the old snapshot or the new one; the next
+run resumes from whichever it finds.
 
-- **Feeds** — `gold.q_trades` and `gold.q_book`, `AvroConfluent` Kafka engines over the three `market.crypto.v3.trades.*` / `book.*` topics (groups `k2-gold-trades`, `k2-gold-book`), with `kafka_handle_error_mode = 'stream'`: a record the decoder cannot read goes to `gold.feed_errors` with its bytes rather than stalling the partition.
-- **`gold.trades`** — one row per logical trade, every venue, one schema. `ReplacingMergeTree` on `(exchange, canonical_symbol, exchange_ts, trade_id)`, versioned so the **earliest delivery wins**; a venue replay or a topic/lake overlap is one row under `FINAL`. Prices are the wire's fixed point (`price_e8` Int64 at 1e-8) with exact `Decimal(38,10)` aliases.
-- **`gold.book_top20`** — the 1 Hz top-20 snapshots, one row per `(venue, symbol, second)`, later sample in a second wins.
-- **`gold.ohlcv_{1m,5m,1h,1d}`, `gold.bbo_1s`** — the lake's candles and BBO, loaded by pull through `iceberg()` ([clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md)), never computed here.
-- **`gold.ohlcv_live(bucket = <seconds>)`, `gold.bbo_live`** — computed on read over `FINAL`, for the head the lake has not reached yet.
+**Trade-offs.** Batch, not streaming: freshness in the lake is five minutes, and ClickHouse covers the
+head. One Spark container at 2 CPU / 8 GiB serves ingest, rebuilds and maintenance in turn; a full
+bronze rebuild takes 520 s, books 2,367 s ([benchmarks](../benchmarks/2026-08-27.md#lake)).
 
-OHLCV on read is the v2 post-mortem made structural: v2's `SummingMergeTree` candles resolved open/close per insert block, so a minute spanning two blocks kept whichever block's open survived the merge. `scripts/clickhouse-schema-test.sh` (`make test-clickhouse`, in CI) inserts a minute in two blocks and asserts the open. A read-only `quant` user sees `gold` and nothing else.
+## Lake layers — Iceberg on Lakekeeper + MinIO
 
-DDL: [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql) is the contract, [`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql) the feeds; the tier's README is [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md), columns are in [schema-design.md](schema-design.md).
+**Built.** DDL in [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql); catalog is Lakekeeper's
+REST API over MinIO ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)); Parquet + zstd.
 
-**What ran until 2026-08-26 — the v2 `k2` medallion, dropped 2026-08-27.** Per exchange, four objects: a Kafka-engine table (`k2.trades_<exchange>_queue`) reading the `.raw` JSON topic as `JSONAsString`; a normalizing MV (`JSONExtract*` + `toDecimal64(…, 8)`); a per-exchange bronze `MergeTree` with a 7-day TTL ([ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md)); and a silver MV fanning into the single `k2.silver_trades` (30-day TTL), from which six more MVs maintained `ohlcv_1m/5m/15m/30m/1h/1d` ([ADR-009](../adr/ADR-009-medallion-in-clickhouse.md)). The DDL is kept unexecuted in [`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md).
-
-### Orchestration and batch — Prefect + Spark
-
-Prefect 3 (`prefect-server`, `prefect-worker`, `prefect-db` on PostgreSQL 15) runs two deployments on the `lake` work pool:
-
-| Deployment | Cron | Does |
+| Layer | Tables | Contract |
 |---|---|---|
-| `lake-ingest-5min` | `1-59/5 * * * *` | Redpanda → `raw.messages` verbatim, then `raw.messages` → `bronze.*` |
-| `lake-maintenance-daily` | `0 3 * * *` | Compact (binpack, 128 MB) → expire snapshots → audits into `audit.checks` |
+| `raw` | `messages` | every Kafka record verbatim, partitioned `days(kafka_ts), topic`, never expired |
+| `bronze` | `<venue>_<msgtype>` ×7 | the venue's field names and JSON types as sent, decoded from raw JSON, lineage to the raw row |
+| `silver` | `trades_<venue>`, `book_<venue>` ×3 | typed, UTC, canonical symbol beside native, flags `venue_replay` / `seq_gap` / `precision_loss` / `checksum_ok`; every delivery kept |
+| `gold` | `trades`, `book_top20`, `bbo_1s`, `ohlcv_{1m,5m,1h,1d}`, `dim_*` | one row per logical trade, end-of-second book state from replaying every delta, products with `src_snapshot_id` |
+| `audit` | `checks` | every nightly assertion, pass or fail |
 
-Both shell out to the shared `spark-iceberg` container. `docker/lake/ingest.py` reads Redpanda **by offset range**, starting from the offsets recorded in the last ingest snapshot's summary, and writes those offsets back in the same commit that writes the rows — so a killed run is a no-op and the next cycle resumes exactly where it stopped, with no second store to disagree ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)).
+Columns: [schema-design.md](schema-design.md). Partitioning and file sizing:
+[partitioning-strategy.md](partitioning-strategy.md). Why four layers and what each is for:
+[data-strategy.md](data-strategy.md), [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md).
 
-Spark is batch-only ([ADR-006](../adr/ADR-006-spark-batch-only.md)). Until Phase D, this pair was a 15-minute ClickHouse→Iceberg offload and its nightly maintenance flow, reading over JDBC ([ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md), [ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md)); both, and the PostgreSQL watermark table behind them, are deleted.
+**Trade-offs.** Bronze keeps vendor schemas, so a Kraken field is not a Binance field until silver —
+cross-venue queries pay for that at gold. Silver keeps every delivery, including replays, so it is
+larger than gold and lake-only. Disk on one host is the binding constraint: ≈ 9.8 GB/day, runway
+≈ 60 days at the 2026-08-27 fill ([capacity-model.md](capacity-model.md)).
 
-### Cold store — the Iceberg lake
+## Served tier — ClickHouse `gold`
 
-Five namespaces on a Lakekeeper REST catalog over MinIO: `raw.messages` (every frame verbatim, `days(kafka_ts), topic`, never expired); seven per-venue `bronze.<venue>_<msgtype>` tables in the venue's own field names; `silver.trades_<venue>` and `silver.book_<venue>` typed and flagged; `gold.trades`, `gold.dim_*`, `gold.ohlcv_*`, `gold.book_top20`, `gold.bbo_1s` as the canonical cross-venue layer; and `audit.checks` ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)). The Phase D unified `bronze.trades` / `bronze.book_snapshots_l2` pair ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)) was dropped on 2026-08-27 once the per-venue layers matched it. Parquet with zstd, 128–256 MB target file size ([ADR-007](../adr/ADR-007-iceberg-cold-storage.md), [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md), [ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)). DDL with per-column commentary: [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql).
+**Built.** [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql)
+is the contract, tested in CI (`make test-clickhouse`); `20-gold-kafka.sql` adds `AvroConfluent`
+Kafka engines over the trades and book topics with `kafka_handle_error_mode='stream'`, so an undecodable
+record lands in `gold.feed_errors` instead of stalling a partition. A read-only `quant` profile
+(3 GiB, 2 threads) is what dashboards and notebooks use. Limits: 4 CPU / 8 GiB, server cap 6.5 GiB.
 
-**Superseded divergence:** v2 ran a file-based **Hadoop catalog** over a bind-mounted warehouse rather than the REST catalog the original design assumed, because REST cost a day of version fights and bought nothing on one node ([ADR-013](../adr/ADR-013-pragmatic-iceberg-version-strategy.md)). It did not survive contact with a lake that has to be the system of record: a file catalog has no atomic commit, no multi-writer, and ClickHouse cannot read it. Lakekeeper replaced it in Phase B ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)), and the bind-mounted warehouse went with the offload in Phase D.
+**How it works.** `gold.trades` is `ReplacingMergeTree` keyed on
+`(exchange, canonical_symbol, exchange_ts, trade_id)`, earliest delivery wins; a venue replay or a
+topic/lake overlap is one row under `FINAL`. `gold.ohlcv_*` and `gold.bbo_1s` are pulled from the
+lake through `iceberg()` ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)); `ohlcv_live` and
+`bbo_live` are views over `FINAL` for the head the lake has not reached. No TTL; the lake wins on
+conflict ([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)).
 
-Two silver columns that the v2 offload dropped — `trade_conditions Array(String)` and `vendor_data Map(String,String)`, which the Spark ClickHouse JDBC driver could not deserialize — are the exact class of loss the raw archive exists to make impossible: nothing decodes on the way in.
+**Trade-offs.** OHLCV on read costs a `FINAL` scan per query rather than a merge-time bug: v2's
+`SummingMergeTree` resolved open and close per insert block, and the CI test that inserts one minute
+in two blocks is the regression guard. ClickHouse 24.3 cannot speak to a REST catalog, so the lake
+pull is by metadata path and needs uncompressed metadata on the source tables.
 
-### Observability
+## Observability
 
-Prometheus v3.2 scrapes the three capture containers (`:8082`), ClickHouse (`:9363`), Redpanda (`:9644`), the lake metrics exporter (`lake-metrics:8000`) and Grafana. Grafana 11.5 ships five provisioned dashboards in `docker/grafana/dashboards/`: pipeline overview, ClickHouse overview, v2 migration tracker, K2 Capture (v3), K2 Lake (v3).
+Prometheus scrapes capture (`:8082`), ClickHouse (`:9363`), Redpanda (`:9644`), the lake exporter
+(`lake-metrics:8000`, PyIceberg over snapshot summaries) and itself. 28 rules in
+[`docker/prometheus/rules/`](../../docker/prometheus/rules/) — 10 capture, 12 lake, 6 ClickHouse — each
+with a runbook in [`../runbooks/`](../runbooks/README.md) and a `promtool` unit test. Four Grafana
+dashboards: pipeline overview, capture, lake, ClickHouse. No Alertmanager: rules are evaluated and
+shown, not routed. Detail: [operations/observability.md](../operations/observability.md).
 
-**28 alert rules** are loaded from `docker/prometheus/rules/`: 6 ClickHouse (the served tier, two of them on the gold feeds), plus 10 v3 capture-tier rules, which landed with Phase C and are evaluated against live series, and 12 v3 lake-tier rules landing with Phase D. The 9 Iceberg-offload rules and the `iceberg-scheduler` job that fed them were deleted with `docker/offload/` in Phase D; the six runbooks they pointed at are archived in [`legacy/v2-offload/runbooks/`](../../legacy/v2-offload/runbooks/). **Two of the ten capture rules have been shown to fire on the fault they name.** `make chaos` ran for the first time on 2026-08-26, 16:40–16:57Z: five faults injected, one SKIP, and `CaptureDown` (119 s / 152 s / 165 s to fire) and `CaptureProduceErrors` (256 s) both fired, with recovery 0–30 s ([`scripts/chaos/README.md`](../../scripts/chaos/README.md), raw rows in [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)). The remaining eight are unproven against a real fault; three of them — `CaptureFeedStale`, `CaptureProduceStalled`, `CaptureBookDepthDegraded` — carry `promtool` unit tests only ([`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml), `make check-alerts`), which pin an expression and never a recovery time. `CaptureFeedStale` cannot be proven by the pause script at all: a paused scrape target is stale-marked, so the rule stops evaluating rather than firing. The lake-tier gap is wider: **one of the 12 lake rules has now fired on a real fault** — `LakeIngestLagHigh`, while the topic truncation of 2026-08-26 held the ingest down ([lake-ingest-lag.md §3](../runbooks/lake-ingest-lag.md)). `LakeIngestFailed` did not, correctly: it needs 30 minutes with no commit on `raw.messages`, and the repair landed 17.5 minutes after the last one (21:32:36Z → 21:50:06Z). The other 11, because the four `lake-*.sh` chaos scripts ship unrun; they carry `promtool` unit tests only. The 4 remaining v2 rules are unproven the same way. There is no Alertmanager.
+## Research surface
 
----
-
-## Data model
-
-ClickHouse `gold`, as served:
-
-| Table | Shape |
-|---|---|
-| `gold.trades` | `exchange, symbol, canonical_symbol, trade_id, price_e8, qty_e8 (+ price, qty aliases), side, exchange_ts, recv_ts_ns, seq, conn_id, conn_msg_seq, src_topic, src_partition, src_offset, first_seen` |
-| `gold.book_top20` | `exchange, symbol, canonical_symbol, depth, seq, checksum_ok, bid_px[], bid_qty[], ask_px[], ask_qty[], exchange_ts, recv_ts_ns, snapshot_ts_ns, snapshot_ts, second, conn_id, conn_msg_seq, src_*` |
-| `gold.ohlcv_{1m,5m,1h,1d}` | `exchange, canonical_symbol, window_start, open_e8, high_e8, low_e8, close_e8 (+ aliases), volume, quote_volume, trade_count, open_time, close_time, src_snapshot_id` |
-| `gold.bbo_1s` | `exchange, canonical_symbol, second, bid_e8, bid_qty_e8, ask_e8, ask_qty_e8 (+ bid, ask aliases), mid, spread_bps, imbalance, microprice, checksum_ok, src_snapshot_id` |
-| `gold.feed_errors` | `seen_at, topic, partition, offset, error, raw` |
-
-The v2 `k2` shapes (`bronze_trades_<ex>`, `silver_trades`, `ohlcv_*`) are recorded in [schema-design.md](schema-design.md) under their dated v2 headings.
-
-Full field notes: [schema-design.md](schema-design.md).
-
----
-
-## Trade lifecycle
-
-This is the **v2** path, as it ran and as it was measured on 2026-02-19. The feed handler that opened it retired on 2026-08-26 and the ClickHouse tables it wrote were dropped on 2026-08-27 ([`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md)). Kept because the measured p99 below is what this repo published, and a measured number is not rewritten. The live path is `k2-capture` → `market.crypto.v3.*` → `gold.q_trades` → `gold.trades`, and its equivalent number is not yet measured.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant EX as Exchange WS
-    participant FH as Feed handler (v2, retired)
-    participant RP as Redpanda
-    participant KE as CH Kafka engine
-    participant MV as CH MVs
-    participant SP as Spark lake ingest
-
-    EX->>FH: trade JSON
-    Note over FH: parse + normalize, sub-ms
-    FH->>RP: raw JSON + Avro, ~2 ms produce
-    RP->>KE: poll batch, flush every 7.5 s
-    KE->>MV: normalizing MV to bronze
-    MV->>MV: bronze to silver, sub-ms
-    MV->>MV: silver to 6 OHLCV tables
-    Note over EX,MV: measured p99 exchange to silver:<br/>191 / 197 / 170 ms
-    RP-->>SP: read by offset range from the last snapshot
-    SP->>SP: append raw then bronze, offsets in the same commit
-    Note over SP: every 5 min, independent of the ClickHouse path
-```
-
-The end-to-end p99 is dominated by network RTT to the exchanges (~80 ms average), not by anything in the platform — bronze → silver is below the measurement resolution. Caveat on those numbers: they come from a 1-hour window on a cold-started stack with n ≈ 12–13 trades per exchange, and the 24-hour burn-in that would give them statistical weight is unfinished.
-
----
+`notebooks/` is a uv project: DuckDB reads the lake straight from Parquet under MinIO, four
+notebooks (connect, book at a time, ASOF trades-to-book, completeness) run in 19 s
+(`make notebooks-run`). Notebooks read `gold` for research and `silver` for forensics; nothing reads
+ClickHouse.
 
 ## Resource footprint
 
-| Service | CPU limit | Memory limit |
-|---|---|---|
-| clickhouse | 4.0 | 8 GB |
-| redpanda | 2.0 | 2 GB |
-| spark-iceberg | 2.0 | 4 GB |
-| prometheus | 1.0 | 2 GB |
-| minio | 1.0 | 1 GB |
-| prefect-db | 1.0 | 1 GB |
-| prefect-server | 1.0 | 1 GB |
-| redpanda-console | 0.5 | 256 MB |
-| grafana | 0.5 | 512 MB |
-| prefect-worker | 0.5 | 512 MB |
-| lakekeeper (v3) | 0.25 | 256 MB |
-| capture-binance (v3) | 0.25 | 256 MB |
-| capture-kraken (v3) | 0.25 | 256 MB |
-| capture-coinbase (v3) | 0.25 | 512 MB |
-| `lake-metrics` (v3) | 0.1 | 128 MB |
-| **Total (15 long-running services)** | **14.60** | **25.625 GiB** |
+15 long-running services at 14.60 CPU / 25.625 GiB of limits, plus four one-shot init containers;
+per-service table and the command that produces it in
+[operations/docker-resources.md](../operations/docker-resources.md). Budget and the reasoning behind
+each limit: [ADR-010](../adr/ADR-010-resource-budget.md).
 
-Against the v2 baseline of 15.1 CPU / 21.875 GB across 14 services: `lakekeeper`, the three `capture-*`
-containers and `lake-metrics` added +1.10 CPU / +1.375 GiB, retiring the three Kotlin feed handlers gave
-back −1.5 CPU / −1.5 GiB ([ADR-019](../adr/ADR-019-rust-capture-tier.md)), and deleting the v2 offload
-took its own exporter (−0.1 CPU / −128 MiB) with it — net −0.5 CPU for a capture tier that now carries L2
-books as well as trades, and a lake that replaced the offload.
+## Not built
 
-Four further entries — `redpanda-init` (v2, topic creation), `lakekeeper-migrate` (v3 catalog DB schema),
-`lake-init` (v3 bucket + warehouse + namespaces) and `lake-ddl` (v3 raw/bronze/audit table DDL) — are
-one-shot containers that exit after startup, so they are not in the steady-state total. They are not free
-either: they declare 1.50 CPU / 1.500 GiB between them and run concurrently with everything above at
-`docker compose up`, for a bootstrap peak of 16.10 CPU / 27.125 GiB across 19 containers. Budget and
-reasoning: [ADR-010](../adr/ADR-010-resource-budget.md),
-[docs/operations/docker-resources.md](../operations/docker-resources.md).
+No query API; no replication or failover; no Alertmanager routing; no load test above 1×. Designed
+and deferred: pcap sidecar with kernel timestamps (ADR-026 Phase E+1) and a cross-venue security
+master ([data-strategy.md](data-strategy.md)). The cloud mapping in
+[scale-out-path.md](scale-out-path.md) is designed, not exercised.
 
-| Forward look | [capacity-model.md](capacity-model.md) — msg/s per core, bytes/day per topic and lake table, and headroom against 16 CPU / 40 GB once the v3 capture tier lands. Predictions only, written before the burn-in that scores them. |
+## Further reading
+
+| Page | What it holds |
 |---|---|
-| Scale-out | [scale-out-path.md](scale-out-path.md) — every tier's AWS equivalent at TB/PB, what changes versus what does not, and the partition/file/manifest arithmetic redone at 400×. Labelled *designed, not exercised*: nothing in it has been deployed. |
-| Data strategy | [data-strategy.md](data-strategy.md) — the four lake layers, ClickHouse as indefinite gold serving, retention vs the disk, pcap after E; decided 2026-08-27 |
-| Failure modes | [failure-modes.md](failure-modes.md) — FMEA over the v3 capture and lake tiers and Redpanda as they see it: each failure's detection signal, what it loses versus delays, its runbook, and the [`scripts/chaos/`](../../scripts/chaos/README.md) script that proves it. Hot-tier rows land with Phase E. |
-
----
-
-## What is not built
-
-- **No query API.** Phase 8 is unstarted. Reads today are `clickhouse-client` / HTTP on `:8123` and Spark SQL against Iceberg. The Kotlin JVM query API proposed in [ADR-005](../adr/ADR-005-kotlin-spring-boot-api.md) was never written, and the ROI analysis that ranked it last is the reason.
-- **No query engine over the lake yet.** DuckDB + PyIceberg notebooks land in Phase F.
-- **No Raw layer in ClickHouse.** [ADR-009](../adr/ADR-009-medallion-in-clickhouse.md) specified a four-layer Raw → Bronze → Silver → Gold medallion there; v2 built three, with the Kafka-engine queue playing the Raw role in flight. v3 puts the four layers in the lake instead — `raw.messages` is the durable pre-decode record — and ClickHouse serves only gold.
-- **No Alertmanager, no alert fire test, no load testing above 1x.** The 5x/10x replay scenarios in the latency plan were never run.
-- **Single broker, single ClickHouse node, single host.** No replication, no failover; recovery is container restart, verified by test rather than by design.
-
----
-
-## v3 direction
-
-The list above is what v2 chose not to build. Separately, an audit of the code found eight things v2 got *wrong* for research use — this is a quant-research platform on public internet feeds, not a trading path, and it still fails at completeness, correctness and reproducibility:
-
-- The lake was a JDBC copy of ClickHouse, not the system of record — the archive inherited a serving DB's normalisation, TTL and dropped columns. Deleted in Phase D; the code is gone and the reasoning is in the Outcome of [ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md).
-- OHLCV `SummingMergeTree` resolves open/high/low/close arbitrarily across merges ([`01-k2-schema.sql:178`](../../legacy/v2-clickhouse/01-k2-schema.sql#L178)) — a real correctness bug, not a rounding one.
-- Bronze is plain `MergeTree` ([`01-k2-schema.sql:88`](../../legacy/v2-clickhouse/01-k2-schema.sql#L88)) — a topic replay duplicates every row.
-- No receive timestamp before parse ([`TradeNormalizer.kt:28`](../../legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L28)) — clock skew and platform latency are inseparable.
-- Kraken runs WS v1 with synthesised colliding trade IDs ([`TradeNormalizer.kt:60`](../../legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L60)).
-- Coinbase `sequence_num` is parsed and never compared ([`CoinbaseWebSocketClient.kt:178`](../../legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/CoinbaseWebSocketClient.kt#L178)) — dropped messages are silent.
-- The Avro schema puts `logicalType` beside `type` where Avro ignores it ([`normalized-trade.avsc:60`](../../schemas/avro/normalized-trade.avsc#L60)), and ClickHouse consumes raw JSON anyway ([`01-k2-schema.sql:39`](../../legacy/v2-clickhouse/01-k2-schema.sql#L39)).
-- Trades only, no L2 book, and raw topics keyed by exchange name ([`KafkaProducerService.kt:155`](../../legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/KafkaProducerService.kt#L155)) pin two exchanges to a single partition.
-
-The four source links above resolve into [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md): the code is archived, not deleted, because it is the baseline the parity comparison was measured against.
-
-v3 inverts the storage hierarchy — the lake becomes the system of record and everything else is derived and rebuildable — and has replaced the Kotlin handlers with one Rust `k2-capture` binary per exchange doing trades and L2 book on a single connection.
-
-**Today, honestly (Phase E cut over, 2026-08-27):** capture is Rust only; the v2 hot tier is dropped
-(top of this page); the lake carries raw, bronze, silver and gold; ClickHouse serves `gold` from the v3
-topics and reloads from the lake — see
-[004-phase-e](../plans/2026-08-26-v3-quant-research-platform/004-phase-e-hot-tier.md).
-Throughput, latency, reconnects and resource use for the Rust tier are in the "Measured" section of
-[`services/capture-rust/README.md`](../../services/capture-rust/README.md).
-
-```mermaid
-flowchart TB
-  EX["Exchanges<br/>Binance · Kraken · Coinbase"]
-  CAP["Rust k2-capture ×3<br/>v3, the only capture tier"]
-  RP[("Redpanda")]
-  CH["ClickHouse gold<br/>served · derived · no TTL"]
-  LK["Iceberg lake<br/>raw · bronze · silver · gold"]
-  EX --> CAP --> RP
-  RP -->|"trades + book"| CH
-  RP --> LK
-  LK -.->|reload| CH
-```
-
-### Phase D — the lake tier
-
-Phase D is where "the lake is the system of record" stops being a sentence in an ADR and
-becomes Iceberg tables. Spark reads Redpanda **by offset range** — not as a stream —
-lands every frame verbatim in `raw.messages`, then decodes that archive into `bronze.*` —
-since Phase E, seven per-venue tables that keep the venue's own field names and JSON types
-([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)); the Phase D
-unified pair was dropped on 2026-08-27 once the rebuild proved parity.
-Nothing reads ClickHouse; the JDBC offload that made the v2 lake a copy of a serving
-database was deleted with `docker/offload/`, and its runbooks are archived in
-[`legacy/v2-offload/`](../../legacy/v2-offload/README.md).
-
-```mermaid
-flowchart TB
-  RP[("Redpanda · 9 v3 topics<br/>raw 48h · derived 7d")]
-  ING["Spark ingest · every 5 min<br/>offsets in the snapshot summary"]
-  RAW[("raw.messages · verbatim<br/>days(kafka_ts), topic · never expired")]
-  BR[("bronze.<venue>_<msgtype> ×7<br/>silver.* · gold.* · rebuildable")]
-  Q["ClickHouse gold · reload by pull<br/>DuckDB + PyIceberg · Phase F"]
-  RP --> ING --> RAW --> BR --> Q
-  BR -.->|"audit.checks"| Q
-```
-
-Four things about this diagram are decisions rather than drawing:
-
-- **The arrow from Redpanda is batch, by offset range.** Exactly-once comes from writing
-  the consumed offsets into the Iceberg snapshot summary of the same commit that wrote the
-  rows, so there is no watermark table and no second store to disagree with
-  ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The PostgreSQL
-  watermark table is gone, deleted with the offload in Phase D.
-- **`raw.messages` has no outbound TTL and never will.** It is the system of record, kept
-  forever, and the honest cost is that host disk becomes the platform's first binding
-  constraint — on a calendar, not at a load multiple
-  ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md),
-  [capacity model §7](capacity-model.md#7-bottleneck-prediction)).
-- **`bronze.*` is per venue again, and `gold.*` is where the venues unify.** Phase D shipped
-  a unified `bronze.trades` / `bronze.book_snapshots_l2` pair
-  ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)); Phase E reversed that
-  into raw → bronze-per-venue → silver-per-venue → gold-canonical and dropped the pair on
-  2026-08-27 ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)).
-- **The catalog is Lakekeeper over MinIO**, not the Hadoop catalog on a bind mount: a
-  file-based catalog has no atomic commit, no multi-writer, and cannot be read by
-  ClickHouse ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)).
-
-The tables, with per-column commentary, are in
-[`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql); their partition specs and the
-rejected alternatives are in [partitioning-strategy.md](partitioning-strategy.md); the AWS
-mapping — *designed, not exercised* — is in [scale-out-path.md](scale-out-path.md).
-
-**Target (Phase F, end state):**
-
-```mermaid
-flowchart LR
-  EX["Exchanges · public WS<br/>Binance · Kraken · Coinbase"]
-  CAP["k2-capture ×3 · Rust<br/>trades + L2 · recv_ts · seq · CRC32"]
-  RP[("Redpanda<br/>Avro + registry")]
-  IB[("Iceberg · Lakekeeper + MinIO<br/>system of record")]
-  CH["ClickHouse gold<br/>derived · rebuildable · no TTL"]
-  DD["DuckDB + PyIceberg<br/>notebooks"]
-  GR["Grafana + Prometheus"]
-  EX --> CAP --> RP
-  RP -->|"Spark batch · offsets in snapshot"| IB
-  RP --> CH
-  IB -->|rebuild| CH
-  IB --> DD
-  CH --> GR
-  CAP -.metrics.-> GR
-```
-
-Same 16 CPU / 40 GB single host ([ADR-010](../adr/ADR-010-resource-budget.md) holds). Phases, exit criteria and verify-first spikes: [the v3 plan](../plans/2026-08-26-v3-quant-research-platform/README.md). Decision and rejected alternatives: [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) (Proposed).
-
----
-
-## Decision records
-
-The full set is in [docs/adr/](../adr/). The ones that shaped this diagram:
-
-| ADR | Decision |
-|---|---|
-| [ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md) | Kafka + Schema Registry → Redpanda |
-| [ADR-002](../adr/ADR-002-kotlin-feed-handlers.md) | Python feed handlers → Kotlin |
-| [ADR-003](../adr/ADR-003-clickhouse-warm-storage.md) | ClickHouse as the hot store |
-| [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md) | Delete Spark Structured Streaming |
-| [ADR-006](../adr/ADR-006-spark-batch-only.md) | Spark retained, batch only |
-| [ADR-007](../adr/ADR-007-iceberg-cold-storage.md) | Iceberg as the cold tier |
-| [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md) | Proposed dropping Prefect — **not adopted**, see the journey doc |
-| [ADR-009](../adr/ADR-009-medallion-in-clickhouse.md) | Medallion as ClickHouse materialized views |
-| [ADR-010](../adr/ADR-010-resource-budget.md) | The 16-core / 40 GB budget |
-| [ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md) | Bronze table per exchange |
-| [ADR-013](../adr/ADR-013-pragmatic-iceberg-version-strategy.md) | Hadoop catalog over REST — **superseded by ADR-023** |
-| [ADR-014](../adr/ADR-014-spark-based-iceberg-offload.md) | Spark offload, not a Kotlin service — **superseded; the offload is deleted** |
-| [ADR-015](../adr/ADR-015-clickhouse-lts-downgrade.md) | ClickHouse 26.1 → 24.3 LTS |
-| [ADR-016](../adr/ADR-016-add-coinbase-exchange.md) | Coinbase as the third exchange |
-| [ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md) | Daily compaction + snapshot expiry — **superseded; carried into `docker/lake/maintenance.py`** |
-| [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) | **Proposed** — v3: lake-first, Rust capture tier |
-| [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md) | **Proposed** — `raw.messages` is the system of record, kept forever |
-| [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) | **Proposed** — Kafka offsets in the Iceberg snapshot summary; the watermark table goes |
-| [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md) | **Proposed** — Lakekeeper REST catalog on MinIO, replacing the Hadoop catalog |
-| [ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md) | **Proposed** — unified bronze in the lake, partitioned by exchange |
-| [ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md) | ClickHouse derived and rebuildable; reload by pull through `iceberg()` |
-| [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) | Four lake layers, `gold` served from ClickHouse with no TTL; the Phase E cutover that dropped `k2` |
+| [data-strategy.md](data-strategy.md) | why four layers, what ClickHouse holds and for how long, retention vs disk |
+| [schema-design.md](schema-design.md) | every column in every layer and the wire contracts |
+| [partitioning-strategy.md](partitioning-strategy.md) | partition specs, sort orders, file sizes, ClickHouse keys |
+| [failure-modes.md](failure-modes.md) | FMEA: detection, blast radius, recovery, proof per failure |
+| [capacity-model.md](capacity-model.md) | predicted vs measured bytes/day, CPU, disk runway |
+| [streaming-sources.md](streaming-sources.md) | the three venue dialects and what a fourth costs |
+| [platform-principles.md](platform-principles.md), [positioning.md](positioning.md) | the rules the design is held to, and what it is deliberately wrong for |
+| [../MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md) | v1 → v2 → v3, with the measured outcomes of each |

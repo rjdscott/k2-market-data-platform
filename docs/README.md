@@ -8,15 +8,14 @@ say so — the divergence is usually the interesting part.
 For a reviewer opening this repo cold, in order:
 
 1. [Root README](../README.md) — what the platform is, and how to run it.
-2. [architecture/README.md](architecture/README.md) — the as-built diagram, per-tier
-   detail, the resource table, and an explicit list of what is *not* built.
-3. [adr/ADR-008](adr/ADR-008-eliminate-prefect-orchestration.md) — the decision that was
-   argued, accepted, and then reversed in practice. The `Outcome` section is the point.
-4. [MIGRATION-JOURNEY.md](MIGRATION-JOURNEY.md) — v1 → v2: phase log, measured outcomes,
-   and every prediction scored against what shipped.
-5. [benchmarks/2026-02-19-v2-baseline.md](benchmarks/2026-02-19-v2-baseline.md) — the
-   numbers quoted everywhere else, with the command behind each and the sample-size
-   caveat stated plainly.
+2. [architecture/README.md](architecture/README.md) — each component: how it is built,
+   how it works, what it trades away; and what is *not* built.
+3. [adr/ADR-026](adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) — the
+   decision that shaped the lake and the serving tier, with its rejected alternatives.
+4. [adr/ADR-008](adr/ADR-008-eliminate-prefect-orchestration.md) — a decision argued,
+   accepted, and reversed in practice. The `Outcome` section is the point.
+5. [benchmarks/2026-08-27.md](benchmarks/2026-08-27.md) — the numbers quoted everywhere
+   else, the command behind each, and the window they came from.
 6. [audits/2026-08-26-doc-accuracy.md](audits/2026-08-26-doc-accuracy.md) — 31 findings
    from an adversarial pass over these docs, published rather than quietly fixed.
 
@@ -35,11 +34,11 @@ research/  →  adr/  →  plans/  →  audits/
 | Surface | Holds | Conventions |
 |---------|-------|-------------|
 | [research/](research/) | Analysis before a decision, dated. Allowed to be wrong in hindsight | [README](research/README.md) |
-| [adr/](adr/) | 26 ADRs. Immutable once accepted; divergence recorded in an `Outcome` section | [README](adr/README.md) · [template](adr/template.md) |
+| [adr/](adr/) | 27 ADRs. Immutable once accepted; divergence recorded in an `Outcome` section | [README](adr/README.md) · [template](adr/template.md) |
 | [plans/](plans/) | Multi-phase design documents with exit criteria per phase | [README](plans/README.md) |
 | [audits/](audits/) | Point-in-time sweeps of one surface, with a findings table | [README](audits/README.md) |
 | [benchmarks/](benchmarks/) | Dated measurement snapshots. Every published number traces here | [README](benchmarks/README.md) |
-| [runbooks/](runbooks/) | 11 incident procedures (2 v2 + 5 v3 capture + 4 v3 lake), one per alert family, with measured MTTR | [README](runbooks/README.md) · [template](runbooks/template.md) |
+| [runbooks/](runbooks/) | 12 incident procedures, one per alert family, with measured MTTR | [README](runbooks/README.md) · [template](runbooks/template.md) |
 
 ## Reference
 
@@ -47,7 +46,7 @@ The system as built, for readers who want the detail rather than the argument.
 
 | Doc | What's in it |
 |---|---|
-| [architecture/README.md](architecture/README.md) | As-built system: diagram, tiers, data model, lifecycle, footprint, known gaps |
+| [architecture/README.md](architecture/README.md) | As-built system: diagram, per-component build / mechanics / trade-offs, footprint, known gaps |
 | [architecture/technology-stack.md](architecture/technology-stack.md) | Every component, its version, its job, and the ADR that chose it |
 | [architecture/schema-design.md](architecture/schema-design.md) | Bronze / Silver / Gold columns, the Avro normalized-trade contract, precision choices |
 | [architecture/partitioning-strategy.md](architecture/partitioning-strategy.md) | Redpanda keys and partition counts, Iceberg partition specs and sort orders, and why symbol is in neither. The ClickHouse section lands with Phase E |
