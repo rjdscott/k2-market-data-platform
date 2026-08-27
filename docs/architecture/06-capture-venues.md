@@ -47,8 +47,8 @@ all three ([symbols and venues](02-market-data-concepts.md#symbols-and-venues)),
 12 Binance, 11 Kraken, 11 Coinbase: each instrument carries a `native` (the bytes on the
 wire, byte for byte) and a `canonical` (`BASE/QUOTE`), and an unlisted symbol is a hard
 error, never a guess. A venue's private ticker is folded into the canonical name;
-`BTC/USDT` and `BTC/USD` never are, being different collateral with a basis that is itself
-a research subject.
+`BTC/USDT` and `BTC/USD` never are, being different collateral whose basis is itself a
+research subject.
 
 | | Binance | Kraken (WS v2) | Coinbase (Advanced Trade) |
 |---|---|---|---|
@@ -154,9 +154,8 @@ Per venue counters, all on `:8082/metrics` and prefixed `k2_capture_`: `gaps_tot
 `resyncs_total`, `reconnects_total{reason}`, `produce_errors_total{reason}`,
 `precision_loss_total`, `unknown_frames_total`, `exchange_to_recv_seconds` histogram,
 `book_depth`, `book_levels_total`. Every series carries the venue's own `exchange` label, so
-the scrape jobs set no `exchange` target label
-([11-observability.md](11-observability.md)). The 6.5 h window on 2026-08-27 read 0 gaps and
-0 checksum failures over 14.1 M Kraken frames
+the scrape jobs set none ([11-observability.md](11-observability.md)). The 6.5 h window on
+2026-08-27 read 0 gaps and 0 checksum failures over 14.1 M Kraken frames
 ([benchmarks](../benchmarks/2026-08-27.md#ingestion--capture-tier)).
 
 ## Practices
@@ -173,8 +172,7 @@ the scrape jobs set no `exchange` target label
 ## Trade-offs
 
 Three policies means three code paths and three sets of venue docs to keep current, and the
-honest limit of this shape is around ten venues. At three it is less code than the
-abstraction would have been.
+honest limit of this shape is around ten venues.
 
 Coinbase's connection-wide resync is the expensive one: one lost frame costs every book on
 the socket, and that cost grows with the instrument count. Splitting products across
@@ -187,7 +185,7 @@ stops us reading the socket and the venue drops us, losing more than it saved
 unparseable frame is still archived verbatim to the `raw` topic and counted in
 `unknown_frames_total`, so a normalisation bug stays
 [rebuildable](03-data-engineering-concepts.md#rebuildability). At 34 instruments this has
-cost nothing; at a hundred across ten venues the DLQ is the first thing to add.
+cost nothing; at ten venues the DLQ is the first thing to add.
 
 ## Key points
 
@@ -197,6 +195,6 @@ cost nothing; at a hundred across ten venues the DLQ is the first thing to add.
   *contents*, not just its ordering; it needs per-pair precision before it can run at all.
 - A book that fails its check is emitted once with `checksum_ok = false` before it is
   dropped, so the bad window is queryable instead of looking like quiet.
-- Nothing is translated or synthesised: the registry's `native` is the bytes on the wire, an
-  unknown symbol fails loudly, and arithmetic is
+- Nothing is translated or synthesised: `native` is the bytes on the wire, an unknown symbol
+  fails loudly, and arithmetic is
   [fixed-point](02-market-data-concepts.md#fixed-point-numbers) `i64` at 1e-8 throughout.
