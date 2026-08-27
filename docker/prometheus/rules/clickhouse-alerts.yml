@@ -102,3 +102,59 @@ groups:
         expr: |
           rate(ClickHouseProfileEvents_QueryTimeMicroseconds[5m])
           / clamp_min(rate(ClickHouseProfileEvents_Query[5m]), 0.001) / 1e6
+
+  # ── v3 gold (Phase E, ADR-026). The served tier is fed by Kafka-engine
+  # consumers; these are the two ways that feed fails quietly. ──────────────
+  - name: clickhouse_gold
+    interval: 30s
+    rules:
+
+      # The consumers have read nothing for 10 minutes while a capture is
+      # still receiving trades. Either signal alone is ambiguous — a quiet
+      # market or a stopped capture also reads as "no messages" — so both are
+      # required: the capture's own freshness gauge says frames are arriving.
+      - alert: ClickHouseGoldFeedStale
+        expr: |
+          sum(rate(ClickHouseProfileEvents_KafkaMessagesRead[10m])) == 0
+          and on()
+          min(time() - k2_capture_last_message_ts_seconds{stream="trade"}) < 300
+        for: 5m
+        labels:
+          severity: warning
+          component: clickhouse
+          tier: hot
+        annotations:
+          summary: "gold Kafka consumers have read nothing for 10 minutes while capture is live"
+          description: |
+            ClickHouse's Kafka-engine tables (gold.q_trades, gold.q_book) are not
+            consuming although capture reports fresh trades. Dashboards on gold
+            are going stale; nothing is lost — the lake still archives every
+            frame and gold is rebuildable from it.
+
+            1. `SELECT * FROM system.kafka_consumers` — assignments, last error
+            2. `docker logs k2-clickhouse --tail 200 | grep -i kafka`
+            3. A consumer group stuck on a bad record: see KafkaRowsRejected below
+
+      # A record the AvroConfluent decoder could not read. With
+      # kafka_handle_error_mode = 'stream' it is skipped and lands in
+      # gold.feed_errors with its bytes; this counter is what moves. (Not
+      # KafkaRowsRejected: that counts rows discarded on a rebalance and
+      # re-consumed — 450 K of them during the 2026-08-27 head-start drain,
+      # none lost.) One is a foreign producer or a schema evolution the DDL
+      # does not know about; the lake has the bytes either way.
+      - alert: ClickHouseKafkaMessagesFailed
+        expr: increase(ClickHouseProfileEvents_KafkaMessagesFailed[15m]) > 0
+        labels:
+          severity: warning
+          component: clickhouse
+          tier: hot
+        annotations:
+          summary: "ClickHouse could not decode {{ $value }} Kafka records in 15 min"
+          description: |
+            AvroConfluent could not decode a record into gold.q_trades /
+            gold.q_book; it was skipped into gold.feed_errors
+            (`SELECT topic, partition, offset, error FROM gold.feed_errors ORDER BY seen_at DESC`).
+            Compare the registered schema
+            (`curl redpanda:8081/subjects/<topic>-value/versions/latest`)
+            against docker/clickhouse/ddl/20-gold-kafka.sql; a new field the
+            queue table lacks is the usual cause (/schema-change).

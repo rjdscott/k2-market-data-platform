@@ -1,0 +1,87 @@
+# promtool unit tests for the clickhouse_gold group in ../clickhouse-alerts.yml
+rule_files:
+  - ../clickhouse-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ── ClickHouseGoldFeedStale must fire only when capture is live AND the
+  # consumers are silent. Three cases: silent feed + live capture (fires),
+  # silent feed + stopped capture (must not — that is a quiet stack, not a
+  # broken feed), reading feed + live capture (must not).
+  - interval: 1m
+    input_series:
+      - series: 'ClickHouseProfileEvents_KafkaMessagesRead{instance="clickhouse:9363",job="clickhouse"}'
+        values: '1000+0x40'              # flat counter: nothing read
+      - series: 'k2_capture_last_message_ts_seconds{exchange="kraken",stream="trade"}'
+        values: '0+60x40'                # advances with time(): capture live
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ClickHouseGoldFeedStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: clickhouse
+              tier: hot
+            exp_annotations:
+              summary: "gold Kafka consumers have read nothing for 10 minutes while capture is live"
+              description: |
+                ClickHouse's Kafka-engine tables (gold.q_trades, gold.q_book) are not
+                consuming although capture reports fresh trades. Dashboards on gold
+                are going stale; nothing is lost — the lake still archives every
+                frame and gold is rebuildable from it.
+
+                1. `SELECT * FROM system.kafka_consumers` — assignments, last error
+                2. `docker logs k2-clickhouse --tail 200 | grep -i kafka`
+                3. A consumer group stuck on a bad record: see KafkaRowsRejected below
+
+  - interval: 1m
+    input_series:
+      - series: 'ClickHouseProfileEvents_KafkaMessagesRead{instance="clickhouse:9363",job="clickhouse"}'
+        values: '1000+0x40'
+      - series: 'k2_capture_last_message_ts_seconds{exchange="kraken",stream="trade"}'
+        values: '0+0x40'                 # frozen: capture stopped at t=0
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ClickHouseGoldFeedStale
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'ClickHouseProfileEvents_KafkaMessagesRead{instance="clickhouse:9363",job="clickhouse"}'
+        values: '1000+500x40'            # consuming
+      - series: 'k2_capture_last_message_ts_seconds{exchange="kraken",stream="trade"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ClickHouseGoldFeedStale
+        exp_alerts: []
+
+  # ── ClickHouseKafkaMessagesFailed: one failed record fires; a flat counter does not.
+  - interval: 1m
+    input_series:
+      - series: 'ClickHouseProfileEvents_KafkaMessagesFailed{instance="clickhouse:9363",job="clickhouse"}'
+        values: '0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ClickHouseKafkaMessagesFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: clickhouse
+              tier: hot
+              instance: clickhouse:9363
+              job: clickhouse
+            exp_annotations:
+              summary: "ClickHouse could not decode 1 Kafka records in 15 min"
+              description: |
+                AvroConfluent could not decode a record into gold.q_trades /
+                gold.q_book; it was skipped into gold.feed_errors
+                (`SELECT topic, partition, offset, error FROM gold.feed_errors ORDER BY seen_at DESC`).
+                Compare the registered schema
+                (`curl redpanda:8081/subjects/<topic>-value/versions/latest`)
+                against docker/clickhouse/ddl/20-gold-kafka.sql; a new field the
+                queue table lacks is the usual cause (/schema-change).
+      - eval_time: 3m
+        alertname: ClickHouseKafkaMessagesFailed
+        exp_alerts: []

@@ -52,6 +52,8 @@ Rules: each layer is derived only from the one above; lineage points one layer u
 fields are never dropped (bronze columns, kept through silver); dedup is a gold concern;
 schema evolution is add-nullable-only at every layer, with `raw.messages` frozen.
 
+**Gold in ClickHouse — landed 2026-08-27.** [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql) is the served contract: `gold.trades` (`ReplacingMergeTree`, `ORDER BY (exchange, canonical_symbol, exchange_ts, trade_id)`, version = inverted `recv_ts_ns` so the earliest delivery wins, no TTL), `gold.book_top20` (one row per venue-symbol-second, later sample wins), and the on-read views `gold.ohlcv_live(bucket)` and `gold.bbo_live`. Prices and quantities are the wire's `Int64` at 1e-8 with exact `Decimal(38,10)` aliases. Fed by AvroConfluent Kafka engines for freshness (`20-gold-kafka.sql`) and, once the lake gold layer exists, by a pull from it; CI asserts the semantics on every PR (`make test-clickhouse`, [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)).
+
 **Why identifier uniqueness lives in gold and nowhere below.** The v3-D unified bronze
 declared `(exchange, symbol, trade_id)` unique and the data disproved it twice in a day
 (reconnect replay, then in-connection re-send — ADR-024 amendment). Below gold, the only

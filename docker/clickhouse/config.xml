@@ -19,14 +19,26 @@
     <tcp_port>9000</tcp_port>
     <interserver_http_port>9009</interserver_http_port>
 
-    <!-- Performance -->
-    <max_concurrent_queries>100</max_concurrent_queries>
-    <max_server_memory_usage_to_ram_ratio>0.9</max_server_memory_usage_to_ram_ratio>
+    <!-- Performance. Sized to the 4 CPU / 8 GiB compose limit (ADR-010), not
+         to the host: max_server_memory_usage_to_ram_ratio reads the machine's
+         RAM through the cgroup and would let the server plan for 36 GiB it
+         does not have. 6.5 GiB server-wide, 6 GB per query for `default`,
+         3 GiB for `quant` (users.xml), leaves ~1.5 GiB for page cache and the
+         Kafka consumers. Plan 004. -->
+    <max_concurrent_queries>32</max_concurrent_queries>
+    <max_server_memory_usage>6979321856</max_server_memory_usage>
     <max_thread_pool_size>10000</max_thread_pool_size>
 
-    <!-- Market data optimizations -->
-    <background_pool_size>16</background_pool_size>
+    <!-- Merges: 8 background threads on 4 CPUs is already 2x oversubscribed;
+         16 was sized for a 16-core box. -->
+    <background_pool_size>8</background_pool_size>
     <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+    <!-- The server refuses to start if this floor (default 20) exceeds
+         pool_size x ratio (16); measured 2026-08-27 on 24.3.18.7. -->
+    <merge_tree>
+        <number_of_free_entries_in_pool_to_execute_mutation>8</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>8</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+    </merge_tree>
 
     <!-- Kafka Engine settings for Redpanda integration -->
     <kafka>
@@ -41,17 +53,9 @@
         </case>
     </compression>
 
-    <!-- Query settings -->
-    <profiles>
-        <default>
-            <max_memory_usage>10000000000</max_memory_usage>
-            <use_uncompressed_cache>1</use_uncompressed_cache>
-            <load_balancing>random</load_balancing>
-        </default>
-    </profiles>
-
-    <!-- Users defined in users.xml -->
-    <users_config>users.xml</users_config>
+    <!-- Profiles (per-query limits) live in users.xml, where ClickHouse
+         requires them: a <profiles> block here is logged as an error and
+         ignored — which is what v2's 10 GB max_memory_usage was, 2026-08-27. -->
 
     <!-- Timezone -->
     <timezone>UTC</timezone>

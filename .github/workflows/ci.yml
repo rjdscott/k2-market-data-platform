@@ -68,6 +68,21 @@ jobs:
       - name: Pytest
         run: uv run --no-project --with pytest --with pyyaml pytest tests -q
 
+  clickhouse:
+    name: ClickHouse (gold schema)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The served tier's contract, asserted on a throwaway server: the v2
+      # OHLCV regression (open/close across two insert blocks), FINAL
+      # deduplication with the earliest delivery winning, exact fixed-point to
+      # Decimal, book downsampling, BBO arithmetic, no TTL, and the quant
+      # profile. Only 10-gold-tables.sql — the Kafka feeds need a broker.
+      - run: bash scripts/clickhouse-schema-test.sh
+
   docker:
     name: Docker build (${{ matrix.name }})
     runs-on: ubuntu-latest

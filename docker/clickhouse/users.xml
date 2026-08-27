@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<!--
+  K2 v3 — the `quant` user and profile (plan 004, ADR-026).
+
+  Read-only research access to `gold`, bounded so a backtest cannot take the
+  server down: 3 GiB and 2 threads per query on a 4 CPU / 8 GiB container that
+  also runs the Kafka consumers and merges. readonly=2 (not 1) so clients that
+  send per-query SETTINGS — Grafana's ClickHouse datasource, DuckDB's
+  clickhouse extension — still connect; writes and DDL are refused either way.
+  do_not_merge_across_partitions_select_final keeps `FINAL` on the monthly
+  partitions of gold.trades a per-partition merge rather than a global one.
+
+  The `default` profile is here too, because ClickHouse only reads profiles
+  from the users config (a <profiles> block in config.d is logged as an error
+  and ignored — v2's 10 GB cap never applied, found 2026-08-27).
+
+  The password comes from the environment (K2_QUANT_PASSWORD in .env) so no
+  secret lives in this file. Mounted to /etc/clickhouse-server/users.d/ by
+  docker-compose.yml; the `default` user is still created from CLICKHOUSE_*
+  by the image's entrypoint.
+-->
+<clickhouse>
+    <profiles>
+        <!-- default: the operator / pipeline user. 6 GB per query under the
+             6.5 GiB server cap in config.xml. -->
+        <default>
+            <max_memory_usage>6000000000</max_memory_usage>
+            <use_uncompressed_cache>1</use_uncompressed_cache>
+        </default>
+        <quant>
+            <readonly>2</readonly>
+            <max_memory_usage>3221225472</max_memory_usage>
+            <max_threads>2</max_threads>
+            <max_execution_time>300</max_execution_time>
+            <do_not_merge_across_partitions_select_final>1</do_not_merge_across_partitions_select_final>
+        </quant>
+    </profiles>
+    <users>
+        <quant>
+            <password from_env="K2_QUANT_PASSWORD"/>
+            <profile>quant</profile>
+            <quota>default</quota>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <allow_databases>
+                <database>gold</database>
+            </allow_databases>
+        </quant>
+    </users>
+</clickhouse>
