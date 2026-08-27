@@ -513,6 +513,10 @@ services:
       - "8888:8888"     # Jupyter (if needed)
     volumes:
       - ./docker/lake:/home/iceberg/lake          # ingest, maintenance, DDL, session builder
+      # Silver derives canonical_symbol from the registry, not from the Avro
+      # topics. File-level bind mount: edit in place needs --force-recreate
+      # (CLAUDE.md, bind-mount gotcha).
+      - ./config/instruments.yaml:/home/iceberg/config/instruments.yaml:ro
     environment:
       # MinIO / S3 credentials (Iceberg cold storage)
       - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}

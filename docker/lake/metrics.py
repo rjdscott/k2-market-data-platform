@@ -63,6 +63,9 @@ TABLES = {
     "bronze.kraken_book": ("bronze", "kraken_book"),
     "bronze.coinbase_market_trades": ("bronze", "coinbase_market_trades"),
     "bronze.coinbase_level2": ("bronze", "coinbase_level2"),
+    "silver.trades_binance": ("silver", "trades_binance"),
+    "silver.trades_kraken": ("silver", "trades_kraken"),
+    "silver.trades_coinbase": ("silver", "trades_coinbase"),
     "audit.checks": ("audit", "checks"),
 }
 

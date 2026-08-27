@@ -36,6 +36,8 @@ the tier being down ([lake-recovery.md](./lake-recovery.md)).
 | 6 | `bronze_unparseable` — a venue frame did not parse as the declared shape | < 1 day (a schema change + a table rebuild) | pass verified 2026-08-27 (0 rows on all six tables after the 61.9 M-row rebuild); a failure not yet induced |
 | 7 | `bronze_schema_drift` — the venue sends a key the table does not declare | < 1 day (same) | pass and **fail** verified 2026-08-27: 23/23 audits green in 290 s; with `M`,`m` removed from `binance_trade`'s declared keys the check failed with `$.data: ['M', 'm']` |
 | 8 | `bronze_parity` — filed by the ingest: frames in ≠ rows out + control frames | < 60 min | not yet verified — Phase E |
+| 9 | `silver_parity` — silver rows ≠ trades in the bronze snapshot silver last read | < 60 min (rebuild the venue) | not yet verified — Phase E |
+| 10 | `silver_flags` — informational; **cannot fail** | n/a — read the rates | not yet verified — Phase E |
 
 ---
 
@@ -512,6 +514,29 @@ When the sum does not match, a frame went missing between the raw read and the s
 which should be impossible: the same `from_avro` output feeds both the routed writes and
 the control count. Treat it as a bug in `bronze.py` — re-run the decode for the venue
 with `make lake-rebuild LAYER=bronze EXCHANGE=<venue>` after reading the run's log.
+
+## 9. `silver_parity` — a bronze frame's trades are not all in silver
+
+**Symptom** — `check_name = 'silver_parity'`, `scope` one of `lake.silver.trades_<venue>`,
+`observed` = silver rows − trades in bronze (negative: missing; positive: extra).
+
+**What it means** — silver reads each bronze table incrementally by snapshot and
+explodes every frame to one row per trade; the count is compared against the bronze
+snapshot silver last recorded (`k2.src-snapshot-id`), so a bronze commit after the
+last silver tick is not a finding. A shortfall is a run that committed partially or a
+frame whose trades did not explode (a shape silver's `explode` SQL does not expect);
+an excess is a double write.
+
+```bash
+make lake-rebuild LAYER=silver EXCHANGE=<venue>     # drop, recreate, replay by day
+```
+
+## 10. `silver_flags` — the rates, informational
+
+One line per venue: rows, venue replays, trade-id gaps, ids never received, rows
+beyond 8 decimals. It cannot fail; it is here so a *change* is visible — a jump in
+gaps is a capture-tier question (`k2_capture_reconnects_total`, produce errors), a
+jump in replays is reconnect churn.
 
 ## After any failure: do not silence the audit
 

@@ -1,5 +1,5 @@
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- K2 v3 lake — the Iceberg tables (raw, unified bronze, six bronze-per-venue, audit), applied by docker/lake/apply_ddl.py
+-- K2 v3 lake — the Iceberg tables (raw, unified bronze, six bronze-per-venue, silver trades per venue, audit), applied by docker/lake/apply_ddl.py
 -- (the `lake-ddl` one-shot compose service). Idempotent: every statement is
 -- CREATE ... IF NOT EXISTS or an ALTER that converges to a fixed value, so a
 -- re-run against a live warehouse is a no-op.
@@ -518,6 +518,203 @@ ALTER TABLE lake.bronze.coinbase_level2 SET IDENTIFIER FIELDS src_topic, src_par
 
 ALTER TABLE lake.bronze.coinbase_level2
     WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, recv_ts_ns;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Silver per venue — Phase E, ADR-026. Typed, annotated, every delivery kept.
+--
+-- One table per (venue, message type), derived only from its bronze table by
+-- docker/lake/silver.py. Types are ours (DECIMAL(28,10), TIMESTAMP UTC micros),
+-- names are canonical for the shared columns and the venue's own for the rest
+-- (kept beside, never instead: `side_native`, `buyer_is_maker`, `ord_type`).
+-- canonical_symbol comes from config/instruments.yaml, the registry the capture
+-- subscribes from — not from the Avro topics, so silver stays a function of
+-- raw.messages alone.
+--
+-- Flags, each a measurement rather than a judgement:
+--   venue_replay    the same trade was delivered before (Coinbase re-sends on
+--                   subscribe and inside a live subscription; lake.sql above)
+--   seq_gap         trade ids the archive never saw, per symbol — the venues
+--                   number trades sequentially, so a hole is a hole
+--   precision_loss  more than 8 decimals: the wire's 1e-8 cannot carry it
+-- Rows are never dropped for any of them; gold decides what to keep.
+--
+-- Partitioned by days(exchange_ts) — the research axis — and sorted
+-- (canonical_symbol, exchange_ts) inside a partition. Identifier = bronze
+-- lineage + position within the frame, so one archived frame that carries N
+-- trades yields exactly N rows and nothing else can.
+--
+-- Books (silver.book_<venue>) follow in the next step; Kraken's checksum
+-- verification needs the `instrument` precision frames beside the book frames.
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ───────────────────────────────────────────────────────────────────────────
+-- silver.trades_binance
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.silver.trades_binance (
+    symbol           STRING  NOT NULL COMMENT 'Venue-native symbol, as sent (the bronze value)',
+    canonical_symbol STRING  NOT NULL COMMENT 'BASE/QUOTE from config/instruments.yaml — silver derives it from the registry, never from the wire',
+    trade_id         STRING  NOT NULL COMMENT 'The trade id the venue assigned, as sent',
+    trade_seq        BIGINT  NOT NULL COMMENT 'trade_id as a number. All three venues number trades sequentially per symbol (measured 2026-08-27: Binance 8,667,843 consecutive ids vs 144 jumps). seq_gap is computed on this',
+    price            DECIMAL(28,10) NOT NULL COMMENT 'Typed from the bronze value, exact',
+    qty              DECIMAL(28,10) NOT NULL COMMENT 'Base quantity, exact',
+    side             STRING  NOT NULL COMMENT 'Taker side normalised: buy | sell',
+    side_native      STRING  NOT NULL COMMENT 'The side as the venue expresses it, as sent (Binance: the buyer-is-maker flag as true/false)',
+    exchange_ts      TIMESTAMP NOT NULL COMMENT 'Venue trade time, typed UTC microseconds (Coinbase nanoseconds truncate to micros)',
+    recv_ts_ns       BIGINT  NOT NULL COMMENT 'K2 receive clock of the frame, nanoseconds',
+    recv_ts          TIMESTAMP NOT NULL COMMENT 'recv_ts_ns to microseconds',
+    conn_id          STRING  NOT NULL,
+    conn_msg_seq     BIGINT  NOT NULL,
+    venue_replay     BOOLEAN NOT NULL COMMENT 'true = an earlier delivery of the same (symbol, trade_id) exists in the archive (lower recv_ts_ns, or same and earlier lineage). Every delivery is kept. gold keeps the first',
+    seq_gap          BOOLEAN          COMMENT 'true = the previous trade_seq for this symbol is more than 1 below this one: trades the archive never received. NULL = no previous trade within the lookback (unknowable)',
+    missing_before   BIGINT           COMMENT 'How many trade ids are absent between the previous trade and this one. 0 when seq_gap is false, NULL with it',
+    precision_loss   BOOLEAN NOT NULL COMMENT 'true = price or qty carries more than 8 decimal places, i.e. the 1e-8 fixed point of the wire and of gold cannot hold it exactly',
+    event_type       STRING           COMMENT 'Binance `e`, as sent',
+    event_time       TIMESTAMP        COMMENT 'Binance `E`, typed from epoch milliseconds',
+    buyer_is_maker   BOOLEAN          COMMENT 'Binance `m`, as sent. side above is derived from it',
+    ignore_flag      BOOLEAN          COMMENT 'Binance `M`, as sent',
+    stream           STRING           COMMENT 'The combined-stream name, as sent',
+    src_topic        STRING  NOT NULL COMMENT 'Lineage: the bronze row (= the raw.messages row)',
+    src_partition    INT     NOT NULL,
+    src_offset       BIGINT  NOT NULL,
+    src_index        INT     NOT NULL COMMENT 'Position of this trade within the frame, 0-based, in the order the venue sent — the last component of the identifier',
+    ingest_ts        TIMESTAMP NOT NULL COMMENT 'When the silver run that wrote this row started'
+)
+USING iceberg
+PARTITIONED BY (days(exchange_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.canonical_symbol' = 'full',
+    'write.metadata.metrics.column.exchange_ts'     = 'full',
+    'write.metadata.metrics.column.recv_ts'         = 'full',
+    'write.metadata.metrics.column.trade_seq'       = 'full',
+    'write.metadata.metrics.column.src_offset'      = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Binance trades typed from bronze.binance_trade, one row per frame'
+);
+
+ALTER TABLE lake.silver.trades_binance SET IDENTIFIER FIELDS src_topic, src_partition, src_offset, src_index;
+
+ALTER TABLE lake.silver.trades_binance
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, exchange_ts;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- silver.trades_kraken
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.silver.trades_kraken (
+    symbol           STRING  NOT NULL COMMENT 'Venue-native symbol, as sent (the bronze value)',
+    canonical_symbol STRING  NOT NULL COMMENT 'BASE/QUOTE from config/instruments.yaml — silver derives it from the registry, never from the wire',
+    trade_id         STRING  NOT NULL COMMENT 'The trade id the venue assigned, as sent',
+    trade_seq        BIGINT  NOT NULL COMMENT 'trade_id as a number. All three venues number trades sequentially per symbol (measured 2026-08-27: Binance 8,667,843 consecutive ids vs 144 jumps). seq_gap is computed on this',
+    price            DECIMAL(28,10) NOT NULL COMMENT 'Typed from the bronze value, exact',
+    qty              DECIMAL(28,10) NOT NULL COMMENT 'Base quantity, exact',
+    side             STRING  NOT NULL COMMENT 'Taker side normalised: buy | sell',
+    side_native      STRING  NOT NULL COMMENT 'The side as the venue expresses it, as sent (Binance: the buyer-is-maker flag as true/false)',
+    exchange_ts      TIMESTAMP NOT NULL COMMENT 'Venue trade time, typed UTC microseconds (Coinbase nanoseconds truncate to micros)',
+    recv_ts_ns       BIGINT  NOT NULL COMMENT 'K2 receive clock of the frame, nanoseconds',
+    recv_ts          TIMESTAMP NOT NULL COMMENT 'recv_ts_ns to microseconds',
+    conn_id          STRING  NOT NULL,
+    conn_msg_seq     BIGINT  NOT NULL,
+    venue_replay     BOOLEAN NOT NULL COMMENT 'true = an earlier delivery of the same (symbol, trade_id) exists in the archive (lower recv_ts_ns, or same and earlier lineage). Every delivery is kept. gold keeps the first',
+    seq_gap          BOOLEAN          COMMENT 'true = the previous trade_seq for this symbol is more than 1 below this one: trades the archive never received. NULL = no previous trade within the lookback (unknowable)',
+    missing_before   BIGINT           COMMENT 'How many trade ids are absent between the previous trade and this one. 0 when seq_gap is false, NULL with it',
+    precision_loss   BOOLEAN NOT NULL COMMENT 'true = price or qty carries more than 8 decimal places, i.e. the 1e-8 fixed point of the wire and of gold cannot hold it exactly',
+    ord_type         STRING           COMMENT 'Kraken `ord_type`, as sent',
+    frame_type       STRING           COMMENT 'Kraken frame `type`: snapshot | update',
+    src_topic        STRING  NOT NULL COMMENT 'Lineage: the bronze row (= the raw.messages row)',
+    src_partition    INT     NOT NULL,
+    src_offset       BIGINT  NOT NULL,
+    src_index        INT     NOT NULL COMMENT 'Position of this trade within the frame, 0-based, in the order the venue sent — the last component of the identifier',
+    ingest_ts        TIMESTAMP NOT NULL COMMENT 'When the silver run that wrote this row started'
+)
+USING iceberg
+PARTITIONED BY (days(exchange_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.canonical_symbol' = 'full',
+    'write.metadata.metrics.column.exchange_ts'     = 'full',
+    'write.metadata.metrics.column.recv_ts'         = 'full',
+    'write.metadata.metrics.column.trade_seq'       = 'full',
+    'write.metadata.metrics.column.src_offset'      = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Kraken trades typed from bronze.kraken_trade; N rows per frame'
+);
+
+ALTER TABLE lake.silver.trades_kraken SET IDENTIFIER FIELDS src_topic, src_partition, src_offset, src_index;
+
+ALTER TABLE lake.silver.trades_kraken
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, exchange_ts;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- silver.trades_coinbase
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.silver.trades_coinbase (
+    symbol           STRING  NOT NULL COMMENT 'Venue-native symbol, as sent (the bronze value)',
+    canonical_symbol STRING  NOT NULL COMMENT 'BASE/QUOTE from config/instruments.yaml — silver derives it from the registry, never from the wire',
+    trade_id         STRING  NOT NULL COMMENT 'The trade id the venue assigned, as sent',
+    trade_seq        BIGINT  NOT NULL COMMENT 'trade_id as a number. All three venues number trades sequentially per symbol (measured 2026-08-27: Binance 8,667,843 consecutive ids vs 144 jumps). seq_gap is computed on this',
+    price            DECIMAL(28,10) NOT NULL COMMENT 'Typed from the bronze value, exact',
+    qty              DECIMAL(28,10) NOT NULL COMMENT 'Base quantity, exact',
+    side             STRING  NOT NULL COMMENT 'Taker side normalised: buy | sell',
+    side_native      STRING  NOT NULL COMMENT 'The side as the venue expresses it, as sent (Binance: the buyer-is-maker flag as true/false)',
+    exchange_ts      TIMESTAMP NOT NULL COMMENT 'Venue trade time, typed UTC microseconds (Coinbase nanoseconds truncate to micros)',
+    recv_ts_ns       BIGINT  NOT NULL COMMENT 'K2 receive clock of the frame, nanoseconds',
+    recv_ts          TIMESTAMP NOT NULL COMMENT 'recv_ts_ns to microseconds',
+    conn_id          STRING  NOT NULL,
+    conn_msg_seq     BIGINT  NOT NULL,
+    venue_replay     BOOLEAN NOT NULL COMMENT 'true = an earlier delivery of the same (symbol, trade_id) exists in the archive (lower recv_ts_ns, or same and earlier lineage). Every delivery is kept. gold keeps the first',
+    seq_gap          BOOLEAN          COMMENT 'true = the previous trade_seq for this symbol is more than 1 below this one: trades the archive never received. NULL = no previous trade within the lookback (unknowable)',
+    missing_before   BIGINT           COMMENT 'How many trade ids are absent between the previous trade and this one. 0 when seq_gap is false, NULL with it',
+    precision_loss   BOOLEAN NOT NULL COMMENT 'true = price or qty carries more than 8 decimal places, i.e. the 1e-8 fixed point of the wire and of gold cannot hold it exactly',
+    envelope_ts      TIMESTAMP        COMMENT 'Coinbase envelope `timestamp`, typed (nanoseconds truncate to micros)',
+    sequence_num     BIGINT           COMMENT 'Coinbase connection-wide sequence of the envelope',
+    event_type       STRING           COMMENT 'Coinbase `events[].type`: snapshot (history replayed on subscribe) | update',
+    src_topic        STRING  NOT NULL COMMENT 'Lineage: the bronze row (= the raw.messages row)',
+    src_partition    INT     NOT NULL,
+    src_offset       BIGINT  NOT NULL,
+    src_index        INT     NOT NULL COMMENT 'Position of this trade within the frame, 0-based, in the order the venue sent — the last component of the identifier',
+    ingest_ts        TIMESTAMP NOT NULL COMMENT 'When the silver run that wrote this row started'
+)
+USING iceberg
+PARTITIONED BY (days(exchange_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.canonical_symbol' = 'full',
+    'write.metadata.metrics.column.exchange_ts'     = 'full',
+    'write.metadata.metrics.column.recv_ts'         = 'full',
+    'write.metadata.metrics.column.trade_seq'       = 'full',
+    'write.metadata.metrics.column.src_offset'      = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Coinbase trades typed from bronze.coinbase_market_trades; N rows per frame under events[].trades[]'
+);
+
+ALTER TABLE lake.silver.trades_coinbase SET IDENTIFIER FIELDS src_topic, src_partition, src_offset, src_index;
+
+ALTER TABLE lake.silver.trades_coinbase
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, exchange_ts;
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- audit.checks — one row per check per maintenance run. Append-only history, so

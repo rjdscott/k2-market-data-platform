@@ -119,9 +119,9 @@ prefix=${prefix%%\"*}
 [[ -n $prefix && $prefix != "$cfg" ]] || {
   echo "✗ no defaults.prefix in config response: $cfg" >&2; exit 1; }
 echo "  prefix: $prefix"
-for ns in raw bronze audit; do
+for ns in raw bronze silver gold audit; do
   echo "  $ns"
   post "$LK/catalog/v1/$prefix/namespaces" "{\"namespace\":[\"$ns\"]}" "409"
 done
 
-echo "✓ lake ready — catalog $LK/catalog, warehouse $WAREHOUSE, namespaces raw/bronze/audit"
+echo "✓ lake ready — catalog $LK/catalog, warehouse $WAREHOUSE, namespaces raw/bronze/silver/gold/audit"
