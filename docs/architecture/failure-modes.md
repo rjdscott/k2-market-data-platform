@@ -85,7 +85,7 @@ The queue is the only place "delayed" can happen, and it has a computable size, 
 delayed→lost boundary is a number rather than an adjective:
 
 ```mermaid
-flowchart LR
+flowchart TB
   WS["WS frame"] --> HF["handle_frame<br/>pure, no buffer"]
   HF --> Q["librdkafka queue<br/>32 MiB · the only buffer"]
   Q -->|"produce ok"| RP[("Redpanda<br/>raw 48 h · derived 7 d")]

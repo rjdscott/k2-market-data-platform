@@ -11,7 +11,7 @@ Implementation: [`services/capture-rust/`](../../services/capture-rust/README.md
 ## Shape of a capture process
 
 ```mermaid
-flowchart LR
+flowchart TB
     WS["Exchange WebSocket<br/>trades + L2 on one connection"] --> RD["ws.rs<br/>recv_ts_ns stamped first"]
     RD --> AD["exchanges/&lt;venue&gt;.rs<br/>handle_frame — pure"]
     AD --> R1["RawMessage<br/>every frame, verbatim"]

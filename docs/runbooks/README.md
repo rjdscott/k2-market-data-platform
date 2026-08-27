@@ -123,7 +123,7 @@ not data. Once Phase E lands, "hot tier first" stops being the right instinct.
 | Recovery not achieved within the runbook's MTTR + 30 min | Escalate to the platform owner |
 | Root cause is a code bug | Open an issue, link the runbook section that failed |
 | More than 3 occurrences in 24 h | Stop restarting; find the cause |
-| Data loss suspected | Escalate immediately — reconcile hot vs cold using [../operations/data-inspection.md](../operations/data-inspection.md#warm-vs-cold-reconciliation) before taking any destructive action |
+| Data loss suspected | Escalate immediately — reconcile hot vs cold using [../operations/data-inspection.md](../operations/data-inspection.md#clickhouse-vs-lake-reconciliation) before taking any destructive action |
 
 ## Archived v2 Kotlin runbooks
 

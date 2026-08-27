@@ -1,21 +1,18 @@
 # Prefect Schedules
 
-**Status:** not yet deployed — verify at the Phase D cutover. `prefect deployment ls` must
-show both deployments on work pool `lake`; nothing on this host has registered them yet,
-because Phase C's burn-in owns the containers they run in. Everything below is the design
-the code implements, not an observed state.
+**Verified 2026-08-27:** `docker exec k2-prefect-server prefect deployment ls` shows both
+deployments below on work pool `lake`; a fresh clone registers them at start.
 
 Two Prefect 3.x deployments drive the v3 lake, both executing against the shared
 `k2-spark-iceberg` container:
 
 | Deployment | Cron (UTC) | Purpose |
 |------------|------------|---------|
-| `lake-ingest/lake-ingest-5min` | `1-59/5 * * * *` | Redpanda → `lake.raw.messages` → `lake.bronze.*`, every 5 minutes |
-| `lake-maintenance/lake-maintenance-daily` | `0 3 * * *` | Compact, expire snapshots, remove orphans, audit — all four lake tables |
+| `lake-ingest/lake-ingest-5min` | `1-59/5 * * * *` | Redpanda → `raw.messages` → `bronze.*` → `silver.*` → `gold.*`, every 5 minutes |
+| `lake-maintenance/lake-maintenance-daily` | `0 3 * * *` | Compact, expire snapshots, remove orphans, audit — every lake table |
 
 Both run at **concurrency 1** on the `lake` work pool, claimed by the
-`k2-prefect-worker` process worker. Confirm they are live — this is the cutover check, and
-it has not been run:
+`k2-prefect-worker` process worker. Confirm they are live:
 
 ```bash
 docker exec k2-prefect-server prefect deployment ls
@@ -151,7 +148,7 @@ Runs once per day at 03:00 UTC with `days=2`, `retain_days=7`. Four stages, in o
 
 | Stage | Action |
 |-------|--------|
-| `compact` | Binpack `raw.messages` to 256 MB; **sort**-rewrite every `bronze.*` table (the unified pair and the six per-venue tables) to 128 MB, bounded to the last `--days` of partitions |
+| `compact` | Binpack `raw.messages` to 256 MB; **sort**-rewrite every `bronze.*` table (the seven per-venue tables) to 128 MB, bounded to the last `--days` of partitions |
 | `expire` | Drop snapshots older than `--retain-days` on every table, retaining at least 10 |
 | `remove_orphans` | Delete objects under each table's prefix that no snapshot references, with a **24-hour floor** |
 | `audit` | Offset continuity, duplicate identifiers, sequence monotonicity, the informational venue-replay rate; per venue table, `bronze_unparseable` and `bronze_schema_drift` |

@@ -30,27 +30,29 @@ Iceberg lake as the system of record, ClickHouse as a derived serving tier — o
 ## Architecture
 
 ```mermaid
-flowchart LR
-  E["Exchanges<br/>Binance · Kraken · Coinbase<br/>34 instruments"]:::ex
-  F["k2-capture ×3 · Rust<br/>trades + L2 book<br/>recv_ts · seq · CRC32"]:::rs
-  R[("Redpanda 25.3<br/>Avro + schema registry<br/>raw · trades · book per venue")]:::rp
-  subgraph L["Iceberg lake · Lakekeeper + MinIO — system of record"]
-    RAW[("raw.messages<br/>verbatim · forever")]:::lk
-    BR[("bronze.&lt;venue&gt;_&lt;msg&gt;<br/>vendor schema")]:::lk
-    SV[("silver.trades_* · book_*<br/>typed · flagged")]:::lk
-    GD[("gold.trades · book_top20<br/>ohlcv · bbo_1s · dims")]:::lk
-  end
-  S["Prefect 3 → Spark 3.5<br/>every 5 min · offsets in snapshot"]:::sp
+flowchart TB
+  E["Exchanges · Binance · Kraken · Coinbase<br/>public WebSocket · 34 instruments"]:::ex
+  F["k2-capture ×3 · Rust<br/>trades + L2 book on one socket<br/>recv_ts · seq · CRC32"]:::rs
+  R[("Redpanda 25.3 · Avro + schema registry<br/>raw · trades · book per venue")]:::rp
   C["ClickHouse 24.3 · gold<br/>ReplacingMergeTree · no TTL<br/>ohlcv_live · bbo_live on read"]:::ch
+  S["Prefect 3 → Spark 3.5 · every 5 min<br/>offset range · offsets in the snapshot"]:::sp
+  subgraph L["Iceberg lake · Lakekeeper + MinIO · system of record"]
+    direction TB
+    RAW[("raw.messages · verbatim · forever")]:::lk
+    BR[("bronze.&lt;venue&gt;_&lt;msg&gt; · vendor schema")]:::lk
+    SV[("silver.trades_* · book_* · typed · flagged")]:::lk
+    GD[("gold.trades · book_top20 · ohlcv · bbo_1s")]:::lk
+    RAW --> BR --> SV --> GD
+  end
   N["DuckDB notebooks"]:::nb
-  O["Prometheus 28 rules<br/>Grafana 4 dashboards"]:::ob
+  O["Prometheus · 28 rules<br/>Grafana · 4 dashboards"]:::ob
 
-  E -->|WebSocket| F -->|Avro| R
-  R -->|offset range| S --> RAW --> BR --> SV --> GD
+  E --> F --> R
   R -->|Kafka engine| C
+  R --> S --> RAW
   GD -.->|reload| C
   GD --> N
-  F & C & S -.-> O
+  F & S & C -.-> O
 
   classDef ex fill:#e5e7eb,stroke:#374151,color:#111827
   classDef rs fill:#c7d2fe,stroke:#4338ca,color:#111827

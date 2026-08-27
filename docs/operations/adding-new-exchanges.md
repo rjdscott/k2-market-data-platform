@@ -7,13 +7,8 @@ A step-by-step checklist for adding a fourth venue to the v3 Rust capture tier.
 **Architecture**: Exchange WebSocket → one `k2-capture` container → three Avro topics
 (`market.crypto.v3.{raw,trades,book}.<exchange>`).
 
-> **A new exchange feeds the v3 topics only.** The v2 medallion — the six
-> `market.crypto.trades.*` topics, `k2.bronze_trades_*`, `k2.silver_trades` and the six
-> `k2.ohlcv_*` tables — froze on 2026-08-26 and was **dropped on 2026-08-27** at the Phase E
-> cutover; nothing below creates a v2 object. Downstream of the topics, the ClickHouse
-> `gold` feeds (step 8) and the lake's per-venue decoders (post-integration) are the two
-> places a fourth venue has to be named. What the v2 tier looked like is kept under
-> [The retired v2 medallion](#the-retired-v2-medallion).
+Downstream of the topics, the ClickHouse `gold` feeds (step 8) and the lake's per-venue
+decoders (post-integration) are the two places a fourth venue has to be named.
 
 The Kotlin handlers this checklist used to describe are archived at
 [`legacy/v2-kotlin/README.md`](../../legacy/v2-kotlin/README.md)
@@ -367,31 +362,6 @@ table that used to bridge the two went with the Kotlin handlers.
         continuity policy from step 1 is either firing correctly or is wrong
   - [ ] `precision_loss_total` non-zero? The venue quotes finer than the fixed-point 1e-8
         scale and the contract needs an ADR, not a patch
-
----
-
-## The retired v2 medallion
-
-Kept as history. **None of this is a step for a new exchange** — the `k2` database was
-dropped on 2026-08-27 at the Phase E cutover, and its DDL lives in
-[`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md); the served tier that
-replaced it is [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md).
-
-Each v2 exchange had a Kafka-engine queue on `market.crypto.trades.{exchange}.raw`, a
-normalizing materialized view into an exchange-native `k2.bronze_trades_{exchange}`
-(`MergeTree`, `TTL 7 DAY`, identical schema across all three), and a second MV normalizing
-bronze into the unified `k2.silver_trades` — canonical symbol, `Decimal128(8)` prices, a
-`BUY`/`SELL` enum, and the venue's own fields preserved in a `vendor_data` map. Six gold
-`ohlcv_*` tables aggregated silver. The whole chain is in
-[`legacy/v2-clickhouse/01-k2-schema.sql`](../../legacy/v2-clickhouse/01-k2-schema.sql),
-with [`11-bronze-coinbase.sql`](../../legacy/v2-clickhouse/schema/11-bronze-coinbase.sql) and
-[`12-silver-coinbase.sql`](../../legacy/v2-clickhouse/schema/12-silver-coinbase.sql) as the
-cleanest worked pair. The design is [ADR-011](../adr/ADR-011-multi-exchange-bronze-architecture.md);
-the last exchange added through it is [ADR-016](../adr/ADR-016-add-coinbase-exchange.md).
-
-The v2 Iceberg cold tier that mirrored it is gone: `docker/offload/` and the `cold.*` tables
-were deleted in Phase D ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The
-lake that replaced them needs nothing per venue — see the lake step in the checklist above.
 
 ---
 
