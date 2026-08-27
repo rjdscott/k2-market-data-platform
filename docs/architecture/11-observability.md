@@ -82,7 +82,7 @@ flowchart TB
   ClickHouse. Grafana queries ClickHouse as the read-only `quant` user.
 - **Chaos** scripts in `scripts/chaos/` stop or corrupt one thing, watch the alert that should
   fire, time recovery, and append a row to `scripts/chaos/results/`. Measured: lake ingest
-  killed 42 s, MinIO stopped 38 s, Lakekeeper stopped 37 s, ClickHouse stopped 160 s to healthy,
+  killed 42 s, MinIO stopped 38 s, Lakekeeper stopped 37 s, ClickHouse stopped for 150 s: `ClickHouseDown` at 160 s, healthy 7 s after restart,
   corrupt feed record isolated in 4 s ([benchmarks § MTTR](../benchmarks/2026-08-27.md#mttr)).
 
 ## Practices

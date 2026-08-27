@@ -15,11 +15,11 @@ must match yours) to every book frame; Coinbase publishes one `sequence_num` sha
 channel on the connection.
 
 Three detectors, three blast radii. Binance can lose one symbol's book and repair it alone.
-Kraken learns within one update that a book is wrong but cannot say which update was missed.
-A Coinbase gap cannot be attributed to any product, so it invalidates every book on the
+Kraken learns within one update that a book is wrong but not which update was missed. A
+Coinbase gap cannot be attributed to any product, so it invalidates every book on the
 socket. A single resync policy either under-reacts on one venue or over-reacts on another,
-and both show up in the archive as
-[completeness](02-market-data-concepts.md#completeness) you cannot defend.
+and both show up as [completeness](02-market-data-concepts.md#completeness) you cannot
+defend.
 
 ## Options
 

@@ -67,7 +67,7 @@ flowchart TB
   venue replay, a consumer restart, or a lake reload that overlaps the topic head all
   collapse to one row under `FINAL`.
 - **Candles on read.** `ohlcv_live(bucket)` is a parameterised view: `argMin`/`argMax` over
-  `FINAL` with the total order `(exchange_ts, recv_ts_ns, trade_seq)` so open and close are
+  `FINAL` with the total order `(exchange_ts, recv_ts_ns, trade_id)` (lake gold uses `trade_seq`) so open and close are
   deterministic. v2's `SummingMergeTree` candles resolved open/close per insert block;
   `scripts/clickhouse-schema-test.sh` inserts one minute in two blocks and asserts the open.
 - **History by pull.** `ohlcv_*` and `bbo_1s` (per-second best bid/offer with spread,
@@ -97,7 +97,7 @@ flowchart TB
 | Least privilege | `quant` readonly profile in `users.xml`; dashboards and notebooks use it |
 | Memory bounded below the container | `config.xml` server cap 6.5 GiB under an 8 GiB limit |
 | Rebuildable, timed | `clickhouse-rebuild-from-lake.md` with the command and the measured time |
-| Feed liveness alerted | `ClickHouseGoldFeedStale` (topics moving, tables not); `clickhouse-stop.sh` measured 160 s to healthy |
+| Feed liveness alerted | `ClickHouseGoldFeedStale` (topics moving, tables not); `clickhouse-stop.sh`: `ClickHouseDown` at 160 s under a 150 s stop, healthy 7 s after restart |
 
 ## Trade-offs
 
