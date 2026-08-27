@@ -451,6 +451,22 @@ Each resource, and the multiple of today's 1× rate at which it binds:
 > the same way as the original conclusion and neither changes it: disk binds first, on a
 > calendar, inside a month.
 
+> **2026-08-27 host finding — the free space above is not what the lake can use.** Docker
+> Desktop on Linux keeps every volume inside one sparse image,
+> `~/.docker/desktop/vms/0/data/Docker.raw`: 961 GB apparent, **506 GB allocated on the
+> host** (`du -sh`), while the guest reports only **66 GB used of 945 GB**
+> (`df -h /var/lib/docker` via `nsenter -t 1`). The qemu drive is attached without
+> `discard=unmap`, so `fstrim` inside the guest (1.7 GiB trimmed, 2026-08-27T04:55Z) never
+> punches holes on the host and the image only grows. Pruning 153 GB of images and build
+> cache therefore returned nothing to `df /` (193 GB free before and after). Runway is
+> bounded by the physical disk, not by either `df`: `(961 GB − 720 GB used) + (506 GB
+> image − 66 GB guest used) ≈ 630 GB` reusable, **≈ 60 days at the 10 GB/day predicted
+> for four layers plus ClickHouse gold** (plan 004). Decision, maintainer 2026-08-27:
+> stay on the root disk, no second volume — this host is a demonstration; the lever is
+> stopping capture, not tiering raw. **Revisit when** `df /` passes 80 % or the guest
+> passes 500 GB used, whichever first (`docker run --rm --privileged --pid=host alpine
+> nsenter -t 1 -m -u -n -i df -h /var/lib/docker`).
+
 | 2 | Redpanda disk at 48 h raw retention | **~5.8×**, if 200 GB is allocated to it | Time-based retention scales disk linearly with rate | `200 GB ÷ 34.6 GB` (§4d) |
 | 3 | `capture-coinbase` RSS | **~12.5×** on **book depth** — *not* on message rate | Only the book scales with depth: fixed cost is `(8+8+32+16)×1.2 + 25×1.2 = 106.8 MB`, book cost `27.1×1.2 = 32.5 MB`. A market-wide depth increase binds this; a trade-rate spike does not touch it. | `(512 − 106.8) ÷ 32.5` (§5) |
 | 4 | Total CPU budget headroom | **~19×** on capture usage alone | 1.40 cores of headroom ÷ 0.074 predicted usage — but this is headroom for *everything*, not just capture | `1.40 ÷ 0.074` (§3b, §6) |
