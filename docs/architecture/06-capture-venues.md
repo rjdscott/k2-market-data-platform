@@ -45,10 +45,10 @@ chapter [05](05-capture.md), the code is
 [`config/instruments.yaml`](../../config/instruments.yaml) is the single source of truth for
 all three ([symbols and venues](02-market-data-concepts.md#symbols-and-venues)), currently
 12 Binance, 11 Kraken, 11 Coinbase: each instrument carries a `native` (the bytes on the
-wire, byte for byte) and a `canonical` (`BASE/QUOTE`), and a symbol the registry does not
-list is a hard error, never a guess. A venue's private ticker for an asset is folded into
-the canonical name; `BTC/USDT` and `BTC/USD` never are, being different collateral with a
-basis that is itself a research subject.
+wire, byte for byte) and a `canonical` (`BASE/QUOTE`), and an unlisted symbol is a hard
+error, never a guess. A venue's private ticker is folded into the canonical name;
+`BTC/USDT` and `BTC/USD` never are, being different collateral with a basis that is itself
+a research subject.
 
 | | Binance | Kraken (WS v2) | Coinbase (Advanced Trade) |
 |---|---|---|---|

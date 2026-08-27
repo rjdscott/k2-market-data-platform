@@ -98,7 +98,7 @@ Coinbase's p99 is dominated by the venue's on-subscribe trade snapshot, not tran
 excludes it from the histogram. Lake bronze rebuild from raw: 61.9 M rows in 520 s; per-venue bronze
 stores at 0.59× the raw archive; lake growth ≈ 9.8 GB/day. ClickHouse pull of 10.4 M gold trades from
 the lake: 4.4 s. Chaos recovery: lake ingest killed 42 s, MinIO stopped 38 s, Lakekeeper stopped 37 s,
-ClickHouse stopped 160 s to healthy, corrupt feed record isolated in 4 s
+ClickHouse stopped for 150 s: alert at 160 s, healthy 7 s after restart; corrupt feed record isolated in 4 s
 ([failure-modes.md](./docs/architecture/16-failure-modes.md)).
 
 ## Quick start

@@ -111,8 +111,7 @@ it is [rebuildable](03-data-engineering-concepts.md#rebuildability), so a bug in
 
 `maintenance.py` runs nightly and writes every assertion to `audit.checks`; any failure exits non-zero
 and `LakeAuditFailed` fires ([runbook](../runbooks/lake-audit-failed.md)). These are
-[audits as tests](03-data-engineering-concepts.md#audits-as-tests): assertions about last night's data,
-not about the code CI ran.
+[audits as tests](03-data-engineering-concepts.md#audits-as-tests): assertions about last night's data, not about the code CI ran.
 
 | Audit | Asserts |
 |---|---|
@@ -143,13 +142,11 @@ ClickHouse and DuckDB candles at a pinned snapshot.
 
 - **Batch, five minutes.** Freshness in the lake is bounded by the cron; ClickHouse covers the head
   from the topics. A streaming writer would need its own checkpoint store, the thing this design removes.
-- **One writer, one container.** Ingest, rebuilds and maintenance share 2 CPU / 8 GiB in
-  turn. Serial by lock is a capacity ceiling, not a correctness one.
+- **One writer, one container.** Ingest, rebuilds and maintenance share 2 CPU / 8 GiB in turn; serial by lock is a capacity ceiling, not a correctness one.
 - **Retention is the deadline.** `raw.*` topics keep 48 h, the only door
   [loss](03-data-engineering-concepts.md#backpressure-and-loss) can enter by, and it enters loudly:
   a longer outage is a recorded, acknowledged hole ([failure modes](16-failure-modes.md#lake-tier)).
-- **Bronze keeps vendor schemas.** Cross-venue work waits for gold; in exchange nothing a
-  venue sent is normalised away before it can be inspected.
+- **Bronze keeps vendor schemas.** Cross-venue work waits for gold; in exchange nothing a venue sent is normalised away before it can be inspected.
 
 ## Key points
 
