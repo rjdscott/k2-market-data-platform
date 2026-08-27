@@ -54,8 +54,6 @@ DISK_PATH = os.environ.get("K2_LAKE_DISK_PATH", "/minio-data")
 
 TABLES = {
     "raw.messages": ("raw", "messages"),
-    "bronze.trades": ("bronze", "trades"),
-    "bronze.book_snapshots_l2": ("bronze", "book_snapshots_l2"),
     # Phase E bronze per venue (docker/lake/bronze.py, ADR-026)
     "bronze.binance_trade": ("bronze", "binance_trade"),
     "bronze.binance_depth20": ("bronze", "binance_depth20"),

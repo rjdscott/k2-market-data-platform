@@ -135,30 +135,16 @@ DERIVED_RETENTION_MS=604800000
 log() { echo "  $*"; }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. v2 topics — FROZEN as of 2026-08-26, still created.
+# 1. v2 topics — deleted at the Phase E cutover, 2026-08-27.
 #
-#    The Kotlin feed handlers that were the only producers of these six topics
-#    retired to legacy/v2-kotlin/ (ADR-019). NOTHING WRITES THEM. They are still
-#    created here on purpose: the ClickHouse `k2` database's Kafka-engine queues
-#    subscribe to the three `.raw` topics at startup and error out if the topic
-#    is missing, and `k2.*` stays queryable as frozen history until Phase E drops
-#    the database and deletes these topics together. Creating an empty topic on a
-#    fresh volume costs nothing and keeps a from-scratch bring-up identical to
-#    the running cluster.
-#
-#    Do not "clean this up" ahead of Phase E, and do not touch the partition
-#    counts (binance 40, kraken 20, coinbase 20): rpk will not shrink a topic, so
-#    an edit here would silently repartition nothing while making the file
-#    disagree with the cluster.
+#    The six market.crypto.trades.<ex>{,.raw} topics (40/20/20 partitions) had no
+#    producer since the Kotlin handlers retired (ADR-019) and no consumer once the
+#    ClickHouse `k2` database went with them. They are not recreated: a from-scratch
+#    bring-up and the running cluster now agree on nine topics.
 # ─────────────────────────────────────────────────────────────────────────────
-echo "▶ v2 topics (frozen — no producer since 2026-08-26)"
-rpk topic describe market.crypto.trades.binance.raw  --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.binance.raw  --partitions 40 --brokers "$BROKERS"
-rpk topic describe market.crypto.trades.binance      --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.binance      --partitions 40 --brokers "$BROKERS"
-rpk topic describe market.crypto.trades.kraken.raw   --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.kraken.raw   --partitions 20 --brokers "$BROKERS"
-rpk topic describe market.crypto.trades.kraken       --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.kraken       --partitions 20 --brokers "$BROKERS"
-rpk topic describe market.crypto.trades.coinbase.raw --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.coinbase.raw --partitions 20 --brokers "$BROKERS"
-rpk topic describe market.crypto.trades.coinbase     --brokers "$BROKERS" >/dev/null 2>&1 || rpk topic create market.crypto.trades.coinbase     --partitions 20 --brokers "$BROKERS"
-log "✅ 6 v2 topics present (frozen, retained data only)"
+# The six v2 topics (market.crypto.trades.<ex>{,.raw}) were deleted at the Phase E
+# cutover, 2026-08-27: nothing had produced to them since ADR-019 and nothing
+# reads them. docker/redpanda/README.md keeps the history.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. v3 topics — 9 topics, 12 partitions each.

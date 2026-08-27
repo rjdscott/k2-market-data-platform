@@ -315,7 +315,7 @@ tests:
   # ── LakeCommitAgeHigh selects bronze only, and raw must not match it ─────
   - interval: 1m
     input_series:
-      - series: 'k2_lake_last_commit_ts_seconds{table="bronze.trades"}'
+      - series: 'k2_lake_last_commit_ts_seconds{table="bronze.kraken_book"}'
         values: '0+0x120'
       - series: 'k2_lake_last_commit_ts_seconds{table="raw.messages"}'
         values: '0+0x120'
@@ -327,9 +327,9 @@ tests:
               severity: warning
               component: lake
               tier: cold
-              table: bronze.trades
+              table: bronze.kraken_book
             exp_annotations:
-              summary: "bronze.trades has not committed for 45m 0s"
+              summary: "bronze.kraken_book has not committed for 45m 0s"
               description: |
                 A bronze table has taken no commit in over 30 minutes. If
                 raw.messages is still committing, stage 2 is the failing half —

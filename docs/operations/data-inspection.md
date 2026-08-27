@@ -1,8 +1,14 @@
 # Data Inspection
 
-How to look at the data at every hop: Redpanda → ClickHouse bronze → silver → gold, and
-Redpanda → the Iceberg lake. Every query below matches the as-built schema; column names
-differ between layers, so copy them rather than guessing.
+How to look at the data at every hop: Redpanda → ClickHouse `gold`, and Redpanda → the
+Iceberg lake. Every query below matches the as-built schema and was run on 2026-08-27
+against the post-cutover stack; column names differ between layers, so copy them rather
+than guessing.
+
+> The v2 ClickHouse medallion (`k2.bronze_trades_*`, `k2.silver_trades`, `k2.ohlcv_*`) and
+> the six `market.crypto.trades.<ex>[.raw]` topics were **dropped on 2026-08-27** at the
+> Phase E cutover. Their DDL is kept in [`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md);
+> the served tier is described in [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md).
 
 Load credentials into your shell first, then set a shorthand:
 
@@ -12,28 +18,28 @@ CH="docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD"
 ```
 
 `clickhouse-client` also accepts `--password` with no argument to prompt interactively.
+Research reads go through the read-only `quant` user: `--user quant --password "$K2_QUANT_PASSWORD"`.
 
 ## Schema cheat sheet
 
 | Layer | Table(s) | Time column | Key columns |
 |-------|----------|-------------|-------------|
-| Bronze | `k2.bronze_trades_{binance,kraken,coinbase}` | `exchange_timestamp` | `sequence_number`, `symbol`, `price`, `quantity`, `quote_volume`, `event_time`, `kafka_offset`, `kafka_partition`, `ingestion_timestamp` |
-| Silver | `k2.silver_trades` | `timestamp` | `exchange`, `canonical_symbol`, `side`, `trade_id`, `price`, `quantity`, `is_valid`, `ingestion_timestamp`, `processed_at` |
-| Gold | `k2.ohlcv_{1m,5m,15m,30m,1h,1d}` | `window_start` | `exchange`, `canonical_symbol`, `open_price`, `high_price`, `low_price`, `close_price`, `volume`, `quote_volume`, `trade_count` |
+| Served trades | `gold.trades` (`ReplacingMergeTree`, read with `FINAL`) | `exchange_ts` | `exchange`, `symbol`, `canonical_symbol`, `trade_id`, `price_e8`/`qty_e8` (Int64 at 1e-8) with `price`/`qty` Decimal aliases, `side`, `recv_ts_ns`, `seq`, `conn_id`, `conn_msg_seq`, `src_topic`/`src_partition`/`src_offset` |
+| Served book | `gold.book_top20` (`ReplacingMergeTree`, read with `FINAL`) | `second` (`snapshot_ts`) | `exchange`, `canonical_symbol`, `depth`, `seq`, `checksum_ok`, `bid_px`/`bid_qty`/`ask_px`/`ask_qty` (Array(Int64), best first) |
+| Rejects | `gold.feed_errors` | `seen_at` | `topic`, `partition`, `offset`, `error`, `raw` |
+| Candles, from the lake | `gold.ohlcv_{1m,5m,1h,1d}` | `window_start` | `exchange`, `canonical_symbol`, `open`/`high`/`low`/`close` (aliases over `*_e8`), `volume`, `quote_volume`, `trade_count`, `open_time`, `close_time`, `src_snapshot_id` |
+| BBO, from the lake | `gold.bbo_1s` | `second` | `exchange`, `canonical_symbol`, `bid`/`ask` (aliases), `mid`, `spread_bps`, `imbalance`, `microprice` |
+| Views, on read | `gold.ohlcv_live(bucket = <seconds>)`, `gold.bbo_live` | `window_start` / `second` | same columns as the tables above, computed over `gold.trades FINAL` / `gold.book_top20 FINAL` |
 | Lake archive | `lake.raw.messages` | `kafka_ts` | `topic`, `partition`, `offset`, `ingest_ts`, `key`, `schema_id`, `payload`, `headers` |
-| Lake bronze | `lake.bronze.trades` | `exchange_ts` | `exchange`, `symbol`, `canonical_symbol`, `trade_id`, `price`, `qty`, `side`, `recv_ts_ns`, `seq`, `conn_id`, `conn_msg_seq`, `src_topic`/`src_partition`/`src_offset`, `ingest_ts` |
-| Lake bronze | `lake.bronze.book_snapshots_l2` | `snapshot_ts` | as above plus `depth`, `checksum_ok`, `bids`, `asks`, `snapshot_ts_ns` |
+| Lake bronze | `lake.bronze.<venue>_<msgtype>` (7 tables) | per venue | the venue's own field names and JSON types, one row per frame — [`docker/lake/README.md`](../../docker/lake/README.md#bronze-per-venue-phase-e-adr-026) |
+| Lake silver | `lake.silver.trades_<venue>`, `lake.silver.book_<venue>` | `exchange_ts` / `snapshot_ts` | typed, one row per trade / per frame, canonical symbol, replay / gap / checksum flags |
+| Lake gold | `lake.gold.trades`, `lake.gold.dim_*`, `lake.gold.ohlcv_*`, `lake.gold.book_top20`, `lake.gold.bbo_1s` | `exchange_ts` / `window_start` / `second` | the canonical layer ClickHouse `gold` is loaded from |
 | Lake audit | `lake.audit.checks` | `run_ts` | `job`, `check_name`, `scope`, `passed`, `observed`, `detail` |
 
-ClickHouse bronze tables carry **no** `exchange` column — the exchange is the table. Silver
-adds it during unification. Gold windows have a `window_start` only; there is no
-`window_end`.
-
-The **lake** tables invert that: one `bronze.trades` for all three venues with `exchange`
-as the leading partition field ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)),
-and `raw.messages` holding the Kafka value byte for byte, framing included, as the system
-of record ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)). `price`/`qty` are
-`DECIMAL(28,10)` — the wire's int64 at 1e-8 divided by 1e8, exact and unrounded.
+Numbers are the wire's fixed point: `*_e8` Int64 at 1e-8, exact. The `price`/`qty`/`open`…
+columns are `ALIAS` expressions that yield the exact `Decimal(38,10)` on read, so
+`SELECT price` works but costs a cast per row; group and filter on the `_e8` columns. The
+lake's `DECIMAL(28,10)` columns are the same value, divided by 1e8 once, at write.
 
 ## Redpanda
 
@@ -52,106 +58,90 @@ docker exec k2-redpanda curl -s \
   localhost:8081/subjects/market.crypto.v3.trades.binance-value/versions/latest \
   | jq -r '.schema | fromjson'
 
-# FROZEN v2 — retained data only, no producer since 2026-08-26 (ADR-019). Still readable,
-# and still plain JSON, which is why these are the easy ones to eyeball:
-docker exec k2-redpanda rpk topic consume market.crypto.trades.binance.raw \
-  --num 3 --format '%v\n' | jq
-docker exec k2-redpanda rpk topic consume market.crypto.trades.kraken.raw \
-  --num 3 --format 'p=%p o=%o t=%d %v\n'
-
-# Consumer groups (one per ClickHouse Kafka Engine table, all on frozen v2 topics).
-# The names do not match the exchanges — Binance's is `clickhouse_bronze_offload_test`;
-# docs/runbooks/redpanda.md has the mapping.
+# Consumer groups: k2-gold-trades (gold.q_trades on trades.*) and k2-gold-book
+# (gold.q_book on book.*). The lake ingest reads by offset range and has no group.
 docker exec k2-redpanda rpk group list
-docker exec k2-redpanda rpk group describe clickhouse_bronze_offload_test
+docker exec k2-redpanda rpk group describe k2-gold-trades
 ```
 
-## Bronze — per-exchange ingest
+## Trades — `gold.trades`
 
 ```bash
-# Volume and freshness for all three exchanges
-for t in binance kraken coinbase; do
-  echo "== $t"
-  $CH -q "SELECT count() AS trades,
-                 min(exchange_timestamp) AS earliest,
-                 max(exchange_timestamp) AS latest,
-                 uniqExact(symbol) AS symbols
-          FROM k2.bronze_trades_$t"
-done
+# Volume and freshness, per exchange (FINAL: one row per logical trade)
+$CH -q "SELECT exchange, count() AS trades, min(exchange_ts) AS earliest, max(exchange_ts) AS latest
+        FROM gold.trades FINAL GROUP BY exchange ORDER BY exchange"
+
+# Are all three exchanges flowing right now?
+$CH -q "SELECT exchange, count() AS trades, max(exchange_ts) AS latest
+        FROM gold.trades FINAL
+        WHERE exchange_ts > now() - INTERVAL 15 MINUTE
+        GROUP BY exchange ORDER BY exchange"
 
 # Most recent rows
-$CH -q "SELECT symbol, price, quantity, exchange_timestamp, kafka_partition, kafka_offset
-        FROM k2.bronze_trades_binance
-        ORDER BY exchange_timestamp DESC LIMIT 10 FORMAT Pretty"
-
-# Kafka Engine health — a non-empty last_exception is the thing to look for
-$CH -q "SELECT table, consumer_id, num_messages_read, num_commits,
-               last_poll_time, last_exception
-        FROM system.kafka_consumers WHERE database = 'k2' FORMAT Vertical"
-```
-
-## Silver — unified trades
-
-```bash
-# Are all three exchanges flowing?
-$CH -q "SELECT exchange, count() AS trades, max(timestamp) AS latest
-        FROM k2.silver_trades
-        WHERE timestamp > now() - INTERVAL 15 MINUTE
-        GROUP BY exchange ORDER BY exchange"
+$CH -q "SELECT exchange, canonical_symbol, price, qty, side, exchange_ts, src_partition, src_offset
+        FROM gold.trades FINAL ORDER BY exchange_ts DESC LIMIT 10 FORMAT Pretty"
 
 # Busiest instruments
 $CH -q "SELECT exchange, canonical_symbol, count() AS trades
-        FROM k2.silver_trades WHERE timestamp > now() - INTERVAL 1 HOUR AND is_valid
+        FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 1 HOUR
         GROUP BY exchange, canonical_symbol ORDER BY trades DESC LIMIT 15 FORMAT Pretty"
 
-# End-to-end ingestion lag — this is the number in latency-budgets.md
+# Venue-to-K2 lag: the receive clock against the venue clock. This is the v3 successor of
+# the v2 ingestion-lag number in latency-budgets.md; it measures the exchange RTT plus the
+# capture parse, not the ClickHouse hop.
 $CH -q "SELECT exchange,
-               quantile(0.50)(dateDiff('millisecond', timestamp, ingestion_timestamp)) AS p50_ms,
-               quantile(0.99)(dateDiff('millisecond', timestamp, ingestion_timestamp)) AS p99_ms,
+               quantile(0.50)(recv_ts_ns / 1e6 - toUnixTimestamp64Milli(exchange_ts)) AS p50_ms,
+               quantile(0.99)(recv_ts_ns / 1e6 - toUnixTimestamp64Milli(exchange_ts)) AS p99_ms,
                count() AS n
-        FROM k2.silver_trades
-        WHERE timestamp > now() - INTERVAL 1 HOUR
+        FROM gold.trades FINAL
+        WHERE exchange_ts > now() - INTERVAL 1 HOUR
         GROUP BY exchange FORMAT Pretty"
 
-# Anything failing validation?
-$CH -q "SELECT exchange, count() FROM k2.silver_trades
-        WHERE NOT is_valid AND timestamp > now() - INTERVAL 1 DAY GROUP BY exchange"
+# Deliveries vs trades: the gap is venue replays and topic overlap, collapsed by FINAL
+$CH -q "SELECT count(), (SELECT count() FROM gold.trades FINAL) FROM gold.trades"
+
+# Kafka Engine health — a non-empty exceptions.text is the thing to look for; a record the
+# decoder rejected is in gold.feed_errors with its bytes
+$CH -q "SELECT table, consumer_id, num_messages_read, num_commits, last_poll_time, exceptions.text
+        FROM system.kafka_consumers WHERE database = 'gold' FORMAT Vertical"
+$CH -q "SELECT seen_at, topic, partition, offset, error FROM gold.feed_errors ORDER BY seen_at DESC LIMIT 10"
 ```
 
-## Gold — OHLCV candles
+## Candles and BBO — `gold.ohlcv_*`, `gold.ohlcv_live`, `gold.bbo_*`
 
 ```bash
-# Latest 1m candles
-$CH -q "SELECT exchange, canonical_symbol, window_start,
-               open_price, high_price, low_price, close_price, volume, trade_count
-        FROM k2.ohlcv_1m
-        WHERE window_start > now() - INTERVAL 1 HOUR
+# Latest 1m candles, computed on read over the deduplicated trades — any bucket in seconds
+$CH -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close, volume, trade_count
+        FROM gold.ohlcv_live(bucket = 60)
+        WHERE canonical_symbol = 'BTC/USDT' AND window_start > now() - INTERVAL 1 HOUR
         ORDER BY window_start DESC LIMIT 20 FORMAT Pretty"
 
-# Candle coverage across all six timeframes
-for tf in 1m 5m 15m 30m 1h 1d; do
+# The lake-computed candles (the record; loaded by pull, see clickhouse-rebuild-from-lake.md)
+$CH -q "SELECT exchange, canonical_symbol, window_start, open, close, volume, trade_count
+        FROM gold.ohlcv_1m FINAL ORDER BY window_start DESC LIMIT 20 FORMAT Pretty"
+
+# Candle coverage across the four loaded timeframes
+for tf in 1m 5m 1h 1d; do
   echo -n "ohlcv_$tf: "
   $CH -q "SELECT concat(toString(count()), ' candles, latest ', toString(max(window_start)))
-          FROM k2.ohlcv_$tf"
+          FROM gold.ohlcv_$tf FINAL"
 done
+
+# Best bid/offer off the 1 Hz book, with mid / spread / imbalance / microprice
+$CH -q "SELECT exchange, canonical_symbol, second, bid, ask, spread_bps, imbalance
+        FROM gold.bbo_live WHERE canonical_symbol = 'BTC/USDT' ORDER BY second DESC LIMIT 10 FORMAT Pretty"
 ```
 
-`ohlcv_*` tables are `SummingMergeTree` on `(volume, quote_volume, trade_count)`. Rows
-for the same `(exchange, canonical_symbol, window_start)` merge in the background, so a
-freshly written window can show duplicate partial rows. Add `FINAL` — or a
-`GROUP BY ... sum()` — when exact per-window totals matter:
-
-```bash
-$CH -q "SELECT canonical_symbol, window_start, sum(volume) AS volume, sum(trade_count) AS trades
-        FROM k2.ohlcv_1m WHERE window_start > now() - INTERVAL 10 MINUTE
-        GROUP BY canonical_symbol, window_start ORDER BY window_start DESC FORMAT Pretty"
-```
+`gold.ohlcv_live` is a view over `gold.trades FINAL`, so a minute that arrived in two insert
+blocks is still one correct candle — the v2 `SummingMergeTree` candles could not promise
+that, which is why the v3 tables are loaded from the lake and never aggregated here
+([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)).
 
 ## Lake tier — Iceberg via Spark
 
 The lake lives on a **Lakekeeper REST catalog** over MinIO
 ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)) — one catalog, named `lake`, with the
-`raw`, `bronze` and `audit` namespaces. Its configuration lives in exactly one place,
+`raw`, `bronze`, `silver`, `gold` and `audit` namespaces. Its configuration lives in exactly one place,
 [`docker/lake/spark_conf.py`](../../docker/lake/spark_conf.py); every v3 Spark job gets its
 session from `lake_session()`, so query it the same way rather than reassembling a dozen
 `--conf` flags:
@@ -174,9 +164,11 @@ PY
 Queries worth having:
 
 ```sql
-SHOW TABLES IN lake.bronze;
+SHOW TABLES IN lake.bronze;      -- seven per-venue tables
+SHOW TABLES IN lake.silver;
+SHOW TABLES IN lake.gold;
 
-SELECT exchange, count(*) FROM lake.bronze.trades GROUP BY exchange;
+SELECT exchange, count(*) FROM lake.gold.trades GROUP BY exchange;
 
 -- Snapshot history, with the committed Kafka offsets that make it exactly-once
 SELECT snapshot_id, committed_at, operation,
@@ -201,31 +193,32 @@ current Iceberg metadata and returns files no live snapshot references, which fa
 plausible number rather than as an error. See
 [lake-recovery.md](../runbooks/lake-recovery.md).
 
-## Hot vs. lake reconciliation
+## ClickHouse vs. lake reconciliation
 
-The lake accumulates history past the ClickHouse TTL (7 days bronze, 30 days silver), so
-lake row counts exceeding the hot tier is expected. Two things are worth comparing on an
-overlapping window:
+ClickHouse `gold` is derived from the same topics the lake archives, and the lake's
+`gold.trades` is what a reload puts back into it, so on an overlapping window the two must
+agree **exactly** — the lake wins on conflict ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)).
+They did on 2026-08-27: 1,978,901 / 273,060 / 33,246 (binance / coinbase / kraken) on
+00:00–05:00Z, both sides ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md#measured-2026-08-27-first-live-apply-commit-of-pr-98)).
 
 ```bash
-# Hot side
-$CH -q "SELECT exchange, count() FROM k2.silver_trades WHERE timestamp >= '2026-08-26 00:00:00' GROUP BY exchange"
+# ClickHouse side
+$CH -q "SELECT exchange, count() FROM gold.trades FINAL
+        WHERE exchange_ts >= '2026-08-27 00:00:00' AND exchange_ts < '2026-08-27 05:00:00' GROUP BY exchange"
 ```
 
 ```sql
 -- Lake side, same window
-SELECT exchange, count(*) FROM lake.bronze.trades
-WHERE exchange_ts >= TIMESTAMP '2026-08-26 00:00:00' GROUP BY exchange;
+SELECT exchange, count(*) FROM lake.gold.trades
+WHERE exchange_ts >= TIMESTAMP '2026-08-27 00:00:00' AND exchange_ts < TIMESTAMP '2026-08-27 05:00:00'
+GROUP BY exchange;
 ```
 
-**During the Phase C parallel run these are two independently captured paths** — the
-ClickHouse tier reads the v2 Kotlin topics, the lake reads the v3 capture topics — so an
-exact match is not the expectation and a small divergence is not a finding.
-`scripts/parity/compare_trades.py` is the tool that compares them properly, on
-`(exchange, symbol, trade_id)` with a fixed-point tolerance; it is the evidence
-[ADR-019](../adr/ADR-019-rust-capture-tier.md)'s Kotlin retirement rests on.
+A difference means the ClickHouse feed skipped or double-counted something — check
+`gold.feed_errors` first, then reload the window from the lake
+([clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md)).
 
-What *is* a hard invariant is internal to the lake, and the nightly audit checks it:
+What *is* a hard invariant internal to the lake, checked by the nightly audit:
 `raw.messages` holds an unbroken offset run per `(topic, partition)`, and no two
 `bronze.*` rows share their identifier fields. See
 [prefect-schedules.md](./prefect-schedules.md) and
@@ -236,17 +229,16 @@ What *is* a hard invariant is internal to the lake, and the nightly audit checks
 ```bash
 # Table sizes
 $CH -q "SELECT table, formatReadableSize(sum(bytes)) AS size, sum(rows) AS rows
-        FROM system.parts WHERE database = 'k2' AND active
+        FROM system.parts WHERE database = 'gold' AND active
         GROUP BY table ORDER BY sum(bytes) DESC FORMAT Pretty"
 
 # CSV / JSON export
-$CH -q "SELECT * FROM k2.ohlcv_1h WHERE window_start > now() - INTERVAL 7 DAY FORMAT CSVWithNames" > ohlcv_1h.csv
-$CH -q "SELECT * FROM k2.silver_trades LIMIT 1000 FORMAT JSONEachRow" > trades.jsonl
+$CH -q "SELECT * FROM gold.ohlcv_1h FINAL WHERE window_start > now() - INTERVAL 7 DAY FORMAT CSVWithNames" > ohlcv_1h.csv
+$CH -q "SELECT * FROM gold.trades FINAL ORDER BY exchange_ts DESC LIMIT 1000 FORMAT JSONEachRow" > trades.jsonl
 
-# Sample a topic to disk. The v2 raw topics are frozen but retained, and they are the only
-# ones whose values are plain JSON — a v3 sample needs an Avro-aware reader.
-docker exec k2-redpanda rpk topic consume market.crypto.trades.binance.raw \
-  --num 10000 --format '%v\n' > binance_raw_sample.jsonl
+# Sample a topic to disk. Values are Confluent-framed Avro, so a sample needs an Avro-aware
+# reader; the lake's raw.messages holds the same bytes, queryable through Spark.
+docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.binance --num 100 -f '%k\t%o\n' > binance_raw_keys.tsv
 ```
 
 ## Related

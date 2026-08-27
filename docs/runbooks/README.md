@@ -84,8 +84,8 @@ make ps
 
 # Is data still moving?
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count(), max(timestamp) FROM k2.silver_trades
-   WHERE timestamp > now() - INTERVAL 5 MINUTE GROUP BY exchange"
+  "SELECT exchange, count(), max(exchange_ts) FROM gold.trades FINAL
+   WHERE exchange_ts > now() - INTERVAL 5 MINUTE GROUP BY exchange"
 
 # Is the lake keeping up? Ingest lag, and how long since each table last committed.
 curl -s --get localhost:9090/api/v1/query \
@@ -99,15 +99,6 @@ curl -s --get localhost:9090/api/v1/query \
 curl -s --get localhost:9090/api/v1/query \
   --data-urlencode 'query=k2_lake_audit_failures_total' | jq -r '.data.result[].value[1]'
 ```
-
-> **Four `IcebergOffload*` alerts fire continuously and are expected**, not
-> incidents: `IcebergOffloadLagElevated`, `IcebergOffloadLagCritical`,
-> `IcebergOffloadThroughputLow` and `IcebergOffloadWatermarkStale`. The v2 hot
-> tier has had no producer since the Kotlin handlers retired on 2026-08-26
-> ([ADR-019](../adr/ADR-019-rust-capture-tier.md)), so `k2.*` gains no rows and
-> the offload watermark cannot advance. They are deleted with `docker/offload/`
-> in the Phase D PR. Triage the v3 `Capture*` alerts first; those four are noise
-> until then.
 
 Then:
 

@@ -2,7 +2,7 @@
 
 Two contracts live here at once. **v3** is the wire format going forward — three Avro records under `com.k2.market.v3`, described below, and the Iceberg lake they land in. **v2** is what is still running in the hot tier: `NormalizedTrade` plus the three ClickHouse medallion layers. Its Iceberg mirrors are gone, deleted with the offload in Phase D. v2 stays documented, unedited, until Phase C retires the Kotlin handlers; nothing new should be built against it.
 
-DDL: [`docker/clickhouse/ddl/01-k2-schema.sql`](../../docker/clickhouse/ddl/01-k2-schema.sql) (hot), [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) (lake), [`schemas/avro/`](../../schemas/avro/) (wire).
+DDL: [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql) (served `gold`), [`legacy/v2-clickhouse/01-k2-schema.sql`](../../legacy/v2-clickhouse/01-k2-schema.sql) (v2 `k2`, dropped 2026-08-27), [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) (lake), [`schemas/avro/`](../../schemas/avro/) (wire).
 
 ---
 

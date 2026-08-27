@@ -40,30 +40,30 @@ queryable OHLCV candles in under a second — on a single host, inside a 16-core
 flowchart LR
   E["Exchanges<br/>Binance · Kraken · Coinbase<br/>34 instruments"]:::kt
   F["k2-capture · 3 containers<br/>Rust 1.98 · trades + L2 book"]:::kt
-  R["Redpanda 25.3<br/>v3: 9 topics · 108 partitions<br/>v2: 6 topics · frozen"]:::rp
-  subgraph CH["ClickHouse 24.3 LTS — hot tier"]
-    B["bronze tables<br/>one per exchange"]:::ch
-    S["silver_trades"]:::ch
-    G["ohlcv 1m · 5m · 15m<br/>30m · 1h · 1d"]:::ch
+  R["Redpanda 25.3<br/>9 topics · 108 partitions<br/>Avro + schema registry"]:::rp
+  subgraph CH["ClickHouse 24.3 LTS — gold, served"]
+    B["gold.trades · book_top20<br/>ReplacingMergeTree"]:::ch
+    S["ohlcv_live · bbo_live<br/>computed on read"]:::ch
+    G["ohlcv 1m · 5m · 1h · 1d · bbo_1s<br/>loaded from the lake"]:::ch
   end
   subgraph BATCH["Orchestrated batch"]
     P["Prefect 3"]:::sp
     K["Spark 3.5"]:::sp
   end
-  I["Iceberg lake · Lakekeeper + MinIO<br/>raw · bronze · audit"]:::st
+  I["Iceberg lake · Lakekeeper + MinIO<br/>raw · bronze · silver · gold · audit"]:::st
   subgraph OBS["Observability"]
-    M["Prometheus<br/>26 alert rules"]:::ob
+    M["Prometheus<br/>28 alert rules"]:::ob
     D["Grafana<br/>5 dashboards"]:::ob
   end
 
   E -->|WebSocket| F
-  F -->|"raw JSON + Avro"| R
-  R -->|"Kafka engine · JSON"| B
-  B -->|materialized view| S
-  S -->|materialized view| G
+  F -->|"raw + trades + book · Avro"| R
+  R -->|"Kafka engine · Avro"| B
+  B -->|view over FINAL| S
   P -->|every 5 min| K
   R -.->|"offset range"| K
   K -->|append| I
+  I -.->|reload| G
   F -.->|/metrics| M
   CH -.->|:9363| M
   K -.-> M
@@ -77,14 +77,17 @@ flowchart LR
   classDef ob fill:#e5e7eb,stroke:#374151,color:#111827
 ```
 
-Each handler holds one WebSocket and produces every trade twice to Redpanda: the raw exchange JSON
-and a normalized Avro record registered in the built-in schema registry.
-ClickHouse consumes with Kafka engine tables; materialized views carry rows from per-exchange bronze into
-a unified `silver_trades` and on into six OHLCV tables — no scheduler, no streaming job, no application
-code in the hot path. Independently, every 5 min a Prefect flow runs Spark to read Redpanda **by offset
-range** and append to Iceberg — raw frames verbatim first, decoded `bronze.*` from that archive second —
-with the consumed offsets written into the same commit as the rows, so a failed run resumes rather than
-duplicates ([ADR-022](./docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The catalog is Lakekeeper
+Each capture container holds one WebSocket and produces three Avro topics per venue: every frame verbatim
+(`raw`), decoded trades, and top-20 book snapshots at 1 Hz, all registered in the built-in schema registry.
+ClickHouse consumes `trades.*` and `book.*` with Kafka engine tables into `gold.trades` and `gold.book_top20`
+— `ReplacingMergeTree`, so a venue replay is one row under `FINAL` — and OHLCV is a view computed on read; no
+scheduler, no streaming job, no application code in the hot path
+([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)). Independently, every
+5 min a Prefect flow runs Spark to read Redpanda **by offset range** and append to Iceberg — raw frames
+verbatim first, then per-venue `bronze.*`, `silver.*` and canonical `gold.*` from that archive — with the
+consumed offsets written into the same commit as the rows, so a failed run resumes rather than duplicates
+([ADR-022](./docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The lake's candles and BBO are
+loaded back into ClickHouse by pull; the lake wins on conflict. The catalog is Lakekeeper
 over MinIO ([ADR-023](./docs/adr/ADR-023-lakekeeper-rest-catalog.md)); v2's Hadoop catalog on a local
 volume, and the ClickHouse→Iceberg offload that wrote to it, are deleted.
 
@@ -105,8 +108,9 @@ the three Kotlin handlers, plus Lakekeeper, `lake-metrics` and 4 one-shot init c
 bootstrap peak of 16.10 CPU / 27.125 GiB across all 19. The Kotlin handlers are archived in
 [`legacy/v2-kotlin/`](./legacy/v2-kotlin/README.md)
 ([ADR-019](./docs/adr/ADR-019-rust-capture-tier.md)); with them went the only producer of the v2
-topics, so the ClickHouse `k2` medallion is **frozen** — still queryable, no longer growing — until
-the Phase E cutover drops it. The v2 ClickHouse→Iceberg offload is deleted outright
+topics, and the ClickHouse `k2` medallion they fed was **dropped at the Phase E cutover on 2026-08-27**
+— its DDL is archived in [`legacy/v2-clickhouse/`](./legacy/v2-clickhouse/README.md), and ClickHouse
+now serves `gold` ([`docker/clickhouse/README.md`](./docker/clickhouse/README.md)). The v2 ClickHouse→Iceberg offload is deleted outright
 ([ADR-022](./docs/adr/ADR-022-exactly-once-via-snapshot-offsets.md)); its runbooks are archived in
 [`legacy/v2-offload/`](./legacy/v2-offload/). Source for all of them:
 `docker compose --env-file .env.example config`, limits summed
@@ -176,7 +180,7 @@ K2 Lake v3 (`k2-lake`).
 ![Pipeline overview dashboard](docs/images/grafana-pipeline-overview.jpg)
 ![Prefect deployments](docs/images/prefect-deployments.jpg)
 
-26 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 4 ClickHouse (down, memory,
+28 alert rules in [`docker/prometheus/rules/`](./docker/prometheus/rules/): 6 ClickHouse (down, memory,
 query failures, merge queue), 10 v3 capture (down, feed stale, sequence gaps, checksum failure,
 produce errors/stalled, resync storm, ingress latency, book depth, precision loss), 12 v3 lake (ingest
 failed, audit failed, unresolvable schema id, offset gap, ingest lag, bronze commit age, compaction stale, exporter
@@ -231,9 +235,9 @@ matrix: prefect, spark, capture), **compose** (`config -q` + every service decla
 
 ```
 services/capture-rust/          Rust k2-capture: trades + L2 book, one binary per exchange — the capture tier
-docker/clickhouse/ddl/          Bronze → Silver → Gold DDL and materialized views (auto-applied)
+docker/clickhouse/ddl/          gold: 10-gold-tables.sql (the contract, CI-tested) + 20-gold-kafka.sql (the feeds)
 docker/lake/                    Spark lake ingest + maintenance + metrics, DDL, Prefect flows (v3)
-docker/prometheus/rules/        26 alert rules
+docker/prometheus/rules/        28 alert rules
 docker/grafana/dashboards/      5 provisioned dashboards
 docker/spark/  docker/prefect/  Custom images
 config/instruments.yaml         Instrument registry — single source of truth
@@ -243,12 +247,13 @@ docs/                           Architecture, ADRs, operations, development
 legacy/v1/                      Archived v1 platform
 legacy/v2-kotlin/               Archived v2 Kotlin feed handlers (ADR-019)
 legacy/v2-offload/              Archived runbooks for the deleted v2 ClickHouse→Iceberg offload
+legacy/v2-clickhouse/           Archived DDL of the v2 `k2` medallion, dropped 2026-08-27
 docker-compose.yml              The whole stack
 ```
 
 ## Where v2 falls short — and the v3 roadmap
 
-v2 is complete and frozen: three exchanges, medallion in ClickHouse, 4 v2 alert rules, 2 v2 runbooks
+v2 is complete and retired — three exchanges, a medallion in ClickHouse (dropped 2026-08-27, DDL in [`legacy/v2-clickhouse/`](./legacy/v2-clickhouse/README.md)), 4 v2 alert rules, 2 v2 runbooks
 (six more archived with the offload under [`legacy/v2-offload/`](./legacy/v2-offload/README.md), and the
 feed handler's under [`legacy/v2-kotlin/`](./legacy/v2-kotlin/README.md)).
 It is a good streaming pipeline and a poor research archive. This is a **quantitative-research**
@@ -260,12 +265,12 @@ structural reasons rather than missing polish. An audit of the code (not the doc
 | Gap | Why it matters to a quant | v3 fix | ADR |
 |---|---|---|---|
 | Lake was a JDBC copy of ClickHouse, not the system of record (deleted in Phase D; archived in [`legacy/v2-offload/`](./legacy/v2-offload/README.md)) | The archive inherited the serving DB's normalisation, its 7-day TTL, and the driver's dropped `Array`/`Map` columns. Nothing was reproducible | Spark batch reads Redpanda by offset range → Iceberg `raw.messages` (verbatim, never expired) → `bronze.*`; ClickHouse becomes derived | [018](./docs/adr/ADR-018-v3-lake-first-rust-capture.md), 021, 022 |
-| OHLCV open/high/low/close resolve **arbitrarily** across merges — [`01-k2-schema.sql:178`](./docker/clickhouse/ddl/01-k2-schema.sql#L178) | `SummingMergeTree` sums volume correctly and picks non-summed columns at random. A candle can carry a close that never traded last. This is a real bug | OHLCV computed on read over deduplicated trades, plus a CI regression test across two insert blocks | 026 |
-| Bronze is plain `MergeTree` — [`01-k2-schema.sql:88`](./docker/clickhouse/ddl/01-k2-schema.sql#L88) | Replaying a topic duplicates every row. No key, no version, no dedup — so recovery corrupts history | `ReplacingMergeTree` hot tier with an explicit dedup contract; the lake holds truth | 025, 026 |
+| OHLCV open/high/low/close resolve **arbitrarily** across merges — [`01-k2-schema.sql:178`](./legacy/v2-clickhouse/01-k2-schema.sql#L178) | `SummingMergeTree` sums volume correctly and picks non-summed columns at random. A candle can carry a close that never traded last. This is a real bug | OHLCV computed on read over deduplicated trades, plus a CI regression test across two insert blocks | 026 |
+| Bronze is plain `MergeTree` — [`01-k2-schema.sql:88`](./legacy/v2-clickhouse/01-k2-schema.sql#L88) | Replaying a topic duplicates every row. No key, no version, no dedup — so recovery corrupts history | `ReplacingMergeTree` hot tier with an explicit dedup contract; the lake holds truth | 025, 026 |
 | No receive timestamp before parse — [`TradeNormalizer.kt:28`](./legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L28) | Exchange-clock skew and platform latency are not separable in any stored row, so no honest latency distribution exists | `recv_ts_ns` taken as the first statement on frame receipt, carried in the record body and a Kafka header | 019, 020 |
 | Kraken on WS v1 with synthesised trade IDs — [`TradeNormalizer.kt:60`](./legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/TradeNormalizer.kt#L60) | `KRAKEN-${ms}-${pair.hashCode()}` collides for two trades in the same millisecond — dedup and joins are unsound | Kraken WS v2: real `trade_id`, plus CRC32 book checksum verified on every update | 019, 027 |
 | Coinbase `sequence_num` parsed and never checked — [`CoinbaseWebSocketClient.kt:178`](./legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/CoinbaseWebSocketClient.kt#L178) | A dropped message is silent. Completeness is assumed, never measured | Per-exchange sequencing with gap counters, resync on gap, and audits over the lake | 019, 027 |
-| Avro contract broken and unused — [`normalized-trade.avsc:60`](./schemas/avro/normalized-trade.avsc#L60), [`01-k2-schema.sql:39`](./docker/clickhouse/ddl/01-k2-schema.sql#L39) | `logicalType` sits as a sibling of `type` (Avro ignores it) and prices are strings; ClickHouse reads raw JSON instead. The registry proves nothing | One wire format: Avro + registry, fixed-point `int64` @1e-8, `BACKWARD_TRANSITIVE` compatibility | 020 |
+| Avro contract broken and unused — [`normalized-trade.avsc:60`](./schemas/avro/normalized-trade.avsc#L60), [`01-k2-schema.sql:39`](./legacy/v2-clickhouse/01-k2-schema.sql#L39) | `logicalType` sits as a sibling of `type` (Avro ignores it) and prices are strings; ClickHouse reads raw JSON instead. The registry proves nothing | One wire format: Avro + registry, fixed-point `int64` @1e-8, `BACKWARD_TRANSITIVE` compatibility | 020 |
 | Trades only, no order book; raw topics keyed by exchange name — [`KafkaProducerService.kt:155`](./legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/KafkaProducerService.kt#L155) | No L2 means no spread, no imbalance, no microprice — most of what research wants. Single-key topics also pin two exchanges to one partition | Rust `k2-capture` does trades + L2 on one connection, top-20 snapshots at 1 Hz, symbol-keyed topics | 019, 027 |
 
 ### v3 target architecture
@@ -276,7 +281,7 @@ flowchart LR
   CAP["k2-capture ×3 · Rust<br/>trades + L2 · recv_ts · seq · CRC32"]
   RP[("Redpanda<br/>Avro + registry")]
   IB[("Iceberg · Lakekeeper + MinIO<br/>system of record")]
-  CH["ClickHouse hot tier<br/>derived · rebuildable · 7d TTL"]
+  CH["ClickHouse gold<br/>derived · rebuildable · no TTL"]
   DD["DuckDB + PyIceberg<br/>notebooks"]
   GR["Grafana + Prometheus"]
   EX --> CAP --> RP

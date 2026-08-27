@@ -51,8 +51,6 @@ from spark_conf import (
 )
 
 RAW_TABLE = f"{CATALOG}.raw.messages"
-TRADES_TABLE = f"{CATALOG}.bronze.trades"
-BOOK_TABLE = f"{CATALOG}.bronze.book_snapshots_l2"
 CHECKS_TABLE = f"{CATALOG}.audit.checks"
 
 # Iceberg's procedures take the table without the catalog prefix.
@@ -81,7 +79,7 @@ def _where_ts(moment: datetime) -> str:
 
 
 def compact(spark, since: datetime) -> None:
-    """Binpack `raw.messages`, sort-rewrite the unified and per-venue bronze tables.
+    """Binpack `raw.messages`, sort-rewrite every derived table on its research axis.
 
     Both are bounded to recent partitions. Everything older was compacted by a
     previous run and rewriting it again would rewrite the whole archive nightly
@@ -115,7 +113,7 @@ def compact(spark, since: datetime) -> None:
         + [(t.table, "recv_ts") for t in books.BOOKS]
         + [(gold.TRADES, "exchange_ts"), (books.GOLD_BOOK, "second"), (books.GOLD_BBO, "second")]
     )
-    for table, column in [(TRADES_TABLE, "exchange_ts"), (BOOK_TABLE, "snapshot_ts")] + per_venue:
+    for table, column in per_venue:
         # No sort_order argument: the tables declare theirs in lake.sql and the
         # procedure uses the declared one. Repeating it here is a second place
         # to get it wrong.
@@ -140,7 +138,7 @@ def expire(spark, retain_days: int) -> None:
     covers a long outage without unbounded metadata growth.
     """
     older_than = datetime.now(timezone.utc) - timedelta(days=retain_days)
-    for table in (RAW_TABLE, TRADES_TABLE, BOOK_TABLE, CHECKS_TABLE, *bronze.TABLES, *silver.TABLES, *gold.TABLES, *books.TABLES):
+    for table in (RAW_TABLE, CHECKS_TABLE, *bronze.TABLES, *silver.TABLES, *gold.TABLES, *books.TABLES):
         _call(
             spark,
             f"CALL {CATALOG}.system.expire_snapshots("
@@ -220,7 +218,7 @@ def remove_orphans(spark, older_than_hours: int) -> None:
             "see remove_orphans() for why that floor is a safety property"
         )
     older_than = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
-    for table in (RAW_TABLE, TRADES_TABLE, BOOK_TABLE, CHECKS_TABLE):
+    for table in (RAW_TABLE, CHECKS_TABLE, *bronze.TABLES, *silver.TABLES, *gold.TABLES, *books.TABLES):
         view = "k2_orphan_candidates"
         listed = file_list_view(spark, table_location(spark, table), view)
         print(f"  {table}: {listed} objects under its prefix")
@@ -382,95 +380,6 @@ def audit_duplicates(spark, table: str, keys: list) -> list:
         else f"{row['dup_keys']} duplicated keys, {extra} extra rows on ({key_list})"
     )
     return [_result("duplicate_identifiers", table, extra == 0, extra, detail)]
-
-
-def audit_venue_replay(spark) -> list:
-    """How many logical trades arrived on more than one connection.
-
-    Not a failure, and it is here so that it cannot be mistaken for one.
-    Coinbase replays recent `market_trades` when a subscription is
-    re-established, so after every reconnect the archive legitimately holds the
-    same (exchange, symbol, trade_id) twice under two conn_ids — measured at 956
-    such trades in 287,184 over 30 min on 2026-08-26. It also re-sends trades
-    inside one connection: the same day, 5,034 Coinbase trade ids arrived twice
-    on one conn_id in two distinct `market_trades` frames ~15 s apart (raw
-    offsets 9374 and 9772 on trades.coinbase/9 are one such pair). Those rows
-    are real frames that really arrived and the append-only archive keeps both.
-
-    What this row buys: the replay rate becomes a published number instead of
-    background noise, so a *change* in it is visible. A jump means reconnect
-    churn, which is a capture-tier question.
-    """
-    row = spark.sql(
-        f"""
-        SELECT count(*) AS replayed,
-               coalesce(sum(CASE WHEN conns > 1 THEN 1 ELSE 0 END), 0) AS across_conns
-        FROM (
-          SELECT exchange, symbol, trade_id, count(DISTINCT conn_id) AS conns
-          FROM {TRADES_TABLE}
-          GROUP BY exchange, symbol, trade_id
-          HAVING count(*) > 1
-        )
-        """
-    ).collect()[0]
-    count, across = int(row["replayed"]), int(row["across_conns"])
-    return [
-        _result(
-            "venue_replay",
-            TRADES_TABLE,
-            True,
-            count,
-            f"{count} trade ids delivered 2+ times ({across} across reconnects, "
-            f"{count - across} within one connection; venue replay, expected)",
-        )
-    ]
-
-
-def audit_sequence(spark, table: str) -> list:
-    """`seq` never goes backwards within one (exchange, symbol, conn_id).
-
-    Deliberately monotonicity, not `+1` continuity, and the reason is in the
-    data rather than in convenience:
-
-      * Kraken v2 publishes no sequence at all and writes 0 — filtered out here.
-      * Binance trades write 0 for the same reason; its book stream carries
-        `lastUpdateId`, which jumps by however many updates a frame folded in.
-      * Coinbase's `sequence_num` is connection-wide across `l2_data`,
-        `market_trades` and `heartbeats`, and only two of those three reach
-        bronze — so a `+1` check would report a gap for every heartbeat, which
-        is a correct capture, not a loss.
-
-    A regression is a different animal: it means frames arrived out of order or
-    the stream was silently re-keyed, which is real and is the `lastUpdateId`
-    row in docs/architecture/failure-modes.md. Full `+1` continuity is provable
-    against `conn_msg_seq` in the raw frames, and that belongs to a replay tool
-    (Phase G), not to a nightly SQL pass over bronze.
-
-    Ordered by ARRIVAL — `(recv_ts_ns, conn_msg_seq)` — not by the venue clock.
-    Two reasons, and the first one is that the check was previously unable to
-    fail: ordering by `(exchange_ts, seq)` sorts any out-of-order pair sharing
-    an `exchange_ts` into ascending `seq`, which makes `seq < previous`
-    unreachable for exactly the ties a venue produces most of. The second is
-    that "frames arrived out of order" is a statement about arrival, and
-    `conn_msg_seq` is K2's own strictly increasing frame counter on the
-    connection — the only total order in the row that we control.
-    """
-    row = spark.sql(
-        f"""
-        SELECT count(*) AS regressions
-        FROM (
-          SELECT seq, lag(seq) OVER (
-                   PARTITION BY exchange, symbol, conn_id
-                   ORDER BY recv_ts_ns, conn_msg_seq
-                 ) AS previous
-          FROM {table} WHERE seq > 0
-        )
-        WHERE previous IS NOT NULL AND seq < previous
-        """
-    ).collect()[0]
-    count = int(row["regressions"])
-    detail = "no sequence regressions" if count == 0 else f"{count} rows where seq < previous seq"
-    return [_result("sequence_gaps", table, count == 0, count, detail)]
 
 
 def audit_unparseable(spark, t: bronze.VenueTable) -> list:
@@ -712,30 +621,15 @@ def _result(check: str, scope: str, passed: bool, observed: int, detail: str) ->
     }
 
 
-# venue_replay has no pass/fail semantics — it publishes a rate so a *change* in
-# it is visible. Counting it as a passing audit inflates the summary line with a
+# silver_flags has no pass/fail semantics — it publishes rates so a *change* in
+# them is visible. Counting it as a passing audit inflates the summary line with a
 # check that cannot fail, so it is named here and reported separately.
-INFORMATIONAL = {"venue_replay", "silver_flags"}
+INFORMATIONAL = {"silver_flags"}
 
 # (check name, scope, callable). The scope is here rather than only inside the
 # check so that a check which RAISES still has somewhere to file its failure.
 AUDITS = (
     ("offset_continuity", RAW_TABLE, audit_offset_continuity),
-    (
-        "duplicate_identifiers",
-        TRADES_TABLE,
-        lambda s: audit_duplicates(
-            s, TRADES_TABLE, ["exchange", "symbol", "trade_id", "src_topic", "src_partition", "src_offset"]
-        ),
-    ),
-    (
-        "duplicate_identifiers",
-        BOOK_TABLE,
-        lambda s: audit_duplicates(s, BOOK_TABLE, ["exchange", "symbol", "conn_id", "snapshot_ts_ns"]),
-    ),
-    ("venue_replay", TRADES_TABLE, audit_venue_replay),
-    ("sequence_gaps", TRADES_TABLE, lambda s: audit_sequence(s, TRADES_TABLE)),
-    ("sequence_gaps", BOOK_TABLE, lambda s: audit_sequence(s, BOOK_TABLE)),
 ) + tuple(
     row
     for t in bronze.VENUE_TABLES

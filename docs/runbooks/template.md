@@ -28,7 +28,7 @@ docker exec k2-<service> <health command>
 
 # confirm data is moving again
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count() FROM k2.silver_trades WHERE timestamp > now() - INTERVAL 2 MINUTE GROUP BY exchange"
+  "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange"
 ```
 
 **Measured** — <duration>, <date>. What was observed: row counts, consumer
