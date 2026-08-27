@@ -35,7 +35,8 @@ across every channel on a connection, Kraken none at all.
 Check the venue's own signal and repair at the smallest scope it allows.
 
 **K2.** Per-venue policy: Binance regression drops that symbol and waits for the next
-complete partial; Coinbase gap drops every book and reconnects, because the gap cannot be
+complete partial (ADR-027 wrote reconnect; the adapter resubscribes the symbol and takes the
+next partial as its snapshot); Coinbase gap drops every book and reconnects, because the gap cannot be
 attributed to one product; Kraken has no sequence, so it relies on the checksum below.
 Every gap is counted (`k2_capture_gaps_total`) and alerted. See [06](06-capture-venues.md).
 
@@ -52,7 +53,7 @@ mismatch.
 snapshot marked `checksum_ok = false`, drops the book and resubscribes, so the failure is
 visible before it is repaired. The lake re-verifies every archived frame in replay; a
 checksum that passed live and fails in replay means the archive has a hole. Kraken's
-documented example (`3310070434`) is a unit test. See [06](06-capture-venues.md#kraken-checksum).
+documented example (`3310070434`) is a unit test. See [06](06-capture-venues.md#kraken).
 
 ## Timestamps and clocks
 
@@ -65,7 +66,8 @@ hundreds of milliseconds; neither is separable after the fact unless both are st
 Stamp the receive time as the very first act on frame arrival and carry both.
 
 **K2.** `recv_ts_ns` is taken before parsing, travels in the record body and a Kafka header,
-and partitions bronze and silver books; `exchange_ts` partitions silver trades and gold. Latency is reported as
+and `recv_ts_ns` partitions bronze and the silver books; `exchange_ts` partitions silver trades
+and gold trades. Latency is reported as
 venue to receive, per venue, with the caveat that it includes transit and skew.
 See [05](05-capture.md), [15](15-capacity-model.md).
 
@@ -127,8 +129,9 @@ touches.
 
 **K2.** ClickHouse serves candles on read for the live head; the lake materialises
 `ohlcv_{1m,5m,1h,1d}` by recomputing every bucket a batch touched, with the total order
-`(exchange_ts, recv_ts_ns, trade_seq)`. Three engines (lake, ClickHouse, DuckDB) agree at a
-pinned snapshot with zero differences. See [10](10-clickhouse-gold.md), [08](08-lake-ingest.md).
+`(exchange_ts, recv_ts_ns, trade_seq)`. Three engines (lake, ClickHouse, DuckDB) are compared at
+the snapshot pinned in `tests/parity/pinned.json` by `make parity-ohlcv`, which prints the number
+of differing buckets. See [10](10-clickhouse-gold.md), [08](08-lake-ingest.md).
 
 ## BBO and book features
 
@@ -136,6 +139,8 @@ pinned snapshot with zero differences. See [10](10-clickhouse-gold.md), [08](08-
 ask (BBO), mid price, spread in basis points, imbalance (bid quantity versus ask quantity at
 the top), and microprice (the mid weighted by the opposite side's quantity, a short-horizon
 fair-value estimate).
+
+**Options.** Compute per query, or materialise once per second from the replayed book.
 
 **K2.** `gold.bbo_1s` carries all of them per venue, symbol and second, computed once from
 the replayed book; ClickHouse `bbo_live` computes the same on read for the head. Definitions
@@ -159,7 +164,9 @@ capture. See [09](09-lake-layers.md), [ADR-027](../adr/ADR-027-book-snapshot-and
 timestamp to our receive includes the venue's matching-engine-to-publish delay, the
 internet, and clock skew; none of it is a trading-path number.
 
-**K2.** Reported as `exchange_to_recv_seconds` per venue with p50/p95/p99 and the sample
+**Options.** Report one number, or report endpoints, percentiles and sample size.
+
+**K2.** Reported as `k2_capture_exchange_to_recv_seconds` per venue with p50/p95/p99 and the sample
 size, and labelled as a research-platform number. The Coinbase subscribe snapshot, whose
 trades predate the connection, is excluded from the histogram because it is history, not
 latency. See [15](15-capacity-model.md), [benchmarks](../benchmarks/2026-08-27.md).

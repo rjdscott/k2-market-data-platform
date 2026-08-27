@@ -1,7 +1,7 @@
 # 04. System overview
 
 > **You will learn** the whole system on one diagram, its three invariants, and the data path end to end.
-> **Read this if** anyone who needs the shape before the detail.
+> **Read this if** you need the shape before the detail.
 > **Before this** chapter 01.
 
 ## Problem
@@ -43,7 +43,7 @@ flowchart TB
         MNT["maintenance nightly<br/>compact · expire · audit"]
     end
     ICE[("Iceberg lake · Lakekeeper v0.13.3 + MinIO<br/>raw · bronze · silver · gold · audit")]
-    CH["ClickHouse 24.3 LTS · gold<br/>live from topics · reloaded from lake"]
+    CH["ClickHouse 24.3 LTS · gold<br/>live via Kafka engine · reloaded from lake"]
     NB["DuckDB notebooks"]
     subgraph OBS["Observability"]
         PR["Prometheus v3.2 · 28 rules"]
@@ -114,12 +114,13 @@ One trade, from the venue's socket to a candle in ClickHouse and a row in lake g
    reached `gold.trades` from the topic as a `ReplacingMergeTree` row, earliest delivery winning, and
    `ohlcv_live(bucket)` computes the candle on read over `FINAL`. Lake history arrives by `iceberg()`.
 8. **Every step above is measured.** Capture counters, lake gauges read from Iceberg snapshot
-   summaries and ClickHouse's own `/metrics` feed 28 Prometheus rules, each with a runbook, a unit
-   test, and a chaos script that proves it ([observability.md](11-observability.md)).
+   summaries and ClickHouse's own `/metrics` feed 28 Prometheus rules as code; 22 carry a runbook
+   annotation and 17 have a promtool unit test; eleven chaos scripts in `scripts/chaos/` fire the
+   ones that can be induced on a single host ([observability.md](11-observability.md)).
 
 Research reads the lake, not the database: `notebooks/` is a uv project where DuckDB queries the
 Parquet under MinIO directly, four notebooks (connect, book at a time, ASOF trades-to-book,
-completeness) running in 19 s (`make notebooks-run`) over `gold` for research and `silver` for
+completeness) run by `make notebooks-run` over `gold` for research and `silver` for
 forensics. Nothing in the notebooks reads ClickHouse.
 
 ## Decisions that shaped it
@@ -144,7 +145,9 @@ per-service table and the command that produces it in
 ## Not built
 
 No query API; no replication or failover; no Alertmanager routing; no load test above 1×. Designed
-and deferred: pcap sidecar with kernel timestamps (ADR-026 Phase E+1) and a cross-venue security
+and deferred: pcap sidecar with kernel timestamps
+([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md), `raw.pcap`,
+deferred) and a cross-venue security
 master ([data-strategy.md](12-data-strategy.md)). The cloud mapping in
 [scale-out-path.md](17-scale-out-path.md) is designed, not exercised.
 

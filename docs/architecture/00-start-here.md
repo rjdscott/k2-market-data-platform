@@ -5,8 +5,8 @@
 > **Before this** nothing.
 
 `docs/architecture/` is written as a book: numbered chapters in the order a new joiner
-should meet them, each one openable on its own. Every chapter starts with three lines , 
-what you will learn, who should read it, what to read first, so you can skip.
+should meet them, each one openable on its own. Every chapter starts with three lines: what you
+will learn, who should read it, what to read first, so you can skip.
 
 **The journey.** Chapter 01 says what the platform is for and what it refuses to be.
 Chapters 02–03 explain the market-data and data-engineering ideas the rest assumes.

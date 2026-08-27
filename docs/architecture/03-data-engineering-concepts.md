@@ -106,8 +106,10 @@ partitions that metadata dominates.
 tiny files). Partition by time at day granularity plus the one dimension queries always
 name, and rely on per-file column statistics for the rest.
 
-**K2.** Raw by `days(kafka_ts), topic`; bronze and silver books by `days(recv_ts)`; silver trades by `days(exchange_ts)`; gold by
-`exchange, days(exchange_ts)`. Column metrics are off by default and switched on only for
+**K2.** Raw by `days(kafka_ts), topic`; every bronze table and the silver books by
+`days(recv_ts)`; silver trades by `days(exchange_ts)`; gold trades by
+`exchange, days(exchange_ts)`, gold books by `exchange, days(second)`, candles by
+`exchange, months(window_start)` (`ohlcv_1d` by `exchange` alone). Column metrics are off by default and switched on only for
 the columns range scans use, so manifests stay small. ClickHouse keys mirror the query
 shape: `(exchange, canonical_symbol, exchange_ts, trade_id)`. See [14](14-partitioning-strategy.md).
 
@@ -171,7 +173,9 @@ itself, a bug is permanent.
 **Options.** Back up the products. Keep the inputs and make every product a pure function
 of them, with a command to recompute.
 
-**K2.** `raw.messages` is never expired; `rebuild.py --layer` recomputes any lake layer
+**K2.** `raw.messages` is never expired, in the sense `maintenance.py` makes literal: nothing
+there deletes a row, `expire_snapshots` drops only metadata and files a rewrite already
+superseded, so every raw frame in the current snapshot stays. `rebuild.py --layer` recomputes any lake layer
 from its parent; ClickHouse is reloaded from lake gold by one runbook; the times are
 published. Everything except raw is disposable by design. See [08](08-lake-ingest.md),
 [10](10-clickhouse-gold.md), [12](12-data-strategy.md).

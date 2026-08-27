@@ -54,8 +54,7 @@ The system as built, for readers who want the detail rather than the argument.
 | [architecture/15-capacity-model.md](architecture/15-capacity-model.md) | Predicted msg/s, bytes/day and headroom for the v3 capture and lake tiers, each row naming its assumption |
 | [architecture/16-failure-modes.md](architecture/16-failure-modes.md) | FMEA: one row per component × failure, with its detection signal, blast radius, recovery step and proof |
 | [architecture/06-capture-venues.md](architecture/06-capture-venues.md) | How a capture process works, the per-venue dialects, and what a fourth exchange costs |
-| [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | The handful of rules the design is actually held to |
-| [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | What this platform is for, and the workloads it is deliberately wrong for |
+| [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | What this platform is for, the workloads it is deliberately wrong for, and the six rules the design is held to |
 | [operations/](operations/) | Running the stack: [quick reference](operations/quick-reference.md), [Docker budget](operations/docker-resources.md), [observability](operations/observability.md), [latency budgets](operations/latency-budgets.md), [Prefect schedules](operations/prefect-schedules.md), [data inspection](operations/data-inspection.md), [adding an exchange](operations/adding-new-exchanges.md), [cost model](operations/cost-model.md) |
 | [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md), prerequisites, and how to run the Rust and Python suites |
 
