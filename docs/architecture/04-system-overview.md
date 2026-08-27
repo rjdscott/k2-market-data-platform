@@ -1,13 +1,27 @@
 # 04. System overview
 
-> **You will learn** the whole system on one diagram, its three invariants, and one section per tier.
-> **Read this if** anyone who needs the shape before the detail.
+> **You will learn** the whole system on one diagram, its three invariants, and the data path end to end.
+> **Read this if** you need the shape before the detail.
 > **Before this** chapter 01.
 
-How each component is built, how it works, and what it trades away. Versions are the
-image tags in [`docker-compose.yml`](../../docker-compose.yml). Decisions live in
-[`../adr/`](../adr/README.md), numbers in [`../benchmarks/`](../benchmarks/README.md); this page
-cites both and repeats neither.
+## Problem
+
+A research platform for crypto market data has to do four things end to end, on one host, inside a
+16 CPU / 40 GB budget: receive every frame three public venues send and know when it did not; keep an
+archive still trustworthy after the code that wrote it has been rewritten twice; derive research
+products from it and recompute them on demand; and serve queries fast. The hard part is that the fast
+tier and the durable tier want opposite things, and whichever is the record silently caps the other.
+
+v1 was a complete Python lakehouse, Kafka and five always-on Spark Structured Streaming jobs into
+Iceberg, and it worked at 35 to 40 CPU and 45 to 50 GB across 18 to 20 containers, more than 2x over
+the mandate on both axes ([MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md)). v2 was rebuilt greenfield
+around Redpanda and a ClickHouse medallion, hit the budget, and made the serving database the record:
+its Iceberg tier was a JDBC copy of ClickHouse and inherited that database's TTL, normalisation and
+dropped columns. v3 inverts the ownership ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md)):
+capture is Rust, the lake is the record, ClickHouse is derived and disposable.
+
+Versions are the image tags in [`docker-compose.yml`](../../docker-compose.yml); decisions live in
+[`../adr/`](../adr/README.md), numbers in [`../benchmarks/`](../benchmarks/README.md).
 
 ## System
 
@@ -29,7 +43,7 @@ flowchart TB
         MNT["maintenance nightly<br/>compact · expire · audit"]
     end
     ICE[("Iceberg lake · Lakekeeper v0.13.3 + MinIO<br/>raw · bronze · silver · gold · audit")]
-    CH["ClickHouse 24.3 LTS · gold<br/>live from topics · reloaded from lake"]
+    CH["ClickHouse 24.3 LTS · gold<br/>live via Kafka engine · reloaded from lake"]
     NB["DuckDB notebooks"]
     subgraph OBS["Observability"]
         PR["Prometheus v3.2 · 28 rules"]
@@ -73,146 +87,87 @@ Three invariants hold the shape together:
 3. **Correctness is measured, not asserted.** Sequence and checksum counters at capture, per-layer
    audits in the lake, three-way OHLCV parity at a pinned snapshot, chaos scripts with timed recovery.
 
-## Capture: `k2-capture`
+## The data path
 
+One trade, from the venue's socket to a candle in ClickHouse and a row in lake gold.
 
-**Built.** One Rust crate ([`services/capture-rust/`](../../services/capture-rust/README.md)), one
-image, three containers selected by `--exchange`. Single-threaded tokio (`current_thread`) because the
-CPU quota is 0.25; librdkafka's producer queue (32 MiB) is the only buffer. Runs on
-`distroless/cc` as non-root; a `healthcheck` subcommand stands in for `curl`.
+1. **The frame arrives.** `k2-capture` holds one WebSocket per venue carrying trades and L2 book
+   together, and stamps `recv_ts_ns` as the first statement after the frame leaves the socket, before
+   anything is parsed ([capture.md](05-capture.md)).
+2. **Continuity is checked in the venue's own terms.** Binance's `lastUpdateId`, Kraken's CRC32,
+   Coinbase's connection-wide `sequence_num`; a broken signal drops that book and resubscribes rather
+   than publishing a stale one ([capture-venues.md](06-capture-venues.md)).
+3. **Three records leave capture,** Avro against the registry, keyed by canonical symbol: the frame
+   verbatim to `raw.<venue>`, the trade to `trades.<venue>` as fixed-point `int64` at 1e-8, the
+   symbol's top-20 book at the next 1 Hz tick to `book.<venue>` ([wire-contracts.md](07-wire-contracts.md)).
+4. **Every 5 minutes the lake reads by offset range,** from the offsets in the last ingest snapshot's
+   summary to the broker's latest, appending each record verbatim to `raw.messages` with the consumed
+   offsets in the same commit, so a killed run resumes rather than duplicates
+   ([lake-ingest.md](08-lake-ingest.md)).
+5. **Bronze decodes it per venue** into the venue's own field names with lineage to the raw row;
+   **silver** types and flags it (UTC, canonical symbol, `venue_replay` / `seq_gap` /
+   `precision_loss` / `checksum_ok`), keeping every delivery ([lake-layers.md](09-lake-layers.md)).
+6. **Gold makes it one trade:** first delivery per `(exchange, canonical_symbol, trade_id)` wins;
+   OHLCV buckets are `MERGE`d under the total order `(exchange_ts, recv_ts_ns, trade_seq)`, so a
+   late delivery re-opens its candle ([lake-layers.md](09-lake-layers.md)).
+7. **ClickHouse served it within seconds** (Kafka engine flush every 5 s) ([clickhouse-gold.md](10-clickhouse-gold.md)): the trade
+   reached `gold.trades` from the topic as a `ReplacingMergeTree` row, earliest delivery winning, and
+   `ohlcv_live(bucket)` computes the candle on read over `FINAL`. Lake history arrives by `iceberg()`.
+8. **Every step above is measured.** Capture counters, lake gauges read from Iceberg snapshot
+   summaries and ClickHouse's own `/metrics` feed 28 Prometheus rules as code; 22 carry a runbook
+   annotation and 17 have a promtool unit test; eleven chaos scripts in `scripts/chaos/` fire the
+   ones that can be induced on a single host ([observability.md](11-observability.md)).
 
-**How it works.** One WebSocket per venue carries trades and L2 book together. `recv_ts_ns` is the
-first statement after a frame leaves the socket. Each frame is published verbatim to `raw.<venue>`,
-then parsed by a pure `handle_frame(bytes, recv_ts) -> records` that runs identically in production
-and in the replay tests. Per venue: Kraken v2 with CRC32 verification of every book update against
-the venue's published checksum; Binance `depth20@100ms` partials with `lastUpdateId` regression checks
-and a scheduled reconnect before the 24 h cap; Coinbase `level2` full books in a `BTreeMap` with
-`sequence_num` gap detection and resync. Top-20 snapshots are emitted at 1 Hz per symbol
-([ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md)). After a produce-error drop on a book
-stream, capture resubscribes for a fresh snapshot once the queue drains.
+Research reads the lake, not the database: `notebooks/` is a uv project where DuckDB queries the
+Parquet under MinIO directly, four notebooks (connect, book at a time, ASOF trades-to-book,
+completeness) run by `make notebooks-run` over `gold` for research and `silver` for
+forensics. Nothing in the notebooks reads ClickHouse.
 
-**Trade-offs.** Drop-on-full rather than back-pressure: a stalled broker costs records (counted in
-`k2_capture_produce_errors_total`, recovered by the lake's audit) rather than a frozen socket that the
-venue would close anyway. No spill-to-disk; the lake, not capture, is where completeness is proven.
-Internet feeds: exchange→receive latency includes transit and venue clock skew and is published as
-such ([benchmarks](../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-receive)).
+## Decisions that shaped it
 
-## Streaming backbone: Redpanda
-
-
-**Built.** Single broker, `--smp 1 --memory 1500M`, schema registry and console built in
-([ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md)). Topics are created by the `redpanda-init`
-one-shot, never auto-created: `market.crypto.v3.{raw,trades,book}.<venue>`, 12 partitions each,
-keyed by canonical symbol. Retention: raw 48 h, derived 7 d.
-
-**Trade-offs.** Retention is a buffer, not storage, an ingest outage longer than 48 h loses raw
-frames, and the `raw` audit says so ([failure-modes.md](16-failure-modes.md)). Single broker: recovery is
-restart, measured, not failover.
-
-## Lake ingest: Spark under Prefect
-
-
-**Built.** [`docker/lake/`](../../docker/lake/README.md): `ingest.py` runs the stages, one module per
-layer (`bronze.py`, `silver.py`, `gold.py`, `books.py`), `maintenance.py` compacts and audits,
-`rebuild.py` recomputes any layer from its parent. Prefect deployments `lake-ingest-5min`
-(`1-59/5 * * * *`) and `lake-maintenance-daily` (`0 3 * * *`) `docker exec` into the one Spark
-container; a file lock serialises writers.
-
-**How it works.** Stage 1 reads Redpanda by explicit offset range, from the offsets recorded in the
-last ingest snapshot's summary to `latest`, and appends every record verbatim to `raw.messages`,
-writing the consumed offsets into the same Iceberg commit ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)).
-Each later stage reads its parent incrementally by snapshot id (`k2.src-snapshot-id`) and commits the
-id it read up to. A run killed at any instant leaves either the old snapshot or the new one; the next
-run resumes from whichever it finds.
-
-**Trade-offs.** Batch, not streaming: freshness in the lake is five minutes, and ClickHouse covers the
-head. One Spark container at 2 CPU / 8 GiB serves ingest, rebuilds and maintenance in turn; a full
-bronze rebuild takes 520 s, books 2,367 s ([benchmarks](../benchmarks/2026-08-27.md#lake)).
-
-## Lake layers: Iceberg on Lakekeeper + MinIO
-
-
-**Built.** DDL in [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql); catalog is Lakekeeper's
-REST API over MinIO ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)); Parquet + zstd.
-
-| Layer | Tables | Contract |
+| ADR | Decision | Why |
 |---|---|---|
-| `raw` | `messages` | every Kafka record verbatim, partitioned `days(kafka_ts), topic`, never expired |
-| `bronze` | `<venue>_<msgtype>` ×7 | the venue's field names and JSON types as sent, decoded from raw JSON, lineage to the raw row |
-| `silver` | `trades_<venue>`, `book_<venue>` ×3 | typed, UTC, canonical symbol beside native, flags `venue_replay` / `seq_gap` / `precision_loss` / `checksum_ok`; every delivery kept |
-| `gold` | `trades`, `book_top20`, `bbo_1s`, `ohlcv_{1m,5m,1h,1d}`, `dim_*` | one row per logical trade, end-of-second book state from replaying every delta, products with `src_snapshot_id` |
-| `audit` | `checks` | every nightly assertion, pass or fail |
-
-Columns: [schema-design.md](13-schema-design.md). Partitioning and file sizing:
-[partitioning-strategy.md](14-partitioning-strategy.md). Why four layers and what each is for:
-[data-strategy.md](12-data-strategy.md), [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md).
-
-**Trade-offs.** Bronze keeps vendor schemas, so a Kraken field is not a Binance field until silver , 
-cross-venue queries pay for that at gold. Silver keeps every delivery, including replays, so it is
-larger than gold and lake-only. Disk on one host is the binding constraint: ≈ 9.8 GB/day, runway
-≈ 60 days at the 2026-08-27 fill ([capacity-model.md](15-capacity-model.md)).
-
-## Served tier: ClickHouse `gold`
-
-
-**Built.** [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql)
-is the contract, tested in CI (`make test-clickhouse`); `20-gold-kafka.sql` adds `AvroConfluent`
-Kafka engines over the trades and book topics with `kafka_handle_error_mode='stream'`, so an undecodable
-record lands in `gold.feed_errors` instead of stalling a partition. A read-only `quant` profile
-(3 GiB, 2 threads) is what dashboards and notebooks use. Limits: 4 CPU / 8 GiB, server cap 6.5 GiB.
-
-**How it works.** `gold.trades` is `ReplacingMergeTree` keyed on
-`(exchange, canonical_symbol, exchange_ts, trade_id)`, earliest delivery wins; a venue replay or a
-topic/lake overlap is one row under `FINAL`. `gold.ohlcv_*` and `gold.bbo_1s` are pulled from the
-lake through `iceberg()` ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)); `ohlcv_live` and
-`bbo_live` are views over `FINAL` for the head the lake has not reached. No TTL; the lake wins on
-conflict ([ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md)).
-
-**Trade-offs.** OHLCV on read costs a `FINAL` scan per query rather than a merge-time bug: v2's
-`SummingMergeTree` resolved open and close per insert block, and the CI test that inserts one minute
-in two blocks is the regression guard. ClickHouse 24.3 cannot speak to a REST catalog, so the lake
-pull is by metadata path and needs uncompressed metadata on the source tables.
-
-## Observability
-
-
-Prometheus scrapes capture (`:8082`), ClickHouse (`:9363`), Redpanda (`:9644`), the lake exporter
-(`lake-metrics:8000`, PyIceberg over snapshot summaries) and itself. 28 rules in
-[`docker/prometheus/rules/`](../../docker/prometheus/rules/), 10 capture, 12 lake, 6 ClickHouse, each
-with a runbook in [`../runbooks/`](../runbooks/README.md) and a `promtool` unit test. Four Grafana
-dashboards: pipeline overview, capture, lake, ClickHouse. No Alertmanager: rules are evaluated and
-shown, not routed. Detail: [operations/observability.md](../operations/observability.md).
-
-## Research surface
-
-`notebooks/` is a uv project: DuckDB reads the lake straight from Parquet under MinIO, four
-notebooks (connect, book at a time, ASOF trades-to-book, completeness) run in 19 s
-(`make notebooks-run`). Notebooks read `gold` for research and `silver` for forensics; nothing reads
-ClickHouse.
+| [018](../adr/ADR-018-v3-lake-first-rust-capture.md) | Lake is the system of record; everything else derived | v2's lake was a JDBC copy of the serving DB, it inherited its TTL, normalisation and dropped columns |
+| [019](../adr/ADR-019-rust-capture-tier.md) | Rust capture replaces three JVM handlers | One connection per venue carrying trades *and* book; `recv_ts` before parse; retired on a measured parity gate |
+| [020](../adr/ADR-020-avro-fixed-point-contracts.md) | Avro + registry, `int64` @1e-8, `BACKWARD_TRANSITIVE` | v2 stored prices as strings and its registry proved nothing |
+| [022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md) | Kafka offsets committed inside the Iceberg snapshot | One atomic commit replaces a watermark table and its failure modes |
+| [026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) | raw / bronze-per-venue / silver-per-venue / gold-canonical; ClickHouse serves gold with no TTL | Typed venue fields survive; OHLCV on read fixes v2's `SummingMergeTree` candles resolving open/close arbitrarily |
+| [027](../adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync policy | Raw holds the deltas; the product is what research joins against |
+| [008](../adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect, **reversed** | Wrong call, kept on the record with its Outcome |
 
 ## Resource footprint
 
 15 long-running services at 14.60 CPU / 25.625 GiB of limits, plus four one-shot init containers;
 per-service table and the command that produces it in
-[operations/docker-resources.md](../operations/docker-resources.md). Budget and the reasoning behind
-each limit: [ADR-010](../adr/ADR-010-resource-budget.md).
+[operations/docker-resources.md](../operations/docker-resources.md). Budget and reasoning per limit:
+[ADR-010](../adr/ADR-010-resource-budget.md).
 
 ## Not built
 
 No query API; no replication or failover; no Alertmanager routing; no load test above 1×. Designed
-and deferred: pcap sidecar with kernel timestamps (ADR-026 Phase E+1) and a cross-venue security
+and deferred: pcap sidecar with kernel timestamps
+([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md), `raw.pcap`,
+deferred) and a cross-venue security
 master ([data-strategy.md](12-data-strategy.md)). The cloud mapping in
 [scale-out-path.md](17-scale-out-path.md) is designed, not exercised.
+
+## Key points
+
+- One ownership decision sets the shape: the lake holds the record, every other tier is a cache that
+  can be dropped and recomputed, and none can quietly become authoritative.
+- A trade is written verbatim before it is understood, then understood in steps, each layer derived
+  only from the one above it and rebuildable on demand.
+- Position and data commit in one snapshot, so exactly-once is a property of the storage format, not
+  of a checkpoint store somebody has to operate. ClickHouse buys freshness, not truth.
 
 ## Further reading
 
 | Page | What it holds |
 |---|---|
-| [data-strategy.md](12-data-strategy.md) | why four layers, what ClickHouse holds and for how long, retention vs disk |
-| [schema-design.md](13-schema-design.md) | every column in every layer and the wire contracts |
-| [partitioning-strategy.md](14-partitioning-strategy.md) | partition specs, sort orders, file sizes, ClickHouse keys |
-| [failure-modes.md](16-failure-modes.md) | FMEA: detection, blast radius, recovery, proof per failure |
-| [capacity-model.md](15-capacity-model.md) | predicted vs measured bytes/day, CPU, disk runway |
-| [streaming-sources.md](06-capture-venues.md) | the three venue dialects and what a fourth costs |
-| [platform-principles.md](01-what-k2-is.md), [positioning.md](01-what-k2-is.md) | the rules the design is held to, and what it is deliberately wrong for |
-| [../MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md) | v1 → v2 → v3, with the measured outcomes of each |
+| [12-data-strategy.md](12-data-strategy.md) | why four layers, what ClickHouse holds and for how long, retention vs disk |
+| [13-schema-design.md](13-schema-design.md) | every column in every layer and the wire contracts |
+| [14-partitioning-strategy.md](14-partitioning-strategy.md) | partition specs, sort orders, file sizes, ClickHouse keys |
+| [15-capacity-model.md](15-capacity-model.md) | predicted vs measured bytes/day, CPU, disk runway |
+| [16-failure-modes.md](16-failure-modes.md) | FMEA: detection, blast radius, recovery, proof per failure |
+| [17-scale-out-path.md](17-scale-out-path.md) | the AWS mapping at TB/PB scale, designed, not exercised |
+| [A1-technology-stack.md](A1-technology-stack.md) | every version and the ADR behind each |

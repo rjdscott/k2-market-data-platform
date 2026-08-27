@@ -12,16 +12,16 @@ Every component that runs, the version pinned, what it does here, and the decisi
 |---|---|---|---|
 | Redpanda | v25.3.4 | Streaming backbone. Kafka API, single broker, `--smp 1 --memory 1500M`. Schema registry is built in, no separate registry process | [ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md) |
 | Redpanda Console | v3.5.1 | Topic / consumer-group / schema browser on `:8080` | [ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md) |
-| ClickHouse | 24.3-alpine (LTS) | Hot store *and* stream processor. Kafka-engine tables + materialized views implement the whole medallion | [ADR-003](../adr/ADR-003-clickhouse-warm-storage.md), [ADR-009](../adr/ADR-009-medallion-in-clickhouse.md), [ADR-015](../adr/ADR-015-clickhouse-lts-downgrade.md) |
+| ClickHouse | 24.3-alpine (LTS) | Serves `gold` only: `ReplacingMergeTree` fed by AvroConfluent Kafka engines, candles on read, history pulled from the lake by `iceberg()`, no TTL | [ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md), [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md), [ADR-015](../adr/ADR-015-clickhouse-lts-downgrade.md) |
 | Apache Spark | 3.5.5 (`tabulario/spark-iceberg:3.5.5_1.8.1`) | Batch only, reads Redpanda by offset range, decodes Confluent-framed Avro, appends to Iceberg. No streaming jobs, and nothing reads ClickHouse. The image is pinned by digest and bakes the five Kafka/Avro jars it needs, each pinned by sha256, so no job resolves from Maven at runtime ([`docker/spark/Dockerfile`](../../docker/spark/Dockerfile)) | [ADR-006](../adr/ADR-006-spark-batch-only.md), [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) |
 | Apache Iceberg | 1.8.1 | Lake table format. Parquet + zstd, copy-on-write deletes on every table, `commit.retry.num-retries=10` ([`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql)) | [ADR-007](../adr/ADR-007-iceberg-cold-storage.md), [ADR-013](../adr/ADR-013-pragmatic-iceberg-version-strategy.md) |
 | Lakekeeper | v0.13.3 (`quay.io/lakekeeper/catalog`) | The Iceberg REST catalog, on `127.0.0.1:18181`; metadata in a `lakekeeper` PostgreSQL database. Sole catalog since Phase D, the v2 Hadoop-catalog bind mount is deleted | [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md), [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md) |
 | MinIO | RELEASE.2025-09-07T16-13-09Z | S3-compatible object store. Holds the lake bucket (`k2-lake`), which is now the only warehouse | [ADR-007](../adr/ADR-007-iceberg-cold-storage.md), [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) |
 | PostgreSQL | 15-alpine | Two databases on one server: Prefect's metadata, and Lakekeeper's catalog. No pipeline bookkeeping of its own, the lake's consumed offsets live in the Iceberg snapshot summary | [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md), [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md) |
 | Prefect | 3 (`prefecthq/prefect:3-python3.12`) | Schedules the two lake deployments on the `lake` work pool, `lake-ingest-5min` and `lake-maintenance-daily`. Workers, not agents | [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md) |
-| Prometheus | v3.2.0 | Scrapes capture ×3, ClickHouse, Redpanda, Grafana and `lake-metrics`. 30-day retention, 26 alert rules (4 v2 ClickHouse + 10 capture + 12 lake) |, |
-| Grafana | 11.5.0 | 5 provisioned dashboards in `docker/grafana/dashboards/` |, |
-| Docker Compose |, | The only deployment target. One file, 15 long-running service entries (+4 one-shot init containers), explicit CPU/memory limits per service | [ADR-010](../adr/ADR-010-resource-budget.md) |
+| Prometheus | v3.2.0 | Scrapes capture ×3, ClickHouse, Redpanda, Grafana and `lake-metrics`. 30-day retention, 28 alert rules (10 capture + 12 lake + 6 ClickHouse) | |
+| Grafana | 11.5.0 | 4 provisioned dashboards in `docker/grafana/dashboards/` | |
+| Docker Compose | | The only deployment target. One file, 15 long-running service entries (+4 one-shot init containers), explicit CPU/memory limits per service | [ADR-010](../adr/ADR-010-resource-budget.md) |
 
 ## Capture tier (Rust)
 
@@ -30,13 +30,13 @@ Every component that runs, the version pinned, what it does here, and the decisi
 | Crate | Version | Role |
 |---|---|---|
 | tokio | 1.48 | `current_thread` runtime, one connection per process, and a single-threaded scheduler makes frame order under a cgroup quota the same order a replay sees |
-| tokio-tungstenite | 0.28 | WebSocket client, `rustls-tls-webpki-roots` |
+| tokio-tungstenite | 0.30 | WebSocket client, `rustls-tls-webpki-roots` |
 | rdkafka | 0.39 | Producer. Features `cmake-build`, `libz-static`, `zstd`, `tokio`, not the defaults: distroless/cc has no `libz.so.1` and `zstd` is not in librdkafka's default set |
 | schema_registry_converter | 5.0 | Confluent framing (magic byte + schema id) against Redpanda's registry; `rustls_tls` so the image carries one TLS stack, not two |
 | apache-avro | 0.22 | Record encoding for `trade`, `book-snapshot-l2`, `raw-message` |
 | serde / serde_json / serde_yaml | 1 / 1 / 0.9 | Frame parsing and the [`config/instruments.yaml`](../../config/instruments.yaml) loader |
 | crc32fast | 1.5 | Kraken's book checksum, computed over decimal digit strings, never `f64` |
-| metrics / metrics-exporter-prometheus | 0.24 / 0.17 | `k2_capture_*` exposition on `:8082` |
+| metrics / metrics-exporter-prometheus | 0.24 / 0.18 | `k2_capture_*` exposition on `:8082` |
 | clap | 4 | Subcommands `run`, `record`, `healthcheck` |
 | anyhow | 1 | The only error type: every error is either propagated with context or counted and dropped, so a `thiserror` enum would be a type nobody reads |
 
@@ -60,7 +60,7 @@ RSS on import alone against a 128 MB container limit.
 
 **Redpanda over Kafka.** Kafka plus a Confluent Schema Registry was 2.0 CPU / 2.77 GB before a single message moved, and its JVM GC pauses showed up in p99. Redpanda is a single C++ binary with the registry built in, Kafka-wire-compatible so the standard `kafka-clients` producer is unchanged. Cost: one broker, no replication, and a smaller operational-knowledge pool.
 
-**ClickHouse as the stream processor, not just the store.** The transforms in this pipeline are stateless per-record maps and time-bucketed aggregates. ClickHouse already ingests from Kafka and already maintains incremental aggregates; adding a stream-processing framework to feed it would have been a second copy of machinery already present. This deleted five Spark Streaming jobs and a planned Kotlin service.
+**ClickHouse serves, the lake computes.** v2 ran the medallion inside ClickHouse ([ADR-009](../adr/ADR-009-medallion-in-clickhouse.md)), which made the serving DB the record and put per-block `argMin` candles in the archive; v3 keeps ClickHouse for sub-second dashboards and `ASOF JOIN` backtests over gold, and computes every product once in the lake ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)).
 
 **Rust for the capture tier, and not for speed.** K2 reads public WebSocket feeds over the open internet; transit dominates everything the process does by two orders of magnitude, and at ~150 msg/s capture is not the bottleneck. What Rust buys is three properties of the frame path that the JVM tier could not be extended into: `recv_ts_ns` before the parser, exact fixed-point arithmetic without a decimal library on the hot path, and bit-for-bit replay determinism (no `HashMap` iteration on emit paths, no `f64` on the record path, no wall-clock read outside the receipt stamp). It also replaced three JVMs with three ~43 MB containers. The full argument, including why Go and Python lose on the same two properties, is [ADR-019](../adr/ADR-019-rust-capture-tier.md); the Kotlin decision it supersedes is [ADR-002](../adr/ADR-002-kotlin-feed-handlers.md).
 

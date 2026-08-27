@@ -54,11 +54,11 @@ message.max.bytes          = 8388608      // 8 MiB; matches the WebSocket cap in
 enable.idempotence         = true         // a retry cannot duplicate a record
 acks                       = "all"        // durability first
 compression.type           = "zstd"
-message.timeout.ms         = 30000        // drop and count rather than pin forever
+message.timeout.ms         = 300000       // 5 min: drop and count rather than pin forever
 ```
 
-`message.timeout.ms = 30000` is the one worth understanding: a record still unsent after
-30 s is failed and counted rather than held, because a record that stale is better lost
+`message.timeout.ms = 300000` is the one worth understanding: a record still unsent after
+5 minutes is failed and counted rather than held, because a record that stale is better lost
 visibly than pinned behind a dead broker. No `linger.ms` tuning, the venue's frame arrival
 rate, not batching, sets the cadence.
 

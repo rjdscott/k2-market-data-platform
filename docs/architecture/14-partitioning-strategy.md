@@ -12,17 +12,18 @@ third tier, ClickHouse, serves the lake's gold layer; see [ClickHouse](#clickhou
 
 What follows is what the DDL and the topic bootstrap actually configure:
 [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) and
-[`docker/redpanda/init.sh`](../../docker/redpanda/init.sh). Where a spec is a Phase D
-plan rather than applied DDL, the row says so.
+[`docker/redpanda/init.sh`](../../docker/redpanda/init.sh).
 
 ```mermaid
 flowchart TB
   CAP["k2-capture ×3<br/>key = canonical symbol"]
   RP[("Redpanda · 9 v3 topics<br/>12 partitions each")]
   RAW[("raw.messages<br/>days(kafka_ts), topic")]
-  BR[("bronze.trades · book_snapshots_l2<br/>exchange, days(ts) · sorted by symbol")]
+  BR[("bronze.&lt;venue&gt;_&lt;msg&gt;<br/>days(recv_ts) · sorted by symbol")]
+  SV[("silver.trades_&lt;venue&gt; · silver.book_&lt;venue&gt;<br/>days(exchange_ts) · days(recv_ts)")]
+  GD[("gold.trades · ohlcv_* · book_top20 · bbo_1s<br/>exchange + days/months")]
   Q["DuckDB · ClickHouse<br/>prune: partition then sort order"]
-  CAP --> RP --> RAW --> BR --> Q
+  CAP --> RP --> RAW --> BR --> SV --> GD --> Q
 ```
 
 ---
@@ -53,7 +54,7 @@ raw archive must not carry a normalisation decision, `raw-message.avsc`'s `symbo
 says so explicitly, and its value is read out of the payload. Frames that belong to no
 single instrument, heartbeats, subscription acknowledgements, error envelopes, carry no
 key at all and spread round-robin, which is correct: they have no ordering relationship
-to anything (`services/capture-rust/src/record.rs:140-151`).
+to anything (`services/capture-rust/src/record.rs:163`).
 
 Keying on the symbol means every record for one instrument lands on one partition and
 stays in the order the venue sent it. Ordering *across* instruments is not preserved and
@@ -65,7 +66,7 @@ single clock can back.
 v2 raw producer passes the exchange name as the key:
 
 ```kotlin
-// services/feed-handler-kotlin/src/main/kotlin/com/k2/feedhandler/KafkaProducerService.kt:155
+// legacy/v2-kotlin/src/main/kotlin/com/k2/feedhandler/KafkaProducerService.kt:155
 val record = ProducerRecord(topic, exchange, json)
 ```
 
@@ -91,41 +92,58 @@ partitions holding them are hotter than the tail. At the predicted ~700 frames/s
 broker sized for ~100 K msg/s ([ADR-010](../adr/ADR-010-resource-budget.md)'s "2 cores
 handles 100K msg/s", the figure rank 6 of [capacity model
 §7](15-capacity-model.md#7-bottleneck-prediction) uses to put broker CPU at ~113× today's
-rate), per-partition skew is not near anything that binds, and the fix if it ever is , 
-more partitions, is available only at topic-recreation cost, so it is a decision to make
-once with headroom rather than to tune.
+rate), per-partition skew is not near anything that binds. The fix if it ever binds, more
+partitions, is available only at topic-recreation cost, so it is a decision to make once
+with headroom rather than to tune.
 
 ### Retention is not partitioning, but it interacts
 
 `raw.*` topics carry 48 h *and* a 512 MiB-per-partition byte cap (`12 × 3 × 512 MiB ≈
 18 GiB`, inside a 20 GB budget); `trades.*` and `book.*` carry 7 d and no byte cap. The
-arithmetic and the reasoning are in `docker/redpanda/init.sh`. Which limit binds first is
-an open question the Phase D burn-in settles. It matters to partitioning because the byte
-cap is **per partition**: raising the partition count raises the disk floor
-proportionally.
+arithmetic and the reasoning are in `docker/redpanda/init.sh`. **The byte cap binds
+first**: measured 7.0 h on `raw.kraken/0` on 2026-08-26
+([capacity model §4d](15-capacity-model.md#4d-retention--disk)), not 48 h, because keyed
+partitions are not evenly loaded. It matters to partitioning because the byte cap is
+**per partition**: raising the partition count raises the disk floor proportionally.
 
 ---
 
 ## Iceberg
 
-Four tables across three namespaces, `raw.messages`, `bronze.trades`,
-`bronze.book_snapshots_l2`, `audit.checks`. Applied by `docker/lake/apply_ddl.py` from
+Twenty-five tables across five namespaces, `raw`, `bronze`, `silver`, `gold`, `audit`.
+Applied by `docker/lake/apply_ddl.py` from
 [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql).
 
 | Table | `PARTITIONED BY` | Local sort order | Target file size | Metrics on |
 |---|---|---|---|---|
 | `raw.messages` | `days(kafka_ts), topic` | `topic, partition, offset` | 256 MB | `offset`, `kafka_ts`, `partition` |
-| `bronze.trades` | `exchange, days(exchange_ts)` | `symbol, exchange_ts` | 128 MB | `symbol`, `exchange_ts`, `seq`, `src_offset` |
-| `bronze.book_snapshots_l2` | `exchange, days(snapshot_ts)` | `symbol, snapshot_ts` | 128 MB | `symbol`, `snapshot_ts`, `seq` |
-| `audit.checks` | `days(run_ts)` |, | 128 MB | default |
+| `bronze.<venue>_<msg>` ×7 | `days(recv_ts)` | `symbol, recv_ts_ns` | 128 MB | `symbol`, `recv_ts`, `src_offset` |
+| `silver.trades_<venue>` ×3 | `days(exchange_ts)` | `canonical_symbol, exchange_ts` | 128 MB | `canonical_symbol`, `exchange_ts`, `recv_ts`, `trade_seq`, `src_offset` |
+| `silver.book_<venue>` ×3 | `days(recv_ts)` | `canonical_symbol, recv_ts_ns` | 128 MB | `canonical_symbol`, `recv_ts`, `src_offset` |
+| `gold.trades` | `exchange, days(exchange_ts)` | `canonical_symbol, exchange_ts` | 128 MB | `canonical_symbol`, `exchange_ts`, `trade_seq`, `src_offset` |
+| `gold.ohlcv_{1m,5m,1h}` | `exchange, months(window_start)` | none | 128 MB | `canonical_symbol`, `window_start` |
+| `gold.ohlcv_1d` | `exchange` | none | 128 MB | `canonical_symbol`, `window_start` |
+| `gold.book_top20` | `exchange, days(second)` | `canonical_symbol, second` | 128 MB | `canonical_symbol`, `second` |
+| `gold.bbo_1s` | `exchange, days(second)` | none | 128 MB | `canonical_symbol`, `second` |
+| `gold.dim_instrument`, `gold.dim_venue`, `gold.book_state` | `exchange` | none | 128 MB | none |
+| `audit.checks` | `days(run_ts)` | none | 128 MB | default |
 
-All four: Parquet + zstd, `format-version = 2`, `write.distribution-mode = hash`,
-copy-on-write for delete/update/merge. Three of the four also set
-`write.metadata.metrics.default = none` and re-enable metrics per column, as the last
+The seven bronze tables are `binance_trade`, `binance_depth20`, `kraken_trade`,
+`kraken_book`, `kraken_instrument`, `coinbase_market_trades`, `coinbase_level2`.
+`gold.ohlcv_1d` drops the time field from its spec because a whole year of daily candles
+for 34 instruments is one small file per venue; a monthly transform on it would produce
+twelve.
+
+Every table: Parquet + zstd, `format-version = 2`, `write.distribution-mode = hash`,
+copy-on-write for delete/update/merge. Every table but `audit.checks` also sets
+`write.metadata.metrics.default = none` and re-enables metrics per column, as the last
 table column above records. `audit.checks` is the exception: its DDL sets no metrics
 property at all, so it keeps Iceberg's `truncate(16)` default on every column, a table
 of a few rows a night whose columns are all short strings pays nothing for it, and there
-is no `payload`-shaped column to make the default expensive.
+is no `payload`-shaped column to make the default expensive. Every `gold` table also sets
+`write.metadata.compression-codec = none`, because ClickHouse 24.3's `iceberg()` cannot
+read the gzip-compressed `metadata.json` Lakekeeper writes by default, and `gold` is the
+layer ClickHouse pulls.
 
 ### `raw.messages`: time first, topic second
 
@@ -151,20 +169,20 @@ statement about what prunes: the archive prunes on coordinates, never on anythin
 the frame. That is a direct consequence of `payload` being opaque bytes
 ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)).
 
-### `bronze.*`: exchange first, then the day, and symbol nowhere
+### `bronze.*` and `silver.*`: no exchange field, and which clock the day comes from
 
-`exchange` leads on both bronze tables. It has exactly three values, it will not grow
-faster than roughly one a year, and it is the field almost every query filters on, so it
-buys a two-thirds exact file skip for 3× the partition count. `days(...)` follows.
+Bronze is one table per venue × message, so `exchange` is the table name and the partition
+is `days(recv_ts)`, the one clock every frame carries: Binance's depth stream has no venue
+timestamp at all ([ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md)), and a
+nullable column cannot carry a partition. Silver trades partition on `days(exchange_ts)`
+because every venue stamps a trade, and that is the axis research reads on; silver books
+keep `days(recv_ts)` for the same reason bronze does. `gold` is the first layer where
+`exchange` becomes a partition field, because gold is the first layer that is
+cross-venue: one table, three values, an exact two-thirds file skip for 3× the partition
+count.
 
-The two tables use **different time columns**, deliberately. `bronze.trades` partitions on
-`exchange_ts` because every venue stamps a trade. `bronze.book_snapshots_l2` partitions on
-`snapshot_ts`, K2's own 1 Hz sampler clock, because Binance's partial-depth stream
-carries no venue timestamp at all, so `exchange_ts` is null for a third of the book rows
-([ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md)), and a nullable column cannot
-carry a partition. Using one column for symmetry would have put a third of the book data
-in a null partition. The cost is stated where it lands: an as-of join from book snapshots
-to trades crosses two different clocks, and any query doing it must say which.
+The cost is stated where it lands: an as-of join from book snapshots to trades crosses
+two different clocks, and any query doing it must say which.
 
 ### Why symbol is a sort key and not a partition field
 
@@ -173,12 +191,14 @@ having in full.
 
 **Partitioning by symbol would produce skew by construction.** The registry holds **34
 (exchange, symbol) pairs**, binance 12, kraken 11, coinbase 11, 23 distinct canonical
-symbols across them ([`config/instruments.yaml`](../../config/instruments.yaml)), so
-`exchange × day × symbol` is 34 partitions per day against a table that writes
-**0.156 GB/day** for trades and **0.264 GB/day** for book snapshots
-([capacity model §4c](15-capacity-model.md#4c-per-lake-table-per-day)). Even split evenly
-that is `0.156 GB ÷ 34 = 4.6 MB` per trades partition per day, well under any file size
-worth writing. And it would not split evenly: BTC-quoted majors would hold most of it;
+symbols across them ([`config/instruments.yaml`](../../config/instruments.yaml)), and the
+tables are already one per venue, so adding `symbol` splits a venue-day into 11 or 12
+partitions. The three `silver.trades_<venue>` tables write **0.25 GB/day between them**
+and the three `silver.book_<venue>` tables **2.1 GB/day**
+([capacity model §4c](15-capacity-model.md#4c-per-lake-table-per-day)). Split evenly that
+is `0.25 ÷ 3 ÷ 11 ≈ 7.6 MB` per symbol per day on trades and `2.1 ÷ 3 ÷ 11 ≈ 64 MB` on
+books, both under the 128 MB target and trades an order of magnitude under it. And it
+would not split evenly: BTC-quoted majors would hold most of it;
 the tail would hold partitions of a few hundred rows each. Those are files too small to
 be worth opening, a metadata tree larger than the data it indexes,
 and a compaction job that can never reach its 128 MB target because there is not 128 MB
@@ -188,7 +208,8 @@ in the partition to reach it with.
 `(symbol, …)`, so each file's `symbol` min/max bounds cover a narrow, contiguous slice of
 the alphabet. A single-instrument scan skips every file whose bounds exclude it, and
 Parquet's row-group statistics narrow it again inside the files it does open. Metrics are
-explicitly enabled on `symbol` for exactly this reason.
+explicitly enabled on `symbol` (bronze) and `canonical_symbol` (silver, gold) for exactly
+this reason.
 
 **The honest difference: partition pruning is exact, sort-order pruning is statistical.**
 A partition filter is evaluated on metadata and is guaranteed; a sort-order skip depends
@@ -198,9 +219,9 @@ queries*, not as an error, which is why the daily maintenance job sort-rewrites 
 two days of `bronze.*` rather than only binpacking them.
 
 **And it is reversible.** Iceberg supports partition evolution: `ALTER TABLE …
-ADD PARTITION FIELD symbol` applies to new data without rewriting old data. If the first
-Phase D notebooks show single-symbol queries opening most of a day partition, that is the
-answer, and it costs a DDL statement rather than a migration.
+ADD PARTITION FIELD symbol` applies to new data without rewriting old data. If
+single-symbol queries open most of a day partition, that is the answer, and it costs a DDL
+statement rather than a migration.
 
 ### Why not `hours()`
 
@@ -214,15 +235,16 @@ metadata for a pruning gain that is already paid for. The arithmetic is redone i
 partition reaches one 256 MB target file at **8.5×** today's rate, and at the **400×** PB
 case it is the right spec.
 
-### File size: 256 MB for raw, 128 MB for bronze
+### File size: 256 MB for raw, 128 MB everywhere else
 
 `raw.messages` targets 256 MB because it is the high-volume table, 6.47 GB/day predicted
-of the 6.89 GB/day all four lake tables write between them, **94 % of the lake's growth**
-([capacity model §4c](15-capacity-model.md#4c-per-lake-table-per-day)), and larger files
-mean fewer manifest entries per snapshot and
-fewer object-store round trips per scan. `bronze.*` target 128 MB because at 0.156 and
-0.264 GB/day a 256 MB target would never be reached and compaction would produce one
-undersized file per partition either way, with no benefit.
+of the 13.6 GB/day all lake tables write between them
+([capacity model §4c](15-capacity-model.md#4c-per-lake-table-per-day)), so **raw is 48 %
+of predicted lake growth, 62 % measured** (3.77 GB of 6.09 GB on 2026-08-27,
+[B4](../benchmarks/2026-08-27.md#b4)). Larger files mean fewer manifest entries per
+snapshot and fewer object-store round trips per scan. Every other table targets 128 MB
+because at a few hundred MB/day per table a 256 MB target would never be reached and
+compaction would produce one undersized file per partition either way, with no benefit.
 
 Both are targets, not guarantees. The ingest runs every 5 minutes, so each cycle writes
 small files into the current day's partition, ~288 commits per day per table before
@@ -247,7 +269,7 @@ and both partition pruning and sort-order pruning get slower without getting wro
 
 **Rewritten at the Phase E cutover, 2026-08-27.** The v2 hot tier (`k2.*`, 7-day TTL,
 `SummingMergeTree` candles) is gone, [legacy/v2-clickhouse/](../../legacy/v2-clickhouse/README.md)
-keeps its DDL, and `git log -p -- docs/architecture/14-partitioning-strategy.md` this page's
+keeps its DDL, and `git log -p --follow -- docs/architecture/14-partitioning-strategy.md` this page's
 earlier description. What serves now is the `gold` database of
 [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md):
 [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql).
@@ -258,7 +280,7 @@ No table has a TTL.
 | `gold.trades` | `ReplacingMergeTree(first_seen)` | `toYYYYMM(exchange_ts)` | `(exchange, canonical_symbol, exchange_ts, trade_id)` | the logical trade is the key; a venue replay or a feed/reload overlap collapses under `FINAL` to the **earliest delivery** (`first_seen` = inverted receive time). Monthly partitions keep `FINAL` a per-partition merge (the `quant` profile sets `do_not_merge_across_partitions_select_final`) and keep part counts flat at ~10 M rows/day |
 | `gold.book_top20` | `ReplacingMergeTree(ver)` | `toYYYYMM(second)` | `(exchange, canonical_symbol, second)` | one row per venue-symbol-second; the later sample in a second wins, and a lake reload (state at the end of the second, `ver` = last nanosecond) out-ranks the feed's mid-second sample |
 | `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bbo_1s` | `ReplacingMergeTree(src_snapshot_id)` | `toYYYYMM(window_start)` / `toYYYYMM(second)` | `(exchange, canonical_symbol, window_start)` | loaded from the lake, never computed here; a reload carrying a newer lake snapshot for a bucket replaces the row |
-| `gold.feed_errors` | `MergeTree` |, | `(topic, partition, offset)` | every record AvroConfluent could not decode, with its bytes |
+| `gold.feed_errors` | `MergeTree` | | `(topic, partition, offset)` | every record AvroConfluent could not decode, with its bytes |
 
 **Why not partition by exchange, as the lake does.** ClickHouse's partition is a merge
 boundary and a `FINAL` boundary, not a pruning device the way an Iceberg partition is;
@@ -301,7 +323,7 @@ GROUP BY partition ORDER BY partition;
 -- Is the sort order doing its job? Tight symbol bounds per file mean a
 -- single-symbol scan prunes. Wide bounds everywhere mean compaction is behind.
 SELECT file_path, lower_bounds, upper_bounds
-FROM lake.bronze.trades.files LIMIT 20;
+FROM lake.bronze.binance_trade.files LIMIT 20;
 ```
 
 Rules of thumb used here, and what each one means if it trips:
@@ -311,12 +333,11 @@ Rules of thumb used here, and what each one means if it trips:
 | Average file size in a settled partition | < 10 MB | compaction is behind, or the partition spec is too fine |
 | Files per day partition, `raw.messages`, after maintenance | > ~50 | the 256 MB target is not being reached, check the compaction job ran |
 | Manifest count per snapshot | > ~100 | planning time is growing; rewrite manifests |
-| Single-symbol scan opening > 10 % of a day partition's files |, | sort-order pruning is not working; `ADD PARTITION FIELD symbol` becomes the answer ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)) |
+| Single-symbol scan opening > 10 % of a day partition's files | | sort-order pruning is not working; `ADD PARTITION FIELD symbol` becomes the answer ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)) |
 
-**None of these thresholds has been measured against a populated lake**, the tables were
-created in Phase D and the burn-in that scores them is a labelled 2 h window
-([Q6](../research/2026-08-26-v3-requirements-clarification.md#q6--burn-in-windows-real-wall-clock-duration-or-shortened)).
-They are design expectations until then.
+Scored once, 2026-08-27 ([B4](../benchmarks/2026-08-27.md#b4)): `raw.messages` **278 files
+for 3.77 GB**; per-venue bronze **2 to 12 files each**. The thresholds themselves are still
+design expectations.
 
 ---
 
