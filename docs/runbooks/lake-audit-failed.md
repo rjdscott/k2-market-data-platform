@@ -40,6 +40,7 @@ the tier being down ([lake-recovery.md](./lake-recovery.md)).
 | 10 | `silver_flags` — informational; **cannot fail** | n/a — read the rates | not yet verified — Phase E |
 | 11 | `gold_parity` — gold rows per venue ≠ silver first deliveries | < 60 min (rebuild gold) | not yet verified — Phase E |
 | 12 | `ohlcv_parity` — a stored 1m candle ≠ recomputed from gold.trades | < 60 min (rebuild gold) | not yet verified — Phase E |
+| 13 | `kraken_checksum` — a replayed Kraken book failed the venue's CRC32 | **investigation** — a missed or misapplied frame | **failed as designed** 2026-08-27: 386,962 of 40.2 M frames, all inside the 2026-08-26 chaos window; every other hour zero. See `docker/lake/README.md` § Books |
 
 ---
 
@@ -564,6 +565,40 @@ bucket was written from a partial view. The candle tables are derived and cheap:
 `make lake-rebuild LAYER=gold` recomputes every bucket. If it recurs, the bucket-key
 derivation in `gold.stage_ohlcv` and `gold.candles` disagree — that is a code bug, not
 a data one.
+
+## 13. `kraken_checksum` — the replayed book does not hash to the venue's checksum
+
+**Symptom** — `check_name = 'kraken_checksum'`, `observed` = frames with `checksum_ok = false`
+in `lake.silver.book_kraken`; the detail also counts the unverifiable ones (`NULL`: no
+precision for the pair, or a frame before its connection's snapshot).
+
+**What it means** — for that frame, the book replayed from the connection's frames
+(truncated to depth 25, hashed over the top 10 at the pair's precision) is not what the
+venue had. Either a frame is missing between the snapshot and this one (a capture-side
+loss: compare `conn_msg_seq` continuity in `raw.messages` for the connection), or a level
+was applied wrongly (a `book.py` bug — the unit test pins Kraken's own example, so start
+with a frame whose precision changed mid-connection: `bronze.kraken_instrument` updates).
+The capture verifies the same checksum live and resubscribes on a mismatch
+(`k2_capture_checksum_failures_total`); if the capture saw no failure at that time, the
+replay is wrong, not the data.
+
+```sql
+SELECT symbol, conn_id, conn_msg_seq, checksum, frame_type, recv_ts
+FROM lake.silver.book_kraken WHERE checksum_ok = false ORDER BY recv_ts LIMIT 20;
+```
+
+**Acknowledging a window.** Once the cause is known and it is an archive hole — not a
+replay bug — file an operator row and the audit nets those frames out on every later run
+(they stay in the table; the detail line still counts them). Exactly the `offset_gap`
+pattern of §1:
+
+```sql
+INSERT INTO lake.audit.checks VALUES (
+  current_timestamp(), 'operator', 'checksum_failure_acknowledged', 'lake.silver.book_kraken', true, 386962,
+  'from 2026-08-26T16:00:00Z to 2026-08-26T18:00:00Z: capture-kill / queue-full / redpanda-stop chaos runs (scripts/chaos/results/2026-08-26.tsv); 31,464 Kraken records dropped on a full producer queue; every failure of the archive is in this window');
+```
+
+Filed 2026-08-27 for exactly that window, after the first books rebuild.
 
 ## After any failure: do not silence the audit
 

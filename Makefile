@@ -83,7 +83,7 @@ lake-verify:  ## Phase D exit criteria against the LIVE stack: offsets gapless, 
 # Drops and re-decodes a whole lake layer from its parent, under the writer
 # lock, one day per venue at a time. Pause lake-ingest-5min first (see
 # docker/lake/rebuild.py). EXCHANGE=kraken limits it to one venue.
-lake-rebuild:  ## Rebuild LAYER=bronze|silver|gold from its parent over the whole archive (LIVE stack; minutes to hours)
+lake-rebuild:  ## Rebuild LAYER=bronze|silver|gold|books from its parent over the whole archive (LIVE stack; minutes to hours)
 	docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer $(or $(LAYER),bronze) $(if $(EXCHANGE),--exchange $(EXCHANGE),)
 
 parity-ohlcv:  ## Three-way OHLCV parity (ClickHouse on-read, lake gold, DuckDB over silver) at tests/parity/pinned.json

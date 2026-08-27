@@ -67,6 +67,8 @@ TABLES = {
     "silver.trades_kraken": ("silver", "trades_kraken"),
     "silver.trades_coinbase": ("silver", "trades_coinbase"),
     "gold.trades": ("gold", "trades"),
+    "gold.book_top20": ("gold", "book_top20"),
+    "silver.book_kraken": ("silver", "book_kraken"),
     "gold.ohlcv_1m": ("gold", "ohlcv_1m"),
     "audit.checks": ("audit", "checks"),
 }

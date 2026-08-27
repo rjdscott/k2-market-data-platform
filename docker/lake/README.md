@@ -26,6 +26,8 @@ compares them before the old path is deleted.
 | `bronze.py` | Stage 2b: the six per-venue tables, decoded from the venue JSON in `raw.*` — vendor field names and types as sent |
 | `silver.py` | Stage 2c: `silver.trades_<venue>` — bronze frames typed, one row per trade, canonical symbol from the registry, replay / gap / precision flags |
 | `instruments.py` | The registry (`config/instruments.yaml`) as silver needs it: native → canonical, failing loudly on an unknown symbol |
+| `book.py` | Pure: an L2 book replayed from frames, Kraken's CRC32 at the pair's precision, truncation to the subscription depth. Unit-tested against Kraken's published example |
+| `books.py` | Stage 2e: `silver.book_<venue>` typed (Kraken `checksum_ok` by replay) and, from the same replay, `gold.book_top20` per second and `gold.bbo_1s`; `gold.book_state` carries a connection's book between ticks |
 | `gold.py` | Stage 2d: `gold.trades` (one row per logical trade = silver's first deliveries), `gold.dim_*` from the registry, `gold.ohlcv_{1m,5m,1h,1d}` recomputed per touched bucket and MERGEd |
 | `rebuild.py` | `make lake-rebuild LAYER=bronze|silver|gold`: drop, recreate and re-decode a layer from its parent, one day per venue at a time |
 | `maintenance.py` | Nightly compaction, snapshot expiry, and the audits. Non-zero exit on a failure |
@@ -43,6 +45,7 @@ flowchart TB
   RAW -->|stage 2b<br/>from_avro, from_json| BV[(bronze.venue_msgtype ×6<br/>vendor schema as sent)]
   BV -->|stage 2c<br/>type, flag, registry| SV[(silver.trades_venue ×3<br/>one row per trade)]
   SV -->|stage 2d<br/>first deliveries, candles| GD[(gold.trades · dim_* · ohlcv_*<br/>canonical, 1e-8 fixed point)]
+  BV -->|stage 2e<br/>one replay per connection| BK[(silver.book_venue ×3 · gold.book_top20 · bbo_1s<br/>checksum verified, 1 Hz state)]
   RAW --> MNT[maintenance.py<br/>compact · expire · audit]
   BR --> MNT
   BV --> MNT
@@ -263,6 +266,70 @@ for 2026-08-26). Three-way parity for 2026-08-27: **9,866 buckets, 0 differ** �
 findings the first run produced: DuckDB bucketing in the host's time zone (all 29,407
 buckets off against ClickHouse) and open/close ties inside one frame (3,829 buckets),
 both fixed at the source and recorded in the scripts.
+
+## Books — silver per venue, gold top-20 per second (Phase E, ADR-026)
+
+The book is a state machine over a connection's frames, and `books.py` walks it **once**
+per connection (`book.py` is the pure core: apply, truncate, top-N, Kraken CRC32 — tested
+against the venue's published example, `3310070434`). One walk, two outputs:
+
+| Output | Table | What |
+|---|---|---|
+| per frame | `silver.book_kraken.checksum_ok` | the replayed book, truncated to the subscription depth (25), hashed at the pair's precision (`bronze.kraken_instrument`) equals the CRC32 the venue attached — the HFT-grade integrity check, per frame, over the whole archive |
+| per second | `gold.book_top20` | the book at the end of every second while the connection is alive, top 20 per side as the wire's four `*_e8` arrays (ClickHouse `gold.book_top20` loads it column for column); a quiet second repeats the state, as the capture's 1 Hz sampler does |
+| per second | `gold.bbo_1s` | a SQL projection of the above: bid/ask, mid, spread bps, imbalance, microprice |
+
+`silver.book_binance` needs no replay (each depth20 frame *is* the top-20 book; gold takes
+the last frame per second) and carries `seq_gap` when `lastUpdateId` fails to advance;
+`silver.book_coinbase` is one row per `events[i]`, updates typed with `side` normalised
+beside the venue's `bid | offer`, replayed full-depth (the subscribe snapshot is the whole
+book) and sampled to the top 20.
+
+**Streamed, stateful.** Frames are repartitioned by `(symbol, conn_id)`, sorted by
+`conn_msg_seq`, and walked by a generator over the partition iterator — one book dict per
+open connection, never a whole connection in memory (a BTC/USD Kraken connection can be
+half a day of frames). The book after the last frame of every connection is written to
+`gold.book_state` so a 5-minute tick resumes from it; a frame that precedes its
+connection's snapshot is typed into silver with `checksum_ok = NULL` and yields no book,
+exactly as the capture treats it. Rebuild replays bronze one day per venue in order, the
+state carrying across days.
+
+Nightly: `duplicate_identifiers` and `silver_parity` per book table, **`kraken_checksum`**
+(frames whose replayed book failed the venue's checksum — zero is the bar; unverifiable
+frames are counted separately), duplicates on `gold.book_top20`'s `(exchange, symbol, second)`.
+
+**Measured 2026-08-27, first rebuild** (`make lake-rebuild LAYER=books`, whole archive,
+2g heap): **2,367 s**, peak driver RSS 2,685 MiB. Kraken replayed at ~35 k frames/s
+(29,060,920 frames in 830 s); Coinbase, whose subscribe snapshots are the whole book,
+5,688,236 events in 726 s.
+
+| Table | Rows | Note |
+|---|---:|---|
+| `silver.book_kraken` | 40,207,065 | `checksum_ok`: **39,288,012 verified, 386,962 failed, 532,091 unverifiable** |
+| `silver.book_binance` | 4,432,079 | `seq_gap` true on 467 frames (lastUpdateId did not advance), NULL on 168 (first of a connection) |
+| `silver.book_coinbase` | 7,894,742 | one row per `events[i]` |
+| `gold.book_top20` | 1,951,135 | 670,815 / 632,405 / 647,915 seconds for binance / kraken / coinbase; depth 20 throughout |
+| `gold.bbo_1s` | 1,951,129 | 6 fewer: seconds with an empty side; median spread 0.99 / 1.64 / 1.36 bps (binance / kraken / coinbase, 2026-08-27) |
+| `gold.book_state` | 277 Kraken + 160 Coinbase connections | Coinbase carries 688,746 resting levels across them (full depth) |
+
+**Every one of the 386,962 checksum failures is explained, and none is the replay's.**
+By hour they fall entirely in 16:00–18:00 UTC on 2026-08-26 — the window of the
+`capture-kill`, `capture-queue-full` and `redpanda-stop` chaos runs
+(`scripts/chaos/results/2026-08-26.tsv`), when the producer dropped 31,464 Kraken records
+on a full queue — and every other hour of ~40 M frames has zero. A dropped frame desyncs
+the replayed book, and the failures then run to the end of the connection because the
+capture's own book never missed the frame, so it never resubscribed. The 532,091
+unverifiable frames are two connections (`a90d3104…`, `25650038…`) whose subscribe snapshot
+fell inside the `raw.kraken` retention eviction of the same day: no snapshot, no book, NULL
+rather than a guess. **Capture follow-up:** after a produce-error drop on a book stream,
+resubscribe for a fresh snapshot so the archive's book becomes verifiable again.
+
+**Two samplers, one book.** ClickHouse's feed-fed `gold.book_top20` is the capture's own
+1 Hz sample taken at a fixed sub-second offset; the lake's is the state at the *end* of the
+second. Over 2026-08-27 00:00–05:00 the two agree on the best bid and ask in 88.6 % of
+Binance seconds, 66.8 % Kraken, 65.9 % Coinbase (`docs/runbooks/clickhouse-rebuild-from-lake.md`);
+the rest are seconds in which the top of book moved between the two instants. The
+venue-attested checksum above, not this comparison, is what validates the replay.
 
 ## The exactly-once contract
 

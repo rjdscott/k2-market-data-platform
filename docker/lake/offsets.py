@@ -387,3 +387,22 @@ def uncovered_holes(holes: list, gaps: list) -> list:
         if cursor <= int(last):
             out.append(hole)
     return out
+
+
+# An operator acknowledgement of a window of checksum failures (docs/runbooks/
+# lake-audit-failed.md §13) is a detail string of the form
+#   "from 2026-08-26T16:00:00Z to 2026-08-26T18:00:00Z: <why>"
+# The audit nets failures inside [from, to) out, exactly as offset_continuity
+# nets a recorded offset_gap. Reword the format and the audit stops recognising
+# its own acknowledgements — which is why the parser lives here, beside
+# GAP_OFFSETS, with a test.
+_ISO = r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)"
+_ACK_WINDOW_RE = re.compile(rf"from {_ISO} to {_ISO}")
+
+
+def ack_window(detail: str):
+    """`(from, to)` as `YYYY-MM-DD HH:MM:SS` strings from an acknowledgement detail, or None."""
+    m = _ACK_WINDOW_RE.search(detail or "")
+    if not m:
+        return None
+    return tuple(g.rstrip("Z").replace("T", " ") for g in (m.group(1), m.group(2)))

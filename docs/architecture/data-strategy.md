@@ -104,3 +104,23 @@ Not a trading path: public WebSocket feeds over the internet, one host, no HA. T
 above are about **fidelity and reproducibility**, which is what quant research and
 regulatory replay need; latency is measured and reported, never optimised for
 ([positioning.md](positioning.md)).
+
+## Deferred to v3.1: a security master
+
+Decided 2026-08-27 with the maintainer. `config/instruments.yaml` — `(exchange, native)
+→ canonical BASE/QUOTE`, materialised as `gold.dim_instrument` / `gold.dim_venue` — is
+the security master v3 has, and `canonical_symbol` is the only cross-venue key silver and
+gold carry. `BTC/USDT` and `BTC/USD` stay different instruments on purpose. What a full
+security master adds, and the trigger that makes each worth building:
+
+| Piece | Adds | Build when |
+|---|---|---|
+| stable surrogate `instrument_id` | identity that survives a venue rename (Kraken XBT→BTC), a delisting, symbol reuse | the first rename or delisting in the registry, or a fourth venue |
+| `dim_asset` | asset codes with venue aliases and decimals | two venues disagree on an asset code the yaml cannot express |
+| attributes with validity (SCD2: tick, lot, precision, status, listed/delisted) | as-of joins for queue-position and fee features; `bronze.kraken_instrument` already holds Kraken's | a gold product needs tick or lot size, or derivatives arrive (symbol ≠ instrument) |
+| exposure families | "BTC spot against a USD-like quote" across venues, with the stablecoin basis explicit | the first cross-venue research notebook that wants it |
+
+Rule kept from the start so none of this forces a rewrite: silver stays thin — the
+native symbol and `canonical_symbol` (later `instrument_id`), nothing else joined in.
+Attributes are dimensions joined at query time; an attribute change never rewrites a
+10 M-row table.

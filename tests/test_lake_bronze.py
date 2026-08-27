@@ -56,7 +56,7 @@ def test_route_covers_every_declared_pair_and_nothing_else(bronze):
     assert bronze.route("kraken", "heartbeat") is None
     assert bronze.route("coinbase", "trade") is None
     names = [t.name for t in bronze.VENUE_TABLES]
-    assert len(names) == len(set(names)) == 6
+    assert len(names) == len(set(names)) == 7
 
 
 def test_drift_reports_only_undeclared_keys(bronze):
@@ -66,7 +66,7 @@ def test_drift_reports_only_undeclared_keys(bronze):
     assert bronze.drift({"$": {"a", "b", "c"}, "$.a": {"x", "y"}}, expected) == {"$": ["c"], "$.a": ["y"]}
 
 
-@pytest.mark.parametrize("name", ["binance_trade", "binance_depth20", "kraken_trade", "kraken_book", "coinbase_market_trades", "coinbase_level2"])
+@pytest.mark.parametrize("name", ["binance_trade", "binance_depth20", "kraken_trade", "kraken_book", "kraken_instrument", "coinbase_market_trades", "coinbase_level2"])
 def test_declared_keys_match_a_captured_frame(bronze, name):
     t = next(t for t in bronze.VENUE_TABLES if t.name == name)
     doc = json.loads((FIXTURES / f"{name}.json").read_text())
@@ -76,7 +76,7 @@ def test_declared_keys_match_a_captured_frame(bronze, name):
         assert seen[path] == keys, f"{path}: fixture {seen[path]} != declared {keys}"
 
 
-@pytest.mark.parametrize("name", ["binance_trade", "binance_depth20", "kraken_trade", "kraken_book", "coinbase_market_trades", "coinbase_level2"])
+@pytest.mark.parametrize("name", ["binance_trade", "binance_depth20", "kraken_trade", "kraken_book", "kraken_instrument", "coinbase_market_trades", "coinbase_level2"])
 def test_every_declared_key_is_a_column_in_the_schema(bronze, name):
     t = next(t for t in bronze.VENUE_TABLES if t.name == name)
     for keys in t.keys.values():

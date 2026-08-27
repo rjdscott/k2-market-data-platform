@@ -423,3 +423,15 @@ def test_a_bounded_cold_start_drains_without_skipping_or_repeating(partitions):
     # And the continuity audit agrees with the run sequence it just produced.
     rows = [("t", p, len(o), min(o), max(o)) for p, o in consumed.items()]
     assert O.offset_gaps(rows) == []
+
+
+def test_ack_window_parses_the_runbook_format_and_nothing_else():
+    import offsets as O
+
+    assert O.ack_window("from 2026-08-26T16:00:00Z to 2026-08-26T18:00:00Z: chaos runs, 31,464 records dropped") == (
+        "2026-08-26 16:00:00",
+        "2026-08-26 18:00:00",
+    )
+    assert O.ack_window("from 2026-08-26T16:00:00Z to 2026-08-26T18:00:00Z") == ("2026-08-26 16:00:00", "2026-08-26 18:00:00")
+    assert O.ack_window("acknowledged, see ticket") is None
+    assert O.ack_window(None) is None

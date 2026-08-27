@@ -64,6 +64,7 @@ import sys
 from datetime import datetime, timezone
 from functools import reduce
 
+import books
 import bronze
 import gold
 import silver
@@ -735,6 +736,9 @@ def main() -> int:
             # Stage 2d: gold — one row per logical trade from silver, dims from
             # the registry, candles recomputed for the buckets the batch touched.
             gold.stage(spark, ingest_ts)
+            # Stage 2e: books — silver.book_* typed (Kraken checksum verified by
+            # replay) and gold.book_top20 / bbo_1s sampled from the same replay.
+            books.stage(spark, ingest_ts)
     finally:
         spark.stop()
         if lock is not None:

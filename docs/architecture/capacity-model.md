@@ -294,7 +294,9 @@ anyway so that a deeper or faster book stays recoverable by replay.
 | `silver.trades_<venue>` ×3 (Phase E, predicted 2026-08-27 before the first silver rebuild) | **0.25 GB/day**, sum of three | The three bronze trade tables held 126.2 MB for ≈ 14.9 h (0.20 GB/day); silver stores the same trades exploded and typed — two DECIMAL(28,10) instead of strings, timestamps instead of text, four flag columns, a canonical symbol dictionary — call it 1.25× | `0.20 × 1.25` |
 | `gold.trades` (Phase E, predicted 2026-08-27 before the first gold rebuild) | **0.18 GB/day** | The non-replay rows of silver (≈ 97 %), fewer columns, two BIGINTs where silver has two DECIMAL(28,10)s: ~0.9× the silver trades size | `0.20 × 0.9` |
 | `gold.ohlcv_*` ×4 | **< 0.01 GB/day** | 34 instruments × 1,440 minutes = 49 K rows/day for 1m, ~30 B each compressed; the coarser three are negligible | `34 × 1440 × 30 B` |
-| **All lake tables** | **10.9 GB/day** | — | sum, with bronze per venue, silver trades and gold; 6.89 without them |
+| `silver.book_<venue>` ×3 (predicted 2026-08-27 before the first books rebuild) | **2.1 GB/day** | the three bronze book tables (kraken_book, binance_depth20, coinbase_level2) held 1.85 GB for ≈ 14.9 h (3.0 GB/day); typed decimals and structs compress a little better than the string pairs: ~0.7× | `3.0 × 0.7` |
+| `gold.book_top20` + `gold.bbo_1s` | **0.6 GB/day** | 34 instruments × 86,400 s = 2.9 M rows/day of 80 Int64 levels; ClickHouse's feed-fed copy of the same shape measured 330 MiB for 2.0 M rows (4.65×), so ~0.5 GB/day for the book and ~0.1 for the BBO | `2.9 M × 165 B + 2.9 M × 40 B` |
+| **All lake tables** | **13.6 GB/day** | — | sum, with bronze per venue, silver trades and books, gold; 6.89 without them |
 
 ### 4d. Retention → disk
 

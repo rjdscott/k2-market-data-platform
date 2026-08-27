@@ -1,5 +1,5 @@
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- K2 v3 lake — the Iceberg tables (raw, unified bronze, six bronze-per-venue, silver trades per venue, gold, audit), applied by docker/lake/apply_ddl.py
+-- K2 v3 lake — the Iceberg tables (raw, unified bronze, six bronze-per-venue, silver trades + books per venue, gold, audit), applied by docker/lake/apply_ddl.py
 -- (the `lake-ddl` one-shot compose service). Idempotent: every statement is
 -- CREATE ... IF NOT EXISTS or an ALTER that converges to a fixed value, so a
 -- re-run against a live warehouse is a no-op.
@@ -1004,6 +1004,331 @@ TBLPROPERTIES (
 );
 
 ALTER TABLE lake.gold.ohlcv_1d SET IDENTIFIER FIELDS exchange, canonical_symbol, window_start;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- bronze.kraken_instrument — the `instrument` channel (reference data): every
+-- pair price_precision / qty_precision, which the book checksum is defined
+-- over. A snapshot at subscribe (≈ 566 KB, every asset and pair Kraken lists)
+-- and small updates after. Vendor schema as sent, like the other six.
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.bronze.kraken_instrument (
+    channel          STRING           COMMENT 'instrument',
+    type             STRING           COMMENT 'snapshot | update',
+    data             STRUCT<assets: ARRAY<STRUCT<id: STRING, status: STRING, precision: INT, precision_display: INT, borrowable: BOOLEAN, collateral_value: DECIMAL(28,10), class: STRING, margin_rate: DECIMAL(28,10)>>, pairs: ARRAY<STRUCT<symbol: STRING, base: STRING, quote: STRING, status: STRING, qty_precision: INT, qty_increment: DECIMAL(28,10), price_precision: INT, cost_precision: INT, marginable: BOOLEAN, has_index: BOOLEAN, ws_display_price_precision: INT, cost_min: DECIMAL(28,10), margin_initial: DECIMAL(28,10), position_limit_long: BIGINT, position_limit_short: BIGINT, tick_size: DECIMAL(28,10), price_increment: DECIMAL(28,10), qty_min: DECIMAL(28,10)>>>
+                                      COMMENT 'assets[] and pairs[] as sent. price_precision and qty_precision on pairs[] are what silver.book_kraken verifies checksums with',
+    symbol           STRING           COMMENT 'RawMessage.symbol, venue spelling. NULL = no single instrument',
+    recv_ts_ns       BIGINT  NOT NULL,
+    recv_ts          TIMESTAMP NOT NULL,
+    conn_id          STRING  NOT NULL,
+    conn_msg_seq     BIGINT  NOT NULL,
+    src_topic        STRING  NOT NULL,
+    src_partition    INT     NOT NULL,
+    src_offset       BIGINT  NOT NULL,
+    ingest_ts        TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (days(recv_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.symbol'              = 'full',
+    'write.metadata.metrics.column.recv_ts'             = 'full',
+    'write.metadata.metrics.column.src_offset'          = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Kraken instrument channel frames (reference data: pair precisions). Vendor schema as sent.'
+);
+
+ALTER TABLE lake.bronze.kraken_instrument SET IDENTIFIER FIELDS src_topic, src_partition, src_offset;
+
+ALTER TABLE lake.bronze.kraken_instrument
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY symbol, recv_ts_ns;
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Silver books — Phase E, ADR-026. One table per venue, typed frames, every
+-- frame kept. Kraken carries the checksum verdict; the book itself is not
+-- stored per frame (40 M frames a day x 25 levels would be the archive
+-- again) — gold.book_top20 is the 1 Hz sampled state, replayed from these.
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ───────────────────────────────────────────────────────────────────────────
+-- silver.book_binance
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.silver.book_binance (
+    symbol           STRING  NOT NULL,
+    canonical_symbol STRING  NOT NULL,
+    last_update_id   BIGINT  NOT NULL COMMENT 'Binance lastUpdateId of this partial-book frame',
+    bids             ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>> NOT NULL COMMENT 'The frame IS the top-20 book: best first, typed from the [["px","qty"]] pairs',
+    asks             ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>> NOT NULL,
+    depth            INT     NOT NULL COMMENT 'Levels per side in the frame',
+    seq_gap          BOOLEAN          COMMENT 'true = last_update_id did not advance past the previous frame on this connection (a regression). NULL on the first frame of a connection in the lookback',
+    recv_ts_ns       BIGINT  NOT NULL,
+    recv_ts          TIMESTAMP NOT NULL,
+    conn_id          STRING  NOT NULL,
+    conn_msg_seq     BIGINT  NOT NULL,
+    src_topic        STRING  NOT NULL COMMENT 'Lineage to the bronze row',
+    src_partition    INT     NOT NULL,
+    src_offset       BIGINT  NOT NULL,
+    src_index        INT     NOT NULL COMMENT 'Position within the frame (Coinbase events[i]). 0 where a frame is one event',
+    ingest_ts        TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (days(recv_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.recv_ts'             = 'full',
+    'write.metadata.metrics.column.src_offset'          = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Binance depth20 frames typed. Each frame is a complete top-20 snapshot; no state to replay.'
+);
+
+ALTER TABLE lake.silver.book_binance SET IDENTIFIER FIELDS src_topic, src_partition, src_offset, src_index;
+
+ALTER TABLE lake.silver.book_binance
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, recv_ts_ns;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- silver.book_kraken
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.silver.book_kraken (
+    symbol           STRING  NOT NULL,
+    canonical_symbol STRING  NOT NULL,
+    frame_type       STRING  NOT NULL COMMENT 'snapshot | update',
+    bids             ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>> NOT NULL COMMENT 'The levels the frame carries (a snapshot: the book. an update: the changed levels, qty 0 = removed)',
+    asks             ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>> NOT NULL,
+    checksum         BIGINT  NOT NULL COMMENT 'The CRC32 the venue attached, as sent',
+    checksum_ok      BOOLEAN          COMMENT 'true = the book replayed from this connection frames, truncated to the subscription depth, hashes to `checksum` at the pair precision (docker/lake/book.py). false = it does not: a missed or misapplied frame. NULL = precision unknown (no instrument frame yet)',
+    exchange_ts      TIMESTAMP        COMMENT 'The frame timestamp, typed',
+    recv_ts_ns       BIGINT  NOT NULL,
+    recv_ts          TIMESTAMP NOT NULL,
+    conn_id          STRING  NOT NULL,
+    conn_msg_seq     BIGINT  NOT NULL,
+    src_topic        STRING  NOT NULL COMMENT 'Lineage to the bronze row',
+    src_partition    INT     NOT NULL,
+    src_offset       BIGINT  NOT NULL,
+    src_index        INT     NOT NULL COMMENT 'Position within the frame (Coinbase events[i]). 0 where a frame is one event',
+    ingest_ts        TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (days(recv_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.recv_ts'             = 'full',
+    'write.metadata.metrics.column.src_offset'          = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Kraken book frames typed, with the checksum verified by replay (the HFT-grade integrity check).'
+);
+
+ALTER TABLE lake.silver.book_kraken SET IDENTIFIER FIELDS src_topic, src_partition, src_offset, src_index;
+
+ALTER TABLE lake.silver.book_kraken
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, recv_ts_ns;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- silver.book_coinbase
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.silver.book_coinbase (
+    symbol           STRING  NOT NULL COMMENT 'events[i].product_id',
+    canonical_symbol STRING  NOT NULL,
+    event_type       STRING  NOT NULL COMMENT 'snapshot (the whole book) | update',
+    updates          ARRAY<STRUCT<side: STRING, side_native: STRING, px: DECIMAL(28,10), qty: DECIMAL(28,10), event_time: TIMESTAMP>> NOT NULL
+                                      COMMENT 'Absolute quantities per price level. side normalised to bid | ask beside the venue bid | offer. qty 0 = level removed',
+    sequence_num     BIGINT  NOT NULL COMMENT 'Connection-wide, across every channel',
+    envelope_ts      TIMESTAMP NOT NULL,
+    seq_gap          BOOLEAN          COMMENT 'NULL: sequence_num continuity spans heartbeats and trades, which are not in this table. the capture counts gaps live (k2_capture_gaps_total)',
+    recv_ts_ns       BIGINT  NOT NULL,
+    recv_ts          TIMESTAMP NOT NULL,
+    conn_id          STRING  NOT NULL,
+    conn_msg_seq     BIGINT  NOT NULL,
+    src_topic        STRING  NOT NULL COMMENT 'Lineage to the bronze row',
+    src_partition    INT     NOT NULL,
+    src_offset       BIGINT  NOT NULL,
+    src_index        INT     NOT NULL COMMENT 'Position within the frame (Coinbase events[i]). 0 where a frame is one event',
+    ingest_ts        TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (days(recv_ts))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.recv_ts'             = 'full',
+    'write.metadata.metrics.column.src_offset'          = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Coinbase level2 events typed, one row per event; the book is replayed from them for gold.book_top20.'
+);
+
+ALTER TABLE lake.silver.book_coinbase SET IDENTIFIER FIELDS src_topic, src_partition, src_offset, src_index;
+
+ALTER TABLE lake.silver.book_coinbase
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, recv_ts_ns;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- gold.book_top20 — the book as it stood at the end of each second, top 20 per
+-- side, every venue, one schema: the wire four parallel Int64 arrays, so
+-- ClickHouse gold.book_top20 loads it column for column. Replayed from the
+-- silver frames per connection (docker/lake/books.py); a second with no frame
+-- carries the previous state forward, as the capture own 1 Hz sampler does.
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.gold.book_top20 (
+    exchange         STRING  NOT NULL,
+    canonical_symbol STRING  NOT NULL,
+    symbol           STRING  NOT NULL,
+    second           TIMESTAMP NOT NULL COMMENT 'The 1 Hz bucket. the state is as of its end',
+    depth            INT     NOT NULL COMMENT 'Levels per side present, at most 20',
+    seq              BIGINT  NOT NULL COMMENT 'Venue sequence of the last frame folded in (Binance lastUpdateId, Coinbase sequence_num). 0 for Kraken',
+    checksum_ok      BOOLEAN          COMMENT 'Kraken: the last frame verdict. NULL elsewhere',
+    bid_px_e8        ARRAY<BIGINT> NOT NULL COMMENT 'Best first, 1e-8 fixed point',
+    bid_qty_e8       ARRAY<BIGINT> NOT NULL,
+    ask_px_e8        ARRAY<BIGINT> NOT NULL,
+    ask_qty_e8       ARRAY<BIGINT> NOT NULL,
+    recv_ts_ns       BIGINT  NOT NULL COMMENT 'Receive time of the last frame folded in',
+    conn_id          STRING  NOT NULL,
+    conn_msg_seq     BIGINT  NOT NULL,
+    src_topic        STRING  NOT NULL COMMENT 'Lineage: the last frame folded in',
+    src_partition    INT     NOT NULL,
+    src_offset       BIGINT  NOT NULL,
+    src_index        INT     NOT NULL,
+    ingest_ts        TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (exchange, days(second))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.compression-codec'              = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.second'              = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = '1 Hz top-20 book states replayed from silver. Loaded into ClickHouse gold.book_top20 by pull.'
+);
+
+ALTER TABLE lake.gold.book_top20 SET IDENTIFIER FIELDS exchange, canonical_symbol, second;
+
+ALTER TABLE lake.gold.book_top20
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, second;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- gold.bbo_1s — best bid / offer and the derived numbers, one row per book
+-- state above (a plain SQL projection of it; ClickHouse gold.bbo_live is the
+-- same arithmetic on read).
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.gold.bbo_1s (
+    exchange         STRING  NOT NULL,
+    canonical_symbol STRING  NOT NULL,
+    second           TIMESTAMP NOT NULL,
+    bid_e8           BIGINT  NOT NULL,
+    bid_qty_e8       BIGINT  NOT NULL,
+    ask_e8           BIGINT  NOT NULL,
+    ask_qty_e8       BIGINT  NOT NULL,
+    mid              DOUBLE  NOT NULL COMMENT '(bid + ask) / 2, quote currency',
+    spread_bps       DOUBLE  NOT NULL COMMENT '(ask - bid) / mid x 1e4',
+    imbalance        DOUBLE  NOT NULL COMMENT 'bid_qty / (bid_qty + ask_qty)',
+    microprice       DOUBLE  NOT NULL COMMENT '(bid x ask_qty + ask x bid_qty) / (bid_qty + ask_qty)',
+    checksum_ok      BOOLEAN,
+    src_snapshot_id  BIGINT  NOT NULL COMMENT 'The gold.book_top20 snapshot this row was projected from'
+)
+USING iceberg
+PARTITIONED BY (exchange, days(second))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.compression-codec'              = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.second'              = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'BBO per second, projected from gold.book_top20.'
+);
+
+ALTER TABLE lake.gold.bbo_1s SET IDENTIFIER FIELDS exchange, canonical_symbol, second;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- gold.book_state — the replay carry-over between ticks: per (venue,
+-- symbol, connection), the book after the last frame processed and the last
+-- second emitted. Overwritten each run. Operational, not a product; it exists
+-- so a 5-minute tick does not re-read a connection whole life to know its
+-- book. Empty before a rebuild.
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.gold.book_state (
+    exchange         STRING  NOT NULL,
+    symbol           STRING  NOT NULL,
+    conn_id          STRING  NOT NULL,
+    bid_px_e8        ARRAY<BIGINT> NOT NULL,
+    bid_qty_e8       ARRAY<BIGINT> NOT NULL,
+    ask_px_e8        ARRAY<BIGINT> NOT NULL,
+    ask_qty_e8       ARRAY<BIGINT> NOT NULL,
+    seq              BIGINT  NOT NULL,
+    checksum_ok      BOOLEAN,
+    last_conn_msg_seq BIGINT NOT NULL,
+    last_recv_ts_ns  BIGINT  NOT NULL,
+    last_second      TIMESTAMP NOT NULL COMMENT 'The last 1 Hz bucket emitted for this connection',
+    last_src_partition INT   NOT NULL,
+    last_src_offset  BIGINT  NOT NULL,
+    last_src_index   INT     NOT NULL,
+    updated_at       TIMESTAMP NOT NULL
+)
+USING iceberg
+PARTITIONED BY (exchange)
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Replay carry-over per connection; overwritten each run.'
+);
+
+ALTER TABLE lake.gold.book_state SET IDENTIFIER FIELDS exchange, symbol, conn_id;
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- audit.checks — one row per check per maintenance run. Append-only history, so
