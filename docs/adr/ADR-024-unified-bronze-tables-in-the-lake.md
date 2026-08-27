@@ -1,6 +1,6 @@
 # ADR-024: Unified bronze tables in the lake, partitioned by exchange
 
-**Status:** Proposed
+**Status:** Superseded by [ADR-026](ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)
 **Date:** 2026-08-26
 **Author:** Rob Scott
 **Category:** Data model
