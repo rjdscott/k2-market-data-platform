@@ -105,6 +105,8 @@ restart, measured, not failover.
 
 ## Lake ingest — Spark under Prefect
 
+Deep dive: [components/lake-ingest.md](components/lake-ingest.md).
+
 **Built.** [`docker/lake/`](../../docker/lake/README.md): `ingest.py` runs the stages, one module per
 layer (`bronze.py`, `silver.py`, `gold.py`, `books.py`), `maintenance.py` compacts and audits,
 `rebuild.py` recomputes any layer from its parent. Prefect deployments `lake-ingest-5min`
