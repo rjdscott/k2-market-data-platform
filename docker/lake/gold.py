@@ -245,14 +245,26 @@ def stage_bars(spark, minutes: DataFrame, run_ts: datetime) -> int:
     """
     src = _current(spark, TRADES)
     minutes.select("exchange", "canonical_symbol", F.to_date("minute").alias("day")).distinct().createOrReplaceTempView("__days")
+    days = spark.table("__days").count()
+    if days == 0:
+        # A batch that carried no trades touches no day. Returning here rather
+        # than appending an empty DataFrame keeps the table's snapshot history a
+        # log of recomputes; an empty append is a commit that says nothing.
+        print(f"stage 2d: no touched days, {BARS} unchanged")
+        return 0
     fresh = _bars(spark, "__days", src, run_ts).cache()
     n = fresh.count()
+    # TWO commits, and Iceberg gives no transaction across them: a crash between
+    # the DELETE and the append leaves those symbol-days with no bars at all.
+    # Nothing detects that on its own — the nightly audits cover trades, silver,
+    # books and the candles (maintenance.py), and none of them counts bars. It
+    # heals when a later trade touches the same day, or on demand with
+    # `make lake-rebuild LAYER=bars`.
     spark.sql(
         f"DELETE FROM {BARS} WHERE (exchange, canonical_symbol, day) IN (SELECT exchange, canonical_symbol, day FROM __days)"
     )
     fresh.writeTo(BARS).option(f"snapshot-property.{O.JOB}", O.JOB_DECODE).append()
     fresh.unpersist()
-    days = spark.table("__days").count()
     print(f"stage 2d: {n} bars over {days} symbol-days recomputed -> {BARS} (gold.trades snapshot {src})")
     return n
 

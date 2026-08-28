@@ -27,7 +27,7 @@ Research reads go through the read-only `quant` user: `--user quant --password "
 | Served trades | `gold.trades` (`ReplacingMergeTree`, read with `FINAL`) | `exchange_ts` | `exchange`, `symbol`, `canonical_symbol`, `trade_id`, `price_e8`/`qty_e8` (Int64 at 1e-8) with `price`/`qty` Decimal aliases, `side`, `recv_ts_ns`, `seq`, `conn_id`, `conn_msg_seq`, `src_topic`/`src_partition`/`src_offset` |
 | Served book | `gold.book_top20` (`ReplacingMergeTree`, read with `FINAL`) | `second` (`snapshot_ts`) | `exchange`, `canonical_symbol`, `depth`, `seq`, `checksum_ok`, `bid_px`/`bid_qty`/`ask_px`/`ask_qty` (Array(Int64), best first) |
 | Rejects | `gold.feed_errors` | `seen_at` | `topic`, `partition`, `offset`, `error`, `raw` |
-| Candles, from the lake | `gold.ohlcv_{1m,5m,1h,1d}` | `window_start` | `exchange`, `canonical_symbol`, `open`/`high`/`low`/`close` (aliases over `*_e8`), `volume`, `quote_volume`, `trade_count`, `open_time`, `close_time`, `src_snapshot_id` |
+| Candles, from the lake | `gold.ohlcv_{1m,5m,1h,1d}` | `window_start` | `exchange`, `canonical_symbol`, `open`/`high`/`low`/`close` (aliases over `*_e8`), `volume`, `quote_volume`, `trade_count`, `open_time`, `close_time`, `src_snapshot_id`, `computed_at` |
 | BBO, from the lake | `gold.bbo_1s` | `second` | `exchange`, `canonical_symbol`, `bid`/`ask` (aliases), `mid`, `spread_bps`, `imbalance`, `microprice` |
 | Views, on read | `gold.ohlcv_live(bucket = <seconds>)`, `gold.bbo_live` | `window_start` / `second` | same columns as the tables above, computed over `gold.trades FINAL` / `gold.book_top20 FINAL` |
 | Lake archive | `lake.raw.messages` | `kafka_ts` | `topic`, `partition`, `offset`, `ingest_ts`, `key`, `schema_id`, `payload`, `headers` |

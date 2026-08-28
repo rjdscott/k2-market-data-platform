@@ -127,6 +127,18 @@ def diff(name_a: str, a: dict, name_b: str, b: dict, limit: int = 5) -> int:
     return len(bad)
 
 
+def not_empty(**sides) -> int:
+    """0 when every side has rows; 1 with a message when one is empty.
+
+    An empty side compares equal to another empty side, so without this a run
+    against the wrong day or a stale snapshot id prints PASS and proves nothing.
+    """
+    empty = [name for name, rows in sides.items() if not rows]
+    if empty:
+        print(f"PARITY: FAIL - nothing to compare, {' and '.join(empty)} returned 0 rows (wrong --day, or a snapshot id from another table?)")
+    return 1 if empty else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--day", required=True, help="UTC day, YYYY-MM-DD")
@@ -140,14 +152,21 @@ def main() -> int:
     c = duck(os.environ["MINIO_ROOT_USER"], os.environ["MINIO_ROOT_PASSWORD"])
     b = normalise(lake_candles(c, args.day, args.ohlcv_snapshot))
     cc = normalise(silver_candles(c, args.day, silver_snaps))
+    if not_empty(**{"lake.gold.ohlcv_1m": b, "duckdb-over-silver": cc}):
+        return 1
     bad = diff("lake.gold.ohlcv_1m", b, "duckdb-over-silver", cc)
     if not args.skip_clickhouse:
         a = normalise(clickhouse_candles(args.day, os.environ["CLICKHOUSE_PASSWORD"]))
+        if not_empty(**{"clickhouse.ohlcv_live": a}):
+            return 1
         bad += diff("clickhouse.ohlcv_live", a, "lake.gold.ohlcv_1m", b)
     if bad == 0 and args.write_pin:
-        Path("tests/parity/pinned.json").write_text(
-            json.dumps({"day": args.day, "ohlcv_1m_snapshot": args.ohlcv_snapshot, "silver_snapshots": silver_snaps}, indent=2) + "\n"
-        )
+        # Read-modify-write: scripts/parity_bars.py keeps its ids in the `bars`
+        # block of the same file, and a plain overwrite here deleted them.
+        pin = Path("tests/parity/pinned.json")
+        doc = json.loads(pin.read_text()) if pin.exists() else {}
+        doc.update({"day": args.day, "ohlcv_1m_snapshot": args.ohlcv_snapshot, "silver_snapshots": silver_snaps})
+        pin.write_text(json.dumps(doc, indent=2) + "\n")
     print("PARITY: " + ("PASS" if bad == 0 else "FAIL"))
     return 0 if bad == 0 else 1
 

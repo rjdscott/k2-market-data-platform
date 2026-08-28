@@ -143,6 +143,14 @@ def main() -> int:
     ref, n_trades = reference_bars(c, args.day, args.trades_snapshot, symbols)
     b_subset = {k: v for k, v in b.items() if k[1] in symbols}
 
+    # An empty side compares equal to another empty side: without this, a run
+    # against the wrong day or a snapshot id from another table prints "ok".
+    sides = (("lake.gold.bars", a), ("DuckDB window SQL", b), ("Python reference", ref), ("DuckDB, reference symbols only", b_subset))
+    empty = [name for name, rows in sides if not rows]
+    if empty:
+        print(f"parity: FAIL - nothing to compare, {' and '.join(empty)} returned 0 rows (wrong --day, wrong --reference-symbols, or a snapshot id from another table?)")
+        return 1
+
     bad = compare("A lake.gold.bars vs B DuckDB window SQL", a, b)
     bad += compare(f"B DuckDB vs C Python reference ({', '.join(symbols)}, {n_trades:,} trades)", b_subset, ref)
     if bad:

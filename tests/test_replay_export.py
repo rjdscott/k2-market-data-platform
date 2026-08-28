@@ -56,3 +56,17 @@ def test_until_trims_the_tail_only():
 @pytest.mark.parametrize("payload", [b"", b"\x00\x00\x01", b"\x01" + b"x" * 10])
 def test_unframed_rows_are_skipped_not_fatal(payload):
     assert rx.frames([(1, payload)], "A") == []
+
+
+def test_a_gap_in_conn_msg_seq_is_fatal():
+    # The scan window missed frame 3: a replay of 1, 2, 4 would fold deltas
+    # into a book that never saw one of them and look perfectly normal.
+    rows = [framed("A", i, i * 100, b"{}") for i in (1, 2, 4)]
+    with pytest.raises(SystemExit, match="not 1..n unbroken"):
+        rx.frames(rows, "A")
+
+
+def test_a_duplicated_conn_msg_seq_is_fatal():
+    rows = [framed("A", i, i * 100, b"{}") for i in (1, 2, 2, 3)]
+    with pytest.raises(SystemExit, match="4 frames"):
+        rx.frames(rows, "A")

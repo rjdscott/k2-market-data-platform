@@ -39,6 +39,14 @@ def load(path: Path = BARS_PATH, canonical_symbols: set | None = None) -> list:
     With `canonical_symbols` given (the registry's), a symbol without a
     threshold is an error, not an absent bar: the point of the table is that
     every instrument has exactly one canonical value.
+
+    A threshold must also be EXACT in the fixed point the bucket arithmetic
+    uses: a whole number of trades for `tick`, a whole number of 1e-8 units for
+    `volume` and `dollar`. 0.29 is not (0.29 x 1e8 is 28999999.999999996 in
+    binary floating point) and would have Spark's CAST truncate to 28999999
+    while DuckDB's rounds to 29000000 — two engines, two bar boundaries, and a
+    parity run that fails on real data long after the config changed. 0.5 is
+    fine: 0.5e8 is exact.
     """
     doc = yaml.safe_load(path.read_text())
     if doc.get("version") != 1:
@@ -47,8 +55,14 @@ def load(path: Path = BARS_PATH, canonical_symbols: set | None = None) -> list:
     for symbol, per_kind in doc["thresholds"].items():
         for kind in KINDS:
             t = per_kind.get(kind)
-            if not isinstance(t, (int, float)) or t <= 0:
+            if not isinstance(t, (int, float)) or isinstance(t, bool) or t <= 0:
                 raise ValueError(f"{path}: {symbol} {kind} threshold must be a positive number, got {t!r}")
+            units = float(t) if kind == "tick" else float(t) * SCALE
+            if not units.is_integer():
+                raise ValueError(
+                    f"{path}: {symbol} {kind} threshold {t!r} is not exact: "
+                    + ("tick thresholds must be whole trades" if kind == "tick" else f"{t!r} x 1e8 is {units!r}, not a whole number of 1e-8 units")
+                )
             rows.append((symbol, kind, float(t)))
     if canonical_symbols is not None:
         missing = sorted(canonical_symbols - set(doc["thresholds"]))
@@ -105,7 +119,7 @@ def bars_sql(trades: str, thresholds: str, dialect: str) -> str:
                  CASE th.bar_kind
                    WHEN 'tick'   THEN {d["intdiv"]("n_before", "CAST(th.threshold AS BIGINT)")}
                    WHEN 'volume' THEN {d["intdiv"]("vol_before", f"CAST(th.threshold * {SCALE} AS BIGINT)")}
-                   WHEN 'dollar' THEN {d["intdiv"]("usd_before", f"CAST(th.threshold AS {wide}) * CAST({SCALE} AS {wide}) * CAST({SCALE} AS {wide})")}
+                   WHEN 'dollar' THEN {d["intdiv"]("usd_before", f"CAST(CAST(th.threshold * {SCALE} AS BIGINT) AS {wide}) * CAST({SCALE} AS {wide})")}
                  END AS bar_seq
           FROM c JOIN {thresholds} th ON th.canonical_symbol = c.canonical_symbol
         )

@@ -38,11 +38,12 @@ ch -q "EXISTS gold.bbo_live" | grep -q '^1$' || { echo "FAIL: gold DDL did not a
 ch -q "INSERT INTO gold.trades FORMAT JSONEachRow" < tests/clickhouse/trades_block1.jsonl
 ch -q "INSERT INTO gold.trades FORMAT JSONEachRow" < tests/clickhouse/trades_block2.jsonl
 ch -q "INSERT INTO gold.book_top20 FORMAT JSONEachRow" < tests/clickhouse/book.jsonl
+ch -q "INSERT INTO gold.bars FORMAT JSONEachRow" < tests/clickhouse/bars.jsonl
 
 out=$(ch --multiquery < tests/clickhouse/assertions.sql)
 echo "$out"
 n=$(echo "$out" | grep -c .)
-[ "$n" -eq 9 ] || { echo "FAIL: expected 9 assertion lines, got $n"; exit 1; }
+[ "$n" -eq 10 ] || { echo "FAIL: expected 10 assertion lines, got $n"; exit 1; }
 echo "$out" | grep -v '^ok$' && { echo "FAIL: assertion(s) above"; exit 1; }
 
 # quant: password from the environment, read-only, gold only.

@@ -109,3 +109,55 @@ fn depth_and_interval_reach_the_snapshots() {
         product.len()
     );
 }
+
+/// The sampler stays on the grid `first_frame + n * interval`, as
+/// `tokio::time::interval` does from connect, rather than re-basing on whatever
+/// frame happened to fire the tick.
+///
+/// Ten real Kraken frames (the book snapshot lands on the sixth) re-stamped so
+/// they arrive at t = 0 (the first six), 0.9, 1.95, 2.5 and 3.9 s. Grid lines
+/// at 1, 2, 3, 4 s; the frames that first cross them are 1.95 (line 1), 2.5
+/// (line 2) and 3.9 (line 3), so three sampler passes and three snapshots, each
+/// stamped with the crossing frame's clock. Re-basing on the triggering frame
+/// would put the next due time at 2.95 and skip the 2.5 frame entirely: two.
+#[test]
+fn the_sampler_stays_on_the_grid() {
+    let arrivals: [i64; 10] = [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        900_000_000,
+        1_950_000_000,
+        2_500_000_000,
+        3_900_000_000,
+    ];
+    let input: Vec<u8> = BufReader::new(std::fs::File::open(fixture("kraken-20s.jsonl")).unwrap())
+        .lines()
+        .take(arrivals.len())
+        .zip(arrivals)
+        .map(|(line, recv_ts_ns)| {
+            let mut frame: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+            frame["recv_ts_ns"] = recv_ts_ns.into();
+            frame.to_string() + "\n"
+        })
+        .collect::<String>()
+        .into_bytes();
+
+    let mut adapter = Adapter::Kraken(KrakenAdapter::new(
+        Instruments::load(&registry(), Exchange::Kraken).unwrap(),
+    ));
+    let (bytes, _) = run(&mut adapter, &input, &Options::default());
+    let sampled: Vec<i64> = bytes
+        .split(|&b| b == b'\n')
+        .filter(|l| !l.is_empty())
+        .map(|l| serde_json::from_slice::<OutRecord>(l).unwrap())
+        .filter_map(|r| match r {
+            OutRecord::Book(b) => Some(b.snapshot_ts_ns),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sampled, vec![1_950_000_000, 2_500_000_000, 3_900_000_000]);
+}

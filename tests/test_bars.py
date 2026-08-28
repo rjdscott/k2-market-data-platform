@@ -33,6 +33,25 @@ def test_repo_bars_yaml_covers_every_registry_symbol():
     assert len(rows) == len(canon) * len(bars.KINDS)
 
 
+def test_a_threshold_that_is_not_exact_in_1e_8_units_is_an_error(tmp_path):
+    # 0.29 x 1e8 is 28999999.999999996: Spark's CAST truncates it, DuckDB's
+    # rounds it, and the two engines then disagree on every bar boundary.
+    p = tmp_path / "bars.yaml"
+    p.write_text("version: 1\nthresholds:\n  BTC/USD: {dollar: 1, volume: 0.29, tick: 1}\n")
+    with pytest.raises(ValueError, match="BTC/USD volume threshold 0.29 is not exact"):
+        bars.load(p)
+
+
+def test_a_fractional_but_exact_threshold_is_fine(tmp_path):
+    # 0.5e8 is exact; a tick threshold has to be whole trades.
+    p = tmp_path / "bars.yaml"
+    p.write_text("version: 1\nthresholds:\n  BTC/USD: {dollar: 1, volume: 0.5, tick: 1}\n")
+    assert ("BTC/USD", "volume", 0.5) in bars.load(p)
+    p.write_text("version: 1\nthresholds:\n  BTC/USD: {dollar: 1, volume: 0.5, tick: 100.5}\n")
+    with pytest.raises(ValueError, match="BTC/USD tick threshold 100.5 is not exact"):
+        bars.load(p)
+
+
 def test_missing_symbol_is_an_error(tmp_path):
     p = tmp_path / "bars.yaml"
     p.write_text("version: 1\nthresholds:\n  BTC/USD: {dollar: 1, volume: 1, tick: 1}\n")
