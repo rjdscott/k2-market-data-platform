@@ -34,8 +34,8 @@ The forces are the ones every other v3 ADR names: one host, 16 CPU / 40 GB
 open internet, measured venue-to-receive **42.2 ms p50 / 206.8 ms p99** on Binance and
 higher on the other two
 ([2026-08-27](../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-receive)); one
-maintainer; and an archive growing at **≈ 9.8 GB/day** on disk with **≈ 60 days** of runway
-([2026-08-27](../benchmarks/2026-08-27.md#lake), § Disk).
+maintainer; and an archive growing at **≈ 9.8 GB/day** on disk, with **≈ 60 days** of runway
+at the capacity model's 10.4 GB/day ([2026-08-27](../benchmarks/2026-08-27.md#lake), § Disk).
 
 ---
 
@@ -243,8 +243,9 @@ gold in ClickHouse likewise has no TTL
 considered and rejected: it bounds the disk problem and unbounds a worse one, because the replay
 window becomes the TTL and the archive stops being the system of record for anything older.
 There is no tiering either — no Glacier, no cold storage class — because there is one disk. So
-the policy is arithmetic and an alert: **≈ 9.8 GB/day** measured, **≈ 630 GB** reusable,
-**≈ 60 days** ([2026-08-27](../benchmarks/2026-08-27.md#lake), § Disk).
+the policy is arithmetic and an alert: **≈ 9.8 GB/day** measured over 14.9 h of archive,
+**≈ 630 GB** reusable, **≈ 60 days** at the capacity model's 10.4 GB/day
+([2026-08-27](../benchmarks/2026-08-27.md#lake), § Disk).
 
 - **Nearest thing K2 offers:** an 80 % disk alert with an operator escape hatch — expand the
   disk, or decide — and per-table storage measured rather than assumed.
