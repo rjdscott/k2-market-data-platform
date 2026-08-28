@@ -1,14 +1,14 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
-    <img alt="K2 Market Data Platform — Rust capture, Redpanda, Iceberg lake, ClickHouse hot tier" src="docs/assets/banner-light.svg" width="100%">
+    <img alt="K2 Market Data Platform — Rust capture, Redpanda, Iceberg lakehouse, ClickHouse hot tier" src="docs/assets/banner-light.svg" width="100%">
   </picture>
 </p>
 
 # K2 Market Data Platform
 
 A market data platform for quantitative research. Three crypto exchanges are captured
-verbatim over public WebSocket feeds, archived to an Iceberg lake that is the system of
+verbatim over public WebSocket feeds, archived to an Iceberg lakehouse that is the system of
 record, and served from ClickHouse as a derived tier. One host, 16 CPU / 40 GB. Not a
 trading path.
 
@@ -35,7 +35,7 @@ flowchart TB
   R[("Redpanda 25.3 · Avro + schema registry<br/>raw · trades · book per venue")]:::rp
   C["ClickHouse 24.3 · gold<br/>ReplacingMergeTree · no TTL<br/>ohlcv_live · bbo_live on read"]:::ch
   S["Prefect 3 → Spark 3.5 · every 5 min<br/>offset range · offsets in the snapshot"]:::sp
-  subgraph L["Iceberg lake · Lakekeeper + MinIO · system of record"]
+  subgraph L["Iceberg lakehouse · Lakekeeper + MinIO · system of record"]
     direction TB
     RAW[("raw.messages · verbatim · forever")]:::lk
     BR[("bronze.&lt;venue&gt;_&lt;msg&gt; · vendor schema")]:::lk

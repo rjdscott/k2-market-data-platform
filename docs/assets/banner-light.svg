@@ -5,5 +5,5 @@
   <line x1="496" y1="92" x2="496" y2="164" stroke="#111827" stroke-opacity="0.28" stroke-width="2"/>
   <text x="340" y="160" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="112" font-weight="700" letter-spacing="-5" fill="#111827">K2</text>
   <text x="522" y="160" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="42" font-weight="500" letter-spacing="-0.3" fill="#111827">Market Data Platform</text>
-  <text x="342" y="212" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" letter-spacing="0.4" fill="#111827" fill-opacity="0.60">Rust capture · Redpanda · Iceberg lake · ClickHouse hot tier</text>
+  <text x="342" y="212" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" letter-spacing="0.4" fill="#111827" fill-opacity="0.60">Rust capture · Redpanda · Iceberg lakehouse · ClickHouse hot tier</text>
 </svg>
