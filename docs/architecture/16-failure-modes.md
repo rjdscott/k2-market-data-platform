@@ -172,6 +172,17 @@ why both rows below lose nothing.
 
 ---
 
+## Research surface
+
+Same columns. Neither row loses market data; both lose the *guarantee* that a research
+number is what the pipeline would have produced, which is the failure
+[ADR-029](../adr/ADR-029-research-production-parity-contract.md) exists to make loud.
+
+| component | failure | detection signal (metric/alert name + PromQL) | blast radius (lost vs delayed vs unaffected, name the data) | recovery (step + runbook link) | proof (chaos script or test path) |
+|---|---|---|---|---|---|
+| replay / parser | **Parser drift**, a change to an adapter, the book state machine, decimal conversion or the record shape changes what a recorded frame produces | **CI, not Prometheus:** `cargo test` replays the three fixtures in `services/capture-rust/tests/fixtures/` through `replay::run` and compares the JSONL bytes to the committed `.sha256`; a mismatch fails the `rust` job with the first differing digest. Live, a re-run of `scripts/replay-lake.sh` at the same snapshot id and conn_id prints a different sha256 from the `audit.checks` row that recorded the last one | **Nothing lost, nothing delayed:** the archive is untouched. What is lost is silent agreement: every notebook and parity result computed by the old parser is now a different function of the same bytes. **Unaffected:** capture, lake, ClickHouse | Intended change: land it with a new hash and a PR line saying what moved. Unintended: the diff of the first differing record is in the test output; fix the code, not the hash. No runbook, the test is the runbook | `services/capture-rust/tests/replay*.rs` (`replay_is_deterministic` ×3, `tests/replay_cli.rs`), run in CI on every PR; `scripts/replay-lake.sh` re-run 2026-08-28 twice at one id, same digest `1e5262c2…` |
+| parity gate | **Parity not run**, or skipped, before a tag: `make parity-ohlcv` / `make parity-bars` need the live stack and cannot run in GitHub's CI, so the guard is a human step | None automatic, deliberately stated: `tests/parity/pinned.json` carries the day and ids of the last passing run, and a tag whose date is later than every pinned day is a tag the gate did not cover. `/release-check` lists both targets | **Lost:** the guarantee that ClickHouse, the lake and DuckDB agree on the tagged numbers. **Unaffected:** the data itself; a disagreement found later is found, not fixed, by running the gate | Run both targets; on failure the scripts print the first differing rows and the reference is the arbiter. Re-pin with `--pin-current` only on a green run | Last runs: `scripts/parity-ohlcv.sh` 2026-08-27 (`pinned.json` top-level); `scripts/parity-bars.sh --pin-current 2026-08-26` on 2026-08-28, 4,463 = 4,463 rows, 388 = 388 vs reference, 0 differ |
+
 ## What this page does not cover
 
 - **The served tier's internal failures** (a merge that never completes, a disk-full

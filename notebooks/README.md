@@ -18,7 +18,13 @@ make notebooks-run        # execute all five headless (nbconvert), the runnable 
 | `04_completeness_audit.ipynb` | what the archive is missing and why: trade-id holes, venue replays, checksum failures by hour, offset gaps | `silver.trades_*`, `silver.book_kraken`, `audit.checks` |
 
 `k2lake.py` is the one connection; read its docstring for the two things that bite
-(host endpoints, `SET TimeZone = 'UTC'`). Credentials come from `../.env`.
+(host endpoints, `SET TimeZone = 'UTC'`). Credentials come from `../.env`. Every notebook's
+first cell calls `pin(con)`: one `pinned.<ns>_<table>` view per gold, silver and audit table
+at its current snapshot id, printed with the commit, and nothing below reads `lake.*`
+directly (`tests/test_notebooks_pinned.py` fails CI if one does). A number a notebook
+prints therefore names the snapshot it came from ([ADR-029](../docs/adr/ADR-029-research-production-parity-contract.md)).
+What this data can and cannot honestly support is written down before any of it is
+quoted: [replay-fidelity-limits](../docs/research/2026-08-28-replay-fidelity-limits.md).
 
 Numbers printed by these notebooks are not published anywhere else; the published ones are
 in `docs/benchmarks/`. A notebook cell is a query, not a claim.

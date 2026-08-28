@@ -164,3 +164,10 @@ which this plan had scheduled for G. What remains, and what changed:
 - **ADR-027 moved to Accepted** with an Outcome noting the deltas are queryable in
   bronze since Phase E, which this plan's "deltas only in `raw.messages`" wording
   predates.
+
+**Phase G landed 2026-08-28** (PRs #112–#115): `k2-capture replay` with `--depth` /
+`--interval-ms` / `--speed`, lake export + `audit.checks` ledger, `gold.bars` with
+three-way parity, notebooks on pinned views, ADR-029 Accepted, fidelity limits in
+`docs/research/2026-08-28-replay-fidelity-limits.md`. Deviations from this plan: no
+Kafka sink (double-archive), no Parquet reader in Rust (Python export), live parity is
+a `make` target under `/release-check` rather than a CI job (no stack in CI).
