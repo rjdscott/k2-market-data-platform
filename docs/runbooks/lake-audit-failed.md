@@ -41,6 +41,7 @@ the tier being down ([lake-recovery.md](./lake-recovery.md)).
 | 11 | `gold_parity`, gold rows per venue ≠ silver first deliveries | < 60 min (rebuild gold) | not yet verified, Phase E |
 | 12 | `ohlcv_parity`, a stored 1m candle ≠ recomputed from gold.trades | < 60 min (rebuild gold) | not yet verified, Phase E |
 | 13 | `kraken_checksum`, a replayed Kraken book failed the venue's CRC32 | **investigation**, a missed or misapplied frame | **failed as designed** 2026-08-27: 386,962 of 40.2 M frames, all inside the 2026-08-26 chaos window; every other hour zero. See `docker/lake/README.md` § Books |
+| 14 | `bars_parity`, a stored bar ≠ recomputed from gold.trades | < 60 min (rebuild bars) | not yet verified |
 
 ---
 
@@ -599,6 +600,30 @@ INSERT INTO lake.audit.checks VALUES (
 ```
 
 Filed 2026-08-27 for exactly that window, after the first books rebuild.
+
+## 14. `bars_parity`: a stored bar disagrees with the trades
+
+**Symptom**, `check_name = 'bars_parity'`, `scope = lake.gold.bars`, `observed` = the
+number of yesterday's `(exchange, canonical_symbol, bar_kind, bar_seq)` bars whose stored
+open/high/low/close/volume/quote_volume/trade_count differ from a fresh recompute over
+`gold.trades` (`bars.bars_sql`, the same SQL `gold.stage_bars` runs), or exist on one side
+only.
+
+**What it means**, same failure shape as `ohlcv_parity` (§12), one bucket lower: a late
+trade landed and `gold.stage_bars`'s delete-then-append for its `(exchange, symbol, day)`
+did not run, or ran over a stale `gold.trades` snapshot. Because every later `bar_seq` in a
+touched day shifts with it, a missed trade tends to show up as a run of mismatched
+`bar_seq` values for that day rather than one bar.
+
+```bash
+make lake-rebuild LAYER=bars          # drops and recreates gold.bars from gold.trades
+```
+
+If it recurs after a rebuild, the bucket arithmetic in `bars.bars_sql` and the audit's own
+recompute have drifted apart — a code bug, not a data one, since both call the same
+function.
+
+**Measured**, not yet verified.
 
 ## After any failure: do not silence the audit
 
