@@ -129,12 +129,12 @@ across every place the contract lives, use `/schema-change`, not this checklist.
 in one file)
 
 - [ ] Copy `capture-coinbase`, change the name, `hostname`, `container_name` and
-      `K2_EXCHANGE`. It reuses the shared `x-capture-build` anchor, so there is no second
-      image to build:
+      `K2_EXCHANGE`. It reuses the `k2-capture:v3` image that only `capture-binance`
+      builds — do not add a `build:` block; a second one races the export on a
+      fresh clone:
 
 ```yaml
 capture-{exchange}:
-  build: *capture-build
   image: k2-capture:v3
   container_name: k2-capture-{exchange}
   hostname: capture-{exchange}
@@ -247,7 +247,7 @@ on their own.
 
 ```bash
 make test-rust                                        # the replay test first
-docker compose up -d --build capture-{exchange}
+docker compose up -d --build capture-binance capture-{exchange}   # binance owns the build
 ```
 
 ### 2. Verify capture

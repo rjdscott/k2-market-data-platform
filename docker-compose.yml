@@ -43,7 +43,10 @@ volumes:
 # Context is the REPOSITORY ROOT, not the crate: src/record.rs compiles the wire
 # contract in with `include_str!("../../../schemas/avro/trade.avsc")`, and
 # services/capture-rust/Dockerfile.dockerignore is what keeps the context small.
-# All three services build the same image; an anchor keeps them from drifting.
+# One image for all three capture services. Only capture-binance carries a
+# `build:`; kraken and coinbase reuse the tag. Three `build:` blocks for one tag
+# race on export in a fresh clone (`image "k2-capture:v3": already exists`) and
+# abort `docker compose up` before any container starts.
 x-capture-build: &capture-build
   context: .
   dockerfile: services/capture-rust/Dockerfile
@@ -885,7 +888,6 @@ services:
   # Kraken Capture - Rust k2-capture (trades + L2 book, one connection)
   # ───────────────────────────────────────────────────────────────────────
   capture-kraken:
-    build: *capture-build
     image: k2-capture:v3
     container_name: k2-capture-kraken
     hostname: capture-kraken
@@ -933,7 +935,6 @@ services:
   # 512M not 256M: Coinbase's full-depth BTreeMap<i64,i64> book (vs. Binance's
   # top-20 no-state and Kraken's depth=25) is the larger resident structure.
   capture-coinbase:
-    build: *capture-build
     image: k2-capture:v3
     container_name: k2-capture-coinbase
     hostname: capture-coinbase

@@ -116,9 +116,14 @@ git clone https://github.com/rjdscott/k2-market-data-platform.git && cd k2-marke
 cp .env.example .env            # set every change-me value; LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 set -a && . ./.env && set +a
 docker compose up -d            # first run builds the capture, prefect and spark images
-docker compose ps               # all 15 healthy within about 3 minutes
+docker compose ps               # 15 long-running containers up within about 3 minutes:
+                                # 12 healthy, 3 without a healthcheck, plus 4 one-shots at Exited (0)
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
 ```
+
+Step by step, with the measured timeline: [fresh install](./docs/runbooks/fresh-install.md).
+Hosts with fewer than 15 cores must set `K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` in `.env`
+(see `.env.example`) or the capture and heavy containers fail at start with `invalid argument`.
 
 Every lake layer is populated within five minutes of a fresh clone (release check, 2026-08-27).
 
