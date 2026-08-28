@@ -240,8 +240,21 @@ where "intact" is unknowable.
   by construction). Per venue, incrementally by silver snapshot; the position of each
   venue is a separate `k2.src-snapshot-id.<venue>` property carried forward on every
   commit.
-- **`gold.dim_instrument`, `gold.dim_venue`**, `config/instruments.yaml`, overwritten
-  each run: a dimension is a statement about now, the file is its history.
+- **`gold.dim_instrument`, `gold.dim_venue`** — the security master, **SCD2** since
+  2026-08-29 ([ADR-030](../../docs/adr/ADR-030-scd2-security-master.md)). One row per
+  validity interval, keyed by a deterministic `sha256` surrogate over `(exchange,
+  canonical_symbol)`, with the native `symbol` as a *tracked attribute* so a venue rename
+  (Kraken `XBT/USD` → `BTC/USD`) opens a version instead of inventing a second instrument.
+  Kraken's published `tick_size` / `qty_increment` / precisions / `status` come from
+  `bronze.kraken_instrument`; the same columns are NULL for Binance and Coinbase, whose
+  REST endpoints K2 does not capture, and `source` says which. Open rows carry
+  `valid_to = 9999-12-31 23:59:59` and `is_current = true` — never NULL, because
+  `ts < NULL` is not `TRUE` and would drop the current row from every range join. The diff
+  is `scd2.py`, pure and unit-tested; `load_dims()` closes the changed versions with a
+  copy-on-write `MERGE` and then appends the new ones, in that order, because an
+  interrupted close-then-insert leaves a visible gap while the reverse leaves two open
+  rows. A run with nothing changed writes no rows. These are the only gold tables
+  `rebuild.py --layer gold` does not drop: their history has no upstream source.
 - **`gold.ohlcv_{1m,5m,1h,1d}`**, every bucket a batch of trades touches is
   recomputed over **all** of `gold.trades` for that bucket and `MERGE`d in, so a late
   trade replaces its candle rather than adding a second partial row, v2's

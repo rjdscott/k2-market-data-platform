@@ -631,18 +631,53 @@ ALTER TABLE lake.gold.trades
     WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, exchange_ts;
 
 -- ───────────────────────────────────────────────────────────────────────────
--- gold.dim_instrument / gold.dim_venue — config/instruments.yaml as tables,
--- rewritten from the file on every gold run (overwrite, not append: a
--- dimension is a statement about now, and the file is its history).
+-- gold.dim_instrument / gold.dim_venue — the security master, Kimball type-2
+-- (ADR-030). One row per validity interval, not a snapshot: a research result
+-- computed from an instrument attribute is only reproducible if the attribute
+-- can be read as it stood at the trade timestamp, and the SCD1 shape these
+-- tables had until 2026-08-29 made reading the wrong one undetectable.
+--
+--   natural key    (exchange, canonical_symbol) — the half of the identity a
+--                  venue rename does not touch. The native `symbol` is a
+--                  TRACKED ATTRIBUTE, so Kraken XBT/USD -> BTC/USD closes one
+--                  version and opens the next under the same instrument_id.
+--   surrogate      first 32 hex of sha256(exchange | 0x1F | canonical_symbol).
+--                  Deterministic, not a sequence: rebuild.py --layer gold
+--                  drops and recreates gold, and a sequence would renumber
+--                  every id every time.
+--   open row       valid_to = 9999-12-31 23:59:59, NEVER NULL. `ts < NULL` is
+--                  not TRUE, so a NULL upper bound silently drops the current
+--                  row from every hand-written range join while DuckDB ASOF
+--                  JOIN survives it — two spellings, two row counts.
+--   change         attr_hash, sha256 over the canonically serialised tracked
+--                  attributes. One comparison however wide the row gets.
+--
+-- CREATE IF NOT EXISTS, deliberately, though the shape changed: the lake-ddl
+-- one-shot runs on every `docker compose up`, and a DROP here would delete the
+-- accumulated history on every restart. These are the only gold tables that
+-- are not rebuildable from silver — nothing is a source for lost dimension
+-- history — so rebuild.py leaves them alone.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS lake.gold.dim_instrument (
-    exchange         STRING  NOT NULL,
-    symbol           STRING  NOT NULL COMMENT 'native, byte for byte as the venue spells it',
-    canonical_symbol STRING  NOT NULL,
+    instrument_id    STRING  NOT NULL COMMENT 'Deterministic surrogate: first 32 hex of sha256(exchange | 0x1F | canonical_symbol). Stable across a rebuild and across a native-symbol rename',
+    exchange         STRING  NOT NULL COMMENT 'With canonical_symbol, the natural key',
+    canonical_symbol STRING  NOT NULL COMMENT 'BASE/QUOTE. Unique per exchange — tests/test_contracts.py asserts it, which is what makes this a key',
+    symbol           STRING  NOT NULL COMMENT 'native, byte for byte as the venue spells it. Tracked: a rename opens a new version, not a new instrument',
     base             STRING  NOT NULL,
     quote            STRING  NOT NULL,
     book_depth       INT     NOT NULL COMMENT 'The L2 subscription depth in force: the per-instrument override or the venue default',
-    loaded_at        TIMESTAMP NOT NULL
+    subscribed       BOOLEAN NOT NULL COMMENT 'Present in config/instruments.yaml as of this version. An instrument that leaves the registry gets a subscribed = false version, never a delete: deleting would make historical facts unjoinable',
+    tick_size        DECIMAL(28,10)   COMMENT 'Venue-published. Kraken only, from bronze.kraken_instrument data.pairs[]. NULL on Binance and Coinbase, which publish it over REST that K2 does not capture — `source` disambiguates',
+    qty_increment    DECIMAL(28,10)   COMMENT 'Venue-published, Kraken only',
+    price_precision  INT              COMMENT 'Venue-published, Kraken only. The precision silver.book_kraken verifies checksums at',
+    qty_precision    INT              COMMENT 'Venue-published, Kraken only',
+    venue_status     STRING           COMMENT 'Venue-published trading status (Kraken: online, cancel_only, post_only, limit_only, reduce_only). NULL where not captured',
+    source           STRING  NOT NULL COMMENT 'Which authority supplied the venue attributes on this version: registry (they are NULL) or venue:kraken',
+    attr_hash        STRING  NOT NULL COMMENT 'sha256 over the tracked attributes, canonically serialised: fixed field order, 0x1F separator, NULL as 0x00. Adding a tracked attribute rewrites every hash and opens a version for every instrument, once',
+    valid_from       TIMESTAMP NOT NULL COMMENT 'Effective from, inclusive',
+    valid_to         TIMESTAMP NOT NULL COMMENT 'Effective to, exclusive. Open rows carry the sentinel 9999-12-31 23:59:59, never NULL',
+    is_current       BOOLEAN NOT NULL COMMENT 'valid_to = the sentinel. Derivable, kept because it is the predicate every consumer writes and it pushes down',
+    recorded_at      TIMESTAMP NOT NULL COMMENT 'When K2 learned it. Equal to valid_from for a registry change; valid_from < recorded_at is a backfill, and is the only as-known-at axis this table has'
 )
 USING iceberg
 PARTITIONED BY (exchange)
@@ -657,15 +692,30 @@ TBLPROPERTIES (
     'write.merge.mode'                              = 'copy-on-write',
     'write.metadata.metrics.default'                = 'none',
     'write.metadata.compression-codec'              = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.valid_from'          = 'full',
+    'write.metadata.metrics.column.is_current'          = 'full',
     'commit.retry.num-retries'                      = '10',
-    'comment'                                       = 'config/instruments.yaml, as of the last gold run.'
+    'comment'                                       = 'Security master, SCD2. One row per validity interval per instrument; as-of join on (exchange, canonical_symbol) at valid_from.'
 );
 
+ALTER TABLE lake.gold.dim_instrument SET IDENTIFIER FIELDS instrument_id, valid_from;
+
+ALTER TABLE lake.gold.dim_instrument
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, valid_from;
+
 CREATE TABLE IF NOT EXISTS lake.gold.dim_venue (
-    exchange         STRING  NOT NULL,
+    venue_id         STRING  NOT NULL COMMENT 'Deterministic surrogate: first 32 hex of sha256(exchange)',
+    exchange         STRING  NOT NULL COMMENT 'The natural key',
     book_depth       INT     NOT NULL COMMENT 'Default L2 depth. 0 = the venue sends the whole book (Coinbase)',
-    instruments      INT     NOT NULL COMMENT 'How many instruments are subscribed',
-    loaded_at        TIMESTAMP NOT NULL
+    instruments      INT     NOT NULL COMMENT 'How many instruments are subscribed. Tracked, so adding an instrument opens a venue version too',
+    subscribed       BOOLEAN NOT NULL COMMENT 'Present in config/instruments.yaml as of this version. A venue that leaves gets a subscribed = false version, never a delete',
+    source           STRING  NOT NULL COMMENT 'registry. No venue publishes its own row',
+    attr_hash        STRING  NOT NULL COMMENT 'sha256 over the tracked attributes, as dim_instrument',
+    valid_from       TIMESTAMP NOT NULL COMMENT 'Effective from, inclusive',
+    valid_to         TIMESTAMP NOT NULL COMMENT 'Effective to, exclusive. Open rows carry the sentinel 9999-12-31 23:59:59, never NULL',
+    is_current       BOOLEAN NOT NULL,
+    recorded_at      TIMESTAMP NOT NULL COMMENT 'When K2 learned it'
 )
 USING iceberg
 PARTITIONED BY (exchange)
@@ -680,9 +730,13 @@ TBLPROPERTIES (
     'write.merge.mode'                              = 'copy-on-write',
     'write.metadata.metrics.default'                = 'none',
     'write.metadata.compression-codec'              = 'none',
+    'write.metadata.metrics.column.valid_from'          = 'full',
+    'write.metadata.metrics.column.is_current'          = 'full',
     'commit.retry.num-retries'                      = '10',
-    'comment'                                       = 'One row per venue, from config/instruments.yaml.'
+    'comment'                                       = 'Venue dimension, SCD2. One row per validity interval per venue.'
 );
+
+ALTER TABLE lake.gold.dim_venue SET IDENTIFIER FIELDS venue_id, valid_from;
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- gold.ohlcv_{1m,5m,1h,1d} — candles materialised from gold.trades, one table

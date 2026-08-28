@@ -126,7 +126,9 @@ Applied by `docker/lake/apply_ddl.py` from
 | `gold.bars` | `exchange, months(open_time)` | none | 128 MB | `canonical_symbol`, `open_time` |
 | `gold.book_top20` | `exchange, days(second)` | `canonical_symbol, second` | 128 MB | `canonical_symbol`, `second` |
 | `gold.bbo_1s` | `exchange, days(second)` | none | 128 MB | `canonical_symbol`, `second` |
-| `gold.dim_instrument`, `gold.dim_venue`, `gold.book_state` | `exchange` | none | 128 MB | none |
+| `gold.dim_instrument` | `exchange` | `canonical_symbol, valid_from` | 128 MB | `canonical_symbol`, `valid_from`, `is_current` |
+| `gold.dim_venue` | `exchange` | none | 128 MB | `valid_from`, `is_current` |
+| `gold.book_state` | `exchange` | none | 128 MB | none |
 | `audit.checks` | `days(run_ts)` | none | 128 MB | default |
 
 `gold.bars` partitions on `months(open_time)` rather than on its `day` column because
@@ -150,6 +152,25 @@ is no `payload`-shaped column to make the default expensive. Every `gold` table 
 `write.metadata.compression-codec = none`, because ClickHouse 24.3's `iceberg()` cannot
 read the gzip-compressed `metadata.json` Lakekeeper writes by default, and `gold` is the
 layer ClickHouse pulls.
+
+### The dimensions: partitioned by venue, sorted by validity
+
+`gold.dim_instrument` and `gold.dim_venue` are SCD2 as of
+[ADR-030](../adr/ADR-030-scd2-security-master.md) — one row per validity interval rather
+than one row per instrument — and they keep the `exchange` partitioning they had as
+snapshots. Nothing else was worth doing: 34 instruments over any plausible number of
+attribute changes is a single small file per venue, so a time transform on `valid_from`
+would produce one file per month holding a handful of rows, which is the small-file
+problem the maintenance job exists to remove.
+
+What did change is the sort order and the metrics. `dim_instrument` is locally ordered by
+`(canonical_symbol, valid_from)`, which is the as-of join's key order, and metrics are on
+for `canonical_symbol`, `valid_from` and `is_current`. `is_current` earns its place because
+the overwhelmingly common query is the current slice — "what do we trade now" — and a
+boolean with metrics on prunes to the file holding the open versions. Partitioning on it
+instead would be worse: the value flips on every version close, so an `exchange`-plus-
+`is_current` partition would rewrite two partitions per change on a table that fits in one
+file.
 
 ### `raw.messages`: time first, topic second
 

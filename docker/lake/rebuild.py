@@ -125,7 +125,12 @@ def main() -> int:
     elif args.layer == "bars":
         tables = [gold.BARS]
     else:
-        tables = list(gold.TABLES)
+        # The dimensions are the one part of gold that is NOT rebuildable from
+        # silver: their history is the record of what the registry said over
+        # time, and nothing upstream is a source for it (ADR-030). Dropping them
+        # here would delete it. gold.rebuild() still calls load_dims(), which
+        # merges the current registry into whatever history is already there.
+        tables = [t for t in gold.TABLES if t not in (gold.DIM_INSTRUMENT, gold.DIM_VENUE)]
 
     print(f"waiting for {LOCK_PATH}", flush=True)
     lock = acquire_lock(LOCK_PATH, blocking=True)  # noqa: F841 - held until exit
