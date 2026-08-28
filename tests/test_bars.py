@@ -80,3 +80,43 @@ def test_sql_is_generated_for_both_dialects():
     assert " DIV " in spark and "struct(" in spark and "DECIMAL(38,0)" in spark
     assert " // " in duck and "arg_min(" in duck and "HUGEINT" in duck
     assert "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" in spark
+
+
+def bar(exchange="kraken", symbol="BTC/USD", kind="tick", seq=0, **overrides):
+    row = {
+        "exchange": exchange, "canonical_symbol": symbol, "bar_kind": kind, "bar_seq": seq,
+        "open_e8": 1, "high_e8": 2, "low_e8": 1, "close_e8": 2, "volume_e8": 3,
+        "quote_volume_e8": 4, "trade_count": 5,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_bars_mismatches_is_clean_on_identical_rows():
+    fresh = [bar(seq=0), bar(seq=1)]
+    stored = [bar(seq=0), bar(seq=1)]
+    assert bars.bars_mismatches(fresh, stored) == (0, [])
+
+
+def test_bars_mismatches_flags_a_differing_column():
+    fresh = [bar(seq=0, close_e8=2), bar(seq=1)]
+    stored = [bar(seq=0, close_e8=99), bar(seq=1)]
+    count, first = bars.bars_mismatches(fresh, stored)
+    assert count == 1
+    assert first == [("kraken", "BTC/USD", "tick", 0)]
+
+
+def test_bars_mismatches_flags_rows_present_on_only_one_side():
+    fresh = [bar(seq=0), bar(seq=1)]
+    stored = [bar(seq=0)]
+    count, first = bars.bars_mismatches(fresh, stored)
+    assert count == 1
+    assert first == [("kraken", "BTC/USD", "tick", 1)]
+
+
+def test_bars_mismatches_caps_first_keys_at_five():
+    fresh = [bar(seq=i) for i in range(7)]
+    stored = [bar(seq=i, trade_count=999) for i in range(7)]
+    count, first = bars.bars_mismatches(fresh, stored)
+    assert count == 7
+    assert len(first) == 5

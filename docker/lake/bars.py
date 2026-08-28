@@ -122,6 +122,39 @@ def bars_sql(trades: str, thresholds: str, dialect: str) -> str:
     """
 
 
+# The columns compared at tolerance zero by `maintenance.audit_bars_parity`.
+# Not threshold/open_time/close_time: threshold is config, not a derived fact,
+# and the times are redundant with bar_seq once the other columns agree.
+COMPARE_COLUMNS = (
+    "open_e8", "high_e8", "low_e8", "close_e8", "volume_e8", "quote_volume_e8", "trade_count",
+)
+KEY_COLUMNS = ("exchange", "canonical_symbol", "bar_kind", "bar_seq")
+
+
+def bars_mismatches(fresh_rows: list, stored_rows: list) -> tuple:
+    """`(mismatch_count, first_keys)` comparing recomputed bars to the stored ones.
+
+    Pure — no pyspark — so the nightly `bars_parity` audit's comparison logic is
+    testable without a Spark session; `maintenance.audit_bars_parity` does the
+    recompute and hands both row sets here. Rows are dicts (or anything
+    subscriptable by column name, e.g. a collected `pyspark.sql.Row`) keyed by
+    `KEY_COLUMNS`; a key on only one side, or a difference on any of
+    `COMPARE_COLUMNS`, is a mismatch. Tolerance zero — every compared column is
+    an integer. `first_keys` is the first 5 mismatched keys, sorted, for the
+    audit detail line.
+    """
+    fresh = {tuple(r[c] for c in KEY_COLUMNS): r for r in fresh_rows}
+    stored = {tuple(r[c] for c in KEY_COLUMNS): r for r in stored_rows}
+    bad = sorted(
+        key
+        for key in fresh.keys() | stored.keys()
+        if key not in fresh
+        or key not in stored
+        or any(fresh[key][c] != stored[key][c] for c in COMPARE_COLUMNS)
+    )
+    return len(bad), bad[:5]
+
+
 def reference(trades: list, kind: str, threshold) -> list:
     """The arbiter: the same bars from a sorted Python list, integers only.
 

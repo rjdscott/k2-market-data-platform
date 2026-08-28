@@ -263,7 +263,10 @@ where "intact" is unknowable.
 
 Nightly: `duplicate_identifiers` on the logical key, `gold_parity` (gold rows per
 venue == silver first deliveries at the snapshot gold read), `ohlcv_parity` (yesterday's
-stored 1m candles == candles recomputed from `gold.trades`, tolerance zero).
+stored 1m candles == candles recomputed from `gold.trades`, tolerance zero), `bars_parity`
+(yesterday's stored `gold.bars` rows == bars recomputed from `gold.trades` via the same
+`bars.bars_sql` the nightly compute uses, tolerance zero on every `*_e8` column, `trade_count`
+and row presence both ways).
 
 ClickHouse's `gold` database is loaded from these tables by pull
 (`docs/runbooks/clickhouse-rebuild-from-lake.md`) and fed live from the topics for the

@@ -30,6 +30,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
+import bars
 import books
 import bronze
 import gold
@@ -563,6 +564,32 @@ def audit_ohlcv(spark) -> list:
                     else f"{bad} candle(s) differ between stored and recomputed for yesterday ({row['n_stored']} stored, {row['n_fresh']} fresh)")]
 
 
+def audit_bars_parity(spark) -> list:
+    """The stored gold.bars rows equal bars recomputed from gold.trades, for the last full day.
+
+    Reuses `bars.bars_sql` and `gold._thresholds_view` — the same SQL the nightly
+    compute path runs (`gold._bars`) — so the audit asserts the stored table
+    against the one definition of a bar rather than a second copy of it.
+    Tolerance zero, on every integer column plus row presence both ways, exactly
+    like `audit_ohlcv` above.
+    """
+    th = gold._thresholds_view(spark)
+    trades = f"(SELECT * FROM {gold.TRADES} WHERE CAST(exchange_ts AS DATE) = date_sub(current_date(), 1))"
+    fresh = [r.asDict() for r in spark.sql(bars.bars_sql(trades, th, "spark")).collect()]
+    stored = [
+        r.asDict()
+        for r in spark.sql(f"SELECT * FROM {gold.BARS} WHERE day = date_sub(current_date(), 1)").collect()
+    ]
+    bad, first = bars.bars_mismatches(fresh, stored)
+    detail = (
+        f"{len(stored)} stored bars == {len(fresh)} recomputed for yesterday"
+        if bad == 0
+        else f"{bad} bar(s) differ between stored and recomputed for yesterday "
+        f"({len(stored)} stored, {len(fresh)} fresh); first keys (exchange, canonical_symbol, bar_kind, bar_seq): {first}"
+    )
+    return [_result("bars_parity", gold.BARS, bad == 0, bad, detail)]
+
+
 def audit_book_parity(spark, spec: books.BookSpec) -> list:
     """silver.book_<venue> rows == the frames/events of the bronze snapshot it last read."""
     previous = O.latest_summary(snapshot_history(spark, spec.table), O.JOB_DECODE)
@@ -650,6 +677,7 @@ AUDITS = (
     ("duplicate_identifiers", gold.TRADES, lambda s: audit_duplicates(s, gold.TRADES, list(gold.IDENTIFIER_FIELDS))),
     ("gold_parity", gold.TRADES, audit_gold_trades),
     ("ohlcv_parity", gold.OHLCV["1m"][0], audit_ohlcv),
+    ("bars_parity", gold.BARS, audit_bars_parity),
 ) + tuple(
     row
     for t in books.BOOKS
