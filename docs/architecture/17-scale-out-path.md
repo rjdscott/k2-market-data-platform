@@ -52,7 +52,7 @@ is why chapter 16 remains the authority on anything with a stopwatch attached.
 | F4 | **Catalog database** | Lakekeeper's PostgreSQL down means no commits. The ingest writes its data files, fails to commit, and is a no-op with orphans — [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)'s own table covers it | RDS PostgreSQL Multi-AZ: synchronous replication, failover in ~1–2 min | Lakekeeper must reconnect rather than wedge. **Unverified** — no failover has been exercised anywhere |
 | F5 | **Ingest job dies mid-commit** | **already safe, and for an exact reason** — §1.1 | unchanged. Exactly-once is a property of the Iceberg commit, so it does not care what launched the job | **the `flock` does not survive the move.** §1.2. This is the sharpest finding on this page |
 | F6 | **ClickHouse node** | the hot tier is gone; nothing is lost. [ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md) makes it derived, rebuildable and originating nothing | `ReplicatedMergeTree` × 2+ replicas with a 3-node Keeper ensemble, or ClickHouse Cloud | the RTO is the **rebuild duration**, which is a function of lake size and is unmeasured at 200×. §3's hot-tier row argues that number should be measured before any replica is bought |
-| F7 | **Prefect** | no ingest is dispatched; the lake stalls and `LakeIngestFailed` fires. Nothing is lost while Redpanda's 48 h retention holds | Prefect Cloud, or server + worker on ECS across AZs with RDS Multi-AZ | `concurrency_limit=1` becomes the **only** mutual exclusion once the `flock` is gone (F5), so a control-plane bug becomes a correctness bug |
+| F7 | **Prefect** | no ingest is dispatched; the lake stalls and `LakeIngestFailed` fires. Nothing is lost only while the bus still holds the unread records — and the binding limit is **512 MiB per partition, not 48 h**: measured 2026-08-26, that cap bound at **7.01 h** on `raw.kraken` partition 0, because keyed partitioning concentrates the busiest symbol, and 1,168,954 records were evicted unread (`docker/redpanda/init.sh`) | Prefect Cloud, or server + worker on ECS across AZs with RDS Multi-AZ | `concurrency_limit=1` becomes the **only** mutual exclusion once the `flock` is gone (F5), so a control-plane bug becomes a correctness bug |
 | F8 | **S3 regional event** | not representable — MinIO is one container on one disk | nothing single-region can mitigate it. This row is why §7 exists | — |
 | F9 | **Region** | not representable | §7: S3 CRR, a catalog in the second region, re-placed capture. **Not** a warm standby — a cold rebuild with a stated RTO | Iceberg's absolute paths make this a *catalog and metadata* problem before it is a storage problem (§7.1) |
 
@@ -89,7 +89,7 @@ no way to detect which you got.
 
 ### 1.2 …and the one thing about it that does not survive the move
 
-`docker/lake/lock.py` is thirty lines of stdlib: an exclusive `fcntl.flock` on
+`docker/lake/lock.py` is 31 lines of stdlib: an exclusive `fcntl.flock` on
 `/tmp/k2-lake-ingest.lock`, taken non-blocking by `ingest.py` (exit 2 if held) and
 blocking by `maintenance.py` (held for its whole run). On one host with one Spark
 container it is exact — two writers are unrepresentable.
@@ -226,7 +226,7 @@ not a gap in this page.**
 | `K2_LAKE_WAREHOUSE` | `k2` | the warehouse registered in that catalog | which warehouse's storage profile is used |
 | `K2_LAKE_CATALOG` | `lake` | unchanged | the Spark catalog name; also `spark.sql.defaultCatalog` |
 | `K2_S3_ENDPOINT` | `http://minio:9000` | unset, or a VPC endpoint | which object store `S3FileIO` talks to |
-| `K2_S3_REGION` | `local-01` | `eu-west-2` | S3 request signing region, required even for MinIO (spike S9) |
+| `K2_S3_REGION` | `local-01` | `eu-west-2` | the S3 signing region. Lakekeeper requires it in the `s3-compat` warehouse body even for MinIO (spike S9) |
 | `K2_S3_PATH_STYLE` | `true` | `false` | path-style (MinIO) vs virtual-hosted (S3) addressing |
 | `K2_BROKERS` | `redpanda:9092` | MSK bootstrap brokers | where capture produces and Spark reads |
 | `K2_SCHEMA_REGISTRY_URL` | `http://redpanda:8081` | the managed registry | where schema ids resolve |
@@ -311,7 +311,8 @@ than re-guess.
 
 **Assumption A2, the shape of that 200×.** It comes from breadth, not from a busier
 BTC: roughly **20 venues × ~500 instruments ≈ 10,000 instruments**, against today's
-3 venues × 34. Those instruments are tail instruments, so 10,000 of them carry 200× the
+34 instruments across 3 venues (`config/instruments.yaml`: 12 Binance, 11 Kraken,
+11 Coinbase). Those instruments are tail instruments, so 10,000 of them carry 200× the
 bytes rather than 294×. That matters because it changes what scales: partition counts and
 topic counts scale with venues and symbols; per-connection CPU does not.
 
@@ -645,4 +646,4 @@ decision.
 - [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md), the catalog choice, and why §3 keeps it over Glue
 - [ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md), why the hot tier's HA is a measurement away from being unnecessary
 - [`docker/lake/spark_conf.py`](../../docker/lake/spark_conf.py), the env-driven configuration §3.1 describes
-- [`docker/lake/lock.py`](../../docker/lake/lock.py), the thirty lines §1.2 is about
+- [`docker/lake/lock.py`](../../docker/lake/lock.py), the 31 lines §1.2 is about
