@@ -92,7 +92,7 @@ a fixture is the same conversation the live path has.
 | Venue | Continuity signal | On failure | Counters |
 |-------|-------------------|------------|----------|
 | Binance | `lastUpdateId` strictly increasing per symbol on `@depth20@100ms` | drop that book; `Action::Resubscribe` with **no frames**, the next in-order partial frame is a complete top-20 | `gaps_total`, `resyncs_total` |
-| Kraken | CRC32 checksum on every `book` frame (no sequence numbers) | emit one last snapshot marked `checksum_ok=false`, **then** drop that book; unsubscribe + subscribe that symbol with `snapshot: true` | `checksum_failures_total{symbol}`, `resyncs_total` |
+| Kraken | CRC32 checksum on every `book` frame (no sequence numbers) | emit one last snapshot marked `checksum_ok=false`, **then** drop that book; unsubscribe + subscribe that symbol with `snapshot: true`. Every `update` arriving before the venue's fresh `snapshot` is ignored: an empty book has nothing to fold a delta into, and folding them anyway turned one mismatch into one resubscribe per update frame (ADR-027 Outcome, 2026-08-28) | `checksum_failures_total{symbol}`, `book_updates_ignored_total{symbol}`, `resyncs_total` |
 | Coinbase | `sequence_num`, connection-wide across every channel | drop **every** book; `Action::Reconnect`, `main.rs` closes the socket and takes the backoff path | `gaps_total`, `resyncs_total`, `reconnects_total{reason="involuntary"}` |
 
 Coinbase reconnects rather than resubscribes because a gap cannot be attributed
@@ -225,9 +225,10 @@ contract needs an ADR. Seeded: `messages_total` and `bytes_total` and
 `precision_loss_total` per reason, `reconnects_total` per reason, `gaps_total`,
 `resyncs_total`. `k2_capture_last_message_ts_seconds` is seeded at process start
 for every continuous stream, so a subscription the venue silently rejects goes
-stale rather than never existing. `checksum_failures_total` is seeded **only for
-Kraken**, Binance and Coinbase publish no checksum, and 23 permanently-zero
-series implied a capability that does not exist.
+stale rather than never existing. `checksum_failures_total` and
+`book_updates_ignored_total` are seeded **only for Kraken**, Binance and Coinbase
+publish no checksum, and 23 permanently-zero series implied a capability that
+does not exist.
 
 **Produced is not delivered.** `k2_capture_records_produced_total` counts the
 local enqueue into librdkafka's queue and keeps climbing at full rate through a
