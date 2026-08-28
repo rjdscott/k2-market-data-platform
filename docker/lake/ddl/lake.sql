@@ -672,7 +672,7 @@ CREATE TABLE IF NOT EXISTS lake.gold.dim_instrument (
     price_precision  INT              COMMENT 'Venue-published, Kraken only. The precision silver.book_kraken verifies checksums at',
     qty_precision    INT              COMMENT 'Venue-published, Kraken only',
     venue_status     STRING           COMMENT 'Venue-published trading status (Kraken: online, cancel_only, post_only, limit_only, reduce_only). NULL where not captured',
-    source           STRING  NOT NULL COMMENT 'Which authority supplied this version''s venue attributes: registry (they are NULL) or venue:kraken',
+    source           STRING  NOT NULL COMMENT 'Which authority supplied the venue attributes on this version: registry (they are NULL) or venue:kraken',
     attr_hash        STRING  NOT NULL COMMENT 'sha256 over the tracked attributes, canonically serialised: fixed field order, 0x1F separator, NULL as 0x00. Adding a tracked attribute rewrites every hash and opens a version for every instrument, once',
     valid_from       TIMESTAMP NOT NULL COMMENT 'Effective from, inclusive',
     valid_to         TIMESTAMP NOT NULL COMMENT 'Effective to, exclusive. Open rows carry the sentinel 9999-12-31 23:59:59, never NULL',

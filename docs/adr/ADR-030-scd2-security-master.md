@@ -227,10 +227,87 @@ old-shape tables is an operator action, recorded in Verification below, not a li
 
 ## Verification
 
-Against the live stack on 2026-08-29 (`docker compose up -d`, one `lake-ingest` flow, then a
-second ingest by hand). Commands and full output in the PR body.
+Against the live stack, 2026-08-29 (`docker compose up -d`; container clock reads
+2026-08-28 UTC). The captures were running, so the ingest had a cold-start backlog to drain.
 
-<!-- filled in from the live run; see the verification commit -->
+**The one-time drop.** `lake-ddl` failed the first time with
+`IllegalArgumentException: Cannot add field valid_from as an identifier field: not found in
+current schema` — the old-shape tables had survived the 2026-08-28 wipe, so `CREATE TABLE IF
+NOT EXISTS` was a no-op and the `ALTER … SET IDENTIFIER FIELDS` had nothing to bind to. That
+is the failure this ADR predicted and it is why the drop is an operator action:
+
+```
+DROP TABLE lake.gold.dim_instrument PURGE     # then dim_venue, via rebuild.drop()
+docker start k2-lake-ddl   →  ✓ 67 statements applied to catalog `lake`   (exit 0)
+```
+
+**First load, and Kraken's attributes.** One `lake-ingest` flow, `Finished in state
+Completed()`:
+
+```
+stage 2d: dims: lake.gold.dim_instrument 0 closed / 34 new version(s),
+                lake.gold.dim_venue 0 closed / 3 new version(s); 1437 Kraken pairs published
+
+registry instruments = 34   dim_instrument is_current = 34   total rows = 34
+
+|exchange|canonical_symbol|symbol |subscribed|tick_size   |qty_increment|price_precision|venue_status|source      |valid_to           |
+|binance |BTC/USDT        |BTCUSDT|true      |NULL        |NULL         |NULL           |NULL        |registry    |9999-12-31 23:59:59|
+|coinbase|BTC/USD         |BTC-USD|true      |NULL        |NULL         |NULL           |NULL        |registry    |9999-12-31 23:59:59|
+|kraken  |BTC/USD         |BTC/USD|true      |0.1000000000|0.0000000100 |1              |online      |venue:kraken|9999-12-31 23:59:59|
+
+|source      |rows|with_tick|ids|
+|registry    |23  |0        |23 |
+|venue:kraken|11  |11       |11 |
+```
+
+11 Kraken instruments carry published attributes, 23 Binance and Coinbase rows carry NULL with
+`source = registry`, exactly as designed. 34 surrogates for 34 instruments.
+
+**A second run adds nothing.** `docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py`:
+
+```
+stage 2d: dims: lake.gold.dim_instrument 0 closed / 0 new version(s),
+                lake.gold.dim_venue 0 closed / 0 new version(s); 1437 Kraken pairs published
+
+|total_rows|current_rows|instruments|          lake.gold.dim_instrument.snapshots:
+|        34|          34|         34|          one append, added-records = 34
+```
+
+**The DDL one-shot stays idempotent and keeps the history.** `docker start k2-lake-ddl` again:
+`exit=0`, and `rows_after_ddl_rerun = 34, current_rows = 34`. This is why the DDL is `CREATE
+IF NOT EXISTS` and not `DROP` + `CREATE`: the one-shot runs on every `docker compose up`.
+
+**The change path, on Spark, against a throwaway namespace.** `config/instruments.yaml` was
+not touched (its file-level bind mount pins the inode). `apply_ddl`'s `--namespace-map`
+mechanism built `lake.scratch_dim.dim_instrument` from the same DDL and `gold._merge_dim` ran
+five cycles against it, then the table and namespace were dropped:
+
+```
+cycle 1 (first load)          closed/new = (0, 2)
+cycle 2 (nothing changed)     closed/new = (0, 0)
+cycle 3 (rename + tick_size)  closed/new = (1, 1)
+cycle 4 (ETH leaves registry) closed/new = (1, 1)
+cycle 5 (still absent)        closed/new = (0, 0)
+
+|canonical_symbol|symbol |subscribed|tick_size   |source      |valid_from         |valid_to           |is_current|id12        |
+|BTC/USD         |XBT/USD|true      |NULL        |registry    |2026-08-29 09:00:00|2026-08-29 11:00:00|false     |4419ceb35e8a|
+|BTC/USD         |BTC/USD|true      |0.1000000000|venue:kraken|2026-08-29 11:00:00|9999-12-31 23:59:59|true      |4419ceb35e8a|
+|ETH/USD         |ETH/USD|true      |NULL        |registry    |2026-08-29 09:00:00|2026-08-29 12:00:00|false     |b2e5f443989a|
+|ETH/USD         |ETH/USD|false     |NULL        |registry    |2026-08-29 12:00:00|9999-12-31 23:59:59|true      |b2e5f443989a|
+```
+
+The `XBT/USD` → `BTC/USD` rename kept `instrument_id` `4419ceb35e8a…` and opened a version;
+one version's `valid_to` is the next one's `valid_from` to the microsecond, so the intervals
+tile with no gap and no overlap; the delisted instrument got exactly one `subscribed = false`
+version and the run after it was silent.
+
+**Nothing else moved.** `bash scripts/lake-verify.sh` → `✓ lake-verify passed`, all thirteen
+checks `ok` over 25,952,166 raw rows: offsets present and gapless across 79 partitions, silver
+== bronze on all three venues for trades and books, gold == silver first deliveries, snapshot
+summary == `COUNT(*)`.
+
+`make test-python` 273 passed (255 before, +18 in `tests/test_lake_scd2.py`);
+`make lint` clean; `bash scripts/check-docs.sh` all eight gates PASS.
 
 ---
 
