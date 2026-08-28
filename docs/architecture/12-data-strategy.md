@@ -23,7 +23,7 @@ flowchart TB
   R["RAW · what arrived<br/>raw.messages, raw.pcap (designed, not built)"]
   B["BRONZE · vendor schema, columnar<br/>one table per venue × message"]
   S["SILVER · typed + annotated<br/>per venue, every delivery kept"]
-  G["GOLD · canonical, cross-venue<br/>trades, book_top20, dims, ohlcv, bbo"]
+  G["GOLD · canonical, cross-venue<br/>trades, book_top20, dims, ohlcv, bars, bbo"]
   CH["ClickHouse gold · indefinite<br/>backtesting + dashboards"]
   R --> B --> S --> G --> CH
 ```
@@ -33,7 +33,7 @@ flowchart TB
 | **Raw** | the frame as received: bytes verbatim, `recv_ts_ns`, `conn_id`/`conn_msg_seq`, Kafka lineage; `raw.pcap` beside it is designed, not built | Iceberg (`raw.*`) | forever | replay, regulatory "what did you receive", forensics |
 | **Bronze** | the venue's own schema, columnar: one table per venue × message type, field names and types as sent, no renaming | Iceberg (`bronze.*`) | forever | anyone who needs the venue's semantics untouched |
 | **Silver** | bronze, typed and annotated: fixed-point, UTC, canonical symbol *added* beside the native one, flags `checksum_ok` / `venue_replay` / `seq_gap` / `precision_loss`, lineage to the bronze row; every delivery kept | Iceberg (`silver.*`) | forever | investigations, per-venue research, gold's source |
-| **Gold** | canonical model: one schema, one row per logical trade, cross-venue in one query; reference dims; materialised products `ohlcv_{1m,5m,1h,1d}`, `bbo_1s` | Iceberg (`gold.*`) **and** ClickHouse (`gold.*`) | forever in both | backtesting, dashboards, notebooks |
+| **Gold** | canonical model: one schema, one row per logical trade, cross-venue in one query; reference dims; materialised products `ohlcv_{1m,5m,1h,1d}`, `bars` (tick/volume/dollar at one canonical threshold per symbol), `bbo_1s` | Iceberg (`gold.*`) **and** ClickHouse (`gold.*`) | forever in both | backtesting, dashboards, notebooks |
 
 Rules that keep it explainable:
 

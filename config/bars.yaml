@@ -1,0 +1,56 @@
+# config/bars.yaml — the canonical event-bar thresholds behind lake.gold.bars
+# (docker/lake/bars.py, ADR-029). One threshold per canonical symbol per bar
+# kind; every other threshold is a query (notebooks/k2lake.py `bars()`), never
+# a second table.
+#
+# Cumulative-bucket bars, not reset bars. A trade belongs to bar k of its UTC
+# day when k*T <= (cumulative total before it) < (k+1)*T, the total being
+# base quantity (volume), price x quantity in the quote currency (dollar) or
+# the trade count (tick). The boundary is a function of the day's trades
+# alone, so it is one window expression in Spark, DuckDB and a 20-line Python
+# reference and the three agree at tolerance zero. A reset-after-crossing bar
+# needs a running state no SQL engine expresses the same way twice. Bars
+# reset at the UTC day boundary so a day recomputes on its own.
+#
+# Sized 2026-08-28 from lake.gold.trades over 2026-08-26T13:00 → 2026-08-27T05:00
+# (16 h, scaled to 24 h) so the BUSIEST venue of each canonical symbol prints
+# ~100 bars/day, rounded to one significant figure. Per canonical symbol and
+# not per venue on purpose: a dollar bar is comparable across venues only if
+# a dollar is the same size on each. Thin venues therefore print fewer bars
+# (Kraken BTC/USD ~30/day against Coinbase's ~100); that is the instrument's
+# liquidity showing, not a knob to tune away. Query for the sizing:
+#   SELECT canonical_symbol, exchange, count(*)*1.5, sum(qty_e8/1e8)*1.5,
+#          sum((price_e8/1e8)*(qty_e8/1e8))*1.5 FROM lake.gold.trades
+#   WHERE exchange_ts >= '2026-08-26 13:00' AND exchange_ts < '2026-08-27 05:00' GROUP BY 1,2
+#
+#   dollar   quote-currency notional per bar (USD or USDT — the quote as the venue quotes it)
+#   volume   base units per bar
+#   tick     trades per bar
+#
+# A canonical symbol in config/instruments.yaml with no row here fails the gold
+# stage loudly (bars.load), the same rule as the instrument registry: no guessing.
+version: 1
+thresholds:
+  ADA/USD:   {dollar: 100000,   volume: 700000,  tick: 500}
+  ADA/USDT:  {dollar: 200000,   volume: 1000000, tick: 2000}
+  ATOM/USD:  {dollar: 10000,    volume: 10000,   tick: 100}
+  ATOM/USDT: {dollar: 20000,    volume: 10000,   tick: 200}
+  AVAX/USD:  {dollar: 30000,    volume: 4000,    tick: 200}
+  AVAX/USDT: {dollar: 100000,   volume: 20000,   tick: 1000}
+  BNB/USDT:  {dollar: 800000,   volume: 1000,    tick: 7000}
+  BTC/USD:   {dollar: 6000000,  volume: 80,      tick: 10000}
+  BTC/USDT:  {dollar: 10000000, volume: 100,     tick: 40000}
+  DOGE/USD:  {dollar: 100000,   volume: 2000000, tick: 400}
+  DOGE/USDT: {dollar: 500000,   volume: 6000000, tick: 7000}
+  DOT/USD:   {dollar: 50000,    volume: 60000,   tick: 400}
+  DOT/USDT:  {dollar: 60000,    volume: 70000,   tick: 400}
+  ETH/USD:   {dollar: 4000000,  volume: 1000,    tick: 4000}
+  ETH/USDT:  {dollar: 7000000,  volume: 3000,    tick: 30000}
+  LINK/USD:  {dollar: 100000,   volume: 10000,   tick: 400}
+  LINK/USDT: {dollar: 200000,   volume: 20000,   tick: 3000}
+  LTC/USD:   {dollar: 80000,    volume: 2000,    tick: 500}
+  LTC/USDT:  {dollar: 200000,   volume: 4000,    tick: 2000}
+  SOL/USD:   {dollar: 2000000,  volume: 20000,   tick: 2000}
+  SOL/USDT:  {dollar: 3000000,  volume: 30000,   tick: 20000}
+  XRP/USD:   {dollar: 2000000,  volume: 2000000, tick: 2000}
+  XRP/USDT:  {dollar: 2000000,  volume: 2000000, tick: 20000}

@@ -49,7 +49,7 @@ flowchart TB
   RAW[("raw.messages<br/>what arrived, byte for byte<br/>never expired")]
   BR[("bronze.&lt;venue&gt;_&lt;msgtype&gt; ×7<br/>what the venue said<br/>its own field names")]
   SV[("silver.trades_* · book_*<br/>what it means<br/>typed · UTC · flagged · every delivery")]
-  GD[("gold.trades · book_top20<br/>bbo_1s · ohlcv_* · dim_*<br/>one schema · one row per event")]
+  GD[("gold.trades · book_top20<br/>bbo_1s · ohlcv_* · bars · dim_*<br/>one schema · one row per event")]
   AU[("audit.checks<br/>what was proven, nightly")]
   RAW -->|"from_json per venue"| BR
   BR -->|"type · flag · canonical symbol"| SV
@@ -79,7 +79,8 @@ where "one logical trade" is *made* true, and the `duplicate_identifiers` audit 
 - **Partitions.** `raw` by `days(kafka_ts), topic`, time first so a replay lands in one
   partition; `bronze` and `silver.book_*` by `days(recv_ts)`, the one clock every frame carries;
   `silver.trades_*` by `days(exchange_ts)`; `gold.trades` by `exchange, days(exchange_ts)`;
-  `ohlcv_{1m,5m,1h}` by `exchange, months(window_start)` and `ohlcv_1d` by `exchange`;
+  `ohlcv_{1m,5m,1h}` by `exchange, months(window_start)`, `ohlcv_1d` by `exchange`, `bars` by
+  `exchange, months(open_time)`;
   `book_top20` and `bbo_1s` by `exchange, days(second)`
   ([pruning](03-data-engineering-concepts.md#partitioning-and-pruning)).
 - **Files.** `write.distribution-mode = hash`, targets 256 MB (raw) / 128 MB (derived),
@@ -109,7 +110,7 @@ where "one logical trade" is *made* true, and the `duplicate_identifiers` audit 
 | Schema per venue, drift detected | `bronze_schema_drift` audit fails on undeclared keys; `spark.sql.caseSensitive = true` |
 | Every delivery kept with a reason | silver flags computed against a 1-day lookback; `silver_flags` reported nightly |
 | Dedup once, proven | `duplicate_identifiers` audit on `gold.trades`: count == distinct `(exchange, canonical_symbol, trade_id)` |
-| Products carry provenance | `src_snapshot_id` on every `ohlcv_*` / `bbo_1s` row; parity pinned to a snapshot in `tests/parity/pinned.json` |
+| Products carry provenance | `src_snapshot_id` on every `ohlcv_*` / `bars` / `bbo_1s` row; parity pinned to a snapshot in `tests/parity/pinned.json` (candles and bars) |
 | DDL is the contract | [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) applied by the `lake-ddl` one-shot; `tests/test_lake_bronze.py` |
 | Add-nullable-only evolution | schema changes move Avro + lake DDL + ClickHouse DDL + projections together (`/schema-change`) |
 | Rebuild is a command, timed | `make lake-rebuild LAYER=…`; times in the benchmark |

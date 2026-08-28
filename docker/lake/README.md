@@ -28,9 +28,10 @@ compares them before the old path is deleted.
 | `instruments.py` | The registry (`config/instruments.yaml`) as silver needs it: native → canonical, failing loudly on an unknown symbol |
 | `book.py` | Pure: an L2 book replayed from frames, Kraken's CRC32 at the pair's precision, truncation to the subscription depth. Unit-tested against Kraken's published example |
 | `books.py` | Stage 2e: `silver.book_<venue>` typed (Kraken `checksum_ok` by replay) and, from the same replay, `gold.book_top20` per second and `gold.bbo_1s`; `gold.book_state` carries a connection's book between ticks |
-| `gold.py` | Stage 2d: `gold.trades` (one row per logical trade = silver's first deliveries), `gold.dim_*` from the registry, `gold.ohlcv_{1m,5m,1h,1d}` recomputed per touched bucket and MERGEd |
+| `gold.py` | Stage 2d: `gold.trades` (one row per logical trade = silver's first deliveries), `gold.dim_*` from the registry, `gold.ohlcv_{1m,5m,1h,1d}` recomputed per touched bucket and MERGEd, `gold.bars` recomputed per touched symbol-day |
+| `bars.py` | The event-bar definition (`bars_sql` for Spark and DuckDB, `reference` in pure Python) and the `config/bars.yaml` loader behind `gold.bars` |
 | `record_check.py` | One `audit.checks` row from the command line, `job='replay'`: what `scripts/replay-lake.sh` files after every replay (snapshot id, conn_id, crate sha, output sha256), so a research result is reproducible by re-running the same ids and comparing one digest |
-| `rebuild.py` | `make lake-rebuild LAYER=bronze|silver|gold`: drop, recreate and re-decode a layer from its parent, one day per venue at a time |
+| `rebuild.py` | `make lake-rebuild LAYER=bronze|silver|gold|books|bars`: drop, recreate and re-decode a layer from its parent, one day per venue at a time (`bars` rebuilds `gold.bars` alone, leaving the candles' snapshots pinned) |
 | `maintenance.py` | Nightly compaction, snapshot expiry, and the audits. Non-zero exit on a failure |
 | `metrics.py` | The `lake-metrics` exporter. Reads snapshot summaries over the catalog's REST API |
 | `flows/` | The two Prefect deployments: `lake-ingest-5min`, `lake-maintenance-daily` |
@@ -248,6 +249,17 @@ where "intact" is unknowable.
   `(exchange_ts, recv_ts_ns)`, the rule ClickHouse's `gold.ohlcv_live` applies, and
   each row carries the `gold.trades` snapshot it was computed from. Copy-on-write
   `MERGE`, so no delete files ever face DuckDB or `iceberg()`.
+- **`gold.bars`**, tick, volume and dollar bars at the one canonical threshold per
+  symbol in `config/bars.yaml` (`bars.py`). A cumulative bucket: trade → bar `k` of its
+  UTC day when `k·T ≤ (day's total before it) < (k+1)·T`, one window expression in
+  Spark, DuckDB and the Python reference, all three compared at tolerance zero by
+  `scripts/parity-bars.sh` (pinned in `tests/parity/pinned.json` under `bars`). Exact
+  integers throughout (`volume_e8`, `quote_volume_e8`): no decimal division, because
+  DuckDB turns one into a `DOUBLE` and lost a unit in the eighth place on the first run.
+  A touched `(exchange, symbol, day)` is deleted and re-appended, since a late trade
+  moves every later boundary in its day. **Measured 2026-08-28:** 5,796 bars over
+  10.4 M trades in 41 s (`make lake-rebuild LAYER=bars`); parity 4,463 = 4,463 rows for
+  2026-08-26, 0 differ, in 12 s.
 
 Nightly: `duplicate_identifiers` on the logical key, `gold_parity` (gold rows per
 venue == silver first deliveries at the snapshot gold read), `ohlcv_parity` (yesterday's

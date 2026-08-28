@@ -123,10 +123,16 @@ Applied by `docker/lake/apply_ddl.py` from
 | `gold.trades` | `exchange, days(exchange_ts)` | `canonical_symbol, exchange_ts` | 128 MB | `canonical_symbol`, `exchange_ts`, `trade_seq`, `src_offset` |
 | `gold.ohlcv_{1m,5m,1h}` | `exchange, months(window_start)` | none | 128 MB | `canonical_symbol`, `window_start` |
 | `gold.ohlcv_1d` | `exchange` | none | 128 MB | `canonical_symbol`, `window_start` |
+| `gold.bars` | `exchange, months(open_time)` | none | 128 MB | `canonical_symbol`, `open_time` |
 | `gold.book_top20` | `exchange, days(second)` | `canonical_symbol, second` | 128 MB | `canonical_symbol`, `second` |
 | `gold.bbo_1s` | `exchange, days(second)` | none | 128 MB | `canonical_symbol`, `second` |
 | `gold.dim_instrument`, `gold.dim_venue`, `gold.book_state` | `exchange` | none | 128 MB | none |
 | `audit.checks` | `days(run_ts)` | none | 128 MB | default |
+
+`gold.bars` partitions on `months(open_time)` rather than on its `day` column because
+DuckDB 1.4.4's Iceberg reader returned zero rows for any predicate on a `DATE` partition
+source (`day = DATE '2026-08-26'` → 0 of 4,463 on 2026-08-28) while the same predicate on a
+`TIMESTAMP` source prunes correctly; `day` stays a plain column and filters on it work.
 
 The seven bronze tables are `binance_trade`, `binance_depth20`, `kraken_trade`,
 `kraken_book`, `kraken_instrument`, `coinbase_market_trades`, `coinbase_level2`.
@@ -280,6 +286,7 @@ No table has a TTL.
 | `gold.trades` | `ReplacingMergeTree(first_seen)` | `toYYYYMM(exchange_ts)` | `(exchange, canonical_symbol, exchange_ts, trade_id)` | the logical trade is the key; a venue replay or a feed/reload overlap collapses under `FINAL` to the **earliest delivery** (`first_seen` = inverted receive time). Monthly partitions keep `FINAL` a per-partition merge (the `quant` profile sets `do_not_merge_across_partitions_select_final`) and keep part counts flat at ~10 M rows/day |
 | `gold.book_top20` | `ReplacingMergeTree(ver)` | `toYYYYMM(second)` | `(exchange, canonical_symbol, second)` | one row per venue-symbol-second; the later sample in a second wins, and a lake reload (state at the end of the second, `ver` = last nanosecond) out-ranks the feed's mid-second sample |
 | `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bbo_1s` | `ReplacingMergeTree(src_snapshot_id)` | `toYYYYMM(window_start)` / `toYYYYMM(second)` | `(exchange, canonical_symbol, window_start)` | loaded from the lake, never computed here; a reload carrying a newer lake snapshot for a bucket replaces the row |
+| `gold.bars` | `ReplacingMergeTree(src_snapshot_id)` | `toYYYYMM(day)` | `(exchange, canonical_symbol, bar_kind, day, bar_seq)` | loaded from the lake; a touched day arrives whole with a newer snapshot id and replaces its rows |
 | `gold.feed_errors` | `MergeTree` | | `(topic, partition, offset)` | every record AvroConfluent could not decode, with its bytes |
 
 **Why not partition by exchange, as the lake does.** ClickHouse's partition is a merge

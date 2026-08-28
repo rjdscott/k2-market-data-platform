@@ -730,6 +730,63 @@ TBLPROPERTIES (
 
 ALTER TABLE lake.gold.ohlcv_1m SET IDENTIFIER FIELDS exchange, canonical_symbol, window_start;
 
+-- ───────────────────────────────────────────────────────────────────────────
+-- gold.bars — event bars: tick, volume and dollar, at the one canonical
+-- threshold per symbol in config/bars.yaml (docker/lake/bars.py, ADR-029). A
+-- cumulative-bucket bar: trade -> bar k of its UTC day when
+-- k*T <= (day's total before it) < (k+1)*T in the same (exchange_ts, recv_ts_ns,
+-- trade_seq) order the candles use. Bars restart at the UTC day boundary. The
+-- touched (exchange, symbol, day) set is deleted and re-appended per run, never
+-- MERGEd: a late trade moves every later boundary in its day. Any other
+-- threshold is a query over gold.trades (notebooks/k2lake.py bars()), not a
+-- second table.
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS lake.gold.bars (
+    exchange         STRING  NOT NULL,
+    canonical_symbol STRING  NOT NULL,
+    bar_kind         STRING  NOT NULL COMMENT 'tick | volume | dollar',
+    threshold        DECIMAL(38,10) NOT NULL COMMENT 'The bucket size the bar was built at: trades, base units or quote-currency notional. Carried on the row so a bar is self-describing when the config moves',
+    day              DATE    NOT NULL COMMENT 'UTC day of every trade in the bar; bars never span a day',
+    bar_seq          INT     NOT NULL COMMENT 'Bucket index within (exchange, symbol, kind, day), from 0',
+    open_e8          BIGINT  NOT NULL COMMENT 'First trade by (exchange_ts, recv_ts_ns, trade_seq), fixed point 1e-8',
+    high_e8          BIGINT  NOT NULL,
+    low_e8           BIGINT  NOT NULL,
+    close_e8         BIGINT  NOT NULL COMMENT 'Last trade by the same order',
+    volume_e8        BIGINT  NOT NULL COMMENT 'Sum of qty, base currency, fixed point 1e-8, exact',
+    quote_volume_e8  BIGINT  NOT NULL COMMENT 'Sum of price x qty, quote currency, fixed point 1e-8: the exact 1e-16 sum floor-divided by 1e8, the one rounding in the table and an integer rule every engine spells the same way',
+    trade_count      BIGINT  NOT NULL,
+    open_time        TIMESTAMP NOT NULL COMMENT 'exchange_ts of the first trade',
+    close_time       TIMESTAMP NOT NULL COMMENT 'exchange_ts of the last trade; the last bar of a day is open-ended until the day is',
+    src_snapshot_id  BIGINT  NOT NULL COMMENT 'The gold.trades snapshot this day was computed from',
+    computed_at      TIMESTAMP NOT NULL
+)
+USING iceberg
+-- months(open_time), not months(day): DuckDB 1.4.4's Iceberg reader returned
+-- zero rows for any predicate on a DATE column that was a partition source
+-- (`day = DATE '2026-08-26'` -> 0 of 4,463; `CAST(day AS VARCHAR) = ...` -> 4,463,
+-- 2026-08-28), while the same predicate shapes on TIMESTAMP sources
+-- (ohlcv_1m.window_start) are right. Same rows either way; day stays a plain
+-- column and filters on it work.
+PARTITIONED BY (exchange, months(open_time))
+TBLPROPERTIES (
+    'format-version'                                = '2',
+    'write.format.default'                          = 'parquet',
+    'write.parquet.compression-codec'               = 'zstd',
+    'write.distribution-mode'                       = 'hash',
+    'write.target-file-size-bytes'                  = '134217728',
+    'write.delete.mode'                             = 'copy-on-write',
+    'write.update.mode'                             = 'copy-on-write',
+    'write.merge.mode'                              = 'copy-on-write',
+    'write.metadata.metrics.default'                = 'none',
+    'write.metadata.compression-codec'              = 'none',
+    'write.metadata.metrics.column.canonical_symbol'    = 'full',
+    'write.metadata.metrics.column.open_time'           = 'full',
+    'commit.retry.num-retries'                      = '10',
+    'comment'                                       = 'Event bars (tick/volume/dollar) from gold.trades at config/bars.yaml thresholds; one row per (exchange, symbol, kind, day, bar_seq); a touched day is replaced whole.'
+);
+
+ALTER TABLE lake.gold.bars SET IDENTIFIER FIELDS exchange, canonical_symbol, bar_kind, day, bar_seq;
+
 CREATE TABLE IF NOT EXISTS lake.gold.ohlcv_5m (
     exchange         STRING  NOT NULL,
     canonical_symbol STRING  NOT NULL,

@@ -6,6 +6,8 @@ Gold — the canonical cross-venue surface, derived from silver only (ADR-026).
     gold.dim_instrument  config/instruments.yaml, rewritten every run
     gold.dim_venue       one row per venue, from the same file
     gold.ohlcv_{1m,5m,1h,1d}   candles over gold.trades, recomputed per touched bucket and MERGEd
+    gold.bars            tick / volume / dollar bars over gold.trades at config/bars.yaml's
+                         thresholds, recomputed per touched (exchange, symbol, UTC day) — bars.py
 
 **One row per logical trade, and silver already decided which.** Silver keeps
 every delivery and flags the later ones `venue_replay`; the earliest delivery is
@@ -40,6 +42,7 @@ from __future__ import annotations
 from datetime import datetime
 from functools import reduce
 
+import bars
 import instruments
 import silver
 from catalog import added_records, snapshot_history
@@ -58,7 +61,8 @@ OHLCV = {
     "1h": (f"{CATALOG}.gold.ohlcv_1h", 3600),
     "1d": (f"{CATALOG}.gold.ohlcv_1d", 86400),
 }
-TABLES = (TRADES, DIM_INSTRUMENT, DIM_VENUE, *[t for t, _ in OHLCV.values()])
+BARS = f"{CATALOG}.gold.bars"
+TABLES = (TRADES, DIM_INSTRUMENT, DIM_VENUE, *[t for t, _ in OHLCV.values()], BARS)
 IDENTIFIER_FIELDS = ("exchange", "canonical_symbol", "trade_id")
 SCALE = 100_000_000  # 1e-8 fixed point, as the wire and ClickHouse gold
 
@@ -207,11 +211,67 @@ def stage_ohlcv(spark, minutes: DataFrame, run_ts: datetime) -> int:
     return total
 
 
+def _thresholds_view(spark) -> str:
+    """config/bars.yaml as a temp view, checked against the registry's canonical symbols."""
+    canon = {c for natives in instruments.load().values() for c in natives.values()}
+    rows = bars.load(canonical_symbols=canon)
+    spark.createDataFrame(rows, "canonical_symbol string, bar_kind string, threshold double").createOrReplaceTempView("__th")
+    return "__th"
+
+
+def _bars(spark, days_view: str | None, src_snapshot_id, run_ts: datetime) -> DataFrame:
+    """gold.bars rows for the (exchange, symbol, day) keys in `days_view`, or the whole of gold.trades when None."""
+    th = _thresholds_view(spark)
+    if days_view is None:
+        trades = TRADES
+    else:
+        trades = (
+            f"(SELECT g.* FROM {TRADES} g JOIN {days_view} k ON g.exchange = k.exchange "
+            f"AND g.canonical_symbol = k.canonical_symbol AND CAST(g.exchange_ts AS DATE) = k.day)"
+        )
+    computed = run_ts.strftime("%Y-%m-%d %H:%M:%S.%f")
+    return spark.sql(
+        f"SELECT b.*, CAST({src_snapshot_id} AS BIGINT) AS src_snapshot_id, TIMESTAMP '{computed}' AS computed_at "
+        f"FROM ({bars.bars_sql(trades, th, 'spark')}) b"
+    )
+
+
+def stage_bars(spark, minutes: DataFrame, run_ts: datetime) -> int:
+    """Recompute every (exchange, symbol, UTC day) the new trades touch: delete the day's bars, append the fresh ones.
+
+    Delete-then-append rather than MERGE: a late trade shifts every later bar
+    boundary in its day, so the row set for the day changes shape, and a
+    MERGE keyed on bar_seq would leave a stale tail behind.
+    """
+    src = _current(spark, TRADES)
+    minutes.select("exchange", "canonical_symbol", F.to_date("minute").alias("day")).distinct().createOrReplaceTempView("__days")
+    fresh = _bars(spark, "__days", src, run_ts).cache()
+    n = fresh.count()
+    spark.sql(
+        f"DELETE FROM {BARS} WHERE (exchange, canonical_symbol, day) IN (SELECT exchange, canonical_symbol, day FROM __days)"
+    )
+    fresh.writeTo(BARS).option(f"snapshot-property.{O.JOB}", O.JOB_DECODE).append()
+    fresh.unpersist()
+    days = spark.table("__days").count()
+    print(f"stage 2d: {n} bars over {days} symbol-days recomputed -> {BARS} (gold.trades snapshot {src})")
+    return n
+
+
 def stage(spark, run_ts: datetime) -> int:
     n, minutes = stage_trades(spark, run_ts)
     load_dims(spark, run_ts)
     if minutes is not None:
         stage_ohlcv(spark, minutes, run_ts)
+        stage_bars(spark, minutes, run_ts)
+    return n
+
+
+def rebuild_bars(spark, run_ts: datetime) -> int:
+    """Every bar over all of gold.trades, into a table the caller has just (re)created."""
+    src = _current(spark, TRADES)
+    _bars(spark, None, src, run_ts).writeTo(BARS).option(f"snapshot-property.{O.JOB}", O.JOB_DECODE).append()
+    n = added_records(spark, BARS)
+    print(f"rebuild: bars: {n} rows -> {BARS} (gold.trades snapshot {src})", flush=True)
     return n
 
 
@@ -235,4 +295,5 @@ def rebuild(spark, run_ts: datetime) -> dict:
         candles(spark, seconds, keys, src, run_ts).writeTo(table).option(f"snapshot-property.{O.JOB}", O.JOB_DECODE).append()
         totals[table] = added_records(spark, table)
         print(f"rebuild: {tf}: {totals[table]} candles in {(datetime.now() - started).total_seconds():.0f} s", flush=True)
+    totals[BARS] = rebuild_bars(spark, run_ts)
     return totals

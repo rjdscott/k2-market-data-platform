@@ -274,6 +274,42 @@ PARTITION BY toYYYYMM(window_start)
 ORDER BY (exchange, canonical_symbol, window_start);
 
 -- ───────────────────────────────────────────────────────────────────────────
+-- gold.bars — the lake's event bars (lake.gold.bars, docker/lake/bars.py):
+-- tick, volume and dollar at config/bars.yaml's one canonical threshold per
+-- symbol. Loaded by pull like the candles, never computed here; a reload with
+-- a newer lake snapshot for a day replaces that day's rows. `threshold` rides
+-- on every row so a bar is self-describing after the config moves.
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS gold.bars
+(
+    exchange         LowCardinality(String),
+    canonical_symbol LowCardinality(String),
+    bar_kind         LowCardinality(String),
+    threshold        Decimal(38, 10),
+    day              Date,
+    bar_seq          Int32,
+    open_e8          Int64,
+    high_e8          Int64,
+    low_e8           Int64,
+    close_e8         Int64,
+    open             Decimal(38, 10) ALIAS toDecimal128(open_e8,  10) / toDecimal128(100000000, 0),
+    high             Decimal(38, 10) ALIAS toDecimal128(high_e8,  10) / toDecimal128(100000000, 0),
+    low              Decimal(38, 10) ALIAS toDecimal128(low_e8,   10) / toDecimal128(100000000, 0),
+    close            Decimal(38, 10) ALIAS toDecimal128(close_e8, 10) / toDecimal128(100000000, 0),
+    volume_e8        Int64,
+    quote_volume_e8  Int64,
+    volume           Decimal(38, 10) ALIAS toDecimal128(volume_e8, 10) / toDecimal128(100000000, 0),
+    quote_volume     Decimal(38, 10) ALIAS toDecimal128(quote_volume_e8, 10) / toDecimal128(100000000, 0),
+    trade_count      UInt64,
+    open_time        DateTime64(6, 'UTC'),
+    close_time       DateTime64(6, 'UTC'),
+    src_snapshot_id  UInt64                  COMMENT 'The lake gold.trades snapshot the day was computed from; the version'
+)
+ENGINE = ReplacingMergeTree(src_snapshot_id)
+PARTITION BY toYYYYMM(day)
+ORDER BY (exchange, canonical_symbol, bar_kind, day, bar_seq);
+
+-- ───────────────────────────────────────────────────────────────────────────
 -- gold.bbo_1s — the lake's per-second BBO (lake.gold.bbo_1s, projected from
 -- lake.gold.book_top20 which is replayed from every venue frame). Loaded by
 -- pull like the candles; gold.bbo_live below is the same arithmetic on the
