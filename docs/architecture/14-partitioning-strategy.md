@@ -237,8 +237,8 @@ a day, ~79,000 a year, on a single host holding the catalog metadata for all of 
 it would buy is a tighter time prune, and the day partition plus the `(topic, partition,
 offset)` sort order already narrows an intraday read to a handful of files. Hourly is
 metadata for a pruning gain that is already paid for. The arithmetic is redone in
-[`17-scale-out-path.md`](17-scale-out-path.md) §3.3, where it comes out differently: an hourly
-partition reaches one 256 MB target file at **8.5×** today's rate, and at the **400×** PB
+[`17-scale-out-path.md`](17-scale-out-path.md) §5.3, where it comes out differently: an hourly
+partition reaches one 256 MB target file at **8.5×** today's rate, and at the **200×** PB
 case it is the right spec.
 
 ### File size: 256 MB for raw, 128 MB everywhere else
