@@ -5,5 +5,14 @@
     "kraken": 264358488000747777,
     "coinbase": 7144589879523206615,
     "binance": 3528392281922118482
+  },
+  "bars": {
+    "day": "2026-08-26",
+    "bars_snapshot": 1589136844755948459,
+    "trades_snapshot": 1348216816157062508,
+    "reference_symbols": [
+      "BTC/USD",
+      "ETH/USDT"
+    ]
   }
 }

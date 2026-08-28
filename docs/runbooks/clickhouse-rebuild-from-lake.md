@@ -115,7 +115,13 @@ SELECT exchange, canonical_symbol, window_start, open_e8, high_e8, low_e8, close
 FROM iceberg('http://minio:9000/k2-lake/warehouse/k2/<ohlcv_1m-uuid>/', '<MINIO_ROOT_USER>', '<MINIO_ROOT_PASSWORD>')
 SETTINGS iceberg_engine_ignore_schema_evolution = 1;
 -- same for ohlcv_5m, ohlcv_1h, ohlcv_1d; and gold.bbo_1s from lake.gold.bbo_1s (same column names)
+-- gold.bars from lake.gold.bars: exchange, canonical_symbol, bar_kind, threshold, day, bar_seq,
+--   open_e8, high_e8, low_e8, close_e8, volume_e8, quote_volume_e8, trade_count, open_time, close_time, src_snapshot_id
 ```
+
+**Measured 2026-08-28:** `gold.bars` 5,796 rows in 0.025 s (a fresh table after the DDL was
+applied by hand with `clickhouse-client --multiquery`; a running ClickHouse does not re-read
+`10-gold-tables.sql`).
 
 **Measured 2026-08-27:** `ohlcv_1m` 31,324 rows in 0.030 s; `5m` / `1h` / `1d` each
 ≤ 0.013 s. `gold.ohlcv_1m` then spanned 2026-08-26 12:04 → 2026-08-27 05:15 UTC.

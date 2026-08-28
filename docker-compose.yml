@@ -517,6 +517,7 @@ services:
       # topics. File-level bind mount: edit in place needs --force-recreate
       # (CLAUDE.md, bind-mount gotcha).
       - ./config/instruments.yaml:/home/iceberg/config/instruments.yaml:ro
+      - ./config/bars.yaml:/home/iceberg/config/bars.yaml:ro                # gold.bars thresholds (docker/lake/bars.py)
     environment:
       # MinIO / S3 credentials (Iceberg cold storage)
       - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}

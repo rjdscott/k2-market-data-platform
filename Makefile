@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv notebooks notebooks-run
+.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -83,17 +83,20 @@ lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, eve
 # Drops and re-decodes a whole lake layer from its parent, under the writer
 # lock, one day per venue at a time. Pause lake-ingest-5min first (see
 # docker/lake/rebuild.py). EXCHANGE=kraken limits it to one venue.
-lake-rebuild:  ## Rebuild LAYER=bronze|silver|gold|books from its parent over the whole archive (LIVE stack; minutes to hours)
+lake-rebuild:  ## Rebuild LAYER=bronze|silver|gold|books|bars from its parent over the whole archive (LIVE stack; minutes to hours)
 	docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer $(or $(LAYER),bronze) $(if $(EXCHANGE),--exchange $(EXCHANGE),)
 
 notebooks:  ## JupyterLab on :8889 over the lake (DuckDB via Lakekeeper + MinIO on the published ports)
 	cd notebooks && uv sync -q && uv run jupyter lab --port 8889 --no-browser
 
-notebooks-run:  ## Execute the four notebooks headless — the runnable check (needs the stack up)
+notebooks-run:  ## Execute the five notebooks headless — the runnable check (needs the stack up)
 	cd notebooks && uv sync -q && for nb in 0*.ipynb; do uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=600 $$nb || exit 1; done
 
 parity-ohlcv:  ## Three-way OHLCV parity (ClickHouse on-read, lake gold, DuckDB over silver) at tests/parity/pinned.json
 	scripts/parity-ohlcv.sh
+
+parity-bars:  ## Three-way event-bar parity (lake gold.bars, DuckDB window SQL, Python reference) at tests/parity/pinned.json
+	scripts/parity-bars.sh
 
 chaos:  ## Inject each capture and lake failure, wait for its alert, measure recovery (LOCAL ONLY - breaks the running stack)
 	@echo "chaos: breaks the running stack and drops real market data - public feeds do not replay it."

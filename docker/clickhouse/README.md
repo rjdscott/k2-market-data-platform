@@ -8,7 +8,7 @@ conflict. The v2 `k2` database is frozen beside it until the Phase E cutover dro
 | File | What it does |
 |---|---|
 | `ddl/01-k2-schema.sql` | v2 medallion, frozen (ADR-019). Dropped at cutover |
-| `ddl/10-gold-tables.sql` | **The contract.** `gold.trades`, `gold.book_top20`, `gold.feed_errors`, the lake-loaded `gold.ohlcv_{1m,5m,1h,1d}` and `gold.bbo_1s`, the on-read views `gold.ohlcv_live(bucket)` and `gold.bbo_live`. The only DDL CI applies |
+| `ddl/10-gold-tables.sql` | **The contract.** `gold.trades`, `gold.book_top20`, `gold.feed_errors`, the lake-loaded `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bars` and `gold.bbo_1s`, the on-read views `gold.ohlcv_live(bucket)` and `gold.bbo_live`. The only DDL CI applies |
 | `ddl/20-gold-kafka.sql` | The feeds: AvroConfluent Kafka-engine tables over the three `trades.*` / `book.*` topics and the MVs into gold. Boot only |
 | `config.xml` | Server limits sized to the 4 CPU / 8 GiB container: 6.5 GiB server-wide, 32 queries, 8 merge threads |
 | `users.xml` | Profiles: `default` 6 GB/query; `quant` read-only, 3 GiB, 2 threads, `gold` only, password from `K2_QUANT_PASSWORD` |
