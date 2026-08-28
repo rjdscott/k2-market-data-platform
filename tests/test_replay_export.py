@@ -70,3 +70,42 @@ def test_a_duplicated_conn_msg_seq_is_fatal():
     rows = [framed("A", i, i * 100, b"{}") for i in (1, 2, 2, 3)]
     with pytest.raises(SystemExit, match="4 frames"):
         rx.frames(rows, "A")
+
+
+class _FakeResult:
+    """Just enough of a duckdb cursor for export(): fetchall() for connections(),
+    fetchmany() for the raw.messages scan."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def fetchall(self):
+        return self.rows
+
+    def fetchmany(self, n):
+        rows, self.rows = self.rows[:n], self.rows[n:]
+        return rows
+
+
+class _FakeConn:
+    """A conn_id that's a real connection (bronze bounds know it) but the
+    raw.messages scan comes back empty — wrong snapshot, --until before the
+    first frame, or a spelling that only collides with the bounds lookup."""
+
+    def __init__(self, bounds_row):
+        self.bounds_row = bounds_row
+
+    def execute(self, sql):
+        if "GROUP BY" in sql:  # connections()
+            return _FakeResult([self.bounds_row])
+        return _FakeResult([])  # the raw.messages scan in export()
+
+
+def test_zero_frames_for_a_known_conn_id_is_fatal_not_a_silent_empty_export():
+    # This is the case a bare `if seqs and ...` guard inside frames() misses:
+    # the export is empty before frames() ever runs, so there's no seqs list
+    # to be non-contiguous. A silent empty export here means `k2-capture
+    # replay` emits 0 records and replay-lake.sh files observed=0, passed=true.
+    c = _FakeConn(("A", 3, "2026-01-01 00:00:00", "2026-01-01 00:05:00"))
+    with pytest.raises(SystemExit, match="A: 0 frames at raw.messages snapshot 42"):
+        rx.export(c, "kraken", 42, "A", None, io.StringIO())

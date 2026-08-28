@@ -158,6 +158,14 @@ def export(c, exchange: str, snapshot_id: int, conn_id: str, until_ns: int | Non
     while batch := cur.fetchmany(20_000):
         rows.extend(batch)
     lines = frames(rows, conn_id, until_ns)
+    if not lines:
+        # A conn_id that matches the bronze bounds but yields nothing here — a
+        # typo that happens to collide, a snapshot pinned before the
+        # connection existed, an --until before its first frame — must not
+        # write an empty fixture: `k2-capture replay` would emit 0 records and
+        # scripts/replay-lake.sh would file an audit.checks row with
+        # observed=0, passed=true.
+        raise SystemExit(f"{conn_id}: 0 frames at raw.messages snapshot {snapshot_id} — not a replay, an empty one")
     for line in lines:
         out.write(json.dumps(line, separators=(",", ":")) + "\n")
     return len(lines)
