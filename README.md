@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+    <img alt="K2 Market Data Platform — Rust capture, Redpanda, Iceberg lake, ClickHouse hot tier" src="docs/assets/banner-light.svg" width="100%">
+  </picture>
+</p>
+
 # K2 Market Data Platform
 
 A market data platform for quantitative research. Three crypto exchanges are captured
