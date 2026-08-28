@@ -163,7 +163,7 @@ k2-capture record --exchange kraken --seconds 20 --symbols BTC/USD > f.jsonl
 k2-capture replay --exchange kraken --fixture f.jsonl > records.jsonl   # same adapter, clock from the file
 ```
 
-`replay` is Phase G's `k2-replay` ([plan 006](../../docs/plans/2026-08-26-v3-quant-research-platform/006-phase-g-replay-parity.md); ADR-029 follows):
+`replay` is Phase G's `k2-replay` ([ADR-029](../../docs/adr/ADR-029-research-production-parity-contract.md)):
 a fixture or a lake export (`scripts/replay_export.py`, one archived connection out
 of `raw.messages` at a pinned snapshot) through the *same* `handle_frame` the socket
 loop calls, with the 1 Hz sampler ticking off the recorded `recv_ts_ns`. No socket,

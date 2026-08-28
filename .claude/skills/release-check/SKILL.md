@@ -69,7 +69,11 @@ curl -su "admin:$GRAFANA_PASSWORD" localhost:3000/api/search | jq -r '.[].title'
 
 ```bash
 make test    # kotlin (docker) + python (uv)
+make parity-ohlcv parity-bars   # live three-way parity at tests/parity/pinned.json (ADR-029); needs the stack from step 2
 ```
+
+Parity cannot run in GitHub's CI (no stack there), so this is the only place it gates a
+tag. A failure prints the first differing rows; the Python reference is the arbiter.
 
 ## 5. Grep sweep — forbidden strings in published docs
 
