@@ -58,6 +58,9 @@ struct BookState {
 #[derive(Debug)]
 pub struct BinanceAdapter {
     instruments: Instruments,
+    /// Levels per side in an emitted snapshot; `SNAPSHOT_LEVELS` unless a
+    /// replay asked for more.
+    snapshot_levels: usize,
     /// lowercase stream spelling -> registry native (`btcusdt` -> `BTCUSDT`).
     by_lower: BTreeMap<String, String>,
     conn_id: String,
@@ -74,11 +77,16 @@ impl BinanceAdapter {
             .collect();
         Self {
             instruments,
+            snapshot_levels: SNAPSHOT_LEVELS,
             by_lower,
             conn_id: String::new(),
             conn_msg_seq: 0,
             books: BTreeMap::new(),
         }
+    }
+
+    pub fn set_snapshot_depth(&mut self, depth: usize) {
+        self.snapshot_levels = depth.max(1);
     }
 
     pub fn begin_connection(&mut self, conn_id: &str) {
@@ -194,7 +202,7 @@ impl BinanceAdapter {
             return None;
         }
         let canonical = self.instruments.canonical(native)?;
-        let top = state.book.top_n(SNAPSHOT_LEVELS);
+        let top = state.book.top_n(self.snapshot_levels);
         Some(BookSnapshotRecord {
             exchange: EXCHANGE.into(),
             symbol: native.to_string(),

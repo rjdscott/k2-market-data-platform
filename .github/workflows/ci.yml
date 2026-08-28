@@ -66,7 +66,7 @@ jobs:
         run: uv run --no-project --with ruff ruff check docker/lake tests
 
       - name: Pytest
-        run: uv run --no-project --with pytest --with pyyaml pytest tests -q
+        run: uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests -q
 
   clickhouse:
     name: ClickHouse (gold schema)

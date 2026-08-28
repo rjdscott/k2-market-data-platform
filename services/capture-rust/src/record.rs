@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 
 use apache_avro::Schema;
 use apache_avro::types::Value;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const TRADE_SCHEMA_JSON: &str = include_str!("../../../schemas/avro/trade.avsc");
 pub const BOOK_SCHEMA_JSON: &str = include_str!("../../../schemas/avro/book-snapshot-l2.avsc");
@@ -33,7 +33,7 @@ pub static RAW_SCHEMA: LazyLock<Schema> = LazyLock::new(|| {
 
 /// Taker side. The Avro enum's symbol order is `["buy", "sell"]` and the index
 /// is what goes on the wire, so this discriminant is part of the contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     Buy,
@@ -50,7 +50,7 @@ impl Side {
 }
 
 /// `schemas/avro/trade.avsc`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TradeRecord {
     pub exchange: String,
     pub symbol: String,
@@ -70,7 +70,7 @@ pub struct TradeRecord {
 }
 
 /// `schemas/avro/book-snapshot-l2.avsc`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BookSnapshotRecord {
     pub exchange: String,
     pub symbol: String,
@@ -91,7 +91,7 @@ pub struct BookSnapshotRecord {
 }
 
 /// `schemas/avro/raw-message.avsc`. The system of record: every frame, verbatim.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RawMessageRecord {
     pub exchange: String,
     pub stream: String,
@@ -107,7 +107,7 @@ pub struct RawMessageRecord {
 /// An enum rather than three separate return channels because the order the
 /// records were produced in is itself information a replay must preserve: the
 /// raw frame always precedes the records derived from it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OutRecord {
     Trade(TradeRecord),

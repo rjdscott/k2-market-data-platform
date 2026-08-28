@@ -32,7 +32,7 @@ test: test-python test-rust test-clickhouse  ## Run all unit tests
 
 
 test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs uv)
-	uv run --no-project --with pytest --with pyyaml pytest tests -q
+	uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests -q
 
 # The WHOLE repo is mounted, not just the crate: src/record.rs compiles the wire
 # contract in with `include_str!("../../../schemas/avro/trade.avsc")` and the

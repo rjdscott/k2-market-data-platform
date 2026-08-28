@@ -15,8 +15,9 @@
 use std::path::{Path, PathBuf};
 
 use k2_capture::config::{Exchange, Instruments};
-use k2_capture::exchanges::CoinbaseAdapter;
+use k2_capture::exchanges::{Adapter, CoinbaseAdapter};
 use k2_capture::record::{BookSnapshotRecord, OutRecord};
+use k2_capture::replay;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -185,9 +186,29 @@ fn fixture_replays_with_no_sequence_gaps() {
 /// Same input, same bytes out. The golden hash is committed so drift fails CI.
 #[test]
 fn replay_is_deterministic() {
-    let first = serde_json::to_vec(&replay().records).expect("serialise");
-    let second = serde_json::to_vec(&replay().records).expect("serialise");
+    // Through the shared driver `k2-capture replay` runs, hashed over the same
+    // JSONL bytes it writes: `replay --fixture coinbase-20s.jsonl | sha256sum` must
+    // print the committed digest.
+    let pass = || {
+        let mut adapter = Adapter::Coinbase(adapter());
+        let input = std::io::BufReader::new(
+            std::fs::File::open(fixtures().join("coinbase-20s.jsonl")).expect("fixture"),
+        );
+        let mut bytes = Vec::new();
+        let stats = replay::run(&mut adapter, input, &replay::Options::default(), |r| {
+            replay::write_jsonl(&mut bytes, r)
+        })
+        .expect("replay");
+        (bytes, stats)
+    };
+    let (first, stats) = pass();
+    let (second, _) = pass();
     assert_eq!(first, second, "two passes over one fixture disagreed");
+    assert_eq!(
+        stats.records,
+        first.iter().filter(|&&b| b == b'\n').count(),
+        "one record per line"
+    );
 
     let digest = format!("{:x}", Sha256::digest(&first));
     let golden = std::fs::read_to_string(fixtures().join("coinbase-20s.sha256"))

@@ -59,6 +59,9 @@ struct BookState {
 #[derive(Debug)]
 pub struct CoinbaseAdapter {
     instruments: Instruments,
+    /// Levels per side in an emitted snapshot; `SNAPSHOT_LEVELS` unless a
+    /// replay asked for more.
+    snapshot_levels: usize,
     conn_id: String,
     conn_msg_seq: i64,
     /// The `sequence_num` the next sequenced frame must carry. `None` until
@@ -76,11 +79,16 @@ impl CoinbaseAdapter {
     pub fn new(instruments: Instruments) -> Self {
         Self {
             instruments,
+            snapshot_levels: SNAPSHOT_LEVELS,
             conn_id: String::new(),
             conn_msg_seq: 0,
             expected_seq: None,
             books: BTreeMap::new(),
         }
+    }
+
+    pub fn set_snapshot_depth(&mut self, depth: usize) {
+        self.snapshot_levels = depth.max(1);
     }
 
     pub fn begin_connection(&mut self, conn_id: &str) {
@@ -190,7 +198,7 @@ impl CoinbaseAdapter {
             return None;
         }
         let canonical = self.instruments.canonical(native)?;
-        let top = state.book.top_n(SNAPSHOT_LEVELS);
+        let top = state.book.top_n(self.snapshot_levels);
         Some(BookSnapshotRecord {
             exchange: EXCHANGE.into(),
             symbol: native.to_string(),
