@@ -54,7 +54,7 @@ flowchart TB
   QB -->|MV| BK["gold.book_top20<br/>ReplacingMergeTree(ver)<br/>latest sample in the second wins"]
   QT & QB -.->|"undecodable"| FE["gold.feed_errors"]
   TR --> LV["ohlcv_live(bucket) · bbo_live<br/>views over FINAL"]
-  LK[("lake gold.*")] -.->|"iceberg() pull"| PR["ohlcv_* · bbo_1s<br/>ReplacingMergeTree(src_snapshot_id)"]
+  LK[("lake gold.*")] -.->|"iceberg() pull"| PR["ohlcv_* · bars · bbo_1s<br/>Replacing(computed_at)"]
   U["quant profile<br/>readonly · 3 GiB · 2 threads"] --- LV & PR
 ```
 
@@ -76,7 +76,10 @@ flowchart TB
   are loaded from lake gold through the `iceberg()` table function, with the
   [Iceberg snapshot](03-data-engineering-concepts.md#iceberg-snapshots) they were read from
   recorded in `src_snapshot_id`; 10.4 M trades in 4.4 s
-  ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)). Never computed here.
+  ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)). Never computed here. A re-pull
+  is versioned on the lake's `computed_at`, not on that snapshot id, which is a random
+  64-bit number and would keep an arbitrary row; `bbo_1s` is the exception, it has no
+  `computed_at` in the lake.
 - **Errors are rows.** `kafka_handle_error_mode = 'stream'` sends an undecodable record to
   `gold.feed_errors` with its bytes; the partition keeps moving.
   `kafka_skip_broken_messages` does not cover a registry miss (schema id 0), stream mode does.

@@ -2,7 +2,8 @@
 -- runs them after loading the three fixture files and fails on any line that is not ok.
 -- Fixtures: tests/clickhouse/trades_block{1,2}.jsonl (one minute of BTC/USDT in two
 -- insert blocks, the earlier trade in the LATER block; trade t2 delivered twice), book.jsonl
--- (two BTC/USDT snapshots in one second, an empty Kraken book).
+-- (two BTC/USDT snapshots in one second, an empty Kraken book), bars.jsonl (one bars key
+-- pulled twice, the recompute carrying the SMALLER src_snapshot_id).
 
 -- 1. The v2 regression. OHLCV of a minute that arrived in two insert blocks: the open is
 --    the earliest trade by exchange_ts (t0, 99, second block), the close the latest (t3, 101),
@@ -43,3 +44,11 @@ SELECT if((SELECT count() FROM system.tables WHERE database = 'gold' AND engine 
 
 -- 9. The config is the one applied: the default profile's per-query memory cap.
 SELECT if((SELECT value FROM system.settings WHERE name = 'max_memory_usage') = '6000000000', 'ok', concat('FAIL max_memory_usage=', (SELECT value FROM system.settings WHERE name = 'max_memory_usage')));
+
+-- 10. gold.bars versions on computed_at, not on the Iceberg snapshot id. Both rows are the
+--     same key; the second pull is the later computed_at (02:00) and the SMALLER
+--     src_snapshot_id (1e18 vs 9e18), because snapshot ids are random 64-bit numbers.
+--     FINAL must keep the recompute.
+SELECT if((SELECT count() FROM gold.bars FINAL) = 1 AND close_e8 = 20000000000 AND trade_count = 4,
+          'ok', concat('FAIL bars version: rows=', toString((SELECT count() FROM gold.bars FINAL)), ' close_e8=', toString(close_e8)))
+FROM gold.bars FINAL WHERE canonical_symbol = 'BTC/USD' AND bar_kind = 'dollar';

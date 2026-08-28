@@ -111,9 +111,20 @@ pub fn run<R: BufRead>(
             stats.records += 1;
         }
 
-        // The sampler: due at fixed offsets from the first frame's clock, as
-        // `tokio::time::interval` would be from connect. A frame later than the
-        // due time triggers exactly one sample, matching MissedTickBehavior::Skip.
+        // The sampler. What matches live: the grid. Due times are
+        // `first_frame + n * interval` and stay on that grid however late a
+        // frame is, exactly as `tokio::time::interval` from connect does, and a
+        // frame that crosses several grid lines at once triggers ONE sample -
+        // MissedTickBehavior::Skip. (Re-basing the next due time on the
+        // triggering frame instead would drift the grid by the lateness of
+        // every tick, and the sampled seconds would wander away from live's.)
+        //
+        // What structurally cannot match: live samples on a wall-clock tick,
+        // replay only samples when a frame arrives. A 5 s silence live yields 5
+        // snapshots of an unchanged book; the same silence in the recording has
+        // no frames in it, so replay yields at most one, on the frame that ends
+        // the silence. Determinism here is fixture -> fixture, not live -> replay
+        // (docs/research/2026-08-28-replay-fidelity-limits.md).
         let due = *next_sample_ns.get_or_insert(frame.recv_ts_ns + opts.snapshot_interval_ns);
         if frame.recv_ts_ns >= due {
             for symbol in &symbols {
@@ -122,7 +133,8 @@ pub fn run<R: BufRead>(
                     stats.records += 1;
                 }
             }
-            next_sample_ns = Some(frame.recv_ts_ns + opts.snapshot_interval_ns);
+            let missed = (frame.recv_ts_ns - due) / opts.snapshot_interval_ns;
+            next_sample_ns = Some(due + (missed + 1) * opts.snapshot_interval_ns);
         }
     }
     Ok(stats)

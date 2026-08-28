@@ -103,6 +103,12 @@ def frames(rows, conn_id: str, until_ns: int | None = None) -> list:
     counter, not on Kafka offset: the raw topic is keyed by symbol, so one
     connection's frames are spread over partitions and only conn_msg_seq
     restores the order the socket delivered them in.
+
+    The counter is monotonic from 1 and unbroken within a connection
+    (raw-message.avsc), so anything other than exactly 1..n here means the
+    export is not the whole connection — a frame the scan window missed, or a
+    duplicate — and a truncated replay produces plausible-looking output from
+    an incomplete book. That is a `SystemExit`, not a warning.
     """
     out = []
     for schema_id, payload in rows:
@@ -115,6 +121,12 @@ def frames(rows, conn_id: str, until_ns: int | None = None) -> list:
             continue
         out.append((rec["conn_msg_seq"], rec["recv_ts_ns"], rec["payload"]))
     out.sort()
+    seqs = [seq for seq, _, _ in out]
+    if seqs and seqs != list(range(1, len(seqs) + 1)):
+        raise SystemExit(
+            f"{conn_id}: conn_msg_seq is not 1..n unbroken — {len(seqs)} frames, "
+            f"first {seqs[0]}, last {seqs[-1]}; the export would be a truncated connection"
+        )
     return [{"recv_ts_ns": ts, "payload": pl.decode("utf-8")} for _, ts, pl in out]
 
 
@@ -123,17 +135,24 @@ def export(c, exchange: str, snapshot_id: int, conn_id: str, until_ns: int | Non
     if conn_id not in bounds:
         sys.exit(f"{conn_id} is not a connection {CONNECTIONS_TABLE[exchange]} knows; --list prints them")
     first, last = bounds[conn_id]
-    # kafka_ts is the producer's CreateTime, within seconds of recv_ts; the
-    # minute either side keeps the scan to the connection's window while the
-    # conn_id filter below does the exact cut. `schema_id > 0` and not
-    # `IS NOT NULL`: DuckDB 1.4.4's Iceberg reader returned zero rows for the
+    # kafka_ts is the producer's CreateTime, within seconds of recv_ts, and the
+    # bounds come from the bronze table, which only holds the venue's book
+    # frames. The tail needs 2 minutes, not 1: a continuous stream must be
+    # silent 60 s before the session watchdog reconnects (CONTINUOUS in
+    # services/capture-rust/src/main.rs), so the last frames of a connection —
+    # a heartbeat, the close — can land a minute after bronze's last book row.
+    # A minute at the head is enough: nothing precedes the subscribe.
+    # The conn_id filter below does the exact cut, and `frames` refuses to
+    # return a set of frames whose conn_msg_seq is not 1..n.
+    #
+    # `schema_id > 0` and not `IS NOT NULL`: DuckDB 1.4.4's Iceberg reader returned zero rows for the
     # IS NOT NULL form on this table (no column stats on schema_id), while
     # count(schema_id) over the same rows was 51,544 (2026-08-28).
     cur = c.execute(
         f"""SELECT schema_id, payload FROM lake.raw.messages AT (VERSION => {int(snapshot_id)})
             WHERE topic = 'market.crypto.v3.raw.{exchange}' AND schema_id > 0
               AND kafka_ts >= TIMESTAMP '{first}' - INTERVAL 1 MINUTE
-              AND kafka_ts <= TIMESTAMP '{last}' + INTERVAL 1 MINUTE"""
+              AND kafka_ts <= TIMESTAMP '{last}' + INTERVAL 2 MINUTE"""
     )
     rows = []
     while batch := cur.fetchmany(20_000):

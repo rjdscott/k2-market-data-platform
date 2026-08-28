@@ -105,18 +105,33 @@ reload creates no duplicates for `ReplacingMergeTree` to collapse.
 ## 3. Candles from lake gold
 
 The candle tables in ClickHouse are loaded, never computed (`gold.ohlcv_live` is the
-on-read view for the head). `ReplacingMergeTree(src_snapshot_id)`: a reload carrying a
-newer lake snapshot for a bucket replaces the older row.
+on-read view for the head). `ReplacingMergeTree(computed_at)`: a re-pull of a bucket the
+lake recomputed replaces the older row. **`computed_at` must be in the SELECT**: it is
+the version column. It is not `src_snapshot_id`, which is a random 64-bit Iceberg id and
+would have a re-pull keep an arbitrary one of the two rows; that column is lineage only.
+`gold.bbo_1s` is the exception, still versioned on `src_snapshot_id` because
+`lake.gold.bbo_1s` has no `computed_at` to use.
 
 ```sql
 INSERT INTO gold.ohlcv_1m
 SELECT exchange, canonical_symbol, window_start, open_e8, high_e8, low_e8, close_e8,
-       volume, quote_volume, trade_count, open_time, close_time, src_snapshot_id
+       volume, quote_volume, trade_count, open_time, close_time, src_snapshot_id, computed_at
 FROM iceberg('http://minio:9000/k2-lake/warehouse/k2/<ohlcv_1m-uuid>/', '<MINIO_ROOT_USER>', '<MINIO_ROOT_PASSWORD>')
 SETTINGS iceberg_engine_ignore_schema_evolution = 1;
--- same for ohlcv_5m, ohlcv_1h, ohlcv_1d; and gold.bbo_1s from lake.gold.bbo_1s (same column names)
+-- same for ohlcv_5m, ohlcv_1h, ohlcv_1d; and gold.bbo_1s from lake.gold.bbo_1s (same column
+--   names, no computed_at there)
 -- gold.bars from lake.gold.bars: exchange, canonical_symbol, bar_kind, threshold, day, bar_seq,
---   open_e8, high_e8, low_e8, close_e8, volume_e8, quote_volume_e8, trade_count, open_time, close_time, src_snapshot_id
+--   open_e8, high_e8, low_e8, close_e8, volume_e8, quote_volume_e8, trade_count, open_time,
+--   close_time, src_snapshot_id, computed_at
+```
+
+**After a threshold change in `config/bars.yaml`, TRUNCATE first.** Raising a threshold
+makes a day's bars fewer, and a pull cannot express a deletion: the orphaned rows at the
+high `bar_seq` end of each day have no newer row sharing their key, so nothing collapses
+them and the table serves bars from two different thresholds.
+
+```sql
+TRUNCATE TABLE gold.bars;   -- then the INSERT above, whole table, no WHERE
 ```
 
 **Measured 2026-08-28:** `gold.bars` 5,796 rows in 0.025 s (a fresh table after the DDL was

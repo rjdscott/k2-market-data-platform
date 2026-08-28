@@ -150,11 +150,14 @@ def fetch_schema(schema_id: int) -> str:
 def write_audit_rows(spark, rows: list, properties: dict, job: str = "ingest") -> bool:
     """This run's findings into `audit.checks`, in ONE commit. True if it landed.
 
-    Same table as the nightly audit, `job='ingest'`, so "what did the pipeline
-    find and when" stays one query.
+    Same table as the nightly audit, so "what did the pipeline find and when"
+    stays one query. `job` is the `k2.job` property the commit carries and names
+    the writer: `ingest` for the pipeline's own findings (the default), or
+    `replay` / `operator` for the rows record_check.py writes from the command
+    line.
 
     Three properties ride on the commit and all three are load-bearing.
-    `k2.job=ingest` is what keeps this snapshot out of
+    `k2.job` — anything but `maintenance` — is what keeps this snapshot out of
     `k2_lake_audit_failures_total`: that gauge is the nightly audit's count, and
     an ingest row landing as the current snapshot used to zero a firing
     `LakeAuditFailed` with no audit having passed. `k2.audit-failures` is the

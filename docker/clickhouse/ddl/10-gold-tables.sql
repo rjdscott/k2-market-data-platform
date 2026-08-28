@@ -174,8 +174,15 @@ GROUP BY exchange, canonical_symbol, window_start;
 -- gold.ohlcv_{1m,5m,1h,1d} — the candles the LAKE computed (lake.gold.ohlcv_*,
 -- docker/lake/gold.py), loaded by pull (docs/runbooks/clickhouse-rebuild-from-
 -- lake.md). Never computed here: gold.ohlcv_live above is for the head, these
--- are the record. ReplacingMergeTree on the lake snapshot id so a reload
--- carrying a newer candle for the same bucket replaces the older one.
+-- are the record.
+--
+-- The version is `computed_at`, the wall clock of the Spark run that produced
+-- the row (docker/lake/gold.py stamps it on every candle), NOT
+-- `src_snapshot_id`: an Iceberg snapshot id is a random 64-bit number, so a
+-- ReplacingMergeTree keyed on it keeps an arbitrary one of the two rows on a
+-- re-pull rather than the newer one. `src_snapshot_id` stays as a plain
+-- lineage column — "which trades went into this candle" — and answers nothing
+-- about ordering.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS gold.ohlcv_1m
 (
@@ -195,9 +202,10 @@ CREATE TABLE IF NOT EXISTS gold.ohlcv_1m
     trade_count      UInt64,
     open_time        DateTime64(6, 'UTC'),
     close_time       DateTime64(6, 'UTC'),
-    src_snapshot_id  UInt64                  COMMENT 'The lake gold.trades snapshot the candle was computed from; the version — a reload with a newer snapshot replaces the row'
+    src_snapshot_id  UInt64                  COMMENT 'Lineage only: the lake gold.trades snapshot the candle was computed from (a random id, never an order)',
+    computed_at      DateTime64(6, 'UTC')    COMMENT 'The version: when the lake computed this row; the later recompute wins'
 )
-ENGINE = ReplacingMergeTree(src_snapshot_id)
+ENGINE = ReplacingMergeTree(computed_at)
 PARTITION BY toYYYYMM(window_start)
 ORDER BY (exchange, canonical_symbol, window_start);
 
@@ -219,9 +227,10 @@ CREATE TABLE IF NOT EXISTS gold.ohlcv_5m
     trade_count      UInt64,
     open_time        DateTime64(6, 'UTC'),
     close_time       DateTime64(6, 'UTC'),
-    src_snapshot_id  UInt64                  COMMENT 'The lake gold.trades snapshot the candle was computed from; the version — a reload with a newer snapshot replaces the row'
+    src_snapshot_id  UInt64                  COMMENT 'Lineage only: the lake gold.trades snapshot the candle was computed from (a random id, never an order)',
+    computed_at      DateTime64(6, 'UTC')    COMMENT 'The version: when the lake computed this row; the later recompute wins'
 )
-ENGINE = ReplacingMergeTree(src_snapshot_id)
+ENGINE = ReplacingMergeTree(computed_at)
 PARTITION BY toYYYYMM(window_start)
 ORDER BY (exchange, canonical_symbol, window_start);
 
@@ -243,9 +252,10 @@ CREATE TABLE IF NOT EXISTS gold.ohlcv_1h
     trade_count      UInt64,
     open_time        DateTime64(6, 'UTC'),
     close_time       DateTime64(6, 'UTC'),
-    src_snapshot_id  UInt64                  COMMENT 'The lake gold.trades snapshot the candle was computed from; the version — a reload with a newer snapshot replaces the row'
+    src_snapshot_id  UInt64                  COMMENT 'Lineage only: the lake gold.trades snapshot the candle was computed from (a random id, never an order)',
+    computed_at      DateTime64(6, 'UTC')    COMMENT 'The version: when the lake computed this row; the later recompute wins'
 )
-ENGINE = ReplacingMergeTree(src_snapshot_id)
+ENGINE = ReplacingMergeTree(computed_at)
 PARTITION BY toYYYYMM(window_start)
 ORDER BY (exchange, canonical_symbol, window_start);
 
@@ -267,18 +277,28 @@ CREATE TABLE IF NOT EXISTS gold.ohlcv_1d
     trade_count      UInt64,
     open_time        DateTime64(6, 'UTC'),
     close_time       DateTime64(6, 'UTC'),
-    src_snapshot_id  UInt64                  COMMENT 'The lake gold.trades snapshot the candle was computed from; the version — a reload with a newer snapshot replaces the row'
+    src_snapshot_id  UInt64                  COMMENT 'Lineage only: the lake gold.trades snapshot the candle was computed from (a random id, never an order)',
+    computed_at      DateTime64(6, 'UTC')    COMMENT 'The version: when the lake computed this row; the later recompute wins'
 )
-ENGINE = ReplacingMergeTree(src_snapshot_id)
+ENGINE = ReplacingMergeTree(computed_at)
 PARTITION BY toYYYYMM(window_start)
 ORDER BY (exchange, canonical_symbol, window_start);
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- gold.bars — the lake's event bars (lake.gold.bars, docker/lake/bars.py):
 -- tick, volume and dollar at config/bars.yaml's one canonical threshold per
--- symbol. Loaded by pull like the candles, never computed here; a reload with
--- a newer lake snapshot for a day replaces that day's rows. `threshold` rides
--- on every row so a bar is self-describing after the config moves.
+-- symbol. Loaded by pull like the candles, never computed here; a re-pull of a
+-- recomputed day replaces that day's rows, versioned on `computed_at` for the
+-- reason given above the candles. `threshold` rides on every row so a bar is
+-- self-describing after the config moves.
+--
+-- **Raising a threshold in config/bars.yaml shrinks a day's bar count**, and a
+-- pull-based ReplacingMergeTree cannot express a deletion: the orphaned rows at
+-- the high `bar_seq` end of every day stay, with their old `computed_at`, and
+-- nothing collapses them because no new row shares their key. After a
+-- threshold change the reload is `TRUNCATE TABLE gold.bars` then re-pull the
+-- whole table, not an incremental pull (docs/runbooks/
+-- clickhouse-rebuild-from-lake.md §3).
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS gold.bars
 (
@@ -303,9 +323,10 @@ CREATE TABLE IF NOT EXISTS gold.bars
     trade_count      UInt64,
     open_time        DateTime64(6, 'UTC'),
     close_time       DateTime64(6, 'UTC'),
-    src_snapshot_id  UInt64                  COMMENT 'The lake gold.trades snapshot the day was computed from; the version'
+    src_snapshot_id  UInt64                  COMMENT 'Lineage only: the lake gold.trades snapshot the day was computed from (a random id, never an order)',
+    computed_at      DateTime64(6, 'UTC')    COMMENT 'The version: when the lake computed this day''s bars; the later recompute wins'
 )
-ENGINE = ReplacingMergeTree(src_snapshot_id)
+ENGINE = ReplacingMergeTree(computed_at)
 PARTITION BY toYYYYMM(day)
 ORDER BY (exchange, canonical_symbol, bar_kind, day, bar_seq);
 
@@ -314,6 +335,12 @@ ORDER BY (exchange, canonical_symbol, bar_kind, day, bar_seq);
 -- lake.gold.book_top20 which is replayed from every venue frame). Loaded by
 -- pull like the candles; gold.bbo_live below is the same arithmetic on the
 -- topic-fed book_top20 for the head.
+--
+-- Still versioned on `src_snapshot_id`, unlike the candles and bars above:
+-- lake.gold.bbo_1s carries no `computed_at` (docker/lake/books.py projects it
+-- straight from gold.book_top20), so there is no monotone column to switch to.
+-- A re-pull of a recomputed second therefore keeps an arbitrary one of the two
+-- rows. Revisit when lake.gold.bbo_1s gains a computed_at.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS gold.bbo_1s
 (

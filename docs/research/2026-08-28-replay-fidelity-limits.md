@@ -1,7 +1,8 @@
 # What top-20 @ 1 Hz over public WebSockets can and cannot honestly simulate
 
-**Date:** 2026-08-28 · **Question:** `k2-capture replay` reproduces the live pipeline's
-output byte for byte from the archive (ADR-029). What research does that data support,
+**Date:** 2026-08-28 · **Question:** `k2-capture replay` reproduces its own output byte
+for byte for a given input, fixture or archive export (ADR-029); live-vs-replay snapshot
+cadence differs during silences, see the table. What research does that data support,
 and what does it not, stated before anyone builds a simulation on it?
 
 This is a statement of limits, written from what the archive *is* rather than from
@@ -31,6 +32,7 @@ says nothing about the feed being faithful to the market.
 | **Venue-side conflation is invisible** | Binance publishes a 100 ms conflated partial; Coinbase batches up to 100 trades per frame at one time; Kraken's book updates are already netted per level | Event-count studies that assume one frame per market event; message-rate as a proxy for activity across venues |
 | **No hidden or iceberg liquidity, no auction, no halts modelled** | Not in the public feed | Realistic adverse-selection simulation; anything that depends on liquidity the book did not show |
 | **Trades and book are two streams with two orderings** | A trade's `exchange_ts` and the book snapshot in force at it are joined as-of on receive time, not on a venue sequence that spans both | The exact book state at a trade's matching instant; trade-through analysis finer than one snapshot interval |
+| **Replay samples on frame arrival, live samples on a wall-clock tick** | The live sampler is a `tokio::time::interval`; the replay sampler is the same grid (`first frame + n x interval`) but can only fire when a frame gives it a clock, and a silence has no frames in it. A 5 s silence live yields up to 5 snapshots of an unchanged book, replay yields at most one | Comparing snapshot *counts* across a silent period between a live run and its replay, and any claim of live-to-replay byte equality. What is proven is fixture-to-fixture (or export-to-export) determinism: the same input gives the same bytes, hash-checked in `services/capture-rust/tests/fixtures/*.sha256` |
 | **Fixtures are seconds long, recorded on 2026-08-26** | Three fixtures, 10–20 s each | Replay determinism is proven over what the fixtures contain; a venue behaviour they lack is unproven until a new fixture carries it |
 
 ## What this supports, stated positively

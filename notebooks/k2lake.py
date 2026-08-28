@@ -113,6 +113,10 @@ def bars(con, kind: str, threshold, symbol: str | None = None, exchange: str | N
     pinned view by default (call `pin(con)` first); pass `lake.gold.trades`
     for an unpinned read outside a notebook.
 
+    `start` / `end` must be UTC-day boundaries: the cumulative grid restarts at
+    each day's first trade, so a mid-day `start` re-bases bar 0 there and the
+    bars are not the ones `lake.gold.bars` holds for that day.
+
         bars(con, "dollar", 1_000_000, symbol="BTC/USD", start="2026-08-27")
     """
     if kind not in BAR_KINDS:
@@ -130,7 +134,7 @@ def bars(con, kind: str, threshold, symbol: str | None = None, exchange: str | N
     bucket = {
         "tick": f"n_before // CAST({t} AS BIGINT)",
         "volume": f"vol_before // CAST({t} * {SCALE} AS BIGINT)",
-        "dollar": f"usd_before // (CAST({t} AS HUGEINT) * {SCALE} * {SCALE})",
+        "dollar": f"usd_before // (CAST(CAST({t} * {SCALE} AS BIGINT) AS HUGEINT) * CAST({SCALE} AS HUGEINT))",
     }[kind]
     sql = f"""
         WITH t AS (
