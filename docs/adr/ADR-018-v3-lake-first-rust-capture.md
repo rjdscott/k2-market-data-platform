@@ -195,7 +195,7 @@ To be written when each phase lands, not before:
 | 025 | ClickHouse as a derived, rebuildable hot tier | ADR-009 |
 | 026 | OHLCV computed on read + the ReplacingMergeTree dedup contract | — |
 | 027 | L2 book snapshot model and per-exchange resync policy | — |
-| 028 | Non-goals and honest limits of a single-host research platform | — (the replay-fidelity limits are in `docs/research/2026-08-28-replay-fidelity-limits.md` meanwhile) |
+| [028](ADR-028-non-goals-and-honest-limits.md) | Non-goals and honest limits of a single-host research platform | — |
 | ADR-029 | Research/production parity contract (Phase G) | — |
 
 ---
