@@ -256,10 +256,10 @@ def stage_bars(spark, minutes: DataFrame, run_ts: datetime) -> int:
     n = fresh.count()
     # TWO commits, and Iceberg gives no transaction across them: a crash between
     # the DELETE and the append leaves those symbol-days with no bars at all.
-    # Nothing detects that on its own — the nightly audits cover trades, silver,
-    # books and the candles (maintenance.py), and none of them counts bars. It
-    # heals when a later trade touches the same day, or on demand with
-    # `make lake-rebuild LAYER=bars`.
+    # The nightly `bars_parity` audit (maintenance.audit_bars_parity) recomputes
+    # yesterday's bars and compares them to what's stored, so a half-applied day
+    # doesn't go undetected past the next audit run. It heals when a later trade
+    # touches the same day, or on demand with `make lake-rebuild LAYER=bars`.
     spark.sql(
         f"DELETE FROM {BARS} WHERE (exchange, canonical_symbol, day) IN (SELECT exchange, canonical_symbol, day FROM __days)"
     )
