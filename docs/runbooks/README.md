@@ -73,6 +73,13 @@ no longer exists, do not follow them against this stack.
 > [`iceberg()` only, the `s3()` glob is banned](./lake-recovery.md#the-one-rule-on-this-page),
 > because the glob returns plausible wrong numbers after any compaction.
 
+### Host / operations
+
+| Runbook | When to use | Triggering alert |
+|---------|-------------|------------------|
+| [fresh-install.md](./fresh-install.md) | Bringing the stack up from a fresh clone or after a Docker wipe: prerequisites, the measured timeline, what `docker compose ps` should show, and the capture image build race | none, manual check |
+| [docker-desktop-disk.md](./docker-desktop-disk.md) | Host `/` filling while `docker system df` reports far less: reclaiming space from a bloated `Docker.raw` with `fstrim`. Read the warning before touching the disk-image-size slider | none, manual check |
+
 ## Triage
 
 ```bash
