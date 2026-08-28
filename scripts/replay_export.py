@@ -19,6 +19,18 @@ exchange sequence numbers only run within one `conn_id` (raw-message.avsc). A
 replay that starts mid-connection produces trades and no books, silently.
 `--until` trims the tail, never the head.
 
+**Connections opened before 2026-08-26T12:30Z are refused by the contiguity
+check, and that is not archive loss.** Probed 2026-08-28 at raw.messages
+snapshot 8675983916383659458: every Kraken connection from 12:04 to 12:11 has
+`max(conn_msg_seq)` ≈ 1.8x its frame count while its `book` frame count equals
+`bronze.kraken_book` exactly (e.g. `1dfb9139…`: 5,891 frames, seq 1..10,242,
+5,837 book frames on both sides); every connection from 12:38 on is whole
+(`c8a130a5…`: 863,186 frames, seq 1..863,186). The early connections were
+produced by the Phase C build under burn-in before the counter's per-frame
+semantics settled (squashed into #71), so their counters are not a frame count
+and a replay of them cannot be shown complete. Nothing was dropped there that
+this script could recover.
+
 Reads from the HOST through the published ports, like scripts/parity_ohlcv.py
 and notebooks/k2lake.py. The Avro body is decoded here (fastavro against
 schemas/avro/raw-message.avsc, after the 5-byte Confluent header) so the Rust

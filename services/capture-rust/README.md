@@ -178,10 +178,13 @@ by what the venue sent: Binance 20, Kraken the subscribed 25, Coinbase full dept
 archive. There is no Kafka sink on purpose: the raw topic is what the lake ingests,
 and a replayed frame produced there would be archived a second time.
 
-Measured 2026-08-28, one archived Kraken connection (`1dfb9139…`, 23 s, 5,891 frames,
-`scripts/replay-lake.sh`): 6,030 records (132 snapshots, all `checksum_ok = true`) in
-under a second, the same digest on the second run; `--depth 25 --interval-ms 100`
-gave 1,140 snapshots at depth 25 from the same frames.
+Measured 2026-08-28, one whole archived Kraken connection (`c8a130a5…`, 2026-08-26
+12:38–13:42Z, 863,186 frames, `scripts/replay-lake.sh`): 879,119 records in 16 s end to
+end including the export and the `audit.checks` row, digest `56ad1df1…`. The earlier
+figure on this page (`1dfb9139…`, 5,891 frames → 6,030 records) was over a connection
+the export now refuses: its `conn_msg_seq` is not contiguous, a counter artefact of the
+pre-burn-in Phase C build rather than loss (see `scripts/replay_export.py`). `--depth 25
+--interval-ms 100` on that same input gave 1,140 snapshots at depth 25.
 
 `healthcheck` reads our own `/metrics` over loopback and looks at
 `k2_capture_last_message_ts_seconds`, the same number the staleness alert
