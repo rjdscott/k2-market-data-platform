@@ -171,3 +171,21 @@ three-way parity, notebooks on pinned views, ADR-029 Accepted, fidelity limits i
 `docs/research/2026-08-28-replay-fidelity-limits.md`. Deviations from this plan: no
 Kafka sink (double-archive), no Parquet reader in Rust (Python export), live parity is
 a `make` target under `/release-check` rather than a CI job (no stack in CI).
+
+**Fixture corpus extended 2026-08-28:** three failure fixtures join the three clean
+ones — `kraken-20s-checksum-fail.jsonl`, `coinbase-20s-seq-gap.jsonl`,
+`binance-10s-regression.jsonl`, each derived from its clean sibling by one textual
+edit (`scripts/make-failure-fixtures.py`) rather than recorded, since the captures are
+stopped and no recording window contained one of these failures. This closes the
+ADR-029 risk that "a venue behaviour the fixtures do not contain is a behaviour replay
+cannot prove" for the three resync policies of ADR-027, and pins what each adapter
+does with a resync request the fixture cannot answer: Kraken one `Resubscribe` and one
+marked `checksum_ok = false` snapshot, then dark to the end of the file (10 snapshots
+against the clean fixture's 19); Coinbase one `Reconnect` and then no snapshot at all
+for the rest of the session (9 against 19); Binance one `Resubscribe` and exactly one
+sampled snapshot lost (9 against 10). `tests/replay_failures.rs`, hashes committed as
+for the clean three. The Kraken fixture found a bug on the way in — the same file
+replayed to 573 actions and 573 marked snapshots before
+[#119](https://github.com/rjdscott/k2-market-data-platform/pull/119) taught
+`apply_book` to ignore updates onto an empty book — which is the argument for the
+corpus, made by the corpus.
