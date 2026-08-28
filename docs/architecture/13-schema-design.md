@@ -58,6 +58,27 @@ schema evolution is add-nullable-only at every layer, with `raw.messages` frozen
 
 **Gold in the lake, landed 2026-08-27.** [`docker/lake/gold.py`](../../docker/lake/gold.py): `gold.trades` is silver's first deliveries projected to one schema with `price_e8`/`qty_e8` fixed point (identifier `(exchange, canonical_symbol, trade_id)`), `gold.dim_instrument`/`dim_venue` from the registry, `gold.ohlcv_{1m,5m,1h,1d}` recomputed per touched bucket and MERGEd (copy-on-write) with the source snapshot on every row. `bbo_1s` and `book_top20` in the lake follow with silver books.
 
+**The security master, landed 2026-08-29.** [`docker/lake/scd2.py`](../../docker/lake/scd2.py)
+and `gold.py`'s `load_dims()`: `gold.dim_instrument` and `gold.dim_venue` are Kimball type-2
+dimensions ([ADR-030](../adr/ADR-030-scd2-security-master.md)), one row per validity interval.
+
+| Column group | Columns | Contract |
+|---|---|---|
+| surrogate | `instrument_id` / `venue_id` | first 32 hex of `sha256(exchange ‖ 0x1F ‖ canonical_symbol)`. Deterministic, so it survives `rebuild.py`; a sequence would not |
+| natural key | `exchange`, `canonical_symbol` (`exchange` alone for the venue) | the half of the identity a venue rename does not touch. Unique per venue, asserted by `tests/test_contracts.py` |
+| registry attributes | `symbol` (native), `base`, `quote`, `book_depth`, `subscribed` | from `config/instruments.yaml`. `symbol` is **tracked, not key**: Kraken `XBT/USD` → `BTC/USD` opens a version under the same `instrument_id` |
+| venue attributes | `tick_size`, `qty_increment`, `price_precision`, `qty_precision`, `venue_status` | nullable. Populated for Kraken from `bronze.kraken_instrument` `data.pairs[]`; NULL for Binance and Coinbase, which publish them over REST that K2 does not capture |
+| provenance | `source` | `registry` or `venue:kraken` — which authority supplied this version's venue attributes, so a NULL is never ambiguous |
+| validity | `attr_hash`, `valid_from`, `valid_to`, `is_current`, `recorded_at` | `valid_to` on the open row is the sentinel `9999-12-31 23:59:59`, **never NULL**: `ts < NULL` is not `TRUE`, so a NULL bound silently drops the current row from a range join. `attr_hash` is sha256 over the tracked attributes and is the whole change predicate |
+
+Read them with an as-of join, never with a bare `SELECT *`: a query that forgets
+`WHERE is_current` gets every historical version. `valid_from` ≤ `t` < `valid_to` tiles the
+timeline per key with no gap and no overlap, because the close and the open share one
+`run_ts`. These are the only gold tables not rebuildable from silver — nothing upstream is a
+source for what the registry said last month — so `rebuild.py --layer gold` leaves them alone.
+`gold.trades` deliberately carries **no** `instrument_id`: it is a pure function of `exchange`
+and `canonical_symbol`, both already on the row, and the join uses those.
+
 **Event bars, landed 2026-08-28.** [`docker/lake/bars.py`](../../docker/lake/bars.py): `gold.bars` holds tick, volume and dollar bars at the one canonical threshold per symbol in [`config/bars.yaml`](../../config/bars.yaml), computed from every trade in `gold.trades` (the book is never an input). A bar is a *cumulative bucket*, trade → bar `k` of its UTC day when `k·T ≤ (day's total before it) < (k+1)·T` in the candles' `(exchange_ts, recv_ts_ns, trade_seq)` order, so it is one window expression in Spark, DuckDB and a twenty-line Python reference; `scripts/parity-bars.sh` holds the three to tolerance zero. Columns are exact fixed point in and out (`open_e8` … `volume_e8`, `quote_volume_e8` = the 1e-16 notional floor-divided to 1e-8), with no `DECIMAL` division on the path, because DuckDB turns a decimal quotient into a `DOUBLE`. A touched `(exchange, symbol, day)` is deleted and re-appended, not `MERGE`d: a late trade moves every later boundary in its day. Any other threshold is [`notebooks/k2lake.py`](../../notebooks/k2lake.py) `bars()` over `gold.trades`, never a second table. Served from ClickHouse `gold.bars` by the same pull as the candles.
 
 **Gold in ClickHouse, landed 2026-08-27.** [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql) is the served contract: `gold.trades` (`ReplacingMergeTree`, `ORDER BY (exchange, canonical_symbol, exchange_ts, trade_id)`, version = inverted `recv_ts_ns` so the earliest delivery wins, no TTL), `gold.book_top20` (one row per venue-symbol-second, later sample wins), and the on-read views `gold.ohlcv_live(bucket)` and `gold.bbo_live`. Prices and quantities are the wire's `Int64` at 1e-8 with exact `Decimal(38,10)` aliases. Fed by AvroConfluent Kafka engines for freshness (`20-gold-kafka.sql`) and by a pull from lake gold through `iceberg()` ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)); CI asserts the semantics on every PR (`make test-clickhouse`, [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)).

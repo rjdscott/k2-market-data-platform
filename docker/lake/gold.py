@@ -3,8 +3,9 @@
 Gold — the canonical cross-venue surface, derived from silver only (ADR-026).
 
     gold.trades          silver.trades_<venue> WHERE NOT venue_replay, one schema, 1e-8 fixed point
-    gold.dim_instrument  config/instruments.yaml, rewritten every run
-    gold.dim_venue       one row per venue, from the same file
+    gold.dim_instrument  the security master: config/instruments.yaml plus Kraken's published
+                         precisions, SCD2 — one row per validity interval (scd2.py, ADR-030)
+    gold.dim_venue       one SCD2 row per validity interval per venue, from the same file
     gold.ohlcv_{1m,5m,1h,1d}   candles over gold.trades, recomputed per touched bucket and MERGEd
     gold.bars            tick / volume / dollar bars over gold.trades at config/bars.yaml's
                          thresholds, recomputed per touched (exchange, symbol, UTC day) — bars.py
@@ -44,6 +45,7 @@ from functools import reduce
 
 import bars
 import instruments
+import scd2
 import silver
 from catalog import added_records, snapshot_history
 from pyspark.sql import DataFrame
@@ -68,6 +70,39 @@ SCALE = 100_000_000  # 1e-8 fixed point, as the wire and ClickHouse gold
 
 # Which venues send the whole book (no depth parameter); config/instruments.yaml.
 _VENUE_DEPTH = {"binance": 20, "kraken": 25, "coinbase": 0}
+
+# The two dimensions, in ddl/lake.sql's column order — `writeTo(...).append()`
+# resolves positionally, so the tuple order and the schema string are the
+# contract with the DDL, and tests/test_wire_format.py asserts they agree.
+DIM_INSTRUMENT_COLUMNS = (
+    "instrument_id", "exchange", "canonical_symbol", "symbol", "base", "quote", "book_depth",
+    "subscribed", "tick_size", "qty_increment", "price_precision", "qty_precision",
+    "venue_status", "source", "attr_hash", "valid_from", "valid_to", "is_current", "recorded_at",
+)
+DIM_INSTRUMENT_SCHEMA = (
+    "instrument_id string, exchange string, canonical_symbol string, symbol string, base string, "
+    "quote string, book_depth int, subscribed boolean, tick_size decimal(28,10), "
+    "qty_increment decimal(28,10), price_precision int, qty_precision int, venue_status string, "
+    "source string, attr_hash string, valid_from timestamp, valid_to timestamp, "
+    "is_current boolean, recorded_at timestamp"
+)
+DIM_VENUE_COLUMNS = (
+    "venue_id", "exchange", "book_depth", "instruments", "subscribed", "source",
+    "attr_hash", "valid_from", "valid_to", "is_current", "recorded_at",
+)
+DIM_VENUE_SCHEMA = (
+    "venue_id string, exchange string, book_depth int, instruments int, subscribed boolean, "
+    "source string, attr_hash string, valid_from timestamp, valid_to timestamp, "
+    "is_current boolean, recorded_at timestamp"
+)
+# What a version is ABOUT, as opposed to what identifies it. The surrogate and
+# the natural key are excluded by construction: they cannot change without the
+# row being a different instrument.
+DIM_INSTRUMENT_TRACKED = (
+    "symbol", "base", "quote", "book_depth", "subscribed", "tick_size", "qty_increment",
+    "price_precision", "qty_precision", "venue_status", "source",
+)
+DIM_VENUE_TRACKED = ("book_depth", "instruments", "subscribed", "source")
 
 
 def _project_silver(df: DataFrame, exchange: str, run_ts: datetime) -> DataFrame:
@@ -145,18 +180,119 @@ def stage_trades(spark, run_ts: datetime) -> tuple:
     return total, (reduce(DataFrame.unionByName, touched) if touched else None)
 
 
+def _kraken_pairs(spark) -> dict:
+    """Kraken's published attributes per native pair, latest value each, from bronze.
+
+    `bronze.kraken_instrument` is the `instrument` channel verbatim: a snapshot of
+    every pair at subscribe plus incremental updates. `max_by(..., recv_ts_ns)` per
+    pair takes the newest value of each field across both, which is one pass and no
+    window. Empty (a stack with no Kraken capture yet) is a normal answer, not an
+    error: the venue columns are nullable and `source` records that the registry
+    was the only authority.
+
+    # ponytail: full scan of a reference-data table — ~566 KB per connection
+    # snapshot plus small updates. Bound it by the latest day partition if it
+    # ever passes ~1 GB.
+    """
+    rows = spark.sql(
+        f"""
+        WITH p AS (SELECT explode(data.pairs) AS pair, recv_ts_ns FROM {CATALOG}.bronze.kraken_instrument)
+        SELECT pair.symbol                                AS symbol,
+               max_by(pair.tick_size, recv_ts_ns)         AS tick_size,
+               max_by(pair.qty_increment, recv_ts_ns)     AS qty_increment,
+               max_by(pair.price_precision, recv_ts_ns)   AS price_precision,
+               max_by(pair.qty_precision, recv_ts_ns)     AS qty_precision,
+               max_by(pair.status, recv_ts_ns)            AS venue_status
+        FROM p GROUP BY pair.symbol
+        """
+    ).collect()
+    return {r["symbol"]: r.asDict() for r in rows}
+
+
+def _merge_dim(spark, table: str, key_cols: tuple, columns: tuple, schema: str,
+               tracked: tuple, current: dict, run_ts: datetime) -> tuple:
+    """One SCD2 cycle against `table`: close the changed versions, append the new ones.
+
+    Close BEFORE insert. Iceberg allows one action per matched row, so these are
+    two commits with no transaction across them, and the orders fail differently:
+    interrupted, close-then-insert leaves a key with no current version — an
+    as-of join returns nothing, the miss is visible, and the next run heals it by
+    treating the key as unseen. Insert-then-close would leave two open rows for
+    one key, which makes the as-of join non-deterministic and doubles every count
+    downstream. A gap announces itself; a duplicate produces plausible wrong
+    numbers (ADR-030).
+    """
+    previous = {
+        tuple(row[k] for k in key_cols): row.asDict()
+        for row in spark.sql(f"SELECT * FROM {table} WHERE is_current").collect()
+    }
+    close, insert = scd2.plan(previous, current, tracked, run_ts)
+    if close:
+        spark.createDataFrame(close, ", ".join(f"{k} string" for k in key_cols)).createOrReplaceTempView("__close")
+        on = " AND ".join(f"t.{k} = c.{k}" for k in key_cols)
+        spark.sql(
+            f"MERGE INTO {table} t USING __close c ON {on} "
+            f"WHEN MATCHED AND t.is_current THEN UPDATE SET "
+            f"t.valid_to = TIMESTAMP '{run_ts.strftime('%Y-%m-%d %H:%M:%S.%f')}', t.is_current = false"
+        )
+    if insert:
+        spark.createDataFrame([tuple(row[c] for c in columns) for row in insert], schema).writeTo(table).append()
+    return len(close), len(insert)
+
+
 def load_dims(spark, run_ts: datetime) -> None:
-    """config/instruments.yaml as gold.dim_instrument and gold.dim_venue, overwritten."""
+    """The security master: config/instruments.yaml + Kraken's published attributes, SCD2.
+
+    Not an overwrite any more. A run with nothing changed writes no rows at all;
+    a changed attribute closes the open version and opens the next under the same
+    surrogate; an instrument that leaves the registry is closed and reopened with
+    `subscribed = false`, never deleted (ADR-030, scd2.py).
+    """
     reg = instruments.load()
-    rows, venues = [], []
+    pairs = _kraken_pairs(spark)
+    instrument_rows, venue_rows = {}, {}
     for exchange, natives in reg.items():
         for native, canon in natives.items():
             base, quote = canon.split("/")
-            rows.append((exchange, native, canon, base, quote, _VENUE_DEPTH[exchange], run_ts))
-        venues.append((exchange, _VENUE_DEPTH[exchange], len(natives), run_ts))
-    spark.createDataFrame(rows, "exchange string, symbol string, canonical_symbol string, base string, quote string, book_depth int, loaded_at timestamp").writeTo(DIM_INSTRUMENT).overwritePartitions()
-    spark.createDataFrame(venues, "exchange string, book_depth int, instruments int, loaded_at timestamp").writeTo(DIM_VENUE).overwritePartitions()
-    print(f"stage 2d: dims loaded: {len(rows)} instruments, {len(venues)} venues")
+            # Kraken is the only venue whose attributes K2 captures; Binance and
+            # Coinbase publish theirs over REST, which the WebSocket capture tier
+            # does not read. `source` is what tells a NULL apart from a zero.
+            venue = pairs.get(native, {}) if exchange == "kraken" else {}
+            instrument_rows[(exchange, canon)] = {
+                "instrument_id": scd2.surrogate(exchange, canon),
+                "exchange": exchange,
+                "canonical_symbol": canon,
+                "symbol": native,
+                "base": base,
+                "quote": quote,
+                "book_depth": _VENUE_DEPTH[exchange],
+                "subscribed": True,
+                "tick_size": venue.get("tick_size"),
+                "qty_increment": venue.get("qty_increment"),
+                "price_precision": venue.get("price_precision"),
+                "qty_precision": venue.get("qty_precision"),
+                "venue_status": venue.get("venue_status"),
+                "source": "venue:kraken" if venue else "registry",
+            }
+        venue_rows[(exchange,)] = {
+            "venue_id": scd2.surrogate(exchange),
+            "exchange": exchange,
+            "book_depth": _VENUE_DEPTH[exchange],
+            "instruments": len(natives),
+            "subscribed": True,
+            "source": "registry",
+        }
+    closed_i, inserted_i = _merge_dim(spark, DIM_INSTRUMENT, ("exchange", "canonical_symbol"),
+                                      DIM_INSTRUMENT_COLUMNS, DIM_INSTRUMENT_SCHEMA,
+                                      DIM_INSTRUMENT_TRACKED, instrument_rows, run_ts)
+    closed_v, inserted_v = _merge_dim(spark, DIM_VENUE, ("exchange",),
+                                      DIM_VENUE_COLUMNS, DIM_VENUE_SCHEMA,
+                                      DIM_VENUE_TRACKED, venue_rows, run_ts)
+    print(
+        f"stage 2d: dims: {DIM_INSTRUMENT} {closed_i} closed / {inserted_i} new version(s), "
+        f"{DIM_VENUE} {closed_v} closed / {inserted_v} new version(s); "
+        f"{len(pairs)} Kraken pairs published"
+    )
 
 
 def candles(spark, seconds: int, keys: DataFrame, src_snapshot_id, run_ts: datetime) -> DataFrame:
