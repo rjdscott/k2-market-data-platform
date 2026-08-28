@@ -50,6 +50,7 @@ reads is seeded at zero on startup, so a counter's *first* event is detectable.
 | `produce_errors_total` | counter | `exchange`, `reason` | Records that failed to produce. There is no spill-to-disk, so these are lost |
 | `gaps_total`, `resyncs_total` | counter | `exchange` | Sequence continuity broke; book rebuilt |
 | `checksum_failures_total` | counter | `exchange`, `symbol` | Kraken CRC32 mismatch. Kraken only, the other two publish no checksum |
+| `book_updates_ignored_total` | counter | `exchange`, `symbol` | Kraken `update` frames dropped because the local book is empty — before the first snapshot, or between a mismatch and the resync landing. The width of that dark window |
 | `reconnects_total` | counter | `exchange`, `reason=scheduled\|involuntary` | `scheduled` is Binance's 23 h pre-emptive recycle |
 | `precision_loss_total` | counter | `exchange`, `reason` | A venue quoted finer than the fixed-point 1e-8 scale |
 | `unknown_frames_total` | counter | `exchange`, `stream` | Frames the adapter did not recognise (still archived verbatim) |

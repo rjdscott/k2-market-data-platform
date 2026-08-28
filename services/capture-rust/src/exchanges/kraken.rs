@@ -361,6 +361,25 @@ impl KrakenAdapter {
         let depth = self.subscription_depth(f.symbol) as usize;
 
         let state = self.books.entry(f.symbol.to_string()).or_default();
+        // An empty book means one of exactly two things: no `snapshot` has
+        // arrived yet on this connection, or a checksum mismatch cleared it and
+        // the resubscribe is still in flight. In both an `update` is a delta
+        // onto nothing - folding it in produces a partial book that fails the
+        // checksum, emits another `checksum_ok=false` snapshot and raises
+        // another `Action::Resubscribe`, once per update frame for the whole
+        // round trip (~10/s on BTC/USD). One incident, counted N times. The
+        // venue's answer to the resubscribe is a `snapshot`, and that is what
+        // rebuilds the book; until then this symbol is dark, which is the gap
+        // ADR-027's Outcome describes.
+        if frame_type == "update" && state.book.is_empty() {
+            metrics::counter!(
+                "k2_capture_book_updates_ignored_total",
+                "exchange" => EXCHANGE,
+                "symbol" => f.symbol.to_string(),
+            )
+            .increment(1);
+            return Vec::new();
+        }
         // A `snapshot` frame replaces the book outright; an `update` folds in.
         if frame_type == "snapshot" {
             state.book.clear();
@@ -859,6 +878,71 @@ mod tests {
         );
         let msgs = a.resubscribe_messages("BTC/USD");
         assert!(msgs[0].contains("unsubscribe") && msgs[1].contains("\"snapshot\":true"));
+    }
+
+    /// One `update` frame. Its checksum is deliberately wrong, so applying it
+    /// to an empty book would fail verification and raise a resubscribe.
+    fn update_frame() -> &'static str {
+        r#"{"channel":"book","type":"update","data":[{"symbol":"BTC/USD","bids":[{"price":45283.4,"qty":0.2}],"asks":[],"checksum":1,"timestamp":"2026-08-26T07:44:37.205375Z"}]}"#
+    }
+
+    /// One mismatch is **one** resubscribe, not one per update frame until the
+    /// venue answers. Before this guard every update in the round-trip window
+    /// folded into the just-cleared book, failed the checksum again and raised
+    /// another `Action::Resubscribe`: a derived fixture with a single tampered
+    /// checksum replayed to 573 actions.
+    #[test]
+    fn updates_during_the_dark_window_are_ignored_until_the_snapshot_lands() {
+        let mut a = adapter();
+        a.handle_frame(instrument_frame().as_bytes(), 1);
+        let bad = r#"{"channel":"book","type":"snapshot","data":[{"symbol":"BTC/USD","bids":[{"price":45283.5,"qty":0.1}],"asks":[{"price":45285.2,"qty":0.001}],"checksum":1,"timestamp":"2026-08-26T07:44:36.205375Z"}]}"#;
+        let h = a.handle_frame(bad.as_bytes(), 2);
+        assert_eq!(h.actions, vec![Action::Resubscribe("BTC/USD".into())]);
+
+        for ts in 3..13 {
+            let h = a.handle_frame(update_frame().as_bytes(), ts);
+            assert_eq!(
+                h.records.len(),
+                1,
+                "the raw archive record and nothing else: there is no book to fold into"
+            );
+            assert!(
+                h.actions.is_empty(),
+                "the resubscribe was already raised; one incident is one action"
+            );
+        }
+        assert_eq!(a.depth("BTC/USD"), Some(0), "the book stays empty");
+        assert!(a.snapshot("BTC/USD", 13).is_none(), "and unsampled");
+
+        // The venue's answer to the resubscribe - a fresh snapshot - is what
+        // ends the dark window.
+        let good = format!(
+            r#"{{"channel":"book","type":"snapshot","data":[{{"symbol":"BTC/USD","bids":[{{"price":45283.5,"qty":0.1}}],"asks":[{{"price":45285.2,"qty":0.001}}],"checksum":{},"timestamp":"2026-08-26T07:44:38.205375Z"}}]}}"#,
+            book_checksum(
+                &[(4_528_520_000_000, 100_000)],
+                &[(4_528_350_000_000, 10_000_000)],
+                1,
+                8
+            )
+        );
+        let h = a.handle_frame(good.as_bytes(), 14);
+        assert!(h.actions.is_empty(), "the resync landed");
+        let snap = a.snapshot("BTC/USD", 15).expect("the book is back");
+        assert_eq!(snap.checksum_ok, Some(true));
+        assert_eq!(snap.bid_px, vec![4_528_350_000_000]);
+        assert_eq!(snap.ask_px, vec![4_528_520_000_000]);
+    }
+
+    /// The other state an empty book can be in: nothing has arrived yet. An
+    /// update is just as unfoldable there, and just as silent.
+    #[test]
+    fn an_update_before_the_first_snapshot_is_ignored() {
+        let mut a = adapter();
+        a.handle_frame(instrument_frame().as_bytes(), 1);
+        let h = a.handle_frame(update_frame().as_bytes(), 2);
+        assert_eq!(h.records.len(), 1, "raw only");
+        assert!(h.actions.is_empty());
+        assert!(a.snapshot("BTC/USD", 3).is_none());
     }
 
     /// Nothing maps a symbol on the way to the wire any more.

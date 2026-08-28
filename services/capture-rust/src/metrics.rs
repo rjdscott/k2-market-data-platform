@@ -93,6 +93,12 @@ fn describe() {
          maintained book. Each one drops the book and triggers a resync."
     );
     describe_counter!(
+        "k2_capture_book_updates_ignored_total",
+        "Kraken book `update` frames dropped because the local book was empty - before \
+         the first snapshot, or between a checksum mismatch and the resync landing. \
+         This is the width of the dark window; the raw frame is still archived."
+    );
+    describe_counter!(
         "k2_capture_resyncs_total",
         "Book resubscriptions requested after the local book became untrustworthy."
     );
@@ -202,13 +208,16 @@ fn zero(
     ] {
         counter!(name, "exchange" => exchange).increment(0);
     }
+    // Both are Kraken-only for the same reason: only a venue with a checksum
+    // has a mismatch to recover from, and only that recovery leaves a window in
+    // which updates are ignored.
     for symbol in checksummed_symbols {
-        counter!(
+        for name in [
             "k2_capture_checksum_failures_total",
-            "exchange" => exchange,
-            "symbol" => symbol.clone(),
-        )
-        .increment(0);
+            "k2_capture_book_updates_ignored_total",
+        ] {
+            counter!(name, "exchange" => exchange, "symbol" => symbol.clone()).increment(0);
+        }
     }
     // A gauge, and it needs seeding for the same reason the counters do: the
     // frame path only creates it once `adapter.depth(symbol)` returns a book, so
@@ -250,6 +259,7 @@ mod tests {
 
         for want in [
             "k2_capture_book_depth",
+            "k2_capture_book_updates_ignored_total",
             "k2_capture_checksum_failures_total",
             "k2_capture_gaps_total",
             "k2_capture_produce_errors_total",

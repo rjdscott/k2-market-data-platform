@@ -265,3 +265,44 @@ trade in `gold.trades`, which is unsampled; the book is never an input.
 
 Status moves to Accepted with this addendum: three venues have run on this policy since
 2026-08-26 and the Phase E lake tier consumes its output.
+
+### Resync storm after a checksum mismatch, found 2026-08-28
+
+The Outcome above says "between that snapshot and the resync landing the symbol emits
+nothing — a gap". That was the intent; the adapter did not implement it. The mismatch
+branch cleared the book and returned `Action::Resubscribe`, but nothing recorded that the
+symbol was *waiting* for a snapshot, so every `update` frame that arrived during the round
+trip folded into the now-empty book, failed the checksum again, emitted another
+`checksum_ok = false` snapshot, incremented `k2_capture_checksum_failures_total` and
+`k2_capture_resyncs_total` again, and raised another `Action::Resubscribe`. One incident,
+counted N times — live, one resubscribe frame per book update for the venue's round-trip
+window, and Kraken sends ~10 book updates a second on BTC/USD.
+
+Found by replay, not by an alert. A derived fixture — `tests/fixtures/kraken-20s.jsonl`
+with one `update` frame's checksum incremented by one, nothing else changed — replayed
+through `k2-capture replay` to **1156 actions and 1156 checksum failures over 1185
+frames**: the venue in a recording never answers a resubscribe, so the storm ran to the
+end of the file. The count scales with how many book frames remain after the tampered
+one; the shape, one action per subsequent update, does not. After the fix the same
+fixture replays to **1 action**.
+
+The fix is one early return: an `update` frame for a symbol whose local book is empty is
+ignored for book purposes — no apply, no checksum, no snapshot record, no action — and
+the raw frame is archived as always. An empty book means either no snapshot has arrived
+yet on this connection or a mismatch cleared it, and in both an update is a delta onto
+nothing. The venue's `snapshot` is what rebuilds it. The dark window is now visible
+rather than inferred: `k2_capture_book_updates_ignored_total{exchange,symbol}`, seeded at
+zero for Kraken only, alongside `checksum_failures_total`. Pinned by
+`kraken.rs::updates_during_the_dark_window_are_ignored_until_the_snapshot_lands` and
+`::an_update_before_the_first_snapshot_is_ignored`. The three committed replay hashes are
+unchanged: the clean fixtures contain no mismatch, so the guard never fires on them.
+
+**A wording drift the same exercise turned up.** The policy table above says Binance
+"Reconnect the combined stream". The adapter does not reconnect: it raises
+`Action::Resubscribe(symbol)`, and for Binance that maps to no frame at all —
+`resubscribe_messages` returns nothing on the combined stream, because the next
+`@depth20@100ms` partial *is* a complete book and needs no request. The behaviour is
+right and was always right; only the table's verb is wrong, and the table is Accepted, so
+it stays as written. `services/capture-rust/README.md` § Sequencing and resync already
+states it correctly ("`Action::Resubscribe` with **no frames**"), and that is the row to
+believe.
