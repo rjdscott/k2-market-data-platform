@@ -129,3 +129,38 @@ diverge silently; parity job disabled or skipped → the guard is gone).
 - No unpinned reads: `grep -rniE "snapshot.?id\s*=\s*['\"]?latest|current_snapshot\(\)" notebooks/ tests/parity/` prints nothing.
 - Fixtures are shared, not duplicated: `grep -rn "tests/golden" services/capture-rust tests notebooks` shows all three consumers pointing at the same directory.
 - ADR-029 is Accepted and reachable from `docs/adr/README.md`; the fidelity research doc is indexed in `docs/research/README.md`.
+
+## Scope amendment, 2026-08-28
+
+Decided when the phase was picked up, after Phase E landed the parity script
+(`scripts/parity_ohlcv.py`, `tests/parity/pinned.json`) and the three per-venue
+fixtures with committed hashes (`services/capture-rust/tests/fixtures/`), both of
+which this plan had scheduled for G. What remains, and what changed:
+
+- **Lake source is a Python export, not a Parquet reader in Rust.** The plan left
+  the choice open; the smaller dependency set wins. `scripts/replay-export.py`
+  (PyIceberg) reads `raw.messages` at an explicit `--snapshot-id` for one topic and
+  writes the fixture JSONL shape (`recv_ts_ns` from the Kafka header, `payload`
+  as the frame text). `k2-capture replay` reads a file or stdin and nothing else,
+  so a test fixture and a lake export are the same input. The wrapper writes the
+  `audit.checks` row; the binary stays free of any lake client.
+- **`--depth N` and `--interval-ms M` on replay.** ADR-027's "deeper and faster by
+  replay" becomes two flags rather than a promise. Bounded by what each venue
+  sends: Binance 20, Kraken the subscribed 25, Coinbase full depth. The live path
+  keeps its constants; the flags exist only on replay.
+- **Fixtures stay where they are.** `tests/golden/<exchange>/` in the plan is
+  `services/capture-rust/tests/fixtures/` in the repo, already shared by the
+  Rust tests. Not moved: the path is in three test files and a README, and the
+  location was never the point.
+- **`gold.bars` joins the catalogue.** Event bars (tick, volume, dollar) at one
+  fixed threshold per instrument from `config/bars.yaml`, computed in
+  `docker/lake/gold.py` from `gold.trades` like the candles are, pulled into
+  ClickHouse like the candles are, with a pure-Python reference in the parity
+  test. Threshold is data-dependent by nature, so exactly one canonical value is
+  materialised and every other threshold is `k2lake.bars()` over `gold.trades` in
+  DuckDB. Bars reset at the UTC day boundary so a day is recomputable on its own.
+  This is the "standardised bars dataset" the research surface vends; it is a
+  schema change and ships through `/schema-change`.
+- **ADR-027 moved to Accepted** with an Outcome noting the deltas are queryable in
+  bronze since Phase E, which this plan's "deltas only in `raw.messages`" wording
+  predates.

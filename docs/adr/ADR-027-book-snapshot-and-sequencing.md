@@ -1,6 +1,6 @@
 # ADR-027: L2 book snapshot model and per-exchange resync policy
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-26
 **Author:** Rob Scott
 **Category:** Data model
@@ -236,3 +236,32 @@ Coinbase held 13,000–15,000 levels on liquid symbols over the 2026-08-26 12:38
 sample, so a fall to 50 levels would be severe and would stay far above this floor.
 Catching that needs a per-venue baseline; Phase F's measured depth distributions are the
 trigger to revisit.
+
+### The deltas became queryable without this ADR changing, 2026-08-28
+
+The Decision says the deltas are kept "only as verbatim frames in `raw.messages`". That
+was true through Phase C and stopped being true in Phase E without anyone noticing the
+sentence: `docker/lake/bronze.py` now decodes every book frame into
+`bronze.{binance_depth20,kraken_book,coinbase_level2}`, typed, one row per frame, with
+lineage back to the `raw.messages` row it came from; `docker/lake/books.py` replays those
+tables per connection with the Kraken CRC32 verified on every update and samples
+`gold.book_top20` and `gold.bbo_1s` off that replay. So "recoverable by replay" now means
+a Spark job over a typed table, not a decode of archived bytes — cheaper than the
+Decision priced it, and the reason it was priced that way (one host, no second `book.rs`
+in SQL) still holds: nothing reconstructs a book in SQL, and the 1 Hz top-20 row is still
+the only book a query joins to.
+
+**Ad-hoc depth and cadence, sampled from the archive.** Phase G's `k2-capture replay`
+runs the archived frames through the same adapter as live and takes `--depth N` and
+`--interval-ms M`, so a top-50 at 100 ms is a command over a pinned snapshot rather than
+a table anyone pays for daily. Binance caps at 20 by stream construction and Kraken at
+the subscribed 25 (`book_depth`); Coinbase is full depth. The Alternatives table above
+stands: a *table* at that depth or rate is still rejected.
+
+**Bars are not from the book.** A question that came up when this ADR was read back:
+whether the sampled book limits what bars can be built. It does not. Time bars
+(`gold.ohlcv_*`) and event bars (`gold.bars`, ADR-029 era) are computed from every
+trade in `gold.trades`, which is unsampled; the book is never an input.
+
+Status moves to Accepted with this addendum: three venues have run on this policy since
+2026-08-26 and the Phase E lake tier consumes its output.
