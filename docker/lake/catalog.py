@@ -147,7 +147,7 @@ def fetch_schema(schema_id: int) -> str:
         raise UnresolvableSchema(f"schema id {schema_id}: {exc}") from exc
 
 
-def write_audit_rows(spark, rows: list, properties: dict) -> bool:
+def write_audit_rows(spark, rows: list, properties: dict, job: str = "ingest") -> bool:
     """This run's findings into `audit.checks`, in ONE commit. True if it landed.
 
     Same table as the nightly audit, `job='ingest'`, so "what did the pipeline
@@ -177,7 +177,7 @@ def write_audit_rows(spark, rows: list, properties: dict) -> bool:
     writer = (
         spark.createDataFrame(rows)
         .writeTo(CHECKS_TABLE)
-        .option(f"snapshot-property.{O.JOB}", "ingest")
+        .option(f"snapshot-property.{O.JOB}", job)
         .option(f"snapshot-property.{O.AUDIT_FAILURES}", str(failures))
     )
     for name, value in properties.items():

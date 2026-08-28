@@ -5,12 +5,15 @@
 //!   runtime image is distroless: there is no curl and no shell to run one in,
 //!   so the healthcheck has to be the binary itself.
 //! * `record`      dump frames as JSONL for a test fixture.
+//! * `replay`      recorded frames (a fixture, or a lake export) through the
+//!   same adapter, clock from the recording, records as JSONL on stdout.
 //!
 //! The runtime is `current_thread` on purpose. One connection cannot saturate a
 //! core, the container is limited to a quarter of one, and a single-threaded
 //! scheduler makes the interleaving of the frame loop and the 1 Hz sampler
 //! deterministic rather than a function of how many cores the host had free.
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -20,6 +23,7 @@ use k2_capture::config::{Exchange, Instruments};
 use k2_capture::exchanges::{Action, Adapter, BinanceAdapter, CoinbaseAdapter, KrakenAdapter};
 use k2_capture::metrics as k2_metrics;
 use k2_capture::record::OutRecord;
+use k2_capture::replay::{self, FixtureLine};
 use k2_capture::resync::ResyncOnDrain;
 use k2_capture::sink::Sink;
 use k2_capture::ws::{Backoff, Feed, http_get, now_ns};
@@ -156,6 +160,8 @@ enum Command {
     Healthcheck(HealthArgs),
     /// Record raw frames as JSONL on stdout, for a replay fixture.
     Record(RecordArgs),
+    /// Replay recorded frames through the live adapter; records as JSONL on stdout.
+    Replay(ReplayArgs),
 }
 
 #[derive(Args)]
@@ -220,6 +226,39 @@ struct RecordArgs {
     ws_url: Option<String>,
 }
 
+#[derive(Args)]
+struct ReplayArgs {
+    #[arg(long, env = "K2_EXCHANGE")]
+    exchange: Exchange,
+    /// Fixture or lake export (JSONL: `{"recv_ts_ns":..,"payload":".."}`); `-` for stdin.
+    #[arg(long, default_value = "-")]
+    fixture: PathBuf,
+    #[arg(
+        long,
+        env = "K2_INSTRUMENTS_FILE",
+        default_value = "/app/config/instruments.yaml"
+    )]
+    instruments_file: PathBuf,
+    /// Native symbols to keep, comma separated; default every instrument the registry has for the venue.
+    #[arg(long, value_delimiter = ',')]
+    symbols: Vec<String>,
+    /// Stamped on every record. A lake export carries the archived one; pass it so
+    /// the replayed records join back to the archive.
+    #[arg(long, default_value = replay::FIXTURE_CONN_ID)]
+    conn_id: String,
+    /// Sampler cadence, in recorded time. 1000 is the product (ADR-027).
+    #[arg(long, default_value_t = 1000)]
+    interval_ms: u64,
+    /// Levels per side per snapshot. Default is the product's 20; bounded by what the
+    /// venue sent (Binance 20, Kraken the subscribed 25, Coinbase full depth).
+    #[arg(long)]
+    depth: Option<usize>,
+    /// `max` runs as fast as the CPU allows; `realtime` sleeps the recorded gaps.
+    /// Both produce identical bytes.
+    #[arg(long, default_value = "max", value_parser = ["max", "realtime"])]
+    speed: String,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     // Logs go to stderr because `record` writes its fixture to stdout, and a
@@ -235,6 +274,7 @@ async fn main() -> Result<()> {
         Command::Run(args) => run(args).await,
         Command::Healthcheck(args) => healthcheck(args).await,
         Command::Record(args) => record(args).await,
+        Command::Replay(args) => replay_cmd(args),
     }
 }
 
@@ -670,13 +710,52 @@ async fn record(args: RecordArgs) -> Result<()> {
     Ok(())
 }
 
-/// One line of a replay fixture. A struct rather than `json!` so the field
-/// order is the declared one - `tests/replay.rs` reads these back and a stable
-/// layout keeps the committed file diffable.
-#[derive(serde::Serialize)]
-struct FixtureLine<'a> {
-    recv_ts_ns: i64,
-    payload: std::borrow::Cow<'a, str>,
+/// Recorded frames through the live adapter. No socket, no producer, no
+/// metrics exporter: the adapter's `counter!`/`gauge!` calls hit no recorder
+/// and cost nothing. Prints a SHA-256 of the bytes written to stderr, so
+/// `replay ... | sha256sum` and the log agree by construction.
+fn replay_cmd(args: ReplayArgs) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let mut instruments = Instruments::load(&args.instruments_file, args.exchange)?;
+    if !args.symbols.is_empty() {
+        instruments.retain_native(&args.symbols)?;
+    }
+    let mut adapter = build_adapter(args.exchange, instruments);
+    let opts = replay::Options {
+        conn_id: args.conn_id,
+        snapshot_interval_ns: (args.interval_ms as i64) * 1_000_000,
+        depth: args.depth,
+        realtime: args.speed == "realtime",
+    };
+    let input: Box<dyn std::io::BufRead> = if args.fixture.as_os_str() == "-" {
+        Box::new(std::io::stdin().lock())
+    } else {
+        let f = std::fs::File::open(&args.fixture)
+            .with_context(|| format!("opening {}", args.fixture.display()))?;
+        Box::new(std::io::BufReader::new(f))
+    };
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+    let mut hasher = Sha256::new();
+    let mut line = Vec::with_capacity(4096);
+    let stats = replay::run(&mut adapter, input, &opts, |record| {
+        line.clear();
+        replay::write_jsonl(&mut line, record)?;
+        hasher.update(&line);
+        out.write_all(&line)?;
+        Ok(())
+    })?;
+    out.flush()?;
+    tracing::info!(
+        frames = stats.frames,
+        records = stats.records,
+        actions = stats.actions,
+        first_recv_ts_ns = stats.first_recv_ts_ns,
+        last_recv_ts_ns = stats.last_recv_ts_ns,
+        sha256 = %format!("{:x}", hasher.finalize()),
+        "replayed"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

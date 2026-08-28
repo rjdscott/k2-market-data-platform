@@ -29,6 +29,7 @@ compares them before the old path is deleted.
 | `book.py` | Pure: an L2 book replayed from frames, Kraken's CRC32 at the pair's precision, truncation to the subscription depth. Unit-tested against Kraken's published example |
 | `books.py` | Stage 2e: `silver.book_<venue>` typed (Kraken `checksum_ok` by replay) and, from the same replay, `gold.book_top20` per second and `gold.bbo_1s`; `gold.book_state` carries a connection's book between ticks |
 | `gold.py` | Stage 2d: `gold.trades` (one row per logical trade = silver's first deliveries), `gold.dim_*` from the registry, `gold.ohlcv_{1m,5m,1h,1d}` recomputed per touched bucket and MERGEd |
+| `record_check.py` | One `audit.checks` row from the command line, `job='replay'`: what `scripts/replay-lake.sh` files after every replay (snapshot id, conn_id, crate sha, output sha256), so a research result is reproducible by re-running the same ids and comparing one digest |
 | `rebuild.py` | `make lake-rebuild LAYER=bronze|silver|gold`: drop, recreate and re-decode a layer from its parent, one day per venue at a time |
 | `maintenance.py` | Nightly compaction, snapshot expiry, and the audits. Non-zero exit on a failure |
 | `metrics.py` | The `lake-metrics` exporter. Reads snapshot summaries over the catalog's REST API |

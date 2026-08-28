@@ -49,10 +49,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # counted and dropped. Nothing matches on an error variant, so a thiserror enum
 # would be a type nobody reads.
 anyhow = "1"
+# `replay` prints the digest of what it wrote; 0.11 changes the digest output type
+# and the replay tests format it with {:x}.
+sha2 = "0.10"
 
 [dev-dependencies]
 proptest = "1"
-sha2 = "0.10"  # 0.11 changes the digest output type; the replay tests format it with {:x}
 
 [profile.release]
 lto = "thin"

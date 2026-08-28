@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use k2_capture::config::{Exchange, Instruments};
 use k2_capture::exchanges::{Adapter, KrakenAdapter};
 use k2_capture::record::{BookSnapshotRecord, OutRecord};
+use k2_capture::replay;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -209,9 +210,29 @@ fn fixture_replays_with_no_checksum_failures() {
 /// what moved.
 #[test]
 fn replay_is_deterministic() {
-    let first = serde_json::to_vec(&replay().records).expect("serialise");
-    let second = serde_json::to_vec(&replay().records).expect("serialise");
+    // Through the shared driver `k2-capture replay` runs, hashed over the same
+    // JSONL bytes it writes: `replay --fixture kraken-20s.jsonl | sha256sum` must
+    // print the committed digest.
+    let pass = || {
+        let mut adapter = adapter();
+        let input = std::io::BufReader::new(
+            std::fs::File::open(fixtures().join("kraken-20s.jsonl")).expect("fixture"),
+        );
+        let mut bytes = Vec::new();
+        let stats = replay::run(&mut adapter, input, &replay::Options::default(), |r| {
+            replay::write_jsonl(&mut bytes, r)
+        })
+        .expect("replay");
+        (bytes, stats)
+    };
+    let (first, stats) = pass();
+    let (second, _) = pass();
     assert_eq!(first, second, "two passes over one fixture disagreed");
+    assert_eq!(
+        stats.records,
+        first.iter().filter(|&&b| b == b'\n').count(),
+        "one record per line"
+    );
 
     let digest = format!("{:x}", Sha256::digest(&first));
     let golden = std::fs::read_to_string(fixtures().join("kraken-20s.sha256"))

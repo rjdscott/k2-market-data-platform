@@ -160,7 +160,28 @@ they are quoted here, in ADR-019 and in the FMEA's delayed→lost arithmetic.
 k2-capture run                       # capture and produce
 k2-capture healthcheck               # exit 0 if EVERY continuous stream is inside its own bound
 k2-capture record --exchange kraken --seconds 20 --symbols BTC/USD > f.jsonl
+k2-capture replay --exchange kraken --fixture f.jsonl > records.jsonl   # same adapter, clock from the file
 ```
+
+`replay` is Phase G's `k2-replay` ([plan 006](../../docs/plans/2026-08-26-v3-quant-research-platform/006-phase-g-replay-parity.md); ADR-029 follows):
+a fixture or a lake export (`scripts/replay_export.py`, one archived connection out
+of `raw.messages` at a pinned snapshot) through the *same* `handle_frame` the socket
+loop calls, with the 1 Hz sampler ticking off the recorded `recv_ts_ns`. No socket,
+no producer, no exporter. Records go to stdout as JSONL, one per line, raw frame
+before what was derived from it; the SHA-256 of those bytes is logged at the end,
+and `replay ... | sha256sum` prints the same digest. `--speed realtime` sleeps the
+recorded gaps and changes nothing else (`tests/replay_cli.rs` asserts the bytes are
+identical). `--depth N` and `--interval-ms M` are the "deeper and faster by replay"
+[ADR-027](../../docs/adr/ADR-027-book-snapshot-and-sequencing.md) promised, bounded
+by what the venue sent: Binance 20, Kraken the subscribed 25, Coinbase full depth.
+`--conn-id` stamps the archived connection id back on so the records join to the
+archive. There is no Kafka sink on purpose: the raw topic is what the lake ingests,
+and a replayed frame produced there would be archived a second time.
+
+Measured 2026-08-28, one archived Kraken connection (`1dfb9139…`, 23 s, 5,891 frames,
+`scripts/replay-lake.sh`): 6,030 records (132 snapshots, all `checksum_ok = true`) in
+under a second, the same digest on the second run; `--depth 25 --interval-ms 100`
+gave 1,140 snapshots at depth 25 from the same frames.
 
 `healthcheck` reads our own `/metrics` over loopback and looks at
 `k2_capture_last_message_ts_seconds`, the same number the staleness alert
@@ -450,6 +471,12 @@ with `k2-capture record` on 2026-08-26.
 | `kraken-20s.jsonl` | `tests/replay.rs` | 1185 | 329 KB | BTC/USD (20 s) | the `instrument` snapshot's `pairs` filtered to the recorded symbol and `assets` emptied: 639 KB → under 1 KB |
 | `binance-10s.jsonl` | `tests/replay_binance.rs` | 539 (438 trade, 101 depth20) | 269 KB | BTCUSDT (10 s) | none, 10 s of one symbol is the whole budget at 100 ms depth frames |
 | `coinbase-20s.jsonl` | `tests/replay_coinbase.rs` | 159 (`sequence_num` 0..158) | 320 KB | ATOM-USD (20 s) | the `level2` snapshot event trimmed to 1,250 of 3,440 levels (all 450 bids, best 800 offers): 582 KB → 320 KB. Every `sequence_num` intact |
+
+`replay_is_deterministic` in each file runs the fixture through `replay::run`, the
+driver the `replay` subcommand uses, and hashes the JSONL bytes it writes, so the
+committed `.sha256` is exactly what `k2-capture replay --fixture <f> | sha256sum`
+prints. `tests/replay_cli.rs` covers the driver's own properties: speed does not
+change a byte, `--depth`/`--interval-ms` reach the snapshots.
 
 All three tests load `config/instruments.yaml` directly. The Kraken one used to
 need its own copy of the registry (`tests/fixtures/instruments-kraken-v2.yaml`)

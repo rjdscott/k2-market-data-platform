@@ -1,12 +1,1 @@
-1326dd291ed92c576dfdf9021415097eed9f79a3a30b4eaad9ff805a6dd5f977
-
-# SHA-256 of `serde_json::to_vec(&records)` over one replay of
-# kraken-20s.jsonl - see tests/replay.rs::replay_is_deterministic.
-#
-# This is the golden value for "same input, same bytes out". It changes only
-# when the fixture changes or a record's shape changes; either way the new
-# value goes here with a line saying what moved. It is not a hash of the
-# fixture file itself.
-#
-# 2026-08-26  first recorded: 1185 frames, 1 trade batch, 19 snapshots, 0
-#             checksum failures.
+65850bbae75f49a67f9665007f1e4dafd7f0a50b5eb501542105f8729232cdc8

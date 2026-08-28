@@ -153,6 +153,16 @@ impl Adapter {
 
     /// Take a top-20 snapshot of one symbol's book at `now_ns`, or `None` if
     /// there is no book yet. Called by the sampler, never by the frame path.
+    /// Levels per side the next snapshots carry. Live capture never calls
+    /// this (20 is the product, ADR-027); `replay --depth` does.
+    pub fn set_snapshot_depth(&mut self, depth: usize) {
+        match self {
+            Adapter::Kraken(a) => a.set_snapshot_depth(depth),
+            Adapter::Binance(a) => a.set_snapshot_depth(depth),
+            Adapter::Coinbase(a) => a.set_snapshot_depth(depth),
+        }
+    }
+
     pub fn snapshot(&self, native_symbol: &str, now_ns: i64) -> Option<BookSnapshotRecord> {
         match self {
             Adapter::Kraken(a) => a.snapshot(native_symbol, now_ns),
