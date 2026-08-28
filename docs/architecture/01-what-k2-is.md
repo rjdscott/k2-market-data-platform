@@ -27,6 +27,10 @@ Three properties define it, and the rest of the book is their consequences:
 
 ## What it is not
 
+The four below are the ones that change how you read the rest of the book. The full list —
+twelve non-goals, each with its cost, a revisit trigger and the nearest thing K2 does offer —
+is [ADR-028](../adr/ADR-028-non-goals-and-honest-limits.md).
+
 - **Not a trading path.** Feeds are public and cross the internet; measured venue-to-receive
   latency is 42 ms p50 / 207 ms p99 on Binance and higher elsewhere
   ([benchmarks](../benchmarks/2026-08-27.md#latency--exchange-timestamp--k2-receive)).
