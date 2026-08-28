@@ -21,7 +21,7 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 | 14 | [Partitioning strategy](14-partitioning-strategy.md) | partitions, sort orders, file sizes, ClickHouse keys |
 | 15 | [Capacity model](15-capacity-model.md) | predicted vs measured bytes/day, CPU, disk runway |
 | 16 | [Failure modes](16-failure-modes.md) | FMEA with detection, blast radius, recovery, proof |
-| 17 | [Scale-out path](17-scale-out-path.md) | AWS mapping at TB/PB, designed, not exercised |
+| 17 | [Scale-out path](17-scale-out-path.md) | HA, DR and cost on AWS at TB/PB, designed, not exercised |
 | A1 | [Technology stack](A1-technology-stack.md) | versions and the ADR behind each |
 
 Decisions live in [`../adr/`](../adr/README.md),
