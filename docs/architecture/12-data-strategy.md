@@ -111,7 +111,21 @@ above are about **fidelity and reproducibility**, which is what quant research a
 regulatory replay need; latency is measured and reported, never optimised for
 ([positioning.md](01-what-k2-is.md)).
 
-## Deferred to v3.1: a security master
+## The security master
+
+> **Two of the four rows below landed on 2026-08-29 — [ADR-030](../adr/ADR-030-scd2-security-master.md).**
+> `gold.dim_instrument` and `gold.dim_venue` are now Kimball type-2 dimensions: a stable
+> deterministic `instrument_id` over `(exchange, canonical_symbol)`, one row per validity
+> interval (`valid_from` / `valid_to` / `is_current`, open rows at the `9999-12-31` sentinel),
+> `recorded_at` as an as-known-at stamp, `attr_hash` as the change predicate, and the
+> venue-published attributes — `tick_size`, `qty_increment`, `price_precision`,
+> `qty_precision`, `venue_status` — populated from `bronze.kraken_instrument` for Kraken and
+> left NULL for Binance and Coinbase, which publish them over REST that K2 does not capture.
+> The trigger for the surrogate row fired retroactively: the Kraken `XBT`→`BTC` rename had
+> already happened, in the file, on 2026-08-26. `dim_asset` and exposure families are still
+> deferred on their original triggers. The reasoning is
+> [`docs/research/2026-08-29-scd2-security-master.md`](../research/2026-08-29-scd2-security-master.md);
+> the table below is left as written on 2026-08-27.
 
 Decided 2026-08-27 with the maintainer. `config/instruments.yaml`, `(exchange, native)
 → canonical BASE/QUOTE`, materialised as `gold.dim_instrument` / `gold.dim_venue`, is
