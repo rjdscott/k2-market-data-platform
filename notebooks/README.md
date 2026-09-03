@@ -49,8 +49,11 @@ not `TRUE`. `03_asof_trades_book.ipynb` runs both and compares the counts.
 `tick_size`, `qty_increment` and the precisions are populated for Kraken only, from
 `bronze.kraken_instrument`; Binance and Coinbase publish them over REST that K2 does not
 capture, so they are `NULL` there and `source` says which authority the version came from.
-The dimension's history starts on 2026-08-29 — nothing is a source for what the registry said
-before that.
+A key's FIRST version opens at `1970-01-01`, not at the run that discovered it: the registry
+asserts what an instrument *is*, and that was true before K2 recorded it, so no trade is ever
+older than its dimension row. `recorded_at` dates when K2 learned it — on those seed rows
+`valid_from < recorded_at`, and the gap is the history nothing observed
+([ADR-030](../adr/ADR-030-scd2-security-master.md) Outcome). Later versions open at their run.
 
 Numbers printed by these notebooks are not published anywhere else; the published ones are
 in `docs/benchmarks/`. A notebook cell is a query, not a claim.

@@ -319,3 +319,66 @@ summary == `COUNT(*)`.
 - [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md) — why a durable id generator outside Iceberg is not an option here.
 - [`docs/architecture/12-data-strategy.md`](../architecture/12-data-strategy.md) § Security master — the deferral this supersedes.
 - [`docker/lake/scd2.py`](../../docker/lake/scd2.py), [`docker/lake/gold.py`](../../docker/lake/gold.py) `load_dims()`, [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), [`tests/test_lake_scd2.py`](../../tests/test_lake_scd2.py).
+
+---
+
+## Outcome (2026-09-03)
+
+**A first version opened at the run that discovered it, and that silently emptied the
+as-of join.** The security master first ran `2026-08-28 14:59:20`; `gold.trades` starts
+`08:19:11` the same day. Every dimension row therefore had
+`valid_from = 2026-08-28 14:59:20`, and the ASOF join this ADR taught
+(`notebooks/README.md`, `03_asof_trades_book.ipynb`) matched only trades *after* that
+instant: **36 of 7,651** kraken `BTC/USD` trades for 14:00–15:00, 72,788 of 1,380,178 over
+`BTC/USD` + `BTC/USDT`. No error, no warning — a smaller result set, with `tick_size` NULL
+on everything that did survive the hand-written range-join spelling. Exactly the failure
+mode the `FOREVER` sentinel exists to prevent, at the other end of the interval.
+
+**The rule changed for the first version only.** `scd2.plan()` now opens the first version
+of a natural key at `EPOCH` (`1970-01-01`, a module constant documented beside `FOREVER`)
+with `recorded_at = run_ts`. The registry asserts what an instrument *is* — base, quote,
+tick size — and those were true before K2 started recording them; opening at `run_ts`
+claimed the platform's own start date as the instrument's. A CHANGED attribute still closes
+at `run_ts` and opens at `run_ts`, and a delisting still opens at `run_ts`: those are new as
+of the run. The resulting `valid_from < recorded_at` on the seed rows is not a defect but
+the "we learned this late" evidence § Decision already anticipated — here the gap is the
+whole of history before the first run.
+
+**Migration**, run once against the live tables (both had exactly one version per key: 34
+instruments, 3 venues, all at `2026-08-28 14:59:20.699765`):
+
+```bash
+docker exec k2-spark-iceberg python3 -c "
+import sys; sys.path.insert(0, '/home/iceberg/lake')
+from spark_conf import CATALOG, lake_session
+s = lake_session('k2-scd2-first-version-epoch')
+for t, key in (('gold.dim_instrument', 'exchange, canonical_symbol'), ('gold.dim_venue', 'exchange')):
+    on = ' AND '.join(f'd.{c} = m.{c}' for c in key.split(', '))
+    s.sql(f'''
+      MERGE INTO {CATALOG}.{t} d
+      USING (SELECT {key}, MIN(valid_from) AS first_from FROM {CATALOG}.{t} GROUP BY {key}) m
+      ON {on} AND d.valid_from = m.first_from
+      WHEN MATCHED THEN UPDATE SET d.valid_from = TIMESTAMP '1970-01-01 00:00:00'
+    ''')"
+#  gold.dim_instrument  34 rows  valid_from 1970-01-01 00:00:00  recorded_at 2026-08-28 14:59:20.699765
+#  gold.dim_venue        3 rows  valid_from 1970-01-01 00:00:00  recorded_at 2026-08-28 14:59:20.699765
+```
+
+**After**, from `notebooks/` (`k2lake.connect()` + `pin()`, current snapshots):
+
+| Scope | Trades | ASOF-joined | Match |
+|---|---|---|---|
+| kraken `BTC/USD`, 2026-08-28 14:00–15:00 | 7,651 | 7,651 | yes |
+| `BTC/USD` + `BTC/USDT`, all venues | 1,442,335 | 1,442,335 | yes |
+| kraken, all — `tick_size IS NULL` after the join | — | 90,662 | 0 NULL |
+
+(The overall count is above the 1,380,178 measured at diagnosis because the ingest kept
+running between the two reads.)
+
+`make test-python` 275 passed (+3 in `tests/test_lake_scd2.py`, one of which — a trade a
+year older than the first run must still join — fails against the old rule); `make lint`
+clean; `bash scripts/check-docs.sh` PASS.
+
+**Revisit when** a source publishes an effective date of its own — a venue-dated tick-size
+change, say. At that point `valid_from` stops being derivable from the run at all and comes
+off the payload, and `EPOCH` applies only to attributes with no stated start.

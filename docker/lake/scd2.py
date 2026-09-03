@@ -14,7 +14,7 @@ docs/research/2026-08-29-scd2-security-master.md:
   unchanged   attr_hash matches -> nothing. Running twice adds no rows, which is
               the property the ingest depends on and the test asserts.
   changed     close the open version at run_ts, insert a new one from run_ts.
-  new         insert only.
+  new         insert only, valid from EPOCH — see `EPOCH` below.
   gone        an instrument that leaves config/instruments.yaml is CLOSED and
               reopened with subscribed = false, carrying its last known
               attributes forward. Never deleted: deleting makes every historical
@@ -42,6 +42,17 @@ from datetime import datetime
 # worse: the ASOF spelling works and the hand-written range join beside it does
 # not. The sentinel makes both spellings total.
 FOREVER = datetime(9999, 12, 31, 23, 59, 59)
+
+# The FIRST version of a natural key opens here, not at the run that discovered
+# it. The registry asserts what an instrument *is* — its base, its quote, its
+# tick size — and those were true before K2 started recording them, so opening at
+# run_ts would claim the platform's own start date as the instrument's. It also
+# breaks the join: the security master first ran 2026-08-28 14:59:20 and
+# gold.trades starts 08:19:11 that day, so the ASOF join returned 36 of 7,651
+# kraken BTC/USD trades for one hour — silently, tick_size NULL on the rest.
+# `valid_from < recorded_at` on these rows is exactly the "we learned this late"
+# evidence the design already anticipates (ADR-030, research 2026-08-29 §2).
+EPOCH = datetime(1970, 1, 1)
 
 # SCD2 bookkeeping, as opposed to the attributes a version is about. Never
 # hashed — a hash over valid_from would make every row a change — and stripped
@@ -102,17 +113,17 @@ def plan(
     close: list[tuple] = []
     insert: list[dict] = []
 
-    def version(row: dict) -> dict:
+    def version(row: dict, valid_from: datetime) -> dict:
         return {
             **row,
             "attr_hash": attr_hash(row, tracked),
-            "valid_from": run_ts,
+            "valid_from": valid_from,
             "valid_to": FOREVER,
             "is_current": True,
             # Equal to valid_from for every registry-sourced change, because the
             # run timestamp is both when it became true and when K2 learned it.
-            # The day a source publishes an effective date of its own, the two
-            # separate and `valid_from < recorded_at` is the evidence.
+            # For a first version the two separate — the attribute predates the
+            # run — and `valid_from < recorded_at` is that evidence.
             "recorded_at": run_ts,
         }
 
@@ -122,7 +133,8 @@ def plan(
             continue
         if open_version is not None:
             close.append(key)
-        insert.append(version(row))
+        # A change is new as of run_ts; a first version is not (see EPOCH).
+        insert.append(version(row, run_ts if open_version is not None else EPOCH))
 
     for key, open_version in previous.items():
         if key in current or not open_version["subscribed"]:
@@ -133,6 +145,6 @@ def plan(
         carried = {k: v for k, v in open_version.items() if k not in BOOKKEEPING}
         carried["subscribed"] = False
         close.append(key)
-        insert.append(version(carried))
+        insert.append(version(carried, run_ts))
 
     return close, insert

@@ -72,10 +72,34 @@ class TestPlan:
         close, insert = scd2.plan({}, {KEY: instrument()}, TRACKED, T1)
         assert close == []
         assert len(insert) == 1
-        assert insert[0]["valid_from"] == T1
+        assert insert[0]["valid_from"] == scd2.EPOCH
         assert insert[0]["valid_to"] == scd2.FOREVER
         assert insert[0]["is_current"] is True
         assert insert[0]["recorded_at"] == T1
+
+    def test_a_first_version_opens_in_the_past_and_a_changed_one_opens_at_run_ts(self):
+        # The registry asserts its attributes for all history: the first version of
+        # a key must cover trades older than the first run, or an ASOF join drops
+        # them silently. A CHANGED attribute is genuinely new as of run_ts.
+        first = scd2.plan({}, {KEY: instrument()}, TRACKED, T1)[1][0]
+        assert first["valid_from"] == scd2.EPOCH == datetime(1970, 1, 1)
+        assert first["recorded_at"] == T1           # when K2 learned it, not when it became true
+        assert first["valid_from"] < first["recorded_at"]
+
+        changed = scd2.plan(
+            {KEY: stored(instrument(), valid_from=scd2.EPOCH)},
+            {KEY: instrument(book_depth=100)},
+            TRACKED,
+            T1,
+        )[1][0]
+        assert changed["valid_from"] == T1
+        assert changed["recorded_at"] == T1
+
+    def test_a_trade_older_than_the_first_run_still_joins(self):
+        # The bug this rule fixes: gold.trades starts before the dimension does.
+        insert = scd2.plan({}, {KEY: instrument()}, TRACKED, T1)[1][0]
+        trade_ts = T0 - timedelta(days=365)
+        assert insert["valid_from"] <= trade_ts < insert["valid_to"]
 
     def test_a_changed_attribute_closes_the_old_version_and_opens_a_new_one(self):
         before = instrument()

@@ -97,8 +97,9 @@ repeats the mapping). Carry both, mapped from one registry.
 
 **K2.** `config/instruments.yaml` holds native and canonical spellings for every instrument;
 capture keys topics by the canonical symbol; silver carries both columns; gold and
-ClickHouse use `canonical_symbol`. A full security master (instrument dimension with
-lifecycle) is designed and deferred. See [09](09-lake-layers.md), [12](12-data-strategy.md).
+ClickHouse use `canonical_symbol`. The lifecycle lives in `gold.dim_instrument`, an SCD2
+dimension read as of the trade's timestamp ([ADR-030](../adr/ADR-030-scd2-security-master.md)).
+See [09](09-lake-layers.md), [12](12-data-strategy.md).
 
 ## Trades and replays
 
