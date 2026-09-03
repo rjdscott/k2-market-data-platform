@@ -93,7 +93,7 @@ flowchart TB
 
 | Practice | Where it is enforced |
 |---|---|
-| Alerts carry their runbook | 22 of 28 (capture, lake) as a `runbook` annotation, checked by `check-docs.sh` gate (d); the 6 ClickHouse rules name `failure-recovery.md` in their description |
+| Alerts carry their runbook | 28 of 28, as a `runbook` annotation. Two gates, because one was not enough: `check-docs.sh` (d) checks the paths present resolve, (d2) checks every `- alert:` has one at all. Until 2026-09-03 only (d) existed and the 6 ClickHouse rules carried no annotation — passing a gate by having nothing to check, while this row claimed 22 of 28 were covered |
 | Alert thresholds unit-tested | 17 of 28 alert names asserted in `tests/*.test.yml` and `rules/tests/*_test.yml`, run by `promtool` in `check-docs.sh` and CI `docs` |
 | Staleness as timestamp, not rate | `k2_capture_last_message_ts_seconds`, `k2_lake_last_commit_ts_seconds`; `CaptureFeedStale`, `LakeCommitAgeHigh` |
 | Counters carry the reason | `reconnects_total{reason}`, `produce_errors_total{reason}` |

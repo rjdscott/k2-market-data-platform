@@ -28,11 +28,11 @@ import os
 import sys
 from pathlib import Path
 
-import duckdb
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "docker" / "lake"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bars  # noqa: E402
+from parity_ohlcv import resolve_snapshot  # noqa: E402  - same stale-pin fallback, one copy
 
 LAKEKEEPER = os.environ.get("K2_LAKEKEEPER_HOST_URL", "http://localhost:18181/catalog")
 S3_ENDPOINT = os.environ.get("K2_S3_HOST_ENDPOINT", "localhost:9000")
@@ -41,7 +41,9 @@ COLS = ["open_e8", "high_e8", "low_e8", "close_e8", "trade_count", "volume_e8", 
 SCALE = bars.SCALE
 
 
-def duck(user: str, password: str) -> duckdb.DuckDBPyConnection:
+def duck(user: str, password: str):
+    import duckdb  # see scripts/parity_ohlcv.py: keeps the module importable without it
+
     c = duckdb.connect()
     c.execute("SET TimeZone = 'UTC'")
     c.execute("INSTALL iceberg; LOAD iceberg; INSTALL httpfs; LOAD httpfs;")
@@ -137,10 +139,16 @@ def main() -> int:
                 env.setdefault(k.strip(), v.strip())
     c = duck(env["MINIO_ROOT_USER"], env["MINIO_ROOT_PASSWORD"])
 
-    a = lake_bars(c, args.day, args.bars_snapshot)
-    b = duck_bars(c, args.day, args.trades_snapshot)
+    def q(sql):
+        return c.execute(sql).fetchall()
+
+    bars_snapshot = resolve_snapshot(q, "lake.gold.bars", args.bars_snapshot)
+    trades_snapshot = resolve_snapshot(q, "lake.gold.trades", args.trades_snapshot)
+
+    a = lake_bars(c, args.day, bars_snapshot)
+    b = duck_bars(c, args.day, trades_snapshot)
     symbols = [s for s in args.reference_symbols.split(",") if s]
-    ref, n_trades = reference_bars(c, args.day, args.trades_snapshot, symbols)
+    ref, n_trades = reference_bars(c, args.day, trades_snapshot, symbols)
     b_subset = {k: v for k, v in b.items() if k[1] in symbols}
 
     # An empty side compares equal to another empty side: without this, a run
@@ -158,7 +166,7 @@ def main() -> int:
     if args.write_pin:
         pin = ROOT / "tests" / "parity" / "pinned.json"
         doc = json.loads(pin.read_text())
-        doc["bars"] = {"day": args.day, "bars_snapshot": args.bars_snapshot, "trades_snapshot": args.trades_snapshot, "reference_symbols": symbols}
+        doc["bars"] = {"day": args.day, "bars_snapshot": bars_snapshot, "trades_snapshot": trades_snapshot, "reference_symbols": symbols}
         pin.write_text(json.dumps(doc, indent=2) + "\n")
         print(f"pinned in {pin}")
     print("parity: ok")

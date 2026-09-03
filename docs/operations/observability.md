@@ -77,7 +77,9 @@ recording rules for this tier.
 ## Alert rules
 
 28 alert rules across three files (plus two ClickHouse recording rules). **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when `ClickHouseKafkaMessagesFailed` could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
-runbook link; the tables below are the index. The three `FeedHandler*` rules retired with
+`runbook:` annotation — enforced by `scripts/check-docs.sh` gate (d2), added
+2026-09-03 after the 6 ClickHouse rules were found carrying none while gate (d),
+which only checks that the paths present resolve, passed them. The tables below are the index. The three `FeedHandler*` rules retired with
 the Kotlin handlers ([ADR-019](../adr/ADR-019-rust-capture-tier.md)); their file is
 archived at [`legacy/v2-kotlin/runbooks/feed-handler-alerts.yml`](../../legacy/v2-kotlin/runbooks/feed-handler-alerts.yml)
 and `capture-alerts.yml` below is what replaced them. The nine `IcebergOffload*` rules were
@@ -135,7 +137,7 @@ and a target label of the same name would win and rename the sample's to
 Alerts on capture series get `exchange` from the binary; alerts on `up` name the venue
 through `job` (`capture-<exchange>`).
 
-### `lake-alerts.yml`: v3 lake tier, Phase D (11)
+### `lake-alerts.yml`: v3 lake tier, Phase D (12)
 
 Every staleness expression is `time() - <a timestamp gauge>`, never a pre-computed age.
 `docker/lake/metrics.py` only recomputes on a successful catalog read, so an age gauge
@@ -156,11 +158,20 @@ freezes at its last small value during exactly the outage it is the backstop for
 | `LakeScrapeErrors` | warning | `k2_lake_scrape_errors_total > 0` for 5m, the catalog is up and a table is not |
 | `LakeDiskUsageHigh` | warning | `k2_lake_disk_used_ratio > 0.80` for 15m. **The rule is tested, the metric is host-dependent**, on a Docker Desktop host `os.statvfs` sees the VM's thin-provisioned disk (0.344) and not the machine's (0.79). See `docker/lake/README.md` |
 
-These eleven are the only rules in the repo with unit tests:
-`docker/prometheus/rules/tests/lake-alerts_test.yml`, run by `make check-docs` gate (c2).
+All twelve carry unit tests in `docker/prometheus/rules/tests/lake-alerts_test.yml`, run
+by `make check-docs` gate (c2). They are not the only ones: three `Capture*` rules and two
+`ClickHouseGold*`/`ClickHouseKafka*` rules are covered too, **17 of the 28** —
+
+```bash
+grep -rhoE 'alertname: [A-Za-z]+' docker/prometheus/tests/*.test.yml \
+  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 17, 2026-09-03
+```
+
 Each case is either "must fire on a synthetic series" or "must not fire on healthy
 input", an alert that cannot fire and an alert that always fires are the same bug, and
-this file had one of each before it was written.
+this file had one of each before it was written. `bronze.kraken_instrument` is the newest
+"must not fire" case: reference data commits hours apart, so it would page under
+`LakeCommitAgeHigh` from the day `metrics.py` started enumerating the catalog.
 
 ### How the lake metrics are produced
 

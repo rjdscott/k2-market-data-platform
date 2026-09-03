@@ -204,6 +204,78 @@ recovered from their last committed offset with no data corruption.
 
 ---
 
+## 7. ClickHouse resource pressure
+
+**Not one of the six.** This section was written on 2026-09-03 to give
+`ClickHouseHighMemoryUsage`, `ClickHouseQueryFailureRateHigh` and
+`ClickHouseMergeQueueLarge` somewhere to point: all three had fired-and-nowhere-to-go
+status, with no `runbook:` annotation, while `docs/architecture/11-observability.md`
+claimed every alert carried one. **No MTTR here is measured** — none of these three has
+been induced. The commands below were run against the live 24.3 stack on 2026-09-03 and
+their output is what the healthy state looks like.
+
+**Symptom**, queries get slower or start failing; `gold` reads time out.
+
+**Detection**, `ClickHouseHighMemoryUsage` (RSS > 85% of host RAM, 5m),
+`ClickHouseQueryFailureRateHigh` (> 0.1 failed queries/s, 3m),
+`ClickHouseMergeQueueLarge` (> 10 background merge tasks, 5m).
+
+**Expected behaviour**, none of the three loses data. ClickHouse `gold` is derived
+(ADR-026): the lake holds every row and the Kafka-engine consumers resume from their
+committed offsets, so the worst case is a stale served tier and a rebuild
+([clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md)).
+
+**Diagnose** — load `set -a && . ./.env && set +a`, then:
+
+```bash
+ch() { docker exec -i k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" "$@"; }
+
+# Memory: what the alert's two series actually are
+ch -q "SELECT metric, formatReadableSize(value) FROM system.asynchronous_metrics
+       WHERE metric IN ('MemoryResident','OSMemoryTotal') ORDER BY metric"
+# 2026-09-03: MemoryResident 1.46 GiB / OSMemoryTotal 39.16 GiB — 3.7%, nowhere near 85%
+
+# Memory: who is holding it right now
+ch -q "SELECT query_id, formatReadableSize(memory_usage) AS mem, elapsed
+       FROM system.processes ORDER BY memory_usage DESC LIMIT 5"
+
+# Query failures: the split, then the distinct exceptions behind it
+ch -q "SELECT type, count() FROM system.query_log
+       WHERE event_time > now() - INTERVAL 1 HOUR GROUP BY type ORDER BY type"
+ch -q "SELECT any(exception), count() FROM system.query_log
+       WHERE event_time > now() - INTERVAL 1 HOUR AND type = 'ExceptionWhileProcessing'
+       GROUP BY substring(exception, 1, 60) ORDER BY 2 DESC LIMIT 3"
+
+# Merge queue: what is merging, and which partition is fragmenting
+ch -q "SELECT database, table, elapsed, progress, formatReadableSize(memory_usage)
+       FROM system.merges ORDER BY elapsed DESC LIMIT 5"
+ch -q "SELECT table, partition, count() AS parts FROM system.parts
+       WHERE active AND database='gold' GROUP BY table, partition ORDER BY parts DESC LIMIT 5"
+# 2026-09-03: no merges in flight, worst partition 7 active parts. Healthy.
+```
+
+**Recovery**
+
+- **Memory.** Kill the query, not the server: `ch -q "KILL QUERY WHERE query_id = '<id>'"`.
+  The `quant` role is already capped at 3 GiB (`max_memory_usage`, asserted by
+  `make test-clickhouse`), so a runaway `default` query is the usual cause. A restart
+  (`docker compose restart clickhouse`, §2) is the last resort and costs ~32 s.
+- **Query failures.** Read the exception before acting. A `TIMEOUT_EXCEEDED` on a
+  300 s read is a query problem; `MEMORY_LIMIT_EXCEEDED` is the row above;
+  a Kafka decode error belongs to `ClickHouseKafkaMessagesFailed` and
+  [clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md), not here.
+- **Merge queue.** Merges are throttled, not lost — a queue that is draining needs
+  nothing. A queue that is flat while inserts continue means the insert rate has
+  outrun merge throughput: the fix is fewer, bigger inserts
+  (`kafka_max_block_size` in [`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql)),
+  not more merge threads on a 16-CPU host.
+
+**Measured**, not measured. Inducing memory pressure on the served tier is the obvious
+next chaos script; until it exists, treat the numbers above as the healthy baseline and
+nothing more.
+
+---
+
 ## Re-running these tests
 
 Each mode is induced with a single command, `docker compose restart <svc>`,

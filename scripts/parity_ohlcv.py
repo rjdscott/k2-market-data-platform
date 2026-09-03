@@ -33,8 +33,6 @@ import os
 import sys
 from pathlib import Path
 
-import duckdb
-
 LAKEKEEPER = os.environ.get("K2_LAKEKEEPER_HOST_URL", "http://localhost:18181/catalog")
 S3_ENDPOINT = os.environ.get("K2_S3_HOST_ENDPOINT", "localhost:9000")
 CH_HOST = os.environ.get("K2_CLICKHOUSE_HOST", "localhost")
@@ -44,7 +42,41 @@ KEY = ["exchange", "canonical_symbol", "window_start"]
 COLS = ["open_e8", "high_e8", "low_e8", "close_e8", "trade_count", "volume"]
 
 
-def duck(minio_user: str, minio_pass: str) -> duckdb.DuckDBPyConnection:
+def resolve_snapshot(query, table: str, pinned: int) -> int:
+    """The pinned snapshot if `table` still holds it, else the current one, said out loud.
+
+    A pin written on another host — or one `expire_snapshots` has since dropped —
+    is not in this table, and reading `AT (VERSION => <pin>)` raised
+    `Could not find snapshot with id ...`: the release gate ADR-029 names crashed
+    instead of reporting anything, every run, from 2026-08-27 to 2026-09-03.
+
+    Falling back *silently* would be worse than the crash — the gate would print
+    PASS at a snapshot nobody pinned and nobody could re-run. So: fall back, name
+    both ids on stdout, and leave the exit code to parity. A stale pin degrades
+    the check from reproducible to current; it never turns a FAIL into a PASS.
+
+    `query` is `lambda sql: conn.execute(sql).fetchall()` — a callable so the
+    decision is testable without DuckDB or a catalog (tests/test_parity.py).
+    """
+    rows = query(f"SELECT sequence_number, snapshot_id FROM iceberg_snapshots('{table}')")
+    if not rows:
+        raise SystemExit(f"{table} has no snapshots — nothing to compare")
+    if pinned in {r[1] for r in rows}:
+        return pinned
+    # ponytail: newest sequence_number is the current snapshot on a linear
+    # history, which is all this lake writes. A branch or a rollback would need
+    # the catalog's current-snapshot-id, which iceberg_snapshots does not expose.
+    current = max(rows)[1]
+    print(
+        f"pin {pinned} not found in {table}; ran at current snapshot {current} "
+        f"(pin stale: refresh tests/parity/pinned.json with --pin-current)"
+    )
+    return current
+
+
+def duck(minio_user: str, minio_pass: str):
+    import duckdb  # imported here so `resolve_snapshot` is importable without it
+
     c = duckdb.connect()
     # Spark writes Iceberg TIMESTAMP as timestamptz; DuckDB renders those in the
     # session time zone, which defaults to the HOST's. On a UTC+10 machine the
@@ -150,7 +182,16 @@ def main() -> int:
 
     silver_snaps = json.loads(args.silver_snapshots)
     c = duck(os.environ["MINIO_ROOT_USER"], os.environ["MINIO_ROOT_PASSWORD"])
-    b = normalise(lake_candles(c, args.day, args.ohlcv_snapshot))
+
+    def q(sql):
+        return c.execute(sql).fetchall()
+
+    ohlcv_snapshot = resolve_snapshot(q, "lake.gold.ohlcv_1m", args.ohlcv_snapshot)
+    silver_snaps = {
+        venue: resolve_snapshot(q, f"lake.silver.trades_{venue}", snap)
+        for venue, snap in silver_snaps.items()
+    }
+    b = normalise(lake_candles(c, args.day, ohlcv_snapshot))
     cc = normalise(silver_candles(c, args.day, silver_snaps))
     if not_empty(**{"lake.gold.ohlcv_1m": b, "duckdb-over-silver": cc}):
         return 1
@@ -165,7 +206,7 @@ def main() -> int:
         # block of the same file, and a plain overwrite here deleted them.
         pin = Path("tests/parity/pinned.json")
         doc = json.loads(pin.read_text()) if pin.exists() else {}
-        doc.update({"day": args.day, "ohlcv_1m_snapshot": args.ohlcv_snapshot, "silver_snapshots": silver_snaps})
+        doc.update({"day": args.day, "ohlcv_1m_snapshot": ohlcv_snapshot, "silver_snapshots": silver_snaps})
         pin.write_text(json.dumps(doc, indent=2) + "\n")
     print("PARITY: " + ("PASS" if bad == 0 else "FAIL"))
     return 0 if bad == 0 else 1

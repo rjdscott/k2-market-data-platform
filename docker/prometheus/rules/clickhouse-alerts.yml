@@ -21,15 +21,18 @@ groups:
             Prometheus cannot scrape ClickHouse metrics. The server may be down
             or the Prometheus listener failed to start.
 
-            **Impact:** All bronze/silver/gold writes are failing. Data is buffering
-            in Redpanda (limited to Redpanda retention window).
+            **Impact:** the served `gold` tier is unreadable — dashboards and every
+            quant query. **Nothing is lost.** `gold` is derived (ADR-026): the lake
+            holds every row, the Kafka-engine consumers resume from their committed
+            offsets, and capture keeps producing into Redpanda's 48 h retention.
+            The medallion this alert used to describe (`k2.bronze/silver/gold`) was
+            dropped at the Phase E cutover.
 
             **Immediate Actions:**
             1. Check status: `docker compose ps clickhouse`
             2. Check logs: `docker logs k2-clickhouse --tail 100`
             3. Restart: `docker compose restart clickhouse`
-
-            **Runbook:** docs/runbooks/failure-recovery.md
+          runbook: docs/runbooks/failure-recovery.md
 
       # CRITICAL: ClickHouse memory near limit (>90% of limit)
       - alert: ClickHouseHighMemoryUsage
@@ -51,6 +54,7 @@ groups:
             1. Check top consumers: `docker exec k2-clickhouse clickhouse-client -q "SELECT * FROM system.processes ORDER BY memory_usage DESC LIMIT 10"`
             2. Consider reducing max_memory_usage in config
             3. If near OOM: restart with `docker compose restart clickhouse`
+          runbook: docs/runbooks/failure-recovery.md
 
       # CRITICAL: Too many failed queries
       - alert: ClickHouseQueryFailureRateHigh
@@ -66,6 +70,9 @@ groups:
           description: |
             ClickHouse is failing {{ $value | humanize }} queries/sec.
             This may indicate memory pressure, disk issues, or misconfiguration.
+            Read the exception before acting — `system.query_log` groups them
+            (failure-recovery.md §7).
+          runbook: docs/runbooks/failure-recovery.md
 
   # ClickHouseBronzeInsertRateLow and the clickhouse:insert_rate:5m recording rule
   # were removed on 2026-08-26 and archived at
@@ -92,6 +99,9 @@ groups:
           description: |
             {{ $value }} background merge tasks queued. This may indicate
             the insert rate exceeds merge throughput, which can degrade query performance.
+            A draining queue needs nothing; a flat one under continued inserts is a
+            `kafka_max_block_size` question (failure-recovery.md §7).
+          runbook: docs/runbooks/failure-recovery.md
 
   - name: clickhouse_recording
     rules:
@@ -134,6 +144,7 @@ groups:
             1. `SELECT * FROM system.kafka_consumers` — assignments, last error
             2. `docker logs k2-clickhouse --tail 200 | grep -i kafka`
             3. A consumer group stuck on a bad record: see KafkaRowsRejected below
+          runbook: docs/runbooks/clickhouse-rebuild-from-lake.md
 
       # A record the AvroConfluent decoder could not read. With
       # kafka_handle_error_mode = 'stream' it is skipped and lands in
@@ -157,4 +168,6 @@ groups:
             Compare the registered schema
             (`curl redpanda:8081/subjects/<topic>-value/versions/latest`)
             against docker/clickhouse/ddl/20-gold-kafka.sql; a new field the
-            queue table lacks is the usual cause (/schema-change).
+            queue table lacks is the usual cause (/schema-change). Once the DDL
+            agrees, the skipped window is reloaded from the lake.
+          runbook: docs/runbooks/clickhouse-rebuild-from-lake.md

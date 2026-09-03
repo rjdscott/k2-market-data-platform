@@ -112,6 +112,30 @@ else
 fi
 rm -f "$out"
 
+# (d2) every alert HAS a runbook: annotation
+# Gate (d) only checks that the annotations present resolve, so an alert with no
+# annotation at all passed it — which is how 5 of the 6 ClickHouse rules shipped
+# with no runbook while docs/architecture/11-observability.md claimed "checked by
+# check-docs.sh gate (d)". A rule you cannot act on at 3am is a page, not an
+# alert. Recording rules are exempt: nothing pages on them.
+out=$(mktemp)
+for f in docker/prometheus/rules/*.yml; do
+  awk -v f="$f" '
+    function flush() { if (name != "" && !seen) print f " -> " name }
+    /^[[:space:]]*-[[:space:]]*alert:[[:space:]]/ { flush(); name = $NF; seen = 0; next }
+    /^[[:space:]]*-[[:space:]]*record:[[:space:]]/ { flush(); name = ""; seen = 0; next }
+    /^[[:space:]]*runbook:[[:space:]]/ { seen = 1 }
+    END { flush() }
+  ' "$f"
+done > "$out" || true
+if [ -s "$out" ]; then
+  bad "(d2) alerts with no runbook: annotation:"
+  sed 's/^/  /' "$out"
+else
+  pass "(d2) every alert carries a runbook: annotation"
+fi
+rm -f "$out"
+
 # (e) capacity-model gate: predicted-only until a benchmark file covers capacity
 cm=docs/architecture/15-capacity-model.md
 if [ ! -f "$cm" ]; then

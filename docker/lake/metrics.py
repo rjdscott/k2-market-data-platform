@@ -52,25 +52,6 @@ WAREHOUSE = os.environ.get("K2_LAKE_WAREHOUSE", "k2")
 # path it measured as a label instead of claiming to be the host's.
 DISK_PATH = os.environ.get("K2_LAKE_DISK_PATH", "/minio-data")
 
-TABLES = {
-    "raw.messages": ("raw", "messages"),
-    # Phase E bronze per venue (docker/lake/bronze.py, ADR-026)
-    "bronze.binance_trade": ("bronze", "binance_trade"),
-    "bronze.binance_depth20": ("bronze", "binance_depth20"),
-    "bronze.kraken_trade": ("bronze", "kraken_trade"),
-    "bronze.kraken_book": ("bronze", "kraken_book"),
-    "bronze.coinbase_market_trades": ("bronze", "coinbase_market_trades"),
-    "bronze.coinbase_level2": ("bronze", "coinbase_level2"),
-    "silver.trades_binance": ("silver", "trades_binance"),
-    "silver.trades_kraken": ("silver", "trades_kraken"),
-    "silver.trades_coinbase": ("silver", "trades_coinbase"),
-    "gold.trades": ("gold", "trades"),
-    "gold.book_top20": ("gold", "book_top20"),
-    "silver.book_kraken": ("silver", "book_kraken"),
-    "gold.ohlcv_1m": ("gold", "ohlcv_1m"),
-    "audit.checks": ("audit", "checks"),
-}
-
 INGEST_TABLE = "raw.messages"
 CHECKS_TABLE = "audit.checks"
 
@@ -171,6 +152,29 @@ def catalog_prefix() -> str:
     """
     config = _get(f"{CATALOG_URI.rstrip('/')}/v1/config?warehouse={WAREHOUSE}")
     return config["defaults"]["prefix"]
+
+
+def list_tables(prefix: str) -> list[tuple[str, str]]:
+    """Every `(namespace, table)` the catalog holds, sorted.
+
+    Enumerated per refresh rather than listed in this file. The hand-maintained
+    dict this replaced named 15 tables while the lake held 26, so `gold.bbo_1s`,
+    `gold.bars`, `gold.ohlcv_5m/1h/1d`, both dimensions, `gold.book_state`,
+    `silver.book_binance/coinbase` and `bronze.kraken_instrument` had no freshness
+    or row-count series at all — and therefore no alert could fire on them, which
+    reads exactly like "healthy". Two extra catalog calls per namespace per
+    30-second refresh buys "a new table is monitored the moment it exists".
+
+    No override map: nothing this exporter does varies by table. Cadence lives in
+    the Prometheus rules, which is where the per-table thresholds already are.
+    """
+    root = f"{CATALOG_URI.rstrip('/')}/v1/{prefix}/namespaces"
+    out = []
+    for namespace in _get(root).get("namespaces", []):
+        name = ".".join(namespace)
+        for ident in _get(f"{root}/{name}/tables").get("identifiers", []):
+            out.append((name, ident["name"]))
+    return sorted(out)
 
 
 def load_metadata(prefix: str, namespace: str, table: str) -> dict:
@@ -302,7 +306,8 @@ def _num(summary: dict, key: str) -> float:
 def refresh(prefix: str, now: float) -> int:
     """Re-derive every metric. Returns the number of tables that could not be read."""
     errors = 0
-    for label, (namespace, table) in TABLES.items():
+    for namespace, table in list_tables(prefix):
+        label = f"{namespace}.{table}"
         try:
             metadata = load_metadata(prefix, namespace, table)
         except Exception as exc:  # noqa: BLE001 - a missing table is a real state

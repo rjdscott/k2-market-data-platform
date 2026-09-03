@@ -96,7 +96,8 @@ considered before committing*.
   `docs/benchmarks/<date>.md`; that file carries the command per row.
   `/benchmark-report` enforces this.
 - **Schema changes move together or not at all**: Avro (`schemas/avro/*.avsc`)
-  + ClickHouse DDL (`docker/clickhouse/ddl/01-k2-schema.sql`) + lake DDL
+  + ClickHouse DDL (`docker/clickhouse/ddl/10-gold-tables.sql` +
+  `20-gold-kafka.sql`) + lake DDL
   (`docker/lake/ddl/lake.sql`) + the projections in `docker/lake/ingest.py`
   + docs (`docs/architecture/13-schema-design.md`, `14-partitioning-strategy.md`)
   + tests, in one PR. Use `/schema-change`; a half-migrated contract fails
@@ -113,9 +114,10 @@ considered before committing*.
 ## Tests
 
 ```bash
-make test          # python + rust
-make test-python   # uv run --no-project --with pytest --with pyyaml pytest tests -q
+make test          # everything CI runs: python + rust + clickhouse
+make test-python   # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests -q
 make test-rust     # rust:1-bookworm container; no local cargo needed
+make test-clickhouse  # the gold DDL + assertions on a throwaway 24.3 server
 ```
 
 - The v2 Kotlin tier retired to `legacy/v2-kotlin/` (ADR-019). Its tests are

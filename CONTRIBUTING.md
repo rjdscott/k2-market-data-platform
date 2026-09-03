@@ -21,13 +21,14 @@ make ps
 ## Tests
 
 ```bash
-make test                # Rust + Python unit tests
+make test                # everything CI runs: Python + Rust + ClickHouse
 make test-rust           # cargo test inside rust:1-bookworm
-make test-python         # uv run --no-project --with pytest --with pyyaml pytest tests -q
+make test-python         # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests -q
+make test-clickhouse     # the gold DDL and its assertions on a throwaway 24.3 server
 make lint                # uv run --no-project --with ruff ruff check docker/lake tests
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same two suites plus a Docker build of every image, the doc gates and a Trivy scan.
+CI (`.github/workflows/ci.yml`) runs the same three suites plus a Docker build of every image, a compose config check, the doc gates and a Trivy scan.
 
 `make test-legacy-kotlin` runs the archived v2 Kotlin feed-handler tests against `legacy/v2-kotlin/` ([ADR-019](docs/adr/ADR-019-rust-capture-tier.md)). It needs the `gradle:8.12-jdk21` Docker image and is deliberately outside `make test` and outside CI, that code is archived, not maintained.
 

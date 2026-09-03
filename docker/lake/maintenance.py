@@ -115,19 +115,46 @@ def compact(spark, since: datetime) -> None:
         + [(gold.TRADES, "exchange_ts"), (books.GOLD_BOOK, "second"), (books.GOLD_BBO, "second")]
     )
     for table, column in per_venue:
-        # No sort_order argument: the tables declare theirs in lake.sql and the
-        # procedure uses the declared one. Repeating it here is a second place
-        # to get it wrong.
-        _call(
-            spark,
-            f"CALL {CATALOG}.system.rewrite_data_files("
-            f"  table => '{_bare(table)}',"
-            f"  strategy => 'sort',"
-            f"  where => '{column} >= {_where_ts(since)}',"
-            f"  options => map('min-input-files', '5', 'target-file-size-bytes', '134217728',"
-            f"                  'max-concurrent-file-group-rewrites', '1',"
-            f"                  'partial-progress.enabled', 'true'))",
-        )
+        _rewrite(spark, table, column, since)
+
+
+# The Spark exception raised by `strategy => 'sort'` against a table whose DDL
+# never declared one: "Cannot sort data without a valid sort order, table
+# 'lake.gold.bbo_1s' is unsorted and no sort order is provided".
+_UNSORTED = "without a valid sort order"
+
+
+def _rewrite(spark, table: str, column: str, since: datetime) -> None:
+    """Sort-rewrite one table's recent partitions, binpacking it if it has no sort order.
+
+    No sort_order argument: the tables declare theirs in lake.sql and the
+    procedure uses the declared one. Repeating it here is a second place to get
+    it wrong.
+
+    The fallback is a blast radius fix, not a substitute for the DDL. `gold.bbo_1s`
+    shipped without its `WRITE ORDERED BY` and this loop raised on it, so every
+    `lake-maintenance-daily` run since died *before* expiry, orphan removal and
+    all seven audits — one missing clause on one table silently disabled the whole
+    nightly job, and the alert that would have caught it (`LakeAuditFailed`) reads
+    a summary the dead run never wrote. Binpacking still merges the small files;
+    the line it prints is what says the DDL, not the compaction, is what to fix.
+    """
+    call = (
+        f"CALL {CATALOG}.system.rewrite_data_files("
+        f"  table => '{_bare(table)}',"
+        f"  strategy => '{{strategy}}',"
+        f"  where => '{column} >= {_where_ts(since)}',"
+        f"  options => map('min-input-files', '5', 'target-file-size-bytes', '134217728',"
+        f"                  'max-concurrent-file-group-rewrites', '1',"
+        f"                  'partial-progress.enabled', 'true'))"
+    )
+    try:
+        _call(spark, call.format(strategy="sort"))
+    except Exception as exc:  # noqa: BLE001 - narrowed on the message below
+        if _UNSORTED not in str(exc):
+            raise
+        print(f"  {table}: no sort order declared, binpacking instead — fix ddl/lake.sql")
+        _call(spark, call.format(strategy="binpack"))
 
 
 def expire(spark, retain_days: int) -> None:

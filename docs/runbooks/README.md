@@ -17,10 +17,12 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 - MTTR is measured by inducing the failure, not estimated.
 - No decision rationale here, link the ADR.
 - A PR that invalidates a runbook's steps updates it and its index row in the same PR.
-- Every alert in `docker/prometheus/rules/` names a runbook in its annotations, and that
-  path must resolve. The v2 rule files carry it as a `**Runbook:**` line inside the
-  `description`; `capture-alerts.yml` promotes it to a first-class `runbook:`
-  annotation so the path is machine-checkable. New rule files use the annotation form.
+- Every alert in `docker/prometheus/rules/` names a runbook as a `runbook:` annotation,
+  and that path must resolve. Two gates in `scripts/check-docs.sh`, because one was not
+  enough: **(d)** the paths present resolve, **(d2)** every `- alert:` block has one.
+  Only (d) existed until 2026-09-03, and the six ClickHouse rules passed it by carrying
+  no annotation at all — the last `**Runbook:**`-inside-the-description holdout was
+  converted then, so the annotation form is now the only form.
 - Write it with the `/runbook` skill.
 
 ## Index
@@ -29,7 +31,7 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
-| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, capture crash, batch-job failure, MinIO down, network partition | `ClickHouseDown`, `CaptureDown`, `CaptureProduceErrors` |
+| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, capture crash, batch-job failure, MinIO down, network partition. Plus §7, ClickHouse resource pressure — diagnosed, **not induced**, no MTTR | `ClickHouseDown`, `CaptureDown`, `CaptureProduceErrors`, `ClickHouseHighMemoryUsage`, `ClickHouseQueryFailureRateHigh`, `ClickHouseMergeQueueLarge` |
 | [redpanda.md](./redpanda.md) | Topic, partition, consumer-group or schema-registry problems; broker health | `CaptureProduceErrors` |
 
 The six runbooks for the v2 ClickHouse→Iceberg offload were archived with the code they

@@ -1242,6 +1242,20 @@ TBLPROPERTIES (
 
 ALTER TABLE lake.gold.bbo_1s SET IDENTIFIER FIELDS exchange, canonical_symbol, second;
 
+-- The same axis as gold.book_top20 above, which this is a projection of, and for
+-- the same reason: the research read is one symbol over a time range.
+--
+-- Not decoration. `docker/lake/maintenance.py` compacts every derived table with
+-- `strategy => 'sort'`, which uses the table's DECLARED sort order and raises
+-- `Cannot sort data without a valid sort order, table 'lake.gold.bbo_1s' is
+-- unsorted and no sort order is provided` when there is none. This table was the
+-- only gold table missing the clause, so `lake-maintenance-daily` died here on
+-- every run and never reached expiry, orphan removal or the audits. Repeating the
+-- ALTER converges rather than duplicates, so re-running lake.sql on the existing
+-- table sets the order — which is how the live table was fixed.
+ALTER TABLE lake.gold.bbo_1s
+    WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY canonical_symbol, second;
+
 -- ───────────────────────────────────────────────────────────────────────────
 -- gold.book_state — the replay carry-over between ticks: per (venue,
 -- symbol, connection), the book after the last frame processed and the last

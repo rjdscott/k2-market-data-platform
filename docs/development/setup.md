@@ -156,7 +156,7 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
 docker exec k2-prefect-server prefect deployment run 'lake-ingest/lake-ingest-5min'
 
 # Unit tests (pure Python: no stack needed)
-uv run --no-project --with pytest --with pyyaml pytest tests -q
+uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests -q
 ```
 
 An ingest takes an exclusive `flock`, so a hand-run that collides with the 5-minute cron

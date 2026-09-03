@@ -156,14 +156,21 @@ Research: `make notebooks` starts JupyterLab with DuckDB over the lake
 
 ## Tests and CI
 
+Counted 2026-09-03 by the command in each row's footnote, not by hand — the
+previous version of this table was 60 / 229 / 9 against a reality of 68 / 287 / 10.
+
 | Suite | Run |
 |---|---|
-| Rust capture: 60 tests, including replay over recorded sessions | `make test-rust` |
-| Python: 229 tests over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
-| ClickHouse schema: 9 assertions, including the v2 OHLCV regression | `make test-clickhouse` |
+| Rust capture: 68 tests [^rust], 56 unit plus 12 replay over recorded sessions | `make test-rust` |
+| Python: 287 tests [^py] over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
+| ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
-| Prometheus rule unit tests and documentation gates | `bash scripts/check-docs.sh` |
-| Live stack: per-layer parity, three-way OHLCV parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make chaos` |
+| Prometheus rule unit tests (17 of 28 alerts) and 8 documentation gates | `bash scripts/check-docs.sh` |
+| Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
+
+[^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
+[^py]: `make test-python` with `--collect-only -q | tail -1`
+[^ch]: the count `scripts/clickhouse-schema-test.sh` itself asserts (`[ "$n" -eq 10 ]`)
 
 CI ([`ci.yml`](./.github/workflows/ci.yml)) runs rust (fmt, clippy `-D warnings`, test),
 python (Ruff, pytest), clickhouse-schema, a docker build matrix, compose validation, the
