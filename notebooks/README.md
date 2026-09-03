@@ -26,6 +26,67 @@ prints therefore names the snapshot it came from ([ADR-029](../docs/adr/ADR-029-
 What this data can and cannot honestly support is written down before any of it is
 quoted: [replay-fidelity-limits](../docs/research/2026-08-28-replay-fidelity-limits.md).
 
+## The quant story in three lines
+
+"Kraken BTC/USD, one hour: every trade with the top of book in force when it printed, the
+security master as it stood at that trade, and is the hour complete." Two helpers, not
+eighteen lines of triple-ASOF SQL:
+
+```python
+from k2lake import connect, pin, trades, completeness
+con = connect(); pin(con)
+t = trades(con, 'BTC/USD', 'kraken', '2026-09-03 12:00', '2026-09-03 13:00')   # 31 columns
+t.project('exchange_ts, side, price_e8/1e8 AS price, bid, ask, quote_second, '
+          'native_symbol, tick_size, master_source').limit(3).show(max_width=170)
+```
+
+```
+┌───────────────────────────────┬─────────┬─────────┬─────────┬─────────┬──────────────────────────┬───────────────┬────────────────┬───────────────┐
+│          exchange_ts          │  side   │  price  │   bid   │   ask   │       quote_second       │ native_symbol │   tick_size    │ master_source │
+│   timestamp with time zone    │ varchar │ double  │ double  │ double  │ timestamp with time zone │    varchar    │ decimal(28,10) │    varchar    │
+├───────────────────────────────┼─────────┼─────────┼─────────┼─────────┼──────────────────────────┼───────────────┼────────────────┼───────────────┤
+│ 2026-09-03 12:47:04.413735+00 │ buy     │ 78327.9 │ 78327.8 │ 78327.9 │ 2026-09-03 12:47:03+00   │ BTC/USD       │   0.1000000000 │ venue:kraken  │
+│ 2026-09-03 12:47:05.425627+00 │ buy     │ 78331.7 │ 78331.6 │ 78331.7 │ 2026-09-03 12:47:04+00   │ BTC/USD       │   0.1000000000 │ venue:kraken  │
+│ 2026-09-03 12:47:05.425627+00 │ buy     │ 78331.7 │ 78331.6 │ 78331.7 │ 2026-09-03 12:47:04+00   │ BTC/USD       │   0.1000000000 │ venue:kraken  │
+└───────────────────────────────┴─────────┴─────────┴─────────┴─────────┴──────────────────────────┴───────────────┴────────────────┴───────────────┘
+```
+
+`quote_second` is one to two seconds behind `exchange_ts` on purpose: **`gold.bbo_1s` is the
+book at the END of its second**, so the quote in force is the previous second's row and the
+join is `exchange_ts >= second + INTERVAL 1 SECOND`. Getting that wrong pairs a trade with a
+quote from its own future — on this hour it reads 64.74% of prints as trading through the
+book where the correct pairing reads 51.74%. The rule lives in `trades()` now, not in a
+markdown cell. Both joins are LEFT: a trade with no book that second, or one older than the
+dimension's first version, still comes back, with NULLs and a warning on stderr.
+
+```python
+completeness(con, 'BTC/USD', 'kraken', '2026-09-03 12:00', '2026-09-03 13:00').show()
+```
+
+```
+┌────────┬─────────────────────┬──────────────────┬──────────┬────────────────────┬────────────────────┬─────────────────┬────────────────┐
+│ trades │ minutes_with_trades │ minutes_expected │ seq_gaps │ ids_never_received │ quote_coverage_pct │ checksum_failed │ audit_failures │
+│ int64  │        int64        │      int64       │  int64   │       int64        │       double       │      int64      │     int64      │
+├────────┼─────────────────────┼──────────────────┼──────────┼────────────────────┼────────────────────┼─────────────────┼────────────────┤
+│   1923 │                  13 │               60 │        0 │                  0 │              100.0 │               0 │             31 │
+└────────┴─────────────────────┴──────────────────┴──────────┴────────────────────┴────────────────────┴─────────────────┴────────────────┘
+```
+
+Read that as: 1923 trades over 13 of the hour's 60 minutes (Kraken BTC/USD is thin, and the
+capture only started at 12:46 in this window), no trade-id holes, every trade found a quote.
+`checksum_failed` is Kraken-only — Binance and Coinbase publish no book checksum, so it is
+`NULL` there, which means *not measurable*, never *clean*. `audit_failures` counts
+`audit.checks` rows that RAN in the window, not checks that cover data in it: that table
+stamps one `run_ts`, not a range. Both docstrings say which signal is missing per venue.
+
+Both helpers bind every caller value as a DuckDB parameter and take table names only from a
+fixed allow-list (`source="pinned"`, the default, or `"lake"`), so a symbol with a quote in
+it is a zero-row answer rather than a SQL error.
+
+Import works from `notebooks/` (`cd notebooks && uv run python`, or the JupyterLab in
+`make notebooks`); from anywhere else, `PYTHONPATH=notebooks`. `make test-notebooks` runs
+`test_k2lake.py` against synthetic DuckDB tables — no stack, no credentials.
+
 ## The dimension is SCD2 — join it as of the trade
 
 `gold.dim_instrument` holds one row per validity interval, not one per instrument

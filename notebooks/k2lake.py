@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import duckdb
@@ -97,10 +98,180 @@ def pin(con: duckdb.DuckDBPyConnection, namespaces=PINNED_NAMESPACES) -> dict:
     return ids
 
 
+# ── The quant surface ───────────────────────────────────────────────────────
+# Table names are never taken from the caller: `source` picks one of two fixed
+# maps. Every other value the caller supplies is a bound parameter.
+_TABLES = {
+    "pinned": {  # the snapshot-pinned views pin() creates — the notebook default (ADR-029)
+        "trades": "pinned.gold_trades", "bbo": "pinned.gold_bbo_1s",
+        "dim": "pinned.gold_dim_instrument", "book_kraken": "pinned.silver_book_kraken",
+        "checks": "pinned.audit_checks",
+    },
+    "lake": {  # the moving head, for scripts outside a notebook
+        "trades": "lake.gold.trades", "bbo": "lake.gold.bbo_1s",
+        "dim": "lake.gold.dim_instrument", "book_kraken": "lake.silver.book_kraken",
+        "checks": "lake.audit.checks",
+    },
+}
+
+
+def _tables(source: str) -> dict:
+    """`source` -> the table-name map. "pinned.gold_trades" also names "pinned"."""
+    key = str(source).split(".")[0]
+    if key not in _TABLES:
+        raise ValueError(f"source must be 'pinned' or 'lake', got {source!r}")
+    return _TABLES[key]
+
+
+def _trades_sql(tb: dict, book: bool, master: bool) -> str:
+    """The trades ⋈ bbo ⋈ dim_instrument SQL. Placeholders bind, in this order:
+    symbol, exchange, start, end (trades), then symbol, exchange, end (bbo)."""
+    sel = ["t.*"]
+    joins = ""
+    if book:
+        sel += [
+            "q.second AS quote_second",
+            f"CAST(q.bid_e8 AS DECIMAL(28,10)) / {SCALE} AS bid",
+            f"CAST(q.bid_qty_e8 AS DECIMAL(28,10)) / {SCALE} AS bid_qty",
+            f"CAST(q.ask_e8 AS DECIMAL(28,10)) / {SCALE} AS ask",
+            f"CAST(q.ask_qty_e8 AS DECIMAL(28,10)) / {SCALE} AS ask_qty",
+            "q.mid", "q.spread_bps",
+        ]
+        # No lower bound on `second`: the ASOF takes the greatest second at or
+        # before the trade, and clipping the scan to the window would silently
+        # give the window's first trades no quote at all.
+        # ponytail: scans the venue+symbol history of bbo_1s. Add a lower bound
+        # if a query over a multi-day archive gets slow enough to measure.
+        joins += f"""
+        ASOF LEFT JOIN (SELECT * FROM {tb["bbo"]}
+                        WHERE canonical_symbol = ? AND exchange = ? AND second < CAST(? AS TIMESTAMP)) q
+          ON t.exchange = q.exchange AND t.canonical_symbol = q.canonical_symbol
+         AND t.exchange_ts >= q.second + INTERVAL 1 SECOND"""
+    if master:
+        sel += [
+            "d.symbol AS native_symbol", "d.tick_size", "d.qty_increment",
+            "d.source AS master_source", "d.valid_from AS master_valid_from",
+        ]
+        joins += f"""
+        ASOF LEFT JOIN {tb["dim"]} d
+          ON t.exchange = d.exchange AND t.canonical_symbol = d.canonical_symbol
+         AND t.exchange_ts >= d.valid_from"""
+    return f"""
+        SELECT {", ".join(sel)}
+        FROM (SELECT * FROM {tb["trades"]}
+              WHERE canonical_symbol = ? AND exchange = ?
+                AND exchange_ts >= CAST(? AS TIMESTAMP) AND exchange_ts < CAST(? AS TIMESTAMP)) t
+        {joins}
+        ORDER BY t.exchange_ts, t.trade_seq"""
+
+
+def trades(con, symbol: str, exchange: str, start, end, book: bool = True, master: bool = True, source: str = "pinned"):
+    """Trades in [start, end) with the book in force and the security master as of each one.
+
+    One row per trade, every `gold.trades` column plus:
+
+      quote_second, bid, bid_qty, ask, ask_qty  the BBO in force, quote currency
+                                                and base units (DECIMAL, not e8)
+      mid, spread_bps                           as `gold.bbo_1s` computed them
+      native_symbol, tick_size, qty_increment,  the `gold.dim_instrument` version
+      master_source, master_valid_from          in force at exchange_ts
+
+    **`gold.bbo_1s` is the book at the END of its second**, so the quote in force
+    for a trade is the row for the *previous* second: the join is
+    `exchange_ts >= second + INTERVAL 1 SECOND`. Joining on `second <= exchange_ts`
+    uses a quote from up to a second in the trade's future: on Kraken BTC/USD,
+    2026-09-03 12:00-13:00 UTC, that reads 64.74% of prints as trading through the
+    book where the correct pairing reads 51.74% (both measured with this function's
+    join, 1923 trades).
+
+    Both joins are LEFT: nothing is dropped. A trade with no quote (no book
+    frames that second) has NULL bid/ask; a trade older than the dimension's
+    first version has NULL master columns and prints a warning on stderr —
+    `tick_size`/`qty_increment` are Kraken-only anyway (ADR-030).
+
+    Units: `exchange_ts` and `quote_second` are UTC TIMESTAMPs; `start`/`end` are
+    anything DuckDB casts to TIMESTAMP and are read as UTC; prices and quantities
+    stay as the table's e8 fixed point (`price_e8`, `qty_e8`) while the joined
+    book columns are decimals (e8 / SCALE). `symbol` is the canonical BASE/QUOTE,
+    `exchange` one of binance | kraken | coinbase.
+
+    `source` is "pinned" (the views `pin(con)` creates — call it first) or "lake".
+
+        trades(con, "BTC/USD", "kraken", "2026-09-03 04:00", "2026-09-03 05:00")
+    """
+    tb = _tables(source)
+    params = [symbol, exchange, start, end] + ([symbol, exchange, end] if book else [])
+    rel = con.sql(_trades_sql(tb, book, master), params=params)
+    if master:
+        # ponytail: this runs the join a second time. Cheap at one hour; if it
+        # ever isn't, pass master=False and check coverage yourself.
+        n, missing = rel.aggregate(
+            "count(*), count(*) FILTER (WHERE master_valid_from IS NULL)"
+        ).fetchone()
+        if missing:
+            print(f"{missing} of {n} trades have no dim_instrument version; see ADR-030", file=sys.stderr)
+    return rel
+
+
+def completeness(con, symbol: str, exchange: str, start, end, source: str = "pinned"):
+    """One row: is [start, end) of this symbol on this venue whole, and how would we know.
+
+        trades                how many landed
+        minutes_with_trades   distinct UTC minutes that carry at least one
+        minutes_expected      minutes in the window. A venue is not obliged to
+                              print every minute — this is the denominator, not a target
+        seq_gaps              trades whose `seq_gap` is true: a hole in the venue's
+                              trade-id sequence immediately before them
+        ids_never_received    sum of `missing_before` — trade ids the archive never saw
+        quote_coverage_pct    share of trades that found a bbo (the +1 s ASOF of
+                              `trades()`), 2 dp
+        checksum_failed       `silver.book_<venue>` rows with checksum_ok = false whose
+                              `recv_ts` falls in the window. **Kraken only** — Binance
+                              and Coinbase publish no book checksum, so this is NULL
+                              for them, which means "not measurable", not "clean"
+        audit_failures        `audit.checks` rows with passed = false whose `run_ts`
+                              falls in the window. audit.checks stamps one run time, not
+                              a range, so this is the checks that RAN in the window, not
+                              the checks that cover data in it
+
+    All timestamps UTC. `source` as in `trades()`. Nothing here fails a window:
+    it reports, and NULL always means the signal does not exist for this venue.
+    """
+    tb = _tables(source)
+    params = [symbol, exchange, start, end, symbol, exchange, end]
+    if exchange == "kraken":
+        checksum = f"""(SELECT count(*) FROM {tb["book_kraken"]}
+                        WHERE canonical_symbol = ? AND checksum_ok = false
+                          AND recv_ts >= CAST(? AS TIMESTAMP) AND recv_ts < CAST(? AS TIMESTAMP))"""
+    else:
+        checksum = "CAST(NULL AS BIGINT)"
+    sql = f"""
+        WITH tq AS ({_trades_sql(tb, book=True, master=False)}),
+        agg AS (
+          SELECT count(*) AS trades,
+                 count(DISTINCT date_trunc('minute', exchange_ts)) AS minutes_with_trades,
+                 CAST(coalesce(sum(CASE WHEN seq_gap THEN 1 ELSE 0 END), 0) AS BIGINT) AS seq_gaps,
+                 CAST(coalesce(sum(missing_before), 0) AS BIGINT) AS ids_never_received,
+                 round(100.0 * coalesce(avg(CASE WHEN quote_second IS NULL THEN 0 ELSE 1 END), 0), 2) AS quote_coverage_pct
+          FROM tq)
+        SELECT trades, minutes_with_trades,
+               CAST(date_diff('minute', CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP)) AS BIGINT) AS minutes_expected,
+               seq_gaps, ids_never_received, quote_coverage_pct,
+               {checksum} AS checksum_failed,
+               (SELECT count(*) FROM {tb["checks"]} WHERE NOT passed
+                  AND run_ts >= CAST(? AS TIMESTAMP) AND run_ts < CAST(? AS TIMESTAMP)) AS audit_failures
+        FROM agg"""
+    params += [start, end]
+    if exchange == "kraken":
+        params += [symbol, start, end]
+    params += [start, end]
+    return con.sql(sql, params=params)
+
+
 BAR_KINDS = ("tick", "volume", "dollar")
 
 
-def bars(con, kind: str, threshold, symbol: str | None = None, exchange: str | None = None, start=None, end=None, source: str = "pinned.gold_trades"):
+def bars(con, kind: str, threshold, symbol: str | None = None, exchange: str | None = None, start=None, end=None, source: str = "pinned"):
     """Event bars at ANY threshold, computed over lake.gold.trades in DuckDB.
 
     The same cumulative-bucket definition as the materialised `lake.gold.bars`
@@ -110,8 +281,8 @@ def bars(con, kind: str, threshold, symbol: str | None = None, exchange: str | N
     trade_seq) order. `threshold` is trades (tick), base units (volume) or
     quote-currency notional (dollar). Returns a DuckDB relation with the
     table's columns; `.df()` / `.pl()` / `.show()` as you like. `source` is the
-    pinned view by default (call `pin(con)` first); pass `lake.gold.trades`
-    for an unpinned read outside a notebook.
+    pinned view by default (call `pin(con)` first); pass "lake" for an unpinned
+    read outside a notebook.
 
     `start` / `end` must be UTC-day boundaries: the cumulative grid restarts at
     each day's first trade, so a mid-day `start` re-bases bar 0 there and the
@@ -121,15 +292,12 @@ def bars(con, kind: str, threshold, symbol: str | None = None, exchange: str | N
     """
     if kind not in BAR_KINDS:
         raise ValueError(f"kind must be one of {BAR_KINDS}, got {kind!r}")
-    where = ["TRUE"]
-    if symbol:
-        where.append(f"canonical_symbol = '{symbol}'")
-    if exchange:
-        where.append(f"exchange = '{exchange}'")
-    if start:
-        where.append(f"exchange_ts >= TIMESTAMP '{start}'")
-    if end:
-        where.append(f"exchange_ts < TIMESTAMP '{end}'")
+    where, params = ["TRUE"], []
+    for expr, value in (("canonical_symbol = ?", symbol), ("exchange = ?", exchange),
+                        ("exchange_ts >= CAST(? AS TIMESTAMP)", start), ("exchange_ts < CAST(? AS TIMESTAMP)", end)):
+        if value:
+            where.append(expr)
+            params.append(value)
     t = float(threshold)
     bucket = {
         "tick": f"n_before // CAST({t} AS BIGINT)",
@@ -140,7 +308,7 @@ def bars(con, kind: str, threshold, symbol: str | None = None, exchange: str | N
         WITH t AS (
           SELECT exchange, canonical_symbol, CAST(exchange_ts AS DATE) AS day, exchange_ts, recv_ts_ns, trade_seq,
                  price_e8, qty_e8, CAST(price_e8 AS HUGEINT) * CAST(qty_e8 AS HUGEINT) AS notional_e16
-          FROM {source} WHERE {" AND ".join(where)}
+          FROM {_tables(source)["trades"]} WHERE {" AND ".join(where)}
         ),
         c AS (
           SELECT *, (sum(qty_e8) OVER w) - qty_e8 AS vol_before, (sum(notional_e16) OVER w) - notional_e16 AS usd_before,
@@ -156,4 +324,4 @@ def bars(con, kind: str, threshold, symbol: str | None = None, exchange: str | N
                count(*) AS trade_count, min(exchange_ts) AS open_time, max(exchange_ts) AS close_time
         FROM k GROUP BY ALL ORDER BY exchange, canonical_symbol, day, bar_seq
     """
-    return con.sql(sql)
+    return con.sql(sql, params=params)

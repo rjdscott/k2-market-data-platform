@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run
+.PHONY: chaos help up down logs ps health test test-python test-rust test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -31,7 +31,7 @@ logs:  ## Tail all service logs
 ps:  ## Show service status
 	docker compose ps
 
-test: test-python test-rust test-clickhouse  ## Run all unit tests
+test: test-python test-rust test-clickhouse test-notebooks  ## Run all unit tests
 
 
 test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs uv)
@@ -91,6 +91,9 @@ lake-rebuild:  ## Rebuild LAYER=bronze|silver|gold|books|bars from its parent ov
 
 notebooks:  ## JupyterLab on :8889 over the lake (DuckDB via Lakekeeper + MinIO on the published ports)
 	cd notebooks && uv sync -q && uv run jupyter lab --port 8889 --no-browser
+
+test-notebooks:  ## k2lake.trades/completeness against synthetic DuckDB tables (no stack needed)
+	cd notebooks && uv sync -q && uv run pytest -q
 
 notebooks-run:  ## Execute the five notebooks headless — the runnable check (needs the stack up)
 	cd notebooks && uv sync -q && for nb in 0*.ipynb; do uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=600 $$nb || exit 1; done

@@ -158,6 +158,7 @@ Research: `make notebooks` starts JupyterLab with DuckDB over the lake
 | Rust capture: 60 tests, including replay over recorded sessions | `make test-rust` |
 | Python: 229 tests over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
 | ClickHouse schema: 9 assertions, including the v2 OHLCV regression | `make test-clickhouse` |
+| Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
 | Prometheus rule unit tests and documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make chaos` |
 
