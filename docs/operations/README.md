@@ -13,8 +13,8 @@ Redpanda → the Iceberg lake on MinIO. Everything here targets the as-built
 | [observability.md](./observability.md) | Grafana dashboards, capture-tier and lake metrics, all 26 Prometheus alert rules |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
 | [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 14.60 CPU / 25.625 GiB across 15 long-running services, +4 one-shot (1.50 / 1.500 GiB), bootstrap peak 16.10 / 27.125 GiB |
-| [prefect-schedules.md](./prefect-schedules.md) | The two Prefect schedules (5-min lake ingest, daily lake maintenance), written, not yet deployed |
-| [clickhouse-database-standard.md](./clickhouse-database-standard.md) | Why everything lives in the `k2` database and how to keep it that way |
+| [prefect-schedules.md](./prefect-schedules.md) | The two deployed Prefect schedules: `lake-ingest-5min` and `lake-maintenance-daily` |
+| [clickhouse-database-standard.md](./clickhouse-database-standard.md) | Why everything served lives in the `gold` database (`k2` was dropped at the Phase E cutover) and how to keep it that way |
 | [adding-new-exchanges.md](./adding-new-exchanges.md) | End-to-end checklist for wiring up a 4th exchange |
 | [cost-model.md](./cost-model.md) | What this single host would cost as managed cloud services |
 
@@ -39,8 +39,8 @@ were archived with the code they described, in
 Load secrets into your shell first: `set -a && . ./.env && set +a`
 
 ```bash
-# 1. Every container up and healthy
-make ps
+# 1. Every container healthy, every venue producing, lake still committing
+make health
 
 # 2. All 3 capture containers alive (the image is distroless: no curl, so the
 #    binary reads its own /metrics; exits non-zero if any stream is stale)
@@ -58,24 +58,22 @@ curl -s --get localhost:9090/api/v1/query \
   --data-urlencode 'query=time() - k2_lake_max_kafka_ts_seconds' | \
   jq -r '.data.result[].value[1]'
 
-# 5. Nothing firing beyond the four expected IcebergOffload* ones (note below)
+# 5. Nothing firing
 curl -s localhost:9090/api/v1/alerts \
-  | jq -r '.data.alerts[] | select(.labels.alertname | startswith("IcebergOffload") | not)
-           | "\(.labels.alertname)\t\(.state)"'
+  | jq -r '.data.alerts[] | "\(.labels.alertname)\t\(.state)"'
 ```
 
-There is no "trades landed in ClickHouse" check any more: the `k2` database is
-frozen and gains no rows, see [../architecture/README.md](../architecture/README.md).
-The same freeze makes the four `IcebergOffload*` alerts fire permanently and
-expectedly, which is why check 5 filters them out; they are deleted with
-`docker/offload/` in the Phase D PR. `ClickHouseBronzeInsertRateLow` measured the
-same frozen ingest and was archived to
-[`legacy/v2-kotlin/runbooks/`](../../legacy/v2-kotlin/runbooks/clickhouse-v2-ingest-alerts.yml)
-in the retirement PR rather than left to fire. Rationale:
-[ADR-019](../adr/ADR-019-rust-capture-tier.md) Outcome.
+There is no permanently-firing alert to filter out of check 5 any more: the four
+`IcebergOffload*` rules went with `docker/offload/` in Phase D
+([`legacy/v2-offload/`](../../legacy/v2-offload/README.md)) and
+`ClickHouseBronzeInsertRateLow`, which measured the frozen v2 ingest, was archived to
+[`legacy/v2-kotlin/`](../../legacy/v2-kotlin/runbooks/clickhouse-v2-ingest-alerts.yml)
+rather than left to fire. Check 1 is now the ClickHouse check: `gold` is live and fed
+straight from Redpanda, and the v2 `k2` database was dropped at the Phase E cutover on
+2026-08-27. Rationale: [ADR-019](../adr/ADR-019-rust-capture-tier.md) Outcome.
 
 ## Related
 
 - [Architecture](../architecture/), how the pipeline is designed
-- [Decisions](../adr/), ADR-001 … ADR-027
+- [Decisions](../adr/), ADR-001 … ADR-030
 - [Development](../development/), [setup](../development/setup.md), [testing](../development/testing.md)

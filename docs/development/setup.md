@@ -16,8 +16,18 @@ code once it is.
 ```bash
 cp .env.example .env      # then replace every change-me-in-production value
 make up
-make ps
+make health
 ```
+
+Two values in `.env` are host-specific, not secrets:
+
+- `K2_CAPTURE_CPUSET` / `K2_HEAVY_CPUSET` ship **empty**, which means no CPU pinning and
+  starts anywhere. Uncomment the 15-core layout in `.env.example` only on a host that has
+  those cores — a cpuset naming a core the host does not have fails the container at start
+  with `invalid argument`, six of them at once.
+- `K2_PREFECT_PORT` (default `4200`) is Prefect's host port. It feeds both the published
+  port and `PREFECT_UI_API_URL`, so moving it moves the UI's own API URL with it; set it
+  if something else on the host owns 4200.
 
 `make up` builds three images on the first run, the Rust `k2-capture` binary, the Prefect
 worker, and the Spark image (which bakes the Kafka and Avro jars, each pinned by sha256).
@@ -34,11 +44,11 @@ password.
 ### The safe bring-up (after the first run)
 
 `make up` is the raw `docker compose up -d`. For everyday use, `make dev-up` runs the
-maintainer's bring-up checklist instead: it works around a busy host port 4200, recreates
-any service holding a directory bind mount that changed in the last commit (see the
-[bind-mount gotcha](../../docker/README.md#troubleshooting)), waits for health, and probes
-that trades are actually flowing before declaring success. `bash scripts/dev-up.sh --dry-run`
-prints what it would do without touching anything.
+maintainer's bring-up checklist instead: it sets `K2_PREFECT_PORT` when host port 4200 is
+busy, recreates any service holding a directory bind mount that changed in the last commit
+(see the [bind-mount gotcha](../../docker/README.md#troubleshooting)), then runs
+`scripts/health.sh` — the same checks as `make health` — before declaring success.
+`bash scripts/dev-up.sh --dry-run` prints what it would do without touching anything.
 
 ### Applying the ClickHouse schema
 
@@ -163,7 +173,7 @@ docker exec k2-prefect-worker python /opt/prefect/lake-flows/deploy_lake.py
 |--------|-------|
 | Any container | `docker compose logs -f <service>` or `make logs` |
 | Capture | `docker logs -f k2-capture-binance`, `tracing` to stderr, filtered by `RUST_LOG`. No log files: nothing is bind-mounted out |
-| Lake flow runs | `docker logs k2-prefect-worker`, plus run history at http://localhost:4200 |
+| Lake flow runs | `docker logs k2-prefect-worker`, plus run history at `http://localhost:$K2_PREFECT_PORT` (default 4200) |
 | Spark job output | `docker logs k2-spark-iceberg`; the Application UI is on http://localhost:4040 while a job runs |
 | ClickHouse server | `docker logs k2-clickhouse` |
 

@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run
+.PHONY: chaos help up down logs ps health test test-python test-rust test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -15,6 +15,9 @@ up:  ## Start the full stack (builds images on first run)
 
 dev-up: ## Bring the stack up the safe way (override, rebuild, recreate mount holders, health, data-flow probe)
 	bash scripts/dev-up.sh
+
+health: ## Is it up: every service healthy, a message on every venue in the last 2 min, last lake commit + ingest run
+	bash scripts/health.sh
 
 check-docs: ## Doc gates (links, forbidden words, promtool, runbook paths, capacity-model gate)
 	bash scripts/check-docs.sh
