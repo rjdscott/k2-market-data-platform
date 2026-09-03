@@ -618,5 +618,8 @@ FROM pinned.audit_checks ORDER BY run_ts DESC LIMIT 4
 - [clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md), the pull
   that fills the empty ClickHouse tables
 - [`notebooks/README.md`](../../notebooks/README.md), the research surface and pinned reads
+- `k2lake.trades()` and `k2lake.completeness()` in [`notebooks/k2lake.py`](../../notebooks/k2lake.py):
+  the `+1 SECOND` join, the as-of security master and the completeness signals above, as
+  one call each
 - [../architecture/13-schema-design.md](../architecture/13-schema-design.md), why the layers
   have the shape they do
