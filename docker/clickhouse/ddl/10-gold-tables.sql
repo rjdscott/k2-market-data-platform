@@ -142,9 +142,12 @@ ORDER BY (topic, partition, offset);
 -- block*, so a minute that arrived in two blocks kept whichever block's open
 -- happened to survive the merge — a wrong number that looked right. A view
 -- over FINAL sees the whole minute every time. open/close are decided by
--- (exchange_ts, recv_ts_ns, trade id) — the same total order the lake's
--- gold.py uses, so the two compare at tolerance zero; the id breaks the tie
--- for trades one frame delivered at one instant. scripts/clickhouse-schema-test.sh
+-- (exchange_ts, recv_ts_ns, toUInt64OrZero(trade_id)) — the same total order
+-- the lake's gold.py uses, where the third component is spelled `trade_seq`
+-- (the trade id read as a number) and carries the same value, so the two
+-- compare at tolerance zero; the id breaks the tie for trades one frame
+-- delivered at one instant. docs/operations/data-catalog.md § Candle and bar
+-- total order states it once for both engines. scripts/clickhouse-schema-test.sh
 -- inserts a minute in two blocks and asserts the open comes from the earlier
 -- one. The materialised `gold.ohlcv_*` tables land with the lake's gold layer
 -- and are loaded from it, never computed here.
@@ -370,6 +373,16 @@ ORDER BY (exchange, canonical_symbol, second);
 -- the derived values: they are ratios, not prices. Int64 products of an e8
 -- price and an e8 quantity overflow (1e13 x 1e10), so the arithmetic is done
 -- in Float64 after the cast, not before.
+--
+-- THE `second` LABEL IS THE END OF THAT SECOND, not its start. A row labelled
+-- 13:06:00 is the book as it stood at 13:06:01.000. The quote in force for a
+-- trade is therefore the PREVIOUS second's row, and every as-of join against
+-- this view (or against gold.bbo_1s, same rule) is on
+-- `second + INTERVAL 1 SECOND <= exchange_ts`. Joining on `second <=
+-- exchange_ts` reads a quote from up to a second in the trade's future and
+-- makes 77 % of Binance prints look like they traded through the book
+-- (notebooks/03_asof_trades_book.ipynb). docs/operations/data-catalog.md
+-- § The `+1 SECOND` rule.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE VIEW IF NOT EXISTS gold.bbo_live AS
 SELECT

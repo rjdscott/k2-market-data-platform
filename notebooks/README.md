@@ -17,6 +17,11 @@ make notebooks-run        # execute all five headless (nbconvert), the runnable 
 | `05_bars.ipynb` | the event-bar catalogue (`gold.bars`: tick/volume/dollar at one canonical threshold per symbol) and `k2lake.bars()` for any other threshold; bar duration vs activity; the function reproduces the catalogue row for row | `gold.bars`, `gold.trades` |
 | `04_completeness_audit.ipynb` | what the archive is missing and why: trade-id holes, venue replays, checksum failures by hour, offset gaps | `silver.trades_*`, `silver.book_kraken`, `audit.checks` |
 
+What each table holds — grain, time columns and their units, symbol conventions, the
+`+1 SECOND` book rule, and where the lake and ClickHouse disagree — is
+[`docs/operations/data-catalog.md`](../docs/operations/data-catalog.md). Read it before
+writing a query against a table you have not used.
+
 `k2lake.py` is the one connection; read its docstring for the two things that bite
 (host endpoints, `SET TimeZone = 'UTC'`). Credentials come from `../.env`. Every notebook's
 first cell calls `pin(con)`: one `pinned.<ns>_<table>` view per gold, silver and audit table

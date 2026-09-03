@@ -34,11 +34,11 @@ research/  →  adr/  →  plans/  →  audits/
 | Surface | Holds | Conventions |
 |---------|-------|-------------|
 | [research/](research/) | Analysis before a decision, dated. Allowed to be wrong in hindsight | [README](research/README.md) |
-| [adr/](adr/) | 27 ADRs. Immutable once accepted; divergence recorded in an `Outcome` section | [README](adr/README.md) · [template](adr/template.md) |
+| [adr/](adr/) | 30 ADRs. Immutable once accepted; divergence recorded in an `Outcome` section | [README](adr/README.md) · [template](adr/template.md) |
 | [plans/](plans/) | Multi-phase design documents with exit criteria per phase | [README](plans/README.md) |
 | [audits/](audits/) | Point-in-time sweeps of one surface, with a findings table | [README](audits/README.md) |
 | [benchmarks/](benchmarks/) | Dated measurement snapshots. Every published number traces here | [README](benchmarks/README.md) |
-| [runbooks/](runbooks/) | 12 incident procedures, one per alert family, with measured MTTR | [README](runbooks/README.md) · [template](runbooks/template.md) |
+| [runbooks/](runbooks/) | 14 incident procedures, one per alert family, with measured MTTR | [README](runbooks/README.md) · [template](runbooks/template.md) |
 
 ## Reference
 
@@ -48,6 +48,7 @@ The system as built, for readers who want the detail rather than the argument.
 |---|---|
 | [architecture/](architecture/README.md) | The book: numbered chapters from purpose to scale-out, one per component, each with a practices table |
 | [architecture/A1-technology-stack.md](architecture/A1-technology-stack.md) | Every component, its version, its job, and the ADR that chose it |
+| [operations/data-catalog.md](operations/data-catalog.md) | Every user-facing table: grain, partitioning, time columns and units, symbol conventions, dedup keys, which engine is authoritative, one runnable example each. Start here to write a query |
 | [architecture/13-schema-design.md](architecture/13-schema-design.md) | Bronze / Silver / Gold columns, the Avro normalized-trade contract, precision choices |
 | [architecture/14-partitioning-strategy.md](architecture/14-partitioning-strategy.md) | Redpanda keys and partition counts, Iceberg partition specs and sort orders, and why symbol is in neither. The ClickHouse section lands with Phase E |
 | [architecture/17-scale-out-path.md](architecture/17-scale-out-path.md) | How each tier becomes highly available and fault tolerant on AWS, single-region and multi-region, what it costs at 1× and 200×, and the partition/file/manifest arithmetic at PB scale. *Designed, not exercised* |
@@ -55,7 +56,7 @@ The system as built, for readers who want the detail rather than the argument.
 | [architecture/16-failure-modes.md](architecture/16-failure-modes.md) | FMEA: one row per component × failure, with its detection signal, blast radius, recovery step and proof |
 | [architecture/06-capture-venues.md](architecture/06-capture-venues.md) | How a capture process works, the per-venue dialects, and what a fourth exchange costs |
 | [architecture/01-what-k2-is.md](architecture/01-what-k2-is.md) | What this platform is for, the workloads it is deliberately wrong for, and the six rules the design is held to |
-| [operations/](operations/) | Running the stack: [quick reference](operations/quick-reference.md), [Docker budget](operations/docker-resources.md), [observability](operations/observability.md), [latency budgets](operations/latency-budgets.md), [Prefect schedules](operations/prefect-schedules.md), [data inspection](operations/data-inspection.md), [adding an exchange](operations/adding-new-exchanges.md), [cost model](operations/cost-model.md) |
+| [operations/](operations/) | Running the stack: [quick reference](operations/quick-reference.md), [data catalog](operations/data-catalog.md), [Docker budget](operations/docker-resources.md), [observability](operations/observability.md), [latency budgets](operations/latency-budgets.md), [Prefect schedules](operations/prefect-schedules.md), [data inspection](operations/data-inspection.md), [adding an exchange](operations/adding-new-exchanges.md), [cost model](operations/cost-model.md) |
 | [development/](development/) | [setup.md](development/setup.md) and [testing.md](development/testing.md), prerequisites, and how to run the Rust and Python suites |
 
 ## Migration journey

@@ -743,9 +743,12 @@ ALTER TABLE lake.gold.dim_venue SET IDENTIFIER FIELDS venue_id, valid_from;
 -- per bucket. Every bucket a batch of trades touches is recomputed over ALL of
 -- gold.trades for that bucket and MERGEd in, so a late trade replaces the
 -- candle instead of adding a second row for it — the v2 SummingMergeTree
--- failure, closed at the source. open/close are decided by (exchange_ts,
--- recv_ts_ns), the same rule ClickHouse's gold.ohlcv_live applies, which is
--- what the three-way parity check compares.
+-- failure, closed at the source. open/close are decided by the total order
+-- (exchange_ts, recv_ts_ns, trade_seq) — three components, not two; the third
+-- breaks the tie for trades one frame delivered at one instant. ClickHouse's
+-- gold.ohlcv_live spells the same order (exchange_ts, recv_ts_ns,
+-- toUInt64OrZero(trade_id)), which is why the three-way parity check compares
+-- at tolerance zero. docs/operations/data-catalog.md states it once for both.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS lake.gold.ohlcv_1m (
     exchange         STRING  NOT NULL,
@@ -1143,10 +1146,15 @@ ALTER TABLE lake.silver.book_coinbase
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- gold.book_top20 — the book as it stood at the end of each second, top 20 per
--- side, every venue, one schema: the wire four parallel Int64 arrays, so
--- ClickHouse gold.book_top20 loads it column for column. Replayed from the
--- silver frames per connection (docker/lake/books.py); a second with no frame
--- carries the previous state forward, as the capture own 1 Hz sampler does.
+-- side, every venue, one schema: the wire four parallel Int64 arrays. The
+-- ClickHouse table holds the same four arrays under different names (bid_px,
+-- bid_qty, ask_px, ask_qty — no _e8 suffix, same 1e-8 fixed point), so the
+-- reload maps them by name, not positionally: docs/operations/data-catalog.md
+-- § Column-name divergences. Replayed from the silver frames per connection
+-- (docker/lake/books.py); a second with no frame carries the previous state
+-- forward. That replay is NOT the same construction as ClickHouse's live
+-- book_top20, which is the capture's own 1 Hz sampler — the two differ on the
+-- same second, measured in the catalog.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS lake.gold.book_top20 (
     exchange         STRING  NOT NULL,

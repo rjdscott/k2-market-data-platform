@@ -69,8 +69,11 @@ SETTINGS iceberg_engine_ignore_schema_evolution = 1;
 `seq` is 0 from the lake: gold.trades in the lake does not carry the venue sequence
 (silver does), and nothing in ClickHouse reads it.
 
-The book snapshots come from `lake.gold.book_top20`, replayed from every venue frame,
-not the capture's 1 Hz sampler, column for column (the same four `*_e8` arrays):
+The book snapshots come from `lake.gold.book_top20`, replayed from every venue frame, not
+the capture's 1 Hz sampler. The four level arrays carry the same 1e-8 fixed-point values
+under different names — lake `bid_px_e8`/`bid_qty_e8`/`ask_px_e8`/`ask_qty_e8`, ClickHouse
+`bid_px`/`bid_qty`/`ask_px`/`ask_qty` — so the column lists below must stay aligned by
+hand ([data-catalog.md](../operations/data-catalog.md#column-name-divergences)):
 
 ```sql
 INSERT INTO gold.book_top20

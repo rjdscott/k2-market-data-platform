@@ -68,8 +68,10 @@ flowchart TB
   collapse to one row under `FINAL` (ClickHouse's read-time merge, which applies the
   `ReplacingMergeTree` rule before returning rows).
 - **Candles on read.** `ohlcv_live(bucket)` is a parameterised view: `argMin`/`argMax` over
-  `FINAL` with the total order `(exchange_ts, recv_ts_ns, trade_id)` (lake gold uses `trade_seq`) so open and close are
-  deterministic. v2's `SummingMergeTree` candles resolved open/close per insert block;
+  `FINAL` with a three-component total order, so open and close are deterministic; the lake
+  spells its third component `trade_seq` and gets the same value
+  ([data-catalog.md](../operations/data-catalog.md#candle-and-bar-total-order)).
+  v2's `SummingMergeTree` candles resolved open/close per insert block;
   `scripts/clickhouse-schema-test.sh` inserts one minute in two blocks and asserts the open.
 - **History by pull.** `ohlcv_*` and `bbo_1s` (per-second best bid/offer with spread,
   imbalance and microprice: [BBO and book features](02-market-data-concepts.md#bbo-and-book-features))

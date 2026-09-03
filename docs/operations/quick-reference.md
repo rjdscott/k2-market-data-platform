@@ -145,7 +145,7 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-o
 curl -s localhost:18181/health | jq .
 PREFIX=$(curl -fsS 'localhost:18181/catalog/v1/config?warehouse=k2' | jq -r '.defaults.prefix')
 curl -fsS "localhost:18181/catalog/v1/$PREFIX/namespaces" | jq -c .
-#   {"namespaces":[["raw"],["bronze"],["audit"],["scratch"]]}
+#   {"namespaces":[["raw"],["bronze"],["silver"],["gold"],["audit"]]}
 
 # Ingest lag and per-table commit age (timestamps, aged in PromQL)
 curl -s --get localhost:9090/api/v1/query \

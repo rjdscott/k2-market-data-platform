@@ -137,6 +137,9 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 
 Step by step, with the measured timeline: [fresh install](./docs/runbooks/fresh-install.md).
 
 Every lake layer is populated within five minutes of a fresh clone (release check, 2026-08-27).
+To write the first query, start at the
+[data catalog](./docs/operations/data-catalog.md): every table's grain, time columns,
+symbol conventions and a runnable example.
 
 | Service | URL | First thing to look at |
 |---|---|---|
@@ -189,6 +192,10 @@ master are designed ([ADR-026](./docs/adr/ADR-026-four-layer-lake-and-gold-serve
 
 ## Documentation
 
+- [`docs/`](./docs/README.md): the map — which surface answers which kind of question
+- [`docs/operations/data-catalog.md`](./docs/operations/data-catalog.md): every table,
+  its grain, its clocks, and which engine is authoritative. Start here to query the data
+- [`docs/operations/`](./docs/operations/README.md): running, inspecting and recovering the stack
 - [`docs/architecture/`](./docs/architecture/README.md): the book, start at chapter 00
 - [`docs/adr/`](./docs/adr/README.md): why, one decision per file, never edited once accepted
 - [`docs/runbooks/`](./docs/runbooks/README.md): how, one per alert family, with measured recovery
