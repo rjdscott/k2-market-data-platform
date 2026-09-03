@@ -68,6 +68,9 @@ jobs:
       - name: Pytest
         run: uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests -q
 
+      - name: Notebook helpers (k2lake)
+        run: make test-notebooks
+
   clickhouse:
     name: ClickHouse (gold schema)
     runs-on: ubuntu-latest
