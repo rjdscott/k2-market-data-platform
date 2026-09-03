@@ -17,7 +17,9 @@ For a reviewer opening this repo cold, in order:
 5. [benchmarks/2026-08-27.md](benchmarks/2026-08-27.md), the numbers quoted everywhere
    else, the command behind each, and the window they came from.
 6. [audits/2026-08-26-doc-accuracy.md](audits/2026-08-26-doc-accuracy.md), 31 findings
-   from an adversarial pass over these docs, published rather than quietly fixed.
+   from an adversarial pass over these docs, published rather than quietly fixed, and
+   [audits/2026-09-03-ux-end-to-end.md](audits/2026-09-03-ux-end-to-end.md), the same
+   treatment applied to every user story the platform exposes, not just the docs.
 
 ## The pipeline
 
