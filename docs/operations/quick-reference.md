@@ -12,6 +12,7 @@ set -a && . ./.env && set +a
 
 ```bash
 make up          # docker compose up -d  (builds images on first run)
+make health      # is it up: every service healthy, every venue producing, lake still committing
 make down        # stop, keep volumes
 make ps          # service status
 make logs        # tail everything
@@ -25,17 +26,21 @@ docker stats --no-stream                             # live CPU / RAM
 
 ## URLs and credentials
 
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| Redpanda Console | http://localhost:8080 | none |
-| Grafana | http://localhost:3000 | `admin` / `$GRAFANA_PASSWORD` |
-| Prometheus | http://localhost:9090 | none |
-| Prefect | http://localhost:4200 | none |
-| Lakekeeper (Iceberg REST catalog) | http://localhost:18181 | none (`/health`, `/catalog/v1/...`) |
-| MinIO Console | http://localhost:9001 | `$MINIO_ROOT_USER` / `$MINIO_ROOT_PASSWORD` |
-| ClickHouse HTTP | http://localhost:8123 | `default` / `$CLICKHOUSE_PASSWORD` |
-| Spark Master UI | http://localhost:18080 | none |
-| Spark Application UI | http://localhost:4040 | only while a job is running |
+Every UI the platform has, and the one thing each is good for. This is the tools page;
+the README links here rather than repeating it.
+
+| URL | What it is for | Credential | First thing to look at |
+|-----|----------------|------------|------------------------|
+| http://localhost:3000 | Grafana, the dashboards | `admin` / `$GRAFANA_PASSWORD` | `k2-pipeline-overview`, then `k2-lake` |
+| http://localhost:8080 | Redpanda Console: topics, groups, live messages | none | `market.crypto.v3.trades.binance` — values decode as **Avro** off the schema registry at `8081` |
+| `http://localhost:$K2_PREFECT_PORT` (`.env`, default 4200) | Prefect: the lake schedules and their run history | none | Deployments → `lake-ingest-5min`, `lake-maintenance-daily`; Runs for the last state |
+| http://localhost:18181/ui/ | Lakekeeper: browse the Iceberg catalog | none (auth is off) | Warehouses → **`k2`** → namespaces `raw`, `bronze`, `silver`, `gold`, `audit`. The warehouse is named `k2`; Spark and DuckDB address it through the *catalog* name `lake`, so a table the UI shows under `gold` is `lake.gold.trades` in a query |
+| http://localhost:9001 | MinIO console: the bytes under the lake | `$MINIO_ROOT_USER` / `$MINIO_ROOT_PASSWORD` | bucket **`k2-lake`** |
+| http://localhost:9090 | Prometheus: metrics and alert state | none | Alerts, then `time() - max(k2_lake_last_commit_ts_seconds)` |
+| http://localhost:8123 (`/play` for a query box) | ClickHouse: the gold hot tier | `default` / `$CLICKHOUSE_PASSWORD`; research reads `quant` / `$K2_QUANT_PASSWORD` (read-only, `gold` only) | `SELECT count() FROM gold.trades FINAL`. Native protocol from the host is `--port 9002` |
+| http://localhost:18080 | Spark master UI | none | mostly empty by design: the lake jobs run as **local** drivers and never register with the master. A running job's own UI is http://localhost:4040, and only while it runs |
+| http://localhost:8889 | JupyterLab, the K2 research notebooks — `make notebooks` | token printed by the command | [`notebooks/README.md`](../../notebooks/README.md) |
+| http://127.0.0.1:8888 | the Spark image's **vendor** Iceberg sample notebooks, not K2's | none (loopback only, deliberately) | nothing, normally — K2's notebooks are 8889 |
 
 Also listening: Redpanda Kafka API `9092`, Admin API `9644`, Schema Registry `8081`;
 ClickHouse native `9002`, Prometheus metrics `9363`; MinIO S3 API `9000`; PostgreSQL (Prefect + Lakekeeper) `15432` on localhost only.

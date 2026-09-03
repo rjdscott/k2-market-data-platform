@@ -3,10 +3,12 @@
 The working contract for this repo. K2 is a single-host crypto market data
 platform: Rust capture (`services/capture-rust/`) → Redpanda → a Spark batch
 ingest into an Iceberg lake on MinIO under Prefect, catalogued by Lakekeeper.
-The ClickHouse medallion is **frozen as of 2026-08-26**: the Kotlin handlers that
-fed it retired in ADR-019 and nothing produces to the v2 topics, so `k2.*` is
-readable history, not a live path, until the Phase E hot tier replaces it. The v2
-ClickHouse→Iceberg offload that wrote `cold.*` is deleted (Phase D).
+The v2 ClickHouse medallion is **gone**: the Kotlin handlers that fed it retired
+in ADR-019 and the `k2.*` database was dropped at the Phase E cutover on
+2026-08-27 — `SHOW DATABASES` lists `gold` and nothing else. Its DDL is archived,
+unexecuted, in `legacy/v2-clickhouse/`. ClickHouse now serves the `gold` hot tier
+only, fed straight from Redpanda. The v2 ClickHouse→Iceberg offload that wrote
+`cold.*` is deleted (Phase D).
 v2 is at the repo root; v1 is archived unmodified in `legacy/v1/`, the v2 Kotlin
 tier in `legacy/v2-kotlin/`, and the deleted v2 offload in `legacy/v2-offload/`.
 Read this before writing code or docs. Architecture: `docs/architecture/README.md`.

@@ -23,10 +23,13 @@ if [ ! -f docker-compose.yml ] || [ ! -f .env ]; then
 fi
 result "(a) preflight" "PASS (docker-compose.yml + .env present)"
 
-# (b) prefect-server port override, idempotent
-step "(b) prefect-server port 4200 override"
-if [ -f docker-compose.override.yml ]; then
-  result "(b) override" "SKIP (docker-compose.override.yml already present)"
+# (b) prefect-server host port, idempotent
+# One variable, not an override file: compose interpolates K2_PREFECT_PORT into
+# both the `ports` mapping and PREFECT_UI_API_URL, and a UI published on a port
+# its own API URL does not name is a UI that loads and then fails every request.
+step "(b) prefect-server host port"
+if grep -q '^K2_PREFECT_PORT=' .env; then
+  result "(b) prefect port" "SKIP (.env already sets K2_PREFECT_PORT=$(grep -m1 '^K2_PREFECT_PORT=' .env | cut -d= -f2))"
 else
   busy=0
   if command -v ss >/dev/null 2>&1; then
@@ -35,23 +38,14 @@ else
     lsof -iTCP:4200 -sTCP:LISTEN >/dev/null 2>&1 && busy=1 || true
   fi
   if [ "$busy" = "1" ]; then
-    if [ "$DRY_RUN" = "1" ]; then
-      echo "[dry-run] write docker-compose.override.yml (prefect-server -> 14200:4200)"
-      echo "[dry-run] append docker-compose.override.yml to .git/info/exclude"
-    else
-      cat > docker-compose.override.yml <<'EOF'
-services:
-  prefect-server:
-    ports: !override
-      - "14200:4200"
-EOF
-      grep -qxF 'docker-compose.override.yml' .git/info/exclude 2>/dev/null \
-        || echo 'docker-compose.override.yml' >> .git/info/exclude
-    fi
-    result "(b) override" "WROTE (host port 4200 busy -> prefect-server moved to 14200)"
+    run sh -c 'printf "\n# host 4200 was busy at bring-up (scripts/dev-up.sh)\nK2_PREFECT_PORT=14200\n" >> .env'
+    result "(b) prefect port" "WROTE (host port 4200 busy -> K2_PREFECT_PORT=14200 in .env)"
   else
-    result "(b) override" "SKIP (port 4200 free)"
+    result "(b) prefect port" "SKIP (port 4200 free, compose default)"
   fi
+fi
+if [ -f docker-compose.override.yml ] && grep -q '4200' docker-compose.override.yml; then
+  result "(b) legacy override" "WARN (docker-compose.override.yml still remaps 4200 — delete it, K2_PREFECT_PORT replaces it)"
 fi
 
 # (c) build + start — daemon caches, so plain --build is cheap on a no-op
@@ -99,68 +93,16 @@ else
   fi
 fi
 
-# (e) wait for health, <= 5 minutes
-step "(e) wait for health (<= 5 min)"
+# (e) + (f) health and data-flow probe — scripts/health.sh, the same one
+# `make health` runs. Non-zero from it is reported, not fatal: the rest of the
+# checklist (and `docker compose ps`) is worth printing either way.
+step "(e) health + data-flow probe (scripts/health.sh)"
 if [ "$DRY_RUN" = "1" ]; then
-  echo "[dry-run] loop: docker compose ps --format '{{.Name}} {{.Health}}' until all healthy or no healthcheck, 5 min timeout"
+  echo "[dry-run] bash scripts/health.sh"
+elif bash scripts/health.sh; then
+  result "(e) health.sh" "PASS"
 else
-  deadline=$((SECONDS + 300))
-  while :; do
-    unhealthy=$(docker compose ps --format '{{.Name}} {{.Health}}' | grep -v ' healthy$' | grep -v ' $' || true)
-    if [ -z "$unhealthy" ]; then
-      result "(e) health" "PASS (all services healthy or have no healthcheck)"
-      break
-    fi
-    if [ "$SECONDS" -ge "$deadline" ]; then
-      result "(e) health" "FAIL (still unhealthy after 5 min)"
-      echo "$unhealthy"
-      break
-    fi
-    sleep 15
-  done
-fi
-
-# (f) data-flow probe
-step "(f) data-flow probe"
-if [ "$DRY_RUN" = "1" ]; then
-  # shellcheck disable=SC2016 # literal preview text — $CLICKHOUSE_PASSWORD is not meant to expand here
-  echo '[dry-run] docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD -q "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange"'
-  echo '[dry-run] for each running capture-* service: docker run --rm --network <its-network> curlimages/curl:8.14.1 -s http://<service>:8082/metrics | grep k2_capture_last_message_ts_seconds'
-else
-  set -a
-  # shellcheck disable=SC1091 # .env is generated locally from .env.example, not a static repo file to follow
-  . ./.env
-  set +a
-
-  ch_out=$(docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-    "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange" 2>&1) || true
-  if [ -z "$ch_out" ]; then
-    result "(f) clickhouse gold.trades" "WARN (no rows in the last 2 minutes — capture may be warming up)"
-  else
-    echo "$ch_out" | while IFS=$'\t' read -r exch cnt; do
-      if [ -n "${cnt:-}" ] && [ "$cnt" -gt 0 ] 2>/dev/null; then
-        result "(f) $exch" "PASS ($cnt trades/2min)"
-      else
-        result "(f) $exch" "WARN (0 trades/2min)"
-      fi
-    done
-  fi
-
-  for svc in capture-binance capture-kraken capture-coinbase; do
-    cid=$(docker compose ps -q "$svc" 2>/dev/null || true)
-    [ -z "$cid" ] && continue || true
-    running=$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo false)
-    [ "$running" != "true" ] && continue || true
-    net=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$cid" 2>/dev/null || true)
-    [ -z "$net" ] && continue || true
-    metrics=$(docker run --rm --network "$net" curlimages/curl:8.14.1 -s "http://${svc}:8082/metrics" 2>/dev/null || true)
-    lastts=$(printf '%s\n' "$metrics" | grep '^k2_capture_last_message_ts_seconds' || true)
-    if [ -n "$lastts" ]; then
-      result "(f) $svc metrics" "PASS ($lastts)"
-    else
-      result "(f) $svc metrics" "WARN (no k2_capture_last_message_ts_seconds yet — may be warming up)"
-    fi
-  done
+  result "(e) health.sh" "FAIL (see the FAIL lines above)"
 fi
 
 # (g) final status

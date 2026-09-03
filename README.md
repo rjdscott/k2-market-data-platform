@@ -118,31 +118,35 @@ Detail per failure: [failure modes](./docs/architecture/16-failure-modes.md).
 Requires a Docker engine with at least 24 GB of memory so every declared limit is honoured;
 measured usage is far lower.
 
+Two lines of `.env` are host-specific and are the whole first-run gotcha:
+`K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` ship empty (no CPU pinning, starts anywhere) —
+uncomment the 15-core layout in `.env.example` only on a host that has those cores, or six
+containers fail at start with `invalid argument`. `K2_PREFECT_PORT` (default 4200) is
+Prefect's host port, and it moves the UI's own API URL with it.
+
 ```bash
 git clone https://github.com/rjdscott/k2-market-data-platform.git && cd k2-market-data-platform
 cp .env.example .env            # set every change-me value; LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 set -a && . ./.env && set +a
 docker compose up -d            # first run builds the capture, prefect and spark images
-docker compose ps               # 15 long-running containers up within about 3 minutes:
-                                # 12 healthy, 3 without a healthcheck, plus 4 one-shots at Exited (0)
+make health                     # every service healthy, a message on every venue in the last
+                                # 2 min, and a lake that is still committing
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
 ```
 
 Step by step, with the measured timeline: [fresh install](./docs/runbooks/fresh-install.md).
-Hosts with fewer than 15 cores must set `K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` in `.env`
-(see `.env.example`) or the capture and heavy containers fail at start with `invalid argument`.
 
 Every lake layer is populated within five minutes of a fresh clone (release check, 2026-08-27).
 
-| Service | URL |
-|---|---|
-| Grafana | http://localhost:3000 (`admin` / `$GRAFANA_PASSWORD`) |
-| Redpanda Console | http://localhost:8080 |
-| ClickHouse HTTP | http://localhost:8123 |
-| Prefect | http://localhost:4200 |
-| Lakekeeper | http://localhost:18181 |
-| MinIO Console | http://localhost:9001 |
-| Prometheus | http://localhost:9090 |
+| Service | URL | First thing to look at |
+|---|---|---|
+| Grafana | http://localhost:3000 (`admin` / `$GRAFANA_PASSWORD`) | the capture and lake dashboards |
+| Redpanda Console | http://localhost:8080 | `market.crypto.v3.trades.binance`, values decoded as Avro |
+| Prefect | `http://localhost:$K2_PREFECT_PORT` (default 4200) | Deployments: `lake-ingest-5min`, `lake-maintenance-daily` |
+
+Every other URL, credential and port — ClickHouse, Lakekeeper, MinIO, Prometheus, Spark,
+the notebooks — is on one page:
+[quick reference](./docs/operations/quick-reference.md#urls-and-credentials).
 
 Research: `make notebooks` starts JupyterLab with DuckDB over the lake
 ([`notebooks/`](./notebooks/README.md)).

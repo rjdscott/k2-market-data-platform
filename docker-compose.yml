@@ -127,8 +127,11 @@ services:
       - "8080:8080"
     environment:
       KAFKA_BROKERS: redpanda:9092
-      KAFKA_SCHEMAREGISTRY_ENABLED: true
-      KAFKA_SCHEMAREGISTRY_URLS: http://redpanda:8081
+      # Console v3 moved the schema registry out from under `kafka.`:
+      # KAFKA_SCHEMAREGISTRY_* is silently ignored and the UI shows
+      # "Schema Registry: Not configured" with every Avro value undecodable.
+      SCHEMAREGISTRY_ENABLED: true
+      SCHEMAREGISTRY_URLS: http://redpanda:8081
     depends_on:
       redpanda:
         condition: service_healthy
@@ -404,14 +407,18 @@ services:
     hostname: prefect-server
     networks:
       - k2-net
+    # Host port is one variable, K2_PREFECT_PORT (.env, default 4200): it has to
+    # move in lockstep with PREFECT_UI_API_URL, which is the URL the SPA in the
+    # browser calls. Publishing on another port without moving that variable too
+    # gives a UI that loads and then fails every request.
     ports:
-      - "4200:4200"
+      - "${K2_PREFECT_PORT:-4200}:4200"
     volumes:
       - ./docker/prefect:/root/.prefect
     environment:
       PREFECT_SERVER_API_HOST: 0.0.0.0
       PREFECT_API_URL: http://prefect-server:4200/api
-      PREFECT_UI_API_URL: http://localhost:4200/api   # what the browser on the host uses
+      PREFECT_UI_API_URL: http://localhost:${K2_PREFECT_PORT:-4200}/api   # what the browser on the host uses
       PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/${PREFECT_DB_NAME}
     command: prefect server start --host 0.0.0.0
     depends_on:
@@ -513,7 +520,10 @@ services:
     ports:
       - "18080:8080"    # Spark Master UI (mapped to 18080 to avoid conflict)
       - "4040:4040"     # Spark Application UI
-      - "8888:8888"     # Jupyter (if needed)
+      # The Spark image's own Jupyter: unauthenticated, root, and it holds the
+      # MinIO keys. Loopback only, same as prefect-db and lakekeeper. K2's
+      # notebooks are a different thing entirely — `make notebooks`, port 8889.
+      - "127.0.0.1:8888:8888"   # vendor Iceberg sample notebooks (Spark image), not K2's
     volumes:
       - ./docker/lake:/home/iceberg/lake          # ingest, maintenance, DDL, session builder
       # Silver derives canonical_symbol from the registry, not from the Avro
@@ -620,7 +630,12 @@ services:
       LAKEKEEPER__PG_DATABASE_URL_READ: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
       LAKEKEEPER__PG_DATABASE_URL_WRITE: postgres://${PREFECT_DB_USER}:${PREFECT_DB_PASSWORD}@prefect-db:5432/lakekeeper
       LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_ENCRYPTION_KEY}
+      # BASE_URI stays on the compose network: it is what the catalog puts in
+      # the links it hands back to Spark and PyIceberg *inside* docker.
+      # The SPA runs in the browser on the host, which cannot resolve
+      # `lakekeeper`, so the UI gets its own published-port URL.
       LAKEKEEPER__BASE_URI: http://lakekeeper:8181
+      LAKEKEEPER__UI__LAKEKEEPER_URL: http://localhost:18181
     command: ["serve"]
     depends_on:
       lakekeeper-migrate:

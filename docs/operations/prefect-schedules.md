@@ -33,7 +33,7 @@ The deployments are registered (upserted) by
 
 ```mermaid
 flowchart TD
-  S["Prefect Server<br/>localhost:4200"] --> P["Work pool: lake<br/>(process)"]
+  S["Prefect Server<br/>localhost:$K2_PREFECT_PORT"] --> P["Work pool: lake<br/>(process)"]
   P --> W["k2-prefect-worker"]
   W -->|"1-59/5 * * * *"| I["lake_flows.py:lake_ingest<br/>concurrency 1, 1 retry after 60 s"]
   W -->|"0 3 * * *"| M["lake_flows.py:lake_maintenance<br/>concurrency 1, no retry"]
@@ -106,7 +106,7 @@ It is an upsert and it is idempotent, the worker runs the same command at every 
 
 ```bash
 # Prefect UI
-open http://localhost:4200
+open "http://localhost:${K2_PREFECT_PORT:-4200}"
 
 # Ingest lag and per-table commit age, both aged in PromQL from timestamp gauges
 curl -s --get localhost:9090/api/v1/query \
@@ -317,7 +317,7 @@ pool is fixed by restarting the worker container.
 | Ingest by hand | `docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py` |
 | Maintenance by hand | `docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py` |
 | Audits only | `docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-only` |
-| Prefect UI | http://localhost:4200 |
+| Prefect UI | `http://localhost:$K2_PREFECT_PORT` (`.env`, default 4200) |
 
 ---
 
