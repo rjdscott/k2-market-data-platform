@@ -121,8 +121,9 @@ where "one logical trade" is *made* true, and the `duplicate_identifiers` audit 
   "what arrived" and "what does it mean" separately; on one host that sets the runway.
 - **Cross-venue queries start at gold.** Silver keeps venue vocabulary on purpose; a
   research question that needs a silver-only field routinely is the trigger to promote it.
-- **No security master yet.** `canonical_symbol` comes from `config/instruments.yaml`; a
-  cross-venue instrument dimension is designed and deferred ([data-strategy.md](12-data-strategy.md)).
+- **The security master is an SCD2 dimension, not a lookup.** `gold.dim_instrument` and
+  `gold.dim_venue` carry one row per validity interval, joined as of the trade's timestamp
+  ([ADR-030](../adr/ADR-030-scd2-security-master.md)); a point-in-time question costs a join.
 
 ## Key points
 

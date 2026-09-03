@@ -417,3 +417,7 @@ full history resident in memory to answer a question the hot tier is not being a
 - ClickHouse, [Dictionaries](https://clickhouse.com/docs/en/sql-reference/dictionaries) — `complex_key_hashed`, `range_hashed`.
 
 All URLs checked 2026-08-29.
+
+---
+
+*Appended 2026-09-03:* § 2's "`valid_from == recorded_at` by construction" holds for a *change*, not for a key's first version — implementation opened those at the run too, which emptied the as-of join for every trade predating it. They now open at `1970-01-01`; see [ADR-030](../adr/ADR-030-scd2-security-master.md) § Outcome.
