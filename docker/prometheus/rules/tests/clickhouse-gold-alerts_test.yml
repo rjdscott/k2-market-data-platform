@@ -34,6 +34,7 @@ tests:
                 1. `SELECT * FROM system.kafka_consumers` — assignments, last error
                 2. `docker logs k2-clickhouse --tail 200 | grep -i kafka`
                 3. A consumer group stuck on a bad record: see KafkaRowsRejected below
+              runbook: docs/runbooks/clickhouse-rebuild-from-lake.md
 
   - interval: 1m
     input_series:
@@ -81,7 +82,9 @@ tests:
                 Compare the registered schema
                 (`curl redpanda:8081/subjects/<topic>-value/versions/latest`)
                 against docker/clickhouse/ddl/20-gold-kafka.sql; a new field the
-                queue table lacks is the usual cause (/schema-change).
+                queue table lacks is the usual cause (/schema-change). Once the DDL
+                agrees, the skipped window is reloaded from the lake.
+              runbook: docs/runbooks/clickhouse-rebuild-from-lake.md
       - eval_time: 3m
         alertname: ClickHouseKafkaMessagesFailed
         exp_alerts: []

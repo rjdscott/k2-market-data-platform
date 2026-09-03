@@ -7,9 +7,9 @@
     "binance": 3528392281922118482
   },
   "bars": {
-    "day": "2026-08-26",
-    "bars_snapshot": 1589136844755948459,
-    "trades_snapshot": 1348216816157062508,
+    "day": "2026-08-28",
+    "bars_snapshot": 6439341232863081544,
+    "trades_snapshot": 768042784292372288,
     "reference_symbols": [
       "BTC/USD",
       "ETH/USDT"

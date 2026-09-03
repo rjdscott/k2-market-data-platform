@@ -237,7 +237,7 @@ curl -s http://localhost:8081/config                         # global compatibil
 ## Testing
 
 ```bash
-uv run --no-project --with pytest --with pyyaml pytest tests/test_contracts.py -q
+uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests/test_contracts.py -q
 ```
 
 Structural only, and deliberately so: `doc` on every field, `logicalType`

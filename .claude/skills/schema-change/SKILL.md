@@ -16,7 +16,7 @@ so a mismatch surfaces as a null column hours later, not as a build error.
 | 1 | Avro schema | `schemas/avro/*.avsc` |
 | 2 | Lake DDL (`raw`/`bronze`/`audit`) | `docker/lake/ddl/lake.sql` |
 | 3 | Ingest decode | `docker/lake/ingest.py` — the stage-2 select list |
-| 4 | ClickHouse DDL (derived hot tier) | `docker/clickhouse/ddl/01-k2-schema.sql` |
+| 4 | ClickHouse DDL (derived hot tier) | `docker/clickhouse/ddl/10-gold-tables.sql` + `20-gold-kafka.sql` |
 | 5 | Docs | `docs/architecture/13-schema-design.md`, `docs/architecture/14-partitioning-strategy.md` |
 
 ## Checklist
@@ -46,17 +46,29 @@ Work top to bottom; do not skip a row because "nothing reads it yet".
    Then update the stage-2 select list in `docker/lake/ingest.py` so the new
    field is actually written, and `tests/test_wire_format.py`, which parses
    `lake.sql` and asserts the two agree.
-4. **ClickHouse DDL** — edit `01-k2-schema.sql`. It must stay **idempotent**:
-   `CREATE TABLE IF NOT EXISTS` for new tables, `ALTER TABLE … ADD COLUMN IF
-   NOT EXISTS` for new fields on existing ones. It re-runs on every container
-   start. Apply to the running stack:
+4. **ClickHouse DDL** — the served `gold` tier, two files, both idempotent
+   (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE … ADD COLUMN IF NOT EXISTS`);
+   they are mounted at `/docker-entrypoint-initdb.d` and run on a fresh
+   container start. `10-gold-tables.sql` is the contract and the only one CI
+   applies; `20-gold-kafka.sql` attaches the Avro queue tables and their MVs.
+   **A field added to the Avro schema must be added to the queue table too** —
+   AvroConfluent maps by name and a mismatch either stalls the feed into
+   `gold.feed_errors` or errors on every record. `tests/test_wire_format.py`
+   asserts both directions; run it.
    ```bash
    docker exec -i k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
-     --multiquery < docker/clickhouse/ddl/01-k2-schema.sql
+     --multiquery < docker/clickhouse/ddl/10-gold-tables.sql
+   docker exec -i k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
+     --multiquery < docker/clickhouse/ddl/20-gold-kafka.sql
    ```
    Materialized views do **not** pick up new columns — an MV that must carry
    the field is dropped and recreated, and that gap loses rows unless you
-   backfill. Say so in the PR.
+   backfill from the lake ([clickhouse-rebuild-from-lake.md](../../../docs/runbooks/clickhouse-rebuild-from-lake.md)).
+   Say so in the PR.
+
+   The `k2.*` medallion (`01-k2-schema.sql`, `k2.silver_trades`) was dropped at
+   the Phase E cutover and archived in `legacy/v2-clickhouse/`. It is not a
+   place a contract lives any more.
 5. **Docs** — `13-schema-design.md` (the field table) and, if partitioning or
    sort order moved, `14-partitioning-strategy.md`.
 6. **Tests** — a test that would fail if the field were dropped:
@@ -64,10 +76,11 @@ Work top to bottom; do not skip a row because "nothing reads it yet".
    and wire-format tests. (Not `make test-kotlin` — that tier retired in ADR-019.)
 7. **Verify end to end** on the running stack before opening the PR:
    ```bash
-   docker exec k2-spark-iceberg spark-sql -e "DESCRIBE lake.bronze.trades"
+   docker exec k2-spark-iceberg spark-sql -e "DESCRIBE lake.bronze.binance_trade"
    docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-     "DESCRIBE k2.silver_trades"
-   make lake-verify   # raw count == bronze count, double-run adds 0
+     "DESCRIBE gold.trades"
+   make lake-verify       # raw count == bronze count, double-run adds 0
+   make test-clickhouse   # the gold DDL on a throwaway server, assertions and all
    ```
 
 ## One PR

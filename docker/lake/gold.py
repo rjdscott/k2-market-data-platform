@@ -68,8 +68,26 @@ TABLES = (TRADES, DIM_INSTRUMENT, DIM_VENUE, *[t for t, _ in OHLCV.values()], BA
 IDENTIFIER_FIELDS = ("exchange", "canonical_symbol", "trade_id")
 SCALE = 100_000_000  # 1e-8 fixed point, as the wire and ClickHouse gold
 
-# Which venues send the whole book (no depth parameter); config/instruments.yaml.
+# Which venues send the whole book (0 = no depth parameter); config/instruments.yaml.
 _VENUE_DEPTH = {"binance": 20, "kraken": 25, "coinbase": 0}
+
+
+def venue_depth(exchange: str) -> int:
+    """`_VENUE_DEPTH[exchange]`, but the failure names the file to edit.
+
+    A venue added to config/instruments.yaml and not here failed the dimension
+    build with a bare `KeyError: 'bitstamp'` from inside a Spark job — a stack
+    trace that says nothing about where the fix goes. The registry is the source
+    of truth for WHICH venues exist; the depth is per-venue knowledge that only
+    lives here, so there is no default worth guessing (0 means "the whole book",
+    which is a claim, not a fallback).
+    """
+    if exchange not in _VENUE_DEPTH:
+        raise KeyError(
+            f"no book depth for venue {exchange!r}: add it to _VENUE_DEPTH in "
+            f"docker/lake/gold.py (see docs/operations/adding-new-exchanges.md)"
+        )
+    return _VENUE_DEPTH[exchange]
 
 # The two dimensions, in ddl/lake.sql's column order — `writeTo(...).append()`
 # resolves positionally, so the tuple order and the schema string are the
@@ -265,7 +283,7 @@ def load_dims(spark, run_ts: datetime) -> None:
                 "symbol": native,
                 "base": base,
                 "quote": quote,
-                "book_depth": _VENUE_DEPTH[exchange],
+                "book_depth": venue_depth(exchange),
                 "subscribed": True,
                 "tick_size": venue.get("tick_size"),
                 "qty_increment": venue.get("qty_increment"),
@@ -277,7 +295,7 @@ def load_dims(spark, run_ts: datetime) -> None:
         venue_rows[(exchange,)] = {
             "venue_id": scd2.surrogate(exchange),
             "exchange": exchange,
-            "book_depth": _VENUE_DEPTH[exchange],
+            "book_depth": venue_depth(exchange),
             "instruments": len(natives),
             "subscribed": True,
             "source": "registry",

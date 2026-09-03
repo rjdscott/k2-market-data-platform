@@ -44,7 +44,7 @@ CI runs them.
 ### Python
 
 ```bash
-uv run --no-project --with pytest --with pyyaml pytest tests -q
+uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests -q
 ```
 
 `--no-project` keeps the run isolated from the repo's own virtualenv, so the only

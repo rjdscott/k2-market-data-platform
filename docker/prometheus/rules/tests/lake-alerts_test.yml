@@ -312,10 +312,17 @@ tests:
                 feed, which is a capacity question rather than an incident.
               runbook: docs/runbooks/lake-ingest-lag.md
 
-  # ── LakeCommitAgeHigh selects bronze only, and raw must not match it ─────
+  # ── LakeCommitAgeHigh selects bronze only; raw and the instrument reference
+  #    table must not match it. bronze.kraken_instrument is frozen here exactly
+  #    like bronze.kraken_book: identical series, and only one of them may fire.
+  #    Kraken sends `instrument` on connect and on a listing change, so a flat
+  #    commit age is that table's healthy state, and it gained a series the day
+  #    metrics.py started enumerating the catalog.
   - interval: 1m
     input_series:
       - series: 'k2_lake_last_commit_ts_seconds{table="bronze.kraken_book"}'
+        values: '0+0x120'
+      - series: 'k2_lake_last_commit_ts_seconds{table="bronze.kraken_instrument"}'
         values: '0+0x120'
       - series: 'k2_lake_last_commit_ts_seconds{table="raw.messages"}'
         values: '0+0x120'

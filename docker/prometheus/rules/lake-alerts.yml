@@ -147,9 +147,20 @@ groups:
       # schema the registry cannot serve, a body that fails FAILFAST — while the
       # other and the archive carry on. Nothing is lost while this fires: bronze
       # is a function of raw and replays from it.
+      #
+      # bronze.kraken_instrument is excluded, and it is the only exclusion.
+      # Every other bronze table takes a frame per market event, so 30 minutes of
+      # silence is a fault. That one is Kraken's `instrument` channel: reference
+      # data, sent on connect and on a listing change, so hours or days between
+      # commits is its NORMAL state. It gained a series the day metrics.py started
+      # enumerating the catalog instead of a 15-table dict, and the rule as written
+      # would have paged on it within the hour — for nothing. An alert whose
+      # healthy state is "firing" is one nobody reads, which costs more than the
+      # coverage is worth. Nothing watches this table's cadence now; the drift
+      # audit in maintenance.py is what covers its CONTENT.
       - alert: LakeCommitAgeHigh
         expr: |
-          time() - k2_lake_last_commit_ts_seconds{table=~"bronze\\..*"} > 1800
+          time() - k2_lake_last_commit_ts_seconds{table=~"bronze\\..*", table!="bronze.kraken_instrument"} > 1800
         for: 10m
         labels:
           severity: warning
