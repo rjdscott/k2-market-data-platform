@@ -18,19 +18,17 @@ upgrading a stack that already holds data, and it does not cover restoring the l
 - A Docker engine with **at least 24 GB of memory** so every declared limit is honoured.
   Measured usage on a fresh install is far lower (~4.5 GiB RSS total; largest single
   container ClickHouse at 1.13 GiB).
-- **At least 15 CPU cores**, or an explicit cpuset. `docker-compose.yml` pins the three
-  capture containers to `${K2_CAPTURE_CPUSET-12-14}` and the heavy tier (ClickHouse,
-  Spark, lake-ddl) to `${K2_HEAVY_CPUSET-0-11}`. A cpuset naming a core the host does not
-  have fails the container at start with `invalid argument`. On a smaller host, set both
-  in `.env` to ranges that exist, or to the empty string to run unpinned — the compose
-  default uses `-` and not `:-` so that an explicit empty value wins:
-
-  ```bash
-  K2_CAPTURE_CPUSET=
-  K2_HEAVY_CPUSET=
-  ```
-
+- **Any core count.** `.env.example` ships `K2_CAPTURE_CPUSET=` and `K2_HEAVY_CPUSET=`
+  empty, which is no CPU pinning and starts on every host. The 15-core layout (capture on
+  `12-14`, the heavy tier ClickHouse/Spark/lake-ddl on `0-11`) is commented out beside
+  them; uncomment it only on a host that has those cores, because a cpuset naming a core
+  the host does not have fails the container at start with `invalid argument`. The compose
+  default uses `-` and not `:-`, so an explicit empty value wins over `12-14`.
   See [`.env.example`](../../.env.example) for the full note.
+- **Port 4200 free**, or `K2_PREFECT_PORT` set to another port in `.env`. The variable
+  moves both the published port and the URL the Prefect UI calls from the browser; an
+  override file that remaps only the port gives a UI that loads and then fails every
+  request.
 - **Roughly 8 GB of image space.** The three built images are `k2-capture` 54 MB,
   `k2-prefect-worker` 1.23 GB and `k2-spark-iceberg` 6.47 GB, on top of ~5.3 GB of
   upstream pulls.
@@ -44,7 +42,7 @@ cp .env.example .env            # set every change-me value;
                                 # LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 set -a && . ./.env && set +a
 docker compose up -d            # first run pulls 9 images and builds 3
-docker compose ps
+make health                     # every service healthy, a message on every venue in the last 2 min, lake committing
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
 bash scripts/lake-verify.sh
 ```
@@ -80,7 +78,10 @@ held 85,134 rows in `gold.trades` and 13,896 in `gold.book_top20`.
 
 ## What healthy looks like
 
-`docker compose ps` shows **19 containers: 15 long-running and 4 one-shots.** Only 12 of
+`make health` prints `health: PASS` (`scripts/health.sh`: container health, trades per
+venue in the last 2 minutes, last lake commit age, last ingest run state). Underneath it,
+`docker compose ps -a` shows **19 containers: 15 long-running and 4 one-shots** (plain
+`docker compose ps` hides the exited one-shots). Only 12 of
 the 15 ever report `healthy`; three have no healthcheck defined and stay at plain `Up`,
 which is correct and not a degraded state.
 
