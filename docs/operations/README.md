@@ -9,7 +9,8 @@ Redpanda → the Iceberg lake on MinIO. Everything here targets the as-built
 | Doc | What it covers |
 |-----|----------------|
 | [quick-reference.md](./quick-reference.md) | One-page cheat sheet: URLs, ports, credentials, stack commands |
-| [data-inspection.md](./data-inspection.md) | Runnable queries for every layer, Redpanda, bronze/silver/gold, the Iceberg lake |
+| [data-catalog.md](./data-catalog.md) | Every user-facing table: grain, partitioning, time columns and units, symbol conventions, dedup key, which engine is authoritative, one runnable example each |
+| [data-inspection.md](./data-inspection.md) | Operator health queries per hop: Redpanda, ClickHouse `gold`, the Iceberg lake |
 | [observability.md](./observability.md) | Grafana dashboards, capture-tier and lake metrics, all 26 Prometheus alert rules |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
 | [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 14.60 CPU / 25.625 GiB across 15 long-running services, +4 one-shot (1.50 / 1.500 GiB), bootstrap peak 16.10 / 27.125 GiB |

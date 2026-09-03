@@ -1,9 +1,12 @@
 # Data Inspection
 
-How to look at the data at every hop: Redpanda → ClickHouse `gold`, and Redpanda → the
-Iceberg lake. Every query below matches the as-built schema and was run on 2026-08-27
-against the post-cutover stack; column names differ between layers, so copy them rather
-than guessing.
+Health queries at every hop: Redpanda → ClickHouse `gold`, and Redpanda → the Iceberg lake.
+This is the operator's cheat sheet — is it flowing, is it lagging, what did it reject.
+
+**Composing a research query? Start at [data-catalog.md](./data-catalog.md)**, which owns
+the per-table reference: grain, partitioning, time columns and their units, symbol
+conventions, dedup keys, which engine is authoritative, and a runnable example per table.
+Nothing on this page repeats it.
 
 > The v2 ClickHouse medallion (`k2.bronze_trades_*`, `k2.silver_trades`, `k2.ohlcv_*`) and
 > the six `market.crypto.trades.<ex>[.raw]` topics were **dropped on 2026-08-27** at the
@@ -20,26 +23,15 @@ CH="docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD"
 `clickhouse-client` also accepts `--password` with no argument to prompt interactively.
 Research reads go through the read-only `quant` user: `--user quant --password "$K2_QUANT_PASSWORD"`.
 
-## Schema cheat sheet
+Two facts every query below assumes, both spelled out in
+[data-catalog.md](./data-catalog.md):
 
-| Layer | Table(s) | Time column | Key columns |
-|-------|----------|-------------|-------------|
-| Served trades | `gold.trades` (`ReplacingMergeTree`, read with `FINAL`) | `exchange_ts` | `exchange`, `symbol`, `canonical_symbol`, `trade_id`, `price_e8`/`qty_e8` (Int64 at 1e-8) with `price`/`qty` Decimal aliases, `side`, `recv_ts_ns`, `seq`, `conn_id`, `conn_msg_seq`, `src_topic`/`src_partition`/`src_offset` |
-| Served book | `gold.book_top20` (`ReplacingMergeTree`, read with `FINAL`) | `second` (`snapshot_ts`) | `exchange`, `canonical_symbol`, `depth`, `seq`, `checksum_ok`, `bid_px`/`bid_qty`/`ask_px`/`ask_qty` (Array(Int64), best first) |
-| Rejects | `gold.feed_errors` | `seen_at` | `topic`, `partition`, `offset`, `error`, `raw` |
-| Candles, from the lake | `gold.ohlcv_{1m,5m,1h,1d}` | `window_start` | `exchange`, `canonical_symbol`, `open`/`high`/`low`/`close` (aliases over `*_e8`), `volume`, `quote_volume`, `trade_count`, `open_time`, `close_time`, `src_snapshot_id`, `computed_at` |
-| BBO, from the lake | `gold.bbo_1s` | `second` | `exchange`, `canonical_symbol`, `bid`/`ask` (aliases), `mid`, `spread_bps`, `imbalance`, `microprice` |
-| Views, on read | `gold.ohlcv_live(bucket = <seconds>)`, `gold.bbo_live` | `window_start` / `second` | same columns as the tables above, computed over `gold.trades FINAL` / `gold.book_top20 FINAL` |
-| Lake archive | `lake.raw.messages` | `kafka_ts` | `topic`, `partition`, `offset`, `ingest_ts`, `key`, `schema_id`, `payload`, `headers` |
-| Lake bronze | `lake.bronze.<venue>_<msgtype>` (7 tables) | per venue | the venue's own field names and JSON types, one row per frame, [`docker/lake/README.md`](../../docker/lake/README.md#bronze-per-venue-phase-e-adr-026) |
-| Lake silver | `lake.silver.trades_<venue>`, `lake.silver.book_<venue>` | `exchange_ts` / `snapshot_ts` | typed, one row per trade / per frame, canonical symbol, replay / gap / checksum flags |
-| Lake gold | `lake.gold.trades`, `lake.gold.dim_*`, `lake.gold.ohlcv_*`, `lake.gold.book_top20`, `lake.gold.bbo_1s` | `exchange_ts` / `window_start` / `second` | the canonical layer ClickHouse `gold` is loaded from |
-| Lake audit | `lake.audit.checks` | `run_ts` | `job`, `check_name`, `scope`, `passed`, `observed`, `detail` |
-
-Numbers are the wire's fixed point: `*_e8` Int64 at 1e-8, exact. The `price`/`qty`/`open`…
-columns are `ALIAS` expressions that yield the exact `Decimal(38,10)` on read, so
-`SELECT price` works but costs a cast per row; group and filter on the `_e8` columns. The
-lake's `DECIMAL(28,10)` columns are the same value, divided by 1e8 once, at write.
+- Numbers are the wire's fixed point, `*_e8` Int64 at 1e-8. ClickHouse's `price`/`qty`/
+  `open`… are `ALIAS` columns over them — **omitted from `SELECT *`, and invisible through
+  a subquery**. Name them.
+- `gold.ohlcv_*`, `gold.bars` and `gold.bbo_1s` in ClickHouse are pull-fed and empty until
+  [clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md) runs;
+  `gold.ohlcv_live` / `gold.bbo_live` are the live views.
 
 ## Redpanda
 
@@ -232,9 +224,16 @@ $CH -q "SELECT table, formatReadableSize(sum(bytes)) AS size, sum(rows) AS rows
         FROM system.parts WHERE database = 'gold' AND active
         GROUP BY table ORDER BY sum(bytes) DESC FORMAT Pretty"
 
-# CSV / JSON export
-$CH -q "SELECT * FROM gold.ohlcv_1h FINAL WHERE window_start > now() - INTERVAL 7 DAY FORMAT CSVWithNames" > ohlcv_1h.csv
-$CH -q "SELECT * FROM gold.trades FINAL ORDER BY exchange_ts DESC LIMIT 1000 FORMAT JSONEachRow" > trades.jsonl
+# CSV / JSON export. NEVER `SELECT *` here: ClickHouse omits ALIAS columns from it, so
+# `SELECT *` on a candle table yields a file with no OHLC at all. Spell them out.
+$CH -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close,
+               volume, quote_volume, trade_count
+        FROM gold.ohlcv_1h FINAL WHERE window_start > now() - INTERVAL 7 DAY
+        FORMAT CSVWithNames" > ohlcv_1h.csv
+$CH -q "SELECT exchange, symbol, canonical_symbol, trade_id, price, qty, side,
+               exchange_ts, recv_ts_ns, src_topic, src_partition, src_offset
+        FROM gold.trades FINAL ORDER BY exchange_ts DESC LIMIT 1000
+        FORMAT JSONEachRow" > trades.jsonl
 
 # Sample a topic to disk. Values are Confluent-framed Avro, so a sample needs an Avro-aware
 # reader; the lake's raw.messages holds the same bytes, queryable through Spark.
@@ -243,6 +242,8 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.raw.binance --num 100
 
 ## Related
 
+- [data-catalog.md](./data-catalog.md), the per-table reference: grain, time columns,
+  symbol conventions, dedup keys, and which engine wins
 - [quick-reference.md](./quick-reference.md), the short version of this page
 - [observability.md](./observability.md), metrics and alerts rather than row-level data
 - [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md), when inspection shows a gap
