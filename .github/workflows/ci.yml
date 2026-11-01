@@ -60,7 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.3.3
 
       - name: Ruff
         run: uv run --no-project --with ruff ruff check docker/lake tests
