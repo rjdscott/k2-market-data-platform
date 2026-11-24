@@ -19,7 +19,7 @@
 - `decision-log.md`: a short page grouping decisions by component, each a link into
   [the ADR index](../../adr/README.md). It carries no statuses of its own.
 - `docs/development/spark-dbt-airflow-guide.md`: which tool does what, with examples from
-  this repository, including what `dbt parse` on a second target does and does not show.
+  this repository, including which models would port to another SQL engine unchanged.
 - `docs/development/golden-path.md`: the onboarding path, told with FX as it was actually
   built (declare, ingest, process, assure, trace, serve, catalogue, publish), each step with
   the pull request that did it and the command that shows it. Then proven a third time from

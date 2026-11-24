@@ -23,6 +23,10 @@
   the comparison exists. Gate count updated in `README.md`, `docs/development/testing.md`
   and `Makefile`.
 - `Makefile:74-78`: `prom/prometheus` gets the tag the compose file uses.
+- `docker-compose.yml:526`: the Spark image's own sample-notebook server is no longer
+  published on host port 8888. Nothing in K2 uses it (K2's notebooks are on 8889), it is
+  unauthenticated, runs as root and holds the storage keys, and on a machine where 8888 is
+  taken `make up` fails partway with half the stack started.
 - Stale facts: the `spark-iceberg` row in the compose summary comment; the ADR count at
   `README.md:86`; the GiB figures at `docs/adr/README.md:5`; one required engine memory value
   in both `docs/development/setup.md` and `docs/runbooks/fresh-install.md`; the six drift

@@ -23,16 +23,18 @@
 
 **Pull request 2: dbt and the first marts**
 
-- `dbt/` with its own `pyproject.toml` and `uv.lock`: `dbt-trino`, `dbt-athena` and
-  `dbt-redshift`, pinned. Run by Airflow through astronomer-cosmos from a manifest built into
+- `dbt/` with its own `pyproject.toml` and `uv.lock`: `dbt-trino`, pinned. Run by Airflow through astronomer-cosmos from a manifest built into
   the image; `dbt deps` runs at image build, never at task time.
-- `profiles.yml` targets `trino` (runs), `athena` and `redshift` (placeholder settings).
+- `profiles.yml` has one target, `trino`. Targets for other engines are added by the plan
+  that brings an engine to run them against; a target that is only parsed proves little.
+  Models use dbt's cross-database macros where they cost nothing, and the guide says which
+  models would port unchanged and which would not.
 - Layout: `staging/` (one view per source table), `intermediate/`, `marts/`. Marts are
   materialised as tables in namespace `marts`.
   - `venue_quality_scorecard`: per venue and day, from `lake.audit.checks`.
   - `ohlcv_delayed_20m`: rows older than 20 minutes only.
   - `ohlcv_1m`: the port of `gold.candles()` (`docker/lake/gold.py:316`), the worked example.
-    It uses `min_by` and `max_by`, which Redshift lacks, so it is tagged Trino-only.
+    It uses `min_by` and `max_by`, which not every warehouse has, and is tagged as such.
 - `k2gen` emitter for dbt sources and source tests.
 - Tests: generic tests, unit tests on the bucketing, source freshness. The maintained
   dbt-expectations fork if it supports the pinned adapter; otherwise the same checks as
@@ -40,10 +42,9 @@
 - Parity: `scripts/parity_ohlcv.py` gains a side read through Trino at the same snapshot id
   (`FOR VERSION AS OF`). `quote_volume` joins the comparison only if `typeof` shows both
   engines produce the same decimal.
-- CI job `dbt`: `dbt deps`, `dbt parse` for all three targets, `dbt compile --target trino`
+- CI job `dbt`: `dbt deps`, `dbt parse`, `dbt compile --target trino`
   against the CI Trino, a pinned SQL linter with layering rules (a mart may not select from
-  a source), and a manifest check that fails a mart with no uniqueness test on its grain. Stated plainly in the guide: `parse` shows the project loads for
-  Athena and Redshift; it does not prove the SQL runs there.
+  a source), and a manifest check that fails a mart with no uniqueness test on its grain.
 - ADR-029 Outcome: marts are covered by dbt unit tests and a reference computation where one
   is cheap, not by a three-engine parity check. `ohlcv_1m` has the full check.
 - `maintenance.py` takes its table lists from the contracts, so `marts` tables are compacted
@@ -72,7 +73,7 @@ and a failed dbt build.
 docker exec k2-airflow-scheduler airflow dags test dbt_marts
 make parity-ohlcv
 make test-python                                  # batch audit: a short batch records and still commits
-(cd dbt && uv run dbt deps && uv run dbt parse --target athena && uv run dbt parse --target redshift)
+(cd dbt && uv run dbt deps && uv run dbt parse)
 make generate && test -z "$(git status --porcelain)"
 make gates
 ```
