@@ -19,7 +19,7 @@ dev-up: ## Bring the stack up the safe way (override, rebuild, recreate mount ho
 health: ## Is it up: every service healthy, a message on every venue in the last 2 min, last lake commit + ingest run
 	bash scripts/health.sh
 
-check-docs: ## Doc gates (links, forbidden words, promtool, runbook paths, capacity-model gate, no em-dash on added lines)
+check-docs: ## Doc gates (links, forbidden words, promtool, runbook paths, capacity-model gate, no em-dash on added lines, synthetic fixtures)
 	bash scripts/check-docs.sh
 
 down:  ## Stop the stack (volumes kept)

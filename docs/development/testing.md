@@ -70,7 +70,7 @@ tests `legacy/v2-kotlin/`.
 | Job | What it does |
 |-----|--------------|
 | **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain, runs the 68 tests |
-| **Python (lake + tests)** | `ruff check` then `pytest tests -q` under `uv`, runs the 290 tests |
+| **Python (lake + tests)** | `ruff check` then `pytest tests -q` under `uv`, runs the 299 tests |
 | **Docker build** | 3-way matrix: Prefect worker, Spark, capture, with GHA layer caching. Every leg builds from the repo root. Catches broken build contexts, not runtime behaviour |
 | **Compose (config validation)** | `docker compose --env-file .env.example config -q`, then `python3 scripts/check-budget.py`: prints the steady default, bootstrap default and bootstrap `--profile governance` limit sums and fails when the steady default is over 16 CPU / 40 GB; fails any service in either config without a CPU and memory limit (it would escape the ADR-010 budget and nothing else would notice), any untagged or `latest` image, and any unpinned `FROM` or `pip install` in a Dockerfile under `docker/` or `services/` |
 | **Docs** | `bash scripts/check-docs.sh`, ten failing gates: links, forbidden words, promtool check and test, runbook annotation paths and presence, capacity-model gate, no plan checkboxes, no em-dash on lines added since `origin/main` (so the job checks out with full history), fixture and sample data synthetic or listed in `NOTICE`. Mermaid width only warns |

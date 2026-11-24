@@ -176,10 +176,10 @@ hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 
 | Suite | Run |
 |---|---|
 | Rust capture: 68 tests [^rust], 56 unit plus 12 replay over synthetic sessions; `make record-fixtures` replays real ones locally | `make test-rust` |
-| Python: 290 tests [^py] over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
+| Python: 299 tests [^py] over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
-| Prometheus rule unit tests (17 of 28 alerts) and 9 documentation gates | `bash scripts/check-docs.sh` |
+| Prometheus rule unit tests (17 of 28 alerts) and 10 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
