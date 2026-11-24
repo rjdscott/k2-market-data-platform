@@ -30,7 +30,7 @@ rdkafka = { version = "0.39", default-features = false, features = ["cmake-build
 # brings rustls, and taking the default would link OpenSSL as well - two TLS
 # stacks in a 45 MB image, and a libssl.so the distroless runtime would have to
 # supply.
-schema_registry_converter = { version = "5.0", default-features = false, features = ["avro", "easy", "futures", "rustls_tls"] }
+schema_registry_converter = { version = "6.0", default-features = false, features = ["avro", "easy", "futures", "rustls_tls"] }
 apache-avro = "0.22"
 
 serde = { version = "1", features = ["derive"] }
