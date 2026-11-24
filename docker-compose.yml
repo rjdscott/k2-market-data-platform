@@ -583,7 +583,7 @@ services:
   # file above only has to create an empty database.
   # ───────────────────────────────────────────────────────────────────────
   lakekeeper-migrate:
-    image: quay.io/lakekeeper/catalog:v0.13.3
+    image: quay.io/lakekeeper/catalog:v0.13.9
     container_name: k2-lakekeeper-migrate
     networks:
       - k2-net
@@ -618,7 +618,7 @@ services:
   # `healthcheck` subcommand — it GETs http://localhost:8181/health and exits
   # non-zero on failure. CMD form, not CMD-SHELL: there is no shell to run.
   lakekeeper:
-    image: quay.io/lakekeeper/catalog:v0.13.3
+    image: quay.io/lakekeeper/catalog:v0.13.9
     container_name: k2-lakekeeper
     hostname: lakekeeper
     networks:

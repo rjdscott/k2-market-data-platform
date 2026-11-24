@@ -42,7 +42,7 @@ flowchart TB
         ING["ingest every 5 min<br/>offset range → raw → bronze → silver → gold"]
         MNT["maintenance nightly<br/>compact · expire · audit"]
     end
-    ICE[("Iceberg lake · Lakekeeper v0.13.3 + MinIO<br/>raw · bronze · silver · gold · audit")]
+    ICE[("Iceberg lake · Lakekeeper v0.13.9 + MinIO<br/>raw · bronze · silver · gold · audit")]
     CH["ClickHouse 24.3 LTS · gold<br/>live via Kafka engine · reloaded from lake"]
     NB["DuckDB notebooks"]
     subgraph OBS["Observability"]
