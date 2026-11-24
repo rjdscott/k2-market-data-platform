@@ -71,6 +71,31 @@ jobs:
       - name: Notebook helpers (k2lake)
         run: make test-notebooks
 
+  contracts:
+    name: Contracts (k2gen)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.4.0
+
+      # Generated files are never edited by hand. A contract changed without
+      # `make generate`, a generated file edited by hand, or one never committed
+      # shows here as a diff or an untracked file. `generate` validates first and
+      # writes nothing on an invalid contract, which fails this step too.
+      - name: Drift (make generate, then no change)
+        run: make generate && git status --porcelain && test -z "$(git status --porcelain)"
+
+      - name: Tests
+        run: make test-k2gen
+
+      # Both pinned in platform/k2gen/uv.lock: the versions `make lint` runs.
+      - name: Ruff and mypy
+        working-directory: platform/k2gen
+        run: uv run --locked ruff check . && uv run --locked mypy
+
   clickhouse:
     name: ClickHouse (gold schema)
     runs-on: ubuntu-latest
