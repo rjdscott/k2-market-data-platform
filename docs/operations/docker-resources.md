@@ -108,7 +108,7 @@ run, and 12.875 GiB.
   compaction of `raw.messages` OOM'd at 768m twice, its rows are up to 5 MB each. So
   the two drivers are now **serialised, not co-resident**: `maintenance.py` takes the
   ingest `flock` blocking and runs with a **2g** heap (`K2_LAKE_MAINTENANCE_DRIVER_MEMORY`);
-  an ingest tick that lands during it exits 2 at the lock. Budget with one driver at a
+  an ingest tick that lands during it exits 75 at the lock. Budget with one driver at a
   time: 633 MiB + 2g + ~550 MiB overhead ≈ 3.2 GiB, which is why the limit went to
   8 GiB the same day: 4 GiB left no margin for an operator's `docker exec` beside it.
   **The limit only means something if the Docker engine has the memory:** this host's

@@ -402,14 +402,14 @@ Two consequences worth knowing:
   left 10 rows in two append snapshots, because the retry re-applies the loser
   on the new base. The summary makes a *sequence* of runs exactly-once, not a
   pair of concurrent ones. `ingest.py` takes an exclusive `flock` on
-  `/tmp/k2-lake-ingest.lock` (`$K2_LAKE_LOCK`) in `main()` and exits 2 if it is
+  `/tmp/k2-lake-ingest.lock` (`$K2_LAKE_LOCK`) in `main()` and exits 75 (`EX_TEMPFAIL`) if it is
   held; `lake-ingest-5min`'s `concurrency_limit=1` sits behind that and covers
   only the runs Prefect launched, which is not the ones in these runbooks.
   `maintenance.py` takes the same lock *blocking*, it waits out a running ingest,
   then holds the lock for its whole run. That is what lets it use a 2g driver heap
   (`K2_LAKE_MAINTENANCE_DRIVER_MEMORY`) in what was then a 4 GiB container (8 GiB since): compaction of
   5 MB `raw.messages` rows OOM'd at 768m on 2026-08-26, and two drivers that size do
-  not fit together. The ingest tick that lands during the nightly run exits 2 and
+  not fit together. The ingest tick that lands during the nightly run exits 75 and
   shows as one failed `lake-ingest` flow run at ~03:01Z; the next tick catches up.
 - **Snapshot expiry must not outrun stage 2.** Bronze resumes from the
   `raw.messages` snapshot id it last decoded, so expiring that snapshot turns

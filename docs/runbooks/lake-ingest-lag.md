@@ -22,7 +22,7 @@ It does **not** cover a crashed run (that is safe and automatic ,
 | 2 | Scheduler stopped, no runs at all | < 15 min | not yet verified, Phase D burn-in |
 | 3 | `failOnDataLoss`, offsets point below broker retention | **a decision, then < 15 min** | **12 min, measured 2026-08-26**, detection to a green schedule (§3) |
 | 4 | Nightly rewrite missed, small files accumulating | < 24 h (next maintenance window) | not yet verified, Phase D burn-in |
-| 5 | A flow run failed with `exited 2`, the ingest lock held | **nothing to repair** | n/a, the lock working is not an incident |
+| 5 | A flow run failed with `exited 75`, the ingest lock held | **nothing to repair** | n/a, the lock working is not an incident |
 
 ---
 
@@ -475,12 +475,12 @@ both bronze tables using the sort order declared in `lake.sql`.
 
 ---
 
-## 5. A flow run failed with `exited 2`: the ingest lock held
+## 5. A flow run failed with `exited 75`: the ingest lock held
 
 **Symptom**, one `lake-ingest-5min` flow run is Failed in the Prefect UI, its logs end in
 
 ```
-ingest.py exited 2 after 3s
+ingest.py exited 75 after 3s
 another ingest holds /tmp/k2-lake-ingest.lock, refusing to run a second one.
 Two concurrent appends both commit and both write offsets; see LOCK_PATH above.
 ```
@@ -493,7 +493,7 @@ refused run costs one cycle of freshness, which is an order of magnitude inside
 
 **Expected behaviour, this is the lock doing its job, and the correct response is
 nothing.** `main()` in `docker/lake/ingest.py` takes a non-blocking exclusive `flock` on
-`/tmp/k2-lake-ingest.lock` before it opens a Spark session, and exits 2 rather than
+`/tmp/k2-lake-ingest.lock` before it opens a Spark session, and exits 75 rather than
 queueing if another process holds it. Two concurrent ingests would both read the same
 committed offsets from the last snapshot summary and both append the same records, so
 concurrency is the one thing that breaks the exactly-once argument
@@ -505,7 +505,7 @@ that covers every path.
 The ordinary causes are all benign: a hand-run ingest during triage that overlapped a
 scheduled cycle, a chaos script (each pauses the schedule for its duration precisely to
 avoid this), `make lake-verify`, or a long backlog slice still running when the next cycle
-fires. **The run that exited 2 wrote nothing**, the lock is taken before the Spark session
+fires. **The run that exited 75 wrote nothing**, the lock is taken before the Spark session
 so there is nothing to clean up and nothing to replay.
 
 **Recovery**, only if it repeats. A run refused every cycle means a holder that never
@@ -529,7 +529,7 @@ path, so unlinking it does not release anything, it just lets the next run take 
 lock on a new inode and start the second concurrent ingest the lock exists to prevent.
 
 **Measured**, not yet verified. Exercised against a throwaway `scratch` namespace: two
-concurrent appends duplicate without the lock and the second run exits 2 with it.
+concurrent appends duplicate without the lock and the second run exits 75 with it.
 
 ---
 
