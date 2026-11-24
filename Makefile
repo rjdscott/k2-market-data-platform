@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health gates test test-python test-rust record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run
+.PHONY: chaos help up down logs ps health gates test test-python test-rust record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run test-k2gen
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -31,7 +31,7 @@ logs:  ## Tail all service logs
 ps:  ## Show service status
 	docker compose ps
 
-test: test-python test-rust test-clickhouse test-notebooks  ## Run all unit tests
+test: test-python test-rust test-clickhouse test-notebooks test-k2gen  ## Run all unit tests
 
 # One recipe line per gate, not prerequisites: recipe lines run in order and
 # stop at the first failure even under `make -j`, where prerequisites would not
@@ -106,8 +106,8 @@ check-alerts:  ## promtool: syntax-check every rule file and run the capture + l
 	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus:v3.2.0 \
 	  -c 'promtool test rules /p/tests/*.test.yml /p/rules/tests/*_test.yml'
 
-lint:  ## Ruff over the v3 lake and the tests (same scope as CI)
-	uv run --no-project --with ruff ruff check docker/lake tests
+lint:  ## Ruff over the v3 lake, the tests and platform/k2gen (CI's ruff step covers the first two)
+	uv run --no-project --with ruff ruff check docker/lake tests platform/k2gen
 
 lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, every layer level with its parent, double-run adds 0
 	bash scripts/lake-verify.sh
@@ -123,6 +123,10 @@ notebooks:  ## JupyterLab on :8889 over the lake (DuckDB via Lakekeeper + MinIO 
 
 test-notebooks:  ## k2lake.trades/completeness against synthetic DuckDB tables (no stack needed)
 	cd notebooks && uv sync -q && uv run pytest -q
+
+# --locked: a pyproject.toml edited without `uv lock` fails here, not in someone else's sync.
+test-k2gen:  ## k2gen: contracts/ against ODCS v3, the K2 schema and lake.sql, plus each check made to fail (no stack needed)
+	cd platform/k2gen && uv run --locked -q pytest -q
 
 notebooks-run:  ## Execute the five notebooks headless — the runnable check (needs the stack up)
 	cd notebooks && uv sync -q && for nb in 0*.ipynb; do uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=600 $$nb || exit 1; done
