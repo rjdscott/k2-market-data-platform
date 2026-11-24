@@ -28,9 +28,9 @@
   the image; `dbt deps` runs at image build, never at task time.
 - `profiles.yml` targets `trino` (runs), `athena` and `redshift` (placeholder settings).
 - Marts in `marts`, materialised as tables:
-  - `ohlcv_1d_aud`: daily OHLCV valued in AUD through `silver.fx_rates`. AUD is chosen
-    because the ECB quotes neither USD/AUD nor AUD as a base: the rate has to be derived
-    from two euro crosses, which is the case worth testing. A EUR mart would be a lookup.
+  - `ohlcv_1d_fx`: daily OHLCV valued in each reporting currency listed in the mart's
+    config (AUD, EUR, GBP and JPY to start) through `silver.fx_rates`. Trades are priced in
+    USD and USDT, so every valuation is a derived cross and none is a plain lookup.
   - `venue_quality_scorecard`: per venue and day, from `lake.audit.checks`.
   - `ohlcv_delayed_20m`: rows older than 20 minutes only.
   - `ohlcv_1m`: the port of `gold.candles()` (`docker/lake/gold.py:316`), the worked example.
@@ -58,14 +58,29 @@
   after asserting the bundled expat is 2.4.1 or newer (the image has no pip layer, and that
   version already refuses entity expansion). Takes the writer lock blocking, as maintenance
   does, with a bounded wait.
-- `bronze.ecb_fx_daily` (the XML verbatim as a string, plus one row per currency) and
-  `silver.fx_rates` (typed, USD/AUD derived from the two euro crosses). DDL emitted by
-  `k2gen` into `docker/lake/ddl/generated/`. Never `raw.messages`.
+- Source: the ECB euro reference rates, chosen over the alternatives surveyed (RBA, Federal
+  Reserve H.10, Bank of Canada, Bank of England, community wrappers) because it is the only
+  one with no key, one file shape for a day, 90 days and the full history since 1999, 29
+  currencies at one fixing, and terms that allow reuse with attribution. ADR-037 records the
+  survey. The daily file feeds the schedule; the history file feeds the backfill.
+- `bronze.ecb_fx_daily`: the XML verbatim as a string, plus one row per currency exactly as
+  published (units of currency per euro, as a decimal string).
+- `silver.fx_rates`: one row per date and currency pair, typed. The published euro rates are
+  kept, and a USD-based cross is derived for every currency (`AUD per EUR / USD per EUR`),
+  with a `derived` flag. The ECB's terms require a modified figure to be labelled, and both
+  legs are fixed at the same moment (about 14:10 CET), so the cross is exact to the rounding
+  of its inputs.
+- The ECB publishes on TARGET working days only and crypto trades every day. Non-publishing
+  days carry the last published rate forward with a `carried` flag, so a weekend candle is
+  valued and a reader can see how.
+- DDL emitted by `k2gen` into `docker/lake/ddl/generated/`. Never `raw.messages`. The source,
+  the fixing time and "reference rate, not for transactions" are stated in the contract's
+  description and reach the catalog from there.
 - Write-audit-publish: write to a branch created from `main` at the start of the run, audit
   (row count, currencies present, rates positive, date not in the future, a business day not
   skipped), fast-forward `main`. A failed audit leaves the branch and writes an
   `audit.checks` row; `main` does not move.
-- A committed 90-day XML fixture seeds the tables on a fresh clone, so the marts build with
+- A committed copy of the 90-day XML file (about 70 KB, attributed to the ECB) seeds the tables on a fresh clone, so the marts build with
   no network. Tests use the fixture and a corrupted one; none reaches the network.
 - DAG `fx_ingest`, weekdays after the ECB publication time, with a backfill parameter. It is
   the first DAG built by `docker/airflow/dags/factory.py` from generated config.
