@@ -166,7 +166,7 @@ the scrape jobs set none ([11-observability.md](11-observability.md)). The 6.5 h
 | Failure is visible before it is repaired | Kraken marked snapshot emitted **before** the book is dropped (`kraken.rs:410-418`); consumers can filter `checksum_ok = false` |
 | Resync is the venue's job, not ours | no book is rebuilt from guesses; a fresh venue snapshot is the only repair |
 | Venue example is a test | `decimal.rs` / `kraken.rs` tests against Kraken's published checksum example |
-| Recorded sessions replay | `k2-capture record` fixtures in `services/capture-rust/tests/fixtures/`, sha256-pinned, run by `cargo test --locked` in CI |
+| Sessions replay | synthetic sessions in each venue's wire format in `services/capture-rust/tests/fixtures/` (`scripts/make-synthetic-fixtures.py`), sha256-pinned, run by `cargo test --locked` in CI; real sessions recorded by `make record-fixtures` into a git-ignored directory, never committed |
 | Pre-empt known limits | Binance 23 h scheduled reconnect (`main.rs:124`); Coinbase snapshot size measured before the frame cap was set (`ws.rs:28`, `init.sh:128`) |
 
 ## Trade-offs

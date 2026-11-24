@@ -41,7 +41,7 @@ them in any language ([ADR-019](../adr/ADR-019-rust-capture-tier.md)).**
 The consequence downstream: the raw topic is the system of record and the trades and book topics
 derive from it, so a normalisation bug is repaired by
 [reprocessing](03-data-engineering-concepts.md#rebuildability), not by losing the day. The same
-`handle_frame` runs in production and in the replay tests over recorded fixtures; the `k2-replay`
+`handle_frame` runs in production and in the replay tests over synthetic fixtures; the `k2-replay`
 subcommand ADR-019 describes is not built.
 The cost: anything on the frame path is now Rust, and each venue is a hand-written adapter
 ([capture-venues.md](06-capture-venues.md)).
@@ -72,7 +72,8 @@ flowchart TB
 - **Adapter contract.** `Adapter::handle_frame(&mut self, bytes, recv_ts_ns) -> Handled`
   (`exchanges/mod.rs`) is pure: it mutates book state and returns records plus an `Action`
   (resubscribe, reconnect). The same function runs in production and in the replay tests
-  over recorded fixtures (`tests/fixtures/*.jsonl`, sha256-pinned).
+  over synthetic fixtures (`tests/fixtures/synthetic-*.jsonl`, sha256-pinned), and over
+  real sessions recorded locally by `make record-fixtures`, which are never committed.
 - **Numbers.** `decimal.rs` parses venue strings straight to `i64` at 1e-8
   (`SCALE = 100_000_000`); a value with more than 8 decimals is counted in
   `k2_capture_precision_loss_total`, never rounded silently. No `f64` on the path.

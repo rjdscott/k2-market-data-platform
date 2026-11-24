@@ -36,7 +36,7 @@ retirement window live in ADR-019's Outcome section.
 
 Both are normalised to `Norm(canonical_symbol, trade_id, price, qty, side,
 exchange_ts_us)` with prices as exact 1e-8 integers via `Decimal` — never a
-float, because a float round-trip of "78600.44000000" is exactly the silent
+float, because a float round-trip of "128.14000000" is exactly the silent
 corruption this comparison is supposed to be able to detect.
 
 `side` is the taker side, and both contracts already carry it: v2's `TradeSide`
@@ -191,7 +191,7 @@ def to_fixed_1e8(value: str) -> int:
     """
     Decimal string -> exact fixed-point int64 at scale 1e-8.
 
-    '78600.44000000' -> 7860044000000. Never via float: float('0.1') * 1e8 is
+    '128.14000000' -> 12814000000. Never via float: float('0.1') * 1e8 is
     10000000.000000002, and the whole point of the v3 contract is that the
     integer is exact.
 

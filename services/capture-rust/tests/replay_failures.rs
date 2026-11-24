@@ -3,28 +3,29 @@
 //! The clean per-venue fixtures (`tests/replay.rs`, `replay_binance.rs`,
 //! `replay_coinbase.rs`) prove the happy path; these three prove the resync
 //! policy of ADR-027 by carrying the failure itself. Each is derived
-//! deterministically from its clean sibling by one edit - no live venue, no
-//! hand-written frames - so every byte except the one disturbance is real venue
-//! output:
+//! deterministically from its clean sibling by one edit, so every byte except
+//! the one disturbance is the same synthetic session the clean test replays:
 //!
 //! | Fixture | Derived from | The one edit |
 //! |---------|--------------|--------------|
-//! | `kraken-20s-checksum-fail.jsonl` | `kraken-20s.jsonl` | line 600, a `book` `update` ~8 s after the snapshot: `"checksum":1925110775` -> `"checksum":1` |
-//! | `coinbase-20s-seq-gap.jsonl` | `coinbase-20s.jsonl` | line 81 deleted (`l2_data` `update`, `sequence_num` 80), so 79 is followed by 81 |
-//! | `binance-10s-regression.jsonl` | `binance-10s.jsonl` | the payloads of lines 67 and 68 swapped - `lastUpdateId` 99193217508 arrives before 99193217500 - each line keeping its own `recv_ts_ns` |
+//! | `synthetic-kraken-20s-checksum-fail.jsonl` | `synthetic-kraken-20s.jsonl` | line 537, the first `book` `update` at or after 9.5 s: its checksum rewritten to `1` |
+//! | `synthetic-coinbase-20s-seq-gap.jsonl` | `synthetic-coinbase-20s.jsonl` | line 80 deleted (`l2_data` `update`, `sequence_num` 79), so 78 is followed by 80 |
+//! | `synthetic-binance-10s-regression.jsonl` | `synthetic-binance-10s.jsonl` | the payloads of lines 44 and 45 swapped - `lastUpdateId` 1133 arrives before 1120 - each line keeping its own `recv_ts_ns` |
 //!
-//! Re-derive with `python3 scripts/make-failure-fixtures.py`; the committed
-//! `.sha256` files are what `k2-capture replay --exchange <x> --fixture <f>
-//! --instruments-file ../../config/instruments.yaml | sha256sum` prints.
+//! All six come from `python3 scripts/make-synthetic-fixtures.py`, which prints
+//! the edits above; the committed `.sha256` files are what `k2-capture replay
+//! --exchange <x> --fixture <f> --instruments-file ../../config/instruments.yaml
+//! | sha256sum` prints.
 //!
 //! A fixture stops at the edge of the venue's reply: it can carry the failing
 //! frame but not the answer to the resync that frame triggers. So each test also
 //! pins what the adapter does for the *rest* of the session with its request
 //! unanswered - the part these fixtures add over the unit tests in
 //! `src/exchanges/*.rs`, which stop at the action. The Kraken one found a bug
-//! that way: before #119 a single mismatch replayed to 573 `Resubscribe` actions
-//! and 573 marked snapshots, one per `update` frame folded into the empty book
-//! it had just cleared (ADR-027 Outcome, 2026-08-28). It is 1 and 1 now.
+//! that way: before #119 a single mismatch replayed, on the recorded fixture
+//! this test then used, to 573 `Resubscribe` actions and 573 marked snapshots,
+//! one per `update` frame folded into the empty book it had just cleared
+//! (ADR-027 Outcome, 2026-08-28). It is 1 and 1 now.
 
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -96,9 +97,10 @@ fn books(records: &[OutRecord]) -> Vec<&BookSnapshotRecord> {
 /// fixture is the reason for: the round-trip window costs exactly **one**
 /// action. An `update` for a symbol whose book is empty is ignored, because a
 /// delta onto nothing produces a partial book that fails the checksum and asks
-/// for the same resubscribe again — 572 more times here, which is what this
-/// fixture measured before the guard landed (#119). The venue's `snapshot` is
-/// the only thing that ends the window, this fixture cannot carry one, and so
+/// for the same resubscribe again, once per `update` for the rest of the
+/// session, which is what this test measured before the guard landed (#119).
+/// The venue's `snapshot` is the only thing that ends the window, this fixture
+/// cannot carry one, and so
 /// the symbol emits **no further book record at all**: 10 snapshots against the
 /// clean fixture's 19, the last of them the marked one. Every ignored frame is
 /// still archived — the guard is about the book, not the record.
@@ -107,7 +109,8 @@ fn kraken_checksum_mismatch_marks_once_then_goes_dark() {
     let adapter = Adapter::Kraken(KrakenAdapter::new(
         Instruments::load(&registry(), Exchange::Kraken).expect("registry"),
     ));
-    let (records, stats, digest) = replay_fixture(adapter, "kraken-20s-checksum-fail.jsonl");
+    let (records, stats, digest) =
+        replay_fixture(adapter, "synthetic-kraken-20s-checksum-fail.jsonl");
     let books = books(&records);
 
     let bad = books
@@ -144,7 +147,7 @@ fn kraken_checksum_mismatch_marks_once_then_goes_dark() {
         books[marked].snapshot_ts_ns, books[marked].recv_ts_ns,
         "the marked snapshot was sampled off the 1 Hz clock"
     );
-    // The 572 ignored `update` frames are ignored for book purposes only.
+    // The 635 ignored `update` frames are ignored for book purposes only.
     let raw = records
         .iter()
         .filter(|r| matches!(r, OutRecord::Raw(_)))
@@ -157,7 +160,7 @@ fn kraken_checksum_mismatch_marks_once_then_goes_dark() {
 
     assert_eq!(
         digest,
-        golden("kraken-20s-checksum-fail.sha256"),
+        golden("synthetic-kraken-20s-checksum-fail.sha256"),
         "replay output changed; update the .sha256 only if the change was intended"
     );
 }
@@ -172,7 +175,7 @@ fn kraken_checksum_mismatch_marks_once_then_goes_dark() {
 /// Here nothing answers, and the consequence is the point: an `l2_data` `update`
 /// with no snapshot behind it is dropped rather than used to build a
 /// thin-but-plausible book, so the symbol emits *no snapshot at all* for the
-/// remaining ~13 s - 9 against the clean fixture's 19, the last of them carrying
+/// remaining ~10 s - 9 against the clean fixture's 19, the last of them carrying
 /// a `seq` from before the gap.
 #[test]
 fn coinbase_sequence_gap_reconnects_and_the_books_stay_dark() {
@@ -180,7 +183,7 @@ fn coinbase_sequence_gap_reconnects_and_the_books_stay_dark() {
         Exchange::Coinbase,
         "ATOM-USD",
     )));
-    let (records, stats, digest) = replay_fixture(adapter, "coinbase-20s-seq-gap.jsonl");
+    let (records, stats, digest) = replay_fixture(adapter, "synthetic-coinbase-20s-seq-gap.jsonl");
     let books = books(&records);
 
     assert_eq!(stats.actions, 1, "exactly one Reconnect for one gap");
@@ -194,13 +197,13 @@ fn coinbase_sequence_gap_reconnects_and_the_books_stay_dark() {
         "19 snapshots on the clean fixture; the gap ends them"
     );
     assert!(
-        books.iter().all(|b| b.seq < 80),
-        "a snapshot was emitted from a book touched after the gap at sequence_num 80"
+        books.iter().all(|b| b.seq < 79),
+        "a snapshot was emitted from a book touched after the gap at sequence_num 79"
     );
 
     assert_eq!(
         digest,
-        golden("coinbase-20s-seq-gap.sha256"),
+        golden("synthetic-coinbase-20s-seq-gap.sha256"),
         "replay output changed; update the .sha256 only if the change was intended"
     );
 }
@@ -215,7 +218,7 @@ fn coinbase_sequence_gap_reconnects_and_the_books_stay_dark() {
 /// policies: every `@depth20@100ms` frame *is* a complete top-20, so the next one
 /// 100 ms later rebuilds the book unaided. One action, and the whole cost is one
 /// sampled snapshot - the grid line that falls on the swapped pair, where the
-/// clean fixture samples `lastUpdateId` 99193217508 and this one has no book to
+/// clean fixture samples `lastUpdateId` 1133 and this one has no book to
 /// sample. 9 snapshots against the clean fixture's 10, and the ~100 ms hole is
 /// the entire blast radius.
 #[test]
@@ -224,7 +227,8 @@ fn binance_last_update_id_regression_costs_one_sample() {
         Exchange::Binance,
         "BTCUSDT",
     )));
-    let (records, stats, digest) = replay_fixture(adapter, "binance-10s-regression.jsonl");
+    let (records, stats, digest) =
+        replay_fixture(adapter, "synthetic-binance-10s-regression.jsonl");
     let books = books(&records);
 
     assert_eq!(
@@ -233,7 +237,7 @@ fn binance_last_update_id_regression_costs_one_sample() {
     );
     assert_eq!(books.len(), 9, "10 on the clean fixture: one sample lost");
     assert!(
-        books.iter().all(|b| b.seq != 99_193_217_508),
+        books.iter().all(|b| b.seq != 1133),
         "the clean fixture samples this lastUpdateId at the grid line the \
          regression falls on; here there is no book to sample"
     );
@@ -248,7 +252,7 @@ fn binance_last_update_id_regression_costs_one_sample() {
 
     assert_eq!(
         digest,
-        golden("binance-10s-regression.sha256"),
+        golden("synthetic-binance-10s-regression.sha256"),
         "replay output changed; update the .sha256 only if the change was intended"
     );
 }

@@ -503,7 +503,8 @@ last day of **raw** frames (not bronze) and diffs `json_object_keys` at each dec
 against `VenueTable.keys`. A key the venue *stopped* sending is not reported, the column
 reads NULL, nothing was lost.
 
-Add the column (nullable, a schema change, so `/schema-change`), refresh the fixture in
+Add the column (nullable, a schema change, so `/schema-change`), add the key to the
+synthetic frame in `scripts/make-synthetic-fixtures.py` and regenerate
 `tests/fixtures/bronze/`, and rebuild the table so the archive's earlier frames get the
 column too. Until the rebuild, `raw.messages` is the only place the key exists.
 

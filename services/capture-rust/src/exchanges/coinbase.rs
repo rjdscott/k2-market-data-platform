@@ -499,10 +499,10 @@ mod tests {
     }
 
     const SNAPSHOT: &[(&str, &str, &str)] = &[
-        ("bid", "1.5577", "92.81"),
-        ("bid", "1.5576", "160.49"),
-        ("offer", "1.5589", "256.59"),
-        ("offer", "1.5590", "10"),
+        ("bid", "9.9999", "1.5"),
+        ("bid", "9.9998", "2.25"),
+        ("offer", "10.0001", "3"),
+        ("offer", "10.0002", "10"),
     ];
 
     #[test]
@@ -529,16 +529,16 @@ mod tests {
     #[test]
     fn trade_frame_becomes_a_trade_record_with_the_frame_sequence() {
         let mut a = adapter();
-        let frame = r#"{"channel":"market_trades","timestamp":"2026-08-26T12:13:45.82034548Z","sequence_num":7,"events":[{"type":"snapshot","trades":[{"product_id":"ATOM-USD","trade_id":"62534898","price":"1.5594","size":"5.88","time":"2026-08-26T12:13:40.017221Z","side":"SELL"},{"product_id":"ATOM-USD","trade_id":"62534899","price":"1.5595","size":"1","time":"2026-08-26T12:13:41.000000Z","side":"BUY"}]}]}"#;
+        let frame = r#"{"channel":"market_trades","timestamp":"2026-08-26T12:13:45.82034548Z","sequence_num":7,"events":[{"type":"snapshot","trades":[{"product_id":"ATOM-USD","trade_id":"1001","price":"10.0001","size":"5.5","time":"2026-08-26T12:13:40.017221Z","side":"SELL"},{"product_id":"ATOM-USD","trade_id":"1002","price":"10.0002","size":"1","time":"2026-08-26T12:13:41.000000Z","side":"BUY"}]}]}"#;
         let h = a.handle_frame(frame.as_bytes(), 9_999);
         assert_eq!(h.records.len(), 3, "raw + two trades");
         let OutRecord::Trade(t) = &h.records[1] else {
             panic!("no trade record")
         };
-        assert_eq!(t.price, 155_940_000);
-        assert_eq!(t.qty, 588_000_000);
+        assert_eq!(t.price, 1_000_010_000);
+        assert_eq!(t.qty, 550_000_000);
         assert_eq!(t.side, Side::Sell, "upper-case SELL maps to the enum");
-        assert_eq!(t.trade_id, "62534898");
+        assert_eq!(t.trade_id, "1001");
         assert_eq!(t.exchange_ts, 1_787_746_420_017_221);
         assert_eq!(t.seq, 7, "the frame's connection-wide sequence_num");
         assert_eq!(t.canonical_symbol, "ATOM/USD");
@@ -563,8 +563,8 @@ mod tests {
         let mut a = adapter();
         a.handle_frame(l2(0, "snapshot", SNAPSHOT).as_bytes(), 100);
         let s = a.snapshot("ATOM-USD", 150).expect("book after snapshot");
-        assert_eq!(s.bid_px, vec![155_770_000, 155_760_000]);
-        assert_eq!(s.ask_px, vec![155_890_000, 155_900_000]);
+        assert_eq!(s.bid_px, vec![999_990_000, 999_980_000]);
+        assert_eq!(s.ask_px, vec![1_000_010_000, 1_000_020_000]);
         assert_eq!(s.depth, 2);
         assert_eq!(s.seq, 0);
         assert_eq!(s.checksum_ok, None, "no checksum on this venue");
@@ -576,13 +576,13 @@ mod tests {
             l2(
                 1,
                 "update",
-                &[("bid", "1.5577", "0"), ("offer", "1.5589", "300.5")],
+                &[("bid", "9.9999", "0"), ("offer", "10.0001", "300.5")],
             )
             .as_bytes(),
             200,
         );
         let s = a.snapshot("ATOM-USD", 250).unwrap();
-        assert_eq!(s.bid_px, vec![155_760_000], "qty 0 removed the best bid");
+        assert_eq!(s.bid_px, vec![999_980_000], "qty 0 removed the best bid");
         assert_eq!(s.ask_qty[0], 30_050_000_000, "absolute replace, not an add");
         assert_eq!(s.seq, 1);
         assert_eq!(s.recv_ts_ns, 200);

@@ -17,6 +17,20 @@ trading path.
 [![Rust](https://img.shields.io/badge/rust-1.98-orange.svg)](https://www.rust-lang.org/)
 [![ClickHouse](https://img.shields.io/badge/clickhouse-24.3_LTS-yellow.svg)](https://clickhouse.com/)
 
+## What this is, and data terms
+
+K2 is a platform you run on your own machine for research and quant workflows. It is a
+reference implementation, not a hosted service. It is not a market data distribution
+service and not for production trading, and it is not affiliated with or endorsed by
+Binance, Kraken, Coinbase, any other venue, or the European Central Bank.
+
+The repository ships code and contracts; every venue-format fixture in it is synthetic
+([`NOTICE`](./NOTICE)). Market data is fetched by your own stack from public endpoints,
+stays on your machine, and is subject to each provider's terms:
+[Binance](https://www.binance.com/en/terms), [Kraken](https://www.kraken.com/legal),
+[Coinbase](https://www.coinbase.com/legal/user_agreement). Complying with them is your
+responsibility.
+
 ## Overview
 
 | Property | How |
@@ -156,16 +170,16 @@ Research: `make notebooks` starts JupyterLab with DuckDB over the lake
 
 ## Tests and CI
 
-Counted 2026-09-03 by the command in each row's footnote, not by hand — the
-previous version of this table was 60 / 229 / 9 against a reality of 68 / 287 / 10.
+Counted 2026-11-24 by the command in each row's footnote, not by hand (on 2026-09-03 a
+hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 / 10).
 
 | Suite | Run |
 |---|---|
-| Rust capture: 68 tests [^rust], 56 unit plus 12 replay over recorded sessions | `make test-rust` |
-| Python: 287 tests [^py] over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
+| Rust capture: 68 tests [^rust], 56 unit plus 12 replay over synthetic sessions; `make record-fixtures` replays real ones locally | `make test-rust` |
+| Python: 299 tests [^py] over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
-| Prometheus rule unit tests (17 of 28 alerts) and 9 documentation gates | `bash scripts/check-docs.sh` |
+| Prometheus rule unit tests (17 of 28 alerts) and 10 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`

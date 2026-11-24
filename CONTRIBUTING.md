@@ -32,6 +32,29 @@ CI (`.github/workflows/ci.yml`) runs the same three suites plus a Docker build o
 
 `make test-legacy-kotlin` runs the archived v2 Kotlin feed-handler tests against `legacy/v2-kotlin/` ([ADR-019](docs/adr/ADR-019-rust-capture-tier.md)). It needs the `gradle:8.12-jdk21` Docker image and is deliberately outside `make test` and outside CI, that code is archived, not maintained.
 
+## Where things live
+
+Every tracked top-level directory (`git ls-files | cut -d/ -f1 | sort -u`), what belongs
+in it, and what does not.
+
+| Directory | Belongs here | Does not |
+|---|---|---|
+| `.claude/` | the Claude Code skills, one per doc surface | session logs, handoffs, local settings |
+| `.github/` | the CI workflow and Dependabot config | anything no workflow reads |
+| `config/` | registries the services read: instruments, bar thresholds | secrets, host-specific values (those are `.env`) |
+| `docker/` | per-service images, DDL, lake jobs, Prefect flows, alert rules, dashboards | volumes, backups, warehouse files |
+| `docs/` | the architecture book, ADRs, runbooks, plans, audits, benchmarks, research | progress trackers, phase status files, pasted market data |
+| `legacy/` | v1, the v2 Kotlin tier, v2 ClickHouse DDL, the v2 offload: archived, unmodified | new work or fixes |
+| `notebooks/` | DuckDB research notebooks and the `k2lake` helpers, outputs cleared | executed outputs, which are your venue data |
+| `schemas/` | the Avro wire contracts | anything that is not the contract |
+| `scripts/` | gates, health, chaos, parity, the synthetic fixture generator | one-off scripts nobody reruns |
+| `services/` | the Rust capture crate, its tests and synthetic fixtures | recorded venue frames (`tests/recorded/` is git-ignored) |
+| `tests/` | Python unit tests, ClickHouse assertions, synthetic fixtures, parity pins | real venue frames, tests that need a live stack |
+
+A data file under any `fixtures/` or `samples/` directory is named `synthetic-*` or is
+listed in [`NOTICE`](NOTICE) with its source and terms; `scripts/check-docs.sh` gate (h)
+fails CI otherwise.
+
 ## Conventions
 
 - Conventional commits: `feat(scope): …`, `fix(scope): …`, `docs: …`, `chore: …`, `ci: …`

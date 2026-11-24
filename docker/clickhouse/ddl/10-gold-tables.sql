@@ -19,8 +19,7 @@
 -- Numbers are the wire's fixed point: `*_e8` Int64 at 1e-8 (ADR-020), exact and
 -- cheap to store; `price` / `qty` are ALIAS columns that produce the exact
 -- Decimal on read (`toDecimal128(x, 10) / toDecimal128(100000000, 0)` is exact
--- on 24.3: 7843677000000 -> 78436.7700000000, int64 max -> 92233720368.54775807,
--- measured 2026-08-27). Aggregates that multiply price by quantity are Float64
+-- on 24.3: int64 max -> 92233720368.54775807, measured 2026-08-27). Aggregates that multiply price by quantity are Float64
 -- on purpose: a Decimal(38,20) product overflows on a SHIB-sized quantity and
 -- a quote-volume sum is not a price.
 --
@@ -380,7 +379,7 @@ ORDER BY (exchange, canonical_symbol, second);
 -- this view (or against gold.bbo_1s, same rule) is on
 -- `second + INTERVAL 1 SECOND <= exchange_ts`. Joining on `second <=
 -- exchange_ts` reads a quote from up to a second in the trade's future and
--- makes 77 % of Binance prints look like they traded through the book
+-- overstates how many prints traded through the book
 -- (notebooks/03_asof_trades_book.ipynb). docs/operations/data-catalog.md
 -- § The `+1 SECOND` rule.
 -- ───────────────────────────────────────────────────────────────────────────

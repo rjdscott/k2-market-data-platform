@@ -34,12 +34,13 @@ fn run(adapter: &mut Adapter, input: &[u8], opts: &Options) -> (Vec<u8>, replay:
 /// the Binance fixture keeps the wall-clock cost of the sleeping pass small.
 #[test]
 fn realtime_and_max_produce_identical_bytes() {
-    let head: Vec<u8> = BufReader::new(std::fs::File::open(fixture("binance-10s.jsonl")).unwrap())
-        .lines()
-        .take(60)
-        .map(|l| l.unwrap() + "\n")
-        .collect::<String>()
-        .into_bytes();
+    let head: Vec<u8> =
+        BufReader::new(std::fs::File::open(fixture("synthetic-binance-10s.jsonl")).unwrap())
+            .lines()
+            .take(60)
+            .map(|l| l.unwrap() + "\n")
+            .collect::<String>()
+            .into_bytes();
     let adapter = || {
         Adapter::Binance(BinanceAdapter::new(
             Instruments::load(&registry(), Exchange::Binance).unwrap(),
@@ -65,7 +66,7 @@ fn realtime_and_max_produce_identical_bytes() {
 /// the product's 20; `--interval-ms 100` yields ~10x the snapshots.
 #[test]
 fn depth_and_interval_reach_the_snapshots() {
-    let text = std::fs::read(fixture("kraken-20s.jsonl")).unwrap();
+    let text = std::fs::read(fixture("synthetic-kraken-20s.jsonl")).unwrap();
     let adapter = || {
         Adapter::Kraken(KrakenAdapter::new(
             Instruments::load(&registry(), Exchange::Kraken).unwrap(),
@@ -114,7 +115,7 @@ fn depth_and_interval_reach_the_snapshots() {
 /// `tokio::time::interval` does from connect, rather than re-basing on whatever
 /// frame happened to fire the tick.
 ///
-/// Ten real Kraken frames (the book snapshot lands on the sixth) re-stamped so
+/// The fixture's first ten Kraken frames (the book snapshot lands on the sixth) re-stamped so
 /// they arrive at t = 0 (the first six), 0.9, 1.95, 2.5 and 3.9 s. Grid lines
 /// at 1, 2, 3, 4 s; the frames that first cross them are 1.95 (line 1), 2.5
 /// (line 2) and 3.9 (line 3), so three sampler passes and three snapshots, each
@@ -134,17 +135,18 @@ fn the_sampler_stays_on_the_grid() {
         2_500_000_000,
         3_900_000_000,
     ];
-    let input: Vec<u8> = BufReader::new(std::fs::File::open(fixture("kraken-20s.jsonl")).unwrap())
-        .lines()
-        .take(arrivals.len())
-        .zip(arrivals)
-        .map(|(line, recv_ts_ns)| {
-            let mut frame: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
-            frame["recv_ts_ns"] = recv_ts_ns.into();
-            frame.to_string() + "\n"
-        })
-        .collect::<String>()
-        .into_bytes();
+    let input: Vec<u8> =
+        BufReader::new(std::fs::File::open(fixture("synthetic-kraken-20s.jsonl")).unwrap())
+            .lines()
+            .take(arrivals.len())
+            .zip(arrivals)
+            .map(|(line, recv_ts_ns)| {
+                let mut frame: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+                frame["recv_ts_ns"] = recv_ts_ns.into();
+                frame.to_string() + "\n"
+            })
+            .collect::<String>()
+            .into_bytes();
 
     let mut adapter = Adapter::Kraken(KrakenAdapter::new(
         Instruments::load(&registry(), Exchange::Kraken).unwrap(),

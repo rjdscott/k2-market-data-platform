@@ -24,6 +24,8 @@ sample instead (`kraken-book.sample.jsonl`: first 20 lines; `coinbase.sample.jso
 3 non-snapshot lines of `coinbase.jsonl`, since the first several lines are all update
 frames from one snapshot burst).
 
+**Resolved 2026-11-24** ([ADR-029](../../adr/ADR-029-research-production-parity-contract.md) Outcome, 2026-11): both samples are replaced by synthetic frames of the same shape and file format, [`s2-kraken-instrument/synthetic-kraken-book.sample.jsonl`](s2-kraken-instrument/synthetic-kraken-book.sample.jsonl) and [`s5-coinbase-level2/synthetic-coinbase.sample.jsonl`](s5-coinbase-level2/synthetic-coinbase.sample.jsonl), written by `scripts/make-synthetic-fixtures.py`; the repository ships no venue data. The recorded samples described above remain in git history.
+
 | Spike | Dir | How to re-run | Expected decisive output |
 |-------|-----|----------------|---------------------------|
 | S1 — Kraken v2 book checksum | [`s1-kraken-checksum/`](s1-kraken-checksum/) | `DOCKER_CONTEXT=default docker run --rm -v $PWD:/w -w /w rust:1-bookworm cargo test` | `test result: ok. 2 passed` — checksum `3310070434` matches the doc's worked example |

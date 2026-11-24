@@ -206,20 +206,27 @@ on their own.
 ### 7. Fixture and replay test
 
 **Files**: `services/capture-rust/tests/replay_{exchange}.rs`,
-`services/capture-rust/tests/fixtures/{exchange}-NNs.jsonl`
+`services/capture-rust/tests/fixtures/synthetic-{exchange}-NNs.jsonl`,
+`scripts/make-synthetic-fixtures.py`, `Makefile` (`record-fixtures`)
 
-- [ ] Record a session with `k2-capture record --exchange {exchange} --symbols <native>
-      --seconds 20 > fixture.jsonl`. The recorder goes through the same `ws_url()` the
-      live path does, so the fixture is the conversation capture actually has
+- [ ] Record a session locally with `k2-capture record --exchange {exchange} --symbols
+      <native> --seconds 20` into `services/capture-rust/tests/recorded/` (git-ignored).
+      The recorder goes through the same `ws_url()` the live path does, so the file is
+      the conversation capture actually has. It is the venue's data: read it, never
+      commit it
+- [ ] Teach `scripts/make-synthetic-fixtures.py` the venue's wire format from that
+      recording: the same message types, field names and order, number spellings and
+      sequence behaviour, with invented prices, sizes, ids and timestamps. Commit the
+      synthetic session it writes, never the recording
 - [ ] Add a replay test in the shape of
       [`replay_coinbase.rs`](../../services/capture-rust/tests/replay_coinbase.rs): drive
       the fixture through the live adapter's `handle_frame`, assert the book invariants
       (top-20, sorted, uncrossed, no zero quantities) and the venue's own continuity
-      check, then hash two passes against a committed golden value
+      check, then hash two passes against a committed golden value; honour
+      `K2_RECORDED_FIXTURES` as the three existing ones do, and add the venue to
+      `make record-fixtures`
 - [ ] Load `config/instruments.yaml` directly in the test, no test-only copy of the
       registry
-- [ ] If the fixture had to be trimmed to keep it committable, say exactly what was
-      trimmed in the test's module docs, as all three existing ones do
 - [ ] `make test` green before opening the PR, see
       [../development/testing.md](../development/testing.md)
 

@@ -1,13 +1,12 @@
-//! Replay a recorded Binance combined-stream session through the live adapter.
+//! Replay a Binance combined-stream session through the live adapter.
 //!
 //! Same shape as `tests/replay.rs`: the `handle_frame(bytes, recv_ts_ns)` the
 //! socket loop calls, fed from a JSONL fixture with the clock supplied by the
 //! recording. The fixture is 10 s of `btcusdt@trade/btcusdt@depth20@100ms`
-//! recorded verbatim on 2026-08-26 (one symbol, 10 s: two symbols for 20 s is
-//! 880 KB, and the fixture budget is 300 KB).
-//!
-//! Re-record with `k2-capture record --exchange binance --symbols BTCUSDT
-//! --seconds 10 > tests/fixtures/binance-10s.jsonl`.
+//! made by `scripts/make-synthetic-fixtures.py`: invented prices and sizes on a
+//! 100.00 book, a depth frame every 100 ms with `lastUpdateId` strictly
+//! increasing. `make record-fixtures` runs the same tests over a real session
+//! recorded into a git-ignored directory, golden hash excepted.
 
 use std::path::{Path, PathBuf};
 
@@ -29,6 +28,15 @@ struct FixtureLine {
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+}
+
+/// A real session, when `make record-fixtures` sets `K2_RECORDED_FIXTURES`.
+fn recorded() -> Option<PathBuf> {
+    std::env::var_os("K2_RECORDED_FIXTURES").map(|d| PathBuf::from(d).join("binance-10s.jsonl"))
+}
+
+fn fixture() -> PathBuf {
+    recorded().unwrap_or_else(|| fixtures().join("synthetic-binance-10s.jsonl"))
 }
 
 /// The repo registry, not a test copy: Binance natives (`BTCUSDT`) are the
@@ -53,7 +61,7 @@ struct Replay {
 }
 
 fn replay() -> Replay {
-    let text = std::fs::read_to_string(fixtures().join("binance-10s.jsonl")).expect("fixture");
+    let text = std::fs::read_to_string(fixture()).expect("fixture");
     let mut adapter = adapter();
     adapter.begin_connection(CONN_ID);
     let symbols = adapter.symbols();
@@ -188,17 +196,15 @@ fn fixture_replays_with_no_gaps() {
     );
 }
 
-/// Same input, same bytes out - golden hash in `binance-10s.sha256`.
+/// Same input, same bytes out - golden hash in `synthetic-binance-10s.sha256`.
 #[test]
 fn replay_is_deterministic() {
     // Through the shared driver `k2-capture replay` runs, hashed over the same
-    // JSONL bytes it writes: `replay --fixture binance-10s.jsonl | sha256sum` must
-    // print the committed digest.
+    // JSONL bytes it writes: `replay --fixture synthetic-binance-10s.jsonl |
+    // sha256sum` must print the committed digest.
     let pass = || {
         let mut adapter = Adapter::Binance(adapter());
-        let input = std::io::BufReader::new(
-            std::fs::File::open(fixtures().join("binance-10s.jsonl")).expect("fixture"),
-        );
+        let input = std::io::BufReader::new(std::fs::File::open(fixture()).expect("fixture"));
         let mut bytes = Vec::new();
         let stats = replay::run(&mut adapter, input, &replay::Options::default(), |r| {
             replay::write_jsonl(&mut bytes, r)
@@ -214,9 +220,12 @@ fn replay_is_deterministic() {
         first.iter().filter(|&&b| b == b'\n').count(),
         "one record per line"
     );
+    if recorded().is_some() {
+        return; // the golden hash describes the synthetic session only
+    }
 
     let digest = format!("{:x}", Sha256::digest(&first));
-    let golden = std::fs::read_to_string(fixtures().join("binance-10s.sha256"))
+    let golden = std::fs::read_to_string(fixtures().join("synthetic-binance-10s.sha256"))
         .expect("golden hash")
         .split_whitespace()
         .next()
@@ -224,6 +233,6 @@ fn replay_is_deterministic() {
         .to_string();
     assert_eq!(
         digest, golden,
-        "replay output changed; update tests/fixtures/binance-10s.sha256 only if the change was intended"
+        "replay output changed; update tests/fixtures/synthetic-binance-10s.sha256 only if the change was intended"
     );
 }

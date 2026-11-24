@@ -94,9 +94,8 @@ inside the second, which is the intended "lake wins" for a fully replayed book.
 
 **Measured 2026-08-27:** 1,951,135 lake book-seconds pulled into a scratch table in
 **2.914 s**; `gold.bbo_1s` (1,951,129 rows) in 0.985 s. Against the feed's own samples
-over 2026-08-27 00:00–05:00 the top-of-book prices agree in 88.6 % (Binance) / 66.8 %
-(Kraken) / 65.9 % (Coinbase) of seconds, the two are sampled at different instants inside
-the second, so this is not a tolerance-zero check; the Kraken checksum in
+the top-of-book prices disagree in the seconds in which the book moved between the two
+sampling instants, so this is not a tolerance-zero check; the Kraken checksum in
 `silver.book_kraken` is.
 
 **Measured 2026-08-27** (first run, `clickhouse-client --time`): the whole lake

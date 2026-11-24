@@ -178,8 +178,8 @@ FROM t ASOF JOIN q
 ```
 
 Joining on `second <= exchange_ts` uses a quote from up to a second in the trade's future
-and reads as 77 % of Binance prints trading through the book
-(`notebooks/03_asof_trades_book.ipynb`).
+and inflates the share of prints that appear to trade through the book;
+`notebooks/03_asof_trades_book.ipynb` computes that share both ways on your data.
 
 ### Candle and bar total order
 
@@ -247,22 +247,11 @@ are structural, not faults:
 `gold.book_top20` is the capture's own 1 Hz sampler, deduplicated to the *latest sample in
 each second* (`ver = snapshot_ts_ns`). Lake `gold.book_top20` is a replay of **every**
 venue frame, emitting the state at the *end* of each second. Same key, different
-definitions of "the book in that second". Measured over 12:55:00–12:58:00Z on 2026-09-03,
-joining `lake.gold.bbo_1s` to ClickHouse `gold.bbo_live` on `(exchange, canonical_symbol,
-second)`:
-
-```
-   exchange canonical_symbol  seconds  identical  max_bid_diff
-0    kraken          BTC/USD      180      143.0         37.50
-1   binance         BTC/USDT      176      112.0         29.99
-2  coinbase          BTC/USD      180      155.0         13.14
-3    kraken          ETH/USD      180       66.0          1.50
-4   binance         ETH/USDT      176      103.0          1.36
-5  coinbase          ETH/USD      180       91.0          0.68
-```
-
-Up to $37.50 apart on the same second. Use the lake for any research number; ClickHouse's
-book views are a live monitor.
+definitions of "the book in that second". To see by how much on your own data, join
+`lake.gold.bbo_1s` to ClickHouse `gold.bbo_live` on `(exchange, canonical_symbol, second)`
+over a few minutes and count, per instrument, the seconds whose `bid_e8` is identical and
+the largest difference: on a busy book a share of seconds differ, by more than a tick.
+Use the lake for any research number; ClickHouse's book views are a live monitor.
 
 **2. ClickHouse candles, bars and `bbo_1s` are empty until the pull runs.** They are
 pull-fed by design and never computed in ClickHouse
@@ -346,9 +335,7 @@ FROM lake.bronze.kraken_trade WHERE symbol = 'BTC/USD' ORDER BY recv_ts_ns DESC 
 
 ```
                          recv_ts  symbol   price      qty side
-2026-09-03 13:06:01.766565+00:00 BTC/USD 78562.5 0.000378  buy
-2026-09-03 13:05:54.490266+00:00 BTC/USD 78562.4 0.012970 sell
-2026-09-03 13:05:53.317612+00:00 BTC/USD 78562.5 0.000019  buy
+…
 ```
 
 ### `silver.trades_kraken`
@@ -361,9 +348,7 @@ ORDER BY exchange_ts DESC LIMIT 3
 
 ```
 canonical_symbol  symbol  trade_id   price      qty side                      exchange_ts  venue_replay  seq_gap
-         BTC/USD BTC/USD 106704564 78562.5 0.000378  buy 2026-09-03 13:06:01.607226+00:00         False    False
-         BTC/USD BTC/USD 106704561 78562.4 0.019079 sell 2026-09-03 13:05:54.335566+00:00         False    False
-         BTC/USD BTC/USD 106704562 78562.4 0.000477 sell 2026-09-03 13:05:54.335566+00:00         False    False
+…
 ```
 
 Two trades share one `exchange_ts`: one frame delivered both. The third component of the
@@ -393,9 +378,7 @@ ORDER BY exchange_ts DESC LIMIT 3
 
 ```
 exchange canonical_symbol  trade_id   price      qty side                      exchange_ts  seq_gap  missing_before
-  kraken          BTC/USD 106704564 78562.5 0.000378  buy 2026-09-03 13:06:01.607226+00:00    False               0
-  kraken          BTC/USD 106704561 78562.4 0.019079 sell 2026-09-03 13:05:54.335566+00:00    False               0
-  kraken          BTC/USD 106704562 78562.4 0.000477 sell 2026-09-03 13:05:54.335566+00:00    False               0
+…
 ```
 
 ClickHouse, same instrument — note `FINAL`, and the `price` / `qty` aliases named
@@ -410,9 +393,7 @@ $CH -q "SELECT exchange, canonical_symbol, trade_id, price, qty, side, exchange_
 
 ```
    ┌─exchange─┬─canonical_symbol─┬─trade_id──┬───price─┬────────qty─┬─side─┬────────────────exchange_ts─┐
-1. │ kraken   │ BTC/USD          │ 106704814 │ 78501.2 │   0.000051 │ sell │ 2026-09-03 13:09:27.773053 │
-2. │ kraken   │ BTC/USD          │ 106704813 │ 78501.5 │ 0.00007043 │ sell │ 2026-09-03 13:09:27.773053 │
-3. │ kraken   │ BTC/USD          │ 106704812 │ 78502.4 │     0.0004 │ sell │ 2026-09-03 13:09:27.773053 │
+…
 ```
 
 ### `gold.ohlcv_1m`
@@ -426,9 +407,7 @@ ORDER BY window_start DESC LIMIT 3
 
 ```
              window_start    open    high     low   close   volume  trade_count
-2026-09-03 13:06:00+00:00 78562.5 78562.5 78562.5 78562.5 0.000378            1
-2026-09-03 13:05:00+00:00 78580.5 78580.5 78562.4 78562.4 1.665577          118
-2026-09-03 13:04:00+00:00 78650.1 78650.1 78580.5 78580.5 0.596911           89
+…
 ```
 
 The ClickHouse `gold.ohlcv_1m` table is empty until the pull runs. The head is the view:
@@ -442,9 +421,7 @@ $CH -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close,
 
 ```
    ┌─exchange─┬─canonical_symbol─┬────────window_start─┬────open─┬────high─┬─────low─┬───close─┬─────volume─┬─trade_count─┐
-1. │ kraken   │ BTC/USD          │ 2026-09-03 13:09:00 │ 78532.5 │ 78532.5 │ 78501.2 │ 78501.2 │ 0.18626765 │          43 │
-2. │ kraken   │ BTC/USD          │ 2026-09-03 13:08:00 │ 78508.8 │ 78537.7 │ 78503.5 │ 78532.4 │ 1.86799297 │          80 │
-3. │ kraken   │ BTC/USD          │ 2026-09-03 13:07:00 │   78513 │ 78526.1 │ 78503.5 │ 78508.8 │ 0.29410822 │          41 │
+…
 ```
 
 ### `gold.bars`
@@ -458,9 +435,7 @@ ORDER BY day DESC, bar_seq DESC LIMIT 3
 
 ```
 bar_kind  threshold        day  bar_seq    open   close  trade_count                        open_time                       close_time
-  dollar  6000000.0 2026-09-03        0 78327.9 78562.5         2804 2026-09-03 12:47:04.413735+00:00 2026-09-03 13:06:01.607226+00:00
-  dollar  6000000.0 2026-08-28       12 78754.9 79338.6         2053 2026-08-28 14:28:54.318353+00:00 2026-08-28 15:10:22.074647+00:00
-  dollar  6000000.0 2026-08-28       11 78537.8 78754.9         2209 2026-08-28 14:15:26.989790+00:00 2026-08-28 14:28:54.317316+00:00
+…
 ```
 
 `bar_seq` restarts at 0 each UTC day, and the last bar of a day is open-ended until the day
@@ -478,9 +453,7 @@ ORDER BY second DESC LIMIT 3
 
 ```
                    second  depth     bid  bid_qty     ask  ask_qty  checksum_ok
-2026-09-03 13:06:03+00:00     20 78562.4 0.692551 78562.5 0.076821         True
-2026-09-03 13:06:02+00:00     20 78562.4 0.081816 78562.5 0.274466         True
-2026-09-03 13:06:01+00:00     20 78562.4 0.271474 78562.5 0.338266         True
+…
 ```
 
 ClickHouse, different column names and no `_e8` division built in:
@@ -494,9 +467,7 @@ $CH -q "SELECT exchange, canonical_symbol, second, depth, bid_px[1] AS bid_e8, a
 
 ```
    ┌─exchange─┬─canonical_symbol─┬──────────────second─┬─depth─┬────────bid_e8─┬────────ask_e8─┬─checksum_ok─┐
-1. │ kraken   │ BTC/USD          │ 2026-09-03 13:09:36 │    20 │ 7849820000000 │ 7849830000000 │ true        │
-2. │ kraken   │ BTC/USD          │ 2026-09-03 13:09:35 │    20 │ 7849820000000 │ 7849830000000 │ true        │
-3. │ kraken   │ BTC/USD          │ 2026-09-03 13:09:34 │    20 │ 7849820000000 │ 7849830000000 │ true        │
+…
 ```
 
 Arrays are 1-based in both engines.
@@ -512,9 +483,7 @@ ORDER BY second DESC LIMIT 3
 
 ```
                    second     bid     ask      mid  spread_bps  imbalance
-2026-09-03 13:06:03+00:00 78562.4 78562.5 78562.45       0.013     0.9002
-2026-09-03 13:06:02+00:00 78562.4 78562.5 78562.45       0.013     0.2296
-2026-09-03 13:06:01+00:00 78562.4 78562.5 78562.45       0.013     0.4452
+…
 ```
 
 ClickHouse `gold.bbo_1s` is empty until the pull runs; `gold.bbo_live` is the head, the
@@ -529,11 +498,7 @@ $CH -q "SELECT exchange, canonical_symbol, second, bid, ask, round(spread_bps,3)
 
 ```
    ┌─exchange─┬─canonical_symbol─┬──────────────second─┬─────bid─┬─────ask─┬─spread_bps─┬─imbalance─┐
-1. │ kraken   │ BTC/USD          │ 2026-09-03 13:07:28 │   78526 │ 78526.1 │      0.013 │    0.3208 │
-2. │ kraken   │ BTC/USD          │ 2026-09-03 13:07:27 │ 78523.1 │ 78523.2 │      0.013 │    0.9835 │
-3. │ kraken   │ BTC/USD          │ 2026-09-03 13:07:26 │ 78523.1 │ 78523.2 │      0.013 │    0.9835 │
-4. │ kraken   │ BTC/USD          │ 2026-09-03 13:07:25 │ 78523.1 │ 78523.2 │      0.013 │    0.9835 │
-5. │ kraken   │ BTC/USD          │ 2026-09-03 13:07:24 │ 78523.1 │ 78523.2 │      0.013 │    0.9809 │
+…
 ```
 
 ### The `+1 SECOND` join, end to end
@@ -549,12 +514,10 @@ ORDER BY t.exchange_ts DESC
 
 ```
                      exchange_ts   price                    second     bid     ask
-2026-09-03 13:06:01.607226+00:00 78562.5 2026-09-03 13:06:00+00:00 78562.4 78562.5
-2026-09-03 13:05:54.335566+00:00 78562.4 2026-09-03 13:05:53+00:00 78562.4 78562.5
-2026-09-03 13:05:54.335566+00:00 78562.4 2026-09-03 13:05:53+00:00 78562.4 78562.5
+…
 ```
 
-The 13:06:01 trade pairs with the second labelled 13:06:00 — the book as it stood at
+A trade at 13:06:01.6 pairs with the second labelled 13:06:00: the book as it stood at
 13:06:01.000, the last state that existed before the trade printed.
 
 ### `gold.dim_instrument`

@@ -16,14 +16,15 @@ make test-rust     # capture unit + replay integration tests (runs in rust:1-boo
 
 | Suite | Count | Location | What it covers |
 |-------|------:|----------|----------------|
-| Rust, capture lib unit | 49 | [`services/capture-rust/src/`](../../services/capture-rust/src/) | `decimal`, `record`, `config`, `ws`, `book`, `sink`, `metrics`, `exchanges/{binance,kraken,coinbase}`, fixed-point conversion, book state, per-exchange framing |
+| Rust, capture lib unit | 52 | [`services/capture-rust/src/`](../../services/capture-rust/src/) | `decimal`, `record`, `config`, `ws`, `book`, `sink`, `metrics`, `exchanges/{binance,kraken,coinbase}`, fixed-point conversion, book state, per-exchange framing |
 | Rust, capture binary unit | 4 | [`services/capture-rust/src/main.rs`](../../services/capture-rust/src/main.rs) | The healthcheck's staleness parsing and per-stream bounds, the "green while the primary feed is dead" bug and its opposite |
-| Rust, capture replay integration | 6 | [`services/capture-rust/tests/`](../../services/capture-rust/tests/) | `replay.rs` (2), `replay_binance.rs` (2), `replay_coinbase.rs` (2), golden-fixture replay through the same `handle_frame()` path live capture runs |
+| Rust, capture replay integration | 12 | [`services/capture-rust/tests/`](../../services/capture-rust/tests/) | `replay.rs` (2), `replay_binance.rs` (2), `replay_coinbase.rs` (2), `replay_failures.rs` (3), `replay_cli.rs` (3), synthetic golden-fixture replay through the same `handle_frame()` path live capture runs; `make record-fixtures` runs the first three over real sessions recorded locally |
 | Python, v3 data contracts | 41 | [`tests/test_contracts.py`](../../tests/test_contracts.py) | Structural checks on `schemas/avro/*.avsc` and `config/instruments.yaml`, sibling `logicalType`, fixed-point prices, nullable defaults, duplicate/malformed canonical symbols |
-| Python, parity comparator | 65 | [`tests/test_parity.py`](../../tests/test_parity.py) | `scripts/parity/compare_trades.py`, the tolerance boundary, Kraken's no-trade-id join, string → fixed-point conversion. This is the evidence the Kotlin retirement rested on ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) |
-| Python, lake offsets | 26 | [`tests/test_lake_offsets.py`](../../tests/test_lake_offsets.py) | `docker/lake/offsets.py`: the exactly-once bookkeeping written into the Iceberg snapshot summary, encode/decode round-trips, next-offset arithmetic, gap detection (ADR-022) |
-| Python, wire format | 32 | [`tests/test_wire_format.py`](../../tests/test_wire_format.py) | `docker/lake/wire.py` plus the contract between `schemas/avro/*.avsc` and `docker/lake/ddl/lake.sql`, CLAUDE.md's schema-change rule, executable |
-| **Total (Rust + Python)** | **223** | | |
+| Python, parity comparator | 69 | [`tests/test_parity.py`](../../tests/test_parity.py) | `scripts/parity/compare_trades.py`, the tolerance boundary, Kraken's no-trade-id join, string → fixed-point conversion. This is the evidence the Kotlin retirement rested on ([ADR-019](../adr/ADR-019-rust-capture-tier.md)) |
+| Python, lake offsets | 60 | [`tests/test_lake_offsets.py`](../../tests/test_lake_offsets.py) | `docker/lake/offsets.py`: the exactly-once bookkeeping written into the Iceberg snapshot summary, encode/decode round-trips, next-offset arithmetic, gap detection (ADR-022) |
+| Python, wire format | 35 | [`tests/test_wire_format.py`](../../tests/test_wire_format.py) | `docker/lake/wire.py` plus the contract between `schemas/avro/*.avsc` and `docker/lake/ddl/lake.sql`, CLAUDE.md's schema-change rule, executable |
+| Python, everything else | 85 | [`tests/`](../../tests/) | bars, lake book/bronze/silver/SCD2/instruments/lock/maintenance/metrics, replay export, pinned notebooks, and `test_synthetic_fixtures.py` (the committed fixtures are what the generator writes) |
+| **Total (Rust + Python)** | **358** | | Counted 2026-11-24: `cargo test` output and `pytest --collect-only -q` |
 | Archived v2 Kotlin | 20 | [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md) | `TradeNormalizerTest` (7), `InstrumentsLoaderTest` (13). `make test-legacy-kotlin` runs them; deliberately **not** part of `make test` and not run in CI |
 | Legacy v1 | 180 | [`legacy/v1/tests/unit/`](../../legacy/v1/tests/unit/) | Archived. Kept for reference; not run in CI |
 
@@ -32,7 +33,7 @@ make test-rust     # capture unit + replay integration tests (runs in rust:1-boo
 ### Rust
 
 ```bash
-make test-rust      # cargo test --locked in rust:1-bookworm, 59 tests
+make test-rust      # cargo test --locked in rust:1-bookworm, 68 tests
 ```
 
 No local toolchain needed. For a tight loop use the pre-built builder image and the named
@@ -68,11 +69,11 @@ tests `legacy/v2-kotlin/`.
 
 | Job | What it does |
 |-----|--------------|
-| **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain, runs the 59 tests |
-| **Python (lake + tests)** | `ruff check` then `pytest tests -q` under `uv`, runs the 164 tests |
+| **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain, runs the 68 tests |
+| **Python (lake + tests)** | `ruff check` then `pytest tests -q` under `uv`, runs the 299 tests |
 | **Docker build** | 3-way matrix: Prefect worker, Spark, capture, with GHA layer caching. Every leg builds from the repo root. Catches broken build contexts, not runtime behaviour |
 | **Compose (config validation)** | `docker compose --env-file .env.example config -q`, then `python3 scripts/check-budget.py`: prints the steady default, bootstrap default and bootstrap `--profile governance` limit sums and fails when the steady default is over 16 CPU / 40 GB; fails any service in either config without a CPU and memory limit (it would escape the ADR-010 budget and nothing else would notice), any untagged or `latest` image, and any unpinned `FROM` or `pip install` in a Dockerfile under `docker/` or `services/` |
-| **Docs** | `bash scripts/check-docs.sh`, nine failing gates: links, forbidden words, promtool check and test, runbook annotation paths and presence, capacity-model gate, no plan checkboxes, no em-dash on lines added since `origin/main` (so the job checks out with full history). Mermaid width only warns |
+| **Docs** | `bash scripts/check-docs.sh`, ten failing gates: links, forbidden words, promtool check and test, runbook annotation paths and presence, capacity-model gate, no plan checkboxes, no em-dash on lines added since `origin/main` (so the job checks out with full history), fixture and sample data synthetic or listed in `NOTICE`. Mermaid width only warns |
 | **Security (Trivy)** | Filesystem scan for CRITICAL/HIGH findings, SARIF uploaded to GitHub code scanning. `legacy/` is skipped |
 
 No job starts the stack, so nothing in CI exercises a real Redpanda, ClickHouse or
@@ -123,11 +124,11 @@ configuration. Each mode is one command to induce and one to recover.
 ## Adding tests
 
 - Rust tests live in a `#[cfg(test)] mod tests` at the foot of the module they cover;
-  anything that needs a recorded session goes in `tests/` with its fixture.
+  anything that replays a session goes in `tests/` with its synthetic fixture.
 - Python tests use plain pytest with `unittest.mock`, no fixtures framework, no plugins,
   and nothing that imports pyspark. Test the pure helper next to the Spark job rather than
   the job.
-- Adding an exchange means at minimum a recorded fixture and a replay test for it, see
+- Adding an exchange means at minimum a synthetic fixture and a replay test for it, see
   [../operations/adding-new-exchanges.md](../operations/adding-new-exchanges.md).
 - Follow the pragmatic TDD loop in [`CLAUDE.md`](../../CLAUDE.md): happy path first, then
   one meaningful edge case. A few good tests beat fifteen shallow ones.

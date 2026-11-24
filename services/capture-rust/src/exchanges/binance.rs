@@ -254,7 +254,7 @@ impl BinanceAdapter {
             exchange: EXCHANGE.into(),
             symbol: native.to_string(),
             canonical_symbol: canonical.to_string(),
-            // Raw JSON text of `t`, so 6621701993 stays 6621701993.
+            // Raw JSON text of `t`, so 4294967296 stays 4294967296.
             trade_id: t.trade_id.get().to_string(),
             price,
             qty,
@@ -346,7 +346,7 @@ fn parse_units(text: &str, symbol: &str, field: &str) -> Option<i64> {
 
 // ── wire types ──────────────────────────────────────────────────────────────
 //
-// Binance sends prices and quantities as JSON *strings* (`"78436.77000000"`),
+// Binance sends prices and quantities as JSON *strings* (`"100.01000000"`),
 // so `&str` already is the exact wire text; only `t` needs `RawValue`.
 
 #[derive(Deserialize)]
@@ -395,8 +395,8 @@ mod tests {
         a
     }
 
-    // A frame recorded 2026-08-26 from the live combined stream.
-    const TRADE: &str = r#"{"stream":"btcusdt@trade","data":{"e":"trade","E":1787746340684,"s":"BTCUSDT","t":6621701993,"p":"78436.77000000","q":"0.00014000","T":1787746340684,"m":false,"M":true}}"#;
+    // A synthetic frame in the live combined stream's exact shape.
+    const TRADE: &str = r#"{"stream":"btcusdt@trade","data":{"e":"trade","E":1000000000123,"s":"BTCUSDT","t":4294967296,"p":"100.01000000","q":"0.25000000","T":1000000000123,"m":false,"M":true}}"#;
 
     fn depth(last_update_id: i64, bid: &str, ask: &str) -> String {
         format!(
@@ -414,10 +414,10 @@ mod tests {
         let OutRecord::Trade(t) = &h.records[1] else {
             panic!("no trade record")
         };
-        assert_eq!(t.trade_id, "6621701993");
-        assert_eq!(t.price, 7_843_677_000_000);
-        assert_eq!(t.qty, 14_000);
-        assert_eq!(t.exchange_ts, 1_787_746_340_684_000, "T ms -> micros");
+        assert_eq!(t.trade_id, "4294967296");
+        assert_eq!(t.price, 10_001_000_000);
+        assert_eq!(t.qty, 25_000_000);
+        assert_eq!(t.exchange_ts, 1_000_000_000_123_000, "T ms -> micros");
         assert_eq!((t.seq, t.recv_ts_ns, t.conn_msg_seq), (0, 7, 1));
         assert_eq!(t.canonical_symbol, "BTC/USDT");
         assert!(h.actions.is_empty());

@@ -1,0 +1,41 @@
+K2 Market Data Platform
+Copyright (c) 2026 Rob Scott
+
+The code, schemas, configuration and documentation in this repository are
+licensed under the MIT licence; see LICENSE.
+
+Third-party data files
+======================
+
+None. This repository contains no market data files from any venue.
+
+Every venue-format frame in the tree is synthetic: invented prices, sizes, ids
+and timestamps, written in each venue's wire format by
+scripts/make-synthetic-fixtures.py from a fixed seed, and named synthetic-*:
+
+  services/capture-rust/tests/fixtures/synthetic-*    replay test sessions and their golden hashes
+  tests/fixtures/bronze/synthetic-*                   one frame per bronze table
+  docs/research/2026-08-26-v3-spikes/*/synthetic-*    the S2 and S5 spike samples
+
+tests/clickhouse/*.jsonl are hand-written synthetic rows. Gate (h) of
+scripts/check-docs.sh fails CI on a fixture or sample data file that is neither
+named synthetic-* nor listed by path in this section with its source and terms.
+
+Market data is fetched by a user's own running stack from each venue's public
+endpoints, stays on that user's machine, and is subject to that provider's
+terms (README, "What this is, and data terms"). `make record-fixtures` records
+real frames into services/capture-rust/tests/recorded/, which is git-ignored.
+
+Earlier commits in this repository's history contain recorded venue frames that
+have since been replaced by the synthetic files above. History is not rewritten
+(docs/adr/ADR-029-research-production-parity-contract.md, Outcome 2026-11).
+
+Third-party reference values in code
+====================================
+
+The Kraken book checksum tests (services/capture-rust/src/exchanges/kraken.rs,
+services/capture-rust/src/decimal.rs, tests/test_lake_book.py and the S1 spike
+under docs/research/2026-08-26-v3-spikes/s1-kraken-checksum/) use the worked
+example published in Kraken's WebSocket v2 book documentation,
+https://docs.kraken.com/api/docs/guides/spot-ws-book-v2, as a test vector for
+the checksum algorithm. It is quoted for interoperability testing, not as data.

@@ -50,17 +50,15 @@ t.project('exchange_ts, side, price_e8/1e8 AS price, bid, ask, quote_second, '
 │          exchange_ts          │  side   │  price  │   bid   │   ask   │       quote_second       │ native_symbol │   tick_size    │ master_source │
 │   timestamp with time zone    │ varchar │ double  │ double  │ double  │ timestamp with time zone │    varchar    │ decimal(28,10) │    varchar    │
 ├───────────────────────────────┼─────────┼─────────┼─────────┼─────────┼──────────────────────────┼───────────────┼────────────────┼───────────────┤
-│ 2026-09-03 12:47:04.413735+00 │ buy     │ 78327.9 │ 78327.8 │ 78327.9 │ 2026-09-03 12:47:03+00   │ BTC/USD       │   0.1000000000 │ venue:kraken  │
-│ 2026-09-03 12:47:05.425627+00 │ buy     │ 78331.7 │ 78331.6 │ 78331.7 │ 2026-09-03 12:47:04+00   │ BTC/USD       │   0.1000000000 │ venue:kraken  │
-│ 2026-09-03 12:47:05.425627+00 │ buy     │ 78331.7 │ 78331.6 │ 78331.7 │ 2026-09-03 12:47:04+00   │ BTC/USD       │   0.1000000000 │ venue:kraken  │
+…
 └───────────────────────────────┴─────────┴─────────┴─────────┴─────────┴──────────────────────────┴───────────────┴────────────────┴───────────────┘
 ```
 
 `quote_second` is one to two seconds behind `exchange_ts` on purpose: **`gold.bbo_1s` is the
 book at the END of its second**, so the quote in force is the previous second's row and the
 join is `exchange_ts >= second + INTERVAL 1 SECOND`. Getting that wrong pairs a trade with a
-quote from its own future — on this hour it reads 64.74% of prints as trading through the
-book where the correct pairing reads 51.74%. The rule lives in `trades()` now, not in a
+quote from its own future, and inflates the share of prints that appear to trade through
+the book (`03_asof_trades_book.ipynb` computes it both ways). The rule lives in `trades()` now, not in a
 markdown cell. Both joins are LEFT: a trade with no book that second, or one older than the
 dimension's first version, still comes back, with NULLs and a warning on stderr.
 
