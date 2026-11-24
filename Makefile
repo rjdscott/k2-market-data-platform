@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health gates test test-python test-rust record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run test-k2gen
+.PHONY: chaos help up down logs ps health gates test test-python test-rust record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -106,8 +106,10 @@ check-alerts:  ## promtool: syntax-check every rule file and run the capture + l
 	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus:v3.2.0 \
 	  -c 'promtool test rules /p/tests/*.test.yml /p/rules/tests/*_test.yml'
 
-lint:  ## Ruff over the v3 lake, the tests and platform/k2gen (CI's ruff step covers the first two)
-	uv run --no-project --with ruff ruff check docker/lake tests platform/k2gen
+# platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
+lint:  ## Ruff over the v3 lake and the tests; ruff and mypy (strict) over platform/k2gen
+	uv run --no-project --with ruff ruff check docker/lake tests
+	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, every layer level with its parent, double-run adds 0
 	bash scripts/lake-verify.sh
@@ -127,6 +129,13 @@ test-notebooks:  ## k2lake.trades/completeness against synthetic DuckDB tables (
 # --locked: a pyproject.toml edited without `uv lock` fails here, not in someone else's sync.
 test-k2gen:  ## k2gen: contracts/ against ODCS v3, the K2 schema and lake.sql, plus each check made to fail (no stack needed)
 	cd platform/k2gen && uv run --locked -q pytest -q
+
+# CI runs this and fails on any diff or untracked file: generated files are never edited by hand.
+generate:  ## Validate contracts/, then rewrite docker/lake/ddl/generated/, docker/lake/generated/retention.json and docs/products/
+	cd platform/k2gen && uv run --locked -q k2gen generate
+
+new-product:  ## Scaffold contracts/DOMAIN/NAME/: a descriptor and one contract with inline columns that validates (DOMAIN=x NAME=y)
+	cd platform/k2gen && uv run --locked -q k2gen new "$(DOMAIN)" "$(NAME)"
 
 notebooks-run:  ## Execute the five notebooks headless — the runnable check (needs the stack up)
 	cd notebooks && uv sync -q && for nb in 0*.ipynb; do uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=600 $$nb || exit 1; done

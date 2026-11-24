@@ -99,7 +99,19 @@
           "maxItems": 1,
           "items": {
             "type": "object",
-            "required": ["name", "physicalName", "physicalType", "authoritativeDefinitions"],
+            "required": ["name", "physicalName", "physicalType"],
+            "oneOf": [
+              {
+                "description": "A table lake.sql creates: referenced, columns not restated.",
+                "required": ["authoritativeDefinitions"],
+                "not": {"required": ["properties"]}
+              },
+              {
+                "description": "A new table: inline columns, its DDL generated into docker/lake/ddl/generated/.",
+                "required": ["properties"],
+                "not": {"required": ["authoritativeDefinitions"]}
+              }
+            ],
             "properties": {
               "physicalName": {"$ref": "#/$defs/table"},
               "physicalType": {"const": "table"},
@@ -110,6 +122,23 @@
                   "properties": {
                     "type": {"const": "implementation"},
                     "url": {"const": "docker/lake/ddl/lake.sql"}
+                  }
+                }
+              },
+              "properties": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["name", "physicalType", "description"],
+                  "properties": {
+                    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+                    "physicalType": {
+                      "description": "The Spark SQL type as the DDL spells it: STRING, TIMESTAMP, DECIMAL(28,10).",
+                      "type": "string",
+                      "pattern": "^[A-Z]"
+                    },
+                    "description": {"type": "string", "minLength": 1}
                   }
                 }
               }
