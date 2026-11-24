@@ -1,6 +1,6 @@
 """The one write lock for the lake, shared by ingest.py and maintenance.py.
 
-ingest.py takes it non-blocking and exits 2 if held: two appends must never
+ingest.py takes it non-blocking and exits 75 (EX_TEMPFAIL) if held: two appends must never
 interleave (docker/lake/README.md, "Concurrency must be 1"). maintenance.py
 takes it blocking, waits out a running ingest, and holds it for its whole run,
 so the only ingest that could share the 8 GiB container with its 2g driver is

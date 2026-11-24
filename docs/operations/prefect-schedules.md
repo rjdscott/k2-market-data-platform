@@ -81,8 +81,8 @@ into.
 window both commit and the second one's offsets overwrite the first's. The deployment limit
 only gates runs *Prefect* launched, so the real guard is the exclusive `flock` on
 `/tmp/k2-lake-ingest.lock` taken at the top of `ingest.py`'s `main()`, it covers the
-runbooks, the chaos scripts and `make lake-verify` too. A run refused by the lock exits 2
-and wrote nothing; see [lake-ingest-lag.md §5](../runbooks/lake-ingest-lag.md#5-a-flow-run-failed-with-exited-2--the-ingest-lock-held).
+runbooks, the chaos scripts and `make lake-verify` too. A run refused by the lock exits 75
+and wrote nothing; see [lake-ingest-lag.md §5](../runbooks/lake-ingest-lag.md#5-a-flow-run-failed-with-exited-75--the-ingest-lock-held).
 
 ### Key files
 
@@ -260,12 +260,12 @@ instead.
 
 See also: [lake-ingest-lag.md](../runbooks/lake-ingest-lag.md).
 
-### A run failed with `exited 2`
+### A run failed with `exited 75`
 
 The ingest lock was held by another run, a hand-run ingest, a chaos script, or a backlog
 slice still going when the cycle fired. **The refused run wrote nothing** and the next cycle
 succeeds normally. Nothing to repair;
-[lake-ingest-lag.md §5](../runbooks/lake-ingest-lag.md#5-a-flow-run-failed-with-exited-2--the-ingest-lock-held)
+[lake-ingest-lag.md §5](../runbooks/lake-ingest-lag.md#5-a-flow-run-failed-with-exited-75--the-ingest-lock-held)
 covers the case where it repeats.
 
 ### A run failed on `failOnDataLoss`
