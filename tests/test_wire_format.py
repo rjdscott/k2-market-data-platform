@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 
 import pytest
+from k2gen import ddl
 
 import wire
 
@@ -28,27 +29,6 @@ _DDL = _ROOT / "docker" / "lake" / "ddl" / "lake.sql"
 def _avro_fields(name):
     schema = json.loads((_AVRO / name).read_text())
     return [field["name"] for field in schema["fields"]]
-
-
-def _ddl_columns(table):
-    """Column names of one CREATE TABLE block in lake.sql.
-
-    A line-oriented parse rather than a SQL parser: every column in that file is
-    declared on its own line as `<name> <TYPE> ...`, and a real parser here would
-    be a dependency in service of a test.
-    """
-    body = re.search(
-        rf"CREATE TABLE IF NOT EXISTS lake\.{re.escape(table)} \((.*?)\n\)\nUSING iceberg",
-        _DDL.read_text(),
-        re.DOTALL,
-    )
-    assert body, f"no CREATE TABLE block for lake.{table} in {_DDL}"
-    columns = []
-    for line in body.group(1).splitlines():
-        match = re.match(r"\s{4}(\w+)\s+[A-Z]", line)
-        if match:
-            columns.append(match.group(1))
-    return columns
 
 
 # ── the Confluent framing ───────────────────────────────────────────────────
@@ -198,7 +178,7 @@ class TestRawMessages:
         # The columns the plan names for raw.messages. This table is frozen by
         # policy (no schema evolution beyond nullable adds), so the list is
         # written out rather than derived.
-        assert set(_ddl_columns("raw.messages")) == {
+        assert set(ddl.parse(_DDL)["raw.messages"].columns) == {
             "topic",
             "partition",
             "offset",
