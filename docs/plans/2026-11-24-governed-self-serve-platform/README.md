@@ -25,6 +25,10 @@ Umbrella decision: [ADR-031](../../adr/ADR-031-governed-self-serve-platform.md).
   starts. [17-scale-out-path.md](../../architecture/17-scale-out-path.md) remains the cloud
   design until then, and [ADR-028](../../adr/ADR-028-non-goals-and-honest-limits.md) §9
   stays in force.
+- Access control at the catalog (an identity provider, Lakekeeper authorisation, short-lived
+  storage credentials per table): a separate plan. This plan declares every access point,
+  enforces entitlements on Trino, gives consumers a read-only storage key, and says plainly
+  what is not yet enforced. ADR-039 records the target.
 - A REST data product API. ADR-028 §6 stays in force for an API; this plan lifts it only for
   SQL serving through Trino.
 
@@ -41,8 +45,23 @@ Umbrella decision: [ADR-031](../../adr/ADR-031-governed-self-serve-platform.md).
 - Four domains: `market-capture`, `reference-data`, `fx-reference` (new, ECB XML),
   `market-analytics`. The platform team owns the generator, Airflow, Trino, the catalog and
   the controls.
-- One YAML contract per data product; a generator (`k2gen`) emits the governed artefacts;
-  outputs are committed and CI fails on drift.
+- **The product is the unit.** Each data product has a descriptor (owner, purpose, inputs,
+  outputs, lifecycle stage, consumers) and one contract per output in the Open Data Contract
+  Standard v3, with K2-only fields as custom properties. A generator (`k2gen`) emits the
+  governed artefacts; outputs are committed and CI fails on drift.
+- **Existing products at contract depth, FX at full depth.** Every existing table gets a
+  descriptor, a contract and a generated page. FX also gets the ingestion pattern, SLOs,
+  lineage to the file, a catalog entry and a readiness scorecard.
+- **Ingestion is a pattern, not a script.** A file source is declared in its contract and
+  runs as a generated Airflow DAG: fetch to an immutable landing zone, load, audit, publish.
+  It has two users from the start, ECB FX rates and the ISO 4217 currency list.
+- **One catalog, many access points.** The Iceberg REST catalog is the unifying layer. A
+  product declares how it is reached: Trino SQL, DuckDB through the notebook helper, the
+  ClickHouse hot tier where it is loaded there, and the open catalog endpoint for any
+  Iceberg client, so consumers can bring their own engine. Each declared access point is
+  smoke-tested.
+- **A product is published only when it is ready.** A generated scorecard gates the
+  `published` lifecycle stage in CI.
 - Layered quality: CI, an audit at ingest, dbt tests on models, reconciliation.
   Write-audit-publish on a branch applies to the FX ingest and fails closed. The
   `raw.messages` ingest gets a per-batch audit that always publishes, records the finding and
@@ -52,8 +71,9 @@ Umbrella decision: [ADR-031](../../adr/ADR-031-governed-self-serve-platform.md).
   cross-rate matrix, returns and volatility, an implied stablecoin basis and daily bars
   valued in reporting currencies, behind one reusable conversion macro. Conventions are in
   the phase file and ADR-037.
-- OpenLineage for lineage, captured to file in the default stack. OpenMetadata for the
-  catalog behind an opt-in `governance` compose profile.
+- OpenLineage for lineage, captured to file in the default stack, dataset level from the
+  source file to each access point. Cataloguing has two forms, both must-have: generated
+  product pages in the repository, and OpenMetadata behind the `governance` compose profile.
 - Classification and entitlement (realtime or delayed) drive access rules on the Trino path.
   A design-only document covers personal data.
 - A controls catalogue as code, with daily evidence and a generated report.
@@ -188,32 +208,38 @@ Verified against `main` at `abdc804`.
 
 ```mermaid
 flowchart TB
-    C[contracts/ YAML per data product] --> G[k2gen generator]
-    G --> A[Airflow 3]
-    G --> R[DDL, retention, access rules, SLO rules, catalog payloads]
+    C[contracts/: product descriptor + ODCS contract per output] --> G[k2gen]
+    G --> A[Airflow 3: generated DAGs]
+    G --> R[DDL, retention, access rules, SLO rules, pages, catalog payloads]
 
     CAP[Rust capture] --> RP[Redpanda]
     RP --> SP[Spark ingest: raw, bronze, silver, gold]
-    ECB[ECB FX XML] --> FX[Spark FX ingest: write, audit, publish]
+    SRC[File sources: ECB FX, ISO 4217] --> LZ[(Landing zone, immutable)]
+    LZ --> FS[Spark file-source load: write, audit, publish]
     A --> SP
-    A --> FX
+    A --> LZ
+    A --> FS
     A --> DBT[dbt on Trino]
 
-    SP --> L[(Iceberg lake: Lakekeeper + MinIO)]
-    FX --> L
+    SP --> L[(Iceberg lake)]
+    FS --> L
     L --> DBT
-    DBT --> M[(marts namespace)]
-    RP --> CH[(ClickHouse gold, hot tier)]
+    DBT --> L
+    L --> CAT{{Iceberg REST catalog: Lakekeeper}}
+    RP --> CH[(ClickHouse hot tier)]
 
-    M --> T[Trino: realtime_reader, delayed_reader]
-    L --> T
-    A --> OL[OpenLineage events, file]
-    DBT --> OL
-    SP --> OL
-    OL -.-> OM[OpenMetadata, governance profile]
-    A --> EV[(governance.control_evidence)]
-    EV --> REP[compliance report + Grafana]
+    CAT --> T[Trino SQL, entitled]
+    CAT --> DD[DuckDB notebooks]
+    CAT --> BYO[Any Iceberg client]
+    CH --> DASH[Dashboards]
+
+    A -.-> OL[OpenLineage events]
+    DBT -.-> OL
+    FS -.-> OL
+    OL -.-> OM[Product pages + OpenMetadata]
 ```
+
+Principles```
 
 Principles the diagram encodes:
 
@@ -226,33 +252,70 @@ Principles the diagram encodes:
   observes.
 - **Existing DDL stays the record.** Contracts for existing tables reference `lake.sql` and
   are validated against it. The generator emits DDL only for new products.
-- **The default stack proves the claim.** Anything behind the `governance` profile is extra;
-  lineage capture, entitlements and controls work without it.
+- **One catalog, many engines.** Tables are open Iceberg behind one REST catalog. Serving is
+  not a service in front of the data; it is the set of declared, tested ways to reach it.
+- **The default stack proves the claim.** Product pages, lineage capture, entitlements and
+  controls work without the `governance` profile; the interactive catalog needs it.
+
+## The onboarding path, with FX as the example
+
+The plan's through-line is what a team does to publish a new product, shown once for real.
+
+| Step | What the team does | What the platform does | Phase |
+|---|---|---|---|
+| Declare | Writes a descriptor and contracts: schema, owner, classification, SLOs, source URL, access points | Validates against the standard and against upstream classifications; scaffolds from `make new-product` | P1 |
+| Ingest | Adds a parser of a few dozen lines | Generates the DAG; fetches to the landing zone by hash; loads behind write-audit-publish | P4 |
+| Process | Writes dbt models and tests | Supplies generated sources, the conversion macro, the calendar, CI lint and unit-test runs | P3, P4 |
+| Assure | Declares quality rules | Runs them, records results in one place, alerts with a runbook | P3, P4 |
+| Trace | Nothing | Emits lineage at every hop; each row carries its source file hash; one command walks a value back to the file | P5 |
+| Serve | Declares access points | Generates access rules; smoke-tests every access point; documents bring-your-own-engine | P5 |
+| Catalogue | Nothing | Generates the product page; loads domain, product, owner, lineage and quality into the catalog | P1, P5 |
+| Publish | Sets the lifecycle stage to `published` | Blocks it in CI until the readiness scorecard passes | P6 |
+
+## Engineering standards
+
+Each standard names what enforces it. A standard with no check is a preference.
+
+| Standard | Enforced by |
+|---|---|
+| Generated files are never edited by hand | CI drift check: regenerate, then no diff and no untracked file |
+| Ingestion is idempotent and replayable | Landing objects keyed by content hash; merges keyed on natural keys; a re-run test asserts zero new rows |
+| The system of record never stalls behind a check | Batch audit records and alerts; only late-tolerant sources fail closed |
+| dbt is layered: staging, intermediate, marts; marts never read sources | SQL lint with layer rules in CI; `dbt parse` on every pull request |
+| Every model has a declared grain and a uniqueness test | A CI check that fails a mart with no unique test |
+| Derived numbers have a second computation or a hand-computed unit test | `make parity-ohlcv`, `make parity-bars`, `make parity-fx`; dbt unit tests |
+| Python in the generator is typed and tested | ruff, a type checker and pytest in CI |
+| A contract change is versioned | `k2gen check-compat` fails a breaking change without a major bump |
+| A product has one accountable owner | `CODEOWNERS` per `contracts/<domain>/`; readiness scorecard |
+| Least privilege by default | Consumers get a read-only storage key; Trino roles from contracts; no root key in any consumer recipe |
+| Every image and package is pinned; every service declares limits | Existing CI limits check, extended to the budget sum |
+| Every alert has a runbook that was run | Existing docs gates (d) and (d2) |
+| Every published number has a command behind it | `/benchmark-report`; docs gate (e) |
 
 ## Phases
 
 | File | Phase | Scope | Exit |
 |---|---|---|---|
 | `000-prerequisites-guardrails.md` | P0 | Stack up, `make gates`, budget gate, lock exit code, Lakekeeper patch, stale facts | `make gates` green on the live stack; CI budget gate live |
-| `001-contracts-generator-mesh.md` | P1 | Contracts for every existing product, `k2gen`, four domains | drift check clean in CI |
+| `001-contracts-generator-mesh.md` | P1 | Product descriptors and ODCS contracts for every existing product, `k2gen`, generated product pages, four domains | drift check clean in CI |
 | `002-airflow-replaces-prefect.md` | P2 | Airflow 3, schedule shadow, cutover, Prefect archived | `make gates` green under Airflow; Prefect only where listed |
 | `003-trino-dbt-marts.md` | P3 | Trino, dbt project and first marts, ingest batch audit, quality results | dbt and Spark `ohlcv_1m` agree on the compared columns |
-| `004-fx-data-product.md` | P4 | ECB rates behind write-audit-publish; dbt FX product: crosses, returns, volatility, stablecoin basis, bars in reporting currencies | `make parity-fx` passes; a bad FX file never reaches `main` |
-| `005-entitlements-lineage-catalog.md` | P5 | Access rules, retention as code, lineage capture, catalog | `delayed_reader` denied on `gold.trades` through Trino; lineage events asserted |
-| `006-controls-slos-release.md` | P6 | Controls catalogue, SLO rules, release engineering, drills | `make compliance-report` renders from real evidence |
+| `004-fx-data-product.md` | P4 | File-source ingestion pattern with two users (ECB rates, ISO 4217); dbt FX product: crosses, returns, volatility, stablecoin basis, bars in reporting currencies | `make parity-fx` passes; a bad FX file never reaches `main` |
+| `005-access-lineage-catalog.md` | P5 | Access points and bring-your-own-engine, access rules, retention as code, lineage, catalog | `delayed_reader` denied on `gold.trades` through Trino; lineage events asserted |
+| `006-controls-slos-release.md` | P6 | Controls catalogue, readiness scorecard, SLO rules, release engineering, drills | `make compliance-report` renders from real evidence |
 | `007-governance-pack-release-gate.md` | P7 | Governance documents, capability matrix, fresh-clone gate | `/release-check` passes from a fresh clone |
 
 Order is dependency, then risk. P0 exists because three later phases would otherwise each
 discover the same broken guardrail. Each phase file lists its pull requests; an ADR lands in
 the pull request that builds its decision.
 
-**Must-have and stretch.** Everything in the phase files is must-have except four items, cut
-in this order if time runs out: the OpenMetadata service (lineage capture to file stays),
-blue/green dbt deploys, the DR drill benchmark, the chaos extensions. A control whose evidence
+**Must-have and stretch.** Everything in the phase files is must-have except three items, cut
+in this order if time runs out: blue/green dbt deploys, the DR drill benchmark,
+the chaos extensions. A control whose evidence
 source was cut reports "not applicable" with the reason, never a pass. Never cut: the
 failure-mode tests, the runbooks, the provenance of a published number.
 
-**Estimate.** About nine working days for the must-have path, live-stack gates included.
+**Estimate.** Twelve to thirteen working days for the must-have path, live-stack gates included.
 This is a judgement, not a measurement.
 
 **Resource budget.** Limits to declare, estimated; each phase measures and records the real
@@ -302,13 +365,15 @@ Then `/release-check` on a fresh clone. With a 50 GB engine:
 | Lakekeeper 0.13.3 is behind its own patch line, which carries ref-handling fixes | P0: move to the newest 0.13.x, run `make gates` | Stay on 0.13.3; FX write-audit-publish becomes a staging table swapped by rename |
 | Branch write and fast-forward from Spark 3.5.5 with Iceberg 1.8.1, on a scratch table; readers see only `main` | First task of P4 | The staging-table swap above |
 | Trino Iceberg REST connector against Lakekeeper: warehouse name, views, DuckDB reading a Trino-written table | First task of P3 | Delayed product as a scheduled dbt table; pin an older Trino |
-| An 8 MB XML string in one Iceberg row (the full ECB history file); 5 MB rows have strained compaction before | P4: load it once, run maintenance, measure | Keep the history file as an object in MinIO and store its path and hash |
+| MinIO object locking on the landing bucket behaves as the S3 feature it stands in for | P4: create the bucket locked, try to overwrite | Versioning without a lock, with the hash in the object key as the guard |
+| An existing validator covers the ODCS v3 schema, so `k2gen` need not carry its own | P1: validate one contract with the standard's published JSON Schema | `k2gen` vendors that schema file and validates with it directly |
 | The implied stablecoin basis is noisy across venues on thin days | P4: compute it over the existing history, look at the spread | Widen the minimum asset count; fall back to the flagged peg |
 | The newest Airflow 3 release is weeks old; cosmos and the OpenLineage provider may trail it | P2: pin the newest release cosmos supports outside beta | Pin one minor back |
 | dbt and Airflow dependencies clash in one image | P3 | Run dbt in its own container through `docker exec`, as Spark is |
 | `quote_volume` precision differs between Spark and Trino decimals | P3: `typeof` on both sides | Leave it out of the compared columns and say so |
 | OpenLineage Spark listener memory in a 2g driver that has hit OOM before | P5: measure peak RSS with it on | Dataset lineage from dbt and Airflow only; Spark at job level |
-| One Spark write and one dbt model produce one lineage edge in OpenMetadata | P5, before the service is added to compose | Catalog payloads generated and validated offline; service stays out |
+| One Spark write and one dbt model produce one lineage edge in OpenMetadata | P5, before the service is added to compose | Marquez for the lineage graph, with the generated product pages as the catalog; ADR-038 records it |
+| Each engine reaches the catalog with a read-only storage key: PyIceberg, DuckDB, Spark | P5: one read per engine with the consumer key | Drop the engine from the supported list and say so |
 | One Postgres at 1 CPU serves Lakekeeper, Airflow and later the catalog | P2: cap connections per role, measure | A second Postgres for the governance profile |
 | A `docker exec` timeout kills the client, not the Spark driver, which keeps the lock | P2 | Timeout handler kills the recorded driver PID inside the container |
 | Fresh-clone time grows well past the measured 15 minutes ([fresh-install](../../runbooks/fresh-install.md)) | P7 | Publish the measured time |

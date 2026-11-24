@@ -50,8 +50,10 @@ deliberate non-goals, each with a revisit trigger, and requires a new ADR to lif
 
 **We will add a governed, self-serve layer to K2 in place, driven by one data contract per
 product, because the missing capability is not another pipeline but the means for other teams
-to add pipelines safely.** Scope: the crypto domain, the single host. Cloud infrastructure
-code is a separate plan and a separate decision.
+to add pipelines safely.** The data product, not the table, is the unit: it has an owner, a
+lifecycle, declared inputs and declared access points. Scope: the crypto domain, the single
+host. Cloud infrastructure code and catalog-level access control are separate plans and
+separate decisions.
 
 This ADR is the umbrella. It decides the shape and reserves the numbers. Each follow-on ADR
 makes one decision and lands, Accepted, in the pull request that builds it.
@@ -60,14 +62,14 @@ makes one decision and lands, Accepted, in the pull request that builds it.
 
 | ADR | Decision | Supersedes or lifts |
 |---|---|---|
-| 032 | Data contracts and the `k2gen` generator; outputs committed, drift fails CI | ADR-028 §11 |
+| 032 | Product descriptors and ODCS v3 contracts; the `k2gen` generator; outputs committed, drift fails CI | ADR-028 §11 |
 | 033 | Data mesh: four domains; the platform team owns the paved road | |
 | 034 | Airflow 3 replaces Prefect; default-profile budget of 20 CPU / 36 GiB | orchestration clauses of ADR-008, ADR-014, ADR-017, ADR-018; the 16 CPU clause of ADR-010 |
 | 035 | Trino and dbt for marts; Spark keeps ingest, backfill and compaction | departs from ADR-006 for marts; ADR-028 §6 for SQL serving; scopes ADR-029 §3 |
-| 036 | Layered data quality; write-audit-publish where a bad write can wait | |
+| 036 | A file-source ingestion pattern: immutable landing, then write-audit-publish where a bad write can wait | |
 | 037 | An FX reference domain from ECB reference rates; derivation in dbt, not at ingest | ADR-028 §4 |
 | 038 | OpenLineage for lineage, OpenMetadata for the catalog | |
-| 039 | Classification and entitlements, enforced on the Trino path | ADR-028 §8, for that path |
+| 039 | Serving as declared access points on one catalog; entitlements enforced on Trino, catalog-level control as the stated target | ADR-028 §8, for that path |
 | 040 | A controls catalogue as code | |
 | 041 | SLOs and error budgets for consumer-facing products | ADR-028 §10, on its own trigger |
 | 042 | Release engineering: contract semver and a changelog | |
@@ -115,7 +117,8 @@ Trino and whether it met its SLO.
 fresh-clone time than the 15 minutes measured in
 [fresh-install](../runbooks/fresh-install.md).
 
-**Committed to:** the contract schema as a versioned interface; generated files never edited
+**Committed to:** the Open Data Contract Standard v3 as the contract format and the
+descriptor schema as a versioned interface; generated files never edited
 by hand; every existing gate green at every merge; a default-profile ceiling of 20 CPU /
 36 GiB at the bootstrap peak, enforced in CI.
 

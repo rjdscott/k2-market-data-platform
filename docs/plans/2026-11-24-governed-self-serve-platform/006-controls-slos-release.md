@@ -2,8 +2,8 @@
 
 **Depends on:** P1 to P5 (the controls collect evidence from what those phases built)
 **Decision it implements:** ADR-040 (controls catalogue as code), ADR-041 (SLOs and error budgets) and ADR-042 (release engineering), each written in the pull request that builds it. ADR-041 lifts [ADR-028](../../adr/ADR-028-non-goals-and-honest-limits.md) §10, whose own trigger is a recorded window of 24 h or more, and appends an Outcome there.
-**Delivers:** a compliance reporting model that runs daily on real evidence, SLOs with burn-rate alerts generated from contracts, and the release mechanics.
-**Exit:** `make compliance-report` renders from rows in `governance.control_evidence`, with one control shown failing and then passing after its cause is fixed; `make check-alerts` passes with the generated rules and their tests; every SLO target cites a benchmark window of at least 24 h; a contract change that drops a column without a major version bump fails CI.
+**Delivers:** a compliance reporting model that runs daily on real evidence, a readiness scorecard that gates publication, SLOs with burn-rate alerts generated from contracts, and the release mechanics.
+**Exit:** `make compliance-report` renders from rows in `governance.control_evidence`, with one control shown failing and then passing after its cause is fixed; `make check-alerts` passes with the generated rules and their tests; every SLO target cites a benchmark window of at least 24 h; a contract change that drops a column without a major version bump fails CI; setting a product to `published` with a failing scorecard item fails CI.
 
 ## Scope
 
@@ -24,6 +24,14 @@
 - `make compliance-report` renders `docs/compliance/report-<date>.md`. One report is
   committed per release as a dated snapshot; daily output is not committed.
 - `docs/compliance/README.md` describes the model.
+- Readiness scorecard, per product, from the same evidence: descriptor valid, owner set,
+  classification set, every column described, quality rules present, SLO declared (gold and
+  marts), lineage seen, at least one access point declared and passing. `k2gen` writes it to
+  the product page.
+- Lifecycle gate in CI: a descriptor may say `published` only when every scorecard item that
+  can be checked offline passes. Items that need the stack are checked by the evidence DAG,
+  and a published product failing one raises an alert. Existing products start as
+  `published` only if they pass; the rest are `draft` with the missing items listed.
 
 **Pull request 2: SLOs, ADR-041**
 

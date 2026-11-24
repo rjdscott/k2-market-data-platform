@@ -19,9 +19,10 @@
   (golden paths, intake, design reviews, office hours, delivery tracking).
 - `docs/development/spark-dbt-airflow-guide.md`: which tool does what, with examples from
   this repository, including what `dbt parse` on a second target does and does not show.
-- `docs/development/golden-path.md` finished by doing it: `make new-product`, fill the
-  contract, `make generate`, then see the table, the DAG run, the access rule and the
-  quality result on the stack.
+- `docs/development/golden-path.md`: the onboarding path, told with FX as it was actually
+  built (declare, ingest, process, assure, trace, serve, catalogue, publish), each step with
+  the pull request that did it and the command that shows it. Then proven a third time from
+  zero: `make new-product`, a parser, `make generate`, and the product reaches `published`.
 
 **Capability matrix**
 

@@ -1,8 +1,8 @@
 # Phase P4: the FX reference domain and the FX data product
 
-**Depends on:** P1 (contracts, generated DDL), P2 (Airflow), P3 (Trino, dbt)
-**Decision it implements:** ADR-036 (layered quality; write-audit-publish where a bad write can wait) and ADR-037 (FX reference domain: the source, the conventions, and where derivation lives), both written in this phase. ADR-037 lifts [ADR-028](../../adr/ADR-028-non-goals-and-honest-limits.md) §4 and appends an Outcome there.
-**Delivers:** a fourth domain publishing ECB reference rates as landed, and a consumer product built on it in dbt: a cross-rate matrix, returns and volatility, an implied stablecoin basis, daily bars valued in reporting currencies, and a return decomposition. It is the plan's worked example of one team publishing a source and the platform turning it into something every other product can use.
+**Depends on:** P1 (descriptors, contracts, generated DDL), P2 (Airflow), P3 (Trino, dbt)
+**Decision it implements:** ADR-036 (the file-source ingestion pattern: immutable landing, then write-audit-publish where a bad write can wait) and ADR-037 (FX reference domain: the source, the conventions, and where derivation lives), both written in this phase. ADR-037 lifts [ADR-028](../../adr/ADR-028-non-goals-and-honest-limits.md) §4 and appends an Outcome there.
+**Delivers:** a reusable way to onboard a file source, used twice; a fourth domain publishing ECB reference rates as landed; and a consumer product built on it in dbt: a cross-rate matrix, returns and volatility, an implied stablecoin basis, daily bars valued in reporting currencies, and a return decomposition. It is the plan's worked example of one team publishing a source and the platform turning it into something every other product can use.
 **Exit:** `make parity-fx` passes (dbt crosses, returns and volatility equal a pure-Python reference on the committed sample); a corrupted FX file fails its audit, `main` keeps its prior snapshot id and `k2lake.pin()` still returns that id; every dbt unit test listed under "Tests" passes; a fresh clone with no network builds every FX mart from the committed sample.
 
 ## Why this split
@@ -35,44 +35,70 @@ Window lengths, the annualisation factor and the reporting currencies are dbt va
 
 ## Scope
 
-**Pull request 1: FX ingest behind write-audit-publish, ADR-036, ADR-037**
+**Pull request 1: the file-source ingestion pattern, ADR-036**
 
-- Spike first: a branch write and fast-forward from Spark on a scratch table.
+- Spike first: a branch write and fast-forward from Spark on a scratch table; and a locked,
+  versioned MinIO bucket that refuses an overwrite.
 - `notebooks/k2lake.py:84` and `scripts/parity_ohlcv.py:66-69` resolve the snapshot `main`
   points at, with a test, before any branch exists.
-- `docker/lake/fx.py`: fetch with the standard library; parse with the standard library
-  after asserting the bundled expat is 2.4.1 or newer (the image has no pip layer, and that
-  version already refuses entity expansion). Takes the writer lock blocking, as maintenance
-  does, with a bounded wait.
-- Tables, DDL emitted by `k2gen` into `docker/lake/ddl/generated/`. Never `raw.messages`.
-  - `bronze.ecb_fx_file`: one row per fetched file. URL, fetch time, sha256, the XML verbatim.
-  - `bronze.ecb_fx_daily`: one row per date and currency as published, the rate as a string,
-    with the file's sha256 as lineage.
+- A contract declares a file source in its custom properties: `url`, `format`, `schedule`,
+  `calendar`, `parser`, and the audits to run. `k2gen` emits the DAG config; one factory,
+  `docker/airflow/dags/factory.py`, builds every file-source DAG from it.
+- The generated DAG has four tasks, the same for every source:
+  1. **fetch**: download with the standard library, compute sha256, write to the landing zone
+     at `landing/<domain>/<product>/<fetch date>/<sha256>.<ext>`. Same content, same key: a
+     re-fetch of an unchanged file writes nothing. The landing bucket is versioned and
+     locked, so a landed file cannot be altered. It is the verbatim record.
+  2. **load**: `docker/lake/file_source.py` in the Spark container reads the landed object,
+     calls the product's parser (`docker/lake/sources/<name>.py`, one function from bytes to
+     rows), and writes bronze to a branch created from `main`. Every row carries
+     `source_file_sha256`. Takes the writer lock blocking, with a bounded wait.
+  3. **audit**: generic checks (parses, non-empty, keys unique, no key outside the declared
+     domain, a published value is never changed by a later file) plus the product's own.
+  4. **publish**: fast-forward `main`, then merge to silver. A failed audit leaves the branch,
+     writes an `audit.checks` row and alerts; `main` does not move.
+- `bronze.source_files`: one row per landed file for every source: product, URL, fetch time,
+  sha256, landing path, byte size. The file itself stays in the landing zone, not in a table
+  row.
+- Parsers use the standard library after asserting the bundled expat is 2.4.1 or newer (the
+  image has no pip layer, and that version already refuses entity expansion).
+- A fresh clone seeds the landing zone from committed sample files, so every product builds
+  with no network. No test reaches the network.
+- `maintenance.py` already takes its table lists from the contracts (P3), so new tables are
+  compacted and expired with no further change.
+
+**Pull request 2: two products on the pattern, ADR-037**
+
+The pattern has two users from its first merge, so its seams are real.
+
+- **ECB FX rates**, domain `fx-reference`.
+  - `bronze.ecb_fx_daily`: one row per date and currency as published, the rate as a string.
   - `silver.fx_rates_ecb`: `rate_date`, `currency`, `eur_rate` as a decimal, `fetched_at`,
-    and `available_at` (16:00 Frankfurt time on `rate_date`, stated as nominal, not observed).
-    Keyed on date and currency; a re-fetch merges and adds nothing.
-- Write-audit-publish: write to a branch created from `main` at the start of the run, audit,
-  fast-forward `main`. A failed audit leaves the branch, writes an `audit.checks` row and
-  alerts; `main` does not move. Audits:
-  - every rate parses and is positive; no date in the future;
-  - no currency code outside the currency seed (a new code is a contract change, not data);
-  - a rate already published for a date is not changed by a later file;
-  - the latest date's currency set equals the previous date's (a difference warns: the ECB
-    does add and retire currencies);
-  - no TARGET working day is missing between the last stored date and the new one.
-- DAG `fx_ingest`: TARGET working days at 15:30 UTC, retrying until 18:00, with a `history`
-  parameter that loads the full file since 1999 (about 8 MB). It is the first DAG built by
-  `docker/airflow/dags/factory.py` from generated config.
-- A committed copy of the ECB 90-day file (about 70 KB, attributed) seeds the tables on a
-  fresh clone. A corrupted copy sits beside it for the audit test. No test reaches the network.
-- Contract `contracts/fx-reference/ecb_fx_rates.yaml`: classification `public`, freshness SLO
-  "the day's fixing by 18:00 UTC on TARGET working days".
-- `scripts/chaos/fx-bad-file.sh`: feeds the corrupted copy and checks the three exit
+    `available_at` (16:00 Frankfurt time on `rate_date`, stated as nominal, not observed),
+    `source_file_sha256`. Keyed on date and currency.
+  - Product audits: every rate positive; no date in the future; the latest date's currency
+    set equals the previous date's (a difference warns: the ECB does add and retire
+    currencies); no TARGET working day missing since the last stored date.
+  - Schedule: TARGET working days at 15:30 UTC, retrying until 18:00. A `history` run loads
+    the full file since 1999.
+  - Sample: the ECB 90-day file (about 70 KB, attributed) and a corrupted copy for the test.
+  - Classification `public`; freshness SLO "the day's fixing by 18:00 UTC on TARGET working
+    days".
+- **ISO 4217 currency list**, domain `reference-data`: the published XML list of currency
+  codes, names and minor units, landed as `bronze.iso4217_currency` and
+  `silver.currency_master`. Monthly schedule. It replaces a hand-written currency seed, so
+  the FX models' currency dimension is itself a governed product. Its terms of use are read
+  before a sample is committed; if they forbid it, the sample is synthetic and says so.
+- DDL for all of it emitted by `k2gen` into `docker/lake/ddl/generated/`. Nothing here
+  touches `raw.messages`.
+- `scripts/chaos/fx-bad-file.sh`: lands the corrupted copy and checks the three exit
   conditions.
+- `scripts/trace-product.sh <output> <date>`: walks one served value back through silver and
+  bronze to the landed file and prints its hash and path.
 
-**Pull request 2: FX models in dbt**
+**Pull request 3: FX models in dbt**
 
-`dbt/models/fx/`, with `dbt/seeds/currencies.csv` (ISO 4217 code, name, minor units) and
+`dbt/models/fx/`, with `stg_ref__currencies` over `silver.currency_master` and
 `dbt/seeds/target_holidays.csv` (generated by a committed script: the fixed TARGET closing
 days and the two that follow Easter).
 
@@ -124,6 +150,8 @@ docker exec k2-airflow-scheduler airflow dags test fx_ingest
 docker exec k2-airflow-scheduler airflow dags test dbt_marts
 make parity-fx
 bash scripts/chaos/fx-bad-file.sh
+bash scripts/trace-product.sh fx_rates_daily "$(date -u -d yesterday +%F)"
+docker exec k2-airflow-scheduler airflow dags test currency_master_ingest
 docker exec k2-trino trino --execute "SELECT rate, rate_date, days_stale FROM lake.marts.fx_rates_daily WHERE base = 'USD' AND quote = 'AUD' ORDER BY as_of_date DESC LIMIT 3"
 make generate && test -z "$(git status --porcelain)"
 make gates
