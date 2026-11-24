@@ -42,20 +42,35 @@ updates:
       # hand with the {:x} call sites, not from a bot.
       - dependency-name: "sha2"
         update-types: ["version-update:semver-minor"]
+    # One pull request per run for all security fixes, not one per advisory.
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
     open-pull-requests-limit: 3
     labels: ["dependencies", "rust"]
     commit-message:
       prefix: "build"
       include: "scope"
 
-  # legacy/v1 is archived and runs nowhere (SECURITY.md). Alerts on its lockfile
-  # stay visible in the Security tab; this entry exists only to switch off the
-  # security-update PRs for that manifest, which is what a 0 limit does — the
-  # lockfile was upgraded in-constraint once (#84) and the residue is recorded
-  # in legacy/v1/README.md. Without this entry Dependabot opens one PR per
-  # advisory against an archive.
+  # notebooks/ is live; legacy/v1 is archived and runs nowhere (SECURITY.md).
+  # Limit 0 switches off version-update pull requests for both. It does not
+  # switch off security updates: 26 single-advisory pull requests arrived
+  # against these two lockfiles by 2026-11-24. The group folds security fixes
+  # into one pull request per directory. Alerts stay visible in the Security
+  # tab either way; the legacy residue is recorded in legacy/v1/README.md.
   - package-ecosystem: "uv"
-    directory: "/legacy/v1"
+    directories:
+      - "/notebooks"
+      - "/legacy/v1"
     schedule:
       interval: "monthly"
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
     open-pull-requests-limit: 0
+    labels: ["dependencies", "python:uv"]
+    commit-message:
+      prefix: "build"
+      include: "scope"

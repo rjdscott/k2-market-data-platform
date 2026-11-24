@@ -56,7 +56,7 @@ def _run(script: str, args: list, timeout: int) -> str:
     failed to stdout and exits 1 — swallowing that would turn
     "duplicate_identifiers failed on bronze.kraken_book" into "returned exit status 1".
     In full to the log, as a tail in the exception: an ingest refused by the
-    flock exits 2 with one line on stderr, and that line has to be readable in
+    flock exits 75 with one line on stderr, and that line has to be readable in
     the Prefect UI without opening the run.
     """
     logger = get_run_logger()

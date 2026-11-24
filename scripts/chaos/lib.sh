@@ -168,7 +168,7 @@ wait_healthy() {
 #
 # Every lake fault below races the `1-59/5 * * * *` lake-ingest-5min deployment.
 # Two things go wrong if it lands inside the window: `docker/lake/ingest.py`'s
-# flock makes the second run exit 2, which reads as the fault having broken the
+# flock makes the second run exit 75, which reads as the fault having broken the
 # ingest; and the before/after row-count assertions in lake-lakekeeper-stop.sh
 # and lake-minio-stop.sh see a legitimate commit and call it a partial one.
 #
@@ -216,7 +216,7 @@ pause_lake_ingest() {
   echo "→ paused $LAKE_DEPLOYMENT for the duration of this run" >&2
   # Pausing the schedule does not stop a run already in flight, and every lake
   # writer takes the same flock (docker/lake/lock.py) — an ingest this script
-  # starts while one is running exits 2 at the lock, which the first
+  # starts while one is running exits 75 at the lock, which the first
   # lake-corrupt-payload run misread as "blocked by the bad record" (2026-08-27).
   local waited=0
   while docker exec "$SPARK_CONTAINER" pgrep -f 'lake/(ingest|maintenance)\.py' >/dev/null 2>&1; do

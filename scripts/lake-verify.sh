@@ -25,7 +25,7 @@
 # The 5-minute lake-ingest-5min schedule is paused for the duration and resumed
 # from a trap. A scheduled run landing between the two cycles reads records this
 # script's window does not cover, and the flock in ingest.py makes an overlapping
-# one exit 2 — either way the result would be a failure that says nothing about
+# one exit 75, either way the result would be a failure that says nothing about
 # idempotency.
 #
 #   scripts/lake-verify.sh                 # window ends 60 s ago

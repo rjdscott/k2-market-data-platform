@@ -90,7 +90,7 @@ no way to detect which you got.
 ### 1.2 …and the one thing about it that does not survive the move
 
 `docker/lake/lock.py` is 31 lines of stdlib: an exclusive `fcntl.flock` on
-`/tmp/k2-lake-ingest.lock`, taken non-blocking by `ingest.py` (exit 2 if held) and
+`/tmp/k2-lake-ingest.lock`, taken non-blocking by `ingest.py` (exit 75 if held) and
 blocking by `maintenance.py` (held for its whole run). On one host with one Spark
 container it is exact — two writers are unrepresentable.
 

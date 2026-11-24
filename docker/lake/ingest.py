@@ -93,6 +93,9 @@ from spark_conf import (
 
 RAW_TABLE = f"{CATALOG}.raw.messages"
 
+# Writer lock held: EX_TEMPFAIL (75), "try again later", not a failure of the run.
+EXIT_LOCK_HELD = os.EX_TEMPFAIL
+
 # One ingest at a time, per container, on every dispatch path.
 #
 # Prefect's `concurrency_limit=1` only gates runs Prefect launched, and the
@@ -504,7 +507,7 @@ def main() -> int:
                 "Two concurrent appends both commit and both write offsets; see LOCK_PATH above.",
                 file=sys.stderr,
             )
-            return 2
+            return EXIT_LOCK_HELD
 
     spark = lake_session("k2-lake-ingest")
     try:

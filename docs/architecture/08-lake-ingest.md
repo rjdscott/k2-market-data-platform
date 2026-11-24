@@ -59,7 +59,7 @@ flowchart TB
   RP --> S1 --> RAW --> S2 --> BR --> S3 --> SV --> S4 --> GD
 ```
 
-One process, one Spark session, one file lock (`lock.py`): a second writer exits 2 rather
+One process, one Spark session, one file lock (`lock.py`): a second writer exits 75 rather
 than interleaving appends; nightly maintenance takes the same lock blocking, so compaction
 never shares the 8 GiB container with an ingest.
 
@@ -134,7 +134,7 @@ ClickHouse and DuckDB candles at a pinned snapshot.
 | Position and data in one commit | `snapshot-property.k2.kafka-offsets` on the `raw.messages` append (`ingest.py`); `test_lake_offsets.py` |
 | Exactly-once by construction, tested | `make lake-verify`: a second run adds 0 rows; chaos `lake-ingest-kill.sh` (42 s, no duplicates) |
 | Loss needs a human | `--accept-data-loss` is a CLI flag only; scheduled runs fail until typed; each hole is an `offset_gap` audit row |
-| One writer | `lock.py` `flock`; ingest exits 2 if held, maintenance waits |
+| One writer | `lock.py` `flock`; ingest exits 75 if held, maintenance waits |
 | Layers read parents by snapshot id | `k2.src-snapshot-id` in `bronze.py`, `silver.py`, `gold.py`, `books.py` |
 | Nightly proof, alerted | `maintenance.py` audits → `audit.checks`; non-zero exit → `LakeAuditFailed` |
 | Pure logic unit-tested off Spark | `offsets.py`, `book.py`, `instruments.py` have no pyspark import; `tests/test_lake_*.py` |

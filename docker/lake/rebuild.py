@@ -19,8 +19,8 @@ one day per venue at a time (bronze.rebuild); print the timing. Every commit
 carries the pinned parent snapshot id, so when the lock is released the
 5-minute ingest resumes exactly after the pin and nothing arrives twice.
 
-**Pause the ingest schedule first** — the lock makes a concurrent ingest exit 2
-rather than corrupt anything, but an hour of exit-2 runs is an hour of
+**Pause the ingest schedule first**, the lock makes a concurrent ingest exit 75
+rather than corrupt anything, but an hour of exit-75 runs is an hour of
 LakeIngestFailed noise:
 
     docker exec k2-prefect-server prefect deployment schedule pause lake-ingest/lake-ingest-5min <schedule-id>   # id from: prefect deployment schedule ls lake-ingest/lake-ingest-5min
