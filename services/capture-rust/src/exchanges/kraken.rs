@@ -326,7 +326,7 @@ impl KrakenAdapter {
             symbol: t.symbol.to_string(),
             canonical_symbol: canonical.to_string(),
             // The venue's integer id, stringified without reformatting: this is
-            // the raw JSON text, so 105994519 stays 105994519.
+            // the raw JSON text, so 4294967296 stays 4294967296.
             trade_id: t.trade_id.get().to_string(),
             price,
             qty,
@@ -783,15 +783,15 @@ mod tests {
     #[test]
     fn trade_frame_becomes_a_trade_record() {
         let mut a = adapter();
-        let frame = r#"{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"sell","price":78568.6,"qty":0.04244195,"ord_type":"limit","trade_id":105994519,"timestamp":"2026-08-26T11:34:06.075373Z"}]}"#;
+        let frame = r#"{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"sell","price":1000.1,"qty":0.25000000,"ord_type":"limit","trade_id":4294967296,"timestamp":"2026-08-26T11:34:06.075373Z"}]}"#;
         let h = a.handle_frame(frame.as_bytes(), 9_999);
         let OutRecord::Trade(t) = &h.records[1] else {
             panic!("no trade record")
         };
-        assert_eq!(t.price, 7_856_860_000_000);
-        assert_eq!(t.qty, 4_244_195);
+        assert_eq!(t.price, 100_010_000_000);
+        assert_eq!(t.qty, 25_000_000);
         assert_eq!(t.side, Side::Sell);
-        assert_eq!(t.trade_id, "105994519", "integer id stringified verbatim");
+        assert_eq!(t.trade_id, "4294967296", "integer id stringified verbatim");
         assert_eq!(
             t.exchange_ts, 1_787_744_046_075_373,
             "2026-08-26T11:34:06.075373Z"
@@ -961,7 +961,7 @@ mod tests {
 
         assert_eq!(a.symbols(), vec!["BTC/USD", "DOGE/USD", "ETH/USD"]);
 
-        let frame = r#"{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"buy","price":78568.7,"qty":0.001,"ord_type":"limit","trade_id":1,"timestamp":"2026-08-26T11:34:06.075373Z"}]}"#;
+        let frame = r#"{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"buy","price":1000.2,"qty":0.001,"ord_type":"limit","trade_id":1,"timestamp":"2026-08-26T11:34:06.075373Z"}]}"#;
         let h = a.handle_frame(frame.as_bytes(), 1);
         let OutRecord::Trade(t) = &h.records[1] else {
             panic!("no trade record for BTC/USD")
@@ -990,7 +990,7 @@ mod tests {
 
         // ... and the v2 frame the venue would send for the pair it *does* know
         // resolves to nothing, because we never subscribed to that symbol.
-        let frame = r#"{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"buy","price":78568.7,"qty":0.001,"ord_type":"limit","trade_id":1,"timestamp":"2026-08-26T11:34:06.075373Z"}]}"#;
+        let frame = r#"{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"buy","price":1000.2,"qty":0.001,"ord_type":"limit","trade_id":1,"timestamp":"2026-08-26T11:34:06.075373Z"}]}"#;
         let h = a.handle_frame(frame.as_bytes(), 1);
         assert!(
             !h.records.iter().any(|r| matches!(r, OutRecord::Trade(_))),

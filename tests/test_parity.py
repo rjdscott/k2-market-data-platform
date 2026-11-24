@@ -18,7 +18,7 @@ What each test is actually guarding:
     the tolerance must never absorb — `side` included, because an inverted
     aggressor is invisible in every other column.
   - the string -> fixed-point conversion, exactly, on a value with trailing
-    zeros. float('78600.44') * 1e8 == 7860043999999.999, so a float
+    zeros. float('128.14') * 1e8 == 12813999999.999998, so a float
     implementation would fail this test — which is why it is here.
 """
 
@@ -80,7 +80,7 @@ def run(v2, v3, exchange="binance"):
 
 def test_v2_price_string_converts_exactly():
     """The headline case: trailing zeros, and a value a float cannot round-trip."""
-    assert to_fixed_1e8("78600.44000000") == 7860044000000
+    assert to_fixed_1e8("128.14000000") == 12814000000
 
 
 @pytest.mark.parametrize(
@@ -146,14 +146,14 @@ def test_normalise_v2_record():
         {
             "canonical_symbol": "BTC/USDT",
             "trade_id": "5551212",
-            "price": "78600.44000000",
+            "price": "128.14000000",
             "quantity": "0.01500000",
-            "quote_volume": "1179.0066",
+            "quote_volume": "1.9221",
             "side": "BUY",
             "exchange_timestamp": 1_700_000_000_123,
         }
     )
-    assert n == Norm("BTC/USDT", "5551212", 7860044000000, 1_500_000, "buy", 1_700_000_000_123_000)
+    assert n == Norm("BTC/USDT", "5551212", 12814000000, 1_500_000, "buy", 1_700_000_000_123_000)
 
 
 def test_normalise_v3_record():
@@ -161,13 +161,13 @@ def test_normalise_v3_record():
         {
             "canonical_symbol": "BTC/USDT",
             "trade_id": 5551212,  # venues emit ints; the contract stringifies
-            "price": 7860044000000,
+            "price": 12814000000,
             "qty": 1_500_000,
             "side": "buy",
             "exchange_ts": 1_700_000_000_123_456,
         }
     )
-    assert n == Norm("BTC/USDT", "5551212", 7860044000000, 1_500_000, "buy", 1_700_000_000_123_456)
+    assert n == Norm("BTC/USDT", "5551212", 12814000000, 1_500_000, "buy", 1_700_000_000_123_456)
 
 
 def test_the_two_contracts_meet_on_the_same_tuple():
@@ -179,7 +179,7 @@ def test_the_two_contracts_meet_on_the_same_tuple():
         {
             "canonical_symbol": "BTC/USD",
             "trade_id": "77",
-            "price": "78600.44000000",
+            "price": "128.14000000",
             "quantity": "0.01500000",
             "side": "BUY",
             "exchange_timestamp": 1_700_000_000_123,
@@ -189,7 +189,7 @@ def test_the_two_contracts_meet_on_the_same_tuple():
         {
             "canonical_symbol": "BTC/USD",
             "trade_id": "77",
-            "price": 7860044000000,
+            "price": 12814000000,
             "qty": 1_500_000,
             "side": "buy",
             "exchange_ts": 1_700_000_000_123_000,
@@ -216,7 +216,7 @@ def test_an_inverted_binance_side_does_not_pass():
     raw_v2 = {
         "canonical_symbol": "BTC/USDT",
         "trade_id": "5551212",
-        "price": "78600.44000000",
+        "price": "128.14000000",
         "quantity": "0.01500000",
         "side": "BUY",
         "exchange_timestamp": 1_700_000_000_123,
@@ -224,7 +224,7 @@ def test_an_inverted_binance_side_does_not_pass():
     raw_v3 = {
         "canonical_symbol": "BTC/USDT",
         "trade_id": "5551212",
-        "price": 7860044000000,
+        "price": 12814000000,
         "qty": 1_500_000,
         "side": "sell",  # inverted
         "exchange_ts": 1_700_000_000_123_000,
@@ -739,7 +739,7 @@ def _v2_only(monkeypatch, note):
     row = Norm(
         canonical_symbol="BTC/USD",
         trade_id="1",
-        price=to_fixed_1e8("78600.44"),
+        price=to_fixed_1e8("128.14"),
         qty=to_fixed_1e8("0.001"),
         side="buy",
         exchange_ts_us=1_787_730_846_075_373,

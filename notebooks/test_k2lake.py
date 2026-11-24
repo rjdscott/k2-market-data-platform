@@ -76,7 +76,7 @@ def test_bbo_is_the_book_at_the_end_of_its_second(con):
     """A trade at :05.500 takes second :04's book, not :05's.
 
     Drop the `+ INTERVAL 1 SECOND` and this trade sees a quote from its own
-    future (bid 190) — the 44.49% vs 53.41% trade-through difference.
+    future (bid 190), the pairing that overstates trade-through.
     """
     rows = trades(con, *WINDOW).df()
     first = rows[rows.trade_id == "1"].iloc[0]

@@ -22,7 +22,7 @@ so the lineage survives the explode).
 and bronze stores STRING; Kraken sends JSON numbers and bronze stores
 DECIMAL(28,10), which is the lossless reading of a JSON number literal — Spark's
 JSON parser hands the digits to the decimal without going through a double, so
-`949.90293702` is stored as those digits and not as the nearest float64
+a value like `949.12345678` is stored as those digits and not as the nearest float64
 (measured in the 2026-08-27 spike; docker/lake/README.md). Timestamps stay in
 the venue's own form: epoch milliseconds for Binance, RFC 3339 strings for the
 other two. Silver types them.

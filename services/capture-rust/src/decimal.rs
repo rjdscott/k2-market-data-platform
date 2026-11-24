@@ -15,7 +15,7 @@
 //!
 //! The input is the **raw JSON text** of the number, not a parsed value.
 //! `serde_json::value::RawValue` hands back exactly the bytes the exchange
-//! sent, so `78980.2` arrives here as the five characters it was on the wire.
+//! sent, so `100.5` arrives here as the five characters it was on the wire.
 
 /// Fixed-point scale for every price and quantity on the v3 wire: 1e-8.
 pub const SCALE: i64 = 100_000_000;
@@ -156,7 +156,7 @@ mod tests {
             ("0", Ok(0)),
             ("0.0", Ok(0)),
             ("1", Ok(SCALE)),
-            ("78980.2", Ok(7_898_020_000_000)),
+            ("1000.5", Ok(100_050_000_000)),
             ("0.18772827", Ok(18_772_827)),
             // Exactly 8 dp is fine; 9 is not.
             ("1.12345678", Ok(112_345_678)),

@@ -179,10 +179,9 @@ def trades(con, symbol: str, exchange: str, start, end, book: bool = True, maste
     **`gold.bbo_1s` is the book at the END of its second**, so the quote in force
     for a trade is the row for the *previous* second: the join is
     `exchange_ts >= second + INTERVAL 1 SECOND`. Joining on `second <= exchange_ts`
-    uses a quote from up to a second in the trade's future: on Kraken BTC/USD,
-    2026-09-03 12:00-13:00 UTC, that reads 64.74% of prints as trading through the
-    book where the correct pairing reads 51.74% (both measured with this function's
-    join, 1923 trades).
+    uses a quote from up to a second in the trade's future, which inflates the
+    share of prints that appear to trade through the book
+    (`03_asof_trades_book.ipynb` computes it both ways).
 
     Both joins are LEFT: nothing is dropped. A trade with no quote (no book
     frames that second) has NULL bid/ask; a trade older than the dimension's

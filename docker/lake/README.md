@@ -338,7 +338,7 @@ frames are counted separately), duplicates on `gold.book_top20`'s `(exchange, sy
 | `silver.book_binance` | 4,432,079 | `seq_gap` true on 467 frames (lastUpdateId did not advance), NULL on 168 (first of a connection) |
 | `silver.book_coinbase` | 7,894,742 | one row per `events[i]` |
 | `gold.book_top20` | 1,951,135 | 670,815 / 632,405 / 647,915 seconds for binance / kraken / coinbase; depth 20 throughout |
-| `gold.bbo_1s` | 1,951,129 | 6 fewer: seconds with an empty side; median spread 0.99 / 1.64 / 1.36 bps (binance / kraken / coinbase, 2026-08-27) |
+| `gold.bbo_1s` | 1,951,129 | 6 fewer: seconds with an empty side; the spread per second is the `spread_bps` column |
 | `gold.book_state` | 277 Kraken + 160 Coinbase connections | Coinbase carries 688,746 resting levels across them (full depth) |
 
 **Every one of the 386,962 checksum failures is explained, and none is the replay's.**
@@ -355,9 +355,9 @@ resubscribe for a fresh snapshot so the archive's book becomes verifiable again.
 
 **Two samplers, one book.** ClickHouse's feed-fed `gold.book_top20` is the capture's own
 1 Hz sample taken at a fixed sub-second offset; the lake's is the state at the *end* of the
-second. Over 2026-08-27 00:00–05:00 the two agree on the best bid and ask in 88.6 % of
-Binance seconds, 66.8 % Kraken, 65.9 % Coinbase (`docs/runbooks/clickhouse-rebuild-from-lake.md`);
-the rest are seconds in which the top of book moved between the two instants. The
+second. They disagree on the best bid or ask exactly in the seconds in which the top of
+book moved between the two instants (`docs/runbooks/clickhouse-rebuild-from-lake.md`),
+so the agreement rate is a property of the market, not of the replay. The
 venue-attested checksum above, not this comparison, is what validates the replay.
 
 ## The exactly-once contract
