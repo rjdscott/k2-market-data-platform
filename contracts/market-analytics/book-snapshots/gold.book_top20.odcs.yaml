@@ -1,0 +1,47 @@
+# Contract for lake.gold.book_top20. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.gold.book_top20
+name: gold.book_top20
+version: 1.0.0
+domain: market-analytics
+description:
+  purpose: >-
+    Book states at 1 Hz, top 20 per side as four parallel fixed-point arrays, replayed from
+    the silver frames per connection. A second with no frame carries the previous state
+    forward.
+team:
+  name: analytics-team
+schema:
+  - name: book_top20
+    physicalName: gold.book_top20
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+    quality:
+      - type: custom
+        engine: k2-maintenance
+        implementation: duplicate_identifiers
+        description: >-
+          No two rows share the identifier fields lake.sql declares.
+customProperties:
+  - property: layer
+    value: gold
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["exchange", "days(second)"]
+  - property: sort
+    value: ["canonical_symbol", "second"]
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: realtime
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["silver.book_binance", "silver.book_kraken", "silver.book_coinbase", "gold.book_state"]
+  - property: schedule
+    value: "1-59/5 * * * *"

@@ -1,0 +1,50 @@
+# Contract for lake.silver.book_binance. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.silver.book_binance
+name: silver.book_binance
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    Binance depth20 frames typed. Each frame is a complete top-20 snapshot.
+team:
+  name: capture-team
+schema:
+  - name: book_binance
+    physicalName: silver.book_binance
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+    quality:
+      - type: custom
+        engine: k2-maintenance
+        implementation: duplicate_identifiers
+        description: >-
+          No two rows share the identifier fields lake.sql declares.
+      - type: custom
+        engine: k2-maintenance
+        implementation: silver_parity
+        description: >-
+          Rows equal the frames or events of the bronze snapshot this table last read.
+customProperties:
+  - property: layer
+    value: silver
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["days(recv_ts)"]
+  - property: sort
+    value: ["canonical_symbol", "recv_ts_ns"]
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: realtime
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["bronze.binance_depth20", "config/instruments.yaml"]
+  - property: schedule
+    value: "1-59/5 * * * *"

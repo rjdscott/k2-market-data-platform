@@ -1,0 +1,20 @@
+name: venue-frames
+domain: market-capture
+owner: capture-team
+purpose: >-
+  Each venue frame decoded from raw.messages into the venue's own field names, types and
+  nesting: one table per venue and message type, one row per frame, no renames and no
+  canonical symbol (ADR-026).
+kind: source-aligned
+lifecycle: draft
+inputs:
+  - table: raw.messages
+outputs:
+  - bronze.binance_trade
+  - bronze.binance_depth20
+  - bronze.kraken_trade
+  - bronze.kraken_book
+  - bronze.kraken_instrument
+  - bronze.coinbase_market_trades
+  - bronze.coinbase_level2
+consumers: []

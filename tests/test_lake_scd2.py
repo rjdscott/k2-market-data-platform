@@ -14,12 +14,12 @@ mode CLAUDE.md warns about: silent, and hours downstream.
 """
 
 import ast
-import re
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import scd2
+from k2gen import ddl
 
 _ROOT = Path(__file__).resolve().parent.parent
 _DDL = _ROOT / "docker" / "lake" / "ddl" / "lake.sql"
@@ -202,17 +202,6 @@ class TestHashing:
         assert T1 < scd2.FOREVER
 
 
-def _ddl_columns(table):
-    """Column names of one CREATE TABLE block in lake.sql, in declaration order."""
-    body = re.search(
-        rf"CREATE TABLE IF NOT EXISTS lake\.{re.escape(table)} \((.*?)\n\)\nUSING iceberg",
-        _DDL.read_text(),
-        re.DOTALL,
-    )
-    assert body, f"no CREATE TABLE block for lake.{table}"
-    return [m.group(1) for m in re.finditer(r"^ {4}(\w+)\s+[A-Z]", body.group(1), re.M)]
-
-
 def _gold_tuple(name):
     """A module-level tuple literal from gold.py, without importing pyspark."""
     tree = ast.parse(_GOLD.read_text())
@@ -224,15 +213,15 @@ def _gold_tuple(name):
 
 class TestColumnOrderMatchesTheDDL:
     def test_dim_instrument(self):
-        assert _gold_tuple("DIM_INSTRUMENT_COLUMNS") == tuple(_ddl_columns("gold.dim_instrument"))
+        assert _gold_tuple("DIM_INSTRUMENT_COLUMNS") == ddl.parse(_DDL)["gold.dim_instrument"].columns
 
     def test_dim_venue(self):
-        assert _gold_tuple("DIM_VENUE_COLUMNS") == tuple(_ddl_columns("gold.dim_venue"))
+        assert _gold_tuple("DIM_VENUE_COLUMNS") == ddl.parse(_DDL)["gold.dim_venue"].columns
 
     def test_every_tracked_attribute_is_a_real_column(self):
         for name, table in (("DIM_INSTRUMENT_TRACKED", "gold.dim_instrument"),
                             ("DIM_VENUE_TRACKED", "gold.dim_venue")):
-            assert set(_gold_tuple(name)) <= set(_ddl_columns(table)), name
+            assert set(_gold_tuple(name)) <= set(ddl.parse(_DDL)[table].columns), name
 
     def test_the_bookkeeping_columns_are_never_tracked(self):
         # Hashing valid_from would make every row a change, forever.

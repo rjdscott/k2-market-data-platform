@@ -1,0 +1,20 @@
+name: security-master
+domain: reference-data
+owner: reference-data-team
+purpose: >-
+  The instrument and venue dimensions, Kimball type-2, so an attribute can be read as it
+  stood at a trade's timestamp. Not rebuildable from silver: nothing else holds the history
+  (ADR-030).
+kind: source-aligned
+lifecycle: draft
+inputs:
+  - external: "config/instruments.yaml"
+    classification: public
+    description: >-
+      The instrument registry: instruments, symbols and book depth per venue.
+  - table: bronze.kraken_instrument
+outputs:
+  - gold.dim_instrument
+  - gold.dim_venue
+consumers:
+  - notebooks/k2lake.py

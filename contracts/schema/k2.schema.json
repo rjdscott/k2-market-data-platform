@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "K2 data product descriptor, domain registry and contract profile",
+  "description": "Read by k2gen validate. Each definition is applied on its own: domains to contracts/domains.yaml, product to each product.yaml, contract to each *.odcs.yaml after the ODCS schema, customProperties to that contract's customProperties folded into one object.",
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "table": {
+      "description": "An Iceberg identifier without the lake. catalog: <namespace>.<table>.",
+      "type": "string",
+      "pattern": "^[a-z]+\\.[a-z0-9_]+$"
+    },
+    "classification": {
+      "description": "Ordered public < internal < restricted. A table is at least as restricted as each of its upstreams.",
+      "enum": ["public", "internal", "restricted"]
+    },
+    "domains": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domains"],
+      "properties": {
+        "domains": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/slug"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["owner", "kind", "description"],
+            "properties": {
+              "owner": {"$ref": "#/$defs/slug"},
+              "kind": {"enum": ["source-aligned", "consumer-aligned"]},
+              "description": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "domain", "owner", "purpose", "kind", "lifecycle", "inputs", "outputs", "consumers"],
+      "properties": {
+        "name": {"$ref": "#/$defs/slug"},
+        "domain": {"$ref": "#/$defs/slug"},
+        "owner": {"$ref": "#/$defs/slug"},
+        "purpose": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["source-aligned", "consumer-aligned"]},
+        "lifecycle": {"enum": ["draft", "published", "deprecated"]},
+        "inputs": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["table"],
+                "properties": {"table": {"$ref": "#/$defs/table"}}
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["external", "classification", "description"],
+                "properties": {
+                  "external": {"type": "string", "minLength": 1},
+                  "classification": {"$ref": "#/$defs/classification"},
+                  "description": {"type": "string", "minLength": 1}
+                }
+              }
+            ]
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/table"}
+        },
+        "consumers": {
+          "description": "Known readers outside the contracts: scripts, notebooks, the ClickHouse reload. Products that read this one name it in their inputs instead.",
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "contract": {
+      "description": "K2's profile of an ODCS contract: the standard's optional fields K2 requires.",
+      "type": "object",
+      "required": ["name", "domain", "description", "team", "schema", "customProperties"],
+      "properties": {
+        "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+        "description": {"type": "object", "required": ["purpose"]},
+        "team": {"type": "object", "required": ["name"]},
+        "schema": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "physicalName", "physicalType", "authoritativeDefinitions"],
+            "properties": {
+              "physicalName": {"$ref": "#/$defs/table"},
+              "physicalType": {"const": "table"},
+              "authoritativeDefinitions": {
+                "contains": {
+                  "type": "object",
+                  "required": ["type", "url"],
+                  "properties": {
+                    "type": {"const": "implementation"},
+                    "url": {"const": "docker/lake/ddl/lake.sql"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "customProperties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer", "format", "partitioning", "sort", "classification", "entitlement", "retention", "upstreams", "schedule"],
+      "properties": {
+        "layer": {"enum": ["raw", "bronze", "silver", "gold"]},
+        "format": {"const": "iceberg"},
+        "partitioning": {
+          "description": "Iceberg partition fields in order, as lake.sql spells them: days(recv_ts), exchange.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "sort": {
+          "description": "The declared write sort order in lake.sql, in order. Empty when the table declares none.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "classification": {"$ref": "#/$defs/classification"},
+        "entitlement": {"enum": ["realtime", "delayed", "none"]},
+        "retention": {
+          "description": "Snapshot expiry, in days. Not deletion of data: no row is ever deleted (ADR-028 section 12 stays in force, ADR-032).",
+          "type": "integer",
+          "minimum": 1
+        },
+        "upstreams": {
+          "description": "What this table is computed from: tables of this product, or entries of the product's inputs.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "schedule": {
+          "description": "Cron of the job that writes the table.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

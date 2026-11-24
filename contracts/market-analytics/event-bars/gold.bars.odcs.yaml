@@ -1,0 +1,46 @@
+# Contract for lake.gold.bars. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.gold.bars
+name: gold.bars
+version: 1.0.0
+domain: market-analytics
+description:
+  purpose: >-
+    Event bars from gold.trades, one row per (exchange, canonical_symbol, bar_kind, day,
+    bar_seq). A day a new trade touches is replaced whole.
+team:
+  name: analytics-team
+schema:
+  - name: bars
+    physicalName: gold.bars
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+    quality:
+      - type: custom
+        engine: k2-maintenance
+        implementation: bars_parity
+        description: >-
+          Stored bars equal bars recomputed from gold.trades for the last full day.
+customProperties:
+  - property: layer
+    value: gold
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["exchange", "months(open_time)"]
+  - property: sort
+    value: []
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: realtime
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["gold.trades", "config/bars.yaml"]
+  - property: schedule
+    value: "1-59/5 * * * *"

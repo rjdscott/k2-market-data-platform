@@ -1,0 +1,40 @@
+# Contract for lake.gold.bbo_1s. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.gold.bbo_1s
+name: gold.bbo_1s
+version: 1.0.0
+domain: market-analytics
+description:
+  purpose: >-
+    Best bid and offer per second with mid, spread, imbalance and microprice, a SQL
+    projection of gold.book_top20.
+team:
+  name: analytics-team
+schema:
+  - name: bbo_1s
+    physicalName: gold.bbo_1s
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+customProperties:
+  - property: layer
+    value: gold
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["exchange", "days(second)"]
+  - property: sort
+    value: ["canonical_symbol", "second"]
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: realtime
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["gold.book_top20"]
+  - property: schedule
+    value: "1-59/5 * * * *"

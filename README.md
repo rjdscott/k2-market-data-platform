@@ -97,7 +97,7 @@ works, and the practices that enforce it.
 | [027](./docs/adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync | Raw keeps the deltas; the product is what research joins against |
 | [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect: reversed | A wrong call kept on the record with its outcome |
 
-All 31 ADRs: [`docs/adr/`](./docs/adr/README.md).
+All 33 ADRs: [`docs/adr/`](./docs/adr/README.md).
 
 ## Measured
 
@@ -199,6 +199,8 @@ docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds
 docker/prometheus/rules/   28 alert rules with unit tests
 schemas/avro/              raw-message, trade, book-snapshot-l2
 config/instruments.yaml    instrument registry, the single source of truth
+contracts/                 a descriptor per data product, an ODCS v3 contract per lake table, four domains
+platform/k2gen/            k2gen, the contract validator
 scripts/chaos/             failure injection, timed
 notebooks/                 DuckDB research notebooks
 docs/                      the architecture book, ADRs, runbooks, benchmarks, plans

@@ -1,0 +1,24 @@
+name: venue-books
+domain: market-capture
+owner: capture-team
+purpose: >-
+  Book frames per venue, typed, with Kraken's checksum verified by replay, and the replay's
+  per-connection state carried between runs so a run reads only its new frames.
+kind: source-aligned
+lifecycle: draft
+inputs:
+  - table: bronze.binance_depth20
+  - table: bronze.kraken_book
+  - table: bronze.kraken_instrument
+  - table: bronze.coinbase_level2
+  - external: "config/instruments.yaml"
+    classification: public
+    description: >-
+      The instrument registry: native to canonical symbol per venue.
+outputs:
+  - silver.book_binance
+  - silver.book_kraken
+  - silver.book_coinbase
+  - gold.book_state
+consumers:
+  - notebooks/k2lake.py

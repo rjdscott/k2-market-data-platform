@@ -1,0 +1,22 @@
+name: venue-trades
+domain: market-capture
+owner: capture-team
+purpose: >-
+  Trades per venue, typed and flagged for venue replay, sequence gaps and precision loss,
+  with every delivery kept and the canonical symbol taken from the instrument registry.
+kind: source-aligned
+lifecycle: draft
+inputs:
+  - table: bronze.binance_trade
+  - table: bronze.kraken_trade
+  - table: bronze.coinbase_market_trades
+  - external: "config/instruments.yaml"
+    classification: public
+    description: >-
+      The instrument registry: native to canonical symbol per venue.
+outputs:
+  - silver.trades_binance
+  - silver.trades_kraken
+  - silver.trades_coinbase
+consumers:
+  - scripts/parity_ohlcv.py

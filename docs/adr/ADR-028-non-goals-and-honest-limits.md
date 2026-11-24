@@ -310,3 +310,34 @@ are re-derived against it and this ADR gets an `Outcome` rather than an edit.
 - [`docs/research/2026-08-26-v3-requirements-clarification.md`](../research/2026-08-26-v3-requirements-clarification.md) — Q4 (SLOs), Q7 (no v2 import), Q8 (retention), Q9 (scale target)
 - [`docs/architecture/01-what-k2-is.md`](../architecture/01-what-k2-is.md), [`15-capacity-model.md`](../architecture/15-capacity-model.md), [`17-scale-out-path.md`](../architecture/17-scale-out-path.md)
 - [`docs/benchmarks/2026-08-27.md`](../benchmarks/2026-08-27.md) — every measured number quoted above, with the command per row
+
+---
+
+## Outcome (2026-11)
+
+**§ 11 is lifted for the lake's product contracts by
+[ADR-032](ADR-032-odcs-contracts-and-k2gen.md).** Not by its own trigger: no change has needed
+what `BACKWARD_TRANSITIVE` cannot express, and no drift has reached the lake past
+`tests/test_wire_format.py`. It is lifted because the governed platform plan
+([ADR-031](ADR-031-governed-self-serve-platform.md)) needs one declared source per data product
+for ownership, classification, retention and lineage, which is a different job from the
+migration framework § 11 rejected.
+
+What changed: every table in `docker/lake/ddl/lake.sql` outside `audit` has an Open Data
+Contract Standard v3 contract under `contracts/`, inside a product descriptor, and
+`k2gen validate` fails when a contract disagrees with `lake.sql` on partitioning or sort order,
+when a table has no contract, or when the rules across products break. The generator that
+emits DDL for new products follows in the next pull request of P1.
+
+What did not: `lake.sql` stays the DDL of record for every table it creates and nothing
+rewrites it. The registry's `BACKWARD_TRANSITIVE` mode, add-nullable-only evolution, the frozen
+`raw.messages` schema, `tests/test_wire_format.py` and the `/schema-change` skill are unchanged,
+and there is still no migration tool.
+
+The prediction that held: a migration tool "would not catch the failure that actually happens
+here, which is a half-migrated contract failing silently at the ingest boundary". `k2gen`
+does not catch it either. It checks contracts against the DDL, not the DDL against the data;
+that remains `tests/test_wire_format.py` and the nightly audits.
+
+**§ 12 stays in force.** A contract's `retention` is snapshot expiry in days, never deletion
+of data, and `raw.messages` is still kept forever (ADR-032).

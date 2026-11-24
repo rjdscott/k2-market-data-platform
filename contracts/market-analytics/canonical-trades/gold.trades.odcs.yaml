@@ -1,0 +1,52 @@
+# Contract for lake.gold.trades. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.gold.trades
+name: gold.trades
+version: 1.0.0
+domain: market-analytics
+description:
+  purpose: >-
+    Canonical trades: the venue_replay = false rows of silver, one to one, keyed by
+    (exchange, canonical_symbol, trade_id).
+team:
+  name: analytics-team
+schema:
+  - name: trades
+    physicalName: gold.trades
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+    quality:
+      - type: custom
+        engine: k2-maintenance
+        implementation: duplicate_identifiers
+        description: >-
+          No two rows share the identifier fields lake.sql declares.
+      - type: custom
+        engine: k2-maintenance
+        implementation: gold_parity
+        description: >-
+          Rows equal the non-replay rows of silver, per venue, at the silver snapshots gold
+          last read.
+customProperties:
+  - property: layer
+    value: gold
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["exchange", "days(exchange_ts)"]
+  - property: sort
+    value: ["canonical_symbol", "exchange_ts"]
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: realtime
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["silver.trades_binance", "silver.trades_kraken", "silver.trades_coinbase"]
+  - property: schedule
+    value: "1-59/5 * * * *"

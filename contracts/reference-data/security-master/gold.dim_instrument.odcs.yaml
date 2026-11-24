@@ -1,0 +1,40 @@
+# Contract for lake.gold.dim_instrument. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.gold.dim_instrument
+name: gold.dim_instrument
+version: 1.0.0
+domain: reference-data
+description:
+  purpose: >-
+    Security master, type-2: one row per validity interval per instrument, joined as of a
+    timestamp on (exchange, canonical_symbol).
+team:
+  name: reference-data-team
+schema:
+  - name: dim_instrument
+    physicalName: gold.dim_instrument
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+customProperties:
+  - property: layer
+    value: gold
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["exchange"]
+  - property: sort
+    value: ["canonical_symbol", "valid_from"]
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: none
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["config/instruments.yaml", "bronze.kraken_instrument"]
+  - property: schedule
+    value: "1-59/5 * * * *"
