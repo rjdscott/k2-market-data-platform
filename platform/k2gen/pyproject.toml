@@ -22,9 +22,17 @@ module-root = ""
 
 [dependency-groups]
 dev = [
+    "mypy==2.4.1",
     "pytest==9.2.0",
+    "ruff==0.17.6",
+    "types-jsonschema==4.26.0.20261006",
+    "types-pyyaml==6.0.12.20261122",
 ]
 
 [tool.ruff]
 extend = "../../ruff.toml"
 target-version = "py312"  # the repo default is py39 for the Spark image; k2gen never runs there
+
+[tool.mypy]
+strict = true
+files = ["k2gen"]

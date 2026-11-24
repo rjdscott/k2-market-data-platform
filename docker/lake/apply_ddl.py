@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-Apply docker/lake/ddl/lake.sql through the `lake` catalog. The `lake-ddl`
-one-shot compose service runs this; it is idempotent, so a re-run on a live
-warehouse is a no-op.
+Apply docker/lake/ddl/lake.sql, then each docker/lake/ddl/generated/*.sql in
+name order, through the `lake` catalog. The generated files are the DDL
+`k2gen generate` writes for contracts with inline columns (ADR-032); lake.sql
+stays the DDL of record for every table it creates. The `lake-ddl` one-shot
+compose service runs this; it is idempotent, so a re-run on a live warehouse is
+a no-op.
 
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/apply_ddl.py
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/apply_ddl.py --dry-run
@@ -22,6 +25,12 @@ from pathlib import Path
 from spark_conf import CATALOG, lake_session
 
 DDL_FILE = Path(__file__).parent / "ddl" / "lake.sql"
+GENERATED_DIR = Path(__file__).parent / "ddl" / "generated"
+
+
+def ddl_files() -> list[Path]:
+    """lake.sql first, then the generated DDL in name order. Nothing generated is fine."""
+    return [DDL_FILE, *sorted(GENERATED_DIR.glob("*.sql"))]
 
 
 def statements(sql: str) -> list[str]:
@@ -102,11 +111,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true", help="print statements, run nothing")
     ap.add_argument("--namespace-map", default="", help="raw=scratch_raw,bronze=scratch_bronze")
-    ap.add_argument("--file", default=str(DDL_FILE))
+    ap.add_argument("--file", help="apply only this file (default: lake.sql, then ddl/generated/*.sql)")
     args = ap.parse_args()
 
-    sql = remap(Path(args.file).read_text(), _parse_map(args.namespace_map))
-    stmts = statements(sql)
+    mapping = _parse_map(args.namespace_map)
+    files = [Path(args.file)] if args.file else ddl_files()
+    stmts = [s for f in files for s in statements(remap(f.read_text(), mapping))]
 
     if args.dry_run:
         for ns in namespaces(stmts):

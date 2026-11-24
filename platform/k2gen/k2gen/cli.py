@@ -1,8 +1,10 @@
 """k2gen: the data product contracts under contracts/, checked (ADR-032).
 
     uv run --project platform/k2gen k2gen validate
+    uv run --project platform/k2gen k2gen generate
+    uv run --project platform/k2gen k2gen new <domain> <name>
 
-`validate` checks, in order:
+`generate` and `new` are in k2gen/generate.py. `validate` checks, in order:
 
 1. Every file against its schema: `contracts/domains.yaml` and each
    `product.yaml` against contracts/schema/k2.schema.json, and each
@@ -12,7 +14,8 @@
    domain's owner and kind, the outputs it lists against the contracts beside it.
 3. Each contract against docker/lake/ddl/lake.sql: the table exists, and its
    partitioning and sort order are the ones declared there. Every table outside
-   `audit` has exactly one contract.
+   `audit` has exactly one contract. A contract with inline columns is a table
+   lake.sql does not create, and its partitioning and sort name its own columns.
 4. Three rules across products: a table another table reads keeps snapshots for
    at least the seven-day floor; a table is at least as restricted as anything
    it reads; and every input resolves to a declared output or a declared
@@ -23,6 +26,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import jsonschema
 import yaml
@@ -39,15 +43,15 @@ FLOOR_DAYS = 7
 RANK = {"public": 0, "internal": 1, "restricted": 2}
 
 
-def _k2(schema: dict, name: str) -> jsonschema.Draft202012Validator:
+def _k2(schema: dict[str, Any], name: str) -> jsonschema.Draft202012Validator:
     return jsonschema.Draft202012Validator({"$ref": f"#/$defs/{name}", "$defs": schema["$defs"]})
 
 
-def _schema_errors(validator, doc, where: str) -> list:
+def _schema_errors(validator: jsonschema.protocols.Validator, doc: Any, where: str) -> list[str]:
     return [f"{where}: {e.json_path}: {e.message}" for e in validator.iter_errors(doc)]
 
 
-def validate(root: Path = ROOT) -> list:
+def validate(root: Path = ROOT) -> list[str]:
     """Every problem found under `root`, as one line each. Empty means valid."""
     contracts = root / "contracts"
     k2 = json.loads((contracts / "schema" / "k2.schema.json").read_text())
@@ -59,11 +63,11 @@ def validate(root: Path = ROOT) -> list:
     # 1. schemas. The checks after this assume well-formed documents, so stop here on any.
     domains = yaml.safe_load((contracts / "domains.yaml").read_text())
     errors = _schema_errors(_k2(k2, "domains"), domains, "contracts/domains.yaml")
-    products = {}  # product directory -> descriptor
+    products: dict[Path, Any] = {}  # product directory -> descriptor
     for path in sorted(contracts.glob("*/*/product.yaml")):
         products[path.parent] = yaml.safe_load(path.read_text())
         errors += _schema_errors(_k2(k2, "product"), products[path.parent], rel(path))
-    docs = {}  # contract path -> (contract, its custom properties as one object)
+    docs: dict[Path, tuple[Any, dict[str, Any]]] = {}  # contract path -> (contract, its custom properties)
     for path in sorted(contracts.glob(f"*/*/*{SUFFIX}")):
         doc = yaml.safe_load(path.read_text())
         found = _schema_errors(odcs, doc, rel(path)) or _schema_errors(_k2(k2, "contract"), doc, rel(path))
@@ -96,7 +100,8 @@ def validate(root: Path = ROOT) -> list:
 
     # 3. lake.sql.
     lake = {t: v for t, v in ddl.parse(root / LAKE_SQL).items() if not t.startswith("audit.")}
-    home, props_of = {}, {}  # table -> product directory, table -> custom properties
+    home: dict[str, Path] = {}
+    props_of: dict[str, dict[str, Any]] = {}  # table -> its custom properties
     for path, (doc, props) in docs.items():
         where, table = rel(path), doc["schema"][0]["physicalName"]
         product = products.get(path.parent)
@@ -113,8 +118,16 @@ def validate(root: Path = ROOT) -> list:
             errors.append(f"{where}: domain and team.name must be the product's: {product['domain']}, {product['owner']}")
         if props["layer"] != table.split(".")[0]:
             errors.append(f"{where}: layer {props['layer']}, but {table} is in namespace {table.split('.')[0]}")
+        inline = doc["schema"][0].get("properties")
+        if inline:  # a new table: generate writes its DDL, lake.sql never holds it
+            if table in lake:
+                errors.append(f"{where}: {table} is created by {LAKE_SQL}, so the contract references it, not inline columns")
+            names = {c["name"] for c in inline}
+            for key in ("partitioning", "sort"):
+                errors += [f"{where}: {key} {f} reads no column the contract declares" for f in props[key] if ddl.column_of(f) not in names]
+            continue
         if table not in lake:
-            errors.append(f"{where}: {table} is not a table in {LAKE_SQL}")
+            errors.append(f"{where}: {table} is not a table in {LAKE_SQL}, and the contract declares no inline columns")
             continue
         for key in ("partitioning", "sort"):
             declared = list(getattr(lake[table], key))
@@ -133,7 +146,7 @@ def validate(root: Path = ROOT) -> list:
             elif home[table] == pdir:
                 errors.append(f"{where}: input {table} is one of its own outputs")
         readable = set(external) | set(tables) | set(product["outputs"])
-        read = set()
+        read: set[str] = set()
         for table in product["outputs"]:
             if home.get(table) != pdir:
                 continue  # reported above
@@ -155,18 +168,33 @@ def validate(root: Path = ROOT) -> list:
     return errors
 
 
-def main(argv=None) -> int:
+def main(argv: list[str] | None = None) -> int:
+    from k2gen import generate  # here, not at the top: generate.py imports this module's constants
+
     parser = argparse.ArgumentParser(prog="k2gen", description="Data product contracts for the K2 lake (ADR-032).")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("validate", help="check every descriptor and contract under contracts/")
-    parser.parse_args(argv)
+    sub.add_parser("generate", help="validate, then rewrite every generated file from contracts/")
+    new = sub.add_parser("new", help="scaffold contracts/<domain>/<name>/: a descriptor and one contract")
+    new.add_argument("domain")
+    new.add_argument("name")
+    args = parser.parse_args(argv)
 
-    errors = validate()
+    if args.command == "new":
+        for path in generate.scaffold(ROOT, args.domain, args.name):
+            print(f"k2gen new: wrote {path.relative_to(ROOT)}")
+        print("k2gen new: edit both, then `make generate` and commit what it writes")
+        return 0
+    errors = validate(ROOT)
     for line in errors:
         print(line, file=sys.stderr)
     if errors:
-        print(f"k2gen validate: {len(errors)} problem(s)", file=sys.stderr)
+        print(f"k2gen {args.command}: {len(errors)} problem(s)" + (", nothing written" if args.command == "generate" else ""), file=sys.stderr)
         return 1
+    if args.command == "generate":
+        files = generate.generate(ROOT)
+        print(f"k2gen generate: {len(files)} files, {generate.RETENTION} and under {', '.join(generate.OWNED)}")
+        return 0
     products = len(list((ROOT / "contracts").glob("*/*/product.yaml")))
     contracts = len(list((ROOT / "contracts").glob(f"*/*/*{SUFFIX}")))
     print(f"k2gen validate: {products} products, {contracts} contracts, every lake table outside audit covered")

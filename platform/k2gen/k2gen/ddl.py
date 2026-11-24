@@ -9,7 +9,8 @@ A line-oriented parse, not a SQL parser. lake.sql is written to a fixed shape:
 four-space indent, `)` and `USING iceberg` on their own lines, one
 `PARTITIONED BY (...)` line, and the sort order in a separate
 `ALTER TABLE ... WRITE ... ORDERED BY ...;`. A table written another way is not
-found, and the coverage tests in platform/k2gen/tests/ fail on it.
+found, and the coverage tests in platform/k2gen/tests/ fail on it. The DDL that
+`k2gen generate` writes for inline columns has the same shape.
 """
 
 import re
@@ -21,6 +22,7 @@ _CREATE = re.compile(
     re.M | re.S,
 )
 _COLUMN = re.compile(r"^ {4}(\w+)\s+[A-Z]", re.M)
+_COMMENT = re.compile(r"\bCOMMENT '((?:[^']|'')*)'")
 _PARTITIONED = re.compile(r"^PARTITIONED BY \((.*)\)$", re.M)
 _ORDERED = re.compile(r"^ALTER TABLE lake\.(\w+\.\w+)\s+WRITE\b[^;]*?\bORDERED BY ([^;]+);", re.M)
 # One partition field: a transform with its arguments, or a bare column.
@@ -28,13 +30,47 @@ _FIELD = re.compile(r"\w+\([^)]*\)|\w+")
 
 
 @dataclass(frozen=True)
+class Column:
+    name: str
+    type: str  # as written, NOT NULL included: "STRING NOT NULL"
+    comment: str  # "" where lake.sql gives none
+
+
+@dataclass(frozen=True)
 class Table:
-    columns: tuple
-    partitioning: tuple
-    sort: tuple
+    schema: tuple[Column, ...]
+    partitioning: tuple[str, ...]
+    sort: tuple[str, ...]
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        return tuple(c.name for c in self.schema)
 
 
-def parse(path) -> dict:
+def _columns(body: str) -> tuple[Column, ...]:
+    """One Column per definition; a definition runs from its name to the next one's."""
+    starts = list(_COLUMN.finditer(body))
+    ends = [m.start() for m in starts[1:]] + [len(body)]
+    out = []
+    for m, end in zip(starts, ends, strict=True):
+        text = body[m.end(1) : end].strip().rstrip(",")
+        comment = _COMMENT.search(text)
+        out.append(
+            Column(
+                name=m.group(1),
+                type=" ".join(text[: comment.start() if comment else len(text)].split()),
+                comment=comment.group(1).replace("''", "'") if comment else "",
+            )
+        )
+    return tuple(out)
+
+
+def column_of(field: str) -> str:
+    """The column a partition or sort field reads: days(recv_ts) -> recv_ts, bucket(16, id) -> id."""
+    return str(re.findall(r"\w+", field)[-1])
+
+
+def parse(path: Path | str) -> dict[str, Table]:
     """{"<ns>.<table>": Table} for every CREATE TABLE in the file, in file order."""
     text = Path(path).read_text()
     sort = {m.group(1): tuple(c.strip() for c in m.group(2).split(",")) for m in _ORDERED.finditer(text)}
@@ -43,7 +79,7 @@ def parse(path) -> dict:
         name, body, rest = m.groups()
         partitioned = _PARTITIONED.search(rest)
         tables[name] = Table(
-            columns=tuple(_COLUMN.findall(body)),
+            schema=_columns(body),
             partitioning=tuple(_FIELD.findall(partitioned.group(1))) if partitioned else (),
             sort=sort.get(name, ()),
         )

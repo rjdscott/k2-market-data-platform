@@ -30,7 +30,7 @@ Moving to a newer snapshot is a pull request that replaces the file, updates thi
 | `owner` | ODCS `team.name`; equal to the domain's owner in `domains.yaml` |
 | `description` | ODCS `description.purpose` |
 | `table` | ODCS `schema[0].physicalName`, the Iceberg identifier without the `lake.` catalog |
-| `schema` | ODCS `schema[0].authoritativeDefinitions`, type `implementation`, url `docker/lake/ddl/lake.sql` |
+| `schema` | for a table `lake.sql` creates, ODCS `schema[0].authoritativeDefinitions`, type `implementation`, url `docker/lake/ddl/lake.sql`; for a new table, inline columns in `schema[0].properties` (`name`, `physicalType` as Spark SQL spells it, `description`, `required`), from which `k2gen generate` writes `docker/lake/ddl/generated/<table>.sql` |
 | `quality` | ODCS `schema[0].quality`, type `custom`, engine `k2-maintenance`, the audit's check name |
 | `slo` | ODCS `slaProperties`, only where an alert enforces a stated target |
 | `layer`, `format`, `partitioning`, `sort`, `classification`, `entitlement`, `retention`, `upstreams`, `schedule` | ODCS `customProperties`, validated by `k2.schema.json#/$defs/customProperties` |

@@ -4,7 +4,7 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 
 | # | Chapter | Read it for |
 |---|---|---|
-| 00 | [Start here](00-start-here.md) | how the book is organised, three reading paths |
+| 00 | [Start here](00-start-here.md) | how the book is organised, four reading paths |
 | 01 | [What K2 is](01-what-k2-is.md) | purpose, non-goals, principles, what it is deliberately wrong for |
 | 02 | [Market data concepts](02-market-data-concepts.md) | books, sequences, checksums, clocks, fixed point, symbols, candles, BBO, completeness |
 | 03 | [Data engineering concepts](03-data-engineering-concepts.md) | exactly-once, idempotency, snapshots, layers, lineage, evolution, partitioning, compaction, audits |
@@ -22,6 +22,7 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 | 15 | [Capacity model](15-capacity-model.md) | predicted vs measured bytes/day, CPU, disk runway |
 | 16 | [Failure modes](16-failure-modes.md) | FMEA with detection, blast radius, recovery, proof |
 | 17 | [Scale-out path](17-scale-out-path.md) | HA, DR and cost on AWS at TB/PB, designed, not exercised |
+| 18 | [Data mesh](18-data-mesh.md) | four domains, products and their contracts, what `k2gen` checks and writes |
 | A1 | [Technology stack](A1-technology-stack.md) | versions and the ADR behind each |
 
 Decisions live in [`../adr/`](../adr/README.md),

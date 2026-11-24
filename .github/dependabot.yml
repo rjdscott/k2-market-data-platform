@@ -53,15 +53,17 @@ updates:
       prefix: "build"
       include: "scope"
 
-  # notebooks/ is live; legacy/v1 is archived and runs nowhere (SECURITY.md).
-  # Limit 0 switches off version-update pull requests for both. It does not
-  # switch off security updates: 26 single-advisory pull requests arrived
-  # against these two lockfiles by 2026-11-24. The group folds security fixes
-  # into one pull request per directory. Alerts stay visible in the Security
-  # tab either way; the legacy residue is recorded in legacy/v1/README.md.
+  # notebooks/ and platform/k2gen/ are live; legacy/v1 is archived and runs
+  # nowhere (SECURITY.md). Limit 0 switches off version-update pull requests for
+  # all three. It does not switch off security updates: 26 single-advisory pull
+  # requests arrived against notebooks/ and legacy/v1 by 2026-11-24. The group
+  # folds security fixes into one pull request per directory. Alerts stay
+  # visible in the Security tab either way; the legacy residue is recorded in
+  # legacy/v1/README.md.
   - package-ecosystem: "uv"
     directories:
       - "/notebooks"
+      - "/platform/k2gen"
       - "/legacy/v1"
     schedule:
       interval: "monthly"
