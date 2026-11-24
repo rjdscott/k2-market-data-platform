@@ -103,6 +103,8 @@ considered before committing*.
   + tests, in one PR. Use `/schema-change`; a half-migrated contract fails
   silently at the ingest boundary, not at build time. `tests/test_wire_format.py`
   is that rule made executable — run it.
+  A lake table's partitioning or sort also lives in its contract under
+  `contracts/`: `make test-k2gen` fails until both move, then `make generate`.
 - **Resource-limit changes** update the ADR-010 Outcome section *and* the
   summary comment in `docker-compose.yml`. The 16 CPU / 40 GB single-host
   budget is a stated constraint of the project, not an accident.

@@ -45,7 +45,8 @@ Work top to bottom; do not skip a row because "nothing reads it yet".
    ```
    Then update the stage-2 select list in `docker/lake/ingest.py` so the new
    field is actually written, and `tests/test_wire_format.py`, which parses
-   `lake.sql` and asserts the two agree.
+   `lake.sql` and asserts the two agree. A moved partition spec or sort order also
+   moves in the table's contract under `contracts/`: `make test-k2gen` fails until it does, then `make generate`.
 4. **ClickHouse DDL** — the served `gold` tier, two files, both idempotent
    (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE … ADD COLUMN IF NOT EXISTS`);
    they are mounted at `/docker-entrypoint-initdb.d` and run on a fresh
