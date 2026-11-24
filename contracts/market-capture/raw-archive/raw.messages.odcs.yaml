@@ -1,0 +1,60 @@
+# Contract for lake.raw.messages. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.raw.messages
+name: raw.messages
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    Every Kafka record from the v3 topics, with the Kafka value byte for byte including its
+    Confluent header. The exactly-once position is held in the snapshot summary (ADR-022).
+team:
+  name: capture-team
+schema:
+  - name: messages
+    physicalName: raw.messages
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+    quality:
+      - type: custom
+        engine: k2-maintenance
+        implementation: offset_continuity
+        description: >-
+          Every (topic, partition) holds an unbroken offset run, net of ranges a data-loss
+          repair recorded.
+slaProperties:
+  - property: latency
+    value: 15
+    unit: min
+    description: >-
+      The newest kafka_ts in the table is under 15 minutes old. LakeIngestLagHigh
+      fires past it (docker/prometheus/rules/lake-alerts.yml).
+  - property: freshness
+    value: 30
+    unit: min
+    description: >-
+      The table takes a commit at least every 30 minutes. LakeIngestFailed fires
+      past it (docker/prometheus/rules/lake-alerts.yml).
+customProperties:
+  - property: layer
+    value: raw
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["days(kafka_ts)", "topic"]
+  - property: sort
+    value: ["topic", "partition", "offset"]
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: realtime
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["redpanda:market.crypto.v3"]
+  - property: schedule
+    value: "1-59/5 * * * *"

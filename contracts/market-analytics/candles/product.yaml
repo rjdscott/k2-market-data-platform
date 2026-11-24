@@ -1,0 +1,19 @@
+name: candles
+domain: market-analytics
+owner: analytics-team
+purpose: >-
+  OHLCV candles at 1m, 5m, 1h and 1d from gold.trades, recomputed and replaced when a late
+  trade lands in a bucket. Open and close follow the total order (exchange_ts, recv_ts_ns,
+  trade_seq).
+kind: consumer-aligned
+lifecycle: draft
+inputs:
+  - table: gold.trades
+outputs:
+  - gold.ohlcv_1m
+  - gold.ohlcv_5m
+  - gold.ohlcv_1h
+  - gold.ohlcv_1d
+consumers:
+  - ClickHouse gold reload, docs/runbooks/clickhouse-rebuild-from-lake.md
+  - scripts/parity_ohlcv.py

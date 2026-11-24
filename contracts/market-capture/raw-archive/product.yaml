@@ -1,0 +1,21 @@
+name: raw-archive
+domain: market-capture
+owner: capture-team
+purpose: >-
+  The system of record: every Kafka record from the nine v3 topics, byte for byte, with its
+  topic, partition and offset. Every other lake table is a function of it, and no row is
+  ever deleted (ADR-021).
+kind: source-aligned
+lifecycle: draft
+inputs:
+  - external: "redpanda:market.crypto.v3"
+    classification: internal
+    description: >-
+      The nine topics market.crypto.v3.{raw,trades,book}.{binance,kraken,coinbase}, written
+      by services/capture-rust.
+outputs:
+  - raw.messages
+consumers:
+  - scripts/replay_export.py
+  - scripts/lake-verify.sh
+  - docker/lake/metrics.py

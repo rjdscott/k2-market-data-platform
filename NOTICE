@@ -30,6 +30,16 @@ Earlier commits in this repository's history contain recorded venue frames that
 have since been replaced by the synthetic files above. History is not rewritten
 (docs/adr/ADR-029-research-production-parity-contract.md, Outcome 2026-11).
 
+Third-party schema files
+========================
+
+contracts/schema/odcs-json-schema-v3.2.0-20261117.json is the JSON Schema of the
+Open Data Contract Standard v3.2.0, copyright The Bitol Contributors, from
+https://github.com/bitol-io/open-data-contract-standard, vendored unmodified
+under the Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0). The
+MIT licence above does not cover it. Source commit and sha256 are in
+contracts/schema/README.md.
+
 Third-party reference values in code
 ====================================
 

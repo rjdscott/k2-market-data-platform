@@ -1,0 +1,39 @@
+# Contract for lake.gold.dim_venue. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.gold.dim_venue
+name: gold.dim_venue
+version: 1.0.0
+domain: reference-data
+description:
+  purpose: >-
+    Venue dimension, type-2: one row per validity interval per venue.
+team:
+  name: reference-data-team
+schema:
+  - name: dim_venue
+    physicalName: gold.dim_venue
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+customProperties:
+  - property: layer
+    value: gold
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["exchange"]
+  - property: sort
+    value: []
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: none
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["config/instruments.yaml"]
+  - property: schedule
+    value: "1-59/5 * * * *"

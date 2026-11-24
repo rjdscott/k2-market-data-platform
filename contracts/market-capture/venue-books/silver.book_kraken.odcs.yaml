@@ -1,0 +1,57 @@
+# Contract for lake.silver.book_kraken. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.silver.book_kraken
+name: silver.book_kraken
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    Kraken book frames typed, each carrying the verdict of the checksum replayed against the
+    venue's.
+team:
+  name: capture-team
+schema:
+  - name: book_kraken
+    physicalName: silver.book_kraken
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+    quality:
+      - type: custom
+        engine: k2-maintenance
+        implementation: duplicate_identifiers
+        description: >-
+          No two rows share the identifier fields lake.sql declares.
+      - type: custom
+        engine: k2-maintenance
+        implementation: silver_parity
+        description: >-
+          Rows equal the frames or events of the bronze snapshot this table last read.
+      - type: custom
+        engine: k2-maintenance
+        implementation: kraken_checksum
+        description: >-
+          Frames whose replayed book did not hash to the venue checksum, net of acknowledged
+          windows. Zero passes.
+customProperties:
+  - property: layer
+    value: silver
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["days(recv_ts)"]
+  - property: sort
+    value: ["canonical_symbol", "recv_ts_ns"]
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: realtime
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["bronze.kraken_book", "bronze.kraken_instrument", "config/instruments.yaml"]
+  - property: schedule
+    value: "1-59/5 * * * *"

@@ -1,0 +1,19 @@
+name: book-snapshots
+domain: market-analytics
+owner: analytics-team
+purpose: >-
+  The book at the end of each second, top 20 per side, every venue in one schema, and the
+  best bid and offer with spread, imbalance and microprice projected from it (ADR-027).
+kind: consumer-aligned
+lifecycle: draft
+inputs:
+  - table: silver.book_binance
+  - table: silver.book_kraken
+  - table: silver.book_coinbase
+  - table: gold.book_state
+outputs:
+  - gold.book_top20
+  - gold.bbo_1s
+consumers:
+  - ClickHouse gold reload, docs/runbooks/clickhouse-rebuild-from-lake.md
+  - notebooks/k2lake.py

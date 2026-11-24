@@ -1,0 +1,47 @@
+# Contract for lake.gold.ohlcv_1m. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.gold.ohlcv_1m
+name: gold.ohlcv_1m
+version: 1.0.0
+domain: market-analytics
+description:
+  purpose: >-
+    OHLCV 1m candles from gold.trades, one row per (exchange, canonical_symbol, bucket),
+    replaced when a late trade lands in the bucket.
+team:
+  name: analytics-team
+schema:
+  - name: ohlcv_1m
+    physicalName: gold.ohlcv_1m
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+    quality:
+      - type: custom
+        engine: k2-maintenance
+        implementation: ohlcv_parity
+        description: >-
+          Stored candles equal candles recomputed from gold.trades for the last full day, at
+          tolerance zero.
+customProperties:
+  - property: layer
+    value: gold
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["exchange", "months(window_start)"]
+  - property: sort
+    value: []
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: realtime
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["gold.trades"]
+  - property: schedule
+    value: "1-59/5 * * * *"

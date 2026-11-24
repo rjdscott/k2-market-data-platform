@@ -1,0 +1,19 @@
+name: event-bars
+domain: market-analytics
+owner: analytics-team
+purpose: >-
+  Tick, volume and dollar bars at the one canonical threshold per symbol, restarting at each
+  UTC day. Any other threshold is a query over gold.trades, not a second table (ADR-029).
+kind: consumer-aligned
+lifecycle: draft
+inputs:
+  - table: gold.trades
+  - external: "config/bars.yaml"
+    classification: public
+    description: >-
+      The canonical bar threshold per symbol and bar kind.
+outputs:
+  - gold.bars
+consumers:
+  - ClickHouse gold reload, docs/runbooks/clickhouse-rebuild-from-lake.md
+  - scripts/parity_bars.py

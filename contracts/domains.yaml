@@ -1,0 +1,28 @@
+# The data mesh domains (ADR-033). Each owns contracts/<domain>/ and is named in
+# .github/CODEOWNERS. A domain with no product yet has no directory: it is
+# declared here so its owner exists before its first contract does.
+domains:
+  market-capture:
+    owner: capture-team
+    kind: source-aligned
+    description: >-
+      What the venues sent, archived verbatim and typed per venue: raw.messages,
+      bronze and silver per venue, and the book replay state.
+  reference-data:
+    owner: reference-data-team
+    kind: source-aligned
+    description: >-
+      The security master: instrument and venue dimensions, type-2, from the
+      instrument registry and the attributes a venue publishes.
+  fx-reference:
+    owner: fx-reference-team
+    kind: source-aligned
+    description: >-
+      Foreign exchange reference rates as their publisher released them. Declared
+      in phase P1, no product until phase P4 of the governed self-serve platform plan.
+  market-analytics:
+    owner: analytics-team
+    kind: consumer-aligned
+    description: >-
+      Cross-venue products a researcher reads first: canonical trades, candles,
+      event bars and the 1 Hz book.

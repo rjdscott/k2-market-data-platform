@@ -1,0 +1,41 @@
+# Contract for lake.gold.book_state. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.gold.book_state
+name: gold.book_state
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    The book replay's carry-over per venue, symbol and connection: the book after the last
+    frame processed and the last second emitted. Overwritten each run. Operational state,
+    not a research product.
+team:
+  name: capture-team
+schema:
+  - name: book_state
+    physicalName: gold.book_state
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+customProperties:
+  - property: layer
+    value: gold
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["exchange"]
+  - property: sort
+    value: []
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: realtime
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: ["silver.book_binance", "silver.book_kraken", "silver.book_coinbase"]
+  - property: schedule
+    value: "1-59/5 * * * *"
