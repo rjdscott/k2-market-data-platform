@@ -98,10 +98,10 @@ with headroom rather than to tune.
 
 ### Retention is not partitioning, but it interacts
 
-`raw.*` topics carry 48 h *and* a 512 MiB-per-partition byte cap (`12 × 3 × 512 MiB ≈
-18 GiB`, inside a 20 GB budget); `trades.*` and `book.*` carry 7 d and no byte cap. The
+`raw.*` topics carry 48 h *and* a 2 GiB-per-partition byte cap (`12 × 3 × 2 GiB =
+72 GiB` ceiling; raised from 512 MiB on 2026-11-25); `trades.*` and `book.*` carry 7 d and no byte cap. The
 arithmetic and the reasoning are in `docker/redpanda/init.sh`. **The byte cap binds
-first**: measured 7.0 h on `raw.kraken/0` on 2026-08-26
+first**: measured 7.0 h on `raw.kraken/0` on 2026-08-26, at the old 512 MiB cap
 ([capacity model §4d](15-capacity-model.md#4d-retention--disk)), not 48 h, because keyed
 partitions are not evenly loaded. It matters to partitioning because the byte cap is
 **per partition**: raising the partition count raises the disk floor proportionally.

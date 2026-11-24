@@ -123,8 +123,26 @@ V3_PREFIX="${K2_V3_PREFIX:-market.crypto.v3}"
 #
 # What it cost to learn: 1,168,954 records evicted unread from that partition on
 # 2026-08-26, recorded as an offset_gap row in lake.audit.checks.
+#
+# RAISED 2026-11-25 to 2 GiB per partition (2147483648). The "512 MiB stands"
+# reasoning above held while every stall was shorter than the window. On
+# 2026-11-24 an orchestrator fault stalled the ingest for 7 h and partition 0
+# of raw.kraken lost 6,351,400 records. The catch-up is bounded at 200,000
+# offsets per partition per run, so while the queued maintenance runs held the
+# writer lock for another hour the unread head sat at the log start and a
+# further 1,386,717 records were evicted. Both are offset_gap rows in
+# lake.audit.checks.
+#
+# Why 2 GiB: it is four times the window on the busiest partition, and it is
+# bounded. Measured on the data volume the same day with the 512 MiB cap in
+# force: the three raw topics held 6.4 GB, three partitions were at the cap
+# and the rest under it. The ceiling is 2 GiB x 12 x 3 = 72 GiB, against 169 GB
+# free on the Docker disk; the expected steady figure is far lower because
+# 48 h binds first on every partition but the few busiest. This replaces the
+# 20 GB slice in the arithmetic above. Revisit when the redpanda-data volume
+# passes 40 GB, or when a partition next evicts unread records.
 RAW_RETENTION_MS=172800000
-RAW_RETENTION_BYTES=536870912
+RAW_RETENTION_BYTES=2147483648
 RAW_MAX_MESSAGE_BYTES=8388608   # largest measured frame 5,195,904 B (S5); agrees with sink.rs MESSAGE_MAX_BYTES
 
 # trades.*/book.* 7 d = 604800000 ms. These are derived and rebuildable from

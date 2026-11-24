@@ -354,6 +354,8 @@ anyway so that a deeper or faster book stays recoverable by replay.
 >
 > It cost 1,168,954 records on 2026-08-26 to learn this, once, on partition 0, that
 > incident and its repair are in the same runbook section.
+>
+> *2026-11-25:* raised to 2 GiB per partition after a second eviction; see `docker/redpanda/init.sh`.
 
 ---
 

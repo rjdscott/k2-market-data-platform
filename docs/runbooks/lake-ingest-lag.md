@@ -34,7 +34,7 @@ range a punctual one would have
 freshness, not correctness.
 
 **The deadline is broker retention, and it is the number to hold in your head:** raw topics
-keep **48 h** and a **512 MiB-per-partition** byte cap (`docker/redpanda/init.sh`), whichever
+keep **48 h** and a **2 GiB-per-partition** byte cap (`docker/redpanda/init.sh`), whichever
 binds first, an open question until the Phase D burn-in measures it. Past that, unread
 records are evicted and are gone permanently; public WebSocket feeds do not replay. So lag
 is a countdown, and the only question that matters while triaging is *how much of the 48 h
@@ -401,6 +401,8 @@ hottest partition that is ~700 k on that partition, and the topic gauge sums twe
 them. Two cycles, because one is a slow run and two is a trend. That is the trigger; below
 it, a rising backlog is §1, not a retention question.
 
+*2026-11-25:* raised to 2 GiB per partition after a second eviction; see `docker/redpanda/init.sh`.
+
 This scenario is deliberately not in `make chaos`: inducing it means waiting out real
 retention or destroying a topic, and both prove something other than the fault.
 
@@ -566,7 +568,7 @@ revisiting it is in §3.
 - [lake-recovery.md](./lake-recovery.md), a killed run, Lakekeeper down, MinIO down
 - [lake-audit-failed.md](./lake-audit-failed.md), when the continuity audit finds the hole instead of the ingest job
 - [`../architecture/14-partitioning-strategy.md`](../architecture/14-partitioning-strategy.md), target file sizes and the sort-order pruning that §4 protects
-- [`docker/redpanda/init.sh`](../../docker/redpanda/init.sh), the 48 h / 512 MiB retention arithmetic and why it is deliberately unresolved
+- [`docker/redpanda/init.sh`](../../docker/redpanda/init.sh), the 48 h / 2 GiB retention arithmetic and why it is deliberately unresolved
 
 ---
 
