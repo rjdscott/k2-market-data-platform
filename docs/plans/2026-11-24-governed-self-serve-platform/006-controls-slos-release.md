@@ -27,7 +27,9 @@
 - Readiness scorecard, per product, from the same evidence: descriptor valid, owner set,
   classification set, every column described, quality rules present, SLO declared (gold and
   marts), lineage seen, at least one access point declared and passing. `k2gen` writes it to
-  the product page.
+  the product page, beside a "Quality and known limitations" section generated from
+  `governance.dq_results` and the contract: recent failures are listed with their dates, not
+  only counted.
 - Lifecycle gate in CI: a descriptor may say `published` only when every scorecard item that
   can be checked offline passes. Items that need the stack are checked by the evidence DAG,
   and a published product failing one raises an alert. Existing products start as

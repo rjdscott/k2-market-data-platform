@@ -29,6 +29,9 @@ Umbrella decision: [ADR-031](../../adr/ADR-031-governed-self-serve-platform.md).
   storage credentials per table): a separate plan. This plan declares every access point,
   enforces entitlements on Trino, gives consumers a read-only storage key, and says plainly
   what is not yet enforced. ADR-039 records the target.
+- Venue-published daily bars as an independent product and a reconciliation of captured
+  bars against them: [a follow-on plan](../2026-11-24-venue-reference-bars/README.md),
+  started after P4.
 - A REST data product API. ADR-028 §6 stays in force for an API; this plan lifts it only for
   SQL serving through Trino.
 
