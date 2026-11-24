@@ -367,7 +367,8 @@ Then `/release-check` on a fresh clone. With a 50 GB engine:
 | Trino Iceberg REST connector against Lakekeeper: warehouse name, views, DuckDB reading a Trino-written table | First task of P3 | Delayed product as a scheduled dbt table; pin an older Trino |
 | MinIO object locking on the landing bucket behaves as the S3 feature it stands in for | P4: create the bucket locked, try to overwrite | Versioning without a lock, with the hash in the object key as the guard |
 | An existing validator covers the ODCS v3 schema, so `k2gen` need not carry its own | P1: validate one contract with the standard's published JSON Schema | `k2gen` vendors that schema file and validates with it directly |
-| The implied stablecoin basis is noisy across venues on thin days | P4: compute it over the existing history, look at the spread | Widen the minimum asset count; fall back to the flagged peg |
+| The close-ratio basis estimator holds on the lake's own bars as it did on public candles (median error about one basis point) | P4: compare with a directly traded USDT/USD over the lake's history | Restrict to the most liquid assets; fall back to the flagged peg |
+| Decimal typing differs across Trino versions: division and multiplication scales | P3: pin the version, `typeof` on a cross and a product | Cast explicitly at every arithmetic step |
 | The newest Airflow 3 release is weeks old; cosmos and the OpenLineage provider may trail it | P2: pin the newest release cosmos supports outside beta | Pin one minor back |
 | dbt and Airflow dependencies clash in one image | P3 | Run dbt in its own container through `docker exec`, as Spark is |
 | `quote_volume` precision differs between Spark and Trino decimals | P3: `typeof` on both sides | Leave it out of the compared columns and say so |
