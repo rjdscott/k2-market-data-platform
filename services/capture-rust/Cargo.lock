@@ -2123,9 +2123,9 @@ dependencies = [
 
 [[package]]
 name = "schema_registry_converter"
-version = "5.0.0"
+version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b676292e1f89f166eae0de740a51c6f9718581cf97ee621781a31a93f490f3d"
+checksum = "f49a1bb385b8c10df239624527d813e01209a230d19ea2c85a9e249a7444b1ec"
 dependencies = [
  "apache-avro",
  "byteorder",
@@ -2134,7 +2134,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "tokio",
 ]
 
 [[package]]
