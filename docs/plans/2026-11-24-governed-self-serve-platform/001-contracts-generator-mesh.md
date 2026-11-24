@@ -88,7 +88,7 @@ make test-k2gen
 make generate && test -z "$(git status --porcelain)"
 make new-product DOMAIN=market-analytics NAME=example
 uv run --project platform/k2gen k2gen validate
-git clean -fd contracts/market-analytics/example.yaml
+rm -r contracts/market-analytics/example
 make lint && make gates
 ```
 

@@ -26,10 +26,15 @@
 - `docs/compliance/README.md` describes the model.
 - Readiness scorecard, per product, from the same evidence: descriptor valid, owner set,
   classification set, every column described, quality rules present, SLO declared (gold and
-  marts), lineage seen, at least one access point declared and passing. `k2gen` writes it to
-  the product page, beside a "Quality and known limitations" section generated from
-  `governance.dq_results` and the contract: recent failures are listed with their dates, not
-  only counted.
+  marts), lineage seen, at least one access point declared and passing. `k2gen` writes the
+  items it can check offline to the product page, beside a "Quality and known limitations"
+  section taken from the contract: what is checked, the limits that apply, and the query that
+  returns the live record. Pages are generated and identical on every run, so they carry no
+  live results.
+- Live quality results live on the platform: `governance.dq_results` through Trino and the
+  notebook helper, a Grafana dashboard in the default stack showing status by product and
+  day, and OpenMetadata under the `governance` profile, where each result attaches to the
+  table it concerns.
 - Lifecycle gate in CI: a descriptor may say `published` only when every scorecard item that
   can be checked offline passes. Items that need the stack are checked by the evidence DAG,
   and a published product failing one raises an alert. Existing products start as
@@ -39,7 +44,8 @@
 
 - A `/benchmark-report` over a continuous window of at least 24 h under Airflow comes first.
   SLO targets cite it.
-- SLOs for consumer-facing products only: `gold` and `marts`. Source-aligned tables are
+- SLOs for consumer-facing products (`gold` and `marts`) and a freshness SLO for each
+  file-source product, which no existing alert covers. Streaming source-aligned tables are
   covered by the existing lake alerts.
 - A completeness gauge added to `docker/lake/metrics.py` from the offset-gap and audit
   summaries it already reads. Freshness uses the existing last-commit gauge.

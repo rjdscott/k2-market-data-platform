@@ -1,84 +1,111 @@
 # Phase V1: reconciliation and the day-level trust signal
 
-**Depends on:** V0; P3 and P6 of [the governed self-serve platform plan](../2026-11-24-governed-self-serve-platform/README.md) (dbt, quality results, the scorecard)
-**Decision it implements:** the ADR from V0, which this phase completes with measured tolerances.
-**Delivers:** a daily comparison of K2's captured bars with each venue's own, tolerances set from a measured baseline, an alert when a day breaks them, and a per-day status that travels with the captured products so a user of granular data can see whether that day can be trusted.
-**Exit:** the reconciliation product is in the catalog with owner, contract, lineage from both inputs, and a page; the baseline over every captured day is published as a benchmark; `make reconcile-bars` passes on a clean day; a day from which trades were deliberately removed in a scratch copy is flagged with the right status; the status is visible on the product page, in quality results and through the notebook helper.
+**Depends on:** V0; P3 and P6 of [the governed self-serve platform plan](../2026-11-24-governed-self-serve-platform/README.md) (dbt, quality results, the scorecard, the Grafana quality dashboard)
+**Decision it implements:** ADR-043, which this phase completes with the comparison rules as measured.
+**Delivers:** a daily comparison of K2's captured bars with each venue's own, published on the platform as a product; a status for every captured day that says what kind of day it was; an alert when a fully covered day disagrees; and that status surfaced where people already work.
+**Exit:** the reconciliation product is in the catalog with owner, contract and lineage from both inputs; on a scratch copy of a fully covered day, removing one trade is reported as a count breach; a day on which capture was stopped is reported as partial and raises no alert; today's unfinished day is reported as pending; `delayed_reader` can read the quality view; no result of any comparison is in the repository.
+
+## What can and cannot be compared
+
+| Venue | Compared exactly | Not comparable | Evidence used instead |
+|---|---|---|---|
+| Binance | open, high, low, close, base volume, quote volume, trade count | | |
+| Kraken | open, high, low, close, base volume, trade count | quote volume (not published) | |
+| Coinbase | high and low, one-sided: a captured high below the venue's, or a captured low above it, means a trade was missed | open, close, volume (its candle is not the sum of its own trades), trade count (not published) | trade-id gaps from the lake's own audit |
+
+Tolerance is zero wherever a field is compared. A tolerance wide enough to absorb a venue's
+noise is also wide enough to hide a capture gap: the gaps K2 has actually recorded were a
+few dozen trades in a day of millions. These rules are confirmed or corrected by the first
+task below, and live in one place, the `bar_reconciliation` contract.
+
+The lake's own gold bars are what is compared. ClickHouse candles are covered through the
+existing three-way parity check, and the product page says so.
 
 ## Scope
 
-**Pull request 1: the comparison and the baseline**
+**Pull request 1: coverage, the comparison, the rules as measured**
 
-- dbt model `bar_reconciliation_daily`, in `marts`, grain exchange, symbol, day. A full outer
-  join of `gold.ohlcv_1d` and `silver.venue_ohlcv_1d`, the only place the two paths meet.
-  Per field: the captured value, the venue's value, the difference (absolute for prices in
-  1e-8 units, relative for volume and trade count). Only fields the venue publishes are
-  compared: all six for Binance; no quote volume for Kraken; price and base volume only for
-  Coinbase.
-- `status`, one per row: `match`, `within_tolerance`, `price_mismatch`, `volume_breach`,
-  `count_breach`, `missing_captured`, `missing_reference`, `not_comparable`.
-- First task before any threshold exists: run the comparison over every captured day and
-  publish the distribution of differences per venue and field through `/benchmark-report`.
-  The questions it answers are open today: whether a bar rebuilt from the public trade stream
-  equals the venue's candle exactly when nothing was missed, and how often a venue's own
-  figure is the odd one.
-- Tolerances are then written into the `venue_bars` and `gold.ohlcv_1d` contracts as quality
-  rules, per venue and field, each citing the benchmark. Starting expectation, to be
-  confirmed or replaced by the measurement: prices exact; volume and trade count within 0.1
-  percent.
-- dbt unit tests with hand-built rows for every status, including a venue that does not
-  publish a field.
+- First task: per-day capture coverage. For each exchange, symbol and day, the share of the
+  day covered by a live capture connection, from the connection spans the bronze trade
+  tables already carry and the gap rows in `audit.checks`; plus that day's sequence gaps and
+  trade ids never received, the same figures `k2lake.completeness()` computes. Built as a dbt
+  model, `captured_day_coverage`, with unit tests.
+- Second task: run the comparison over every fully covered captured day and look at the
+  result on the platform before any rule is fixed. The script and its query are committed;
+  the figures are not. ADR-043 records what was found in words and names the query.
+- dbt model `bar_reconciliation_daily`, in `marts`, grain exchange, symbol, day. It joins
+  `gold.ohlcv_1d`, `silver.venue_ohlcv_1d` and coverage, bounded per symbol to the days from
+  its first captured day to the last completed day. It is the only place the two paths meet.
+  - Per field: captured value, venue value, signed difference, and a field status (`equal`,
+    `differs`, `not_published`, `not_comparable`). The sign matters: a captured high below
+    the venue's is a missed extreme; above it is a trade outside the venue's day.
+  - Per row: `coverage`, the gap counts, the `gold.ohlcv_1d` snapshot id that was read, and
+    a day state:
+    - `pending`: the day is not closed, or the ingest has not yet passed its end;
+    - `reference_unavailable`: the venue's bar has not landed;
+    - `partial_capture`: coverage below 100 percent. Expected on a stack that was off;
+    - `complete`: full coverage, no sequence gap, no missing trade id, every comparable
+      field equal;
+    - `aggregates_agree`: every comparable field equal, but the gap evidence is incomplete
+      (for example the first day after a long stop);
+    - `breach`: full coverage and a comparable field differs.
+- When it runs: after `lake_maintenance`, from 03:30 UTC, for days whose end the ingest has
+  passed by thirty minutes. A bar that changes later is evaluated again, and the latest
+  evaluation is the status.
+- dbt unit tests with hand-built rows for every field status and every day state, including
+  a venue that does not publish a field and a Coinbase day.
 
-**Pull request 2: reconciliation in the catalog**
+**Pull request 2: reconciliation as a product, in the catalog**
 
-- Product `contracts/market-analytics/bar_reconciliation/`: a descriptor and two output
-  contracts, so the comparison is discoverable, owned and versioned like any product.
-  - `bar_reconciliation_daily`: the full comparison, venue values included. Classification
-    `internal`, inherited from `venue_bars`.
-  - `captured_day_quality`: status and the size of each difference per exchange, symbol and
-    day, with no venue values in it. Classification `public`, readable by every role.
-- That second output is less restricted than its input, which the generator rule from the
-  first plan forbids. The rule gains one explicit exception: a contract may declare
-  `declassified_from` with a written justification, and `k2gen validate` accepts it only when
-  the output's columns are on an allow-list of non-source fields (keys, statuses, relative
-  differences). The justification is shown on the product page, and the change is reviewed
-  by the owners of the input through `CODEOWNERS`.
-- Generated pages:
-  - the reconciliation product's own page: what is compared for each venue, what is not
-    comparable and why, the tolerances and the benchmark they came from;
-  - every captured product's page gains a "Quality and known limitations" section: days
-    checked, days matched, each breach with its date and size, and the limits that apply
-    (Coinbase publishes no trade count; Kraken history starts 720 days back). Breaches are
-    listed, not summarised away.
-- With the `governance` profile up, the same facts reach OpenMetadata: the product under its
-  domain, lineage from `gold.ohlcv_1d` and `silver.venue_ohlcv_1d`, and each day's result as
-  a quality test result on the captured table it concerns.
-- `make access-verify` covers both outputs; `delayed_reader` can read `captured_day_quality`
-  and cannot read `bar_reconciliation_daily`, asserted in `scripts/entitlements-verify.sh`.
+- Product `contracts/market-analytics/bar_reconciliation/`: descriptor and two outputs.
+  - `bar_reconciliation_daily`: the full comparison.
+  - `captured_day_quality`: exchange, symbol, day, day state, coverage, gap counts, and each
+    field's status and signed difference. This is the answer to "can I trust the granular
+    data for this day".
+- Both are classified `internal` with entitlement `delayed`, so both reader roles can read
+  them through Trino, and the notebook helper and the open catalog endpoint reach them like
+  any table. No exception to the generator's classification rule is needed.
+- The generated product page is static: what is compared for each venue, what is not and
+  why, the day states and what each means, and the query that returns the live record. It
+  holds no results.
+- Every captured product's page (`gold.trades`, the `gold.ohlcv_*` tables, `gold.bars`)
+  gains, in its "Quality and known limitations" section, the same static facts and the
+  query for its own record.
+- With the `governance` profile up: the product under its domain in OpenMetadata, lineage
+  from `gold.ohlcv_1d` and `silver.venue_ohlcv_1d`, and each day's result as a quality
+  result on the captured table it concerns.
+- `make access-verify` covers both outputs.
 
-**Pull request 3: what a breach does**
+**Pull request 3: results, alert and dashboard**
 
-- Each day's comparison is a row in `governance.dq_results`.
-- A breach lowers that day's completeness for the captured product, which its SLO (P6 of the
-  first plan) already measures.
-- Alert `CapturedBarDisagreesWithVenue`, with a promtool test and a runbook via `/runbook`:
-  how to tell a capture gap from a venue restatement, using the trade-id holes and sequence
-  gaps the lake already audits.
-- `make reconcile-bars`: runs the comparison for the last completed day and exits non-zero on
-  a breach. It joins `/release-check`, not `make gates`, because it needs the network.
-
-**Pull request 4: the trust signal in the tools people use**
-
-- `captured_day_quality` is the answer to "can I trust the granular data for this day".
-- `notebooks/k2lake.py`: `trades()` and `completeness()` print a one-line warning when the
-  requested range includes a day that did not reconcile, and `day_quality()` returns the
-  view. A test covers a clean range and a flagged one.
+- After each `dbt_marts` run, a Spark task appends one `audit.checks` row per evaluated
+  exchange, symbol and day (`job = 'reconcile'`) and writes the count of breaches into the
+  snapshot summary. `governance.dq_results`, the exporter and the alert read what they
+  already read; nothing new learns to query a mart.
+- Alert `CapturedBarDisagreesWithVenue`, on a breach only, never on a partial or pending
+  day, with a promtool test and a runbook via `/runbook`: how to tell a capture gap from a
+  venue restatement, using the trade-id and sequence-gap evidence.
+- The Grafana quality dashboard from P6 gains a reconciliation row: day state by venue and
+  symbol over time, coverage, and breaches.
 - The readiness scorecard gains one item for captured products: reconciliation is running.
-- `scripts/chaos/reconcile-detects-gap.sh`: on a scratch copy of one day, remove a slice of
-  trades, rebuild the day's bar, and assert the status is `volume_breach` or `count_breach`.
+- `make reconcile-bars`: evaluates the last completed day on a live stack and exits non-zero
+  on a breach, zero on partial or pending. It is not part of `/release-check`: a fresh clone
+  has no captured day to compare. The fresh-clone gate is the dbt unit tests.
+- `scripts/chaos/reconcile-detects-gap.sh`: on a scratch copy of one fully covered Binance
+  day, remove one trade that is not the day's extreme, rebuild the bar, and assert the trade
+  count field differs and the day state is `breach`.
 
-**Documents.** The benchmark; chapters 11 and 16; `docs/operations/data-catalog.md` through
-its generator; the runbook.
+**Pull request 4: the trust signal where people work**
+
+- `notebooks/k2lake.py`: `trades()` and `completeness()` print one line when the requested
+  range includes a day that is not `complete`, naming the state; `day_quality()` returns the
+  view. Tests cover a clean range, a partial day and a breach.
+- The claim made to users is exact and limited, and the page states it: `complete` means the
+  day's trade set is whole as far as two independent records can show. It says nothing
+  about any single minute on a day that is not `complete`.
+
+**Documents.** ADR-043 completed; chapters 11 and 16; `docs/operations/data-catalog.md`
+through its generator; the runbook.
 
 ## Verification
 
@@ -88,6 +115,7 @@ make reconcile-bars
 bash scripts/chaos/reconcile-detects-gap.sh
 make check-alerts
 make access-verify && bash scripts/entitlements-verify.sh
-docker exec k2-trino trino --execute "SELECT exchange, status, count(*) FROM lake.marts.bar_reconciliation_daily GROUP BY 1, 2 ORDER BY 1, 2"
+docker exec k2-trino trino --execute "SELECT exchange, day_state, count(*) FROM lake.marts.captured_day_quality GROUP BY 1, 2 ORDER BY 1, 2"
+git status --porcelain docs/        # empty: no result was written into the repository
 make gates
 ```

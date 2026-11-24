@@ -41,7 +41,8 @@
   (`FOR VERSION AS OF`). `quote_volume` joins the comparison only if `typeof` shows both
   engines produce the same decimal.
 - CI job `dbt`: `dbt deps`, `dbt parse` for all three targets, `dbt compile --target trino`
-  against the CI Trino. Stated plainly in the guide: `parse` shows the project loads for
+  against the CI Trino, a pinned SQL linter with layering rules (a mart may not select from
+  a source), and a manifest check that fails a mart with no uniqueness test on its grain. Stated plainly in the guide: `parse` shows the project loads for
   Athena and Redshift; it does not prove the SQL runs there.
 - ADR-029 Outcome: marts are covered by dbt unit tests and a reference computation where one
   is cheap, not by a three-engine parity check. `ohlcv_1m` has the full check.

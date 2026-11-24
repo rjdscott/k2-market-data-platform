@@ -1,22 +1,23 @@
-# Phase P7: governance pack, capability matrix and the release gate
+# Phase P7: design and adoption documents, verification index and the release gate
 
 **Depends on:** P1 to P6
-**Decision it implements:** none new. It documents and proves the decisions under [ADR-031](../../adr/ADR-031-governed-self-serve-platform.md), which moves to Accepted here if every follow-on ADR landed.
-**Delivers:** the governance documents, a capability matrix whose every row links to its evidence, the documentation map updated to reach it, and a tagged release that passed the fresh-clone gate.
-**Exit:** `/release-check` passes on a fresh clone with the default profile; `make check-docs` passes, which proves every evidence link in the matrix resolves; the golden path was followed from zero and the product it created ran one scheduled DAG run on the stack.
+**Decision it implements:** none new. It documents and proves the decisions under [ADR-031](../../adr/ADR-031-governed-self-serve-platform.md), which moves to Accepted here if every ADR in its table landed.
+**Delivers:** documents for people who run or adopt the platform, a verification index whose every row links to its evidence, the documentation map updated to reach it, and a tagged release that passed the fresh-clone gate.
+**Exit:** `/release-check` passes on a fresh clone with the default profile; `make check-docs` passes, which proves every evidence link in the index resolves; the golden path was followed from zero and the product it created ran one scheduled DAG run on the stack.
 
 ## Scope
 
-**Governance pack** (`docs/governance/`)
+**Design and adoption documents** (`docs/governance/`)
 
 - `solution-design.md`: end to end across ingestion, storage, transformation and serving.
-- `design-authority-checklist.md`: what a design passes before build.
-- `decision-log.md`: a short page grouping decisions by capability, each a link into
+- `design-review-checklist.md`: what a change to the platform or a new product is checked
+  against before it is built. It is the engineering standards table turned into questions.
+- `adoption-guide.md`: how a team would run this platform for real. Who owns a domain and a
+  product, who approves a contract change and a classification change, how a new product is
+  proposed and onboarded, what the platform maintainers own. One document, in place of
+  separate organisational charts.
+- `decision-log.md`: a short page grouping decisions by component, each a link into
   [the ADR index](../../adr/README.md). It carries no statuses of its own.
-- `stakeholders-raci.md`: architecture, product owners, delivery owners, workload engineers,
-  business experts, security, the data office; a RACI per platform capability.
-- `operating-model.md`: how the platform team supports engineers embedded in workload teams
-  (golden paths, intake, design reviews, office hours, delivery tracking).
 - `docs/development/spark-dbt-airflow-guide.md`: which tool does what, with examples from
   this repository, including what `dbt parse` on a second target does and does not show.
 - `docs/development/golden-path.md`: the onboarding path, told with FX as it was actually
@@ -24,20 +25,20 @@
   the pull request that did it and the command that shows it. Then proven a third time from
   zero: `make new-product`, a parser, `make generate`, and the product reaches `published`.
 
-**Capability matrix**
+**Verification index**
 
-- `docs/capability-traceability.md`: one row per capability, grouped by area (architecture,
-  platform, governance, operations, security, data, cloud), with ids such as `ARCH-1`. Each
-  row has the component, the evidence written as a markdown link, and the command that shows
-  it.
+- `docs/verification-index.md`: one row per component (capture, ingest, contracts and
+  generator, orchestration, marts, FX product, access, lineage and catalog, controls, SLOs,
+  release). Each row has what is claimed, the evidence written as a markdown link, and the
+  command that shows it.
 - Gate (a) of `scripts/check-docs.sh` already fails a link that does not resolve, so the
-  matrix is enforced by an existing gate and no new one is added.
-- Cloud rows link [17-scale-out-path.md](../../architecture/17-scale-out-path.md) and say that
-  the infrastructure code is a separate plan.
+  index is enforced by an existing gate and no new one is added.
+- The cloud row links [17-scale-out-path.md](../../architecture/17-scale-out-path.md) and says
+  that the infrastructure code is a separate plan.
 
 **README**
 
-- The existing ten-minute path in `docs/README.md` gains the matrix as a stop.
+- The existing ten-minute path in `docs/README.md` gains the index as a stop.
 - The architecture diagram and the counts it quotes brought up to date.
 
 **Release gate**

@@ -34,12 +34,11 @@ These were checked against the full ECB history (7,142 fixing dates, 1999-01-04 
 | Stablecoin | USDT is not assumed to be one dollar. Daily USDT/USD (USD per USDT) is the median over overlapping assets of `close_usd / close_usdt` from the daily bars, using only pairs whose last trade on both venues falls in the final minute of the UTC day, with at least three such assets; otherwise 1 with `peg_assumed`. No venue in the registry lists both quotes, so the figure includes any venue premium, and the description says so |
 | Conversion of a bar | One daily rate, times the basis for USDT pairs, is applied to open, high, low and close, which preserves their ordering. The converted high and low are not the true extremes in the reporting currency; the error is bounded by that day's FX range. `quote_volume` converts the same way; base `volume` does not change |
 
-Why closes and not volume-weighted prices for the basis: over 720 days against a directly
-traded USDT/USD, the ratio of daily volume-weighted prices across venues had a median error
-of 8.4 basis points and a correlation of 0.35 with the real basis, because the two venues'
-intraday volume profiles differ. The ratio of closes had a median error of 1.1 basis points
-and a correlation of 0.91. The real basis itself moved within about 21 basis points. This
-comparison is published as a research note with its commands before ADR-037 cites it.
+Why closes and not volume-weighted prices for the basis: the two venues' intraday volume
+profiles differ, so a ratio of daily volume-weighted prices mostly measures that difference.
+The ratio of closes tracks a directly traded USDT/USD far more closely. The comparison is a
+script in this phase (`scripts/basis-estimator-check.py`), run on the user's stack; its
+results are written to a platform table and read there, not quoted in a document.
 
 Window lengths, the annualisation factor, the carry horizon and the reporting currencies are
 dbt variables.
@@ -77,6 +76,8 @@ dbt variables.
   image has no pip layer, and that version already refuses entity expansion).
 - A fresh clone seeds the landing zone from committed sample files, so every product builds
   with no network. No test reaches the network.
+- Idempotency test per source: load the same landed file twice and assert the second load
+  adds no row and changes no value.
 
 **Pull request 2: two products on the pattern, ADR-037**
 
@@ -86,8 +87,8 @@ The pattern has two users from its first merge, so its seams are real.
   and historic currency codes, names and minor units, landed as `bronze.iso4217_currency`
   and `silver.currency_master`, with `status` (active, historic). Monthly schedule. Both
   lists are needed: twelve codes the ECB once published are no longer current, and the FX
-  audit below must know them. Its terms of use are read before a sample is committed; if
-  they forbid it, the sample is synthetic and says so.
+  audit below must know them. The committed sample is synthetic and named so; the real
+  list is fetched by the user's stack.
 - **ECB FX rates**, domain `fx-reference`.
   - `bronze.ecb_fx_daily`: one row per date and currency as published, the rate as a string.
   - `silver.fx_rates_ecb`: `rate_date`, `currency`, `eur_rate` as a decimal, `fetched_at`,
@@ -105,7 +106,7 @@ The pattern has two users from its first merge, so its seams are real.
   - Schedule: TARGET working days at 15:30 UTC, retrying until 18:00. A `history` run loads
     the full file since 1999.
   - Samples: the ECB 90-day file (about 70 KB, attributed), a corrupted copy for the audit
-    test, and a small excerpt of the history file chosen for its awkward cases: Easter 2026,
+    test (named as modified, as the ECB's terms require), and a small excerpt of the history file chosen for its awkward cases: Easter 2026,
     the 2025 year end including a currency leaving the set, the krona stopping in 2008, and
     the franc on 2015-01-15.
   - Classification `public`; freshness SLO "the day's fixing by 18:00 UTC on TARGET working
@@ -177,8 +178,10 @@ was a fixing day is read from the data.
   same specification: it catches a wrong query, not a wrong convention. The anchor and the
   hand-computed unit rows are what guard the conventions. It joins `make gates`.
 
-**Documents.** ADR-036, ADR-037; ADR-028 Outcome; a research note with the basis estimator
-comparison and the history statistics quoted above, each with its command; chapter 18 (the
+**Documents.** ADR-036, ADR-037; ADR-028 Outcome; a research note giving the
+command behind each ECB history statistic quoted above (the ECB's terms allow them to be
+quoted with attribution); the basis estimator check as a script whose results stay on the
+platform; chapter 18 (the
 FX product as the mesh's worked example) and chapters 12 and 13; `dbt/models/fx/README.md`
 carrying the conventions table; runbooks for a failed file-source audit and a late fixing.
 

@@ -23,7 +23,7 @@ It is not yet a platform a second team could build on. An inventory of the tree 
   `docker/lake/maintenance.py`, and the description a reader needs in a hand-kept page,
   `docs/operations/data-catalog.md`. The plan's Ground truth lists six places where two of
   these disagree today. Nothing names an owner.
-- **Adding a product means editing the platform.** There is no path for a workload engineer
+- **Adding a product means editing the platform.** There is no path for a product author
   that does not go through the ingest code. The nearest thing is a five-place checklist in the
   `schema-change` skill.
 - **Access control is one profile.** ClickHouse has a read-only `quant` user. The lake has
@@ -73,6 +73,9 @@ makes one decision and lands, Accepted, in the pull request that builds it.
 | 040 | A controls catalogue as code | |
 | 041 | SLOs and error budgets for consumer-facing products | ADR-028 §10, on its own trigger |
 | 042 | Release engineering: contract semver and a changelog | |
+
+Numbers come from this table, not from the highest file in the directory: phases land out of
+numeric order. 043 is taken by the venue reference bars plan.
 
 ---
 

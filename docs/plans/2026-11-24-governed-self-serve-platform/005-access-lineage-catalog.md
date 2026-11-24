@@ -48,8 +48,9 @@ cloud deployment would use.
   reproducible reads; what the schema compatibility promise covers; and the enforcement
   statement above.
 - `k2gen` emitter: Trino file-based access rules from `classification` and `entitlement`.
-  `realtime_reader` reads `gold` and `marts`. `delayed_reader` reads only products with
-  entitlement `delayed` or classification `public` (the FX rates and analytics). Neither
+  Roles follow classification, not namespace: `realtime_reader` reads every product classified
+  `internal` or `public`; `delayed_reader` reads products classified `public` or with
+  entitlement `delayed`. Neither
   writes. The `dbt` user writes `marts` only.
 - Offline test in `make test`: the generated rules match the contracts. Live test,
   `scripts/entitlements-verify.sh`, against the stack and against the CI Trino.

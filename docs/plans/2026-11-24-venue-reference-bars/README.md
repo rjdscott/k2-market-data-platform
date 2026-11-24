@@ -13,13 +13,13 @@ missing from all three sides.
 Each venue also publishes its own daily candles, computed from its own record. Fetched by a
 separate pipeline, they are an independent pricing source: a product in their own right for
 anyone who wants daily bars and no tick data, and a reference to hold K2's captured bars
-against. A researcher pulling trades or minute bars for a symbol and day can then check one
-flag first: did that day reconcile to the venue's own figures.
+against. A researcher pulling trades or minute bars for a symbol and day can then check
+first whether that day reconciled.
 
 This plan follows
 [the governed self-serve platform plan](../2026-11-24-governed-self-serve-platform/README.md)
-and starts after its P4, whose file-source ingestion pattern, dbt project and quality results
-it reuses. It adds no service and no budget.
+and starts after its P6: it reuses the file-source ingestion pattern (P4), access points
+(P5) and the scorecard and quality results (P6). It adds no service and no budget.
 
 ## Decisions
 
@@ -32,82 +32,91 @@ it reuses. It adds no service and no budget.
 - Daily grain only.
 - On a mismatch: record it, score it, alert on it. Captured data is never edited from the
   reference, and the reference is never merged into `gold`.
-- **Reconciliation is published, not kept as an operations detail.** It is a data product
-  in the catalog like any other: owner, contract, lineage, page. Every captured product's
-  page shows its reconciliation record, good and bad. Where the platform's data disagrees
-  with a venue, or cannot be compared, the catalog says so.
+- **Reconciliation is published on the platform, as a product.** It is in the catalog like
+  any other: owner, contract, lineage. Its data and results live in platform tables, are
+  readable by every role, and are shown on a dashboard in the default stack. They are never
+  written into the repository. Where captured data disagrees with a venue, or cannot be
+  compared, the platform says so, with the size of the difference.
+- **Everything here runs on the user's own stack.** The repository ships the pipeline, the
+  contracts and the method. Venue data is fetched by the user from public endpoints under
+  that venue's terms, stays local, and no venue value or venue-derived figure is committed.
 - Venue history from before capture began is loaded as part of the reference product,
-  labelled as venue-published, and gives the FX analytics years of history.
-- [ADR-028](../../adr/ADR-028-non-goals-and-honest-limits.md) §5 is lifted only this far. Its
-  stated reason for refusing venue REST data is that it would plant rows in `raw.messages`
-  that look captured and are not (`:126-135`). Reference bars live in their own tables. The
-  captured history still starts when capture started, and gaps stay gaps. A new ADR,
-  numbered when written, records this with an appended Outcome on ADR-028.
+  labelled as venue-published.
+- The decision is recorded as ADR-043, written in V0.
+  [ADR-028](../../adr/ADR-028-non-goals-and-honest-limits.md) §5 refuses venue REST backfill
+  for two reasons (`:126-135`): keys, which do not arise with public endpoints, and that a
+  REST record planted in `raw.messages` would look captured and is not. ADR-043 lifts the
+  clause for reference tables only, by the owner's decision rather than by §5's own trigger.
+  Captured history still starts when capture started, and gaps stay gaps.
+- This is a reconciliation against an external source, not a second computation in the sense
+  of ADR-029 §3, which is unchanged.
 
 ## Ground truth
 
-Repository facts verified against `main` at `abdc804`. Venue facts fetched 2026-11-24 with no
-key and a generic client; each names its URL.
+Repository facts verified against `main` at `abdc804`.
 
 **What K2 has to compare**
 
 - `gold.ohlcv_1d` carries open, high, low and close as fixed-point integers at 1e-8, exact
   base `volume` and `quote_volume`, `trade_count`, and the first and last trade times
   (`docker/lake/ddl/lake.sql:921-935`). Buckets are UTC days from the venue's own trade
-  timestamp, not the receive time (`docker/lake/gold.py:316-336`).
+  timestamp (`docker/lake/gold.py:316-336`). Buckets are recomputed when late trades land.
 - Capture subscribes to individual trades on all three venues: Binance `@trade`
   (`services/capture-rust/src/exchanges/binance.rs:1`), Kraken `trade` (`kraken.rs:164`),
   Coinbase `market_trades` (`coinbase.rs:118`). Gold keeps one row per venue trade id
-  (`docker/lake/gold.py:68`). So trade count is comparable, not only price.
-- Binance pairs are quoted in USDT; Kraken and Coinbase pairs in USD
-  (`config/instruments.yaml`).
+  (`docker/lake/gold.py:68`).
+- The lake already measures completeness from inside: `k2lake.completeness()` returns
+  sequence gaps and trade ids never received (`notebooks/k2lake.py:216-268`).
+- Captured history is intermittent by nature on a single host: the lake was rebuilt on
+  2026-08-28 and capture has been stopped for long stretches
+  (`docs/audits/2026-09-03-ux-end-to-end.md:68`, `:196-201`). Most captured days are
+  partial days. A comparison that ignores that would flag nearly all of them.
+- The ingest runs every five minutes and maintenance at 03:00 UTC
+  (`docker/lake/flows/deploy_lake.py:47`, `:73`).
 
-**What the venues publish**
+**What the venues publish.** Working notes from fetches made on 2026-11-24 while planning.
+V0 opens by recording the command behind each fact in a research note; until then these are
+not citable.
 
 | | Binance | Kraken | Coinbase |
 |---|---|---|---|
 | Endpoint | `data-api.binance.vision/api/v3/klines`, interval `1d` | `api.kraken.com/0/public/OHLC`, interval `1440` | `api.exchange.coinbase.com/products/<id>/candles`, granularity `86400` |
 | Day boundary | 00:00 UTC | 00:00 UTC | 00:00 UTC |
-| Per request | 1,000 days | 720 committed days plus the day in progress; `since` cannot reach further back | 300 days |
-| History for BTC | from 2017-08-17 | 720 days by this endpoint | from 2015-07-20 |
-| Open, high, low, close | yes | yes | yes |
-| Base volume | yes | yes | yes |
-| Quote volume | yes | no (a volume-weighted price instead) | no |
-| Trade count | yes | yes | no |
-| Number format | strings, 8 decimals | strings | JSON numbers, not strings |
-| Quirks | bulk files exist too, with checksums, under a non-commercial share-alike licence | response key differs from the request (`XBTUSD` returns `XXBTZUSD`; `DOGE` is `XDG`); last row is uncommitted | a `User-Agent` header is required; responses cached five minutes; "may be incomplete" per its own documentation |
+| Request shape | start and end times; 1,000 days a request | `since` only, no end; at most 720 committed days plus the day in progress | start and end; 300 days a request; a `User-Agent` is required |
+| Stable on re-fetch | yes, for a closed day | no: every response includes the moving in-progress row | yes, for a closed day |
+| Fields beyond open, high, low, close, base volume | quote volume, trade count | trade count, volume-weighted price | none |
+| Numbers | strings | strings | JSON numbers |
+| Symbols | as in the registry | the registry's native names are accepted and echoed as the result key | as in the registry |
 
-- Binance's endpoint and its bulk file for 2026-11-22 agree on every field (open 60215.78,
-  close 61271.08, 4,694,484 trades). The endpoint is used for both the daily run and the
-  history load, which keeps the bulk dataset's licence out of the question.
-- Kraken's endpoint and its quarterly archive agree for 2026-09-29. The full archive is five
-  parts of about 2 GB each on `assets.kraken.com`.
-- Terms: Binance's bulk dataset terms are quoted above. Kraken's general terms restrict
-  automation against its content in broad words while it publishes this API for the purpose.
-  Coinbase's terms pages refused a scripted fetch and are unread. No venue's terms were found
-  to grant redistribution.
-
-Consequences taken from the terms: requests are few and slow (one per symbol per day);
-nothing fetched from a venue is committed to the repository; the product is classified
-`internal`; sample files for tests and fresh clones are synthetic and say so.
+- For one completed day, a bar rebuilt from the venue's own public trades equalled the
+  venue's candle on every published field for Binance and for Kraken, trade count included.
+- For Coinbase it did not. On the day checked, the candle's open, close and volume could not
+  be reproduced from Coinbase's own trade list by any window; high and low agreed. Its own
+  documentation calls the candles possibly incomplete. So a perfect capture would still
+  disagree with a Coinbase candle on open, close and volume.
+- Venue terms differ and change (two of the three were revised in the last three months).
+  They are read at the start of V0 and recorded in ADR-043.
 
 ## Target architecture
 
 ```mermaid
 flowchart TB
-    V[Venue candle endpoints: Binance, Kraken, Coinbase] --> F[Airflow: generated file-source DAGs]
-    F --> LZ[(Landing zone, immutable, by hash)]
+    V[Venue candle endpoints: Binance, Kraken, Coinbase] --> F[Airflow: one DAG per venue]
+    F --> LZ[(Landing zone, immutable)]
     LZ --> LD[Spark load: write, audit, publish]
     LD --> RB[(silver.venue_ohlcv_1d)]
 
     CAP[Rust capture] --> RP[Redpanda] --> ING[Spark ingest] --> G[(gold.ohlcv_1d)]
+    ING --> COV[Coverage and trade-id gaps per day]
 
     RB --> REC[dbt: bar_reconciliation_daily]
     G --> REC
-    REC --> DQ[Quality results, scorecard, alert]
-    REC --> TS[Day-level trust signal on captured products]
-
-    RB --> REF[dbt: reference bars in reporting currencies, long-history basis]
+    COV --> REC
+    REC --> Q[(captured_day_quality)]
+    Q --> T[Trino and notebooks, every role]
+    Q --> GR[Grafana dashboard]
+    Q --> CAT[Catalog: product, lineage, results]
+    Q --> AL[Alert, on a fully covered day only]
 ```
 
 Principles:
@@ -116,20 +125,25 @@ Principles:
   the right path never reads venue candles. They join in one dbt model and nowhere else.
 - **A reference is evidence, not a repair.** It can say a captured day is short. It cannot
   fill it.
-- **Open about quality.** A consumer finds a product's known gaps in the same place they
-  find its schema, before they query it, not after.
-- **Tolerances are measured, then set.** The first run compares every captured day and
-  publishes the distribution of differences. Thresholds come from that, not from a guess.
+- **Exact where exact is possible.** Where a venue's candle is the sum of its trades, the
+  tolerance is zero. Where it is not, the field is reported as not comparable rather than
+  given a tolerance wide enough to hide a hole.
+- **Say what kind of day it was.** A day the stack was off is a partial day, not a breach.
+  The comparison knows the difference, and only a fully covered day can alert.
+- **Open on the platform.** Every comparison, its status and its size is readable by every
+  role. The repository holds how it is computed, not what it found.
 
 ## Phases
 
 | File | Phase | Scope | Exit |
 |---|---|---|---|
-| `000-venue-bars-product.md` | V0 | The ingestion pattern extended to paged JSON sources; three venue sources; the `venue_bars` product | Each venue's bar for a completed day lands and equals a direct fetch of the same day |
-| `001-reconciliation-and-trust-signal.md` | V1 | Reconciliation as a catalogued product, measured baseline, tolerances, alert, day-level trust signal | A day with deliberately removed trades is flagged; the baseline is published |
-| `002-history-and-reference-analytics.md` | V2 | History load; reference bars valued in reporting currencies; long-history stablecoin basis | History loads through the audits; the long-history basis agrees with the captured-bar basis on overlapping days |
+| `000-venue-bars-product.md` | V0 | Terms read and ADR-043; three venue sources on the ingestion pattern; the `venue_bars` product | Each venue's bar for a completed day lands and equals a direct fetch of the same day |
+| `001-reconciliation-and-trust-signal.md` | V1 | Reconciliation as a catalogued product; day states and coverage; alert; dashboard; trust signal in the notebook helper | Removing one trade from a fully covered day is detected; a day the stack was off is reported as partial, not as a breach |
+| `002-history-and-reference-analytics.md` | V2 | History load; stretch: a long-history stablecoin basis | History loads through the audits with each symbol's first day and gaps recorded |
 
-Estimate: three to four working days. A judgement, not a measurement.
+Must-have: V0, V1 and the history load. Stretch: the long-history basis.
+
+Estimate: four working days. A judgement, not a measurement.
 
 ## Verification (end-to-end)
 
@@ -148,9 +162,10 @@ make gates
 
 | Unknown | Spike | Escape hatch |
 |---|---|---|
-| A bar rebuilt from the public trade stream differs from the venue's candle even with nothing missed (trade types a candle includes, prints at the day boundary) | V1, first task: reconcile every captured day and read the differences before setting any threshold | Per-venue, per-field tolerances; a field that never agrees is reported as not comparable, with the reason |
-| A venue's terms forbid this use on a closer reading | Before V0 merges: read each venue's terms in a browser and record the wording in the ADR | Drop that venue from the product; the others stand |
-| A venue blocks the host's region or a scripted client | V0: fetch from the stack itself, not a laptop | Binance's alternate host; otherwise drop the venue and say so |
-| Kraken history beyond 720 days needs a 10 GB archive | V2 | Kraken reference history stays at 720 days and the product page says so |
-| Coinbase candles are "incomplete" by its own description and carry no trade count | V1: measure how often its volume differs | Coinbase reconciles on price only |
-| The ingestion pattern needs paged, per-symbol requests it was not built for | V0, first task | A venue-specific fetch task behind the same landing, audit and publish steps |
+| A venue's terms do not allow this local use on a careful reading | V0, first task: read each venue's terms and quote them in ADR-043 | Drop that venue from the product; the others stand |
+| The exact match seen for Binance and Kraken on one day holds across symbols and days | V1, first task: compare every fully covered captured day before fixing any rule | A field that does not hold exactly is reported as not comparable, with the reason; no tolerance is introduced to make it pass |
+| Coinbase candles are unusable for open, close and volume, as one day suggests | V1, same task | Already the design: one-sided high and low only, and trade-id gaps as the evidence |
+| A venue restates a closed day's candle | V0: store the first value, count later differences | The count is shown per venue; if common, the comparison waits a day |
+| Per-day capture coverage can be derived from what the lake already stores | V1, first task: connection spans in bronze and gap rows in `audit.checks` | Coverage from trade-id continuity alone, stated as weaker |
+| A venue blocks the host's region or a scripted client | V0: fetch from the stack itself | Binance's alternate host; otherwise drop the venue and say so |
+| Three third-party endpoints change shape over time | V0: a parse failure alerts with a runbook | The venue's DAG is paused and its days show as reference unavailable |

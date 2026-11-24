@@ -31,7 +31,7 @@ Umbrella decision: [ADR-031](../../adr/ADR-031-governed-self-serve-platform.md).
   what is not yet enforced. ADR-039 records the target.
 - Venue-published daily bars as an independent product and a reconciliation of captured
   bars against them: [a follow-on plan](../2026-11-24-venue-reference-bars/README.md),
-  started after P4.
+  started after P6.
 - A REST data product API. ADR-028 §6 stays in force for an API; this plan lifts it only for
   SQL serving through Trino.
 
@@ -87,8 +87,24 @@ Umbrella decision: [ADR-031](../../adr/ADR-031-governed-self-serve-platform.md).
 - **ADR sequencing:** ADR-031 is the Proposed umbrella and reserves 032 to 042. Each decision
   ADR lands Accepted in the pull request that builds it, as
   [the ADR conventions](../../adr/README.md) require.
-- **A capability matrix** at `docs/capability-traceability.md`: one row per platform
-  capability, grouped by area, each with its evidence and the command that shows it.
+- **What the repository is, said up front.** K2 is a platform a person runs on their own
+  machine for research and quant workflows. The repository ships code, contracts and method.
+  Market data is fetched by the user's own stack from each provider's public endpoints, stays
+  on that stack, and is subject to that provider's terms. The README says so near the top.
+- **The repository ships no real venue market data.** Existing capture fixtures are replaced
+  by synthetic frames in each venue's format. New sample files are synthetic and labelled,
+  except where a provider's terms allow reuse with attribution (the ECB file). A `NOTICE`
+  lists every third-party data file and states that the MIT licence covers the code.
+- **Market-derived numbers live on the platform.** Documents and ADRs describe the method and
+  give the exact query or script; quality results, reconciliation results and statistics
+  computed from market data are read from platform tables, a Grafana dashboard in the default
+  stack, and the catalog. Numbers about the platform's own behaviour (throughput, latency,
+  gap counts) stay in dated benchmarks as before.
+- **A verification index** at `docs/verification-index.md`: one row per component, each with
+  its evidence and the command that shows it.
+- **Documents for people who run or adopt the platform**, not an organisational pack: a
+  solution design, a design review checklist, an adoption guide, and a guide to which tool
+  does what.
 - New text carries no em-dashes. New ADRs use the status `Accepted` and the landed line uses a
   comma. Existing documents are not swept: Accepted ADRs are immutable.
 
@@ -242,14 +258,12 @@ flowchart TB
     OL -.-> OM[Product pages + OpenMetadata]
 ```
 
-Principles```
-
 Principles the diagram encodes:
 
-- **The contract is the interface.** A workload engineer writes one YAML file. Everything
+- **The contract is the interface.** A product author writes a descriptor and its contracts. Everything
   governed about the product is generated from it, committed, and checked for drift.
 - **One writer path per layer.** Spark writes raw to gold, FX and `governance`. Trino writes
-  only `marts`. Neither writes the other's namespaces.
+  tables only in `marts`, and views in `governance`. Neither writes the other's namespaces.
 - **The orchestrator holds no data state.** Offsets stay in the Iceberg snapshot
   ([ADR-022](../../adr/ADR-022-exactly-once-via-snapshot-offsets.md)); Airflow schedules and
   observes.
@@ -282,31 +296,33 @@ Each standard names what enforces it. A standard with no check is a preference.
 | Standard | Enforced by |
 |---|---|
 | Generated files are never edited by hand | CI drift check: regenerate, then no diff and no untracked file |
-| Ingestion is idempotent and replayable | Landing objects keyed by content hash; merges keyed on natural keys; a re-run test asserts zero new rows |
+| Ingestion is idempotent and replayable | Landing objects keyed by content hash; merges keyed on natural keys; a re-run test per source asserts zero new rows (P4) |
 | The system of record never stalls behind a check | Batch audit records and alerts; only late-tolerant sources fail closed |
-| dbt is layered: staging, intermediate, marts; marts never read sources | SQL lint with layer rules in CI; `dbt parse` on every pull request |
-| Every model has a declared grain and a uniqueness test | A CI check that fails a mart with no unique test |
+| dbt is layered: staging, intermediate, marts; marts never read sources | SQL lint with layer rules and `dbt parse` in the CI `dbt` job (P3) |
+| Every model has a declared grain and a uniqueness test | A check in the CI `dbt` job that fails a mart with no uniqueness test (P3) |
 | Derived numbers have a second computation or a hand-computed unit test | `make parity-ohlcv`, `make parity-bars`, `make parity-fx`; dbt unit tests |
 | Python in the generator is typed and tested | ruff, a type checker and pytest in CI |
 | A contract change is versioned | `k2gen check-compat` fails a breaking change without a major bump |
 | A product has one accountable owner | `CODEOWNERS` per `contracts/<domain>/`; readiness scorecard |
 | Least privilege by default | Consumers get a read-only storage key; Trino roles from contracts; no root key in any consumer recipe |
-| Every image and package is pinned; every service declares limits | Existing CI limits check, extended to the budget sum |
+| Every image and package is pinned; every service declares limits | The CI limits check extended to the budget sum, and a check that fails an image with no tag or a dependency with no version (P0) |
 | Every alert has a runbook that was run | Existing docs gates (d) and (d2) |
-| Every published number has a command behind it | `/benchmark-report`; docs gate (e) |
+| Every published number has a command behind it | `/benchmark-report`, which records the command per row |
+| The repository ships no market data | Sample files are synthetic or attributed in `NOTICE`; a CI check fails a data file under a samples directory that is neither (P0) |
+| Market-derived figures live on the platform, not in documents | Documents give the method and the query; review, and the P0 sweep of existing documents |
 
 ## Phases
 
 | File | Phase | Scope | Exit |
 |---|---|---|---|
-| `000-prerequisites-guardrails.md` | P0 | Stack up, `make gates`, budget gate, lock exit code, Lakekeeper patch, stale facts | `make gates` green on the live stack; CI budget gate live |
+| `000-prerequisites-guardrails.md` | P0 | Stack up, README scope and data terms, synthetic fixtures, `make gates`, budget gate, lock exit code, Lakekeeper patch, stale facts | `make gates` green on the live stack; CI budget gate live |
 | `001-contracts-generator-mesh.md` | P1 | Product descriptors and ODCS contracts for every existing product, `k2gen`, generated product pages, four domains | drift check clean in CI |
 | `002-airflow-replaces-prefect.md` | P2 | Airflow 3, schedule shadow, cutover, Prefect archived | `make gates` green under Airflow; Prefect only where listed |
 | `003-trino-dbt-marts.md` | P3 | Trino, dbt project and first marts, ingest batch audit, quality results | dbt and Spark `ohlcv_1m` agree on the compared columns |
 | `004-fx-data-product.md` | P4 | File-source ingestion pattern with two users (ECB rates, ISO 4217); dbt FX product: crosses, returns, volatility, stablecoin basis, bars in reporting currencies | `make parity-fx` passes; a bad FX file never reaches `main` |
 | `005-access-lineage-catalog.md` | P5 | Access points and bring-your-own-engine, access rules, retention as code, lineage, catalog | `delayed_reader` denied on `gold.trades` through Trino; lineage events asserted |
 | `006-controls-slos-release.md` | P6 | Controls catalogue, readiness scorecard, SLO rules, release engineering, drills | `make compliance-report` renders from real evidence |
-| `007-governance-pack-release-gate.md` | P7 | Governance documents, capability matrix, fresh-clone gate | `/release-check` passes from a fresh clone |
+| `007-governance-pack-release-gate.md` | P7 | Design and adoption documents, verification index, fresh-clone gate | `/release-check` passes from a fresh clone |
 
 Order is dependency, then risk. P0 exists because three later phases would otherwise each
 discover the same broken guardrail. Each phase file lists its pull requests; an ADR lands in
