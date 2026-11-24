@@ -30,7 +30,7 @@
 # the deployed container, so it does not close this row.
 #
 # Revisit when: k2-replay lands (Phase G). The script then becomes: take
-# tests/fixtures/kraken-20s.jsonl, flip one byte in one frame, replay the file
+# tests/fixtures/synthetic-kraken-20s.jsonl, flip one byte in one frame, replay the file
 # through the running binary, and assert the RawMessage for that frame is
 # byte-identical to the corrupted input while the parse-failure counter moved
 # by exactly one.

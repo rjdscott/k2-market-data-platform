@@ -464,51 +464,60 @@ compressed (`docker save | wc -c`), of which 11.6 MB is the binary.
 
 ## Fixtures and replay
 
-One replay test per venue drives a recorded JSONL session through the live
-adapter's `handle_frame`, asserts the book invariants (top-20, sorted,
-uncrossed, no zero quantities) and every venue's own continuity check, then
-hashes two passes against a committed golden value. The first three were recorded
-with `k2-capture record` on 2026-08-26; the last three are those files with one
-failure introduced, added 2026-08-28.
+One replay test per venue drives a JSONL session through the live adapter's
+`handle_frame`, asserts the book invariants (top-20, sorted, uncrossed, no zero
+quantities) and every venue's own continuity check, then hashes two passes against a
+committed golden value. Every fixture is synthetic: the repository ships no venue data
+([`NOTICE`](../../NOTICE)). [`scripts/make-synthetic-fixtures.py`](../../scripts/make-synthetic-fixtures.py)
+writes all six from one fixed seed in each venue's exact wire format (message types,
+field names and order, number spellings, sequence behaviour), with invented prices,
+sizes, ids and a 2001 clock; every Kraken book frame carries the CRC32 of the synthetic
+book after it, computed as `book_checksum` computes it. `tests/test_synthetic_fixtures.py`
+fails if a committed file is not what the generator writes.
 
-| Fixture | Test | Frames | Size | Symbol | Not verbatim |
-|---------|------|--------|------|--------|--------------|
-| `kraken-20s.jsonl` | `tests/replay.rs` | 1185 | 329 KB | BTC/USD (20 s) | the `instrument` snapshot's `pairs` filtered to the recorded symbol and `assets` emptied: 639 KB → under 1 KB |
-| `binance-10s.jsonl` | `tests/replay_binance.rs` | 539 (438 trade, 101 depth20) | 269 KB | BTCUSDT (10 s) | none, 10 s of one symbol is the whole budget at 100 ms depth frames |
-| `coinbase-20s.jsonl` | `tests/replay_coinbase.rs` | 159 (`sequence_num` 0..158) | 320 KB | ATOM-USD (20 s) | the `level2` snapshot event trimmed to 1,250 of 3,440 levels (all 450 bids, best 800 offers): 582 KB → 320 KB. Every `sequence_num` intact |
-| `kraken-20s-checksum-fail.jsonl` | `tests/replay_failures.rs` | 1185 | 329 KB | BTC/USD (20 s) | `kraken-20s.jsonl` with line 600's `book` `update` checksum rewritten `1925110775` → `1`. Nothing else, including the `instrument` frame that file already trims |
-| `coinbase-20s-seq-gap.jsonl` | `tests/replay_failures.rs` | 158 (`sequence_num` 0..158 **minus 80**) | 319 KB | ATOM-USD (20 s) | `coinbase-20s.jsonl` with line 81 deleted — the `l2_data` `update` carrying `sequence_num` 80. Every surviving line byte-identical |
-| `binance-10s-regression.jsonl` | `tests/replay_failures.rs` | 539 | 269 KB | BTCUSDT (10 s) | `binance-10s.jsonl` with the payloads of lines 67 and 68 swapped, so `lastUpdateId` 99193217508 arrives before 99193217500. Each line keeps its own `recv_ts_ns`, so the recorded clock stays monotonic |
+| Fixture | Test | Frames | Size | Symbol | Session |
+|---------|------|--------|------|--------|---------|
+| `synthetic-kraken-20s.jsonl` | `tests/replay.rs` | 1185 | 313 KB | BTC/USD (20 s) | status, three acks, the `instrument` snapshot, a depth-25 book snapshot, 1156 book updates, 3 trades, a heartbeat a second |
+| `synthetic-binance-10s.jsonl` | `tests/replay_binance.rs` | 539 (438 trade, 101 depth20) | 254 KB | BTCUSDT (10 s) | a depth20 frame every 100 ms, `lastUpdateId` strictly increasing |
+| `synthetic-coinbase-20s.jsonl` | `tests/replay_coinbase.rs` | 159 (`sequence_num` 0..158) | 127 KB | ATOM-USD (20 s) | full-depth `level2` snapshot, acks, `market_trades` history, heartbeats, 134 `l2_data` updates |
+| `synthetic-kraken-20s-checksum-fail.jsonl` | `tests/replay_failures.rs` | 1185 | 313 KB | BTC/USD (20 s) | the clean file with line 537's `book` `update` checksum rewritten to `1` |
+| `synthetic-coinbase-20s-seq-gap.jsonl` | `tests/replay_failures.rs` | 158 (`sequence_num` 0..158 **minus 79**) | 126 KB | ATOM-USD (20 s) | the clean file with line 80 deleted, the `l2_data` `update` carrying `sequence_num` 79 |
+| `synthetic-binance-10s-regression.jsonl` | `tests/replay_failures.rs` | 539 | 254 KB | BTCUSDT (10 s) | the clean file with the payloads of lines 44 and 45 swapped, so `lastUpdateId` 1133 arrives before 1120; each line keeps its own `recv_ts_ns` |
 
-The three failure fixtures are derived from the clean ones by
-[`scripts/make-failure-fixtures.py`](../../scripts/make-failure-fixtures.py), not
-recorded: these failures did not occur during a recording window, and the captures
-are stopped. One edit each, textual, on one line — so the failing frame is real
-venue output with one field, one line or one ordering disturbed, and everything
-around it is the session that actually happened. `tests/replay_failures.rs` asserts
-the failure signature (`Stats.actions`, the emitted records) *and* what the adapter
-does for the rest of the session, which is the part a fixture can show and a unit
-test cannot: a fixture carries the failing frame but not the venue's answer to the
-resync it triggers. Each venue's cost, measured on these files:
+The three failure fixtures are their clean sibling with one edit each, textual, on one
+line, made by the same script, so everything around the failing frame is the session
+the clean test replays. `tests/replay_failures.rs` asserts the failure signature
+(`Stats.actions`, the emitted records) *and* what the adapter does for the rest of the
+session, which is the part a fixture can show and a unit test cannot: a fixture carries
+the failing frame but not the venue's answer to the resync it triggers. Each venue's
+cost, measured on these files:
 
 | Fixture | Actions | Snapshots (clean fixture) | What the rest of the session looks like |
 |---------|---------|---------------------------|------------------------------------------|
-| `kraken-20s-checksum-fail` | 1 `Resubscribe` | 10 (19) — 9 verified, then 1 marked `checksum_ok=false` | dark to the end of the file: the 572 `update` frames after the mismatch are ignored (empty book, nothing to fold into) and only the venue's `snapshot` would end it. All 1185 frames still archived |
-| `coinbase-20s-seq-gap` | 1 `Reconnect` | 9 (19) — all `seq` < 80 | dark for the remaining ~13 s: every book cleared, and an `l2_data` `update` with no snapshot behind it is dropped rather than believed |
-| `binance-10s-regression` | 1 `Resubscribe` | 9 (10) | one sample lost, and that is the whole blast radius — the next `@depth20@100ms` frame is itself a complete top-20, so recovery needs no venue reply |
+| `synthetic-kraken-20s-checksum-fail` | 1 `Resubscribe` | 10 (19): 9 verified, then 1 marked `checksum_ok=false` | dark to the end of the file: the 635 `update` frames after the mismatch are ignored (empty book, nothing to fold into) and only the venue's `snapshot` would end it. All 1185 frames still archived |
+| `synthetic-coinbase-20s-seq-gap` | 1 `Reconnect` | 9 (19), all `seq` < 79 | dark for the remaining ~10 s: every book cleared, and an `l2_data` `update` with no snapshot behind it is dropped rather than believed |
+| `synthetic-binance-10s-regression` | 1 `Resubscribe` | 9 (10) | one sample lost, and that is the whole blast radius: the next `@depth20@100ms` frame is itself a complete top-20, so recovery needs no venue reply |
 
 The Kraken row is why this fixture exists: before
-[#119](https://github.com/rjdscott/k2-market-data-platform/pull/119) it replayed to
-**573 actions and 573 marked snapshots**, one per `update` frame folded into the
-book the mismatch had just cleared — one incident counted 573 times, and live one
-resubscribe frame per book update. The guard is in `apply_book`; the dark window it
-opens is visible as `k2_capture_book_updates_ignored_total{symbol}`.
+[#119](https://github.com/rjdscott/k2-market-data-platform/pull/119) the recorded
+fixture this test then used replayed to **573 actions and 573 marked snapshots**, one
+per `update` frame folded into the book the mismatch had just cleared: one incident
+counted 573 times, and live one resubscribe frame per book update. The guard is in
+`apply_book`; the dark window it opens is visible as
+`k2_capture_book_updates_ignored_total{symbol}`.
 
 `replay_is_deterministic` in each file runs the fixture through `replay::run`, the
 driver the `replay` subcommand uses, and hashes the JSONL bytes it writes, so the
 committed `.sha256` is exactly what `k2-capture replay --fixture <f> | sha256sum`
 prints. `tests/replay_cli.rs` covers the driver's own properties: speed does not
 change a byte, `--depth`/`--interval-ms` reach the snapshots.
+
+**Real frames, never committed.** `make record-fixtures` runs `k2-capture record` for
+each venue on your machine into `tests/recorded/` (git-ignored; the frames are the
+venues' data, under their terms) and then the three clean replay tests over them with
+`K2_RECORDED_FIXTURES` set. Every invariant runs; only the golden hash, which describes
+the synthetic session, is skipped. It is the stronger evidence that the adapters
+match today's venue protocol, and the check to run when a venue changes its format.
 
 Every one of these tests loads `config/instruments.yaml` directly. The Kraken one used to
 need its own copy of the registry (`tests/fixtures/instruments-kraken-v2.yaml`)

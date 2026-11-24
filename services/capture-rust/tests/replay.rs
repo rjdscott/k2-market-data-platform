@@ -1,4 +1,4 @@
-//! Replay a recorded Kraken session through the live adapter.
+//! Replay a Kraken session through the live adapter.
 //!
 //! This is the Phase G parity property in miniature: the same
 //! `handle_frame(bytes, recv_ts_ns)` the socket loop calls, fed from a JSONL
@@ -6,22 +6,13 @@
 //! host. Nothing here mocks anything - a mock adapter would prove the mock
 //! works.
 //!
-//! Re-record the fixture with:
-//!
-//! ```text
-//! cargo run -- record --exchange kraken --seconds 20 --symbols BTC/USD \
-//!     --instruments-file ../../config/instruments.yaml \
-//!     > tests/fixtures/kraken-20s.jsonl
-//!
-//! (`--instruments-file` because the default is the container path
-//! `/app/config/instruments.yaml`; it used to point at a Kraken-only fixture
-//! registry, which is gone — see `adapter()` below.)
-//! ```
-//!
-//! One line of the committed fixture is not verbatim: the `instrument`
-//! snapshot's `pairs` array is filtered to `BTC/USD` and its `assets` array
-//! emptied, which takes the frame from 639 KB to under 1 KB. The frame keeps
-//! its shape and the fields the adapter reads; nothing else is touched.
+//! The fixture is synthetic (NOTICE: the repository ships no venue data):
+//! `scripts/make-synthetic-fixtures.py` writes 20 s of `BTC/USD` in Kraken's WS
+//! v2 wire format, invented prices and sizes on a 1000.0 book, and every book
+//! frame carries the CRC32 of the synthetic book after it, computed the way
+//! `book_checksum` computes it. `make record-fixtures` records a real session on
+//! the user's machine into a git-ignored directory and runs these tests over it;
+//! everything but the golden hash holds there too.
 
 use std::path::{Path, PathBuf};
 
@@ -46,6 +37,16 @@ struct FixtureLine {
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+}
+
+/// A real session, when `make record-fixtures` points `K2_RECORDED_FIXTURES`
+/// at the directory it recorded into.
+fn recorded() -> Option<PathBuf> {
+    std::env::var_os("K2_RECORDED_FIXTURES").map(|d| PathBuf::from(d).join("kraken-20s.jsonl"))
+}
+
+fn fixture() -> PathBuf {
+    recorded().unwrap_or_else(|| fixtures().join("synthetic-kraken-20s.jsonl"))
 }
 
 /// The repo registry, like the Binance and Coinbase replay tests. This test used
@@ -76,7 +77,7 @@ struct Replay {
 /// The 1 Hz sampler is driven by recorded `recv_ts_ns` rather than by
 /// `tokio::time`, which is what makes two passes produce identical bytes.
 fn replay() -> Replay {
-    let text = std::fs::read_to_string(fixtures().join("kraken-20s.jsonl")).expect("fixture");
+    let text = std::fs::read_to_string(fixture()).expect("fixture");
     let mut adapter = adapter();
     adapter.begin_connection(CONN_ID);
 
@@ -211,13 +212,11 @@ fn fixture_replays_with_no_checksum_failures() {
 #[test]
 fn replay_is_deterministic() {
     // Through the shared driver `k2-capture replay` runs, hashed over the same
-    // JSONL bytes it writes: `replay --fixture kraken-20s.jsonl | sha256sum` must
-    // print the committed digest.
+    // JSONL bytes it writes: `replay --fixture synthetic-kraken-20s.jsonl |
+    // sha256sum` must print the committed digest.
     let pass = || {
         let mut adapter = adapter();
-        let input = std::io::BufReader::new(
-            std::fs::File::open(fixtures().join("kraken-20s.jsonl")).expect("fixture"),
-        );
+        let input = std::io::BufReader::new(std::fs::File::open(fixture()).expect("fixture"));
         let mut bytes = Vec::new();
         let stats = replay::run(&mut adapter, input, &replay::Options::default(), |r| {
             replay::write_jsonl(&mut bytes, r)
@@ -233,9 +232,12 @@ fn replay_is_deterministic() {
         first.iter().filter(|&&b| b == b'\n').count(),
         "one record per line"
     );
+    if recorded().is_some() {
+        return; // the golden hash describes the synthetic session only
+    }
 
     let digest = format!("{:x}", Sha256::digest(&first));
-    let golden = std::fs::read_to_string(fixtures().join("kraken-20s.sha256"))
+    let golden = std::fs::read_to_string(fixtures().join("synthetic-kraken-20s.sha256"))
         .expect("golden hash")
         .split_whitespace()
         .next()
@@ -243,6 +245,6 @@ fn replay_is_deterministic() {
         .to_string();
     assert_eq!(
         digest, golden,
-        "replay output changed; update tests/fixtures/kraken-20s.sha256 only if the change was intended"
+        "replay output changed; update tests/fixtures/synthetic-kraken-20s.sha256 only if the change was intended"
     );
 }

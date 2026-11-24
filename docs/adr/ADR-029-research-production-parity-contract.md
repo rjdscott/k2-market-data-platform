@@ -182,3 +182,42 @@ protocol version any adapter speaks.
 - [`services/capture-rust/README.md`](../../services/capture-rust/README.md) § Subcommands, § Fixtures and replay
 - [`scripts/replay-lake.sh`](../../scripts/replay-lake.sh), [`scripts/parity-ohlcv.sh`](../../scripts/parity-ohlcv.sh), [`scripts/parity-bars.sh`](../../scripts/parity-bars.sh)
 - [ADR-027](ADR-027-book-snapshot-and-sequencing.md) Outcome — deeper and faster books by replay, which `--depth` / `--interval-ms` deliver
+
+---
+
+## Outcome (2026-11)
+
+**The golden fixtures became synthetic, and their hashes were re-pinned.** The
+repository is public and is a platform people run on their own machines; it must ship
+no venue market data and no numbers derived from it (README, "What this is, and data
+terms"; [`NOTICE`](../../NOTICE)). The six sessions under
+`services/capture-rust/tests/fixtures/` were recorded venue frames, so they were deleted
+and replaced by `synthetic-*.jsonl`, written by
+[`scripts/make-synthetic-fixtures.py`](../../scripts/make-synthetic-fixtures.py) from one
+fixed seed: each venue's exact wire format, session shape and sequence behaviour, with
+invented prices, sizes, ids and a 2001 clock, and every Kraken book frame carrying the
+CRC32 of the synthetic book after it, computed as `book_checksum` computes it. The three
+failure fixtures are still their clean sibling with one edit each, made by the same
+script. The bronze key fixtures and the S2/S5 spike samples went the same way.
+
+The six `.sha256` files were re-pinned in the same change, under the new names. Clause 2
+holds as written; what moved is its input. Every count the replay tests assert held on
+the synthetic sessions without being touched (19 snapshots clean, 10 / 9 / 9 on the
+failure fixtures, 1185 and 158 frames); only the line numbers and ids the failure tests
+name moved. The "new fixture with a new name, never a regenerated old one" commitment was
+kept by the rename. It now also binds the generator: a change to it regenerates every
+synthetic file, so it lands like a parser change, with a deliberate hash update and a PR
+line saying what moved (`tests/test_synthetic_fixtures.py` fails until it does).
+
+What this costs, against the Risks paragraph above: the corpus now contains exactly the
+venue behaviours the generator writes, which is narrower than a recording. The
+counterweight is `make record-fixtures`, which records real sessions on the user's
+machine into a git-ignored directory and runs the clean replay tests over them, golden
+hash excepted. Like the live parity gates it is a human's job, not CI's.
+
+Old commits still contain the recorded fixtures, bronze frames and spike samples.
+History is not rewritten: rewriting a public repository's history breaks every clone,
+fork and commit link, and recalls no copy already made.
+
+**Revisit when:** `make record-fixtures` fails on a venue while the synthetic tests pass;
+that is a protocol change the generator has to learn.

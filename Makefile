@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health gates test test-python test-rust test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run
+.PHONY: chaos help up down logs ps health gates test test-python test-rust record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -65,6 +65,24 @@ test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo 
 	  -v k2-capture-cargo:/usr/local/cargo/registry \
 	  -v k2-capture-target:/repo/services/capture-rust/target rust:1-bookworm \
 	  sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang libclang-dev >/dev/null && cargo test --locked'
+
+# The committed replay fixtures are synthetic (NOTICE). This is the stronger
+# evidence: real sessions recorded on this machine from the venues' public
+# endpoints with `k2-capture record`, into a git-ignored directory, then the
+# clean replay tests over them. Every invariant runs; the golden hash, which
+# describes the synthetic session, is skipped. Never committed: the frames are
+# the venues' data, under their terms. chown because the container is root.
+record-fixtures:  ## Record real venue sessions into services/capture-rust/tests/recorded/ (git-ignored) and replay-test them
+	docker run --rm -v "$(CURDIR)":/repo -w /repo/services/capture-rust \
+	  -v k2-capture-cargo:/usr/local/cargo/registry \
+	  -v k2-capture-target:/repo/services/capture-rust/target rust:1-bookworm \
+	  sh -c 'apt-get update -qq && apt-get install -y -qq cmake clang libclang-dev >/dev/null && mkdir -p tests/recorded && \
+	    rec() { cargo run -q --locked -- record --exchange $$1 --seconds $$2 --symbols $$3 \
+	      --instruments-file ../../config/instruments.yaml > tests/recorded/$$1-$$2s.jsonl; } && \
+	    rec kraken 20 BTC/USD && rec binance 10 BTCUSDT && rec coinbase 20 ATOM-USD && \
+	    chown -R $(shell id -u):$(shell id -g) tests/recorded && wc -l tests/recorded/*.jsonl && \
+	    K2_RECORDED_FIXTURES=/repo/services/capture-rust/tests/recorded \
+	      cargo test --locked --test replay --test replay_binance --test replay_coinbase'
 
 # NOT part of `make test` and not run by CI: the Kotlin tier retired to
 # legacy/v2-kotlin/ in ADR-019 and nothing in the running stack builds it. Kept

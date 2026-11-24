@@ -35,6 +35,8 @@ says nothing about the feed being faithful to the market.
 | **Replay samples on frame arrival, live samples on a wall-clock tick** | The live sampler is a `tokio::time::interval`; the replay sampler is the same grid (`first frame + n x interval`) but can only fire when a frame gives it a clock, and a silence has no frames in it. A 5 s silence live yields up to 5 snapshots of an unchanged book, replay yields at most one | Comparing snapshot *counts* across a silent period between a live run and its replay, and any claim of live-to-replay byte equality. What is proven is fixture-to-fixture (or export-to-export) determinism: the same input gives the same bytes, hash-checked in `services/capture-rust/tests/fixtures/*.sha256` |
 | **Fixtures are seconds long, recorded on 2026-08-26** | Three fixtures, 10–20 s each | Replay determinism is proven over what the fixtures contain; a venue behaviour they lack is unproven until a new fixture carries it |
 
+**Resolved 2026-11-24** for the last row ([ADR-029](../adr/ADR-029-research-production-parity-contract.md) Outcome, 2026-11): the committed fixtures are now synthetic, generated in each venue's wire format by `scripts/make-synthetic-fixtures.py`, so they carry only the behaviours the generator writes; `make record-fixtures` runs the same replay tests over real sessions recorded locally and never committed, which is where a venue behaviour the generator lacks shows up.
+
 ## What this supports, stated positively
 
 - Candle and daily-bar research, and event-bar research at the catalogue thresholds

@@ -2,11 +2,11 @@
 bronze.py's pure parts: routing, drift detection, and the claim that the
 declared key sets match frames the venues actually sent.
 
-The fixtures under tests/fixtures/bronze/ are frames captured on 2026-08-27
-(docker/lake/README.md, "Bronze per venue"), trimmed to a few levels/trades but
-with every key the venue sent. A venue adding a field is caught here the day
-the fixture is refreshed, and nightly by maintenance.py's schema-drift audit
-until then.
+The fixtures under tests/fixtures/bronze/ are synthetic frames, one per table,
+written by scripts/make-synthetic-fixtures.py with every key the venue sends
+(docker/lake/README.md, "Bronze per venue"). A venue adding a field is caught
+nightly by maintenance.py's schema-drift audit, and here once the generator
+learns the key.
 
 bronze.py imports pyspark at module level, so the tests import the pure pieces
 through a stub: the dataclass, the tables, route() and drift() do not touch
@@ -67,9 +67,9 @@ def test_drift_reports_only_undeclared_keys(bronze):
 
 
 @pytest.mark.parametrize("name", ["binance_trade", "binance_depth20", "kraken_trade", "kraken_book", "kraken_instrument", "coinbase_market_trades", "coinbase_level2"])
-def test_declared_keys_match_a_captured_frame(bronze, name):
+def test_declared_keys_match_the_fixture_frame(bronze, name):
     t = next(t for t in bronze.VENUE_TABLES if t.name == name)
-    doc = json.loads((FIXTURES / f"{name}.json").read_text())
+    doc = json.loads((FIXTURES / f"synthetic-{name}.json").read_text())
     seen = {path: _keys_at(doc, path) for path in t.keys}
     assert bronze.drift(seen, t.keys) == {}, "the venue sends keys the table does not declare"
     for path, keys in t.keys.items():
