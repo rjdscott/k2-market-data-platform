@@ -30,3 +30,4 @@ and never renumbered.
 | Plan | Scope | Status |
 |------|-------|--------|
 | [2026-08-26-v3-quant-research-platform/](./2026-08-26-v3-quant-research-platform/README.md) | v3: Rust capture tier, lake-first Iceberg system of record, ClickHouse as derived hot tier, DuckDB query layer | Phases A–G; tracked via ADR-018+ and git tags |
+| [2026-11-24-governed-self-serve-platform/](./2026-11-24-governed-self-serve-platform/README.md) | Data contracts and a generator, Airflow 3 replacing Prefect, Trino and dbt marts, lineage, entitlements, a controls catalogue, SLOs and release engineering | Phases P0 to P6; tracked via ADR-031+ and git tags |
