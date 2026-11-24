@@ -28,7 +28,9 @@
   the image; `dbt deps` runs at image build, never at task time.
 - `profiles.yml` targets `trino` (runs), `athena` and `redshift` (placeholder settings).
 - Marts in `marts`, materialised as tables:
-  - `ohlcv_1d_aud`: daily OHLCV valued in AUD through `silver.fx_rates`.
+  - `ohlcv_1d_aud`: daily OHLCV valued in AUD through `silver.fx_rates`. AUD is chosen
+    because the ECB quotes neither USD/AUD nor AUD as a base: the rate has to be derived
+    from two euro crosses, which is the case worth testing. A EUR mart would be a lookup.
   - `venue_quality_scorecard`: per venue and day, from `lake.audit.checks`.
   - `ohlcv_delayed_20m`: rows older than 20 minutes only.
   - `ohlcv_1m`: the port of `gold.candles()` (`docker/lake/gold.py:316`), the worked example.

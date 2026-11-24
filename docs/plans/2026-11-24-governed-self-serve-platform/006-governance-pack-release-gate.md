@@ -2,7 +2,7 @@
 
 **Depends on:** P1 to P5
 **Decision it implements:** none new. It documents and proves the decisions under [ADR-031](../../adr/ADR-031-governed-self-serve-platform.md), which moves to Accepted here if every follow-on ADR landed.
-**Delivers:** the governance documents, a capability matrix whose every row links to its evidence, a ten-minute tour in the README, and a tagged release that passed the fresh-clone gate.
+**Delivers:** the governance documents, a capability matrix whose every row links to its evidence, the documentation map updated to reach it, and a tagged release that passed the fresh-clone gate.
 **Exit:** `/release-check` passes on a fresh clone with the default profile; `make check-docs` passes, which proves every evidence link in the matrix resolves; the golden path was followed from zero and the product it created ran one scheduled DAG run on the stack.
 
 ## Scope
@@ -36,8 +36,7 @@
 
 **README**
 
-- A "Ten-minute tour" section pointing at the matrix.
-- A short author paragraph in the README only.
+- The existing ten-minute path in `docs/README.md` gains the matrix as a stop.
 - The architecture diagram and the counts it quotes brought up to date.
 
 **Release gate**
