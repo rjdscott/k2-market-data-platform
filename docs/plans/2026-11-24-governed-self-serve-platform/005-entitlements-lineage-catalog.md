@@ -1,6 +1,6 @@
-# Phase P4: entitlements, retention as code, lineage and the catalog
+# Phase P5: entitlements, retention as code, lineage and the catalog
 
-**Depends on:** P1, P2, P3
+**Depends on:** P1 to P4
 **Decision it implements:** ADR-038 (OpenLineage for lineage, OpenMetadata for the catalog: one decision, the metadata stack) and ADR-039 (classification and entitlements), both written in this phase. ADR-039 lifts [ADR-028](../../adr/ADR-028-non-goals-and-honest-limits.md) §8 for the Trino path only and appends an Outcome there.
 **Delivers:** access rules generated from each contract, retention read from contracts, lineage events captured from all three engines in the default stack, and a catalog that models the four domains behind an opt-in profile.
 **Exit:** `scripts/entitlements-verify.sh` shows `delayed_reader` denied on `lake.gold.trades` and allowed on the delayed product; a test asserts captured lineage events name `raw.messages` as an input and a mart as an output; `maintenance.py` fails loudly when its retention config is missing; `make gates` stays green.
@@ -11,7 +11,7 @@
 
 - `k2gen` emitter: Trino file-based access rules from `classification` and `entitlement`.
   `realtime_reader` reads `gold` and `marts`. `delayed_reader` reads only products with
-  entitlement `delayed`. Neither writes. The `dbt` user writes `marts` only.
+  entitlement `delayed` or classification `public` (the FX rates and analytics). Neither writes. The `dbt` user writes `marts` only.
 - Offline test in `make test`: the generated rules match the contracts (every restricted
   product is absent from `delayed_reader`, every delayed product is present).
 - Live test, `scripts/entitlements-verify.sh`: both queries against the stack, asserting the

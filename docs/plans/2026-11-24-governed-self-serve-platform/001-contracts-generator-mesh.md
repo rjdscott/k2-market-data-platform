@@ -20,9 +20,9 @@
     `silver.trades_*`, `silver.book_*`, `gold.book_state`.
   - `reference-data` (source-aligned): `gold.dim_instrument`, `gold.dim_venue`.
     `config/instruments.yaml` is named as their upstream, not given a contract of its own.
-  - `fx-reference` (source-aligned): declared here, built in P3.
+  - `fx-reference` (source-aligned): declared here, built in P4.
   - `market-analytics` (consumer-aligned): `gold.trades`, `gold.ohlcv_*`, `gold.bars`,
-    `gold.bbo_1s`, `gold.book_top20`; the dbt marts are added in P3.
+    `gold.bbo_1s`, `gold.book_top20`; the dbt marts are added in P3 and the FX product in P4.
 - `contracts/schema/contract.schema.json`.
 - `platform/k2gen/`: its own `pyproject.toml` and `uv.lock`, following `notebooks/`. No
   `platform/__init__.py`. The DDL parser is one standard-library-only module; the two copies
@@ -44,11 +44,11 @@
   |---|---|---|
   | Iceberg DDL for products with inline columns | `docker/lake/ddl/generated/` | P1 |
   | Retention and snapshot expiry | `docker/lake/generated/retention.json` | P1 |
-  | Airflow DAG config for new products | `docker/airflow/dags/generated/` | P3 |
+  | Airflow DAG config for new products | `docker/airflow/dags/generated/` | P4 |
   | dbt sources and tests | `dbt/models/sources/` | P3 |
-  | Trino access rules | `docker/trino/etc/rules.json` | P4 |
-  | Catalog payloads | `generated/openmetadata/` | P4 |
-  | SLO rules and their tests | `docker/prometheus/rules/` and `rules/tests/` | P5 |
+  | Trino access rules | `docker/trino/etc/rules.json` | P5 |
+  | Catalog payloads | `generated/openmetadata/` | P5 |
+  | SLO rules and their tests | `docker/prometheus/rules/` and `rules/tests/` | P6 |
 
 - `docker/lake/apply_ddl.py` applies `lake.sql`, then `ddl/generated/`. Existing tables keep
   `lake.sql` as their DDL of record; the generator never rewrites it.
@@ -60,7 +60,7 @@
 
 **Documents.** `docs/architecture/18-data-mesh.md`, with `docs/architecture/README.md`,
 `00-start-here.md` and `docs/README.md` updated in the same pull request.
-`docs/development/golden-path.md` started; finished in P6 by following it from zero.
+`docs/development/golden-path.md` started; finished in P7 by following it from zero.
 
 ## Verification
 

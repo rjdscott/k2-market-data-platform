@@ -1,6 +1,6 @@
-# Phase P5: controls catalogue, SLOs and release engineering
+# Phase P6: controls catalogue, SLOs and release engineering
 
-**Depends on:** P1 to P4 (the controls collect evidence from what those phases built)
+**Depends on:** P1 to P5 (the controls collect evidence from what those phases built)
 **Decision it implements:** ADR-040 (controls catalogue as code), ADR-041 (SLOs and error budgets) and ADR-042 (release engineering), each written in the pull request that builds it. ADR-041 lifts [ADR-028](../../adr/ADR-028-non-goals-and-honest-limits.md) §10, whose own trigger is a recorded window of 24 h or more, and appends an Outcome there.
 **Delivers:** a compliance reporting model that runs daily on real evidence, SLOs with burn-rate alerts generated from contracts, and the release mechanics.
 **Exit:** `make compliance-report` renders from rows in `governance.control_evidence`, with one control shown failing and then passing after its cause is fixed; `make check-alerts` passes with the generated rules and their tests; every SLO target cites a benchmark window of at least 24 h; a contract change that drops a column without a major version bump fails CI.

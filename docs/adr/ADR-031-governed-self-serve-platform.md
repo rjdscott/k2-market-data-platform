@@ -65,7 +65,7 @@ makes one decision and lands, Accepted, in the pull request that builds it.
 | 034 | Airflow 3 replaces Prefect; default-profile budget of 20 CPU / 36 GiB | orchestration clauses of ADR-008, ADR-014, ADR-017, ADR-018; the 16 CPU clause of ADR-010 |
 | 035 | Trino and dbt for marts; Spark keeps ingest, backfill and compaction | departs from ADR-006 for marts; ADR-028 §6 for SQL serving; scopes ADR-029 §3 |
 | 036 | Layered data quality; write-audit-publish where a bad write can wait | |
-| 037 | An FX reference domain from ECB XML, in its own tables | ADR-028 §4 |
+| 037 | An FX reference domain from ECB reference rates; derivation in dbt, not at ingest | ADR-028 §4 |
 | 038 | OpenLineage for lineage, OpenMetadata for the catalog | |
 | 039 | Classification and entitlements, enforced on the Trino path | ADR-028 §8, for that path |
 | 040 | A controls catalogue as code | |

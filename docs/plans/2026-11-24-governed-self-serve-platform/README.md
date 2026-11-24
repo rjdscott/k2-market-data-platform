@@ -47,6 +47,11 @@ Umbrella decision: [ADR-031](../../adr/ADR-031-governed-self-serve-platform.md).
   Write-audit-publish on a branch applies to the FX ingest and fails closed. The
   `raw.messages` ingest gets a per-batch audit that always publishes, records the finding and
   alerts: the system of record must not stall behind its own audit.
+- The FX domain is the worked example of the platform improving a product. The source team
+  lands ECB reference rates exactly as published. A dbt product built on them adds a
+  cross-rate matrix, returns and volatility, an implied stablecoin basis and daily bars
+  valued in reporting currencies, behind one reusable conversion macro. Conventions are in
+  the phase file and ADR-037.
 - OpenLineage for lineage, captured to file in the default stack. OpenMetadata for the
   catalog behind an opt-in `governance` compose profile.
 - Classification and entitlement (realtime or delayed) drive access rules on the Trino path.
@@ -231,10 +236,11 @@ Principles the diagram encodes:
 | `000-prerequisites-guardrails.md` | P0 | Stack up, `make gates`, budget gate, lock exit code, Lakekeeper patch, stale facts | `make gates` green on the live stack; CI budget gate live |
 | `001-contracts-generator-mesh.md` | P1 | Contracts for every existing product, `k2gen`, four domains | drift check clean in CI |
 | `002-airflow-replaces-prefect.md` | P2 | Airflow 3, schedule shadow, cutover, Prefect archived | `make gates` green under Airflow; Prefect only where listed |
-| `003-trino-dbt-fx.md` | P3 | Trino, dbt marts, FX domain with write-audit-publish, quality results | dbt and Spark `ohlcv_1m` agree on the compared columns; a bad FX file never reaches `main` |
-| `004-entitlements-lineage-catalog.md` | P4 | Access rules, retention as code, lineage capture, catalog | `delayed_reader` denied on `gold.trades` through Trino; lineage events asserted |
-| `005-controls-slos-release.md` | P5 | Controls catalogue, SLO rules, release engineering, drills | `make compliance-report` renders from real evidence |
-| `006-governance-pack-release-gate.md` | P6 | Governance documents, capability matrix, fresh-clone gate | `/release-check` passes from a fresh clone |
+| `003-trino-dbt-marts.md` | P3 | Trino, dbt project and first marts, ingest batch audit, quality results | dbt and Spark `ohlcv_1m` agree on the compared columns |
+| `004-fx-data-product.md` | P4 | ECB rates behind write-audit-publish; dbt FX product: crosses, returns, volatility, stablecoin basis, bars in reporting currencies | `make parity-fx` passes; a bad FX file never reaches `main` |
+| `005-entitlements-lineage-catalog.md` | P5 | Access rules, retention as code, lineage capture, catalog | `delayed_reader` denied on `gold.trades` through Trino; lineage events asserted |
+| `006-controls-slos-release.md` | P6 | Controls catalogue, SLO rules, release engineering, drills | `make compliance-report` renders from real evidence |
+| `007-governance-pack-release-gate.md` | P7 | Governance documents, capability matrix, fresh-clone gate | `/release-check` passes from a fresh clone |
 
 Order is dependency, then risk. P0 exists because three later phases would otherwise each
 discover the same broken guardrail. Each phase file lists its pull requests; an ADR lands in
@@ -246,7 +252,7 @@ blue/green dbt deploys, the DR drill benchmark, the chaos extensions. A control 
 source was cut reports "not applicable" with the reason, never a pass. Never cut: the
 failure-mode tests, the runbooks, the provenance of a published number.
 
-**Estimate.** About eight working days for the must-have path, live-stack gates included.
+**Estimate.** About nine working days for the must-have path, live-stack gates included.
 This is a judgement, not a measurement.
 
 **Resource budget.** Limits to declare, estimated; each phase measures and records the real
@@ -265,8 +271,8 @@ figures in its ADR.
 | **Default profile, steady** | **18.20** | **34.189** | |
 | One-shots: the four existing and an Airflow migrate | +2.00 | +2.500 | |
 | **Default profile, bootstrap peak** | **20.20** | **36.689** | |
-| `governance`: OpenMetadata server, search engine, ingestion, Postgres | +2.50 | +5.500 | P4 |
-| `governance` one-shot: migrate | +0.50 | +1.500 | P4 |
+| `governance`: OpenMetadata server, search engine, ingestion, Postgres | +2.50 | +5.500 | P5 |
+| `governance` one-shot: migrate | +0.50 | +1.500 | P5 |
 | **With governance, bootstrap peak** | **23.20** | **43.689** | |
 
 The default bootstrap estimate is 0.20 CPU and 0.7 GiB over the ceiling. P2 and P3 must trim
@@ -294,13 +300,15 @@ Then `/release-check` on a fresh clone. With a 50 GB engine:
 | Unknown | Spike | Escape hatch |
 |---|---|---|
 | Lakekeeper 0.13.3 is behind its own patch line, which carries ref-handling fixes | P0: move to the newest 0.13.x, run `make gates` | Stay on 0.13.3; FX write-audit-publish becomes a staging table swapped by rename |
-| Branch write and fast-forward from Spark 3.5.5 with Iceberg 1.8.1, on a scratch table; readers see only `main` | First task of P3's FX pull request | The staging-table swap above |
+| Branch write and fast-forward from Spark 3.5.5 with Iceberg 1.8.1, on a scratch table; readers see only `main` | First task of P4 | The staging-table swap above |
 | Trino Iceberg REST connector against Lakekeeper: warehouse name, views, DuckDB reading a Trino-written table | First task of P3 | Delayed product as a scheduled dbt table; pin an older Trino |
+| An 8 MB XML string in one Iceberg row (the full ECB history file); 5 MB rows have strained compaction before | P4: load it once, run maintenance, measure | Keep the history file as an object in MinIO and store its path and hash |
+| The implied stablecoin basis is noisy across venues on thin days | P4: compute it over the existing history, look at the spread | Widen the minimum asset count; fall back to the flagged peg |
 | The newest Airflow 3 release is weeks old; cosmos and the OpenLineage provider may trail it | P2: pin the newest release cosmos supports outside beta | Pin one minor back |
 | dbt and Airflow dependencies clash in one image | P3 | Run dbt in its own container through `docker exec`, as Spark is |
 | `quote_volume` precision differs between Spark and Trino decimals | P3: `typeof` on both sides | Leave it out of the compared columns and say so |
-| OpenLineage Spark listener memory in a 2g driver that has hit OOM before | P4: measure peak RSS with it on | Dataset lineage from dbt and Airflow only; Spark at job level |
-| One Spark write and one dbt model produce one lineage edge in OpenMetadata | P4, before the service is added to compose | Catalog payloads generated and validated offline; service stays out |
+| OpenLineage Spark listener memory in a 2g driver that has hit OOM before | P5: measure peak RSS with it on | Dataset lineage from dbt and Airflow only; Spark at job level |
+| One Spark write and one dbt model produce one lineage edge in OpenMetadata | P5, before the service is added to compose | Catalog payloads generated and validated offline; service stays out |
 | One Postgres at 1 CPU serves Lakekeeper, Airflow and later the catalog | P2: cap connections per role, measure | A second Postgres for the governance profile |
 | A `docker exec` timeout kills the client, not the Spark driver, which keeps the lock | P2 | Timeout handler kills the recorded driver PID inside the container |
-| Fresh-clone time grows well past the measured 15 minutes ([fresh-install](../../runbooks/fresh-install.md)) | P6 | Publish the measured time |
+| Fresh-clone time grows well past the measured 15 minutes ([fresh-install](../../runbooks/fresh-install.md)) | P7 | Publish the measured time |
