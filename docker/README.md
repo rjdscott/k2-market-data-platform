@@ -15,7 +15,8 @@ docker/
 │   └── schema/           # Historical schema migration trail (not run)
 ├── lake/                 # v3 Iceberg lake on Lakekeeper + MinIO (ADR-018)
 │   ├── ddl/lake.sql      # raw.messages, bronze.*, audit.checks
-│   ├── apply_ddl.py      # Applies lake.sql (the lake-ddl one-shot)
+│   ├── ddl/generated/    # DDL written by k2gen generate for new products (none today)
+│   ├── apply_ddl.py      # Applies lake.sql, then ddl/generated/ (the lake-ddl one-shot)
 │   ├── init-lake.sh      # One-shot bootstrap: bucket, catalog, warehouse, namespaces
 │   ├── ingest.py         # Redpanda -> raw.messages -> bronze.* (Spark, every 5 min)
 │   ├── maintenance.py    # Compaction, snapshot expiry, orphan removal, nightly audit

@@ -16,7 +16,9 @@ compares them before the old path is deleted.
 | File | What it does |
 |---|---|
 | `ddl/lake.sql` | Every table: `raw.messages`, the six per-venue `bronze.<venue>_<msgtype>` plus `bronze.kraken_instrument`, silver, gold, and `audit.checks`. The Phase D unified `bronze.*` pair was dropped at the Phase E cutover (comment above `bronze.binance_trade`) |
-| `apply_ddl.py` | Applies that file. The `lake-ddl` one-shot runs it; idempotent, so a re-run is a no-op |
+| `ddl/generated/` | Written by `k2gen generate`, never by hand: DDL for data product contracts with inline columns ([ADR-032](../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)). None today |
+| `generated/retention.json` | Written by `k2gen generate`: snapshot expiry in days per table, from the contracts. Nothing reads it until phase P5 |
+| `apply_ddl.py` | Applies `ddl/lake.sql`, then `ddl/generated/*.sql` in name order. The `lake-ddl` one-shot runs it; idempotent, so a re-run is a no-op |
 | `spark_conf.py` | The one Spark session builder. Every catalog and S3 setting lives here, env-driven |
 | `init-lake.sh` | The `lake-init` one-shot: MinIO bucket, Lakekeeper bootstrap, warehouse, namespaces |
 | `offsets.py` | Pure offset bookkeeping. The exactly-once contract, and the only file with no Spark import |
