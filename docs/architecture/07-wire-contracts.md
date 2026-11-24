@@ -75,10 +75,10 @@ flowchart TB
   ([symbols and venues](02-market-data-concepts.md#symbols-and-venues)). One symbol's records stay ordered
   within a partition, and three venues' BTC/USD land on the same key. Twelve partitions because at most 12
   instruments per venue and the ClickHouse feeds run 2 consumers.
-- **Retention is a per-partition budget.** `retention.ms` 48 h and `retention.bytes` 512 MiB per partition
-  on `raw.*` (a 20 GB disk slice / 3 topics / 12 partitions, `init.sh`), 7 d on the derived topics.
+- **Retention is a per-partition budget.** `retention.ms` 48 h and `retention.bytes` 2 GiB per partition
+  on `raw.*` (raised from 512 MiB on 2026-11-25, arithmetic in `init.sh`), 7 d on the derived topics.
   Symbol-keyed partitions are uneven, so the busiest partition hits its byte cap first: measured 7 h on
-  Kraken partition 0 and accepted, because the bus is a buffer for a 5-minute ingest, not the archive.
+  Kraken partition 0 at the old 512 MiB cap (not yet measured at 2 GiB) and accepted, because the bus is a buffer for a 5-minute ingest, not the archive.
 - **Frame cap.** `max.message.bytes` 8 MiB on `raw.*` to fit Coinbase's ~5 MB `level2`
   subscribe snapshot; the capture's own cap matches.
 

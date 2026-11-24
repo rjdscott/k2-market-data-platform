@@ -149,7 +149,7 @@ the lake is fine.
 hot tier while the lake keeps advancing.
 
 **Expected behaviour**, this is a **cold start**, not a repair, and it is bounded by
-broker retention, not by need: raw topics keep **48 h** with a 512 MiB-per-partition byte
+broker retention, not by need: raw topics keep **48 h** with a 2 GiB-per-partition byte
 cap; `trades.*` and `book.*` keep **7 d** (`docker/redpanda/init.sh`). Whichever binds
 first is an open question the Phase D burn-in settles, so **check what is actually there
 before planning a replay** rather than trusting the time figure.

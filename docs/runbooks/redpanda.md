@@ -32,7 +32,7 @@ three `k2-capture-*` containers. Keys are plain UTF-8: `trades.*` and `book.*` k
 **canonical** symbol (`BTC/USDT`), `raw.*` on the **wire** symbol the venue used
 (`BTCUSDT`), a raw frame carries the venue's own name for the instrument. Frames that
 belong to no instrument (heartbeats, subscribe acks) have no key at all. Retention
-is 48 h + 512 MiB/partition on `raw.*` and 7 d on `trades.*`/`book.*`, set by
+is 48 h + 2 GiB/partition on `raw.*` and 7 d on `trades.*`/`book.*`, set by
 [`docker/redpanda/init.sh`](../../docker/redpanda/init.sh), which is also the authority
 on the topic table above.
 
@@ -244,7 +244,7 @@ docker exec k2-redpanda df -h /var/lib/redpanda/data
 ```
 
 **Resolution**:
-1. Check retention settings, the v3 `raw.*` topics cap at 512 MiB per partition
+1. Check retention settings, the v3 `raw.*` topics cap at 2 GiB per partition
    (`retention.bytes`) as well as 48 h, so they are bounded by design. Confirm with
    `rpk topic describe market.crypto.v3.raw.binance`.
 2. `trades.*` / `book.*` are 7 d, time-only; they are rebuildable from the lake, so a
