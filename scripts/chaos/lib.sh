@@ -220,10 +220,14 @@ pause_lake_ingest() {
   # lake-corrupt-payload run misread as "blocked by the bad record" (2026-08-27).
   local waited=0
   while docker exec "$SPARK_CONTAINER" pgrep -f 'lake/(ingest|maintenance)\.py' >/dev/null 2>&1; do
-    [ "$waited" -eq 0 ] && echo "→ waiting for the in-flight lake job to finish" >&2
-    sleep 5; waited=$((waited + 5))
-    [ "$waited" -ge 300 ] && die "a lake job has held the lock for 5 min — not starting another under it"
+    if [ "$waited" -eq 0 ]; then echo "→ waiting for the in-flight lake job to finish" >&2; fi
+    sleep "${K2_LAKE_WAIT_STEP:-5}"; waited=$((waited + 5))
+    if [ "$waited" -ge 300 ]; then die "a lake job has held the lock for 5 min, not starting another under it"; fi
   done
+  # Explicit: a `while` returns its last body command's status, and with the
+  # `[ ... ] && ...` form that was 1 whenever the loop had waited at all, so a
+  # caller under `set -e` died silently right after a successful wait.
+  return 0
 }
 
 # resume_lake_ingest — idempotent, so it is safe in a trap that may fire twice.

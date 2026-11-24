@@ -59,8 +59,10 @@ die() { printf 'lake-verify: %s\n' "$*" >&2; exit 1; }
 docker inspect -f '{{.State.Running}}' "$SPARK" 2>/dev/null | grep -qx true \
   || die "$SPARK is not running. Bring the stack up first: make up"
 
-pause_lake_ingest
+# Trap first: resume is a no-op until the pause records ids, and a death inside
+# the pause must not leave the schedule off.
 trap resume_lake_ingest EXIT
+pause_lake_ingest
 
 echo "── lake-verify ─────────────────────────────────────────────"
 echo "  container : $SPARK"
