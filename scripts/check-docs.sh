@@ -184,4 +184,34 @@ else
 fi
 rm -f "$out"
 
+# (h) no em-dash (U+2014) on a line added since origin/main
+# Repo-wide, not just the published docs: Markdown, Python, shell, SQL, YAML.
+# Existing files carry over 2,000 such lines and rewriting them is churn, so only
+# added lines are gated: commits since the merge base with origin/main, plus
+# uncommitted edits (`git diff <base>` reads the working tree) and untracked
+# files. CI checks out with fetch-depth 0 so the merge base exists there. The
+# character is built from its UTF-8 bytes so this file does not contain one.
+emdash=$(printf '\342\200\224')
+exts=('*.md' '*.py' '*.sh' '*.sql' '*.yml' '*.yaml')
+if base=$(git merge-base origin/main HEAD 2>/dev/null); then
+  out=$(mktemp)
+  {
+    git diff --unified=0 --no-color --no-ext-diff "$base" -- "${exts[@]}" | awk -v d="$emdash" '
+      /^\+\+\+ / { f = substr($0, 7); next }
+      /^@@/      { split($3, a, ","); n = substr(a[1], 2) + 0; next }
+      /^\+/      { if (index($0, d)) print f ":" n ": " substr($0, 2); n++ }'
+    git ls-files --others --exclude-standard -z -- "${exts[@]}" \
+      | xargs -0 -r grep -nHF "$emdash" || true
+  } > "$out"
+  if [ -s "$out" ]; then
+    bad "(h) em-dash on lines added since origin/main (use a comma, colon, or parentheses):"
+    sed 's/^/  /' "$out"
+  else
+    pass "(h) no em-dash on lines added since origin/main"
+  fi
+  rm -f "$out"
+else
+  note "(h) origin/main not found (no remote, or a shallow clone): skipping the added-line em-dash gate"
+fi
+
 exit "$fail"

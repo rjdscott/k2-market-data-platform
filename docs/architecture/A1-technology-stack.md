@@ -72,4 +72,4 @@ RSS on import alone against a 128 MB container limit.
 
 ## Not in the stack
 
-No API framework, no query engine beyond ClickHouse and Spark SQL, no Alertmanager, no Kubernetes, no service mesh, no distributed tracing. The v1 stack's Kafka, Confluent Schema Registry, Spark Structured Streaming, DuckDB, FastAPI and Kafka UI are all gone; that codebase is archived at [`legacy/v1/`](../../legacy/v1/README.md).
+No API framework, no query engine beyond ClickHouse, Spark SQL and the in-process DuckDB the research notebooks read the lake with ([`notebooks/k2lake.py`](../../notebooks/k2lake.py)), no Alertmanager, no Kubernetes, no service mesh, no distributed tracing. The v1 stack's Kafka, Confluent Schema Registry, Spark Structured Streaming, FastAPI and Kafka UI are all gone, as is v1's DuckDB query layer; that codebase is archived at [`legacy/v1/`](../../legacy/v1/README.md).

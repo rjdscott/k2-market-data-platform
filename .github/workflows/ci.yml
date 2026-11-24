@@ -138,22 +138,14 @@ jobs:
       - name: docker compose config
         run: docker compose --env-file .env.example config -q
 
-      # A service that declares no CPU or memory limit silently escapes the
-      # 16 CPU / 40 GB budget ADR-010 states, and nothing else would notice.
-      - name: every service declares resource limits
-        run: |
-          docker compose --env-file .env.example config \
-            | python3 -c '
-          import sys, yaml
-          services = yaml.safe_load(sys.stdin)["services"]
-          missing = [
-              name for name, svc in services.items()
-              if not (svc.get("deploy") or {}).get("resources", {}).get("limits")
-          ]
-          if missing:
-              sys.exit("services with no deploy.resources.limits: " + ", ".join(missing))
-          print(f"{len(services)} services, all with limits")
-          '
+      # Prints the steady default, bootstrap default and bootstrap with
+      # --profile governance limit sums, and fails when the steady default is
+      # over the 16 CPU / 40 GB ADR-010 states. Also fails a service in either
+      # config with no CPU or memory limit (it would escape the budget and
+      # nothing else would notice), an untagged or `latest` image, and an
+      # unpinned FROM or pip install in a Dockerfile. Stdlib only.
+      - name: resource budget, limits and pins
+        run: python3 scripts/check-budget.py
 
   docs:
     name: Docs (link/word/rule gates)
@@ -161,7 +153,11 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      # Full history: gate (h) diffs against the merge base with origin/main,
+      # which a depth-1 checkout does not have.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - run: bash scripts/check-docs.sh
 

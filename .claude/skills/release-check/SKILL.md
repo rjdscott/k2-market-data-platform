@@ -40,14 +40,34 @@ and its logs.
 Allow a few minutes of trades to land first.
 
 ```bash
-# Silver: all three exchanges producing
+# ClickHouse gold, fed straight from Redpanda: all three exchanges producing
+# (the query scripts/health.sh runs). There is no k2 database any more, only gold.
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count() FROM k2.silver_trades GROUP BY exchange ORDER BY exchange"
+  "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange ORDER BY exchange"
 # → three rows, all non-zero
-
-# Gold: candles materialising
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT count() FROM k2.ohlcv_1m"
+  "SELECT exchange, count() FROM gold.book_top20 GROUP BY exchange ORDER BY exchange"
+# → three rows, all non-zero
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
+  "SELECT count() FROM gold.ohlcv_live(bucket = 60) WHERE window_start > now() - INTERVAL 10 MINUTE"
+# → non-zero: candles on read over the deduplicated trades
+
+# Lake: every layer committed, through the same Spark session scripts/lake-verify.sh
+# opens. Needs the first lake-ingest-5min run to have finished (`make health` step 3).
+docker exec -i k2-spark-iceberg python3 - /home/iceberg/lake <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from spark_conf import lake_session
+spark = lake_session("k2-release-check")
+try:
+    for t in ("raw.messages", "bronze.binance_trade", "bronze.kraken_trade",
+              "bronze.coinbase_market_trades", "silver.trades_binance",
+              "silver.trades_kraken", "silver.trades_coinbase", "gold.trades", "gold.ohlcv_1m"):
+        print(t, spark.sql(f"SELECT count(*) FROM lake.{t}").collect()[0][0])
+finally:
+    spark.stop()
+PY
+# → every count non-zero
 
 # Redpanda: topics and consumers
 docker exec k2-redpanda rpk cluster health
@@ -68,7 +88,7 @@ curl -su "admin:$GRAFANA_PASSWORD" localhost:3000/api/search | jq -r '.[].title'
 ## 4. Tests
 
 ```bash
-make test    # kotlin (docker) + python (uv)
+make test    # python (uv) + rust (docker) + clickhouse gold schema (docker) + notebook helpers (uv)
 make parity-ohlcv parity-bars   # live three-way parity at tests/parity/pinned.json (ADR-029); needs the stack from step 2
 ```
 
