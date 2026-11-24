@@ -214,4 +214,25 @@ else
   note "(h) origin/main not found (no remote, or a shallow clone): skipping the added-line em-dash gate"
 fi
 
+# (i) fixture and sample data is synthetic or declared
+# The repository ships no real venue market data (README, "What this is, and
+# data terms"). A tracked data file under a fixtures/ or samples/ directory, or
+# named *sample*, is either named synthetic-* (scripts/make-synthetic-fixtures.py
+# writes those) or listed by path in NOTICE with its source and terms. Code
+# files (*.py and the like) are not data and are not checked.
+out=$(mktemp)
+git ls-files | grep -iE '(^|/)(fixtures|samples)/|sample[^/]*$' \
+  | grep -iE '\.(json|jsonl|ndjson|csv|tsv|txt|parquet|avro|pcap|pcapng|bin|gz|zst|sha256)$' \
+  | while IFS= read -r f; do
+      case "$(basename "$f")" in synthetic-*) continue ;; esac
+      grep -qF "$f" NOTICE 2>/dev/null || echo "$f"
+    done > "$out" || true
+if [ -s "$out" ]; then
+  bad "(i) fixture/sample data neither named synthetic-* nor listed in NOTICE:"
+  sed 's/^/  /' "$out"
+else
+  pass "(i) fixture and sample data is synthetic or listed in NOTICE"
+fi
+rm -f "$out"
+
 exit "$fail"
