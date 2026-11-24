@@ -188,7 +188,7 @@ engines and identical in value:
 
 | Product | Order | Source |
 |---|---|---|
-| lake `gold.ohlcv_*` | `(exchange_ts, recv_ts_ns, trade_seq)` | `docker/lake/gold.py:310,313` — `min_by`/`max_by` over `struct(...)` |
+| lake `gold.ohlcv_*` | `(exchange_ts, recv_ts_ns, trade_seq)` | `docker/lake/gold.py:328,331`, `min_by`/`max_by` over `struct(...)` |
 | lake `gold.bars`, `k2lake.bars()` | `(exchange_ts, recv_ts_ns, trade_seq)` | `docker/lake/bars.py:33`, `notebooks/k2lake.py:153-154` |
 | ClickHouse `gold.ohlcv_live` | `(exchange_ts, recv_ts_ns, toUInt64OrZero(trade_id))` | `10-gold-tables.sql:157,160` |
 
@@ -285,7 +285,7 @@ What the archive knows about its own holes. None of these exist in ClickHouse.
 | `precision_loss` | `silver.trades_*` | price or qty needs more than 8 decimals; the 1e-8 fixed point of gold cannot hold it |
 | `checksum_ok` | `silver.book_kraken`, `gold.book_top20`, `gold.bbo_1s` | Kraken's CRC32 verified by replaying the connection's book at the pair's precision. `NULL` = precision unknown or the venue publishes no checksum |
 | `seq_gap` | `silver.book_binance` | `lastUpdateId` did not advance past the previous frame on this connection |
-| `audit.checks` | `lake.audit.checks` | one row per check per run: `offset_continuity`, `duplicate_identifiers`, `sequence_gaps`, `venue_replay`, `unresolvable_schema_id`, `offset_gap`, `manual_purge`. `passed = false` is what makes a maintenance run exit non-zero |
+| `audit.checks` | `lake.audit.checks` | one row per check per run. Maintenance writes the names in `AUDITS` (`docker/lake/maintenance.py`): `offset_continuity`, `duplicate_identifiers`, `bronze_unparseable`, `bronze_schema_drift`, `silver_parity`, `silver_flags` (informational), `gold_parity`, `ohlcv_parity`, `bars_parity`, `kraken_checksum`. The ingest writes `unresolvable_schema_id`, `bronze_parity` and `offset_gap`; an operator `manual_purge` and `checksum_failure_acknowledged`; `scripts/replay-lake.sh` writes `replay`. `passed = false` is what makes a maintenance run exit non-zero |
 | `gold.feed_errors` | ClickHouse | the served tier's counterpart: Kafka records the decoder rejected, with their bytes |
 
 ## Where parity is checked

@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health test test-python test-rust test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run
+.PHONY: chaos help up down logs ps health gates test test-python test-rust test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -19,7 +19,7 @@ dev-up: ## Bring the stack up the safe way (override, rebuild, recreate mount ho
 health: ## Is it up: every service healthy, a message on every venue in the last 2 min, last lake commit + ingest run
 	bash scripts/health.sh
 
-check-docs: ## Doc gates (links, forbidden words, promtool, runbook paths, capacity-model gate)
+check-docs: ## Doc gates (links, forbidden words, promtool, runbook paths, capacity-model gate, no em-dash on added lines)
 	bash scripts/check-docs.sh
 
 down:  ## Stop the stack (volumes kept)
@@ -32,6 +32,17 @@ ps:  ## Show service status
 	docker compose ps
 
 test: test-python test-rust test-clickhouse test-notebooks  ## Run all unit tests
+
+# One recipe line per gate, not prerequisites: recipe lines run in order and
+# stop at the first failure even under `make -j`, where prerequisites would not
+# keep their order.
+gates:  ## Every gate before a merge, in order, stopping at the first failure: test, lake-verify, parity-ohlcv, parity-bars, check-alerts, check-docs (needs the LIVE stack)
+	$(MAKE) test
+	$(MAKE) lake-verify
+	$(MAKE) parity-ohlcv
+	$(MAKE) parity-bars
+	$(MAKE) check-alerts
+	$(MAKE) check-docs
 
 
 test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs uv)
@@ -72,9 +83,9 @@ build-capture:  ## Build k2-capture:v3 from the repo root, stamping the git sha
 	docker compose build capture-binance
 
 check-alerts:  ## promtool: syntax-check every rule file and run the capture + lake alert unit tests
-	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus \
+	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus:v3.2.0 \
 	  -c 'promtool check rules /p/rules/*.yml'
-	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus \
+	docker run --rm -v "$(CURDIR)/docker/prometheus":/p --entrypoint sh prom/prometheus:v3.2.0 \
 	  -c 'promtool test rules /p/tests/*.test.yml /p/rules/tests/*_test.yml'
 
 lint:  ## Ruff over the v3 lake and the tests (same scope as CI)

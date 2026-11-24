@@ -180,6 +180,9 @@ LAKE_DEPLOYMENT="${K2_LAKE_DEPLOYMENT:-lake-ingest/lake-ingest-5min}"
 PREFECT_CONTAINER="${K2_PREFECT_CONTAINER:-k2-prefect-server}"
 SPARK_CONTAINER="${K2_SPARK_CONTAINER:-k2-spark-iceberg}"
 LAKE_SCHEDULE_IDS=""
+LAKE_POOL="${K2_LAKE_POOL:-lake}"
+LAKE_QUEUE="${K2_LAKE_QUEUE:-default}"
+LAKE_QUEUE_PAUSED=""
 
 # _lake_schedules -> whitespace-separated ids of the ACTIVE schedules for
 # LAKE_DEPLOYMENT.
@@ -213,6 +216,19 @@ pause_lake_ingest() {
       prefect deployment schedule pause "$LAKE_DEPLOYMENT" "$id" >/dev/null 2>&1 \
       || echo "→ WARNING: could not pause schedule $id" >&2
   done
+  # A schedule pause deletes only FUTURE auto-scheduled runs. Past-due runs and
+  # runs waiting on the deployment's concurrency slot still dispatch, and after
+  # an outage there is a backlog of them: on 2026-11-24 two fired inside a
+  # lake-verify window. A paused work queue dispatches nothing, whatever state
+  # the run is in. Only un-pause it in the trap if this run paused it.
+  if docker exec "$PREFECT_CONTAINER" prefect work-queue inspect "$LAKE_QUEUE" --pool "$LAKE_POOL" -o json 2>/dev/null \
+       | grep -q '"is_paused": false'; then
+    if docker exec "$PREFECT_CONTAINER" prefect work-queue pause "$LAKE_QUEUE" --pool "$LAKE_POOL" >/dev/null 2>&1; then
+      LAKE_QUEUE_PAUSED=1
+    else
+      echo "→ WARNING: could not pause work queue $LAKE_POOL/$LAKE_QUEUE" >&2
+    fi
+  fi
   echo "→ paused $LAKE_DEPLOYMENT for the duration of this run" >&2
   # Pausing the schedule does not stop a run already in flight, and every lake
   # writer takes the same flock (docker/lake/lock.py) — an ingest this script
@@ -220,15 +236,24 @@ pause_lake_ingest() {
   # lake-corrupt-payload run misread as "blocked by the bad record" (2026-08-27).
   local waited=0
   while docker exec "$SPARK_CONTAINER" pgrep -f 'lake/(ingest|maintenance)\.py' >/dev/null 2>&1; do
-    [ "$waited" -eq 0 ] && echo "→ waiting for the in-flight lake job to finish" >&2
-    sleep 5; waited=$((waited + 5))
-    [ "$waited" -ge 300 ] && die "a lake job has held the lock for 5 min — not starting another under it"
+    if [ "$waited" -eq 0 ]; then echo "→ waiting for the in-flight lake job to finish" >&2; fi
+    sleep "${K2_LAKE_WAIT_STEP:-5}"; waited=$((waited + 5))
+    if [ "$waited" -ge 300 ]; then die "a lake job has held the lock for 5 min, not starting another under it"; fi
   done
+  # Explicit: a `while` returns its last body command's status, and with the
+  # `[ ... ] && ...` form that was 1 whenever the loop had waited at all, so a
+  # caller under `set -e` died silently right after a successful wait.
+  return 0
 }
 
 # resume_lake_ingest — idempotent, so it is safe in a trap that may fire twice.
 resume_lake_ingest() {
   local id
+  if [ -n "$LAKE_QUEUE_PAUSED" ]; then
+    docker exec "$PREFECT_CONTAINER" prefect work-queue resume "$LAKE_QUEUE" --pool "$LAKE_POOL" >/dev/null 2>&1 \
+      || echo "→ WARNING: could not resume work queue $LAKE_POOL/$LAKE_QUEUE, resume it by hand" >&2
+    LAKE_QUEUE_PAUSED=""
+  fi
   [ -n "$LAKE_SCHEDULE_IDS" ] || return 0
   for id in $LAKE_SCHEDULE_IDS; do
     docker exec "$PREFECT_CONTAINER" \

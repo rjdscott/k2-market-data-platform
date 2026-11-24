@@ -40,7 +40,6 @@ the README links here rather than repeating it.
 | http://localhost:8123 (`/play` for a query box) | ClickHouse: the gold hot tier | `default` / `$CLICKHOUSE_PASSWORD`; research reads `quant` / `$K2_QUANT_PASSWORD` (read-only, `gold` only) | `SELECT count() FROM gold.trades FINAL`. Native protocol from the host is `--port 9002` |
 | http://localhost:18080 | Spark master UI | none | mostly empty by design: the lake jobs run as **local** drivers and never register with the master. A running job's own UI is http://localhost:4040, and only while it runs |
 | http://localhost:8889 | JupyterLab, the K2 research notebooks — `make notebooks` | token printed by the command | [`notebooks/README.md`](../../notebooks/README.md) |
-| http://127.0.0.1:8888 | the Spark image's **vendor** Iceberg sample notebooks, not K2's | none (loopback only, deliberately) | nothing, normally — K2's notebooks are 8889 |
 
 Also listening: Redpanda Kafka API `9092`, Admin API `9644`, Schema Registry `8081`;
 ClickHouse native `9002`, Prometheus metrics `9363`; MinIO S3 API `9000`; PostgreSQL (Prefect + Lakekeeper) `15432` on localhost only.

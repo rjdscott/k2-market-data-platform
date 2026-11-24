@@ -83,7 +83,7 @@ works, and the practices that enforce it.
 | [027](./docs/adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync | Raw keeps the deltas; the product is what research joins against |
 | [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect: reversed | A wrong call kept on the record with its outcome |
 
-All 27 ADRs: [`docs/adr/`](./docs/adr/README.md).
+All 31 ADRs: [`docs/adr/`](./docs/adr/README.md).
 
 ## Measured
 
@@ -165,7 +165,7 @@ previous version of this table was 60 / 229 / 9 against a reality of 68 / 287 / 
 | Python: 287 tests [^py] over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
-| Prometheus rule unit tests (17 of 28 alerts) and 8 documentation gates | `bash scripts/check-docs.sh` |
+| Prometheus rule unit tests (17 of 28 alerts) and 9 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
@@ -173,8 +173,8 @@ previous version of this table was 60 / 229 / 9 against a reality of 68 / 287 / 
 [^ch]: the count `scripts/clickhouse-schema-test.sh` itself asserts (`[ "$n" -eq 10 ]`)
 
 CI ([`ci.yml`](./.github/workflows/ci.yml)) runs rust (fmt, clippy `-D warnings`, test),
-python (Ruff, pytest), clickhouse-schema, a docker build matrix, compose validation, the
-documentation gates and Trivy on every pull request.
+python (Ruff, pytest), clickhouse-schema, a docker build matrix, compose validation with
+the resource-budget and pin checks, the documentation gates and Trivy on every pull request.
 
 ## Repository layout
 

@@ -91,7 +91,7 @@ def venue_depth(exchange: str) -> int:
 
 # The two dimensions, in ddl/lake.sql's column order — `writeTo(...).append()`
 # resolves positionally, so the tuple order and the schema string are the
-# contract with the DDL, and tests/test_wire_format.py asserts they agree.
+# contract with the DDL, and tests/test_lake_scd2.py asserts they agree.
 DIM_INSTRUMENT_COLUMNS = (
     "instrument_id", "exchange", "canonical_symbol", "symbol", "base", "quote", "book_depth",
     "subscribed", "tick_size", "qty_increment", "price_precision", "qty_precision",

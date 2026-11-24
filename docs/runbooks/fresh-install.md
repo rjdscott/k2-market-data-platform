@@ -15,7 +15,9 @@ upgrading a stack that already holds data, and it does not cover restoring the l
 
 ## Prerequisites
 
-- A Docker engine with **at least 24 GB of memory** so every declared limit is honoured.
+- A Docker engine with **at least 28 GiB of memory** so every declared limit is honoured,
+  including the 27.125 GiB bootstrap peak while the one-shots run
+  ([docker-resources.md](../operations/docker-resources.md)).
   Measured usage on a fresh install is far lower (~4.5 GiB RSS total; largest single
   container ClickHouse at 1.13 GiB).
 - **Any core count.** `.env.example` ships `K2_CAPTURE_CPUSET=` and `K2_HEAVY_CPUSET=`

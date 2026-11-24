@@ -15,14 +15,14 @@ compares them before the old path is deleted.
 
 | File | What it does |
 |---|---|
-| `ddl/lake.sql` | Every table: `raw.messages`, the unified `bronze.*` pair, the six per-venue `bronze.<venue>_<msgtype>`, and `audit.checks` |
+| `ddl/lake.sql` | Every table: `raw.messages`, the six per-venue `bronze.<venue>_<msgtype>` plus `bronze.kraken_instrument`, silver, gold, and `audit.checks`. The Phase D unified `bronze.*` pair was dropped at the Phase E cutover (comment above `bronze.binance_trade`) |
 | `apply_ddl.py` | Applies that file. The `lake-ddl` one-shot runs it; idempotent, so a re-run is a no-op |
 | `spark_conf.py` | The one Spark session builder. Every catalog and S3 setting lives here, env-driven |
 | `init-lake.sh` | The `lake-init` one-shot: MinIO bucket, Lakekeeper bootstrap, warehouse, namespaces |
 | `offsets.py` | Pure offset bookkeeping. The exactly-once contract, and the only file with no Spark import |
 | `wire.py` | The Confluent framing, as a Python parser and as the Spark SQL the executors run |
 | `catalog.py` | Snapshot bookkeeping, the registry fetch by id, and how a running job files an audit row. Shared by the next three |
-| `ingest.py` | Stage 1 Kafka → `raw.messages`, stage 2 `raw.messages` → unified `bronze.*`, stage 2b → per venue |
+| `ingest.py` | Stage 1 Kafka → `raw.messages`, stage 2 `raw.messages` → per-venue `bronze.<venue>_*`, then stages 2c to 2e: silver, gold, books, in the same run |
 | `bronze.py` | Stage 2b: the six per-venue tables, decoded from the venue JSON in `raw.*`, vendor field names and types as sent |
 | `silver.py` | Stage 2c: `silver.trades_<venue>`, bronze frames typed, one row per trade, canonical symbol from the registry, replay / gap / precision flags |
 | `instruments.py` | The registry (`config/instruments.yaml`) as silver needs it: native → canonical, failing loudly on an unknown symbol |

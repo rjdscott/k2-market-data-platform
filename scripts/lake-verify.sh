@@ -59,8 +59,10 @@ die() { printf 'lake-verify: %s\n' "$*" >&2; exit 1; }
 docker inspect -f '{{.State.Running}}' "$SPARK" 2>/dev/null | grep -qx true \
   || die "$SPARK is not running. Bring the stack up first: make up"
 
-pause_lake_ingest
+# Trap first: resume is a no-op until the pause records ids, and a death inside
+# the pause must not leave the schedule off.
 trap resume_lake_ingest EXIT
+pause_lake_ingest
 
 echo "── lake-verify ─────────────────────────────────────────────"
 echo "  container : $SPARK"
@@ -167,10 +169,18 @@ try:
     # this adds is the other half: a summary whose total-records disagrees with
     # COUNT(*) means a commit landed rows without the bookkeeping that describes
     # them, which is the one way the offsets could be right and the lake wrong.
-    claimed = int(summary.get("total-records", -1)) if summary else -1
-    actual = spark.sql(f"SELECT count(*) FROM {RAW_TABLE}").collect()[0][0]
+    # Both numbers at ONE snapshot. COUNT(*) at "current" raced every commit
+    # that landed while the checks above ran: on 2026-11-24 two queued runs
+    # added 679,304 rows between the two reads and this failed on a sound lake.
+    row = spark.sql(
+        f"SELECT snapshot_id, summary['total-records'] FROM {RAW_TABLE}.snapshots "
+        f"WHERE summary['{O.JOB}'] = '{O.JOB_INGEST}' ORDER BY committed_at DESC LIMIT 1"
+    ).collect()
+    sid, claimed = (row[0][0], int(row[0][1])) if row else (None, -1)
+    actual = (spark.sql(f"SELECT count(*) FROM {RAW_TABLE} VERSION AS OF {sid}").collect()[0][0]
+              if sid else -2)
     check("summary matches table", claimed == actual,
-          f"snapshot says {claimed} rows, COUNT(*) says {actual}")
+          f"@ {sid}: snapshot says {claimed} rows, COUNT(*) says {actual}")
 finally:
     spark.stop()
 
