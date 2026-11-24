@@ -76,5 +76,5 @@ straight from Redpanda, and the v2 `k2` database was dropped at the Phase E cuto
 ## Related
 
 - [Architecture](../architecture/), how the pipeline is designed
-- [Decisions](../adr/), ADR-001 … ADR-030
+- [Decisions](../adr/), ADR-001 … ADR-031
 - [Development](../development/), [setup](../development/setup.md), [testing](../development/testing.md)

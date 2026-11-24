@@ -30,3 +30,5 @@ and never renumbered.
 | Plan | Scope | Status |
 |------|-------|--------|
 | [2026-08-26-v3-quant-research-platform/](./2026-08-26-v3-quant-research-platform/README.md) | v3: Rust capture tier, lake-first Iceberg system of record, ClickHouse as derived hot tier, DuckDB query layer | Phases A–G; tracked via ADR-018+ and git tags |
+| [2026-11-24-governed-self-serve-platform/](./2026-11-24-governed-self-serve-platform/README.md) | Data contracts and a generator, Airflow 3 replacing Prefect, Trino and dbt marts, lineage, entitlements, an FX data product, a controls catalogue, SLOs and release engineering | Phases P0 to P7; tracked via ADR-031+ and git tags |
+| [2026-11-24-venue-reference-bars/](./2026-11-24-venue-reference-bars/README.md) | Venue-published daily bars as an independent product; reconciliation of captured bars against them, published in the catalog; a day-level trust signal | Phases V0 to V2; follows the governed self-serve platform plan |
