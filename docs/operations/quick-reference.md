@@ -213,19 +213,18 @@ docker exec k2-trino trino --execute \
 docker exec k2-trino trino --execute "SELECT run_started_at, tested, test_name, status, message
   FROM market_analytics.dq.dbt_test_results WHERE status <> 'pass' ORDER BY run_started_at DESC LIMIT 20"
 #   (no rows: every recorded test passed)
-# And every result in one place, the lake's audits too, through the governance view. Ran on
-# make test-dbt's throwaway Trino (dbt/README.md); the governance catalog reaches the stack
-# with its rollout.
+# And every result in one place, the lake's audits too, through the governance view. Ran
+# against k2-trino on the live stack on 2026-11-25, after the governance rollout.
 docker exec k2-trino trino --execute "SELECT checked_at, source_system, domain, subject, check_name, status, detail
   FROM governance.quality_results.dq_results WHERE status <> 'pass' ORDER BY checked_at DESC LIMIT 20"
+#   rows of source_system lake_audit only, checks offset_gap and duplicate_identifiers, status
+#   fail: the lake's recorded findings from earlier outages. No dbt row: every test passed.
 
 # Rebuild them now rather than at minute 10 (the DAG runs each domain as its writer).
 # Ran on 2026-11-25 in a throwaway container of the same image, before the DAG's rollout.
 docker exec k2-airflow-scheduler airflow dags trigger dbt_marts
 ```
 
-<!-- VERIFY (ADR-046 rollout): run the governance.quality_results.dq_results query above on the
-live stack once catalog governance exists, and paste what it prints. -->
 
 ## When something breaks
 
