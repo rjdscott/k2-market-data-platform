@@ -14,8 +14,8 @@ code once it is.
 ## First run
 
 ```bash
-cp .env.example .env      # then replace every change-me-in-production value
-make up
+cp .env.example .env      # then replace every change-me-in-production value (openssl rand -hex 24)
+make up                   # refuses while one is left, or MINIO_ROOT_USER = MINIO_ROOT_PASSWORD
 make health
 ```
 
@@ -43,8 +43,8 @@ password.
 
 ### The safe bring-up (after the first run)
 
-`make up` is the raw `docker compose up -d`. For everyday use, `make dev-up` runs the
-maintainer's bring-up checklist instead: it sets `K2_PREFECT_PORT` when host port 4200 is
+`make up` is `scripts/check-env.sh`, then the raw `docker compose up -d`. For everyday use,
+`make dev-up` runs the maintainer's bring-up checklist instead: the same `.env` check, then it sets `K2_PREFECT_PORT` when host port 4200 is
 busy, recreates any service holding a directory bind mount that changed in the last commit
 (see the [bind-mount gotcha](../../docker/README.md#troubleshooting)), then runs
 `scripts/health.sh` — the same checks as `make health` — before declaring success.

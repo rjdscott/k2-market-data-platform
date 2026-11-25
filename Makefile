@@ -10,7 +10,8 @@ export K2_GIT_SHA
 help:  ## Show available targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /\t/'
 
-up:  ## Start the full stack (builds images on first run)
+up:  ## Start the full stack (builds images on first run); refuses a .env with placeholder or guessable secrets
+	bash scripts/check-env.sh
 	docker compose up -d
 
 dev-up: ## Bring the stack up the safe way (override, rebuild, recreate mount holders, health, data-flow probe)
