@@ -140,6 +140,8 @@ SHOTS = [
         file="10-airflow-dags.png", section="Scheduling", title="Airflow: DAGs",
         url="http://localhost:8090/dags", app="airflow", height=720,
         ready="text=lake_maintenance",
+        # A run in flight shows a spinner as its state badge, most of every 5 minutes.
+        busy_ok=True,
         read="The three lake DAGs: lake_ingest every 5 minutes, lake_maintenance daily at 03:00, "
              "lake_rebuild on demand only. Each shows its last run and a strip of recent run states.",
         leads_to="docs/runbooks/airflow-scheduling.md",
