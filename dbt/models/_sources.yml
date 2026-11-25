@@ -73,7 +73,7 @@ sources:
       description: Sum of qty, base currency, exact
     - name: quote_volume
       data_type: decimal(38,10)
-      description: Sum of price x qty, quote currency, exact
+      description: Sum of price x qty, quote currency; Spark decimal multiplication rounds each product to 6 decimal places, so the column holds 6 places in a DECIMAL(38,10)
     - name: trade_count
       data_type: bigint
     - name: open_time
