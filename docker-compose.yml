@@ -703,8 +703,18 @@ services:
       <<: *airflow-env
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "True"
     command: ["scheduler"]
+    # lake-ddl too: lake_maintenance starts unpaused and runs its latest 03:00
+    # slot as soon as it is parsed, and on a fresh clone that must not reach
+    # the Spark container before the tables exist (retries=0: a failed run and
+    # an alert on every fresh install). The cost is prefect-worker's reason
+    # for not gating: a DDL that fails at boot leaves the scheduler down until
+    # `docker compose up -d` runs again, which AirflowSchedulerHeartbeatLost
+    # reports within 5 minutes. A later `up` of this service re-runs the
+    # idempotent one-shots it depends on; `--no-deps` does not.
     depends_on:
       airflow-migrate:
+        condition: service_completed_successfully
+      lake-ddl:
         condition: service_completed_successfully
     stop_grace_period: 45s
     deploy:
