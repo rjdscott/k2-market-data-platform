@@ -47,7 +47,7 @@ flowchart TB
     NB["DuckDB notebooks"]
     subgraph OBS["Observability"]
         PR["Prometheus v3.2 · 28 rules"]
-        GR["Grafana 11.5 · 4 dashboards"]
+        GR["Grafana 11.5 · 6 dashboards"]
     end
 
     BIN --> FHB

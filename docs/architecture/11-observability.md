@@ -4,7 +4,7 @@
 > **Read this if** operators, anyone adding an alert.
 > **Before this** chapter 04.
 
-Prometheus scrapes every tier, 28 rules carry runbooks and `promtool` cases, four Grafana
+Prometheus scrapes every tier, 28 rules carry runbooks and `promtool` cases, six Grafana
 dashboards ship from the repo, and the failure modes those rules watch are induced on purpose
 with timed recovery. No Alertmanager: rules are evaluated and shown, not routed. Operator
 detail: [operations/observability.md](../operations/observability.md); FMEA:
@@ -57,10 +57,11 @@ flowchart TB
   H["ClickHouse · :9363<br/>ClickHouseProfileEvents_*, parts"]
   R["Redpanda · :9644"]
   L["lake-metrics · :8000<br/>k2_lake_* from snapshot summaries"]
+  A["cAdvisor · :8080<br/>CPU, memory, cgroup limits per container"]
   P["Prometheus v3.2<br/>rules/*.yml · 28 alerts"]
-  G["Grafana 11.5<br/>4 dashboards"]
+  G["Grafana 11.5<br/>6 dashboards"]
   X["scripts/chaos/*.sh<br/>induce · time · record"]
-  C & H & R & L --> P --> G
+  C & H & R & L & A --> P --> G
   X -.->|"proves"| P
 ```
 
@@ -79,8 +80,10 @@ flowchart TB
   annotation that gate (d) of `check-docs.sh` resolves to a file; unit tests sit in
   `docker/prometheus/tests/*.test.yml` and `rules/tests/*_test.yml`, both run by gate (c2).
   Prometheus loads rules at start or `SIGHUP`, so the docs say so.
+- **Containers**: cAdvisor reports each container's CPU and memory, and the limits compose gave
+  its cgroup, so the K2 Resources dashboard plots use against limit with no limit typed twice.
 - **Dashboards** are JSON in `docker/grafana/dashboards/`: pipeline overview, capture, lake,
-  ClickHouse. All four query Prometheus; no ClickHouse datasource is provisioned. Notebooks
+  ClickHouse, Airflow, resources. All six query Prometheus; no ClickHouse datasource is provisioned. Notebooks
   and `make parity-ohlcv` use the read-only `quant` user.
 - **Chaos** scripts in `scripts/chaos/` stop or corrupt one thing, watch the alert that should
   fire, time recovery, and append a row to `scripts/chaos/results/`. Measured: lake ingest

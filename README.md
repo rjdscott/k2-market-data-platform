@@ -58,7 +58,7 @@ flowchart TB
     RAW --> BR --> SV --> GD
   end
   N["DuckDB notebooks"]:::nb
-  O["Prometheus · 28 rules<br/>Grafana · 4 dashboards"]:::ob
+  O["Prometheus · 28 rules<br/>Grafana · 6 dashboards"]:::ob
 
   E --> F --> R
   R -->|Kafka engine| C
