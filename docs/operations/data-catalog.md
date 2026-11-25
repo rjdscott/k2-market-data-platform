@@ -55,8 +55,8 @@ Every table is Iceberg format-version 2, Parquet + zstd, copy-on-write, append-o
 ([`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) header). Namespaces are
 `raw`, `bronze`, `silver`, `gold`, `audit`
 ([`docker/lake/init-lake.sh`](../../docker/lake/init-lake.sh) line 133). The dbt marts will
-live in a second warehouse, `marts`, the only one Trino writes; it holds nothing yet
-([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)).
+live in one warehouse per data domain, the only places Trino writes; they hold nothing yet
+([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)).
 
 | Table | Grain — one row per … | Partition / sort | Time column (unit, zone) | Symbol columns | Identifier (dedup key) | Populated by |
 |---|---|---|---|---|---|---|

@@ -199,7 +199,7 @@ SHOTS = [
         url="http://localhost:3000/d/k2-resources", app="grafana", height=1520,
         ready=panel("Every container against its compose limit"),
         callouts=[
-            (1, panel("CPU limits against the 25-core ceiling"), "declared CPU limits of the running containers, against ADR-035's ceiling"),
+            (1, panel("CPU limits against the 25-core ceiling"), "declared CPU limits of the running containers, against ADR-045's ceiling"),
             (2, panel("Every container against its compose limit"), "each container's CPU and memory against the limit read from its cgroup"),
             (3, panel("CPU throttled share"), "containers their CPU limit is holding back"),
         ],

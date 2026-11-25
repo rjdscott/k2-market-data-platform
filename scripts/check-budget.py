@@ -8,7 +8,7 @@ with `--profile legacy`, prints four limit sums and exits 1 on any of:
 
 - the bootstrap default (every default-profile service, one-shots included,
   because they run beside the rest at `docker compose up`) above 25 CPU /
-  48 GiB, the ceiling ADR-035 sets in place of ADR-034's 20 CPU / 36 GiB
+  48 GiB, the ceiling ADR-045 sets in place of ADR-034's 20 CPU / 36 GiB
   (which replaced ADR-010's 16 CPU / 40 GB). The steady default and the two
   profiled bootstraps are reported only: no service has the governance profile
   today, so its line equals the default, and legacy is the Prefect rollback,

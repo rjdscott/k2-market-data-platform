@@ -3,12 +3,12 @@
 Every long-running service in [`docker-compose.yml`](../../docker-compose.yml) declares a
 hard `limit` and a guaranteed `reservation`; the one-shot init containers declare limits
 only. The ceiling is **25 CPU / 48 GiB at the bootstrap peak**
-([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md), which superseded the 20 CPU / 36 GiB of
+([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md), which superseded the 20 CPU / 36 GiB of
 [ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md), which superseded the 16-core / 40 GB
 target of [ADR-010](../adr/ADR-010-resource-budget.md)), and `scripts/check-budget.py` fails CI
 over it. The host gives Docker 28 CPUs and 49.5 GiB; three cores and 1.5 GiB stay outside the
 ceiling for the operating system and the engine, which is enough only because measured use is
-far below the declared limits (ADR-035).
+far below the declared limits (ADR-045).
 
 **As built, steady state: 19.30 CPU / 34.312 GiB across 19 long-running services.**
 **One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 21.30 CPU / 36.812 GiB

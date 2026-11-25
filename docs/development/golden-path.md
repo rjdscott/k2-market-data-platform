@@ -63,7 +63,7 @@ git status --short
 
 ```
 cd platform/k2gen && uv run --locked -q k2gen generate
-k2gen generate: 14 files, docker/lake/generated/retention.json and under docker/lake/ddl/generated, docs/products
+k2gen generate: 24 files: docker/lake/generated/retention.json, docker/lake/generated/warehouses.txt, docker/trino/etc/rules.json, the domain catalogs in docker/trino/etc/catalog and docker/trino/test/local, and under docker/lake/ddl/generated, docs/products
  M docker/lake/ddl/generated/README.md
  M docker/lake/generated/retention.json
  M docs/products/README.md
@@ -107,7 +107,7 @@ git status --porcelain | wc -l
 
 ```
 cd platform/k2gen && uv run --locked -q k2gen generate
-k2gen generate: 12 files, docker/lake/generated/retention.json and under docker/lake/ddl/generated, docs/products
+k2gen generate: 22 files: docker/lake/generated/retention.json, docker/lake/generated/warehouses.txt, docker/trino/etc/rules.json, the domain catalogs in docker/trino/etc/catalog and docker/trino/test/local, and under docker/lake/ddl/generated, docs/products
 0
 ```
 

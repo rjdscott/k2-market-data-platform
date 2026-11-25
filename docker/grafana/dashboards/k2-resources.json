@@ -90,7 +90,7 @@
       "id": 3,
       "type": "gauge",
       "title": "CPU limits against the 25-core ceiling",
-      "description": "Sum of every running container's CPU limit. The ceiling is ADR-035's 25 CPU / 48 GiB, which scripts/check-budget.py gates at the bootstrap peak: every default service's limit, the five one-shots included. A one-shot that has exited has no cgroup, so this sum is the long-running services only, and sits below the gated figure by the one-shots' 2 CPU / 2.5 GiB.",
+      "description": "Sum of every running container's CPU limit. The ceiling is ADR-045's 25 CPU / 48 GiB, which scripts/check-budget.py gates at the bootstrap peak: every default service's limit, the five one-shots included. A one-shot that has exited has no cgroup, so this sum is the long-running services only, and sits below the gated figure by the one-shots' 2 CPU / 2.5 GiB.",
       "gridPos": {
         "h": 6,
         "w": 7,
@@ -220,7 +220,7 @@
       "id": 5,
       "type": "gauge",
       "title": "Memory limits against the 48 GiB ceiling",
-      "description": "Sum of every running container's memory limit. The ceiling is ADR-035's 25 CPU / 48 GiB, which scripts/check-budget.py gates at the bootstrap peak: every default service's limit, the five one-shots included. A one-shot that has exited has no cgroup, so this sum is the long-running services only, and sits below the gated figure by the one-shots' 2 CPU / 2.5 GiB.",
+      "description": "Sum of every running container's memory limit. The ceiling is ADR-045's 25 CPU / 48 GiB, which scripts/check-budget.py gates at the bootstrap peak: every default service's limit, the five one-shots included. A one-shot that has exited has no cgroup, so this sum is the long-running services only, and sits below the gated figure by the one-shots' 2 CPU / 2.5 GiB.",
       "gridPos": {
         "h": 6,
         "w": 7,
