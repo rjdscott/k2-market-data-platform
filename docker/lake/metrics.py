@@ -66,6 +66,7 @@ KAFKA_BACKLOG = "k2.kafka-backlog"
 AUDIT_FAILURES = "k2.audit-failures"
 UNRESOLVABLE_IDS = "k2.unresolvable-schema-ids"
 OFFSET_GAPS = "k2.offset-gaps"
+BATCH_AUDIT_FAILURES = "k2.batch-audit-failures"
 
 # ── timestamps, not ages ────────────────────────────────────────────────────
 #
@@ -126,6 +127,12 @@ offset_gaps = Gauge(
     "Partitions the most recent ingest resumed past evicted records, with --accept-data-loss. "
     "The durable record is the offset_gap row in lake.audit.checks; this gauge only says "
     "it just happened",
+)
+batch_audit_failures = Gauge(
+    "k2_lake_batch_audit_failures_total",
+    "Partitions whose stage-1 batch did not match its planned offset range, in the most recent "
+    "ingest that found one; 0 once that is 15 minutes old. The durable record is the "
+    "batch_offsets row in lake.audit.checks (ADR-047)",
 )
 disk_used_ratio = Gauge(
     "k2_lake_disk_used_ratio",
@@ -367,6 +374,9 @@ def refresh(prefix: str, now: float) -> int:
             # clean ingest commits nothing here at all.
             unresolvable_schema_ids.set(fresh_ingest_value(snapshots, UNRESOLVABLE_IDS, now))
             offset_gaps.set(fresh_ingest_value(snapshots, OFFSET_GAPS, now))
+            # The third (ADR-047): filed only by a batch that failed its audit,
+            # so a pulse like offset_gaps, and held up only while batches keep failing.
+            batch_audit_failures.set(fresh_ingest_value(snapshots, BATCH_AUDIT_FAILURES, now))
 
     _refresh_disk()
     scrape_errors.set(errors)

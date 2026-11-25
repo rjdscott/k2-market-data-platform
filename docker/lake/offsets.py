@@ -38,7 +38,7 @@ MAX_KAFKA_TS = "k2.max-kafka-ts"
 SRC_SNAPSHOT_ID = "k2.src-snapshot-id"
 AUDIT_FAILURES = "k2.audit-failures"
 
-# Per-finding counts, written by the two ingest-side audit paths. They are
+# Per-finding counts, written by the ingest-side audit paths. They are
 # separate properties rather than one shared `k2.audit-failures` because
 # docker/lake/metrics.py reads each gauge off the newest ingest snapshot that
 # CARRIES ITS KEY: with one shared count, an offset_gap commit would set
@@ -46,6 +46,10 @@ AUDIT_FAILURES = "k2.audit-failures"
 # and vice versa. One key per gauge is what keeps the two findings independent.
 UNRESOLVABLE_IDS = "k2.unresolvable-schema-ids"
 OFFSET_GAPS = "k2.offset-gaps"
+BATCH_AUDIT_FAILURES = "k2.batch-audit-failures"
+
+# The check_name stage 1's batch audit files under (`batch_audit` below, ADR-047).
+BATCH_AUDIT = "batch_offsets"
 
 # Values for the JOB property.
 JOB_INGEST = "ingest"
@@ -275,6 +279,59 @@ def latest_summary(snapshots: list, job: str):
     if not matching:
         return None
     return max(matching, key=lambda pair: pair[0])[1]
+
+
+def batch_audit(starts: dict, ends: dict, found: list) -> list:
+    """The batch stage 1 just committed, against the range it planned to read.
+
+    `starts` and `ends` are the pinned range the read used, AFTER any
+    `--accept-data-loss` skip; `found` is `[(topic, partition, rows, first,
+    last)]` aggregated over the files the commit added. A partition passes iff
+    it wrote exactly `end - start` rows, the first at `start` and the last at
+    `end - 1`. A partition planned empty passes iff it wrote nothing.
+
+    Comparing against the post-skip `starts` is what keeps an eviction from
+    being reported twice: the evicted range was never planned, so it is not
+    missing from the batch, and its `offset_gap` row is the only record of it.
+
+    One failure per (topic, partition) however many of the three numbers are
+    wrong, so a run's rows can never collide on (run_ts, scope, check_name).
+    `observed` is planned minus written: records missing, negative for extra
+    rows, the same sign `offset_gaps` uses.
+
+    ponytail: count, min and max, the same arithmetic as the nightly
+    `offset_continuity`, so one hole and one duplicate in the same partition of
+    the same batch net to a pass. Add `count(DISTINCT offset)` to the aggregate
+    if a duplicate inside one batch is ever seen.
+    """
+    seen = {(topic, int(p)): (int(n), int(lo), int(hi)) for topic, p, n, lo, hi in found}
+    planned = [
+        (topic, int(p), int(starts[topic][p]), int(end))
+        for topic in sorted(ends)
+        for p, end in sorted(ends[topic].items())
+    ]
+    failures = []
+    for topic, partition, start, end in planned:
+        got = seen.pop((topic, partition), None)
+        if got != ((end - start, start, end - 1) if end > start else None):
+            failures.append(_batch_failure(topic, partition, start, end, got))
+    # Rows from a partition the run did not plan at all.
+    for (topic, partition), got in sorted(seen.items()):
+        failures.append(_batch_failure(topic, partition, 0, 0, got))
+    return failures
+
+
+def _batch_failure(topic: str, partition: int, start: int, end: int, got) -> dict:
+    def span(n, first, last):
+        return f"{n} at {first}..{last}" if n else "none"
+
+    return {
+        "scope": f"{topic}/{partition}",
+        "observed": (end - start) - (got[0] if got else 0),
+        "detail": "planned {}, found {}".format(
+            span(end - start, start, end - 1), span(*got) if got else "none"
+        ),
+    }
 
 
 def offset_gaps(rows: list) -> list:

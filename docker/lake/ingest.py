@@ -19,6 +19,10 @@ partition. The Kafka value is stored byte for byte, Confluent framing included.
 Nothing is parsed, reformatted or validated on the way in; that is what makes
 this the system of record rather than a view of one (ADR-018).
 
+**Then the batch audit** (ADR-047): once the commit has landed, the files it
+added are aggregated per partition and checked against the planned range. A
+mismatch is an `audit.checks` row and an alert, never a blocked commit.
+
 **Bounded, and nothing payload-bearing is cached.** Both properties are the same
 fix. An unbounded first run over a 48-hour retention put 41.5 M records through a
 `persist(DISK_ONLY)` — which serialises via the in-memory columnar cache — and
@@ -63,6 +67,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 import books
@@ -344,7 +349,81 @@ def stage_raw(
     )
     written = added_records(spark, RAW_TABLE)
     print(f"stage 1: {written} rows -> {RAW_TABLE} (max kafka_ts {max_kafka_ts})")
+    # After the commit, never before it, and never able to undo it (ADR-047).
+    audit_batch(spark, starts, ends, ingest_ts)
     return written
+
+
+def audit_batch(spark, starts: dict, ends: dict, run_ts: datetime) -> list:
+    """Check the batch just committed against the range it planned. Never raises.
+
+    Per (topic, partition): rows written equal `end - start`, the first offset
+    is `start` and the last is `end - 1` (`offsets.batch_audit`). A mismatch
+    is a `batch_offsets` row in `audit.checks`, job `ingest`, one per
+    partition, and `k2.batch-audit-failures` on that commit is what
+    `k2_lake_batch_audit_failures_total` and LakeIngestBatchAuditFailed read.
+    A clean batch files nothing: the raw.messages commit is already the record
+    that the batch ran.
+
+    **It audits after publishing, not before** (ADR-047). Holding the commit
+    until the audit passes would hold the offsets too, and Redpanda's per-
+    partition byte cap evicts unread records sooner than a person can answer
+    an alert. So the commit stands whatever this finds, and an audit that
+    cannot run is itself a finding rather than a failed ingest.
+    """
+    began = time.monotonic()
+    try:
+        failures = O.batch_audit(starts, ends, _batch_offsets(spark))
+    except Exception as exc:  # noqa: BLE001 - the batch is committed; this must not undo the run
+        failures = [
+            {"scope": RAW_TABLE, "observed": -1, "detail": f"batch audit raised {type(exc).__name__}: {exc}"}
+        ]
+    for f in failures:
+        print(f"stage 1: BATCH AUDIT FAILED {f['scope']}: {f['detail']}", file=sys.stderr)
+    if failures:
+        rows = [
+            Row(
+                run_ts=run_ts,
+                job=O.JOB_INGEST,
+                check_name=O.BATCH_AUDIT,
+                scope=f["scope"],
+                passed=False,
+                observed=int(f["observed"]),
+                detail=f["detail"],
+            )
+            for f in failures
+        ]
+        # Best-effort, like the schema-id path: a finding that cannot be filed
+        # is printed above and must not become a second failure.
+        write_audit_rows(spark, rows, {O.BATCH_AUDIT_FAILURES: str(len(rows))})
+    print(f"stage 1: batch audit {len(failures)} failure(s) in {time.monotonic() - began:.1f}s")
+    return failures
+
+
+def _batch_offsets(spark) -> list:
+    """`[(topic, partition, rows, first, last)]` over the files the current snapshot added.
+
+    An incremental read of one snapshot, the one stage 1 just committed under
+    the writer lock, so nothing else can be current. Three narrow columns are
+    projected, so Parquet never decodes `payload` or `headers`, and nothing is
+    cached: see "What one run may read" in docker/lake/README.md.
+    """
+    snap = current_snapshot_id(spark, RAW_TABLE)
+    parent = spark.sql(
+        f"SELECT parent_id FROM {RAW_TABLE}.snapshots WHERE snapshot_id = {snap}"
+    ).collect()[0][0]
+    reader = spark.read.format("iceberg")
+    if parent is None:  # the table's first commit is the whole table
+        reader = reader.option("snapshot-id", snap)
+    else:
+        reader = reader.option("start-snapshot-id", parent).option("end-snapshot-id", snap)
+    rows = (
+        reader.load(RAW_TABLE)
+        .groupBy("topic", "partition")
+        .agg(F.count(F.lit(1)), F.min("offset"), F.max("offset"))
+        .collect()
+    )
+    return [tuple(r) for r in rows]
 
 
 def _accept_data_loss(
