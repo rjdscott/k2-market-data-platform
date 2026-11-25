@@ -1,6 +1,6 @@
 # ADR-034: Airflow 3 replaces Prefect; the default profile's ceiling is 20 CPU / 36 GiB
 
-**Status:** Accepted; the 20 CPU / 36 GiB ceiling **superseded by [ADR-035](ADR-035-trino-and-dbt-for-marts.md)** (24 CPU / 42 GiB at the bootstrap peak; scoped, the rest stands)
+**Status:** Accepted; the 20 CPU / 36 GiB ceiling **superseded by [ADR-035](ADR-035-trino-and-dbt-for-marts.md)** (25 CPU / 48 GiB at the bootstrap peak; scoped, the rest stands)
 **Date:** 2026-11-25
 **Author:** Rob Scott
 **Category:** Orchestration, Infrastructure
@@ -411,20 +411,18 @@ whatever the quota; whether to set the thread count is a separate decision.
 ## Outcome (2026-11-25, the ceiling)
 
 **The 20 CPU / 36 GiB clause is superseded by
-[ADR-035](ADR-035-trino-and-dbt-for-marts.md): 24 CPU / 42 GiB at the bootstrap peak**,
-gated the same way by `scripts/check-budget.py`. The owner's decision, 2026-11-25: the host
-gives Docker 28 CPUs and 49.50 GiB, whole-stack use over 6 hours peaked near 3.6 cores and
-7.3 GiB of process memory (the owner's reading of cAdvisor on the K2 Resources dashboard),
-the ceiling is a sum of declared limits, and the
-platform runs as one always-on whole. Four cores stay outside it for the operating system
-and the engine. The Revisit trigger above, "the default bootstrap peak would pass 20 CPU or
-36 GiB, which P3's Trino estimate does", fired as predicted: Trino at 2.0 CPU / 4 GiB puts the
-peak at 21.30 CPU / 36.812 GiB across 24 services.
+[ADR-035](ADR-035-trino-and-dbt-for-marts.md): 25 CPU / 48 GiB at the bootstrap peak**,
+gated the same way by `scripts/check-budget.py`. The owner's decision, 2026-11-25. The
+Revisit trigger above, "the default bootstrap peak would pass 20 CPU or 36 GiB, which P3's
+Trino estimate does unless P3 trims first", fired as written: P3 did not trim, and Trino at
+2.0 CPU / 4 GiB puts the peak at 21.30 CPU / 36.812 GiB across 24 services. ADR-035 records
+the reasoning, including the host's 28 CPUs and 49.50 GiB and the measured use of the whole
+stack, and the triggers for the new figure.
 
 The sentence "The `governance` profile is outside it" no longer describes the direction.
-Later phases run their services always-on inside the ceiling, with no opt-in profile. No
-service has the `governance` profile today, so `check-budget.py`'s governance line equals the
-default one.
+The maintainer's direction is one always-on platform with no opt-in profiles: later phases
+run their services inside the ceiling, measured on first boot. No service has the
+`governance` profile today, so `check-budget.py`'s governance line equals the default one.
 
 ---
 

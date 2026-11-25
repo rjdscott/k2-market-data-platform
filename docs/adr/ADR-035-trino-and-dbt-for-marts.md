@@ -1,4 +1,4 @@
-# ADR-035: Trino and dbt for marts; the Spark and dbt boundary; the ceiling is 24 CPU / 42 GiB
+# ADR-035: Trino and dbt for marts; the Spark and dbt boundary; the ceiling is 25 CPU / 48 GiB
 
 **Status:** Accepted
 **Date:** 2026-11-25
@@ -29,11 +29,23 @@ Three earlier decisions stand in the way:
 The budget: [ADR-034](ADR-034-airflow-3-replaces-prefect.md) set 20 CPU / 36 GiB at the
 bootstrap peak, and the stack declares 19.30 CPU / 32.812 GiB there
 (`python3 scripts/check-budget.py`, 2026-11-25). The plan estimated Trino at 2.0 CPU / 4 GiB,
-which does not fit. The engine on the reference host has 28 CPUs and 53,149,339,648 bytes
-(49.50 GiB) (`docker info --format '{{.NCPU}} {{.MemTotal}}'`, 2026-11-25). Whole-stack use
-over 6 hours on 2026-11-25 peaked near 3.6 cores and 7.3 GiB of process memory (the owner's
-reading of the cAdvisor series on the K2 Resources dashboard). The ceiling is a sum of declared
-limits, not of use.
+which does not fit. [ADR-031](ADR-031-governed-self-serve-platform.md), still Proposed,
+committed the platform to 20 CPU / 36 GiB at the bootstrap peak and named a default-profile
+bootstrap total above either figure as its revisit trigger. That trigger has fired, and this
+ADR is the response.
+
+The engine on the reference host has 28 CPUs and 53,149,339,648 bytes (49.50 GiB)
+(`docker info --format '{{.NCPU}} {{.MemTotal}}'`, 2026-11-25). Measured use of the whole
+stack is far below any of these sums. Over the 6 hours to 2026-11-25 12:17 UTC, a window that
+includes the Trino spike containers and the running `k2-trino`, the peak was **3.84 cores**
+and **10.12 GiB** (10,864,435,200 bytes) of process memory, from Prometheus over cAdvisor:
+
+```
+max_over_time(sum(rate(container_cpu_usage_seconds_total{job="cadvisor"}[1m]))[6h:1m])
+max_over_time(sum(container_memory_rss{job="cadvisor"})[6h:1m])
+```
+
+The ceiling is a sum of declared limits, not of use.
 
 What Trino does on this lake was measured before deciding, on the running stack, with
 Trino 484 in throwaway containers (commands and results in
@@ -52,10 +64,11 @@ Trino 484 in throwaway containers (commands and results in
 | Iceberg REST view | created and read back, stored with dialect `trino`; DuckDB 1.4.4 does not list it (`Table with name ... does not exist!`); Spark 3.5.5 reads it only when its SQL also parses as Spark SQL (`to_iso8601` failed with `Cannot load function`) | `CREATE VIEW` in Trino, then a read from each engine |
 | A Trino-written table, read elsewhere | DuckDB 1.4.4 and Spark 3.5.5 both read it, types intact | DuckDB `ATTACH` as `scripts/parity_ohlcv.py` does; `lake_session()` in `k2-spark-iceberg` |
 | Snapshot summary | `engine-name: trino`, `engine-version: 484`, `trino_query_id`, `trino_user`, the standard totals; no `k2.*` key | the table's `snapshots` over REST |
-| Session time zone | the client's zone; a client that sends none gets the JVM's, pinned by `-Duser.timezone=UTC` even with `TZ=Australia/Sydney` in the container | `SELECT current_timezone()` from the CLI and from a raw HTTP request |
+| Session time zone | the client's zone; a client that sends none gets the JVM's, pinned by `-Duser.timezone=UTC` even with a non-UTC zone (for example `TZ=America/New_York`) set in the container | `SELECT current_timezone()` from the CLI and from a raw HTTP request |
 | Decimal arithmetic | `DECIMAL(38,10) * DECIMAL(38,10)` is typed `decimal(38,6)` and fails with `Decimal overflow` once the exact product passes about 1e18; `gold.candles()`'s `quote_volume` expression, ported verbatim, fails on `gold.trades` | `SELECT CAST(10000000000 AS DECIMAL(38,10)) * CAST(10000000000 AS DECIMAL(38,10))` |
-| 1 CPU / 2 GiB, heap 1280M | the `gold.candles()` aggregation over all of `gold.trades` as a CTAS: 21.3 s, peak 1.41 GiB, no OOM | `docker stats` sampled during the query |
-| 2 CPU / 4 GiB, heap 2816M | idle 1.42 GiB; the same aggregation read only: 6.6 s alone, four at once 12.5 s each at most, peak 2.86 GiB and 2.15 cores, no OOM | `system.runtime.queries`, `docker stats` |
+| 1 CPU / 2 GiB, heap 1280M | the `gold.candles()` aggregation over all of `gold.trades` in its integer-product form (`DECIMAL(38,0)` product, not the verbatim expression that overflows), as a CTAS into the spike's scratch namespace, since dropped: 21.3 s, peak 1.41 GiB, no OOM | `docker stats` sampled during the query |
+| 2 CPU / 4 GiB, heap 2816M | idle 1.42 GiB; the candle aggregation (open, high, low, close, volume, count) over all of `gold.trades`, read only: 6.6 s alone, four at once 12.5 s each at most, peak 2.86 GiB and 2.15 cores, no OOM | `system.runtime.queries`, `docker stats` |
+| The closed paths, probed on `k2-trino` (the compose service, this configuration) | `CREATE TABLE marts.esc.t (x integer) WITH (location='s3://k2-lake/warehouse/k2/_escape_test')`: `Failed to create transaction`, Lakekeeper refused a location outside warehouse `marts` and nothing was created; `CALL marts.system.register_table(...)` and `CALL lake.system.unregister_table('gold','nope')`: `Access Denied: Cannot execute procedure ...`; `ALTER TABLE marts.esc.a EXECUTE add_files(location => 's3://k2-lake/warehouse/k2/_escape_test', format => 'PARQUET')`: `add_files procedure is disabled` | each statement, 2026-11-25 |
 
 ---
 
@@ -63,7 +76,7 @@ Trino 484 in throwaway containers (commands and results in
 
 **We will run one Trino 484 node beside Spark as the lake's SQL engine for consumers and for
 dbt-built marts, with the lake's catalog read-only at the connector and marts in a second
-Lakekeeper warehouse of their own, and raise the default profile's ceiling to 24 CPU / 42 GiB
+Lakekeeper warehouse of their own, and raise the default profile's ceiling to 25 CPU / 48 GiB
 at the bootstrap peak, because consumer marts need an engine that reads this lake through its
 REST catalog without sharing the ingest's container, nothing that engine does may commit to
 the system of record, and the platform is to run always-on as one whole.** Scope: SQL
@@ -96,7 +109,11 @@ does stop them, and keeps the marts' files under a prefix of their own.
 
 A model that needs an offset, the lock or code per record is a Spark job. A model that is a
 `SELECT` over lake tables is a dbt model. Spark does not write warehouse `marts`; Trino
-writes nothing else. `maintenance.py` will compact and expire the marts like every other
+writes nothing else. Every object Trino owns, views included, lives in catalog `marts`. So the
+phase's planned `governance.dq_results` view, which the phase file places in a `governance`
+namespace of the lake, lands in catalog `marts` too (for example `marts.governance.dq_results`),
+reading `lake.audit.checks` and the dbt test results from there: a second, named departure
+from the phase file's wording, for the same reason as the first. `maintenance.py` will compact and expire the marts like every other
 table once the first one exists (P3, the next pull request).
 
 **What the spike fixed in the configuration** (`docker/trino/etc/`):
@@ -138,13 +155,24 @@ dbt's `ohlcv_1m`, the worked example, keeps the full check against Spark's `gold
 a pinned snapshot. ADR-028 section 6 is lifted for SQL serving only; an HTTP API stays a
 non-goal, and section 8 stands.
 
-**The ceiling.** 24 CPU / 42 GiB at the bootstrap peak, summed over every default-profile
+**The ceiling.** 25 CPU / 48 GiB at the bootstrap peak, summed over every default-profile
 service's `deploy.resources.limits`, one-shots included, gated by
 `scripts/check-budget.py` in CI. It supersedes ADR-034's 20 CPU / 36 GiB clause and nothing
-else in ADR-034. Four of the host's 28 cores and 7.5 of its 49.5 GiB stay outside it for the
-operating system and the engine. Later phases run always-on inside it: there is no opt-in
-profile for the platform layer, so ADR-034's sentence that the `governance` profile is
-outside the ceiling no longer describes the direction.
+else in ADR-034. The maintainer's direction is one always-on platform with no opt-in
+profiles, so ADR-034's sentence that the `governance` profile is outside the ceiling no
+longer describes it.
+
+Why 25 / 48: the plan's estimate for the always-on catalog phase is +3.00 CPU / +7.000 GiB
+(the OpenMetadata services at +2.50 / +5.500 and their migrate one-shot at +0.50 / +1.500,
+plan README lines 356 to 357). On today's 21.30 CPU / 36.812 GiB that is 24.30 CPU /
+43.812 GiB, and 25 / 48 covers it with 0.70 CPU and 4.188 GiB to spare. The catalog phase
+still measures on first boot and records its own figures in its ADR; it no longer has to
+reopen the ceiling on the plan's estimate.
+
+The honest cost: Docker has 28 CPUs and 49.50 GiB on this host, so a stack that ever reached
+all its memory limits at once would leave 3 cores and 1.50 GiB for the engine and the
+operating system. That is accepted because the ceiling is a sum of declared limits and
+measured use is far below it: 3.84 cores and 10.12 GiB at the 6-hour peak above.
 
 | | Services | CPU | GiB |
 |---|---|---|---|
@@ -154,7 +182,7 @@ outside the ceiling no longer describes the direction.
 | This pull request, bootstrap peak (gated) | 24 | **21.30** | **36.812** |
 | With `--profile legacy` (reported) | 26 | 22.80 | 38.312 |
 
-Headroom at the gated peak: 2.70 CPU and 5.188 GiB (`python3 scripts/check-budget.py`,
+Headroom at the gated peak: 3.70 CPU and 11.188 GiB (`python3 scripts/check-budget.py`,
 2026-11-25).
 
 ---
@@ -176,10 +204,10 @@ Headroom at the gated peak: 2.70 CPU and 5.188 GiB (`python3 scripts/check-budge
 - **ADR-006's objection holds for ETL and not for this.** Trino does not take over the ingest,
   backfill or compaction. Its floor was predicted at 2 to 4 GB; one query ran at 2 GiB, and
   4 GiB carried four concurrent aggregations at 2.86 GiB.
-- **The ceiling follows the host and the stated aim.** The owner's decision (2026-11-25): a
-  platform that runs as one always-on whole, on a host that gives Docker 28 cores and 49.5 GiB,
-  with measured use a small fraction of either. The ceiling is set by the host, not fitted to
-  the sum of the day.
+- **The ceiling follows the stated aim and the measured use.** The maintainer's decision
+  (2026-11-25): one always-on platform, sized so the next planned phase fits on its own
+  estimate, on a host whose measured use (3.84 cores, 10.12 GiB) is a small fraction of the
+  declared sum.
 
 ---
 
@@ -194,6 +222,7 @@ Headroom at the gated peak: 2.70 CPU and 5.188 GiB (`python3 scripts/check-budge
 | ClickHouse as the mart engine | ClickHouse is a derived tier that originates nothing (ADR-025); 24.3 reads Iceberg and does not write it |
 | Trino at 1 CPU / 2 GiB | ran every single query in the spike; concurrency was not measured at that size, and dbt runs models in parallel |
 | Trino 483 or older | 484 is the release the spike measured; nothing in it failed that an older one would fix |
+| 24 CPU / 42 GiB, this pull request's first figure | covers today's 21.30 / 36.812 but not the catalog phase's estimate of 24.30 / 43.812, which would have reopened the ceiling one phase later |
 | Keep 20 CPU / 36 GiB and trim elsewhere | 1.30 CPU and 0.812 GiB would come out of other services' limits, and ADR-034 keeps Airflow's at the plan's figures until real ingests are measured; ADR-031 rejected opt-in profiles for the platform layer |
 
 ---
@@ -213,7 +242,7 @@ dropped mart is rebuilt by dbt.
 
 **Committed to:** `iceberg.security=read_only` on catalog `lake` and writes only in catalog
 `marts`, checked by `make test-trino` and the CI `trino` job; warehouse `marts` created by
-`init-lake.sh`; the 24 CPU / 42 GiB bootstrap ceiling in CI; Trino pinned by hand
+`init-lake.sh`; the 25 CPU / 48 GiB bootstrap ceiling in CI; Trino pinned by hand
 (Dependabot tracks Dockerfiles, not compose images); the Spark and dbt boundary above.
 
 **Not in this decision: a storage key for Trino.** Trino holds the MinIO root keys, so the
@@ -238,11 +267,17 @@ catalog has one.
 
 - a Trino query fails with `EXCEEDED_LOCAL_MEMORY_LIMIT` or the container is OOM-killed, or
   the `dbt_marts` run takes longer than its schedule interval: measure, then raise inside
-  the 2.70 CPU / 5.188 GiB of headroom;
+  the 3.70 CPU / 11.188 GiB of headroom;
 - P5 enforces entitlements on Trino (ADR-039): give Trino the scoped storage key above in
   the same pull request;
 - a second person gets access to the host: authentication on Trino before anything else;
-- the default bootstrap peak would pass 22.8 CPU or 39.9 GiB (95% of the ceiling);
+- the declared bootstrap sum passes 95% of either figure: 23.75 CPU or 45.6 GiB
+  (`python3 scripts/check-budget.py`);
+- measured process memory of the whole stack stays above 32 GiB for an hour, which is
+  `min_over_time(sum(container_memory_rss{job="cadvisor"})[1h:1m]) > 34359738368` in
+  Prometheus: the margin for the engine was accepted on use being far below the limits;
+- the host changes: `docker info --format '{{.NCPU}} {{.MemTotal}}'` prints anything but
+  `28 53149339648`;
 - Trino 485 is released: upgrade by hand after `make test-trino` and the checks in
   `docker/trino/README.md`.
 

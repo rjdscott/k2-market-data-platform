@@ -1,6 +1,6 @@
 # ADR-010: Resource Budget and Docker Compose Constraints
 
-**Status:** Accepted, Implemented (2026-02), see Outcome; the 16 CPU / 40 GB ceiling **superseded by [ADR-034](ADR-034-airflow-3-replaces-prefect.md)** (20 CPU / 36 GiB at the bootstrap peak), then by **[ADR-035](ADR-035-trino-and-dbt-for-marts.md)** (24 CPU / 42 GiB at the bootstrap peak); scoped, the rest stands
+**Status:** Accepted, Implemented (2026-02), see Outcome; the 16 CPU / 40 GB ceiling **superseded by [ADR-034](ADR-034-airflow-3-replaces-prefect.md)** (20 CPU / 36 GiB at the bootstrap peak), then by **[ADR-035](ADR-035-trino-and-dbt-for-marts.md)** (25 CPU / 48 GiB at the bootstrap peak); scoped, the rest stands
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Infrastructure
@@ -617,10 +617,10 @@ every limit above it, ClickHouse's 8G included, was clipped (`docker stats` show
 checked with `docker info --format '{{.MemTotal}}'`, not assumed. Resized to 39.2 GiB the
 same day; `docs/development/setup.md` now says ≥ 28 GB engine memory and why.
 
-### Outcome addendum (2026-11-25, Trino and the 24 CPU / 42 GiB ceiling)
+### Outcome addendum (2026-11-25, Trino and the 25 CPU / 48 GiB ceiling)
 
 The ceiling moved twice after this ADR's: to 20 CPU / 36 GiB at the bootstrap peak
-([ADR-034](ADR-034-airflow-3-replaces-prefect.md)), then to **24 CPU / 42 GiB**
+([ADR-034](ADR-034-airflow-3-replaces-prefect.md)), then to **25 CPU / 48 GiB**
 ([ADR-035](ADR-035-trino-and-dbt-for-marts.md)), gated in CI by `scripts/check-budget.py`.
 The allocation method above, a hard limit per service summed from the resolved compose
 file, is unchanged.
@@ -636,10 +636,10 @@ steady default         19 services   19.30 CPU   34.312 GiB
 bootstrap default      24 services   21.30 CPU   36.812 GiB
 bootstrap governance   24 services   21.30 CPU   36.812 GiB
 bootstrap legacy       26 services   22.80 CPU   38.312 GiB
-PASS: bootstrap default within 24 CPU / 42 GiB; limits and pins hold across 6 Dockerfiles
+PASS: bootstrap default within 25 CPU / 48 GiB; limits and pins hold across 6 Dockerfiles
 ```
 
-Headroom at the gated peak: 2.70 CPU and 5.188 GiB. The engine on the reference host has
+Headroom at the gated peak: 3.70 CPU and 11.188 GiB. The engine on the reference host has
 28 CPUs and 49.50 GiB (`docker info --format '{{.NCPU}} {{.MemTotal}}'`, 2026-11-25), so the
-ceiling leaves 4 cores and 7.5 GiB outside it. The summary comment at the end of
+ceiling leaves 3 cores and 1.5 GiB outside it; ADR-035 says why that is accepted. The summary comment at the end of
 `docker-compose.yml` carries the same sums.
