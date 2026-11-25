@@ -262,7 +262,8 @@ holds. What landed differently from the text above and from the plan:
 
 **Prefect left the default profile at the cutover, not at the archive.** `prefect-server`
 and `prefect-worker` moved behind a compose `legacy` profile, which a plain
-`docker compose up -d` does not start, and were stopped there as the rollback
+`docker compose up -d` does not start, and their containers were removed: the rollback
+creates them again from that profile, with Prefect's state still in `prefect-db`
 ([airflow-scheduling.md](../runbooks/airflow-scheduling.md#rollback-to-prefect)). So the
 budget table's "After the archive" row arrived at the cutover, and the archive changes no
 default sum. Declared limits after it (`python3 scripts/check-budget.py`, 2026-11-25):

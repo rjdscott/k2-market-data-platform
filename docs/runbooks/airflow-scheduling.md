@@ -12,8 +12,8 @@ script found: that is [lake-ingest-lag.md](./lake-ingest-lag.md),
 [lake-audit-failed.md](./lake-audit-failed.md) and [lake-recovery.md](./lake-recovery.md).
 
 **Airflow is the only scheduler of the lake writes** from the cutover on. Prefect's two
-services sit behind the compose `legacy` profile, stopped: a plain `docker compose up -d`
-does not start them, and nothing else depends on them. They stay until the archive pull
+services sit behind the compose `legacy` profile with no containers: a plain
+`docker compose up -d` does not start them, and nothing else depends on them. They stay until the archive pull
 request of plan phase P2, after 24 consecutive green `lake_ingest` runs.
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
@@ -133,15 +133,18 @@ make health
 #    Once it ends: lake_maintenance's run is success and the next lake_ingest task is success.
 ```
 
-VERIFY: run steps 9 to 11 on the live stack; check that both Prefect containers show
-`Exited`, that `make health` ends `health: PASS`, that `make lake-verify` ends
+VERIFY: run steps 9 to 11 on the live stack; check that the `ps -a` lists neither Prefect
+container, that `make health` ends `health: PASS`, that `make lake-verify` ends
 `✓ lake-verify passed`, and the last line of each gate.
 
 ```bash
-# 9. Stop Prefect. A plain `docker compose up -d` leaves the legacy profile alone, and
-#    `restart: unless-stopped` keeps a stopped container stopped across a reboot.
-docker compose --profile legacy stop prefect-server prefect-worker
-docker compose --profile legacy ps -a prefect-server prefect-worker      # both Exited
+# 9. Stop Prefect, and remove its two containers: a plain `docker compose up -d` leaves
+#    the legacy profile alone. Removed, not only stopped: a stopped container keeps the
+#    id of a network that `make down` deletes, and the rollback's `up -d` then fails with
+#    "network ... not found" (shown on a throwaway compose project, Compose v5.0.0,
+#    2026-11-25). Nothing is lost: Prefect's state is in prefect-db and docker/prefect/.
+docker compose --profile legacy rm --stop --force prefect-server prefect-worker
+docker compose --profile legacy ps -a prefect-server prefect-worker      # neither listed
 
 # 10. The stack, and the lake's exit criteria, with Airflow as the only scheduler.
 make health
@@ -184,7 +187,7 @@ docker exec k2-airflow-scheduler airflow dags list-runs lake_maintenance --state
 ## Rollback to Prefect
 
 **Not exercised.** Documented, not drilled, by the owner's decision. Every block is a
-`VERIFY:`. Prefect's state survives in `prefect-db` while its containers are stopped: the
+`VERIFY:`. Prefect's state survives in `prefect-db` while it has no containers: the
 deployments, the paused ingest schedule and the paused work queue as the cutover left
 them. The Prefect worker re-registers both deployments when it starts
 (`docker/lake/flows/deploy_lake.py`, `paused=False`), so its schedules can come back
@@ -256,7 +259,7 @@ and that `make health` ends `health: PASS`.
 ```bash
 docker exec k2-airflow-scheduler airflow dags unpause lake_ingest
 docker exec k2-airflow-scheduler airflow dags unpause lake_maintenance
-docker compose --profile legacy stop prefect-server prefect-worker
+docker compose --profile legacy rm --stop --force prefect-server prefect-worker   # as cutover step 9
 make health
 ```
 
