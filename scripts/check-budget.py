@@ -17,8 +17,10 @@ with `--profile legacy`, prints four limit sums and exits 1 on any of:
   limit, so a service behind a profile cannot ship without one.
 - a compose image, or a Dockerfile FROM, with no tag or the tag `latest`.
 - a `pip install` package in a Dockerfile with no `==` version.
-- a published port in any config not bound to 127.0.0.1: a bare `9000:9000`
-  listens on every interface, the local network included (SECURITY.md).
+- a published port not bound to 127.0.0.1, or `network_mode: host`, in any
+  service of any profile (a fourth resolve, `--profile '*'`): a bare
+  `9000:9000` listens on every interface, the local network included, and host
+  networking publishes whatever the container listens on (SECURITY.md).
 
 A one-shot is a service with `restart: "no"`, the rule
 docs/operations/docker-resources.md already uses; it only decides which
@@ -116,16 +118,26 @@ def check(
     for name, svc in sorted(every.items()):
         if unpinned(svc.get("image", "")):
             failures.append(f"service {name}: image {svc.get('image') or '(none)'!r} has no pinned tag")
-        # `config` normalises "127.0.0.1:9000:9000" to host_ip + published + target.
-        for port in svc.get("ports") or []:
-            if port.get("host_ip") != "127.0.0.1":
-                failures.append(
-                    f"service {name}: port {port.get('published')}:{port.get('target')} is published on "
-                    f"{port.get('host_ip') or 'every interface'}, not 127.0.0.1"
-                )
     for path, text in dockerfiles:
         failures += dockerfile_problems(path, text)
     return report, failures
+
+
+def exposure_problems(services: dict) -> list[str]:
+    """Ports off loopback, and host networking. `config` normalises every port
+    syntax (short, long, a range, one entry per port) to host_ip + published +
+    target, with no host_ip for a bare "9000:9000"."""
+    problems = []
+    for name, svc in sorted(services.items()):
+        if svc.get("network_mode") == "host":
+            problems.append(f"service {name}: network_mode host shares the host's interfaces")
+        for port in svc.get("ports") or []:
+            if port.get("host_ip") != "127.0.0.1":
+                problems.append(
+                    f"service {name}: port {port.get('published')}:{port.get('target')} is published on "
+                    f"{port.get('host_ip') or 'every interface'}, not 127.0.0.1"
+                )
+    return problems
 
 
 def main() -> int:
@@ -143,6 +155,7 @@ def main() -> int:
         compose_services("--profile", "legacy"),
         dockerfiles,
     )
+    failures += exposure_problems(compose_services("--profile", "*"))
     print("\n".join(report))
     for f in failures:
         print(f"FAIL: {f}")

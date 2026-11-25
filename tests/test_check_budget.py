@@ -104,13 +104,48 @@ def test_dockerfile_from_and_pip_pins():
     ]
 
 
-def test_a_port_not_on_loopback_fails_in_any_profile():
-    # As `config` prints them: "127.0.0.1:9000:9000" has a host_ip, "9000:9000" none.
-    ok = {**svc(0.1, 0.1), "ports": [{"host_ip": "127.0.0.1", "target": 9000, "published": "9000"}]}
-    lan = {**svc(0.1, 0.1), "ports": [{"target": 9000, "published": "9000"}]}
-    every = {**svc(0.1, 0.1), "ports": [{"host_ip": "0.0.0.0", "target": 9001, "published": "9001"}]}
-    assert failures({"minio": ok}) == []
-    assert failures({"minio": ok}, legacy={"minio": ok, "prefect-server": lan}) == [
-        "service prefect-server: port 9000:9000 is published on every interface, not 127.0.0.1"
+
+def port(published, target=None, host_ip=None):
+    # As `config` prints one: a range is already one entry per port.
+    p = {"mode": "ingress", "target": target or int(published), "published": str(published), "protocol": "tcp"}
+    return {**p, "host_ip": host_ip} if host_ip else p
+
+
+def test_only_loopback_ports_pass():
+    assert budget.exposure_problems({"minio": {"ports": [port(9000, host_ip="127.0.0.1")]}, "cadvisor": {}}) == []
+
+
+def test_every_way_off_loopback_fails():
+    services = {
+        "bare": {"ports": [port(9000)]},                      # "9000:9000"
+        "any4": {"ports": [port(9001, host_ip="0.0.0.0")]},   # "0.0.0.0:9001:9001"
+        "any6": {"ports": [port(9002, host_ip="::")]},        # "[::]:9002:9002"
+        "long": {"ports": [port(9003)]},                      # target/published, no host_ip
+        "range": {"ports": [port(9004, host_ip="127.0.0.1"), port(9005)]},  # "9004-9005:9004-9005", one bare
+        "lan": {"ports": [port(9006, host_ip="192.168.1.5")]},
+    }
+    named = [p.split()[1].rstrip(":") for p in budget.exposure_problems(services)]
+    assert named == ["any4", "any6", "bare", "lan", "long", "range"]
+    assert "port 9002:9002 is published on ::, not 127.0.0.1" in " ".join(budget.exposure_problems(services))
+
+
+def test_host_networking_fails():
+    assert budget.exposure_problems({"tool": {"network_mode": "host"}}) == [
+        "service tool: network_mode host shares the host's interfaces"
     ]
-    assert failures({"minio": every}) == ["service minio: port 9001:9001 is published on 0.0.0.0, not 127.0.0.1"]
+    assert budget.exposure_problems({"side": {"network_mode": "service:minio"}}) == []
+
+
+def test_main_gates_every_profile_not_only_the_three_it_sums(monkeypatch, capsys):
+    # A service behind a profile check() never resolves still fails main().
+    calls = []
+
+    def fake(*profile):
+        calls.append(profile)
+        ok = {"a": {**svc(1.0, 1), "ports": [port(9000, host_ip="127.0.0.1")]}}
+        return {**ok, "tools": {**svc(0.1, 0.1), "ports": [port(9009)]}} if profile == ("--profile", "*") else ok
+
+    monkeypatch.setattr(budget, "compose_services", fake)
+    assert budget.main() == 1
+    assert ("--profile", "*") in calls
+    assert "service tools: port 9009:9009 is published on every interface" in capsys.readouterr().out
