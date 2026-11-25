@@ -42,7 +42,10 @@ S3_PATH_STYLE = os.environ.get("K2_S3_PATH_STYLE", "true")
 SCHEMA_REGISTRY_URL = os.environ.get("K2_SCHEMA_REGISTRY_URL", "http://redpanda:8081")
 KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 
-# Driver heap, pinned rather than inherited. `spark-iceberg` is capped at 2 CPU
+# Driver heap, pinned rather than inherited. What follows down to "The trigger
+# fired" is the 2026-08 sizing, kept as the record of why 768m was chosen: the
+# container was capped at 2 CPU and 4 GiB then (3 CPU and 8 GiB now), and the
+# default is no longer 768m. `spark-iceberg` was capped at 2 CPU
 # and 4 GiB, and that budget is NOT empty before a job starts: the base image
 # runs a standalone Master, a Worker, the History Server, a Thrift Server and
 # Jupyter for the whole life of the container. Idle, with no driver at all,
@@ -88,7 +91,7 @@ KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 # re-deriving this figure. Peak RSS here is a function of the heap setting, not
 # of how much arrived.
 #
-# Revisit trigger: raise it back to `1g` if `lake-ingest-5min` fails with an
+# Revisit trigger (2026-08, fired 2026-11-25, see below): raise it back to `1g` if `lake-ingest-5min` fails with an
 # OOM-kill or `java.lang.OutOfMemoryError`. It did exactly that once, on
 # 2026-08-26, and the cause was a `persist(DISK_ONLY)` on a DataFrame carrying
 # 5.2 MB payload rows rather than an undersized heap — read
