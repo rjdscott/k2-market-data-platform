@@ -25,6 +25,8 @@ docker/
 │   ├── metrics.py        # Prometheus exporter (the lake-metrics service)
 │   ├── spark_conf.py     # lake_session(), the only `lake` catalog config; --smoke self-check
 │   └── flows/            # Prefect flow + deployment definitions (deploy_lake.py)
+├── airflow/              # Airflow 3 image, the three lake DAGs (dags/lake.py) and their tests (ADR-034)
+├── lake-metrics/         # The lake-metrics exporter's own image (runs lake/metrics.py)
 ├── redpanda/             # Topic + Avro subject bootstrap (init.sh, run by redpanda-init)
 ├── prefect/              # Prefect worker image (Dockerfile) + deployment storage
 ├── spark/                # Spark image (Iceberg 1.8.1, Kafka + Avro jars, pinned by sha256)
@@ -33,9 +35,9 @@ docker/
 │   └── dashboards/       # Dashboard JSON, 5: pipeline overview, ClickHouse, k2-l2-capture, k2-lake, v2-migration-tracker
 ├── prometheus/
 │   ├── prometheus.yml    # Scrape configs
-│   └── rules/            # Alerting rules (ClickHouse, capture, lake)
+│   └── rules/            # Alerting rules (ClickHouse, capture, lake, Airflow)
 └── postgres/
-    └── ddl/              # Lakekeeper catalog DB, created beside the Prefect metadata DB
+    └── ddl/              # Lakekeeper catalog DB, created beside the Prefect metadata DB (Airflow's: airflow/init-db.sh)
 ```
 
 ## Services
@@ -47,13 +49,15 @@ docker/
 | `minio` | long-running | S3 object storage, holds the v3 `k2-lake` bucket |
 | `lakekeeper` | long-running | **v3** Iceberg REST catalog ([ADR-018](../docs/adr/ADR-018-v3-lake-first-rust-capture.md)); `127.0.0.1:18181` |
 | `spark-iceberg` | long-running | Batch engine for the v3 lake ingest and maintenance |
-| `prefect-db`, `prefect-server`, `prefect-worker` | long-running | Orchestration + Prefect and Lakekeeper metadata |
+| `prefect-db`, `prefect-server`, `prefect-worker` | long-running | Orchestration + Prefect, Airflow and Lakekeeper metadata |
+| `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` | long-running | Airflow 3 beside Prefect in a schedule shadow ([ADR-034](../docs/adr/ADR-034-airflow-3-replaces-prefect.md)); UI on `127.0.0.1:8090` |
 | `prometheus`, `grafana`, `lake-metrics` | long-running | Observability |
 | `capture-{binance,kraken,coinbase}` | long-running | **v3** Rust WebSocket capture (trades + L2 book); metrics on `:8082/metrics` ([ADR-019](../docs/adr/ADR-019-rust-capture-tier.md)) |
 | `redpanda-init` | one-shot | Topics + Avro subjects (`redpanda/init.sh`) |
 | `lakekeeper-migrate` | one-shot | v3 catalog DB schema (`lakekeeper migrate`) |
 | `lake-init` | one-shot | v3 bucket, bootstrap, warehouse `k2`, namespaces (`lake/init-lake.sh`) |
 | `lake-ddl` | one-shot | v3 lake tables (`lake/apply_ddl.py` over `lake/ddl/lake.sql`) |
+| `airflow-migrate` | one-shot | `airflow` role and database on `prefect-db`, then `airflow db migrate` (`airflow/init-db.sh`) |
 
 ## The v3 lake
 

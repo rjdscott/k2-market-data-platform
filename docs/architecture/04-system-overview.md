@@ -137,7 +137,7 @@ forensics. Nothing in the notebooks reads ClickHouse.
 
 ## Resource footprint
 
-15 long-running services at 14.60 CPU / 25.625 GiB of limits, plus four one-shot init containers;
+19 long-running services at 17.70 CPU / 31.688 GiB of limits, plus five one-shot init containers;
 per-service table and the command that produces it in
 [operations/docker-resources.md](../operations/docker-resources.md). Budget and reasoning per limit:
 [ADR-010](../adr/ADR-010-resource-budget.md).
