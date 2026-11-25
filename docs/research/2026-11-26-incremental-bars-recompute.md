@@ -1,12 +1,46 @@
-# Incremental bars recompute: where stage 2d's time and heap go, and what to change
+# Incremental bars recompute: where the gold step's time and memory go, and what to change
 
 **Date:** 2026-11-26 (measurements from the 2026-11-25 UTC ingest runs)
-**Question:** every 5-minute ingest recomputes all of the day's `gold.bars` for each touched
-symbol-day, runs take most of their 300 s slot and grow through the UTC day, and the
-2026-11-25 heap incident failed inside the `gold.bars` append. Where do the seconds and the
-heap of stage 2d actually go, and which redesign makes the cost follow what a run adds?
-**Status:** proposed as [ADR-048](../adr/ADR-048-incremental-gold-bars-and-pruned-stage-2d.md),
-with the owner's two decisions of 2026-11-26 folded in (section 5).
+**Question:** the step of each five-minute ingest run that builds candles and event bars takes
+most of the run, grows through the UTC day, and crashed out of memory on 2026-11-25. Where do
+its seconds and its memory go, and which redesign makes the cost follow what a run adds?
+**Status:** proposed as two ADRs.
+[ADR-048](../adr/ADR-048-gold-step-reads-touched-data-writes-bars-once.md) is "stage 1" in this
+note; [ADR-049](../adr/ADR-049-event-bars-extended-not-recomputed.md) is "stage 2". The owner's
+two decisions of 2026-11-26 are folded in (section 5).
+
+## In short
+
+- Most of the step's time and memory is waste: it computes the bars twice, reads the whole
+  trade table ten times where a few files would do, and moves and sorts every trade more than
+  the result needs.
+- Removing that waste changes no stored row and no table (stage 1, ADR-048). It also writes the
+  bars in one commit, so a crash can no longer leave a day without bars.
+- What remains is recomputing each touched day of bars from all of that day's trades, which
+  grows from midnight to midnight UTC.
+- Almost every batch of new trades arrives after everything already stored, so the stored bars
+  can be extended instead (stage 2, ADR-049). That needs one new exact column on `gold.bars`, in
+  the lake and in ClickHouse.
+- Every "after" number here is an estimate; every measured number has its command in the
+  appendix.
+
+## Glossary
+
+| Term | Meaning here |
+|---|---|
+| ingest run | one execution of `docker/lake/ingest.py`, started by Airflow every five minutes |
+| stage 2d, the gold step | the ingest step that builds the gold tables (`gold.trades`, the dimensions, candles `gold.ohlcv_*`, event bars `gold.bars`); code in `docker/lake/gold.py`. The other steps are 1 (Kafka to `raw.messages`), 2b (bronze), 2c (silver trades), 2e (books); ADR-048 has the table |
+| event bars | bars closed by a trade count, a traded quantity or a traded dollar value instead of by the clock; `docker/lake/bars.py`, thresholds in `config/bars.yaml` |
+| symbol-day | one instrument, on one venue, for one UTC day; bars restart at 00:00 UTC, so it is the unit a run recomputes |
+| units before | for one trade, the count, quantity or dollar value of the day's earlier trades; the trade's bar is `floor(units before / threshold)` |
+| in-order batch | a run's new trades for one symbol-day whose earliest `exchange_ts` is strictly later than the latest already stored |
+| fold | extend the stored bars with an in-order batch: add its trades to the open bar and append the bars that follow, without rereading the day |
+| evaluation, cache | a Spark DataFrame is a recipe; each action (count, write) evaluates it from the source tables again, unless Spark substitutes a cached result |
+| shuffle | Spark moving rows between tasks so that rows with one key meet in one task, through local disk |
+| spill | a task writing sorted runs to disk when it has more rows than memory, merged later |
+| heap | the Java memory of the single Spark process (driver and only executor in local mode): 1,536 MiB, of which 741 MiB is lent to running tasks |
+| commit, snapshot | an Iceberg commit replaces the table's metadata in one atomic step and creates a snapshot, an immutable numbered version of the table; readers read one whole snapshot |
+| pruning | Iceberg skipping partitions and data files whose stored `exchange_ts` range cannot match a filter; only works for a filter comparing the column itself to constants |
 
 Every number below is seconds, bytes, file counts, stage counts or a ratio, read from the
 Spark History Server inside `k2-spark-iceberg` or from Trino over the lake, read-only. No
@@ -372,9 +406,8 @@ Before the PR: rehearse (a2)'s three forms, in order, on a copy of one day of `g
 `lake.scratch_p4`, in a Spark session started by hand outside the ingest schedule and holding
 the lake lock. For each: one new snapshot, the touched day's rows equal to the fresh frame,
 the stale tail gone, an untouched day byte-identical, and a driver killed before the commit
-leaves the table at its previous snapshot. Use the first that passes; if none does, whether
-stage 1 ships with (a)'s shorter two-commit window or waits is the owner's call (ADR-048,
-question 3).
+leaves the table at its previous snapshot. Use the first that passes; if none does, ADR-048
+returns to the owner before the write changes.
 
 Functions:
 
@@ -511,7 +544,8 @@ from the application list. After each stage, the same script on runs at the same
 the next day, and the duration of every run that day by hour (minimum, median, maximum),
 against 166 s at 07:56 and 242 s at 21:26. Heap: `peakMemoryMetrics.JVMHeapMemory` from the
 `executors` endpoint, against 1,276 MiB; RSS: the `ps -o rss=` sampling the spark_conf comment
-describes. The measured numbers go into ADR-048's Outcome with their commands, and into a
+describes. The measured numbers go into ADR-048's and ADR-049's Outcome sections with their
+commands, and into a
 `docs/benchmarks/` file through `/benchmark-report` if the README quotes them.
 
 ---
