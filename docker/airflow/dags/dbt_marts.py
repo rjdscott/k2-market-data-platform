@@ -21,7 +21,9 @@ Once a day, in the 04:10 run, each domain's writer then expires its marts'
 snapshots and orphan files at the 7-day floor (dbt/macros/expire_mart_snapshots.sql).
 
 Every dbt invocation that runs a test records its results in its domain's own
-dq.dbt_test_results (dbt/macros/record_test_results.sql). The governance domain
+dq.dbt_test_results (dbt/macros/record_test_results.sql). That table is created,
+if absent, by a task of the domain's own before any other: two of its tasks whose
+hooks both created it at once could fail (ADR-046 Risks). The governance domain
 builds last, once every other domain's build has finished however it ended, so
 its view over all of those tables (governance.quality_results.dq_results) sees
 this run's results and its tests run on them (ADR-046).
@@ -80,6 +82,23 @@ EXECUTION = ExecutionConfig(
     execution_mode=ExecutionMode.LOCAL, invocation_mode=InvocationMode.SUBPROCESS, dbt_executable_path=DBT
 )
 
+
+def run_operation(domain: str, macro: str, task_id: str) -> DbtRunOperationLocalOperator:
+    """`dbt run-operation <macro>` as the domain's writer."""
+    return DbtRunOperationLocalOperator(
+        task_id=task_id,
+        macro_name=macro,
+        project_dir=str(DBT_PROJECT),
+        profile_config=PROFILE,
+        dbt_executable_path=DBT,
+        invocation_mode=InvocationMode.SUBPROCESS,
+        env=env(domain),
+        append_env=True,
+        install_deps=False,
+        emit_datasets=False,
+    )
+
+
 with DAG(
     dag_id="dbt_marts",
     schedule="10 * * * *",
@@ -124,19 +143,9 @@ with DAG(
             ),
             operator_args={"env": env(domain), "append_env": True, "install_deps": False, "emit_datasets": False},
         )
-        maintain = DbtRunOperationLocalOperator(
-            task_id=f"{domain}_expire_mart_snapshots",
-            macro_name="expire_mart_snapshots",
-            project_dir=str(DBT_PROJECT),
-            profile_config=PROFILE,
-            dbt_executable_path=DBT,
-            invocation_mode=InvocationMode.SUBPROCESS,
-            env=env(domain),
-            append_env=True,
-            install_deps=False,
-            emit_datasets=False,
-        )
+        maintain = run_operation(domain, "expire_mart_snapshots", f"{domain}_expire_mart_snapshots")
         build >> maintenance_hour.override(task_id=f"{domain}_maintenance_hour")() >> maintain
+        run_operation(domain, "create_test_results_table", f"{domain}_test_results_table") >> build
 
     # all_done: a failed test elsewhere is exactly what governance's view should show.
     others = [b for d, b in builds.items() if d != GOVERNANCE]

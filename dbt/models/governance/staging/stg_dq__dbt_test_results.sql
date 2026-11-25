@@ -1,7 +1,8 @@
 -- Every domain's dq.dbt_test_results (macros/record_test_results.sql), with the domain it
 -- belongs to: one union branch per catalog that holds a model of this project, so a domain
--- with marts is in as soon as its runs have recorded a test, and one that has not yet is
--- left out rather than breaking the view. The list is fixed when the view is built, which
+-- with marts is in as soon as its table exists (dbt_marts creates it before the domain's other
+-- tasks, the hook on a hand run), and one with no table yet is left out rather than breaking
+-- the view. The list is fixed when the view is built, which
 -- dbt_marts does after every other domain in each run (docker/airflow/dags/dbt_marts.py).
 -- The first branch is empty and types the columns, so the view builds with no domain at all.
 -- A row counts for a domain only if that domain's writer wrote it: on the stack nobody else

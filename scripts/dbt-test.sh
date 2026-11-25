@@ -19,7 +19,8 @@
 #   4b. A failing test still gets its row: a duplicate trade fails a source test,
 #      the build exits non-zero, and the failed and skipped tests are recorded; the
 #      governance view, rebuilt after, shows that failure and a failed and a raised
-#      lake check, to a user who owns none of it.
+#      lake check, to a user who owns none of it. And the run-operation dbt_marts runs
+#      first in each domain makes the results table on its own.
 #   5. No marts at all: the sources and selectors k2gen writes then, with no
 #      models, still parse, so removing the last mart leaves a working project
 #      (and a dbt_marts DAG with no task group).
@@ -154,6 +155,14 @@ for pair in "governance market_analytics" "market_analytics governance"; do
   grep -q "Access Denied" <<< "$out" || { echo "FAIL: dbt_$w inserted into $c.dq.dbt_test_results"; echo "$out"; exit 1; }
   echo "ok fence: dbt_$w into $c.dq.dbt_test_results: $(grep -m1 -oE 'Access Denied: [^"]*' <<< "$out")"
 done
+# What dbt_marts runs before a domain's other tasks, so no two hooks create the table at once
+# (ADR-046 Risks): the run-operation alone makes it, as the writer, where there is none. The
+# local catalogs share one metastore, so the table is dropped first, here only.
+sql dbt_market_analytics "DROP TABLE market_analytics.dq.dbt_test_results" >/dev/null
+K2_TRINO_USER=dbt_market_analytics uv run --locked dbt run-operation -q create_test_results_table
+[ "$(sql dbt_market_analytics "SELECT count(*) FROM market_analytics.dq.dbt_test_results" | tr -d '"')" = 0 ] \
+  || { echo "FAIL: dbt run-operation create_test_results_table did not make market_analytics.dq.dbt_test_results"; exit 1; }
+echo "ok results table: dbt run-operation create_test_results_table made market_analytics.dq.dbt_test_results, empty, as dbt_market_analytics"
 
 # 5. Zero marts: what k2gen writes for no marts, this project's macros, no models.
 empty=$(mktemp -d)

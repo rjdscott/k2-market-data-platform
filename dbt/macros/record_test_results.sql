@@ -6,9 +6,11 @@
   tests) writes nothing.
 
   dbt runs on-run-end after the nodes whatever their result, so a failed, warned, errored or
-  skipped test gets its row too (make test-dbt fails a source test on purpose and reads the
-  row back). If the hook itself fails, dbt reports `k2.on-run-end.0 failed` and exits non-zero
-  although every test passed (docs/runbooks/dbt-marts.md).
+  skipped test of the invocation gets its row too (make test-dbt fails a source test on
+  purpose and reads the row back). A test outside the invocation gets none: under Airflow each
+  node is its own invocation, and a node whose upstream task failed is upstream_failed and
+  runs no dbt at all. If the hook itself fails, dbt exits non-zero although every test passed
+  (docs/runbooks/dbt-marts.md), and that invocation's rows are lost.
 
   Columns: invocation_id and run_started_at, dbt's own; writer, the profile's user, so a row
   says who asserted it (rules.json lets only dbt_<catalog> insert here); unique_id and
@@ -47,27 +49,39 @@
         ] | join(', ') ~ ')') -%}
     {%- endfor -%}
     {%- if rows -%}
-        {%- set table = target.database ~ '.dq.dbt_test_results' -%}
-        {%- set create_table -%}
-            create table if not exists {{ table }} (
-                invocation_id varchar,
-                run_started_at timestamp(6) with time zone,
-                writer varchar,
-                unique_id varchar,
-                test_name varchar,
-                tested varchar,
-                status varchar,
-                failures bigint,
-                execution_time double,
-                message varchar
-            )
-            comment 'One row per dbt test and unit test run by the catalog writer (dbt/macros/record_test_results.sql, ADR-046)'
-        {%- endset -%}
-        {%- do run_query('create schema if not exists ' ~ target.database ~ '.dq') -%}
-        {%- do run_query(create_table) -%}
+        {%- set table = create_test_results_table() -%}
         {%- do run_query('insert into ' ~ table ~ ' values ' ~ rows | join(', ')) -%}
         {{ log("record_test_results: " ~ rows | length ~ " test result(s) into " ~ table, info=True) }}
     {%- endif -%}
+{% endmacro %}
+
+{#
+  The writer's dq.dbt_test_results and its schema, if absent; returns the table's name. The
+  hook calls it, and dbt_marts runs it as a task of its own before every other task of the
+  domain (docker/airflow/dags/dbt_marts.py): two hooks creating a missing table at once can
+  fail, one of them with "Table already exists" (ADR-046 Risks), and dbt's Jinja has no way
+  to catch that and go on.
+#}
+{% macro create_test_results_table() %}
+    {%- set table = target.database ~ '.dq.dbt_test_results' -%}
+    {%- set create_table -%}
+        create table if not exists {{ table }} (
+            invocation_id varchar,
+            run_started_at timestamp(6) with time zone,
+            writer varchar,
+            unique_id varchar,
+            test_name varchar,
+            tested varchar,
+            status varchar,
+            failures bigint,
+            execution_time double,
+            message varchar
+        )
+        comment 'One row per dbt test and unit test run by the catalog writer (dbt/macros/record_test_results.sql, ADR-046)'
+    {%- endset -%}
+    {%- do run_query('create schema if not exists ' ~ target.database ~ '.dq') -%}
+    {%- do run_query(create_table) -%}
+    {{- return(table) -}}
 {% endmacro %}
 
 {# A SQL string literal, or null. #}

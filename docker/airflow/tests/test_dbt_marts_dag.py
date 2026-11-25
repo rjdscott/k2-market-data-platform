@@ -110,6 +110,18 @@ class Order(unittest.TestCase):
             self.assertNotIn("domains_built", t.get_flat_relative_ids(upstream=True))
 
 
+class Results(unittest.TestCase):
+    def test_the_results_table_is_created_before_every_other_task_of_its_domain(self):
+        # Two hooks creating a missing dq.dbt_test_results at once can fail (ADR-046 Risks).
+        for domain in SELECTORS:
+            create = DAG.get_task(f"{domain}_test_results_table")
+            self.assertEqual((type(create).__name__, create.macro_name), ("DbtRunOperationLocalOperator", "create_test_results_table"))
+            self.assertEqual(create.env["K2_TRINO_USER"], f"dbt_{domain}")
+            for t in dbt_tasks(domain):
+                with self.subTest(t.task_id):
+                    self.assertIn(create.task_id, t.get_flat_relative_ids(upstream=True))
+
+
 class Maintenance(unittest.TestCase):
     def gate(self, domain=None):
         return DAG.get_task(f"{domain or SELECTORS[0]}_maintenance_hour")

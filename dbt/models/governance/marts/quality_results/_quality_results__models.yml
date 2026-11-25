@@ -3,8 +3,10 @@ models:
     description: >-
       Every quality result the platform records, one row per check per run: the lake jobs'
       checks from lake.audit.checks and every test each domain's dbt runs recorded in its own
-      dq.dbt_test_results, with status pass, fail, warn or error. A view (ADR-046), read
-      through Trino only. Product quality-results, contracts/governance/quality-results/product.yaml.
+      dq.dbt_test_results, with status pass, fail, warn or error. A lake check filed more than
+      once under one run, scope and name (a rebuild's day slices) is one row, its worst. The
+      tests of a node Airflow never started (upstream_failed) have no row. A view (ADR-046),
+      read through Trino only. Product quality-results, contracts/governance/quality-results/product.yaml.
     columns:
       - name: checked_at
         description: When the check ran, UTC; the lake job's run_ts, or the start of the dbt invocation that ran the test.
@@ -32,7 +34,10 @@ models:
               arguments:
                 values: [pass, fail, warn, error]
       - name: detail
-        description: For a lake check, observed and its detail; for a dbt test, dbt's message, cut at 1000 characters.
+        description: >-
+          For a lake check, observed and its detail, after "<n> rows, the worst shown" when the
+          run filed it more than once under one scope; for a dbt test, dbt's message, cut at
+          1000 characters.
     data_tests:
       # The grain, as the contract declares it; scripts/dbt_manifest_check.py requires this test.
       - dbt_expectations.expect_compound_columns_to_be_unique:
@@ -69,6 +74,29 @@ unit_tests:
         - {source_system: lake_audit, domain: market-capture, subject: lake.silver.book_alpha, check_name: kraken_checksum, status: error, detail: "observed -1; check raised ValueError: boom"}
         - {source_system: lake_audit, domain: market-capture, subject: market.crypto.v3.raw.alpha/7, check_name: offset_continuity, status: fail, detail: observed -1; gap}
         - {source_system: lake_audit, domain: market-capture, subject: market.crypto.v3.raw.alpha/7, check_name: offset_gap, status: fail, detail: observed 11}
+
+  - name: dq_results_folds_one_lake_key_to_its_worst_row
+    description: >-
+      A rebuild files bronze_parity once per venue and day under one run_ts and scope. Each
+      (run_ts, scope, check_name) is one row: error over fail over pass, the worst row's
+      detail, and how many rows it stands for. A key filed once is unchanged.
+    model: dq_results
+    given:
+      - input: ref('stg_lake__audit_checks')
+        rows:
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: ingest, check_name: bronze_parity, scope: bronze.alpha, passed: false, observed: 4, detail: day one}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: ingest, check_name: bronze_parity, scope: bronze.alpha, passed: false, observed: -1, detail: "check raised ValueError: boom"}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: ingest, check_name: bronze_parity, scope: bronze.alpha, passed: true, observed: 0, detail: ""}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: maintenance, check_name: silver_parity, scope: lake.silver.trades_alpha, passed: true, observed: 0, detail: ""}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: maintenance, check_name: silver_parity, scope: lake.silver.trades_alpha, passed: false, observed: 2, detail: two rows differ}
+          - {run_ts: "2001-01-01 04:00:00.000000 UTC", job: ingest, check_name: bronze_parity, scope: bronze.alpha, passed: false, observed: 7, detail: another run}
+      - input: ref('stg_dq__dbt_test_results')
+        rows: []
+    expect:
+      rows:
+        - {subject: bronze.alpha, check_name: bronze_parity, status: error, detail: "3 rows, the worst shown; observed -1; check raised ValueError: boom"}
+        - {subject: lake.silver.trades_alpha, check_name: silver_parity, status: fail, detail: "2 rows, the worst shown; observed 2; two rows differ"}
+        - {subject: bronze.alpha, check_name: bronze_parity, status: fail, detail: observed 7; another run}
 
   - name: dq_results_normalises_every_domains_dbt_tests
     description: >-
