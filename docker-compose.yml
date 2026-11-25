@@ -772,16 +772,22 @@ services:
       com.k2.tier: "control-plane"
       com.k2.version: "v3"
 
-  # statsd in, Prometheus out (job airflow-statsd, :9102). No mapping file:
+  # statsd in, Prometheus out (job airflow-statsd, :9102). Default names:
   # Airflow sends InfluxDB-style tags and the exporter makes them labels, so
   # `airflow.ti.finish,dag_id=lake_ingest,task_id=ingest,state=skipped:1|c`
-  # becomes airflow_ti_finish{dag_id="lake_ingest",state="skipped",...}.
+  # becomes airflow_ti_finish{dag_id="lake_ingest",state="skipped",...}. The
+  # mapping file has one rule, a ttl on the ti.running gauge, and says why.
+  # It is a file bind mount: after editing it, recreate this service
+  # (`docker compose up -d --force-recreate --no-deps airflow-statsd`).
   # Counters live in this process: a restart resets them, which the rules in
   # docker/prometheus/rules/airflow-alerts.yml allow for.
   airflow-statsd:
     image: prom/statsd-exporter:v0.31.0
     container_name: k2-airflow-statsd
     hostname: airflow-statsd
+    command: ["--statsd.mapping-config=/etc/statsd-mapping.yml"]
+    volumes:
+      - ./docker/airflow/statsd-mapping.yml:/etc/statsd-mapping.yml:ro
     networks:
       - k2-net
     deploy:

@@ -7,7 +7,8 @@
 # the airflow-statsd exporter serves: counters with no `_total` suffix, labels
 # from Airflow's InfluxDB-style tags, and a series that does not exist until
 # its first increment; and the scheduler's ti_running gauge, absent until a
-# task is first seen running and 0 after it stops. `_` is a missing sample,
+# task is first seen running, 0 after it stops, and absent again 2 minutes
+# after its last send (the exporter's ttl). `_` is a missing sample,
 # `stale` an exporter restart; at a 1m interval the value at position i is
 # the value at minute i.
 
@@ -429,6 +430,35 @@ tests:
         alertname: AirflowLakeIngestNotRunning
         exp_alerts: []
       - eval_time: 53m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts:
+          - exp_labels: *not-running-labels
+            exp_annotations: *not-running-annotations
+
+  # ── Both lake rules: a holder gauge the scheduler stopped refreshing ─────
+  # Maintenance ends at minute 10 and the scheduler restarts before its next
+  # send, so the 0 never comes: the gauge stays 1 until the exporter's 2m ttl
+  # drops it, absent from 13. Absent is not running: three skips from another
+  # writer at 31, 36 and 41 fire, and when the finishes stop after 41, so
+  # does the silence alert. Without the ttl the 1 muted both for good.
+  - name: holder gauge stuck at 1 then absent, nothing muted
+    interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x80'
+      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
+        values: '1x12 stale'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
+        values: '5x30 6x4 7x4 8x40'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '10x80'
+    alert_rule_test:
+      - eval_time: 43m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts:
+          - exp_labels: *skipped-labels
+            exp_annotations: *skipped-annotations
+      - eval_time: 62m
         alertname: AirflowLakeIngestNotRunning
         exp_alerts:
           - exp_labels: *not-running-labels

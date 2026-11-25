@@ -20,7 +20,8 @@
 #     read from database state, not counted from events, so it is right again
 #     within 30 s of an exporter restart and has no first-increment case. A
 #     task that stops running is sent once more as 0; a task never seen
-#     running is not sent at all, so the series can be absent.
+#     running is not sent at all, and the exporter drops a value not re-sent
+#     for 2 minutes, so the series is often absent: absent is not running.
 #
 # Observed firing 2026-11-25, falsely: AirflowLakeIngestSkippedRepeatedly at
 # the end of the first lake_maintenance under Airflow. The grace below is the
@@ -125,12 +126,12 @@ groups:
       # task_instance_heartbeat_timeout (300 s), and a series first seen at 1
       # reads 1. No time bound is needed.
       #
-      # Ceiling: the 0 for a task that stopped running is sent by the scheduler
-      # that saw it run, from its memory. A scheduler stopped in the 30 s
-      # between a try's end and its next send leaves the exporter holding 1
-      # until that task runs again (a day for maintenance, the next trigger for
-      # rebuild), muting both rules that read this. Upgrade: a statsd_exporter
-      # mapping with a ttl of a few minutes on airflow.ti.running.
+      # The 0 for a task that stopped running is sent by the scheduler that saw
+      # it run, from its memory: a scheduler stopped in the 30 s between a
+      # try's end and its next send never sends it. The exporter drops a value
+      # not re-sent for 2 minutes (docker/airflow/statsd-mapping.yml), so that
+      # stuck 1 goes absent, and absent reads as not running here and in both
+      # rules that read this.
       - record: airflow:lake_lock_holder_in_flight
         expr: max(airflow_ti_running{dag_id=~"lake_maintenance|lake_rebuild"}) > 0
 

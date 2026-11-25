@@ -412,6 +412,23 @@ time the grace lapses even if the first run fails. For up to 15 minutes after th
 `airflow-statsd` exporter restarts the skip count reads low and the alert stays quiet: a lock
 held across the restart fires that much later.
 
+The exporter drops an `airflow_ti_running` value the scheduler has not re-sent for 2 minutes
+(`docker/airflow/statsd-mapping.yml`; the scheduler re-sends a running task every 30 s). A
+scheduler restarted just after a holder ended never sends its 0, and without that ttl the
+last 1 muted both lake alerts until the exporter restarted. The mapping is a file bind mount,
+so a change to it takes a recreate (the [`CLAUDE.md`](../../CLAUDE.md) bind-mount gotcha).
+A recreate restarts every Airflow counter from zero, and the lake rules allow for it: this
+alert errs quiet for up to 15 minutes and §5's is quiet for 15, both cases in
+`docker/prometheus/rules/tests/airflow-alerts_test.yml`.
+
+VERIFY: run on the live stack; check that `airflow_ti_running` for a finished task goes
+absent about 2 minutes after its last send, and that every other `airflow_*` series keeps
+its name.
+
+```bash
+docker compose up -d --force-recreate --no-deps airflow-statsd
+```
+
 **Observed 2026-11-25**, before the grace existed: a false firing. The first
 `lake_maintenance` under Airflow ran 06:10:21 to 06:33:58 UTC, and the `lake_ingest` runs for
 the 06:11 to 06:31 slots skipped, five in a row, as they should. The alert went pending at
