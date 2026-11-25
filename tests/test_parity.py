@@ -850,3 +850,90 @@ def test_a_table_with_no_snapshots_is_an_error_not_a_fallback():
     """Nothing to fall back TO. Exiting beats `max()` on an empty sequence."""
     with pytest.raises(SystemExit):
         resolve_snapshot(_stub([]), "lake.gold.ohlcv_1m", 111)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The dbt side, D: scripts/parity_ohlcv.py --dbt
+#
+# D runs dbt's compiled ohlcv_1m SQL through Trino over gold.trades at the
+# snapshot the lake's candles were computed from. These hold the two pure halves
+# without a stack: which snapshot, and the SQL that reads nothing at `latest`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from parity_ohlcv import latest_source_snapshot, normalise, pinned_sql  # noqa: E402
+
+_TRADES = '"lake"."gold"."trades"'
+_STAGING = '"market_analytics"."staging"."stg_gold__trades"'
+
+
+def _manifest():
+    """The shape of dbt's target/manifest.json after `dbt compile`, two models and a source."""
+    return {
+        "sources": {"source.k2.gold.trades": {"relation_name": _TRADES}},
+        "nodes": {
+            "model.k2.stg_gold__trades": {
+                "relation_name": _STAGING,
+                "compiled_code": f"select exchange, price_e8 from {_TRADES}",
+                "depends_on": {"nodes": ["source.k2.gold.trades"]},
+            },
+            "model.k2.ohlcv_1m": {
+                "relation_name": '"market_analytics"."candles"."ohlcv_1m"',
+                "compiled_code": f"select exchange, max(price_e8) as high_e8 from {_STAGING} group by 1",
+                "depends_on": {"nodes": ["model.k2.stg_gold__trades"]},
+            },
+        },
+    }
+
+
+def test_the_newest_source_snapshot_is_the_highest_sequence_number_not_the_highest_id():
+    # 999 is the highest id; 222 has the highest sequence number among the ids asked for.
+    assert latest_source_snapshot([111, 222], [(13, 111), (44, 999), (27, 222)]) == 222
+
+
+def test_an_expired_source_snapshot_is_an_error_not_a_fallback():
+    # D must read the trades B was computed from; reading any other snapshot proves nothing.
+    with pytest.raises(SystemExit, match=r"\[333\]"):
+        latest_source_snapshot([111, 333], [(13, 111)])
+    with pytest.raises(SystemExit):
+        latest_source_snapshot([], [(13, 111)])
+
+
+def test_pinned_sql_inlines_the_staging_view_and_reads_the_source_at_the_snapshot():
+    sql = pinned_sql(_manifest(), "model.k2.ohlcv_1m", {"source.k2.gold.trades": 42})
+    assert sql == (
+        f"select exchange, max(price_e8) as high_e8 from (select exchange, price_e8 from {_TRADES} FOR VERSION AS OF 42) group by 1"
+    )
+    assert _STAGING not in sql  # the view reads the lake at latest; the parity must not
+
+
+def test_pinned_sql_refuses_a_source_with_no_snapshot():
+    with pytest.raises(SystemExit, match="no snapshot"):
+        pinned_sql(_manifest(), "model.k2.ohlcv_1m", {})
+
+
+def test_pinned_sql_refuses_a_relation_the_compiled_sql_does_not_name():
+    # A changed quoting style would otherwise leave the source unpinned, silently.
+    manifest = _manifest()
+    manifest["nodes"]["model.k2.stg_gold__trades"]["compiled_code"] = "select exchange, price_e8 from lake.gold.trades"
+    with pytest.raises(SystemExit, match="does not appear"):
+        pinned_sql(manifest, "model.k2.ohlcv_1m", {"source.k2.gold.trades": 42})
+
+
+def test_pinned_sql_needs_a_compiled_manifest():
+    manifest = _manifest()
+    del manifest["nodes"]["model.k2.ohlcv_1m"]["compiled_code"]  # what `dbt parse` alone leaves
+    with pytest.raises(SystemExit, match="dbt compile"):
+        pinned_sql(manifest, "model.k2.ohlcv_1m", {"source.k2.gold.trades": 42})
+
+
+def test_quote_volume_compares_exactly_and_only_when_asked():
+    from datetime import datetime
+    from decimal import Decimal
+
+    ws = datetime(2001, 1, 1)
+    row = ("x", "AAA/BBB", ws, 1, 2, 1, 2, 3, Decimal("4.0000000000"), Decimal("403.0000010000"))
+    assert normalise([row]) == {("x", "AAA/BBB", ws): (1, 2, 1, 2, 3, 4.0)}
+    assert normalise([row], quote_volume=True)[("x", "AAA/BBB", ws)][-1] == Decimal("403.000001")
+    # One unit in the tenth decimal is a difference: no tolerance (ADR-029).
+    other = row[:9] + (Decimal("403.0000010001"),)
+    assert normalise([row], quote_volume=True) != normalise([other], quote_volume=True)

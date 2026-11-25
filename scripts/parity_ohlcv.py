@@ -21,8 +21,19 @@ Pinned, never `latest`: a parity check that reads whatever is current cannot be
 re-run to the same answer, and a check that cannot be re-run is not a check.
 `tests/parity/pinned.json` holds the ids of the last run this passed against.
 
-Exit 0 when A == B == C on every bucket of the day, non-zero with the first
-differences printed otherwise.
+`--dbt` adds a fourth, compared with B on the same columns and on quote_volume:
+
+  D  dbt on Trino  the compiled SQL of dbt's market_analytics.candles.ohlcv_1m,
+                   its staging view inlined and lake.gold.trades read FOR VERSION
+                   AS OF the newest gold.trades snapshot B's rows for the day
+                   were computed from (their src_snapshot_id)
+
+D is the SQL dbt builds the mart with, run on the trades Spark last read for the
+day, not the table dbt last built: that table holds the lake as it was at build
+time. `--skip-silver` and `--skip-clickhouse` leave B against D alone.
+
+Exit 0 when every side run equals B on every bucket of the day, non-zero with the
+first differences printed otherwise.
 """
 
 from __future__ import annotations
@@ -30,12 +41,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 LAKEKEEPER = os.environ.get("K2_LAKEKEEPER_HOST_URL", "http://localhost:18181/catalog")
 S3_ENDPOINT = os.environ.get("K2_S3_HOST_ENDPOINT", "localhost:9000")
 CH_HOST = os.environ.get("K2_CLICKHOUSE_HOST", "localhost")
+TRINO_HOST = os.environ.get("K2_TRINO_HOST", "localhost")
+TRINO_PORT = int(os.environ.get("K2_TRINO_PORT", "8088"))
+DBT = Path(__file__).resolve().parent.parent / "dbt"
+DBT_MODEL = "model.k2.ohlcv_1m"
+DBT_TRADES = "source.k2.gold.trades"
 SCALE = 100_000_000
 
 KEY = ["exchange", "canonical_symbol", "window_start"]
@@ -96,9 +114,9 @@ def duck(minio_user: str, minio_pass: str):
 
 
 def lake_candles(c, day: str, snapshot: int) -> list:
-    """B: the materialised 1m candles, at the pinned snapshot."""
+    """B: the materialised 1m candles, at the pinned snapshot. quote_volume last, for D only."""
     return c.execute(
-        f"""SELECT exchange, canonical_symbol, window_start, open_e8, high_e8, low_e8, close_e8, trade_count, volume
+        f"""SELECT exchange, canonical_symbol, window_start, open_e8, high_e8, low_e8, close_e8, trade_count, volume, quote_volume
             FROM lake.gold.ohlcv_1m AT (VERSION => {snapshot})
             WHERE CAST(window_start AS DATE) = DATE '{day}'
             ORDER BY 1, 2, 3"""
@@ -141,12 +159,76 @@ def clickhouse_candles(day: str, password: str) -> list:
     return rows
 
 
-def normalise(rows: list) -> dict:
+def latest_source_snapshot(src_ids, snapshots) -> int:
+    """The newest of the gold.trades snapshots `src_ids` names, by sequence number.
+
+    `snapshots` is (sequence_number, snapshot_id) rows, as `iceberg_snapshots`
+    returns them. Snapshot ids are random, so the newest is the highest sequence
+    number, never the highest id. Every bucket of a finished day was last computed
+    at one of `src_ids`, and a trade landing later would have recomputed its bucket
+    at a later one, so the newest holds every trade B counted.
+    """
+    seq = {sid: n for n, sid in snapshots}
+    gone = sorted(set(src_ids) - set(seq))
+    if not src_ids or gone:
+        raise SystemExit(f"gold.trades snapshot(s) {gone} are expired or from another table: D cannot read the trades B was computed from")
+    return max(src_ids, key=seq.__getitem__)
+
+
+def pinned_sql(manifest: dict, unique_id: str, snapshots: dict) -> str:
+    """A dbt model's compiled SQL, each model it reads inlined, each source read at a snapshot.
+
+    `manifest` is dbt's target/manifest.json after `dbt compile`; `snapshots` maps a
+    source's unique id to its snapshot id. A source without one is an error: the
+    point is to read nothing at `latest`.
+    """
+    node = manifest["nodes"][unique_id]
+    if "compiled_code" not in node:
+        raise SystemExit(f"{unique_id} is not compiled: run dbt compile first")
+    sql = node["compiled_code"]
+    for dep in node["depends_on"]["nodes"]:
+        if dep in manifest["sources"]:
+            if dep not in snapshots:
+                raise SystemExit(f"{unique_id} reads {dep}, which has no snapshot to read it at")
+            name, replacement = manifest["sources"][dep]["relation_name"], f"{manifest['sources'][dep]['relation_name']} FOR VERSION AS OF {snapshots[dep]}"
+        else:
+            name, replacement = manifest["nodes"][dep]["relation_name"], f"({pinned_sql(manifest, dep, snapshots)})"
+        if not name or name not in sql:  # an ephemeral model has no relation; a quoting change would hide one
+            raise SystemExit(f"{dep} does not appear in the compiled SQL of {unique_id} as {name}")
+        sql = sql.replace(name, replacement)
+    return sql
+
+
+def dbt_candles(day: str, trades_snapshot: int) -> list:
+    """D: the dbt model's SQL through Trino, over gold.trades at `trades_snapshot`."""
+    import trino  # imported here so the pure functions above import without it
+
+    # The SQL as committed, not a manifest left over from another checkout. Reads only.
+    done = subprocess.run(["uv", "run", "--locked", "-q", "dbt", "compile", "--select", "+ohlcv_1m"], cwd=DBT, capture_output=True, text=True)
+    if done.returncode:
+        raise SystemExit(f"dbt compile failed in {DBT}:\n{done.stdout}{done.stderr}")
+    sql = pinned_sql(json.loads((DBT / "target" / "manifest.json").read_text()), DBT_MODEL, {DBT_TRADES: trades_snapshot})
+    cur = trino.dbapi.connect(host=TRINO_HOST, port=TRINO_PORT, user="parity", timezone="UTC").cursor()
+    cur.execute(
+        f"""SELECT exchange, canonical_symbol, window_start, open_e8, high_e8, low_e8, close_e8, trade_count, volume,
+                   quote_volume, typeof(quote_volume)
+            FROM ({sql}) WHERE CAST(window_start AS DATE) = DATE '{day}' ORDER BY 1, 2, 3"""
+    )
+    return cur.fetchall()
+
+
+def normalise(rows: list, quote_volume: bool = False) -> dict:
+    """{(exchange, symbol, window_start): (open, high, low, close, count, volume[, quote_volume])}.
+
+    quote_volume, when asked for, is the tenth column and compared exactly as a Decimal.
+    """
     out = {}
     for r in rows:
         exchange, symbol, ws = r[0], r[1], r[2]
         key = (exchange, symbol, ws.replace(tzinfo=None) if hasattr(ws, "replace") else ws)
         out[key] = tuple(int(x) if i < 5 else round(float(x), 8) for i, x in enumerate(r[3:9]))
+        if quote_volume:
+            out[key] += (Decimal(r[9]),)
     return out
 
 
@@ -175,27 +257,50 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--day", required=True, help="UTC day, YYYY-MM-DD")
     ap.add_argument("--ohlcv-snapshot", type=int, required=True, help="lake.gold.ohlcv_1m snapshot id")
-    ap.add_argument("--silver-snapshots", required=True, help='JSON: {"binance": id, "kraken": id, "coinbase": id} — the k2.src-snapshot-id.<venue> of the gold.trades snapshot')
-    ap.add_argument("--skip-clickhouse", action="store_true", help="two-way only: lake vs DuckDB-over-silver")
+    ap.add_argument("--silver-snapshots", help='JSON: {"binance": id, "kraken": id, "coinbase": id}: the k2.src-snapshot-id.<venue> of the gold.trades snapshot; required unless --skip-silver')
+    ap.add_argument("--skip-clickhouse", action="store_true", help="leave out A, ClickHouse")
+    ap.add_argument("--skip-silver", action="store_true", help="leave out C, DuckDB over silver")
+    ap.add_argument("--dbt", action="store_true", help="add D, dbt's ohlcv_1m SQL through Trino at the gold.trades snapshot B was computed from")
     ap.add_argument("--write-pin", action="store_true", help="on success, record the ids in tests/parity/pinned.json")
     args = ap.parse_args()
+    if not args.skip_silver and not args.silver_snapshots:
+        ap.error("--silver-snapshots is required unless --skip-silver")
+    if args.write_pin and args.skip_silver:
+        ap.error("--write-pin records the silver ids, so it needs side C: drop --skip-silver")
 
-    silver_snaps = json.loads(args.silver_snapshots)
     c = duck(os.environ["MINIO_ROOT_USER"], os.environ["MINIO_ROOT_PASSWORD"])
 
     def q(sql):
         return c.execute(sql).fetchall()
 
     ohlcv_snapshot = resolve_snapshot(q, "lake.gold.ohlcv_1m", args.ohlcv_snapshot)
-    silver_snaps = {
-        venue: resolve_snapshot(q, f"lake.silver.trades_{venue}", snap)
-        for venue, snap in silver_snaps.items()
-    }
-    b = normalise(lake_candles(c, args.day, ohlcv_snapshot))
-    cc = normalise(silver_candles(c, args.day, silver_snaps))
-    if not_empty(**{"lake.gold.ohlcv_1m": b, "duckdb-over-silver": cc}):
+    lake_rows = lake_candles(c, args.day, ohlcv_snapshot)
+    b = normalise(lake_rows)
+    if not_empty(**{"lake.gold.ohlcv_1m": b}):
         return 1
-    bad = diff("lake.gold.ohlcv_1m", b, "duckdb-over-silver", cc)
+    bad = 0
+    if not args.skip_silver:
+        silver_snaps = {
+            venue: resolve_snapshot(q, f"lake.silver.trades_{venue}", snap)
+            for venue, snap in json.loads(args.silver_snapshots).items()
+        }
+        cc = normalise(silver_candles(c, args.day, silver_snaps))
+        if not_empty(**{"duckdb-over-silver": cc}):
+            return 1
+        bad += diff("lake.gold.ohlcv_1m", b, "duckdb-over-silver", cc)
+    if args.dbt:
+        src = [r[0] for r in q(f"""SELECT DISTINCT src_snapshot_id FROM lake.gold.ohlcv_1m AT (VERSION => {ohlcv_snapshot})
+                                   WHERE CAST(window_start AS DATE) = DATE '{args.day}'""")]
+        trades_snapshot = latest_source_snapshot(src, q("SELECT sequence_number, snapshot_id FROM iceberg_snapshots('lake.gold.trades')"))
+        print(f"dbt side: lake.gold.trades FOR VERSION AS OF {trades_snapshot}, the newest of the {len(src)} snapshots the day's lake candles name")
+        d_rows = dbt_candles(args.day, trades_snapshot)
+        if not_empty(**{"dbt.ohlcv_1m": d_rows}):
+            return 1
+        # quote_volume only where both engines type it alike (ADR-035): Iceberg's decimal(38,10) for B.
+        lake_type = q("SELECT typeof(quote_volume) FROM lake.gold.ohlcv_1m LIMIT 1")[0][0].lower()
+        same = {r[10] for r in d_rows} == {lake_type}
+        print(f"quote_volume: lake {lake_type}, dbt {sorted({r[10] for r in d_rows})}: " + ("compared" if same else "NOT compared, the types differ"))
+        bad += diff("lake.gold.ohlcv_1m", normalise(lake_rows, quote_volume=same), "dbt.ohlcv_1m", normalise(d_rows, quote_volume=same))
     if not args.skip_clickhouse:
         a = normalise(clickhouse_candles(args.day, os.environ["CLICKHOUSE_PASSWORD"]))
         if not_empty(**{"clickhouse.ohlcv_live": a}):

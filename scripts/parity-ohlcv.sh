@@ -2,6 +2,7 @@
 # Three-way OHLCV parity at the pinned snapshots (scripts/parity_ohlcv.py).
 #   scripts/parity-ohlcv.sh                # uses tests/parity/pinned.json
 #   scripts/parity-ohlcv.sh --pin-current  # pin the lake's current gold snapshots for today's run
+#   scripts/parity-ohlcv.sh --dbt          # and dbt's ohlcv_1m SQL through Trino (needs dbt/ synced)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 set -a; . ./.env; set +a
@@ -19,4 +20,4 @@ else
          --ohlcv-snapshot "$(python3 -c "import json; print(json.load(open('$PIN'))['ohlcv_1m_snapshot'])")" \
          --silver-snapshots "$(python3 -c "import json; print(json.dumps(json.load(open('$PIN'))['silver_snapshots']))")" "$@"
 fi
-exec uv run --no-project --with duckdb==1.4.4 --with clickhouse-connect==0.8.18 python scripts/parity_ohlcv.py "$@"
+exec uv run --no-project --with duckdb==1.4.4 --with clickhouse-connect==0.8.18 --with trino==0.340.0 python scripts/parity_ohlcv.py "$@"
