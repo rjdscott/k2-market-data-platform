@@ -82,6 +82,13 @@ x-airflow-env: &airflow-env
   AIRFLOW__METRICS__STATSD_PORT: "9125"
   AIRFLOW__METRICS__STATSD_INFLUXDB_ENABLED: "True"
   AIRFLOW__METRICS__LEGACY_NAMES_ON: "False"
+  # dbt_marts (docker/airflow/dags/dbt_marts.py): astronomer-cosmos sends usage
+  # telemetry and dbt anonymous usage stats unless told not to, and both are off.
+  # Cosmos keys its dbt ls cache on a hash of the project's files; a host
+  # checkout's dbt/.venv is no part of the project.
+  AIRFLOW__COSMOS__ENABLE_TELEMETRY: "False"
+  AIRFLOW__COSMOS__PROJECT_HASH_EXCLUDED_DIRS: ".venv"
+  DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
 
 #############################################################################
 # SERVICES - STREAMING BACKBONE
@@ -606,8 +613,13 @@ services:
   # LocalExecutor, so tasks run inside airflow-scheduler, and that is the only
   # service given the Docker socket. No triggerer: nothing here defers.
   #
-  # ./docker/airflow/dags is a directory bind mount held by the scheduler and
-  # the dag-processor. A write-then-rename edit needs both recreated (CLAUDE.md,
+  # dbt_marts builds the dbt marts on Trino every hour at minute 10
+  # (docker/airflow/dags/dbt_marts.py, docs/runbooks/dbt-marts.md).
+  #
+  # ./docker/airflow/dags and ./dbt are directory bind mounts held by the
+  # scheduler and the dag-processor, read-only: cosmos runs each dbt command in
+  # a temporary copy of symlinks, where dbt writes target/ and logs/. A checkout
+  # switch or a write-then-rename edit needs both recreated (CLAUDE.md,
   # bind-mount gotcha).
 
   # One-shot: creates the `airflow` role and database on prefect-db when
@@ -696,6 +708,7 @@ services:
       - k2-net
     volumes:
       - ./docker/airflow/dags:/opt/airflow/dags:ro
+      - ./dbt:/opt/k2/dbt:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${K2_DOCKER_GID:-0}"
@@ -747,6 +760,7 @@ services:
       - k2-net
     volumes:
       - ./docker/airflow/dags:/opt/airflow/dags:ro
+      - ./dbt:/opt/k2/dbt:ro
     environment: *airflow-env
     command: ["dag-processor"]
     depends_on:
@@ -1372,7 +1386,7 @@ services:
 # cadvisor              | 0.1       | 128M         | Per-container CPU and memory (Prometheus job cadvisor)
 # prefect-db            | 1.0       | 1536M        | Prefect, Airflow and Lakekeeper metadata DB
 # airflow-api-server    | 1.0       | 1536M        | Airflow 3 UI, REST and execution API (ADR-034)
-# airflow-scheduler     | 1.5       | 3G           | Airflow 3 scheduler + LocalExecutor, 4 slots
+# airflow-scheduler     | 1.5       | 3G           | Airflow 3 scheduler + LocalExecutor, 4 slots; dbt_marts' dbt
 # airflow-dag-processor | 0.5       | 1G           | Airflow 3 DAG parsing
 # airflow-statsd        | 0.1       | 64M          | Airflow statsd to Prometheus (:9102)
 # spark-iceberg         | 3.0       | 8G           | Batch engine (lake ingest + maintenance)

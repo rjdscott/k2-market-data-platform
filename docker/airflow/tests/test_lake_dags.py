@@ -27,6 +27,7 @@ from airflow.sdk.exceptions import AirflowException, AirflowSkipException, Param
 
 REPO = Path(__file__).resolve().parents[3]
 BAG = DagBag(dag_folder=str(REPO / "docker/airflow/dags"))
+LAKE = ("lake_ingest", "lake_maintenance", "lake_rebuild")
 CONTEXT = {"ti": SimpleNamespace(id="0192f0c4-test")}
 
 
@@ -62,10 +63,10 @@ def run_with_exit(dag_id, rc):
 class Structure(unittest.TestCase):
     def test_the_file_imports_and_holds_exactly_three_dags(self):
         self.assertEqual(BAG.import_errors, {})
-        self.assertEqual(set(BAG.dags), {"lake_ingest", "lake_maintenance", "lake_rebuild"})
+        self.assertEqual({d for d, dag in BAG.dags.items() if dag.fileloc.endswith("/lake.py")}, set(LAKE))
 
     def test_no_dag_replays_or_overlaps(self):
-        for dag in BAG.dags.values():
+        for dag in (BAG.dags[d] for d in LAKE):
             with self.subTest(dag.dag_id):
                 self.assertFalse(dag.catchup)
                 self.assertEqual(dag.max_active_runs, 1)

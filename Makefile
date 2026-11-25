@@ -49,13 +49,18 @@ test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs
 	uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 
 # Inside the Airflow image itself: it carries no pytest and the root suite has no
-# Airflow, so the DAG tests are stdlib unittest. The repo is mounted read-only
-# and the container has no network: nothing here reaches the stack. The build
-# is a cache hit after the first; CI's docker job runs the same tests in the
-# image it just built.
-test-airflow:  ## DAG structure, exit 75 to skipped, params and the kill path, inside k2-airflow:3.3.2 (no stack needed)
-	docker build -q -f docker/airflow/Dockerfile -t k2-airflow:3.3.2 . >/dev/null
-	docker run --rm --network none -e AIRFLOW__LOGGING__LOGGING_LEVEL=WARNING -v "$(CURDIR)":/repo:ro k2-airflow:3.3.2 \
+# Airflow, so the DAG tests are stdlib unittest. The repo is mounted read-only,
+# and dbt/ again at /opt/k2/dbt where the dbt_marts DAG reads it, as compose
+# mounts it; the container has no network and no metadata database, so cosmos's
+# dbt ls cache, an Airflow Variable, is off. Nothing here reaches the stack. The
+# build is a cache hit after the first; CI's docker job runs the same tests in
+# the image it just built. AIRFLOW_IMAGE=k2-airflow:<other tag> tests a branch
+# without retagging the image the running stack was started from.
+AIRFLOW_IMAGE ?= k2-airflow:3.3.2
+test-airflow:  ## DAG structure, exit 75 to skipped, params, the kill path, and dbt_marts as cosmos renders it, inside k2-airflow:3.3.2 (no stack needed)
+	docker build -q -f docker/airflow/Dockerfile -t $(AIRFLOW_IMAGE) . >/dev/null
+	docker run --rm --network none -e AIRFLOW__LOGGING__LOGGING_LEVEL=WARNING -e AIRFLOW__COSMOS__ENABLE_CACHE_DBT_LS=False \
+	  -v "$(CURDIR)":/repo:ro -v "$(CURDIR)/dbt":/opt/k2/dbt:ro $(AIRFLOW_IMAGE) \
 	  python -m unittest discover -s /repo/docker/airflow/tests
 
 # The WHOLE repo is mounted, not just the crate: src/record.rs compiles the wire

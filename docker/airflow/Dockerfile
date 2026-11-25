@@ -14,10 +14,34 @@
 FROM apache/airflow:slim-3.3.2-python3.12
 
 # postgres: the metadata DB driver. statsd: metrics to the statsd exporter.
+# astronomer-cosmos renders the dbt_marts DAG from the dbt project
+# (docker/airflow/dags/dbt_marts.py). 1.16.0 (2026-11-03) is the newest release
+# on 2026-11-26; its compatibility policy lists Airflow 3.3 and dbt Core 1.12.
 # The constraints file is the one Airflow publishes for this exact release and
-# Python, so every transitive dependency is the set Airflow tested.
-RUN pip install --no-cache-dir "apache-airflow[postgres,statsd]==3.3.2" \
+# Python, so every transitive dependency is the set Airflow tested; it pins
+# every one of cosmos's own dependencies too (aenum, deprecation, msgpack,
+# openlineage-integration-common, virtualenv and the rest).
+RUN pip install --no-cache-dir "apache-airflow[postgres,statsd]==3.3.2" "astronomer-cosmos==1.16.0" \
       --constraint=https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.12.txt \
     && docker --version && psql --version
+
+# dbt in a virtualenv of its own, from dbt/uv.lock: dbt-core's pins (protobuf,
+# networkx, jsonschema and more) are not Airflow's, and one environment for both
+# is the clash the plan names. Cosmos calls /opt/k2/dbt-venv/bin/dbt as a
+# subprocess. The packages come from dbt/package-lock.yml at build time, never at
+# task time, into a directory outside the project, which the services mount
+# read-only at /opt/k2/dbt (docker-compose.yml, dbt_project.yml
+# packages-install-path). uv 0.13.10 (2026-11-24) is the newest release.
+COPY --from=ghcr.io/astral-sh/uv:0.13.10 /uv /usr/local/bin/uv
+USER root
+COPY dbt/pyproject.toml dbt/uv.lock /opt/k2/dbt-env/
+RUN UV_PROJECT_ENVIRONMENT=/opt/k2/dbt-venv UV_PYTHON=/usr/python/bin/python3.12 UV_PYTHON_DOWNLOADS=never \
+      uv sync --locked --no-dev --no-cache --project /opt/k2/dbt-env \
+    && /opt/k2/dbt-venv/bin/dbt --version
+COPY dbt/dbt_project.yml dbt/packages.yml dbt/package-lock.yml /tmp/dbt-deps/
+RUN cd /tmp/dbt-deps && K2_DBT_PACKAGES=/opt/k2/dbt_packages DBT_SEND_ANONYMOUS_USAGE_STATS=false \
+      /opt/k2/dbt-venv/bin/dbt deps --log-path /tmp/dbt-deps/logs \
+    && rm -rf /tmp/dbt-deps && ls /opt/k2/dbt_packages/dbt_expectations /opt/k2/dbt_packages/dbt_date >/dev/null
+USER airflow
 
 COPY docker/airflow/init-db.sh /opt/k2/init-db.sh

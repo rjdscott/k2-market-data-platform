@@ -14,6 +14,9 @@ model-paths: ["models"]
 macro-paths: ["macros"]
 test-paths: ["tests"]
 clean-targets: ["target", "dbt_packages"]
+# The Airflow image installs the packages at build time (docker/airflow/Dockerfile) and
+# mounts this directory read-only, so it points dbt at its own copy.
+packages-install-path: "{{ env_var('K2_DBT_PACKAGES', 'dbt_packages') }}"
 
 flags:
   require_certificate_validation: true  # the future default; the stack speaks plain HTTP on loopback
