@@ -627,6 +627,20 @@ full path; and runs one shadow day before cutover. Folded runs leave small files
 joins the nightly compaction. Its open questions (a scheduled ClickHouse pull; candles) became
 future decisions, and the candle one now names the 1m roll-up as an alternative.
 
+**Second round, same day.** A second review of commit `84aea58` added, each checked against the
+code: `gold.stage()` runs candles and bars only `if minutes is not None`, so a retry that finds
+silver already copied skips them and the position alone would not close the crash gap; the step
+must run whenever `gold.trades` has moved past the position. A SQL `MERGE` takes no write options
+(`SparkWriteConf` reads `snapshot-property.` from write options only), so the stale-key `MERGE`
+cannot carry the position and is a fallback for the one-commit publish only. `latest_summary`
+keeps only summaries whose `k2.job` matches, so the publish must carry `k2.job=decode`, and
+`rebuild_bars()` must record the position. A missing or expired position stops only the candle
+and bar work (the affected range is unknown); an `overwrite` or `delete` on `gold.trades` instead
+recomputes its days (the range is known from `all_entries`), so ADR-049's routing can run.
+`latest_summary` orders by `committed_at`, so the position does rest on a clock. ADR-049's gate
+moves from used heap, which counts uncollected garbage, to the window stage's execution memory and
+spill, with thresholds marked as proposals.
+
 Commands for this section:
 
 ```bash

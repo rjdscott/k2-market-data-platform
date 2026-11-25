@@ -16,7 +16,7 @@ it reads the whole trade table where a few files would do, computes the bars twi
 and sorts every trade more than the result needs. We will read only the trades added since the
 step last finished, compute the bars once, and publish them in one atomic step, so a crash can no
 longer leave a day without bars or a minute without its candle. No table changes and every stored
-row stays the same; the cost is a few small code changes, a rehearsal on a scratch table, and a
+row stays the same; the cost is a few small code changes, a test on a scratch table, and a
 row-for-row comparison on real data before merge. Nothing is left to decide: the owner chose the
 one-step publish on 2026-11-26.
 
@@ -82,12 +82,31 @@ between them. K2's tables are *copy-on-write*: changing one row means writing a 
 data file that holds a changed row, never a separate delete file. The snapshot expiry keeps 7
 days of snapshots, so every file a commit replaces stays on disk for 7 days.
 
+**Summary properties, `k2.job` and `latest_summary`.** Every Iceberg snapshot carries a
+*summary*: a map of string keys to string values. Iceberg fills some (`operation`,
+`added-files-size`), and a Spark write adds its own through write options named
+`snapshot-property.<key>`. K2 stamps each ingest commit with `k2.job=decode` and with the position
+it read up to, for example `k2.src-snapshot-id.<venue>` on `gold.trades`: the silver snapshot each
+venue's rows came from. `offsets.latest_summary` returns, from a table's history on `main`, the
+newest summary whose `k2.job` is the job asked for. "Newest" means the largest `committed_at`, the
+time Iceberg records at each commit: a clock, though one that only moves forward per table in
+practice because commits to one table are serialised. A commit without `k2.job=decode`
+(compaction, expiry, a hand-made fix) is skipped, so a position must ride on a commit that carries
+both. A SQL statement (`DELETE`, `MERGE`) takes no write options, so it cannot carry either.
+
 **Branch and fast-forward.** An Iceberg *branch* is a named pointer to a snapshot, like a git
-branch; `main` is the one every reader reads (since #214 K2's own readers also resolve `main`
-explicitly). Commits on another branch are invisible to readers. A *fast-forward* moves `main` to
-point at the branch's newest snapshot in one commit, keeping that snapshot's summary properties,
-which is why K2's rule is that a branch reaches `main` only by fast-forward
-(`docker/lake/README.md`).
+branch; `main` is the one every reader reads, and commits on another branch are invisible to
+readers. A *fast-forward* moves `main` to the branch's newest snapshot in one commit, so `main`
+gains the branch's snapshots unchanged, summary properties included. A *cherry-pick* would
+instead copy a branch commit onto `main` as a new snapshot, and that copy drops the source's `k2.*`
+properties. The *P4 spike* (2026-11-25, the first task of plan P4, which tests branch writes for
+file sources) showed both on a scratch table, `lake.scratch_p4.wap_bronze`: the fast-forwarded
+snapshot kept `k2.job`, the cherry-picked one did not. Hence K2's rule that a branch reaches `main`
+only by fast-forward (`docker/lake/README.md`). The same spike found that once a table has a
+branch, its snapshot list also holds the branch's unpublished commits, and the newest by time can
+be one of them; pull request #214 (merged 2026-11-26) therefore made every K2 reader of positions
+follow `main`'s *lineage*, the chain of parent snapshots from the one `main` points at
+(`offsets.main_lineage`, `catalog.snapshot_history`).
 
 **Pruning.** `gold.trades` is partitioned by venue and UTC day, and Iceberg stores each data
 file's smallest and largest `exchange_ts`. A filter that compares the column itself to constants,
@@ -111,7 +130,7 @@ column compared with values from another table, is evaluated only after every fi
 - **The heap peak is in the bars.** 1,276 of 1,536 MiB during the bar query. Its largest stage
   shuffles 601 MiB, spills 1,083 MiB to disk and takes 560 of the 741 MiB lent to tasks; the
   2026-11-25 crashes failed reading spill files back. Two query choices create that stage
-  (Decision, items 4 and 5). (note §1.4, §3)
+  (Decision, changes 5 and 6). (note §1.4, §3)
 - **A crash in the step leaves stale or missing rows.** The two failed runs sampled (17:46,
   18:39) died after the bars `DELETE` had committed, leaving their symbol-days without bars until
   a later run touched them. The 22:31 UTC run stopped inside the bar computation (its last event
@@ -144,24 +163,49 @@ row.**
 Six changes in `docker/lake/gold.py` and `docker/lake/bars.py`, each keeping every stored row
 identical; the reason is given with each.
 
-### 1. Touched keys come from the step's own position
+### 1. The step works from its own position, and runs whenever there is work
 
-Every bars publish records the `gold.trades` snapshot the step read, as the summary property
-`k2.src-snapshot-id.trades` on the commit. The next run reads `gold.trades` incrementally from
-that snapshot to the current one (an *incremental read*: Iceberg returns the rows that `append`
-commits added in between) and takes its touched keys from those rows instead of from the silver
-batch. The position is found with `offsets.latest_summary` along `main`'s history, the pattern
-[ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md) uses for Kafka offsets. Because the bars
-publish is the step's last write, a run that stops anywhere in the step is redone in full by the
-next one; candle `MERGE`s are idempotent, so redoing them is safe.
+Every bars publish (change 4) carries two summary properties: `k2.job=decode`, so
+`latest_summary` finds it, and `k2.src-snapshot-id.trades`, the `gold.trades` snapshot the step
+read up to: its *position*. `rebuild_bars()` writes both too, so every rebuild leaves a position
+behind. Each run then:
 
-Two edges. An incremental read returns `append` commits only and silently skips any `delete` or
-`overwrite` (verified: `BaseIncrementalAppendScan.appendsBetween` filters on the operation
-string `append`). So if `main`'s history since the position holds a commit on `gold.trades` that
-is neither an append nor a compaction, the run stops and names `make lake-rebuild LAYER=gold`
-rather than miss the repair. The first run after deploy finds no recorded position and uses the
-silver batch once. Cost: one incremental read of the files the last run appended, normally three
-small files (estimate: under a second).
+- reads the position with `latest_summary` over `gold.bars`' history on `main`;
+- lists the `gold.trades` snapshots on `main`'s lineage after it, by their `operation`: `append`
+  (rows added), `replace` (compaction: the same rows in new files), `overwrite` or `delete` (rows
+  changed or removed);
+- takes touched keys from an *incremental read* of the `append` snapshots: Iceberg returns only the
+  rows those commits added, and skips every other operation (verified:
+  `BaseIncrementalAppendScan.appendsBetween` in the Iceberg 1.8.1 jar keeps only snapshots whose
+  operation is the string `append`);
+- lets `replace` pass, since compaction changes files, not rows;
+- treats every `(exchange, day)` partition an `overwrite` or `delete` touched as fully touched.
+  The partitions come from the `all_entries` metadata table, which lists one row per data file
+  per snapshot with a status (added, existing, deleted). Every candle bucket and symbol-day of
+  such a day is recomputed, and that day's candles are deleted and rewritten, not merged, so a
+  bucket left with no trades loses its row (two commits on each candle table; a crash between them
+  is redone by the next run, because the position has not moved). The run carries on; nothing
+  stops.
+
+`stage()` must run the candle and bar work whenever this finds anything. Today it runs it only
+`if minutes is not None` (`docker/lake/gold.py`, `stage()`), so a retry after a stopped run, which
+finds the silver rows already copied, skips it. Because the bars publish is the step's last write
+and the position moves only with it, a run stopped anywhere in the step is redone by the next one;
+the candle writes are recomputes, so redoing them is safe.
+
+**A missing or expired position stops this step only, loudly.** If no bars publish carries a
+position, or `main`'s history of `gold.trades` no longer holds the snapshot it names (expiry
+removed it: it was more than 7 days old and not among the newest 10, which takes an ingest stopped
+for a week or more), the run skips the candle and bar work, files a `gold_position` row in
+`audit.checks`, and carries on with step 2e. `LakeCommitAgeHigh`, today the alert on a bronze table
+that stops committing, is widened to `gold.bars`, which then stops committing. The fix is
+`make lake-rebuild LAYER=gold`, which writes a fresh position. It fails loudly rather than
+recomputes because without the position nothing says which trades are new: the only safe full
+recompute is all of gold, minutes of work that does not belong in a five-minute run, and an
+operator decides when.
+
+Cost: listing the snapshots since the position and one incremental read of the files the last run
+appended, normally three small files (estimate: under a second).
 
 ### 2. Read only the touched time range
 
@@ -196,10 +240,9 @@ join `main`'s history, so a time-travel read of that exact id would show the gap
 it, because pins and readers take the snapshot `main` points at. The `DELETE` rewrites only the
 files holding touched days and
 the `append` writes only the fresh bars, about 308 KB each per run at 22:54 (note §8), so the cost
-stays the size of the touched days. The append keeps its write options, so the commit carries the
-position of change 1, and the fast-forward keeps it on `main`, as the P4 spike showed on
-`lake.scratch_p4.wap_bronze` on 2026-11-25 (`docs/adr/glossary.md`, "Scratch namespace and the P4
-spike"; `docker/lake/offsets.py`, `main_lineage`).
+stays the size of the touched days. The `append` is a DataFrame write, so it takes write options
+and carries `k2.job=decode` and the position of change 1; the fast-forward keeps both on `main`, as
+the P4 spike showed.
 
 Why not a single `MERGE ... WHEN NOT MATCHED BY SOURCE THEN DELETE`, which looks like one
 statement: Iceberg 1.8.1's Spark runtime has no `MERGE` rewrite of its own, and Spark 3.5.5's
@@ -211,16 +254,9 @@ with history, the pattern this ADR removes. A `MERGE` stays possible as the fall
 other shape: carry the stale keys (stored bars of a touched day that the fresh result no longer
 has) in the source with a flag, and delete them with `WHEN MATCHED AND s.stale THEN DELETE`.
 Without a `NOT MATCHED BY SOURCE` clause Spark keeps its file filter, so only touched files are
-rewritten; but a SQL `MERGE` takes no write options, so it cannot carry change 1's position.
-
-Before the pull request is merged, the branch form is rehearsed on a copy of one day of
-`gold.bars` in `lake.scratch_p4`, the producer lake's namespace for spikes that no job reads, in
-a Spark session started by hand outside the schedule while holding the *lake lock* (the file lock
-every lake writer takes, so the session cannot run beside an ingest). It passes when: `main` gains
-one snapshot per run carrying the position; the touched day equals the fresh bars, a stale row is
-gone and an untouched day is unchanged; the snapshot summaries' added and removed file bytes are
-limited to the touched days' files; and a driver killed before the fast-forward leaves `main` at
-its previous snapshot.
+rewritten. But a SQL `MERGE` takes no write options, so it can carry neither `k2.job` nor the
+position: it is a fallback for the one-commit publish only, **not** for change 1. If the branch
+publish fails its gate, changes 1 and 4 return to the owner together; the other four ship.
 
 ### 5. Broadcast the threshold table
 
@@ -250,25 +286,53 @@ No table, column, partition, contract, threshold or bar definition.
 
 ### The gate before merge
 
-- **Old against new, on real data.** At a pinned `gold.trades` snapshot, run the old and new
-  `candles()` for all four timeframes over one batch's touched keys, and old and new `_bars()` for
-  one full UTC day; compare each pair with `EXCEPT ALL` both ways, which must be empty. This runs
-  the new Spark code on live tables in a hand-started session that writes nothing, and is the only
-  check that does: nothing in CI or the parity set runs it. The same session prints each new
-  scan's skipped-file count, which must not be zero.
-- **CI.** DuckDB runs `bars.bars_sql()` over seeded random trades (two venues, a day boundary,
-  ties on `exchange_ts` and `recv_ts_ns`) and must equal the Python reference `bars.reference()`;
-  the range helper's edges (a trade at `lo` is in, at `hi` out); `stage_bars()` against a stub
-  Spark issues one evaluation and one publish with no `DELETE` on `main`; touched keys come from the
-  recorded position, and a non-append commit since it stops the run.
-- **After the first UTC day written entirely by the new code**, re-pin `tests/parity/pinned.json`
-  (the snapshot ids `make parity-ohlcv` and `make parity-bars` read, so a rerun reads the same
-  data) to that day.
+Two parts, both run in Spark sessions started by hand outside the schedule while holding the
+*lake lock* (the file lock every lake writer takes, so a session never runs beside an ingest).
+
+**On a copy of `gold.bars` holding two or more days, in `lake.scratch_p4`** (the producer lake's
+namespace for spikes, which no job reads):
+
+- the branch `DELETE` and the `append`, the append carrying `k2.job=decode` and the position;
+- after the fast-forward, `latest_summary` over `main`'s history returns that position;
+- the touched day equals the fresh bars, a stale row is gone, an untouched day is unchanged;
+- the snapshot summaries' added and removed bytes cover only the touched day's files;
+- a driver killed before the fast-forward leaves `main` unchanged.
+
+**On the live tables, at a pinned `gold.trades` snapshot, writing nothing:**
+
+- old and new `candles()` for all four timeframes over one batch's touched keys, and old and new
+  `_bars()` for one full UTC day, each pair compared with `EXCEPT ALL` both ways: empty. Nothing in
+  CI or the parity set runs the step's Spark code on real data; this does;
+- `EXPLAIN` (Spark printing the plan it will run) shows a `HashAggregate` for the bar aggregate and
+  a broadcast join to the threshold table;
+- every `gold.trades` scan reports more than zero skipped files, which proves the
+  `timestamp_micros` range reaches Iceberg.
+
+The hash aggregate and the pruning are proven by this gate, not before acceptance. If the scratch
+part fails, changes 2 (the time range), 3 (one computation), 5 (the broadcast) and 6 (open and
+close by position) still ship, since none depends on how bars are published; changes 1 and 4 go
+back to the owner.
+
+**In CI** (`make test-python`):
+
+- DuckDB runs `bars.bars_sql()` over seeded random trades (two venues, a day boundary, ties on
+  `exchange_ts` and `recv_ts_ns`) and must equal the Python reference `bars.reference()`;
+- the range helper's edges (a trade at `lo` is in, at `hi` out);
+- `stage_bars()` against a stub Spark: one evaluation, one publish, no `DELETE` on `main`;
+- **the retry case:** a run stopped after its `gold.trades` append and before its bars publish,
+  followed by a run whose silver stage appends nothing; the second run must recompute the first
+  run's candles and bars. Today's `stage()` fails it;
+- an `overwrite` since the position makes its days fully touched; a `replace` does not; a missing
+  position skips the step and files the `audit.checks` row without failing the run.
+
+**After the first UTC day written entirely by the new code**, re-pin `tests/parity/pinned.json`
+(the snapshot ids `make parity-ohlcv` and `make parity-bars` read, so a rerun reads the same data)
+to that day.
 
 ### Rollout and rollback
 
-Rollout: pull `main` into the live checkout between two runs; the next run loads the new code.
-Rollback: `git revert` does not remove rows a faulty version wrote, and closed 1-minute and
+Rollout: pause the ingest DAG, pull `main` into the live checkout, run `make lake-rebuild
+LAYER=bars` so the first position exists, unpause; the next run loads the new code. Rollback: `git revert` does not remove rows a faulty version wrote, and closed 1-minute and
 5-minute buckets are never recomputed. So a rollback reverts, then runs the old-against-new
 comparison over every day the new code wrote; if any differs, `make lake-rebuild LAYER=gold`
 (gold.trades, candles and bars rebuilt from silver under the lake lock; no candle-only rebuild
@@ -306,13 +370,16 @@ if every publish is whole and its position exact.
 sees a symbol-day without bars, and a stopped run is redone in full by the next. The step's Spark
 code is compared with its predecessor on real data before it ships.
 
-**Harder.** A branch per table to manage (reset every run, published only by fast-forward). One
-extra incremental read per run. A rollback is a revert plus a comparison, and possibly a gold
-rebuild.
+**Harder.** A branch to manage (reset every run, published only by fast-forward). One snapshot
+listing and one extra incremental read per run. A missing or expired position stops the candle and
+bar work until an operator rebuilds gold. A repair of `gold.trades` by `overwrite` or `delete`
+makes the next run recompute those whole days. Rollout needs the ingest paused for one bars
+rebuild; a rollback is a revert plus a comparison, and possibly a gold rebuild.
 
 **Committed to.** `gold.bars` is published to `main` only by fast-forward, one commit per run,
-carrying `k2.src-snapshot-id.trades`. Touched keys come from that position. Every read of
-`gold.trades` in this step carries the touched time range.
+carrying `k2.job=decode` and `k2.src-snapshot-id.trades`, and `rebuild_bars()` writes both. Touched
+keys come from that position, and the step runs whenever `gold.trades` has moved past it. Every
+read of `gold.trades` in this step carries the touched time range.
 
 **What this does not fix.**
 
@@ -325,11 +392,11 @@ carrying `k2.src-snapshot-id.trades`. Touched keys come from that position. Ever
 **Risks, and what is not yet verified.**
 
 - Branch writes, `DELETE` on a branch and `fast_forward` on `gold.bars` with Iceberg 1.8.1: the
-  P4 spike proved fast-forward on another table, not this sequence. If the rehearsal fails, this
-  ADR returns to the owner before the write changes.
+  P4 spike proved fast-forward on another table, not this sequence. If the scratch part of the gate
+  fails, changes 1 and 4 return to the owner and the other four ship.
 - That Spark chooses the hash aggregate once the ordering key is a `BIGINT`, and that
-  `timestamp_micros(literal)` is folded to a constant early enough to be pruned by: checked with
-  `EXPLAIN` and the skipped-file count in the gate.
+  `timestamp_micros(literal)` becomes a constant early enough for Iceberg to prune by: proven or
+  disproven by the live part of the gate, not before acceptance.
 - Every "after" number is an estimate from the measured breakdown.
 
 **Revisit when** any scheduled ingest run takes more than 200 s after this lands, an

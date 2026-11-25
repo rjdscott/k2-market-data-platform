@@ -23,13 +23,13 @@ confirm.
 ### Not ready to accept until
 
 1. ADR-048 has landed and run for one full UTC day.
-2. The measured gate below shows the memory problem is still there; below the threshold this ADR
-   is marked Rejected with the measurement.
+2. The measured gate below shows the window's memory and spill are still a problem; below its
+   thresholds, which are proposals, this ADR is marked Rejected with the measurement.
 3. The unsafe cases (an out-of-order or tied batch, a threshold change in `config/bars.yaml`, a
    commit on `gold.trades` that is not an append or a compaction) each route to the full-day path,
    with a test that would fail if they did not.
-4. One UTC day of shadow runs (extension computed beside the full path, compared every run) has
-   shown no difference.
+4. One UTC day in `shadow` mode (the fold computed beside the full path and compared every run,
+   the full result written) has shown no difference.
 
 ---
 
@@ -120,20 +120,26 @@ after it, without reading the day's earlier trades.
 
 ### What a run does
 
-1. **New trades and position.** The trades not yet folded are those `gold.trades` gained since the
-   snapshot recorded on the last `gold.bars` publish (`k2.src-snapshot-id.trades`, which ADR-048
-   introduces), found with `offsets.latest_summary` along `main`'s history. That is the
-   [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md) pattern: the position travels in the
-   same commit as the data, and nothing depends on a clock.
+1. **New trades and position.** ADR-048 already gives the step a *position*: the `gold.trades`
+   snapshot recorded as the summary property `k2.src-snapshot-id.trades` (a key-value pair stored
+   on an Iceberg snapshot) on every `gold.bars` publish, beside `k2.job=decode`, the property
+   `offsets.latest_summary` looks for when it picks the newest such commit on `main`'s history.
+   That is the [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md) pattern: the position
+   travels in the same commit as the data. "Newest" is by `committed_at`, the time Iceberg records
+   at commit, so it does rest on a clock, one that only moves forward per table in practice because
+   commits to one table are serialised. The trades not yet folded are what `gold.trades` gained
+   since the position. A missing or expired position stops the step (ADR-048, change 1), so the
+   fold never runs without one.
 2. **Route each touched symbol-day to the full-day path when**
    - its earliest new `exchange_ts` is not strictly after the stored latest `close_time` (late or
      tied);
    - the stored `threshold` of any of its bars differs from `config/bars.yaml`;
-   - `main`'s history of `gold.trades` since the position holds a commit that is neither an
-     `append` nor a compaction: every symbol-day in the partitions that commit changed goes to the
-     full path (found from the files that commit removed, in the `gold.trades.all_entries`
-     metadata table);
-   - the full-path switch is on (below).
+   - ADR-048 marked its day fully touched, because an `overwrite` or `delete` commit on
+     `gold.trades` since the position changed that `(exchange, day)` partition. ADR-048 finds
+     those partitions in `gold.trades.all_entries`, an Iceberg metadata table with one row per data
+     file per snapshot and a status saying whether that snapshot added, kept or deleted the file;
+     a compaction (`replace`) passes. ADR-048 carries on rather than stopping, so this route runs;
+   - the run's `bars_mode` is `full` or `shadow` (below).
    Every other symbol-day is folded.
 3. **Fold.** Per bar kind, the day's units so far are `sum(trade_count)`, `sum(volume_e8)` or
    `sum(quote_volume_e16)` over the stored bars. `bars.bars_sql()` runs over the new trades only,
@@ -180,31 +186,42 @@ ClickHouse together (the owner's decision), with tests and docs in the same pull
   through a dictionary keyed by bar, so two stored rows with one key would collapse silently.
 - **Compaction.** Folded runs leave one small file per venue-month per run, where today each run
   replaces the last; `gold.bars` joins the nightly compaction in `maintenance.compact`.
-- **The full-path switch.** An Airflow DAG param passed to `ingest.py` forces the full path for
-  every day: the rollback, with no deploy.
-- **Shadow day before cutover.** For one UTC day each run writes the full-path result and also
-  computes the fold, comparing the two with `EXCEPT ALL` and filing any difference in
-  `audit.checks`. The fold is switched on only after a day with none.
+- **Two run modes, set without a deploy.** An Airflow DAG param, `bars_mode`, passed to
+  `ingest.py`, takes one of three values. `fold` is the normal mode this ADR introduces. `full` is
+  the switch: every touched symbol-day goes to the full-day path, no fold is computed, and the run
+  behaves as ADR-048 does. It is the rollback, and the setting to use while anything about the fold
+  is in doubt. `shadow` is the comparison mode: every day still goes to the full path and the
+  full result is what gets written, but the run also computes the fold for the same days, compares
+  the two with `EXCEPT ALL` (the rows one side has and the other does not, counting duplicates),
+  and files any difference in `audit.checks`; it costs two computations per run. Cutover is one
+  UTC day in `shadow` with no difference, then `fold`.
 
 ### The gate
 
-Measured on the first full UTC day after ADR-048 lands, at the last run before 00:00 UTC: the
-window stage's peak execution memory (History Server, `stages`, `peakExecutorMetrics`) and the
-run's heap peak (`executors`, `peakMemoryMetrics.JVMHeapMemory`). **If the window stage stays
-below 370 MiB (half of the 741 MiB lent to tasks) and the heap below 1,152 MiB (three quarters of
-1,536), this ADR is marked Rejected with those numbers.** For reference, at 21:26 on 2026-11-25
-the window stage peaked at 343 to 431 MiB and the heap at 1,276 MiB, with the stage ADR-048
-removes still present.
+Measured after ADR-048 has landed, on the first full UTC day whose `gold.trades` partitions hold
+at least as many bytes as 2026-11-25's (Trino over `gold.trades$files`, grouped by
+`partition.exchange_ts_day`), at the last run before 00:00 UTC, for the stage that holds the
+window (History Server: the stage's `peakExecutorMetrics.OnHeapExecutionMemory`, the memory Spark
+lent its sorts and hash tables, and its `diskBytesSpilled`). Not the heap: the JVM's used heap also
+counts garbage not yet collected, so it runs high on healthy runs and would almost never let this
+gate reject.
+
+**Proposed thresholds, to be confirmed by that measurement:** if the window stage's peak execution
+memory stays below 370 MiB (half of the 741 MiB lent to tasks) and its spill below 256 MiB, this
+ADR is marked Rejected with those numbers. For reference only: at 21:26 on 2026-11-25, before
+ADR-048, that stage peaked at 343 MiB (431 MiB in the repeated computation) and spilled 375 MiB.
 
 ### Tests that land with it
 
 - **Fold equals full recompute, on random data.** For many seeds: random trades split at a random
   point where the second part starts strictly later; folding the second part into the full bars of
   the first equals the full bars of all trades, every kind and column, in the Python reference and
-  in DuckDB running the same bar SQL and combine step. Dollar values near 10^30 check overflow, on
-  DuckDB's `HUGEINT`, not Spark's `DECIMAL(38,0)`: Spark returns `NULL` on a decimal sum overflow
-  with ANSI mode off (its 3.5 default, not changed in `spark_conf.py`), which the `NOT NULL` column
-  would then refuse; checked in the shadow day, not in CI.
+  in DuckDB running the same bar SQL and combine step. Dollar values near 10^30 check overflow on
+  DuckDB's 128-bit `HUGEINT`, not on Spark's `DECIMAL(38,0)`. Spark's behaviour depends on *ANSI
+  mode*, its switch for standard SQL semantics: with it on, an arithmetic overflow is an error;
+  with it off (Spark 3.5's default, which `spark_conf.py` does not change), a decimal sum that
+  overflows becomes `NULL`, which the `NOT NULL` column would then refuse at write. So the Spark
+  side is checked in `shadow` mode, not in CI.
 - **Each unsafe case routes to the full path:** a late trade (and at least one later trade's bar
   moves, the example above as a test), a tie, a changed threshold, a non-append commit.
 - **Day boundary:** a batch spanning `23:59:59.999999` and `00:00:00` folds the old day and starts
@@ -214,8 +231,9 @@ removes still present.
 Rollout (note §6): pause the ingest; pull `main`; `make lake-rebuild LAYER=bars` (drops and
 recreates `gold.bars` from the new DDL; it takes the lake lock); in ClickHouse apply
 `10-gold-tables.sql`, `TRUNCATE TABLE gold.bars` and re-pull; re-pin `make parity-bars`; unpause
-with the full-path switch on for the shadow day. Rollback: the switch first; then, if the column
-must go, revert, rebuild without it, `DROP COLUMN` in ClickHouse and re-pull.
+with `bars_mode=shadow` for one UTC day, then `fold`. Rollback: `bars_mode=full` first, which needs
+no deploy; then, if the column must go, revert, rebuild without it, `DROP COLUMN` in ClickHouse and
+re-pull.
 
 ---
 
@@ -223,8 +241,8 @@ must go, revert, rebuild without it, `DROP COLUMN` in ClickHouse and re-pull.
 
 **It removes what ADR-048 cannot.** After ADR-048 the remaining cost of the bars is the window
 over the day, and only not doing it removes it. A fold reads the day's stored bars (845 KB for the
-whole table today) and one run's trades; estimate: under 5 s at any hour, and a heap peak near the
-candle steps' level, about 0.5 GiB at 21:26 (note §5). The gate makes sure it is still needed.
+whole table today) and one run's trades; estimate: under 5 s at any hour, with no window sort
+and so no spill from it (note §5). The gate makes sure it is still needed.
 
 **In order is the measured common case**, and every case that is not goes to today's algorithm,
 already under parity.
@@ -255,7 +273,7 @@ recomputations, every changed day, plus a conservation check every run.
 **Easier.** The bar step's time and memory follow the batch, not the hour. Every changed day is
 audited, and a conservation check runs every run.
 
-**Harder.** Two code paths for one table, kept correct only by the tests, the shadow day, the
+**Harder.** Two code paths for one table, kept correct only by the tests, the `shadow` day, the
 conservation check and the parity checks. Rollout and rollback each need the ingest paused, a
 bars rebuild, a ClickHouse column change and a full re-pull, and a new parity pin. If the recorded
 position no longer exists in `gold.trades` (the ingest stopped for longer than the 7-day snapshot
@@ -273,7 +291,7 @@ lake and ClickHouse, moved together. ADR-048's one publish per run and its posit
 **Risks, and what is not yet verified.**
 
 - Every "after" number is an estimate; nothing here has run.
-- The fold's correctness rests on tests, the shadow day and the checks, not on a proof.
+- The fold's correctness rests on tests, the `shadow` day and the checks, not on a proof.
 - The in-order share was measured over four days of data, one a full day of continuous ingest.
 
 **Revisit when** out-of-order symbol-batches exceed 1 % over a UTC day (the Trino query in the
@@ -285,8 +303,9 @@ fails.
 ## Questions for the owner
 
 - Decided 2026-11-26: `quote_volume_e16` lives in the lake and in ClickHouse.
-- Open: accept the gate thresholds (window stage 370 MiB, heap 1,152 MiB at the last run before
-  00:00 UTC)? Yes, or give the numbers.
+- Open: accept the proposed gate thresholds (the window stage's peak execution memory 370 MiB and
+  spill 256 MiB at the last run before 00:00 UTC, on a day at least as large as 2026-11-25)? Yes,
+  or give the numbers.
 
 ### Future decisions, not part of this ADR
 

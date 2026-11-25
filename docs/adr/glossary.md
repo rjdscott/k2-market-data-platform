@@ -172,10 +172,12 @@ Where: `bronze.py`, `silver.py`, `gold.py`, `_batch_offsets` in `ingest.py`;
 
 Proposed in [ADR-048](ADR-048-gold-step-reads-touched-data-writes-bars-once.md), not built: the
 `gold.trades` snapshot id the gold candle and bar step (stage 2d) last finished from, recorded as
-`k2.src-snapshot-id.trades` on the `gold.bars` commit that ends the step. The next run takes its
-[touched minutes](#touched-minutes) from what `gold.trades` gained since then, so a run that
-stopped part way is redone in full. Today the touched minutes come from the run's own silver
-batch instead.
+`k2.src-snapshot-id.trades`, beside `k2.job=decode`, on the `gold.bars` commit that ends the step
+and on every bars rebuild. The next run takes its [touched minutes](#touched-minutes) from what
+`gold.trades` gained since then, and runs whenever there is any, so a run that stopped part way is
+redone in full. A missing or expired position stops only that step, with an `audit.checks` row;
+an `overwrite` or `delete` on `gold.trades` since it makes those days fully recomputed. Today the
+touched minutes come from the run's own silver batch instead.
 Where: `latest_summary` in [`docker/lake/offsets.py`](../../docker/lake/offsets.py).
 
 ---
@@ -392,6 +394,14 @@ values, as in a join on `CAST(exchange_ts AS DATE) = day`, is applied after ever
 that is why stage 2d read the whole of `gold.trades` ten times a run on 2026-11-25.
 Where: `gold.candles()` and `gold._bars()`;
 [ADR-048](ADR-048-gold-step-reads-touched-data-writes-bars-once.md).
+
+### all_entries
+
+`<table>.all_entries` is an Iceberg metadata table, queried like a table, with one row per data
+file per snapshot still in the metadata and a status: added, existing or deleted by that
+snapshot. It is how a job finds which partitions an `overwrite` or `delete` commit changed, which
+an incremental read cannot show (incremental reads return `append` commits only).
+Where: [ADR-048](ADR-048-gold-step-reads-touched-data-writes-bars-once.md), change 1.
 
 ### Compaction
 
@@ -617,7 +627,8 @@ Proposed in [ADR-049](ADR-049-event-bars-extended-not-recomputed.md), not built.
 check compares, before each write, the sums of a symbol-day's stored bars (trade count, quantity,
 exact dollar value) with the same sums over its trades in `gold.trades`: one hash aggregate, no
 sort. A shadow run computes a new method beside the current one and compares the two without
-letting the new one write.
+letting the new one write; in ADR-049 it is `bars_mode=shadow`, distinct from `bars_mode=full`,
+which forces the old method and computes nothing new.
 Where: `docker/lake/gold.py` once built.
 
 ---
@@ -651,6 +662,13 @@ little memory, no sort. It needs every value in that record to be fixed-width (n
 timestamps, decimals). An aggregate whose state holds something else, such as `min_by` over a
 `struct`, makes Spark fall back to a sort aggregate, which sorts every input row by group first.
 Where: `bars.DIALECT` in [`docker/lake/bars.py`](../../docker/lake/bars.py).
+
+### ANSI mode
+
+`spark.sql.ansi.enabled` switches Spark SQL to standard SQL semantics: an arithmetic overflow or
+an invalid cast is an error instead of a `NULL`. It is off by default in Spark 3.5 and K2 does not
+turn it on (`docker/lake/spark_conf.py`), so a `DECIMAL` sum that overflows yields `NULL`.
+Where: [ADR-049](ADR-049-event-bars-extended-not-recomputed.md), tests.
 
 ### Window function
 
