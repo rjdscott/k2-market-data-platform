@@ -9,8 +9,8 @@
 
 A market data platform for quantitative research. Three crypto exchanges are captured
 verbatim over public WebSocket feeds, archived to an Iceberg lakehouse that is the system of
-record, and served from ClickHouse as a derived tier. One host, 16 CPU / 40 GB. Not a
-trading path.
+record, and served from ClickHouse as a derived tier, with Trino for SQL over the lake. One
+host, inside a 24 CPU / 42 GiB ceiling. Not a trading path.
 
 [![CI](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -69,6 +69,7 @@ flowchart TB
     RAW --> BR --> SV --> GD
   end
   N["DuckDB notebooks"]:::nb
+  T["Trino 484 · SQL over the lake<br/>writes namespace marts only"]:::nb
   O["Prometheus · 28 rules<br/>Grafana · 6 dashboards"]:::ob
 
   E --> F --> R
@@ -76,6 +77,7 @@ flowchart TB
   R --> S --> RAW
   GD -.->|reload| C
   GD --> N
+  L --> T
   F & S & C -.-> O
 
   classDef ex fill:#e5e7eb,stroke:#374151,color:#111827
@@ -88,9 +90,9 @@ flowchart TB
   classDef ob fill:#f3f4f6,stroke:#6b7280,color:#111827
 ```
 
-18 long-running services and 5 one-shot init containers, 17.30 CPU / 30.312 GiB of declared
-limits at steady state and 19.30 CPU / 32.812 GiB at the bootstrap peak, under a 20 CPU / 36 GiB
-ceiling ([ADR-034](./docs/adr/ADR-034-airflow-3-replaces-prefect.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
+19 long-running services and 5 one-shot init containers, 19.30 CPU / 34.312 GiB of declared
+limits at steady state and 21.30 CPU / 36.812 GiB at the bootstrap peak, under a 24 CPU / 42 GiB
+ceiling ([ADR-035](./docs/adr/ADR-035-trino-and-dbt-for-marts.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 Prefect, which Airflow replaced, waits behind `--profile legacy` as the rollback, not running.
 
 **Read the book.** [`docs/architecture/`](./docs/architecture/README.md) is written as numbered

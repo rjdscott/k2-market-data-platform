@@ -110,7 +110,8 @@ partitions are not evenly loaded. It matters to partitioning because the byte ca
 
 ## Iceberg
 
-Twenty-five tables across five namespaces, `raw`, `bronze`, `silver`, `gold`, `audit`.
+Twenty-five tables across five namespaces, `raw`, `bronze`, `silver`, `gold`, `audit`; a
+sixth, `marts`, is Trino's and holds no table yet ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)).
 Applied by `docker/lake/apply_ddl.py` from
 [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql).
 

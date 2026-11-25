@@ -30,6 +30,7 @@ docker/
 ├── redpanda/             # Topic + Avro subject bootstrap (init.sh, run by redpanda-init)
 ├── prefect/              # Prefect worker image (Dockerfile) + deployment storage
 ├── spark/                # Spark image (Iceberg 1.8.1, Kafka + Avro jars, pinned by sha256)
+├── trino/                # Trino 484 config: catalog `lake`, heap, access rules (writes only `marts`, ADR-035)
 ├── grafana/
 │   ├── provisioning/     # Auto-provisioned datasource (Prometheus) + dashboard loader
 │   └── dashboards/       # Dashboard JSON, 5: pipeline overview, ClickHouse, k2-l2-capture, k2-lake, v2-migration-tracker
@@ -50,13 +51,14 @@ docker/
 | `lakekeeper` | long-running | **v3** Iceberg REST catalog ([ADR-018](../docs/adr/ADR-018-v3-lake-first-rust-capture.md)); `127.0.0.1:18181` |
 | `spark-iceberg` | long-running | Batch engine for the v3 lake ingest and maintenance |
 | `prefect-db` | long-running | PostgreSQL for the Airflow, Lakekeeper and Prefect metadata |
+| `trino` | long-running | SQL over the lake, catalog `lake`; reads every namespace, writes only `marts` ([ADR-035](../docs/adr/ADR-035-trino-and-dbt-for-marts.md), [trino/README.md](trino/README.md)); `127.0.0.1:8088` (`K2_TRINO_PORT`) |
 | `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` | long-running | Airflow 3, the lake schedules ([ADR-034](../docs/adr/ADR-034-airflow-3-replaces-prefect.md)); UI on `127.0.0.1:8090` |
 | `prefect-server`, `prefect-worker` | `legacy` profile | The Prefect rollback, stopped; `docker compose --profile legacy up -d prefect-server prefect-worker` ([airflow-scheduling.md](../docs/runbooks/airflow-scheduling.md#rollback-to-prefect)) |
 | `prometheus`, `grafana`, `lake-metrics` | long-running | Observability |
 | `capture-{binance,kraken,coinbase}` | long-running | **v3** Rust WebSocket capture (trades + L2 book); metrics on `:8082/metrics` ([ADR-019](../docs/adr/ADR-019-rust-capture-tier.md)) |
 | `redpanda-init` | one-shot | Topics + Avro subjects (`redpanda/init.sh`) |
 | `lakekeeper-migrate` | one-shot | v3 catalog DB schema (`lakekeeper migrate`) |
-| `lake-init` | one-shot | v3 bucket, bootstrap, warehouse `k2`, namespaces (`lake/init-lake.sh`) |
+| `lake-init` | one-shot | v3 bucket, bootstrap, warehouse `k2`, namespaces `raw`, `bronze`, `silver`, `gold`, `audit`, `marts` (`lake/init-lake.sh`) |
 | `lake-ddl` | one-shot | v3 lake tables (`lake/apply_ddl.py` over `lake/ddl/lake.sql`) |
 | `airflow-migrate` | one-shot | `airflow` role and database on `prefect-db`, then `airflow db migrate` (`airflow/init-db.sh`) |
 

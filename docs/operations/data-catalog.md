@@ -53,8 +53,9 @@ intended shape, not a fault.
 
 Every table is Iceberg format-version 2, Parquet + zstd, copy-on-write, append-only
 ([`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) header). Namespaces are
-`raw`, `bronze`, `silver`, `gold`, `audit`
-([`docker/lake/init-lake.sh`](../../docker/lake/init-lake.sh) line 122).
+`raw`, `bronze`, `silver`, `gold`, `audit`, and `marts`, which Trino writes and which holds no
+table yet ([`docker/lake/init-lake.sh`](../../docker/lake/init-lake.sh) line 125,
+[ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)).
 
 | Table | Grain — one row per … | Partition / sort | Time column (unit, zone) | Symbol columns | Identifier (dedup key) | Populated by |
 |---|---|---|---|---|---|---|
