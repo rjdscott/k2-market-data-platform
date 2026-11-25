@@ -62,9 +62,9 @@ scrape_configs:
 
   # cAdvisor: per-container CPU and memory, and each container's cgroup limits
   # (container_spec_*), which the K2 Resources dashboard plots usage against.
-  # cAdvisor already exports cpu and memory only (--enable_metrics); this keeps
-  # the seven series names the dashboards read, for K2's own containers, and
-  # drops the rest at scrape: about 140 series for 20 containers.
+  # cAdvisor already exports cpu, memory and oom_event only (--enable_metrics); this
+  # keeps the ten series names the dashboards read, for K2's own containers, and
+  # drops the rest at scrape: about 200 series for 20 containers.
   - job_name: 'cadvisor'
     static_configs:
       - targets: ['cadvisor:8080']
@@ -75,7 +75,7 @@ scrape_configs:
     scrape_interval: 15s
     metric_relabel_configs:
       - source_labels: [__name__]
-        regex: 'container_(cpu_usage_seconds_total|cpu_cfs_periods_total|cpu_cfs_throttled_periods_total|memory_working_set_bytes|spec_cpu_quota|spec_cpu_period|spec_memory_limit_bytes)'
+        regex: 'container_(cpu_usage_seconds_total|cpu_cfs_periods_total|cpu_cfs_throttled_periods_total|memory_working_set_bytes|memory_rss|memory_cache|oom_events_total|spec_cpu_quota|spec_cpu_period|spec_memory_limit_bytes)'
         action: keep
       - source_labels: [name]
         regex: 'k2-.+'

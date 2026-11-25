@@ -72,7 +72,7 @@ recording rules for this tier.
 | ClickHouse Overview (v2) | `clickhouse-v2` | Query rate, memory gauge, insert rate, background merges, the warm tier in isolation |
 | K2 Capture (v3) | `k2-l2-capture` | The Rust capture tier, now the only ingestion tier: health (up, staleness, reconnects, gaps, checksum failures, resyncs), throughput (messages/bytes/records/produce errors), exchange→recv latency p50/p95/p99, book depth/levels/precision loss. `exchange` template variable filters all panels |
 | K2 Lake (v3) | `k2-lake` | Iceberg lake tier (Phase D): ingest lag and commit age per table, rows/files/bytes and mean file size, rows added by the last commit, audit failures, disk headroom, exporter scrape errors, and a maintenance row plotting compaction age per table and the exporter's own refresh age, the two alertable gauges that had no panel. Every panel reads an Iceberg snapshot summary, nothing here is an in-process counter. Its Resources row, like the pipeline overview's, plots the tier's containers from cAdvisor |
-| K2 Resources | `k2-resources` | Every running container against its compose limit: CPU and memory in use against the 20 CPU / 36 GiB ceiling, a table of each container's use, limit and share of it, the top five consumers, and the share of time each was CPU-throttled. Limits come from the cgroups, not from the dashboard |
+| K2 Resources | `k2-resources` | Every running container against its compose limit: CPU and process memory in use against the 20 CPU / 36 GiB ceiling, a table of each container's use, limit and share of it (with file cache, working set and OOM kills columns), the top five consumers, and the share of time each was CPU-throttled. Limits come from the cgroups, not from the dashboard |
 
 ![Redpanda topics](../images/redpanda-console-topics.jpg)
 
@@ -179,16 +179,19 @@ this file had one of each before it was written. `bronze.kraken_instrument` is t
 
 The **`cadvisor`** service (`k2-cadvisor`, no published port) reads every container's
 cgroup, names it from the Docker API, and serves the result to Prometheus job `cadvisor`.
-Three choices keep it cheap: `--enable_metrics=cpu,memory`, one housekeeping pass every
+Three choices keep it cheap: `--enable_metrics=cpu,memory,oom_event`, one housekeeping pass every
 15 s instead of every second, and a `metric_relabel_configs` keep-list in
-[`prometheus.yml`](../../docker/prometheus/prometheus.yml) that stores seven series names
-for the `k2-*` containers and drops the rest, about 140 series in all.
+[`prometheus.yml`](../../docker/prometheus/prometheus.yml) that stores ten series names
+for the `k2-*` containers and drops the rest, about 200 series in all.
 
 | Metric | Type | What it is |
 |--------|------|------------|
 | `container_cpu_usage_seconds_total` | counter | CPU time used; `rate()` of it is cores in use |
 | `container_cpu_cfs_periods_total`, `container_cpu_cfs_throttled_periods_total` | counter | Scheduler periods, and those in which the CPU limit held the container back |
 | `container_memory_working_set_bytes` | gauge | Memory the kernel counts against the limit |
+| `container_memory_rss` | gauge | Process memory (anonymous pages): what an out-of-memory kill is about |
+| `container_memory_cache` | gauge | Page cache, including files the kernel reclaims under pressure |
+| `container_oom_events_total` | counter | Out-of-memory kills cAdvisor saw; see the note below the table |
 | `container_spec_cpu_quota`, `container_spec_cpu_period` | gauge | The CPU limit: quota ÷ period is cores, `cpus: '2.0'` reads 200000 / 100000 |
 | `container_spec_memory_limit_bytes` | gauge | The memory limit |
 
@@ -203,11 +206,32 @@ curl -sG localhost:9090/api/v1/query --data-urlencode 'query=
   | jq -r '.data.result[] | "\(.metric.name)\t\(.value[1])"'
 ```
 
-It is not privileged and has no `/dev/kmsg`, so it reports no OOM events; every capability
-is dropped and its root filesystem is read-only. It does hold the Docker and containerd
-sockets, which is how a cgroup becomes `k2-clickhouse`, and a socket is not narrowed by
-`:ro`: that is the same engine-level privilege `prefect-worker` and `airflow-scheduler`
-hold.
+It is not privileged and has no `/dev/kmsg`, so `container_oom_events_total` is exposed
+(`oom_event` is enabled) but stays 0 even after a kill: the authoritative check is
+`docker inspect -f '{{.State.OOMKilled}}' <container>` or the cgroup's `memory.events`.
+Every capability is dropped and its root filesystem is read-only. It does hold the Docker
+and containerd sockets, which is how a cgroup becomes `k2-clickhouse`, and a socket is not
+narrowed by `:ro`: that is the same engine-level privilege `prefect-worker` and
+`airflow-scheduler` hold.
+
+### Reading the memory panels
+
+The resource panels plot **process memory** (`container_memory_rss`) against the limit, and
+show **file cache** (`container_memory_cache`, "file cache, reclaimable") as its own series
+or column. `container_memory_working_set_bytes` is usage minus inactive file cache, so it
+counts active page cache the kernel reclaims under pressure; it stays in the table as
+"Working set" but is not the headline percentage. Observed 2026-11-25:
+
+- **MinIO** showed 95 to 97 percent of its 1 GiB limit by working set. Its cgroup
+  `memory.stat` had `anon` 371 MiB and `file` 582 MiB (558 MiB of it `active_file`), and
+  `memory.events` had `oom 0`, `oom_kill 0`; the container had not restarted. An object store
+  that reads and writes files fills whatever cache its cgroup allows. Not a problem.
+- **Redpanda** at about 80 percent was real: `anon` 1,439 MiB of 2,048, because it starts
+  with `--memory 1500M` and reserves that up front. That is the process memory the limit has
+  to hold.
+
+Worry when process memory / limit stays above 90 percent or climbs without levelling, or a
+container restarts with exit 137; ignore a large file cache.
 
 ### How the lake metrics are produced
 

@@ -428,6 +428,18 @@ demonstrated.
 docker compose up -d --force-recreate --no-deps airflow-statsd
 ```
 
+After recreating `airflow-statsd`, restart the three services that send to it. Observed
+2026-11-25: the exporter was recreated at about 07:20 UTC and every Airflow metric stopped,
+because Airflow's StatsD client resolves `airflow-statsd` once at start and kept sending to
+the old address. `AirflowSchedulerHeartbeatLost` fired within minutes (its absent-series
+clause), and `docker compose restart airflow-scheduler airflow-dag-processor
+airflow-api-server` restored all 90 metric names. Pause the ingest DAGs first, with the
+pause commands above, and wait until no task is running, so the restart kills nothing:
+
+```bash
+docker compose restart airflow-scheduler airflow-dag-processor airflow-api-server
+```
+
 **Observed 2026-11-25**, before the grace existed: a false firing. The first
 `lake_maintenance` under Airflow ran 06:10:21 to 06:33:58 UTC, and the `lake_ingest` runs for
 the 06:11 to 06:31 slots skipped, five in a row, as they should. The alert went pending at

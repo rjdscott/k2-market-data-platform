@@ -403,7 +403,7 @@ services:
       - --housekeeping_interval=15s
       - --max_housekeeping_interval=15s
       - --docker_only=true
-      - --enable_metrics=cpu,memory
+      - --enable_metrics=cpu,memory,oom_event
       - --store_container_labels=false
     read_only: true
     cap_drop:
