@@ -74,7 +74,7 @@ OHLCV 1m candles from gold.trades, one row per (exchange, canonical_symbol, buck
 | `low_e8` | `BIGINT NOT NULL` |  |
 | `close_e8` | `BIGINT NOT NULL` | Last trade by (exchange_ts, recv_ts_ns) |
 | `volume` | `DECIMAL(38,10) NOT NULL` | Sum of qty, base currency, exact |
-| `quote_volume` | `DECIMAL(38,10) NOT NULL` | Sum of price x qty, quote currency, exact |
+| `quote_volume` | `DECIMAL(38,10) NOT NULL` | Sum of price x qty, quote currency; Spark decimal multiplication rounds each product to 6 decimal places, so the column holds 6 places in a DECIMAL(38,10) |
 | `trade_count` | `BIGINT NOT NULL` |  |
 | `open_time` | `TIMESTAMP NOT NULL` | exchange_ts of the first trade in the bucket |
 | `close_time` | `TIMESTAMP NOT NULL` | exchange_ts of the last trade in the bucket |
@@ -107,7 +107,7 @@ OHLCV 5m candles from gold.trades, one row per (exchange, canonical_symbol, buck
 | `low_e8` | `BIGINT NOT NULL` |  |
 | `close_e8` | `BIGINT NOT NULL` | Last trade by (exchange_ts, recv_ts_ns) |
 | `volume` | `DECIMAL(38,10) NOT NULL` | Sum of qty, base currency, exact |
-| `quote_volume` | `DECIMAL(38,10) NOT NULL` | Sum of price x qty, quote currency, exact |
+| `quote_volume` | `DECIMAL(38,10) NOT NULL` | Sum of price x qty, quote currency; Spark decimal multiplication rounds each product to 6 decimal places, so the column holds 6 places in a DECIMAL(38,10) |
 | `trade_count` | `BIGINT NOT NULL` |  |
 | `open_time` | `TIMESTAMP NOT NULL` | exchange_ts of the first trade in the bucket |
 | `close_time` | `TIMESTAMP NOT NULL` | exchange_ts of the last trade in the bucket |
@@ -140,7 +140,7 @@ OHLCV 1h candles from gold.trades, one row per (exchange, canonical_symbol, buck
 | `low_e8` | `BIGINT NOT NULL` |  |
 | `close_e8` | `BIGINT NOT NULL` | Last trade by (exchange_ts, recv_ts_ns) |
 | `volume` | `DECIMAL(38,10) NOT NULL` | Sum of qty, base currency, exact |
-| `quote_volume` | `DECIMAL(38,10) NOT NULL` | Sum of price x qty, quote currency, exact |
+| `quote_volume` | `DECIMAL(38,10) NOT NULL` | Sum of price x qty, quote currency; Spark decimal multiplication rounds each product to 6 decimal places, so the column holds 6 places in a DECIMAL(38,10) |
 | `trade_count` | `BIGINT NOT NULL` |  |
 | `open_time` | `TIMESTAMP NOT NULL` | exchange_ts of the first trade in the bucket |
 | `close_time` | `TIMESTAMP NOT NULL` | exchange_ts of the last trade in the bucket |
@@ -173,7 +173,7 @@ OHLCV 1d candles from gold.trades, one row per (exchange, canonical_symbol, buck
 | `low_e8` | `BIGINT NOT NULL` |  |
 | `close_e8` | `BIGINT NOT NULL` | Last trade by (exchange_ts, recv_ts_ns) |
 | `volume` | `DECIMAL(38,10) NOT NULL` | Sum of qty, base currency, exact |
-| `quote_volume` | `DECIMAL(38,10) NOT NULL` | Sum of price x qty, quote currency, exact |
+| `quote_volume` | `DECIMAL(38,10) NOT NULL` | Sum of price x qty, quote currency; Spark decimal multiplication rounds each product to 6 decimal places, so the column holds 6 places in a DECIMAL(38,10) |
 | `trade_count` | `BIGINT NOT NULL` |  |
 | `open_time` | `TIMESTAMP NOT NULL` | exchange_ts of the first trade in the bucket |
 | `close_time` | `TIMESTAMP NOT NULL` | exchange_ts of the last trade in the bucket |
