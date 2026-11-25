@@ -10,8 +10,9 @@ How a product is added: [the golden path](../development/golden-path.md).
 
 Owner `capture-team`, source-aligned. What the venues sent, archived verbatim and typed per venue: raw.messages, bronze and silver per venue, and the book replay state.
 
-| Product | Lifecycle | Outputs |
+| Product | Lifecycle | Outputs and marts |
 |---|---|---|
+| [lake-audit](market-capture/lake-audit.md) | draft | `audit.checks` |
 | [raw-archive](market-capture/raw-archive.md) | draft | `raw.messages` |
 | [venue-books](market-capture/venue-books.md) | draft | `silver.book_binance`, `silver.book_kraken`, `silver.book_coinbase`, `gold.book_state` |
 | [venue-frames](market-capture/venue-frames.md) | draft | `bronze.binance_trade`, `bronze.binance_depth20`, `bronze.kraken_trade`, `bronze.kraken_book`, `bronze.kraken_instrument`, `bronze.coinbase_market_trades`, `bronze.coinbase_level2` |
@@ -21,7 +22,7 @@ Owner `capture-team`, source-aligned. What the venues sent, archived verbatim an
 
 Owner `reference-data-team`, source-aligned. The security master: instrument and venue dimensions, type-2, from the instrument registry and the attributes a venue publishes.
 
-| Product | Lifecycle | Outputs |
+| Product | Lifecycle | Outputs and marts |
 |---|---|---|
 | [security-master](reference-data/security-master.md) | draft | `gold.dim_instrument`, `gold.dim_venue` |
 
@@ -35,9 +36,11 @@ No product yet.
 
 Owner `analytics-team`, consumer-aligned. Cross-venue products a researcher reads first: canonical trades, candles, event bars and the 1 Hz book.
 
-| Product | Lifecycle | Outputs |
+| Product | Lifecycle | Outputs and marts |
 |---|---|---|
 | [book-snapshots](market-analytics/book-snapshots.md) | draft | `gold.book_top20`, `gold.bbo_1s` |
-| [candles](market-analytics/candles.md) | draft | `gold.ohlcv_1m`, `gold.ohlcv_5m`, `gold.ohlcv_1h`, `gold.ohlcv_1d` |
+| [candles](market-analytics/candles.md) | draft | `gold.ohlcv_1m`, `gold.ohlcv_5m`, `gold.ohlcv_1h`, `gold.ohlcv_1d`, `market_analytics.candles.ohlcv_1m` |
 | [canonical-trades](market-analytics/canonical-trades.md) | draft | `gold.trades` |
+| [delayed-candles](market-analytics/delayed-candles.md) | draft | `market_analytics.delayed_candles.ohlcv_delayed_20m` |
 | [event-bars](market-analytics/event-bars.md) | draft | `gold.bars` |
+| [venue-quality](market-analytics/venue-quality.md) | draft | `market_analytics.venue_quality.venue_quality_scorecard` |

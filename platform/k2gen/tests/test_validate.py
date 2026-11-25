@@ -15,6 +15,8 @@ ROOT = cli.ROOT
 TRADES = "contracts/market-analytics/canonical-trades/gold.trades.odcs.yaml"
 BBO = "contracts/market-analytics/book-snapshots/gold.bbo_1s.odcs.yaml"
 CANDLES = "contracts/market-analytics/candles/product.yaml"
+AUDIT = "contracts/market-capture/lake-audit"
+DELAYED = "contracts/market-analytics/delayed-candles/product.yaml"
 
 
 @pytest.fixture
@@ -47,7 +49,14 @@ def test_the_repository_validates():
 def test_every_table_outside_audit_has_exactly_one_contract():
     tables = [t for t in ddl.parse(ROOT / cli.LAKE_SQL) if not t.startswith("audit.")]
     described = [yaml.safe_load(p.read_text())["schema"][0]["physicalName"] for p in (ROOT / "contracts").glob("*/*/*.odcs.yaml")]
-    assert sorted(described) == sorted(tables)
+    # audit.checks has one too, because a mart reads it (venue-quality).
+    assert sorted(described) == sorted([*tables, "audit.checks"])
+
+
+def test_an_audit_table_may_go_without_a_contract(tree):
+    shutil.rmtree(tree / AUDIT)
+    edit(tree / "contracts/market-analytics/venue-quality/product.yaml", lambda d: d.update(inputs=[{"table": "gold.trades"}], marts=[{**d["marts"][0], "reads": ["gold.trades"]}]))
+    assert cli.validate(tree) == []
 
 
 def test_the_parser_finds_every_table_in_lake_sql():
@@ -159,3 +168,18 @@ def test_a_mart_is_a_table_or_a_view_by_its_contract(tree):
     assert cli.validate(tree) == []
     edit(tree / CANDLES, set_mart(materialized="ephemeral"))
     assert [e for e in cli.validate(tree) if e.startswith(f"{CANDLES}: $.marts[0].materialized") and "'ephemeral' is not one of ['table', 'view']" in e]
+
+
+def test_a_product_may_build_only_marts_but_not_nothing(tree):
+    # ADR-035's delayed product is a view and writes no lake table.
+    assert yaml.safe_load((tree / DELAYED).read_text())["outputs"] == []
+    assert cli.validate(tree) == []
+    edit(tree / DELAYED, lambda d: d.pop("marts"))
+    errors = cli.validate(tree)
+    assert [e for e in errors if e.startswith(f"{DELAYED}: $: ") and "is not valid under any of the given schemas" in e], errors
+
+
+def test_audit_is_a_layer_but_not_a_made_up_one(tree):
+    contract = tree / AUDIT / "audit.checks.odcs.yaml"
+    edit(contract, set_property("layer", "quality"))
+    assert [e for e in cli.validate(tree) if "customProperties" in e and "'quality' is not one of" in e]

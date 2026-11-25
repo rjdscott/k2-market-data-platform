@@ -1,0 +1,49 @@
+models:
+  - name: ohlcv_delayed_20m
+    description: >-
+      market_analytics.candles.ohlcv_1m without the newest 20 minutes, one row per
+      (exchange, canonical_symbol, window_start): a candle once its minute ended at least 20
+      minutes ago. A view (ADR-035), read through Trino only. Product delayed-candles,
+      contracts/market-analytics/delayed-candles/product.yaml.
+    columns:
+      - name: exchange
+        data_tests: [not_null]
+      - name: canonical_symbol
+        data_tests: [not_null]
+      - name: window_start
+        description: Bucket start, UTC; at least 21 minutes before the query's current_timestamp.
+        data_tests: [not_null]
+    data_tests:
+      # The grain, as the contract declares it; scripts/dbt_manifest_check.py requires this test.
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          name: ohlcv_delayed_20m_unique_on_its_grain
+          arguments:
+            column_list: [exchange, canonical_symbol, window_start]
+      # The delay itself, on whatever the view returns when the test runs.
+      - dbt_expectations.expression_is_true:
+          name: ohlcv_delayed_20m_hides_the_last_20_minutes
+          arguments:
+            expression: close_time <= current_timestamp - interval '20' minute
+
+unit_tests:
+  # Made-up candles, and "now" fixed by overriding dbt's current_timestamp() macro.
+  - name: ohlcv_delayed_20m_shows_a_minute_once_it_ended_20_minutes_ago
+    description: >-
+      At 01:00:00, the minute starting 00:39 ended at 00:40, exactly 20 minutes before, and
+      is shown; the minute starting 00:40 has not ended 20 minutes before and is hidden, and
+      so is every later one. Older candles pass unchanged.
+    model: ohlcv_delayed_20m
+    overrides:
+      macros:
+        current_timestamp: "timestamp '2001-01-01 01:00:00.000000 UTC'"
+    given:
+      - input: ref('ohlcv_1m')
+        rows:
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2000-12-31 23:00:00.000000 UTC", trade_count: 1, close_time: "2000-12-31 23:00:30.000000 UTC"}
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:39:00.000000 UTC", trade_count: 2, close_time: "2001-01-01 00:39:59.999999 UTC"}
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:40:00.000000 UTC", trade_count: 3, close_time: "2001-01-01 00:40:00.000000 UTC"}
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:59:00.000000 UTC", trade_count: 4, close_time: "2001-01-01 00:59:10.000000 UTC"}
+    expect:
+      rows:
+        - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2000-12-31 23:00:00.000000 UTC", trade_count: 1}
+        - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:39:00.000000 UTC", trade_count: 2}

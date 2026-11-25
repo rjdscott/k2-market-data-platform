@@ -7,4 +7,6 @@ selectors:
     - method: fqn
       value: market_analytics
     - method: source
+      value: audit.checks
+    - method: source
       value: gold.trades

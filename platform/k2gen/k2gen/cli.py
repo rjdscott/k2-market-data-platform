@@ -17,7 +17,8 @@
    place, `<domain catalog>.<product schema>.<table>` (ADR-044).
 3. Each contract against docker/lake/ddl/lake.sql: the table exists, and its
    partitioning and sort order are the ones declared there. Every table outside
-   `audit` has exactly one contract. A contract with inline columns is a table
+   `audit` has exactly one contract, and an `audit` table may have one (a mart
+   that reads it needs it). A contract with inline columns is a table
    lake.sql does not create, and its partitioning and sort name its own columns.
    A latency service level names a column of its own table.
 4. Three rules across products: a table another table reads keeps snapshots for
@@ -132,7 +133,7 @@ def validate(root: Path = ROOT) -> list[str]:
         errors += [f"{where}: mart {t} is declared twice" for t in sorted({t for t in marts if marts.count(t) > 1})]
 
     # 3. lake.sql.
-    lake = {t: v for t, v in ddl.parse(root / LAKE_SQL).items() if not t.startswith("audit.")}
+    lake = ddl.parse(root / LAKE_SQL)
     home: dict[str, Path] = {}
     props_of: dict[str, dict[str, Any]] = {}  # table -> its custom properties
     for path, (doc, props) in docs.items():
@@ -169,7 +170,7 @@ def validate(root: Path = ROOT) -> list[str]:
             declared = list(getattr(lake[table], key))
             if props[key] != declared:
                 errors.append(f"{where}: {key} {props[key]}, but {LAKE_SQL} declares {declared}")
-    errors += [f"{LAKE_SQL}: {t} has no contract under contracts/" for t in lake if t not in home]
+    errors += [f"{LAKE_SQL}: {t} has no contract under contracts/" for t in lake if t not in home and not t.startswith("audit.")]
 
     # 4. across products.
     for pdir, product in products.items():

@@ -21,11 +21,13 @@ flowchart LR
     n2["gold.ohlcv_5m"]
     n3["gold.ohlcv_1h"]
     n4["gold.ohlcv_1d"]
+    n5["market_analytics.candles.ohlcv_1m"]
   end
   n0 --> n1
   n0 --> n2
   n0 --> n3
   n0 --> n4
+  n0 --> n5
 ```
 
 | Input | What it is |

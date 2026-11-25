@@ -85,17 +85,20 @@ def _sql(text: str) -> str:
 
 
 def _diagram(product: dict[str, Any], tables: dict[str, Contract]) -> list[str]:
-    """Inputs on the left, the product's outputs in a box, one edge per upstream a contract names."""
+    """Inputs on the left, the product's outputs and marts in a box, one edge per upstream or mart read."""
     inputs = sorted(i.get("table") or i["external"] for i in product["inputs"])
-    ids = {name: f"n{n}" for n, name in enumerate([*inputs, *product["outputs"]])}
+    marts = product.get("marts", [])
+    built = [*product["outputs"], *[m["table"] for m in marts]]
+    ids = {name: f"n{n}" for n, name in enumerate([*inputs, *built])}
     return [
         "```mermaid",
         "flowchart LR",
         *[f'  {ids[i]}["{i}"]' for i in inputs],
         f'  subgraph product ["{product["name"]}"]',
-        *[f'    {ids[t]}["{t}"]' for t in product["outputs"]],
+        *[f'    {ids[t]}["{t}"]' for t in built],
         "  end",
         *[f"  {ids[up]} --> {ids[t]}" for t in product["outputs"] for up in tables[t][2]["upstreams"]],
+        *[f"  {ids[up]} --> {ids[m['table']]}" for m in marts for up in m["reads"]],
         "```",
     ]
 
@@ -206,8 +209,8 @@ def _index(domains: dict[str, Any], products: list[dict[str, Any]]) -> str:
         if not mine:
             lines.append("No product yet.")
             continue
-        lines += ["| Product | Lifecycle | Outputs |", "|---|---|---|"]
-        lines += [f"| [{p['name']}]({name}/{p['name']}.md) | {p['lifecycle']} | {_code(p['outputs'])} |" for p in mine]
+        lines += ["| Product | Lifecycle | Outputs and marts |", "|---|---|---|"]
+        lines += [f"| [{p['name']}]({name}/{p['name']}.md) | {p['lifecycle']} | {_code(p['outputs'] + [m['table'] for m in p.get('marts', [])])} |" for p in mine]
     return "\n".join(lines) + "\n"
 
 
@@ -473,6 +476,12 @@ inputs: []
 outputs:
   - {table}
 consumers: []
+# A table dbt builds on Trino for this product, in the domain's own catalog (dbt/README.md):
+# uncomment, name the model, and write it at dbt/models/{catalog}/marts/{schema}/<model>.sql.
+# marts:
+#   - table: {catalog}.{schema}.{schema}
+#     grain: [id]
+#     reads: [{table}]
 """
 
 CONTRACT = """\
@@ -543,7 +552,7 @@ def scaffold(root: Path, domain: str, name: str) -> list[Path]:
     layer = "bronze" if domains[domain]["kind"] == "source-aligned" else "gold"
     short = name.replace("-", "_")
     fields = dict(name=name, domain=domain, owner=domains[domain]["owner"], kind=domains[domain]["kind"])
-    fields |= dict(layer=layer, short=short, table=f"{layer}.{short}")
+    fields |= dict(layer=layer, short=short, table=f"{layer}.{short}", catalog=fence(domain), schema=fence(name))
     pdir.mkdir(parents=True)
     written = [pdir / "product.yaml", pdir / f"{fields['table']}{SUFFIX}"]
     written[0].write_text(PRODUCT.format(**fields))

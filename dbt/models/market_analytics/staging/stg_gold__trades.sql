@@ -7,5 +7,7 @@ select
     price_e8,
     qty_e8,
     exchange_ts,
-    recv_ts_ns
+    recv_ts_ns,
+    seq_gap,
+    missing_before
 from {{ source('gold', 'trades') }}

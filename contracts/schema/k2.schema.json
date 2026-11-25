@@ -42,6 +42,10 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "domain", "owner", "purpose", "kind", "lifecycle", "inputs", "outputs", "consumers"],
+      "anyOf": [
+        {"description": "A product writes at least one lake table,", "properties": {"outputs": {"minItems": 1}}},
+        {"description": "or builds at least one mart and no lake table (ADR-035's delayed product).", "required": ["marts"], "properties": {"marts": {"minItems": 1}}}
+      ],
       "properties": {
         "name": {"$ref": "#/$defs/slug"},
         "domain": {"$ref": "#/$defs/slug"},
@@ -74,7 +78,6 @@
         },
         "outputs": {
           "type": "array",
-          "minItems": 1,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/table"}
         },
@@ -197,7 +200,7 @@
       "additionalProperties": false,
       "required": ["layer", "format", "partitioning", "sort", "classification", "entitlement", "retention", "upstreams", "schedule"],
       "properties": {
-        "layer": {"enum": ["raw", "bronze", "silver", "gold"]},
+        "layer": {"description": "The lake namespace the table is in: one of the four layers, or audit, the checks the lake jobs file about every layer.", "enum": ["raw", "bronze", "silver", "gold", "audit"]},
         "format": {"const": "iceberg"},
         "partitioning": {
           "description": "Iceberg partition fields in order, as lake.sql spells them: days(recv_ts), exchange.",
