@@ -1,6 +1,8 @@
 # ADR-048: Gold step reads only touched data and writes bars once
 
-**Status:** Proposed
+**Status:** Accepted
+**Accepted:** by the owner on 2026-11-26, after an independent design review in three rounds;
+the findings and their resolution are in pull request #215
 **Date:** 2026-11-26
 **Author:** Platform
 **Category:** Lake / Compute
@@ -182,10 +184,13 @@ behind. Each run then:
 - treats every `(exchange, day)` partition an `overwrite` or `delete` touched as fully touched.
   The partitions come from the `all_entries` metadata table, which lists one row per data file
   per snapshot with a status (added, existing, deleted). Every candle bucket and symbol-day of
-  such a day is recomputed, and that day's candles are deleted and rewritten, not merged, so a
-  bucket left with no trades loses its row (two commits on each candle table; a crash between them
-  is redone by the next run, because the position has not moved). The run carries on; nothing
-  stops.
+  such a day is recomputed. Its candles are written by the same `MERGE` as every run, with one
+  addition: the stored buckets of that day that no longer have any trades go into the source as
+  *stale* rows, and `WHEN MATCHED AND s.stale THEN DELETE` removes them. That keeps the repair one
+  commit per candle table, so no reader sees a minute without its candle, and keeps Spark's file
+  filter, because the `MERGE` has no `NOT MATCHED BY SOURCE` clause (change 4 explains why that
+  matters). A delete-then-rewrite would be simpler to write but would make the repair the one
+  case with a visible gap. The run carries on; nothing stops.
 
 `stage()` must run the candle and bar work whenever this finds anything. Today it runs it only
 `if minutes is not None` (`docker/lake/gold.py`, `stage()`), so a retry after a stopped run, which
@@ -197,9 +202,13 @@ the candle writes are recomputes, so redoing them is safe.
 position, or `main`'s history of `gold.trades` no longer holds the snapshot it names (expiry
 removed it: it was more than 7 days old and not among the newest 10, which takes an ingest stopped
 for a week or more), the run skips the candle and bar work, files a `gold_position` row in
-`audit.checks`, and carries on with step 2e. `LakeCommitAgeHigh`, today the alert on a bronze table
+`audit.checks` (the lake's table of check results, one row per finding, which the nightly audits
+and the ingest's batch audit already write), and carries on with step 2e. `LakeCommitAgeHigh`, today the alert on a bronze table
 that stops committing, is widened to `gold.bars`, which then stops committing. The fix is
-`make lake-rebuild LAYER=gold`, which writes a fresh position. It fails loudly rather than
+`make lake-rebuild LAYER=gold`, which writes a fresh position. Gold, not only bars: while the
+step was stopped no candle was computed either, so the candles cannot be trusted. "Missing" means
+the newest `k2.job=decode` summary on `gold.bars` lacks the property, not that no summary ever had
+it, so an older position from before a rollback is never reused. It fails loudly rather than
 recomputes because without the position nothing says which trades are new: the only safe full
 recompute is all of gold, minutes of work that does not belong in a five-minute run, and an
 operator decides when.
@@ -301,7 +310,9 @@ namespace for spikes, which no job reads):
 **On the live tables, at a pinned `gold.trades` snapshot, writing nothing:**
 
 - old and new `candles()` for all four timeframes over one batch's touched keys, and old and new
-  `_bars()` for one full UTC day, each pair compared with `EXCEPT ALL` both ways: empty. Nothing in
+  `_bars()` for one full UTC day, each pair compared with `EXCEPT ALL` both ways: empty.
+  (`A EXCEPT ALL B` returns the rows of `A` that `B` lacks, counting duplicates, so empty both ways
+  means the two results are the same multiset of rows.) Nothing in
   CI or the parity set runs the step's Spark code on real data; this does;
 - `EXPLAIN` (Spark printing the plan it will run) shows a `HashAggregate` for the bar aggregate and
   a broadcast join to the threshold table;
@@ -322,7 +333,8 @@ back to the owner.
 - **the retry case:** a run stopped after its `gold.trades` append and before its bars publish,
   followed by a run whose silver stage appends nothing; the second run must recompute the first
   run's candles and bars. Today's `stage()` fails it;
-- an `overwrite` since the position makes its days fully touched; a `replace` does not; a missing
+- an `overwrite` since the position makes its days fully touched, and a candle bucket left with no
+  trades is deleted by the same `MERGE`; a `replace` does not; a missing
   position skips the step and files the `audit.checks` row without failing the run.
 
 **After the first UTC day written entirely by the new code**, re-pin `tests/parity/pinned.json`
@@ -332,11 +344,25 @@ to that day.
 ### Rollout and rollback
 
 Rollout: pause the ingest DAG, pull `main` into the live checkout, run `make lake-rebuild
-LAYER=bars` so the first position exists, unpause; the next run loads the new code. Rollback: `git revert` does not remove rows a faulty version wrote, and closed 1-minute and
+LAYER=bars` so the first position exists, unpause; the next run loads the new code. `LAYER=bars`
+is enough here because the old code has just kept the candles correct; only the position is
+missing.
+
+Rollback: `git revert` does not remove rows a faulty version wrote, and closed 1-minute and
 5-minute buckets are never recomputed. So a rollback reverts, then runs the old-against-new
 comparison over every day the new code wrote; if any differs, `make lake-rebuild LAYER=gold`
 (gold.trades, candles and bars rebuilt from silver under the lake lock; no candle-only rebuild
-exists) with the ingest paused.
+exists) with the ingest paused. Gold, because a faulty version cannot be trusted with the candles.
+
+Rolling forward again after a rollback: the old code's bars commits carry `k2.job=decode` without
+a position, so the redeployed step stops at the missing-position check; a redeploy therefore
+repeats the rollout's `make lake-rebuild LAYER=bars`.
+
+Alerting: every alert in this repo points at a runbook. The implementation pull request widens
+`LakeCommitAgeHigh` (`docker/prometheus/rules/lake-alerts.yml`, with its promtool test in
+`docker/prometheus/rules/tests/lake-alerts_test.yml`) to `gold.bars`, adds the missing-position
+case to the alert's description, and adds it to the runbook the alert names,
+`docs/runbooks/lake-ingest-lag.md`, and to that runbook's row in `docs/runbooks/README.md`.
 
 ---
 
