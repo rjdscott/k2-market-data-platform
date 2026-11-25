@@ -30,6 +30,21 @@ Earlier commits in this repository's history contain recorded venue frames that
 have since been replaced by the synthetic files above. History is not rewritten
 (docs/adr/ADR-029-research-production-parity-contract.md, Outcome 2026-11).
 
+Screenshots
+===========
+
+The one named exception to "no venue data". Images under docs/images/ are
+pictures of a live run of the platform on the maintainer's machine. They show
+venue-derived figures (trade counts, rates, sizes, timestamps) as they stood at
+the moment of capture, and are for illustration only: not a data set, and not
+offered as one. docs/images/dashboards/ is made by `make screenshots`
+(scripts/screenshots/); each image's capture date and the commit it was taken
+at are in docs/images/dashboards/manifest.json and in its caption in
+docs/operations/dashboards.md. The three .jpg files directly under docs/images/
+were taken by hand from the earlier stack and committed in 2026-01 and
+2026-08. Gate (i) of scripts/check-docs.sh fails CI on a raster image anywhere
+else in the tree, so this exception cannot spread.
+
 Third-party schema files
 ========================
 

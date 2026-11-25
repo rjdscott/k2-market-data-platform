@@ -31,6 +31,11 @@ stays on your machine, and is subject to each provider's terms:
 [Coinbase](https://www.coinbase.com/legal/user_agreement). Complying with them is your
 responsibility.
 
+The one named exception is pictures. Images under `docs/images/` are screenshots of a live
+run (`make screenshots` takes the current set): they show venue-derived figures as they stood
+at the moment of capture, are for illustration only, and are not a data set
+([`NOTICE`](./NOTICE), "Screenshots").
+
 ## Overview
 
 | Property | How |
@@ -58,7 +63,7 @@ flowchart TB
     RAW --> BR --> SV --> GD
   end
   N["DuckDB notebooks"]:::nb
-  O["Prometheus · 28 rules<br/>Grafana · 4 dashboards"]:::ob
+  O["Prometheus · 28 rules<br/>Grafana · 6 dashboards"]:::ob
 
   E --> F --> R
   R -->|Kafka engine| C
@@ -77,8 +82,8 @@ flowchart TB
   classDef ob fill:#f3f4f6,stroke:#6b7280,color:#111827
 ```
 
-19 long-running services and 5 one-shot init containers, 17.70 CPU / 31.688 GiB of declared
-limits at steady state and 19.70 CPU / 34.188 GiB at the bootstrap peak, under a 20 CPU / 36 GiB
+20 long-running services and 5 one-shot init containers, 17.80 CPU / 31.812 GiB of declared
+limits at steady state and 19.80 CPU / 34.312 GiB at the bootstrap peak, under a 20 CPU / 36 GiB
 ceiling ([ADR-034](./docs/adr/ADR-034-airflow-3-replaces-prefect.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 
 **Read the book.** [`docs/architecture/`](./docs/architecture/README.md) is written as numbered

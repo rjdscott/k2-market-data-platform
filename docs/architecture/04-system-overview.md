@@ -47,7 +47,7 @@ flowchart TB
     NB["DuckDB notebooks"]
     subgraph OBS["Observability"]
         PR["Prometheus v3.2 · 28 rules"]
-        GR["Grafana 11.5 · 4 dashboards"]
+        GR["Grafana 11.5 · 6 dashboards"]
     end
 
     BIN --> FHB
@@ -137,7 +137,7 @@ forensics. Nothing in the notebooks reads ClickHouse.
 
 ## Resource footprint
 
-19 long-running services at 17.70 CPU / 31.688 GiB of limits, plus five one-shot init containers;
+20 long-running services at 17.80 CPU / 31.812 GiB of limits, plus five one-shot init containers;
 per-service table and the command that produces it in
 [operations/docker-resources.md](../operations/docker-resources.md). Budget and reasoning per limit:
 [ADR-010](../adr/ADR-010-resource-budget.md).

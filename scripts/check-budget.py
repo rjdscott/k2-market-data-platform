@@ -116,10 +116,10 @@ def check(default: dict, governance: dict, dockerfiles: list[tuple[str, str]]) -
 
 def main() -> int:
     # ponytail: one level deep is where every Dockerfile lives today
-    # (docker/*/, services/*/); rglob when one moves deeper.
+    # (docker/*/, services/*/, scripts/screenshots/); rglob when one moves deeper.
     dockerfiles = [
         (str(p.relative_to(ROOT)), p.read_text())
-        for d in ("docker", "services")
+        for d in ("docker", "services", "scripts")
         for p in sorted((ROOT / d).glob("*/Dockerfile*"))
         if p.suffix != ".dockerignore"
     ]
