@@ -248,16 +248,18 @@ logic, on made-up rows (the minute bucket; ties on `exchange_ts` broken by `recv
 comparison with Spark's `gold.ohlcv_1m`: `scripts/parity_ohlcv.py --dbt` runs the model's
 compiled SQL through Trino over `gold.trades` `FOR VERSION AS OF` the newest snapshot the lake's
 candles for the day name, so both sides read the same trades and the side needs no new pin. For
-2026-11-24, at the snapshots current on 2026-11-25: 20,144 buckets, 0 differ on open, high,
-low, close, trade count, volume and `quote_volume`. Other marts get the first two, and the third
-where it is as cheap.
+2026-11-24, at the snapshots current on 2026-11-25, every bucket of the day matched on open,
+high, low, close and trade count, and on volume and `quote_volume` digit for digit (the command
+and its output are in [`dbt/README.md`](../../dbt/README.md), "Parity"). Other marts get the
+first two, and the third where it is as cheap.
 
 **`quote_volume` joined, and the lake's is not exact.** Both engines type it `decimal(38,10)`,
 but the lake holds 6 decimals where `lake.sql` calls the column exact: no 2026-11-24 bucket had
 a digit past the sixth. Spark's decimal rules type `gold.py`'s `DECIMAL(38,10)` product
-`decimal(38,6)` (`typeof` of the product on Spark 3.5.5, 2026-11-25), which explains it. The port rounds half up at 6
-decimals on purpose and matched every bucket; rounded at 10, 10,819 of the 20,144 differed.
-Tolerance zero held; the comment is wrong.
+`decimal(38,6)` (`typeof` of the product on Spark 3.5.5, 2026-11-25), which explains it. The
+port rounds half up at 6 decimals on purpose and matched every bucket; rounding at 10 decimals
+does not match (both queries in [`dbt/README.md`](../../dbt/README.md)). Tolerance zero held;
+the comment is wrong.
 
 **What the check does not prove.** It runs the SQL dbt builds with, not the table dbt last
 built, which holds the lake as it was at build time. A bucket computed before the newest
