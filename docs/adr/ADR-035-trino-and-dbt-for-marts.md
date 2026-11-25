@@ -68,9 +68,14 @@ exactly-once ingest and ClickHouse's hot tier do not change.
 | The hot tier | ClickHouse, unchanged | ADR-025 |
 
 A model that needs an offset, the lock or code per record is a Spark job. A model that is a
-`SELECT` over lake tables or marts is a dbt model. Spark does not write the marts; Trino
-writes nothing else, and Spark's `maintenance.py` will compact and expire the marts like
-every other table once the first one exists (P3, the next pull request).
+`SELECT` over lake tables or marts is a dbt model. Spark does not write the marts' rows;
+Trino writes nothing else. Who compacts and expires mart tables is decided in the next pull
+request of P3, between Spark's `maintenance.py` reading the domain warehouses and a scheduled
+platform job through Trino; today nothing does, and nothing needs to, because no mart exists.
+
+**Trino is the front door for marts.** Consumers read marts through Trino, where the fences of
+ADR-044 are; an engine that attaches a domain warehouse directly holds the storage keys and
+bypasses them.
 
 **The engine, as configured** (`docker/trino/etc/`): one node, coordinator and worker in one
 JVM, 2.0 CPU / 4 GiB with a 2816M heap (1.25 GiB of the limit for metaspace, code cache,
@@ -80,7 +85,7 @@ native S3 with the static MinIO keys from the environment, path-style, region `l
 the image's 2GB filesystem cache and sample catalogs left out.
 
 **The delayed product is a view.** A view over `lake.gold` with a 20-minute predicate is
-always current with no schedule. Consumers read marts through Trino only (ADR-044), so a view
+always current with no schedule. Consumers read marts through Trino, so a view
 is enough: DuckDB does not see Iceberg views, and Spark expands one only when its SQL is also
 Spark SQL. A consumer who needs the rows in another engine reads the gold table its rights
 allow, or a scheduled table if one is ever declared.

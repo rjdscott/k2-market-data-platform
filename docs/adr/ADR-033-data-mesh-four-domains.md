@@ -119,21 +119,18 @@ ends without an `fx-reference` product.
 
 ---
 
-## Outcome (2026-11-25, domains get storage, and a fifth is coming)
+## Outcome (2026-11-25, domains get physical mart warehouses)
 
-[ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md) gives every domain in
-`contracts/domains.yaml` a Lakekeeper warehouse of its own for its marts, a Trino catalog
-and a writer identity (`dbt_<domain>`), all generated from the registry by `make generate`.
-The lake's tables do not move: placement by "who can answer for the data" stands for
-ownership, and the physical fence sits on the consumer side only.
+What diverged now: [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md) gives each
+of the four domains as listed in `contracts/domains.yaml` a Lakekeeper warehouse of its own for
+its marts, a Trino catalog and a writer identity (`dbt_<domain>`), all generated from the
+registry by `make generate`. This ADR decided ownership only; domains now also have a physical
+fence on the consumer side. The lake's tables do not move: placement by who can answer for the
+data stands for ownership. A mart that joins two domains belongs to, and is stored in, the
+consuming domain; that is the case the "inputs cross domains in both directions" trigger
+watches, and it has not fired: today every cross-domain input points one way.
 
-Two sentences above no longer describe the direction:
-
-- **"Four domains."** Governance data (quality results, control evidence, lineage) becomes a
-  domain owned by the platform team, added to the registry with its first product. So the
-  platform team will own products as well as the road, which "The platform owns the road,
-  not the products" ruled out; the platform still owns the generator, the schemas and the
-  controls, and its own products go through the same contracts as every other domain's.
-- **A product's place for a mart that joins two domains** is now decided: the consuming
-  domain owns and stores it. That is the case the "inputs cross domains in both directions"
-  trigger watches, and it has not fired: today every cross-domain input points one way.
+Pending, not decided here: the maintainer's direction (2026-11-25) is a fifth,
+platform-owned governance domain for quality results, control evidence and lineage. It would
+reverse this ADR's "The platform owns the road, not the products", so it gets its own ADR when
+its first product lands.

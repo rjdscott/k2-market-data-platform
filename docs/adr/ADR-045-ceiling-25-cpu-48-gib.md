@@ -61,10 +61,11 @@ Headroom at the gated peak: 3.70 CPU and 11.188 GiB (`python3 scripts/check-budg
 2026-11-25). The catalog phase's estimate fits with 0.70 CPU and 4.188 GiB to spare; that phase
 still measures on first boot and records its own figures in its ADR.
 
-**The cost, stated.** A stack that ever reached all its memory limits at once would leave the
-engine and the operating system 3 cores and 1.50 GiB of the host's 28 and 49.50. That is
-accepted because the ceiling is a sum of declared limits and use is far below it: 3.84 cores
-and 10.12 GiB at the 6-hour peak above.
+**The cost, stated.** The ceiling leaves 3 cores and 1.50 GiB of the host's 28 and 49.50 for
+the engine and the operating system: that is the margin if declared limits ever grow to the
+whole ceiling and every one is reached at once. At today's declared 36.812 GiB the margin is
+12.69 GiB (49.50 minus 36.812). Either way it is accepted because the ceiling is a sum of
+declared limits and use is far below it: 3.84 cores and 10.12 GiB at the 6-hour peak above.
 
 ---
 
