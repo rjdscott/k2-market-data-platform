@@ -425,6 +425,12 @@ jobs set, not by Iceberg's own `operation` field. After a nightly rewrite the
 newest snapshot on `raw.messages` carries no offsets, and a job that took it
 would restart from the beginning of every topic.
 
+Reading back also sees only `main`'s lineage: `catalog.snapshot_history` walks
+parent ids from the snapshot `main` points at (`offsets.main_lineage`), and
+`metrics.py` does the same over the REST metadata. `<table>.snapshots` lists a
+branch's unpublished commits and those of a dropped branch as well, and either
+can be the newest by commit time.
+
 ---
 
 ## What one run may read, and why nothing is cached
