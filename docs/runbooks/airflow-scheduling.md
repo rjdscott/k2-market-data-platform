@@ -402,7 +402,23 @@ Read the exit line and go where it points:
 `airflow_ti_finish{dag_id="lake_ingest",state="skipped"}`. A skip is `ingest.py` exiting 75:
 another lake writer holds `/tmp/k2-lake-ingest.lock` in `k2-spark-iceberg`. It does not fire
 while Airflow's own `lake_maintenance` or `lake_rebuild` is running, because both hold the
-lock on purpose.
+lock on purpose, nor for a 15-minute grace after one ends. Running is the scheduler's
+`airflow_ti_running` gauge for either DAG. The grace is there because the skips taken under
+the holder stay in the alert's 15-minute window until the first run after it has finished:
+up to 5 minutes to the next slot, plus that first run, which reads the backlog the hold
+built (3.5 minutes on 2026-11-25), plus about a minute of scrape and evaluation. That is
+9.5 minutes; 15 adds margin and matches the window, so the old skips have aged out by the
+time the grace lapses even if the first run fails. For up to 15 minutes after the
+`airflow-statsd` exporter restarts the skip count reads low and the alert stays quiet: a lock
+held across the restart fires that much later.
+
+**Observed 2026-11-25**, before the grace existed: a false firing. The first
+`lake_maintenance` under Airflow ran 06:10:21 to 06:33:58 UTC, and the `lake_ingest` runs for
+the 06:11 to 06:31 slots skipped, five in a row, as they should. The alert went pending at
+06:35 and fired at 06:36 for about a minute: the holder test read 1 throughout the run and
+dropped the moment maintenance ended, while the window still held three of the skips and the
+06:36 run, the first to get the lock, had not finished. That run succeeded 3.5 minutes after
+it started. Nothing was wrong with the lock.
 
 **Expected behaviour**, one or two skips are the lock doing its job: a maintenance or a
 manual job held it and the ingest stepped aside. Three in a row with nothing of Airflow's
@@ -486,7 +502,12 @@ age climbing, and every container healthy. Nothing else looks wrong.
 
 **Detection**, `AirflowLakeIngestNotRunning`: no `lake_ingest` task has finished, in any
 state, for 15 minutes held for 5, while none is running and no Airflow `lake_maintenance`
-or `lake_rebuild` holds the lock. `LakeIngestFailed` follows 35 minutes after the last
+or `lake_rebuild` holds the lock or has in the last 15 minutes. That is §3's grace, for the
+same reason: a `lake_ingest` paused under a long rebuild and unpaused as it ends has no
+finish until the first run after it, up to 5 minutes to the slot plus the run. It is also
+quiet for 15 minutes after the `airflow-statsd` exporter restarts, when the old process's
+count and the new one can match by chance; if nothing finishes after the restart it fires
+20 minutes after it. `LakeIngestFailed` follows 35 minutes after the last
 commit, and `make health` step (3) fails with "no lake_ingest run finished in the last
 30 min". A deliberate pause longer than 20 minutes (a deep `make lake-verify`, a chaos
 run) fires it as well: that is the forgotten-pause case caught early.
