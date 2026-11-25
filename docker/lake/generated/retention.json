@@ -1,4 +1,5 @@
 {
+  "audit.checks": 7,
   "bronze.binance_depth20": 7,
   "bronze.binance_trade": 7,
   "bronze.coinbase_level2": 7,

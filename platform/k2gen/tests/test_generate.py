@@ -49,6 +49,17 @@ def test_a_scaffolded_product_validates(tree):
     assert cli.validate(tree) == []
 
 
+def test_the_scaffolds_marts_stub_validates_once_uncommented(tree):
+    generate.scaffold(tree, "market-analytics", "example-desk")
+    path = tree / "contracts/market-analytics/example-desk/product.yaml"
+    text = path.read_text()
+    stub = text[text.index("# marts:"):]
+    path.write_text(text.replace(stub, "\n".join(line.removeprefix("# ") for line in stub.splitlines()) + "\n"))
+    (mart,) = yaml.safe_load(path.read_text())["marts"]
+    assert mart == {"table": "market_analytics.example_desk.example_desk", "grain": ["id"], "reads": ["gold.example_desk"]}
+    assert cli.validate(tree) == []
+
+
 def test_a_source_aligned_scaffold_is_bronze_and_validates(tree):
     generate.scaffold(tree, "fx-reference", "example-rates")
     assert (tree / "contracts/fx-reference/example-rates/bronze.example_rates.odcs.yaml").exists()
@@ -212,32 +223,53 @@ def test_warehouses_txt_ends_with_a_newline():
 def test_dbt_sources_carry_trino_types_the_identifier_check_and_freshness():
     # ADR-044 and dbt/README.md: the sources a mart reads come from the contracts, not by hand.
     files = generate.render(ROOT)
-    (gold,) = yaml.safe_load(files[generate.DBT_SOURCES])["sources"]
+    audit, gold = yaml.safe_load(files[generate.DBT_SOURCES])["sources"]
     assert (gold["name"], gold["database"], gold["schema"]) == ("gold", "lake", "gold")
-    (trades,) = gold["tables"]
+    ohlcv, trades = gold["tables"]
     types = {c["name"]: c["data_type"] for c in trades["columns"]}
     assert types["exchange_ts"] == "timestamp(6) with time zone" and types["price_e8"] == "bigint" and types["src_index"] == "integer"
     assert list(types) == list(ddl.parse(ROOT / cli.LAKE_SQL)["gold.trades"].columns)
     assert trades["config"]["loaded_at_field"] == "ingest_ts"
     assert trades["config"]["freshness"] == {"error_after": {"count": 30, "period": "minute"}}
-    assert trades["config"]["meta"]["read_by"] == ["market_analytics.candles.ohlcv_1m"]
+    assert trades["config"]["meta"]["read_by"] == ["market_analytics.candles.ohlcv_1m", "market_analytics.venue_quality.venue_quality_scorecard"]
+    # The delayed view reads the lake's candles (ADR-035), checked on their identifier fields, with no freshness declared.
+    assert ohlcv["config"]["meta"]["read_by"] == ["market_analytics.delayed_candles.ohlcv_delayed_20m"]
+    assert ohlcv["data_tests"][0]["dbt_expectations.expect_compound_columns_to_be_unique"]["arguments"]["column_list"] == ["exchange", "canonical_symbol", "window_start"]
+    assert "freshness" not in ohlcv["config"]
     (test,) = trades["data_tests"]
     args = test["dbt_expectations.expect_compound_columns_to_be_unique"]["arguments"]
     assert args == {"column_list": ["exchange", "canonical_symbol", "trade_id"], "row_condition": "exchange_ts >= current_timestamp - interval '6' hour"}
+    # audit.checks: its own types, no identifier fields so no uniqueness check, no latency so no freshness.
+    (checks,) = audit["tables"]
+    assert {c["name"]: c["data_type"] for c in checks["columns"]} == {
+        "run_ts": "timestamp(6) with time zone", "job": "varchar", "check_name": "varchar", "scope": "varchar",
+        "passed": "boolean", "observed": "bigint", "detail": "varchar",
+    }
+    assert "data_tests" not in checks and "freshness" not in checks["config"]
 
 
 def test_one_dbt_selector_per_domain_with_marts():
     (selector,) = yaml.safe_load(generate.render(ROOT)[generate.DBT_SELECTORS])["selectors"]
     assert selector["name"] == "market_analytics"
-    assert selector["definition"]["union"] == [{"method": "fqn", "value": "market_analytics"}, {"method": "source", "value": "gold.trades"}]
+    assert selector["definition"]["union"] == [
+        {"method": "fqn", "value": "market_analytics"},
+        {"method": "source", "value": "audit.checks"},
+        {"method": "source", "value": "gold.ohlcv_1m"},
+        {"method": "source", "value": "gold.trades"},
+    ]
 
 
 def test_a_removed_mart_takes_its_sources_and_selector_with_it(tree):
+    # The last marts gone: what scripts/dbt-test.sh then shows dbt still parses.
+    shutil.rmtree(tree / "contracts/market-analytics/delayed-candles")
+    shutil.rmtree(tree / "contracts/market-analytics/venue-quality")
     path = tree / "contracts/market-analytics/candles/product.yaml"
     doc = yaml.safe_load(path.read_text())
     del doc["marts"]
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
     assert cli.validate(tree) == []
+    assert generate.render(tree)[generate.DBT_SOURCES] == generate._dbt_sources([], {}, {})
+    assert generate.render(tree)[generate.DBT_SELECTORS] == generate._dbt_selectors([])
     files = generate.render(tree)
     assert yaml.safe_load(files[generate.DBT_SOURCES])["sources"] == []
     assert yaml.safe_load(files[generate.DBT_SELECTORS])["selectors"] == []
@@ -254,7 +286,10 @@ def test_the_parser_reads_identifier_fields():
 
 
 def test_the_product_page_says_how_each_mart_is_built(tree):
-    assert "| `market_analytics.candles.ohlcv_1m` | table |" in generate.render(ROOT)[f"{generate.PAGES}/market-analytics/candles.md"]
+    page = generate.render(ROOT)[f"{generate.PAGES}/market-analytics/candles.md"]
+    assert "| `market_analytics.candles.ohlcv_1m` | table |" in page
+    # In the diagram too, fed by what it reads: gold.trades is node n0, the mart the last one in the box.
+    assert '    n5["market_analytics.candles.ohlcv_1m"]\n  end' in page and "  n0 --> n5\n" in page
     path = tree / "contracts/market-analytics/candles/product.yaml"
     doc = yaml.safe_load(path.read_text())
     doc["marts"][0]["materialized"] = "view"

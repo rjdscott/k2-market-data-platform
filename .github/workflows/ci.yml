@@ -197,7 +197,8 @@ jobs:
         if: matrix.name == 'airflow'
         run: >-
           docker run --rm --network none -e AIRFLOW__LOGGING__LOGGING_LEVEL=WARNING
-          -v "$PWD":/repo:ro k2-airflow:3.3.2
+          -e AIRFLOW__COSMOS__ENABLE_CACHE_DBT_LS=False
+          -v "$PWD":/repo:ro -v "$PWD/dbt":/opt/k2/dbt:ro k2-airflow:3.3.2
           python -m unittest discover -s /repo/docker/airflow/tests
 
       - name: Exporter self-check, in the image just built

@@ -82,6 +82,13 @@ x-airflow-env: &airflow-env
   AIRFLOW__METRICS__STATSD_PORT: "9125"
   AIRFLOW__METRICS__STATSD_INFLUXDB_ENABLED: "True"
   AIRFLOW__METRICS__LEGACY_NAMES_ON: "False"
+  # dbt_marts (docker/airflow/dags/dbt_marts.py): astronomer-cosmos sends usage
+  # telemetry and dbt anonymous usage stats unless told not to, and both are off.
+  # Cosmos keys its dbt ls cache on a hash of the project's files; a host
+  # checkout's dbt/.venv is no part of the project.
+  AIRFLOW__COSMOS__ENABLE_TELEMETRY: "False"
+  AIRFLOW__COSMOS__PROJECT_HASH_EXCLUDED_DIRS: ".venv"
+  DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
 
 #############################################################################
 # SERVICES - STREAMING BACKBONE
@@ -606,8 +613,13 @@ services:
   # LocalExecutor, so tasks run inside airflow-scheduler, and that is the only
   # service given the Docker socket. No triggerer: nothing here defers.
   #
-  # ./docker/airflow/dags is a directory bind mount held by the scheduler and
-  # the dag-processor. A write-then-rename edit needs both recreated (CLAUDE.md,
+  # dbt_marts builds the dbt marts on Trino every hour at minute 10
+  # (docker/airflow/dags/dbt_marts.py, docs/runbooks/dbt-marts.md).
+  #
+  # ./docker/airflow/dags and ./dbt are directory bind mounts held by the
+  # scheduler and the dag-processor, read-only: cosmos runs each dbt command in
+  # a temporary copy of symlinks, where dbt writes target/ and logs/. A checkout
+  # switch or a write-then-rename edit needs both recreated (CLAUDE.md,
   # bind-mount gotcha).
 
   # One-shot: creates the `airflow` role and database on prefect-db when
@@ -696,6 +708,7 @@ services:
       - k2-net
     volumes:
       - ./docker/airflow/dags:/opt/airflow/dags:ro
+      - ./dbt:/opt/k2/dbt:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${K2_DOCKER_GID:-0}"
@@ -747,6 +760,7 @@ services:
       - k2-net
     volumes:
       - ./docker/airflow/dags:/opt/airflow/dags:ro
+      - ./dbt:/opt/k2/dbt:ro
     environment: *airflow-env
     command: ["dag-processor"]
     depends_on:
@@ -1108,10 +1122,11 @@ services:
   # writer `dbt_<domain>` (ADR-044). Checked by `make test-trino`. Identity is
   # the X-Trino-User header, not authenticated, so the port is loopback only.
   #
-  # Heap 2816M (etc/jvm.config) under the 4G limit leaves 1.25 GiB for
-  # metaspace, code cache, thread stacks and direct buffers. The 2026-11-25 spike
-  # ran every single query at 1 CPU / 2 GiB; the rest is for concurrent dbt
-  # threads (ADR-035).
+  # Heap 2816M (etc/jvm.config) under the 5G limit leaves 2.25 GiB for
+  # metaspace, code cache, thread stacks and direct buffers, which jvm.config
+  # does not cap. The 2026-11-25 spike ran every single query at 1 CPU / 2 GiB;
+  # the rest is for concurrent dbt threads. 4G until the dbt marts' first
+  # builds left the cgroup's anon memory 0.2 GiB under it (ADR-035 Outcome).
   trino:
     image: trinodb/trino:484
     container_name: k2-trino
@@ -1138,7 +1153,7 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 4G
+          memory: 5G
         reservations:
           cpus: '0.5'
           memory: 1G
@@ -1372,13 +1387,13 @@ services:
 # cadvisor              | 0.1       | 128M         | Per-container CPU and memory (Prometheus job cadvisor)
 # prefect-db            | 1.0       | 1536M        | Prefect, Airflow and Lakekeeper metadata DB
 # airflow-api-server    | 1.0       | 1536M        | Airflow 3 UI, REST and execution API (ADR-034)
-# airflow-scheduler     | 1.5       | 3G           | Airflow 3 scheduler + LocalExecutor, 4 slots
+# airflow-scheduler     | 1.5       | 3G           | Airflow 3 scheduler + LocalExecutor, 4 slots; dbt_marts' dbt
 # airflow-dag-processor | 0.5       | 1G           | Airflow 3 DAG parsing
 # airflow-statsd        | 0.1       | 64M          | Airflow statsd to Prometheus (:9102)
 # spark-iceberg         | 3.0       | 8G           | Batch engine (lake ingest + maintenance)
 # lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018)
 # lake-metrics          | 0.1       | 128M         | v3 lake alerts exporter (:8000)
-# trino                 | 2.0       | 4G           | SQL over the lake, dbt marts (ADR-035; 127.0.0.1:8088)
+# trino                 | 2.0       | 5G           | SQL over the lake, dbt marts (ADR-035; 127.0.0.1:8088)
 # capture-binance       | 0.25      | 256M         | Rust capture, Binance (12 pairs, trades + L2)
 # capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (11 pairs, trades + L2)
 # capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (11 pairs, trades + L2)
@@ -1387,7 +1402,7 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (19 long-running) | 19.30 CPU | 34.312 GiB | v3 capture + lake, Airflow schedules, Trino
+# STEADY STATE (19 long-running) | 19.30 CPU | 35.312 GiB | v3 capture + lake, Airflow schedules, Trino
 #
 # One-shots are NOT free. They declare limits and they run concurrently with
 # the steady state at boot, so the budget that matters at `docker compose up` is
@@ -1401,11 +1416,11 @@ services:
 #   ----------------------------------------------------------------------------
 #   one-shot subtotal  2.0  | 2.5G
 #
-# Bootstrap peak: 21.30 CPU / 36.812 GiB, all 24 default-profile services,
+# Bootstrap peak: 21.30 CPU / 37.812 GiB, all 24 default-profile services,
 # against the 25 CPU / 48 GiB ceiling ADR-045 sets at the bootstrap peak
 # (superseding ADR-034's 20 CPU / 36 GiB, which superseded ADR-010's 16 CPU /
 # 40 GB). scripts/check-budget.py fails CI over it. Headroom: 3.70 CPU and
-# 11.188 GiB. The host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay
+# 10.188 GiB. The host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay
 # outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
 #
 # `legacy` profile, the Prefect rollback, not started by default:
@@ -1413,7 +1428,7 @@ services:
 #   prefect-server     1.0  | 1G    Orchestration UI/API (Prefect 3.x)
 #   prefect-worker     0.5  | 512M  Workflow executor (Prefect 3.x)
 #
-# With it the peak is 22.80 CPU / 38.312 GiB across 26, inside the ceiling but
+# With it the peak is 22.80 CPU / 39.312 GiB across 26, inside the ceiling but
 # reported, not gated. Both go at the archive pull request. The Airflow limits
 # are the plan's estimates until ADR-034's measured figures replace them.
 #
@@ -1431,5 +1446,5 @@ services:
 # Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-25 (trino 2.0 CPU / 4G and the 25 CPU / 48 GiB ceiling, ADR-045; before it spark-iceberg 2.0 -> 3.0 CPU)
+# Last updated: 2026-11-26 (trino 4G -> 5G, ADR-010 and ADR-035 Outcomes; before it trino 2.0 CPU / 4G and the 25 CPU / 48 GiB ceiling, ADR-045)
 #############################################################################

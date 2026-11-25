@@ -1,0 +1,42 @@
+# Contract for lake.audit.checks. Columns live in docker/lake/ddl/lake.sql, the DDL of
+# record; `k2gen validate` checks partitioning and sort against it.
+apiVersion: v3.2.0
+kind: DataContract
+id: lake.audit.checks
+name: audit.checks
+version: 1.0.0
+domain: market-capture
+description:
+  purpose: >-
+    One row per check per run of a lake job, append-only: a failed check is never edited
+    out. The checks read every layer (docker/lake/maintenance.py AUDITS, the ingest's
+    offset_gap rows), which is why no upstream is declared: a list of every lake table
+    would say less than the code does.
+team:
+  name: capture-team
+schema:
+  - name: checks
+    physicalName: audit.checks
+    physicalType: table
+    authoritativeDefinitions:
+      - type: implementation
+        url: docker/lake/ddl/lake.sql
+customProperties:
+  - property: layer
+    value: audit
+  - property: format
+    value: iceberg
+  - property: partitioning
+    value: ["days(run_ts)"]
+  - property: sort
+    value: []
+  - property: classification
+    value: internal
+  - property: entitlement
+    value: none
+  - property: retention
+    value: 7
+  - property: upstreams
+    value: []
+  - property: schedule
+    value: "0 3 * * *"

@@ -75,9 +75,14 @@ else
   printf '%s\n' "$changed" | grep -q '^schemas/'         && services+=(redpanda-init) || true
   # Trino reads etc/ (rules, catalogs, heap) only at start.
   printf '%s\n' "$changed" | grep -q '^docker/trino/'     && services+=(trino) || true
+  # The Airflow services hold the dags/ and dbt/ directory mounts (CLAUDE.md, bind-mount
+  # gotcha) and run k2-airflow:3.3.2, whose tag never changes: (c)'s --build rebuilds it
+  # when the Dockerfile or the dbt files it copies change (dbt/uv.lock, package-lock.yml),
+  # and only a recreate puts the running services on the new image.
+  printf '%s\n' "$changed" | grep -qE '^(docker/airflow/|dbt/)' && services+=(airflow-api-server airflow-scheduler airflow-dag-processor) || true
 
   if [ "${#services[@]}" -eq 0 ]; then
-    result "(d) mount holders" "SKIP (no docker/lake, docker/redpanda, docker/trino, config/, or schemas/ changes in HEAD~1..HEAD)"
+    result "(d) mount holders" "SKIP (no docker/lake, docker/redpanda, docker/trino, docker/airflow, dbt/, config/, or schemas/ changes in HEAD~1..HEAD)"
   else
     mapfile -t services < <(printf '%s\n' "${services[@]}" | sort -u)
     # read-only lookup — run even under --dry-run so the preview is accurate

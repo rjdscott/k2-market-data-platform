@@ -1,0 +1,17 @@
+name: lake-audit
+domain: market-capture
+owner: capture-team
+purpose: >-
+  What the lake jobs found when they checked the lake: one row per check per run, filed by
+  the nightly maintenance (offset continuity, duplicate identifiers, parse, drift and parity
+  checks), by the ingest (the records Redpanda evicted before it read them), by an operator
+  or by a replay. Most checks are about this domain's tables and partitions, so it is filed
+  here until the platform-owned governance domain ADR-044 records as intent is decided.
+kind: source-aligned
+lifecycle: draft
+inputs: []
+outputs:
+  - audit.checks
+consumers:
+  - docs/runbooks/lake-audit-failed.md
+  - docker/lake/maintenance.py

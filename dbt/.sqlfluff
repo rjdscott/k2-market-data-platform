@@ -12,3 +12,7 @@ exclude_rules = ST06
 
 [sqlfluff:templater:jinja]
 apply_dbt_builtins = True
+
+# dbt's cross-database current_timestamp(), which a unit test overrides to fix "now".
+[sqlfluff:templater:jinja:macros]
+current_timestamp = {% macro current_timestamp() %}current_timestamp{% endmacro %}

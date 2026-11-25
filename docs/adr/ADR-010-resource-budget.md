@@ -643,3 +643,26 @@ Headroom at the gated peak: 3.70 CPU and 11.188 GiB. The engine on the reference
 28 CPUs and 49.50 GiB (`docker info --format '{{.NCPU}} {{.MemTotal}}'`, 2026-11-25), so the
 ceiling leaves 3 cores and 1.5 GiB outside it; ADR-045 says why that is accepted. The summary comment at the end of
 `docker-compose.yml` carries the same sums.
+
+### Outcome addendum (2026-11-26, Trino 4G to 5G)
+
+`trino` goes from 4G to **5G**, its heap unchanged at 2816M
+(`docker/trino/etc/jvm.config`), CPU unchanged at 2.0. After the first builds of the dbt marts
+the container's anonymous memory stood at 4,072,116,224 bytes against the 4,294,967,296-byte
+limit (`docker exec k2-trino cat /sys/fs/cgroup/memory.stat`, the `anon` line, 2026-11-25),
+about 0.2 GiB of room, and `jvm.config` does not cap the JVM's direct memory. The marts are
+rebuilt every hour by an unattended DAG, so the limit moves before an out-of-memory kill rather
+than after one ([ADR-035](ADR-035-trino-and-dbt-for-marts.md) Outcome). The extra GiB is all
+outside the heap: 2.25 GiB of the limit is left beside it, against 1.25 GiB before.
+
+```
+$ python3 scripts/check-budget.py
+steady default         19 services   19.30 CPU   35.312 GiB
+bootstrap default      24 services   21.30 CPU   37.812 GiB
+bootstrap governance   24 services   21.30 CPU   37.812 GiB
+bootstrap legacy       26 services   22.80 CPU   39.312 GiB
+PASS: bootstrap default within 25 CPU / 48 GiB; limits and pins hold across 6 Dockerfiles
+```
+
+Headroom at the gated peak: 3.70 CPU and 10.188 GiB. The summary comment at the end of
+`docker-compose.yml` carries the same sums.

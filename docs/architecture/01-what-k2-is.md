@@ -12,7 +12,7 @@ verbatim to an Iceberg lake, derives typed and canonical layers from that archiv
 serves the canonical layer from ClickHouse for dashboards and fast queries, with Trino for
 SQL over the lake. It runs on one host inside a declared ceiling of 25 CPU / 48 GiB at the
 bootstrap peak ([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)): as deployed, 19
-long-running services at 19.30 CPU / 34.312 GiB of limits, plus five one-shot init
+long-running services at 19.30 CPU / 35.312 GiB of limits, plus five one-shot init
 containers, with Prefect kept behind `--profile legacy` as the rollback
 ([docker-resources.md](../operations/docker-resources.md)).
 
@@ -89,9 +89,9 @@ Each rule names where it is enforced; a rule with no enforcement is a slogan.
    [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md) and
    [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md), whose `## Outcome`
    records the reversal on the record.
-6. **Instrument it, then say what is not instrumented.** 28 alert rules as code, chaos
-   results as files, and a stated list of gaps: no Alertmanager, 22 of 28 rules carry a
-   runbook annotation, 17 of 28 have a unit test ([11](11-observability.md)).
+6. **Instrument it, then say what is not instrumented.** 34 alert rules as code, chaos
+   results as files, and a stated list of gaps: no Alertmanager, all 34 rules carry a
+   runbook annotation, 23 of 34 have a unit test ([11](11-observability.md)).
 
 **Applied to a new component.** Declare its limits; make its writes idempotent; keep its
 input verbatim somewhere rebuildable; give it its own container; ask whether something

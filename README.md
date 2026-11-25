@@ -43,7 +43,7 @@ at the moment of capture, are for illustration only, and are not a data set
 | Complete | One Rust process per venue holds a single socket carrying trades and L2 book, stamps `recv_ts_ns` before parsing, verifies Kraken's CRC32 on every update, tracks each venue's sequence numbers, and publishes every frame verbatim. |
 | Reproducible | Every 5 minutes Spark reads Redpanda by offset range into Iceberg: `raw` (never expired) to `bronze` (per venue, vendor schema) to `silver` (typed, flagged) to `gold` (one row per trade, OHLCV, BBO). Consumed offsets are committed in the same snapshot as the rows; any layer rebuilds from the one above. |
 | Disposable serving | ClickHouse `gold` is fed live from the topics and reloaded from the lake. Dedup is a `ReplacingMergeTree` key; candles are computed on read, so a replay cannot corrupt one. |
-| Proven | Nightly audits per layer, three-way OHLCV parity at a pinned snapshot, 28 alert rules as code, chaos scripts with measured recovery, a fresh-clone release check before every tag. |
+| Proven | Nightly audits per layer, three-way OHLCV parity at a pinned snapshot, 34 alert rules as code, chaos scripts with measured recovery, a fresh-clone release check before every tag. |
 
 [![K2 Pipeline Overview on a live run: every scrape target up, trade records per venue, ClickHouse inserts, Redpanda throughput, and the pipeline's CPU and memory](docs/images/dashboards/01-pipeline-overview.png)](docs/operations/dashboards.md)
 
@@ -70,7 +70,7 @@ flowchart TB
   end
   N["DuckDB notebooks"]:::nb
   T["Trino 484 · SQL over the lake, read-only<br/>dbt marts, one warehouse per domain"]:::nb
-  O["Prometheus · 28 rules<br/>Grafana · 6 dashboards"]:::ob
+  O["Prometheus · 34 rules<br/>Grafana · 6 dashboards"]:::ob
 
   E --> F --> R
   R -->|Kafka engine| C
@@ -90,8 +90,8 @@ flowchart TB
   classDef ob fill:#f3f4f6,stroke:#6b7280,color:#111827
 ```
 
-19 long-running services and 5 one-shot init containers, 19.30 CPU / 34.312 GiB of declared
-limits at steady state and 21.30 CPU / 36.812 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
+19 long-running services and 5 one-shot init containers, 19.30 CPU / 35.312 GiB of declared
+limits at steady state and 21.30 CPU / 37.812 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
 ceiling ([ADR-045](./docs/adr/ADR-045-ceiling-25-cpu-48-gib.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 Prefect, which Airflow replaced, waits behind `--profile legacy` as the rollback, not running.
 
@@ -144,8 +144,9 @@ Detail per failure: [failure modes](./docs/architecture/16-failure-modes.md).
 
 ## Quick start
 
-Requires a Docker engine with at least 24 GB of memory so every declared limit is honoured;
-measured usage is far lower.
+Requires a Docker engine with at least 38 GiB of memory so every declared limit is honoured,
+the 37.812 GiB bootstrap peak included ([setup](./docs/development/setup.md)); measured usage is
+far lower.
 
 Two lines of `.env` are host-specific and are the whole first-run gotcha:
 `K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` ship empty (no CPU pinning, starts anywhere) —
@@ -175,7 +176,7 @@ symbol conventions and a runnable example.
 |---|---|---|
 | Grafana | http://localhost:3000 (`admin` / `$GRAFANA_PASSWORD`) | the capture and lake dashboards |
 | Redpanda Console | http://localhost:8080 | `market.crypto.v3.trades.binance`, values decoded as Avro |
-| Airflow | `http://localhost:$K2_AIRFLOW_PORT` (default 8090; `admin`, password: `docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated`) | DAGs: `lake_ingest`, `lake_maintenance`, `lake_rebuild` |
+| Airflow | `http://localhost:$K2_AIRFLOW_PORT` (default 8090; `admin`, password: `docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated`) | DAGs: `lake_ingest`, `lake_maintenance`, `lake_rebuild`, `dbt_marts` |
 
 Every other URL, credential and port — ClickHouse, Lakekeeper, MinIO, Prometheus, Spark,
 the notebooks — is on one page:
@@ -196,15 +197,15 @@ hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
 | Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, only a domain's writer changes its tables with SQL statements (table procedures are not fenced per user, ADR-044); 113 checks [^trino], no stack | `make test-trino` |
-| dbt: sqlfluff, compile, a manifest check (only staging reads a source; every mart tested unique on its contract grain), then a build on empty sources with 2 unit tests and 6 data tests [^dbt], no stack | `make test-dbt` |
-| Prometheus rule unit tests (17 of 28 alerts) and 10 documentation gates | `bash scripts/check-docs.sh` |
+| dbt: sqlfluff, compile, a manifest check (only staging reads a source; every mart tested unique on its contract grain), then a build on empty sources with 8 unit tests and 16 data tests [^dbt], each domain's snapshot maintenance, and a project with no marts still parsing; no stack | `make test-dbt` |
+| Prometheus rule unit tests (23 of 34 alerts) and 10 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
 [^py]: `make test-python` with `--collect-only -q | tail -1`
 [^ch]: the count `scripts/clickhouse-schema-test.sh` itself asserts (`[ "$n" -eq 10 ]`)
 [^trino]: `make test-trino | grep -c '^ok '` (2026-11-26, four domains)
-[^dbt]: `dbt build`'s own summary in `make test-dbt`: `Found 2 models, 6 data tests, 1 source, ... 2 unit tests` (2026-11-25)
+[^dbt]: `dbt build`'s own summary in `make test-dbt`: `Found 6 models, 16 data tests, 3 sources, ... 8 unit tests` (2026-11-25)
 
 CI ([`ci.yml`](./.github/workflows/ci.yml)) runs rust (fmt, clippy `-D warnings`, test),
 python (Ruff, pytest), contracts (k2gen drift, tests, Ruff, mypy), clickhouse-schema, trino
@@ -215,11 +216,11 @@ pin checks, the documentation gates and Trivy on every pull request.
 
 ```
 services/capture-rust/     k2-capture: one binary, three exchanges
-docker/airflow/            the three lake DAGs and their image
+docker/airflow/            the three lake DAGs, dbt_marts, and their image
 docker/lake/               Spark ingest, layer builders, audits, DDL, the Prefect flows kept for rollback
 docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds
 docker/trino/              Trino config: catalog lake (read-only), one generated catalog per domain, access rules
-docker/prometheus/rules/   28 alert rules with unit tests
+docker/prometheus/rules/   34 alert rules with unit tests
 schemas/avro/              raw-message, trade, book-snapshot-l2
 config/instruments.yaml    instrument registry, the single source of truth
 contracts/                 a descriptor per data product, an ODCS v3 contract per lake table, four domains

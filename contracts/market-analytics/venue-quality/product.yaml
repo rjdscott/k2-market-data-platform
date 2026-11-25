@@ -1,0 +1,23 @@
+name: venue-quality
+domain: market-analytics
+owner: analytics-team
+purpose: >-
+  How complete the lake is for each venue, per venue and UTC day: its trades, the trades
+  that revealed missing trade ids and how many ids, the nightly audits of the venue's tables
+  and partitions and how many failed (a day-scoped audit under the day it looked at, a
+  whole-table one under the day it ran), and the raw frames, trade records and book records
+  an ingest skipped because Redpanda had evicted them. Read it before trusting a venue's day.
+kind: consumer-aligned
+lifecycle: draft
+inputs:
+  - table: audit.checks
+  - table: gold.trades
+outputs: []
+consumers: []
+# Owned by market-analytics, its consumer (ADR-044): it joins market-capture's audit.checks
+# with this domain's gold.trades, and filed under market-capture it would make that domain
+# read this one, the both-directions dependency ADR-033 names as its revisit trigger.
+marts:
+  - table: market_analytics.venue_quality.venue_quality_scorecard
+    grain: [exchange, utc_date]
+    reads: [audit.checks, gold.trades]

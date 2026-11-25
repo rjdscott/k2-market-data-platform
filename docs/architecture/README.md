@@ -15,7 +15,7 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 | 08 | [Lake ingest](08-lake-ingest.md) | Redpanda to Iceberg exactly once; incremental layers; audits |
 | 09 | [Lake layers](09-lake-layers.md) | raw, bronze, silver, gold, what each holds and why |
 | 10 | [ClickHouse gold](10-clickhouse-gold.md) | dedup contract, candles on read, reload from the lake |
-| 11 | [Observability](11-observability.md) | metrics, 28 rules as code with runbooks and promtool tests, chaos with timed recovery |
+| 11 | [Observability](11-observability.md) | metrics, 34 rules as code with runbooks and promtool tests, chaos with timed recovery |
 | 12 | [Data strategy](12-data-strategy.md) | why four layers; what ClickHouse keeps; retention vs disk |
 | 13 | [Schema design](13-schema-design.md) | every column, every layer, the wire contracts |
 | 14 | [Partitioning strategy](14-partitioning-strategy.md) | partitions, sort orders, file sizes, ClickHouse keys |

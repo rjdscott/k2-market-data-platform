@@ -1,0 +1,20 @@
+name: delayed-candles
+domain: market-analytics
+owner: analytics-team
+purpose: >-
+  The lake's 1-minute candles without the newest 20 minutes: a candle is shown once its whole
+  minute ended at least 20 minutes ago and the lake has already seen a later trade on the same
+  venue, so no candle is served while it can still grow. The product a delayed-data
+  entitlement will be limited to (plan phase P5). A Trino view over lake.gold.ohlcv_1m
+  (ADR-035), current with every ingest, readable through Trino only.
+kind: consumer-aligned
+lifecycle: draft
+inputs:
+  - table: gold.ohlcv_1m
+outputs: []
+consumers: []
+marts:
+  - table: market_analytics.delayed_candles.ohlcv_delayed_20m
+    grain: [exchange, canonical_symbol, window_start]
+    reads: [gold.ohlcv_1m]
+    materialized: view

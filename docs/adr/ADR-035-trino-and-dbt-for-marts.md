@@ -166,3 +166,66 @@ the checks in `docker/trino/README.md`).
 - Layout and fences: [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md). Ceiling:
   [ADR-045](ADR-045-ceiling-25-cpu-48-gib.md).
 - Code: `docker/trino/`, `scripts/trino-rules-test.sh`
+
+---
+
+## Outcome (2026-11-26)
+
+**The revisit trigger fired, on a test rather than a model.** The uniqueness test k2gen
+generates on `gold.trades`'s identifier fields, `(exchange, canonical_symbol, trade_id)`, failed
+over the whole table with `Query exceeded per-node memory limit of 844.80MB`, Trino's default
+per-node query memory at the 2816M heap, and failed the same way over the newest 2 days; over the
+newest 6 hours it passed in 2.6 s (k2-trino, 2026-11-25; the command, with the window varied, is in
+[`dbt/README.md`](../../dbt/README.md)). No memory was raised. The source test was scoped to the
+newest 6 hours by the table's time partition (`_RECENT` in `platform/k2gen/k2gen/generate.py`),
+and the whole table stays the nightly Spark audit's, `duplicate_identifiers` in
+`docker/lake/maintenance.py`, which checked it before Trino existed. The marts did not hit the
+limit: the 1-minute candles and the venue scorecard each aggregate all of `gold.trades` on every
+build, and both passed on the live stack (`dbt build --selector market_analytics`, 2026-11-25).
+
+**The delayed product is a view over `lake.gold.ohlcv_1m`, as decided, with one cut the
+Decision did not name.** `market_analytics.delayed_candles.ohlcv_delayed_20m`, in its own
+product and schema, shows a candle once its whole minute ended 20 minutes before the query
+(`window_start <= current_timestamp - INTERVAL '21' MINUTE`) and only if it is older than its
+venue's newest minute in the lake (the horizon). `docker/lake/gold.py` MERGEs every minute an
+ingest batch touches, recomputed over all of `gold.trades`, so the newest minute is the one an
+ingest may have read part of, and it is rewritten when the rest lands; a 20-minute predicate
+alone would serve it as final whenever the ingest stalls for more than 20 minutes. The horizon
+is per venue, so a lagging venue holds back only itself. A first version read the hourly mart
+`market_analytics.candles.ohlcv_1m` instead and served that build's partial last minutes once
+they passed the cut, with fewer trades than the lake held (found in review, 2026-11-25); it
+was replaced before merge. On the stack every served candle of the last hour then had the
+trade count a recount of `lake.gold.trades` gives (the command is in
+[`dbt/README.md`](../../dbt/README.md), 2026-11-25).
+
+**One thing landed differently from the Decision.**
+
+- Who maintains mart tables, left open above, is the domain's own writer through Trino:
+  `dbt_marts` runs `expire_snapshots` and then `remove_orphan_files` at 7 days as `dbt_<domain>`,
+  once a day (`dbt/macros/expire_mart_snapshots.sql`). Spark's `maintenance.py` is not taught the
+  domain warehouses. The 7-day floor holds because the session properties that lower it are
+  denied to everyone ([ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md)); an
+  expiry at `1d` as the writer failed with `Retention specified (1.00d) is shorter than the
+  minimum retention configured in the system (7.00d)` (scratch table, 2026-11-25).
+
+**The memory limit was raised from 4 GiB to 5 GiB**, the heap unchanged at 2816M. After the
+builds the container's anonymous memory was 4,072,116,224 bytes against the 4,294,967,296-byte
+limit (`docker exec k2-trino cat /sys/fs/cgroup/memory.stat`, the `anon` line), about 0.2 GiB
+of room; the JVM held 3.82 GiB resident (`docker exec k2-trino cat /proc/1/status`, `VmRSS`),
+`memory.peak` was 3.95 GiB and `oom_kill` 0 (`docker exec k2-trino cat
+/sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events`), all 2026-11-25. That is the heap
+committed to its 2816M maximum and about 1.07 GiB beside it, inside the 1.25 GiB the Decision
+left for that but close to it, and `jvm.config` does not cap direct memory; the 1.42 GiB idle
+figure in the Context is a fresh JVM's. An hourly, unattended DAG should not wait for an
+out-of-memory kill to find out, so the limit moved first: 2.25 GiB now sits beside the heap
+([ADR-010](ADR-010-resource-budget.md) Outcome; the gated bootstrap peak goes to 21.30 CPU /
+37.812 GiB of 25 / 48, `python3 scripts/check-budget.py`). A whole `dbt_marts` run took 31 to
+40 s in a throwaway Airflow container against this Trino (`airflow dags list-runs dbt_marts`,
+start to end, 2026-11-25).
+
+**Revisit when** the `anon` line of `docker exec k2-trino cat /sys/fs/cgroup/memory.stat`
+passes 4.5 GiB (4,831,838,208 bytes) or the `oom_kill` count in `memory.events` is above 0;
+or a mart model, not a test, fails with `EXCEEDED_LOCAL_MEMORY_LIMIT`; or a `dbt_marts` run is
+ended by its 50-minute `dagrun_timeout` (`docker/airflow/dags/dbt_marts.py`). Then measure,
+and cap direct memory in `jvm.config`, or raise the limit or `query.max-memory-per-node`
+inside ADR-045's headroom, 3.70 CPU and 10.188 GiB at the gated peak after this change.

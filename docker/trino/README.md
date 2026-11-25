@@ -23,7 +23,7 @@ named from the product, and a `staging` schema of views; dbt creates them
 | File | Kind | What it sets |
 |---|---|---|
 | `etc/config.properties` | hand-written | one node: coordinator and its only worker; HTTP on 8080 inside the network |
-| `etc/jvm.config` | hand-written | heap `-Xms2816M -Xmx2816M` under the 4G limit, JVM time zone `UTC`, exit on `OutOfMemoryError` (no heap dump: nowhere bounded to put one) |
+| `etc/jvm.config` | hand-written | heap `-Xms2816M -Xmx2816M` under the 5G limit, JVM time zone `UTC`, exit on `OutOfMemoryError` (no heap dump: nowhere bounded to put one) |
 | `etc/node.properties` | hand-written | environment `k2`, data directory |
 | `etc/catalog/lake.properties` | hand-written | warehouse `k2`, `iceberg.security=read_only`; static MinIO keys from `${ENV:MINIO_ROOT_USER}` / `${ENV:MINIO_ROOT_PASSWORD}`, path-style, region `local-01` |
 | `etc/catalog/<domain>.properties` | **generated** | the domain's warehouse, writable, Lakekeeper-assigned locations, `register_table` and `add_files` off |
@@ -37,9 +37,12 @@ Generated files come from `contracts/domains.yaml` through `make generate`
 `init-lake.sh` creates. Never edit them: add or change a domain, then `make generate`; the CI
 drift gate fails a stale one.
 
-**Heap.** 2816M of the 4 GiB limit leaves 1.25 GiB for metaspace, the 256M code cache,
-thread stacks and direct buffers. A single query ran at 1 CPU / 2 GiB with a 1280M heap in
-the spike; the larger limit is for dbt running several models at once.
+**Heap.** 2816M of the 5 GiB limit leaves 2.25 GiB for metaspace, the 256M code cache,
+thread stacks and direct buffers; nothing here caps direct memory. A single query ran at 1 CPU /
+2 GiB with a 1280M heap in the spike; the larger limit is for dbt running several models at
+once. The limit was 4 GiB until 2026-11-26, when the dbt marts' first builds left the cgroup's
+`anon` memory 0.2 GiB under it (`docker exec k2-trino cat /sys/fs/cgroup/memory.stat`;
+[ADR-035](../../docs/adr/ADR-035-trino-and-dbt-for-marts.md) Outcome).
 
 **Time zone.** The JVM is pinned to UTC, the session zone of a client that sends none. A
 client that sends its own zone gets that zone, so pass `--timezone UTC` to the CLI and set

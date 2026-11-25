@@ -11,10 +11,11 @@ Redpanda → the Iceberg lake on MinIO. Everything here targets the as-built
 | [quick-reference.md](./quick-reference.md) | One-page cheat sheet: URLs, ports, credentials, stack commands |
 | [data-catalog.md](./data-catalog.md) | Every user-facing table: grain, partitioning, time columns and units, symbol conventions, dedup key, which engine is authoritative, one runnable example each |
 | [data-inspection.md](./data-inspection.md) | Operator health queries per hop: Redpanda, ClickHouse `gold`, the Iceberg lake |
-| [observability.md](./observability.md) | Grafana dashboards, capture-tier and lake metrics, all 26 Prometheus alert rules |
+| [observability.md](./observability.md) | Grafana dashboards, capture-tier and lake metrics, all 34 Prometheus alert rules |
 | [dashboards.md](./dashboards.md) | Every dashboard and console as a screenshot of a live run, in the order the data moves, with what to read from each and the runbook it leads to. Written by `make screenshots` |
 | [latency-budgets.md](./latency-budgets.md) | 7-segment latency budget plus the measured 2026-02-19 p50/p99 numbers |
-| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 19.30 CPU / 34.312 GiB across 19 long-running services, +5 one-shot (2.00 / 2.500 GiB), bootstrap peak 21.30 / 36.812 GiB against the 24 / 48 GiB ceiling; the Prefect rollback behind `--profile legacy` |
+| [docker-resources.md](./docker-resources.md) | Per-service CPU/RAM limits, 19.30 CPU / 35.312 GiB across 19 long-running services, +5 one-shot (2.00 / 2.500 GiB), bootstrap peak 21.30 / 37.812 GiB against the 25 / 48 GiB ceiling; the Prefect rollback behind `--profile legacy` |
+| [airflow-schedules.md](./airflow-schedules.md) | The four Airflow DAGs, their crons, limits and runbooks: `lake_ingest`, `lake_maintenance`, `lake_rebuild` and the hourly `dbt_marts` |
 | [prefect-schedules.md](./prefect-schedules.md) | The two Prefect schedules Airflow replaced at the cutover, kept for the rollback: `lake-ingest-5min` and `lake-maintenance-daily` |
 | [clickhouse-database-standard.md](./clickhouse-database-standard.md) | Why everything served lives in the `gold` database (`k2` was dropped at the Phase E cutover) and how to keep it that way |
 | [adding-new-exchanges.md](./adding-new-exchanges.md) | End-to-end checklist for wiring up a 4th exchange |
