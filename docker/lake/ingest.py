@@ -7,7 +7,7 @@ K2 v3 lake ingest — Redpanda to Iceberg, in two stages, in one Spark session.
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
         --end-timestamp 2026-08-27T02:00:00Z          # backlog, one slice at a time
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
-        --max-offsets-per-partition 200000            # drain a backlog faster
+        --max-offsets-per-partition 600000            # drain a backlog faster
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
         --accept-data-loss                            # records evicted; skip and record
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
@@ -122,23 +122,32 @@ EXIT_LOCK_HELD = os.EX_TEMPFAIL
 # and commits them, so a backlog empties over a predictable number of runs
 # instead of in one that cannot finish.
 #
-# **200,000 is a floor set by an arrival rate, not a round number.** The bound
+# **600,000 is a floor set by an arrival rate, not a round number.** The bound
 # must exceed what a partition receives between two runs, or that partition
 # falls further behind on every cycle and never catches up. Measured on the
 # busiest one, `market.crypto.v3.raw.kraken-0`: 11,050 records/minute, i.e.
 # 55,250 per 5-minute cycle (two `rpk topic describe` samples 60 s apart,
 # 2026-08-27). The first default here was 50,000 — *below* that, and the topic
 # duly slid backwards until Redpanda's 512 MiB-per-partition cap evicted 1.17 M
-# unread records. 200,000 is ~3.6x the measured rate.
+# unread records. 200,000 (~3.6x the measured rate) was the second default.
 #
-# Costs, measured (docker/lake/README.md): 4,097,437 records in 71 s at this
-# bound, peak driver RSS 1,213 MiB — *lower* than the same run at 50,000, which
+# It stopped being a floor on 2026-11-25. The same partition was receiving
+# 39,797 records/minute, ~198,985 per 5-minute cycle (two `rpk topic describe
+# -p` samples 60 s apart, 17:27 UTC), against 11,050 when 200,000 was set, and
+# runs had lengthened to ~250 s, so a cycle received more than the cap.
+# k2_lake_ingest_backlog_offsets{topic="market.crypto.v3.raw.kraken"} rose at
+# 14:32 UTC to ~1.3 M and sat there until a hand-run at 2,000,000 drained it
+# (17:12 to 17:25 UTC). Nothing was evicted, and nothing alerted. 600,000 is
+# ~3x that cycle's arrival; LakeIngestBacklogSustained now pages on the shape.
+#
+# Costs, measured at the 200,000 bound (docker/lake/README.md): 4,097,437
+# records in 71 s, peak driver RSS 1,213 MiB, *lower* than the same run at 50,000, which
 # is the point. Nothing payload-bearing is cached, so peak memory is a function
 # of the heap setting and raising the bound buys drain rate for wall time only.
 # Lower it if a run cannot finish inside `INGEST_TIMEOUT_S`; raise it to drain a
 # backlog faster on an idle host. 0 disables the bound entirely, which is only
 # ever right when a person is watching it.
-MAX_OFFSETS_PER_PARTITION = int(os.environ.get("K2_LAKE_MAX_OFFSETS_PER_PARTITION", "200000"))
+MAX_OFFSETS_PER_PARTITION = int(os.environ.get("K2_LAKE_MAX_OFFSETS_PER_PARTITION", "600000"))
 
 # Same three names, same prefix and same default as docker/redpanda/init.sh.
 EXCHANGES = os.environ.get("K2_EXCHANGES", "binance,kraken,coinbase").split(",")

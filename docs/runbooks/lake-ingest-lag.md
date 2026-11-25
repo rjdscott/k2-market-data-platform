@@ -109,8 +109,8 @@ Then read the cause:
 
 | What you see | Meaning | Do |
 |---|---|---|
-| Runs completing, each slower than 5 min | the backlog is larger than one cycle can drain | it is already draining, every run is bounded at `--max-offsets-per-partition` (200,000). Watch `k2_lake_ingest_backlog_offsets{topic}` fall; raise the bound on a hand-run to drain faster |
-| Backlog gauge flat or rising across runs | the bound is below the arrival rate on that topic | raise `--max-offsets-per-partition` on hand-runs until it falls, then raise `K2_LAKE_MAX_OFFSETS_PER_PARTITION` for the scheduled path |
+| Runs completing, each slower than 5 min | the backlog is larger than one cycle can drain | it is already draining, every run is bounded at `--max-offsets-per-partition` (600,000). Watch `k2_lake_ingest_backlog_offsets{topic}` fall; raise the bound on a hand-run to drain faster |
+| Backlog gauge flat or rising across runs | the bound is below the arrival rate on that topic | raise `--max-offsets-per-partition` on hand-runs until it falls, then raise `K2_LAKE_MAX_OFFSETS_PER_PARTITION` for the scheduled path. This is `LakeIngestBacklogSustained`, below |
 | Runs completing fast, lag flat | the scheduler is not firing at cadence | §2 |
 | Spark at its CPU limit during a run | contention with capture or ClickHouse | check the cpuset layout, capture is pinned away from Spark deliberately ([Phase D isolation experiment](../plans/2026-08-26-v3-quant-research-platform/003-phase-d-lake-tier.md)) |
 | `failOnDataLoss` in the logs | offsets below broker retention | §3, **stop and read it before doing anything** |
@@ -121,7 +121,7 @@ curl -sG http://localhost:9090/api/v1/query \
   --data-urlencode 'query=k2_lake_ingest_backlog_offsets' \
   | jq -r '.data.result[] | "\(.metric.topic) \(.value[1])"' | sort
 
-# Drain faster than the 200,000-per-partition default, with someone watching.
+# Drain faster than the 600,000-per-partition default, with someone watching.
 # Peak driver RSS does not move with the bound (docker/lake/README.md), but wall
 # time does, and the flow's INGEST_TIMEOUT_S is 3600.
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
@@ -154,6 +154,31 @@ bound, `lake-ingest-5min` paused: 2,721,812 / 1,770,914 / 1,564,334 records comm
 92 s / 57 s / 49 s, peak ingest driver RSS 1,243 MiB of a 4 GiB container. A run with
 nothing to do costs 5.7 s. `market.crypto.v3.raw.kraken` fell 23,175,551 → 22,193,385 over
 the three, about 347 k per run.
+
+---
+
+### `LakeIngestBacklogSustained`: a topic's backlog held above 0 for 30 minutes
+
+A topic has had unread offsets, as of the last commit, for six cycles. Every run commits
+and the lake looks healthy; the cap is simply below what a partition receives per cycle.
+On 2026-11-25 `market.crypto.v3.raw.kraken` held ~1.3 M from 14:32 to 17:12 UTC at a cap of
+200,000 against ~198,985 arriving per cycle (runs had slowed to ~250 s), with no alert.
+
+```bash
+# 1. Is the start offset behind the read position? Then nothing was evicted, drain it.
+#    If LOG-START-OFFSET is past the committed offset, stop: go to §3.
+docker exec k2-redpanda rpk topic describe market.crypto.v3.raw.kraken -p
+
+# 2. Drain it. Run on the live stack 2026-11-25 and drained 1.3 M to 0 (17:12 to 17:25 UTC).
+docker exec k2-airflow-scheduler airflow dags trigger lake_ingest \
+  --conf '{"max_offsets_per_partition": 2000000}'
+
+# 3. Confirm the gauge is 0, then compare the arrival rate with the default (600,000).
+#    Raise K2_LAKE_MAX_OFFSETS_PER_PARTITION if a cycle's arrival is within ~2x of it.
+curl -sG http://localhost:9090/api/v1/query \
+  --data-urlencode 'query=k2_lake_ingest_backlog_offsets' \
+  | jq -r '.data.result[] | "\(.metric.topic) \(.value[1])"' | sort
+```
 
 ---
 
@@ -389,7 +414,7 @@ Three things changed as a result, and none of them is a workaround.
 `offsets.evicted` compares the resume point against the broker's log start **before** the
 Spark job starts, so step 1 arrives as the first line of the failure instead of as an
 `OffsetOutOfRangeException` 384 lines into a stack trace naming one partition and no
-counts. The per-run bound now defaults to 200,000, above the measured arrival rate, which
+counts. The per-run bound then defaulted to 200,000 (600,000 since 2026-11-25), above the measured arrival rate, which
 50,000 was not, because a bound below the arrival rate guarantees this outcome rather
 than merely risking it (`docker/lake/README.md`). And `--accept-data-loss` exists, so the
 step this section used to describe in prose is a command that files the record itself.
@@ -576,8 +601,8 @@ time from 21:36Z. Repaired at 21:48:59Z with
 partition on any topic was below its log start, partition 6 was the next closest, at
 152,000 committed against a log start of 62,436.
 
-Cause: the per-run bound was below the arrival rate, which is now fixed at a default of
-200,000 (~3.6x measured). Not a retention change: 512 MiB stands, and the trigger for
+Cause: the per-run bound was below the arrival rate, which was fixed at a default of
+200,000 (~3.6x measured; raised to 600,000 on 2026-11-25, §1). Not a retention change: 512 MiB stands, and the trigger for
 revisiting it is in §3.
 
 ---

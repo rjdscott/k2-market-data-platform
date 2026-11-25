@@ -148,7 +148,7 @@ with DAG(
             type=["null", "integer"],
             minimum=0,
             description="--max-offsets-per-partition for this run; 0 reads to latest. "
-            "Default 200000 (docker/lake/ingest.py).",
+            "Default 600000 (docker/lake/ingest.py).",
         ),
     },
     **COMMON,
