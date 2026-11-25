@@ -977,8 +977,9 @@ services:
   # REST API rather than from in-process counters: Prefect runs each job in a
   # subprocess that exits long before Prometheus scrapes it. A separate service,
   # not a sidecar in prefect-worker, so a worker crash still leaves the rising
-  # commit age visible. Reuses the worker image, which already carries
-  # prometheus-client, so it costs no extra build.
+  # commit age visible. Its own pinned image (docker/lake-metrics/) since
+  # ADR-034, so it outlives whichever orchestrator runs the jobs; until then it
+  # borrowed the Prefect worker image for its prometheus-client.
   #
   # NOT the Spark image, even though docker/lake/*.py otherwise runs there:
   # reading the catalog through PyIceberg needs a FileIO, and
@@ -988,24 +989,25 @@ services:
   # minio-data is mounted read-only purely so `os.statvfs` can report free space
   # on the filesystem the lake actually lands on. Nothing reads the objects.
   lake-metrics:
-    image: k2-prefect-worker:3-python3.12  # built by the prefect-worker service
+    build:
+      context: .
+      dockerfile: docker/lake-metrics/Dockerfile
+    image: k2-lake-metrics:3.12.16  # local tag after build: the Python it runs
     container_name: k2-lake-metrics
     hostname: lake-metrics
     networks:
       - k2-net
     volumes:
-      - ./docker/lake:/opt/prefect/lake:ro
+      - ./docker/lake:/opt/lake:ro
       - minio-data:/minio-data:ro
     environment:
       K2_LAKE_CATALOG_URI: http://lakekeeper:8181/catalog
       K2_LAKE_WAREHOUSE: k2
       K2_LAKE_DISK_PATH: /minio-data
-    command: ["python", "/opt/prefect/lake/metrics.py", "--serve"]
+    command: ["python", "/opt/lake/metrics.py", "--serve"]
     depends_on:
       lakekeeper:
         condition: service_healthy
-      prefect-worker:
-        condition: service_started  # only for the image build
     deploy:
       resources:
         limits:
