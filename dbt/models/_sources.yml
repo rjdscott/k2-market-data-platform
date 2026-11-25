@@ -41,6 +41,59 @@ sources:
   database: lake
   schema: gold
   tables:
+  - name: ohlcv_1m
+    description: OHLCV 1m candles from gold.trades, one row per (exchange, canonical_symbol, bucket), replaced when a late trade lands in the bucket.
+    config:
+      meta:
+        contract: contracts/market-analytics/candles/gold.ohlcv_1m.odcs.yaml
+        owner: analytics-team
+        read_by:
+        - market_analytics.delayed_candles.ohlcv_delayed_20m
+    columns:
+    - name: exchange
+      data_type: varchar
+    - name: canonical_symbol
+      data_type: varchar
+    - name: window_start
+      data_type: timestamp(6) with time zone
+      description: Bucket start, UTC. The bucket is the table (1m, 5m, 1h, 1d)
+    - name: open_e8
+      data_type: bigint
+      description: First trade by (exchange_ts, recv_ts_ns), fixed point 1e-8
+    - name: high_e8
+      data_type: bigint
+    - name: low_e8
+      data_type: bigint
+    - name: close_e8
+      data_type: bigint
+      description: Last trade by (exchange_ts, recv_ts_ns)
+    - name: volume
+      data_type: decimal(38,10)
+      description: Sum of qty, base currency, exact
+    - name: quote_volume
+      data_type: decimal(38,10)
+      description: Sum of price x qty, quote currency, exact
+    - name: trade_count
+      data_type: bigint
+    - name: open_time
+      data_type: timestamp(6) with time zone
+      description: exchange_ts of the first trade in the bucket
+    - name: close_time
+      data_type: timestamp(6) with time zone
+      description: exchange_ts of the last trade in the bucket
+    - name: src_snapshot_id
+      data_type: bigint
+      description: The gold.trades snapshot this bucket was computed from. Rows for a bucket are replaced, never appended, when later trades land in it
+    - name: computed_at
+      data_type: timestamp(6) with time zone
+    data_tests:
+    - dbt_expectations.expect_compound_columns_to_be_unique:
+        arguments:
+          column_list:
+          - exchange
+          - canonical_symbol
+          - window_start
+          row_condition: window_start >= current_timestamp - interval '6' hour
   - name: trades
     description: 'Canonical trades: the venue_replay = false rows of silver, one to one, keyed by (exchange, canonical_symbol, trade_id).'
     config:
@@ -49,7 +102,6 @@ sources:
         owner: analytics-team
         read_by:
         - market_analytics.candles.ohlcv_1m
-        - market_analytics.delayed_candles.ohlcv_delayed_20m
         - market_analytics.venue_quality.venue_quality_scorecard
       loaded_at_field: ingest_ts
       freshness:

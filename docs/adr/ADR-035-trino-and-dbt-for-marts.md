@@ -183,13 +183,23 @@ and the whole table stays the nightly Spark audit's, `duplicate_identifiers` in
 limit: the 1-minute candles and the venue scorecard each aggregate all of `gold.trades` on every
 build, and both passed on the live stack (`dbt build --selector market_analytics`, 2026-11-25).
 
-**Two things landed differently from the Decision.**
+**The delayed product is a view over `lake.gold.ohlcv_1m`, as decided, with one cut the
+Decision did not name.** `market_analytics.delayed_candles.ohlcv_delayed_20m`, in its own
+product and schema, shows a candle once its whole minute ended 20 minutes before the query
+(`window_start <= current_timestamp - INTERVAL '21' MINUTE`) and only if it is older than its
+venue's newest minute in the lake (the horizon). `docker/lake/gold.py` MERGEs every minute an
+ingest batch touches, recomputed over all of `gold.trades`, so the newest minute is the one an
+ingest may have read part of, and it is rewritten when the rest lands; a 20-minute predicate
+alone would serve it as final whenever the ingest stalls for more than 20 minutes. The horizon
+is per venue, so a lagging venue holds back only itself. A first version read the hourly mart
+`market_analytics.candles.ohlcv_1m` instead and served that build's partial last minutes once
+they passed the cut, with fewer trades than the lake held (found in review, 2026-11-25); it
+was replaced before merge. On the stack every served candle of the last hour then had the
+trade count a recount of `lake.gold.trades` gives (the command is in
+[`dbt/README.md`](../../dbt/README.md), 2026-11-25).
 
-- The delayed product is a view over the 1-minute mart, `market_analytics.candles.ohlcv_1m`,
-  not over `lake.gold`, in its own product and schema
-  (`market_analytics.delayed_candles.ohlcv_delayed_20m`). It is as current as that mart's last
-  hourly build, not as the lake: always at least 20 minutes old, and at most the build's age
-  older. It shows a candle once its whole minute ended 20 minutes before the query.
+**One thing landed differently from the Decision.**
+
 - Who maintains mart tables, left open above, is the domain's own writer through Trino:
   `dbt_marts` runs `expire_snapshots` and then `remove_orphan_files` at 7 days as `dbt_<domain>`,
   once a day (`dbt/macros/expire_mart_snapshots.sql`). Spark's `maintenance.py` is not taught the

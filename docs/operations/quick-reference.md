@@ -201,8 +201,9 @@ docker exec k2-trino trino --user dbt_market_analytics --execute 'CREATE TABLE r
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM market_analytics'
 #   "candles" "delayed_candles" "information_schema" "staging" "system" "venue_quality"
 docker exec k2-trino trino --execute 'DESCRIBE market_analytics.venue_quality.venue_quality_scorecard'
-#   exchange, utc_date, trades, trades_after_gap, trade_ids_missing, trades_gap_unknown,
-#   audit_checks, audit_checks_failed, records_lost
+#   exchange, utc_date, trades, trades_after_gap, trade_ids_missing, trades_gap_unknown, day_audits,
+#   day_audits_failed, whole_table_audits, whole_table_audits_failed, raw_frames_lost,
+#   trade_records_lost, book_records_lost
 docker exec k2-trino trino --execute \
   "SELECT max(close_time) <= current_timestamp - INTERVAL '20' MINUTE FROM market_analytics.delayed_candles.ohlcv_delayed_20m"
 #   "true"

@@ -135,7 +135,7 @@ such as `candles`. [`contracts/domains.yaml`](../../contracts/domains.yaml) list
 belong to these domains as owners and still live in `k2` ([chapter 18](18-data-mesh.md)). Every
 domain warehouse is empty until its first mart. `market_analytics` has three, each in its
 product's schema: `candles.ohlcv_1m`, the 1-minute candles; `delayed_candles.ohlcv_delayed_20m`,
-a view of them without the newest 20 minutes; and `venue_quality.venue_quality_scorecard`, per
+a view of the lake's own candles without the newest 20 minutes; and `venue_quality.venue_quality_scorecard`, per
 venue and day, how complete the lake is ([`dbt/`](../../dbt/README.md)).
 
 One entry in `domains.yaml` gives a domain its whole fence. `make generate` runs
@@ -255,11 +255,13 @@ SELECT exchange, canonical_symbol, window_start FROM lake.gold.ohlcv_1m
 WHERE window_start < current_timestamp - INTERVAL '20' MINUTE
 ```
 
-The product that shipped, `market_analytics.delayed_candles.ohlcv_delayed_20m`, is a view over
-the domain's own 1-minute mart instead, so it is as current as that mart's last hourly build. It
-shows a candle once its whole minute ended 20 minutes before the query, so no trade in it is
-younger than 20 minutes (`window_start <= current_timestamp - INTERVAL '21' MINUTE`,
-[`dbt/`](../../dbt/README.md)). It is what a delayed-data entitlement will be limited to.
+The product that shipped, `market_analytics.delayed_candles.ohlcv_delayed_20m`, is that view
+built by dbt, with two cuts. It shows a candle once its whole minute ended 20 minutes before the
+query, so no trade in it is younger than 20 minutes (`window_start <= current_timestamp -
+INTERVAL '21' MINUTE`), and only before its venue's newest minute in the lake. The ingest
+rewrites a minute when more of its trades land, so the newest one may be partial; without the
+second cut a stalled ingest would let it through as final ([`dbt/`](../../dbt/README.md)). It is
+what a delayed-data entitlement will be limited to.
 
 Trino checks a view's base tables against the view's owner, not its reader: a definer view. Across
 domains, that needs the owner to have `all` on each base table's catalog. A read-only catalog

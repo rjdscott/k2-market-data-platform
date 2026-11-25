@@ -1,9 +1,10 @@
 models:
   - name: ohlcv_delayed_20m
     description: >-
-      market_analytics.candles.ohlcv_1m without the newest 20 minutes, one row per
-      (exchange, canonical_symbol, window_start): a candle once its minute ended at least 20
-      minutes ago. A view (ADR-035), read through Trino only. Product delayed-candles,
+      lake.gold.ohlcv_1m without the newest 20 minutes, one row per (exchange,
+      canonical_symbol, window_start): a candle once its minute ended at least 20 minutes ago
+      and before the venue's newest minute in the lake, which can still grow. A view
+      (ADR-035), read through Trino only. Product delayed-candles,
       contracts/market-analytics/delayed-candles/product.yaml.
     columns:
       - name: exchange
@@ -11,7 +12,7 @@ models:
       - name: canonical_symbol
         data_tests: [not_null]
       - name: window_start
-        description: Bucket start, UTC; at least 21 minutes before the query's current_timestamp.
+        description: Bucket start, UTC; at least 21 minutes before the query's current_timestamp, and before the venue's newest minute in the lake.
         data_tests: [not_null]
     data_tests:
       # The grain, as the contract declares it; scripts/dbt_manifest_check.py requires this test.
@@ -26,24 +27,69 @@ models:
             expression: close_time <= current_timestamp - interval '20' minute
 
 unit_tests:
-  # Made-up candles, and "now" fixed by overriding dbt's current_timestamp() macro.
+  # Made-up candles (venues x and y), and "now" fixed by overriding dbt's current_timestamp().
+  - name: ohlcv_delayed_20m_hides_the_newest_minute_the_lake_has
+    description: >-
+      Hours after the fact, the venue's newest minute is still hidden: the next ingest can
+      add trades to it. The minutes before it are shown.
+    model: ohlcv_delayed_20m
+    overrides:
+      macros:
+        current_timestamp: "timestamp '2001-01-01 12:00:00.000000 UTC'"
+    given:
+      - input: ref('stg_gold__ohlcv_1m')
+        rows:
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:00:00.000000 UTC", trade_count: 1}
+          - {exchange: x, canonical_symbol: CCC/BBB, window_start: "2001-01-01 00:01:00.000000 UTC", trade_count: 2}
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:02:00.000000 UTC", trade_count: 3}
+    expect:
+      rows:
+        - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:00:00.000000 UTC", trade_count: 1}
+        - {exchange: x, canonical_symbol: CCC/BBB, window_start: "2001-01-01 00:01:00.000000 UTC", trade_count: 2}
+
   - name: ohlcv_delayed_20m_shows_a_minute_once_it_ended_20_minutes_ago
     description: >-
       At 01:00:00, the minute starting 00:39 ended at 00:40, exactly 20 minutes before, and
-      is shown; the minute starting 00:40 has not ended 20 minutes before and is hidden, and
-      so is every later one. Older candles pass unchanged.
+      is shown; the minute starting 00:40 has not ended 20 minutes before and is hidden. The
+      lake has seen later trades (00:58), so the horizon does not decide here.
     model: ohlcv_delayed_20m
     overrides:
       macros:
         current_timestamp: "timestamp '2001-01-01 01:00:00.000000 UTC'"
     given:
-      - input: ref('ohlcv_1m')
+      - input: ref('stg_gold__ohlcv_1m')
         rows:
-          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2000-12-31 23:00:00.000000 UTC", trade_count: 1, close_time: "2000-12-31 23:00:30.000000 UTC"}
-          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:39:00.000000 UTC", trade_count: 2, close_time: "2001-01-01 00:39:59.999999 UTC"}
-          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:40:00.000000 UTC", trade_count: 3, close_time: "2001-01-01 00:40:00.000000 UTC"}
-          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:59:00.000000 UTC", trade_count: 4, close_time: "2001-01-01 00:59:10.000000 UTC"}
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2000-12-31 23:00:00.000000 UTC", trade_count: 1}
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:39:00.000000 UTC", trade_count: 2}
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:40:00.000000 UTC", trade_count: 3}
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:58:00.000000 UTC", trade_count: 4}
     expect:
       rows:
         - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2000-12-31 23:00:00.000000 UTC", trade_count: 1}
         - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:39:00.000000 UTC", trade_count: 2}
+
+  - name: ohlcv_delayed_20m_a_stalled_venue_shows_nothing_past_its_horizon
+    description: >-
+      At 03:00, venue x's newest candle is from 01:00, two hours old: x shows up to 00:59 and
+      never its 01:00 minute, however old. Venue y is current (newest 02:50): the delay hides
+      its 02:40, and x's stall does not hold it back.
+    model: ohlcv_delayed_20m
+    overrides:
+      macros:
+        current_timestamp: "timestamp '2001-01-01 03:00:00.000000 UTC'"
+    given:
+      - input: ref('stg_gold__ohlcv_1m')
+        rows:
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:58:00.000000 UTC", trade_count: 1}
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:59:00.000000 UTC", trade_count: 2}
+          - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 01:00:00.000000 UTC", trade_count: 3}
+          - {exchange: y, canonical_symbol: AAA/BBB, window_start: "2001-01-01 02:00:00.000000 UTC", trade_count: 4}
+          - {exchange: y, canonical_symbol: AAA/BBB, window_start: "2001-01-01 02:39:00.000000 UTC", trade_count: 5}
+          - {exchange: y, canonical_symbol: AAA/BBB, window_start: "2001-01-01 02:40:00.000000 UTC", trade_count: 6}
+          - {exchange: y, canonical_symbol: AAA/BBB, window_start: "2001-01-01 02:50:00.000000 UTC", trade_count: 7}
+    expect:
+      rows:
+        - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:58:00.000000 UTC", trade_count: 1}
+        - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:59:00.000000 UTC", trade_count: 2}
+        - {exchange: y, canonical_symbol: AAA/BBB, window_start: "2001-01-01 02:00:00.000000 UTC", trade_count: 4}
+        - {exchange: y, canonical_symbol: AAA/BBB, window_start: "2001-01-01 02:39:00.000000 UTC", trade_count: 5}

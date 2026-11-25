@@ -225,17 +225,17 @@ def test_dbt_sources_carry_trino_types_the_identifier_check_and_freshness():
     files = generate.render(ROOT)
     audit, gold = yaml.safe_load(files[generate.DBT_SOURCES])["sources"]
     assert (gold["name"], gold["database"], gold["schema"]) == ("gold", "lake", "gold")
-    (trades,) = gold["tables"]
+    ohlcv, trades = gold["tables"]
     types = {c["name"]: c["data_type"] for c in trades["columns"]}
     assert types["exchange_ts"] == "timestamp(6) with time zone" and types["price_e8"] == "bigint" and types["src_index"] == "integer"
     assert list(types) == list(ddl.parse(ROOT / cli.LAKE_SQL)["gold.trades"].columns)
     assert trades["config"]["loaded_at_field"] == "ingest_ts"
     assert trades["config"]["freshness"] == {"error_after": {"count": 30, "period": "minute"}}
-    assert trades["config"]["meta"]["read_by"] == [
-        "market_analytics.candles.ohlcv_1m",
-        "market_analytics.delayed_candles.ohlcv_delayed_20m",
-        "market_analytics.venue_quality.venue_quality_scorecard",
-    ]
+    assert trades["config"]["meta"]["read_by"] == ["market_analytics.candles.ohlcv_1m", "market_analytics.venue_quality.venue_quality_scorecard"]
+    # The delayed view reads the lake's candles (ADR-035), checked on their identifier fields, with no freshness declared.
+    assert ohlcv["config"]["meta"]["read_by"] == ["market_analytics.delayed_candles.ohlcv_delayed_20m"]
+    assert ohlcv["data_tests"][0]["dbt_expectations.expect_compound_columns_to_be_unique"]["arguments"]["column_list"] == ["exchange", "canonical_symbol", "window_start"]
+    assert "freshness" not in ohlcv["config"]
     (test,) = trades["data_tests"]
     args = test["dbt_expectations.expect_compound_columns_to_be_unique"]["arguments"]
     assert args == {"column_list": ["exchange", "canonical_symbol", "trade_id"], "row_condition": "exchange_ts >= current_timestamp - interval '6' hour"}
@@ -254,6 +254,7 @@ def test_one_dbt_selector_per_domain_with_marts():
     assert selector["definition"]["union"] == [
         {"method": "fqn", "value": "market_analytics"},
         {"method": "source", "value": "audit.checks"},
+        {"method": "source", "value": "gold.ohlcv_1m"},
         {"method": "source", "value": "gold.trades"},
     ]
 

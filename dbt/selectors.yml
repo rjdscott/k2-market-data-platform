@@ -9,4 +9,6 @@ selectors:
     - method: source
       value: audit.checks
     - method: source
+      value: gold.ohlcv_1m
+    - method: source
       value: gold.trades

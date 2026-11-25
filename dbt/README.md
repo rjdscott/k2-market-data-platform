@@ -33,7 +33,8 @@ table, two unit tests, six data tests) in 16.2 s, of which the table, a CTAS ove
 `lake.gold.trades`, took 11.8 s. A second build, 22 minutes later, took 9.8 s, the table 6.8 s.
 `dbt source freshness` passed in 1.7 s. With the three marts, later that day: 25 of 25 (three
 views, two tables, five unit tests, fifteen data tests) in 18.4 s, the two tables, each over all
-of `lake.gold.trades` and built at once, in 13.4 s and 12.8 s. `on_table_exists: replace` makes a rebuild `CREATE OR
+of `lake.gold.trades` and built at once, in 13.4 s and 12.8 s; with the delayed view over the
+lake's candles, 30 of 30 (four views, two tables, eight unit tests, sixteen data tests) in 12.8 s. `on_table_exists: replace` makes a rebuild `CREATE OR
 REPLACE`: one Iceberg table whose snapshots are its builds, each by `dbt_market_analytics`:
 
 ```bash
@@ -143,24 +144,60 @@ domain's writer in the tested model's catalog and schema, creating and dropping 
 
 ## `market_analytics.delayed_candles.ohlcv_delayed_20m`
 
-ADR-035's delayed product, in a product of its own (`contracts/market-analytics/delayed-candles/`)
-so it has its own schema, which the entitlements phase can grant on its own: a view over
-`ohlcv_1m`, same columns, same grain `(exchange, canonical_symbol, window_start)`. It shows a
-candle once its whole minute, `[window_start, window_start + 1 minute)`, ended at least 20
-minutes before the query, so no trade in it is younger than 20 minutes:
-`window_start <= current_timestamp - INTERVAL '21' MINUTE`, on `window_start` alone so it prunes
-the 1m table's month partitions. It is as current as the 1m mart's last build, not as the lake.
+ADR-035's delayed product, as its Decision has it: a view over the lake's own candles,
+`lake.gold.ohlcv_1m` (through `staging.stg_gold__ohlcv_1m`), in a product of its own
+(`contracts/market-analytics/delayed-candles/`) so it has its own schema, which the
+entitlements phase can grant on its own. Same columns as the lake table without its lineage
+pair, same grain `(exchange, canonical_symbol, window_start)`, and as current as the lake.
 Readable through Trino only, like every view ([ADR-035](../docs/adr/ADR-035-trino-and-dbt-for-marts.md)).
 
-`now` is dbt's cross-database `current_timestamp()`, so its unit test overrides that macro and
-puts "now" at a fixed made-up instant: the minute that ended exactly 20 minutes before is shown,
-the next one is not (it failed when the predicate was changed to 20 minutes). Its data tests: the
-grain, and the delay itself on whatever the view returns when the test runs.
+A candle is served once both hold, each on `window_start` alone:
+
+- **the delay**: its whole minute, `[window_start, window_start + 1 minute)`, ended at least 20
+  minutes before the query, so no trade in it is younger than 20 minutes
+  (`window_start <= current_timestamp - INTERVAL '21' MINUTE`, which also prunes the month
+  partitions);
+- **the horizon**: it is older than its venue's newest minute in the lake
+  (`window_start < max(window_start)` per exchange). `docker/lake/gold.py` MERGEs every minute an
+  ingest batch touches, recomputed over all of `gold.trades`, so the newest minute is the one an
+  ingest may have read only part of, and it is rewritten when its later trades land. Every
+  earlier minute was complete when the ingest read past it. A stalled ingest stops the horizon,
+  so the view never serves a minute the lake has not finished.
+
+The horizon is per venue: a venue whose capture or ingest lags holds back only its own candles.
+Not covered: a trade delivered after its minute was passed (the view then shows the lake's
+corrected candle), and partitions read to different points by a capped catch-up ingest.
+
+The first version read this domain's hourly `candles.ohlcv_1m` instead. That mart is a snapshot
+of the lake at its build, whose newest minutes are partial, and they crossed the 20-minute cut
+later and were served with fewer trades than the lake held (found in review, 2026-11-25).
+
+`now` is dbt's cross-database `current_timestamp()`, which the unit tests override to fix it
+on made-up candles: the venue's newest minute is hidden however old it is; the minute that ended
+exactly 20 minutes before is shown and the next one is not; a venue stalled for two hours shows
+nothing past its horizon while a current one is unaffected. Each failed when the model was
+broken that way (no horizon; 20 instead of 21; one horizon for all venues). Its data tests: the
+grain, and the delay itself on whatever the view returns.
+
+On the stack, every served candle of the last hour has the trade count a recount of
+`lake.gold.trades` gives, and no venue's newest served minute is its newest minute in the lake
+(2026-11-25, after the view was rebuilt):
 
 ```bash
-docker exec k2-trino trino --execute "SELECT max(close_time) <= current_timestamp - INTERVAL '20' MINUTE
-  FROM market_analytics.delayed_candles.ohlcv_delayed_20m"
-#   "true"     (2026-11-25)
+docker exec -i k2-trino trino <<'SQL'
+WITH served AS (SELECT exchange, canonical_symbol, window_start, trade_count
+  FROM market_analytics.delayed_candles.ohlcv_delayed_20m WHERE window_start >= current_timestamp - INTERVAL '60' MINUTE),
+recount AS (SELECT exchange, canonical_symbol, date_trunc('minute', exchange_ts) AS window_start, count(*) AS n
+  FROM lake.gold.trades WHERE exchange_ts >= current_timestamp - INTERVAL '61' MINUTE GROUP BY 1, 2, 3)
+SELECT count(*) > 0, bool_and(s.trade_count = r.n), count_if(r.n IS NULL) = 0,
+       max(window_start) <= current_timestamp - INTERVAL '21' MINUTE
+FROM served s LEFT JOIN recount r USING (exchange, canonical_symbol, window_start)
+SQL
+#   "true","true","true","true"      some served, all equal, none without trades, the delay holds
+docker exec k2-trino trino --execute "SELECT bool_and(v.newest < l.newest)
+  FROM (SELECT exchange, max(window_start) AS newest FROM market_analytics.delayed_candles.ohlcv_delayed_20m GROUP BY 1) v
+  JOIN (SELECT exchange, max(window_start) AS newest FROM lake.gold.ohlcv_1m GROUP BY 1) l USING (exchange)"
+#   "true"                           every venue's newest lake minute is held back
 ```
 
 ## `market_analytics.venue_quality.venue_quality_scorecard`
@@ -175,15 +212,19 @@ estimated; each column is a count of something the lake already records.
 | `trades_after_gap` | `seq_gap` | trades whose previous trade id for the symbol was more than one below: trades the archive never received came before them |
 | `trade_ids_missing` | `missing_before` | how many trade ids those gaps leave out |
 | `trades_gap_unknown` | `seq_gap IS NULL` | trades with no earlier trade of the symbol in silver's lookback, where a gap is unknowable |
-| `audit_checks` | `audit.checks`, `job = 'maintenance'`, by the UTC date of `run_ts` | the nightly audits whose scope is one of the venue's tables or topic partitions, `silver_flags` left out (it publishes rates and cannot fail) |
-| `audit_checks_failed` | the same, `NOT passed` | of those, the failed ones, a check that raised included |
-| `records_lost` | `job = 'ingest'`, `check_name = 'offset_gap'`, `observed` | records Redpanda evicted before the lake read them, which an `--accept-data-loss` ingest recorded |
+| `day_audits` | `audit.checks`, `job = 'maintenance'`, day-scoped checks, under the day before the run | audits of that day on the venue's tables: `bronze_schema_drift`, which samples the 24 hours before the run, 21 of them in the previous UTC day at the 03:00 schedule (`ohlcv_parity` and `bars_parity` audit the previous day too, but their scopes are cross-venue) |
+| `day_audits_failed` | the same, `NOT passed` | of those, the failed ones, a check that raised included |
+| `whole_table_audits` | every other maintenance audit, under the day it ran | audits over the venue's whole tables or topic partitions as they stood at the run, `silver_flags` left out (it publishes rates and cannot fail). They are about every day to date, not the row's day alone |
+| `whole_table_audits_failed` | the same, `NOT passed` | of those, the failed ones |
+| `raw_frames_lost` | `job = 'ingest'`, `offset_gap` on `market.crypto.v3.raw.<venue>`, under the day of the ingest | raw frames Redpanda evicted before the lake read them; bronze, silver and `gold.trades` are decoded from these |
+| `trade_records_lost` | the same on `market.crypto.v3.trades.<venue>` | the typed trade records |
+| `book_records_lost` | the same on `market.crypto.v3.book.<venue>` | the typed book records |
 
 A check is a venue's when its scope names the venue as a whole token, in each of the shapes the
 lake writes (`lake.bronze.kraken_trade`, `lake.silver.trades_kraken`, `lake.gold.trades/kraken`,
 `market.crypto.v3.raw.kraken/7`); a cross-venue scope such as `lake.gold.trades` is no venue's,
-and the venues are those with trades. `regexp_like` is Trino's, so the model is tagged
-`regexp_like`; the rest is plain SQL.
+and the venues are those with trades. `regexp_like` and `split_part` are Trino's, so the model
+is tagged `regexp_like`; the rest is plain SQL.
 
 **Owned by `market-analytics`**, by ADR-044's rule that a mart joining two domains belongs to
 the one that consumes it: it joins market-capture's `audit.checks` with this domain's
@@ -195,12 +236,13 @@ filed under market-capture, whose tables most checks are about, until the platfo
 governance domain ADR-044 records as intent is decided; layer `audit` joined the contract
 schema's layers for it.
 
-Its tests: two unit tests on made-up venues (the UTC day edge, gaps and unknowable trades; each
-scope shape, a near-miss venue name, the rows that do not count, an audit-only day), each made to
-fail by breaking the model one way (a substring match, `silver_flags` counted, unknowable trades
-dropped, a left join, a day in another zone); the grain; and the counts nesting
-(`trades_after_gap + trades_gap_unknown <= trades`, `trades_after_gap <= trade_ids_missing`,
-`audit_checks_failed <= audit_checks`).
+Its tests: three unit tests on made-up venues (the UTC day edge, gaps and unknowable trades; each
+scope shape, a near-miss venue name, the rows that do not count, an audit-only day; the day each
+check is about and the losses by topic family), each made to fail by breaking the model one way (a
+substring match, `silver_flags` counted, unknowable trades dropped, a left join, a day in another
+zone, a day-scoped audit under its run date, the losses summed across families); the grain; and
+two things the data must hold that the SQL does not force: a gap trade leaves out at least one id
+(`trades_after_gap <= trade_ids_missing`), and no loss count is negative.
 
 ## Scheduled: the `dbt_marts` DAG
 
@@ -215,7 +257,9 @@ and the packages are the image's, installed from `package-lock.yml` at build tim
 (`K2_DBT_PACKAGES`). This directory is mounted read-only at `/opt/k2/dbt` in the scheduler and
 the dag-processor; cosmos runs each command in a temporary directory of symlinks to it, without
 `target/`, `logs/` or `package-lock.yml`, where dbt writes its own. A change to a model is live
-at the next parse; a change to `packages.yml` needs the image rebuilt.
+at the next parse; a change to `uv.lock`, `packages.yml` or `package-lock.yml` needs the image
+rebuilt, and `docker/airflow/tests/test_dbt_image.py` fails on an image behind them
+([runbook](../docs/runbooks/dbt-marts.md)).
 
 Once a day, in the 04:10 run, each domain's writer expires its marts' snapshots:
 

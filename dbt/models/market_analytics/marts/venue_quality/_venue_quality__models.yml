@@ -9,7 +9,10 @@ models:
         description: A venue that has at least one trade in gold.trades.
         data_tests: [not_null]
       - name: utc_date
-        description: The UTC date of the trade's exchange_ts, or of the check's run_ts.
+        description: >-
+          The UTC date of the trades' exchange_ts; of the day a day-scoped audit looked at
+          (the day before its run); of the run for a whole-table audit; of the ingest for
+          lost records.
         data_tests: [not_null]
       - name: trades
         description: Trades that day.
@@ -19,27 +22,35 @@ models:
         description: How many trade ids those gaps leave out (sum of missing_before); the trades never received, counted by their ids.
       - name: trades_gap_unknown
         description: Trades with no earlier trade of the symbol inside silver's lookback, so whether ids are missing before them is unknowable (seq_gap null).
-      - name: audit_checks
-        description: Maintenance audits run that day whose scope is one of the venue's tables or topic partitions, silver_flags left out.
-      - name: audit_checks_failed
+      - name: day_audits
+        description: Maintenance audits of this day on the venue's tables, run the next day (bronze_schema_drift; ohlcv_parity and bars_parity are day-scoped too, but cross-venue).
+      - name: day_audits_failed
         description: Of those, how many failed, a check that raised included.
-      - name: records_lost
-        description: Records Redpanda evicted before the lake read them, from the ingest's offset_gap rows that day on the venue's topics.
+      - name: whole_table_audits
+        description: Maintenance audits run this day over the venue's whole tables or topic partitions as they stood at the run (offset continuity, duplicates, parse and parity checks), silver_flags left out. Not about this day's trades alone.
+      - name: whole_table_audits_failed
+        description: Of those, how many failed, a check that raised included.
+      - name: raw_frames_lost
+        description: Raw frames (market.crypto.v3.raw.<venue>) Redpanda evicted before an ingest that day read them, from its offset_gap rows. bronze, silver and gold.trades are decoded from these.
+      - name: trade_records_lost
+        description: The same for the typed trade records (market.crypto.v3.trades.<venue>).
+      - name: book_records_lost
+        description: The same for the typed book records (market.crypto.v3.book.<venue>).
     data_tests:
       # The grain, as the contract declares it; scripts/dbt_manifest_check.py requires this test.
       - dbt_expectations.expect_compound_columns_to_be_unique:
           name: venue_quality_scorecard_unique_on_its_grain
           arguments:
             column_list: [exchange, utc_date]
-      # Every count is a part of the one beside it: a gap trade is a trade, it leaves out at
-      # least one id (lake.sql: missing_before is 0 when seq_gap is false, NULL with it), and a
-      # failed check is a check.
+      # What the data must hold and the SQL does not force: a gap trade leaves out at least one
+      # id (lake.sql: missing_before is 0 when seq_gap is false, NULL with it), and an
+      # offset_gap row counts records, never fewer than none.
       - dbt_expectations.expression_is_true:
-          name: venue_quality_scorecard_counts_nest
+          name: venue_quality_scorecard_gaps_and_losses_hold
           arguments:
             expression: >-
-              trades_after_gap + trades_gap_unknown <= trades and trades_after_gap <= trade_ids_missing
-              and audit_checks_failed <= audit_checks and records_lost >= 0
+              trades_after_gap <= trade_ids_missing
+              and raw_frames_lost >= 0 and trade_records_lost >= 0 and book_records_lost >= 0
 
 unit_tests:
   # Made-up venues (alpha, beta) and values, so the logic is tested and not the market.
@@ -60,16 +71,15 @@ unit_tests:
         rows: []
     expect:
       rows:
-        - {exchange: alpha, utc_date: 2001-01-01, trades: 3, trades_after_gap: 1, trade_ids_missing: 3, trades_gap_unknown: 1, audit_checks: 0, audit_checks_failed: 0, records_lost: 0}
-        - {exchange: alpha, utc_date: 2001-01-02, trades: 1, trades_after_gap: 1, trade_ids_missing: 2, trades_gap_unknown: 0, audit_checks: 0, audit_checks_failed: 0, records_lost: 0}
-        - {exchange: beta, utc_date: 2001-01-01, trades: 1, trades_after_gap: 0, trade_ids_missing: 0, trades_gap_unknown: 0, audit_checks: 0, audit_checks_failed: 0, records_lost: 0}
+        - {exchange: alpha, utc_date: 2001-01-01, trades: 3, trades_after_gap: 1, trade_ids_missing: 3, trades_gap_unknown: 1, whole_table_audits: 0, raw_frames_lost: 0}
+        - {exchange: alpha, utc_date: 2001-01-02, trades: 1, trades_after_gap: 1, trade_ids_missing: 2, trades_gap_unknown: 0, whole_table_audits: 0, raw_frames_lost: 0}
+        - {exchange: beta, utc_date: 2001-01-01, trades: 1, trades_after_gap: 0, trade_ids_missing: 0, trades_gap_unknown: 0, whole_table_audits: 0, raw_frames_lost: 0}
 
   - name: venue_quality_scorecard_files_a_check_under_the_venue_its_scope_names
     description: >-
       A scope names a venue as a whole token, in each of the four shapes the lake writes;
       alphabet is not alpha, and a cross-venue scope is no venue's. silver_flags, operator
-      rows and replay rows are not counted; an offset_gap row adds its records; a check on a
-      day without trades still makes a row.
+      rows and replay rows are not counted; a check on a day without trades still makes a row.
     model: venue_quality_scorecard
     given:
       - input: ref('stg_gold__trades')
@@ -87,11 +97,32 @@ unit_tests:
           - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: maintenance, check_name: duplicate_identifiers, scope: lake.gold.trades, passed: false, observed: 1}
           - {run_ts: "2001-01-01 04:00:00.000000 UTC", job: operator, check_name: manual_purge, scope: lake.bronze.alpha_trade, passed: true, observed: 40}
           - {run_ts: "2001-01-01 05:00:00.000000 UTC", job: replay, check_name: replay, scope: market.crypto.v3.raw.alpha/1, passed: true, observed: 40}
-          - {run_ts: "2001-01-01 06:00:00.000000 UTC", job: ingest, check_name: offset_gap, scope: market.crypto.v3.raw.alpha/7, passed: false, observed: 11}
-          - {run_ts: "2001-01-01 06:00:00.000000 UTC", job: ingest, check_name: offset_gap, scope: market.crypto.v3.trades.alpha/2, passed: false, observed: 4}
           - {run_ts: "2001-01-02 03:00:00.000000 UTC", job: maintenance, check_name: kraken_checksum, scope: lake.silver.book_beta, passed: false, observed: 2}
     expect:
       rows:
-        - {exchange: alpha, utc_date: 2001-01-01, trades: 1, audit_checks: 4, audit_checks_failed: 1, records_lost: 15}
-        - {exchange: beta, utc_date: 2001-01-01, trades: 1, audit_checks: 0, audit_checks_failed: 0, records_lost: 0}
-        - {exchange: beta, utc_date: 2001-01-02, trades: 0, audit_checks: 1, audit_checks_failed: 1, records_lost: 0}
+        - {exchange: alpha, utc_date: 2001-01-01, trades: 1, whole_table_audits: 4, whole_table_audits_failed: 1, day_audits: 0}
+        - {exchange: beta, utc_date: 2001-01-01, trades: 1, whole_table_audits: 0, whole_table_audits_failed: 0, day_audits: 0}
+        - {exchange: beta, utc_date: 2001-01-02, trades: 0, whole_table_audits: 1, whole_table_audits_failed: 1, day_audits: 0}
+
+  - name: venue_quality_scorecard_files_each_check_under_the_day_it_is_about
+    description: >-
+      One maintenance run on 2001-01-03 at 03:00: its schema-drift audit sampled the 24 hours
+      before, so it is filed under 2001-01-02; its whole-table audits under the run's own day.
+      Lost records are split by topic family and filed under the ingest's day.
+    model: venue_quality_scorecard
+    given:
+      - input: ref('stg_gold__trades')
+        rows:
+          - {exchange: alpha, exchange_ts: "2001-01-02 10:00:00.000000 UTC", seq_gap: false, missing_before: 0}
+      - input: ref('stg_audit__checks')
+        rows:
+          - {run_ts: "2001-01-03 03:00:00.000000 UTC", job: maintenance, check_name: bronze_schema_drift, scope: lake.bronze.alpha_trade, passed: false, observed: 2}
+          - {run_ts: "2001-01-03 03:00:00.000000 UTC", job: maintenance, check_name: duplicate_identifiers, scope: lake.bronze.alpha_trade, passed: true, observed: 0}
+          - {run_ts: "2001-01-02 06:00:00.000000 UTC", job: ingest, check_name: offset_gap, scope: market.crypto.v3.raw.alpha/7, passed: false, observed: 11}
+          - {run_ts: "2001-01-02 06:00:00.000000 UTC", job: ingest, check_name: offset_gap, scope: market.crypto.v3.raw.alpha/8, passed: false, observed: 1}
+          - {run_ts: "2001-01-02 06:00:00.000000 UTC", job: ingest, check_name: offset_gap, scope: market.crypto.v3.trades.alpha/2, passed: false, observed: 4}
+          - {run_ts: "2001-01-02 06:00:00.000000 UTC", job: ingest, check_name: offset_gap, scope: market.crypto.v3.book.alpha/3, passed: false, observed: 30}
+    expect:
+      rows:
+        - {exchange: alpha, utc_date: 2001-01-02, trades: 1, day_audits: 1, day_audits_failed: 1, whole_table_audits: 0, raw_frames_lost: 12, trade_records_lost: 4, book_records_lost: 30}
+        - {exchange: alpha, utc_date: 2001-01-03, trades: 0, day_audits: 0, day_audits_failed: 0, whole_table_audits: 1, raw_frames_lost: 0, trade_records_lost: 0, book_records_lost: 0}

@@ -62,8 +62,8 @@ hour at minute 10 by the Airflow DAG `dbt_marts` ([`dbt/README.md`](../../dbt/RE
 | Mart | Built as | Grain, one row per | What it is |
 |---|---|---|---|
 | `market_analytics.candles.ohlcv_1m` | table | `(exchange, canonical_symbol, window_start)` | `gold.ohlcv_1m`'s grain and columns without `src_snapshot_id` and `computed_at`, from `gold.trades` |
-| `market_analytics.delayed_candles.ohlcv_delayed_20m` | view | the same | that mart's candles whose minute ended at least 20 minutes before the query |
-| `market_analytics.venue_quality.venue_quality_scorecard` | table | `(exchange, utc_date)` | per venue and UTC day: trades, trades after a trade-id gap and the ids missing, and that day's lake checks on the venue, failed checks and records lost |
+| `market_analytics.delayed_candles.ohlcv_delayed_20m` | view | the same | `lake.gold.ohlcv_1m`'s candles whose minute ended at least 20 minutes before the query and before the venue's newest minute in the lake |
+| `market_analytics.venue_quality.venue_quality_scorecard` | table | `(exchange, utc_date)` | per venue and UTC day: trades, trades after a trade-id gap and the ids missing; the venue's audits of that day (run the next day) and the whole-table audits run that day, with their failures; raw frames, trade and book records Redpanda evicted before the ingest read them |
 
 | Table | Grain — one row per … | Partition / sort | Time column (unit, zone) | Symbol columns | Identifier (dedup key) | Populated by |
 |---|---|---|---|---|---|---|
