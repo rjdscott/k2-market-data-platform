@@ -170,8 +170,7 @@ nothing until the dbt marts land. The session time zone is the client's: the CLI
 container sends UTC, a client on the host sends the host's zone unless told (`--timezone UTC`).
 
 ```bash
-# VERIFY: each command below against k2-trino on the live stack (written from the
-# 2026-11-25 runs on a throwaway container with the same docker/trino/etc).
+# Each command below ran against k2-trino on the live stack on 2026-11-25.
 docker exec k2-trino trino --execute 'SHOW CATALOGS'
 #   "lake" "marts" "system"
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM lake'
