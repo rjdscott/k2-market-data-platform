@@ -104,7 +104,7 @@ Spark text, and both are written in the model:
 
 - `quote_volume`: the lake holds it with 6 decimals in a `decimal(38,10)` column: no
   2026-11-24 bucket has a seventh. Spark's decimal rules type `gold.py`'s `DECIMAL(38,10)`
-  product `decimal(38,6)` (`typeof` of the product on Spark 3.5.5, 2026-11-25), which explains
+  product `decimal(38,6)` (Spark 3.5.5, 2026-11-25: `spark-sql -e "select typeof(cast(1 as decimal(38,10)) * cast(1 as decimal(38,10)))"` in `k2-spark-iceberg` prints `decimal(38,6)`), which explains
   it. Ported verbatim, the product fails in Trino with `Decimal overflow`; the model multiplies
   the `_e8` integers as `decimal(38,0)` and rounds the quotient half up at 6 decimals. So
   rounded, every 2026-11-24 bucket matches the lake (the parity run below); rounded at 10

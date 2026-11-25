@@ -256,7 +256,7 @@ first two, and the third where it is as cheap.
 **`quote_volume` joined, and the lake's is not exact.** Both engines type it `decimal(38,10)`,
 but the lake holds 6 decimals where `lake.sql` calls the column exact: no 2026-11-24 bucket had
 a digit past the sixth. Spark's decimal rules type `gold.py`'s `DECIMAL(38,10)` product
-`decimal(38,6)` (`typeof` of the product on Spark 3.5.5, 2026-11-25), which explains it. The
+`decimal(38,6)` (Spark 3.5.5, 2026-11-25: `spark-sql -e "select typeof(cast(1 as decimal(38,10)) * cast(1 as decimal(38,10)))"` in `k2-spark-iceberg` prints `decimal(38,6)`), which explains it. The
 port rounds half up at 6 decimals on purpose and matched every bucket; rounding at 10 decimals
 does not match (both queries in [`dbt/README.md`](../../dbt/README.md)). Tolerance zero held;
 the comment is wrong.
