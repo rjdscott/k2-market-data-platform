@@ -585,7 +585,7 @@ tests:
               tier: cold
               topic: market.crypto.v3.raw.kraken
             exp_annotations:
-              summary: "market.crypto.v3.raw.kraken has had 1.3e+06 unread offsets for 30 minutes"
+              summary: "market.crypto.v3.raw.kraken has had 1.3M unread offsets for 30 minutes"
               description: |
                 The ingest's per-run cap is below what this topic receives per cycle,
                 or runs are slower than the 5-minute cadence. Check that the topic's
