@@ -122,7 +122,7 @@ Airflow limits are the plan's estimates until ADR-034's measured figures replace
   before any driver starts (`docker stats --no-stream k2-spark-iceberg`, 2026-08-26). The
   container was first sized for **two** drivers on top of that, the 03:00 maintenance
   run overlapping the 03:01 ingest tick, which is why `docker/lake/spark_conf.py` pins
-  the ingest heap at 768m instead of inheriting the image's 1 g, and why the `lake-ddl`
+  the ingest heap (768m then; 1536m since 2026-11-25, when the daily recompute outgrew it, see the comment there) instead of inheriting the image's 1 g, and why the `lake-ddl`
   one-shot sets `K2_LAKE_DRIVER_MEMORY: 512m` in its own 1 GiB container. Measured
   2026-08-26: ingest peak driver RSS **1,243 MiB** (plan 003, deployment gate), but
   compaction of `raw.messages` OOM'd at 768m twice, its rows are up to 5 MB each. So
