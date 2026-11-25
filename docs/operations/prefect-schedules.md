@@ -1,5 +1,7 @@
 # Prefect Schedules
 
+> **Retired at the Airflow cutover (ADR-034).** Airflow 3's `lake_ingest` and `lake_maintenance` run these jobs now; Prefect is stopped behind `--profile legacy` as the rollback. Operate the lake from [airflow-scheduling.md](../runbooks/airflow-scheduling.md); this page describes the rollback's schedules.
+
 **Verified 2026-08-27:** `docker exec k2-prefect-server prefect deployment ls` shows both
 deployments below on work pool `lake`; a fresh clone registers them at start.
 

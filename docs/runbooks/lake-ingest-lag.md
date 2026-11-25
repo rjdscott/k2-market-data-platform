@@ -127,6 +127,13 @@ curl -sG http://localhost:9090/api/v1/query \
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
   --max-offsets-per-partition 500000
 
+# The same run under Airflow (ADR-034), which takes the DAG's only slot, so no scheduled
+# run starts beside it, and can raise the driver heap too (airflow-scheduling.md §4).
+# Unset params keep the script's defaults. VERIFY: not yet run against the stack; check
+# that the run's `running:` log line ends in --max-offsets-per-partition=500000.
+docker exec k2-airflow-scheduler airflow dags trigger lake_ingest \
+  --conf '{"max_offsets_per_partition": 500000}'
+
 # Or bound by time instead of by count: resolved to offsets on the broker, so
 # the window means the same thing on every partition.
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
