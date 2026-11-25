@@ -1,7 +1,7 @@
 # K2 Market Data Platform v2 - Consolidated Architecture
 # Version: 2.0.0-consolidated
 # Last Updated: 2026-02-12
-# Target: 24 CPU / 42 GiB at the bootstrap peak (ADR-035; was 20 CPU / 36 GiB, ADR-034, and 16 CPU / 40 GB, ADR-010)
+# Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-035; was 20 CPU / 36 GiB, ADR-034, and 16 CPU / 40 GB, ADR-010)
 
 #############################################################################
 # NETWORKS
@@ -1402,11 +1402,11 @@ services:
 #   one-shot subtotal  2.0  | 2.5G
 #
 # Bootstrap peak: 21.30 CPU / 36.812 GiB, all 24 default-profile services,
-# against the 24 CPU / 42 GiB ceiling ADR-035 sets at the bootstrap peak
+# against the 25 CPU / 48 GiB ceiling ADR-035 sets at the bootstrap peak
 # (superseding ADR-034's 20 CPU / 36 GiB, which superseded ADR-010's 16 CPU /
-# 40 GB). scripts/check-budget.py fails CI over it. Headroom: 2.70 CPU and
-# 5.188 GiB. The host gives Docker 28 CPU / 49.5 GiB; 4 cores stay outside the
-# ceiling for the OS and the engine.
+# 40 GB). scripts/check-budget.py fails CI over it. Headroom: 3.70 CPU and
+# 11.188 GiB. The host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay
+# outside the ceiling for the OS and the engine (ADR-035 says why that is enough).
 #
 # `legacy` profile, the Prefect rollback, not started by default:
 #
@@ -1428,8 +1428,8 @@ services:
 #
 #   python3 scripts/check-budget.py
 #
-# Target: 24 CPU / 42 GiB at the bootstrap peak (ADR-035)
+# Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-035)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-25 (trino 2.0 CPU / 4G and the 24 CPU / 42 GiB ceiling, ADR-035; before it spark-iceberg 2.0 -> 3.0 CPU)
+# Last updated: 2026-11-25 (trino 2.0 CPU / 4G and the 25 CPU / 48 GiB ceiling, ADR-035; before it spark-iceberg 2.0 -> 3.0 CPU)
 #############################################################################

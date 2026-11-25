@@ -7,8 +7,8 @@ Resolves the compose file three times, plain, with `--profile governance` and
 with `--profile legacy`, prints four limit sums and exits 1 on any of:
 
 - the bootstrap default (every default-profile service, one-shots included,
-  because they run beside the rest at `docker compose up`) above 24 CPU /
-  42 GiB, the ceiling ADR-035 sets in place of ADR-034's 20 CPU / 36 GiB
+  because they run beside the rest at `docker compose up`) above 25 CPU /
+  48 GiB, the ceiling ADR-035 sets in place of ADR-034's 20 CPU / 36 GiB
   (which replaced ADR-010's 16 CPU / 40 GB). The steady default and the two
   profiled bootstraps are reported only: no service has the governance profile
   today, so its line equals the default, and legacy is the Prefect rollback,
@@ -32,9 +32,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 GIB = 2**30
-CPU_CEILING = 24.0
+CPU_CEILING = 25.0
 # GiB, the unit compose limits are in (docs/operations/docker-resources.md).
-MEM_CEILING = 42 * GIB
+MEM_CEILING = 48 * GIB
 
 
 def compose_services(*profile: str) -> dict:

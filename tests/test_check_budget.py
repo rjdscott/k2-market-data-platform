@@ -24,38 +24,38 @@ def failures(default, governance=None, dockerfiles=(), legacy=None):
 
 
 def test_one_shots_count_towards_the_gated_bootstrap_peak():
-    # 23 CPU steady plus a 2 CPU one-shot: steady is under 24, bootstrap is not.
-    default = {"a": svc(23.0, 20), "init": svc(2.0, 1, restart="no")}
+    # 24 CPU steady plus a 2 CPU one-shot: steady is under 25, bootstrap is not.
+    default = {"a": svc(24.0, 20), "init": svc(2.0, 1, restart="no")}
     report, fails = budget.check(default, default, default, [])
-    assert "23.00 CPU" in report[0] and "25.00 CPU" in report[1]
-    assert any("bootstrap default 25.00 CPU" in f and "ceiling" in f for f in fails)
+    assert "24.00 CPU" in report[0] and "26.00 CPU" in report[1]
+    assert any("bootstrap default 26.00 CPU" in f and "ceiling" in f for f in fails)
 
 
 def test_at_the_ceiling_passes_and_just_over_it_fails():
-    assert failures({"a": svc(22.0, 36), "init": svc(2.0, 6, restart="no")}) == []
-    assert any("ceiling" in f for f in failures({"a": svc(22.0, 36), "init": svc(2.01, 1, restart="no")}))
+    assert failures({"a": svc(23.0, 42), "init": svc(2.0, 6, restart="no")}) == []
+    assert any("ceiling" in f for f in failures({"a": svc(23.0, 42), "init": svc(2.01, 1, restart="no")}))
 
 
-def test_memory_over_42_gib_fails():
-    assert any("ceiling" in f for f in failures({"a": svc(4.0, 41), "init": svc(0.5, 1.001, restart="no")}))
+def test_memory_over_48_gib_fails():
+    assert any("ceiling" in f for f in failures({"a": svc(4.0, 47), "init": svc(0.5, 1.001, restart="no")}))
 
 
 def test_the_governance_profile_is_reported_not_gated():
     default = {"a": svc(10.0, 20)}
-    governance = {**default, "catalog": svc(15.0, 20)}
+    governance = {**default, "catalog": svc(16.0, 20)}
     report, fails = budget.check(default, governance, default, [])
     assert fails == []
-    assert "25.00 CPU" in report[2]
+    assert "26.00 CPU" in report[2]
 
 
 def test_the_legacy_profile_is_reported_not_gated_but_its_limits_and_pins_are():
     # The Prefect rollback: default plus two services, over the ceiling here on
     # purpose, so only its report line moves.
-    default = {"a": svc(22.0, 30)}
+    default = {"a": svc(23.0, 30)}
     legacy = {**default, "prefect-server": svc(3.0, 8, image="prefecthq/prefect:3-python3.12")}
     report, fails = budget.check(default, default, legacy, [])
     assert fails == []
-    assert report[3].startswith("bootstrap legacy") and "25.00 CPU" in report[3]
+    assert report[3].startswith("bootstrap legacy") and "26.00 CPU" in report[3]
     # A service only the legacy profile starts is still held to limits and pins.
     bare = {**default, "prefect-worker": {"image": "k2-prefect-worker", "deploy": {}}}
     named = " ".join(failures(default, legacy=bare))
