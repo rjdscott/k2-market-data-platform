@@ -5,7 +5,8 @@
 symbol-day, runs take most of their 300 s slot and grow through the UTC day, and the
 2026-11-25 heap incident failed inside the `gold.bars` append. Where do the seconds and the
 heap of stage 2d actually go, and which redesign makes the cost follow what a run adds?
-**Status:** proposed as [ADR-048](../adr/ADR-048-incremental-gold-bars-and-pruned-stage-2d.md).
+**Status:** proposed as [ADR-048](../adr/ADR-048-incremental-gold-bars-and-pruned-stage-2d.md),
+with the owner's two decisions of 2026-11-26 folded in (section 5).
 
 Every number below is seconds, bytes, file counts, stage counts or a ratio, read from the
 Spark History Server inside `k2-spark-iceberg` or from Trino over the lake, read-only. No
@@ -63,6 +64,12 @@ given in bytes. The commands are in the [appendix](#appendix-commands).
    touches again (yesterday's day after a run that straddled 00:00 UTC, an illiquid symbol)
    stays empty until the nightly `bars_parity` flags it. Read from the code; never observed:
    every `bars_parity` and `ohlcv_parity` row in `lake.audit.checks` has passed.
+8. **ClickHouse holds bars, by pull only.** `gold.bars` is a `ReplacingMergeTree(computed_at)`
+   in `docker/clickhouse/ddl/10-gold-tables.sql`, loaded from the lake by the `iceberg()`
+   `INSERT` in `docs/runbooks/clickhouse-rebuild-from-lake.md`, with its columns named. Bars
+   never travel on the wire: no Avro schema, no queue table in `20-gold-kafka.sql`, and no
+   scheduled pull anywhere in the repo. On the live stack the table is empty (`system.tables`
+   `total_bytes` 0, 2026-11-25, about 22:00 UTC).
 
 ---
 
@@ -159,9 +166,42 @@ section already use). The frame is the bars, about 1.2 MiB at 21:26, not a paylo
 - *Crash safety:* better than today. The evaluation, which is where the incident's OOM struck,
   now happens before the DELETE, so a failure leaves the old bars in place; the window between
   the two commits shrinks from a full evaluation (17 to 62 s measured) to one small append.
+  The owner chose to close it in stage 1 as well: next subsection.
 - *Parity, rebuild:* unchanged.
 - *Risk:* none found. "Write then count from the summary" alone would also compute once, but
   keeps the evaluation after the DELETE.
+
+### (a2) One commit per run (owner decision: in stage 1)
+
+Replace DELETE-then-append with one statement that replaces the touched symbol-days, so a
+reader, a crash or a kill sees either the old day or the new one. Three forms, in order of
+preference; none is verified on this stack, and the one used is the first that passes a
+rehearsal on a scratch table in `lake.scratch_p4` (section 6):
+
+1. **`MERGE` with `WHEN NOT MATCHED BY SOURCE`.** `MERGE INTO gold.bars t USING <checkpointed
+   bars> s ON <the five key columns> WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN
+   INSERT * WHEN NOT MATCHED BY SOURCE AND (t.exchange, t.canonical_symbol, t.day) IN
+   (<touched days, as literals>) THEN DELETE`. One copy-on-write commit that rewrites only the
+   files holding touched days; the `BY SOURCE` clause makes Spark join against the whole
+   target, which is 845 KB today. Spark 3.5's grammar has the clause; whether Iceberg 1.8.1's
+   row-level rewrite accepts it is the open point. It is also the statement stage 2 extends,
+   and DuckDB 1.4.4 runs the same clause (appendix), so CI can hold its semantics.
+2. **`writeTo(gold.bars).overwritePartitions()`** with the touched days' fresh bars plus the
+   untouched rows of the same `(exchange, months(open_time))` partitions, read from the table
+   and checkpointed into the same frame. Dynamic partition overwrite is one commit and long
+   supported, and it keeps the `snapshot-property` write options; the cost is rewriting a
+   month of bars per touched venue on every run (estimate: a few MB at month end).
+3. **Fallback: a branch, then a fast-forward.** Reset a branch of `gold.bars` from `main`,
+   run today's DELETE and append on the branch, then `CALL lake.system.fast_forward('gold.bars',
+   'main', '<branch>')`. Readers of `main` see one atomic move; a crash before it leaves `main`
+   as it was and the next run resets the branch. Reported proven on this stack on 2026-11-25
+   by the P4 spike (History Server applications `k2-p4-spike-a` to `-e`, 21:30 to 21:40 UTC);
+   not re-verified for this note, and plan 2026-11-24's README still lists the spike as P4's
+   first task.
+
+A SQL `MERGE` carries no write options, so form 1 loses the `k2.job` snapshot property today's
+append stamps on `gold.bars`; nothing reads it for this table (`git grep` over `docker/lake`),
+and stage 2 takes its source snapshot from the rows, not the commit (below).
 
 ### (b) Fold each in-order batch into the day's bars
 
@@ -203,13 +243,14 @@ flowchart LR
   `exchange_ts`, the leading order key, so a tie goes to the full-day path. Proved by tests,
   not argued: section 6.
 - *State integrity:* the new rows must be exactly the trades not yet folded. Read them as an
-  incremental Iceberg scan of `gold.trades` from the snapshot the last `gold.bars` commit
-  recorded (`snapshot-property.k2.src-snapshot-id`, the ADR-022 pattern gold already uses
-  against silver), not from the run's silver batch. That also closes finding 7. It is only
-  sound if every bars commit is whole: a half-applied full-day path (DELETE committed, append
-  not) would leave a day absent but computed, and the fold would restart it at zero. So the
-  slow path must be the same single `MERGE`, with `WHEN NOT MATCHED BY SOURCE AND <slow day>
-  THEN DELETE` for the stale tail.
+  incremental Iceberg scan of `gold.trades` from the snapshot the last bars write was computed
+  from: the `src_snapshot_id` on the rows with the newest `computed_at`, committed with them,
+  so it needs no commit property and survives any of (a2)'s three write forms. That is the
+  ADR-022 idea (the position travels with the data), and reading from the bars' own state
+  rather than the run's silver batch also closes finding 7. It is only sound if every bars
+  commit is whole: a half-applied full-day path (DELETE committed, append not) would leave a
+  day absent but computed, and the fold would restart it at zero. Stage 1's single commit
+  (a2) is what makes it sound; stage 2 only adds the folded rows to the same statement.
 - *Cost:* the fast path reads today's bars for touched symbols (under a megabyte) and the new
   trades (one run's files). No window over the day, no day scan. Estimate: bars step under 5 s
   and flat through the day. Slow path: today's cost for that symbol-day only, at the measured
@@ -221,15 +262,13 @@ flowchart LR
   audit, `make parity-bars`' DuckDB side and the Python reference all recompute whole days.
   `quote_volume_e16` joins the compared columns (an integer, tolerance zero). The pin in
   `tests/parity/pinned.json` moves once, after the rebuild that adds the column.
-- *Rebuild:* `rebuild_bars` writes whole days with the new column and records the source
-  snapshot; the next run folds from there. A recorded snapshot that no longer exists in
+- *Rebuild:* `rebuild_bars` writes whole days with the new column, each row carrying its
+  source snapshot; the next run folds from there. A recorded snapshot that no longer exists in
   `gold.trades` history (expired after a stop longer than the 7-day retention, or a manual
   `gold.trades` rebuild without bars) fails the run loudly with `make lake-rebuild LAYER=bars`
   as the fix.
-- *Risk:* a schema change (`lake.sql`, the ODCS contract's description, the docs; the
-  ClickHouse pull names its columns, so ClickHouse can stay without it), and a second code
-  path whose only arbiter is the parity set. `WHEN NOT MATCHED BY SOURCE` exists in Spark
-  3.5's grammar; that Iceberg 1.8.1's copy-on-write `MERGE` accepts it is not verified here.
+- *Risk:* a schema change across the lake and ClickHouse (the owner's decision; section 6
+  lists every file), and a second code path whose only arbiter is the parity set.
 
 ### (c) Recompute from the earliest affected bar onward
 
@@ -282,7 +321,8 @@ DuckDB-against-reference test in section 6 holds.
 | Option | ADR-029, `bars_parity`, `make parity-bars` | Crash safety (today: DELETE, then append) | Rebuild | Schema change |
 |---|---|---|---|---|
 | (a) one evaluation | unchanged | the evaluation moves before the DELETE; the gap becomes one small append | unchanged | none |
-| (b) in-order fold | clause 3 as written; the stored table now comes from a different algorithm than the three recomputes; `quote_volume_e16` compared; pin moves once | one `MERGE` per run, no gap | writes the column and the source snapshot; a lost snapshot fails loudly | `quote_volume_e16` on `gold.bars` |
+| (a2) one commit per run | unchanged | no gap: one statement replaces the touched days | unchanged | none |
+| (b) in-order fold | clause 3 as written; the stored table now comes from a different algorithm than the three recomputes; `quote_volume_e16` compared; pin moves once | one statement per run, as (a2) | writes the column, rows carry their source snapshot; a lost snapshot fails loudly | `quote_volume_e16` on lake and ClickHouse `gold.bars` |
 | (c) from the earliest affected bar | as (b), without the new column | as (b) only if its slow path is also one `MERGE` | unchanged | none, at the price of a day scan |
 | (d) off the 5-minute path | today's bars become a fourth, on-read side | unchanged, at a lower frequency | unchanged | the product's `schedule` |
 | (e) predicate (adopted) | unchanged | unchanged | unchanged | none |
@@ -292,11 +332,17 @@ DuckDB-against-reference test in section 6 holds.
 
 ## 5. Recommendation
 
-**A staged pair: (a) with (e) as a predicate and the two plan fixes now, then (b).**
+**A staged pair: (a), (a2) and (e) as a predicate with the two plan fixes now, then (b).**
+
+**Owner decisions, 2026-11-26.** (1) Stage 1 includes the single commit per run (a2).
+(2) Stage 2's `quote_volume_e16` goes into the lake and into ClickHouse `gold.bars`, not the
+lake only. Both are folded into this section and section 6; the option analysis above is as
+first written, apart from (a2) and the lines that pointed at these decisions.
 
 Stage 1 changes no table, contract or bar definition and removes the work that is not the
 recompute: the second evaluation, ten whole-table scans, a shuffle of every windowed row and
-the sort the incident failed in. Estimate for the 21:26 run, labelled as such:
+the sort the incident failed in; and it makes the bars write one commit, so no run leaves a
+day half-applied. Estimate for the 21:26 run, labelled as such:
 
 | Step | Measured | Estimate after stage 1 | Estimate after stage 2 |
 |---|---:|---:|---:|
@@ -322,6 +368,14 @@ and sums under the same strict test); it is left out until the 1d `MERGE` passes
 
 ### Stage 1: one PR, no schema change
 
+Before the PR: rehearse (a2)'s three forms, in order, on a copy of one day of `gold.bars` in
+`lake.scratch_p4`, in a Spark session started by hand outside the ingest schedule and holding
+the lake lock. For each: one new snapshot, the touched day's rows equal to the fresh frame,
+the stale tail gone, an untouched day byte-identical, and a driver killed before the commit
+leaves the table at its previous snapshot. Use the first that passes; if none does, whether
+stage 1 ships with (a)'s shorter two-commit window or waits is the owner's call (ADR-048,
+question 3).
+
 Functions:
 
 - `gold.candles(spark, seconds, keys, src, run_ts, lo, hi)`: the `exchange_ts` range on the
@@ -330,9 +384,13 @@ Functions:
   source is evaluated once; `rebuild` passes the table's whole range.
 - `gold._bars(spark, days_view, src, run_ts)`: the same range from the touched days, `[min
   day, max day + 1 day)`.
-- `gold.stage_bars`: `fresh = _bars(...).localCheckpoint()` before the DELETE; append
-  `fresh`; `n = added_records(spark, BARS)`. The `cache()`, `count()` and `unpersist()` go,
-  and the two-commit comment states the new, shorter window.
+- `gold.stage_bars`: `fresh = _bars(...).localCheckpoint()`; one write statement in the
+  form the rehearsal chose, in place of the DELETE and the append; `n` from the commit
+  summary. The `cache()`, `count()` and `unpersist()` go, and the two-commit comment becomes
+  the one-commit argument.
+- `bars.merge_sql(target, source, dialect, replace_days)` for form 1: the replacing `MERGE`
+  with the `NOT MATCHED BY SOURCE` delete limited to the touched days, rendered per dialect
+  so DuckDB executes the same statement in CI. (Form 2 or 3 needs no SQL helper.)
 - `gold._thresholds_view`: `.hint("broadcast")` on the DataFrame before the temp view.
 - `bars.DIALECT` `first`/`last`: order by `n_before`; `bars.py` docstring says why.
 - A pure range helper in `gold.py` (keys and seconds in, `lo`/`hi` out), so the boundary rule
@@ -347,17 +405,24 @@ Tests (`make test-python`):
 - **Range helper boundaries**: a trade at exactly `lo` is in, at `hi` is out, `hi` is the last
   touched bucket's end, a day key spans `[d, d+1)`; and, on random buckets and trades, the
   range-then-join row set equals the join alone.
-- **One evaluation, before the DELETE**: `stage_bars` against a stub Spark in the style of
-  `tests/test_lake_instruments.py` that records calls. Assert the frame appended is the one an
-  eager `localCheckpoint()` returned before the DELETE statement, and that no other action runs
-  on an unmaterialised bars frame. Today's code fails it (it counts and then appends a frame
-  whose cache, as measured, does not survive). The stub can only hold the order; the
-  end-to-end proof is the live check below.
+- **One evaluation, one write**: `stage_bars` against a stub Spark in the style of
+  `tests/test_lake_instruments.py` that records calls. Assert the frame written is the one an
+  eager `localCheckpoint()` returned, that no other action runs on an unmaterialised bars
+  frame, and that the run issues exactly one write statement and no DELETE. Today's code fails
+  all three (it counts, DELETEs, then appends a frame whose cache, as measured, does not
+  survive). The stub can only hold the order; the end-to-end proof is the live check below.
+- **`merge_sql` replaces whole days, in DuckDB** (form 1): a stored day with a longer tail than
+  the fresh one loses the tail, a day not in `replace_days` is untouched even when the source
+  has no rows for it, a new day is inserted, and applying the same fresh frame twice leaves the
+  same rows.
 
 Rollout: merge, then pull `main` in the live checkout between two runs; the next run's driver
 imports the new modules (directory mount, no restart). Check the next three runs with
-`stage2d_cost.py`: the bars `append` row shows no `gold.trades` scan, the candle rows read a
-few files of the table, the post-window stage spills nothing. Then `make parity-bars` at the
+`stage2d_cost.py` (its step matching will need the new statement's description): the bars
+write shows no `gold.trades` scan, the candle rows read a few files of the table, the
+post-window stage spills nothing, and `gold.bars` gains one snapshot per run, not two
+(`SELECT committed_at, operation FROM lake.gold."bars$snapshots" ORDER BY 1 DESC LIMIT 6`
+in Trino). Then `make parity-bars` at the
 current pin (the stored side predates the change, so a pass proves the SQL change kept the
 semantics), and the next nightly `bars_parity` and `ohlcv_parity`. Rollback: `git revert`, pull
 between runs. No table moved, so nothing else.
@@ -371,8 +436,21 @@ Functions and files:
 - `docker/lake/ddl/lake.sql` `gold.bars`: `quote_volume_e16 DECIMAL(38,0) NOT NULL` (the bar's
   exact notional) and the table comment; `contracts/market-analytics/event-bars/gold.bars.odcs.yaml`
   description ("a day a new trade touches is replaced whole" becomes "the open bar is extended,
-  an out-of-order day is replaced"); ClickHouse unchanged, recorded as lake-only in the
-  schema-change PR.
+  an out-of-order day is replaced"). Partitioning and sort do not move, so `make test-k2gen`
+  and `make generate` are unaffected.
+- ClickHouse, the owner's decision: `docker/clickhouse/ddl/10-gold-tables.sql` `gold.bars`
+  gains `quote_volume_e16 Decimal(38, 0)` in the `CREATE TABLE` and an idempotent `ALTER
+  TABLE gold.bars ADD COLUMN IF NOT EXISTS quote_volume_e16 Decimal(38, 0) AFTER
+  quote_volume_e8` for running servers; the comment above it says the column is the exact
+  notional `quote_volume_e8` is floored from. `docs/runbooks/clickhouse-rebuild-from-lake.md`:
+  the pull's column list gains it. `tests/clickhouse/bars.jsonl` gains it and
+  `tests/clickhouse/assertions.sql` asserts `quote_volume_e8 = intDiv(quote_volume_e16,
+  100000000)` on the fixture (`make test-clickhouse`).
+- Not touched, and the PR says why: `docker/clickhouse/ddl/20-gold-kafka.sql` and
+  `schemas/avro/*.avsc` (bars never travel on the wire); `tests/test_wire_format.py` (it holds
+  Avro against the queue tables, where bars do not appear; the ClickHouse side of this change
+  is `make test-clickhouse`); `docs/architecture/14-partitioning-strategy.md` (no partition or
+  sort change).
 - `bars.bars_sql(trades, thresholds, dialect, offsets=None)`: emits `quote_volume_e16`; an
   optional relation `(exchange, canonical_symbol, day, bar_kind, units_before)` added to the
   window's `n_before` / `vol_before` / `usd_before` before the bucket division.
@@ -380,16 +458,20 @@ Functions and files:
   `NOT MATCHED BY SOURCE` delete limited to the slow days. DuckDB 1.4.4 runs `MERGE INTO`, so
   CI executes the same statement the lake does.
 - `bars.reference(trades, kind, threshold, offset=0)`.
-- `gold.stage_bars`: new rows by incremental read from the recorded source snapshot; route
-  per symbol-day; offsets from stored bars; one `MERGE` (source checkpointed once); the commit
-  records the current `gold.trades` snapshot. `gold.rebuild_bars` records it too.
+- `bars.merge_sql`: the combining form for folded rows (`open` kept, `high`/`low` by
+  greatest/least, `close` and `close_time` from the source, sums), beside stage 1's replacing
+  form for slow days, in the one statement.
+- `gold.stage_bars`: new rows by incremental read from the source snapshot on the newest
+  bars rows; route per symbol-day; offsets from stored bars; one write (source checkpointed
+  once).
 - `bars.COMPARE_COLUMNS`, `scripts/parity_bars.py` `COLS`: add `quote_volume_e16`.
 - `maintenance.AUDITS`: `duplicate_identifiers` on `gold.bars`'s key. `bars_mismatches` keys
   rows by a dict, so a duplicated stored bar collapses silently today; a `MERGE`-maintained
   table should be checked for it.
 - Docs in the same PR: `docker/lake/README.md` (the `gold.bars` bullet and crash safety),
-  `docs/architecture/13-schema-design.md`, `docs/operations/data-catalog.md`,
-  `docs/products/market-analytics/event-bars.md`, the ClickHouse runbook's column note.
+  `docs/architecture/13-schema-design.md` (the gold and ClickHouse gold rows and the event-bars
+  paragraph), `docs/architecture/10-clickhouse-gold.md` if it lists the bars columns,
+  `docs/operations/data-catalog.md`, `docs/products/market-analytics/event-bars.md`.
 
 Tests:
 
@@ -405,20 +487,22 @@ Tests:
   full-day path and equals the reference.
 - **Day boundary**: a batch spanning `23:59:59.999999` and `00:00:00` folds the old day and
   starts the new one at `bar_seq` 0 with zero offsets; equals the reference.
-- **One commit per run**: stub Spark; the fast path issues one `MERGE` and no DELETE; a slow
-  day adds the `NOT MATCHED BY SOURCE` clause, still one statement.
+- **One commit per run**: stub Spark; a run with fast and slow days issues one statement,
+  combining the folded rows and replacing the slow days.
 - `bars_mismatches` flags a differing `quote_volume_e16`.
 
 Rollout: pause `lake_ingest` between runs; pull `main`; `make lake-rebuild LAYER=bars` (drops
 and recreates the table from the new DDL, so no `ALTER` and no schema evolution for
 ClickHouse's `iceberg()` to read; it takes the ingest lock, so a run that fires meanwhile exits
-75 and is skipped); `scripts/parity-bars.sh --pin-current`; unpause. The ClickHouse pull path
-carries the new table uuid (runbook `clickhouse-rebuild-from-lake.md`). Verify on the next
-three runs and on the next nightly audits as in stage 1, plus the fast-path share per run
-from the run log. Rollback: pause, `git revert`, `make lake-rebuild LAYER=bars` (recreates the
-table without the column from the reverted DDL), re-pin, unpause. Before the PR merges,
-rehearse `WHEN NOT MATCHED BY SOURCE` on a throwaway table in a Spark session outside the
-live schedule.
+75 and is skipped); `scripts/parity-bars.sh --pin-current`; unpause. ClickHouse: apply
+`10-gold-tables.sql` to the running server (the skill's `clickhouse-client --multiquery`
+command), then `TRUNCATE TABLE gold.bars` and the runbook's whole-table pull, so no row
+carries the column's default; the pull path carries the new lake table uuid. Verify on the
+next three runs and on the next nightly audits as in stage 1, plus the fast-path share per run
+from the run log, and `DESCRIBE gold.bars` in ClickHouse. Rollback: pause, `git revert`,
+`make lake-rebuild LAYER=bars` (recreates the lake table without the column from the reverted
+DDL), `ALTER TABLE gold.bars DROP COLUMN quote_volume_e16` in ClickHouse and a re-pull,
+re-pin, unpause.
 
 ### Measuring the win
 
@@ -438,7 +522,10 @@ describes. The measured numbers go into ADR-048's Outcome with their commands, a
   mechanism is not identified, and stage 1 does not depend on it.
 - That Spark picks hash aggregation once the ordering key is a `BIGINT` (expected from the
   buffer types; check with `EXPLAIN` before merging stage 1).
-- `WHEN NOT MATCHED BY SOURCE` on Iceberg 1.8.1 copy-on-write `MERGE`.
+- Any of (a2)'s three single-commit forms on Iceberg 1.8.1 and Spark 3.5.5: `WHEN NOT MATCHED
+  BY SOURCE` in a copy-on-write `MERGE`, dynamic `overwritePartitions()` over
+  `months(open_time)`, and a branch write with `fast_forward` (reported proven by the P4
+  spike on 2026-11-25, not re-checked here). Section 6 rehearses them on `lake.scratch_p4`.
 - Every "after" number: estimates from the measured stage breakdown, not runs.
 - That the candle cost keeps growing across 00:00 UTC: inferred from whole-table scans; the
   History Server keeps runs from 07:55 UTC only, so no midnight run was available.
@@ -466,6 +553,16 @@ docker exec k2-spark-iceberg curl -s 'localhost:18080/api/v1/applications/local-
 docker exec k2-spark-iceberg curl -s 'localhost:18080/api/v1/applications/local-1795631996335/stages?status=failed'
 # Iceberg runtime
 docker exec k2-spark-iceberg sh -c 'ls /opt/spark/jars | grep -i iceberg'
+# ClickHouse gold.bars on the live stack (prints: bars 0)
+docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
+  --query "SELECT name, total_bytes FROM system.tables WHERE database = 'gold' AND name = 'bars'"
+# DuckDB 1.4.4 runs WHEN NOT MATCHED BY SOURCE (prints [(1, 0, 100), (1, 1, 101), (2, 0, 20)]:
+# day 1's stale tail deleted, day 2 untouched)
+uv run --no-project --with duckdb==1.4.4 python -I -c "import duckdb; c = duckdb.connect()
+c.execute('CREATE TABLE t (d INT, k INT, v BIGINT)'); c.execute('INSERT INTO t VALUES (1, 0, 10), (1, 1, 11), (1, 2, 12), (2, 0, 20)')
+c.execute('CREATE TABLE s (d INT, k INT, v BIGINT)'); c.execute('INSERT INTO s VALUES (1, 0, 100), (1, 1, 101)')
+c.execute('MERGE INTO t USING s ON t.d = s.d AND t.k = s.k WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT VALUES (s.d, s.k, s.v) WHEN NOT MATCHED BY SOURCE AND t.d IN (1) THEN DELETE')
+print(c.execute('SELECT * FROM t ORDER BY d, k').fetchall())"
 # DuckDB 1.4.4 executes MERGE INTO (prints [(1, 10, 5), (2, 21, 8), (3, 30, 9)])
 uv run --no-project --with duckdb==1.4.4 python -I -c "import duckdb; c = duckdb.connect()
 c.execute('CREATE TABLE t (k INT, v BIGINT, e HUGEINT)'); c.execute('INSERT INTO t VALUES (1, 10, 5), (2, 20, 7)')
