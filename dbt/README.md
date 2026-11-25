@@ -39,7 +39,8 @@ lake's candles, 30 of 30 (four views, two tables, eight unit tests, sixteen data
 REPLACE`: one Iceberg table whose snapshots are its builds, each by `dbt_market_analytics`.
 With the test-results hook below, on 2026-11-25: 31 of 31 (four views, two tables, eight unit
 tests, sixteen data tests, the hook) in 18.8 s, and the hook wrote 24 rows. The governance
-selector has not run on the stack yet: its catalog arrives with the rollout of this change.
+selector runs on the stack in every hourly `dbt_marts` run since 2026-11-25 19:32 UTC, the
+first row of `governance.dq.dbt_test_results`.
 
 ```bash
 docker exec k2-trino trino --execute \
@@ -83,7 +84,10 @@ not products (ADR-044's one schema per product holds for products;
 [ADR-046](../docs/adr/ADR-046-governance-domain-and-quality-results.md)). A second domain adds its
 folder, a three-line block in `dbt_project.yml` that makes its marts tables, and its marts in
 its contracts; `make generate` gives it a selector. A domain whose marts are all views, as
-`governance`'s one mart is, needs no block.
+`governance`'s one mart is, needs no block. `make test-k2gen` pins today's marts in
+`platform/k2gen/tests/test_generate.py` (the selectors, each source's `read_by`, the products
+`test_a_removed_mart_takes_its_sources_and_selector_with_it` deletes), so a new domain or mart
+updates those assertions in the same pull request.
 
 `scripts/dbt_manifest_check.py` holds the project to that on the compiled manifest: only
 staging selects from a source; every model is in a domain's catalog; every mart is declared at
@@ -258,14 +262,15 @@ two things the data must hold that the SQL does not force: a gap trade leaves ou
 (`macros/record_test_results.sql`) writes one row per data test and unit test a dbt invocation
 ran into `<catalog>.dq.dbt_test_results`, the profile's own catalog, creating schema and table
 if absent: invocation id, run start, writer, the test's id and name, the model or source
-relation it tests (`tested`, for a source test its one dependency), dbt's status (pass, fail,
+relation it tests (`tested`, for a source test its one dependency, for a unit test its model
+whether it ran or was skipped), dbt's status (pass, fail,
 warn, error, skipped), failures, execution time, and dbt's message cut at 1000 characters. An
 invocation that ran no test (`dbt run`, `dbt source freshness`) writes nothing. dbt runs
 `on-run-end` after the nodes whatever their result, so every test the invocation ran has its
 row, a failed one included, and so has every test it skipped behind a failure inside that same
 invocation. `make test-dbt` proves it on one `dbt build --selector`: two trades with one
 identifier fail the source test on `gold.trades`, the build exits non-zero, and the failed row
-and the skipped ones are read back. No writer can insert into another domain's table (`Access
+and the skipped ones are read back, each skipped one, unit tests included, on what it tests. No writer can insert into another domain's table (`Access
 Denied`, also in `make test-dbt`).
 
 **What is not recorded.** Under Airflow each node is its own dbt invocation (below), so a
@@ -274,7 +279,7 @@ model's data tests then skipped. When a task fails, Airflow marks every task dow
 `upstream_failed` and starts no dbt for them: their tests leave no row at all, pass or skip. An
 invocation whose hook failed loses its rows too ([runbook](../docs/runbooks/dbt-marts.md)). So the absence of a
 recent row is itself the signal: a test last recorded more than two hours ago missed at least
-one hourly run. Through the view, once catalog `governance` exists:
+one hourly run. Through the view:
 
 ```bash
 docker exec k2-trino trino --execute "SELECT domain, subject, check_name, max(checked_at) AS last_run
@@ -348,8 +353,8 @@ through as `skipped`; an `observed` of -1 alone taken for a raised check; every 
 kept, which failed `dq_results_folds_one_lake_key_to_its_worst_row`); its data tests: the grain
 `(source_system, checked_at, subject, check_name)`, not-null columns, and the four statuses.
 
-The governance selector has not run on the stack: catalog `governance` exists after the rollout
-of this change. Over the live `lake.audit.checks`, read-only, on 2026-11-25: some rows, no key
+On the stack the governance selector runs in every hourly `dbt_marts` run (above). Over the
+live `lake.audit.checks`, read-only, on 2026-11-25: some rows, no key
 filed twice yet (so the fold changes no row today), every row a pass or a fail:
 
 ```bash
@@ -369,6 +374,13 @@ docker exec k2-dbt-test trino --user someone --execute "SELECT source_system, do
 #   "lake_audit","market-capture","lake.silver.book_alpha","error"
 #   "lake_audit","market-capture","lake.silver.trades_alpha","fail"
 ```
+
+Read non-passing results over a time window, as in `WHERE status <> 'pass' AND checked_at >
+current_timestamp - INTERVAL '1' DAY`, not as a latest status per `(subject, check_name)`: the
+ingest files `offset_gap` (one row per partition an `--accept-data-loss` run skips) and
+`batch_offsets` (a mismatch only) when they find something and never a pass, so their latest
+status is a failure for good. On the stack on 2026-11-25 every `offset_gap` row in the view is a
+`fail`.
 
 ## Scheduled: the `dbt_marts` DAG
 

@@ -30,9 +30,12 @@
 {% macro record_test_results(results) %}
     {%- set rows = [] -%}
     {%- for r in results if r.node.resource_type in ('test', 'unit_test') -%}
-        {#- A source test has no attached_node (dbt 1.12): its one dependency is the source. -#}
-        {%- set tested_id = (r.node.attached_node or r.node.depends_on.nodes | first)
-            if r.node.resource_type == 'test' else r.node.tested_node_unique_id -%}
+        {#- A source test has no attached_node (dbt 1.12): its one dependency is the source. A
+            unit test that ran is the UnitTestNode dbt built to run it, with tested_node_unique_id;
+            one skipped or errored before that is the manifest's UnitTestDefinition, which has
+            none and depends on its model alone (dbt/parser/unit_tests.py). -#}
+        {%- set tested_id = (r.node.attached_node if r.node.resource_type == 'test' else r.node.tested_node_unique_id)
+            or r.node.depends_on.nodes | first -%}
         {%- set tested = graph.nodes.get(tested_id) or graph.sources.get(tested_id) -%}
         {%- set relation = [tested.database, tested.schema, tested.alias or tested.identifier] | join('.') if tested else none -%}
         {%- do rows.append('(' ~ [

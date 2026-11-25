@@ -181,3 +181,7 @@ and the planned `governance.dq_results` view is `governance.quality_results.dq_r
 product's schema. One addition to "one schema per data product": every domain catalog also has
 a schema `dq`, where its own writer records the domain's dbt test results; like `staging`, it is
 the platform's, not a product's, and `k2gen validate` refuses a product named after it.
+
+Correction, 2026-11-26: the Decision's example mart `market_analytics.delayed_candles.ohlcv_1m_delayed_20m`
+was built as `market_analytics.delayed_candles.ohlcv_delayed_20m`
+(`contracts/market-analytics/delayed-candles/product.yaml`).
