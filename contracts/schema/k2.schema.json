@@ -109,6 +109,10 @@
                 "minItems": 1,
                 "uniqueItems": true,
                 "items": {"$ref": "#/$defs/table"}
+              },
+              "materialized": {
+                "description": "How dbt builds it; a table when absent. A view only where the product is one by decision, as ADR-035's delayed product.",
+                "enum": ["table", "view"]
               }
             }
           }

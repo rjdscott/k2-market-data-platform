@@ -251,3 +251,12 @@ def test_a_mart_reading_a_type_with_no_trino_mapping_stops_generate():
 
 def test_the_parser_reads_identifier_fields():
     assert ddl.parse(ROOT / cli.LAKE_SQL)["gold.trades"].identifier == ("exchange", "canonical_symbol", "trade_id")
+
+
+def test_the_product_page_says_how_each_mart_is_built(tree):
+    assert "| `market_analytics.candles.ohlcv_1m` | table |" in generate.render(ROOT)[f"{generate.PAGES}/market-analytics/candles.md"]
+    path = tree / "contracts/market-analytics/candles/product.yaml"
+    doc = yaml.safe_load(path.read_text())
+    doc["marts"][0]["materialized"] = "view"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+    assert "| `market_analytics.candles.ohlcv_1m` | view |" in generate.render(tree)[f"{generate.PAGES}/market-analytics/candles.md"]

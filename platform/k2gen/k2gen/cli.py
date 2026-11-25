@@ -57,6 +57,11 @@ RESERVED = {
 }
 
 
+# Product names a product cannot take: its marts' schema is the name with underscores, and
+# dbt puts each domain's layers in these two (dbt/macros/naming.sql).
+LAYER_SCHEMAS = ("staging", "intermediate")
+
+
 def fence(domain: str) -> str:
     """A domain's Trino catalog and Lakekeeper warehouse: `market-analytics` -> `market_analytics`."""
     return domain.replace("-", "_")
@@ -119,6 +124,8 @@ def validate(root: Path = ROOT) -> list[str]:
         beside = sorted(p.name[: -len(SUFFIX)] for p in pdir.glob(f"*{SUFFIX}"))
         if sorted(product["outputs"]) != beside:
             errors.append(f"{where}: outputs {sorted(product['outputs'])}, but the contracts beside it are {beside}")
+        if fence(product["name"]) in LAYER_SCHEMAS:
+            errors.append(f"{where}: product name {product['name']} is the schema dbt keeps every domain's {fence(product['name'])} models in (dbt/macros/naming.sql)")
         place = f"{fence(product['domain'])}.{fence(product['name'])}"
         marts = [m["table"] for m in product.get("marts", [])]
         errors += [f"{where}: mart {t} must live in {place}, its domain's catalog and its product's schema (ADR-044)" for t in marts if t.rsplit(".", 1)[0] != place]

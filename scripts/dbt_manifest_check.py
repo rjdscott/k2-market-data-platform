@@ -9,11 +9,13 @@ declare (contracts/domains.yaml, contracts/<domain>/<product>/product.yaml). Fai
 1. Layering: a model outside staging that selects from a source. A lake table is read
    by one staging view per domain; marts and intermediate models read those.
 2. Place: a model whose catalog is not a domain's fence name (ADR-044).
-3. Marts, each model under models/<catalog>/marts/: it is a table, or a view where its
-   product says so (ADR-035's delayed product); a contract declares
-   it at its relation <catalog>.<product>.<model>; it has a uniqueness test on exactly
-   the contract's grain, over the whole table (no row_condition, no where); and the lake
-   tables it reads, through any number of models, are exactly the contract's `reads`.
+3. Marts, each model under models/<catalog>/marts/: a contract declares it at its
+   relation <catalog>.<product>.<model>; it is materialised as that entry says, a table
+   unless `materialized: view` (ADR-035's delayed product); it has a uniqueness test on
+   exactly the contract's grain that fails the build: over the whole table (no
+   row_condition, no where, every row with a key counted), at severity error, failing on
+   any duplicate; and the lake tables it reads, through any number of models, are
+   exactly the contract's `reads`.
 4. Every mart a contract declares has its model.
 
 Standard library and PyYAML, both in dbt/'s environment and in the root test run.
@@ -56,11 +58,19 @@ def _sources_read(manifest: dict, uid: str) -> set[str]:
     return found
 
 
+# A test that stops a build on the first duplicate: dbt's defaults, which a test config can loosen.
+_FAILS_THE_BUILD = {"severity": "error", "error_if": "!= 0", "fail_calc": "count(*)"}
+
+
 def _unique_on(test: dict) -> set[str] | None:
     """The columns a test proves unique over the whole table, or None if it is not such a test."""
     meta, kwargs = test.get("test_metadata") or {}, (test.get("test_metadata") or {}).get("kwargs", {})
     if test["config"].get("where") or kwargs.get("row_condition"):
         return None  # unique over a slice proves nothing about the grain
+    if any(str(test["config"].get(k, v)).lower() != v for k, v in _FAILS_THE_BUILD.items()):
+        return None  # a warning, or a threshold above one duplicate, lets a broken grain build
+    if kwargs.get("ignore_row_if", "all_values_are_missing") != "all_values_are_missing":
+        return None  # skipping rows with any key column null hides duplicates among them
     if meta.get("name") == "expect_compound_columns_to_be_unique" and meta.get("namespace") == "dbt_expectations":
         return set(kwargs["column_list"])
     if meta.get("name") == "unique" and not meta.get("namespace"):
@@ -83,12 +93,16 @@ def check(manifest: dict, fences: set[str], marts: dict[str, dict]) -> list[str]
             continue
         relation = f"{node['database']}.{node['schema']}.{node['alias']}"
         built.add(relation)
-        if node["config"]["materialized"] not in ("table", "view"):
-            errors.append(f"{where}: a mart is a table or a view, not {node['config']['materialized']} (dbt_project.yml, one block per domain)")
         mart = marts.get(relation)
         if mart is None:
             errors.append(f"{where}: builds {relation}, which no product.yaml declares under marts")
             continue
+        want = mart.get("materialized", "table")
+        if node["config"]["materialized"] != want:
+            errors.append(
+                f"{where}: materialised as {node['config']['materialized']}, but {mart['product']} says {want} "
+                "(a table needs its domain's block in dbt_project.yml; a view needs materialized: view in the contract)"
+            )
         grains = [cols for t in tests if t.get("attached_node") == uid and (cols := _unique_on(t)) is not None]
         if set(mart["grain"]) not in grains:
             errors.append(f"{where}: no uniqueness test on its grain {mart['grain']} ({mart['product']}); it has {[sorted(g) for g in grains]}")

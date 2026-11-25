@@ -42,9 +42,9 @@ Known readers outside the contracts:
 Built by dbt on Trino as `dbt_market_analytics`, in the domain's own catalog
 ([ADR-044](../../../docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md), [`dbt/`](../../../dbt/README.md)). Read them through Trino.
 
-| Mart | Grain | Reads | Model |
-|---|---|---|---|
-| `market_analytics.candles.ohlcv_1m` | `exchange`, `canonical_symbol`, `window_start` | `gold.trades` | [`dbt/models/market_analytics/marts/candles/ohlcv_1m.sql`](../../../dbt/models/market_analytics/marts/candles/ohlcv_1m.sql) |
+| Mart | Built as | Grain | Reads | Model |
+|---|---|---|---|---|
+| `market_analytics.candles.ohlcv_1m` | table | `exchange`, `canonical_symbol`, `window_start` | `gold.trades` | [`dbt/models/market_analytics/marts/candles/ohlcv_1m.sql`](../../../dbt/models/market_analytics/marts/candles/ohlcv_1m.sql) |
 
 ## gold.ohlcv_1m
 

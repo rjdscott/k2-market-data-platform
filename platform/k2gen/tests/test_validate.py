@@ -9,7 +9,7 @@ import shutil
 import pytest
 import yaml
 
-from k2gen import cli, ddl
+from k2gen import cli, ddl, generate
 
 ROOT = cli.ROOT
 TRADES = "contracts/market-analytics/canonical-trades/gold.trades.odcs.yaml"
@@ -143,3 +143,19 @@ def test_a_latency_on_a_column_the_table_lacks_fails(tree):
 def test_a_latency_without_a_unit_fails_the_k2_profile(tree):
     edit(tree / TRADES, lambda doc: doc["slaProperties"][0].pop("unit"))
     assert [e for e in cli.validate(tree) if e.startswith(f"{TRADES}: $.slaProperties[0]") and "'unit' is a required property" in e]
+
+
+@pytest.mark.parametrize("name", ["staging", "intermediate"])
+def test_a_product_named_like_a_dbt_layer_schema_is_rejected(tree, name):
+    # Its marts would share <catalog>.<name> with the domain's staging or intermediate views.
+    generate.scaffold(tree, "market-analytics", name)
+    assert cli.validate(tree) == [
+        f"contracts/market-analytics/{name}/product.yaml: product name {name} is the schema dbt keeps every domain's {name} models in (dbt/macros/naming.sql)"
+    ]
+
+
+def test_a_mart_is_a_table_or_a_view_by_its_contract(tree):
+    edit(tree / CANDLES, set_mart(materialized="view"))
+    assert cli.validate(tree) == []
+    edit(tree / CANDLES, set_mart(materialized="ephemeral"))
+    assert [e for e in cli.validate(tree) if e.startswith(f"{CANDLES}: $.marts[0].materialized") and "'ephemeral' is not one of ['table', 'view']" in e]

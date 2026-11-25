@@ -6,8 +6,9 @@
     models/<catalog>/intermediate/<model>.sql     -> <catalog>.intermediate
     models/<catalog>/marts/<product>/<model>.sql  -> <catalog>.<product>
 
-  node.fqn is [project, <catalog>, <layer>, ..., <model>]. Anything that is not a
-  model (a test, a unit test) keeps dbt's default, the profile's catalog.
+  node.fqn is [project, <catalog>, <layer>, ..., <model>]. A unit test runs in the
+  catalog and schema of the model it tests, not here; a data test, which writes
+  nothing unless store_failures is set, keeps dbt's default, the profile's catalog.
 #}
 
 {% macro generate_database_name(custom_database_name, node) -%}

@@ -153,13 +153,14 @@ def _page(product: dict[str, Any], tables: dict[str, Contract], lake: dict[str, 
             f"Built by dbt on Trino as `dbt_{fence(product['domain'])}`, in the domain's own catalog",
             f"([ADR-044]({up}/docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md), [`dbt/`]({up}/dbt/README.md)). Read them through Trino.",
             "",
-            "| Mart | Grain | Reads | Model |",
-            "|---|---|---|---|",
+            "| Mart | Built as | Grain | Reads | Model |",
+            "|---|---|---|---|---|",
         ]
         for mart in product["marts"]:
             catalog, schema, name = mart["table"].split(".")
             model = f"dbt/models/{catalog}/marts/{schema}/{name}.sql"
-            lines.append(f"| `{mart['table']}` | {_code(mart['grain'])} | {_code(mart['reads'])} | [`{model}`]({up}/{model}) |")
+            built = mart.get("materialized", "table")
+            lines.append(f"| `{mart['table']}` | {built} | {_code(mart['grain'])} | {_code(mart['reads'])} | [`{model}`]({up}/{model}) |")
     for table in product["outputs"]:
         path, doc, props = tables[table]
         if "properties" in doc["schema"][0]:
@@ -333,10 +334,11 @@ def _warehouses(domains: dict[str, Any]) -> str:
 _TRINO_TYPES = {"STRING": "varchar", "BIGINT": "bigint", "INT": "integer", "BOOLEAN": "boolean", "TIMESTAMP": "timestamp(6) with time zone"}
 _PERIODS = {"min": "minute", "h": "hour", "d": "day"}  # ODCS units, as k2.schema.json allows them
 # The uniqueness check covers the newest 6 hours by the table's time partition, not the
-# whole table. On k2-trino, 2026-11-25, gold.trades whole (25.4M rows) and its last 2 days
-# (13M) failed with EXCEEDED_LOCAL_MEMORY_LIMIT at the 844.80MB per-node default; its last
-# 6 hours (3.2M rows) took 2.6 s. The whole table is the nightly Spark audit's
-# (duplicate_identifiers, docker/lake/maintenance.py).
+# whole table. On k2-trino, 2026-11-25, the check over all of gold.trades, and over its last
+# 2 days, failed with "Query exceeded per-node memory limit of 844.80MB" (Trino's default at
+# a 2816M heap); over its last 6 hours it took 2.6 s. The command, with the window varied, is
+# in dbt/README.md. The whole table is the nightly Spark audit's (duplicate_identifiers,
+# docker/lake/maintenance.py).
 _RECENT = "interval '6' hour"
 _TIME_TRANSFORMS = ("hours", "days", "months", "years")
 

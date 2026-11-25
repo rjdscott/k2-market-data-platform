@@ -32,11 +32,15 @@ def model(fqn, materialized, schema):
     }
 
 
-def unique_test(columns, **kwargs):
+# A test node's config as dbt 1.12 writes it to the manifest when the yml sets none.
+DEFAULTS = {"severity": "ERROR", "error_if": "!= 0", "warn_if": "!= 0", "fail_calc": "count(*)", "where": None}
+
+
+def unique_test(columns, config=None, **kwargs):
     return {
         "resource_type": "test",
         "attached_node": MART,
-        "config": {},
+        "config": {**DEFAULTS, **(config or {})},
         "test_metadata": {"name": "expect_compound_columns_to_be_unique", "namespace": "dbt_expectations", "kwargs": {"column_list": columns, **kwargs}},
     }
 
@@ -69,6 +73,10 @@ def test_a_mart_selecting_from_a_source_fails(manifest):
         None,  # no test at all
         unique_test(["exchange"]),  # not the grain
         unique_test(["exchange", "window_start"], row_condition="window_start > now()"),  # a slice
+        unique_test(["exchange", "window_start"], config={"severity": "warn"}),  # builds anyway
+        unique_test(["exchange", "window_start"], config={"error_if": "> 10"}),  # ten duplicates pass
+        unique_test(["exchange", "window_start"], config={"fail_calc": "0"}),  # counts nothing
+        unique_test(["exchange", "window_start"], ignore_row_if="any_value_is_missing"),  # skips null keys
     ],
 )
 def test_a_mart_without_a_whole_table_uniqueness_test_on_its_grain_fails(manifest, test):
@@ -83,15 +91,26 @@ def test_a_mart_without_a_whole_table_uniqueness_test_on_its_grain_fails(manifes
 def test_a_core_unique_test_counts_for_a_one_column_grain(manifest):
     marts = copy.deepcopy(MARTS)
     marts["market_analytics.candles.ohlcv_1m"]["grain"] = ["window_start"]
-    manifest["nodes"]["test.k2.grain"] = {"resource_type": "test", "attached_node": MART, "config": {}, "test_metadata": {"name": "unique", "kwargs": {"column_name": "window_start"}}}
+    manifest["nodes"]["test.k2.grain"] = {"resource_type": "test", "attached_node": MART, "config": DEFAULTS, "test_metadata": {"name": "unique", "kwargs": {"column_name": "window_start"}}}
     assert check(manifest, FENCES, marts) == []
 
 
-def test_a_mart_is_a_table_or_a_view_and_nothing_else(manifest):
-    manifest["nodes"][MART]["config"]["materialized"] = "view"  # ADR-035: the delayed product is one
+def test_the_default_grain_test_options_count_as_written_by_hand(manifest):
+    manifest["nodes"]["test.k2.grain"] = unique_test(["exchange", "window_start"], ignore_row_if="all_values_are_missing")
     assert check(manifest, FENCES, MARTS) == []
-    manifest["nodes"][MART]["config"]["materialized"] = "ephemeral"
-    assert [e for e in check(manifest, FENCES, MARTS) if "a mart is a table or a view, not ephemeral" in e]
+
+
+def test_a_mart_is_a_view_only_where_its_contract_says_so(manifest):
+    # A domain without its dbt_project.yml block gets the project default, a view: that must fail.
+    manifest["nodes"][MART]["config"]["materialized"] = "view"
+    (error,) = check(manifest, FENCES, MARTS)
+    assert "materialised as view, but p.yaml says table" in error
+    marts = copy.deepcopy(MARTS)
+    marts["market_analytics.candles.ohlcv_1m"]["materialized"] = "view"  # ADR-035's delayed product
+    assert check(manifest, FENCES, marts) == []
+    manifest["nodes"][MART]["config"]["materialized"] = "table"
+    (error,) = check(manifest, FENCES, marts)
+    assert "materialised as table, but p.yaml says view" in error
 
 
 def test_an_undeclared_mart_and_a_declared_mart_with_no_model_both_fail(manifest):
