@@ -6,8 +6,10 @@
 # Run by `make check-alerts` and `make check-docs` gate (c2). Series are what
 # the airflow-statsd exporter serves: counters with no `_total` suffix, labels
 # from Airflow's InfluxDB-style tags, and a series that does not exist until
-# its first increment. `_` is a missing sample; at a 1m interval the value at
-# position i is the value at minute i.
+# its first increment; and the scheduler's ti_running gauge, absent until a
+# task is first seen running and 0 after it stops. `_` is a missing sample,
+# `stale` an exporter restart; at a 1m interval the value at position i is
+# the value at minute i.
 
 rule_files:
   - ../airflow-alerts.yml
@@ -182,8 +184,8 @@ tests:
         alertname: AirflowLakeIngestSkippedRepeatedly
         exp_alerts: []
 
-  # Exporter restarted at minute 20: the skipped series is new, and the first
-  # three skips after the restart still fire.
+  # A skipped series first seen at minute 21 (no earlier sample of it at all,
+  # the first-increment case): the first three skips still fire.
   - interval: 1m
     input_series:
       - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
@@ -195,43 +197,102 @@ tests:
           - exp_labels: *skipped-labels
             exp_annotations: *skipped-annotations
 
-  # Maintenance holds the lock on purpose from minute 15 to 38, the first run
-  # since the exporter started (no finish series until it ends). Skips under
-  # it are expected and stay quiet; skips after it has finished fire.
-  - interval: 1m
+  # Maintenance holds the lock on purpose from minute 15 to 38 (the gauge,
+  # first seen at 1), skips every 5 minutes from minute 21. Under it, quiet.
+  # At minute 45 the window holds 31, 36 and 41, two of them taken under the
+  # holder: quiet in the grace, where it used to fire. Once the grace lapses
+  # (53:30) the three skips since the holder ended fire.
+  - name: skips under and after maintenance, the grace between
+    interval: 1m
     input_series:
       - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
-        values: '5x20 6x4 7x4 8x4 9x4 10x30'
-      - series: 'airflow_ti_start{dag_id="lake_maintenance",task_id="maintain"}'
-        values: '_x15 1x50'
-      - series: 'airflow_ti_finish{dag_id="lake_maintenance",task_id="maintain",state="success"}'
-        values: '_x38 1x30'
+        values: '5x20 6x4 7x4 8x4 9x4 10x4 11x4 12x4 13x30'
+      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
+        values: '_x15 1x23 0x40'
     alert_rule_test:
       - eval_time: 34m
         alertname: AirflowLakeIngestSkippedRepeatedly
         exp_alerts: []
-      - eval_time: 42m
+      - eval_time: 45m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
+      - eval_time: 56m
         alertname: AirflowLakeIngestSkippedRepeatedly
         exp_alerts:
           - exp_labels: *skipped-labels
             exp_annotations: *skipped-annotations
 
-  # A maintenance try killed with the scheduler: a ti_start at minute 0 and
-  # no ti_finish ever. Skips every 5 minutes from minute 41. Inside the
-  # try's dagrun_timeout (2h05m) it still reads as in flight and the skips
-  # stay quiet; past it the mute ends and three skips fire. Before the bound
-  # the difference held at 1 and muted this until the exporter restarted.
-  - interval: 1m
+  # Observed 2026-11-25, minute 0 = 06:00 UTC: the first lake_maintenance
+  # under Airflow ran 06:10:21 to 06:33:58 (the gauge 1 from 11 to 34), the
+  # skipped series was born at the 06:11 skip, the 06:11 to 06:31 slots
+  # skipped, and the 06:36 run succeeded 3.5 minutes later (minute 40).
+  # Without the grace this went pending at 35 and fired at 36 for about a
+  # minute, as it did that day. Both alerts stay quiet throughout.
+  - name: observed 2026-11-25, maintenance then the first success
+    interval: 1m
     input_series:
-      - series: 'airflow_ti_start{dag_id="lake_maintenance",task_id="maintain"}'
-        values: '1x200'
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x80'
+      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
+        values: '_x11 1x23 0x45'
       - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
-        values: '0x40 1x4 2x4 3x4 4x4 5x4 6x4 7x4 8x4 9x4 10x4 11x4 12x4 13x4 14x4 15x4 16x4 17x4 18x4 19x4 20x4 21x4 22x4 23x4 24x4 25x4 26x4 27x4 28x4 29x4 30x4 31x4 32x4'
+        values: '_x12 1x4 2x4 3x4 4x4 5x50'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '10x2 11x4 12x31 13x2 14x4 15x30'
     alert_rule_test:
-      - eval_time: 60m
+      - eval_time: 30m
         alertname: AirflowLakeIngestSkippedRepeatedly
         exp_alerts: []
-      - eval_time: 150m
+      - eval_time: 36m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
+      - eval_time: 39m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
+      - eval_time: 36m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts: []
+
+  # A maintenance that ended 30 minutes before the skips (the gauge sent as
+  # 0 from minute 11) mutes nothing: three skips at 41, 46 and 51 fire. A
+  # zombie try looks the same once the scheduler fails it and sends 0.
+  - name: holder ended 30 minutes ago, skips fire
+    interval: 1m
+    input_series:
+      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
+        values: '1x10 0x70'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
+        values: '5x40 6x4 7x4 8x30'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '10x80'
+    alert_rule_test:
+      - eval_time: 53m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts:
+          - exp_labels: *skipped-labels
+            exp_annotations: *skipped-annotations
+
+  # The exporter restarts at minute 15 with the lock stuck across it: skips
+  # at 6 and 11 before (the series at 7), then 1, 2, 3 at 17, 22 and 27.
+  # Three skips since the restart at 28, but the offset reads the old 7:
+  # quiet, as the rule's comment says. Once the window has passed the
+  # restart they count, and it fires at 31.
+  - name: exporter restart, skips err quiet then fire
+    interval: 1m
+    input_series:
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
+        values: '5x5 6x4 7x3 stale _ 1x4 2x4 3x4 4x4 5x30'
+    alert_rule_test:
+      - eval_time: 28m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
+      - eval_time: 33m
         alertname: AirflowLakeIngestSkippedRepeatedly
         exp_alerts:
           - exp_labels: *skipped-labels
@@ -245,8 +306,6 @@ tests:
     input_series:
       - series: 'airflow_scheduler_heartbeat'
         values: '0+12x60'
-      - series: 'airflow_ti_start{dag_id="lake_ingest",task_id="ingest"}'
-        values: '0+1x20 20x40'
       - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
         values: '0+1x20 20x40'
     alert_rule_test:
@@ -288,17 +347,15 @@ tests:
           - exp_labels: *not-running-labels
             exp_annotations: *not-running-annotations
 
-  # The same silence while maintenance holds the lock from minute 15 with no
-  # finish yet, and while one lake_ingest try runs long from minute 21: quiet.
+  # The same silence while maintenance holds the lock from minute 15, and
+  # while one lake_ingest try runs long from minute 21: quiet.
   - interval: 1m
     input_series:
       - series: 'airflow_scheduler_heartbeat'
         values: '0+12x60'
-      - series: 'airflow_ti_start{dag_id="lake_ingest",task_id="ingest"}'
-        values: '0+1x20 20x40'
       - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
         values: '0+1x20 20x40'
-      - series: 'airflow_ti_start{dag_id="lake_maintenance",task_id="maintain"}'
+      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
         values: '_x15 1x45'
     alert_rule_test:
       - eval_time: 50m
@@ -308,8 +365,8 @@ tests:
     input_series:
       - series: 'airflow_scheduler_heartbeat'
         values: '0+12x60'
-      - series: 'airflow_ti_start{dag_id="lake_ingest",task_id="ingest"}'
-        values: '0+1x21 21x40'
+      - series: 'airflow_ti_running{dag_id="lake_ingest",task_id="ingest",queue="default"}'
+        values: '_x21 1x40'
       - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
         values: '0+1x20 20x40'
     alert_rule_test:
@@ -317,13 +374,71 @@ tests:
         alertname: AirflowLakeIngestNotRunning
         exp_alerts: []
 
+  # The silence of the first case, with a maintenance that ended at minute
+  # 5 (its gauge sent as 0 since): no holder, so it fires as before.
+  - name: silence with no holder running fires
+    interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x60'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '0+1x20 20x40'
+      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
+        values: '1x5 0x55'
+    alert_rule_test:
+      - eval_time: 42m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts:
+          - exp_labels: *not-running-labels
+            exp_annotations: *not-running-annotations
+
+  # lake_ingest paused under a rebuild from minute 21 to 60 (runbook §3),
+  # unpaused as it ends; the first run after it finishes at 69. Without the
+  # grace this fired at 66, between the holder ending and that first finish.
+  - name: ingest paused under a rebuild, quiet in the grace
+    interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x90'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '0+1x20 20x47 21+1x20'
+      - series: 'airflow_ti_running{dag_id="lake_rebuild",task_id="rebuild",queue="default"}'
+        values: '_x21 1x39 0x30'
+    alert_rule_test:
+      - eval_time: 67m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts: []
+
+  # A fresh exporter counts finishes at 2, 7 and 12 and restarts at 15; the
+  # new one counts 17, 22, 27 and 32, then nothing. Until minute 30 the
+  # offset reads the old count, which equals the new one: 0, "no finish".
+  # Quiet there, as the rule's comment says (without the resets() line it
+  # fired at 22). The real silence after 32 still fires, at 52.
+  - name: exporter restart, quiet 15 minutes, then a real silence fires
+    interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x14 stale 12+12x60'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '_x2 1x4 2x4 3x2 stale _ 1x4 2x4 3x4 4x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts: []
+      - eval_time: 53m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts:
+          - exp_labels: *not-running-labels
+            exp_annotations: *not-running-annotations
+
   # ── Healthy: every run succeeds ──────────────────────────────────────────
   - interval: 1m
     input_series:
       - series: 'airflow_scheduler_heartbeat'
         values: '0+12x60'
-      - series: 'airflow_ti_start{dag_id="lake_ingest",task_id="ingest"}'
-        values: '0+0.2x60'
       - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
         values: '0+0.2x60'
     alert_rule_test:

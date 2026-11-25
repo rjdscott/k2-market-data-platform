@@ -5,20 +5,26 @@
 # Scrape:  job airflow-statsd
 # Tests:   docker/prometheus/rules/tests/airflow-alerts_test.yml
 #
-# Every series here is a statsd COUNTER held in the exporter's memory. Two
-# properties of that shape every expression below:
+# Two kinds of series, both held in the exporter's memory:
 #
-#   * A counter exists only from its first increment. Its first failure arrives
-#     as a brand-new series at 1, and increase() over a series with no earlier
+#   * COUNTERS (ti_finish, scheduler_heartbeat), sent at each event. A counter
+#     exists only from its first increment. Its first failure arrives as a
+#     brand-new series at 1, and increase() over a series with no earlier
 #     sample is 0, so `increase(x[15m]) > 0` alone never sees the first one.
-#     Each rule adds the case of a series that is new in the window.
-#   * An exporter restart resets every counter to nothing. increase() treats
-#     the drop as a reset; the subtractions in AirflowLakeIngestSkippedRepeatedly
-#     go negative across one and stay quiet for that window. That is the
-#     accepted cost: one 15-minute blind spot after an exporter restart.
+#     Each rule adds the case of a series that is new in the window. An
+#     exporter restart resets every counter to nothing, and for 15 minutes
+#     after one an `offset 15m` reads the old process's count: the two lake
+#     rules below each say which way they go then.
+#   * The GAUGE ti_running: how many tries of a task the database holds as
+#     running, sent by the scheduler every 30 s (ti_metrics_interval). It is
+#     read from database state, not counted from events, so it is right again
+#     within 30 s of an exporter restart and has no first-increment case. A
+#     task that stops running is sent once more as 0; a task never seen
+#     running is not sent at all, so the series can be absent.
 #
-# NOT yet observed firing. Until the cutover lake_ingest ran a probe that took
-# no lock and so could never be skipped; the skip rule is live from then on.
+# Observed firing 2026-11-25, falsely: AirflowLakeIngestSkippedRepeatedly at
+# the end of the first lake_maintenance under Airflow. The grace below is the
+# fix.
 
 groups:
   - name: airflow
@@ -87,46 +93,54 @@ groups:
       # increase() extrapolates; `or (x * 0)` reads a series that did not exist
       # 15 minutes ago as 0, the first-increment case above.
       #
-      # Not while Airflow's own maintenance or rebuild is running: both take the
-      # lock for longer than three cycles on purpose, and a nightly page for it
-      # would be one nobody reads (airflow:lake_lock_holder_in_flight below). A
-      # writer started outside Airflow (a runbook, a chaos script,
+      # After an exporter restart it errs quiet: for up to 15 minutes the
+      # offset reads the old process's skip count, which the new count has to
+      # beat by 3, so a lock held across the restart fires up to 15 minutes
+      # late.
+      #
+      # Not while Airflow's own maintenance or rebuild is running, nor for a
+      # 15-minute grace after it ends: both take the lock for longer than three
+      # cycles on purpose, and a nightly page for it would be one nobody reads.
+      # A writer started outside Airflow (a runbook, a chaos script,
       # `make lake-rebuild`) is not excluded, and the runbook says how to tell.
       #
-      # RECORDING: 1 while an Airflow lake_maintenance or lake_rebuild try is in
-      # flight, absent otherwise. In flight is starts minus finishes above 0,
-      # AND a start within that DAG's dagrun_timeout (2h05m, 24h05m): a try
-      # killed without a ti_finish (a zombie after a scheduler kill) would
-      # otherwise hold the difference at 1 and mute both rules that read this
-      # until the exporter restarts. With a zombie on the books, the mute ends
-      # one dagrun_timeout after the latest start.
+      # The grace has to outlast one ingest slot starting and finishing after
+      # the holder ends, or the window still holds the skips taken under it.
+      # Observed 2026-11-25: lake_maintenance held the lock 06:10:21 to
+      # 06:33:58, the 06:11 to 06:31 slots skipped, and this fired at 06:36
+      # for about a minute, before the 06:36 run, the first to get the lock,
+      # had finished. Up to 5 minutes to the next slot, plus the first run
+      # after a hold, which reads the backlog the hold built (3.5 minutes that
+      # day), plus about a minute of scheduling, the 15 s scrape and the 30 s
+      # evaluation: 9.5 minutes. 15 is that with margin, and it is also the
+      # skip window, so by the time the grace lapses the skips taken under the
+      # holder have aged out of it even if that first run fails. The `> 0`
+      # keeps it to samples of a running holder: an absent series, or one at
+      # 0, mutes nothing.
+      #
+      # RECORDING: 1 while an Airflow lake_maintenance or lake_rebuild try is
+      # running, absent otherwise. The ti_running gauge, not starts minus
+      # finishes: the scheduler sends it from the database, so a zombie try
+      # (killed without a ti_finish) clears when the scheduler fails it, after
+      # task_instance_heartbeat_timeout (300 s), and a series first seen at 1
+      # reads 1. No time bound is needed.
+      #
+      # Ceiling: the 0 for a task that stopped running is sent by the scheduler
+      # that saw it run, from its memory. A scheduler stopped in the 30 s
+      # between a try's end and its next send leaves the exporter holding 1
+      # until that task runs again (a day for maintenance, the next trigger for
+      # rebuild), muting both rules that read this. Upgrade: a statsd_exporter
+      # mapping with a ttl of a few minutes on airflow.ti.running.
       - record: airflow:lake_lock_holder_in_flight
-        expr: |
-          (
-            (sum(airflow_ti_start{dag_id="lake_maintenance"})
-               - (sum(airflow_ti_finish{dag_id="lake_maintenance"}) or vector(0))) > 0
-            and on() (sum(airflow_ti_start{dag_id="lake_maintenance"})
-               - (sum(airflow_ti_start{dag_id="lake_maintenance"} offset 2h5m) or vector(0))) > 0
-          ) * 0 + 1
-          or
-          (
-            (sum(airflow_ti_start{dag_id="lake_rebuild"})
-               - (sum(airflow_ti_finish{dag_id="lake_rebuild"}) or vector(0))) > 0
-            and on() (sum(airflow_ti_start{dag_id="lake_rebuild"})
-               - (sum(airflow_ti_start{dag_id="lake_rebuild"} offset 24h5m) or vector(0))) > 0
-          ) * 0 + 1
+        expr: max(airflow_ti_running{dag_id=~"lake_maintenance|lake_rebuild"}) > 0
 
-      # RECORDING: 1 while a lake_ingest try is in flight, absent otherwise.
-      # Bounded the same way, by the run's dagrun_timeout of 2h05m (two tries
-      # of 3600 s, the retry delay and slack).
+      # RECORDING: 1 while a lake_ingest try is running, absent otherwise. The
+      # same gauge, for the same reasons. Starts minus finishes also read one
+      # short for the rest of an exporter's life after it restarted during a
+      # try, and AirflowLakeIngestNotRunning then warned through a long
+      # catch-up.
       - record: airflow:lake_ingest_in_flight
-        expr: |
-          (
-            (sum(airflow_ti_start{dag_id="lake_ingest"})
-               - (sum(airflow_ti_finish{dag_id="lake_ingest"}) or vector(0))) > 0
-            and on() (sum(airflow_ti_start{dag_id="lake_ingest"})
-               - (sum(airflow_ti_start{dag_id="lake_ingest"} offset 2h5m) or vector(0))) > 0
-          ) * 0 + 1
+        expr: max(airflow_ti_running{dag_id="lake_ingest"}) > 0
 
       - alert: AirflowLakeIngestSkippedRepeatedly
         expr: |
@@ -140,7 +154,7 @@ groups:
               - (airflow_ti_finish{dag_id="lake_ingest",state="success"} offset 15m
                   or airflow_ti_finish{dag_id="lake_ingest",state="success"} * 0)
           ) > 0
-          unless on() airflow:lake_lock_holder_in_flight
+          unless on() (max_over_time(airflow:lake_lock_holder_in_flight[15m]) > 0)
         for: 1m
         labels:
           severity: warning
@@ -175,9 +189,18 @@ groups:
       # finished since), once the scheduler has heartbeated for 15 minutes,
       # so a fresh stack's first slot does not warn. A scheduler that is not
       # heartbeating at all is AirflowSchedulerHeartbeatLost's. Not while a
-      # lake_ingest try is in flight (a long
-      # catch-up), or Airflow's maintenance or rebuild is: the recording
-      # rules above, each bounded so a zombie try cannot mute this for good.
+      # lake_ingest try is running (a long catch-up), nor while Airflow's
+      # maintenance or rebuild runs or for the 15-minute grace after it: an
+      # ingest paused under a long rebuild (runbook §3) and unpaused as it
+      # ends has no finish until the first run after it, the same slot plus
+      # first run the skip rule's grace is sized for.
+      #
+      # Quiet for 15 minutes after an exporter restart, deliberately: the
+      # offset then compares the old process's count with the new one, and
+      # they can match by coincidence (for an exporter that had counted three
+      # finishes when it restarted, the difference reads 0 the whole window).
+      # resets() of the heartbeat counter marks the restart. If nothing has
+      # finished since, the absent clause fires 20 minutes after it.
       - alert: AirflowLakeIngestNotRunning
         expr: |
           (
@@ -190,8 +213,9 @@ groups:
                 and on() sum(airflow_scheduler_heartbeat offset 15m)
             )
           )
+          unless on() (resets(airflow_scheduler_heartbeat[15m]) > 0)
           unless on() airflow:lake_ingest_in_flight
-          unless on() airflow:lake_lock_holder_in_flight
+          unless on() (max_over_time(airflow:lake_lock_holder_in_flight[15m]) > 0)
         for: 5m
         labels:
           severity: warning
