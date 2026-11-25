@@ -45,6 +45,12 @@ at the moment of capture, are for illustration only, and are not a data set
 | Disposable serving | ClickHouse `gold` is fed live from the topics and reloaded from the lake. Dedup is a `ReplacingMergeTree` key; candles are computed on read, so a replay cannot corrupt one. |
 | Proven | Nightly audits per layer, three-way OHLCV parity at a pinned snapshot, 28 alert rules as code, chaos scripts with measured recovery, a fresh-clone release check before every tag. |
 
+[![K2 Pipeline Overview on a live run: every scrape target up, trade records per venue, ClickHouse inserts, Redpanda throughput, and the pipeline's CPU and memory](docs/images/dashboards/01-pipeline-overview.png)](docs/operations/dashboards.md)
+
+The pipeline overview on a live run; its figures are venue-derived and for illustration only.
+Every other screen, in the order the data moves through them, with what to read from each and
+the runbook it leads to: [dashboards and consoles](docs/operations/dashboards.md).
+
 ## Architecture
 
 ```mermaid
