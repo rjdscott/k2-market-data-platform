@@ -69,4 +69,4 @@ shipped, the measured resource / latency / MTTR results, a scorecard of predicti
 against reality, and what is still unfinished.
 
 The v1 platform itself is archived at [`legacy/v1/`](../legacy/v1/README.md), including
-its 14 runbooks. They describe an architecture that no longer exists.
+its 14 runbooks. They describe an architecture that no longer exists. Every archive is indexed in [`legacy/README.md`](../legacy/README.md).
