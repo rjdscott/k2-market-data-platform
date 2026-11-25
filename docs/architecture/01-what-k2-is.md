@@ -11,8 +11,8 @@ books from three crypto exchanges over public WebSocket feeds, archives every fr
 verbatim to an Iceberg lake, derives typed and canonical layers from that archive, and
 serves the canonical layer from ClickHouse for dashboards and fast queries. It runs on one
 host inside a declared ceiling of 20 CPU / 36 GiB at the bootstrap peak
-([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)): as deployed, 19 long-running services at
-17.70 CPU / 31.688 GiB of limits, plus five one-shot init containers
+([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)): as deployed, 20 long-running services at
+17.80 CPU / 31.812 GiB of limits, plus five one-shot init containers
 ([docker-resources.md](../operations/docker-resources.md)).
 
 Three properties define it, and the rest of the book is their consequences:

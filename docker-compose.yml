@@ -372,6 +372,61 @@ services:
       com.k2.tier: "observability"
       com.k2.version: "v2"
 
+  # ───────────────────────────────────────────────────────────────────────
+  # cAdvisor - per-container CPU and memory, against each compose limit
+  # ───────────────────────────────────────────────────────────────────────
+  # Prometheus job 'cadvisor'; the K2 Resources dashboard reads it, and the
+  # limits it plots are container_spec_cpu_quota / _period and
+  # container_spec_memory_limit_bytes, read from the cgroups, not retyped.
+  #
+  # No published port: only Prometheus reads it, over k2-net. Not privileged
+  # and no /dev/kmsg, so no OOM-event counter; every capability dropped and the
+  # root filesystem read-only. The two sockets are what names a cgroup
+  # `k2-clickhouse` (v0.61's Docker factory goes through containerd), and
+  # `:ro` does not narrow a socket: whoever holds docker.sock can drive the
+  # engine, the same privilege prefect-worker and airflow-scheduler hold.
+  # cpu and memory only, one housekeeping pass per 15 s scrape instead of
+  # cAdvisor's default 1 s, and Prometheus keeps seven series names of the
+  # ~40 it exports (metric_relabel_configs in docker/prometheus/prometheus.yml).
+  # Measured standalone on 2026-11-25: 18 MiB RSS, under 0.3% of a core.
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.61.1
+    container_name: k2-cadvisor
+    hostname: cadvisor
+    networks:
+      - k2-net
+    volumes:
+      - /sys:/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
+    command:
+      - --housekeeping_interval=15s
+      - --max_housekeeping_interval=15s
+      - --docker_only=true
+      - --enable_metrics=cpu,memory
+      - --store_container_labels=false
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "monitoring"
+      com.k2.tier: "observability"
+      com.k2.version: "v3"
+
 #############################################################################
 # SERVICES - ORCHESTRATION LAYER
 #############################################################################
@@ -1234,6 +1289,7 @@ services:
 # minio                 | 1.0       | 1G           | S3-compatible storage
 # prometheus            | 1.0       | 2G           | Metrics collection
 # grafana               | 0.5       | 512M         | Visualization
+# cadvisor              | 0.1       | 128M         | Per-container CPU and memory (Prometheus job cadvisor)
 # prefect-db            | 1.0       | 1536M        | Prefect, Airflow and Lakekeeper metadata DB
 # prefect-server        | 1.0       | 1G           | Orchestration UI/API (Prefect 3.x)
 # prefect-worker        | 0.5       | 512M         | Workflow executor (Prefect 3.x)
@@ -1252,7 +1308,7 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (19 long-running) | 17.70 CPU | 31.688 GiB | v3 capture + lake, Airflow beside Prefect
+# STEADY STATE (20 long-running) | 17.80 CPU | 31.812 GiB | v3 capture + lake, Airflow beside Prefect
 #
 # One-shots are NOT free. They declare limits and they run concurrently with
 # the steady state at boot, so the budget that matters at `docker compose up` is
@@ -1266,14 +1322,15 @@ services:
 #   ----------------------------------------------------------------------------
 #   one-shot subtotal  2.0  | 2.5G
 #
-# Bootstrap peak: 19.70 CPU / 34.188 GiB, all 24 services, against the
+# Bootstrap peak: 19.80 CPU / 34.312 GiB, all 25 services, against the
 # 20 CPU / 36 GiB ceiling ADR-034 sets at the bootstrap peak (ADR-010's
 # 16 CPU / 40 GB clause is superseded). scripts/check-budget.py fails CI over
-# it. Headroom: 0.30 CPU and 1.812 GiB.
+# it. Headroom: 0.20 CPU and 1.688 GiB. cAdvisor took 0.10 CPU / 128M of the
+# 0.30 / 1.812 GiB ADR-034 left.
 #
 # Airflow beside Prefect is a parallel run and is paid for as one: the Prefect
 # pair (1.5 CPU / 1.5G) leaves at the archive pull request, landing steady state
-# at 16.20 CPU / 30.188 GiB. The Airflow limits are the plan's estimates until
+# at 16.30 CPU / 30.312 GiB. The Airflow limits are the plan's estimates until
 # ADR-034's measured figures replace them.
 #
 # History: retiring the three Kotlin feed handlers (ADR-019) gave back the
@@ -1290,5 +1347,5 @@ services:
 # Target: 20 CPU / 36 GiB at the bootstrap peak (ADR-034)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-25 (ADR-034: Airflow 3 beside Prefect, +5 services, ceiling 20 CPU / 36 GiB)
+# Last updated: 2026-11-25 (cAdvisor, +1 service; before it ADR-034: Airflow 3 beside Prefect, +5 services, ceiling 20 CPU / 36 GiB)
 #############################################################################

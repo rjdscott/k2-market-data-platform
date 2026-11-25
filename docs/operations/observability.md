@@ -23,6 +23,7 @@ container start, no click-ops.
 | `grafana` | `grafana:3000` | 15s | Grafana internal metrics |
 | `capture-{binance,kraken,coinbase}` | `capture-<x>:8082` | 15s | `k2-capture`, see below |
 | `lake-metrics` | `lake-metrics:8000` | 30s | [`docker/lake/metrics.py`](../../docker/lake/metrics.py), see below |
+| `cadvisor` | `cadvisor:8080` | 15s | cAdvisor v0.61.1, per-container CPU and memory and each container's cgroup limits, see below |
 
 Port 8082 is **not published to the host**, and the capture image is distroless, no curl,
 no shell. Read the series through Prometheus:
@@ -174,6 +175,40 @@ this file had one of each before it was written. `bronze.kraken_instrument` is t
 `LakeCommitAgeHigh` from the day `metrics.py` started enumerating the catalog.
 
 ### How the lake metrics are produced
+### Container metrics: cAdvisor
+
+The **`cadvisor`** service (`k2-cadvisor`, no published port) reads every container's
+cgroup, names it from the Docker API, and serves the result to Prometheus job `cadvisor`.
+Three choices keep it cheap: `--enable_metrics=cpu,memory`, one housekeeping pass every
+15 s instead of every second, and a `metric_relabel_configs` keep-list in
+[`prometheus.yml`](../../docker/prometheus/prometheus.yml) that stores seven series names
+for the `k2-*` containers and drops the rest, about 140 series in all.
+
+| Metric | Type | What it is |
+|--------|------|------------|
+| `container_cpu_usage_seconds_total` | counter | CPU time used; `rate()` of it is cores in use |
+| `container_cpu_cfs_periods_total`, `container_cpu_cfs_throttled_periods_total` | counter | Scheduler periods, and those in which the CPU limit held the container back |
+| `container_memory_working_set_bytes` | gauge | Memory the kernel counts against the limit |
+| `container_spec_cpu_quota`, `container_spec_cpu_period` | gauge | The CPU limit: quota ÷ period is cores, `cpus: '2.0'` reads 200000 / 100000 |
+| `container_spec_memory_limit_bytes` | gauge | The memory limit |
+
+Every series carries `name` (the container name, `k2-clickhouse`), `image` and `id`. Labels
+and names were read from a running v0.61.1 on 2026-11-25, not from the docs. CPU against its
+limit, per container:
+
+```bash
+curl -sG localhost:9090/api/v1/query --data-urlencode 'query=
+  sum by (name) (rate(container_cpu_usage_seconds_total{job="cadvisor"}[2m]))
+    / on (name) max by (name) (container_spec_cpu_quota{job="cadvisor"} / container_spec_cpu_period{job="cadvisor"})' \
+  | jq -r '.data.result[] | "\(.metric.name)\t\(.value[1])"'
+```
+
+It is not privileged and has no `/dev/kmsg`, so it reports no OOM events; every capability
+is dropped and its root filesystem is read-only. It does hold the Docker and containerd
+sockets, which is how a cgroup becomes `k2-clickhouse`, and a socket is not narrowed by
+`:ro`: that is the same engine-level privilege `prefect-worker` and `airflow-scheduler`
+hold.
+
 
 Every `k2_lake_*` series comes from the **`lake-metrics`** service, which runs
 [`docker/lake/metrics.py`](../../docker/lake/metrics.py) `--serve` and is scraped on
@@ -236,7 +271,8 @@ Honest gaps, in priority order:
 1. **No Alertmanager.** `alerting.alertmanagers.targets` is empty, alerts are visible in
    the Prometheus UI and Grafana but nothing routes to a pager or Slack.
 2. **No exporters for MinIO, PostgreSQL or Spark.** Their health is only observable via
-   `docker compose ps` and container logs.
+   `docker compose ps` and container logs; cAdvisor gives their CPU and memory, not whether
+   they answer.
 3. **No query-latency percentiles for ClickHouse.** Its Prometheus endpoint exposes
    counters only, no native histograms, so `clickhouse:query_duration_mean:5m` is a mean,
    not a p99.

@@ -7,9 +7,9 @@ only. The ceiling is **20 CPU / 36 GiB at the bootstrap peak**
 40 GB target of [ADR-010](../adr/ADR-010-resource-budget.md)), and `scripts/check-budget.py`
 fails CI over it.
 
-**As built, steady state: 17.70 CPU / 31.688 GiB across 19 long-running services.**
-**One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 19.70 CPU / 34.188 GiB
-across 24**, the one-shots run concurrently with the steady state at `docker compose up`,
+**As built, steady state: 17.80 CPU / 31.812 GiB across 20 long-running services.**
+**One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 19.80 CPU / 34.312 GiB
+across 25**, the one-shots run concurrently with the steady state at `docker compose up`,
 so that peak, not the steady state, is what the host has to absorb at boot, and it is the
 sum the ceiling gates. Airflow runs beside Prefect until the archive pull request of plan
 phase P2, a parallel run that the Prefect pair's 1.50 CPU / 1.500 GiB pays for until then.
@@ -41,7 +41,7 @@ for label, oneshot in (("steady", False), ("one-shot", True)):
     cpu = sum(float(l["cpus"]) for l in lim)
     gib = sum(int(l["memory"]) for l in lim) / 2**30
     print("%-9s %2d services  %5.2f CPU  %6.3f GiB" % (label, len(lim), cpu, gib))'
-steady    19 services  17.70 CPU  31.688 GiB
+steady    20 services  17.80 CPU  31.812 GiB
 one-shot   5 services   2.00 CPU   2.500 GiB
 ```
 
@@ -68,18 +68,19 @@ label was wrong. Run on 2026-11-25. `python3 scripts/check-budget.py` prints the
 | `airflow-statsd` | observability (Airflow) | 0.1 |, | 64 MB |, |
 | `prometheus` | observability | 1.0 | 0.5 | 2 GB | 1 GB |
 | `grafana` | observability | 0.5 | 0.25 | 512 MB | 256 MB |
+| `cadvisor` | observability (per-container CPU and memory) | 0.1 |, | 128 MB |, |
 | `capture-binance` | ingestion (v3) | 0.25 | 0.1 | 256 MB | 128 MB |
 | `capture-kraken` | ingestion (v3) | 0.25 | 0.1 | 256 MB | 128 MB |
 | `capture-coinbase` | ingestion (v3) | 0.25 | 0.1 | 512 MB | 128 MB |
 | `lake-metrics` | observability (v3 lake) | 0.1 |, | 128 MB |, |
-| **Steady state (19 long-running services)** | | **17.70** | **7.85** | **31.688 GiB** | **12.375 GiB** |
+| **Steady state (20 long-running services)** | | **17.80** | **7.85** | **31.812 GiB** | **12.375 GiB** |
 | `redpanda-init` | init (one-shot) | 0.25 |, | 128 MB |, |
 | `lakekeeper-migrate` | init (one-shot) | 0.5 |, | 256 MB |, |
 | `lake-init` | init (one-shot) | 0.25 |, | 128 MB |, |
 | `lake-ddl` | init (one-shot) | 0.5 |, | 1 GB |, |
 | `airflow-migrate` | init (one-shot) | 0.5 |, | 1 GB |, |
 | **One-shot subtotal (5)** | | **2.00** | **, ** | **2.500 GiB** | **, ** |
-| **Bootstrap peak (24 containers)** | | **19.70** | **7.85** | **34.188 GiB** | **12.375 GiB** |
+| **Bootstrap peak (25 containers)** | | **19.80** | **7.85** | **34.312 GiB** | **12.375 GiB** |
 
 `capture-coinbase` gets twice the memory of the other two because Coinbase's `level2`
 channel is full depth, not top-20, its subscribe snapshot alone is 5.2 MB
@@ -94,7 +95,8 @@ steady state at `docker compose up`, so the bootstrap peak is the number the hos
 absorb.
 
 Headroom against the 20 CPU / 36 GiB ceiling at the bootstrap peak, where it is gated:
-**0.30 CPU and 1.812 GiB**. The Airflow limits are the plan's estimates until ADR-034's
+**0.20 CPU and 1.688 GiB**: cAdvisor took 0.10 CPU / 128 MiB of the 0.30 / 1.812 GiB that
+ADR-034 left. The Airflow limits are the plan's estimates until ADR-034's
 measured figures replace them.
 
 ## Where the budget goes
@@ -127,9 +129,12 @@ measured figures replace them.
   That is half what the Kotlin handlers they replaced declared. RSS against these limits
   is **not yet measured** for the post-retirement stack ([ADR-010](../adr/ADR-010-resource-budget.md)
   Outcome); they are declared ceilings, not sizing from observation.
-- **Observability is 1.6 CPU / 2.625 GiB.** Prometheus and Grafana dominate it;
+- **Observability is 1.7 CPU / 2.750 GiB.** Prometheus and Grafana dominate it;
   `lake-metrics` (0.1 CPU / 128 MB) is the lake-alerts exporter, which reads Iceberg
-  snapshot summaries over the catalog and holds no state. Drop retention if you need the
+  snapshot summaries over the catalog and holds no state, and `cadvisor` (0.1 CPU / 128 MB)
+  reads each container's CPU, memory and limits from its cgroup for the K2 Resources
+  dashboard. Standalone on this host, 2026-11-25, cAdvisor ran at 18 MiB RSS and under 0.3%
+  of a core with these flags (`docker stats --no-stream`). Drop retention if you need the
   RAM back.
 - **The Iceberg catalog costs 0.25 CPU / 256 MB.** Lakekeeper
   ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)) is the whole of what the v3 lake
@@ -158,6 +163,14 @@ docker compose config | grep -A2 'limits:'
 # Actual usage right now
 docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}'
 ```
+
+The same comparison over time, per container and against the budget, is the K2 Resources
+dashboard (http://localhost:3000/d/k2-resources). It reads each limit from the container's
+cgroup through cAdvisor (`container_spec_cpu_quota` / `container_spec_cpu_period`,
+`container_spec_memory_limit_bytes`), so it shows what Docker enforces, which is what
+`docker compose config` declares once the container has been recreated. Its sums cover
+running containers only: the one-shots have exited, so they sit 2.00 CPU / 2.500 GiB below
+the bootstrap peak gated above.
 
 Two known behaviours to expect when comparing declared vs. actual:
 
