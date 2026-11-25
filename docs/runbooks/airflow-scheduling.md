@@ -14,15 +14,11 @@ is still the writer. During the shadow a failure here costs no data, and §3 can
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
-> **No command on this page has been run against the stack yet.** Each block carries a
-> `VERIFY:` line naming what has to be run and checked before this page can be trusted. No
-> failure has been induced, so no MTTR is measured.
-
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | Scheduler heartbeat lost | < 10 min | not measured, no failure induced yet |
-| 2 | A lake task failed after its retries | depends on what the script found | not measured, no failure induced yet |
-| 3 | `lake_ingest` skipped three runs in a row: the lock is held | < 15 min | not measured, no failure induced yet |
+| 1 | Scheduler heartbeat lost | < 10 min | alert 301 s after the stop; cleared 59 s after `up` (2026-11-25) |
+| 2 | A lake task failed after its retries | depends on what the script found | alert 27 s after the failure (2026-11-25) |
+| 3 | `lake_ingest` skipped three runs in a row: the lock is held | < 15 min | orphan driver gone 284 ms after TERM (2026-11-25); the alert not yet induced |
 | 4 | Catch up after a long stall, with a bigger driver | a manual run | not measured |
 
 ---
@@ -46,9 +42,7 @@ failed after `task_instance_heartbeat_timeout` (300 s) and retries it once.
 
 **Recovery**
 
-VERIFY: run all of this block on the live stack; check that the `up` query prints `1`
-for a running exporter, that `docker compose ps` lists both services, and that the job
-check prints `Found one alive job.` after the restart.
+Run on the live stack 2026-11-25: the scheduler was stopped on purpose. The `up` query printed `1`, the alert fired 301 s after the stop, `airflow jobs check` printed `Found one alive job.` 9 s after `docker compose up -d`, and the alert cleared 59 s after it. The heartbeat rate reads about 0.2 a second once the 2 m window has filled.
 
 ```bash
 # 1. Scheduler or exporter? 1 = exporter up, so the scheduler is the problem.
@@ -72,7 +66,7 @@ docker exec k2-airflow-scheduler airflow jobs check --job-type SchedulerJob --lo
 Then check §3's first command: if the scheduler died mid-run, a driver may still hold the
 lock.
 
-**Measured**, not yet: no scheduler has been stopped on purpose.
+**Measured**, 2026-11-25, one drill: the alert fired 301 s after `docker compose stop airflow-scheduler`, the scheduler job was alive 9 s after `up -d`, and the alert cleared 59 s after it.
 
 ---
 
@@ -93,10 +87,7 @@ audit is a finding.
 
 **Recovery**
 
-VERIFY: run all of this block on the live stack after a failed run exists (one can be made
-by stopping `spark-iceberg` across a slot); check the run id format the first command
-prints, the `find` path under `/opt/airflow/logs`, and that `pgrep` finds nothing once the
-run has ended.
+Run on the live stack 2026-11-25 against a failed run made on purpose (a `lake_rebuild` dry run with a layer name the script rejects): the run listed as `failed`, the log ended with the script's own error line and `Task failed with exception`, `AirflowTaskFailed` fired 27 s later, and `pgrep` found no process left. Task logs are JSON lines, one event per line.
 
 ```bash
 # 1. Which runs failed, and when.
@@ -124,7 +115,7 @@ Read the exit line and go where it points:
   ingest, 7200 s for maintenance). The task's `on_kill` stopped the driver; step 3 above
   confirms it. A slow ingest is a backlog: §4.
 
-**Measured**, not yet: no failure has been induced under Airflow.
+**Measured**, 2026-11-25, one drill: `AirflowTaskFailed` fired 27 s after a run failed on purpose.
 
 ---
 
@@ -147,11 +138,7 @@ the lock.
 
 **Recovery**
 
-VERIFY: run all of this block on the live stack; check that `pgrep -af` prints the PID and
-script of a running lake job, that the pidfile loop prints the `/tmp/k2-airflow-*.pid`
-files of Airflow-started drivers, and that `ps -o pid,etime,args` works in the Spark image.
-Induce it once by holding the lock with a manual `maintenance.py --audit-only` while
-`lake_ingest` runs for real (after the cutover).
+Run on the live stack 2026-11-25. `pgrep -af` prints each running lake job, and it also prints the `sh -c` wrapper that started it: the writer is the line that begins `python3`. `ps -o pid,etime,args` works in the Spark image. Not yet induced: three skips in a row under Airflow, which needs `lake_ingest` writing for real (after the cutover).
 
 ```bash
 # 1. Every lake writer is a python3 process running one of these scripts. The flock
@@ -181,8 +168,7 @@ Then one of:
   ([lake-recovery.md §5](./lake-recovery.md#5-ingest-killed-mid-run)), and the next slot
   resumes from the last committed offsets.
 
-VERIFY: run on the live stack against a real orphan driver; check that the driver exits
-within 10 s of the TERM and that the next `lake_ingest` run succeeds.
+Run on the live stack 2026-11-25 against a driver left behind on purpose (its parent shell killed): the driver was gone 284 ms after the TERM and the next scheduled run succeeded.
 
 ```bash
 docker exec k2-spark-iceberg kill -TERM <pid>
@@ -207,9 +193,7 @@ so no scheduled run starts beside it; one already in flight finishes first.
 **During the shadow** the DAG runs the probe and these params change nothing. Use the
 `docker exec` form in [lake-ingest-lag.md](./lake-ingest-lag.md) until the cutover.
 
-VERIFY: run on the live stack after the cutover; check that the run's log shows
-`--env=K2_LAKE_DRIVER_MEMORY=2g` and `--max-offsets-per-partition=1000000` in its `running:`
-line, and that a value outside the params' pattern (`"2 GB"`) is refused at trigger time.
+Run on the live stack 2026-11-25 during the shadow, so the run was a probe: its `running:` line carried `--env=K2_LAKE_DRIVER_MEMORY=2g` and `--max-offsets-per-partition=1000000`, and a trigger with `"driver_memory": "2 GB"` was refused with exit 1. Not yet run: a real catch-up through this trigger, which needs the cutover.
 
 ```bash
 docker exec k2-airflow-scheduler airflow dags trigger lake_ingest \

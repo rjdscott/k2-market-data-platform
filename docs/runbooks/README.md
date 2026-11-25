@@ -79,7 +79,7 @@ no longer exists, do not follow them against this stack.
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
-| [airflow-scheduling.md](./airflow-scheduling.md) | The Airflow scheduler stopped, a lake task failed after its retries, `lake_ingest` refused the writer lock three runs in a row, or a catch-up run with a bigger driver. Not yet run against the stack: every block carries a `VERIFY:` line | `AirflowSchedulerHeartbeatLost`, `AirflowTaskFailed`, `AirflowLakeIngestSkippedRepeatedly` |
+| [airflow-scheduling.md](./airflow-scheduling.md) | The Airflow scheduler stopped, a lake task failed after its retries, `lake_ingest` refused the writer lock three runs in a row, or a catch-up run with a bigger driver. Sections 1, 2 and the driver kill in 3 drilled on 2026-11-25; the three-skip alert and a real catch-up wait for the cutover. | `AirflowSchedulerHeartbeatLost`, `AirflowTaskFailed`, `AirflowLakeIngestSkippedRepeatedly` |
 
 ### Host / operations
 

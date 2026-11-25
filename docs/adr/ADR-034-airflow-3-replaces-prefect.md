@@ -204,23 +204,30 @@ The additions are the plan's estimates: api-server 1.0 / 1.5 GiB, scheduler 1.5 
 dag-processor 0.5 / 1 GiB, statsd exporter 0.1 / 64 MiB, `prefect-db` memory +0.5 GiB, and an
 `airflow-migrate` one-shot of 0.5 / 1 GiB. Headroom at the peak is 0.30 CPU and 1.812 GiB.
 
-**Budget, measured.** To be filled from the live stack over the 2 h shadow, with
-`docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}'` sampled every 15 s
-and the peak taken per container:
+**Budget, measured.** From the live stack over the shadow, 2026-11-25 02:13 to 04:27 UTC:
+`docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}'` sampled every 30 s
+(270 samples), mean and peak taken per container. The window includes the nightly
+maintenance (03:00 to 03:32 UTC, still Prefect's), which is where the `spark-iceberg` peaks are.
 
-| Service | Limit | Peak CPU | Peak memory |
-|---|---|---|---|
-| `airflow-api-server` | 1.0 / 1.5 GiB | MEASURE: peak CPU % | MEASURE: peak memory |
-| `airflow-scheduler` (during probe runs) | 1.5 / 3 GiB | MEASURE: peak CPU % | MEASURE: peak memory |
-| `airflow-dag-processor` | 0.5 / 1 GiB | MEASURE: peak CPU % | MEASURE: peak memory |
-| `airflow-statsd` | 0.1 / 64 MiB | MEASURE: peak CPU % | MEASURE: peak memory |
-| `airflow-migrate` (one run, fresh database) | 0.5 / 1 GiB | MEASURE: peak CPU % | MEASURE: peak memory |
-| `prefect-db` | 1.0 / 1.5 GiB | MEASURE: peak CPU % | MEASURE: peak memory |
-| `spark-iceberg` (ingest and probe in one slot) | 2.0 / 8 GiB | MEASURE: peak CPU % | MEASURE: peak memory |
+| Service | Limit | Mean CPU | Peak CPU | Peak memory |
+|---|---|---|---|---|
+| `airflow-api-server` | 1.0 / 1.5 GiB | 0.00 | 0.03 | 261 MiB |
+| `airflow-scheduler` (during probe runs) | 1.5 / 3 GiB | 0.02 | 0.94 | 429 MiB |
+| `airflow-dag-processor` | 0.5 / 1 GiB | 0.03 | 0.52 | 281 MiB |
+| `airflow-statsd` | 0.1 / 64 MiB | 0.00 | 0.03 | 21 MiB |
+| `airflow-migrate` (one run, fresh database) | 0.5 / 1 GiB | not sampled | not sampled | not sampled |
+| `prefect-db` | 1.0 / 1.5 GiB | 0.13 | 0.93 | 386 MiB |
+| `spark-iceberg` (ingest and probe in one slot, and the maintenance) | 2.0 / 8 GiB | 1.62 | 2.12 | 4,719 MiB |
 
-MEASURE: peak connections per role on `prefect-db` over the window,
-`docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d postgres -Atc "SELECT usename, count(*) FROM pg_stat_activity GROUP BY 1"`
-sampled with the stats above, against the `airflow` cap of 100 and the 200 total.
+CPU is in cores. `airflow-migrate` ran to completion in under 30 s, between two samples. The
+`dag-processor` peak sits at its limit for one sample at start-up; its mean is 0.03. Every
+Airflow service peaks under a third of its memory limit, so the limits are generous on this
+evidence; they stay as the plan set them until the cutover has run real ingests, and a
+reduction then is an appended Outcome.
+
+Peak connections per role on `prefect-db` over the same window, from
+`SELECT usename, count(*) FROM pg_stat_activity GROUP BY 1` sampled every 3 min: `airflow` 7
+against its cap of 100, `prefect` (Prefect and the Lakekeeper catalog) 21, of 200 total.
 
 **Risks:** the probe and Prefect's ingest start in the same minute in a 2 CPU container, so
 the shadow could slow the writer it watches; `scripts/airflow-shadow-check.sh` fails if any
