@@ -14,6 +14,9 @@
 #       one per slot, so the shadow did not disturb the writer.
 #
 # Exit 0 only if all three hold. Quote the result with its window: "2 h".
+# A gate before the cutover only, which the cutover runbook cites
+# (docs/runbooks/airflow-scheduling.md): once Prefect is stopped, check (3)
+# fails by design. It goes with Prefect at the archive pull request.
 # The verdict is scripts/airflow_shadow_check.py, tested without a stack.
 # Needs the stack up and .env loaded the way scripts/health.sh loads it.
 set -euo pipefail
