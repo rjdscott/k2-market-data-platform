@@ -72,7 +72,8 @@ never shares the 8 GiB container with an ingest.
    start is the same number copied, no ±1. A partition the map has never seen starts at
    `EARLIEST`: for an archive that is never expired, the beginning is always right.
 2. **Where to stop.** `bounded_offsets()` clips each partition at the broker's `latest`,
-   at `--max-offsets-per-partition` for backlog slicing, or at `--end-timestamp`. What it
+   at `--max-offsets-per-partition` for backlog slicing (600,000 by default,
+   [`docker/lake/README.md`](../../docker/lake/README.md)), or at `--end-timestamp`. What it
    leaves behind is the `k2_lake_ingest_backlog_offsets` gauge.
 3. **What is gone.** If a committed start is below the broker's earliest offset, retention
    evicted records the lake never read. `failOnDataLoss=true` and the run fails; it keeps
@@ -153,8 +154,9 @@ ClickHouse and DuckDB candles at a pinned snapshot.
 
 - **Batch, five minutes.** Freshness in the lake is bounded by the cron; ClickHouse covers the head
   from the topics. A streaming writer would need its own checkpoint store, the thing this design removes.
-- **One writer, one container.** Ingest, rebuilds and maintenance share 2 CPU / 8 GiB in turn; serial by lock is a capacity ceiling, not a correctness one.
-- **Retention is the deadline.** `raw.*` topics keep 48 h, the only door
+- **One writer, one container.** Ingest, rebuilds and maintenance share 3 CPU / 8 GiB in turn; serial by lock is a capacity ceiling, not a correctness one.
+- **Retention is the deadline.** `raw.*` topics keep 48 h or 2 GiB per partition, whichever
+  binds first, the only door
   [loss](03-data-engineering-concepts.md#backpressure-and-loss) can enter by, and it enters loudly:
   a longer outage is a recorded, acknowledged hole ([failure modes](16-failure-modes.md#lake-tier)).
 - **Bronze keeps vendor schemas.** Cross-venue work waits for gold; in exchange nothing a venue sent is normalised away before it can be inspected.

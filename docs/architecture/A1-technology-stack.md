@@ -4,7 +4,7 @@
 > **Read this if** reference; no reading order.
 > **Before this** nothing.
 
-Every component that runs, the version pinned, what it does here, and the decision record that chose it. Versions are read from [`docker-compose.yml`](../../docker-compose.yml), the Dockerfiles under `docker/`, and [`services/capture-rust/Cargo.toml`](../../services/capture-rust/Cargo.toml).
+Every component that runs, the version pinned, what it does here, and the decision record that chose it. Versions are read from [`docker-compose.yml`](../../docker-compose.yml), the Dockerfiles under `docker/`, [`services/capture-rust/Cargo.toml`](../../services/capture-rust/Cargo.toml), and [`dbt/pyproject.toml`](../../dbt/pyproject.toml).
 
 ## Infrastructure
 
@@ -17,11 +17,12 @@ Every component that runs, the version pinned, what it does here, and the decisi
 | Apache Iceberg | 1.8.1 | Lake table format. Parquet + zstd, copy-on-write deletes on every table, `commit.retry.num-retries=10` ([`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql)) | [ADR-007](../adr/ADR-007-iceberg-cold-storage.md), [ADR-013](../adr/ADR-013-pragmatic-iceberg-version-strategy.md) |
 | Lakekeeper | v0.13.9 (`quay.io/lakekeeper/catalog`) | The Iceberg REST catalog, on `127.0.0.1:18181`; metadata in a `lakekeeper` PostgreSQL database. Sole catalog since Phase D, the v2 Hadoop-catalog bind mount is deleted | [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md), [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md) |
 | Trino | 484 (`trinodb/trino:484`) | SQL over the lake: one node on the Lakekeeper REST catalog with the static MinIO keys, `127.0.0.1:8088`. Catalog `lake` (warehouse `k2`) is read-only at the connector; it writes only the per-domain catalogs and warehouses generated from `contracts/domains.yaml`, each by its own writer identity; identity is the `X-Trino-User` header, not authenticated ([`docker/trino/`](../../docker/trino/README.md)) | [ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md), [ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md) |
-| MinIO | RELEASE.2025-09-07T16-13-09Z | S3-compatible object store. Holds the lake bucket (`k2-lake`), which is now the only warehouse | [ADR-007](../adr/ADR-007-iceberg-cold-storage.md), [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) |
-| PostgreSQL | 15-alpine | Two databases on one server: Prefect's metadata, and Lakekeeper's catalog. No pipeline bookkeeping of its own, the lake's consumed offsets live in the Iceberg snapshot summary | [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md), [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md) |
-| Prefect | 3 (`prefecthq/prefect:3-python3.12`) | Schedules the two lake deployments on the `lake` work pool, `lake-ingest-5min` and `lake-maintenance-daily`. Workers, not agents | [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md) |
+| MinIO | RELEASE.2025-09-07T16-13-09Z | S3-compatible object store. Holds one bucket, `k2-lake`: the lake's warehouse `k2` and one mart warehouse per domain, each under its own key prefix `warehouse/<name>` ([chapter 19](19-lakehouse-and-domain-warehouses.md)) | [ADR-007](../adr/ADR-007-iceberg-cold-storage.md), [ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) |
+| PostgreSQL | 15-alpine | One server, container `k2-prefect-db`, with three databases: Airflow's metadata, Lakekeeper's catalog, and Prefect's, kept for the rollback. No pipeline bookkeeping of its own, the lake's consumed offsets live in the Iceberg snapshot summary | [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md), [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md), [ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md) |
+| Airflow | 3.3.2 (`apache/airflow:slim-3.3.2-python3.12`, built as `k2-airflow:3.3.2`) | Schedules every job: `lake_ingest` every 5 minutes, `lake_maintenance` nightly, `lake_rebuild` by hand, each a `docker exec` into the Spark container; and `dbt_marts` hourly, rendered from the dbt project by astronomer-cosmos 1.16.0 ([`docker/airflow/`](../../docker/airflow/Dockerfile)) | [ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md), [ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md) |
+| Prefect | 3 (`prefecthq/prefect:3-python3.12`) | Stopped. Server and worker sit behind `--profile legacy` as Airflow's rollback | [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md), [ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md) |
 | Prometheus | v3.2.0 | Scrapes capture ×3, ClickHouse, Redpanda, Grafana and `lake-metrics`. 30-day retention, 36 alert rules (10 capture + 14 lake + 6 ClickHouse + 6 Airflow) | |
-| Grafana | 11.5.0 | 4 provisioned dashboards in `docker/grafana/dashboards/` | |
+| Grafana | 11.5.0 | 6 provisioned dashboards in `docker/grafana/dashboards/` | |
 | Docker Compose | | The only deployment target. One file, 19 long-running services in the default profile (+5 one-shot init containers), explicit CPU/memory limits per service, 21.30 CPU / 37.812 GiB at the bootstrap peak under a 25 CPU / 48 GiB ceiling | [ADR-010](../adr/ADR-010-resource-budget.md), [ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md) |
 
 ## Capture tier (Rust)
@@ -51,11 +52,24 @@ Build is a multi-stage Dockerfile: `cargo-chef` caches the dependency layer, the
 |---|---|---|
 | PySpark | 3.5.5 (from base image) | Driver for both lake jobs: `docker/lake/ingest.py` and `docker/lake/maintenance.py` |
 | spark-sql-kafka-0-10 / spark-avro | 3.5.5 | The Redpanda read and the Avro decode. Baked into the Spark image with kafka-clients 3.4.1 and commons-pool2 2.11.1, the versions `spark-parent_2.12:3.5.5` declares |
-| prometheus-client | 0.21.1 | The lake exporter `docker/lake/metrics.py`, running as the `lake-metrics` service. Installed in the Prefect worker image, which `lake-metrics` reuses |
+| prometheus-client | 0.26.0 | The lake exporter `docker/lake/metrics.py`, running as the `lake-metrics` service, in an image of its own on `python:3.15.1-slim-trixie` ([`docker/lake-metrics/Dockerfile`](../../docker/lake-metrics/Dockerfile)) |
 
 The lake jobs deliberately depend on nothing else: `metrics.py` reads table metadata over the
 catalog's REST API with `urllib` rather than PyIceberg, whose `PyArrowFileIO` costs 122 MB of
 RSS on import alone against a 128 MB container limit.
+
+## Marts (dbt on Trino)
+
+[`dbt/`](../../dbt/README.md) is its own uv project; the Airflow image installs it into a
+virtualenv of its own from `dbt/uv.lock`, so dbt's pins never meet Airflow's.
+
+| Library | Version | Role |
+|---|---|---|
+| dbt-core | 1.12.7 | Builds each mart from one `SELECT`, with its tests, as the domain's writer `dbt_<domain>` |
+| dbt-trino | 1.12.0 | The adapter: every model runs as SQL on Trino 484 |
+| astronomer-cosmos | 1.16.0 | Renders the dbt project into the Airflow DAG `dbt_marts`, one task per node |
+| dbt_expectations, dbt_date | 0.10.10, 0.21.0 (`dbt/packages.yml`) | Generic data tests, such as the generated uniqueness test on a source's identifier; installed at image build, never at task time |
+| sqlfluff | 4.5.0 (dev) | Lints the models in `make test-dbt` and CI |
 
 ## Choices worth defending
 
@@ -70,6 +84,17 @@ RSS on import alone against a 128 MB container limit.
 **Iceberg REST, on the second attempt.** v2 ran a file-based Hadoop catalog because REST cost a day of version fights and bought nothing on one node ([ADR-013](../adr/ADR-013-pragmatic-iceberg-version-strategy.md)). It did not survive the lake becoming the system of record: a file catalog has no atomic commit, no multi-writer, and ClickHouse cannot read it. Lakekeeper replaced it ([ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md)), and the bind-mounted warehouse went with the v2 offload.
 
 **Prefect kept, repurposed.** [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md) argued for deleting it, and was right about the workload it described, five cron-triggered OHLCV jobs that materialized views absorbed entirely. What replaced that workload is a batch ingest that needs retries, run history, concurrency control and a place to see failures, which is Prefect's actual job. See [MIGRATION-JOURNEY.md](../MIGRATION-JOURNEY.md).
+That job then moved to Airflow 3, the orchestrator the platform plan chose, with the same
+dispatch ([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)); Prefect stays stopped
+as the rollback.
+
+**Trino beside Spark, not instead of it.** [ADR-006](../adr/ADR-006-spark-batch-only.md)
+rejected Trino as a replacement for Spark's ETL, and that still holds: every job that needs
+Kafka offsets, the writer lock or code per record stays in Spark. Trino does two other jobs:
+it serves SQL over the lake to every client, through a catalog that cannot commit, and it is
+the engine dbt builds the consumer marts on, outside the ingest's container
+([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md),
+[ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)).
 
 ## Not in the stack
 

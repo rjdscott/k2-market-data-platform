@@ -48,8 +48,27 @@ table is created by [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql)
 | **Gold** | `gold.trades`, `gold.book_top20`, `gold.dim_instrument`, `gold.dim_venue`, `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bars`, `gold.bbo_1s` | one schema for all venues: `exchange`, `canonical_symbol`, fixed-point `BIGINT` @1e-8 (`price_e8`, `qty_e8`), `exchange_ts`, `recv_ts_ns`, `trade_id`, `side`; one row per logical trade (venue replays collapsed here) | `src_*` → silver row that won the dedup | `(exchange, canonical_symbol, trade_id)`, true here, and only here |
 | **ClickHouse gold** | `gold.trades`, `gold.book_top20`, `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bars`, `gold.bbo_1s`, `gold.feed_errors`, plus the `ohlcv_live` / `bbo_live` views. `ReplacingMergeTree`, **no TTL**. **No `dim_*`**: the security master is a lake table only | the same values, not the same spellings: `price`/`qty`/`open`…`close` are `ALIAS` columns over the `_e8` integers, and the book arrays drop the `_e8` suffix | `src_snapshot_id` of the lake commit it was loaded from | as lake gold |
 
+| **Audit** | `audit.checks` | `run_ts`, `job`, `check_name`, `scope`, `passed`, `observed`, `detail`; one row per check per run, append-only. The ingest files `batch_offsets` here only when a batch misses its offsets ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)) | `job` names who asserted it | none: a failed check is never edited out |
+| **Marts** (domain warehouses, not the lake) | `market_analytics.candles.ohlcv_1m`, `market_analytics.delayed_candles.ohlcv_delayed_20m` (view), `market_analytics.venue_quality.venue_quality_scorecard`, `governance.quality_results.dq_results` (view) | SQL on Trino over lake tables, Trino's types (`decimal(38,10)`, `timestamp(6) with time zone`); defined by the dbt models under [`dbt/models/`](../../dbt/models/) | none on the row: a mart is rebuilt whole from the lake | its grain, declared in its product's `marts` entry and tested unique by dbt |
+
 Per-table grain, partitioning, time columns, dedup keys and a runnable example each:
 [data-catalog.md](../operations/data-catalog.md).
+
+**Marts and quality results, landed 2026-11-25.** A mart's columns are its dbt model's
+`SELECT`; there is no lake DDL for it. `market_analytics.candles.ohlcv_1m` has
+`gold.ohlcv_1m`'s grain and columns without `src_snapshot_id` and `computed_at`, and every
+arithmetic step casts, because Trino's decimal rules differ from Spark's
+([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md), [`dbt/README.md`](../../dbt/README.md)).
+The quality results have two shapes. Each domain's `dq.dbt_test_results` is one row per dbt
+test per run: `invocation_id`, `run_started_at`, `writer`, `unique_id`, `test_name`,
+`tested`, `status`, `failures`, `execution_time`, `message`
+([`record_test_results.sql`](../../dbt/macros/record_test_results.sql)). The view
+`governance.quality_results.dq_results` reads those and `audit.checks` in one shape:
+`checked_at`, `source_system`, `domain`, `subject`, `check_name`, `status`, `detail`
+([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)). The lake columns a mart
+reads are the contract between the two: `make generate` writes them, with Trino's types, into
+`dbt/models/_sources.yml`, so a lake column change reaches the marts' sources at the next
+`make generate`, and CI fails until that is committed.
 
 Rules: each layer is derived only from the one above; lineage points one layer up; vendor
 fields are never dropped (bronze columns, kept through silver); dedup is a gold concern;

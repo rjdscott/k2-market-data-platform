@@ -73,6 +73,11 @@ flowchart TB
   with `urllib` (`metrics.py`; PyIceberg's `PyArrowFileIO` costs 122 MB of RSS on import
   alone, against a 128 MB container limit): last commit timestamp, `max_kafka_ts`, backlog offsets, last compaction, rows / files / bytes
   per table. If the catalog is down the gauge freezes and the age grows: the alert you want.
+  Findings are counts stored on the commits to `audit.checks`. The ingest's are aged out
+  after 15 minutes: `k2_lake_offset_gaps_total`, `k2_lake_unresolvable_schema_ids_total` and
+  `k2_lake_batch_audit_failures_total`, the last from the check stage 1 runs on every batch
+  it commits ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)). The newest
+  maintenance run's failures are `k2_lake_audit_failures_total`.
 - **ClickHouse** ships its own `/metrics`; the two gold-feed rules watch
   `ClickHouseProfileEvents_KafkaMessagesFailed` and topic movement versus table growth.
 - **Rules** are four files by tier, 10 capture, 14 lake, 6 ClickHouse, 6 Airflow, each with
@@ -113,8 +118,9 @@ flowchart TB
   budgets; the burn-in that would justify SLOs is a Phase F item.
 - **Scrape gaps during chaos** are part of the record: a stopped ClickHouse shows as `up == 0`
   and the FMEA rows state what was lost versus delayed.
-- **Coverage is not uniform.** 25 of the 36 alerts are named by a `promtool` case, and the six
-  ClickHouse rules predate the `runbook` annotation, naming it in the description instead.
+- **Coverage is not uniform.** 25 of the 36 alerts are named by a `promtool` case. All 36
+  carry a `runbook` annotation; the six ClickHouse rules gained theirs on 2026-09-03, when
+  gate (d2) was added.
 
 ## Key points
 
