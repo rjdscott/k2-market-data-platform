@@ -1,6 +1,6 @@
 # ADR-034: Airflow 3 replaces Prefect; the default profile's ceiling is 20 CPU / 36 GiB
 
-**Status:** Accepted
+**Status:** Accepted; the 20 CPU / 36 GiB ceiling **superseded by [ADR-035](ADR-035-trino-and-dbt-for-marts.md)** (24 CPU / 42 GiB at the bootstrap peak; scoped, the rest stands)
 **Date:** 2026-11-25
 **Author:** Rob Scott
 **Category:** Orchestration, Infrastructure
@@ -405,3 +405,64 @@ CPU of headroom cannot absorb a further whole core.
 count, so it sizes its thread pool from the cpuset (`K2_HEAVY_CPUSET`, default 0-11), not
 from the CPU quota. Twelve threads under a 3.0 CPU quota will keep throttling in bursts
 whatever the quota; whether to set the thread count is a separate decision.
+
+---
+
+## Outcome (2026-11-25, the ceiling)
+
+**The 20 CPU / 36 GiB clause is superseded by
+[ADR-035](ADR-035-trino-and-dbt-for-marts.md): 24 CPU / 42 GiB at the bootstrap peak**,
+gated the same way by `scripts/check-budget.py`. The owner's decision, 2026-11-25: the host
+gives Docker 28 CPUs and 49.50 GiB, whole-stack use over 6 hours peaked near 3.6 cores and
+7.3 GiB of process memory (the owner's reading of cAdvisor on the K2 Resources dashboard),
+the ceiling is a sum of declared limits, and the
+platform runs as one always-on whole. Four cores stay outside it for the operating system
+and the engine. The Revisit trigger above, "the default bootstrap peak would pass 20 CPU or
+36 GiB, which P3's Trino estimate does", fired as predicted: Trino at 2.0 CPU / 4 GiB puts the
+peak at 21.30 CPU / 36.812 GiB across 24 services.
+
+The sentence "The `governance` profile is outside it" no longer describes the direction.
+Later phases run their services always-on inside the ceiling, with no opt-in profile. No
+service has the `governance` profile today, so `check-budget.py`'s governance line equals the
+default one.
+
+---
+
+## Outcome (2026-11-25, correction: Spark's thread count)
+
+The Outcome "2026-11-25, Spark CPU" above says Spark local mode sizes its thread pool from
+the 12 CPUs the container can see, and its open follow-up says the pool follows the cpuset
+rather than the quota. **Both are false.** Evidence gathered the same day inside
+`k2-spark-iceberg`:
+
+- a Java program printing `Runtime.getRuntime().availableProcessors()` prints 3;
+- the latest Spark event log has `"spark.master":"local[*]"` and `"Total Cores":3`;
+- `java -XX:+PrintFlagsFinal -version` shows `ParallelGCThreads = 3`.
+
+The JVM sizes itself from the 3.0 CPU quota, so the driver already ran 3 task threads on 3.0
+CPU. The throttling that remained came from those threads sharing the quota with the Python
+workers, the GC threads and the JIT compiler, not from a pool sized to 12.
+
+The experiment that follow-up proposed was run anyway, as a measurement of fewer threads:
+`spark.master local[2]` appended to `/opt/spark/conf/spark-defaults.conf` inside the running
+container (no repository change), 2026-11-25 10:24 to 11:28 UTC, 12 consecutive scheduled
+`lake_ingest` runs, all `success`, event log `"Total Cores":2`, the same queries as the
+3-thread measurement above:
+
+| | 3 task threads (13 runs) | 2 task threads (12 runs) |
+|---|---|---|
+| Run duration, median | 168 s | 186 s |
+| Run duration, p90 | 172 s | 188 s |
+| Run duration, min to max | 164 to 178 s | 178 to 189 s |
+| Throttled share of CFS periods, 30 min | 30 percent | 13 percent |
+| Peak CPU use, 60 min | 2.6 cores | 2.5 cores |
+
+**Reverted to `local[*]` (3 threads) at 11:30 UTC.** Two threads more than halved the
+throttled share and made every run about 11 percent slower. Run duration against the 300 s
+slot is what protects the backlog; the throttled share is a symptom, not a cost, while runs
+finish in under 60 percent of the slot.
+
+**What this does to the triggers above.** "The throttled share is above 25 percent" was a
+poor trigger: at 3 threads on a 3.0 CPU quota it is met permanently and says nothing about
+the backlog. It is withdrawn. The trigger that stands is **p90 `lake_ingest` duration above
+240 s over a day**.

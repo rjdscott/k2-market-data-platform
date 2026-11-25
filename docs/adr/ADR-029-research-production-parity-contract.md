@@ -221,3 +221,20 @@ fork and commit link, and recalls no copy already made.
 
 **Revisit when:** `make record-fixtures` fails on a venue while the synthetic tests pass;
 that is a protocol change the generator has to learn.
+
+## Outcome (2026-11-25, marts)
+
+**Clause 3 is scoped for marts by [ADR-035](ADR-035-trino-and-dbt-for-marts.md).** A table
+dbt builds in namespace `marts` is covered by dbt tests on its grain and columns, unit tests
+on its logic, and a reference computation where one is cheap, not by a second and a third
+engine. The worked example, dbt's `ohlcv_1m`, keeps the full check: equal to Spark's
+`gold.ohlcv_1m` at a pinned snapshot on open, high, low, close, trade count and volume
+(plan phase P3's exit). For the gold products the clause stands as written.
+
+What the Trino spike found that bears on that check (2026-11-25,
+[`docker/trino/README.md`](../../docker/trino/README.md)): Trino 484 reads the pinned
+snapshot by id (`FOR VERSION AS OF`), and its decimal arithmetic differs from Spark's.
+`DECIMAL(38,10) * DECIMAL(38,10)` is typed `decimal(38,6)` and fails with `Decimal overflow`
+once the exact product passes about 1e18, so `gold.candles()`'s `quote_volume` expression
+cannot be copied. `quote_volume` joins the comparison only if `typeof` shows both engines
+produce the same decimal; tolerance zero is not relaxed for it.
