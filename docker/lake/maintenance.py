@@ -730,7 +730,7 @@ def run_audits(spark, run_ts: datetime) -> list:
             # fires, and audit.checks — the table the runbook tells you to
             # query — is silent about the run that fired it.
             results.append(
-                _result(name, scope, False, -1, f"check raised {type(exc).__name__}: {exc}")
+                _result(name, scope, False, -1, O.check_raised(exc))
             )
 
     frame = spark.createDataFrame(

@@ -1,6 +1,6 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 35 alert rules (6 ClickHouse + 10 capture + 13 lake + 6 Airflow)
+Prometheus scrapes the stack, Grafana renders it, and 36 alert rules (6 ClickHouse + 10 capture + 14 lake + 6 Airflow)
 cover the things that actually break: capture goes down or silent, sequence gaps and book
 checksum failures, ClickHouse struggles, and the lake ingest falls behind or its nightly
 audit fails.
@@ -81,7 +81,7 @@ other service: [dashboards.md](./dashboards.md).
 
 ## Alert rules
 
-35 alert rules across four files (plus two ClickHouse recording rules and two Airflow ones). **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when `ClickHouseKafkaMessagesFailed` could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
+36 alert rules across four files (plus two ClickHouse recording rules and two Airflow ones). **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when `ClickHouseKafkaMessagesFailed` could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
 `runbook:` annotation — enforced by `scripts/check-docs.sh` gate (d2), added
 2026-09-03 after the 6 ClickHouse rules were found carrying none while gate (d),
 which only checks that the paths present resolve, passed them. The tables below are the index. The three `FeedHandler*` rules retired with
@@ -142,7 +142,7 @@ and a target label of the same name would win and rename the sample's to
 Alerts on capture series get `exchange` from the binary; alerts on `up` name the venue
 through `job` (`capture-<exchange>`).
 
-### `lake-alerts.yml`: v3 lake tier, Phase D (13)
+### `lake-alerts.yml`: v3 lake tier, Phase D (14)
 
 Every staleness expression is `time() - <a timestamp gauge>`, never a pre-computed age.
 `docker/lake/metrics.py` only recomputes on a successful catalog read, so an age gauge
@@ -152,6 +152,7 @@ freezes at its last small value during exactly the outage it is the backstop for
 |-------|----------|-----------|
 | `LakeIngestFailed` | critical | `raw.messages` has taken no commit for 30m, sustained 5m, the data-loss clock, against Redpanda's 48 h raw retention |
 | `LakeAuditFailed` | critical | The last maintenance run stamped a non-zero failed-check count into the `audit.checks` snapshot summary |
+| `LakeIngestBatchAuditFailed` | critical | `k2_lake_batch_audit_failures_total > 0`, no `for`: a batch stage 1 just committed does not match the offset range it read, filed as `batch_offsets` rows in `audit.checks` ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)). A pulse like `LakeOffsetGap`, aged out after 15 min; the commit is never blocked. Covered by `promtool`; unproven against a live fault |
 | `LakeDiskUsageCritical` | critical | `k2_lake_disk_used_ratio > 0.90` for 5m |
 | `LakeUnresolvableSchemaId` | warning | `k2_lake_unresolvable_schema_ids_total > 0` for 15m, a record names a writer schema the registry will not serve, so stage 2 skips that id and files an `audit.checks` row with `job='ingest'`. Its own gauge, keyed on `k2.job`, so it can neither clear nor be cleared by `LakeAuditFailed` |
 | `LakeOffsetGap` | warning | `k2_lake_offset_gaps_total > 0` for 5m, an ingest ran with `--accept-data-loss` and resumed past records Redpanda had already evicted. A **pulse, not a condition**: the row is filed once by the repairing run, the gauge ages out after 15 min like the schema-id one, and the alert resolves with nothing fixed. The durable record is the `offset_gap` row in `lake.audit.checks`; the alert only exists so a permanent hole accepted at a keyboard is not visible solely in a closed terminal. **Unproven against a live fault:** the repair of 2026-08-26 wrote the gauge's source property, but `lake-metrics` had been running since before the gauge existed and so served neither it nor `k2_lake_ingest_backlog_offsets`. Both appear on the exporter's next restart; the rule itself is covered by `promtool` |
@@ -164,14 +165,14 @@ freezes at its last small value during exactly the outage it is the backstop for
 | `LakeScrapeErrors` | warning | `k2_lake_scrape_errors_total > 0` for 5m, the catalog is up and a table is not |
 | `LakeDiskUsageHigh` | warning | `k2_lake_disk_used_ratio > 0.80` for 15m. **The rule is tested, the metric is host-dependent**, on a Docker Desktop host `os.statvfs` sees the VM's thin-provisioned disk (0.344) and not the machine's (0.79). See `docker/lake/README.md` |
 
-All thirteen carry unit tests in `docker/prometheus/rules/tests/lake-alerts_test.yml`, run
+All fourteen carry unit tests in `docker/prometheus/rules/tests/lake-alerts_test.yml`, run
 by `make check-docs` gate (c2). They are not the only ones: three `Capture*` rules, two
 `ClickHouseGold*`/`ClickHouseKafka*` rules and the six Airflow rules below are covered too,
-**24 of the 35**:
+**25 of the 36**:
 
 ```bash
 grep -rhoE 'alertname: [A-Za-z]+' docker/prometheus/tests/*.test.yml \
-  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 24, 2026-11-26 (23 on 2026-11-25, 17 on 2026-09-03)
+  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 25 with ADR-047's rule (24 before it, 23 on 2026-11-25, 17 on 2026-09-03)
 ```
 
 Each case is either "must fire on a synthetic series" or "must not fire on healthy
@@ -288,6 +289,7 @@ catch.
 | `k2_lake_added_records{table}` | gauge | `added-records` on the most recent commit |
 | `k2_lake_audit_failures_total` | gauge | `k2.audit-failures` on the newest `audit.checks` snapshot with `k2.job=maintenance` |
 | `k2_lake_unresolvable_schema_ids_total` | gauge | the same property on the newest snapshot with `k2.job=ingest` |
+| `k2_lake_batch_audit_failures_total` | gauge | `k2.batch-audit-failures` on the newest `audit.checks` snapshot with `k2.job=ingest` that carries it, 0 once 15 minutes old |
 | `k2_lake_disk_used_ratio` / `k2_lake_disk_free_bytes{path}` | gauge | `os.statvfs` on the warehouse filesystem |
 | `k2_lake_scrape_errors_total` | gauge | tables the last refresh could not read; 0 is healthy |
 

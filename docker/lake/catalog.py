@@ -165,8 +165,9 @@ def write_audit_rows(spark, rows: list, properties: dict, job: str = "ingest") -
     commit rather than one per row — per row the count in the newest summary is
     always 1, and a gauge reading it would report "at least one" while claiming
     to be a count. `properties` carries the per-finding count that the gauge for
-    THIS finding is read from (`k2.unresolvable-schema-ids`, `k2.offset-gaps`):
-    two ingest-side findings now share this table, and one shared count would
+    THIS finding is read from (`k2.unresolvable-schema-ids`, `k2.offset-gaps`,
+    `k2.batch-audit-failures`):
+    the ingest-side findings share this table, and one shared count would
     have each of them setting the other's gauge — the case
     docker/lake/offsets.py names next to those two constants.
 
@@ -177,15 +178,19 @@ def write_audit_rows(spark, rows: list, properties: dict, job: str = "ingest") -
     licenses the skip.
     """
     failures = sum(1 for r in rows if not r["passed"])
-    writer = (
-        spark.createDataFrame(rows)
-        .writeTo(CHECKS_TABLE)
-        .option(f"snapshot-property.{O.JOB}", job)
-        .option(f"snapshot-property.{O.AUDIT_FAILURES}", str(failures))
-    )
-    for name, value in properties.items():
-        writer = writer.option(f"snapshot-property.{name}", value)
+    # The DataFrame is built inside the try as well: a finding that cannot be
+    # filed returns False wherever in the write it failed, so a caller that
+    # treats the write as best-effort (the batch audit, ADR-047) cannot be
+    # failed by it.
     try:
+        writer = (
+            spark.createDataFrame(rows)
+            .writeTo(CHECKS_TABLE)
+            .option(f"snapshot-property.{O.JOB}", job)
+            .option(f"snapshot-property.{O.AUDIT_FAILURES}", str(failures))
+        )
+        for name, value in properties.items():
+            writer = writer.option(f"snapshot-property.{name}", value)
         writer.append()
     except Exception as exc:  # noqa: BLE001 - the finding already printed above
         print(f"could not write {len(rows)} audit row(s) ({exc})")

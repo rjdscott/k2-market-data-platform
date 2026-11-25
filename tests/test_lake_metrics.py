@@ -104,3 +104,45 @@ def test_the_listing_is_rooted_at_the_warehouse_prefix(metrics, fake_catalog):
     metrics.list_tables("PREFIX")
     assert fake_catalog[0].endswith("/v1/PREFIX/namespaces")
     assert all("/v1/PREFIX/namespaces" in url for url in fake_catalog)
+
+
+class Recorder:
+    def __init__(self):
+        self.value = None
+
+    def labels(self, **kw):
+        return self
+
+    def set(self, value):
+        self.value = value
+
+
+def test_each_ingest_finding_sets_only_its_own_gauge(metrics, monkeypatch):
+    """A batch-audit commit on audit.checks moves k2_lake_batch_audit_failures_total and
+    nothing else; read off the wrong key, it would page as an offset gap or a schema id."""
+    now = 1_800_000_000.0
+    snapshot = {
+        "snapshot-id": 1,
+        "timestamp-ms": int(now * 1000) - 60_000,
+        "summary": {"operation": "append", metrics.JOB: metrics.JOB_INGEST,
+                    # Different values, so a gauge read off the wrong key cannot pass.
+                    metrics.AUDIT_FAILURES: "5", metrics.BATCH_AUDIT_FAILURES: "2"},
+    }
+    monkeypatch.setattr(metrics, "list_tables", lambda prefix: [("audit", "checks")])
+    monkeypatch.setattr(metrics, "load_metadata", lambda prefix, ns, table: {
+        "current-snapshot-id": 1, "snapshots": [snapshot]})
+    monkeypatch.setattr(metrics, "_refresh_disk", lambda: None)
+    gauges = {}
+    for name in ("batch_audit_failures", "offset_gaps", "unresolvable_schema_ids", "audit_failures"):
+        gauges[name] = Recorder()
+        monkeypatch.setattr(metrics, name, gauges[name])
+
+    assert metrics.refresh("PREFIX", now) == 0
+    assert gauges["batch_audit_failures"].value == 2.0
+    assert gauges["offset_gaps"].value == 0.0
+    assert gauges["unresolvable_schema_ids"].value == 0.0
+    assert gauges["audit_failures"].value == 0.0  # the nightly audit's gauge, untouched by the ingest
+
+    # A pulse: 15 minutes after the failing batch, with none since, it reads 0.
+    assert metrics.refresh("PREFIX", now + metrics.INGEST_SUMMARY_MAX_AGE) == 0
+    assert gauges["batch_audit_failures"].value == 0.0

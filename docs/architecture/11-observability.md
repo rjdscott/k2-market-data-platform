@@ -4,7 +4,7 @@
 > **Read this if** operators, anyone adding an alert.
 > **Before this** chapter 04.
 
-Prometheus scrapes every tier, 35 rules carry runbooks and `promtool` cases, six Grafana
+Prometheus scrapes every tier, 36 rules carry runbooks and `promtool` cases, six Grafana
 dashboards ship from the repo, and the failure modes those rules watch are induced on purpose
 with timed recovery. No Alertmanager: rules are evaluated and shown, not routed. Operator
 detail: [operations/observability.md](../operations/observability.md); FMEA:
@@ -58,7 +58,7 @@ flowchart TB
   R["Redpanda · :9644"]
   L["lake-metrics · :8000<br/>k2_lake_* from snapshot summaries"]
   A["cAdvisor · :8080<br/>CPU, memory, cgroup limits per container"]
-  P["Prometheus v3.2<br/>rules/*.yml · 35 alerts"]
+  P["Prometheus v3.2<br/>rules/*.yml · 36 alerts"]
   G["Grafana 11.5<br/>6 dashboards"]
   X["scripts/chaos/*.sh<br/>induce · time · record"]
   C & H & R & L & A --> P --> G
@@ -75,8 +75,9 @@ flowchart TB
   per table. If the catalog is down the gauge freezes and the age grows: the alert you want.
 - **ClickHouse** ships its own `/metrics`; the two gold-feed rules watch
   `ClickHouseProfileEvents_KafkaMessagesFailed` and topic movement versus table growth.
-- **Rules** are three files by tier, 10 capture, 13 lake, 6 ClickHouse, each with a severity
-  and (bar one ClickHouse rule) a `for`. The 22 capture and lake rules carry a `runbook`
+- **Rules** are four files by tier, 10 capture, 14 lake, 6 ClickHouse, 6 Airflow, each with
+  a severity and, bar `ClickHouseKafkaMessagesFailed`, `AirflowTaskFailed` and
+  `LakeIngestBatchAuditFailed`, a `for`. All 36 carry a `runbook`
   annotation that gate (d) of `check-docs.sh` resolves to a file; unit tests sit in
   `docker/prometheus/tests/*.test.yml` and `rules/tests/*_test.yml`, both run by gate (c2).
   Prometheus loads rules at start or `SIGHUP`, so the docs say so.
@@ -96,8 +97,8 @@ flowchart TB
 
 | Practice | Where it is enforced |
 |---|---|
-| Alerts carry their runbook | 35 of 35, as a `runbook` annotation. Two gates, because one was not enough: `check-docs.sh` (d) checks the paths present resolve, (d2) checks every `- alert:` has one at all. Until 2026-09-03 only (d) existed and the 6 ClickHouse rules carried no annotation, passing a gate by having nothing to check, while this row claimed 22 of 28 were covered |
-| Alert thresholds unit-tested | 24 of 35 alert names asserted in `tests/*.test.yml` and `rules/tests/*_test.yml`, run by `promtool` in `check-docs.sh` and CI `docs` |
+| Alerts carry their runbook | 36 of 36, as a `runbook` annotation. Two gates, because one was not enough: `check-docs.sh` (d) checks the paths present resolve, (d2) checks every `- alert:` has one at all. Until 2026-09-03 only (d) existed and the 6 ClickHouse rules carried no annotation, passing a gate by having nothing to check, while this row claimed 22 of 28 were covered |
+| Alert thresholds unit-tested | 25 of 36 alert names asserted in `tests/*.test.yml` and `rules/tests/*_test.yml`, run by `promtool` in `check-docs.sh` and CI `docs` |
 | Staleness as timestamp, not rate | `k2_capture_last_message_ts_seconds`, `k2_lake_last_commit_ts_seconds`; `CaptureFeedStale`, `LakeCommitAgeHigh` |
 | Counters carry the reason | `reconnects_total{reason}`, `produce_errors_total{reason}` |
 | Build provenance exported | `k2_capture_build_info{git_sha}` |
@@ -112,7 +113,7 @@ flowchart TB
   budgets; the burn-in that would justify SLOs is a Phase F item.
 - **Scrape gaps during chaos** are part of the record: a stopped ClickHouse shows as `up == 0`
   and the FMEA rows state what was lost versus delayed.
-- **Coverage is not uniform.** 24 of the 35 alerts are named by a `promtool` case, and the six
+- **Coverage is not uniform.** 25 of the 36 alerts are named by a `promtool` case, and the six
   ClickHouse rules predate the `runbook` annotation, naming it in the description instead.
 
 ## Key points

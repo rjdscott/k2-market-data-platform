@@ -595,3 +595,68 @@ tests:
       - eval_time: 55m
         alertname: LakeIngestBacklogSustained
         exp_alerts: []
+
+  # ── LakeIngestBatchAuditFailed: a committed batch that is not its plan ───
+  # One failing batch at t=11m: metrics.py holds the count for 15 minutes, then
+  # ages it to 0. No `for`, so it fires on the first evaluation that sees the
+  # count, resolves on its own once the pulse has aged out, and fires again on
+  # the next failing batch with that batch's count.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_batch_audit_failures_total'
+        # 2 from t=11m through t=26m, 0 from t=27m, 1 from t=38m through t=43m, 0 from t=44m
+        values: '0+0x10 2+0x15 0+0x10 1+0x5 0+0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LakeIngestBatchAuditFailed
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: LakeIngestBatchAuditFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, component: lake, tier: cold}
+            exp_annotations:
+              summary: "2 finding(s) from the last ingest's batch audit"
+              description: |
+                Stage 1 committed a batch to raw.messages whose rows do not match
+                the offset range it read: a row count, a first or a last offset
+                differs. Each partition is a batch_offsets row in lake.audit.checks
+                with the planned and the found range; scope lake.raw.messages means
+                the audit itself could not run.
+
+                The committed offsets are already past the batch, so no later run
+                reads those records again. Re-read them while Redpanda still holds
+                them: the runbook has the order.
+              runbook: docs/runbooks/lake-ingest-batch-audit.md
+      - eval_time: 27m
+        alertname: LakeIngestBatchAuditFailed
+        exp_alerts: []
+      - eval_time: 38m
+        alertname: LakeIngestBatchAuditFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, component: lake, tier: cold}
+            exp_annotations:
+              summary: "1 finding(s) from the last ingest's batch audit"
+              description: |
+                Stage 1 committed a batch to raw.messages whose rows do not match
+                the offset range it read: a row count, a first or a last offset
+                differs. Each partition is a batch_offsets row in lake.audit.checks
+                with the planned and the found range; scope lake.raw.messages means
+                the audit itself could not run.
+
+                The committed offsets are already past the batch, so no later run
+                reads those records again. Re-read them while Redpanda still holds
+                them: the runbook has the order.
+              runbook: docs/runbooks/lake-ingest-batch-audit.md
+      - eval_time: 50m
+        alertname: LakeIngestBatchAuditFailed
+        exp_alerts: []
+
+  # Every batch clean: the gauge sits at 0 and it must never fire.
+  - interval: 1m
+    input_series:
+      - series: 'k2_lake_batch_audit_failures_total'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: LakeIngestBatchAuditFailed
+        exp_alerts: []

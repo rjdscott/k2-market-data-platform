@@ -4,8 +4,9 @@
 -- base tables as the view's owner, dbt_governance, whom rules.json lets read every catalog.
 --
 -- status is pass, fail, warn or error in both halves:
--- * a lake check: passed is pass; a check that raised is error (maintenance.run_audits files
---   it as not passed, observed -1, detail "check raised <exception>"); any other is fail.
+-- * a lake check: passed is pass; a check that raised is error (maintenance.run_audits and
+--   ingest.audit_batch file it as not passed, observed -1, detail "check raised <exception>",
+--   the prefix docker/lake/offsets.py CHECK_RAISED defines); any other is fail.
 -- * a dbt test: dbt's own pass, fail and warn; error, and skipped as error, because a skipped
 --   test never ran: a node upstream of it failed in the same invocation.
 -- domain is whose record it is, not what it is about: for a dbt test, the domain whose writer
