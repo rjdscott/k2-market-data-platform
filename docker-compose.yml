@@ -1071,7 +1071,7 @@ services:
     build:
       context: .
       dockerfile: docker/lake-metrics/Dockerfile
-    image: k2-lake-metrics:3.12.16  # local tag after build: the Python it runs
+    image: k2-lake-metrics:3.15.1  # local tag after build: the Python it runs
     container_name: k2-lake-metrics
     hostname: lake-metrics
     networks:

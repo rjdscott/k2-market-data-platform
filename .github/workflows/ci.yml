@@ -129,7 +129,7 @@ jobs:
           - name: lake-metrics
             dockerfile: docker/lake-metrics/Dockerfile
             load: true
-            tag: k2-lake-metrics:3.12.16
+            tag: k2-lake-metrics:3.15.1
           - name: spark
             dockerfile: docker/spark/Dockerfile
           - name: capture
@@ -172,7 +172,7 @@ jobs:
         if: matrix.name == 'lake-metrics'
         run: >-
           docker run --rm --network none -v "$PWD/docker/lake":/opt/lake:ro
-          k2-lake-metrics:3.12.16 python /opt/lake/metrics.py --self-check
+          k2-lake-metrics:3.15.1 python /opt/lake/metrics.py --self-check
 
   compose:
     name: Compose (config validation)
