@@ -49,12 +49,14 @@ def test_the_repository_validates():
 def test_every_table_outside_audit_has_exactly_one_contract():
     tables = [t for t in ddl.parse(ROOT / cli.LAKE_SQL) if not t.startswith("audit.")]
     described = [yaml.safe_load(p.read_text())["schema"][0]["physicalName"] for p in (ROOT / "contracts").glob("*/*/*.odcs.yaml")]
-    # audit.checks has one too, because a mart reads it (venue-quality).
+    # audit.checks has one too, because marts read it (venue-quality, quality-results).
     assert sorted(described) == sorted([*tables, "audit.checks"])
 
 
 def test_an_audit_table_may_go_without_a_contract(tree):
+    # Only while no mart reads it: today venue-quality and quality-results do.
     shutil.rmtree(tree / AUDIT)
+    shutil.rmtree(tree / "contracts/governance/quality-results")
     edit(tree / "contracts/market-analytics/venue-quality/product.yaml", lambda d: d.update(inputs=[{"table": "gold.trades"}], marts=[{**d["marts"][0], "reads": ["gold.trades"]}]))
     assert cli.validate(tree) == []
 
@@ -154,13 +156,19 @@ def test_a_latency_without_a_unit_fails_the_k2_profile(tree):
     assert [e for e in cli.validate(tree) if e.startswith(f"{TRADES}: $.slaProperties[0]") and "'unit' is a required property" in e]
 
 
-@pytest.mark.parametrize("name", ["staging", "intermediate"])
-def test_a_product_named_like_a_dbt_layer_schema_is_rejected(tree, name):
-    # Its marts would share <catalog>.<name> with the domain's staging or intermediate views.
+@pytest.mark.parametrize(
+    ("name", "why"),
+    [
+        ("staging", "the schema dbt keeps every domain's staging models in (dbt/macros/naming.sql)"),
+        ("intermediate", "the schema dbt keeps every domain's intermediate models in (dbt/macros/naming.sql)"),
+        ("dq", "the schema every domain's dbt run records its test results in (dbt/macros/record_test_results.sql)"),
+    ],
+)
+def test_a_product_named_like_a_platform_schema_is_rejected(tree, name, why):
+    # Its marts would share <catalog>.<name> with the domain's staging or intermediate views,
+    # or with the test results its dbt runs record (ADR-046).
     generate.scaffold(tree, "market-analytics", name)
-    assert cli.validate(tree) == [
-        f"contracts/market-analytics/{name}/product.yaml: product name {name} is the schema dbt keeps every domain's {name} models in (dbt/macros/naming.sql)"
-    ]
+    assert cli.validate(tree) == [f"contracts/market-analytics/{name}/product.yaml: product name {name} is {why}"]
 
 
 def test_a_mart_is_a_table_or_a_view_by_its_contract(tree):

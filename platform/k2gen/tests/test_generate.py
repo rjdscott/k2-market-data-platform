@@ -249,7 +249,10 @@ def test_dbt_sources_carry_trino_types_the_identifier_check_and_freshness():
 
 
 def test_one_dbt_selector_per_domain_with_marts():
-    (selector,) = yaml.safe_load(generate.render(ROOT)[generate.DBT_SELECTORS])["selectors"]
+    # Domains with no mart (fx-reference, market-capture, reference-data) get none.
+    governance, selector = yaml.safe_load(generate.render(ROOT)[generate.DBT_SELECTORS])["selectors"]
+    assert governance["name"] == "governance"
+    assert governance["definition"]["union"] == [{"method": "fqn", "value": "governance"}, {"method": "source", "value": "audit.checks"}]
     assert selector["name"] == "market_analytics"
     assert selector["definition"]["union"] == [
         {"method": "fqn", "value": "market_analytics"},
@@ -263,6 +266,7 @@ def test_a_removed_mart_takes_its_sources_and_selector_with_it(tree):
     # The last marts gone: what scripts/dbt-test.sh then shows dbt still parses.
     shutil.rmtree(tree / "contracts/market-analytics/delayed-candles")
     shutil.rmtree(tree / "contracts/market-analytics/venue-quality")
+    shutil.rmtree(tree / "contracts/governance/quality-results")
     path = tree / "contracts/market-analytics/candles/product.yaml"
     doc = yaml.safe_load(path.read_text())
     del doc["marts"]

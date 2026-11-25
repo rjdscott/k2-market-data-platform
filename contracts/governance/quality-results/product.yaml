@@ -1,0 +1,31 @@
+name: quality-results
+domain: governance
+owner: platform-team
+purpose: >-
+  Every quality result the platform records, in one shape: the lake jobs' checks from
+  lake.audit.checks (maintenance audits and the ingest's findings), and every data test and
+  unit test each domain's dbt run recorded in table dq.dbt_test_results of its own catalog.
+  One row per check per run, with when it ran, which system and domain recorded it, what it
+  checked, its status as pass, fail, warn or error, and the detail; a lake check filed more
+  than once under one run and scope (a rebuild's day slices) is one row, its worst. Left out
+  on purpose: silver_flags, which cannot fail, and the operator, verify and replay rows,
+  which are not checks of the platform's data (a failed replay says a research run did not
+  complete). Not recorded at all: the tests of a dbt node Airflow never started because a
+  task upstream of it failed, so a test with no recent row has not run. A Trino view,
+  rebuilt after the other domains in every dbt_marts run, readable through Trino only
+  (ADR-046).
+kind: consumer-aligned
+lifecycle: draft
+inputs:
+  - table: audit.checks
+outputs: []
+consumers: []
+# The per-domain result tables are not lake tables and have no contract, so `reads` cannot
+# name them: they are platform plumbing every domain's writer keeps (ADR-046). The view
+# finds them at build time, one per domain with marts, and skips a domain that has none yet
+# (dbt/models/governance/staging/stg_dq__dbt_test_results.sql).
+marts:
+  - table: governance.quality_results.dq_results
+    grain: [source_system, checked_at, subject, check_name]
+    reads: [audit.checks]
+    materialized: view

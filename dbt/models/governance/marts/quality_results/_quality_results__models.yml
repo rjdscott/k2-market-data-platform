@@ -1,0 +1,125 @@
+models:
+  - name: dq_results
+    description: >-
+      Every quality result the platform records, one row per check per run: the lake jobs'
+      checks from lake.audit.checks and every test each domain's dbt runs recorded in its own
+      dq.dbt_test_results, with status pass, fail, warn or error. A lake check filed more than
+      once under one run, scope and name (a rebuild's day slices) is one row, its worst. The
+      tests of a node Airflow never started (upstream_failed) have no row. A view (ADR-046),
+      read through Trino only. Product quality-results, contracts/governance/quality-results/product.yaml.
+    columns:
+      - name: checked_at
+        description: When the check ran, UTC; the lake job's run_ts, or the start of the dbt invocation that ran the test.
+        data_tests: [not_null]
+      - name: source_system
+        description: lake_audit, a row of lake.audit.checks; or dbt, a row of a domain's dq.dbt_test_results.
+        data_tests: [not_null]
+      - name: domain
+        description: >-
+          Whose record it is, not what it is about: for dbt, the domain whose writer ran the
+          test; for lake_audit, market-capture, which owns lake.audit.checks.
+      - name: subject
+        description: >-
+          What was checked: a lake check's scope (a table, a table and venue, or a topic
+          partition); a dbt test's model or source as catalog.schema.table, or the test's own
+          id when it is attached to neither.
+        data_tests: [not_null]
+      - name: check_name
+        description: The lake check's name (docker/lake/maintenance.py AUDITS, the ingest's), or the dbt test's.
+        data_tests: [not_null]
+      - name: status
+        description: pass, fail, warn or error. A lake check that raised, and a dbt test that errored or was skipped, is error.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [pass, fail, warn, error]
+      - name: detail
+        description: >-
+          For a lake check, observed and its detail, after "<n> rows, the worst shown" when the
+          run filed it more than once under one scope; for a dbt test, dbt's message, cut at
+          1000 characters.
+    data_tests:
+      # The grain, as the contract declares it; scripts/dbt_manifest_check.py requires this test.
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          name: dq_results_unique_on_its_grain
+          arguments:
+            column_list: [source_system, checked_at, subject, check_name]
+
+unit_tests:
+  # Made-up checks and tests, so the normalisation is tested and not the platform's results.
+  - name: dq_results_normalises_the_lake_checks
+    description: >-
+      Passed is pass, a check that raised is error and any other failure is fail, observed -1
+      alone included; ingest findings are checks. silver_flags and the operator, verify and
+      replay rows are not checks and are left out.
+    model: dq_results
+    given:
+      - input: ref('stg_lake__audit_checks')
+        rows:
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: maintenance, check_name: duplicate_identifiers, scope: lake.gold.trades, passed: true, observed: 0, detail: ""}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: maintenance, check_name: silver_parity, scope: lake.silver.trades_alpha, passed: false, observed: 5, detail: five rows differ}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: maintenance, check_name: kraken_checksum, scope: lake.silver.book_alpha, passed: false, observed: -1, detail: "check raised ValueError: boom"}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: maintenance, check_name: offset_continuity, scope: market.crypto.v3.raw.alpha/7, passed: false, observed: -1, detail: gap}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: maintenance, check_name: silver_flags, scope: lake.silver.trades_alpha, passed: true, observed: 9, detail: ""}
+          - {run_ts: "2001-01-01 06:00:00.000000 UTC", job: ingest, check_name: offset_gap, scope: market.crypto.v3.raw.alpha/7, passed: false, observed: 11, detail: null}
+          - {run_ts: "2001-01-01 07:00:00.000000 UTC", job: operator, check_name: manual_purge, scope: lake.bronze.alpha_trade, passed: true, observed: 40, detail: ""}
+          - {run_ts: "2001-01-01 08:00:00.000000 UTC", job: replay, check_name: replay, scope: market.crypto.v3.raw.alpha/1, passed: true, observed: 40, detail: ""}
+          - {run_ts: "2001-01-01 09:00:00.000000 UTC", job: verify, check_name: offset_continuity, scope: lake.raw.messages, passed: true, observed: 0, detail: ""}
+      - input: ref('stg_dq__dbt_test_results')
+        rows: []
+    expect:
+      rows:
+        - {source_system: lake_audit, domain: market-capture, subject: lake.gold.trades, check_name: duplicate_identifiers, status: pass, detail: observed 0}
+        - {source_system: lake_audit, domain: market-capture, subject: lake.silver.trades_alpha, check_name: silver_parity, status: fail, detail: observed 5; five rows differ}
+        - {source_system: lake_audit, domain: market-capture, subject: lake.silver.book_alpha, check_name: kraken_checksum, status: error, detail: "observed -1; check raised ValueError: boom"}
+        - {source_system: lake_audit, domain: market-capture, subject: market.crypto.v3.raw.alpha/7, check_name: offset_continuity, status: fail, detail: observed -1; gap}
+        - {source_system: lake_audit, domain: market-capture, subject: market.crypto.v3.raw.alpha/7, check_name: offset_gap, status: fail, detail: observed 11}
+
+  - name: dq_results_folds_one_lake_key_to_its_worst_row
+    description: >-
+      A rebuild files bronze_parity once per venue and day under one run_ts and scope. Each
+      (run_ts, scope, check_name) is one row: error over fail over pass, the worst row's
+      detail, and how many rows it stands for. A key filed once is unchanged.
+    model: dq_results
+    given:
+      - input: ref('stg_lake__audit_checks')
+        rows:
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: ingest, check_name: bronze_parity, scope: bronze.alpha, passed: false, observed: 4, detail: day one}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: ingest, check_name: bronze_parity, scope: bronze.alpha, passed: false, observed: -1, detail: "check raised ValueError: boom"}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: ingest, check_name: bronze_parity, scope: bronze.alpha, passed: true, observed: 0, detail: ""}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: maintenance, check_name: silver_parity, scope: lake.silver.trades_alpha, passed: true, observed: 0, detail: ""}
+          - {run_ts: "2001-01-01 03:00:00.000000 UTC", job: maintenance, check_name: silver_parity, scope: lake.silver.trades_alpha, passed: false, observed: 2, detail: two rows differ}
+          - {run_ts: "2001-01-01 04:00:00.000000 UTC", job: ingest, check_name: bronze_parity, scope: bronze.alpha, passed: false, observed: 7, detail: another run}
+      - input: ref('stg_dq__dbt_test_results')
+        rows: []
+    expect:
+      rows:
+        - {subject: bronze.alpha, check_name: bronze_parity, status: error, detail: "3 rows, the worst shown; observed -1; check raised ValueError: boom"}
+        - {subject: lake.silver.trades_alpha, check_name: silver_parity, status: fail, detail: "2 rows, the worst shown; observed 2; two rows differ"}
+        - {subject: bronze.alpha, check_name: bronze_parity, status: fail, detail: observed 7; another run}
+
+  - name: dq_results_normalises_every_domains_dbt_tests
+    description: >-
+      dbt's pass, fail and warn are kept; error is error, and so is skipped, with the reason
+      in detail. The subject is the tested relation, or the test's own id when it has none;
+      the domain is the one whose table the row came from.
+    model: dq_results
+    given:
+      - input: ref('stg_lake__audit_checks')
+        rows: []
+      - input: ref('stg_dq__dbt_test_results')
+        rows:
+          - {domain: alpha-desk, run_started_at: "2001-01-01 10:10:00.000000 UTC", unique_id: test.k2.t1.1, test_name: t1, tested: lake.gold.trades, status: pass, message: null}
+          - {domain: alpha-desk, run_started_at: "2001-01-01 10:10:00.000000 UTC", unique_id: test.k2.t2.2, test_name: t2, tested: alpha_desk.p.m, status: fail, message: "Got 3 results, configured to fail if != 0"}
+          - {domain: alpha-desk, run_started_at: "2001-01-01 10:10:00.000000 UTC", unique_id: test.k2.t3.3, test_name: t3, tested: alpha_desk.p.m, status: warn, message: "Got 1 result, configured to warn if != 0"}
+          - {domain: beta-desk, run_started_at: "2001-01-01 10:11:00.000000 UTC", unique_id: unit_test.k2.m.u1, test_name: u1, tested: beta_desk.q.n, status: error, message: Database Error}
+          - {domain: beta-desk, run_started_at: "2001-01-01 10:11:00.000000 UTC", unique_id: test.k2.t4.4, test_name: t4, tested: beta_desk.q.n, status: skipped, message: null}
+          - {domain: beta-desk, run_started_at: "2001-01-01 10:11:00.000000 UTC", unique_id: test.k2.lonely, test_name: lonely, tested: null, status: pass, message: null}
+    expect:
+      rows:
+        - {source_system: dbt, domain: alpha-desk, subject: lake.gold.trades, check_name: t1, status: pass, detail: null}
+        - {source_system: dbt, domain: alpha-desk, subject: alpha_desk.p.m, check_name: t2, status: fail, detail: "Got 3 results, configured to fail if != 0"}
+        - {source_system: dbt, domain: alpha-desk, subject: alpha_desk.p.m, check_name: t3, status: warn, detail: "Got 1 result, configured to warn if != 0"}
+        - {source_system: dbt, domain: beta-desk, subject: beta_desk.q.n, check_name: u1, status: error, detail: Database Error}
+        - {source_system: dbt, domain: beta-desk, subject: beta_desk.q.n, check_name: t4, status: error, detail: "skipped, a node upstream of it failed"}
+        - {source_system: dbt, domain: beta-desk, subject: test.k2.lonely, check_name: lonely, status: pass, detail: null}

@@ -16,3 +16,8 @@ apply_dbt_builtins = True
 # dbt's cross-database current_timestamp(), which a unit test overrides to fix "now".
 [sqlfluff:templater:jinja:macros]
 current_timestamp = {% macro current_timestamp() %}current_timestamp{% endmacro %}
+
+# dbt's execute is false at parse time; here it keeps the linter out of the blocks that ask
+# the warehouse (graph, adapter), as in models/governance/staging/stg_dq__dbt_test_results.sql.
+[sqlfluff:templater:jinja:context]
+execute = False

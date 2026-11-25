@@ -25,15 +25,18 @@ disagree: columns and partitioning in `lake.sql`, retention as one CLI default i
 
 ## Domains and products
 
-Four domains, each owned by one named team ([ADR-033](../adr/ADR-033-data-mesh-four-domains.md)),
+Five domains, each owned by one named team ([ADR-033](../adr/ADR-033-data-mesh-four-domains.md);
+the fifth, `governance`, [ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)),
 registered in [`contracts/domains.yaml`](../../contracts/domains.yaml) and routed for review
 by `.github/CODEOWNERS`. Every team maps to the repository's one account today, so the
 boundaries are declared and checked, not yet exercised by a second team.
 
 A **product** is a directory, `contracts/<domain>/<product>/`: a descriptor, `product.yaml`
 (owner, purpose, kind, lifecycle, inputs, outputs, known consumers), and one Open Data
-Contract Standard v3 contract per output table beside it. `k2gen validate` reports nine
-products and 25 contracts, one for every table in `lake.sql` outside `audit`.
+Contract Standard v3 contract per output table beside it. `k2gen validate` reports 13
+products and 26 contracts: one for every table in `lake.sql` outside `audit`, and one for
+`audit.checks`, which marts read. A product may build only marts, as `delayed-candles`,
+`venue-quality` and `quality-results` do, with `outputs: []`.
 
 ```mermaid
 flowchart TB
@@ -49,19 +52,42 @@ flowchart TB
   subgraph analytics ["market-analytics, consumer-aligned"]
     canonical["canonical-trades"] --> candles["candles"]
     canonical --> bars["event-bars"]
+    candles --> delayed["delayed-candles"]
+    canonical --> vq["venue-quality"]
     snapshots["book-snapshots"]
   end
+  subgraph governance ["governance, consumer-aligned"]
+    quality["quality-results"]
+  end
+  audit["lake-audit, market-capture"]
   topics --> raw
   frames --> master
   vtrades --> canonical
   vbooks --> snapshots
+  audit --> vq
+  audit --> quality
+  analytics -. "dbt test results" .-> quality
 ```
 
 Product to product, from each descriptor's `inputs`. The two configuration files a product
 declares as external inputs (`config/instruments.yaml`, `config/bars.yaml`) are left off.
-`fx-reference` is declared with its owner and has no product until phase P4. The generated
+`fx-reference` is declared with its owner and has no product until phase P4. The dotted edge
+is not a contract input: every domain's dbt runs record their tests in their own catalog, and
+`quality-results` reads those tables as platform plumbing (below). The generated
 [product index](../products/README.md) has a page per product, with the same flow drawn table
 by table.
+
+## The governance domain
+
+`governance` is a domain like any other, owned by `platform-team`
+([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)). The platform team owns the
+road, and this one domain: its products are records about the other domains' data, which no
+domain reads back. Its first product, `quality-results`, is one view,
+`governance.quality_results.dq_results`: the lake jobs' checks from `lake.audit.checks` and
+every test each domain's dbt runs recorded in its own `dq.dbt_test_results`, with status pass,
+fail, warn or error. No writer writes outside its own catalog for it: each domain records its
+own results, and the view only reads ([`dbt/`](../../dbt/README.md)). `lake-audit` stays a
+`market-capture` product, because the lake's jobs write it about that domain's tables.
 
 ## What a contract declares
 
@@ -86,7 +112,8 @@ steps 2 to 4 report together.
 
 1. Every file against its schema: the vendored ODCS v3.2.0 JSON Schema, then K2's profile.
 2. Each product against its place: its directory, its domain's owner and kind, its outputs
-   against the contracts beside it.
+   against the contracts beside it; its name is not one of the schemas every domain catalog
+   keeps for the platform (`staging`, `intermediate`, `dq`).
 3. Each contract against `lake.sql`: the table exists and its partitioning and sort order are
    the declared ones; or, with inline columns, the table is one `lake.sql` does not create and
    its partitioning and sort name its own columns. Every table outside `audit` has one contract.
@@ -131,6 +158,7 @@ fixes. How a team adds a product, step by step: [the golden path](../development
 | Generated files are never edited by hand | CI job `contracts`: `make generate`, then no diff and no untracked file |
 | Generation is repeatable and removes what a deleted contract wrote | `test_a_second_generate_changes_nothing`, `test_a_deleted_contract_removes_its_outputs` |
 | A scaffolded product is valid as written | `test_a_scaffolded_product_validates` |
+| A product cannot take a platform schema's name | `k2gen validate` step 2; `test_a_product_named_like_a_platform_schema_is_rejected` |
 | A new domain gets its fence; a removed one takes it; a reserved or malformed domain id is refused | `test_a_new_domain_gets_its_fence`, `test_a_removed_domain_takes_its_catalog_and_leaves_lake_properties`, `test_a_domain_whose_fence_name_is_taken_is_rejected`, `test_a_domain_id_that_is_not_a_slug_is_rejected` |
 | The generator is typed | mypy, strict, pinned in `platform/k2gen/uv.lock`; `make lint` and CI job `contracts` |
 
@@ -144,7 +172,7 @@ them and `make test` includes it.
 - **Consistency, not truth.** An `upstreams` list that is wrong but self-consistent passes. A job
   that starts reading a table without its contract saying so is invisible until lineage is
   captured in phase P5.
-- **Four teams that are one person.** CODEOWNERS routes no review while every line names the
+- **Five teams that are one person.** CODEOWNERS routes no review while every line names the
   same account; the trigger to change that is a second contributor
   ([ADR-033](../adr/ADR-033-data-mesh-four-domains.md), Revisit when).
 - **`retention.json` is read by nothing yet.** It is written and kept current now so phase P5
@@ -152,14 +180,15 @@ them and `make test` includes it.
 
 ## Key points
 
-- The unit of ownership is the product, not the table or the layer: four domains, nine products, one owner each.
+- The unit of ownership is the product, not the table or the layer: five domains, 13 products, one owner each.
 - `lake.sql` stays the DDL of record for every table it creates; contracts are checked against it, never the reverse.
 - Generated files are committed, owned by `k2gen generate`, and CI fails on any drift.
 
 ## Related
 
 - [ADR-032](../adr/ADR-032-odcs-contracts-and-k2gen.md), the contracts and the generator
-- [ADR-033](../adr/ADR-033-data-mesh-four-domains.md), the four domains and their owners
+- [ADR-033](../adr/ADR-033-data-mesh-four-domains.md), the four domains and their owners;
+  [ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md), the fifth, governance
 - [Product index](../products/README.md), generated: a page per product
 - [Golden path](../development/golden-path.md), adding a product
 - [`contracts/schema/README.md`](../../contracts/schema/README.md), where each K2 field sits in an ODCS contract

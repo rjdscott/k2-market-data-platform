@@ -22,6 +22,7 @@ uv sync --locked
 uv run --locked dbt deps
 K2_TRINO_USER=dbt_market_analytics uv run --locked dbt build --selector market_analytics
 K2_TRINO_USER=dbt_market_analytics uv run --locked dbt source freshness --selector market_analytics
+K2_TRINO_USER=dbt_governance uv run --locked dbt build --selector governance   # after the others
 ```
 
 `make test-dbt` runs the lint, compile, manifest check and a build on a throwaway Trino
@@ -35,7 +36,10 @@ table, two unit tests, six data tests) in 16.2 s, of which the table, a CTAS ove
 views, two tables, five unit tests, fifteen data tests) in 18.4 s, the two tables, each over all
 of `lake.gold.trades` and built at once, in 13.4 s and 12.8 s; with the delayed view over the
 lake's candles, 30 of 30 (four views, two tables, eight unit tests, sixteen data tests) in 12.8 s. `on_table_exists: replace` makes a rebuild `CREATE OR
-REPLACE`: one Iceberg table whose snapshots are its builds, each by `dbt_market_analytics`:
+REPLACE`: one Iceberg table whose snapshots are its builds, each by `dbt_market_analytics`.
+With the test-results hook below, on 2026-11-25: 31 of 31 (four views, two tables, eight unit
+tests, sixteen data tests, the hook) in 18.8 s, and the hook wrote 24 rows. The governance
+selector has not run on the stack yet: its catalog arrives with the rollout of this change.
 
 ```bash
 docker exec k2-trino trino --execute \
@@ -66,6 +70,7 @@ Its folder (`macros/naming.sql`):
 | `models/<catalog>/staging/<model>.sql` | view `<catalog>.staging.<model>`: one per lake table the domain reads, the only models that may select from a source |
 | `models/<catalog>/intermediate/<model>.sql` | view `<catalog>.intermediate.<model>`, when a mart needs a step |
 | `models/<catalog>/marts/<product>/<model>.sql` | table `<catalog>.<product>.<model>`: one schema per data product |
+| none: the `on-run-end` hook | table `<catalog>.dq.dbt_test_results`, the domain's test results (below) |
 
 `<catalog>` is the domain id with underscores, `<product>` the product name with underscores.
 A mart is declared in its product's `product.yaml` under `marts`, with its grain and the lake
@@ -73,9 +78,12 @@ tables it reads (`contracts/market-analytics/candles/product.yaml`). A product m
 and no lake table, with `outputs: []`, as `delayed-candles` and `venue-quality` do; `k2gen new`
 scaffolds a commented `marts:` block at the product's place. A mart that is a view says
 `materialized: view` in its contract and `{{ config(materialized='view') }}` in its model. A product cannot be named
-`staging` or `intermediate`: those schemas are the layers'. A second domain adds its
+`staging`, `intermediate` or `dq`: those schemas are the platform's in every domain catalog,
+not products (ADR-044's one schema per product holds for products;
+[ADR-046](../docs/adr/ADR-046-governance-domain-and-quality-results.md)). A second domain adds its
 folder, a three-line block in `dbt_project.yml` that makes its marts tables, and its marts in
-its contracts; `make generate` gives it a selector.
+its contracts; `make generate` gives it a selector. A domain whose marts are all views, as
+`governance`'s one mart is, needs no block.
 
 `scripts/dbt_manifest_check.py` holds the project to that on the compiled manifest: only
 staging selects from a source; every model is in a domain's catalog; every mart is declared at
@@ -232,9 +240,9 @@ the one that consumes it: it joins market-capture's `audit.checks` with this dom
 domain's candles. Owned by market-capture, it would make that domain read this one, the
 both-directions dependency [ADR-033](../docs/adr/ADR-033-data-mesh-four-domains.md) names as its
 revisit trigger. `audit.checks` needed a contract to be read (`contracts/market-capture/lake-audit/`),
-filed under market-capture, whose tables most checks are about, until the platform-owned
-governance domain ADR-044 records as intent is decided; layer `audit` joined the contract
-schema's layers for it.
+filed under market-capture, whose tables most checks are about; the governance domain
+([ADR-046](../docs/adr/ADR-046-governance-domain-and-quality-results.md)) reads it and left it
+there. Layer `audit` joined the contract schema's layers for it.
 
 Its tests: three unit tests on made-up venues (the UTC day edge, gaps and unknowable trades; each
 scope shape, a near-miss venue name, the rows that do not count, an audit-only day; the day each
@@ -244,6 +252,124 @@ zone, a day-scoped audit under its run date, the losses summed across families);
 two things the data must hold that the SQL does not force: a gap trade leaves out at least one id
 (`trades_after_gap <= trade_ids_missing`), and no loss count is negative.
 
+## Test results: every domain's, then one view
+
+**Recorded by each domain, as its writer.** `dbt_project.yml`'s `on-run-end` hook
+(`macros/record_test_results.sql`) writes one row per data test and unit test a dbt invocation
+ran into `<catalog>.dq.dbt_test_results`, the profile's own catalog, creating schema and table
+if absent: invocation id, run start, writer, the test's id and name, the model or source
+relation it tests (`tested`, for a source test its one dependency), dbt's status (pass, fail,
+warn, error, skipped), failures, execution time, and dbt's message cut at 1000 characters. An
+invocation that ran no test (`dbt run`, `dbt source freshness`) writes nothing. dbt runs
+`on-run-end` after the nodes whatever their result, so every test the invocation ran has its
+row, a failed one included, and so has every test it skipped behind a failure inside that same
+invocation. `make test-dbt` proves it on one `dbt build --selector`: two trades with one
+identifier fail the source test on `gold.trades`, the build exits non-zero, and the failed row
+and the skipped ones are read back. No writer can insert into another domain's table (`Access
+Denied`, also in `make test-dbt`).
+
+**What is not recorded.** Under Airflow each node is its own dbt invocation (below), so a
+skipped row there is a test its own node skipped: a unit test failing before its model, the
+model's data tests then skipped. When a task fails, Airflow marks every task downstream of it
+`upstream_failed` and starts no dbt for them: their tests leave no row at all, pass or skip. An
+invocation whose hook failed loses its rows too ([runbook](../docs/runbooks/dbt-marts.md)). So the absence of a
+recent row is itself the signal: a test last recorded more than two hours ago missed at least
+one hourly run. Through the view, once catalog `governance` exists:
+
+```bash
+docker exec k2-trino trino --execute "SELECT domain, subject, check_name, max(checked_at) AS last_run
+  FROM governance.quality_results.dq_results WHERE source_system = 'dbt' GROUP BY 1, 2, 3
+  HAVING max(checked_at) < current_timestamp - INTERVAL '2' HOUR ORDER BY last_run"
+```
+
+The same over the dbt half's base table, on the stack, read-only, 2026-11-25 19:04 UTC:
+
+```bash
+docker exec k2-trino trino --user reviewer --execute "SELECT tested, test_name, max(run_started_at) AS last_run
+  FROM market_analytics.dq.dbt_test_results GROUP BY 1, 2
+  HAVING max(run_started_at) < current_timestamp - INTERVAL '2' HOUR ORDER BY last_run"
+#   (no rows: every test of the domain recorded in the last two hours)
+```
+
+A test removed from the project stays in that list for good, and a test never run once is never
+in it; what should be there is `dbt ls -q --resource-type test --resource-type unit_test
+--selector <domain>` (24 names for `market_analytics` on 2026-11-25, the 24 its build records).
+
+On the stack, after the build above (2026-11-25):
+
+```bash
+docker exec k2-trino trino --execute "SELECT writer, status, count(*) > 0
+  FROM market_analytics.dq.dbt_test_results GROUP BY 1, 2"
+#   "dbt_market_analytics","pass","true"
+docker exec k2-trino trino --execute "SELECT tested FROM market_analytics.dq.dbt_test_results
+  GROUP BY 1 ORDER BY 1"
+#   "lake.gold.ohlcv_1m" "lake.gold.trades" "market_analytics.candles.ohlcv_1m"
+#   "market_analytics.delayed_candles.ohlcv_delayed_20m" "market_analytics.venue_quality.venue_quality_scorecard"
+```
+
+Each domain's table gains its tests' count of rows every hourly run, so 24 times that a day,
+and a commit per tested node per run, because cosmos runs one invocation per node. The daily
+maintenance compacts it, then expires it like a mart (below). Rows are never deleted. Every
+domain's table has the hook's shape, and the governance view unions them, so a column change
+reaches every domain's table at once or the view stops building.
+
+**Unified by governance.** `governance.quality_results.dq_results`
+(`contracts/governance/quality-results/`), a view: the lake's checks from `lake.audit.checks`
+(maintenance and ingest rows; `silver_flags`, which cannot fail, and the operator, verify and
+replay rows left out) and every domain's `dq.dbt_test_results`, in one shape:
+
+| Column | Lake check | dbt test |
+|---|---|---|
+| `checked_at` | `run_ts` | `run_started_at`, the invocation's start |
+| `source_system` | `lake_audit` | `dbt` |
+| `domain` | `market-capture`, which owns `lake.audit.checks` | the domain whose writer ran it |
+| `subject` | `scope`: a table, a table and venue, or a topic partition | `tested`, or the test's id when it tests neither |
+| `check_name` | `check_name` | the test's name |
+| `status` | `pass`; `error` for a check that raised (observed -1, "check raised"); else `fail` | `pass`, `fail`, `warn`; `error` for error and for skipped |
+| `detail` | observed and the detail | dbt's message; "skipped, ..." for a skipped test |
+
+`domain` is whose record it is, not what it is about. The lake half is one row per
+`(run_ts, scope, check_name)`, the grain: `docker/lake/rebuild.py` takes one `run_ts` for a
+whole rebuild and `bronze.decode` files `bronze_parity` and `unresolvable_schema_id` once per
+venue and day, so a rebuild can file one check several times under one key. Such a group is one
+row with its worst status (error, then fail, then pass) and one of its worst rows' detail, after
+`<n> rows, the worst shown`; `lake.audit.checks` keeps every row. Left out on purpose with the
+operator, verify and replay rows: a replay filed by hand with `record_check.py --failed`, which
+says a research run of the capture binary did not complete, not that a table is wrong.
+
+The staging view `stg_dq__dbt_test_results` finds the tables when it is built: one branch per
+catalog that holds a model of this project, so a domain with marts is in once its results table
+exists (`dbt_marts` creates it before the domain's other tasks), and a domain with no table yet
+is left out rather than breaking the view; a branch keeps only its own writer's rows. The view
+is a definer view: any reader reads the base tables as its owner, `dbt_governance`, which
+`rules.json` lets read every catalog. Its unit tests cover each status of both halves and the
+fold on made-up rows, each failing when the model was changed to break it (a skipped test passed
+through as `skipped`; an `observed` of -1 alone taken for a raised check; every row of a key
+kept, which failed `dq_results_folds_one_lake_key_to_its_worst_row`); its data tests: the grain
+`(source_system, checked_at, subject, check_name)`, not-null columns, and the four statuses.
+
+The governance selector has not run on the stack: catalog `governance` exists after the rollout
+of this change. Over the live `lake.audit.checks`, read-only, on 2026-11-25: some rows, no key
+filed twice yet (so the fold changes no row today), every row a pass or a fail:
+
+```bash
+docker exec k2-trino trino --user reviewer --execute "SELECT count(*) > 0, count(*) = count(DISTINCT (run_ts, scope, check_name)),
+  array_sort(array_agg(DISTINCT CASE WHEN passed THEN 'pass' WHEN observed = -1 AND detail LIKE 'check raised %' THEN 'error' ELSE 'fail' END))
+  FROM lake.audit.checks WHERE job IN ('maintenance', 'ingest') AND check_name <> 'silver_flags'"
+#   "true","true","[fail, pass]"
+```
+
+`make test-dbt` runs the view on its throwaway Trino as a user who owns none of it, after the
+failing build and a failed and a raised lake check, and prints:
+
+```bash
+docker exec k2-dbt-test trino --user someone --execute "SELECT source_system, domain, subject, status
+  FROM governance.quality_results.dq_results WHERE status <> 'pass' AND subject LIKE 'lake.%' ORDER BY 1, 4, 3"
+#   "dbt","market-analytics","lake.gold.trades","fail"
+#   "lake_audit","market-capture","lake.silver.book_alpha","error"
+#   "lake_audit","market-capture","lake.silver.trades_alpha","fail"
+```
+
 ## Scheduled: the `dbt_marts` DAG
 
 Airflow runs every domain every hour at minute 10 (`docker/airflow/dags/dbt_marts.py`,
@@ -251,7 +377,15 @@ Airflow runs every domain every hour at minute 10 (`docker/airflow/dags/dbt_mart
 in `selectors.yml` from a `dbt ls` of this directory, cached in an Airflow Variable keyed on the
 project's files, and runs one task per node as that domain's writer: `dbt build --select <node>`
 for a model, which runs its unit tests, the model and its data tests; `dbt source freshness` and
-the source tests for a lake table a mart reads. dbt itself is `/opt/k2/dbt-venv/bin/dbt`, a
+the source tests for a lake table a mart reads. Before any of them, `<domain>_test_results_table`
+runs `dbt run-operation create_test_results_table` as the writer, so the domain's
+`dq.dbt_test_results` exists before two of its tasks' hooks could both create it at once
+([ADR-046](../docs/adr/ADR-046-governance-domain-and-quality-results.md) Risks). The governance group starts once every other
+group has finished, however it ended (`domains_built`, trigger rule `all_done`), so its view is
+rebuilt and tested on this run's results. `populate_cache: false` in `dbt_project.yml` keeps a
+run from listing every schema of the project first: with dbt's default, a `market_analytics`
+build failed with `Catalog 'governance' not found` on a Trino without that catalog (2026-11-25).
+dbt itself is `/opt/k2/dbt-venv/bin/dbt`, a
 virtualenv built from this `uv.lock` in the Airflow image, so its pins never meet Airflow's,
 and the packages are the image's, installed from `package-lock.yml` at build time
 (`K2_DBT_PACKAGES`). This directory is mounted read-only at `/opt/k2/dbt` in the scheduler and
@@ -261,7 +395,8 @@ at the next parse; a change to `uv.lock`, `packages.yml` or `package-lock.yml` n
 rebuilt, and `docker/airflow/tests/test_dbt_image.py` fails on an image behind them
 ([runbook](../docs/runbooks/dbt-marts.md)).
 
-Once a day, in the 04:10 run, each domain's writer expires its marts' snapshots:
+Once a day, in the 04:10 run, each domain's writer expires its marts' snapshots, and compacts
+and expires its test results:
 
 ```bash
 K2_TRINO_USER=dbt_market_analytics uv run --locked dbt run-operation expire_mart_snapshots
@@ -269,11 +404,15 @@ K2_TRINO_USER=dbt_market_analytics uv run --locked dbt run-operation expire_mart
 #   expire_mart_snapshots: "market_analytics"."candles"."ohlcv_1m" remove_orphan_files at 7d
 #   expire_mart_snapshots: "market_analytics"."venue_quality"."venue_quality_scorecard" expire_snapshots at 7d
 #   expire_mart_snapshots: "market_analytics"."venue_quality"."venue_quality_scorecard" remove_orphan_files at 7d
+#   expire_mart_snapshots: "market_analytics"."dq"."dbt_test_results" optimize
+#   expire_mart_snapshots: "market_analytics"."dq"."dbt_test_results" expire_snapshots at 7d
+#   expire_mart_snapshots: "market_analytics"."dq"."dbt_test_results" remove_orphan_files at 7d
 ```
 
-`macros/expire_mart_snapshots.sql`: every table model in the writer's own catalog, `ALTER TABLE
-... EXECUTE expire_snapshots(retention_threshold => '7d')`, then `remove_orphan_files` at the
-same. A rebuild is one snapshot, so an hourly mart keeps a week of builds for time travel. Seven
+(2026-11-25, on the stack.) `macros/expire_mart_snapshots.sql`: every table model in the
+writer's own catalog, `ALTER TABLE ... EXECUTE expire_snapshots(retention_threshold => '7d')`,
+then `remove_orphan_files` at the same; and `dq.dbt_test_results` the same after `optimize`,
+because it is appended to, a small file per commit, where a mart is rewritten whole. A rebuild is one snapshot, so an hourly mart keeps a week of builds for time travel. Seven
 days is the connector's floor and nobody may set the session properties that lower it (ADR-044),
 so a shorter threshold fails instead of running. `make test-dbt` runs it on the throwaway Trino.
 

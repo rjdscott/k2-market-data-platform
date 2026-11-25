@@ -86,9 +86,40 @@ class Identity(unittest.TestCase):
                     self.assertFalse(t.install_deps)
 
     def test_a_model_task_is_dbt_build_of_that_node_alone(self):
-        t = DAG.get_task(f"{SELECTORS[0]}.ohlcv_1m_model_build")
+        t = DAG.get_task("market_analytics.ohlcv_1m_model_build")
         self.assertEqual(t.base_cmd, ["build"])
         self.assertEqual(t.select, "fqn:k2.market_analytics.marts.candles.ohlcv_1m")
+
+
+class Order(unittest.TestCase):
+    def test_governance_builds_after_every_other_domain_however_it_ended(self):
+        # ADR-046: its view reads every domain's dq.dbt_test_results, so it is rebuilt and
+        # tested once this run's results are in, a failed build's included.
+        others = [d for d in SELECTORS if d != "governance"]
+        self.assertIn("governance", SELECTORS)
+        self.assertTrue(others)
+        barrier = DAG.get_task("domains_built")
+        self.assertEqual(barrier.trigger_rule, "all_done")
+        self.assertEqual(barrier.upstream_task_ids, {t.task_id for d in others for t in DAG.task_group_dict[d].get_leaves()})
+        builds = {t.task_id for d in others for t in dbt_tasks(d) if t.task_id.startswith(f"{d}.")}
+        for t in dbt_tasks("governance"):
+            with self.subTest(t.task_id):
+                self.assertLessEqual(builds, t.get_flat_relative_ids(upstream=True))
+        # and nothing of another domain waits for governance
+        for t in (t for d in others for t in dbt_tasks(d)):
+            self.assertNotIn("domains_built", t.get_flat_relative_ids(upstream=True))
+
+
+class Results(unittest.TestCase):
+    def test_the_results_table_is_created_before_every_other_task_of_its_domain(self):
+        # Two hooks creating a missing dq.dbt_test_results at once can fail (ADR-046 Risks).
+        for domain in SELECTORS:
+            create = DAG.get_task(f"{domain}_test_results_table")
+            self.assertEqual((type(create).__name__, create.macro_name), ("DbtRunOperationLocalOperator", "create_test_results_table"))
+            self.assertEqual(create.env["K2_TRINO_USER"], f"dbt_{domain}")
+            for t in dbt_tasks(domain):
+                with self.subTest(t.task_id):
+                    self.assertIn(create.task_id, t.get_flat_relative_ids(upstream=True))
 
 
 class Maintenance(unittest.TestCase):

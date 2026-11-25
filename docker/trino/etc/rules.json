@@ -5,7 +5,7 @@
       "allow": "read-only"
     },
     {
-      "catalog": "lake|fx_reference|market_analytics|market_capture|reference_data",
+      "catalog": "lake|fx_reference|governance|market_analytics|market_capture|reference_data",
       "allow": "all"
     }
   ],
@@ -13,6 +13,11 @@
     {
       "user": "dbt_fx_reference",
       "catalog": "fx_reference",
+      "owner": true
+    },
+    {
+      "user": "dbt_governance",
+      "catalog": "governance",
       "owner": true
     },
     {
@@ -38,6 +43,18 @@
     {
       "user": "dbt_fx_reference",
       "catalog": "fx_reference",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_governance",
+      "catalog": "governance",
       "privileges": [
         "SELECT",
         "INSERT",

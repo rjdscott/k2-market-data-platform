@@ -59,8 +59,12 @@ RESERVED = {
 
 
 # Product names a product cannot take: its marts' schema is the name with underscores, and
-# dbt puts each domain's layers in these two (dbt/macros/naming.sql).
-LAYER_SCHEMAS = ("staging", "intermediate")
+# these are every domain catalog's platform schemas, not products (ADR-044, ADR-046).
+LAYER_SCHEMAS = {
+    "staging": "the schema dbt keeps every domain's staging models in (dbt/macros/naming.sql)",
+    "intermediate": "the schema dbt keeps every domain's intermediate models in (dbt/macros/naming.sql)",
+    "dq": "the schema every domain's dbt run records its test results in (dbt/macros/record_test_results.sql)",
+}
 
 
 def fence(domain: str) -> str:
@@ -126,7 +130,7 @@ def validate(root: Path = ROOT) -> list[str]:
         if sorted(product["outputs"]) != beside:
             errors.append(f"{where}: outputs {sorted(product['outputs'])}, but the contracts beside it are {beside}")
         if fence(product["name"]) in LAYER_SCHEMAS:
-            errors.append(f"{where}: product name {product['name']} is the schema dbt keeps every domain's {fence(product['name'])} models in (dbt/macros/naming.sql)")
+            errors.append(f"{where}: product name {product['name']} is {LAYER_SCHEMAS[fence(product['name'])]}")
         place = f"{fence(product['domain'])}.{fence(product['name'])}"
         marts = [m["table"] for m in product.get("marts", [])]
         errors += [f"{where}: mart {t} must live in {place}, its domain's catalog and its product's schema (ADR-044)" for t in marts if t.rsplit(".", 1)[0] != place]
