@@ -102,3 +102,15 @@ def test_dockerfile_from_and_pip_pins():
         "Dockerfile: pip install requests has no == version",
         "Dockerfile: pip install duckdb has no == version",
     ]
+
+
+def test_a_port_not_on_loopback_fails_in_any_profile():
+    # As `config` prints them: "127.0.0.1:9000:9000" has a host_ip, "9000:9000" none.
+    ok = {**svc(0.1, 0.1), "ports": [{"host_ip": "127.0.0.1", "target": 9000, "published": "9000"}]}
+    lan = {**svc(0.1, 0.1), "ports": [{"target": 9000, "published": "9000"}]}
+    every = {**svc(0.1, 0.1), "ports": [{"host_ip": "0.0.0.0", "target": 9001, "published": "9001"}]}
+    assert failures({"minio": ok}) == []
+    assert failures({"minio": ok}, legacy={"minio": ok, "prefect-server": lan}) == [
+        "service prefect-server: port 9000:9000 is published on every interface, not 127.0.0.1"
+    ]
+    assert failures({"minio": every}) == ["service minio: port 9001:9001 is published on 0.0.0.0, not 127.0.0.1"]

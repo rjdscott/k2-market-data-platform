@@ -17,6 +17,8 @@ with `--profile legacy`, prints four limit sums and exits 1 on any of:
   limit, so a service behind a profile cannot ship without one.
 - a compose image, or a Dockerfile FROM, with no tag or the tag `latest`.
 - a `pip install` package in a Dockerfile with no `==` version.
+- a published port in any config not bound to 127.0.0.1: a bare `9000:9000`
+  listens on every interface, the local network included (SECURITY.md).
 
 A one-shot is a service with `restart: "no"`, the rule
 docs/operations/docker-resources.md already uses; it only decides which
@@ -114,6 +116,13 @@ def check(
     for name, svc in sorted(every.items()):
         if unpinned(svc.get("image", "")):
             failures.append(f"service {name}: image {svc.get('image') or '(none)'!r} has no pinned tag")
+        # `config` normalises "127.0.0.1:9000:9000" to host_ip + published + target.
+        for port in svc.get("ports") or []:
+            if port.get("host_ip") != "127.0.0.1":
+                failures.append(
+                    f"service {name}: port {port.get('published')}:{port.get('target')} is published on "
+                    f"{port.get('host_ip') or 'every interface'}, not 127.0.0.1"
+                )
     for path, text in dockerfiles:
         failures += dockerfile_problems(path, text)
     return report, failures
@@ -138,7 +147,7 @@ def main() -> int:
     for f in failures:
         print(f"FAIL: {f}")
     if not failures:
-        print(f"PASS: bootstrap default within {CPU_CEILING:g} CPU / {MEM_CEILING / GIB:g} GiB; limits and pins hold "
+        print(f"PASS: bootstrap default within {CPU_CEILING:g} CPU / {MEM_CEILING / GIB:g} GiB; limits, pins and loopback ports hold "
               f"across {len(dockerfiles)} Dockerfiles")
     return 1 if failures else 0
 
