@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product screenshots
+.PHONY: chaos help up down logs ps health gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse test-trino parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product screenshots
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -31,7 +31,7 @@ logs:  ## Tail all service logs
 ps:  ## Show service status
 	docker compose ps
 
-test: test-python test-rust test-clickhouse test-notebooks test-k2gen test-airflow  ## Run all unit tests
+test: test-python test-rust test-clickhouse test-trino test-notebooks test-k2gen test-airflow  ## Run all unit tests
 
 # One recipe line per gate, not prerequisites: recipe lines run in order and
 # stop at the first failure even under `make -j`, where prerequisites would not
@@ -69,6 +69,9 @@ test-airflow:  ## DAG structure, exit 75 to skipped, params and the kill path, i
 # from source).
 test-clickhouse:  ## gold schema semantics on a throwaway clickhouse:24.3 (OHLCV regression, FINAL dedup, BBO math, quant user)
 	bash scripts/clickhouse-schema-test.sh
+
+test-trino:  ## Trino access rules on a throwaway trinodb/trino with a memory catalog named lake (marts read-write, the rest read-only)
+	bash scripts/trino-rules-test.sh
 
 test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo needed)
 	docker run --rm -v "$(CURDIR)":/repo -w /repo/services/capture-rust \

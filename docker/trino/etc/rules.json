@@ -1,0 +1,18 @@
+{
+  "catalogs": [
+    {"catalog": "lake", "allow": "all"},
+    {"catalog": "system", "allow": "read-only"}
+  ],
+  "schemas": [
+    {"catalog": "lake", "schema": "marts", "owner": true},
+    {"owner": false}
+  ],
+  "tables": [
+    {"catalog": "lake", "schema": "marts", "privileges": ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP", "GRANT_SELECT"]},
+    {"catalog": "lake", "privileges": ["SELECT", "GRANT_SELECT"]},
+    {"catalog": "system", "privileges": ["SELECT"]}
+  ],
+  "system_information": [
+    {"allow": ["read"]}
+  ]
+}

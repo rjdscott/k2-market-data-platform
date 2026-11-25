@@ -111,6 +111,20 @@ jobs:
       # profile. Only 10-gold-tables.sql — the Kafka feeds need a broker.
       - run: bash scripts/clickhouse-schema-test.sh
 
+  trino:
+    name: Trino (access rules)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The pinned image from docker-compose.yml with docker/trino/etc, the
+      # `lake` catalog swapped for the memory connector: a smoke query, then
+      # rules.json asserted (marts read-write, every other schema read-only).
+      # The dbt jobs of plan phase P3 compile against this same server.
+      - run: bash scripts/trino-rules-test.sh
+
   docker:
     name: Docker build (${{ matrix.name }})
     runs-on: ubuntu-latest
