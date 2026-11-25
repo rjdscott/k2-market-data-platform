@@ -70,7 +70,7 @@ test-airflow:  ## DAG structure, exit 75 to skipped, params and the kill path, i
 test-clickhouse:  ## gold schema semantics on a throwaway clickhouse:24.3 (OHLCV regression, FINAL dedup, BBO math, quant user)
 	bash scripts/clickhouse-schema-test.sh
 
-test-trino:  ## Trino access rules on a throwaway trinodb/trino with a memory catalog named lake (marts read-write, the rest read-only)
+test-trino:  ## Trino on a throwaway trinodb/trino, no stack: etc/ starts, catalog lake refuses every commit (table procedures too), catalog marts takes writes
 	bash scripts/trino-rules-test.sh
 
 test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo needed)

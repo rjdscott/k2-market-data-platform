@@ -1101,11 +1101,12 @@ services:
 #############################################################################
 # SERVICES - SQL OVER THE LAKE (ADR-035)
 #############################################################################
-  # One Trino node, coordinator and worker in one JVM, catalog `lake` over the
-  # Lakekeeper REST catalog with the static MinIO keys (docker/trino/README.md).
-  # It reads every namespace and writes only `marts`: etc/rules.json, checked by
-  # `make test-trino`. Identity is the X-Trino-User header, not authenticated,
-  # so the port is loopback only, like Airflow's.
+  # One Trino node, coordinator and worker in one JVM, over the Lakekeeper REST
+  # catalog with the static MinIO keys (docker/trino/README.md). Catalog `lake`
+  # (warehouse k2) is read-only at the connector; catalog `marts` (warehouse
+  # marts, same bucket, prefix warehouse/marts) is the only place it writes.
+  # Checked by `make test-trino`. Identity is the X-Trino-User header, not
+  # authenticated, so the port is loopback only, like Airflow's.
   #
   # Heap 2816M (etc/jvm.config) under the 4G limit leaves 1.25 GiB for
   # metaspace, code cache, thread stacks and direct buffers. The 2026-11-25 spike
@@ -1131,7 +1132,7 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      lake-init:   # creates namespace `marts`
+      lake-init:   # creates warehouse `marts`
         condition: service_completed_successfully
     deploy:
       resources:

@@ -25,6 +25,9 @@ set -euo pipefail
 # script creates what those jobs connect to.
 LK=${K2_LAKEKEEPER_URL:-http://lakekeeper:8181}
 WAREHOUSE=${K2_LAKE_WAREHOUSE:-k2}
+# Trino's, for the dbt marts (ADR-035): a second warehouse on the same bucket
+# under its own key prefix, so Trino's catalog over the lake can be read-only.
+MARTS_WAREHOUSE=${K2_MARTS_WAREHOUSE:-marts}
 BUCKET=${K2_LAKE_BUCKET:-k2-lake}
 S3_ENDPOINT=${K2_S3_ENDPOINT:-http://minio:9000}
 S3_REGION=${K2_S3_REGION:-local-01}
@@ -69,19 +72,23 @@ post "$LK/management/v1/bootstrap" '{"accept-terms-of-use":true}' "400 401 403 4
 # ponytail: bash glob match, not grep/jq — this image ships mc, curl and bash and
 # NOT grep (verified: `grep: command not found` from this very line, 2026-08-26).
 # Same constraint the namespace parser below is written around.
-echo "[3/4] Warehouse '$WAREHOUSE'"
-existing=$(curl -fsS "$LK/management/v1/warehouse?project-id=$PROJECT_ID")
-if [[ $existing == *"\"name\":\"$WAREHOUSE\""* ]]; then
-  echo "  → exists, skipping create"
-else
-post "$LK/management/v1/warehouse" "$(cat <<JSON
+# ensure_warehouse <name>: bucket $BUCKET, key prefix warehouse/<name>.
+ensure_warehouse() {
+  local name=$1 existing
+  echo "  $name"
+  existing=$(curl -fsS "$LK/management/v1/warehouse?project-id=$PROJECT_ID")
+  if [[ $existing == *"\"name\":\"$name\""* ]]; then
+    echo "  → exists, skipping create"
+    return 0
+  fi
+  post "$LK/management/v1/warehouse" "$(cat <<JSON
 {
-  "warehouse-name": "$WAREHOUSE",
+  "warehouse-name": "$name",
   "project-id": "$PROJECT_ID",
   "storage-profile": {
     "type": "s3",
     "bucket": "$BUCKET",
-    "key-prefix": "warehouse/$WAREHOUSE",
+    "key-prefix": "warehouse/$name",
     "endpoint": "$S3_ENDPOINT",
     "region": "$S3_REGION",
     "path-style-access": $S3_PATH_STYLE,
@@ -97,7 +104,11 @@ post "$LK/management/v1/warehouse" "$(cat <<JSON
 }
 JSON
 )"   # no tolerated codes: 2xx or fail
-fi
+}
+
+echo "[3/4] Warehouses"
+ensure_warehouse "$WAREHOUSE"
+ensure_warehouse "$MARTS_WAREHOUSE"
 
 # Namespaces over the REST catalog API rather than a Spark `lake-ddl` one-shot:
 # three HTTP calls against a service that is already up, versus a ~20 s JVM
@@ -119,12 +130,9 @@ prefix=${prefix%%\"*}
 [[ -n $prefix && $prefix != "$cfg" ]] || {
   echo "✗ no defaults.prefix in config response: $cfg" >&2; exit 1; }
 echo "  prefix: $prefix"
-# `marts` is Trino's: dbt writes it, and Trino may write nothing else
-# (docker/trino/etc/rules.json, ADR-035). Created here rather than left to
-# dbt's first run, so it exists on a fresh clone before any model does.
-for ns in raw bronze silver gold audit marts; do
+for ns in raw bronze silver gold audit; do
   echo "  $ns"
   post "$LK/catalog/v1/$prefix/namespaces" "{\"namespace\":[\"$ns\"]}" "409"
 done
 
-echo "✓ lake ready: catalog $LK/catalog, warehouse $WAREHOUSE, namespaces raw/bronze/silver/gold/audit/marts"
+echo "✓ lake ready: catalog $LK/catalog, warehouses $WAREHOUSE and $MARTS_WAREHOUSE, namespaces raw/bronze/silver/gold/audit in $WAREHOUSE"

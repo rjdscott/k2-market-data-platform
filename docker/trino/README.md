@@ -2,8 +2,13 @@
 
 One Trino node, the `trino` service in `docker-compose.yml`: SQL over the Iceberg lake
 through the Lakekeeper REST catalog, for consumers and for the dbt marts of plan phase P3.
-Spark keeps everything from raw to gold; Trino reads every namespace and writes only
-`marts` ([ADR-035](../../docs/adr/ADR-035-trino-and-dbt-for-marts.md)).
+Spark keeps everything from raw to gold. Trino has two catalogs
+([ADR-035](../../docs/adr/ADR-035-trino-and-dbt-for-marts.md)):
+
+| Catalog | Lakekeeper warehouse | Files under | Trino may |
+|---|---|---|---|
+| `lake` | `k2`: `raw`, `bronze`, `silver`, `gold`, `audit` | `s3://k2-lake/warehouse/k2/` | read, time travel; nothing that commits |
+| `marts` | `marts`, created by `docker/lake/init-lake.sh`, no schema yet (dbt creates them) | `s3://k2-lake/warehouse/marts/` | read and write: tables, views, schemas |
 
 `etc/` is mounted read-only over the image's `/etc/trino`. A changed file needs
 `docker compose up -d --force-recreate --no-deps trino`; Trino reads its configuration
@@ -14,9 +19,10 @@ only at start.
 | `etc/config.properties` | one node: coordinator and its only worker; HTTP on 8080 inside the network |
 | `etc/jvm.config` | heap `-Xms2816M -Xmx2816M` under the 4G limit, JVM time zone `UTC` |
 | `etc/node.properties` | environment `k2`, data directory |
-| `etc/catalog/lake.properties` | the Iceberg REST catalog: warehouse `k2`, static MinIO keys from `${ENV:MINIO_ROOT_USER}` / `${ENV:MINIO_ROOT_PASSWORD}`, path-style, region `local-01`, table locations assigned by Lakekeeper |
-| `etc/access-control.properties`, `etc/rules.json` | file-based access control, below |
-| `memory-lake.properties` | not used by the stack: `make test-trino` mounts it over `catalog/lake.properties` |
+| `etc/catalog/lake.properties` | Iceberg REST catalog, warehouse `k2`, **`iceberg.security=read_only`**; static MinIO keys from `${ENV:MINIO_ROOT_USER}` / `${ENV:MINIO_ROOT_PASSWORD}`, path-style, region `local-01` |
+| `etc/catalog/marts.properties` | the same over warehouse `marts`, writable, table locations assigned by Lakekeeper |
+| `etc/access-control.properties`, `etc/rules.json` | file-based access control at the catalog level, below |
+| `test/` | not used by the stack: the catalogs `make test-trino` mounts in place of `etc/catalog/` |
 
 Left out of the image's defaults on purpose: its 2GB filesystem memory cache, which would
 not fit beside the heap, and the `jmx`, `memory`, `tpch` and `tpcds` catalogs.
@@ -30,56 +36,42 @@ below).
 none. A client that sends its own zone gets that zone: the Trino CLI sends the zone of the
 machine it runs on. Pass `--timezone UTC` to the CLI, and set it in the dbt profile.
 
-## Access rules
+## Why `lake` is read-only at the connector
 
-`etc/rules.json`, first match wins:
+Two layers, because the second alone has a hole:
 
-- catalog `lake`: every table readable by every user (`SELECT`, `GRANT_SELECT`, so a view
-  in `marts` can read gold); schema `marts` owned by every user, its tables read-write
-  (create, insert, delete, update, alter, drop, views);
-- every other schema in `lake`: no `CREATE SCHEMA`, `DROP SCHEMA`, `CREATE TABLE`,
-  `CREATE VIEW`, insert, delete, update, alter, rename or drop;
-- no `CALL` of the Iceberg procedures (`register_table`, `unregister_table`): with no
-  procedure rules, only Trino's built-in procedures run;
-- catalog `system` read-only; cluster information readable, not writable (no node shutdown).
+1. **`iceberg.security=read_only` on catalog `lake`.** The connector refuses every write,
+   DDL and `ALTER TABLE ... EXECUTE` (table procedures: `optimize`, `rollback_to_snapshot`,
+   `expire_snapshots`, `remove_orphan_files` and the rest). This is the layer that keeps
+   Trino from committing to the lake.
+2. **`etc/rules.json`:** `marts` all, `lake` and `system` read-only, cluster information
+   readable, no Iceberg `CALL` procedures (with no procedure rules only Trino's built-in
+   ones run).
+
+The file-based rules alone do not cover table procedures. In Trino 484
+`checkCanExecuteTableProcedure` is an empty method in both `FileBasedSystemAccessControl`
+(line 1043) and `FileBasedAccessControl` (line 727) of `lib/trino-plugin-toolkit`, and on
+2026-11-25, with the rules and no connector setting,
+`EXPLAIN ALTER TABLE lake.gold.ohlcv_1m EXECUTE optimize` planned with no denial. A
+`rollback_to_snapshot` of `raw.messages` would move `main` back while the ingest resumes
+from the newest ingest snapshot on any ref (`docker/lake/offsets.py`), so the offsets after
+it would never be read again. Hence the connector setting, and marts in a warehouse of
+their own so that the lake's catalog can be read-only.
 
 **Identity is asserted, not authenticated.** Trino takes the user from the `X-Trino-User`
 header, so a rule that named a user would grant its rights to anyone who typed that name.
-The rules name none. The port is published on `127.0.0.1` only, like Airflow's. The rules
-are guard rails against mistakes, not a security boundary: Lakekeeper is unauthenticated
-too ([ADR-028](../../docs/adr/ADR-028-non-goals-and-honest-limits.md) section 8), so
-anything on this host can change the catalog without Trino.
+The rules name none. The port is published on `127.0.0.1` only, like Airflow's. Both
+layers are guard rails against mistakes, not a security boundary: Lakekeeper is
+unauthenticated ([ADR-028](../../docs/adr/ADR-028-non-goals-and-honest-limits.md) section 8)
+and Trino holds the MinIO root keys, so anything on this host can change the lake without
+Trino. A read-only storage key for Trino on `warehouse/k2/` is the named follow-up in
+ADR-035.
 
-**What the rules do not cover: `ALTER TABLE ... EXECUTE`.** In Trino 484 the file-based
-access control allows every table procedure on every table:
-`checkCanExecuteTableProcedure` is an empty method in both `FileBasedSystemAccessControl`
-(line 1043) and `FileBasedAccessControl` (line 727) of `lib/trino-plugin-toolkit` at tag
-484. So `optimize`, `optimize_manifests`, `drop_extended_stats`, `expire_snapshots`,
-`remove_orphan_files` and `rollback_to_snapshot` run on `raw`, `bronze`, `silver`, `gold`
-and `audit` through Trino. What limits them:
-
-- `expire_snapshots` and `remove_orphan_files` refuse a retention under 7 days, Trino's
-  default `iceberg.expire-snapshots.min-retention` and
-  `iceberg.remove-orphan-files.min-retention`, the same floor `maintenance.py` keeps;
-- `add_files` and `register_table` are off (`iceberg.add-files-procedure.enabled` and
-  `iceberg.register-table-procedure.enabled` default to false);
-- `rollback_to_snapshot` and `optimize` are not limited. A rollback of `raw.messages`
-  would move `main` back while the ingest still resumes from the newest ingest snapshot on
-  any ref (`docker/lake/offsets.py`), so the offsets after the rollback point would never
-  be read again. Never run a table procedure through Trino outside `marts`; Spark's
-  `maintenance.py` is the only maintenance path.
-
-ADR-035 records the gap, the escape hatch and the trigger to close it.
-
-Proof on the live lake, with nothing written. `EXPLAIN` runs the access checks of a DML
-statement and executes nothing:
-
-```bash
-docker exec k2-trino trino --execute 'EXPLAIN INSERT INTO lake.gold.ohlcv_1m SELECT * FROM lake.gold.ohlcv_1m LIMIT 0'
-#   ... failed: Access Denied: Cannot insert into table lake.gold.ohlcv_1m
-docker exec k2-trino trino --execute 'EXPLAIN ALTER TABLE lake.gold.ohlcv_1m EXECUTE optimize'
-#   a plan with TableExecute[]: the table procedure passes access control
-```
+`make test-trino` (CI job `trino`) checks all of it without a stack: the real `etc/`
+starts and `lake` is `read_only`; on a local Iceberg catalog that is read-only at the
+connector, every table procedure and write is denied while the writable twin runs
+`optimize`; on memory catalogs named `lake` and `marts`, the rules deny writes in `lake`
+and allow them in `marts`.
 
 ## Verified 2026-11-25
 
@@ -92,12 +84,14 @@ network (`k2-trino-spike`, then `k2-trino-check` with this directory as committe
 |---|---|
 | Namespaces and tables through Lakekeeper, static keys | listed; first lake query 9.7 s after `docker run` at 2 CPU / 4 GiB (20 to 23 s at 1 CPU) |
 | Read `gold.trades`, `gold.ohlcv_1m`, `raw.messages`, `silver.book_*` | works; `timestamp(6) with time zone`, `decimal(38,10)`, `map(varchar, varbinary)`, `array(row(...))` all map |
-| `FOR VERSION AS OF <snapshot id>` on `gold.ohlcv_1m` | works |
-| Writes in a scratch namespace (spike, before the rules): `CREATE SCHEMA`, CTAS, INSERT, `DROP` | Lakekeeper accepts every commit; `DROP TABLE` is a purge drop, and Lakekeeper's `tabular_purge` task deletes the files at once |
-| Iceberg REST view, create and read back | works; stored with dialect `trino` |
-| A Trino-written table read by DuckDB 1.4.4 and Spark 3.5.5 | both read it (gzipped `*.gz.metadata.json` included); Spark reads a Trino view only when its SQL also parses as Spark SQL; DuckDB does not list views |
-| With the rules: `CREATE TABLE lake.gold.*`, `CREATE SCHEMA`, `EXPLAIN` of an INSERT, DELETE or CTAS into gold, `CALL lake.system.unregister_table` | `Access Denied` for each; no Trino-written snapshot in any of the 26 tables afterwards |
-| Session time zone | `UTC` from a client that sends none |
+| `FOR VERSION AS OF <snapshot id>` on `lake.gold.ohlcv_1m` | works through the read-only catalog |
+| Catalog `lake`: `EXPLAIN ALTER TABLE ... EXECUTE optimize`, `ALTER TABLE lake.gold.ohlcv_1m EXECUTE rollback_to_snapshot(<current main>)` | `Access Denied: Cannot execute table procedure OPTIMIZE` / `ROLLBACK_TO_SNAPSHOT on gold.ohlcv_1m`; `main` unchanged |
+| Catalog `lake`: `CREATE TABLE`, `INSERT`, `DELETE`, `CREATE SCHEMA`, `CALL lake.system.unregister_table` | `Access Denied` for each; no Trino-written snapshot in any of the 26 tables of warehouse `k2` afterwards |
+| Catalog `marts`: schema, CTAS of 3,000 rows from `lake.gold.ohlcv_1m`, a view over `lake.gold.ohlcv_1m` with a 20-minute delay | all work; table and view stored under `s3://k2-lake/warehouse/marts/<uuid>`, metadata gzipped (`*.gz.metadata.json`); the view's SQL names `lake.gold.ohlcv_1m`, dialect `trino` |
+| The `marts` table read elsewhere | DuckDB 1.4.4 (`ATTACH 'marts' AS marts` beside `ATTACH 'k2' AS lake`) and Spark 3.5.5 (a second `SparkCatalog` named `marts`, warehouse `marts`) both read it; Spark also read the view, whose SQL is valid Spark SQL and names a catalog Spark also calls `lake`; DuckDB does not list views |
+| `DROP TABLE`, `DROP VIEW`, `DROP SCHEMA` in `marts` | a purge drop: Lakekeeper's `tabular_purge` task deleted the files; `warehouse/marts/` held 0 objects within seconds |
+| Snapshot summary of a Trino write | `engine-name`, `engine-version`, `trino_query_id`, `trino_user`; no `k2.*` property |
+| Session time zone | `UTC` from a client that sends none, also with `TZ=Australia/Sydney` in the container |
 | Idle, 2 CPU / 4 GiB | 1.42 GiB, about 3% CPU |
 | The `gold.candles()` aggregation over all of `gold.trades`, read only | 6.6 s alone; four at once 12.5 s each at most, peak 2.86 GiB of 4 GiB and 2.15 cores, no OOM |
 
@@ -105,10 +99,11 @@ network (`k2-trino-spike`, then `k2-trino-check` with this directory as committe
 `DECIMAL(38,10) * DECIMAL(38,10)` as `decimal(38,6)` but overflows once the exact
 product passes about 1e18. A `DECIMAL(38,0)` product of the two `_e8` integers runs.
 
-Snapshots Trino writes carry `engine-name`, `engine-version`, `trino_query_id` and
-`trino_user`, and no `k2.*` property, so `offsets.latest_summary` skips them.
+Proof commands for the live service, with nothing written:
 
-`make test-trino` (CI job `trino`) starts this `etc/` with no network to check that every
-property is one Trino knows (a misspelt one fails the start with
-`Configuration property '...' was not used`), then asserts the rules on a memory catalog
-named `lake`.
+```bash
+docker exec k2-trino trino --execute 'EXPLAIN ALTER TABLE lake.gold.ohlcv_1m EXECUTE optimize'
+#   ... failed: Access Denied: Cannot execute table procedure OPTIMIZE on gold.ohlcv_1m
+docker exec k2-trino trino --execute 'EXPLAIN INSERT INTO lake.gold.ohlcv_1m SELECT * FROM lake.gold.ohlcv_1m LIMIT 0'
+#   ... failed: Access Denied: Cannot insert into table lake.gold.ohlcv_1m
+```
