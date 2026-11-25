@@ -11,6 +11,7 @@ make test          # everything: Python + Rust
 make test-python   # contract, parity, lake-offset and wire-format tests (needs uv)
 make test-rust     # capture unit + replay integration tests (runs in rust:1-bookworm)
 make test-trino    # Trino's etc/ starts; lake refuses every commit; only a domain's writer changes its catalog
+make test-dbt      # dbt/ on a throwaway Trino: lint, compile, manifest check, build with its unit tests
 ```
 
 ## Inventory
@@ -26,6 +27,7 @@ make test-trino    # Trino's etc/ starts; lake refuses every commit; only a doma
 | Python, wire format | 35 | [`tests/test_wire_format.py`](../../tests/test_wire_format.py) | `docker/lake/wire.py` plus the contract between `schemas/avro/*.avsc` and `docker/lake/ddl/lake.sql`, CLAUDE.md's schema-change rule, executable |
 | Python, everything else | 85 | [`tests/`](../../tests/) | bars, lake book/bronze/silver/SCD2/instruments/lock/maintenance/metrics, replay export, pinned notebooks, and `test_synthetic_fixtures.py` (the committed fixtures are what the generator writes) |
 | **Total (Rust + Python)** | **358** | | Counted 2026-11-24: `cargo test` output and `pytest --collect-only -q` |
+| dbt, unit and data tests | 2 + 6 | [`dbt/models/`](../../dbt/README.md) | `ohlcv_1m`'s minute bucket and its tie-break on (`exchange_ts`, `recv_ts_ns`, `trade_seq`) on made-up rows, run on Trino 484; the grain's uniqueness and not-null tests, the candle envelope, and the windowed uniqueness of `gold.trades`. Counted 2026-11-25 from `dbt build`'s summary. Not in the total, which counts Rust and Python |
 | Archived v2 Kotlin | 20 | [`legacy/v2-kotlin/`](../../legacy/v2-kotlin/README.md) | `TradeNormalizerTest` (7), `InstrumentsLoaderTest` (13). `make test-legacy-kotlin` runs them; deliberately **not** part of `make test` and not run in CI |
 | Legacy v1 | 180 | [`legacy/v1/tests/unit/`](../../legacy/v1/tests/unit/) | Archived. Kept for reference; not run in CI |
 
@@ -64,8 +66,8 @@ uv run --no-project --with ruff ruff check docker/lake tests
 
 ## CI
 
-[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs nine jobs on every PR and
-on pushes to `main`: **rust**, **python**, **contracts**, **clickhouse**, **trino**,
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs ten jobs on every PR and
+on pushes to `main`: **rust**, **python**, **contracts**, **clickhouse**, **trino**, **dbt**,
 **docker** (a matrix), **compose**, **docs**, **security**. The **kotlin** job was deleted with the handlers, nothing in CI builds or
 tests `legacy/v2-kotlin/`.
 
@@ -75,6 +77,7 @@ tests `legacy/v2-kotlin/`.
 | **Python (lake + tests)** | `ruff check` then `pytest tests -q` under `uv`, runs the 299 tests |
 | **Docker build** | 3-way matrix: Prefect worker, Spark, capture, with GHA layer caching. Every leg builds from the repo root. Catches broken build contexts, not runtime behaviour |
 | **Trino (access rules)** | `bash scripts/trino-rules-test.sh` (`make test-trino`): the pinned `trinodb/trino` with `docker/trino/etc`, no network, two starts. The real `etc/`: a misspelt property fails the start, the catalogs must be `lake`, `system` and one per domain in `contracts/domains.yaml`, only `lake` is on warehouse `k2` and it is `read_only`. Then local Iceberg catalogs from the same generator: each domain's writer creates, inserts and drops in its own catalog; the next domain's writer and an unnamed user are denied every SQL write there and in `lake`; `optimize`, `rollback_to_snapshot`, `expire_snapshots`, `remove_orphan_files` and `CALL` through `lake` denied, and `CALL` through a domain catalog; nobody may set the two retention-floor session properties, so an expire at `0s` fails; a user sees only its own queries; the known table-procedure gap between domains asserted (ADR-044) |
+| **dbt (marts)** | `bash scripts/dbt-test.sh` (`make test-dbt`): `sqlfluff lint` over `dbt/models`; the pinned `trinodb/trino` over the same local catalogs, with every lake table in `dbt/models/_sources.yml` created empty in its Trino types; `dbt deps`, `parse`, `compile --target trino`; `scripts/dbt_manifest_check.py` (only staging selects from a source, every model in a domain catalog, every mart a table declared in its contract, reading exactly its declared tables, with a whole-table uniqueness test on its contract grain); `dbt build --selector <domain>` as `dbt_<domain>`, which runs the unit tests; and the same selector as another user, refused with `Access Denied` |
 | **Compose (config validation)** | `docker compose --env-file .env.example config -q`, then `python3 scripts/check-budget.py`: prints the steady default, bootstrap default and bootstrap `--profile governance` and `--profile legacy` limit sums and fails when the bootstrap default is over 25 CPU / 48 GiB ([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)); fails any service in any config without a CPU and memory limit (it would escape the budget and nothing else would notice), any untagged or `latest` image, and any unpinned `FROM` or `pip install` in a Dockerfile under `docker/` or `services/` |
 | **Docs** | `bash scripts/check-docs.sh`, ten failing gates: links, forbidden words, promtool check and test, runbook annotation paths and presence, capacity-model gate, no plan checkboxes, no em-dash on lines added since `origin/main` (so the job checks out with full history), fixture and sample data synthetic or listed in `NOTICE`. Mermaid width only warns |
 | **Security (Trivy)** | Filesystem scan for CRITICAL/HIGH findings, SARIF uploaded to GitHub code scanning. `legacy/` is skipped |

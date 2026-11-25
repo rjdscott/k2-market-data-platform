@@ -13,7 +13,8 @@ raw to gold. Where Trino may write, and who may, is
 
 Today's domains, from `contracts/domains.yaml`: `fx_reference`, `market_analytics`,
 `market_capture`, `reference_data`. Inside a domain catalog, one schema per data product,
-named from the product (dbt creates them).
+named from the product, and a `staging` schema of views; dbt creates them
+([`dbt/README.md`](../../dbt/README.md)).
 
 `etc/` is mounted read-only over the image's `/etc/trino`. A changed file needs
 `docker compose up -d --force-recreate --no-deps trino` (`scripts/dev-up.sh` does it when

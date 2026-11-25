@@ -196,6 +196,7 @@ hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
 | Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, only a domain's writer changes its tables with SQL statements (table procedures are not fenced per user, ADR-044); 113 checks [^trino], no stack | `make test-trino` |
+| dbt: sqlfluff, compile, a manifest check (only staging reads a source; every mart tested unique on its contract grain), then a build on empty sources with 2 unit tests and 6 data tests [^dbt], no stack | `make test-dbt` |
 | Prometheus rule unit tests (17 of 28 alerts) and 10 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
 
@@ -203,10 +204,11 @@ hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 
 [^py]: `make test-python` with `--collect-only -q | tail -1`
 [^ch]: the count `scripts/clickhouse-schema-test.sh` itself asserts (`[ "$n" -eq 10 ]`)
 [^trino]: `make test-trino | grep -c '^ok '` (2026-11-26, four domains)
+[^dbt]: `dbt build`'s own summary in `make test-dbt`: `Found 2 models, 6 data tests, 1 source, ... 2 unit tests` (2026-11-25)
 
 CI ([`ci.yml`](./.github/workflows/ci.yml)) runs rust (fmt, clippy `-D warnings`, test),
 python (Ruff, pytest), contracts (k2gen drift, tests, Ruff, mypy), clickhouse-schema, trino
-(`make test-trino`), a docker build matrix, compose validation with the resource-budget and
+(`make test-trino`), dbt (`make test-dbt`), a docker build matrix, compose validation with the resource-budget and
 pin checks, the documentation gates and Trivy on every pull request.
 
 ## Repository layout
@@ -222,6 +224,7 @@ schemas/avro/              raw-message, trade, book-snapshot-l2
 config/instruments.yaml    instrument registry, the single source of truth
 contracts/                 a descriptor per data product, an ODCS v3 contract per lake table, four domains
 platform/k2gen/            k2gen, the contract validator
+dbt/                       dbt on Trino: the domain marts; sources and selectors generated from contracts/
 scripts/chaos/             failure injection, timed
 notebooks/                 DuckDB research notebooks
 docs/                      the architecture book, ADRs, runbooks, benchmarks, plans

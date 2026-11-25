@@ -238,3 +238,29 @@ snapshot by id (`FOR VERSION AS OF`), and its decimal arithmetic differs from Sp
 once the exact product passes about 1e18, so `gold.candles()`'s `quote_volume` expression
 cannot be copied. `quote_volume` joins the comparison only if `typeof` shows both engines
 produce the same decimal; tolerance zero is not relaxed for it.
+
+## Outcome (2026-11-25, the first mart)
+
+**Marts are covered as scoped, and the worked example has the full check.** dbt's
+`market_analytics.candles.ohlcv_1m` ([`dbt/`](../../dbt/README.md)) has dbt unit tests on its
+logic, on made-up rows (the minute bucket; ties on `exchange_ts` broken by `recv_ts_ns`, then
+`trade_seq`), tests on its grain and envelope, and, because a reference is cheap here, the
+comparison with Spark's `gold.ohlcv_1m`: `scripts/parity_ohlcv.py --dbt` runs the model's
+compiled SQL through Trino over `gold.trades` `FOR VERSION AS OF` the newest snapshot the lake's
+candles for the day name, so both sides read the same trades and the side needs no new pin. For
+2026-11-24, at the snapshots current on 2026-11-25: 20,144 buckets, 0 differ on open, high,
+low, close, trade count, volume and `quote_volume`. Other marts get the first two, and the third
+where it is as cheap.
+
+**`quote_volume` joined, and the lake's is not exact.** Both engines type it `decimal(38,10)`,
+but the lake holds 6 decimals where `lake.sql` calls the column exact: no 2026-11-24 bucket had
+a digit past the sixth. Spark's decimal rules type `gold.py`'s `DECIMAL(38,10)` product
+`decimal(38,6)`, which would explain it (VERIFY: not run on Spark). The port rounds half up at 6
+decimals on purpose and matched every bucket; rounded at 10, 10,819 of the 20,144 differed.
+Tolerance zero held; the comment is wrong.
+
+**What the check does not prove.** It runs the SQL dbt builds with, not the table dbt last
+built, which holds the lake as it was at build time. A bucket computed before the newest
+snapshot it names equals the lake only if no trade landed in it since, and a stale lake bucket
+would show as a difference, not pass. `make parity-ohlcv` stays three-way; the fourth side is
+`--dbt`, opt in.

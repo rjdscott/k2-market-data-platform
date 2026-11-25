@@ -54,9 +54,12 @@ intended shape, not a fault.
 Every table is Iceberg format-version 2, Parquet + zstd, copy-on-write, append-only
 ([`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) header). Namespaces are
 `raw`, `bronze`, `silver`, `gold`, `audit`
-([`docker/lake/init-lake.sh`](../../docker/lake/init-lake.sh) line 133). The dbt marts will
-live in one warehouse per data domain, the only places Trino writes; they hold nothing yet
-([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)).
+([`docker/lake/init-lake.sh`](../../docker/lake/init-lake.sh) line 133). The dbt marts live
+in one warehouse per data domain, the only places Trino writes, and are read through Trino
+([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). The first is
+`market_analytics.candles.ohlcv_1m`: `gold.ohlcv_1m`'s grain and columns without
+`src_snapshot_id` and `computed_at`, rebuilt whole from `gold.trades` by each `dbt build`
+([`dbt/README.md`](../../dbt/README.md)).
 
 | Table | Grain — one row per … | Partition / sort | Time column (unit, zone) | Symbol columns | Identifier (dedup key) | Populated by |
 |---|---|---|---|---|---|---|

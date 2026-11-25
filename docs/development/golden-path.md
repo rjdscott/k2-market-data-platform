@@ -93,7 +93,7 @@ hand, or one left out of the commit, does not merge.
 |---|---|---|
 | Create the table in the lake | `docker/lake/apply_ddl.py` applies `ddl/generated/*.sql` after `lake.sql` (`tests/test_lake_apply_ddl.py`). Not yet run against a stack on this path | P1 code, P7 proof |
 | Ingest | a generated Airflow DAG and the file-source pattern | P4 |
-| Process | dbt models, tests and generated sources | P3, P4 |
+| Process | dbt models and tests: the sources and selectors are generated from a product's `marts` ([`dbt/README.md`](../../dbt/README.md)); a scaffold for a new mart is not | P3, P4 |
 | Trace, serve, catalogue | lineage, access rules, catalog payloads | P5 |
 | Publish | the readiness scorecard that gates `lifecycle: published` | P6 |
 

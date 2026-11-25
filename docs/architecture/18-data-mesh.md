@@ -108,13 +108,15 @@ are byte-identical and a deleted contract leaves nothing behind.
 | One mart warehouse per domain | `docker/lake/generated/warehouses.txt` | `docker/lake/init-lake.sh`, after the lake's own bootstrap |
 | A writable Trino catalog per domain, and its local twin | `docker/trino/etc/catalog/<domain>.properties`, `docker/trino/test/local/<domain>.properties` (the generated ones; `lake.properties` beside them is hand-written) | Trino; `make test-trino` |
 | Trino's access rules: only a domain's writer creates, changes or drops its tables and rows with SQL statements (table procedures are not fenced per user) | `docker/trino/etc/rules.json` | Trino ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)) |
+| The dbt sources for every lake table a mart reads: Trino column types, freshness from the contract's latency, a uniqueness test on its identifier fields | `dbt/models/_sources.yml` | dbt ([`dbt/README.md`](../../dbt/README.md)); `make test-dbt` |
+| One dbt selector per domain with marts, run as its writer | `dbt/selectors.yml` | dbt; `scripts/dbt_manifest_check.py` holds each mart to its contract |
 
 How those warehouses, catalogs and rules work together, and who may read or write each, is
 [chapter 19](19-lakehouse-and-domain-warehouses.md).
 
 With no inline-column contract, the DDL directory holds only the `README.md` that `generate`
-writes there, which says so. Later phases add outputs (Airflow DAG config, dbt sources,
-catalog payloads, SLO rules) at the paths the
+writes there, which says so. Later phases add outputs (Airflow DAG config, catalog payloads,
+SLO rules) at the paths the
 [phase P1 output map](../plans/2026-11-24-governed-self-serve-platform/001-contracts-generator-mesh.md)
 fixes. How a team adds a product, step by step: [the golden path](../development/golden-path.md).
 
