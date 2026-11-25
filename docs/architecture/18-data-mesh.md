@@ -109,6 +109,9 @@ are byte-identical and a deleted contract leaves nothing behind.
 | A writable Trino catalog per domain, and its local twin | `docker/trino/etc/catalog/<domain>.properties`, `docker/trino/test/local/<domain>.properties` (the generated ones; `lake.properties` beside them is hand-written) | Trino; `make test-trino` |
 | Trino's access rules: each domain's writer writes only its own catalog | `docker/trino/etc/rules.json` | Trino ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)) |
 
+How those warehouses, catalogs and rules work together, and who may read or write each, is
+[chapter 19](19-lakehouse-and-domain-warehouses.md).
+
 With no inline-column contract, the DDL directory holds only the `README.md` that `generate`
 writes there, which says so. Later phases add outputs (Airflow DAG config, dbt sources,
 catalog payloads, SLO rules) at the paths the
