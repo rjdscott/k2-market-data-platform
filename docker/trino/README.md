@@ -81,6 +81,15 @@ it in the dbt profile.
 ([ADR-028](../../docs/adr/ADR-028-non-goals-and-honest-limits.md) section 8). The second
 layer, a MinIO key per identity scoped to its prefix, comes with the entitlements phase.
 
+**The startup log and the S3 keys.** Trino logs every catalog property at start, one INFO
+line each under `io.trino.bootstrap.catalog.<catalog>`, and masks only what the connector
+marks security-sensitive: `s3.aws-secret-key` is masked, `s3.aws-access-key` is not. Until
+2026-11-26 that put the MinIO access key in `docker logs k2-trino` once per catalog per
+start. `etc/log.properties` sets that logger to `WARN`, and `make test-trino` starts `etc/`
+with a canary access key and fails if the log prints it. `SHOW CREATE CATALOG` does not exist
+in Trino 484 and `system.metadata.catalogs` lists no properties (probed 2026-11-26), so SQL
+does not reveal the keys either.
+
 **The known gap.** Inside the domain catalogs, table procedures are not fenced per user: no
 built-in access control in Trino 484 restricts `ALTER TABLE ... EXECUTE` per user on a
 writable catalog. `EXPLAIN ALTER TABLE reference_data.scratch_check.candles EXECUTE optimize`

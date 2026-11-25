@@ -31,6 +31,10 @@ upgrading a stack that already holds data, and it does not cover restoring the l
   moves both the published port and the URL the Prefect UI calls from the browser; an
   override file that remaps only the port gives a UI that loads and then fails every
   request.
+- **Every `change-me-in-production` value in `.env` replaced**, and `MINIO_ROOT_PASSWORD`
+  different from `MINIO_ROOT_USER`. `make up` stops before compose with
+  `check-env: FAIL .env: <NAME> ...` lines naming each variable left, never its value
+  ([SECURITY.md](../../SECURITY.md)).
 - **Roughly 8 GB of image space.** The three built images are `k2-capture` 54 MB,
   `k2-prefect-worker` 1.23 GB and `k2-spark-iceberg` 6.47 GB, on top of ~5.3 GB of
   upstream pulls.
@@ -40,14 +44,19 @@ upgrading a stack that already holds data, and it does not cover restoring the l
 ```bash
 git clone https://github.com/rjdscott/k2-market-data-platform.git
 cd k2-market-data-platform
-cp .env.example .env            # set every change-me value;
+cp .env.example .env            # set every change-me value: openssl rand -hex 24 each;
                                 # LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 set -a && . ./.env && set +a
-docker compose up -d            # first run pulls 9 images and builds 3
+make up                         # scripts/check-env.py, then docker compose up -d;
+                                # first run pulls 9 images and builds 3
 make health                     # every service healthy, a message on every venue in the last 2 min, lake committing
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
 bash scripts/lake-verify.sh
 ```
+
+Then the two binding checks in [SECURITY.md](../../SECURITY.md#check-the-binding): check 1
+prints `PASS` (no compose port on `*:` or `0.0.0.0:`) and check 2 prints `loopback 200`,
+`lan 000`. Not yet run on a fresh clone. <!-- VERIFY -->
 
 ## Timeline
 

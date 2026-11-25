@@ -303,6 +303,12 @@ table, or a scheduled table if one is ever declared.
    Lakekeeper is unauthenticated. Spark and DuckDB reach both directly, so Trino's rules bind
    only Trino clients. A MinIO key per identity, scoped to its own prefix, comes with the
    entitlements phase, P5 ([ADR-031](../adr/ADR-031-governed-self-serve-platform.md), ADR-044).
+   Until 2026-11-26 MinIO's API and console also listened on every interface and Trino's
+   startup log printed the access key, so any machine on the local network holding that key
+   could rewrite the lake without going through Trino. Every port is on `127.0.0.1` now and
+   the log is silent ([SECURITY.md](../../SECURITY.md)); loopback keeps other machines out,
+   not other users of the host. The scoped keys, and the root rotation that must come with
+   them, are the next change.
 
 ## On a cloud
 

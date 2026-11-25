@@ -2,6 +2,15 @@
 # Version: 2.0.0-consolidated
 # Last Updated: 2026-02-12
 # Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045; was 20 CPU / 36 GiB, ADR-034, and 16 CPU / 40 GB, ADR-010)
+#
+# Published ports: every `ports:` entry is bound to 127.0.0.1, in every profile.
+# Containers reach each other over k2-net by service name (minio:9000,
+# lakekeeper:8181) and never through a published port; host tools use
+# localhost. A bare "9000:9000" listens on every interface, which put the MinIO
+# API and console, and every unauthenticated UI here, on the local network
+# until 2026-11-26. scripts/check-budget.py fails CI on a port without the
+# prefix. Loopback stops other machines, not other users of this host
+# (SECURITY.md).
 
 #############################################################################
 # NETWORKS
@@ -105,10 +114,10 @@ services:
     networks:
       - k2-net
     ports:
-      - "9092:9092"     # Kafka API
-      - "19092:19092"   # Kafka API, external listener advertised as localhost:19092 (host tooling: scripts/parity)
-      - "9644:9644"     # Admin API
-      - "8081:8081"     # Schema Registry
+      - "127.0.0.1:9092:9092"     # Kafka API
+      - "127.0.0.1:19092:19092"   # Kafka API, external listener advertised as localhost:19092 (host tooling: scripts/parity)
+      - "127.0.0.1:9644:9644"     # Admin API
+      - "127.0.0.1:8081:8081"     # Schema Registry
     volumes:
       - redpanda-data:/var/lib/redpanda/data
     command:
@@ -157,7 +166,7 @@ services:
     networks:
       - k2-net
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       KAFKA_BROKERS: redpanda:9092
       # Console v3 moved the schema registry out from under `kafka.`:
@@ -206,9 +215,9 @@ services:
     networks:
       - k2-net
     ports:
-      - "8123:8123"     # HTTP interface
-      - "9002:9000"     # Native protocol (9002 to avoid MinIO conflict)
-      - "9363:9363"     # Prometheus metrics
+      - "127.0.0.1:8123:8123"     # HTTP interface
+      - "127.0.0.1:9002:9000"     # Native protocol (9002 to avoid MinIO conflict)
+      - "127.0.0.1:9363:9363"     # Prometheus metrics
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
@@ -260,8 +269,8 @@ services:
     networks:
       - k2-net
     ports:
-      - "9000:9000"     # API
-      - "9001:9001"     # Console
+      - "127.0.0.1:9000:9000"     # API
+      - "127.0.0.1:9001:9001"     # Console
     volumes:
       - minio-data:/data
     environment:
@@ -302,7 +311,7 @@ services:
     networks:
       - k2-net
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - prometheus-data:/prometheus
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -344,7 +353,7 @@ services:
     networks:
       - k2-net
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -516,7 +525,7 @@ services:
     # browser calls. Publishing on another port without moving that variable too
     # gives a UI that loads and then fails every request.
     ports:
-      - "${K2_PREFECT_PORT:-4200}:4200"
+      - "127.0.0.1:${K2_PREFECT_PORT:-4200}:4200"
     volumes:
       - ./docker/prefect:/root/.prefect
     environment:
@@ -842,8 +851,8 @@ services:
     networks:
       - k2-net
     ports:
-      - "18080:8080"    # Spark Master UI (mapped to 18080 to avoid conflict)
-      - "4040:4040"     # Spark Application UI
+      - "127.0.0.1:18080:8080"    # Spark Master UI (mapped to 18080 to avoid conflict)
+      - "127.0.0.1:4040:4040"     # Spark Application UI
       # The Spark image also starts its own sample-notebook server on 8888:
       # unauthenticated, root, and it holds the MinIO keys. Nothing in K2 uses
       # it, so it is not published. K2's notebooks are `make notebooks`, 8889.
