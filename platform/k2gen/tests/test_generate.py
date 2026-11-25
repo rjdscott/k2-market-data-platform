@@ -6,6 +6,7 @@ deleted contract takes its outputs with it, and a scaffold is a valid product
 whose generated DDL reads back as its contract declares.
 """
 
+import json
 import shutil
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def tree(tmp_path):
 
 def snapshot(root: Path) -> dict:
     """Every file under the generator's outputs, path -> bytes."""
-    places = [root / d for d in generate.OWNED] + [(root / generate.RETENTION).parent]
+    places = [root / d for d in generate.OWNED] + [(root / generate.RETENTION).parent, root / "docker/trino"]
     return {p.relative_to(root).as_posix(): p.read_bytes() for d in places for p in sorted(d.rglob("*")) if p.is_file()}
 
 
@@ -131,3 +132,62 @@ def test_pages_carry_no_em_dash_although_lake_sql_comments_do():
     # check-docs gate (h) refuses an em-dash on an added line, and a page is regenerated whole.
     assert "\u2014" in (ROOT / cli.LAKE_SQL).read_text()
     assert not [p for p, text in generate.render(ROOT).items() if "\u2014" in text]
+
+
+def add_domain(root: Path, name: str, owner: str = "research-team") -> None:
+    path = root / "contracts/domains.yaml"
+    doc = yaml.safe_load(path.read_text())
+    doc["domains"][name] = {"owner": owner, "kind": "consumer-aligned", "description": "A test domain."}
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
+def test_a_new_domain_gets_its_fence(tree):
+    # ADR-044: adding a domain and running generate is the whole act of giving it a fence.
+    add_domain(tree, "research-desk")
+    assert cli.validate(tree) == []
+    files = generate.generate(tree)
+    catalog = files[f"{generate.CATALOGS}/research_desk.properties"]
+    assert "iceberg.rest-catalog.warehouse=research_desk\n" in catalog and "warehouse=k2" not in catalog
+    assert "iceberg.add-files-procedure.enabled=false\n" in catalog and "iceberg.register-table-procedure.enabled=false\n" in catalog
+    assert "iceberg.catalog.type=TESTING_FILE_METASTORE\n" in files[f"{generate.TEST_CATALOGS}/research_desk.properties"]
+    assert "research_desk" in files[generate.WAREHOUSES].splitlines()
+    rules = json.loads(files[generate.TRINO_RULES])
+    assert {"lake", "research_desk"} <= set(rules["catalogs"][-1]["catalog"].split("|"))
+    assert {"user": "dbt_research_desk", "catalog": "research_desk", "owner": True} in rules["schemas"]
+    writer = {"user": "dbt_research_desk", "catalog": "research_desk"}
+    assert [r for r in rules["tables"] if writer.items() <= r.items() and "OWNERSHIP" in r["privileges"]]
+    # Everyone else, everywhere: the last rule in each list, which matches any user.
+    assert rules["schemas"][-1] == {"owner": False}
+    assert rules["tables"][-1] == {"privileges": ["SELECT", "GRANT_SELECT"]}
+    # No rule names lake for a writer: only its read-only connector and the last rules apply there.
+    assert not [r for r in rules["schemas"] + rules["tables"] if r.get("catalog") == "lake"]
+
+
+def test_a_removed_domain_takes_its_catalog_and_leaves_lake_properties(tree):
+    lake = tree / generate.CATALOGS / "lake.properties"
+    lake.parent.mkdir(parents=True)
+    lake.write_text("connector.name=iceberg\niceberg.security=read_only\n")
+    add_domain(tree, "research-desk")
+    generate.generate(tree)
+    assert (tree / generate.CATALOGS / "research_desk.properties").exists()
+
+    path = tree / "contracts/domains.yaml"
+    doc = yaml.safe_load(path.read_text())
+    del doc["domains"]["research-desk"]
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+    generate.generate(tree)
+    assert not (tree / generate.CATALOGS / "research_desk.properties").exists()
+    assert not (tree / generate.TEST_CATALOGS / "research_desk.properties").exists()
+    assert "research_desk" not in (tree / generate.TRINO_RULES).read_text() + (tree / generate.WAREHOUSES).read_text()
+    assert lake.read_text() == "connector.name=iceberg\niceberg.security=read_only\n"
+
+
+@pytest.mark.parametrize("name", ["lake", "system", "k2"])
+def test_a_domain_whose_fence_name_is_taken_is_rejected(tree, name):
+    add_domain(tree, name)
+    assert [e for e in cli.validate(tree) if f"domain {name} would be catalog and warehouse {name}" in e]
+
+
+def test_a_domain_id_that_is_not_a_slug_is_rejected(tree):
+    add_domain(tree, "Research_Desk")
+    assert [e for e in cli.validate(tree) if "contracts/domains.yaml" in e and "Research_Desk" in e]

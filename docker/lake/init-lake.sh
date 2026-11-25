@@ -25,11 +25,10 @@ set -euo pipefail
 # script creates what those jobs connect to.
 LK=${K2_LAKEKEEPER_URL:-http://lakekeeper:8181}
 WAREHOUSE=${K2_LAKE_WAREHOUSE:-k2}
-# Trino's, for the dbt marts (ADR-035): a second warehouse on the same bucket
-# under its own key prefix, so Trino's catalog over the lake can be read-only.
-# The name also lives in docker/trino/etc/catalog/marts.properties
-# (iceberg.rest-catalog.warehouse); change both or neither.
-MARTS_WAREHOUSE=${K2_MARTS_WAREHOUSE:-marts}
+# One warehouse per data domain for its marts (ADR-044), on the same bucket under
+# warehouse/<name>. The list is generated from contracts/domains.yaml by
+# `make generate`, which writes the matching Trino catalogs too; never edit it here.
+DOMAIN_WAREHOUSES="$(dirname "$0")/generated/warehouses.txt"
 BUCKET=${K2_LAKE_BUCKET:-k2-lake}
 S3_ENDPOINT=${K2_S3_ENDPOINT:-http://minio:9000}
 S3_REGION=${K2_S3_REGION:-local-01}
@@ -138,7 +137,13 @@ done
 
 # Last, after the lake has its namespaces: a failure here still exits 1, but it
 # cannot leave the lake's own bootstrap half done.
-echo "[5/5] Warehouse '$MARTS_WAREHOUSE'"
-ensure_warehouse "$MARTS_WAREHOUSE"
+echo "[5/5] Domain warehouses ($DOMAIN_WAREHOUSES)"
+domains=()
+while read -r w; do
+  [[ -z $w || $w == \#* ]] || domains+=("$w")
+done < "$DOMAIN_WAREHOUSES"
+for w in "${domains[@]}"; do
+  ensure_warehouse "$w"
+done
 
-echo "✓ lake ready: catalog $LK/catalog, warehouses $WAREHOUSE and $MARTS_WAREHOUSE, namespaces raw/bronze/silver/gold/audit in $WAREHOUSE"
+echo "✓ lake ready: catalog $LK/catalog, warehouse $WAREHOUSE (raw/bronze/silver/gold/audit), domain warehouses ${domains[*]}"

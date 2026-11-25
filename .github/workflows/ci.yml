@@ -120,10 +120,10 @@ jobs:
       - uses: actions/checkout@v7
 
       # The pinned image from docker-compose.yml with docker/trino/etc, no
-      # network: the real etc/ starts; a local Iceberg catalog read-only at the
-      # connector refuses every table procedure and write; memory catalogs named
-      # `lake` and `marts` show the rules (writes denied in lake, allowed in
-      # marts).
+      # network: the real etc/ starts with one catalog per domain in
+      # contracts/domains.yaml; on local Iceberg catalogs from the same
+      # generator, each domain's writer writes only its own catalog, nothing
+      # writes `lake`, and an unnamed user writes nowhere.
       - run: bash scripts/trino-rules-test.sh
 
   docker:
