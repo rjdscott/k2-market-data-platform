@@ -70,7 +70,7 @@ test-airflow:  ## DAG structure, exit 75 to skipped, params and the kill path, i
 test-clickhouse:  ## gold schema semantics on a throwaway clickhouse:24.3 (OHLCV regression, FINAL dedup, BBO math, quant user)
 	bash scripts/clickhouse-schema-test.sh
 
-test-trino:  ## Trino on a throwaway trinodb/trino, no stack: etc/ starts, catalog lake refuses every commit (table procedures too), each domain writer writes only its own catalog
+test-trino:  ## Trino on a throwaway trinodb/trino, no stack: etc/ starts, catalog lake refuses every commit (table procedures too), only a domain's writer changes its tables with SQL statements
 	bash scripts/trino-rules-test.sh
 
 test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo needed)
@@ -144,7 +144,7 @@ test-k2gen:  ## k2gen: contracts/ against ODCS v3, the K2 schema and lake.sql, p
 	cd platform/k2gen && uv run --locked -q pytest -q
 
 # CI runs this and fails on any diff or untracked file: generated files are never edited by hand.
-generate:  ## Validate contracts/, then rewrite docker/lake/ddl/generated/, docker/lake/generated/retention.json and docs/products/
+generate:  ## Validate contracts/, then rewrite docker/lake/ddl/generated/, docker/lake/generated/{retention.json,warehouses.txt}, docs/products/, and the per-domain Trino catalogs and rules.json under docker/trino/
 	cd platform/k2gen && uv run --locked -q k2gen generate
 
 new-product:  ## Scaffold contracts/DOMAIN/NAME/: a descriptor and one contract with inline columns that validates (DOMAIN=x NAME=y)

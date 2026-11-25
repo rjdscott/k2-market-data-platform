@@ -195,14 +195,14 @@ hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 
 | Python: 299 tests [^py] over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
-| Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, each domain's writer writes only its own catalog; 60 checks [^trino], no stack | `make test-trino` |
+| Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, only a domain's writer changes its tables with SQL statements (table procedures are not fenced per user, ADR-044); 113 checks [^trino], no stack | `make test-trino` |
 | Prometheus rule unit tests (17 of 28 alerts) and 10 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
 [^py]: `make test-python` with `--collect-only -q | tail -1`
 [^ch]: the count `scripts/clickhouse-schema-test.sh` itself asserts (`[ "$n" -eq 10 ]`)
-[^trino]: `make test-trino | grep -c '^ok '` (2026-11-25, four domains)
+[^trino]: `make test-trino | grep -c '^ok '` (2026-11-26, four domains)
 
 CI ([`ci.yml`](./.github/workflows/ci.yml)) runs rust (fmt, clippy `-D warnings`, test),
 python (Ruff, pytest), contracts (k2gen drift, tests, Ruff, mypy), clickhouse-schema, trino

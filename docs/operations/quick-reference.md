@@ -166,8 +166,9 @@ DuckDB ([`docker/trino/README.md`](../../docker/trino/README.md),
 [ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)). Catalog `lake` is warehouse `k2`,
 read-only at the connector, and its schemas are the lake's namespaces: `lake.gold.trades` is
 `gold.trades`. Each data domain in `contracts/domains.yaml` has a catalog and warehouse of its
-own for its marts, named from the domain id (`market-analytics` is `market_analytics`), which
-only its writer `dbt_<domain>` writes and everyone reads
+own for its marts, named from the domain id (`market-analytics` is `market_analytics`), whose
+tables only its writer `dbt_<domain>` creates, changes or drops with SQL statements, and which
+everyone reads; table procedures are not fenced per user
 ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). They hold nothing
 until the dbt marts land. The user is whatever `--user` says, not authenticated. The session
 time zone is the client's: the CLI inside the container sends UTC, a client on the host sends

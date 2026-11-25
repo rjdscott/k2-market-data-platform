@@ -122,7 +122,7 @@ jobs:
       # The pinned image from docker-compose.yml with docker/trino/etc, no
       # network: the real etc/ starts with one catalog per domain in
       # contracts/domains.yaml; on local Iceberg catalogs from the same
-      # generator, each domain's writer writes only its own catalog, nothing
+      # generator, only a domain's writer changes its catalog with SQL, nothing
       # writes `lake`, and an unnamed user writes nowhere.
       - run: bash scripts/trino-rules-test.sh
 

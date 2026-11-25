@@ -9,7 +9,7 @@ raw to gold. Where Trino may write, and who may, is
 | Catalog | Lakekeeper warehouse | Files under | Who writes |
 |---|---|---|---|
 | `lake` | `k2`: `raw`, `bronze`, `silver`, `gold`, `audit` | `s3://k2-lake/warehouse/k2/` | nobody through Trino: `iceberg.security=read_only` |
-| one per data domain, named from its id (`market-analytics` is `market_analytics`) | the same name, created by `docker/lake/init-lake.sh` | `s3://k2-lake/warehouse/<name>/` | its writer `dbt_<name>` only; everyone reads |
+| one per data domain, named from its id (`market-analytics` is `market_analytics`) | the same name, created by `docker/lake/init-lake.sh` | `s3://k2-lake/warehouse/<name>/` | SQL statements: its writer `dbt_<name>` only; everyone reads. Table procedures: not fenced per user |
 
 Today's domains, from `contracts/domains.yaml`: `fx_reference`, `market_analytics`,
 `market_capture`, `reference_data`. Inside a domain catalog, one schema per data product,
@@ -56,10 +56,19 @@ it in the dbt profile.
    are `all` at the catalog level and `system` read-only; the fence is in the schema and table
    rules: `dbt_<domain>` owns its own catalog's schemas and tables, and every user, that writer
    included, has `SELECT` and `GRANT_SELECT` on everything else. A user no rule names (`trino`,
-   `someone`) reads everything and writes nothing. No procedure rules, so `CALL` runs only
-   Trino's built-ins. The catalog level stays `all` because a definer view is readable by
-   others only if its owner has `all` on each base table's catalog: a read-only catalog rule
-   gave `Access Denied: View owner does not have sufficient privileges` on 2026-11-25.
+   `someone`) reads everything and writes nothing with SQL statements. The catalog level stays
+   `all` because a definer view is readable by others only if its owner has `all` on each base
+   table's catalog: a read-only catalog rule gave `Access Denied: View owner does not have
+   sufficient privileges` on 2026-11-25. Three more lists:
+   - no `procedures` list, so `CALL` runs only Trino's built-ins: that default is what denies
+     `CALL <catalog>.system.rollback_to_snapshot`, `register_table` and the rest in a domain
+     catalog. In `lake` the read-only connector would deny them too (by the source; not
+     tested on its own);
+   - `catalog_session_properties` denies `expire_snapshots_min_retention` and
+     `remove_orphan_files_min_retention` to every user, a domain's writer included, and allows
+     the rest. Without it anyone could lower the 7-day floor to `0s` and expire a table's
+     snapshots (probed on `k2-trino`, 2026-11-25: 2 snapshots became 1);
+   - `queries`: every user executes; a user sees and kills only its own queries.
 
 **Identity is asserted, not authenticated.** The user is the `X-Trino-User` header (`trino
 --user`); anyone on the host can claim `dbt_market_analytics`. The port is published on
@@ -70,15 +79,46 @@ layer, a MinIO key per identity scoped to its prefix, comes with the entitlement
 **The known gap.** Inside the domain catalogs, table procedures are not fenced per user: no
 built-in access control in Trino 484 restricts `ALTER TABLE ... EXECUTE` per user on a
 writable catalog. `EXPLAIN ALTER TABLE reference_data.scratch_check.candles EXECUTE optimize`
-as `dbt_market_analytics` planned on 2026-11-25. The lake is not exposed by it, and a mart is
-rebuilt by dbt; `make test-trino` asserts the gap, so a release that closes it fails there.
+as `dbt_market_analytics` planned on 2026-11-25. So any user can still run `optimize`,
+`rollback_to_snapshot`, and `expire_snapshots` or `remove_orphan_files` at or above the 7-day
+floor on any domain's marts. The lake is not exposed by it, and a mart is rebuilt by dbt;
+`make test-trino` asserts the gap, so a release that closes it fails there.
+
+## Operating the domain warehouses
+
+**`lake-init` failed on a domain warehouse.** `init-lake.sh` creates them last, after the
+lake's namespaces, so the lake itself is bootstrapped; but the one-shot exits 1, and what
+waits for it does not start: `lake-ddl` (and so `airflow-scheduler`) and `trino`. Read the
+reason, fix it (usually a name Lakekeeper refuses, or Lakekeeper or MinIO not up), then run
+the one-shot again and start what waited:
+
+```bash
+docker logs k2-lake-init | tail -20
+docker compose up -d --force-recreate --no-deps lake-init
+docker compose up -d lake-ddl airflow-scheduler trino
+```
+
+**Removing a domain.** Delete it from `contracts/domains.yaml` and `make generate`: its
+catalog file, its rules and its `warehouses.txt` line go. `init-lake.sh` only creates, so the
+Lakekeeper warehouse and every object in it stay, invisible to Trino, and re-adding the same
+id would bring the old tables back. To remove the warehouse for good, confirm it is empty,
+then delete it (how the earlier single warehouse `marts` went, 2026-11-25: `204`):
+
+```bash
+ID=$(curl -s 'localhost:18181/management/v1/warehouse?project-id=00000000-0000-0000-0000-000000000000' \
+  | python3 -c 'import json,sys; print([w["id"] for w in json.load(sys.stdin)["warehouses"] if w["name"] == "<name>"][0])')
+curl -s "localhost:18181/catalog/v1/$ID/namespaces"          # must print {"namespaces":[]}
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE "localhost:18181/management/v1/warehouse/$ID"   # 204
+```
 
 `make test-trino` (CI job `trino`) checks all of this with no stack: the real `etc/` starts
 with exactly `lake`, `system` and one catalog per domain, only `lake` is on `k2` and it is
 `read_only`; then, on local catalogs from the same generator, each writer creates, inserts
-and drops in its own catalog and is denied in the next domain's and in `lake`, table
-procedures and `CALL` through `lake` are denied, a view across two catalogs is read by a
-third user, and an unnamed user writes nowhere.
+and drops in its own catalog; the next domain's writer and an unnamed user are denied every SQL
+write on it (insert, delete, update, add column, view, drop); table procedures and `CALL`
+through `lake` are denied, and `CALL` through a domain catalog, its own writer included;
+nobody may set the two retention floors, so an expire at `0s` fails;
+a view across two catalogs is read by a third user; a user sees only its own queries.
 
 ## Verified 2026-11-25
 

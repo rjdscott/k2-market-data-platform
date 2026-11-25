@@ -159,24 +159,28 @@ Inside a domain catalog there is one schema per data product, for example
 `market_analytics.delayed_candles.ohlcv_1m_delayed_20m`. A product rebuild can then drop one
 schema without touching its siblings. A mart that joins two domains belongs to the domain that
 consumes it, and lives in that domain's warehouse; nobody writes into a producer's warehouse.
-Governance data, such as quality results and lineage, will be a domain like any other, owned by
-the platform team. It joins `domains.yaml` with its first product, not before (ADR-044, and the
-Outcome of ADR-033).
+Governance data, such as quality results and lineage, is meant to become a platform-owned domain
+stored the same way. That is the maintainer's direction, not yet a decision: it gets its own ADR
+with its first product, because it reverses ADR-033's line that the platform owns the road, not
+the products (ADR-044, and the Outcome of ADR-033).
 
 ## Who can do what
 
 | Who | Lake, warehouse `k2` | Its own domain warehouse | Another domain's warehouse |
 |---|---|---|---|
 | Spark jobs in `docker/lake/` | **write**, the only writer. One job at a time: the `flock` in `lock.py`, and one run at a time per Airflow job | none today: `spark_conf.py` opens `k2` only | none today |
-| `dbt_<domain>`, through Trino | **read**. Write **denied**: `rules.json` grants only `SELECT` there, and the connector is read-only (`iceberg.security=read_only`) | **write**: create and drop schemas, tables and views; insert, delete, update. `rules.json` makes it the owner | **read**. Write **denied** by `rules.json` |
-| Any other Trino user, `trino` included | **read**. Write **denied**, as above | none: no rule names it | **read**. Write **denied** by `rules.json` |
+| `dbt_<domain>`, through Trino | **read**. Write **denied**: `rules.json` grants only `SELECT` there, and the connector is read-only (`iceberg.security=read_only`) | **write** with SQL statements: create and drop schemas, tables and views; insert, delete, update. `rules.json` makes it the owner | **read**. SQL writes **denied** by `rules.json` |
+| Any other Trino user, `trino` included | **read**. Write **denied**, as above | none: no rule names it | **read**. SQL writes **denied** by `rules.json` |
 | DuckDB, in notebooks and parity scripts | **read**, through `ATTACH 'k2' AS lake`. No Trino rule applies; the code only reads | not attached today | not attached today |
 
 In [`rules.json`](../../docker/trino/etc/rules.json) the first matching rule wins. A writer's own
-rule comes first; everyone else falls through to the last, `SELECT` and `GRANT_SELECT` only. Two
-cells are weaker than they look: any identity can be claimed, and table procedures (maintenance
-commands such as `optimize`) inside the domain warehouses are open to every user. Both are in
-[the honest limits](#the-honest-limits).
+rule comes first; everyone else falls through to the last, `SELECT` and `GRANT_SELECT` only. The
+same file also denies, to every user: `CALL` of any Iceberg procedure, by leaving out a
+`procedures` list, so only Trino's built-in procedures run; and the two session properties that
+set the 7-day retention floors. And every user sees and kills only its own queries. Two cells
+are weaker than they look: any identity can be claimed, and table procedures (maintenance
+commands such as `optimize`) inside the domain warehouses are open to every user, at or above
+the floors. Both are in [the honest limits](#the-honest-limits).
 
 ## How a query travels
 
@@ -256,9 +260,12 @@ table, or a scheduled table if one is ever declared.
    EXECUTE`: `optimize`, `rollback_to_snapshot`, `expire_snapshots` and others. No built-in
    access control in Trino 484 restricts one per user on a writable catalog. As
    `dbt_market_analytics`, `EXPLAIN ALTER TABLE reference_data.scratch_check.candles EXECUTE
-   optimize` planned ([`docker/trino/README.md`](../../docker/trino/README.md)). That is
-   acceptable for now: the lake is not exposed, and a mart is rebuilt from the lake. `make
-   test-trino` asserts the gap, so a Trino release that closes it fails there first (ADR-044).
+   optimize` planned ([`docker/trino/README.md`](../../docker/trino/README.md)). Expiry and
+   orphan cleaning stay at or above their 7-day floor, because nobody may lower it: the two
+   session properties that would were open to every user until a probe on 2026-11-25 expired a
+   scratch table's snapshots at `0s`, and `rules.json` now denies them. That is acceptable for
+   now: the lake is not exposed, and a mart is rebuilt from the lake. `make test-trino` asserts
+   the gap, so a Trino release that closes it fails there first (ADR-044).
 3. **One set of storage keys.** Trino, Spark and DuckDB all hold the MinIO root keys, and
    Lakekeeper is unauthenticated. Spark and DuckDB reach both directly, so Trino's rules bind
    only Trino clients. A MinIO key per identity, scoped to its own prefix, comes with the
@@ -317,7 +324,9 @@ Each line below was printed by `k2-trino`, or by DuckDB 1.4.4, on 2026-11-25.
 - **Writing to the lake.** `CREATE TABLE lake.gold.chapter_check (x integer)` gives `Access
   Denied: Cannot create table lake.gold.chapter_check`, for every user. A table procedure gives
   `Access Denied: Cannot execute table procedure OPTIMIZE on gold.ohlcv_1m`. That message has no
-  catalog prefix: the read-only connector refused it, since `rules.json` cannot govern procedures.
+  catalog prefix because it comes from the read-only connector, which names a table by schema and
+  table only; `rules.json`'s check for table procedures allows everything, so it is not the one
+  refusing.
 - **Forgetting `--user`.** Inside the container the CLI's user is `trino`, and no rule lets it
   write. `CREATE SCHEMA market_analytics.chapter_check` gives `Access Denied: Cannot create
   schema market_analytics.chapter_check`.
@@ -354,9 +363,9 @@ Each line below was printed by `k2-trino`, or by DuckDB 1.4.4, on 2026-11-25.
 | Producer lake | warehouse `k2`: `raw` to `gold`, written by Spark only |
 | Mart | a table for consumers, built from lake tables, in a domain warehouse |
 | Data domain, data product | a body of data one team owns; one owned unit in it, one schema per mart product |
-| Writer identity, `X-Trino-User` | `dbt_<domain>`, the only user that writes its catalog; the unchecked header naming a user |
+| Writer identity, `X-Trino-User` | `dbt_<domain>`, the only user whose SQL statements may change its catalog; the unchecked header naming a user |
 | Fence | a boundary software enforces, not one people promise to respect |
-| Read-only connector | `iceberg.security=read_only` on catalog `lake`: no commit of any kind |
+| Read-only connector | `iceberg.security=read_only` on catalog `lake`: no statement that would commit, and no table procedure |
 | File-based access control | Trino's rules in `rules.json`: lists of rules, first match wins |
 | Connector, table procedure | the Trino plugin a catalog uses; maintenance run as `ALTER TABLE ... EXECUTE` |
 | View, definer view | a stored query; one whose base tables Trino checks against the view's owner |
@@ -374,4 +383,5 @@ Each line below was printed by `k2-trino`, or by DuckDB 1.4.4, on 2026-11-25.
 - One warehouse, catalog and writer per domain, generated from `contracts/domains.yaml`, because
   a mart has an owner and can always be rebuilt from the lake.
 - Three limits, recorded in ADR-044: identity is an unchecked header, table procedures are open
-  between domain catalogs, and every engine holds the root storage keys.
+  between domain catalogs at or above the retention floors, and every engine holds the root
+  storage keys.
