@@ -89,8 +89,8 @@
       },
       "id": 3,
       "type": "gauge",
-      "title": "CPU limits against the 20-core ceiling",
-      "description": "Sum of every running container's CPU limit. The ceiling is ADR-034's 20 CPU / 36 GiB, which scripts/check-budget.py gates at the bootstrap peak: every default service's limit, the five one-shots included. A one-shot that has exited has no cgroup, so this sum is the long-running services only, and sits below the gated figure by the one-shots' 2 CPU / 2.5 GiB.",
+      "title": "CPU limits against the 24-core ceiling",
+      "description": "Sum of every running container's CPU limit. The ceiling is ADR-035's 24 CPU / 42 GiB, which scripts/check-budget.py gates at the bootstrap peak: every default service's limit, the five one-shots included. A one-shot that has exited has no cgroup, so this sum is the long-running services only, and sits below the gated figure by the one-shots' 2 CPU / 2.5 GiB.",
       "gridPos": {
         "h": 6,
         "w": 7,
@@ -105,7 +105,7 @@
           "unit": "none",
           "mappings": [],
           "min": 0,
-          "max": 20,
+          "max": 24,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -115,11 +115,11 @@
               },
               {
                 "color": "yellow",
-                "value": 19.0
+                "value": 22.8
               },
               {
                 "color": "red",
-                "value": 20
+                "value": 24
               }
             ]
           },
@@ -146,7 +146,7 @@
             "uid": "prometheus"
           },
           "expr": "sum(container_spec_cpu_quota{job=\"cadvisor\"} / container_spec_cpu_period{job=\"cadvisor\"})",
-          "legendFormat": "CPU limits against the 20-core ceiling",
+          "legendFormat": "CPU limits against the 24-core ceiling",
           "refId": "A"
         }
       ]
@@ -219,8 +219,8 @@
       },
       "id": 5,
       "type": "gauge",
-      "title": "Memory limits against the 36 GiB ceiling",
-      "description": "Sum of every running container's memory limit. The ceiling is ADR-034's 20 CPU / 36 GiB, which scripts/check-budget.py gates at the bootstrap peak: every default service's limit, the five one-shots included. A one-shot that has exited has no cgroup, so this sum is the long-running services only, and sits below the gated figure by the one-shots' 2 CPU / 2.5 GiB.",
+      "title": "Memory limits against the 42 GiB ceiling",
+      "description": "Sum of every running container's memory limit. The ceiling is ADR-035's 24 CPU / 42 GiB, which scripts/check-budget.py gates at the bootstrap peak: every default service's limit, the five one-shots included. A one-shot that has exited has no cgroup, so this sum is the long-running services only, and sits below the gated figure by the one-shots' 2 CPU / 2.5 GiB.",
       "gridPos": {
         "h": 6,
         "w": 7,
@@ -235,7 +235,7 @@
           "unit": "bytes",
           "mappings": [],
           "min": 0,
-          "max": 38654705664,
+          "max": 45097156608,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -245,11 +245,11 @@
               },
               {
                 "color": "yellow",
-                "value": 36721970380.799995
+                "value": 42842298777.6
               },
               {
                 "color": "red",
-                "value": 38654705664
+                "value": 45097156608
               }
             ]
           },
@@ -276,7 +276,7 @@
             "uid": "prometheus"
           },
           "expr": "sum(container_spec_memory_limit_bytes{job=\"cadvisor\"})",
-          "legendFormat": "Memory limits against the 36 GiB ceiling",
+          "legendFormat": "Memory limits against the 42 GiB ceiling",
           "refId": "A"
         }
       ]
