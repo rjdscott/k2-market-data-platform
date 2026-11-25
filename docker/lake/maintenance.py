@@ -714,7 +714,8 @@ AUDITS = (
     )
 ) + (
     ("kraken_checksum", f"{CATALOG}.silver.book_kraken", audit_kraken_checksum),
-    ("duplicate_identifiers", books.GOLD_BOOK, lambda s: audit_duplicates(s, books.GOLD_BOOK, ["exchange", "canonical_symbol", "second"])),
+    ("duplicate_identifiers", books.GOLD_BOOK, lambda s: audit_duplicates(s, books.GOLD_BOOK, list(books.GOLD_KEY))),
+    ("duplicate_identifiers", books.GOLD_BBO, lambda s: audit_duplicates(s, books.GOLD_BBO, list(books.GOLD_KEY))),
 )
 
 

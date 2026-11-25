@@ -45,12 +45,13 @@ CI runs them.
 ### Python
 
 ```bash
-uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests -q
+uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 ```
 
 `--no-project` keeps the run isolated from the repo's own virtualenv, so the only
-dependencies are pytest and PyYAML, every test is pure Python over files, with no Spark,
-no catalog and no network. [`tests/conftest.py`](../../tests/conftest.py) injects
+dependencies are pytest, PyYAML, fastavro and DuckDB, every test is pure Python over
+files, with no Spark, no catalog and no network. DuckDB (1.4.4, the notebooks' pin) runs
+the Spark `MERGE` statements `docker/lake/books.py` builds, in `tests/test_lake_books.py`. [`tests/conftest.py`](../../tests/conftest.py) injects
 `docker/lake` onto `sys.path`, the `docker.` package name is already claimed by the Docker
 SDK, so `offsets.py` and `wire.py` are imported by module name instead.
 

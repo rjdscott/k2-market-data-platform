@@ -46,7 +46,7 @@ gates:  ## Every gate before a merge, in order, stopping at the first failure: t
 
 
 test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs uv)
-	uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests -q
+	uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 
 # The WHOLE repo is mounted, not just the crate: src/record.rs compiles the wire
 # contract in with `include_str!("../../../schemas/avro/trade.avsc")` and the

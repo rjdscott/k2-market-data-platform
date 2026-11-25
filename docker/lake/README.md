@@ -311,7 +311,9 @@ against the venue's published example, `3310070434`). One walk, two outputs:
 | per second | `gold.bbo_1s` | a SQL projection of the above: bid/ask, mid, spread bps, imbalance, microprice |
 
 `silver.book_binance` needs no replay (each depth20 frame *is* the top-20 book; gold takes
-the last frame per second) and carries `seq_gap` when `lastUpdateId` fails to advance;
+the last frame per second, `MERGE`d on `(exchange, canonical_symbol, second)` so a second
+that straddles two ticks keeps the later frame, by `(recv_ts_ns, conn_msg_seq)`, and
+`bbo_1s` is recomputed for it) and carries `seq_gap` when `lastUpdateId` fails to advance;
 `silver.book_coinbase` is one row per `events[i]`, updates typed with `side` normalised
 beside the venue's `bid | offer`, replayed full-depth (the subscribe snapshot is the whole
 book) and sampled to the top 20.
@@ -327,7 +329,8 @@ state carrying across days.
 
 Nightly: `duplicate_identifiers` and `silver_parity` per book table, **`kraken_checksum`**
 (frames whose replayed book failed the venue's checksum, zero is the bar; unverifiable
-frames are counted separately), duplicates on `gold.book_top20`'s `(exchange, symbol, second)`.
+frames are counted separately), duplicates on `gold.book_top20`'s and `gold.bbo_1s`'s
+`(exchange, canonical_symbol, second)`.
 
 **Measured 2026-08-27, first rebuild** (`make lake-rebuild LAYER=books`, whole archive,
 2g heap): **2,367 s**, peak driver RSS 2,685 MiB. Kraken replayed at ~35 k frames/s
