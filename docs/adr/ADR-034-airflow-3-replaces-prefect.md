@@ -339,3 +339,69 @@ Measured at the switch, filled from the live run:
   07:24:23 to 07:27:20, `success`, with `driver_memory` 2g and
   `max_offsets_per_partition` 1000000, `stage 1: committing 273039 offsets`.
 - The rollback to Prefect was not exercised (owner's decision, 2026-11-25).
+
+---
+
+## Outcome (2026-11-25, Spark CPU)
+
+**Decision (owner approved 2026-11-25):** the `spark-iceberg` CPU limit goes from 2.0 to
+3.0. Memory (8G) and the reservation (1.0 CPU / 2G) are unchanged: the reservation is a
+floor, not the constraint that was measured.
+
+**Measured on the live stack that day**, with Airflow scheduling real ingests:
+
+- 12 scheduled `lake_ingest` runs took 193 to 294 s (median 203 s, p90 231 s) of a 300 s
+  slot.
+- cAdvisor showed `k2-spark-iceberg` CPU-throttled in 58 percent of its CFS periods over
+  30 minutes.
+- One run committed 1,030,111 offsets and left a backlog of 65,621 on one topic, which the
+  next run cleared.
+
+**Sums as `python3 scripts/check-budget.py` prints them after the change:**
+
+```
+steady default         18 services   17.30 CPU   30.312 GiB
+bootstrap default      23 services   19.30 CPU   32.812 GiB
+bootstrap governance   23 services   19.30 CPU   32.812 GiB
+bootstrap legacy       25 services   20.80 CPU   34.312 GiB
+```
+
+Headroom under the 20 CPU / 36 GiB ceiling at the default bootstrap peak: 0.70 CPU and
+3.188 GiB. The `legacy` profile (the Prefect rollback) is reported, not gated, and is now
+0.80 CPU over the ceiling; that is acceptable only because a rollback to Prefect does not
+need Airflow running at full limits.
+
+Measured 2026-11-25 08:00 to 09:03 UTC, 13 consecutive scheduled `lake_ingest` runs on the
+3.0 CPU limit, all `success` (`airflow dags list-runs lake_ingest -o json`, run ids from
+`scheduled__2026-11-25T07:56`):
+
+| | 2.0 CPU (12 runs before) | 3.0 CPU (13 runs after) |
+|---|---|---|
+| Run duration, median | 203 s | 168 s |
+| Run duration, p90 | 231 s | 172 s |
+| Run duration, min to max | 193 to 294 s | 164 to 178 s |
+| Throttled share of CFS periods, 30 min | 58 percent | 30 percent |
+| Peak CPU use, 60 min | not recorded | 2.6 cores |
+| Max consumer backlog, 60 min | 65,621 | 0 |
+
+Throttled share is
+`rate(container_cpu_cfs_throttled_periods_total[30m]) / rate(container_cpu_cfs_periods_total[30m])`
+for `k2-spark-iceberg`; peak is `max_over_time` of the 1 minute CPU rate from cAdvisor.
+
+The raise bought 17 percent off the median and removed the tail (max 294 s to 178 s), and
+runs now finish well inside the 5 minute slot. It did not remove throttling: 30 percent is
+above the 25 percent trigger below, so that trigger is met on the day it was written. The
+cause is not the size of the limit: Spark local mode sizes its thread pool from the 12 CPUs
+the container can see, not from the quota, so short bursts still hit the ceiling while
+the 1 minute peak stays at 2.6 cores. The next step is to pin the thread count to the limit
+and measure again, not another raise.
+
+**Revisit when** p90 `lake_ingest` duration is above 240 s over a day, or the throttled
+share is above 25 percent after the change. Either means 3.0 CPU did not remove the
+constraint, and the next step is a measured decision, not another blind raise: the 0.70
+CPU of headroom cannot absorb a further whole core.
+
+**Open follow-up (not changed here):** Spark runs in local mode with no explicit thread
+count, so it sizes its thread pool from the cpuset (`K2_HEAVY_CPUSET`, default 0-11), not
+from the CPU quota. Twelve threads under a 3.0 CPU quota will keep throttling in bursts
+whatever the quota; whether to set the thread count is a separate decision.

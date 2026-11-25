@@ -12,7 +12,7 @@ verbatim to an Iceberg lake, derives typed and canonical layers from that archiv
 serves the canonical layer from ClickHouse for dashboards and fast queries. It runs on one
 host inside a declared ceiling of 20 CPU / 36 GiB at the bootstrap peak
 ([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)): as deployed, 18 long-running services at
-16.30 CPU / 30.312 GiB of limits, plus five one-shot init containers, with Prefect kept
+17.30 CPU / 30.312 GiB of limits, plus five one-shot init containers, with Prefect kept
 behind `--profile legacy` as the rollback
 ([docker-resources.md](../operations/docker-resources.md)).
 

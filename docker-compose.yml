@@ -860,7 +860,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
+          cpus: '3.0'
           memory: 8G
         reservations:
           cpus: '1.0'
@@ -1319,7 +1319,7 @@ services:
 # airflow-scheduler     | 1.5       | 3G           | Airflow 3 scheduler + LocalExecutor, 4 slots
 # airflow-dag-processor | 0.5       | 1G           | Airflow 3 DAG parsing
 # airflow-statsd        | 0.1       | 64M          | Airflow statsd to Prometheus (:9102)
-# spark-iceberg         | 2.0       | 8G           | Batch engine (lake ingest + maintenance)
+# spark-iceberg         | 3.0       | 8G           | Batch engine (lake ingest + maintenance)
 # lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018)
 # lake-metrics          | 0.1       | 128M         | v3 lake alerts exporter (:8000)
 # capture-binance       | 0.25      | 256M         | Rust capture, Binance (12 pairs, trades + L2)
@@ -1330,7 +1330,7 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (18 long-running) | 16.30 CPU | 30.312 GiB | v3 capture + lake, Airflow schedules
+# STEADY STATE (18 long-running) | 17.30 CPU | 30.312 GiB | v3 capture + lake, Airflow schedules
 #
 # One-shots are NOT free. They declare limits and they run concurrently with
 # the steady state at boot, so the budget that matters at `docker compose up` is
@@ -1344,10 +1344,10 @@ services:
 #   ----------------------------------------------------------------------------
 #   one-shot subtotal  2.0  | 2.5G
 #
-# Bootstrap peak: 18.30 CPU / 32.812 GiB, all 23 default-profile services,
+# Bootstrap peak: 19.30 CPU / 32.812 GiB, all 23 default-profile services,
 # against the 20 CPU / 36 GiB ceiling ADR-034 sets at the bootstrap peak
 # (ADR-010's 16 CPU / 40 GB clause is superseded). scripts/check-budget.py
-# fails CI over it. Headroom: 1.70 CPU and 3.188 GiB. cAdvisor took 0.10 CPU /
+# fails CI over it. Headroom: 0.70 CPU and 3.188 GiB. cAdvisor took 0.10 CPU /
 # 128M of what ADR-034 left.
 #
 # `legacy` profile, the Prefect rollback, not started by default:
@@ -1355,9 +1355,9 @@ services:
 #   prefect-server     1.0  | 1G    Orchestration UI/API (Prefect 3.x)
 #   prefect-worker     0.5  | 512M  Workflow executor (Prefect 3.x)
 #
-# With it the peak is 19.80 CPU / 34.312 GiB across 25, so a rollback that
-# leaves the Airflow services running stays inside the ceiling. Both go at the
-# archive pull request. The Airflow limits are the plan's estimates
+# With it the peak is 20.80 CPU / 34.312 GiB across 25, over the CPU ceiling: the
+# profile is reported, not gated, and a rollback needs Airflow stopped, not at
+# full limits. Both go at the archive pull request. The Airflow limits are the plan's estimates
 # until ADR-034's measured figures replace them.
 #
 # History: retiring the three Kotlin feed handlers (ADR-019) gave back the
@@ -1374,5 +1374,5 @@ services:
 # Target: 20 CPU / 36 GiB at the bootstrap peak (ADR-034)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-25 (ADR-034 cutover: Prefect behind the legacy profile, -2 services; before it cAdvisor, +1)
+# Last updated: 2026-11-25 (spark-iceberg 2.0 -> 3.0 CPU, ADR-034 Outcome; before it the ADR-034 cutover)
 #############################################################################

@@ -246,7 +246,9 @@ docker exec k2-airflow-scheduler airflow tasks states-for-dag-run <dag_id> <run_
 Not exercised (owner's decision, 2026-11-25): written from the commands the pre-cutover helper ran and from the cutover in reverse.
 
 ```bash
-# 3. Start Prefect from the legacy profile.
+# 3. Start Prefect from the legacy profile. With it the default-profile sum is
+#    20.80 CPU, over the 20 CPU ceiling, which is acceptable only because a rollback
+#    does not need Airflow running at full limits.
 docker compose --profile legacy up -d prefect-server prefect-worker
 docker compose --profile legacy ps prefect-server prefect-worker
 docker logs --tail 50 k2-prefect-worker
