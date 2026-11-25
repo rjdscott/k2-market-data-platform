@@ -642,6 +642,15 @@ the measurement behind it, not a threshold to move.
 _None yet. Appended with their date as they happen; never overwritten. **Every real gap
 found by §1 or §3 is recorded here**, with its window and its evidence._
 
+- **2026-11-25**, an alert that could not fire: `LakeUnresolvableSchemaId` reads gauge
+  `k2_lake_unresolvable_schema_ids_total`, which the exporter takes from commit property
+  `k2.unresolvable-schema-ids`, and no job set that property (`docker/lake/bronze.py` wrote
+  `k2.bronze-findings` only). Found by reading the code, not by a missed incident:
+  `SELECT count(*) FROM lake.audit.checks WHERE check_name = 'unresolvable_schema_id'` on the
+  live stack returned 0. Fixed the same day: `bronze.py` sets the property when it files such
+  a finding, and `tests/test_lake_metrics.py` fails if a finding key the exporter reads has no
+  writer.
+
 ---
 
 ## Related

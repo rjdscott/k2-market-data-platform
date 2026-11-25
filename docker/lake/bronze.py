@@ -375,7 +375,15 @@ def decode(spark, source: DataFrame, raw_snapshot_id, run_ts: datetime, exchange
         # filed must not fail the decode it reports on (catalog.write_audit_rows). A
         # failure anywhere in that write, createDataFrame included, leaves only its
         # "could not write <n> audit row(s)" line in the task log.
-        write_audit_rows(spark, findings, {"k2.bronze-findings": str(len(findings))})
+        props = {"k2.bronze-findings": str(len(findings))}
+        if unresolvable:
+            # The key docker/lake/metrics.py reads for
+            # k2_lake_unresolvable_schema_ids_total and LakeUnresolvableSchemaId. Until
+            # 2026-11-25 only k2.bronze-findings was written, which nothing reads, so
+            # the alert could not fire. Set only when there is such a finding: the
+            # exporter takes the newest commit that carries the key.
+            props[O.UNRESOLVABLE_IDS] = str(len(unresolvable))
+        write_audit_rows(spark, findings, props)
     return written
 
 
