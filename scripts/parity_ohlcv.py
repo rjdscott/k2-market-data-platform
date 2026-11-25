@@ -21,7 +21,11 @@ Pinned, never `latest`: a parity check that reads whatever is current cannot be
 re-run to the same answer, and a check that cannot be re-run is not a check.
 `tests/parity/pinned.json` holds the ids of the last run this passed against.
 
-`--dbt` adds a fourth, compared with B on the same columns and on quote_volume:
+A, B and C compare volume as round(float(volume), 8): a double, exact to about 15
+significant digits, so not to the eighth decimal of a large volume.
+
+`--dbt` adds a fourth, compared with B on the same columns and on quote_volume,
+volume and quote_volume as decimals, digit for digit:
 
   D  dbt on Trino  the compiled SQL of dbt's market_analytics.candles.ohlcv_1m,
                    its staging view inlined and lake.gold.trades read FOR VERSION
@@ -30,7 +34,9 @@ re-run to the same answer, and a check that cannot be re-run is not a check.
 
 D is the SQL dbt builds the mart with, run on the trades Spark last read for the
 day, not the table dbt last built: that table holds the lake as it was at build
-time. `--skip-silver` and `--skip-clickhouse` leave B against D alone.
+time. `--skip-silver` and `--skip-clickhouse` leave B against D alone; with no
+side to compare B with, the script refuses to run. With D, quote_volume typed
+differently by the two engines is a failure (ADR-035).
 
 Exit 0 when every side run equals B on every bucket of the day, non-zero with the
 first differences printed otherwise.
@@ -217,19 +223,33 @@ def dbt_candles(day: str, trades_snapshot: int) -> list:
     return cur.fetchall()
 
 
-def normalise(rows: list, quote_volume: bool = False) -> dict:
+def normalise(rows: list, exact: bool = False) -> dict:
     """{(exchange, symbol, window_start): (open, high, low, close, count, volume[, quote_volume])}.
 
-    quote_volume, when asked for, is the tenth column and compared exactly as a Decimal.
+    By default volume is a float rounded to 8 decimals, as sides A, B and C have always
+    compared it. `exact` keeps volume and quote_volume, the tenth column, as Decimals.
     """
     out = {}
     for r in rows:
         exchange, symbol, ws = r[0], r[1], r[2]
         key = (exchange, symbol, ws.replace(tzinfo=None) if hasattr(ws, "replace") else ws)
-        out[key] = tuple(int(x) if i < 5 else round(float(x), 8) for i, x in enumerate(r[3:9]))
-        if quote_volume:
-            out[key] += (Decimal(r[9]),)
+        if exact:
+            out[key] = (*(int(x) for x in r[3:8]), Decimal(r[8]), Decimal(r[9]))
+        else:
+            out[key] = tuple(int(x) if i < 5 else round(float(x), 8) for i, x in enumerate(r[3:9]))
     return out
+
+
+def lake_vs_dbt(lake_rows: list, dbt_rows: list, lake_type: str) -> int:
+    """B against D, exactly; quote_volume must be typed alike by both engines (ADR-035).
+
+    `dbt_rows` carry Trino's typeof(quote_volume) as an eleventh column. Returns the
+    number of failures: buckets that differ, plus one if the types do.
+    """
+    types = sorted({r[10] for r in dbt_rows})
+    alike = types == [lake_type]
+    print(f"quote_volume: lake {lake_type}, dbt {types}" + ("" if alike else ": FAIL, the engines type it differently"))
+    return (0 if alike else 1) + diff("lake.gold.ohlcv_1m", normalise(lake_rows, exact=True), "dbt.ohlcv_1m", normalise(dbt_rows, exact=True))
 
 
 def diff(name_a: str, a: dict, name_b: str, b: dict, limit: int = 5) -> int:
@@ -267,6 +287,8 @@ def main() -> int:
         ap.error("--silver-snapshots is required unless --skip-silver")
     if args.write_pin and args.skip_silver:
         ap.error("--write-pin records the silver ids, so it needs side C: drop --skip-silver")
+    if args.skip_silver and args.skip_clickhouse and not args.dbt:
+        ap.error("nothing to compare lake.gold.ohlcv_1m with: keep side A or C, or add --dbt")
 
     c = duck(os.environ["MINIO_ROOT_USER"], os.environ["MINIO_ROOT_PASSWORD"])
 
@@ -296,11 +318,8 @@ def main() -> int:
         d_rows = dbt_candles(args.day, trades_snapshot)
         if not_empty(**{"dbt.ohlcv_1m": d_rows}):
             return 1
-        # quote_volume only where both engines type it alike (ADR-035): Iceberg's decimal(38,10) for B.
-        lake_type = q("SELECT typeof(quote_volume) FROM lake.gold.ohlcv_1m LIMIT 1")[0][0].lower()
-        same = {r[10] for r in d_rows} == {lake_type}
-        print(f"quote_volume: lake {lake_type}, dbt {sorted({r[10] for r in d_rows})}: " + ("compared" if same else "NOT compared, the types differ"))
-        bad += diff("lake.gold.ohlcv_1m", normalise(lake_rows, quote_volume=same), "dbt.ohlcv_1m", normalise(d_rows, quote_volume=same))
+        lake_type = q("SELECT typeof(quote_volume) FROM lake.gold.ohlcv_1m LIMIT 1")[0][0].lower()  # Iceberg's, for B
+        bad += lake_vs_dbt(lake_rows, d_rows, lake_type)
     if not args.skip_clickhouse:
         a = normalise(clickhouse_candles(args.day, os.environ["CLICKHOUSE_PASSWORD"]))
         if not_empty(**{"clickhouse.ohlcv_live": a}):
