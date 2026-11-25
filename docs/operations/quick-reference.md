@@ -188,8 +188,7 @@ docker exec k2-trino trino --execute 'SELECT count(*) FROM lake.gold.ohlcv_1m FO
 docker exec k2-trino trino --execute 'EXPLAIN ALTER TABLE lake.gold.ohlcv_1m EXECUTE optimize'
 #   ... failed: Access Denied: Cannot execute table procedure OPTIMIZE on gold.ohlcv_1m
 
-# VERIFY: after k2-trino is recreated on the per-domain configuration (these ran on a
-# throwaway k2-trino-check with the same docker/trino/etc on 2026-11-25).
+# One fence per domain. Ran against k2-trino on the live stack on 2026-11-25.
 docker exec k2-trino trino --execute 'SHOW CATALOGS'
 #   "fx_reference" "lake" "market_analytics" "market_capture" "reference_data" "system"
 docker exec k2-trino trino --user dbt_market_analytics --execute 'CREATE TABLE reference_data.s.t (x integer)'

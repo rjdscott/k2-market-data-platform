@@ -118,5 +118,5 @@ Proof commands for the live service, with nothing written:
 docker exec k2-trino trino --execute 'EXPLAIN ALTER TABLE lake.gold.ohlcv_1m EXECUTE optimize'
 #   ... failed: Access Denied: Cannot execute table procedure OPTIMIZE on gold.ohlcv_1m
 docker exec k2-trino trino --user dbt_market_analytics --execute 'CREATE TABLE reference_data.s.t (x integer)'
-#   ... failed: Access Denied: Cannot create table reference_data.s.t   (VERIFY: once k2-trino runs this etc/)
+#   ... failed: Access Denied: Cannot create table reference_data.s.t   (ran against k2-trino, 2026-11-25)
 ```
