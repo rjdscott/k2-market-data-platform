@@ -5,7 +5,8 @@
 #   1. config: the real etc/ starts (Trino refuses an unknown or misspelt
 #      property); its catalogs are `lake`, `system` and one per domain in
 #      contracts/domains.yaml; `lake` is read-only at the connector and is the
-#      only catalog on warehouse k2; every domain catalog is on its own warehouse.
+#      only catalog on warehouse k2; every domain catalog is on its own warehouse;
+#      the startup log does not print the S3 access key.
 #   2. fences: the same rules.json over local Iceberg catalogs that k2gen
 #      generates beside the hand-written read-only `lake` (docker/trino/test/local,
 #      one shared metastore). Each domain's writer writes its own catalog and no
@@ -59,8 +60,13 @@ deny() {
   esac
 }
 
-# 1. The real configuration. Placeholder keys: nothing is reached.
-start -e MINIO_ROOT_USER=unused -e MINIO_ROOT_PASSWORD=unused
+# 1. The real configuration. Placeholder keys: nothing is reached. The access key
+# is a canary: Trino logs each catalog property at start and masks the secret key
+# only, so etc/log.properties silences that logger and the log must not hold it.
+start -e MINIO_ROOT_USER=k2-canary-access-key -e MINIO_ROOT_PASSWORD=unused
+# grep -c, not -q: -q exits at the first match and pipefail reads docker's SIGPIPE as no match.
+leaked=$(docker logs "$NAME" 2>&1 | grep -c k2-canary-access-key || true)
+[ "$leaked" = 0 ] || bad "Trino's log prints s3.aws-access-key on $leaked lines: etc/log.properties must set io.trino.bootstrap.catalog=WARN"
 want=$(printf '%s\n' lake system "${DOMAINS[@]}" | sort | tr '\n' ' ')
 have=$(sql trino 'SHOW CATALOGS' | tr -d '"' | sort | tr '\n' ' ')
 [ "$have" = "$want" ] || bad "catalogs are [$have], contracts/domains.yaml says [$want]: run make generate"
