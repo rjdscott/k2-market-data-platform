@@ -66,7 +66,7 @@ never shares the 8 GiB container with an ingest.
 ### Stage 1: offsets in the snapshot
 
 1. **Where to start.** `offsets.latest_summary()` finds the newest `raw.messages` snapshot
-   whose summary carries `k2.job = ingest`, maintenance snapshots (compaction, expiry) have
+   on `main`'s lineage whose summary carries `k2.job = ingest`, maintenance snapshots (compaction, expiry) have
    no `k2.job` and are skipped by that property, not by guessing at Iceberg's `operation`
    field. Its `k2.kafka-offsets` map holds Kafka *end* offsets (exclusive), so the next
    start is the same number copied, no ±1. A partition the map has never seen starts at

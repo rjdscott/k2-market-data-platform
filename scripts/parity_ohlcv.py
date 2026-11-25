@@ -65,34 +65,42 @@ SCALE = 100_000_000
 KEY = ["exchange", "canonical_symbol", "window_start"]
 COLS = ["open_e8", "high_e8", "low_e8", "close_e8", "trade_count", "volume"]
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "notebooks"))  # for k2lake, once
 
-def resolve_snapshot(query, table: str, pinned: int) -> int:
-    """The pinned snapshot if `table` still holds it, else the current one, said out loud.
 
-    A pin written on another host — or one `expire_snapshots` has since dropped —
+def main_lineage(table: str) -> list:
+    """`main`'s snapshot ids for `table`, current first: notebooks/k2lake.py's, the one copy."""
+    from k2lake import main_lineage as lineage  # imports duckdb, so not at module level
+
+    return lineage(table)
+
+
+def resolve_snapshot(lineage: list, table: str, pinned: int) -> int:
+    """The pinned snapshot if it is on `main`'s lineage, else main's current one, said out loud.
+
+    A pin written on another host, or one `expire_snapshots` has since dropped,
     is not in this table, and reading `AT (VERSION => <pin>)` raised
     `Could not find snapshot with id ...`: the release gate ADR-029 names crashed
     instead of reporting anything, every run, from 2026-08-27 to 2026-09-03.
+    A pin that is a branch's snapshot is in the table but was never published,
+    so it falls back too.
 
     Falling back *silently* would be worse than the crash — the gate would print
     PASS at a snapshot nobody pinned and nobody could re-run. So: fall back, name
     both ids on stdout, and leave the exit code to parity. A stale pin degrades
     the check from reproducible to current; it never turns a FAIL into a PASS.
 
-    `query` is `lambda sql: conn.execute(sql).fetchall()` — a callable so the
-    decision is testable without DuckDB or a catalog (tests/test_parity.py).
+    `lineage` is `main_lineage(table)`, passed in so the decision is testable
+    without a catalog (tests/test_parity.py). Not the newest by sequence number,
+    which on a table with a branch can be the branch's commit (spike, 2026-11-25).
     """
-    rows = query(f"SELECT sequence_number, snapshot_id FROM iceberg_snapshots('{table}')")
-    if not rows:
+    if not lineage:
         raise SystemExit(f"{table} has no snapshots — nothing to compare")
-    if pinned in {r[1] for r in rows}:
+    if pinned in lineage:
         return pinned
-    # ponytail: newest sequence_number is the current snapshot on a linear
-    # history, which is all this lake writes. A branch or a rollback would need
-    # the catalog's current-snapshot-id, which iceberg_snapshots does not expose.
-    current = max(rows)[1]
+    current = lineage[0]
     print(
-        f"pin {pinned} not found in {table}; ran at current snapshot {current} "
+        f"pin {pinned} not found in {table} on main; ran at current snapshot {current} "
         f"(pin stale: refresh tests/parity/pinned.json with --pin-current)"
     )
     return current
@@ -295,7 +303,7 @@ def main() -> int:
     def q(sql):
         return c.execute(sql).fetchall()
 
-    ohlcv_snapshot = resolve_snapshot(q, "lake.gold.ohlcv_1m", args.ohlcv_snapshot)
+    ohlcv_snapshot = resolve_snapshot(main_lineage("lake.gold.ohlcv_1m"), "lake.gold.ohlcv_1m", args.ohlcv_snapshot)
     lake_rows = lake_candles(c, args.day, ohlcv_snapshot)
     b = normalise(lake_rows)
     if not_empty(**{"lake.gold.ohlcv_1m": b}):
@@ -303,7 +311,7 @@ def main() -> int:
     bad = 0
     if not args.skip_silver:
         silver_snaps = {
-            venue: resolve_snapshot(q, f"lake.silver.trades_{venue}", snap)
+            venue: resolve_snapshot(main_lineage(f"lake.silver.trades_{venue}"), f"lake.silver.trades_{venue}", snap)
             for venue, snap in json.loads(args.silver_snapshots).items()
         }
         cc = normalise(silver_candles(c, args.day, silver_snaps))
