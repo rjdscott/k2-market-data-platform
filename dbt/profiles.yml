@@ -1,0 +1,20 @@
+# One target, the stack's Trino. No authentication exists, so there is no secret: the
+# user is the X-Trino-User header and decides which domain catalog may be written
+# (docker/trino/etc/rules.json). Run a domain's models as its writer:
+#   K2_TRINO_USER=dbt_<catalog> uv run dbt build --selector <catalog>
+k2:
+  target: trino
+  outputs:
+    trino:
+      type: trino
+      method: none
+      http_scheme: http
+      host: "{{ env_var('K2_TRINO_HOST', 'localhost') }}"
+      port: "{{ env_var('K2_TRINO_PORT', '8088') | int }}"
+      user: "{{ env_var('K2_TRINO_USER', 'dbt_market_analytics') }}"
+      # The writer's own catalog, for anything that is not a model (macros/naming.sql).
+      database: "{{ env_var('K2_TRINO_USER', 'dbt_market_analytics') | replace('dbt_', '', 1) }}"
+      schema: staging
+      # The session zone is the client's (docker/trino/README.md); every K2 timestamp is UTC.
+      timezone: UTC
+      threads: 4

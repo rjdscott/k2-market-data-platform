@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse test-trino parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product screenshots
+.PHONY: chaos help up down logs ps health gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse test-trino test-dbt parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product screenshots
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -31,7 +31,7 @@ logs:  ## Tail all service logs
 ps:  ## Show service status
 	docker compose ps
 
-test: test-python test-rust test-clickhouse test-trino test-notebooks test-k2gen test-airflow  ## Run all unit tests
+test: test-python test-rust test-clickhouse test-trino test-dbt test-notebooks test-k2gen test-airflow  ## Run all unit tests
 
 # One recipe line per gate, not prerequisites: recipe lines run in order and
 # stop at the first failure even under `make -j`, where prerequisites would not
@@ -72,6 +72,9 @@ test-clickhouse:  ## gold schema semantics on a throwaway clickhouse:24.3 (OHLCV
 
 test-trino:  ## Trino on a throwaway trinodb/trino, no stack: etc/ starts, catalog lake refuses every commit (table procedures too), only a domain's writer changes its tables with SQL statements
 	bash scripts/trino-rules-test.sh
+
+test-dbt:  ## dbt/ on a throwaway trinodb/trino, no stack: sqlfluff, deps, parse, compile, the manifest check (layering, every mart's grain), then build with its unit tests on empty sources
+	bash scripts/dbt-test.sh
 
 test-rust:  ## Rust capture unit tests (runs in rust:1-bookworm; no local cargo needed)
 	docker run --rm -v "$(CURDIR)":/repo -w /repo/services/capture-rust \

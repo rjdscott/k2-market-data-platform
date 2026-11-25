@@ -1,0 +1,22 @@
+[project]
+name = "k2-dbt"
+version = "0.1.0"
+description = "dbt on Trino: the domain marts, one catalog per domain (ADR-035, ADR-044)"
+requires-python = ">=3.12,<3.14"
+# Checked 2026-11-25 on PyPI: dbt-core 1.12.7 (2026-11-12) and dbt-trino 1.12.0
+# (2026-11-13) are the newest releases; dbt-trino 1.12 requires dbt-core >= 1.12.
+# dbt-trino says it is tested on Trino 478; it was run on 484 (dbt/README.md).
+dependencies = [
+    "dbt-core==1.12.7",
+    "dbt-trino==1.12.0",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    # 4.5.0 (2026-10-30), the newest; its jinja templater stubs ref() and
+    # source(), so the lint needs no warehouse.
+    "sqlfluff==4.5.0",
+]

@@ -126,6 +126,23 @@ jobs:
       # writes `lake`, and an unnamed user writes nowhere.
       - run: bash scripts/trino-rules-test.sh
 
+  dbt:
+    name: dbt (marts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.4.0
+
+      # make test-dbt: sqlfluff, then the pinned Trino image over the local catalogs
+      # job trino uses, with every lake table dbt/models/_sources.yml lists created
+      # empty; dbt deps, parse and compile --target trino against it; the manifest
+      # check (only staging reads a source, every mart tested unique on the grain its
+      # contract declares); and dbt build per domain, which runs the unit tests.
+      - run: bash scripts/dbt-test.sh
+
   docker:
     name: Docker build (${{ matrix.name }})
     runs-on: ubuntu-latest
