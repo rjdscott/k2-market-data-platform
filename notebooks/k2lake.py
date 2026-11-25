@@ -20,6 +20,7 @@ host's — on a UTC+10 machine every bucket lands ten hours late
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import subprocess
@@ -57,12 +58,16 @@ def _get(url: str) -> dict:
         return json.load(r)
 
 
+@functools.cache
+def _prefix() -> str:
+    """The warehouse's REST prefix: fixed for the catalog's life, so read once per process."""
+    return _get(f"{LAKEKEEPER.rstrip('/')}/v1/config?warehouse={WAREHOUSE}")["defaults"]["prefix"]
+
+
 def main_lineage(table: str) -> list:
     """`lineage()` of `ns.table` (or `lake.ns.table`), from Lakekeeper's REST loadTable."""
     ns, name = table.split(".")[-2:]
-    base = LAKEKEEPER.rstrip("/")
-    prefix = _get(f"{base}/v1/config?warehouse={WAREHOUSE}")["defaults"]["prefix"]
-    return lineage(_get(f"{base}/v1/{prefix}/namespaces/{ns}/tables/{name}")["metadata"])
+    return lineage(_get(f"{LAKEKEEPER.rstrip('/')}/v1/{_prefix()}/namespaces/{ns}/tables/{name}")["metadata"])
 
 
 def _env() -> dict:

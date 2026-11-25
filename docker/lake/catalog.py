@@ -21,15 +21,19 @@ from spark_conf import CATALOG, KAFKA_BROKERS, SCHEMA_REGISTRY_URL
 CHECKS_TABLE = f"{CATALOG}.audit.checks"
 
 
-def main_snapshot_ids(spark, table: str) -> list:
-    """Snapshot ids on `main`'s lineage, newest first. Empty if unwritten.
+def main_snapshots(spark, table: str) -> list:
+    """The `<table>.snapshots` rows on `main`'s lineage, unordered. Empty if unwritten.
 
-    `main` is read before the snapshot list, so a commit landing between the
-    two reads adds a snapshot the walk ignores instead of a head it cannot find.
+    One refs read and one snapshot scan. `main` is read first, so a commit
+    landing between the two adds a snapshot the walk ignores instead of a head
+    it cannot find.
     """
     head = current_snapshot_id(spark, table)
-    rows = spark.sql(f"SELECT snapshot_id, parent_id FROM {table}.snapshots").collect()
-    return O.main_lineage({r[0]: r[1] for r in rows}, head)
+    rows = spark.sql(
+        f"SELECT snapshot_id, parent_id, committed_at, summary FROM {table}.snapshots"
+    ).collect()
+    on_main = set(O.main_lineage({r["snapshot_id"]: r["parent_id"] for r in rows}, head))
+    return [r for r in rows if r["snapshot_id"] in on_main]
 
 
 def snapshot_history(spark, table: str) -> list:
@@ -39,11 +43,7 @@ def snapshot_history(spark, table: str) -> list:
     unpublished commits too, and `latest_summary` over them resumes from a
     position `main` never reached (`offsets.main_lineage`).
     """
-    on_main = set(main_snapshot_ids(spark, table))
-    rows = spark.sql(
-        f"SELECT snapshot_id, committed_at, summary FROM {table}.snapshots"
-    ).collect()
-    return [(r["committed_at"], r["summary"] or {}) for r in rows if r["snapshot_id"] in on_main]
+    return [(r["committed_at"], r["summary"] or {}) for r in main_snapshots(spark, table)]
 
 
 def current_snapshot_id(spark, table: str):

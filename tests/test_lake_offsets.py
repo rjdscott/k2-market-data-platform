@@ -313,6 +313,21 @@ class TestMainLineage:
     def test_an_unwritten_table_has_no_lineage(self):
         assert O.main_lineage({}, None) == []
 
+    def test_a_cherry_picked_head_resumes_from_the_commit_before_it(self):
+        """Pinned, not endorsed: main publishes by fast-forward only. A cherry-pick's
+        copy (7, of branch commit 6) carries `source-snapshot-id` and none of 6's
+        `k2.*` properties, so resuming skips it and re-reads 6's batch. A change
+        that follows `source-snapshot-id` updates this test."""
+        history = {
+            1: (None, {O.JOB: O.JOB_DECODE, O.SRC_SNAPSHOT_ID: "10"}),
+            6: (1, {O.JOB: O.JOB_DECODE, O.SRC_SNAPSHOT_ID: "60"}),
+            7: (1, {"operation": "append", "source-snapshot-id": "6"}),
+        }
+        on_main = O.main_lineage({s: p for s, (p, _) in history.items()}, 7)
+        assert on_main == [7, 1]
+        summary = O.latest_summary([(s, history[s][1]) for s in on_main], O.JOB_DECODE)
+        assert summary[O.SRC_SNAPSHOT_ID] == "10"
+
 
 class Row(dict):
     """A pyspark Row: by name and by position."""
@@ -322,15 +337,18 @@ class Row(dict):
 
 
 class FakeSpark:
-    """Answers the three metadata reads `catalog.snapshot_history` makes, from SNAPSHOTS."""
+    """Answers the two metadata reads `catalog.main_snapshots` makes, from SNAPSHOTS.
+
+    `<table>.refs` holds the live branch first, so a read that drops
+    `WHERE name = 'main'` and takes the first row walks the branch instead.
+    """
 
     def sql(self, query):
         if ".refs" in query:
-            rows = [Row(snapshot_id=MAIN)]
-        elif "parent_id" in query:
-            rows = [Row(snapshot_id=s, parent_id=p) for s, p, _, _ in SNAPSHOTS]
+            refs = [("audit_1", 4), ("main", MAIN)]
+            rows = [Row(snapshot_id=sid) for name, sid in refs if "name = 'main'" not in query or name == "main"]
         else:
-            rows = [Row(snapshot_id=s, committed_at=t, summary=m) for s, _, t, m in SNAPSHOTS]
+            rows = [Row(snapshot_id=s, parent_id=p, committed_at=t, summary=m) for s, p, t, m in SNAPSHOTS]
         return type("Result", (), {"collect": lambda self: rows})()
 
 
@@ -354,8 +372,8 @@ class TestSnapshotHistoryIsMainOnly:
         summary = O.latest_summary(catalog.snapshot_history(FakeSpark(), "lake.bronze.t"), O.JOB_DECODE)
         assert summary[O.SRC_SNAPSHOT_ID] == "20"
 
-    def test_main_snapshot_ids_newest_first(self, catalog):
-        assert catalog.main_snapshot_ids(FakeSpark(), "lake.bronze.t") == [3, 2, 1]
+    def test_main_snapshots_are_mains_rows(self, catalog):
+        assert sorted(r["snapshot_id"] for r in catalog.main_snapshots(FakeSpark(), "lake.bronze.t")) == [1, 2, 3]
 
 
 class TestOffsetGaps:

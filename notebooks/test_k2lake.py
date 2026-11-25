@@ -161,14 +161,48 @@ def test_an_empty_table_has_no_lineage():
     assert lineage({"current-snapshot-id": -1, "snapshots": []}) == []
 
 
-def test_main_lineage_reads_the_table_it_names(monkeypatch):
-    """`lake.gold.trades` (the parity scripts) and `gold.trades` (pin) are one table."""
+@pytest.fixture
+def rest(monkeypatch):
+    """Lakekeeper's two REST answers, METADATA for every table; returns the URLs asked for."""
     urls = []
 
     def get(url):
         urls.append(url)
         return {"defaults": {"prefix": "PFX"}} if "/config" in url else {"metadata": METADATA}
 
+    k2lake._prefix.cache_clear()
     monkeypatch.setattr(k2lake, "_get", get)
+    yield urls
+    k2lake._prefix.cache_clear()
+
+
+def test_main_lineage_reads_the_table_it_names(rest):
+    """`lake.gold.trades` (the parity scripts) and `gold.trades` (pin) are one table."""
     assert k2lake.main_lineage("lake.gold.trades") == k2lake.main_lineage("gold.trades") == [3, 2, 1]
-    assert urls[1].endswith("/v1/PFX/namespaces/gold/tables/trades")
+    assert rest[1].endswith("/v1/PFX/namespaces/gold/tables/trades")
+    assert sum("/config" in u for u in rest) == 1, "the prefix is read once, not per table"
+
+
+class FakeLake:
+    """The DuckDB connection pin() talks to: one table, gold.trades, holding METADATA's
+    snapshots. `iceberg_snapshots` answers as DuckDB does, newest first by timestamp,
+    so a pin() that reads it again pins 5, the dropped branch's commit."""
+
+    def __init__(self):
+        self.sql = []
+
+    def execute(self, sql):
+        self.sql.append(sql)
+        if "information_schema" in sql:
+            rows = [("gold", "trades")]
+        elif "iceberg_snapshots" in sql:
+            rows = [(s["snapshot-id"],) for s in sorted(METADATA["snapshots"], key=lambda s: -s["timestamp-ms"])]
+        else:
+            rows = []
+        return type("Result", (), {"fetchall": lambda self: rows, "fetchone": lambda self: rows[0] if rows else None})()
+
+
+def test_pin_pins_the_snapshot_main_points_at(rest, capsys):
+    con = FakeLake()
+    assert k2lake.pin(con, ("gold",)) == {"gold.trades": 3}
+    assert any("lake.gold.trades AT (VERSION => 3)" in q for q in con.sql)

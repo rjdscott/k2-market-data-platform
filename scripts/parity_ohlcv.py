@@ -65,10 +65,11 @@ SCALE = 100_000_000
 KEY = ["exchange", "canonical_symbol", "window_start"]
 COLS = ["open_e8", "high_e8", "low_e8", "close_e8", "trade_count", "volume"]
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "notebooks"))  # for k2lake, once
+
 
 def main_lineage(table: str) -> list:
     """`main`'s snapshot ids for `table`, current first: notebooks/k2lake.py's, the one copy."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "notebooks"))
     from k2lake import main_lineage as lineage  # imports duckdb, so not at module level
 
     return lineage(table)

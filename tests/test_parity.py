@@ -854,6 +854,70 @@ def test_a_table_with_no_snapshots_is_an_error_not_a_fallback():
         resolve_snapshot([], "lake.gold.ohlcv_1m", 111)
 
 
+# The entry points: main() of both parity scripts must resolve through main's
+# lineage, not through `iceberg_snapshots`. Lakekeeper answers every table with
+# main at 3, a live branch's commit 4 and a dropped branch's 5 (the newest); the
+# DuckDB stand-in answers `iceberg_snapshots` as DuckDB does, 5 with the highest
+# sequence number. Both pins are stale, so each side must run AT main's 3.
+_REST = {
+    "current-snapshot-id": 3,
+    "snapshots": [{"snapshot-id": 1}] + [{"snapshot-id": s, "parent-snapshot-id": p} for s, p in ((2, 1), (3, 2), (4, 3), (5, 2))],
+}
+
+
+class _Duck:
+    def __init__(self):
+        self.sql = []
+
+    def execute(self, sql):
+        self.sql.append(sql)
+        if "iceberg_snapshots" in sql:
+            rows = [(n, n) for n in range(1, 6)]  # (sequence_number, snapshot_id)
+        elif "lake.gold.ohlcv_1m AT" in sql:
+            rows = [("kraken", "BTC/USD", datetime(2026, 1, 1), 1, 1, 1, 1, 1, Decimal(1), Decimal(1))]
+        else:
+            rows = []  # every other side is empty, so main() stops after reading it
+        return type("Result", (), {"fetchall": lambda self: rows})()
+
+    def executemany(self, sql, rows):
+        self.sql.append(sql)
+
+
+@pytest.fixture
+def lake(monkeypatch):
+    """Stubbed Lakekeeper REST and DuckDB; returns the DuckDB stand-in."""
+    import k2lake  # on sys.path once parity_ohlcv is imported
+
+    k2lake._prefix.cache_clear()
+    monkeypatch.setattr(k2lake, "_get", lambda url: {"defaults": {"prefix": "P"}} if "/config" in url else {"metadata": _REST})
+    monkeypatch.setenv("MINIO_ROOT_USER", "u")
+    monkeypatch.setenv("MINIO_ROOT_PASSWORD", "p")
+    yield _Duck()
+    k2lake._prefix.cache_clear()
+
+
+def test_parity_ohlcv_main_reads_mains_snapshot(lake, monkeypatch):
+    import parity_ohlcv
+
+    monkeypatch.setattr(parity_ohlcv, "duck", lambda user, password: lake)
+    monkeypatch.setattr(sys, "argv", ["parity_ohlcv.py", "--day", "2026-01-01", "--ohlcv-snapshot", "999",
+                                      "--silver-snapshots", '{"kraken": 999}', "--skip-clickhouse"])
+    assert parity_ohlcv.main() == 1  # silver is empty in the stand-in
+    assert any("lake.gold.ohlcv_1m AT (VERSION => 3)" in q for q in lake.sql)
+    assert any("lake.silver.trades_kraken AT (VERSION => 3)" in q for q in lake.sql)
+
+
+def test_parity_bars_main_reads_mains_snapshot(lake, monkeypatch):
+    import parity_bars
+
+    monkeypatch.setattr(parity_bars, "duck", lambda user, password: lake)
+    monkeypatch.setattr(sys, "argv", ["parity_bars.py", "--day", "2026-01-01", "--bars-snapshot", "999",
+                                      "--trades-snapshot", "999", "--reference-symbols", ""])
+    assert parity_bars.main() == 1  # every side is empty in the stand-in
+    assert any("lake.gold.bars AT (VERSION => 3)" in q for q in lake.sql)
+    assert any("lake.gold.trades AT (VERSION => 3)" in q for q in lake.sql)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The dbt side, D: scripts/parity_ohlcv.py --dbt
 #
