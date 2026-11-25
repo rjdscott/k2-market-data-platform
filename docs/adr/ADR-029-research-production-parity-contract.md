@@ -255,7 +255,7 @@ where it is as cheap.
 **`quote_volume` joined, and the lake's is not exact.** Both engines type it `decimal(38,10)`,
 but the lake holds 6 decimals where `lake.sql` calls the column exact: no 2026-11-24 bucket had
 a digit past the sixth. Spark's decimal rules type `gold.py`'s `DECIMAL(38,10)` product
-`decimal(38,6)`, which would explain it (VERIFY: not run on Spark). The port rounds half up at 6
+`decimal(38,6)` (`typeof` of the product on Spark 3.5.5, 2026-11-25), which explains it. The port rounds half up at 6
 decimals on purpose and matched every bucket; rounded at 10, 10,819 of the 20,144 differed.
 Tolerance zero held; the comment is wrong.
 
