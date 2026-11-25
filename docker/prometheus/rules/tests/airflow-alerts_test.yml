@@ -484,3 +484,108 @@ tests:
       - eval_time: 50m
         alertname: AirflowLakeIngestNotRunning
         exp_alerts: []
+
+  # ── AirflowTaskFailed and dbt_marts ──────────────────────────────────────
+  # A failed dbt_marts task is DbtMartsNotSucceeding's to judge, not a pulse.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_ti_finish{dag_id="dbt_marts",task_id="market_analytics.ohlcv_1m_model_build",state="failed"}'
+        values: '_x10 1x40'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AirflowTaskFailed
+        exp_alerts: []
+
+  # ── DbtMartsNotSucceeding ────────────────────────────────────────────────
+  # Healthy: one success an hour for six hours. Never fires.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x400'
+      - series: 'airflow_dagrun_duration_success_count{dag_id="dbt_marts",run_type="scheduled"}'
+        values: '1x59 2x59 3x59 4x59 5x59 6x59 7x40'
+    alert_rule_test:
+      - eval_time: 300m
+        alertname: DbtMartsNotSucceeding
+        exp_alerts: []
+
+  # The last success is at minute 120. Three hours later the window holds none:
+  # pending from minute 300, firing after the 10 minutes hold.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x400'
+      - series: 'airflow_dagrun_duration_success_count{dag_id="dbt_marts",run_type="scheduled"}'
+        values: '1x59 2x59 3x280'
+    alert_rule_test:
+      - eval_time: 299m
+        alertname: DbtMartsNotSucceeding
+        exp_alerts: []
+      - eval_time: 309m
+        alertname: DbtMartsNotSucceeding
+        exp_alerts: []
+      - eval_time: 311m
+        alertname: DbtMartsNotSucceeding
+        exp_alerts:
+          - exp_labels: &dbt-labels
+              severity: warning
+              component: orchestration
+              tier: control-plane
+            exp_annotations: &dbt-annotations
+              summary: "No dbt_marts run has succeeded for 3 hours"
+              description: |
+                The hourly dbt_marts DAG has not finished a run in success for 3
+                hours, held 10 minutes: every domain mart on Trino is at least that
+                old, and the delayed product with them. The failed task's log has
+                dbt's own output; a stale lake (source freshness), a failed test,
+                a Trino that refuses or is down, and a paused DAG read differently
+                there.
+              runbook: docs/runbooks/dbt-marts.md
+
+  # A manual success counts as much as a scheduled one.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x400'
+      - series: 'airflow_dagrun_duration_success_count{dag_id="dbt_marts",run_type="scheduled"}'
+        values: '1x59 2x59 3x280'
+      - series: 'airflow_dagrun_duration_success_count{dag_id="dbt_marts",run_type="manual"}'
+        values: '_x250 1x150'
+    alert_rule_test:
+      - eval_time: 320m
+        alertname: DbtMartsNotSucceeding
+        exp_alerts: []
+
+  # Never succeeded on a scheduler up for more than 3 hours: the series never
+  # existed. Quiet inside the first 3 hours, firing 3 hours and 10 minutes in.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x300'
+    alert_rule_test:
+      - eval_time: 175m
+        alertname: DbtMartsNotSucceeding
+        exp_alerts: []
+      - eval_time: 195m
+        alertname: DbtMartsNotSucceeding
+        exp_alerts:
+          - exp_labels: *dbt-labels
+            exp_annotations: *dbt-annotations
+
+  # An exporter restart at minute 100, with runs succeeding before and after.
+  # At minute 200 the new process's count (2) equals the old one's 3 hours
+  # earlier (2), which reads as no success; the restart guard keeps it quiet
+  # until the window no longer spans the restart.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x99 stale 0+12x250'
+      - series: 'airflow_dagrun_duration_success_count{dag_id="dbt_marts",run_type="scheduled"}'
+        values: '2x99 stale _x9 1x59 2x59 3x59 4x59 5x59'
+    alert_rule_test:
+      - eval_time: 220m
+        alertname: DbtMartsNotSucceeding
+        exp_alerts: []
+      - eval_time: 330m
+        alertname: DbtMartsNotSucceeding
+        exp_alerts: []

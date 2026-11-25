@@ -1,6 +1,7 @@
 # K2 Market Data Platform - Airflow alert rules (ADR-034)
-# Purpose: the scheduler is alive, no lake task has failed, and lake_ingest is
-#          not being refused the writer lock over and over.
+# Purpose: the scheduler is alive, no lake task has failed, lake_ingest is
+#          not being refused the writer lock over and over, and dbt_marts
+#          keeps succeeding.
 # Metrics: Airflow statsd, through the airflow-statsd exporter (docker-compose.yml)
 # Scrape:  job airflow-statsd
 # Tests:   docker/prometheus/rules/tests/airflow-alerts_test.yml
@@ -66,10 +67,14 @@ groups:
       # state="failed" is the final state. A first try that fails and is
       # retried ends `up_for_retry`, which does not fire. A pulse: it fires
       # for the 15 minutes after a failure, and the task log is the record.
+      #
+      # Not dbt_marts: one failed hour of a mart rebuild is the next hour's to
+      # repair, and DbtMartsNotSucceeding below says when it is not.
       - alert: AirflowTaskFailed
         expr: |
-          increase(airflow_ti_finish{state="failed"}[15m]) > 0
-            or (airflow_ti_finish{state="failed"} unless airflow_ti_finish{state="failed"} offset 15m)
+          increase(airflow_ti_finish{state="failed",dag_id!="dbt_marts"}[15m]) > 0
+            or (airflow_ti_finish{state="failed",dag_id!="dbt_marts"}
+                  unless airflow_ti_finish{state="failed",dag_id!="dbt_marts"} offset 15m)
         labels:
           severity: warning
           component: orchestration
@@ -231,3 +236,53 @@ groups:
             anything else; a stale DAG folder after a checkout switch shows
             nothing else, every container stays healthy.
           runbook: docs/runbooks/airflow-scheduling.md
+
+      # WARNING: no dbt_marts run has succeeded for 3 hours.
+      #
+      # dagrun.duration.success is the timer Airflow sends once for each DAG
+      # run that ends in success (skipped tasks included, so the 23 hourly runs
+      # that skip the maintenance count); the exporter serves its _count as a
+      # counter of successful runs, labelled dag_id and run_type, summed here
+      # so a manual run counts too. Three hours is three hourly slots: one
+      # failed run leaves the marts an hour older and the next run rebuilds
+      # them whole, three in a row is not a blip. The 10 minutes hold covers
+      # the run that is still going at the third slot (a run took 31 to 40 s,
+      # docs/runbooks/dbt-marts.md).
+      #
+      # The two clauses and the restart guard of AirflowLakeIngestNotRunning,
+      # at 3 hours: a counter that stopped moving, and one that has not existed
+      # for 3 hours while the scheduler has heartbeated for 3 hours, so a fresh
+      # stack whose runs all fail fires 3 hours and 10 minutes after it starts,
+      # and a fresh stack still inside its first 3 hours does not. Quiet for 3
+      # hours after an exporter restart, when the offset compares two
+      # processes' counts; if nothing has succeeded since, the absent clause
+      # fires once the restart is 3 hours old. A paused dbt_marts fires too:
+      # the marts stop moving either way.
+      - alert: DbtMartsNotSucceeding
+        expr: |
+          (
+            (
+              sum(airflow_dagrun_duration_success_count{dag_id="dbt_marts"})
+                - (sum(airflow_dagrun_duration_success_count{dag_id="dbt_marts"} offset 3h) or vector(0))
+            ) == 0
+            or (
+              sum(absent_over_time(airflow_dagrun_duration_success_count{dag_id="dbt_marts"}[3h]))
+                and on() sum(airflow_scheduler_heartbeat offset 3h)
+            )
+          )
+          unless on() (resets(airflow_scheduler_heartbeat[3h]) > 0)
+        for: 10m
+        labels:
+          severity: warning
+          component: orchestration
+          tier: control-plane
+        annotations:
+          summary: "No dbt_marts run has succeeded for 3 hours"
+          description: |
+            The hourly dbt_marts DAG has not finished a run in success for 3
+            hours, held 10 minutes: every domain mart on Trino is at least that
+            old, and the delayed product with them. The failed task's log has
+            dbt's own output; a stale lake (source freshness), a failed test,
+            a Trino that refuses or is down, and a paused DAG read differently
+            there.
+          runbook: docs/runbooks/dbt-marts.md
