@@ -4,6 +4,7 @@
 One page per data product, by domain, written from its descriptor and contracts under
 [`contracts/`](../../contracts/domains.yaml). Each page names the owner, what the product
 reads and writes, and every output's classification, retention and columns.
+Every product in one table: [all.md](all.md).
 How a product is added: [the golden path](../development/golden-path.md).
 
 ## market-capture

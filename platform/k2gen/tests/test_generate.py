@@ -93,7 +93,18 @@ def test_a_deleted_contract_removes_its_outputs(tree):
     generate.generate(tree)
     after = snapshot(tree)
     assert EXAMPLE_DDL not in after and page not in after
-    assert b"gold.example" not in after[generate.RETENTION] + after[f"{generate.PAGES}/README.md"]
+    assert b"gold.example" not in after[generate.RETENTION] + after[f"{generate.PAGES}/README.md"] + after[generate.PRODUCT_TABLE]
+
+
+def test_the_product_table_has_one_row_per_product(tree):
+    generate.scaffold(tree, "fx-reference", "example-rates")
+    generate.generate(tree)
+    rows = [r for r in (tree / generate.PRODUCT_TABLE).read_text().splitlines() if r.startswith("| [")]
+    assert len(rows) == len(list(tree.glob("contracts/*/*/product.yaml")))
+    new = "| [fx-reference](README.md#fx-reference) | [example-rates](fx-reference/example-rates.md) | `fx-reference-team` | draft | `bronze.example_rates` |"
+    assert new in rows
+    (candles,) = [r for r in rows if "| [candles](" in r]
+    assert "`analytics-team`" in candles and "`gold.ohlcv_1m`" in candles and "`market_analytics.candles.ohlcv_1m`" in candles
 
 
 def test_generate_writes_nothing_while_validate_fails(tree, monkeypatch):
