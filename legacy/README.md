@@ -12,7 +12,7 @@ Archived components of earlier K2 generations. Each directory is kept so the mig
 ## Adding an archive
 
 1. Move the code in its own commit, with no edits to the moved files.
-2. Write `legacy/<name>/README.md` with the six sections above, in that order. Every date, number and cause cites an ADR, a commit hash or a doc; a fact you cannot find is written as "not recorded".
+2. Write `legacy/<name>/README.md` with these six sections, in this order: `What it was`, `Why it was archived`, `What replaced each piece`, `State at archive`, `Running or verifying it today`, `Known residue`. Every date, number and cause cites an ADR, a commit hash or a doc; a fact you cannot find is written as "not recorded".
 3. State the exact command that verifies it today, or say nothing is runnable. Read it from the Makefile; do not paraphrase from memory.
 4. Add a row to the table above and link the deciding ADR (and its Outcome section if reality diverged).
 5. If it is runnable, add a Makefile target outside `make test` and say so; if it has a lockfile, decide whether CI's `skip-dirs: legacy` and Dependabot cover it and record the residue.
