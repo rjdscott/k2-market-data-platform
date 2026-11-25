@@ -189,7 +189,10 @@ def capture(page, shot, out, secrets):
         page.wait_for_selector(shot["ready"], timeout=TIMEOUT_MS)
     except PlaywrightTimeout:
         raise RuntimeError(f"{shot['ready']!r} never appeared") from None
-    wait_quiet(page)
+    if not shot.get("busy_ok"):
+        wait_quiet(page)
+    else:
+        time.sleep(2)
     if shot["app"] == "grafana":
         empty = [t for t in page.evaluate(GRAFANA_EMPTY_JS) if t not in shot.get("no_data", [])]
         if empty:

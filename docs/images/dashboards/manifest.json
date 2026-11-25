@@ -1,0 +1,100 @@
+{
+  "shots": [
+    {
+      "file": "01-pipeline-overview.png",
+      "url": "http://localhost:3000/d/k2-pipeline-overview",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:07:06Z"
+    },
+    {
+      "file": "02-capture.png",
+      "url": "http://localhost:3000/d/k2-l2-capture",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:07:09Z"
+    },
+    {
+      "file": "03-redpanda-topics.png",
+      "url": "http://localhost:8080/topics",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:07:12Z"
+    },
+    {
+      "file": "04-lake.png",
+      "url": "http://localhost:3000/d/k2-lake",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:07:14Z"
+    },
+    {
+      "file": "05-spark-master.png",
+      "url": "http://localhost:18080",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:07:17Z"
+    },
+    {
+      "file": "06-lakekeeper-gold.png",
+      "url": "http://localhost:18181/ui/warehouse/81d3215a-a2bc-11f1-9478-ffbc9544e0ba/namespace/gold",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:07:20Z"
+    },
+    {
+      "file": "07-minio-lake-bucket.png",
+      "url": "http://localhost:9001/browser/k2-lake",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:07:23Z"
+    },
+    {
+      "file": "08-clickhouse.png",
+      "url": "http://localhost:3000/d/clickhouse-v2",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:07:26Z"
+    },
+    {
+      "file": "09-clickhouse-query.png",
+      "url": "http://localhost:8123/play",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:07:28Z"
+    },
+    {
+      "file": "10-airflow-dags.png",
+      "url": "http://localhost:8090/dags",
+      "git_sha": "v3-phase-e-58-ga102568-dirty",
+      "captured_at": "2026-11-25T09:09:12Z"
+    },
+    {
+      "file": "11-airflow-lake-ingest.png",
+      "url": "http://localhost:8090/dags/lake_ingest",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:08:02Z"
+    },
+    {
+      "file": "12-airflow-task-log.png",
+      "url": "http://localhost:8090/dags/lake_ingest/runs/scheduled__2026-11-25T09:01:00+00:00/tasks/ingest",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:08:06Z"
+    },
+    {
+      "file": "13-airflow-dashboard.png",
+      "url": "http://localhost:3000/d/k2-airflow",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:08:08Z"
+    },
+    {
+      "file": "14-prometheus-alerts.png",
+      "url": "http://localhost:9090/alerts",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:08:11Z"
+    },
+    {
+      "file": "15-prometheus-targets.png",
+      "url": "http://localhost:9090/targets",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:08:14Z"
+    },
+    {
+      "file": "16-resources.png",
+      "url": "http://localhost:3000/d/k2-resources",
+      "git_sha": "v3-phase-e-58-ga102568",
+      "captured_at": "2026-11-25T09:08:16Z"
+    }
+  ]
+}

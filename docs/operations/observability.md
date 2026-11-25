@@ -66,6 +66,9 @@ recording rules for this tier.
 
 ## Dashboards
 
+Each one as a screenshot of a live run, with numbered callouts, beside the consoles of every
+other service: [dashboards.md](./dashboards.md).
+
 | Dashboard | UID | What it shows |
 |-----------|-----|---------------|
 | K2 Pipeline Overview | `k2-pipeline-overview` | The one to open first. Three rows: stack health (service up/down, trade records produced per exchange), ClickHouse (insert rate, memory, merge queue), Redpanda (throughput, connections) |
