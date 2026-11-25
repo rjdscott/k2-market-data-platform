@@ -265,16 +265,17 @@ and `prefect-worker` moved behind a compose `legacy` profile, which a plain
 `docker compose up -d` does not start, and their containers were removed: the rollback
 creates them again from that profile, with Prefect's state still in `prefect-db`
 ([airflow-scheduling.md](../runbooks/airflow-scheduling.md#rollback-to-prefect)). So the
-budget table's "After the archive" row arrived at the cutover, and the archive changes no
-default sum. Declared limits after it (`python3 scripts/check-budget.py`, 2026-11-25):
+Prefect pair's 1.5 CPU / 1.5 GiB left the default sums at the cutover, not at the archive,
+and the archive changes none of them. Declared limits after it, with cAdvisor (0.10 CPU /
+128 MiB, merged after this ADR) included (`python3 scripts/check-budget.py`, 2026-11-25):
 
 | | Services | CPU | GiB |
 |---|---|---|---|
-| Default, steady | 17 | 16.20 | 30.188 |
-| Default, bootstrap peak (gated) | 22 | 18.20 | 32.688 |
-| With `--profile legacy`, bootstrap peak (reported) | 24 | 19.70 | 34.188 |
+| Default, steady | 18 | 16.30 | 30.312 |
+| Default, bootstrap peak (gated) | 23 | 18.30 | 32.812 |
+| With `--profile legacy`, bootstrap peak (reported) | 25 | 19.80 | 34.312 |
 
-Headroom at the gated peak is 1.80 CPU and 3.312 GiB. The rollback with Airflow still up
+Headroom at the gated peak is 1.70 CPU and 3.188 GiB. The rollback with Airflow still up
 fits inside the ceiling, which is why it needs no budget change. With Prefect stopped,
 `airflow-scheduler` is the only running container that holds the Docker socket.
 
