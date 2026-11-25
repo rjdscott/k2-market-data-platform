@@ -11,7 +11,7 @@ set -a && . ./.env && set +a
 ## Stack
 
 ```bash
-make up          # scripts/check-env.sh, then docker compose up -d  (builds images on first run)
+make up          # scripts/check-env.py, then docker compose up -d  (builds images on first run)
 make health      # is it up: every service healthy, every venue producing, lake still committing
 make down        # stop, keep volumes
 make ps          # service status
@@ -23,6 +23,11 @@ docker compose up -d --build capture-binance    # rebuild after a Rust change
 docker compose up -d --force-recreate --no-deps capture-binance   # after editing instruments.yaml
 docker stats --no-stream                             # live CPU / RAM
 ```
+
+On a stack built before 2026-11-26, `make up` and `make dev-up` refuse its MinIO pair
+(`check-env: FAIL`) until the credential replacement is merged and rolled out. Until then
+use `docker compose up -d --no-deps <service>`, and do not edit the pair in `.env`
+([setup.md](../development/setup.md#the-safe-bring-up-after-the-first-run)).
 
 ## URLs and credentials
 

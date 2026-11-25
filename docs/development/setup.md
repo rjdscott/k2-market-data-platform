@@ -43,12 +43,29 @@ password.
 
 ### The safe bring-up (after the first run)
 
-`make up` is `scripts/check-env.sh`, then the raw `docker compose up -d`. For everyday use,
-`make dev-up` runs the maintainer's bring-up checklist instead: the same `.env` check, then it sets `K2_PREFECT_PORT` when host port 4200 is
-busy, recreates any service holding a directory bind mount that changed in the last commit
+`make up` is `scripts/check-env.py`, then the raw `docker compose up -d`. For everyday use,
+`make dev-up` runs the maintainer's bring-up checklist instead: the same `.env` check, then
+it sets `K2_PREFECT_PORT` when host port 4200 is busy, recreates any service holding a
+directory bind mount that changed in the last commit
 (see the [bind-mount gotcha](../../docker/README.md#troubleshooting)), then runs
 `scripts/health.sh` — the same checks as `make health` — before declaring success.
 `bash scripts/dev-up.sh --dry-run` prints what it would do without touching anything.
+
+**A stack built before 2026-11-26 is refused, for now.** Its `.env` carries the MinIO pair
+the guard rejects (SECURITY.md), so `make up` and `make dev-up` stop at `check-env: FAIL`
+until that credential is replaced. Do not edit the pair in `.env` to get past it: each
+Lakekeeper warehouse keeps its own stored copy, and the lake stops writing. Meanwhile start
+or recreate services by name, which is what both targets would have run, and then check:
+
+```bash
+docker compose up -d --no-deps <service> [<service> ...]                  # what make up does, per service
+docker compose up -d --force-recreate --no-deps <holders of a changed mount>   # dev-up's step (d)
+make health                                                              # dev-up's step (e)
+```
+
+The trigger that ends this: the credential replacement in
+`docs/research/2026-11-26-storage-credentials-least-privilege.md` merged and rolled out,
+after which `make up` passes again.
 
 ### Applying the ClickHouse schema
 

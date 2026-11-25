@@ -60,13 +60,13 @@ deny() {
   esac
 }
 
-# 1. The real configuration. Placeholder keys: nothing is reached. The access key
-# is a canary: Trino logs each catalog property at start and masks the secret key
-# only, so etc/log.properties silences that logger and the log must not hold it.
-start -e MINIO_ROOT_USER=k2-canary-access-key -e MINIO_ROOT_PASSWORD=unused
+# 1. The real configuration. Placeholder keys: nothing is reached. Both keys are
+# canaries: Trino logs each catalog property at start and masks the secret key only,
+# so etc/log.properties silences that logger and the log must hold neither.
+start -e MINIO_ROOT_USER=k2-canary-access-key -e MINIO_ROOT_PASSWORD=k2-canary-secret-key
 # grep -c, not -q: -q exits at the first match and pipefail reads docker's SIGPIPE as no match.
-leaked=$(docker logs "$NAME" 2>&1 | grep -c k2-canary-access-key || true)
-[ "$leaked" = 0 ] || bad "Trino's log prints s3.aws-access-key on $leaked lines: etc/log.properties must set io.trino.bootstrap.catalog=WARN"
+leaked=$(docker logs "$NAME" 2>&1 | grep -c -e k2-canary-access-key -e k2-canary-secret-key || true)
+[ "$leaked" = 0 ] || bad "Trino's log prints an S3 key on $leaked lines: etc/log.properties must set io.trino.bootstrap.catalog=WARN"
 want=$(printf '%s\n' lake system "${DOMAINS[@]}" | sort | tr '\n' ' ')
 have=$(sql trino 'SHOW CATALOGS' | tr -d '"' | sort | tr '\n' ' ')
 [ "$have" = "$want" ] || bad "catalogs are [$have], contracts/domains.yaml says [$want]: run make generate"
