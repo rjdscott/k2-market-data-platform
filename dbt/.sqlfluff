@@ -1,0 +1,14 @@
+# sqlfluff 4.5.0 (pyproject.toml), run by make test-dbt and CI job dbt. The jinja templater
+# with dbt's builtins stubs ref(), source() and config(), so no warehouse is needed. The
+# layering rule, that only a staging model selects from a source, is a property of the
+# graph, not of one file's text: scripts/dbt_manifest_check.py holds it, on the manifest.
+[sqlfluff]
+dialect = trino
+templater = jinja
+max_line_length = 120
+# ST06 orders select targets simple first, and counts a CAST of an aggregate as simple; a
+# mart lists its grain first and groups by position, so the order is the grain's.
+exclude_rules = ST06
+
+[sqlfluff:templater:jinja]
+apply_dbt_builtins = True

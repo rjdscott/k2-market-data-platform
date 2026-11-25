@@ -25,6 +25,7 @@ What each test is actually guarding:
 import json
 import sys
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -850,3 +851,164 @@ def test_a_table_with_no_snapshots_is_an_error_not_a_fallback():
     """Nothing to fall back TO. Exiting beats `max()` on an empty sequence."""
     with pytest.raises(SystemExit):
         resolve_snapshot(_stub([]), "lake.gold.ohlcv_1m", 111)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The dbt side, D: scripts/parity_ohlcv.py --dbt
+#
+# D runs dbt's compiled ohlcv_1m SQL through Trino over gold.trades at the
+# snapshot the lake's candles were computed from. These hold the two pure halves
+# without a stack: which snapshot, and the SQL that reads nothing at `latest`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from parity_ohlcv import lake_vs_dbt, latest_source_snapshot, normalise, pinned_sql  # noqa: E402
+
+_TRADES = '"lake"."gold"."trades"'
+_STAGING = '"market_analytics"."staging"."stg_gold__trades"'
+
+
+def _manifest():
+    """The shape of dbt's target/manifest.json after `dbt compile`, two models and a source."""
+    return {
+        "sources": {"source.k2.gold.trades": {"relation_name": _TRADES}},
+        "nodes": {
+            "model.k2.stg_gold__trades": {
+                "relation_name": _STAGING,
+                "compiled_code": f"select exchange, price_e8 from {_TRADES}",
+                "depends_on": {"nodes": ["source.k2.gold.trades"]},
+            },
+            "model.k2.ohlcv_1m": {
+                "relation_name": '"market_analytics"."candles"."ohlcv_1m"',
+                "compiled_code": f"select exchange, max(price_e8) as high_e8 from {_STAGING} group by 1",
+                "depends_on": {"nodes": ["model.k2.stg_gold__trades"]},
+            },
+        },
+    }
+
+
+def test_the_newest_source_snapshot_is_the_highest_sequence_number_not_the_highest_id():
+    # 999 is the highest id; 222 has the highest sequence number among the ids asked for.
+    assert latest_source_snapshot([111, 222], [(13, 111), (44, 999), (27, 222)]) == 222
+
+
+def test_an_expired_source_snapshot_is_an_error_not_a_fallback():
+    # D must read the trades B was computed from; reading any other snapshot proves nothing.
+    with pytest.raises(SystemExit, match=r"\[333\]"):
+        latest_source_snapshot([111, 333], [(13, 111)])
+    with pytest.raises(SystemExit):
+        latest_source_snapshot([], [(13, 111)])
+
+
+def test_pinned_sql_inlines_the_staging_view_and_reads_the_source_at_the_snapshot():
+    sql = pinned_sql(_manifest(), "model.k2.ohlcv_1m", {"source.k2.gold.trades": 42})
+    assert sql == (
+        f"select exchange, max(price_e8) as high_e8 from (select exchange, price_e8 from {_TRADES} FOR VERSION AS OF 42) group by 1"
+    )
+    assert _STAGING not in sql  # the view reads the lake at latest; the parity must not
+
+
+def test_pinned_sql_refuses_a_source_with_no_snapshot():
+    with pytest.raises(SystemExit, match="no snapshot"):
+        pinned_sql(_manifest(), "model.k2.ohlcv_1m", {})
+
+
+def test_pinned_sql_refuses_a_relation_the_compiled_sql_does_not_name():
+    # A changed quoting style would otherwise leave the source unpinned, silently.
+    manifest = _manifest()
+    manifest["nodes"]["model.k2.stg_gold__trades"]["compiled_code"] = "select exchange, price_e8 from lake.gold.trades"
+    with pytest.raises(SystemExit, match="does not appear"):
+        pinned_sql(manifest, "model.k2.ohlcv_1m", {"source.k2.gold.trades": 42})
+
+
+def test_pinned_sql_needs_a_compiled_manifest():
+    manifest = _manifest()
+    del manifest["nodes"]["model.k2.ohlcv_1m"]["compiled_code"]  # what `dbt parse` alone leaves
+    with pytest.raises(SystemExit, match="dbt compile"):
+        pinned_sql(manifest, "model.k2.ohlcv_1m", {"source.k2.gold.trades": 42})
+
+
+_WS = datetime(2001, 1, 1)
+# One made-up bucket, as each side returns it: B's ten columns, D's eleventh is Trino's typeof.
+_LAKE = ("x", "AAA/BBB", _WS, 1, 2, 1, 2, 3, Decimal("4.0000000000"), Decimal("403.0000010000"))
+_DBT = _LAKE + ("decimal(38,10)",)
+
+
+def test_the_three_way_sides_still_compare_volume_rounded_to_8_decimals():
+    # Sides A, B and C: unchanged by --dbt.
+    assert normalise([_LAKE]) == {("x", "AAA/BBB", _WS): (1, 2, 1, 2, 3, 4.0)}
+    assert normalise([_LAKE]) == normalise([_LAKE[:8] + (Decimal("4.0000000001"), _LAKE[9])])
+
+
+def test_lake_and_dbt_agree_when_every_column_and_the_type_match(capsys):
+    assert lake_vs_dbt([_LAKE], [_DBT], "decimal(38,10)") == 0
+    assert "1 buckets, 0 differ" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("column", [8, 9])  # volume, quote_volume
+def test_lake_and_dbt_differ_on_one_unit_in_the_tenth_decimal(column):
+    # No tolerance (ADR-029): the rounding to 8 decimals the three-way sides use would pass this.
+    changed = list(_DBT)
+    changed[column] += Decimal("0.0000000001")
+    assert lake_vs_dbt([_LAKE], [tuple(changed)], "decimal(38,10)") == 1
+
+
+def test_quote_volume_typed_differently_is_a_failure_even_when_the_values_match(capsys):
+    assert lake_vs_dbt([_LAKE], [_DBT[:10] + ("decimal(38,6)",)], "decimal(38,10)") == 1
+    assert "FAIL, the engines type it differently" in capsys.readouterr().out
+
+
+def test_a_run_with_no_side_to_compare_the_lake_with_is_refused(monkeypatch):
+    # Before: --skip-silver --skip-clickhouse without --dbt compared B with nothing and printed PASS.
+    import parity_ohlcv
+
+    monkeypatch.setattr(sys, "argv", ["parity_ohlcv.py", "--day", "2001-01-01", "--ohlcv-snapshot", "1", "--skip-silver", "--skip-clickhouse"])
+    monkeypatch.setattr(parity_ohlcv, "duck", lambda *a: pytest.fail("ran without a side to compare"))
+    with pytest.raises(SystemExit) as stop:
+        parity_ohlcv.main()
+    assert stop.value.code == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# scripts/parity-ohlcv.sh --pin-current: the day is optional and comes first.
+# `--pin-current --dbt` took `--dbt` as the day. Run with curl and uv stubbed:
+# nothing reaches a catalog and nothing is written.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CURL = """#!/usr/bin/env bash
+case "$2" in
+  *config*) echo '{"defaults": {"prefix": "p"}}' ;;
+  *) echo '{"metadata": {"current-snapshot-id": 7, "snapshots": [{"snapshot-id": 7, "summary": {"k2.src-snapshot-id.x": "5"}}]}}' ;;
+esac
+"""
+
+
+def _wrapper(tmp_path, *args):
+    import subprocess
+
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/parity-ohlcv.sh").write_text((Path(__file__).parent.parent / "scripts/parity-ohlcv.sh").read_text())
+    (tmp_path / ".env").write_text("")
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    (stubs / "curl").write_text(_CURL)
+    (stubs / "uv").write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n')  # what parity_ohlcv.py would be given
+    for stub in stubs.iterdir():
+        stub.chmod(0o755)
+    done = subprocess.run(["bash", str(tmp_path / "scripts/parity-ohlcv.sh"), *args], capture_output=True, text=True,
+                          env={"PATH": f"{stubs}:/usr/bin:/bin"}, timeout=30)
+    assert done.returncode == 0, done.stderr
+    given = done.stdout.splitlines()
+    return given[given.index("scripts/parity_ohlcv.py") + 1:]
+
+
+def test_pin_current_passes_dbt_through_and_pins_yesterday(tmp_path):
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    assert _wrapper(tmp_path, "--pin-current", "--dbt") == [
+        "--day", yesterday, "--ohlcv-snapshot", "7", "--silver-snapshots", '{"x": 5}', "--write-pin", "--dbt"
+    ]
+
+
+def test_pin_current_takes_a_day_then_the_rest(tmp_path):
+    assert _wrapper(tmp_path, "--pin-current", "2001-01-02", "--dbt", "--skip-clickhouse")[:2] == ["--day", "2001-01-02"]
+    (tmp_path / "again").mkdir()
+    assert _wrapper(tmp_path / "again", "--pin-current", "2001-01-02", "--dbt")[-2:] == ["--write-pin", "--dbt"]

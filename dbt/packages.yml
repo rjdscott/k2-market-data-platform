@@ -1,0 +1,5 @@
+packages:
+  # The maintained fork; its README lists Trino. 0.10.10 (2025-12-02) is the newest
+  # release on 2026-11-25. It brings godatadriven/dbt_date, pinned in package-lock.yml.
+  - package: metaplane/dbt_expectations
+    version: 0.10.10

@@ -1,0 +1,77 @@
+models:
+  - name: ohlcv_1m
+    description: >-
+      1-minute OHLCV candles over lake.gold.trades, one row per (exchange, canonical_symbol,
+      window_start): the port of gold.candles() in docker/lake/gold.py, rebuilt whole from
+      the lake on every run. Product candles, contracts/market-analytics/candles/product.yaml.
+    columns:
+      - name: exchange
+        data_tests: [not_null]
+      - name: canonical_symbol
+        data_tests: [not_null]
+      - name: window_start
+        description: Bucket start, UTC.
+        data_tests: [not_null]
+      - name: open_e8
+        description: Price of the first trade by (exchange_ts, recv_ts_ns, trade_seq), fixed point 1e-8.
+      - name: close_e8
+        description: Price of the last trade by (exchange_ts, recv_ts_ns, trade_seq), fixed point 1e-8.
+      - name: volume
+        description: Sum of quantity, base currency, exact.
+      - name: quote_volume
+        description: Sum of price x quantity, quote currency, rounded half up at 6 decimals as Spark rounds it in the lake.
+    data_tests:
+      # The grain, as the contract declares it; scripts/dbt_manifest_check.py requires this test.
+      # The null tests above matter: it skips a row whose key columns are all null.
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          name: ohlcv_1m_unique_on_its_grain
+          arguments:
+            column_list: [exchange, canonical_symbol, window_start]
+      # The candle's envelope: open and close inside [low, high], both trade times inside the minute.
+      - dbt_expectations.expression_is_true:
+          name: ohlcv_1m_candle_envelope
+          arguments:
+            expression: >-
+              low_e8 <= least(open_e8, close_e8) and greatest(open_e8, close_e8) <= high_e8
+              and trade_count >= 1 and open_time <= close_time
+              and date_trunc('minute', open_time) = window_start
+              and date_trunc('minute', close_time) = window_start
+
+unit_tests:
+  # Made-up rows (venue x, symbol AAA/BBB), so the logic is tested and not the market.
+  - name: ohlcv_1m_buckets_by_the_utc_minute
+    description: The first and last microsecond of a minute share a bucket; the next minute starts a new one; symbols never mix.
+    model: ohlcv_1m
+    given:
+      - input: ref('stg_gold__trades')
+        rows:
+          - {exchange: x, canonical_symbol: AAA/BBB, trade_seq: 1, price_e8: 100, qty_e8: 1, exchange_ts: "2001-01-01 00:00:00.000000 UTC", recv_ts_ns: 1}
+          - {exchange: x, canonical_symbol: AAA/BBB, trade_seq: 2, price_e8: 200, qty_e8: 1, exchange_ts: "2001-01-01 00:00:59.999999 UTC", recv_ts_ns: 2}
+          - {exchange: x, canonical_symbol: AAA/BBB, trade_seq: 3, price_e8: 300, qty_e8: 1, exchange_ts: "2001-01-01 00:01:00.000000 UTC", recv_ts_ns: 3}
+          - {exchange: x, canonical_symbol: CCC/BBB, trade_seq: 4, price_e8: 400, qty_e8: 1, exchange_ts: "2001-01-01 00:00:30.000000 UTC", recv_ts_ns: 4}
+    expect:
+      rows:
+        - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:00:00.000000 UTC", trade_count: 2, open_e8: 100, close_e8: 200, open_time: "2001-01-01 00:00:00.000000 UTC", close_time: "2001-01-01 00:00:59.999999 UTC"}
+        - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:01:00.000000 UTC", trade_count: 1, open_e8: 300, close_e8: 300, open_time: "2001-01-01 00:01:00.000000 UTC", close_time: "2001-01-01 00:01:00.000000 UTC"}
+        - {exchange: x, canonical_symbol: CCC/BBB, window_start: "2001-01-01 00:00:00.000000 UTC", trade_count: 1, open_e8: 400, close_e8: 400, open_time: "2001-01-01 00:00:30.000000 UTC", close_time: "2001-01-01 00:00:30.000000 UTC"}
+
+  - name: ohlcv_1m_breaks_ties_by_exchange_ts_then_recv_ts_ns_then_trade_seq
+    description: >-
+      gold.candles() orders by (exchange_ts, recv_ts_ns, trade_seq). The open is two trades
+      at one exchange_ts, decided by recv_ts_ns against trade_seq's order; the close is two
+      trades at one exchange_ts and recv_ts_ns, decided by trade_seq. Volumes are exact, and
+      quote_volume rounds half up at 6 decimals like the lake's.
+    model: ohlcv_1m
+    given:
+      - input: ref('stg_gold__trades')
+        rows:
+          - {exchange: x, canonical_symbol: AAA/BBB, trade_seq: 3, price_e8: 10000000000, qty_e8: 100000000, exchange_ts: "2001-01-01 00:00:10.000000 UTC", recv_ts_ns: 5}
+          - {exchange: x, canonical_symbol: AAA/BBB, trade_seq: 9, price_e8: 10100000000, qty_e8: 100000000, exchange_ts: "2001-01-01 00:00:10.000000 UTC", recv_ts_ns: 4}
+          - {exchange: x, canonical_symbol: AAA/BBB, trade_seq: 1, price_e8: 10300000000, qty_e8: 100000000, exchange_ts: "2001-01-01 00:00:50.000000 UTC", recv_ts_ns: 7}
+          - {exchange: x, canonical_symbol: AAA/BBB, trade_seq: 2, price_e8: 9900000000, qty_e8: 100000000, exchange_ts: "2001-01-01 00:00:50.000000 UTC", recv_ts_ns: 7}
+          - {exchange: x, canonical_symbol: AAA/BBB, trade_seq: 5, price_e8: 50000000, qty_e8: 100, exchange_ts: "2001-01-01 00:00:20.000000 UTC", recv_ts_ns: 6}
+    expect:
+      rows:
+        # quote_volume: 100 + 101 + 103 + 99 = 403, plus 0.5 x 0.000001 = 0.0000005, which
+        # rounds up to 0.000001 at 6 decimals (exactly, it would be 403.0000005000).
+        - {exchange: x, canonical_symbol: AAA/BBB, window_start: "2001-01-01 00:00:00.000000 UTC", open_e8: 10100000000, high_e8: 10300000000, low_e8: 50000000, close_e8: 9900000000, trade_count: 5, volume: 4.000001, quote_volume: 403.000001}

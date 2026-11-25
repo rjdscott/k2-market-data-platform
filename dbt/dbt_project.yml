@@ -1,0 +1,35 @@
+# The marts, built on Trino (ADR-035), each in its domain's catalog (ADR-044).
+# A model's folder decides where it lives (macros/naming.sql):
+#   models/<catalog>/staging/<model>.sql          -> <catalog>.staging.<model>, a view
+#   models/<catalog>/intermediate/<model>.sql     -> <catalog>.intermediate.<model>, a view
+#   models/<catalog>/marts/<product>/<model>.sql  -> <catalog>.<product>.<model>, a table
+# and the writer is the profile's user: K2_TRINO_USER=dbt_<catalog> dbt build --selector <catalog>.
+name: k2
+version: "0.1.0"
+profile: k2
+config-version: 2
+require-dbt-version: [">=1.12.0", "<1.13.0"]
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+clean-targets: ["target", "dbt_packages"]
+
+flags:
+  require_certificate_validation: true  # the future default; the stack speaks plain HTTP on loopback
+
+models:
+  k2:
+    +materialized: view
+    +view_security: definer  # dbt-trino's default, stated: readers reach the lake through the owner (ADR-044)
+    +on_table_exists: replace  # CREATE OR REPLACE: one Iceberg table whose history keeps every build
+    # One block per domain with marts: dbt_project.yml has no wildcard folder. A mart
+    # that is a view (ADR-035's delayed product) says so in its own config and in its
+    # contract (materialized: view); scripts/dbt_manifest_check.py holds the two equal.
+    market_analytics:
+      marts:
+        +materialized: table
+
+vars:
+  # dbt_expectations reads it through dbt_date; every K2 timestamp is UTC.
+  "dbt_date:time_zone": UTC

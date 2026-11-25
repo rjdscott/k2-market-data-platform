@@ -125,11 +125,12 @@ considered before committing*.
 ## Tests
 
 ```bash
-make test          # everything CI runs: python + rust + clickhouse + trino
+make test          # everything CI runs: python + rust + clickhouse + trino + dbt
 make test-python   # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 make test-rust     # rust:1-bookworm container; no local cargo needed
 make test-clickhouse  # the gold DDL + assertions on a throwaway 24.3 server
 make test-trino    # docker/trino/etc starts; lake refuses every commit; only a domain's writer changes its catalog
+make test-dbt      # dbt/ (its own uv project): lint, compile, manifest check, build with unit tests on a throwaway Trino
 ```
 
 - The v2 Kotlin tier retired to `legacy/v2-kotlin/` (ADR-019). Its tests are

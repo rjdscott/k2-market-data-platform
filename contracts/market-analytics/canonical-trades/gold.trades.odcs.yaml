@@ -31,6 +31,15 @@ schema:
         description: >-
           Rows equal the non-replay rows of silver, per venue, at the silver snapshots gold
           last read.
+slaProperties:
+  - property: latency
+    value: 30
+    unit: min
+    element: gold.trades.ingest_ts
+    description: >-
+      The newest ingest_ts in the table is under 30 minutes old: the ingest commits every 5
+      minutes, and 30 is LakeCommitAgeHigh's threshold for bronze. dbt source freshness
+      errors past it (dbt/models/_sources.yml, generated).
 customProperties:
   - property: layer
     value: gold

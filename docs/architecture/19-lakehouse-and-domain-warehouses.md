@@ -19,14 +19,14 @@ K2 keeps its data as files in one bucket, `k2-lake`. Six parts work on it:
 - **DuckDB** is a library inside the notebooks. It reads the lake.
 
 Spark, Trino and DuckDB are engines: the programs that run queries. dbt, a tool that turns SQL
-`SELECT` files into tables, will build the marts through Trino from the next pull request of
-[phase P3](../plans/2026-11-24-governed-self-serve-platform/003-trino-dbt-marts.md).
+`SELECT` files into tables, builds the marts through Trino ([`dbt/`](../../dbt/README.md),
+[phase P3](../plans/2026-11-24-governed-self-serve-platform/003-trino-dbt-marts.md)).
 
 ```mermaid
 flowchart TB
   AF["Airflow: lake_ingest every 5 min, lake_maintenance nightly"]
   SP["Spark jobs, docker/lake/"]
-  DBT["dbt, from phase P3"]
+  DBT["dbt, dbt/"]
   TR["Trino, one node"]
   DK["DuckDB, in notebooks"]
   subgraph LK ["Lakekeeper, the catalog service"]
@@ -133,7 +133,7 @@ A data domain is a body of data that one team owns and answers for
 such as `candles`. [`contracts/domains.yaml`](../../contracts/domains.yaml) lists four domains:
 `market-capture`, `reference-data`, `fx-reference` and `market-analytics`. The lake's tables
 belong to these domains as owners and still live in `k2` ([chapter 18](18-data-mesh.md)). Every
-domain warehouse is empty until its first mart.
+domain warehouse is empty until its first mart; `market_analytics` has one, `candles.ohlcv_1m`.
 
 One entry in `domains.yaml` gives a domain its whole fence. `make generate` runs
 [`generate.py`](../../platform/k2gen/k2gen/generate.py), which turns the id `market-analytics`
@@ -161,7 +161,8 @@ be `lake`, `system` or `k2`: those names are taken.
 
 Inside a domain catalog there is one schema per data product, for example
 `market_analytics.delayed_candles.ohlcv_1m_delayed_20m`. A product rebuild can then drop one
-schema without touching its siblings. A mart that joins two domains belongs to the domain that
+schema without touching its siblings. dbt adds one schema that is not a product, `staging`: the
+domain's views over the lake tables its marts read ([`dbt/`](../../dbt/README.md)). A mart that joins two domains belongs to the domain that
 consumes it, and lives in that domain's warehouse; nobody writes into a producer's warehouse.
 Governance data, such as quality results and lineage, is meant to become a platform-owned domain
 stored the same way. That is the maintainer's direction, not yet a decision: it gets its own ADR
@@ -294,7 +295,7 @@ docker exec k2-trino trino --execute 'SHOW CATALOGS'
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM lake'
 #   "audit" "bronze" "gold" "information_schema" "raw" "silver" "system"
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM market_analytics'
-#   "information_schema" "system"                     no marts yet
+#   "candles" "information_schema" "staging" "system"   dbt's first mart and its staging view
 docker exec k2-trino trino --execute \
   'SELECT (SELECT count(*) FROM lake.gold."ohlcv_1m$files"), (SELECT count(*) FROM lake.gold."ohlcv_1m$snapshots")'
 #   "19","196"                                        data files, snapshots
@@ -315,7 +316,7 @@ curl -s "http://localhost:18181/catalog/v1/$p/namespaces/gold/tables/ohlcv_1m" |
 ```
 
 The read, the write and the view above were run for this chapter as `dbt_market_analytics` in
-`market_analytics.chapter_check`, then dropped. No objects remain under any domain prefix.
+`market_analytics.chapter_check`, then dropped; nothing of theirs remains.
 
 ## Common mistakes and what you will see
 

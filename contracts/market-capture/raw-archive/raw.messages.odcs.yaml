@@ -30,6 +30,7 @@ slaProperties:
   - property: latency
     value: 15
     unit: min
+    element: raw.messages.kafka_ts
     description: >-
       The newest kafka_ts in the table is under 15 minutes old. LakeIngestLagHigh
       fires past it (docker/prometheus/rules/lake-alerts.yml).
