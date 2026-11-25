@@ -1,6 +1,6 @@
 # ADR-014: Spark-Based Iceberg Offload (Not Kotlin Service)
 
-**Status:** Accepted (Supersedes Kotlin approach in Phase 5 plan) — **superseded by [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md)**; implementation deleted 2026-08-27, see Outcome
+**Status:** Accepted (Supersedes Kotlin approach in Phase 5 plan), **superseded by [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md)**; implementation deleted 2026-08-27, see Outcome; its choice of Prefect to schedule the Spark jobs **superseded by [ADR-034](ADR-034-airflow-3-replaces-prefect.md)** (Airflow 3, 2026-11 cutover)
 **Date:** 2026-02-11
 **Deciders:** Platform Engineering
 **Related Phase:** Phase 5 (Cold Tier Restructure)

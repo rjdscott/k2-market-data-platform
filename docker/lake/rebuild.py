@@ -21,11 +21,16 @@ carries the pinned parent snapshot id, so when the lock is released the
 
 **Pause the ingest schedule first**, the lock makes a concurrent ingest exit 75
 rather than corrupt anything, but an hour of exit-75 runs is an hour of
-LakeIngestFailed noise:
+skipped-ingest alerts (the lake_rebuild DAG is the one writer they excuse):
 
-    docker exec k2-prefect-server prefect deployment schedule pause lake-ingest/lake-ingest-5min <schedule-id>   # id from: prefect deployment schedule ls lake-ingest/lake-ingest-5min
+    docker exec k2-airflow-scheduler airflow dags pause lake_ingest
     ... rebuild ...
-    docker exec k2-prefect-server prefect deployment schedule resume lake-ingest/lake-ingest-5min <schedule-id>
+    docker exec k2-airflow-scheduler airflow dags unpause lake_ingest
+
+A run still `running` at the pause stays so, and unpaused more than its
+dagrun_timeout (2h05m) later it may be marked failed once: disregard that one,
+it is noise against the "two failed in a row" rollback policy
+(docs/runbooks/airflow-scheduling.md).
 
 Bronze, silver and gold: the shape (pin parent, drop, recreate, decode, record)
 is the same for each.

@@ -16,7 +16,7 @@
       "id": 1,
       "type": "timeseries",
       "title": "DAG run duration",
-      "description": "Mean seconds from a run's start to its end, over 30 minutes, by DAG and outcome. During the schedule shadow lake_ingest runs the probe, which reads a few seconds of each topic, so it is shorter than a real ingest.",
+      "description": "Mean seconds from a run's start to its end, over 30 minutes, by DAG and outcome. Before the cutover lake_ingest ran the probe, which reads a few seconds of each topic, so durations from then are shorter than a real ingest.",
       "gridPos": {
         "h": 8,
         "w": 12,

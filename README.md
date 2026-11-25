@@ -53,7 +53,7 @@ flowchart TB
   F["k2-capture ×3 · Rust<br/>trades + L2 book on one socket<br/>recv_ts · seq · CRC32"]:::rs
   R[("Redpanda 25.3 · Avro + schema registry<br/>raw · trades · book per venue")]:::rp
   C["ClickHouse 24.3 · gold<br/>ReplacingMergeTree · no TTL<br/>ohlcv_live · bbo_live on read"]:::ch
-  S["Prefect 3 → Spark 3.5 · every 5 min<br/>offset range · offsets in the snapshot"]:::sp
+  S["Airflow 3 → Spark 3.5 · every 5 min<br/>offset range · offsets in the snapshot"]:::sp
   subgraph L["Iceberg lakehouse · Lakekeeper + MinIO · system of record"]
     direction TB
     RAW[("raw.messages · verbatim · forever")]:::lk
@@ -82,9 +82,10 @@ flowchart TB
   classDef ob fill:#f3f4f6,stroke:#6b7280,color:#111827
 ```
 
-20 long-running services and 5 one-shot init containers, 17.80 CPU / 31.812 GiB of declared
-limits at steady state and 19.80 CPU / 34.312 GiB at the bootstrap peak, under a 20 CPU / 36 GiB
+18 long-running services and 5 one-shot init containers, 16.30 CPU / 30.312 GiB of declared
+limits at steady state and 18.30 CPU / 32.812 GiB at the bootstrap peak, under a 20 CPU / 36 GiB
 ceiling ([ADR-034](./docs/adr/ADR-034-airflow-3-replaces-prefect.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
+Prefect, which Airflow replaced, waits behind `--profile legacy` as the rollback, not running.
 
 **Read the book.** [`docs/architecture/`](./docs/architecture/README.md) is written as numbered
 chapters: what the platform is and is not, the market data and data engineering concepts it
@@ -141,14 +142,15 @@ measured usage is far lower.
 Two lines of `.env` are host-specific and are the whole first-run gotcha:
 `K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` ship empty (no CPU pinning, starts anywhere) —
 uncomment the 15-core layout in `.env.example` only on a host that has those cores, or six
-containers fail at start with `invalid argument`. `K2_PREFECT_PORT` (default 4200) is
-Prefect's host port, and it moves the UI's own API URL with it.
+containers fail at start with `invalid argument`. `K2_AIRFLOW_PORT` (default 8090, loopback
+only) is Airflow's host port, and it moves the UI's own base URL with it; `K2_DOCKER_GID` is
+the group that owns the Docker socket, 0 on Docker Desktop.
 
 ```bash
 git clone https://github.com/rjdscott/k2-market-data-platform.git && cd k2-market-data-platform
 cp .env.example .env            # set every change-me value; LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 set -a && . ./.env && set +a
-docker compose up -d            # first run builds the capture, prefect and spark images
+docker compose up -d            # first run builds the capture, airflow, lake-metrics and spark images
 make health                     # every service healthy, a message on every venue in the last
                                 # 2 min, and a lake that is still committing
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
@@ -165,7 +167,7 @@ symbol conventions and a runnable example.
 |---|---|---|
 | Grafana | http://localhost:3000 (`admin` / `$GRAFANA_PASSWORD`) | the capture and lake dashboards |
 | Redpanda Console | http://localhost:8080 | `market.crypto.v3.trades.binance`, values decoded as Avro |
-| Prefect | `http://localhost:$K2_PREFECT_PORT` (default 4200) | Deployments: `lake-ingest-5min`, `lake-maintenance-daily` |
+| Airflow | `http://localhost:$K2_AIRFLOW_PORT` (default 8090; `admin`, password: `docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated`) | DAGs: `lake_ingest`, `lake_maintenance`, `lake_rebuild` |
 
 Every other URL, credential and port — ClickHouse, Lakekeeper, MinIO, Prometheus, Spark,
 the notebooks — is on one page:
@@ -200,7 +202,8 @@ the resource-budget and pin checks, the documentation gates and Trivy on every p
 
 ```
 services/capture-rust/     k2-capture: one binary, three exchanges
-docker/lake/               Spark ingest, layer builders, audits, DDL, Prefect flows
+docker/airflow/            the three lake DAGs and their image
+docker/lake/               Spark ingest, layer builders, audits, DDL, the Prefect flows kept for rollback
 docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds
 docker/prometheus/rules/   28 alert rules with unit tests
 schemas/avro/              raw-message, trade, book-snapshot-l2

@@ -51,12 +51,13 @@ tests:
               summary: "raw.messages has not committed for 40m 0s"
               description: |
                 The lake ingest is scheduled every 5 minutes and raw.messages has not
-                taken a commit in over 30. Either the Prefect flow is failing, the
-                Spark container is gone, or Lakekeeper is refusing commits.
+                taken a commit in over 30. Either the Airflow lake_ingest runs are
+                failing or skipping, the Spark container is gone, or Lakekeeper is
+                refusing commits.
 
                 This is the data-loss clock: Redpanda keeps 48 h of the raw topics,
                 so anything not ingested before that window closes is gone for good.
-                Check the flow run first — its logs carry the script's own stdout.
+                Check the lake_ingest task log first: it carries the script's own stdout.
               runbook: docs/runbooks/lake-recovery.md
 
   # A healthy lake commits every 5 minutes. It must never fire.

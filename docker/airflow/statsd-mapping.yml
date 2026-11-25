@@ -1,0 +1,22 @@
+# airflow-statsd mapping (docker-compose.yml, ADR-034). One rule. Every other
+# Airflow metric keeps the exporter's default name and labels: on a throwaway
+# prom/statsd-exporter:v0.31.0 (2026-11-25), Airflow-shaped counters, gauges
+# and timers, with and without InfluxDB tags, served the same /metrics with
+# this file as without it.
+#
+# ti.running is the scheduler's gauge of running tries. Airflow 3.3.2 sends it
+# as `airflow.ti.running,queue=...,dag_id=...,task_id=...` (statsd_on with
+# statsd_influxdb_enabled) every ti_metrics_interval, 30 s by default
+# (jobs/scheduler_job_runner.py, _emit_ti_metrics; not set in compose). The 0
+# for a task that stopped running is sent only by the scheduler that saw it
+# run, so one restarted in between never sends it, and without a ttl the
+# exporter serves the last 1 until it restarts, muting the lake alerts that
+# read it (docker/prometheus/rules/airflow-alerts.yml).
+#
+# 2m is four missed sends: a running try is dropped only if the scheduler loop
+# stalls that long, and a stuck 1 is gone well inside the alerts' 15-minute
+# grace. A ttl is time since the last send, the same value included.
+mappings:
+  - match: "airflow.ti.running"
+    name: "airflow_ti_running"
+    ttl: 2m

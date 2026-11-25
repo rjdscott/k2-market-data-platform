@@ -19,14 +19,14 @@ def svc(cpus, gib, image="k2-thing:v1", restart="unless-stopped"):
     return {"image": image, "restart": restart, "deploy": {"resources": {"limits": limits}}}
 
 
-def failures(default, governance=None, dockerfiles=()):
-    return budget.check(default, governance or default, list(dockerfiles))[1]
+def failures(default, governance=None, dockerfiles=(), legacy=None):
+    return budget.check(default, governance or default, legacy or default, list(dockerfiles))[1]
 
 
 def test_one_shots_count_towards_the_gated_bootstrap_peak():
     # 19 CPU steady plus a 2 CPU one-shot: steady is under 20, bootstrap is not.
     default = {"a": svc(19.0, 20), "init": svc(2.0, 1, restart="no")}
-    report, fails = budget.check(default, default, [])
+    report, fails = budget.check(default, default, default, [])
     assert "19.00 CPU" in report[0] and "21.00 CPU" in report[1]
     assert any("bootstrap default 21.00 CPU" in f and "ceiling" in f for f in fails)
 
@@ -43,15 +43,29 @@ def test_memory_over_36_gib_fails():
 def test_the_governance_profile_is_reported_not_gated():
     default = {"a": svc(10.0, 20)}
     governance = {**default, "catalog": svc(15.0, 20)}
-    report, fails = budget.check(default, governance, [])
+    report, fails = budget.check(default, governance, default, [])
     assert fails == []
     assert "25.00 CPU" in report[2]
+
+
+def test_the_legacy_profile_is_reported_not_gated_but_its_limits_and_pins_are():
+    # The Prefect rollback: default plus two services, over the ceiling here on
+    # purpose, so only its report line moves.
+    default = {"a": svc(18.0, 30)}
+    legacy = {**default, "prefect-server": svc(3.0, 8, image="prefecthq/prefect:3-python3.12")}
+    report, fails = budget.check(default, default, legacy, [])
+    assert fails == []
+    assert report[3].startswith("bootstrap legacy") and "21.00 CPU" in report[3]
+    # A service only the legacy profile starts is still held to limits and pins.
+    bare = {**default, "prefect-worker": {"image": "k2-prefect-worker", "deploy": {}}}
+    named = " ".join(failures(default, legacy=bare))
+    assert "limits: prefect-worker" in named and "service prefect-worker" in named
 
 
 def test_a_service_with_no_restart_key_is_reported_as_steady():
     default = {"a": svc(1.0, 1), "init": svc(0.5, 1, restart="no")}
     del default["a"]["restart"]
-    report, _ = budget.check(default, default, [])
+    report, _ = budget.check(default, default, default, [])
     assert "1 services" in report[0] and "1.00 CPU" in report[0]
 
 

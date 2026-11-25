@@ -49,8 +49,9 @@ docker/
 | `minio` | long-running | S3 object storage, holds the v3 `k2-lake` bucket |
 | `lakekeeper` | long-running | **v3** Iceberg REST catalog ([ADR-018](../docs/adr/ADR-018-v3-lake-first-rust-capture.md)); `127.0.0.1:18181` |
 | `spark-iceberg` | long-running | Batch engine for the v3 lake ingest and maintenance |
-| `prefect-db`, `prefect-server`, `prefect-worker` | long-running | Orchestration + Prefect, Airflow and Lakekeeper metadata |
-| `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` | long-running | Airflow 3 beside Prefect in a schedule shadow ([ADR-034](../docs/adr/ADR-034-airflow-3-replaces-prefect.md)); UI on `127.0.0.1:8090` |
+| `prefect-db` | long-running | PostgreSQL for the Airflow, Lakekeeper and Prefect metadata |
+| `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-statsd` | long-running | Airflow 3, the lake schedules ([ADR-034](../docs/adr/ADR-034-airflow-3-replaces-prefect.md)); UI on `127.0.0.1:8090` |
+| `prefect-server`, `prefect-worker` | `legacy` profile | The Prefect rollback, stopped; `docker compose --profile legacy up -d prefect-server prefect-worker` ([airflow-scheduling.md](../docs/runbooks/airflow-scheduling.md#rollback-to-prefect)) |
 | `prometheus`, `grafana`, `lake-metrics` | long-running | Observability |
 | `capture-{binance,kraken,coinbase}` | long-running | **v3** Rust WebSocket capture (trades + L2 book); metrics on `:8082/metrics` ([ADR-019](../docs/adr/ADR-019-rust-capture-tier.md)) |
 | `redpanda-init` | one-shot | Topics + Avro subjects (`redpanda/init.sh`) |
@@ -83,6 +84,10 @@ docker exec k2-prefect-db psql -U "$PREFECT_DB_USER" -d postgres -c 'CREATE DATA
 ```
 
 ## Lake pipeline
+
+> Since the Airflow cutover the lake jobs run as the `lake_ingest`, `lake_maintenance` and
+> `lake_rebuild` DAGs (`airflow/dags/lake.py`, [airflow-scheduling.md](../docs/runbooks/airflow-scheduling.md)).
+> The Prefect description below is the rollback's.
 
 The lake jobs do not run on a systemd timer or cron, they are scheduled as Prefect
 deployments on the `lake` work pool, dispatched by the `k2-prefect-worker` container into

@@ -91,10 +91,18 @@ class Structure(unittest.TestCase):
         self.assertIsNone(BAG.dags["lake_rebuild"].schedule)
         self.assertEqual(rebuild.retries, 0)
 
-    def test_shadow_mode_probes_and_keeps_maintenance_paused(self):
-        self.assertIn("--probe", rendered("lake_ingest"))
-        self.assertFalse(BAG.dags["lake_ingest"].is_paused_upon_creation)
-        self.assertTrue(BAG.dags["lake_maintenance"].is_paused_upon_creation)
+    def test_after_the_cutover_ingest_writes_and_no_dag_starts_paused(self):
+        # The real ingest: the bare script with no flag at the defaults, not
+        # the shadow's write-nothing probe.
+        cmd = rendered("lake_ingest")
+        self.assertNotIn("--probe", cmd)
+        self.assertEqual(cmd[-1], "/home/iceberg/lake/ingest.py")
+        # The cutover runbook greps the mounted file for this string to tell a
+        # stale bind mount from a deployed one, so it must not appear at all.
+        self.assertNotIn("--probe", (REPO / "docker/airflow/dags/lake.py").read_text())
+        for dag_id in BAG.dags:
+            with self.subTest(dag_id):
+                self.assertFalse(BAG.dags[dag_id].is_paused_upon_creation)
 
 
 class ExitCodes(unittest.TestCase):

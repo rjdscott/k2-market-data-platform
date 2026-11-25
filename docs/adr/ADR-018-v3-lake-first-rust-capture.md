@@ -1,6 +1,6 @@
 # ADR-018: A lake-first v3 with a Rust capture tier
 
-**Status:** Proposed
+**Status:** Proposed; the "Prefect + Spark are retained" clause **superseded by [ADR-034](ADR-034-airflow-3-replaces-prefect.md)** for Prefect only (Airflow 3 schedules the lake, Spark stays; 2026-11 cutover)
 **Date:** 2026-08-26
 **Author:** Rob Scott
 **Category:** Architecture (umbrella)

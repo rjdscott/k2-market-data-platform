@@ -190,8 +190,9 @@ jobs:
         run: docker compose --env-file .env.example config -q
 
       # Prints the steady default, bootstrap default and bootstrap with
-      # --profile governance limit sums, and fails when the bootstrap default
-      # is over the 20 CPU / 36 GiB ADR-034 states. Also fails a service in either
+      # --profile governance and with --profile legacy (the Prefect rollback)
+      # limit sums, and fails when the bootstrap default is over the
+      # 20 CPU / 36 GiB ADR-034 states. Also fails a service in any
       # config with no CPU or memory limit (it would escape the budget and
       # nothing else would notice), an untagged or `latest` image, and an
       # unpinned FROM or pip install in a Dockerfile. Stdlib only.

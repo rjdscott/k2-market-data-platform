@@ -28,7 +28,10 @@ set -a
 # shellcheck disable=SC1091 # .env is generated locally from .env.example
 . ./.env
 set +a
-PREFECT_PORT=${K2_PREFECT_PORT:-4200}
+# airflow_cli, airflow_task_in_flight and LAKE_DAG, the ones the chaos scripts
+# and lake-verify pause the ingest with.
+# shellcheck source=chaos/lib.sh
+. scripts/chaos/lib.sh
 
 # ── (1) every container healthy ──────────────────────────────────────────────
 step "(1) container health (<= $((WAIT / 60)) min)"
@@ -103,37 +106,67 @@ else
   result "(3) lake commit age" "PASS (last commit ${age}s ago)"
 fi
 
-# Last ingest run that actually reached a terminal state. Scheduled and running
-# ones are excluded on purpose: a queue full of PENDING runs is what a stalled
-# worker looks like, and it says nothing about whether the last one worked.
-run_json=$(curl -s --max-time 10 -X POST "localhost:${PREFECT_PORT}/api/flow_runs/filter" \
-  -H 'Content-Type: application/json' \
-  -d '{"limit":1,"sort":"START_TIME_DESC","flows":{"name":{"any_":["lake-ingest"]}},"flow_runs":{"state":{"type":{"any_":["COMPLETED","FAILED","CRASHED"]}}}}' 2>/dev/null || true)
-run_line=$(printf '%s' "$run_json" | python3 -c '
+# The last finished lake_ingest runs, through the Airflow CLI in the scheduler
+# (ADR-034): the scheduled ones of the last LAKE_MAX_AGE, newest first, so none
+# at all means the 5-min schedule has stopped firing, which is also what a
+# stale DAG folder looks like (runbook §5): healthy containers, no new runs.
+# Queued and running runs
+# are excluded on purpose: they say nothing about whether the last one worked.
+#
+# A run whose only task skipped is `success` to Airflow, so a success is read
+# again at the task: success, or skipped (ingest.py exit 75, another lake
+# writer holds the lock). One or two skips are the lock doing its job, and any
+# number while Airflow's lake_maintenance or lake_rebuild runs is the nightly
+# window; three in a row with neither running is a stuck lock, the case
+# AirflowLakeIngestSkippedRepeatedly pages on. A holder that ended in the last
+# 15 minutes still accounts for them, the alert's grace: its skips stay the
+# newest finished runs until the first run after it has finished.
+runbook=docs/runbooks/airflow-scheduling.md
+# holder_ended_recently <dag_id> -> 0 if a run of <dag_id> ended in the last 15 min.
+holder_ended_recently() {
+  airflow_cli dags list-runs "$1" -o json | python3 -c '
+import json, sys, time
+from datetime import datetime
+sys.exit(not any(r["end_date"] and time.time() - datetime.fromisoformat(r["end_date"]).timestamp() < 900
+                 for r in json.load(sys.stdin)))' 2>/dev/null
+}
+since=$(date -u -d "@$(( $(date +%s) - LAKE_MAX_AGE ))" +%FT%T+00:00)
+runs=$(airflow_cli dags list-runs "$LAKE_DAG" -o json --start-date "$since" | python3 -c '
 import json, sys
-from datetime import datetime, timezone
-try:
-    runs = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-if not runs:
-    print("NONE"); sys.exit(0)
-r = runs[0]
-started = datetime.fromisoformat(r["start_time"].replace("Z", "+00:00"))
-print(r["state_type"], int((datetime.now(timezone.utc) - started).total_seconds()), r["name"])
-' 2>/dev/null || true)
-case "$run_line" in
-  "")     bad "(3) last lake-ingest run" "FAIL (Prefect API on localhost:${PREFECT_PORT} did not answer — is K2_PREFECT_PORT right?)" ;;
-  NONE)   bad "(3) last lake-ingest run" "FAIL (no lake-ingest run has ever finished)" ;;
-  *)      read -r state age_s name <<< "$run_line"
-          if [ "$state" = "COMPLETED" ] && [ "$age_s" -le "$LAKE_MAX_AGE" ]; then
-            result "(3) last lake-ingest run" "PASS ($name COMPLETED ${age_s}s ago)"
-          elif [ "$state" = "COMPLETED" ]; then
-            bad "(3) last lake-ingest run" "FAIL ($name COMPLETED but ${age_s}s ago — the 5-min schedule has stopped firing)"
-          else
-            bad "(3) last lake-ingest run" "FAIL ($name $state ${age_s}s ago — logs: http://localhost:${PREFECT_PORT}/runs)"
-          fi ;;
-esac
+done = [r for r in json.load(sys.stdin) if r["state"] in ("success", "failed")][:3]
+print("\n".join(r["run_id"] + " " + r["state"] for r in done) or "NONE")' 2>/dev/null || true)
+skips=0 last=""
+while read -r run_id state; do
+  [ -n "${run_id:-}" ] && [ "$run_id" != NONE ] || break
+  if [ "$state" = success ]; then
+    state=$(airflow_cli tasks states-for-dag-run "$LAKE_DAG" "$run_id" -o json \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["state"])' 2>/dev/null || echo unknown)
+  fi
+  if [ "$state" = skipped ]; then skips=$((skips + 1)); else last="$state $run_id"; break; fi
+done <<< "$runs"
+holder=""
+if [ "$skips" -gt 0 ] && [ -z "$last" ]; then
+  for dag in lake_maintenance lake_rebuild; do
+    if airflow_task_in_flight "$dag"; then holder="while $dag holds the lake lock"; break; fi
+    if holder_ended_recently "$dag"; then holder="under $dag, which ended in the last 15 min"; break; fi
+  done
+fi
+label="(3) last $LAKE_DAG run"
+if [ -z "$runs" ]; then
+  bad "$label" "FAIL (the Airflow CLI in $AIRFLOW_CONTAINER did not answer: is airflow-scheduler up? $runbook §1)"
+elif [ "$runs" = NONE ]; then
+  bad "$label" "FAIL (no $LAKE_DAG run finished in the last $((LAKE_MAX_AGE / 60)) min: the DAG is stale or paused, or the scheduler stopped, $runbook §5 and §1)"
+elif [ "${last%% *}" = success ]; then
+  result "$label" "PASS (${last#* } success$([ "$skips" -gt 0 ] && echo ", then $skips skipped: the lake lock was held"))"
+elif [ -n "$last" ]; then
+  bad "$label" "FAIL (${last#* } ${last%% *}: $runbook §2)"
+elif [ -n "$holder" ]; then
+  result "$label" "PASS ($skips skipped $holder, as it should)"
+elif [ "$skips" -ge 3 ]; then
+  bad "$label" "FAIL ($skips skipped in a row and no Airflow maintenance or rebuild running: the lake lock is stuck, $runbook §3)"
+else
+  result "$label" "WARN ($skips skipped in a row: another lake writer holds the lock; FAIL at 3, $runbook §3)"
+fi
 
 step "summary"
 [ "$fail" = "0" ] && result "health" "PASS" || result "health" "FAIL (see the FAIL lines above)"

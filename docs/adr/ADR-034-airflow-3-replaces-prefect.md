@@ -251,3 +251,91 @@ the host, which is the trigger for a socket proxy and for an auth manager with r
 - Runbook: [airflow-scheduling.md](../runbooks/airflow-scheduling.md)
 - Code: `docker/airflow/`, `docker/lake-metrics/`, `docker/prometheus/rules/airflow-alerts.yml`,
   `scripts/airflow-shadow-check.sh`, `scripts/check-budget.py`
+
+---
+
+## Outcome (2026-11)
+
+The cutover pull request (plan phase P2, pull request 2) switched `lake_ingest` from the
+probe to the real command, unpaused `lake_maintenance` and stopped Prefect. The Decision
+holds. What landed differently from the text above and from the plan:
+
+**Prefect left the default profile at the cutover, not at the archive.** `prefect-server`
+and `prefect-worker` moved behind a compose `legacy` profile, which a plain
+`docker compose up -d` does not start, and their containers were removed: the rollback
+creates them again from that profile, with Prefect's state still in `prefect-db`
+([airflow-scheduling.md](../runbooks/airflow-scheduling.md#rollback-to-prefect)). So the
+Prefect pair's 1.5 CPU / 1.5 GiB left the default sums at the cutover, not at the archive,
+and the archive changes none of them. Declared limits after it, with cAdvisor (0.10 CPU /
+128 MiB, merged after this ADR) included (`python3 scripts/check-budget.py`, 2026-11-25):
+
+| | Services | CPU | GiB |
+|---|---|---|---|
+| Default, steady | 18 | 16.30 | 30.312 |
+| Default, bootstrap peak (gated) | 23 | 18.30 | 32.812 |
+| With `--profile legacy`, bootstrap peak (reported) | 25 | 19.80 | 34.312 |
+
+Headroom at the gated peak is 1.70 CPU and 3.188 GiB. The rollback with Airflow still up
+fits inside the ceiling, which is why it needs no budget change. With Prefect stopped,
+`airflow-scheduler` is the only running container that holds the Docker socket.
+
+**The gate order.** The plan runs `make gates` after the switch. The cutover ran before
+P0's parity re-pin, because that gate needs a complete UTC day and measures the data, not
+the scheduler: at the cutover `make gates` ran without `parity-ohlcv`, and both parity
+gates run after the re-pin.
+
+**Unpausing `lake_maintenance` ran a maintenance at once.** The shadow created it paused,
+and `is_paused_upon_creation` is read only for a DAG the database has never seen, so the
+cutover unpaused it by hand. With `catchup=False` the next run is the most recent past
+cron slot, which is the "runs the latest slot once" above: checked offline on 3.3.2, a
+`0 3 * * *` DAG unpaused at 05:07 UTC had its next run at 03:00 the same day. The cutover
+used that run as its lock test, where the plan had a manual trigger.
+
+**The rollback is documented, not drilled**, by the owner's decision, with a standing
+policy beside it: two scheduled `lake_ingest` runs failing in a row, or 20 minutes without
+a `raw.messages` commit outside a maintenance run, gets up to 30 minutes of diagnosis in
+place and then the rollback.
+
+**The shadow surfaced a failure no alert covered.** On 2026-11-25 a switch of the live
+checkout to a commit without `docker/airflow/dags/` and back left the DAG folder's bind
+mount stale: both Airflow containers saw it empty, the DAGs were marked stale, and no
+`lake_ingest` run was created from 05:11 to 05:46 UTC while every container stayed healthy
+and every Airflow series but the task counters looked normal. A recreate of the scheduler
+and the dag-processor fixed it within a minute, with one run for the latest slot and no
+replay. `AirflowLakeIngestNotRunning` now covers it
+([airflow-scheduling.md §5](../runbooks/airflow-scheduling.md#5-lake_ingest-not-running-a-stale-dag-folder-or-a-forgotten-pause)),
+and `airflow-scheduler` waits for `lake-ddl`, so the unpaused `lake_maintenance` cannot
+run before the tables exist on a fresh clone.
+
+**`scripts/airflow-shadow-check.sh` stayed** to the archive: the cutover's precondition
+cites it, and after the cutover its third check fails by design.
+
+The switch ran on 2026-11-25, before the pull request merged, with the stack on the branch
+tip (`943df7a`); the alert grace period and the statsd ttl (`027980f`) were added and
+deployed afterwards. The live run surfaced two findings, the stale DAG folder mount during
+the shadow and the false `AirflowLakeIngestSkippedRepeatedly` firing after the first
+maintenance run, and both were fixed before merge.
+
+Measured at the switch, filled from the live run:
+
+- Cutover 06:01:49Z to about 06:57Z; the stack's commit during the switch was `943df7a`.
+- The first real `lake_ingest` run was `scheduled__2026-11-25T06:06:00+00:00`, 06:06:00 to
+  06:09:30, `stage 1: committing 404815 offsets`; the commit age read 204 s just after it
+  and `make health` printed `last commit 36s ago`.
+- The unpause started `lake_maintenance` `scheduled__2026-11-25T03:00:00+00:00`, 06:10:21 to
+  06:33:58 (23.6 minutes), `success`. Five `lake_ingest` runs (06:11 to 06:31) ended with
+  the task `skipped`, none `failed`; 06:36 and 06:41 were `success`.
+- After Prefect's containers were removed, `make health` ended `health: PASS` and `make
+  lake-verify` ended `✓ lake-verify passed` (snapshot and `COUNT(*)` both 166156820 rows).
+- `AirflowLakeIngestNotRunning` loaded after the Prometheus reload of step 4b. It was not
+  among the alerts that fired over the cutover window; `LakeIngestLagHigh` fired during
+  maintenance (existing behaviour: maintenance holds the lock longer than that alert's 15
+  minutes) and `AirflowLakeIngestSkippedRepeatedly` fired falsely for about a minute.
+- `make test`, `make parity-bars` (`parity: ok`, run at the current snapshot because its pin
+  was stale), `make check-alerts` (8 SUCCESS) and `make check-docs` passed. `make
+  parity-ohlcv` and a re-pinned `make parity-bars` are not yet run: they need the P0 re-pin,
+  which needs a complete UTC day.
+- A catch-up through the trigger ran after the cutover: `manual__2026-11-25T07:22:45`, task
+  07:24:23 to 07:27:20, `success`, with `driver_memory` 2g and
+  `max_offsets_per_partition` 1000000, `stage 1: committing 273039 offsets`.
+- The rollback to Prefect was not exercised (owner's decision, 2026-11-25).

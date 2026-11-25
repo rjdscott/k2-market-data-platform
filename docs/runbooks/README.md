@@ -75,11 +75,11 @@ no longer exists, do not follow them against this stack.
 > [`iceberg()` only, the `s3()` glob is banned](./lake-recovery.md#the-one-rule-on-this-page),
 > because the glob returns plausible wrong numbers after any compaction.
 
-### Orchestration (Airflow 3, beside Prefect until the cutover)
+### Orchestration (Airflow 3; Prefect behind the `legacy` profile as the rollback)
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
-| [airflow-scheduling.md](./airflow-scheduling.md) | The Airflow scheduler stopped, a lake task failed after its retries, `lake_ingest` refused the writer lock three runs in a row, or a catch-up run with a bigger driver. Sections 1, 2 and the driver kill in 3 drilled on 2026-11-25; the three-skip alert and a real catch-up wait for the cutover. | `AirflowSchedulerHeartbeatLost`, `AirflowTaskFailed`, `AirflowLakeIngestSkippedRepeatedly` |
+| [airflow-scheduling.md](./airflow-scheduling.md) | The one-time cutover from Prefect, the standing roll-back policy and the rollback itself (cutover run 2026-11-25; the rollback documented, not exercised); the Airflow scheduler stopped, a lake task failed after its retries, `lake_ingest` refused the writer lock three runs in a row, or a catch-up run with a bigger driver. Sections 1, 2 and the driver kill in 3 drilled on 2026-11-25; a real catch-up with a bigger driver ran after the cutover; the three-skip alert fired once, falsely, after the first maintenance run (fixed by a grace period). | `AirflowSchedulerHeartbeatLost`, `AirflowTaskFailed`, `AirflowLakeIngestSkippedRepeatedly` |
 
 ### Host / operations
 

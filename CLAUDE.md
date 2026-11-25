@@ -2,7 +2,8 @@
 
 The working contract for this repo. K2 is a single-host crypto market data
 platform: Rust capture (`services/capture-rust/`) → Redpanda → a Spark batch
-ingest into an Iceberg lake on MinIO under Prefect, catalogued by Lakekeeper.
+ingest into an Iceberg lake on MinIO under Airflow 3 (ADR-034; Prefect waits,
+not running, behind `--profile legacy` as the rollback), catalogued by Lakekeeper.
 The v2 ClickHouse medallion is **gone**: the Kotlin handlers that fed it retired
 in ADR-019 and the `k2.*` database was dropped at the Phase E cutover on
 2026-08-27 — `SHOW DATABASES` lists `gold` and nothing else. Its DDL is archived,
@@ -111,7 +112,10 @@ considered before committing*.
 - **Bind-mount gotcha:** file-level bind mounts pin the inode. Editing
   `config/instruments.yaml` in place needs
   `docker compose up -d --force-recreate --no-deps <service>`; `docker restart`
-  does not pick it up.
+  does not pick it up. Directory mounts go stale too: switching the live
+  checkout to a commit without `docker/airflow/dags/` and back left both Airflow
+  containers an empty DAG folder and no runs for 35 minutes (2026-11-25); recreate
+  `airflow-scheduler` and `airflow-dag-processor` after any such switch.
 
 ## Tests
 
