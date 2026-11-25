@@ -17,7 +17,8 @@
 #      expire_mart_snapshots), which must reach every table mart of the domain and
 #      its test results; and the same models run as anyone else, refused on the fence.
 #   4b. A failing test still gets its row: a duplicate trade fails a source test,
-#      the build exits non-zero, and the failed and skipped tests are recorded; the
+#      the build exits non-zero, and the failed and skipped tests are recorded, each
+#      skipped one, unit tests included, on the relation it tests; the
 #      governance view, rebuilt after, shows that failure and a failed and a raised
 #      lake check, to a user who owns none of it. And the run-operation dbt_marts runs
 #      first in each domain makes the results table on its own.
@@ -132,6 +133,16 @@ skipped=$(recorded market_analytics "$inv" "status = 'skipped'")
   || { echo "FAIL: a failing build recorded $failed failed and $skipped skipped of $n tests"; echo "$out" | tail -30; exit 1; }
 echo "ok failure recorded: dbt build exited non-zero, and all $n results are in market_analytics.dq.dbt_test_results:" \
   "the failed source test on lake.gold.trades, $skipped skipped behind it ($(grep -m1 -oE 'record_test_results: .*' <<< "$out"))"
+# A skipped test names what it tests, as its passing rows do, or the view files it under its own
+# id and a latest status per subject shows it skipped for good. A skipped unit test is dbt's
+# definition of it, which has no tested_node_unique_id (macros/record_test_results.sql).
+units=$(recorded market_analytics "$inv" "status = 'skipped' AND unique_id LIKE 'unit_test.%' AND tested LIKE 'market_analytics.%'")
+untested=$(recorded market_analytics "$inv" "status = 'skipped' AND tested IS NULL")
+[ "$units" -gt 0 ] && [ "$untested" = 0 ] \
+  || { echo "FAIL: of $skipped skipped tests, $untested have no tested relation, $units are unit tests on their model"
+       sql dbt_market_analytics "SELECT unique_id, tested FROM market_analytics.dq.dbt_test_results
+         WHERE invocation_id = '$inv' AND status = 'skipped' ORDER BY 1"; exit 1; }
+echo "ok skipped subject: $units skipped unit tests recorded on their model, every skipped test on what it tests"
 # A failed lake check and one that raised, as maintenance.run_audits files them.
 sql "dbt_$writer" "INSERT INTO $writer.audit.checks VALUES
   (current_timestamp, 'maintenance', 'silver_parity', 'lake.silver.trades_alpha', false, 5, 'five rows differ'),
