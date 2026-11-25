@@ -26,6 +26,7 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 | 19 | [Lakehouse and domain warehouses](19-lakehouse-and-domain-warehouses.md) | tables, catalog, warehouses; the producer lake, a mart warehouse per domain, who may write what |
 | A1 | [Technology stack](A1-technology-stack.md) | versions and the ADR behind each |
 
-Decisions live in [`../adr/`](../adr/README.md),
-numbers in [`../benchmarks/`](../benchmarks/README.md), procedures in
+Decisions live in [`../adr/`](../adr/README.md), and the labels and terms they use
+are explained in the [ADR glossary](../adr/glossary.md); numbers in
+[`../benchmarks/`](../benchmarks/README.md), procedures in
 [`../runbooks/`](../runbooks/README.md).
