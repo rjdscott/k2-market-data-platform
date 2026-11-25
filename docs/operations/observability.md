@@ -1,6 +1,6 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 33 alert rules (6 ClickHouse + 10 capture + 12 lake + 5 Airflow)
+Prometheus scrapes the stack, Grafana renders it, and 34 alert rules (6 ClickHouse + 10 capture + 12 lake + 6 Airflow)
 cover the things that actually break: capture goes down or silent, sequence gaps and book
 checksum failures, ClickHouse struggles, and the lake ingest falls behind or its nightly
 audit fails.
@@ -81,7 +81,7 @@ other service: [dashboards.md](./dashboards.md).
 
 ## Alert rules
 
-33 alert rules across four files (plus two ClickHouse recording rules and two Airflow ones). **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when `ClickHouseKafkaMessagesFailed` could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
+34 alert rules across four files (plus two ClickHouse recording rules and two Airflow ones). **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when `ClickHouseKafkaMessagesFailed` could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
 `runbook:` annotation — enforced by `scripts/check-docs.sh` gate (d2), added
 2026-09-03 after the 6 ClickHouse rules were found carrying none while gate (d),
 which only checks that the paths present resolve, passed them. The tables below are the index. The three `FeedHandler*` rules retired with
@@ -165,12 +165,12 @@ freezes at its last small value during exactly the outage it is the backstop for
 
 All twelve carry unit tests in `docker/prometheus/rules/tests/lake-alerts_test.yml`, run
 by `make check-docs` gate (c2). They are not the only ones: three `Capture*` rules, two
-`ClickHouseGold*`/`ClickHouseKafka*` rules and the five Airflow rules below are covered too,
-**22 of the 33**:
+`ClickHouseGold*`/`ClickHouseKafka*` rules and the six Airflow rules below are covered too,
+**23 of the 34**:
 
 ```bash
 grep -rhoE 'alertname: [A-Za-z]+' docker/prometheus/tests/*.test.yml \
-  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 22, 2026-11-25 (17 on 2026-09-03)
+  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 23, 2026-11-25 (17 on 2026-09-03)
 ```
 
 Each case is either "must fire on a synthetic series" or "must not fire on healthy
@@ -179,7 +179,7 @@ this file had one of each before it was written. `bronze.kraken_instrument` is t
 "must not fire" case: reference data commits hours apart, so it would page under
 `LakeCommitAgeHigh` from the day `metrics.py` started enumerating the catalog.
 
-### `airflow-alerts.yml`: the schedules (5)
+### `airflow-alerts.yml`: the schedules (6)
 
 From Airflow's statsd metrics through `airflow-statsd` (job `airflow-statsd`), each with
 promtool cases in `docker/prometheus/rules/tests/airflow-alerts_test.yml`.
@@ -191,6 +191,7 @@ promtool cases in `docker/prometheus/rules/tests/airflow-alerts_test.yml`.
 | `AirflowLakeIngestSkippedRepeatedly` | warning | three `lake_ingest` runs in 15 minutes skipped on the writer lock with no success between, outside an Airflow maintenance or rebuild and the 15 minutes after it |
 | `AirflowLakeIngestNotRunning` | warning | no `lake_ingest` task finished, in any state, for 15m, held 5m |
 | `DbtMartsNotSucceeding` | warning | no `dbt_marts` run ended in success for 3 h, held 10m ([dbt-marts.md](../runbooks/dbt-marts.md)) |
+| `DbtMartsSnapshotExpiryStale` | warning | a domain's daily `<domain>_expire_mart_snapshots` has not succeeded for 26 h, held 10m: failed, skipped after a failed build, or not run ([dbt-marts.md](../runbooks/dbt-marts.md)) |
 
 ### Container metrics: cAdvisor
 

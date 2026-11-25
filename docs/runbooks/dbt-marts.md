@@ -20,15 +20,16 @@ source is [lake-ingest-lag.md](./lake-ingest-lag.md), Airflow itself is
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
 | 1 | No run has succeeded for 3 hours | the next run after the cause is fixed | induced: Trino unreachable from Airflow, the run failed in 10 s; 37 s from Trino reachable again to a successful manual run (2026-11-25, throwaway container). The alert's timing is proven by its promtool tests, not observed |
-| 2 | The daily snapshot maintenance failed | the next day's 04:10 run, or one run-operation | not induced; the run-operation by hand took under 1 s for two tables (2026-11-25) |
+| 2 | The daily snapshot maintenance failed or did not run | the next day's 04:10 run, or one run-operation | not induced; the run-operation by hand took under 1 s for two tables (2026-11-25). The alert's timing is proven by its promtool tests, not observed |
 
 ---
 
 ## 1. No `dbt_marts` run has succeeded for 3 hours
 
-**Symptom.** The marts stop moving: `market_analytics.candles.ohlcv_1m` and the scorecard keep
-their last build, the delayed view shows that build minus 20 minutes. Nothing else in the
-stack is affected: a mart is read by Trino's clients only, and the lake does not depend on it.
+**Symptom.** The table marts stop moving: `market_analytics.candles.ohlcv_1m` and the scorecard
+keep their last build. The delayed view reads the lake when queried and keeps up, but its tests
+stop running. Nothing else in the stack is affected: a mart is read by Trino's clients only,
+and the lake does not depend on it.
 
 **Detection.** `DbtMartsNotSucceeding` (`docker/prometheus/rules/airflow-alerts.yml`), warning:
 no run of `dbt_marts` has ended in success for 3 hours, held 10 minutes. Its input is the count
@@ -91,7 +92,7 @@ What the error says, and where to go:
 | the failed task is `<domain>.gold_trades.source`, the source freshness | the lake ingest is behind the contract's 30 minutes (`gold.trades.ingest_ts`) | [lake-ingest-lag.md](./lake-ingest-lag.md); the marts follow once it commits |
 | `Failure in test <name>` | a mart's grain, envelope or a source test failed on real data | a finding: read the test in `dbt/models/**/_*__models.yml`, rerun it by hand (below) |
 | `Query exceeded per-node memory limit` | a query outgrew Trino's 844.80MB per-node memory | ADR-035's revisit trigger: measure, then raise inside ADR-045's headroom |
-| the DAG is not in the list at all | stale bind mount of `docker/airflow/dags` or `dbt/` | recreate the scheduler and the dag-processor (CLAUDE.md, bind-mount gotcha) |
+| the DAG is not in the list at all, or `list-import-errors` names `dbt_marts.py` | a stale bind mount of `docker/airflow/dags` or `dbt/`; or an image older than the checkout (no `cosmos` module, no `/opt/k2/dbt-venv`, or dbt and its packages behind `dbt/uv.lock` and `dbt/package-lock.yml`) | rebuild the image, then recreate the three Airflow services (below). The tag stays `k2-airflow:3.3.2`, so only a build replaces it |
 
 Reproduce one domain by hand from the host, as its writer, against the same Trino:
 
@@ -103,6 +104,35 @@ K2_TRINO_USER=dbt_market_analytics uv run --locked dbt build --selector market_a
 #   Done. PASS=25 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=25
 cd ..
 ```
+
+Whether the image the stack runs is older than the checkout's `dbt/`: the image test that
+`make test-airflow` runs, against that image. Run on 2026-11-25 against the image the stack
+ran then, built before `dbt_marts`:
+
+```bash
+docker run --rm --network none -v "$PWD":/repo:ro k2-airflow:3.3.2 \
+  python -m unittest discover -s /repo/docker/airflow/tests -p 'test_dbt_image.py' 2>&1 | tail -1
+#   FAILED (errors=2)        an image built from this checkout prints OK
+```
+
+An image older than the checkout, or a stale mount: rebuild (a no-op from the layer cache
+when nothing changed), then recreate the services that run it. `--dry-run` printed this on
+2026-11-25; run it without the flag:
+
+```bash
+docker compose --dry-run build airflow-migrate
+#   Image k2-airflow:3.3.2 Building
+#   airflow-migrate ==> ==> naming to k2-airflow:3.3.2
+#   Image airflow-migrate Built
+docker compose --dry-run up -d --force-recreate --no-deps airflow-api-server airflow-scheduler airflow-dag-processor
+#   Container k2-airflow-dag-processor Created
+#   Container k2-airflow-scheduler Created
+#   Container k2-airflow-api-server Started
+#   ...
+```
+
+Recreate between two `lake_ingest` runs: the scheduler's stop stops a running ingest's driver
+([airflow-scheduling.md](./airflow-scheduling.md)).
 
 Once the cause is fixed, do not wait for minute 10:
 
@@ -126,9 +156,12 @@ case are `docker/prometheus/rules/tests/airflow-alerts_test.yml`.
 snapshot per table per hour, so a mart keeps more than 7 days of history until the next
 success; nothing is wrong with its rows.
 
-**Detection.** The run fails, so a maintenance that keeps failing is `DbtMartsNotSucceeding`
-only if the builds fail too; one failed 04:10 run alone does not alert. Manual check: the task's
-state in the 04:10 run (section 1's commands).
+**Detection.** `DbtMartsSnapshotExpiryStale` (`docker/prometheus/rules/airflow-alerts.yml`),
+warning: a domain's `<domain>_expire_mart_snapshots` has not succeeded for 26 hours, held 10
+minutes, so it fires about two hours after the first 04:10 run whose expiry failed, was skipped
+after a failed build, or did not run. Neither other rule sees it: `AirflowTaskFailed` leaves
+`dbt_marts` out and the day's other runs keep `DbtMartsNotSucceeding` quiet. The task's state
+in the 04:10 run: section 1's commands.
 
 **Expected behaviour.** The next day's 04:10 run retries it. It runs, as the domain's writer,
 `ALTER TABLE ... EXECUTE expire_snapshots(retention_threshold => '7d')` and then

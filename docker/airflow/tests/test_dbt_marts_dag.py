@@ -26,7 +26,10 @@ SELECTORS = [s["name"] for s in yaml.safe_load((REPO / "dbt/selectors.yml").read
 
 
 def dbt_tasks(domain):
-    return [t for t in DAG.tasks if t.task_id.startswith(f"{domain}.") or t.task_id == f"{domain}_expire_mart_snapshots"]
+    """The tasks of a domain that run dbt. A source with tests and no freshness gets an
+    EmptyOperator for its freshness task, which runs nothing (cosmos 1.16)."""
+    mine = [t for t in DAG.tasks if t.task_id.startswith(f"{domain}.") or t.task_id == f"{domain}_expire_mart_snapshots"]
+    return [t for t in mine if type(t).__module__.startswith("cosmos")]
 
 
 class Structure(unittest.TestCase):

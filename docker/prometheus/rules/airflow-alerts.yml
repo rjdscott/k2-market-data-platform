@@ -280,9 +280,55 @@ groups:
           summary: "No dbt_marts run has succeeded for 3 hours"
           description: |
             The hourly dbt_marts DAG has not finished a run in success for 3
-            hours, held 10 minutes: every domain mart on Trino is at least that
-            old, and the delayed product with them. The failed task's log has
+            hours, held 10 minutes: every table mart on Trino is at least that
+            old (a view reads its sources when queried). The failed task's log has
             dbt's own output; a stale lake (source freshness), a failed test,
             a Trino that refuses or is down, and a paused DAG read differently
             there.
+          runbook: docs/runbooks/dbt-marts.md
+
+      # WARNING: a domain's daily snapshot expiry has not succeeded for 26 hours.
+      #
+      # <domain>_expire_mart_snapshots runs once a day, in the 04:10 run, and
+      # neither rule above sees it: AirflowTaskFailed leaves dbt_marts out, and
+      # the other 23 runs of the day keep DbtMartsNotSucceeding quiet. Its
+      # success counter, per task, has to move every 26 hours: one daily slot
+      # and two hours to spare. A failed, skipped or upstream_failed expiry all
+      # leave it flat, so this fires about two hours after the first missed
+      # 04:10 run. The 10 minutes hold is the same as above.
+      #
+      # The same clauses and restart guard as DbtMartsNotSucceeding, at 26
+      # hours: a counter that stopped moving (`or x * 0` reads a series that is
+      # new in the window as 0, so a first success never fires), and no expiry
+      # success of any domain for 26 hours on a scheduler up that long. A new
+      # domain whose expiry has never succeeded, while another's has, is not
+      # caught by the absent clause: its first failure has no series to compare.
+      - alert: DbtMartsSnapshotExpiryStale
+        expr: |
+          (
+            (
+              airflow_ti_finish{dag_id="dbt_marts",task_id=~".+_expire_mart_snapshots",state="success"}
+                - (airflow_ti_finish{dag_id="dbt_marts",task_id=~".+_expire_mart_snapshots",state="success"} offset 26h
+                    or airflow_ti_finish{dag_id="dbt_marts",task_id=~".+_expire_mart_snapshots",state="success"} * 0)
+            ) == 0
+            or on() (
+              absent_over_time(airflow_ti_finish{dag_id="dbt_marts",task_id=~".+_expire_mart_snapshots",state="success"}[26h])
+                and on() sum(airflow_scheduler_heartbeat offset 26h)
+            )
+          )
+          unless on() (resets(airflow_scheduler_heartbeat[26h]) > 0)
+        for: 10m
+        labels:
+          severity: warning
+          component: orchestration
+          tier: control-plane
+        annotations:
+          summary: "No dbt_marts snapshot expiry has succeeded for 26 hours"
+          description: |
+            No success of the daily snapshot expiry for 26 hours, held 10
+            minutes ({{ with $labels.task_id }}{{ . }}{{ else }}any domain{{ end }}): the 04:10
+            expire_snapshots and remove_orphan_files failed, were skipped
+            because a build before them failed, or did not run. Each hourly
+            rebuild still adds a snapshot, so the marts keep more than 7 days of
+            history until it succeeds; their rows are not affected.
           runbook: docs/runbooks/dbt-marts.md

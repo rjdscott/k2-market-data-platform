@@ -89,9 +89,9 @@ Each rule names where it is enforced; a rule with no enforcement is a slogan.
    [ADR-004](../adr/ADR-004-eliminate-spark-streaming.md) and
    [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md), whose `## Outcome`
    records the reversal on the record.
-6. **Instrument it, then say what is not instrumented.** 33 alert rules as code, chaos
-   results as files, and a stated list of gaps: no Alertmanager, all 33 rules carry a
-   runbook annotation, 22 of 33 have a unit test ([11](11-observability.md)).
+6. **Instrument it, then say what is not instrumented.** 34 alert rules as code, chaos
+   results as files, and a stated list of gaps: no Alertmanager, all 34 rules carry a
+   runbook annotation, 23 of 34 have a unit test ([11](11-observability.md)).
 
 **Applied to a new component.** Declare its limits; make its writes idempotent; keep its
 input verbatim somewhere rebuildable; give it its own container; ask whether something

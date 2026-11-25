@@ -39,8 +39,11 @@ RUN UV_PROJECT_ENVIRONMENT=/opt/k2/dbt-venv UV_PYTHON=/usr/python/bin/python3.12
       uv sync --locked --no-dev --no-cache --project /opt/k2/dbt-env \
     && /opt/k2/dbt-venv/bin/dbt --version
 COPY dbt/dbt_project.yml dbt/packages.yml dbt/package-lock.yml /tmp/dbt-deps/
+# The lock the packages came from is kept beside uv.lock, so a test can hold the image to
+# the checkout's dbt/ (docker/airflow/tests/test_dbt_image.py).
 RUN cd /tmp/dbt-deps && K2_DBT_PACKAGES=/opt/k2/dbt_packages DBT_SEND_ANONYMOUS_USAGE_STATS=false \
       /opt/k2/dbt-venv/bin/dbt deps --log-path /tmp/dbt-deps/logs \
+    && cp package-lock.yml /opt/k2/dbt-env/ \
     && rm -rf /tmp/dbt-deps && ls /opt/k2/dbt_packages/dbt_expectations /opt/k2/dbt_packages/dbt_date >/dev/null
 USER airflow
 
