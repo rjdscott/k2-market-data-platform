@@ -13,11 +13,14 @@ and the run still commits and carries on to stage 2.
 import importlib
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest import mock
 
 import pytest
 
 import offsets as O
+
+ROOT = Path(__file__).resolve().parent.parent
 
 RAW = "market.crypto.v3.raw.kraken"
 BOOK = "market.crypto.v3.book.kraken"
@@ -229,7 +232,14 @@ def test_an_audit_that_raises_is_a_finding_not_a_failed_run(ingest, run, monkeyp
     assert ingest.stage_raw(FakeSpark(run), datetime(2026, 1, 1, tzinfo=timezone.utc), "", 600000) == 9
     [row] = run[-1][1]
     assert (row["scope"], row["observed"]) == ("lake.raw.messages", -1)
-    assert row["detail"] == "batch audit raised RuntimeError: catalog went away"
+    assert row["detail"] == "check raised RuntimeError: catalog went away"
+
+
+def test_the_could_not_run_detail_is_the_one_the_governance_view_reads_as_error():
+    """dq_results maps observed -1 plus this prefix to `error`; anything else is `fail`."""
+    sql = (ROOT / "dbt/models/governance/marts/quality_results/dq_results.sql").read_text()
+    assert f"when observed = -1 and detail like '{O.CHECK_RAISED} %' then 'error'" in sql
+    assert O.check_raised(RuntimeError("x")) == f"{O.CHECK_RAISED} RuntimeError: x"
 
 
 def test_a_failed_audit_lets_the_run_commit_and_continue_to_stage_2(ingest, run, monkeypatch):

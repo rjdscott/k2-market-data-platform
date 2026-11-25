@@ -51,6 +51,19 @@ BATCH_AUDIT_FAILURES = "k2.batch-audit-failures"
 # The check_name stage 1's batch audit files under (`batch_audit` below, ADR-047).
 BATCH_AUDIT = "batch_offsets"
 
+# A check that could not run, as against one that ran and failed: passed false,
+# observed -1, and a detail starting with this prefix. maintenance.run_audits
+# and ingest.audit_batch both file it through `check_raised`, and
+# dbt/models/governance/marts/quality_results/dq_results.sql maps exactly that
+# pair to status `error`; reword it and those rows read as `fail`.
+# tests/test_lake_batch_audit.py pins the prefix against the SQL.
+CHECK_RAISED = "check raised"
+
+
+def check_raised(exc: BaseException) -> str:
+    return f"{CHECK_RAISED} {type(exc).__name__}: {exc}"
+
+
 # Values for the JOB property.
 JOB_INGEST = "ingest"
 JOB_DECODE = "decode"

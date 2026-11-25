@@ -130,9 +130,10 @@ offset_gaps = Gauge(
 )
 batch_audit_failures = Gauge(
     "k2_lake_batch_audit_failures_total",
-    "Partitions whose stage-1 batch did not match its planned offset range, in the most recent "
-    "ingest that found one; 0 once that is 15 minutes old. The durable record is the "
-    "batch_offsets row in lake.audit.checks (ADR-047)",
+    "Findings of the stage-1 batch audit in the most recent ingest that filed any: one per "
+    "partition whose batch did not match its planned offset range, or one when the audit "
+    "could not run; 0 once that is 15 minutes old. The durable records are the "
+    "batch_offsets rows in lake.audit.checks (ADR-047)",
 )
 disk_used_ratio = Gauge(
     "k2_lake_disk_used_ratio",

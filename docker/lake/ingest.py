@@ -375,9 +375,9 @@ def audit_batch(spark, starts: dict, ends: dict, run_ts: datetime) -> list:
     try:
         failures = O.batch_audit(starts, ends, _batch_offsets(spark))
     except Exception as exc:  # noqa: BLE001 - the batch is committed; this must not undo the run
-        failures = [
-            {"scope": RAW_TABLE, "observed": -1, "detail": f"batch audit raised {type(exc).__name__}: {exc}"}
-        ]
+        # observed -1 and O.check_raised: the governance view reads that pair as
+        # `error` (could not run), not `fail` (ran and found a hole).
+        failures = [{"scope": RAW_TABLE, "observed": -1, "detail": O.check_raised(exc)}]
     for f in failures:
         print(f"stage 1: BATCH AUDIT FAILED {f['scope']}: {f['detail']}", file=sys.stderr)
     if failures:

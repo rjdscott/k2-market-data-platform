@@ -125,7 +125,8 @@ def test_each_ingest_finding_sets_only_its_own_gauge(metrics, monkeypatch):
         "snapshot-id": 1,
         "timestamp-ms": int(now * 1000) - 60_000,
         "summary": {"operation": "append", metrics.JOB: metrics.JOB_INGEST,
-                    metrics.AUDIT_FAILURES: "2", metrics.BATCH_AUDIT_FAILURES: "2"},
+                    # Different values, so a gauge read off the wrong key cannot pass.
+                    metrics.AUDIT_FAILURES: "5", metrics.BATCH_AUDIT_FAILURES: "2"},
     }
     monkeypatch.setattr(metrics, "list_tables", lambda prefix: [("audit", "checks")])
     monkeypatch.setattr(metrics, "load_metadata", lambda prefix, ns, table: {

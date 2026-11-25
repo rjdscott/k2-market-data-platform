@@ -371,6 +371,10 @@ def decode(spark, source: DataFrame, raw_snapshot_id, run_ts: datetime, exchange
                 )
             )
     if findings:
+        # Best-effort, the return value ignored on purpose: a finding that cannot be
+        # filed must not fail the decode it reports on (catalog.write_audit_rows). A
+        # failure anywhere in that write, createDataFrame included, leaves only its
+        # "could not write <n> audit row(s)" line in the task log.
         write_audit_rows(spark, findings, {"k2.bronze-findings": str(len(findings))})
     return written
 
