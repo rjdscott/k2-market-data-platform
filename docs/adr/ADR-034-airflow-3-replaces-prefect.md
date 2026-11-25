@@ -371,7 +371,30 @@ Headroom under the 20 CPU / 36 GiB ceiling at the default bootstrap peak: 0.70 C
 0.80 CPU over the ceiling; that is acceptable only because a rollback to Prefect does not
 need Airflow running at full limits.
 
-MEASURE: after the change, run durations over at least 12 scheduled runs and the throttled share over 30 minutes
+Measured 2026-11-25 08:00 to 09:03 UTC, 13 consecutive scheduled `lake_ingest` runs on the
+3.0 CPU limit, all `success` (`airflow dags list-runs lake_ingest -o json`, run ids from
+`scheduled__2026-11-25T07:56`):
+
+| | 2.0 CPU (12 runs before) | 3.0 CPU (13 runs after) |
+|---|---|---|
+| Run duration, median | 203 s | 168 s |
+| Run duration, p90 | 231 s | 172 s |
+| Run duration, min to max | 193 to 294 s | 164 to 178 s |
+| Throttled share of CFS periods, 30 min | 58 percent | 30 percent |
+| Peak CPU use, 60 min | not recorded | 2.6 cores |
+| Max consumer backlog, 60 min | 65,621 | 0 |
+
+Throttled share is
+`rate(container_cpu_cfs_throttled_periods_total[30m]) / rate(container_cpu_cfs_periods_total[30m])`
+for `k2-spark-iceberg`; peak is `max_over_time` of the 1 minute CPU rate from cAdvisor.
+
+The raise bought 17 percent off the median and removed the tail (max 294 s to 178 s), and
+runs now finish well inside the 5 minute slot. It did not remove throttling: 30 percent is
+above the 25 percent trigger below, so that trigger is met on the day it was written. The
+cause is not the size of the limit: Spark local mode sizes its thread pool from the 12 CPUs
+the container can see, not from the quota, so short bursts still hit the ceiling while
+the 1 minute peak stays at 2.6 cores. The next step is to pin the thread count to the limit
+and measure again, not another raise.
 
 **Revisit when** p90 `lake_ingest` duration is above 240 s over a day, or the throttled
 share is above 25 percent after the change. Either means 3.0 CPU did not remove the
