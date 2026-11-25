@@ -8,6 +8,8 @@ its seconds and its memory go, and which redesign makes the cost follow what a r
 [ADR-048](../adr/ADR-048-gold-step-reads-touched-data-writes-bars-once.md) is "stage 1" in this
 note; [ADR-049](../adr/ADR-049-event-bars-extended-not-recomputed.md) is "stage 2". The owner's
 two decisions of 2026-11-26 are folded in (section 5).
+A design review the same day changed several conclusions of sections 4 to 6; section 8 records
+each change and its evidence, and where the two disagree, section 8 and the ADRs hold.
 
 ## In short
 
@@ -564,6 +566,93 @@ commands, and into a
 - That the candle cost keeps growing across 00:00 UTC: inferred from whole-table scans; the
   History Server keeps runs from 07:55 UTC only, so no midnight run was available.
 - The retry gap (finding 7): read from the code, never observed.
+
+---
+
+## 8. Design review, 2026-11-26: what changed and why
+
+An independent review of ADR-048 and ADR-049 found one blocker in each and several gaps. Each
+claim was checked read-only where it could be; the result is below. The ADRs carry the revised
+design; this section is the evidence.
+
+**The single-statement `MERGE` is rejected as the one-commit form (sections 4 (a2), 6).**
+Iceberg 1.8.1's Spark 3.5 runtime ships no `MERGE` rewrite of its own, so Spark's applies, and
+Spark 3.5.5's `RewriteMergeIntoTable.buildReplaceDataPlan` takes the branch
+`if (notMatchedBySourceActions.isEmpty) (cond, Some(groupFilter)) else (TrueLiteral, None)`: with
+a `WHEN NOT MATCHED BY SOURCE` clause there is no pushed filter and no runtime file filter, so a
+copy-on-write `MERGE` rewrites every file of the target. On `gold.bars` that is the whole table
+(853 KB at 22:54 UTC, growing with history) every run instead of today's 308 KB, and 7 days of
+retention at 288 runs a day keep 2,016 such copies. The branch form becomes the first choice:
+`DELETE` and `append` on a branch, then `fast_forward` `main`, which also carries write options
+(a SQL `MERGE` takes none) and therefore the gold step's position. The fallback `MERGE` carries
+the stale keys in its source and deletes them with `WHEN MATCHED AND s.stale THEN DELETE`, which
+keeps the file filter. The fast-forward's property behaviour was shown on
+`lake.scratch_p4.wap_bronze` on 2026-11-25 (`offsets.main_lineage`'s docstring).
+
+**Touched keys come from a recorded position, not the silver batch (ADR-048, new).** The
+22:31 UTC run on 2026-11-25 (`local-1795645862133`) never completed: its candle `MERGE`s had
+committed and its last SQL execution, the bars `count()`, started at 22:33:08 and was still
+`RUNNING`; every container restarted at 22:39:25 (`docker inspect`), reported as a host
+out-of-memory kill of the Docker VM, which is not visible from here. That run did no lasting
+damage (its candles were written, its bars `DELETE` had not run), but a run stopped between its
+`gold.trades` append and its candle `MERGE` would leave those minutes' 1m and 5m candles stale
+for good, because the retry's touched keys come only from new silver trades.
+
+**Timestamps are collected as microseconds (ADR-048).** PySpark's `TimestampType.fromInternal`
+returns `datetime.fromtimestamp(...)`, a naive local datetime; a SQL literal built from it is
+re-read in the session time zone (UTC). The container is `Etc/UTC` today, so this is a latent
+fault, closed by collecting `unix_micros()` and filtering with `timestamp_micros()`.
+
+**Candle cost still grows, more slowly (ADR-048).** The 1m candle `MERGE` rewrites the newest file
+of each venue-month and that file grows: 1,091,422 bytes added per commit at 08:57 UTC, 2,209,973
+at 22:52 (`gold.ohlcv_1m$snapshots`, `added-files-size`). `gold.ohlcv_*` is not in the nightly
+compaction. The 1d candles keep their sort aggregate.
+
+**Incremental reads skip non-append commits (ADR-049, and ADR-048's position).**
+`BaseIncrementalAppendScan.appendsBetween` in the Iceberg 1.8.1 jar selects snapshots by comparing
+the operation with the string `append`, so a `delete` or `overwrite` repair of `gold.trades` is
+invisible to an incremental read. ADR-048 stops the run on one; ADR-049 sends the affected
+symbol-days to the full-day path. A mid-day threshold change likewise routes to the full path.
+
+**Position by commit summary, not by the newest `computed_at` (ADR-049).** Section 4 (b) took the
+position from the bar rows with the newest `computed_at`, which trusts the clock. The position is
+now `k2.src-snapshot-id.trades` on the `gold.bars` commit, read with `offsets.latest_summary` along
+`main`'s lineage.
+
+**ADR-049 gains a gate, drift detection and a way back.** It proceeds only if, at the last run
+before 00:00 UTC on a full day after ADR-048, the window stage's peak execution memory passes
+370 MiB or the heap passes 1,152 MiB; audits every changed day, not only yesterday; checks
+conservation of trade count, quantity and dollar value each run; has a switch that forces the
+full path; and runs one shadow day before cutover. Folded runs leave small files, so `gold.bars`
+joins the nightly compaction. Its open questions (a scheduled ClickHouse pull; candles) became
+future decisions, and the candle one now names the 1m roll-up as an alternative.
+
+Commands for this section:
+
+```bash
+# no MERGE rewrite in the Iceberg runtime; Spark's is used
+docker exec k2-spark-iceberg sh -c 'cd /opt/spark/jars; unzip -l iceberg-spark-runtime-3.5_2.12-1.8.1.jar | grep -iE "RewriteMerge|RowLevel"'
+# the NOT MATCHED BY SOURCE branch: TrueLiteral and None at offsets 126 to 139
+docker exec k2-spark-iceberg sh -c 'cd /opt/spark/jars; javap -c -p -classpath spark-catalyst_2.12-3.5.5.jar "org.apache.spark.sql.catalyst.analysis.RewriteMergeIntoTable\$"' \
+  | awk '/buildReplaceDataPlan\(/{f=1} f' | sed -n 18,75p
+# incremental reads select operation "append"
+docker exec k2-spark-iceberg sh -c 'cd /opt/spark/jars; javap -c -p -classpath iceberg-spark-runtime-3.5_2.12-1.8.1.jar org.apache.iceberg.BaseIncrementalAppendScan' | grep -n 'String append'
+# PySpark timestamp conversion and container time zone
+docker exec k2-spark-iceberg python3 -c "import inspect, pyspark.sql.types as t; print(inspect.getsource(t.TimestampType.fromInternal))"
+docker exec k2-spark-iceberg cat /etc/timezone
+# the stopped 22:31 run and the restart
+docker exec k2-spark-iceberg curl -s 'localhost:18080/api/v1/applications/local-1795645862133/sql?details=false&length=1000'
+docker ps --format '{{.Names}}' | xargs -I{} docker inspect -f '{{.Name}} {{.State.StartedAt}}' {}
+```
+
+```sql
+-- bytes each gold.bars and gold.ohlcv_1m commit adds and removes
+SELECT committed_at, operation, element_at(summary, 'added-files-size'), element_at(summary, 'removed-files-size'),
+       element_at(summary, 'total-files-size')
+FROM lake.gold."bars$snapshots" ORDER BY committed_at DESC LIMIT 4;
+SELECT committed_at, operation, element_at(summary, 'added-files-size'), element_at(summary, 'total-files-size')
+FROM lake.gold."ohlcv_1m$snapshots" ORDER BY committed_at DESC LIMIT 6;
+```
 
 ---
 

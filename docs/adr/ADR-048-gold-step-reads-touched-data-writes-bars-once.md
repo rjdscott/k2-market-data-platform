@@ -11,18 +11,25 @@
 ## In plain words
 
 Every five minutes the lake rebuilds its candles and event bars, and on 2026-11-25 that step
-grew to more than half of each run and caused out-of-memory crashes. Most of the work changes
-nothing: it reads the whole trade table instead of the few minutes that changed, it computes
-the bars twice, and it moves and sorts every trade more often than the result needs. We will
-read only the time range a run touched, compute the bars once, write them in one atomic commit,
-and remove two avoidable passes over the trades. No table changes, and every stored row stays
-exactly the same. The owner has already chosen the one-commit write; nothing is left open here.
+grew to more than half of each run and crashed out of memory. Most of its work changes nothing:
+it reads the whole trade table where a few files would do, computes the bars twice, and moves
+and sorts every trade more than the result needs. We will read only the trades added since the
+step last finished, compute the bars once, and publish them in one atomic step, so a crash can no
+longer leave a day without bars or a minute without its candle. No table changes and every stored
+row stays the same; the cost is a few small code changes, a rehearsal on a scratch table, and a
+row-for-row comparison on real data before merge. Nothing is left to decide: the owner chose the
+one-step publish on 2026-11-26.
 
 ---
 
 ## Context
 
-### Where this happens: the ingest run and its steps
+Terms in this ADR are explained where they first appear; the [glossary](glossary.md) has each
+one too. Numbers are from the 2026-11-25 UTC runs; each has its command in the
+[research note](../research/2026-11-26-incremental-bars-recompute.md) ("note §n"; "§1.n" is its
+finding n).
+
+### Where this happens
 
 The lake is fed by one Spark job, `docker/lake/ingest.py`, that Airflow starts every five
 minutes. A run is a sequence of steps, each reading what the step before it wrote:
@@ -36,247 +43,249 @@ minutes. A run is a sequence of steps, each reading what the step before it wrot
 | 2e | the bronze book tables | the order-book tables (`silver.book_*`, `gold.book_top20`, `gold.bbo_1s`) | `books.py` |
 
 This ADR is about step 2d, which the code calls "stage 2d". From here on it is **the gold
-candle and bar step**. It appends the run's new trades to `gold.trades`, one row per trade
-across all venues, and then recomputes two derived products:
+candle and bar step**. It appends the run's new trades to `gold.trades` (one row per trade,
+all venues), then recomputes two products from them:
 
-- **Candles** (`gold.ohlcv_*`): open, high, low, close and volume per time bucket (1 minute,
-  5 minutes, 1 hour, 1 day). `gold.candles()` recomputes every bucket the run's trades fell in,
-  from all of that bucket's trades, and `stage_ohlcv()` writes them with an Iceberg `MERGE`
-  (update the bucket's row if it exists, insert it if not).
-- **Event bars** (`gold.bars`): bars closed by a trade count (tick bars), a traded quantity
-  (volume bars) or a traded dollar value (dollar bars), instead of by the clock. The threshold
-  per instrument is in `config/bars.yaml`. Bars restart at 00:00 UTC, so the unit of work is a
-  **symbol-day**: one instrument, on one venue, for one UTC day. `gold._bars()` recomputes every
-  symbol-day the run touched from all of that day's trades, and `gold.stage_bars()` writes it.
+- **Candles** (`gold.ohlcv_*`): open, high, low, close and volume per time bucket of 1 minute,
+  5 minutes, 1 hour and 1 day. `gold.candles()` recomputes every bucket the new trades fell in,
+  from all of that bucket's trades, and `stage_ohlcv()` writes them with a `MERGE` (update the
+  bucket's row if it exists, insert it if not).
+- **Event bars** (`gold.bars`): bars closed by a trade count, a traded quantity or a traded
+  dollar value instead of by the clock, at one threshold per instrument in `config/bars.yaml`.
+  Bars restart at 00:00 UTC, so the unit of work is a **symbol-day**: one instrument, on one
+  venue, for one UTC day. `gold._bars()` recomputes every symbol-day the new trades touched,
+  from all of that day's trades, and `gold.stage_bars()` writes them.
 
-### Five things you need to know about Spark and Iceberg to follow this
+Which buckets and symbol-days a run recomputes, its *touched keys*, comes today from the run's
+own batch of new silver trades.
+
+### The mechanisms that matter here
 
 **A Spark DataFrame is a recipe, not data.** Building one does nothing. Each *action* on it (a
 `count()`, a write) runs the whole recipe from the source tables again. `cache()` asks Spark to
-keep the result of the first action and to substitute that stored result into later recipes
-that contain the same steps. The substitution is Spark's choice, made by matching recipes.
+keep the result of the first action and substitute it into later recipes that contain the same
+steps; whether it does is Spark's choice, made by matching recipes.
 
-**Shuffle, sort and spill.** To join or group rows by a key, Spark often *shuffles*: it moves
-rows between tasks so that every row with the same key lands in the same task, writing them to
-local disk and reading them back. Grouping or joining large inputs usually also *sorts* each
-task's rows. When a sort needs more memory than the task can get, it *spills*: writes sorted
-runs to disk and merges them afterwards. Spills cost time, and merging many of them costs
-memory too.
+**Shuffle, sort, spill and the heap.** To join or group rows by a key, Spark often *shuffles*:
+it moves rows between tasks through local disk so that rows with the same key meet in one task.
+Joins and groupings over large inputs usually also *sort* each task's rows, and a sort that
+outgrows its memory *spills*, writing sorted runs to disk and merging them later. Here Spark runs
+in local mode, so one Java process does all the work and every task shares its memory, the
+*heap*: 1,536 MiB, of which Spark lends 741 MiB to running tasks. Running out of it is
+`OutOfMemoryError`.
 
-**The heap.** Here Spark runs in local mode: one Java process (the driver) is also the only
-executor, so every task of a run shares that process's memory, its *heap*: 1,536 MiB since
-2026-11-25. Spark lends 741 MiB of it to running tasks for sorts, hash tables and buffers. A run
-that needs more than the heap fails with `OutOfMemoryError`.
+**Iceberg commit, snapshot, copy-on-write.** An Iceberg table is a set of Parquet data files plus
+metadata that lists them. A *commit* swaps in a new metadata version atomically and creates a
+*snapshot*, an immutable version of the table that readers see whole. Spark offers no
+transaction across two statements, so `DELETE` then `append` is two commits with a real gap
+between them. K2's tables are *copy-on-write*: changing one row means writing a new copy of every
+data file that holds a changed row, never a separate delete file. The snapshot expiry keeps 7
+days of snapshots, so every file a commit replaces stays on disk for 7 days.
 
-**An Iceberg commit and snapshot.** An Iceberg table is a set of Parquet data files plus
-metadata listing them. A *commit* replaces that metadata with a new version in one atomic step,
-and every commit creates a *snapshot*, an immutable version of the table. Readers always read
-one whole snapshot, so a single commit is never seen half-done. But Spark gives no transaction
-across two statements: a `DELETE` followed by an `append` is two commits, and between them the
-table really is in the deleted state.
+**Branch and fast-forward.** An Iceberg *branch* is a named pointer to a snapshot, like a git
+branch; `main` is the one every reader reads (since #214 K2's own readers also resolve `main`
+explicitly). Commits on another branch are invisible to readers. A *fast-forward* moves `main` to
+point at the branch's newest snapshot in one commit, keeping that snapshot's summary properties,
+which is why K2's rule is that a branch reaches `main` only by fast-forward
+(`docker/lake/README.md`).
 
-**Pruning.** `gold.trades` is *partitioned* by venue and UTC day (`PARTITIONED BY (exchange,
-days(exchange_ts))`): each data file holds one venue's trades for one day. For every file
-Iceberg also stores the smallest and largest `exchange_ts` in it. When a query filters on the
-column itself against constants, such as `exchange_ts >= TIMESTAMP '2026-11-25 21:20:00'`,
-Spark hands that filter to Iceberg, and Iceberg skips every partition and file whose range
-cannot match. That skipping is *pruning*. It only works for that shape of filter: a comparison
-of the column to a value known when the query is planned.
+**Pruning.** `gold.trades` is partitioned by venue and UTC day, and Iceberg stores each data
+file's smallest and largest `exchange_ts`. A filter that compares the column itself to constants,
+such as `exchange_ts >= <a timestamp>`, is handed to Iceberg, which then skips every partition and
+file whose range cannot match: that is *pruning*. Any other shape, such as a function of the
+column compared with values from another table, is evaluated only after every file is read.
 
 ### What was measured
 
-All on the 2026-11-25 UTC runs, read from the Spark History Server; every number, and the
-command that produced it, is in the
-[research note](../research/2026-11-26-incremental-bars-recompute.md) (cited as "note §n").
-
 - **The step dominates and grows.** A run took 166 s at 07:56 UTC and 242 s at 21:26, against a
-  300 s schedule. Everything outside the gold candle and bar step stayed at about 100 s; the
-  step itself grew from 67 s to 139 s. (note §3)
-- **The bars are computed twice.** `stage_bars()` calls `fresh.cache()` and `fresh.count()`,
-  then `DELETE`, then `fresh.writeTo(...).append()`. The count's plan reads the cache; the
-  append's plan does not, and reads `gold.trades` again, in all 11 runs sampled. That second
-  computation is 43.3 s of the 139 s at 21:26. Why Spark did not substitute the cache is not
-  established. (note §1, finding 1)
-- **Every read of `gold.trades` is the whole table.** Each candle `MERGE` reads its input twice,
-  as its query plan shows: once to find which `gold.ohlcv_*` files contain matching rows (so
-  that only those files are rewritten) and once to produce the rows. With four timeframes and
-  the two bar computations that is ten scans per run, each reading 1,133 of 1,133 data files at 21:26, none skipped. The
-  reason is the join: `candles()` matches trades to buckets with
-  `to_timestamp(floor(unix_timestamp(exchange_ts) / 60) * 60) = window_start`, and `_bars()`
-  with `CAST(exchange_ts AS DATE) = day`. Both compare an *expression* of `exchange_ts` to
-  values from another table, which is not the filter shape Iceberg can prune by, so every file
-  is read and the join throws most rows away. Spark's dynamic partition pruning, which can turn
-  a join into a runtime filter, only applies when the join key is the partition column itself.
-  So the candle cost follows the size of the table, not of the minutes being recomputed: the
-  1m candle `MERGE` grew from 7.3 s to 11.7 s while its work stayed the same size. (note §1,
-  finding 2, §3)
-- **The heap peak is in the bars.** The heap reached 1,276 of 1,536 MiB during the bar
-  computation, against about 500 MiB in the candle steps. The largest stage (a group of tasks
-  between two shuffles) is the last one of the bar query: 601 MiB shuffled, 75 s of task time,
-  1,083 MiB spilled to disk, 560 MiB of the 741 MiB lent to tasks. The 2026-11-25 crashes failed
-  in the code that reads spill files back (`UnsafeSorterSpillReader`, in the comment above
-  `DRIVER_MEMORY` in `docker/lake/spark_conf.py`). Two avoidable choices create that stage; the
-  Decision explains both. (note §1, finding 4, §3)
-- **The crashes happened between the two commits.** The two failed runs sampled (17:46 and
-  18:39 UTC) failed in the second computation, after the `DELETE` had committed. Each left the
-  symbol-days it had touched with no bars until a later run touched them again. (note §1,
-  finding 5)
+  300 s schedule; everything outside the step stayed near 100 s, the step grew from 67 s to
+  139 s. (note §3)
+- **The bars are computed twice.** `stage_bars()` calls `cache()` and `count()`, then `DELETE`,
+  then `append`. The append's plan does not use the cache and reads `gold.trades` again, in all
+  11 runs sampled: 43.3 s of the 139 s. Why the cache was not reused is not known. (note §1.1)
+- **Every read of `gold.trades` is the whole table.** Ten per run, each 1,133 of 1,133 data files,
+  none pruned: `candles()` joins on `to_timestamp(floor(unix_timestamp(exchange_ts) / 60) * 60) =
+  window_start` and `_bars()` on `CAST(exchange_ts AS DATE) = day`, functions of the column
+  compared with another table. A candle `MERGE` reads its input twice, once to find which target
+  files hold matching rows, once to write. (note §1.2)
+- **The heap peak is in the bars.** 1,276 of 1,536 MiB during the bar query. Its largest stage
+  shuffles 601 MiB, spills 1,083 MiB to disk and takes 560 of the 741 MiB lent to tasks; the
+  2026-11-25 crashes failed reading spill files back. Two query choices create that stage
+  (Decision, items 4 and 5). (note §1.4, §3)
+- **A crash in the step leaves stale or missing rows.** The two failed runs sampled (17:46,
+  18:39) died after the bars `DELETE` had committed, leaving their symbol-days without bars until
+  a later run touched them. The 22:31 UTC run stopped inside the bar computation (its last event
+  22:33:08; the containers restarted at 22:39:25, reported as a host out-of-memory kill). Its
+  candles had committed, so no damage this time, but a run stopped between its `gold.trades`
+  append and its candle `MERGE` leaves those 1-minute and 5-minute candles stale for good: the
+  retry's touched keys come from new silver trades, and those minutes never get any.
+  (note §8)
 
 ### Constraints
 
-- [ADR-029](ADR-029-research-production-parity-contract.md) requires the stored candles and bars
-  to equal independent recomputations exactly, at tolerance zero: ClickHouse and DuckDB for
-  candles, DuckDB and a Python reference for bars. A performance change must leave every row
-  identical.
-- The bars are a *cumulative bucket*: a trade belongs to bar `k` of its symbol-day when the
-  total (count, quantity or dollar value) of the day's earlier trades lies between `k * T` and
-  `(k + 1) * T`. Recomputing a symbol-day therefore needs its trades in order. The query does
-  it with a *window function*, a running total computed over rows in a given order
-  (`sum(...) OVER (PARTITION BY exchange, canonical_symbol, day ORDER BY ...)` in
-  `bars.bars_sql()`): Spark shuffles the trades by symbol-day and sorts each day. That sort is
-  the real cost of recomputing a day. This ADR leaves it alone; ADR-049 removes it.
+- [ADR-029](ADR-029-research-production-parity-contract.md) requires stored candles and bars to
+  equal independent recomputations exactly. A performance change must leave every row identical,
+  and the existing checks do not run the step's Spark code on real data: `make parity-bars`
+  compares stored bars with DuckDB, the nightly `bars_parity` audit runs the same Spark SQL on
+  both sides, and candle parity covers only 1-minute candles.
+- A bar is a *cumulative bucket*: a trade's bar is the day's total before it divided by the
+  threshold. Recomputing a day therefore needs its trades in order, a *window function* (a
+  running total over rows in a set order), which shuffles by symbol-day and sorts each day. That
+  sort is the real cost of recomputing a day; this ADR leaves it, ADR-049 removes it.
 
 ---
 
 ## Decision
 
-**We will make the gold candle and bar step read only the time range a run touched, compute
-the bars once and write them in one commit, because most of its cost today is work that
-changes no row.**
+**We will make the gold candle and bar step read only what changed since its last recorded run,
+compute the bars once and publish them in one commit, because most of its cost today changes no
+row.**
 
-Five changes, all in `docker/lake/gold.py` and `docker/lake/bars.py`, then what stays the same.
-Each change keeps every stored row identical; the reason is given with it.
+Six changes in `docker/lake/gold.py` and `docker/lake/bars.py`, each keeping every stored row
+identical; the reason is given with each.
 
-### 1. Read only the touched time range
+### 1. Touched keys come from the step's own position
 
-Before each candle or bar query, compute two constants on the driver: the earliest and latest
-touched bucket (or day), one row of output from the run's touched keys. Add
-`g.exchange_ts >= lo AND g.exchange_ts < hi` to the `gold.trades` side of `candles()` and
-`_bars()`. This is the filter shape Iceberg prunes by. Expected reads per scan, from today's
-file layout (each data file of the current day holds one run's five minutes): two or three
-files per venue for 1m and 5m candles, about twelve for 1h, the day's files for 1d candles and
-bars.
+Every bars publish records the `gold.trades` snapshot the step read, as the summary property
+`k2.src-snapshot-id.trades` on the commit. The next run reads `gold.trades` incrementally from
+that snapshot to the current one (an *incremental read*: Iceberg returns the rows that `append`
+commits added in between) and takes its touched keys from those rows instead of from the silver
+batch. The position is found with `offsets.latest_summary` along `main`'s history, the pattern
+[ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md) uses for Kafka offsets. Because the bars
+publish is the step's last write, a run that stops anywhere in the step is redone in full by the
+next one; candle `MERGE`s are idempotent, so redoing them is safe.
 
-*Why rows stay identical:* every trade the existing join keeps lies inside `[lo, hi)`, so the
-new filter only removes rows the join would have discarded. A late trade outside the run's
-minutes widens the range and costs extra reads, never wrong rows.
+Two edges. An incremental read returns `append` commits only and silently skips any `delete` or
+`overwrite` (verified: `BaseIncrementalAppendScan.appendsBetween` filters on the operation
+string `append`). So if `main`'s history since the position holds a commit on `gold.trades` that
+is neither an append nor a compaction, the run stops and names `make lake-rebuild LAYER=gold`
+rather than miss the repair. The first run after deploy finds no recorded position and uses the
+silver batch once. Cost: one incremental read of the files the last run appended, normally three
+small files (estimate: under a second).
 
-### 2. Compute the bars once, before anything is written
+### 2. Read only the touched time range
 
-Replace `cache()` and `count()` with an eager `localCheckpoint()`. It runs the recipe once,
-stores the result in the driver's memory and local disk, and returns a new DataFrame whose
-recipe is just "read those stored blocks". Later actions cannot recompute from `gold.trades`,
-whatever Spark's cache does. The stored result is the bars, about 1.2 MiB at 21:26, not the
-trades. The row count for the log comes from the commit's own summary (`added_records`, as
-`rebuild_bars()` already does). The candle `MERGE` input is checkpointed the same way, so each
-`MERGE` reads `gold.trades` once instead of twice.
+From the touched keys, compute two constants: the earliest and the latest-plus-one bucket (or
+day), collected as microseconds since the epoch with `unix_micros()`. Add `g.exchange_ts >=
+timestamp_micros(lo) AND g.exchange_ts < timestamp_micros(hi)` to the `gold.trades` side of
+`candles()` and `_bars()`. That is the shape Iceberg prunes by. Collecting a timestamp instead
+would come back to Python as a naive local datetime and be re-read as UTC by the SQL, correct only
+while the container clock is UTC (it is today, `Etc/UTC`). Expected reads per scan: two or three
+files per venue for 1m and 5m candles, about twelve for 1h, the day's files for 1d and bars.
 
-*Why it matters beyond speed:* the computation is where the crashes struck. Done first, a crash
-leaves the old bars in place.
+*Rows stay identical:* every trade the join keeps lies in `[lo, hi)`, so the filter only removes
+rows the join would discard.
 
-### 3. Write the bars in one commit
+### 3. Compute the bars once, before anything is written
 
-Replace `DELETE` then `append` with one statement that replaces the touched symbol-days, so a
-reader or a crash sees either the old day or the new one. Three ways to do it, in order of
-preference:
+Replace `cache()` and `count()` with an eager `localCheckpoint()`: it runs the recipe once, keeps
+the result in the Spark process's memory and local disk, and returns a DataFrame whose recipe is
+"read those blocks", so nothing later can recompute from `gold.trades`. The result is the bars,
+about 1.2 MiB at 21:26. The candle `MERGE` input is checkpointed the same way, so each `MERGE`
+reads `gold.trades` once. The logged row count comes from the commit summary, as
+`rebuild_bars()` does.
 
-1. **`MERGE ... WHEN NOT MATCHED BY SOURCE`.** A `MERGE` compares a source (the fresh bars)
-   with the table on a key (`exchange, canonical_symbol, bar_kind, day, bar_seq`): rows in both
-   are updated, rows only in the source are inserted, and the `NOT MATCHED BY SOURCE` clause
-   deletes rows only in the table, limited here to the touched symbol-days. The delete matters:
-   a recomputed day can lose a `bar_seq` it had before (one large trade can carry the total past
-   two thresholds, so a bar number is skipped, and a late trade moves where that happens), and
-   the stale row must go. It rewrites only the files holding touched days, and to find unmatched
-   rows it reads the whole of `gold.bars` (845 KB today).
-2. **`overwritePartitions()`.** `gold.bars` is partitioned by venue and month. This write
-   replaces every partition that appears in the DataFrame with exactly the DataFrame's rows,
-   in one commit. So the DataFrame must hold the touched days' fresh bars plus all other rows
-   of those venue-months, read from the table first: it rewrites a month of bars per venue on
-   every run.
-3. **A branch, then a fast-forward (fallback).** An Iceberg branch is a named pointer to a
-   snapshot, like a git branch; `main` is what readers read. Reset a branch to `main`, run
-   today's `DELETE` and `append` on the branch, then `CALL lake.system.fast_forward(...)` moves
-   `main` to the branch's snapshot in one commit. A crash before that leaves `main` untouched.
-   Reported proven on this stack on 2026-11-25 by the P4 spike; not re-checked here.
+### 4. Publish the bars in one commit: a branch, then a fast-forward
 
-None of the three has been run against Iceberg 1.8.1 and Spark 3.5.5 for this table. The pull
-request starts with a rehearsal on a copy of one day of `gold.bars` in the scratch namespace
-`lake.scratch_p4`, in a Spark session started by hand outside the ingest schedule: one new
-snapshot per write, the touched day equal to the fresh bars, a stale row removed, an untouched
-day unchanged, and a driver killed before the commit leaving the table at its previous
-snapshot. The first form that passes is used.
+Each run: point a fixed branch of `gold.bars` at `main` (`CREATE OR REPLACE BRANCH`), run today's
+`DELETE` of the touched symbol-days and the `append` of the fresh bars on that branch, then
+`CALL lake.system.fast_forward('gold.bars', 'main', '<branch>')`. Readers of `main` see the old
+day or the new day, never the gap; a crash before the fast-forward leaves `main` as it was, and
+the next run replaces the branch. The branch's intermediate snapshot (after its `DELETE`) does
+join `main`'s history, so a time-travel read of that exact id would show the gap; nothing pins
+it, because pins and readers take the snapshot `main` points at. The `DELETE` rewrites only the
+files holding touched days and
+the `append` writes only the fresh bars, about 308 KB each per run at 22:54 (note §8), so the cost
+stays the size of the touched days. The append keeps its write options, so the commit carries the
+position of change 1, and the fast-forward keeps it on `main`, as the P4 spike showed on
+`lake.scratch_p4.wap_bronze` on 2026-11-25 (`docs/adr/glossary.md`, "Scratch namespace and the P4
+spike"; `docker/lake/offsets.py`, `main_lineage`).
 
-### 4. Broadcast the threshold table
+Why not a single `MERGE ... WHEN NOT MATCHED BY SOURCE THEN DELETE`, which looks like one
+statement: Iceberg 1.8.1's Spark runtime has no `MERGE` rewrite of its own, and Spark 3.5.5's
+`RewriteMergeIntoTable` disables both the pushed filter and the runtime file filter whenever that
+clause is present (verified in its bytecode: the condition becomes `TrueLiteral` and the group
+filter `None`). Copy-on-write would then rewrite every `gold.bars` file every run, today 853 KB
+growing with history, and 7 days of retention would keep about 2,016 such copies: cost growing
+with history, the pattern this ADR removes. A `MERGE` stays possible as the fallback only in the
+other shape: carry the stale keys (stored bars of a touched day that the fresh result no longer
+has) in the source with a flag, and delete them with `WHEN MATCHED AND s.stale THEN DELETE`.
+Without a `NOT MATCHED BY SOURCE` clause Spark keeps its file filter, so only touched files are
+rewritten; but a SQL `MERGE` takes no write options, so it cannot carry change 1's position.
 
-How Spark joins two tables decides how much it moves. A *sort-merge join* shuffles both sides
-by the join key and sorts them; it is the default for two large inputs. A *broadcast hash join*
-copies a small side whole to every task, where it becomes a hash table; the large side then
-stays where it is, with no shuffle and no sort. Spark broadcasts automatically when it knows a
-side is small (under 10 MB by default), from the table's statistics. The thresholds (about a
-hundred rows, one per instrument and bar kind) are built by `_thresholds_view()` from Python
-rows with
-`spark.createDataFrame`, which carries no size statistics, so Spark assumes it is large and
-shuffles every windowed trade of the touched days to meet it: the 601 MiB above. A broadcast
-hint on that DataFrame removes the shuffle. It also helps the nightly `bars_parity` audit,
-which uses the same view.
+Before the pull request is merged, the branch form is rehearsed on a copy of one day of
+`gold.bars` in `lake.scratch_p4`, the producer lake's namespace for spikes that no job reads, in
+a Spark session started by hand outside the schedule while holding the *lake lock* (the file lock
+every lake writer takes, so the session cannot run beside an ingest). It passes when: `main` gains
+one snapshot per run carrying the position; the touched day equals the fresh bars, a stale row is
+gone and an untouched day is unchanged; the snapshot summaries' added and removed file bytes are
+limited to the touched days' files; and a driver killed before the fast-forward leaves `main` at
+its previous snapshot.
 
-*Why rows stay identical:* the join strategy changes how rows meet, not which rows meet.
+### 5. Broadcast the threshold table
 
-### 5. Find a bar's first and last trade by its position in the day
+A *sort-merge join* shuffles and sorts both sides by the join key; a *broadcast hash join* copies
+a small side whole to every task as a hash table and leaves the large side in place, with no
+shuffle and no sort. Spark broadcasts on its own when its statistics say a side is small (10 MB by
+default). The thresholds, about a hundred rows built by `_thresholds_view()` from Python rows with
+`spark.createDataFrame`, carry no statistics, so Spark assumes they are large and shuffles every
+windowed trade of the touched days to meet them: the 601 MiB above. A broadcast hint removes it,
+for the nightly `bars_parity` audit too. *Rows stay identical:* the strategy changes how rows meet,
+not which.
 
-The bar query picks the open and close price with `min_by(price_e8, struct(exchange_ts,
-recv_ts_ns, trade_seq))`: "the price of the row with the smallest order key". Spark's fast
-*hash aggregate* keeps one small fixed-size record per group in a hash table and updates it
-row by row. It can only do that when the record holds fixed-width values (numbers, timestamps,
-decimals); a `struct` is not one, so Spark falls back to a *sort aggregate*, which sorts every
-row by group before scanning. Here that is two sorts of every windowed trade, three times over
-(one copy per bar kind), which is where the spills come from. The window step already computes
-`n_before`, each trade's position in its symbol-day under the same order (0 for the day's
-first trade). Use
-`min_by(price_e8, n_before)` and `max_by(price_e8, n_before)` instead, in both the Spark and
-DuckDB spellings in `bars.DIALECT`.
+### 6. Find a bar's first and last trade by its position in the day
 
-*Why rows stay identical:* a bar never spans two symbol-days, and within a symbol-day
-`n_before` is that same order, so the smallest `n_before` in a bar is the same trade as the
-smallest order key. The new DuckDB test below holds it.
+Open and close are picked with `min_by(price_e8, struct(exchange_ts, recv_ts_ns, trade_seq))`.
+Spark's *hash aggregate* keeps one fixed-size record per group in a hash table; it needs
+fixed-width values, and a `struct` is not one, so Spark falls back to a *sort aggregate* that
+sorts every row by group, here twice and over three copies of each trade (one per bar kind). The
+window already computes `n_before`, each trade's position in its symbol-day in the same order;
+`min_by(price_e8, n_before)` and `max_by(price_e8, n_before)` replace the struct, in both
+spellings in `bars.DIALECT`. *Rows stay identical:* a bar never spans two symbol-days, and within
+one `n_before` is that order.
 
-### 6. What does not change
+### What stays the same
 
-No table, column, partition, contract, threshold or bar definition. `make parity-bars` at the
-current pin then compares bars stored by the old code with bars computed by the new SQL, which
-is the proof the semantics held.
+No table, column, partition, contract, threshold or bar definition.
 
-### Tests that land with it
+### The gate before merge
 
-- DuckDB runs `bars.bars_sql()` over seeded random trades (two venues, a day boundary, ties on
-  `exchange_ts` and `recv_ts_ns`) and must equal the Python reference `bars.reference()` on
-  every column. Nothing in CI executes the bar SQL today.
-- The range helper's edges: a trade at `lo` is in, at `hi` is out, a day spans `[d, d + 1)`;
-  and on random data, filter-then-join equals join alone.
-- `stage_bars()` against a stub Spark that records calls: the frame written is the one an eager
-  `localCheckpoint()` returned, no other action runs on an uncomputed bars frame, and exactly
-  one write statement and no `DELETE` is issued. Today's code fails all three.
-- If form 1 is chosen, DuckDB 1.4.4 runs the same `MERGE ... NOT MATCHED BY SOURCE` (it
-  supports the clause): a stale tail is removed, an untouched day is unchanged, the same input
-  twice gives the same rows.
+- **Old against new, on real data.** At a pinned `gold.trades` snapshot, run the old and new
+  `candles()` for all four timeframes over one batch's touched keys, and old and new `_bars()` for
+  one full UTC day; compare each pair with `EXCEPT ALL` both ways, which must be empty. This runs
+  the new Spark code on live tables in a hand-started session that writes nothing, and is the only
+  check that does: nothing in CI or the parity set runs it. The same session prints each new
+  scan's skipped-file count, which must not be zero.
+- **CI.** DuckDB runs `bars.bars_sql()` over seeded random trades (two venues, a day boundary,
+  ties on `exchange_ts` and `recv_ts_ns`) and must equal the Python reference `bars.reference()`;
+  the range helper's edges (a trade at `lo` is in, at `hi` out); `stage_bars()` against a stub
+  Spark issues one evaluation and one publish with no `DELETE` on `main`; touched keys come from the
+  recorded position, and a non-append commit since it stops the run.
+- **After the first UTC day written entirely by the new code**, re-pin `tests/parity/pinned.json`
+  (the snapshot ids `make parity-ohlcv` and `make parity-bars` read, so a rerun reads the same
+  data) to that day.
 
-Rollout, rollback and measurement are in note §6: pull `main` into the live checkout between
-two runs; the next driver loads the new code. Rollback is `git revert`; no table moved.
+### Rollout and rollback
+
+Rollout: pull `main` into the live checkout between two runs; the next run loads the new code.
+Rollback: `git revert` does not remove rows a faulty version wrote, and closed 1-minute and
+5-minute buckets are never recomputed. So a rollback reverts, then runs the old-against-new
+comparison over every day the new code wrote; if any differs, `make lake-rebuild LAYER=gold`
+(gold.trades, candles and bars rebuilt from silver under the lake lock; no candle-only rebuild
+exists) with the ingest paused.
 
 ---
 
 ## Rationale
 
 The measured cost is mostly work no row needs: a second computation (43 s), whole-table reads
-where a few files would do (most of the 47 s of candles), and a shuffle and two sorts that exist
-only because of how the query was written. Each fix is a few lines, can be checked row for row
-against the old output, and attacks a measured number rather than a guess. The one-commit write
-removes the window in which a crash leaves a day without bars, and ADR-049 needs that property:
-its incremental update is only correct if every write is whole.
-
-What this does not fix: the window function that orders a symbol-day's trades still grows from
-00:00 to 24:00 UTC, and it holds the heap's high-water mark once the avoidable stage is gone.
-That is ADR-049's subject.
+where a few files would do, and a shuffle and two sorts that exist only because of how the query
+was written. Each fix is a few lines and is checked row for row against the old output on real
+data. Taking the touched keys from the step's own recorded position makes the step's work follow
+what changed even across a crash, which is the subject of this ADR; publishing by branch and
+fast-forward removes the gap in which readers see a day without bars, at the cost of the touched
+days only, and carries that position. ADR-049 needs both: its incremental update is only correct
+if every publish is whole and its position exact.
 
 ---
 
@@ -284,41 +293,48 @@ That is ADR-049's subject.
 
 | Option | Why it lost |
 |---|---|
-| Compute once, keep `DELETE` then `append` | Saves the 43 s and moves the crash point before the `DELETE`, but keeps a window in which a day has no bars, and ADR-049 cannot build on a write that can be half-applied |
-| Partition `gold.trades` more finely (by hour, or by a hash of the symbol) | A contract change and a rewrite of every data file, to fix a scan that skips nothing today; the existing day partitions and file ranges prune once the query states a range |
-| Raise the driver heap again | It went from 768 MiB to 1,536 MiB on 2026-11-25. The cost grows with the table and with the day, so a third raise only postpones the next failure, and the container shares 8 GiB with other always-on processes |
-| Go straight to incremental bars (ADR-049) | A schema change and a new algorithm in one step. It needs the one-commit write anyway, and is easier to verify on top of a step whose rows are proven unchanged |
+| One `MERGE ... WHEN NOT MATCHED BY SOURCE` | Spark disables file filtering with that clause, so copy-on-write rewrites all of `gold.bars` every run and retention keeps ~2,016 copies: cost grows with history. Kept only as a `WHEN MATCHED AND s.stale` fallback, which filters but cannot carry the position |
+| `overwritePartitions()` of the touched venue-months | One commit, but every run rewrites a month of bars per venue, carried through the DataFrame; cost grows through the month |
+| Compute once, keep `DELETE` then `append` on `main` | Saves the 43 s, but readers still see the gap and a crash inside it still loses bars |
+| Partition `gold.trades` more finely, or raise the heap again | A rewrite of every file for a scan that prunes nothing today; a heap raise only postpones a cost that grows with the day |
 
 ---
 
 ## Consequences
 
-**Easier.** Shorter runs: an estimate of 125 to 140 s instead of 242 s at 21:26 (note §5). The
-candle cost stops growing with the table's history. A reader, or a crashed run, never sees a
-symbol-day without bars. The bar SQL is executed in CI for the first time.
+**Easier.** Shorter runs (estimate: 125 to 140 s instead of 242 s at 21:26; note §5). No reader
+sees a symbol-day without bars, and a stopped run is redone in full by the next. The step's Spark
+code is compared with its predecessor on real data before it ships.
 
-**Harder.** Three write forms to rehearse before one is chosen, on the live stack's scratch
-namespace and outside the schedule. Form 1 is a SQL `MERGE`, which takes no write options, so
-`gold.bars` commits lose the `k2.job` snapshot property (a key-value note stored on the
-snapshot) that today's append sets; nothing reads it for this table.
+**Harder.** A branch per table to manage (reset every run, published only by fast-forward). One
+extra incremental read per run. A rollback is a revert plus a comparison, and possibly a gold
+rebuild.
 
-**Committed to.** Every write to `gold.bars` is one commit. Every read of `gold.trades` in this
-step carries the touched time range.
+**Committed to.** `gold.bars` is published to `main` only by fast-forward, one commit per run,
+carrying `k2.src-snapshot-id.trades`. Touched keys come from that position. Every read of
+`gold.trades` in this step carries the touched time range.
+
+**What this does not fix.**
+
+- The 1-minute candle `MERGE` rewrites the newest data file of its venue-month, and that file
+  keeps growing through the month: 1.09 MB rewritten per run at 08:57 UTC, 2.21 MB at 22:52
+  (note §8). `gold.ohlcv_*` is not compacted.
+- The 1-day candles still sort-aggregate the whole day (their `min_by` keeps the struct).
+- The window over each touched day still grows from 00:00 to 24:00 UTC and holds the heap peak.
 
 **Risks, and what is not yet verified.**
 
-- That any of the three one-commit forms works on Iceberg 1.8.1 and Spark 3.5.5. If none passes
-  the rehearsal, this ADR returns to the owner before the write changes.
-- That Spark chooses the hash aggregate once the ordering key is a `BIGINT`. Expected from the
-  types; checked with `EXPLAIN` (which prints the plan Spark will run) before merging.
-- Why the cached bars were not reused. Seen in every run sampled, not explained; change 2 does
-  not depend on the cache at all.
-- Every "after" number is an estimate from the measured breakdown, not a measurement.
-- The heap peak will barely move: the window over the day still needs memory that grows
-  through the UTC day.
+- Branch writes, `DELETE` on a branch and `fast_forward` on `gold.bars` with Iceberg 1.8.1: the
+  P4 spike proved fast-forward on another table, not this sequence. If the rehearsal fails, this
+  ADR returns to the owner before the write changes.
+- That Spark chooses the hash aggregate once the ordering key is a `BIGINT`, and that
+  `timestamp_micros(literal)` is folded to a constant early enough to be pruned by: checked with
+  `EXPLAIN` and the skipped-file count in the gate.
+- Every "after" number is an estimate from the measured breakdown.
 
-**Revisit when** any scheduled ingest run takes more than 200 s after this lands, or an
-`OutOfMemoryError` appears in an ingest log again.
+**Revisit when** any scheduled ingest run takes more than 200 s after this lands, an
+`OutOfMemoryError` appears in an ingest log, or the 1-minute candle `MERGE` rewrites more than
+10 MB per run.
 
 ---
 
@@ -332,8 +348,8 @@ step carries the touched time range.
 ## References
 
 - [`../research/2026-11-26-incremental-bars-recompute.md`](../research/2026-11-26-incremental-bars-recompute.md):
-  measurements and their commands, the options, implementation plan, rollout and rollback
-- [ADR-049](ADR-049-event-bars-extended-not-recomputed.md): incremental event bars, which depend
-  on this ADR
+  measurements and their commands; §8 records this ADR's review and its evidence
+- [ADR-049](ADR-049-event-bars-extended-not-recomputed.md): incremental event bars, built on this
+- [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md): the position travels with the commit
 - [ADR-029](ADR-029-research-production-parity-contract.md): the exact-parity contract
-- `docker/lake/spark_conf.py`, the comment above `DRIVER_MEMORY`: the 2026-11-25 heap incident
+- [`glossary.md`](glossary.md): every term above

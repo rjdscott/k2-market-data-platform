@@ -19,6 +19,7 @@ warehouses and access.
 [Iceberg versions and housekeeping](#iceberg-versions-commits-and-housekeeping) ·
 [catalogs and access](#catalogs-warehouses-and-who-may-write) ·
 [dbt and the marts](#dbt-and-the-marts) · [quality and parity](#quality-and-parity) ·
+[Spark query mechanics](#spark-query-mechanics) ·
 [resources](#resources-memory-cpu-and-the-ceiling) · [tools](#tools) ·
 [plan labels](#plan-and-phase-labels)
 
@@ -167,6 +168,16 @@ read over a single commit, its parent to itself.
 Where: `bronze.py`, `silver.py`, `gold.py`, `_batch_offsets` in `ingest.py`;
 [chapter 08](../architecture/08-lake-ingest.md#stages-22e-incremental-by-parent-snapshot).
 
+### Gold step position
+
+Proposed in [ADR-048](ADR-048-gold-step-reads-touched-data-writes-bars-once.md), not built: the
+`gold.trades` snapshot id the gold candle and bar step (stage 2d) last finished from, recorded as
+`k2.src-snapshot-id.trades` on the `gold.bars` commit that ends the step. The next run takes its
+[touched minutes](#touched-minutes) from what `gold.trades` gained since then, so a run that
+stopped part way is redone in full. Today the touched minutes come from the run's own silver
+batch instead.
+Where: `latest_summary` in [`docker/lake/offsets.py`](../../docker/lake/offsets.py).
+
 ---
 
 ## Layers and what they hold
@@ -265,6 +276,17 @@ expression in Spark, DuckDB and Python, and the three must agree exactly.
 Where: [`docker/lake/bars.py`](../../docker/lake/bars.py);
 [ADR-029](ADR-029-research-production-parity-contract.md).
 
+### In-order batch, units before and fold
+
+Terms of [ADR-049](ADR-049-event-bars-extended-not-recomputed.md), proposed, not built. A
+trade's *units before* is the count, quantity or dollar value of its symbol-day's earlier trades;
+its bar is that divided by the threshold, rounded down. A run's new trades for one symbol-day are
+an *in-order batch* when the earliest has an `exchange_ts` strictly later than the latest already
+stored. Such a batch can be *folded*: given the day's stored totals, its trades extend the open
+bar and add bars after it, without rereading the day. Anything else (a late or tied trade, a
+changed threshold, a repair of `gold.trades`) is recomputed for the whole day.
+Where: [`docker/lake/bars.py`](../../docker/lake/bars.py).
+
 ### SCD2 security master
 
 The security master is the pair of gold dimensions `gold.dim_instrument` and `gold.dim_venue`.
@@ -359,6 +381,17 @@ rewrites each data file that holds a changed row, rather than writing separate d
 that readers must apply (merge-on-read). K2 uses copy-on-write everywhere because DuckDB and
 ClickHouse's `iceberg()` reader have not been shown to handle delete files on this stack.
 Where: [`docker/lake/README.md`](../../docker/lake/README.md), "Design notes".
+
+### Pruning
+
+Pruning is Iceberg skipping partitions and data files that cannot hold a matching row, using
+the partition values and the per-file minimum and maximum of each column it keeps metrics for.
+It works only for a filter Spark can hand to Iceberg when planning: a column compared with
+constants (`exchange_ts >= <timestamp>`). A function of the column compared with another table's
+values, as in a join on `CAST(exchange_ts AS DATE) = day`, is applied after every file is read;
+that is why stage 2d read the whole of `gold.trades` ten times a run on 2026-11-25.
+Where: `gold.candles()` and `gold._bars()`;
+[ADR-048](ADR-048-gold-step-reads-touched-data-writes-bars-once.md).
 
 ### Compaction
 
@@ -578,6 +611,55 @@ engines ([ADR-035](ADR-035-trino-and-dbt-for-marts.md)).
 Where: [ADR-029](ADR-029-research-production-parity-contract.md); `scripts/parity-ohlcv.sh`,
 `scripts/parity-bars.sh`.
 
+### Conservation check and shadow run
+
+Proposed in [ADR-049](ADR-049-event-bars-extended-not-recomputed.md), not built. A conservation
+check compares, before each write, the sums of a symbol-day's stored bars (trade count, quantity,
+exact dollar value) with the same sums over its trades in `gold.trades`: one hash aggregate, no
+sort. A shadow run computes a new method beside the current one and compares the two without
+letting the new one write.
+Where: `docker/lake/gold.py` once built.
+
+---
+
+## Spark query mechanics
+
+### Lazy evaluation, cache and checkpoint
+
+A Spark DataFrame is a recipe, not data: each action on it (a `count()`, a write) runs the whole
+recipe from its source tables again. `cache()` asks Spark to keep the result of the first action
+and substitute it into later recipes with the same steps, which Spark does by matching plans, and
+on 2026-11-25 did not do for the `gold.bars` append. An eager `localCheckpoint()` instead runs the
+recipe once, keeps the result in the Spark process's block store (memory, then local disk) and
+returns a DataFrame that reads only that, so nothing later can recompute it. K2 never caches a
+payload-bearing DataFrame (`docker/lake/README.md`, "What one run may read").
+Where: `stage_bars` in [`docker/lake/gold.py`](../../docker/lake/gold.py).
+
+### Join strategies: sort-merge and broadcast
+
+A sort-merge join shuffles both inputs by the join key, sorts them and merges; it is Spark's
+default for two large inputs. A broadcast hash join copies a small input whole to every task as a
+hash table, so the large input is neither shuffled nor sorted. Spark broadcasts on its own only
+when its statistics say a side is small (10 MB by default); a DataFrame built from Python rows has
+no statistics, so it is never broadcast without a hint.
+Where: `_thresholds_view` in `docker/lake/gold.py`.
+
+### Hash and sort aggregate
+
+A hash aggregate keeps one fixed-size record per group in a hash table and updates it per row:
+little memory, no sort. It needs every value in that record to be fixed-width (numbers,
+timestamps, decimals). An aggregate whose state holds something else, such as `min_by` over a
+`struct`, makes Spark fall back to a sort aggregate, which sorts every input row by group first.
+Where: `bars.DIALECT` in [`docker/lake/bars.py`](../../docker/lake/bars.py).
+
+### Window function
+
+A window function computes a value for every row from the rows around it in a set order, such as
+a running total: `sum(qty_e8) OVER (PARTITION BY exchange, canonical_symbol, day ORDER BY ...)`.
+Spark shuffles by the partition columns and sorts each partition, so its cost grows with the
+largest partition: for event bars, the busiest symbol-day so far.
+Where: `bars.bars_sql()`.
+
 ---
 
 ## Resources: memory, CPU and the ceiling
@@ -710,3 +792,13 @@ P4 file sources and the FX product, P5 access, entitlements, lineage and the cat
 controls and SLOs, P7 the release gate. "P3's second pull request" in an ADR is a pull request
 of that phase.
 Where: the `00N-*.md` files in that plan directory.
+
+### Scratch namespace and the P4 spike
+
+`lake.scratch_p4` is a namespace in the producer lake for spikes: tables made by hand to test an
+Iceberg or Spark behaviour, which no job reads. The P4 spike is the first task of
+[plan P4](../plans/2026-11-24-governed-self-serve-platform/004-fx-data-product.md), run there on
+2026-11-25 on `lake.scratch_p4.wap_bronze`: a branch write published by fast-forward kept its
+`k2.job` property, while a cherry-pick dropped it, which is where K2's "fast-forward only" rule
+comes from.
+Where: `main_lineage` in [`docker/lake/offsets.py`](../../docker/lake/offsets.py).
