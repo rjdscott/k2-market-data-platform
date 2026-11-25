@@ -60,9 +60,11 @@ it cannot move a real consumer's offsets. It is safe to run against the live sta
 
 ### Reaching the broker from the host
 
-The defaults work as they stand. `docker-compose.yml:58` publishes the external
-listener (`- "19092:19092"`) and `:67` advertises it as `localhost:19092`, so the
-address inside the bootstrap metadata resolves from the host. Verified 2026-08-26:
+The defaults work as they stand. `docker-compose.yml` publishes the external
+listener (`- "127.0.0.1:19092:19092"`, loopback only since 2026-11-26) and advertises it
+as `localhost:19092`, so the address inside the bootstrap metadata resolves from the
+host. Verified 2026-08-26, before the loopback binding, which changes the `docker port`
+line to `19092/tcp -> 127.0.0.1:19092` and not the connection:
 
 ```
 $ docker port k2-redpanda | grep 19092

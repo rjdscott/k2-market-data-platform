@@ -11,7 +11,7 @@ set -a && . ./.env && set +a
 ## Stack
 
 ```bash
-make up          # docker compose up -d  (builds images on first run)
+make up          # scripts/check-env.sh, then docker compose up -d  (builds images on first run)
 make health      # is it up: every service healthy, every venue producing, lake still committing
 make down        # stop, keep volumes
 make ps          # service status
@@ -27,7 +27,9 @@ docker stats --no-stream                             # live CPU / RAM
 ## URLs and credentials
 
 Every UI the platform has, and the one thing each is good for. This is the tools page;
-the README links here rather than repeating it.
+the README links here rather than repeating it. Every port below is published on
+`127.0.0.1` only, so `localhost` works and the host's LAN address does not: other machines
+are kept out, other users of this host are not ([SECURITY.md](../../SECURITY.md)).
 
 | URL | What it is for | Credential | First thing to look at |
 |-----|----------------|------------|------------------------|
@@ -42,8 +44,9 @@ the README links here rather than repeating it.
 | http://localhost:18080 | Spark master UI | none | mostly empty by design: the lake jobs run as **local** drivers and never register with the master. A running job's own UI is http://localhost:4040, and only while it runs |
 | http://localhost:8889 | JupyterLab, the K2 research notebooks — `make notebooks` | token printed by the command | [`notebooks/README.md`](../../notebooks/README.md) |
 
-Also listening: Redpanda Kafka API `9092`, Admin API `9644`, Schema Registry `8081`;
-ClickHouse native `9002`, Prometheus metrics `9363`; MinIO S3 API `9000`; PostgreSQL (Prefect + Lakekeeper) `15432` on localhost only.
+Also listening, all on `127.0.0.1`: Redpanda Kafka API `9092` (internal listener) and
+`19092` (the one host tools use), Admin API `9644`, Schema Registry `8081`; ClickHouse native
+`9002`, Prometheus metrics `9363`; MinIO S3 API `9000`; PostgreSQL (Prefect + Lakekeeper) `15432`.
 Capture `/metrics` is on port **8082 inside the container only**, not published. There is
 no `/health` endpoint: liveness is the `k2-capture healthcheck` subcommand, because the
 image is distroless and has no curl.

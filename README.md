@@ -157,9 +157,12 @@ the group that owns the Docker socket, 0 on Docker Desktop.
 
 ```bash
 git clone https://github.com/rjdscott/k2-market-data-platform.git && cd k2-market-data-platform
-cp .env.example .env            # set every change-me value; LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
+cp .env.example .env            # set every change-me value: openssl rand -hex 24 each;
+                                # LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 set -a && . ./.env && set +a
-docker compose up -d            # first run builds the capture, airflow, lake-metrics and spark images
+make up                         # refuses a placeholder secret (scripts/check-env.sh), then
+                                # docker compose up -d; first run builds the capture, airflow,
+                                # lake-metrics and spark images
 make health                     # every service healthy, a message on every venue in the last
                                 # 2 min, and a lake that is still committing
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
@@ -181,6 +184,8 @@ symbol conventions and a runnable example.
 Every other URL, credential and port — ClickHouse, Lakekeeper, MinIO, Prometheus, Spark,
 the notebooks — is on one page:
 [quick reference](./docs/operations/quick-reference.md#urls-and-credentials).
+Every port listens on `127.0.0.1` only, which keeps other machines out but not other users
+of the host; [SECURITY.md](./SECURITY.md) says what is and is not protected.
 
 Research: `make notebooks` starts JupyterLab with DuckDB over the lake
 ([`notebooks/`](./notebooks/README.md)).
