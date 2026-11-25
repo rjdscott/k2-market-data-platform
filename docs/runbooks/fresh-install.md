@@ -81,7 +81,14 @@ held 85,134 rows in `gold.trades` and 13,896 in `gold.book_top20`.
 ## What healthy looks like
 
 `make health` prints `health: PASS` (`scripts/health.sh`: container health, trades per
-venue in the last 2 minutes, last lake commit age, last ingest run state). Underneath it,
+venue in the last 2 minutes, last lake commit age, last ingest run state).
+
+The counts and the state table below are the **2026-08-28 measured snapshot**, before
+Airflow, cAdvisor and Trino joined. Today's default profile is 19 long-running services and
+5 one-shots (`python3 scripts/check-budget.py`: `steady default 19 services`,
+`bootstrap default 24 services`, 2026-11-25); a fresh install has not been re-measured since.
+
+Underneath it,
 `docker compose ps -a` shows **19 containers: 15 long-running and 4 one-shots** (plain
 `docker compose ps` hides the exited one-shots). Only 12 of
 the 15 ever report `healthy`; three have no healthcheck defined and stay at plain `Up`,

@@ -17,10 +17,10 @@ only at start.
 | File | What it sets |
 |---|---|
 | `etc/config.properties` | one node: coordinator and its only worker; HTTP on 8080 inside the network |
-| `etc/jvm.config` | heap `-Xms2816M -Xmx2816M` under the 4G limit, JVM time zone `UTC` |
+| `etc/jvm.config` | heap `-Xms2816M -Xmx2816M` under the 4G limit, JVM time zone `UTC`, exit on `OutOfMemoryError` (no heap dump: the container has nowhere bounded to put one) |
 | `etc/node.properties` | environment `k2`, data directory |
 | `etc/catalog/lake.properties` | Iceberg REST catalog, warehouse `k2`, **`iceberg.security=read_only`**; static MinIO keys from `${ENV:MINIO_ROOT_USER}` / `${ENV:MINIO_ROOT_PASSWORD}`, path-style, region `local-01` |
-| `etc/catalog/marts.properties` | the same over warehouse `marts`, writable, table locations assigned by Lakekeeper |
+| `etc/catalog/marts.properties` | the same over warehouse `marts`, writable, table locations assigned by Lakekeeper; `register_table` and `add_files` pinned off |
 | `etc/access-control.properties`, `etc/rules.json` | file-based access control at the catalog level, below |
 | `test/` | not used by the stack: the catalogs `make test-trino` mounts in place of `etc/catalog/` |
 
@@ -78,7 +78,8 @@ and allow them in `marts`.
 Image `trinodb/trino:484` (release 484, 15 Oct 2026; digest
 `sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f`) against
 Lakekeeper v0.13.9 and MinIO on the running stack, as throwaway containers on the compose
-network (`k2-trino-spike`, then `k2-trino-check` with this directory as committed):
+network (`k2-trino-spike`, then `k2-trino-check` with this directory as committed), and the
+closed-path probes against the compose service `k2-trino`:
 
 | Check | Result |
 |---|---|
@@ -91,9 +92,10 @@ network (`k2-trino-spike`, then `k2-trino-check` with this directory as committe
 | The `marts` table read elsewhere | DuckDB 1.4.4 (`ATTACH 'marts' AS marts` beside `ATTACH 'k2' AS lake`) and Spark 3.5.5 (a second `SparkCatalog` named `marts`, warehouse `marts`) both read it; Spark also read the view, whose SQL is valid Spark SQL and names a catalog Spark also calls `lake`; DuckDB does not list views |
 | `DROP TABLE`, `DROP VIEW`, `DROP SCHEMA` in `marts` | a purge drop: Lakekeeper's `tabular_purge` task deleted the files; `warehouse/marts/` held 0 objects within seconds |
 | Snapshot summary of a Trino write | `engine-name`, `engine-version`, `trino_query_id`, `trino_user`; no `k2.*` property |
-| Session time zone | `UTC` from a client that sends none, also with `TZ=Australia/Sydney` in the container |
+| Session time zone | `UTC` from a client that sends none, also with a non-UTC zone (for example `TZ=America/New_York`) set in the container |
+| The closed paths, on `k2-trino` (the compose service) | `CREATE TABLE marts.esc.t (x integer) WITH (location='s3://k2-lake/warehouse/k2/_escape_test')`: `Failed to create transaction` (Lakekeeper refused a location outside warehouse `marts`; nothing was created). `CALL marts.system.register_table(...)` and `CALL lake.system.unregister_table('gold','nope')`: `Access Denied: Cannot execute procedure ...`. `ALTER TABLE marts.esc.a EXECUTE add_files(location => 's3://k2-lake/warehouse/k2/_escape_test', format => 'PARQUET')`: `add_files procedure is disabled`, now also pinned off in `marts.properties` with `register_table` |
 | Idle, 2 CPU / 4 GiB | 1.42 GiB, about 3% CPU |
-| The `gold.candles()` aggregation over all of `gold.trades`, read only | 6.6 s alone; four at once 12.5 s each at most, peak 2.86 GiB of 4 GiB and 2.15 cores, no OOM |
+| The candle aggregation (open, high, low, close, volume, count) over all of `gold.trades`, read only | 6.6 s alone; four at once 12.5 s each at most, peak 2.86 GiB of 4 GiB and 2.15 cores, no OOM |
 
 `gold.candles()` ported verbatim fails with `Decimal overflow`: Trino types
 `DECIMAL(38,10) * DECIMAL(38,10)` as `decimal(38,6)` but overflows once the exact

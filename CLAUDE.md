@@ -110,7 +110,7 @@ considered before committing*.
   A lake table's partitioning or sort also lives in its contract under
   `contracts/`: `make test-k2gen` fails until both move, then `make generate`.
 - **Resource-limit changes** update the ADR-010 Outcome section *and* the
-  summary comment in `docker-compose.yml`. The 24 CPU / 42 GiB ceiling at the
+  summary comment in `docker-compose.yml`. The 25 CPU / 48 GiB ceiling at the
   bootstrap peak (ADR-035, gated by `scripts/check-budget.py`) is a stated
   constraint of the project, not an accident.
 - **Bind-mount gotcha:** file-level bind mounts pin the inode. Editing

@@ -10,7 +10,7 @@
 A market data platform for quantitative research. Three crypto exchanges are captured
 verbatim over public WebSocket feeds, archived to an Iceberg lakehouse that is the system of
 record, and served from ClickHouse as a derived tier, with Trino for SQL over the lake. One
-host, inside a 24 CPU / 42 GiB ceiling. Not a trading path.
+host, inside a 25 CPU / 48 GiB ceiling. Not a trading path.
 
 [![CI](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/rjdscott/k2-market-data-platform/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -91,7 +91,7 @@ flowchart TB
 ```
 
 19 long-running services and 5 one-shot init containers, 19.30 CPU / 34.312 GiB of declared
-limits at steady state and 21.30 CPU / 36.812 GiB at the bootstrap peak, under a 24 CPU / 42 GiB
+limits at steady state and 21.30 CPU / 36.812 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
 ceiling ([ADR-035](./docs/adr/ADR-035-trino-and-dbt-for-marts.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 Prefect, which Airflow replaced, waits behind `--profile legacy` as the rollback, not running.
 
@@ -195,16 +195,19 @@ hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 
 | Python: 299 tests [^py] over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
+| Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, catalog `marts` takes writes; 31 statements [^trino], no stack | `make test-trino` |
 | Prometheus rule unit tests (17 of 28 alerts) and 10 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
 [^py]: `make test-python` with `--collect-only -q | tail -1`
 [^ch]: the count `scripts/clickhouse-schema-test.sh` itself asserts (`[ "$n" -eq 10 ]`)
+[^trino]: `grep -cE '^(allow|deny) ' scripts/trino-rules-test.sh`
 
 CI ([`ci.yml`](./.github/workflows/ci.yml)) runs rust (fmt, clippy `-D warnings`, test),
-python (Ruff, pytest), clickhouse-schema, a docker build matrix, compose validation with
-the resource-budget and pin checks, the documentation gates and Trivy on every pull request.
+python (Ruff, pytest), contracts (k2gen drift, tests, Ruff, mypy), clickhouse-schema, trino
+(`make test-trino`), a docker build matrix, compose validation with the resource-budget and
+pin checks, the documentation gates and Trivy on every pull request.
 
 ## Repository layout
 
@@ -213,6 +216,7 @@ services/capture-rust/     k2-capture: one binary, three exchanges
 docker/airflow/            the three lake DAGs and their image
 docker/lake/               Spark ingest, layer builders, audits, DDL, the Prefect flows kept for rollback
 docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds
+docker/trino/              Trino config: catalog lake (read-only) and catalog marts, access rules
 docker/prometheus/rules/   28 alert rules with unit tests
 schemas/avro/              raw-message, trade, book-snapshot-l2
 config/instruments.yaml    instrument registry, the single source of truth

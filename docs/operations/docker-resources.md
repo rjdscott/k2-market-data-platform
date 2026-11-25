@@ -2,12 +2,13 @@
 
 Every long-running service in [`docker-compose.yml`](../../docker-compose.yml) declares a
 hard `limit` and a guaranteed `reservation`; the one-shot init containers declare limits
-only. The ceiling is **24 CPU / 42 GiB at the bootstrap peak**
+only. The ceiling is **25 CPU / 48 GiB at the bootstrap peak**
 ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md), which superseded the 20 CPU / 36 GiB of
 [ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md), which superseded the 16-core / 40 GB
 target of [ADR-010](../adr/ADR-010-resource-budget.md)), and `scripts/check-budget.py` fails CI
-over it. The host gives Docker 28 CPUs and 49.5 GiB; four cores stay outside the ceiling for
-the operating system and the engine.
+over it. The host gives Docker 28 CPUs and 49.5 GiB; three cores and 1.5 GiB stay outside the
+ceiling for the operating system and the engine, which is enough only because measured use is
+far below the declared limits (ADR-035).
 
 **As built, steady state: 19.30 CPU / 34.312 GiB across 19 long-running services.**
 **One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 21.30 CPU / 36.812 GiB
@@ -105,8 +106,8 @@ The one-shots are **not free**. They declare limits and they run concurrently wi
 steady state at `docker compose up`, so the bootstrap peak is the number the host has to
 absorb.
 
-Headroom against the 24 CPU / 42 GiB ceiling at the bootstrap peak, where it is gated:
-**2.70 CPU and 5.188 GiB** (1.20 CPU and 3.688 GiB with the `legacy` profile up). The
+Headroom against the 25 CPU / 48 GiB ceiling at the bootstrap peak, where it is gated:
+**3.70 CPU and 11.188 GiB** (2.20 CPU and 9.688 GiB with the `legacy` profile up). The
 Airflow limits are the plan's estimates until ADR-034's measured figures replace them.
 
 ## Where the budget goes

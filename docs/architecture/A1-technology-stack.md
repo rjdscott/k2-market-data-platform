@@ -22,7 +22,7 @@ Every component that runs, the version pinned, what it does here, and the decisi
 | Prefect | 3 (`prefecthq/prefect:3-python3.12`) | Schedules the two lake deployments on the `lake` work pool, `lake-ingest-5min` and `lake-maintenance-daily`. Workers, not agents | [ADR-008](../adr/ADR-008-eliminate-prefect-orchestration.md) |
 | Prometheus | v3.2.0 | Scrapes capture ×3, ClickHouse, Redpanda, Grafana and `lake-metrics`. 30-day retention, 28 alert rules (10 capture + 12 lake + 6 ClickHouse) | |
 | Grafana | 11.5.0 | 4 provisioned dashboards in `docker/grafana/dashboards/` | |
-| Docker Compose | | The only deployment target. One file, 19 long-running services in the default profile (+5 one-shot init containers), explicit CPU/memory limits per service, 21.30 CPU / 36.812 GiB at the bootstrap peak under a 24 CPU / 42 GiB ceiling | [ADR-010](../adr/ADR-010-resource-budget.md), [ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md) |
+| Docker Compose | | The only deployment target. One file, 19 long-running services in the default profile (+5 one-shot init containers), explicit CPU/memory limits per service, 21.30 CPU / 36.812 GiB at the bootstrap peak under a 25 CPU / 48 GiB ceiling | [ADR-010](../adr/ADR-010-resource-budget.md), [ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md) |
 
 ## Capture tier (Rust)
 

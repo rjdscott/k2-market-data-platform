@@ -247,7 +247,7 @@ Not exercised (owner's decision, 2026-11-25): written from the commands the pre-
 
 ```bash
 # 3. Start Prefect from the legacy profile. With it the declared sum is 22.80 CPU,
-#    inside the 24 CPU ceiling (ADR-035).
+#    inside the 25 CPU ceiling (ADR-035).
 docker compose --profile legacy up -d prefect-server prefect-worker
 docker compose --profile legacy ps prefect-server prefect-worker
 docker logs --tail 50 k2-prefect-worker

@@ -10,7 +10,7 @@ K2 is a market data platform for quantitative research. It takes live trades and
 books from three crypto exchanges over public WebSocket feeds, archives every frame
 verbatim to an Iceberg lake, derives typed and canonical layers from that archive, and
 serves the canonical layer from ClickHouse for dashboards and fast queries, with Trino for
-SQL over the lake. It runs on one host inside a declared ceiling of 24 CPU / 42 GiB at the
+SQL over the lake. It runs on one host inside a declared ceiling of 25 CPU / 48 GiB at the
 bootstrap peak ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)): as deployed, 19
 long-running services at 19.30 CPU / 34.312 GiB of limits, plus five one-shot init
 containers, with Prefect kept behind `--profile legacy` as the rollback
