@@ -58,7 +58,14 @@ for c in lake marts; do
 done
 grep -qx 'iceberg.security=read_only' "$ETC/catalog/lake.properties" \
   || { echo "FAIL: etc/catalog/lake.properties is not read_only at the connector"; exit 1; }
-echo "ok config: etc/ starts, catalogs lake and marts load, lake is read_only"
+# The read-only catalog is the one over the lake's warehouse, and the writable
+# one is not: swapping the two warehouse lines would pass every check above.
+grep -qx 'iceberg.rest-catalog.warehouse=k2' "$ETC/catalog/lake.properties" \
+  || { echo "FAIL: etc/catalog/lake.properties does not point at warehouse k2"; exit 1; }
+if grep -qx 'iceberg.rest-catalog.warehouse=k2' "$ETC/catalog/marts.properties"; then
+  echo "FAIL: etc/catalog/marts.properties points at the lake's warehouse k2"; exit 1
+fi
+echo "ok config: etc/ starts, catalogs lake and marts load, lake is read_only over warehouse k2, marts is not on k2"
 
 # 2. The connector: one table, written through `marts`, refused through `lake`.
 start -v "$PWD/docker/trino/test/local":/etc/trino/catalog:ro
@@ -74,6 +81,10 @@ deny  "ALTER TABLE lake.gold.t EXECUTE remove_orphan_files(retention_threshold =
 deny  'INSERT INTO lake.gold.t VALUES 3'
 deny  'DELETE FROM lake.gold.t'
 deny  'DROP TABLE lake.gold.t'
+# Iceberg's CALL procedures, through either catalog: rules.json has no procedure
+# rules, so only Trino's built-in ones run.
+deny  "CALL lake.system.unregister_table('gold', 't')"
+deny  "CALL marts.system.register_table(schema_name => 'gold', table_name => 'r', table_location => 'local:///gold/t')"
 # The control: the same procedure through the writable twin runs, so the
 # denials above are the connector's and not a broken table.
 allow 'ALTER TABLE marts.gold.t EXECUTE optimize'

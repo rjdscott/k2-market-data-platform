@@ -123,7 +123,7 @@ jobs:
       # network: the real etc/ starts; a local Iceberg catalog read-only at the
       # connector refuses every table procedure and write; memory catalogs named
       # `lake` and `marts` show the rules (writes denied in lake, allowed in
-      # marts). The dbt jobs of plan phase P3 compile against this same server.
+      # marts).
       - run: bash scripts/trino-rules-test.sh
 
   docker:
