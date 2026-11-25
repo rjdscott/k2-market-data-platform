@@ -31,6 +31,11 @@ stays on your machine, and is subject to each provider's terms:
 [Coinbase](https://www.coinbase.com/legal/user_agreement). Complying with them is your
 responsibility.
 
+The one named exception is pictures. Images under `docs/images/` are screenshots of a live
+run (`make screenshots` takes the current set): they show venue-derived figures as they stood
+at the moment of capture, are for illustration only, and are not a data set
+([`NOTICE`](./NOTICE), "Screenshots").
+
 ## Overview
 
 | Property | How |

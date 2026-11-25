@@ -220,6 +220,10 @@ fi
 # named *sample*, is either named synthetic-* (scripts/make-synthetic-fixtures.py
 # writes those) or listed by path in NOTICE with its source and terms. Code
 # files (*.py and the like) are not data and are not checked.
+#
+# Screenshots are NOTICE's one named exception: pictures of a live run, under
+# docs/images/ and nowhere else. A raster image anywhere else is not covered by
+# it and fails here too.
 out=$(mktemp)
 git ls-files | grep -iE '(^|/)(fixtures|samples)/|sample[^/]*$' \
   | grep -iE '\.(json|jsonl|ndjson|csv|tsv|txt|parquet|avro|pcap|pcapng|bin|gz|zst|sha256)$' \
@@ -227,11 +231,12 @@ git ls-files | grep -iE '(^|/)(fixtures|samples)/|sample[^/]*$' \
       case "$(basename "$f")" in synthetic-*) continue ;; esac
       grep -qF "$f" NOTICE 2>/dev/null || echo "$f"
     done > "$out" || true
+git ls-files | grep -iE '\.(png|jpe?g|gif|webp)$' | grep -v '^docs/images/' >> "$out" || true
 if [ -s "$out" ]; then
-  bad "(i) fixture/sample data neither named synthetic-* nor listed in NOTICE:"
+  bad "(i) fixture/sample data neither named synthetic-* nor listed in NOTICE, or an image outside docs/images/:"
   sed 's/^/  /' "$out"
 else
-  pass "(i) fixture and sample data is synthetic or listed in NOTICE"
+  pass "(i) fixture and sample data is synthetic or listed in NOTICE; images only under docs/images/"
 fi
 rm -f "$out"
 
