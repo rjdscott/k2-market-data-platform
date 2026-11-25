@@ -27,6 +27,8 @@ LK=${K2_LAKEKEEPER_URL:-http://lakekeeper:8181}
 WAREHOUSE=${K2_LAKE_WAREHOUSE:-k2}
 # Trino's, for the dbt marts (ADR-035): a second warehouse on the same bucket
 # under its own key prefix, so Trino's catalog over the lake can be read-only.
+# The name also lives in docker/trino/etc/catalog/marts.properties
+# (iceberg.rest-catalog.warehouse); change both or neither.
 MARTS_WAREHOUSE=${K2_MARTS_WAREHOUSE:-marts}
 BUCKET=${K2_LAKE_BUCKET:-k2-lake}
 S3_ENDPOINT=${K2_S3_ENDPOINT:-http://minio:9000}
@@ -55,12 +57,12 @@ echo "  warehouse: $WAREHOUSE"
 echo "  bucket:    s3://$BUCKET"
 echo "=========================================="
 
-echo "[1/4] MinIO bucket"
+echo "[1/5] MinIO bucket"
 mc alias set k2 "$S3_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" > /dev/null
 mc mb --ignore-existing "k2/$BUCKET"
 
 # 4xx here means "already bootstrapped" — the endpoint closes after first use.
-echo "[2/4] Lakekeeper bootstrap"
+echo "[2/5] Lakekeeper bootstrap"
 post "$LK/management/v1/bootstrap" '{"accept-terms-of-use":true}' "400 401 403 409"
 
 # Ask first, then create. The old version tolerated ANY 400 on create, on the
@@ -106,9 +108,8 @@ JSON
 )"   # no tolerated codes: 2xx or fail
 }
 
-echo "[3/4] Warehouses"
+echo "[3/5] Warehouse '$WAREHOUSE'"
 ensure_warehouse "$WAREHOUSE"
-ensure_warehouse "$MARTS_WAREHOUSE"
 
 # Namespaces over the REST catalog API rather than a Spark `lake-ddl` one-shot:
 # three HTTP calls against a service that is already up, versus a ~20 s JVM
@@ -123,7 +124,7 @@ ensure_warehouse "$MARTS_WAREHOUSE"
 # and coreutils only. `prefix` is a flat string field, so the two trims below are
 # the whole parser. If a second field is ever needed, switch images rather than
 # growing this.
-echo "[4/4] Namespaces"
+echo "[4/5] Namespaces"
 cfg=$(curl -fsS "$LK/catalog/v1/config?warehouse=$WAREHOUSE")
 prefix=${cfg#*\"prefix\":\"}
 prefix=${prefix%%\"*}
@@ -134,5 +135,10 @@ for ns in raw bronze silver gold audit; do
   echo "  $ns"
   post "$LK/catalog/v1/$prefix/namespaces" "{\"namespace\":[\"$ns\"]}" "409"
 done
+
+# Last, after the lake has its namespaces: a failure here still exits 1, but it
+# cannot leave the lake's own bootstrap half done.
+echo "[5/5] Warehouse '$MARTS_WAREHOUSE'"
+ensure_warehouse "$MARTS_WAREHOUSE"
 
 echo "✓ lake ready: catalog $LK/catalog, warehouses $WAREHOUSE and $MARTS_WAREHOUSE, namespaces raw/bronze/silver/gold/audit in $WAREHOUSE"
