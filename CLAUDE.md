@@ -117,7 +117,7 @@ considered before committing*.
 
 ```bash
 make test          # everything CI runs: python + rust + clickhouse
-make test-python   # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests -q
+make test-python   # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 make test-rust     # rust:1-bookworm container; no local cargo needed
 make test-clickhouse  # the gold DDL + assertions on a throwaway 24.3 server
 ```
