@@ -169,3 +169,15 @@ ADR).
   `scripts/trino-rules-test.sh`
 - Upstream: Trino 484 file-based and read-only access control, `lib/trino-plugin-toolkit` at
   tag 484; the Iceberg connector's `iceberg.security`
+
+---
+
+## Outcome (2026-11-25, the first governance product)
+
+The trigger "the first governance product lands" fired, and
+[ADR-046](ADR-046-governance-domain-and-quality-results.md) is the decision: domain `governance`
+gets its warehouse, catalog and writer from `make generate` with nothing in this layout changed,
+and the planned `governance.dq_results` view is `governance.quality_results.dq_results`, in its
+product's schema. One addition to "one schema per data product": every domain catalog also has
+a schema `dq`, where its own writer records the domain's dbt test results; like `staging`, it is
+the platform's, not a product's, and `k2gen validate` refuses a product named after it.

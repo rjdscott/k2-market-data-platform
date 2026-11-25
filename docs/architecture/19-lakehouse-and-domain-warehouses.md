@@ -12,7 +12,7 @@ K2 keeps its data as files in one bucket, `k2-lake`. Six parts work on it:
   Amazon S3. It holds the bucket.
 - **Lakekeeper** is the catalog service. It records which files make up each table.
 - **Warehouses** are separate areas inside the catalog, each with its own tables. There are
-  five: `k2`, the producer lake, and one per data domain for that domain's marts. A data domain
+  six: `k2`, the producer lake, and one per data domain for that domain's marts. A data domain
   is a team's area of data. A mart is a table built for consumers out of lake tables.
 - **Spark** runs the batch jobs that write the lake. **Airflow**, the scheduler, starts them.
 - **Trino** is a SQL server. It reads every warehouse and writes only the domain warehouses.
@@ -31,7 +31,7 @@ flowchart TB
   DK["DuckDB, in notebooks"]
   subgraph LK ["Lakekeeper, the catalog service"]
     WK["warehouse k2: raw, bronze, silver, gold, audit"]
-    WD["warehouses fx_reference, market_analytics,<br/>market_capture, reference_data"]
+    WD["warehouses fx_reference, governance,<br/>market_analytics, market_capture, reference_data"]
   end
   S3[("MinIO bucket k2-lake<br/>warehouse/k2/ and warehouse/&lt;domain&gt;/")]
   AF --> SP
@@ -130,13 +130,14 @@ move every table and re-base every audit, for fences nobody stands behind (ADR-0
 
 A data domain is a body of data that one team owns and answers for
 ([ADR-033](../adr/ADR-033-data-mesh-four-domains.md)). A data product is one owned unit inside it,
-such as `candles`. [`contracts/domains.yaml`](../../contracts/domains.yaml) lists four domains:
-`market-capture`, `reference-data`, `fx-reference` and `market-analytics`. The lake's tables
-belong to these domains as owners and still live in `k2` ([chapter 18](18-data-mesh.md)). Every
+such as `candles`. [`contracts/domains.yaml`](../../contracts/domains.yaml) lists five domains:
+`market-capture`, `reference-data`, `fx-reference`, `market-analytics` and `governance`. The lake's tables
+belong to the first four as owners and still live in `k2` ([chapter 18](18-data-mesh.md)). Every
 domain warehouse is empty until its first mart. `market_analytics` has three, each in its
 product's schema: `candles.ohlcv_1m`, the 1-minute candles; `delayed_candles.ohlcv_delayed_20m`,
 a view of the lake's own candles without the newest 20 minutes; and `venue_quality.venue_quality_scorecard`, per
-venue and day, how complete the lake is ([`dbt/`](../../dbt/README.md)).
+venue and day, how complete the lake is ([`dbt/`](../../dbt/README.md)). `governance` has one,
+`quality_results.dq_results`, below.
 
 One entry in `domains.yaml` gives a domain its whole fence. `make generate` runs
 [`generate.py`](../../platform/k2gen/k2gen/generate.py), which turns the id `market-analytics`
@@ -164,15 +165,22 @@ be `lake`, `system` or `k2`: those names are taken.
 
 Inside a domain catalog there is one schema per data product, for example
 `market_analytics.delayed_candles.ohlcv_delayed_20m`. A product rebuild can then drop one
-schema without touching its siblings. dbt adds one schema that is not a product, `staging`: the
-domain's views over the lake tables its marts read ([`dbt/`](../../dbt/README.md)). A mart that joins two domains belongs to the domain that
-consumes it, and lives in that domain's warehouse; nobody writes into a producer's warehouse.
-The scorecard is one: it joins market-capture's `audit.checks` with market-analytics'
-`gold.trades`, and lives in `market_analytics`, which reads both.
-Governance data, such as quality results and lineage, is meant to become a platform-owned domain
-stored the same way. That is the maintainer's direction, not yet a decision: it gets its own ADR
-with its first product, because it reverses ADR-033's line that the platform owns the road, not
-the products (ADR-044, and the Outcome of ADR-033).
+schema without touching its siblings. The platform adds two schemas that are not products, in
+every domain catalog: `staging`, dbt's views over the lake tables the domain's marts read, and
+`dq`, where the domain's own writer records its dbt test results; `k2gen validate` refuses a
+product with either name ([`dbt/`](../../dbt/README.md)). A mart that joins two domains belongs
+to the domain that consumes it, and lives in that domain's warehouse; nobody writes into a
+producer's warehouse. The scorecard is one: it joins market-capture's `audit.checks` with
+market-analytics' `gold.trades`, and lives in `market_analytics`, which reads both.
+
+Governance is a domain stored the same way, owned by the platform team
+([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)). Its quality results show
+how the fences shape a cross-domain product: every dbt invocation that runs a test writes the
+results into `dq.dbt_test_results` of its own catalog, as its own writer, through an
+`on-run-end` hook, failed tests included. `governance.quality_results.dq_results` is a view
+over those tables and `lake.audit.checks`, built by `dbt_governance` after every other domain in
+each `dbt_marts` run. Nothing crosses a fence but a read, and a definer view lets any reader see
+it through its owner.
 
 ## Who can do what
 
@@ -239,7 +247,8 @@ The Airflow DAG `dbt_marts` builds every mart again, whole, every hour at minute
 domain as its own writer. A build is a `CREATE OR REPLACE`, so each one adds a snapshot; once a
 day the same writer expires snapshots and removes orphan files older than 7 days. Seven days is
 the Iceberg connector's floor, and nobody may set the session properties that lower it
-(ADR-044; [the runbook](../runbooks/dbt-marts.md)).
+(ADR-044; [the runbook](../runbooks/dbt-marts.md)). The same daily step compacts each domain's
+`dq.dbt_test_results`, which grows by an append per tested node per run, before expiring it.
 
 ## Views
 
@@ -306,7 +315,8 @@ environment.
 
 ## See it yourself
 
-Read-only, against the running stack, on 2026-11-25. Counts grow with every commit.
+Read-only, against the running stack, on 2026-11-25, before the governance domain's rollout:
+its catalog and warehouse are not in these outputs yet. Counts grow with every commit.
 
 ```bash
 docker exec k2-trino trino --execute 'SHOW CATALOGS'
@@ -316,6 +326,7 @@ docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM lake'
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM market_analytics'
 #   "candles" "delayed_candles" "information_schema" "staging" "system" "venue_quality"
 #                                                     one schema per mart product, and dbt's staging views
+#   (and "dq" after the first build with the test-results hook)
 docker exec k2-trino trino --execute \
   "SELECT max(close_time) <= current_timestamp - INTERVAL '20' MINUTE FROM market_analytics.delayed_candles.ohlcv_delayed_20m"
 #   "true"                                            the delay holds
@@ -390,6 +401,7 @@ Each line below was printed by `k2-trino`, or by DuckDB 1.4.4, on 2026-11-25.
 | Time travel, snapshot expiry | reading an older snapshot; dropping snapshots past seven days, ten kept at least |
 | Producer lake | warehouse `k2`: `raw` to `gold`, written by Spark only |
 | Mart | a table for consumers, built from lake tables, in a domain warehouse |
+| Test results, `dq` | one row per dbt test per run, in each domain catalog's `dq.dbt_test_results`, written by its own writer |
 | Data domain, data product | a body of data one team owns; one owned unit in it, one schema per mart product |
 | Writer identity, `X-Trino-User` | `dbt_<domain>`, the only user whose SQL statements may change its catalog; the unchecked header naming a user |
 | Fence | a boundary software enforces, not one people promise to respect |

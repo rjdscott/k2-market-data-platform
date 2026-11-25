@@ -22,7 +22,7 @@ Numbered chapters, in reading order. Start at [00](00-start-here.md).
 | 15 | [Capacity model](15-capacity-model.md) | predicted vs measured bytes/day, CPU, disk runway |
 | 16 | [Failure modes](16-failure-modes.md) | FMEA with detection, blast radius, recovery, proof |
 | 17 | [Scale-out path](17-scale-out-path.md) | HA, DR and cost on AWS at TB/PB, designed, not exercised |
-| 18 | [Data mesh](18-data-mesh.md) | four domains, products and their contracts, what `k2gen` checks and writes |
+| 18 | [Data mesh](18-data-mesh.md) | five domains, products and their contracts, what `k2gen` checks and writes |
 | 19 | [Lakehouse and domain warehouses](19-lakehouse-and-domain-warehouses.md) | tables, catalog, warehouses; the producer lake, a mart warehouse per domain, who may write what |
 | A1 | [Technology stack](A1-technology-stack.md) | versions and the ADR behind each |
 

@@ -11,10 +11,11 @@ raw to gold. Where Trino may write, and who may, is
 | `lake` | `k2`: `raw`, `bronze`, `silver`, `gold`, `audit` | `s3://k2-lake/warehouse/k2/` | nobody through Trino: `iceberg.security=read_only` |
 | one per data domain, named from its id (`market-analytics` is `market_analytics`) | the same name, created by `docker/lake/init-lake.sh` | `s3://k2-lake/warehouse/<name>/` | SQL statements: its writer `dbt_<name>` only; everyone reads. Table procedures: not fenced per user |
 
-Today's domains, from `contracts/domains.yaml`: `fx_reference`, `market_analytics`,
-`market_capture`, `reference_data`. Inside a domain catalog, one schema per data product,
-named from the product, and a `staging` schema of views; dbt creates them
-([`dbt/README.md`](../../dbt/README.md)).
+Today's domains, from `contracts/domains.yaml`: `fx_reference`, `governance`,
+`market_analytics`, `market_capture`, `reference_data`. Inside a domain catalog, one schema per
+data product, named from the product, a `staging` schema of views, and `dq`, where the domain's
+own writer records its dbt test results; dbt creates them ([`dbt/README.md`](../../dbt/README.md),
+[ADR-046](../../docs/adr/ADR-046-governance-domain-and-quality-results.md)).
 
 `etc/` is mounted read-only over the image's `/etc/trino`. A changed file needs
 `docker compose up -d --force-recreate --no-deps trino` (`scripts/dev-up.sh` does it when
