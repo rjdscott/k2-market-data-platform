@@ -344,8 +344,8 @@ anyway so that a deeper or faster book stays recoverable by replay.
 > partitioning is a cap on the busiest key, not on the topic.
 >
 > The rows above are left as predicted, as this page's convention requires. What changed
-> is elsewhere: the ingest's per-run bound now defaults to 200,000 offsets per partition
-> (~3.6× the measured arrival rate) so the lake drains faster than the cap evicts, and
+> is elsewhere: the ingest's per-run bound now defaults to 600,000 offsets per partition
+> (200,000, ~3.6× the 2026-08-27 arrival rate, until 2026-11-25) so the lake drains faster than the cap evicts, and
 > `docker/redpanda/init.sh` records this measured window next to `RAW_RETENTION_BYTES`.
 > **512 MiB stands**, the bus is a buffer for the 5-minute ingest cadence, not the
 > archive; the lake is the archive (ADR-021). The trigger for revisiting it is in

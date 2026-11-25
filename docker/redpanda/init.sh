@@ -115,7 +115,8 @@ V3_PREFIX="${K2_V3_PREFIX:-market.crypto.v3}"
 # ingest cadence — 7 h is ~84 cycles of slack — and it is NOT the archive: the
 # lake is (ADR-021), and raw.messages is never expired. A lake that cannot keep
 # up is fixed in the lake, which is why the ingest's per-run bound is now
-# 200,000 offsets/partition, ~3.6x the measured arrival rate. Revisit these two
+# 600,000 offsets/partition (200,000, ~3.6x the 2026-08-27 arrival rate, until
+# 2026-11-25, when kraken-0 reached ~199,000 per cycle). Revisit these two
 # numbers when k2_lake_ingest_backlog_offsets for any topic exceeds one hour of
 # that topic's arrival rate for two consecutive cycles
 # (docs/runbooks/lake-ingest-lag.md §3) — and then by raising the disk slice or

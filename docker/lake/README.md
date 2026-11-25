@@ -142,9 +142,9 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --stage bronze
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
     --end-timestamp 2026-08-27T02:00:00Z
 
-# or drain it faster than the 200,000-offset default, with someone watching
+# or drain it faster than the 600,000-offset default, with someone watching
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
-    --max-offsets-per-partition 200000
+    --max-offsets-per-partition 2000000
 
 # what is on the topics, without a table or a commit
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
@@ -430,7 +430,7 @@ would restart from the beginning of every topic.
 ## What one run may read, and why nothing is cached
 
 **Every ingest is bounded before it starts.** `--max-offsets-per-partition`
-(default 200,000, `K2_LAKE_MAX_OFFSETS_PER_PARTITION`) caps each partition at
+(default 600,000, `K2_LAKE_MAX_OFFSETS_PER_PARTITION`) caps each partition at
 `min(latest, start + N)`, and those end offsets are computed in pure code
 (`offsets.bounded_offsets`) from what the broker reports, *before* Spark opens a
 connection. A caught-up 5-minute cycle never reaches the cap, there is only
@@ -500,7 +500,7 @@ the bookkeeping and the data agree exactly.
 Backlog draining across runs 1-3, `market.crypto.v3.raw.kraken`: 23,175,551 →
 22,823,351 → 22,541,125 → 22,193,385. Book topics and `trades.kraken` reached 0.
 
-### Why the default is 200,000, and what 50,000 cost
+### Why the default is 600,000, and what 50,000 and 200,000 cost
 
 **The bound must exceed what a partition receives between two runs.** Below that,
 the partition falls further behind on every cycle and never catches up, and
@@ -528,16 +528,24 @@ needs, before Spark starts. **It is never repaired automatically**, skipping
 forward is an unrecorded hole, which is the one outcome this archive exists to
 prevent. Recovery is [`../../docs/runbooks/lake-ingest-lag.md`](../../docs/runbooks/lake-ingest-lag.md) §3.
 
-200,000 is ~3.6× the measured arrival rate, and run 4 shows what it costs: more
+200,000 was ~3.6× the 2026-08-27 arrival rate, and run 4 shows what it costs: more
 wall time, no more memory. A caught-up cycle never reaches it either way.
 
-**No alert on the backlog, deliberately.** A rising gauge is the only shape worth
-paging on, and it is indistinguishable from a legitimate cold-start drain that
-has not reached its knee yet, the first alert would have fired on the recovery
-above, which was working correctly. The gauge and the dashboard panel are for a
-person watching a drain; the thing that must page is the lake falling behind,
-which `LakeIngestLag` already does off `k2_lake_max_kafka_ts_seconds`, and that
-gauge does not care why.
+**It stopped being enough on 2026-11-25.** `raw.kraken-0` was receiving 39,797
+records/min, ~198,985 per 5-minute cycle (two `rpk topic describe -p` samples 60 s
+apart, 17:27 UTC), and runs had lengthened to ~250 s, so a cycle received more than
+the cap. `k2_lake_ingest_backlog_offsets{topic="market.crypto.v3.raw.kraken"}` rose
+from 14:32 UTC to ~1.3 million and stayed until a hand-run at
+`max_offsets_per_partition` 2,000,000 drained it (17:12 to 17:25 UTC). Nothing was
+evicted, the log start was far behind the read position, and no alert fired. The
+default is now 600,000, ~3× that cycle's arrival.
+
+**The backlog alert is deliberately slow.** Until 2026-11-25 there was none: a
+backlog is indistinguishable from a legitimate cold-start drain, and
+`LakeIngestLagHigh` watches `k2_lake_max_kafka_ts_seconds`, which the 2026-11-25
+backlog did not move far enough to trip. `LakeIngestBacklogSustained` fires when a
+topic's gauge stays above 0 for 30 minutes: six cycles, so a drain that is
+working is over before it fires, and a cap below the arrival rate is not.
 
 A run with nothing to do costs 5.7 s and touches Kafka only for metadata:
 
@@ -662,7 +670,7 @@ pointing this lake at real S3 must be a config change, not a rewrite).
 | `K2_SCHEMA_REGISTRY_URL` | `http://redpanda:8081` | `ingest.py` |
 | `K2_V3_PREFIX` | `market.crypto.v3` | `ingest.py` |
 | `K2_LAKE_DISK_PATH` | `/minio-data` | `metrics.py` |
-| `K2_LAKE_MAX_OFFSETS_PER_PARTITION` | `200000` | `ingest.py`, same as `--max-offsets-per-partition` |
+| `K2_LAKE_MAX_OFFSETS_PER_PARTITION` | `600000` | `ingest.py`, same as `--max-offsets-per-partition` |
 
 `spark_conf.py` and `init-lake.sh` must agree: that script creates what these
 jobs connect to, so overriding one side alone points every job at a catalog
