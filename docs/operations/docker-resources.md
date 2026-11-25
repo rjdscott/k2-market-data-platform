@@ -134,8 +134,9 @@ Airflow limits are the plan's estimates until ADR-034's measured figures replace
   **The limit only means something if the Docker engine has the memory:** this host's
   Docker Desktop VM was 7.6 GiB until 2026-08-26 (`docker info --format '{{.MemTotal}}'`),
   so every limit above that was clipped, `docker stats` showed ClickHouse as
-  `/ 7.648GiB` against its declared 8G. It is 39.2 GiB now; `docs/development/setup.md`
-  states the requirement.
+  `/ 7.648GiB` against its declared 8G. It is 49.5 GiB and 28 CPUs now
+  (`docker info --format '{{.MemTotal}} {{.NCPU}}'` printed `53149339648 28` on
+  2026-11-26); `docs/development/setup.md` states the requirement.
 - **The three capture containers cost 0.75 CPU / 1 GiB combined**, 4% of CPU, 3% of RAM.
   That is half what the Kotlin handlers they replaced declared. RSS against these limits
   is **not yet measured** for the post-retirement stack ([ADR-010](../adr/ADR-010-resource-budget.md)

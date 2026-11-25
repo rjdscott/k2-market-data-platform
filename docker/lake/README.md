@@ -514,8 +514,11 @@ GROUP BY topic, partition" | grep -o 'Execution: [0-9.]*m\?s'
 #   Execution: 601.55ms
 ```
 
-The Spark figure is the log line above. <!-- VERIFY: record the first
-deployed runs' `batch audit ... in <s>s` here -->
+The Spark figure is the log line above. The first two scheduled runs with the audit, logical
+19:51 and 19:56 UTC on 2026-11-25 after the merge of `c0cb1bc`, each logged `stage 1: batch
+audit 0 failure(s) in 0.5s`, in runs of 236 to 244 s (their `lake_ingest` task logs). A
+read-only probe of the same read in a separate, cold Spark session, before the merge, took
+6.5 s; inside the ingest the session is already running.
 
 ### Measured, on the live backlog
 

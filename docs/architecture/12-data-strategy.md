@@ -25,7 +25,9 @@ flowchart TB
   S["SILVER · typed + annotated<br/>per venue, every delivery kept"]
   G["GOLD · canonical, cross-venue<br/>trades, book_top20, dims, ohlcv, bars, bbo"]
   CH["ClickHouse gold · indefinite<br/>backtesting + dashboards"]
+  M["MARTS · dbt on Trino, hourly<br/>one warehouse per domain"]
   R --> B --> S --> G --> CH
+  G --> M
 ```
 
 | Layer | Contract | Lives in | Retention | Who reads it |
@@ -33,7 +35,7 @@ flowchart TB
 | **Raw** | the frame as received: bytes verbatim, `recv_ts_ns`, `conn_id`/`conn_msg_seq`, Kafka lineage; `raw.pcap` beside it is designed, not built | Iceberg (`raw.*`) | forever | replay, regulatory "what did you receive", forensics |
 | **Bronze** | the venue's own schema, columnar: one table per venue × message type, field names and types as sent, no renaming | Iceberg (`bronze.*`) | forever | anyone who needs the venue's semantics untouched |
 | **Silver** | bronze, typed and annotated: fixed-point, UTC, canonical symbol *added* beside the native one, flags `checksum_ok` / `venue_replay` / `seq_gap` / `precision_loss`, lineage to the bronze row; every delivery kept | Iceberg (`silver.*`) | forever | investigations, per-venue research, gold's source |
-| **Gold** | canonical model: one schema, one row per logical trade, cross-venue in one query; reference dims; materialised products `ohlcv_{1m,5m,1h,1d}`, `bars` (tick/volume/dollar at one canonical threshold per symbol), `bbo_1s` | Iceberg (`gold.*`) **and** ClickHouse (`gold.*`) | forever in both | backtesting, dashboards, notebooks |
+| **Gold** | canonical model: one schema, one row per logical trade, cross-venue in one query; reference dims; materialised products `ohlcv_{1m,5m,1h,1d}`, `bars` (tick/volume/dollar at one canonical threshold per symbol), `bbo_1s` | Iceberg (`gold.*`) **and** ClickHouse (`gold.*`) | forever in both | backtesting, dashboards, notebooks, the dbt marts |
 
 Rules that keep it explainable:
 
@@ -45,12 +47,40 @@ Rules that keep it explainable:
 - **Dedup happens in gold, not silver.** Silver is evidence (Coinbase re-sends trades, measured
   5,034 times in a day, [ADR-024 amendment](../adr/ADR-024-unified-bronze-tables-in-the-lake.md));
   gold is truth. `venue_replay` stays a number the audit reports.
-- **Audits per layer**: raw, offset continuity; bronze and silver, row parity with raw per
-  venue and message type; gold, one-row-per-trade and parity with silver.
+- **Audits per layer**: raw, offset continuity nightly and every ingest batch's offsets as it
+  commits ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)); bronze and silver,
+  row parity with raw per venue and message type; gold, one-row-per-trade and parity with
+  silver. Every result, with the marts' dbt tests, reads in one view,
+  `governance.quality_results.dq_results` ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)).
 - **Vendor fields are never dropped.** They are bronze columns; silver keeps them; gold carries
   what is common and links back.
 
+## Marts: beside the lake, owned per domain
+
+A mart is a table or view built for consumers from lake tables. Marts are not a fifth layer:
+they hold nothing the lake cannot rebuild, and nothing in the lake reads them
+([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md),
+[ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)).
+
+| | Lake layers | Marts |
+|---|---|---|
+| Built by | Spark, every 5 minutes | dbt on Trino, every hour at minute 10 (Airflow DAG `dbt_marts`) |
+| Lives in | warehouse `k2` | the owning domain's warehouse, one schema per product |
+| Rows | kept forever | rebuilt whole on every run |
+| Snapshots | expired nightly past seven days, ten kept | expired daily past seven days by the domain's own writer (the one Trino user, `dbt_<domain>`, allowed to change that domain's tables; [chapter 19](19-lakehouse-and-domain-warehouses.md)) |
+| If lost | `raw.messages` cannot be rebuilt; every layer above it can | the next run builds it again from the lake |
+
+One table in a domain warehouse is history, not a mart: `dq.dbt_test_results`, where each
+domain's writer appends its dbt test results on every run. It is never rebuilt and no row is
+deleted ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)). Which marts
+exist, and who owns each: [products/all.md](../products/all.md).
+
 ## Serving: ClickHouse holds gold, indefinitely
+
+SQL over the lake and the marts is Trino's, for any client with a Trino driver; it reads the
+lake through a catalog that cannot commit, so it trails the market as the lake does, by up to
+one ingest cycle ([chapter 19](19-lakehouse-and-domain-warehouses.md)). ClickHouse stays the
+hot tier: gold within seconds of the bus. The rest of this section is about that tier.
 
 Decided as a hybrid, and the reasons are the trade-offs, not a preference:
 

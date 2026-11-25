@@ -42,7 +42,9 @@ cached answer, never an original. The boundary between two layers is where a que
 answered: normalisation waits for silver, dedup waits for gold. Columns: [schema-design.md](13-schema-design.md);
 partitioning: [partitioning-strategy.md](14-partitioning-strategy.md); rows: [lake-ingest.md](08-lake-ingest.md).
 What a catalog and a warehouse are, and where marts live beside these layers, is
-[chapter 19](19-lakehouse-and-domain-warehouses.md).
+[chapter 19](19-lakehouse-and-domain-warehouses.md). The marts are not a fifth layer. dbt
+builds them through Trino from `gold` and `audit.checks`, each in its domain's own
+warehouse, and nothing in the lake reads them back, so the four layers stay the record.
 
 ## How it works
 
@@ -52,7 +54,7 @@ flowchart TB
   BR[("bronze.&lt;venue&gt;_&lt;msgtype&gt; ×7<br/>what the venue said<br/>its own field names")]
   SV[("silver.trades_* · book_*<br/>what it means<br/>typed · UTC · flagged · every delivery")]
   GD[("gold.trades · book_top20<br/>bbo_1s · ohlcv_* · bars · dim_*<br/>one schema · one row per event")]
-  AU[("audit.checks<br/>what was proven, nightly")]
+  AU[("audit.checks<br/>what was proven: nightly, and per ingest batch")]
   RAW -->|"from_json per venue"| BR
   BR -->|"type · flag · canonical symbol"| SV
   SV -->|"first delivery · replay · MERGE"| GD
@@ -108,7 +110,7 @@ where "one logical trade" is *made* true, and the `duplicate_identifiers` audit 
 
 | Practice | Where it is enforced |
 |---|---|
-| Immutable record at the bottom | `raw.messages` never expired; `offset_continuity` audit; `LakeOffsetGap` alert |
+| Immutable record at the bottom | `raw.messages` never expired; `offset_continuity` audit nightly; `batch_offsets` on every ingest batch, alerted by `LakeIngestBatchAuditFailed` ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)); `LakeOffsetGap` alert |
 | Schema per venue, drift detected | `bronze_schema_drift` audit fails on undeclared keys; `spark.sql.caseSensitive = true` |
 | Every delivery kept with a reason | silver flags computed against a 1-day lookback; `silver_flags` reported nightly |
 | Dedup once, proven | `duplicate_identifiers` audit on `gold.trades`: count == distinct `(exchange, canonical_symbol, trade_id)` |

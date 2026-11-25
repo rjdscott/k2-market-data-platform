@@ -49,6 +49,19 @@ The two reads are about a minute apart in wall clock; ClickHouse is nonetheless 
 the lake on trades, and has no candles at all where the lake has 12,416. That is the
 intended shape, not a fault.
 
+Trino is a third way in, not a third copy. `lake.<namespace>.<table>` through Trino reads
+the same Iceberg files Spark wrote, at the same freshness, and Trino writes only the marts
+below ([chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md)).
+
+## Data products
+
+Every table and mart on this page belongs to one data product, and every product to one
+domain and the team that owns it ([chapter 18](../architecture/18-data-mesh.md)). The table
+of every product, with its domain, owner, lifecycle and the tables and marts it publishes,
+is [products/all.md](../products/all.md). `make generate` writes it from `contracts/`, so it
+is never kept by hand, and CI fails when it is stale. Look a table up there to find its
+owner; come back here to query it.
+
 ## Lake — Iceberg via Lakekeeper on MinIO
 
 Every table is Iceberg format-version 2, Parquet + zstd, copy-on-write, append-only
@@ -299,7 +312,7 @@ What the archive knows about its own holes. None of these exist in ClickHouse.
 
 | Check | Compares | Command |
 |---|---|---|
-| OHLCV | ClickHouse `ohlcv_live` on read, lake `gold.ohlcv_*`, DuckDB over silver | `make parity-ohlcv` |
+| OHLCV | ClickHouse `ohlcv_live` on read, lake `gold.ohlcv_*`, DuckDB over silver; optionally a fourth side, the mart `market_analytics.candles.ohlcv_1m`'s SQL through Trino | `make parity-ohlcv`; the fourth side is in [`dbt/README.md`](../../dbt/README.md#parity) |
 | Event bars | lake `gold.bars`, DuckDB window SQL, a Python reference implementation | `make parity-bars` |
 
 Both run at the pinned snapshot in `tests/parity/pinned.json`, so a re-run compares the

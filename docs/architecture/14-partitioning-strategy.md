@@ -22,7 +22,7 @@ flowchart TB
   BR[("bronze.&lt;venue&gt;_&lt;msg&gt;<br/>days(recv_ts) · sorted by symbol")]
   SV[("silver.trades_&lt;venue&gt; · silver.book_&lt;venue&gt;<br/>days(exchange_ts) · days(recv_ts)")]
   GD[("gold.trades · ohlcv_* · book_top20 · bbo_1s<br/>exchange + days/months")]
-  Q["DuckDB · ClickHouse<br/>prune: partition then sort order"]
+  Q["DuckDB · Trino · ClickHouse<br/>prune: partition then sort order"]
   CAP --> RP --> RAW --> BR --> SV --> GD --> Q
 ```
 
@@ -110,7 +110,7 @@ partitions are not evenly loaded. It matters to partitioning because the byte ca
 
 ## Iceberg
 
-Twenty-five tables across five namespaces, `raw`, `bronze`, `silver`, `gold`, `audit`.
+Twenty-six tables across five namespaces, `raw`, `bronze`, `silver`, `gold`, `audit`.
 Applied by `docker/lake/apply_ddl.py` from
 [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql).
 
@@ -290,6 +290,24 @@ and both partition pruning and sort-order pruning get slower without getting wro
   design ([ADR-020](../adr/ADR-020-avro-fixed-point-contracts.md)); as a partition field
   it would be a near-constant that occasionally splits a day in two.
 
+### Marts: partitioned like their source, or not at all
+
+The marts live in the domain warehouses, not in the table above, and each dbt model declares
+its own layout in its `config` ([`dbt/`](../../dbt/README.md)).
+`market_analytics.candles.ohlcv_1m` is partitioned by `exchange, month(window_start)`,
+Trino's spelling of the lake's `exchange, months(window_start)`, so a read of one venue's
+month prunes the same way in both. The venue scorecard, one row per venue and day, is not
+partitioned: every hourly run rebuilds it whole, as one small table. The two views store no
+files. Each domain's `dq.dbt_test_results` is not partitioned either, until a domain's table
+passes 1,000,000 rows ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md),
+Revisit when).
+
+Partitioning also bounds one generated test. The uniqueness test `k2gen` writes for a source a
+mart reads covers only the newest 6 hours, filtered on the table's time partition column,
+because over the whole of `gold.trades` it exceeded Trino's per-node query memory
+([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md), Outcome). The whole table stays the
+nightly Spark audit's, `duplicate_identifiers`.
+
 ---
 
 ## ClickHouse
@@ -346,6 +364,13 @@ SELECT partition, count(*) AS files,
        round(avg(file_size_in_bytes) / 1048576, 1) AS avg_mb
 FROM lake.raw.messages.files
 GROUP BY partition ORDER BY partition;
+```
+
+```bash
+# The same through Trino, from the host. Trino names a metadata table "<table>$files".
+docker exec k2-trino trino --user reviewer --execute '
+  SELECT partition, count(*) AS files, round(avg(file_size_in_bytes) / 1048576, 1) AS avg_mb
+  FROM lake.raw."messages$files" GROUP BY partition ORDER BY partition'
 ```
 
 ```sql

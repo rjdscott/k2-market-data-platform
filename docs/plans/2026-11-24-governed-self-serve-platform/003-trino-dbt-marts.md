@@ -77,3 +77,5 @@ make test-python                                  # batch audit: a short batch r
 make generate && test -z "$(git status --porcelain)"
 make gates
 ```
+
+_Phase P3 landed 2026-11-26 (AEDT), commits #200 7e70fb3, #201 e4c66db, #202 8452529, #204 61e25c2, #206 c0cb1bc. Where it differs from the text above: the marts live in one warehouse per domain, not a namespace `marts` (ADR-044); `governance.dq_results` is `governance.quality_results.dq_results`, fed by each domain's dbt run through Trino, not by a Spark task (ADR-046); the batch audit's decision is ADR-047, and ADR-036 stays reserved; `maintenance.py` does not maintain the marts, each domain's writer does through Trino (ADR-035 Outcome)._

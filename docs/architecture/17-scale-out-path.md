@@ -30,10 +30,20 @@ the arithmetic behind every dollar — is in
 [`2026-08-29-aws-ha-dr.md`](../research/2026-08-29-aws-ha-dr.md). This chapter carries the
 conclusions and cites it.
 
-Scope: the v3 tiers as built in Phases B–E. The 16 CPU / 40 GB single-host constraint
-([ADR-010](../adr/ADR-010-resource-budget.md)) is a *deliberate* constraint of the
+Scope: the v3 tiers as built in Phases B–E, and the SQL tier phase P3 added: Trino and the
+mart warehouses, one per data domain, placed in §1 (F10), §3, §4, §5.6, §7 and §8 (added
+2026-11-26). The single-host ceiling, 25 CPU / 48 GiB at the bootstrap peak
+([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)) and 16 CPU / 40 GB when this page was
+written ([ADR-010](../adr/ADR-010-resource-budget.md)), is a *deliberate* constraint of the
 project, not a ceiling on the architecture: ADR-018's non-goal list keeps *no HA on this
 host*, which is a different sentence from *cannot scale*.
+
+> **Orchestration is still written for Prefect.** Prefect scheduled the lake when this page
+> was written; Airflow 3 has replaced it ([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)).
+> The rows that name Prefect (F7, §1.2, §3, §4, §7, §8) have not been re-derived for Airflow.
+> Their argument does not change: `max_active_runs=1` on the `lake_ingest` DAG
+> (`docker/airflow/dags/lake.py`) is the guard §1.2 calls `concurrency_limit=1`, and it too
+> covers only the runs it launches.
 
 ---
 
@@ -55,6 +65,7 @@ is why chapter 16 remains the authority on anything with a stopwatch attached.
 | F7 | **Prefect** | no ingest is dispatched; the lake stalls and `LakeIngestFailed` fires. Nothing is lost only while the bus still holds the unread records, and the binding limit is **the per-partition byte cap, not 48 h** (2 GiB since 2026-11-25): measured 2026-08-26 at the old 512 MiB, that cap bound at **7.01 h** on `raw.kraken` partition 0, because keyed partitioning concentrates the busiest symbol, and 1,168,954 records were evicted unread (`docker/redpanda/init.sh`) | Prefect Cloud, or server + worker on ECS across AZs with RDS Multi-AZ | `concurrency_limit=1` becomes the **only** mutual exclusion once the `flock` is gone (F5), so a control-plane bug becomes a correctness bug |
 | F8 | **S3 regional event** | not representable — MinIO is one container on one disk | nothing single-region can mitigate it. This row is why §7 exists | — |
 | F9 | **Region** | not representable | §7: S3 CRR, a catalog in the second region, re-placed capture. **Not** a warm standby — a cold rebuild with a stated RTO | Iceberg's absolute paths make this a *catalog and metadata* problem before it is a storage problem (§7.1) |
+| F10 | **Trino** | SQL over the lake and the marts stops, and `dbt_marts` fails, so the marts go stale. Nothing is lost: Trino's `lake` catalog cannot commit ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)), and the next run rebuilds every mart from the lake | Trino on ECS, one task per node across AZs; ECS replaces a failed task (§3) | the coordinator is one process, so losing it stops serving until its task is replaced. One kind of table in the mart warehouses is not rebuildable: each domain's `dq.dbt_test_results`, the dbt test history (§7.2) |
 
 **The three rows that a managed service does not fix** — the ones the introduction
 promises — are F3, F5/F7 and F6. F3 is a design decision about sequence continuity (§2).
@@ -209,8 +220,9 @@ reasons are here.
 | **Ingest + maintenance** | **EMR Serverless** | a failed job is a retry, and §1.1 makes a retry safe | billing matches the shape exactly: 288 short jobs a day plus one nightly window, no idle cluster. **Precondition: §1.2's lock replacement** | the Prefect deployment's dispatch, and `docker/lake/lock.py`. Not `ingest.py`, `offsets.py` or `maintenance.py` |
 | **Hot tier** | **measure the rebuild first**, then ClickHouse Cloud (quote) or 2 replicas + 3-node Keeper on EC2 | replication, or none | the only tier where the honest answer is a measurement this design does not have. ADR-025 already makes it derived and rebuildable, so **if the rebuild is fast enough the correct amount of HA here is none** and the money belongs in the lake | connection strings; the `iceberg()` reload path gains an S3 URL and an IAM role. The contract is unchanged |
 | **Orchestration** | **self-hosted on ECS + RDS Multi-AZ** | 2 server tasks, workers in ≥ 2 AZs, RDS Multi-AZ | not about Prefect: after §1.2, `concurrency_limit=1` is load-bearing for *correctness*. That belongs in an account you control until the distributed lock replaces it — then Prefect Cloud becomes the obvious pick | the API URL and the work-pool type. Not the flows or the schedules |
+| **SQL serving and marts** | **Trino on ECS**: today's single node (coordinator and worker in one JVM) at 1×, workers added when the queries need them; dbt runs inside the orchestrator's tasks | ECS replaces a failed task; a failed `dbt_marts` run is rebuilt whole by the next | the fences of ADR-044 are Trino's `rules.json` and its read-only `lake` catalog, and an engine that attaches a warehouse directly reads around them ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)), so the SQL engine stays Trino. The marts are derived, so, as for the hot tier, restart in place is enough HA | the catalog files' hard-coded endpoints (§3.1); `X-Trino-User` becomes an authenticated identity; each domain writer's storage access scoped to its own prefix, `warehouse/<domain>/` (ADR-044's limits). Not the dbt models, the contracts or `rules.json` |
 | **Observability** | **AMP + AMG** | managed, regional, multi-AZ | Alertmanager finally exists, and everything the repo owns — the rules, the `runbook:` annotations, the promtool tests gated by `scripts/check-docs.sh` — is a file that moves unedited. Caution: at 200× it is **cardinality**, not sample rate, that sets the bill | scrape config becomes remote-write |
-| **Notebooks** | SageMaker or any notebook host; **Athena** for SQL without a cluster | — | DuckDB reads Iceberg through the same REST catalog it does today (spike S10) | the `ATTACH` endpoint and credentials |
+| **Notebooks** | SageMaker or any notebook host; SQL through the Trino tier above, where the fences are | none needed | DuckDB reads Iceberg through the same REST catalog it does today (spike S10) | the `ATTACH` endpoint and credentials |
 
 ### 3.1 What flips each endpoint
 
@@ -231,6 +243,14 @@ not a gap in this page.**
 | `K2_BROKERS` | `redpanda:9092` | MSK bootstrap brokers | where capture produces and Spark reads |
 | `K2_SCHEMA_REGISTRY_URL` | `http://redpanda:8081` | the managed registry | where schema ids resolve |
 | `K2_LAKE_LOCK` | `/tmp/k2-lake-ingest.lock` | **nothing valid** — §1.2 | the ingest mutual exclusion, and the one row here that is not a rename |
+
+**One exception today: Trino's catalog files.** `docker/trino/etc/catalog/lake.properties`
+and every domain catalog `make generate` writes (`platform/k2gen/k2gen/generate.py`) hard-code
+`http://lakekeeper:8181/catalog`, `http://minio:9000`, region `local-01` and path-style
+access, where `docker/lake/` reads each from the environment. By the rule above that is a
+bug, and a small one: Trino already reads the storage keys as `${ENV:MINIO_ROOT_USER}`, so the
+fix is the same substitution for the four values, in `lake.properties` and in the generator's
+template.
 
 Credentials are the other thing that is not a variable rename: `MINIO_ROOT_USER` /
 `MINIO_ROOT_PASSWORD`, read at `spark_conf.py`'s `lake_session()`, become an IAM task
@@ -264,12 +284,15 @@ flowchart LR
     ORC["Prefect on ECS<br/>+ RDS Multi-AZ · concurrency 1"]
     ING["EMR Serverless<br/>288 ingests/day + nightly maintenance"]
     CAT["Lakekeeper ×2 on ECS<br/>+ RDS PostgreSQL Multi-AZ"]
-    S3[("S3 · Iceberg<br/>multi-AZ · lifecycle to Glacier IR")]
+    S3[("S3 · Iceberg, lake + a prefix per domain<br/>multi-AZ · lifecycle to Glacier IR")]
     CH["ClickHouse · gold only<br/>2 replicas + 3-node Keeper"]
+    TR["Trino on ECS · SQL + dbt marts<br/>fenced per domain"]
     OBS["AMP + AMG<br/>remote-write · Alertmanager"]
   end
   V --> CAP --> BUS --> ING --> S3
   ORC --> ING
+  ORC -->|"dbt_marts hourly"| TR
+  TR -->|"reads the lake, writes the marts"| S3
   CAT --- S3
   S3 -->|"iceberg()"| CH
   CAP -.-> OBS
@@ -286,6 +309,8 @@ argument rather than shopping:
 - **ClickHouse hangs off S3, not off the bus.** ADR-025 makes reload a *pull* through
   `iceberg()`, so the hot tier's recovery does not depend on the bus, on Prefect, or on
   anything upstream still being alive.
+- **Trino writes only the domain prefixes.** It reads the lake through a catalog that cannot
+  commit, so losing it costs serving and fresh marts, never lake data.
 
 ---
 
@@ -408,6 +433,17 @@ One constraint that survives every scale, and is easy to get wrong: **snapshot e
 never remove the newest ingest snapshot**, because its summary carries the Kafka offsets
 that the next run resumes from (§1.1).
 
+### 5.6 Marts: a whole rebuild every hour does not survive 200×
+
+`dbt_marts` rebuilds every mart whole every hour, and the 1-minute candles and the venue
+scorecard each aggregate all of `gold.trades` on every build
+([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md), Outcome). The cost of a build grows
+with the whole table, not with the hour's new rows, so at 200× every hour is a full scan of a
+table that grows 200 times faster. The change is dbt's incremental materialization, which
+dbt-trino 1.12 ships with a `merge` strategy: merge on each mart's grain, re-reading the
+buckets a late trade can re-open, as `gold.py` recomputes only the buckets a batch touched.
+That changes the models, not the contracts or the fences. **Design target**, not measured.
+
 ---
 
 ## 6. Storage lifecycle: what actually makes "keep forever" affordable
@@ -499,6 +535,8 @@ second `rewrite_table_path` in the other direction, not a DNS flip.
 | Capture | re-place the tasks; capture is stateless between connections | a new `conn_id` and `conn_msg_seq = 1` mark the seam, so the discontinuity is recorded |
 | Hot tier | rebuild from the region-B lake | strictly downstream of the lake being readable |
 | Orchestration | re-apply `deploy_lake.py` against a region-B API | configuration, not state |
+| Trino | re-place the tasks, with the region-B endpoints in its catalog files (§3.1) | configuration, not state |
+| Mart warehouses | not replicated: `dbt_marts` rebuilds every mart from the region-B lake | strictly after the lake is readable. Each domain's `dq.dbt_test_results` is history, not a mart, so its prefix needs CRR and the same `rewrite_table_path` pass as the lake |
 
 **Not designed: an active-active two-region lake.** Two regions committing to one Iceberg
 table is a distributed-transaction problem the catalog does not solve, and
@@ -522,6 +560,7 @@ disagree with a number by disagreeing with its reason.
 | Ingest | **0** | **≤ 5 min** | §1.1: the in-flight run is a no-op with orphans and the next scheduled run resumes from the committed offsets. RTO is one cadence interval |
 | Hot tier | **0** | **minutes–hours** | ADR-025 makes it derived, so RPO is 0 by construction. RTO is a reload, unmeasured at scale |
 | Orchestration | **0** | ~1 min | RDS Multi-AZ behind it; the flows are code |
+| SQL serving (Trino) | **0** | minutes | no state of its own: the marts are in S3. RTO is a task replacement |
 
 **Region loss:**
 
@@ -533,6 +572,7 @@ disagree with a number by disagreeing with its reason.
 | **Lake readability** | — | **hours** | **the number that dominates**: `rewrite_table_path` over every table, a copy per the emitted file list (a near-no-op, since CRR already moved the bytes), then `register_table` per table |
 | Catalog | seconds | ~15 min | read-replica promotion, plus the `register_table` pass above |
 | Hot tier | **0** | hours | rebuild from the region-B lake, strictly after the row above |
+| Marts | **0**; the dbt test history, CRR's lag | hours, then one `dbt_marts` run | rebuilt from the region-B lake once it is readable; the test history is restored like the lake's tables |
 
 **Region-loss RTO is hours, and it is dominated by one step** — making the CRR'd Iceberg
 metadata point at the region-B bucket. That is a direct consequence of absolute paths,
@@ -573,6 +613,14 @@ one line that is cumulative rather than steady-state. Instance and task sizing i
 | Cross-AZ transfer | produce + consume, $0.01/GB each way | **$14** | **$2,894** | ec2 on-demand, Data Transfer · `AWSDataTransfer v20260720184645` |
 | | **Total** | **~$2,287** | **~$25,322** | |
 
+**Added 2026-11-26, not in the totals: Trino.** At 1× it is one Fargate task at today's
+container limits, 2 vCPU / 5 GB (`docker-compose.yml`), priced at the x86 rates the
+[research note §9](../research/2026-08-29-aws-ha-dr.md) read on 2026-08-29
+([fargate/pricing](https://aws.amazon.com/fargate/pricing/) · `AmazonECS v20260707160651`, per vCPU-hour and per GB-hour):
+`730 × (2 × 0.04656 + 5 × 0.00511)` = **$87/month**. 200× is not estimated: Trino is sized
+by the query workload, which this page does not model, not by the ingest rate. dbt adds no
+line of its own; it runs inside the orchestrator's tasks.
+
 **Excluded, and named rather than absorbed:** the ClickHouse 3-node Keeper ensemble (no
 rate for a suitable small instance class was verified, so it is left out and the totals
 understate by it); S3 GET charges (there is no query workload to model); NAT gateways,
@@ -611,6 +659,8 @@ billing (§3) are why, and both are design choices this platform already made.
 - **Whether the cost estimate is right.** It is list price against predicted volumes with
   guessed instance sizes. Three inputs would each move the total by a large factor:
   observability cardinality, MSK broker sizing, and the ClickHouse decision in §3.
+- **Trino's size.** Nothing here models the queries consumers will send, so the SQL tier is
+  priced at 1× only (§8).
 - **The ClickHouse rebuild duration**, which §3 and §7.3 both defer to and which is the
   single measurement that would most change this design.
 - **Active-active anything.** Not the lake across regions (§7.2), and not capture within
@@ -645,5 +695,6 @@ decision.
 - [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md), why the ingest job does not care what launched it
 - [ADR-023](../adr/ADR-023-lakekeeper-rest-catalog.md), the catalog choice, and why §3 keeps it over Glue
 - [ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md), why the hot tier's HA is a measurement away from being unnecessary
+- [ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md) and [ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md), the SQL tier and the mart warehouses §3 places; [chapter 19](19-lakehouse-and-domain-warehouses.md), how they work on one host
 - [`docker/lake/spark_conf.py`](../../docker/lake/spark_conf.py), the env-driven configuration §3.1 describes
 - [`docker/lake/lock.py`](../../docker/lake/lock.py), the 31 lines §1.2 is about

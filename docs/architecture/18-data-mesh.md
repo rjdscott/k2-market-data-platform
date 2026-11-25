@@ -131,7 +131,7 @@ are byte-identical and a deleted contract leaves nothing behind.
 |---|---|---|
 | Iceberg DDL for contracts with inline columns | `docker/lake/ddl/generated/` (owned) | `docker/lake/apply_ddl.py`, after `lake.sql` |
 | Snapshot expiry per table, in days | `docker/lake/generated/retention.json` | nothing yet: `maintenance.py` reads it from phase P5 |
-| A page per product, and the index by domain | `docs/products/` (owned) | people; check-docs gate (a) checks every link on them |
+| A page per product, the index by domain, and every product in one table (`all.md`) | `docs/products/` (owned) | people, and [the data catalog](../operations/data-catalog.md#data-products), which links `all.md` instead of keeping its own list; check-docs gate (a) checks every link on them |
 | One mart warehouse per domain | `docker/lake/generated/warehouses.txt` | `docker/lake/init-lake.sh`, after the lake's own bootstrap |
 | A writable Trino catalog per domain, and its local twin | `docker/trino/etc/catalog/<domain>.properties`, `docker/trino/test/local/<domain>.properties` (the generated ones; `lake.properties` beside them is hand-written) | Trino; `make test-trino` |
 | Trino's access rules: only a domain's writer creates, changes or drops its tables and rows with SQL statements (table procedures are not fenced per user) | `docker/trino/etc/rules.json` | Trino ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)) |
@@ -158,6 +158,7 @@ fixes. How a team adds a product, step by step: [the golden path](../development
 | Generated files are never edited by hand | CI job `contracts`: `make generate`, then no diff and no untracked file |
 | Generation is repeatable and removes what a deleted contract wrote | `test_a_second_generate_changes_nothing`, `test_a_deleted_contract_removes_its_outputs` |
 | A scaffolded product is valid as written | `test_a_scaffolded_product_validates` |
+| The product table has one row per product, with its owner and its tables and marts | `test_the_product_table_has_one_row_per_product` |
 | A product cannot take a platform schema's name | `k2gen validate` step 2; `test_a_product_named_like_a_platform_schema_is_rejected` |
 | A new domain gets its fence; a removed one takes it; a reserved or malformed domain id is refused | `test_a_new_domain_gets_its_fence`, `test_a_removed_domain_takes_its_catalog_and_leaves_lake_properties`, `test_a_domain_whose_fence_name_is_taken_is_rejected`, `test_a_domain_id_that_is_not_a_slug_is_rejected` |
 | The generator is typed | mypy, strict, pinned in `platform/k2gen/uv.lock`; `make lint` and CI job `contracts` |

@@ -7,7 +7,8 @@
 ## Problem
 
 A research platform for crypto market data has to do four things end to end, on one host, inside a
-16 CPU / 40 GB budget: receive every frame three public venues send and know when it did not; keep an
+fixed budget (16 CPU / 40 GB when v3 was designed; 25 CPU / 48 GiB at the bootstrap peak since
+[ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)): receive every frame three public venues send and know when it did not; keep an
 archive still trustworthy after the code that wrote it has been rewritten twice; derive research
 products from it and recompute them on demand; and serve queries fast. The hard part is that the fast
 tier and the durable tier want opposite things, and whichever is the record silently caps the other.
@@ -38,14 +39,14 @@ flowchart TB
         FHC["capture-coinbase"]
     end
     RP[("Redpanda v25.3.4 + schema registry<br/>9 topics · 12 partitions each · Avro")]
-    subgraph BATCH["Prefect 3 → Spark 3.5.5 / Iceberg 1.8.1"]
-        ING["ingest every 5 min<br/>offset range → raw → bronze → silver → gold"]
+    subgraph BATCH["Airflow 3 → Spark 3.5.5 / Iceberg 1.8.1"]
+        ING["ingest every 5 min<br/>offset range → raw, batch audited → bronze → silver → gold"]
         MNT["maintenance nightly<br/>compact · expire · audit"]
     end
     ICE[("Iceberg lake · Lakekeeper v0.13.9 + MinIO<br/>raw · bronze · silver · gold · audit")]
     CH["ClickHouse 24.3 LTS · gold<br/>live via Kafka engine · reloaded from lake"]
     NB["DuckDB notebooks"]
-    TR["Trino 484 · SQL over the lake, read-only<br/>dbt marts · one warehouse per domain"]
+    TR["Trino 484 · SQL over the lake, read-only<br/>dbt marts hourly · one warehouse per domain"]
     subgraph OBS["Observability"]
         PR["Prometheus v3.2 · 36 rules"]
         GR["Grafana 11.5 · 6 dashboards"]
@@ -83,7 +84,11 @@ Trino ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)) reads the lake thro
 that is read-only at the connector, and writes only the dbt marts, each in its data domain's own
 Lakekeeper warehouse, generated from `contracts/domains.yaml`
 ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md),
-[chapter 19](19-lakehouse-and-domain-warehouses.md)).
+[chapter 19](19-lakehouse-and-domain-warehouses.md)). A mart is a table built for consumers
+from lake tables. Airflow 3 starts every job ([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)):
+the Spark ingest and maintenance, and the `dbt_marts` DAG, which builds the marts through
+Trino every hour ([`dbt/`](../../dbt/README.md)). Prefect is stopped, kept behind
+`--profile legacy` as the rollback.
 
 Three invariants hold the shape together:
 
@@ -93,7 +98,7 @@ Three invariants hold the shape together:
 2. **One wire format.** Avro with the registry, `int64` at 1e-8, `recv_ts_ns` in the body
    ([ADR-020](../adr/ADR-020-avro-fixed-point-contracts.md)). Nothing parses JSON downstream of capture.
 3. **Correctness is measured, not asserted.** Sequence and checksum counters at capture, per-layer
-   audits in the lake, three-way OHLCV parity at a pinned snapshot, chaos scripts with timed recovery.
+   audits in the lake and a check of every ingest batch, three-way OHLCV parity at a pinned snapshot, chaos scripts with timed recovery.
 
 ## The data path
 
@@ -110,8 +115,10 @@ One trade, from the venue's socket to a candle in ClickHouse and a row in lake g
    symbol's top-20 book at the next 1 Hz tick to `book.<venue>` ([wire-contracts.md](07-wire-contracts.md)).
 4. **Every 5 minutes the lake reads by offset range,** from the offsets in the last ingest snapshot's
    summary to the broker's latest, appending each record verbatim to `raw.messages` with the consumed
-   offsets in the same commit, so a killed run resumes rather than duplicates
-   ([lake-ingest.md](08-lake-ingest.md)).
+   offsets in the same commit, so a killed run resumes rather than duplicates. It then checks
+   the batch it committed against the offset range it read, and records a mismatch without
+   undoing the commit ([lake-ingest.md](08-lake-ingest.md),
+   [ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)).
 5. **Bronze decodes it per venue** into the venue's own field names with lineage to the raw row;
    **silver** types and flags it (UTC, canonical symbol, `venue_replay` / `seq_gap` /
    `precision_loss` / `checksum_ok`), keeping every delivery ([lake-layers.md](09-lake-layers.md)).
@@ -121,9 +128,14 @@ One trade, from the venue's socket to a candle in ClickHouse and a row in lake g
 7. **ClickHouse served it within seconds** (Kafka engine flush every 5 s) ([clickhouse-gold.md](10-clickhouse-gold.md)): the trade
    reached `gold.trades` from the topic as a `ReplacingMergeTree` row, earliest delivery winning, and
    `ohlcv_live(bucket)` computes the candle on read over `FINAL`. Lake history arrives by `iceberg()`.
-8. **Every step above is measured.** Capture counters, lake gauges read from Iceberg snapshot
-   summaries and ClickHouse's own `/metrics` feed 28 Prometheus rules as code; 22 carry a runbook
-   annotation and 17 have a promtool unit test; eleven chaos scripts in `scripts/chaos/` fire the
+8. **Every hour it reaches the marts.** Airflow's `dbt_marts` runs dbt through Trino as each
+   domain's writer: `market_analytics.candles.ohlcv_1m` recomputes the candle from
+   `lake.gold.trades`, and every dbt test's result lands in that domain's
+   `dq.dbt_test_results`, read beside the lake's own checks through
+   `governance.quality_results.dq_results` ([chapter 19](19-lakehouse-and-domain-warehouses.md)).
+9. **Every step above is measured.** Capture counters, lake gauges read from Iceberg snapshot
+   summaries and ClickHouse's own `/metrics` feed 36 Prometheus rules as code; all 36 carry a
+   runbook annotation and 25 have a promtool unit test; eleven chaos scripts in `scripts/chaos/` fire the
    ones that can be induced on a single host ([observability.md](11-observability.md)).
 
 Research reads the lake, not the database: `notebooks/` is a uv project where DuckDB queries the
@@ -142,6 +154,9 @@ forensics. Nothing in the notebooks reads ClickHouse.
 | [026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md) | raw / bronze-per-venue / silver-per-venue / gold-canonical; ClickHouse serves gold with no TTL | Typed venue fields survive; OHLCV on read fixes v2's `SummingMergeTree` candles resolving open/close arbitrarily |
 | [027](../adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync policy | Raw holds the deltas; the product is what research joins against |
 | [008](../adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect, **reversed** | Wrong call, kept on the record with its Outcome |
+| [034](../adr/ADR-034-airflow-3-replaces-prefect.md) | Airflow 3 replaces Prefect | One scheduler for the Spark jobs and the dbt marts; Prefect kept stopped as the rollback |
+| [035](../adr/ADR-035-trino-and-dbt-for-marts.md) | Trino serves SQL; dbt on Trino builds the marts; Spark keeps every job that writes the lake | Consumer marts need a shared engine outside the ingest's container |
+| [044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md) | One producer lake, read-only to Trino; one mart warehouse and writer per domain | The lake can lose data for good, a mart can always be rebuilt, and every product has an owner |
 
 ## Resource footprint
 
@@ -152,7 +167,7 @@ per-service table and the command that produces it in
 
 ## Not built
 
-No query API; no replication or failover; no Alertmanager routing; no load test above 1×. Designed
+No HTTP query API (SQL is served by Trino); no replication or failover; no Alertmanager routing; no load test above 1×. Designed
 and deferred: pcap sidecar with kernel timestamps
 ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md), `raw.pcap`,
 deferred) and a cross-venue security

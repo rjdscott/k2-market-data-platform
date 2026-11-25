@@ -6,7 +6,8 @@ order, so two runs are byte-identical and a deleted contract leaves nothing:
 
     docker/lake/ddl/generated/            DDL for contracts with inline columns (owned)
     docker/lake/generated/retention.json  snapshot expiry in days, per table
-    docs/products/                        a page per product and the index (owned)
+    docs/products/                        a page per product, the index, and all.md, every
+                                          product in one table, which the data catalog links (owned)
 
 and, from contracts/domains.yaml, one fence per domain (ADR-044):
 
@@ -44,6 +45,7 @@ from k2gen.cli import LAKE_SQL, SUFFIX, fence
 GENERATED_DDL = "docker/lake/ddl/generated"
 RETENTION = "docker/lake/generated/retention.json"
 PAGES = "docs/products"
+PRODUCT_TABLE = f"{PAGES}/all.md"
 OWNED = (GENERATED_DDL, PAGES)
 WAREHOUSES = "docker/lake/generated/warehouses.txt"
 TRINO_RULES = "docker/trino/etc/rules.json"
@@ -201,6 +203,7 @@ def _index(domains: dict[str, Any], products: list[dict[str, Any]]) -> str:
         "One page per data product, by domain, written from its descriptor and contracts under",
         "[`contracts/`](../../contracts/domains.yaml). Each page names the owner, what the product",
         "reads and writes, and every output's classification, retention and columns.",
+        "Every product in one table: [all.md](all.md).",
         "How a product is added: [the golden path](../development/golden-path.md).",
     ]
     for name, domain in domains.items():
@@ -210,8 +213,32 @@ def _index(domains: dict[str, Any], products: list[dict[str, Any]]) -> str:
             lines.append("No product yet.")
             continue
         lines += ["| Product | Lifecycle | Outputs and marts |", "|---|---|---|"]
-        lines += [f"| [{p['name']}]({name}/{p['name']}.md) | {p['lifecycle']} | {_code(p['outputs'] + [m['table'] for m in p.get('marts', [])])} |" for p in mine]
+        lines += [f"| [{p['name']}]({name}/{p['name']}.md) | {p['lifecycle']} | {_built(p)} |" for p in mine]
     return "\n".join(lines) + "\n"
+
+
+def _built(product: dict[str, Any]) -> str:
+    return _code(product["outputs"] + [m["table"] for m in product.get("marts", [])])
+
+
+def _product_table(domains: dict[str, Any], products: list[dict[str, Any]]) -> str:
+    """Every product in one table, in domains.yaml order: what docs/operations/data-catalog.md links."""
+    rows = [p for name in domains for p in products if p["domain"] == name]
+    return "\n".join(
+        [
+            f"<!-- {HEADER} -->",
+            "# Every data product",
+            "",
+            "One row per data product, from its descriptor under [`contracts/`](../../contracts/domains.yaml).",
+            "A lake table is named `<namespace>.<table>` and read through Trino as `lake.<namespace>.<table>`;",
+            "a mart is `<catalog>.<schema>.<table>`, in its domain's own catalog. Each product's page has",
+            "its inputs, classification, retention and columns; [the index](README.md) has each domain.",
+            "",
+            "| Domain | Product | Owner | Lifecycle | Tables and marts |",
+            "|---|---|---|---|---|",
+            *[f"| [{p['domain']}](README.md#{p['domain']}) | [{p['name']}]({p['domain']}/{p['name']}.md) | `{p['owner']}` | {p['lifecycle']} | {_built(p)} |" for p in rows],
+        ]
+    ) + "\n"
 
 
 def _ddl_readme(tables: list[str]) -> str:
@@ -438,6 +465,7 @@ def render(root: Path) -> dict[str, str]:
     out[f"{GENERATED_DDL}/README.md"] = _ddl_readme(inline)
     out |= {f"{PAGES}/{p['domain']}/{p['name']}.md": _page(p, tables, lake, home) for p in products}
     out[f"{PAGES}/README.md"] = _index(domains, products)
+    out[PRODUCT_TABLE] = _product_table(domains, products)
     out[WAREHOUSES] = _warehouses(domains)
     out[TRINO_RULES] = _rules(domains)
     out |= {f"{CATALOGS}/{fence(d)}.properties": _catalog(d, spec, local=False) for d, spec in domains.items()}

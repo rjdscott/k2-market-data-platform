@@ -514,7 +514,7 @@ tests:
   - interval: 1m
     input_series:
       - series: 'k2_lake_offset_gaps_total'
-        values: '0+0x10 1+0x15 0+0x30'   # filed at t=11m, aged out at t=26m
+        values: '0+0x10 1+0x15 0+0x30'   # filed at t=11m, 1 through t=26m, aged out (0) from t=27m
     alert_rule_test:
       - eval_time: 5m
         alertname: LakeOffsetGap
