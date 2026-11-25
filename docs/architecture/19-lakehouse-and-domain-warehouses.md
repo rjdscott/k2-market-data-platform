@@ -316,6 +316,9 @@ URL, the MinIO endpoint and region `local-01` (`lake.properties`, `generate.py`)
 
 ## See it yourself
 
+For a step-by-step version, with every write on a throwaway Trino, do the
+[lakehouse labs](../development/lakehouse-labs.md).
+
 Read-only, against the running stack, on 2026-11-25; the two catalog listings re-run on
 2026-11-26, after the governance domain's rollout. Counts grow with every commit.
 
