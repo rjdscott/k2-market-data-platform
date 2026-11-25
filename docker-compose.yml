@@ -1122,10 +1122,11 @@ services:
   # writer `dbt_<domain>` (ADR-044). Checked by `make test-trino`. Identity is
   # the X-Trino-User header, not authenticated, so the port is loopback only.
   #
-  # Heap 2816M (etc/jvm.config) under the 4G limit leaves 1.25 GiB for
-  # metaspace, code cache, thread stacks and direct buffers. The 2026-11-25 spike
-  # ran every single query at 1 CPU / 2 GiB; the rest is for concurrent dbt
-  # threads (ADR-035).
+  # Heap 2816M (etc/jvm.config) under the 5G limit leaves 2.25 GiB for
+  # metaspace, code cache, thread stacks and direct buffers, which jvm.config
+  # does not cap. The 2026-11-25 spike ran every single query at 1 CPU / 2 GiB;
+  # the rest is for concurrent dbt threads. 4G until the dbt marts' first
+  # builds left the cgroup's anon memory 0.2 GiB under it (ADR-035 Outcome).
   trino:
     image: trinodb/trino:484
     container_name: k2-trino
@@ -1152,7 +1153,7 @@ services:
       resources:
         limits:
           cpus: '2.0'
-          memory: 4G
+          memory: 5G
         reservations:
           cpus: '0.5'
           memory: 1G
@@ -1392,7 +1393,7 @@ services:
 # spark-iceberg         | 3.0       | 8G           | Batch engine (lake ingest + maintenance)
 # lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018)
 # lake-metrics          | 0.1       | 128M         | v3 lake alerts exporter (:8000)
-# trino                 | 2.0       | 4G           | SQL over the lake, dbt marts (ADR-035; 127.0.0.1:8088)
+# trino                 | 2.0       | 5G           | SQL over the lake, dbt marts (ADR-035; 127.0.0.1:8088)
 # capture-binance       | 0.25      | 256M         | Rust capture, Binance (12 pairs, trades + L2)
 # capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (11 pairs, trades + L2)
 # capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (11 pairs, trades + L2)
@@ -1401,7 +1402,7 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (19 long-running) | 19.30 CPU | 34.312 GiB | v3 capture + lake, Airflow schedules, Trino
+# STEADY STATE (19 long-running) | 19.30 CPU | 35.312 GiB | v3 capture + lake, Airflow schedules, Trino
 #
 # One-shots are NOT free. They declare limits and they run concurrently with
 # the steady state at boot, so the budget that matters at `docker compose up` is
@@ -1415,11 +1416,11 @@ services:
 #   ----------------------------------------------------------------------------
 #   one-shot subtotal  2.0  | 2.5G
 #
-# Bootstrap peak: 21.30 CPU / 36.812 GiB, all 24 default-profile services,
+# Bootstrap peak: 21.30 CPU / 37.812 GiB, all 24 default-profile services,
 # against the 25 CPU / 48 GiB ceiling ADR-045 sets at the bootstrap peak
 # (superseding ADR-034's 20 CPU / 36 GiB, which superseded ADR-010's 16 CPU /
 # 40 GB). scripts/check-budget.py fails CI over it. Headroom: 3.70 CPU and
-# 11.188 GiB. The host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay
+# 10.188 GiB. The host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay
 # outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
 #
 # `legacy` profile, the Prefect rollback, not started by default:
@@ -1427,7 +1428,7 @@ services:
 #   prefect-server     1.0  | 1G    Orchestration UI/API (Prefect 3.x)
 #   prefect-worker     0.5  | 512M  Workflow executor (Prefect 3.x)
 #
-# With it the peak is 22.80 CPU / 38.312 GiB across 26, inside the ceiling but
+# With it the peak is 22.80 CPU / 39.312 GiB across 26, inside the ceiling but
 # reported, not gated. Both go at the archive pull request. The Airflow limits
 # are the plan's estimates until ADR-034's measured figures replace them.
 #
@@ -1445,5 +1446,5 @@ services:
 # Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-25 (trino 2.0 CPU / 4G and the 25 CPU / 48 GiB ceiling, ADR-045; before it spark-iceberg 2.0 -> 3.0 CPU)
+# Last updated: 2026-11-26 (trino 4G -> 5G, ADR-010 and ADR-035 Outcomes; before it trino 2.0 CPU / 4G and the 25 CPU / 48 GiB ceiling, ADR-045)
 #############################################################################

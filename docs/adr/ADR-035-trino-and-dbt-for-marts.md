@@ -198,17 +198,24 @@ build, and both passed on the live stack (`dbt build --selector market_analytics
   expiry at `1d` as the writer failed with `Retention specified (1.00d) is shorter than the
   minimum retention configured in the system (7.00d)` (scratch table, 2026-11-25).
 
-**Memory, measured after the builds.** The JVM held 3.82 GiB resident of the 4 GiB limit
-(`docker exec k2-trino cat /proc/1/status`, `VmRSS`), the container's `memory.peak` was
-3.95 GiB and `oom_kill` 0 (`docker exec k2-trino cat /sys/fs/cgroup/memory.peak
-/sys/fs/cgroup/memory.events`), 2026-11-25. That is the heap committed to its 2816M maximum
-and about 1.07 GiB beside it, inside the 1.25 GiB the Decision left for that; the 1.42 GiB idle
-figure in the Context is a fresh JVM's. A whole `dbt_marts` run took 31 to 40 s in a throwaway
-Airflow container against this Trino (`airflow dags list-runs dbt_marts`, start to end,
-2026-11-25).
+**The memory limit was raised from 4 GiB to 5 GiB**, the heap unchanged at 2816M. After the
+builds the container's anonymous memory was 4,072,116,224 bytes against the 4,294,967,296-byte
+limit (`docker exec k2-trino cat /sys/fs/cgroup/memory.stat`, the `anon` line), about 0.2 GiB
+of room; the JVM held 3.82 GiB resident (`docker exec k2-trino cat /proc/1/status`, `VmRSS`),
+`memory.peak` was 3.95 GiB and `oom_kill` 0 (`docker exec k2-trino cat
+/sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events`), all 2026-11-25. That is the heap
+committed to its 2816M maximum and about 1.07 GiB beside it, inside the 1.25 GiB the Decision
+left for that but close to it, and `jvm.config` does not cap direct memory; the 1.42 GiB idle
+figure in the Context is a fresh JVM's. An hourly, unattended DAG should not wait for an
+out-of-memory kill to find out, so the limit moved first: 2.25 GiB now sits beside the heap
+([ADR-010](ADR-010-resource-budget.md) Outcome; the gated bootstrap peak goes to 21.30 CPU /
+37.812 GiB of 25 / 48, `python3 scripts/check-budget.py`). A whole `dbt_marts` run took 31 to
+40 s in a throwaway Airflow container against this Trino (`airflow dags list-runs dbt_marts`,
+start to end, 2026-11-25).
 
-**Revisit when** `oom_kill` in `k2-trino`'s `memory.events` is above 0, or a mart model, not a
-test, fails with `EXCEEDED_LOCAL_MEMORY_LIMIT`, or a `dbt_marts` run is ended by its 50-minute
-`dagrun_timeout` (`docker/airflow/dags/dbt_marts.py`). Then measure, and raise the memory limit
-or `query.max-memory-per-node` inside ADR-045's headroom: the gated bootstrap peak is 21.30 CPU
-/ 36.81 GiB of 25 / 48 (`python3 scripts/check-budget.py`, 2026-11-25).
+**Revisit when** the `anon` line of `docker exec k2-trino cat /sys/fs/cgroup/memory.stat`
+passes 4.5 GiB (4,831,838,208 bytes) or the `oom_kill` count in `memory.events` is above 0;
+or a mart model, not a test, fails with `EXCEEDED_LOCAL_MEMORY_LIMIT`; or a `dbt_marts` run is
+ended by its 50-minute `dagrun_timeout` (`docker/airflow/dags/dbt_marts.py`). Then measure,
+and cap direct memory in `jvm.config`, or raise the limit or `query.max-memory-per-node`
+inside ADR-045's headroom, 3.70 CPU and 10.188 GiB at the gated peak after this change.

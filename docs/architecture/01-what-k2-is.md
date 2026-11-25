@@ -12,7 +12,7 @@ verbatim to an Iceberg lake, derives typed and canonical layers from that archiv
 serves the canonical layer from ClickHouse for dashboards and fast queries, with Trino for
 SQL over the lake. It runs on one host inside a declared ceiling of 25 CPU / 48 GiB at the
 bootstrap peak ([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)): as deployed, 19
-long-running services at 19.30 CPU / 34.312 GiB of limits, plus five one-shot init
+long-running services at 19.30 CPU / 35.312 GiB of limits, plus five one-shot init
 containers, with Prefect kept behind `--profile legacy` as the rollback
 ([docker-resources.md](../operations/docker-resources.md)).
 

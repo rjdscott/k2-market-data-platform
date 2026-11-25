@@ -90,8 +90,8 @@ flowchart TB
   classDef ob fill:#f3f4f6,stroke:#6b7280,color:#111827
 ```
 
-19 long-running services and 5 one-shot init containers, 19.30 CPU / 34.312 GiB of declared
-limits at steady state and 21.30 CPU / 36.812 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
+19 long-running services and 5 one-shot init containers, 19.30 CPU / 35.312 GiB of declared
+limits at steady state and 21.30 CPU / 37.812 GiB at the bootstrap peak, under a 25 CPU / 48 GiB
 ceiling ([ADR-045](./docs/adr/ADR-045-ceiling-25-cpu-48-gib.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 Prefect, which Airflow replaced, waits behind `--profile legacy` as the rollback, not running.
 
@@ -144,8 +144,9 @@ Detail per failure: [failure modes](./docs/architecture/16-failure-modes.md).
 
 ## Quick start
 
-Requires a Docker engine with at least 24 GB of memory so every declared limit is honoured;
-measured usage is far lower.
+Requires a Docker engine with at least 38 GiB of memory so every declared limit is honoured,
+the 37.812 GiB bootstrap peak included ([setup](./docs/development/setup.md)); measured usage is
+far lower.
 
 Two lines of `.env` are host-specific and are the whole first-run gotcha:
 `K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` ship empty (no CPU pinning, starts anywhere) —
