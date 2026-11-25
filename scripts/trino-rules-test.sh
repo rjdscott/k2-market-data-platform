@@ -29,8 +29,9 @@ mapfile -t DOMAINS < <(sed -n 's/^  \([a-z][a-z0-9-]*\):$/\1/p' contracts/domain
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-# sql <user> <statement>
+# sql <user> <statement>; sql_with <user> <catalog.property=value> <statement>
 sql() { docker exec "$NAME" trino --user "$1" --execute "$2" 2>&1; }
+sql_with() { docker exec "$NAME" trino --user "$1" --session "$2" --execute "$3" 2>&1; }
 
 # start <docker run args...>: a fresh container, waited on for up to 120 s.
 start() {
@@ -90,6 +91,19 @@ for i in "${!DOMAINS[@]}"; do
   deny  "$w" "CREATE TABLE lake.s_$d.t3 AS SELECT 1 AS x"
 done
 
+# Every other SQL write on another domain's existing table, by its neighbour's writer
+# and by a user no rule names (the tables exist: the local catalogs share a metastore).
+for i in "${!DOMAINS[@]}"; do
+  d=${DOMAINS[$i]} other=${DOMAINS[$(( (i + 1) % n ))]}
+  for u in "dbt_$other" someone; do
+    deny "$u" "DELETE FROM $d.s_$d.t WHERE x = 1"
+    deny "$u" "UPDATE $d.s_$d.t SET x = 5 WHERE x = 2"
+    deny "$u" "ALTER TABLE $d.s_$d.t ADD COLUMN y integer"
+    deny "$u" "CREATE VIEW $d.s_$d.v_$u AS SELECT 1 AS x"
+    deny "$u" "DROP TABLE $d.s_$d.t"
+  done
+done
+
 # Reads cross every fence: a view in one domain over another domain's table and the lake,
 # read by a user who owns neither (a definer view: its owner's rights reach the base tables).
 a=${DOMAINS[0]} b=${DOMAINS[1]}
@@ -106,17 +120,44 @@ deny  "$w" "ALTER TABLE lake.s_$a.t EXECUTE expire_snapshots(retention_threshold
 deny  "$w" "ALTER TABLE lake.s_$a.t EXECUTE remove_orphan_files(retention_threshold => '7d')"
 deny  "$w" "DELETE FROM lake.s_$a.t"
 deny  "$w" "DROP TABLE lake.s_$a.t"
-# Iceberg's CALL procedures, through either kind of catalog: rules.json has no
-# procedure rules, so only Trino's built-in ones run.
+# Iceberg's CALL procedures. rules.json has no procedures list, so only Trino's
+# built-in ones run: that default is what denies these in a domain catalog, and a
+# procedures rule added later would reopen them, which these lines would catch.
 deny  "$w" "CALL lake.system.unregister_table('s_$a', 't')"
 deny  "$w" "CALL $a.system.register_table(schema_name => 's_$a', table_name => 'r', table_location => 'local:///s_$a/t')"
+for u in "dbt_$a" "dbt_$b" someone; do
+  deny "$u" "CALL lake.system.rollback_to_snapshot('s_$a', 't', $snap)"
+done
+for u in "dbt_$b" someone; do
+  deny "$u" "CALL $a.system.rollback_to_snapshot('s_$a', 't', $snap)"
+done
+
+# The retention floors are session properties; nobody may lower them, not even a
+# domain's writer in its own catalog, so an expire or orphan clean below 7 days
+# fails on the floor. Any other catalog session property still sets.
+for u in "dbt_$a" someone; do
+  deny "$u" "SET SESSION $a.expire_snapshots_min_retention = '0s'"
+  deny "$u" "SET SESSION $a.remove_orphan_files_min_retention = '0s'"
+done
+out=$(sql_with "dbt_$a" "$a.expire_snapshots_min_retention=0s" "ALTER TABLE $a.s_$a.t EXECUTE expire_snapshots(retention_threshold => '0s')") || true
+case "$out" in
+  *"Access Denied"*|*"shorter than the minimum retention"*)
+    echo "ok refused (dbt_$a): --session $a.expire_snapshots_min_retention=0s, then expire_snapshots at 0s: $(grep -m1 -oE 'Access Denied[^.]*|Retention specified[^)]*\)' <<< "$out")" ;;
+  *) bad "an expire at 0s with the floor lowered by --session was not refused"; echo "  $out" ;;
+esac
+out=$(sql "dbt_$a" "ALTER TABLE $a.s_$a.t EXECUTE expire_snapshots(retention_threshold => '0s')") || true
+case "$out" in
+  *"shorter than the minimum retention"*) echo "ok floor (dbt_$a): expire_snapshots at 0s refused at the 7-day minimum" ;;
+  *) bad "expire_snapshots at 0s did not fail on the floor"; echo "  $out" ;;
+esac
+allow "dbt_$a" "SET SESSION $a.dynamic_filtering_wait_timeout = '1s'"
 # The control: the same procedure in the writer's own catalog runs, so the
 # denials through lake are the connector's and not a broken table.
 allow "$w" "ALTER TABLE $a.s_$a.t EXECUTE optimize"
 
 # The known gap (ADR-044): no built-in access control in Trino 484 restricts
-# ALTER TABLE ... EXECUTE per user on a writable catalog, so one domain's writer can
-# run a table procedure on another domain's table. Asserted, so that a release which
+# ALTER TABLE ... EXECUTE per user on a writable catalog, so any user can run a
+# table procedure on any domain's table (at or above the retention floors). Asserted, so that a release which
 # closes it fails here and the ADR is revisited. EXPLAIN plans without running it.
 case "$(sql "dbt_$b" "EXPLAIN ALTER TABLE $a.s_$a.t EXECUTE optimize")" in
   *TableExecute*) echo "ok known gap: dbt_$b can plan a table procedure on $a (ADR-044)" ;;
@@ -130,6 +171,12 @@ for d in "${DOMAINS[@]}"; do
   deny someone "INSERT INTO $d.s_$d.t VALUES 4"
 done
 deny  someone "CREATE TABLE lake.s_$a.t_someone AS SELECT 1 AS x"
+
+# A user sees and kills only its own queries: someone sees none of dbt_$a's.
+if [ "$(sql someone "SELECT count(*) FROM system.runtime.queries WHERE \"user\" = 'dbt_$a'")" = '"0"' ] \
+  && [ "$(sql "dbt_$a" "SELECT count(*) > 0 FROM system.runtime.queries WHERE \"user\" = 'dbt_$a'")" = '"true"' ]; then
+  echo "ok queries: someone sees none of dbt_$a's queries, dbt_$a sees its own"
+else bad "query visibility is not limited to the owner"; fi
 
 for d in "${DOMAINS[@]}"; do
   [ "$d" = "$a" ] && allow "dbt_$d" "DROP VIEW $d.s_$d.v"

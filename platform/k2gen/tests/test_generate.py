@@ -182,12 +182,28 @@ def test_a_removed_domain_takes_its_catalog_and_leaves_lake_properties(tree):
     assert lake.read_text() == "connector.name=iceberg\niceberg.security=read_only\n"
 
 
-@pytest.mark.parametrize("name", ["lake", "system", "k2"])
+@pytest.mark.parametrize("name", ["lake", "system", "k2", "information-schema", "table", "default", "user"])
 def test_a_domain_whose_fence_name_is_taken_is_rejected(tree, name):
     add_domain(tree, name)
-    assert [e for e in cli.validate(tree) if f"domain {name} would be catalog and warehouse {name}" in e]
+    fence = cli.fence(name)
+    assert [e for e in cli.validate(tree) if f"domain {name} would be catalog and warehouse {fence}" in e]
 
 
 def test_a_domain_id_that_is_not_a_slug_is_rejected(tree):
     add_domain(tree, "Research_Desk")
     assert [e for e in cli.validate(tree) if "contracts/domains.yaml" in e and "Research_Desk" in e]
+
+
+def test_the_rules_keep_the_retention_floors_and_other_peoples_queries_out_of_reach():
+    rules = json.loads(generate.render(ROOT)[generate.TRINO_RULES])
+    first, last = rules["catalog_session_properties"]
+    assert first == {"property": "expire_snapshots_min_retention|remove_orphan_files_min_retention", "allow": False}
+    assert "user" not in first and "catalog" not in first and last == {"allow": True}
+    assert rules["queries"] == [{"allow": ["execute"]}]
+    assert "procedures" not in rules  # so CALL runs only Trino's built-in procedures
+
+
+def test_warehouses_txt_ends_with_a_newline():
+    # init-lake.sh reads it with `while read`, which drops an unterminated last line.
+    text = generate.render(ROOT)[generate.WAREHOUSES]
+    assert text.endswith("\n") and text.splitlines()[-1] == sorted(cli.fence(d) for d in yaml.safe_load((ROOT / "contracts/domains.yaml").read_text())["domains"])[-1]

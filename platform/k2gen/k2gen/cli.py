@@ -49,6 +49,9 @@ RESERVED = {
     "lake": "Trino's read-only catalog over the lake",
     "system": "Trino's own catalog",
     "k2": "the lake's warehouse",
+    "information_schema": "the schema name every Trino catalog has",
+    # Trino reserved words: a catalog named one would need quoting in every query.
+    **{w: "a Trino reserved word" for w in ("table", "select", "schema", "catalog", "default", "user")},
 }
 
 

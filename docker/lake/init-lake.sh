@@ -135,11 +135,13 @@ for ns in raw bronze silver gold audit; do
   post "$LK/catalog/v1/$prefix/namespaces" "{\"namespace\":[\"$ns\"]}" "409"
 done
 
-# Last, after the lake has its namespaces: a failure here still exits 1, but it
-# cannot leave the lake's own bootstrap half done.
+# Last, after the lake's namespaces exist, so a failure here cannot leave them
+# half made. It still exits 1, and lake-init failing holds back what waits for it
+# (lake-ddl, then airflow-scheduler; trino): docker/trino/README.md says what to do.
 echo "[5/5] Domain warehouses ($DOMAIN_WAREHOUSES)"
 domains=()
-while read -r w; do
+# `|| [[ -n $w ]]`: a last line with no newline is still read (the generator writes one).
+while read -r w || [[ -n $w ]]; do
   [[ -z $w || $w == \#* ]] || domains+=("$w")
 done < "$DOMAIN_WAREHOUSES"
 for w in "${domains[@]}"; do

@@ -90,6 +90,22 @@
       ]
     }
   ],
+  "catalog_session_properties": [
+    {
+      "property": "expire_snapshots_min_retention|remove_orphan_files_min_retention",
+      "allow": false
+    },
+    {
+      "allow": true
+    }
+  ],
+  "queries": [
+    {
+      "allow": [
+        "execute"
+      ]
+    }
+  ],
   "system_information": [
     {
       "allow": [

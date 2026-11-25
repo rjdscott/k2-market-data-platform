@@ -13,7 +13,7 @@ and, from contracts/domains.yaml, one fence per domain (ADR-044):
     docker/lake/generated/warehouses.txt  the Lakekeeper warehouses init-lake.sh creates
     docker/trino/etc/catalog/<fence>.properties   a writable Trino catalog per domain
     docker/trino/test/local/<fence>.properties    its twin on a local metastore, for make test-trino
-    docker/trino/etc/rules.json           each domain's writer writes only its own catalog
+    docker/trino/etc/rules.json           only a domain's writer changes its catalog with SQL statements
 
 A catalog file is the generator's if it starts with the generated header; those are
 deleted and written again, so a removed domain takes its catalog with it, and the
@@ -257,7 +257,8 @@ def _catalog(domain: str, spec: dict[str, Any], local: bool) -> str:
     head = (
         f"# {HEADER}\n"
         f"# Domain {domain} ({spec['owner']}): warehouse {name}, key prefix warehouse/{name}.\n"
-        f"# Writable by dbt_{name} only (rules.json); read-only to every other user (ADR-044).\n"
+        f"# Only dbt_{name} creates, changes or drops its tables and rows (rules.json); table\n"
+        f"# procedures are not fenced per user (ADR-044).\n"
     )
     body = (_CATALOG_LOCAL if local else _CATALOG_REST).format(name=name, common=_CATALOG_COMMON)
     return head + body
@@ -276,6 +277,11 @@ def _rules(domains: dict[str, Any]) -> str:
     """
     names = sorted(fence(d) for d in domains)
     write = ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP", "GRANT_SELECT"]
+    # The Iceberg connector's two retention floors are session properties with no lower
+    # bound: anyone who may set them can expire every snapshot or orphan-clean a table at
+    # 0s (probed on k2-trino, 2026-11-25). Nobody may, a domain's writer in its own
+    # catalog included: snapshot maintenance belongs to the platform, not to SQL users.
+    floors = "expire_snapshots_min_retention|remove_orphan_files_min_retention"
     rules = {
         "catalogs": [
             {"catalog": "system", "allow": "read-only"},
@@ -284,6 +290,10 @@ def _rules(domains: dict[str, Any]) -> str:
         "schemas": [{"user": f"dbt_{n}", "catalog": n, "owner": True} for n in names] + [{"owner": False}],
         "tables": [{"user": f"dbt_{n}", "catalog": n, "privileges": write} for n in names]
         + [{"privileges": ["SELECT", "GRANT_SELECT"]}],
+        "catalog_session_properties": [{"property": floors, "allow": False}, {"allow": True}],
+        # Everyone executes; a user views and kills only its own queries, which Trino
+        # always allows. Without this list any user could read and kill anyone's.
+        "queries": [{"allow": ["execute"]}],
         "system_information": [{"allow": ["read"]}],
     }
     return json.dumps(rules, indent=2) + "\n"
