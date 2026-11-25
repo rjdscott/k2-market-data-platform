@@ -158,8 +158,8 @@
       },
       "id": 4,
       "type": "stat",
-      "title": "Memory in use",
-      "description": "Working set of all running K2 containers, summed, from cAdvisor.",
+      "title": "Process memory (RSS)",
+      "description": "Process memory (RSS) of all running K2 containers, summed: what a container is killed for. File cache is excluded and is on the table below. Worry when it nears the total of the memory limits.",
       "gridPos": {
         "h": 6,
         "w": 5,
@@ -206,8 +206,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(container_memory_working_set_bytes{job=\"cadvisor\"})",
-          "legendFormat": "Memory in use",
+          "expr": "sum(container_memory_rss{job=\"cadvisor\"})",
+          "legendFormat": "Process memory (RSS)",
           "refId": "A"
         }
       ]
@@ -302,7 +302,7 @@
       "id": 11,
       "type": "table",
       "title": "Every container against its compose limit",
-      "description": "One row per running K2 container. Limits are read from the container's cgroup (container_spec_cpu_quota / container_spec_cpu_period, container_spec_memory_limit_bytes), so a compose change shows here after `up`, with no edit to this dashboard. CPU is the 2-minute average; memory is the working set. Click a header to sort.",
+      "description": "One row per running K2 container. Limits are read from the container's cgroup, so a compose change shows here after `up`. CPU is the 2-minute average. Process memory / limit is the figure to watch: above 90% the container is close to an out-of-memory kill. File cache is reclaimable page cache the kernel drops under pressure, so a high value is normal for MinIO. Working set is RSS plus recently used cache. OOM kills counts kills since the container started: any value above 0 is a problem, but cAdvisor here has no /dev/kmsg, so 0 is not proof; `docker inspect` OOMKilled is. Click a header to sort.",
       "gridPos": {
         "h": 21,
         "w": 24,
@@ -440,7 +440,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Memory used"
+                "value": "Process memory (RSS)"
               },
               {
                 "id": "unit",
@@ -480,7 +480,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Memory used / limit"
+                "value": "Process memory / limit"
               },
               {
                 "id": "unit",
@@ -537,6 +537,94 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "Value #G"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "File cache, reclaimable"
+              },
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #H"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Working set (RSS + active cache)"
+              },
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #I"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "OOM kills"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "name"
             },
             "properties": [
@@ -560,7 +648,7 @@
         },
         "sortBy": [
           {
-            "displayName": "Memory used / limit",
+            "displayName": "Process memory / limit",
             "desc": true
           }
         ]
@@ -604,7 +692,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (name) (container_memory_working_set_bytes{job=\"cadvisor\"})",
+          "expr": "max by (name) (container_memory_rss{job=\"cadvisor\"})",
           "format": "table",
           "instant": true,
           "legendFormat": "",
@@ -626,11 +714,44 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (name) (container_memory_working_set_bytes{job=\"cadvisor\"}) / on (name) max by (name) (container_spec_memory_limit_bytes{job=\"cadvisor\"})",
+          "expr": "max by (name) (container_memory_rss{job=\"cadvisor\"}) / on (name) max by (name) (container_spec_memory_limit_bytes{job=\"cadvisor\"})",
           "format": "table",
           "instant": true,
           "legendFormat": "",
           "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (name) (container_memory_cache{job=\"cadvisor\"})",
+          "legendFormat": "",
+          "refId": "G",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (name) (container_memory_working_set_bytes{job=\"cadvisor\"})",
+          "legendFormat": "",
+          "refId": "H",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (name) (container_oom_events_total{job=\"cadvisor\"})",
+          "legendFormat": "",
+          "refId": "I",
+          "format": "table",
+          "instant": true
         }
       ],
       "transformations": [
@@ -651,7 +772,10 @@
               "Value #C": 3,
               "Value #D": 4,
               "Value #E": 5,
-              "Value #F": 6
+              "Value #F": 6,
+              "Value #G": 7,
+              "Value #H": 8,
+              "Value #I": 9
             }
           }
         }
@@ -754,8 +878,8 @@
       },
       "id": 22,
       "type": "timeseries",
-      "title": "Top 5 by memory",
-      "description": "The five containers with the largest working set at each point.",
+      "title": "Top 5 by process memory (RSS)",
+      "description": "The five containers with the largest process memory (RSS) at each point. File cache is not counted. A line climbing toward its limit without levelling is a leak or an undersized limit.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -817,7 +941,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "topk(5, max by (name) (container_memory_working_set_bytes{job=\"cadvisor\"}))",
+          "expr": "topk(5, max by (name) (container_memory_rss{job=\"cadvisor\"}))",
           "legendFormat": "{{name}}",
           "refId": "A"
         }

@@ -541,8 +541,8 @@
       },
       "id": 112,
       "type": "timeseries",
-      "title": "Memory used by the pipeline",
-      "description": "Working set of each pipeline container: the figure the kernel compares with the memory limit before it OOM-kills. Limits are on the K2 Resources dashboard.",
+      "title": "Process memory and file cache, pipeline",
+      "description": "Solid lines are process memory (RSS), which is what gets a container OOM-killed; compare it with the limit on K2 Resources. Dashed lines are file cache, reclaimable page cache the kernel drops under pressure, so a high cache is normal for an object store. Worry when RSS climbs toward the limit.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -580,7 +580,30 @@
             ]
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -605,9 +628,18 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max by (name) (container_memory_working_set_bytes{job=\"cadvisor\", name=~\"k2-(capture-.+|redpanda|clickhouse)\"})",
+          "expr": "max by (name) (container_memory_rss{job=\"cadvisor\", name=~\"k2-(capture-.+|redpanda|clickhouse)\"})",
           "legendFormat": "{{name}}",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (name) (container_memory_cache{job=\"cadvisor\", name=~\"k2-(capture-.+|redpanda|clickhouse)\"})",
+          "legendFormat": "{{name}} file cache, reclaimable",
+          "refId": "B"
         }
       ],
       "links": [
