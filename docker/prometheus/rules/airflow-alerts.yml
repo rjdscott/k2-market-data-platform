@@ -1,0 +1,127 @@
+# K2 Market Data Platform - Airflow alert rules (ADR-034)
+# Purpose: the scheduler is alive, no lake task has failed, and lake_ingest is
+#          not being refused the writer lock over and over.
+# Metrics: Airflow statsd, through the airflow-statsd exporter (docker-compose.yml)
+# Scrape:  job airflow-statsd
+# Tests:   docker/prometheus/rules/tests/airflow-alerts_test.yml
+#
+# Every series here is a statsd COUNTER held in the exporter's memory. Two
+# properties of that shape every expression below:
+#
+#   * A counter exists only from its first increment. Its first failure arrives
+#     as a brand-new series at 1, and increase() over a series with no earlier
+#     sample is 0, so `increase(x[15m]) > 0` alone never sees the first one.
+#     Each rule adds the case of a series that is new in the window.
+#   * An exporter restart resets every counter to nothing. increase() treats
+#     the drop as a reset; the subtractions in AirflowLakeIngestSkippedRepeatedly
+#     go negative across one and stay quiet for that window. That is the
+#     accepted cost: one 15-minute blind spot after an exporter restart.
+#
+# NOT yet observed firing. During the schedule shadow lake_ingest runs
+# `ingest.py --probe`, which takes no lock and so can never be skipped.
+
+groups:
+  - name: airflow
+    interval: 30s
+    rules:
+
+      # WARNING: the scheduler has stopped heartbeating.
+      #
+      # It heartbeats every 5 s (scheduler_heartbeat_sec). Two minutes with no
+      # increase, held for three, is about five minutes of no scheduling at
+      # all. `absent()` covers a scheduler that never started and an exporter
+      # that is down, which look the same from here: the runbook tells them
+      # apart with up{job="airflow-statsd"}.
+      #
+      # Warning, not critical: LakeIngestFailed is the critical backstop once
+      # Airflow owns the ingest, 35 minutes after the last commit.
+      - alert: AirflowSchedulerHeartbeatLost
+        expr: |
+          rate(airflow_scheduler_heartbeat[2m]) == 0
+            or absent(airflow_scheduler_heartbeat)
+        for: 3m
+        labels:
+          severity: warning
+          component: orchestration
+          tier: control-plane
+        annotations:
+          summary: "Airflow scheduler has not heartbeated for 5 minutes"
+          description: |
+            No scheduler heartbeat has reached the statsd exporter for five
+            minutes, so no DAG run is being created or started. Either the
+            airflow-scheduler container is down or wedged, or airflow-statsd
+            is, in which case every Airflow series is missing and this is the
+            only rule that says so.
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      # WARNING: a lake task ended failed, after its retries.
+      #
+      # state="failed" is the final state. A first try that fails and is
+      # retried ends `up_for_retry`, which does not fire. A pulse: it fires
+      # for the 15 minutes after a failure, and the task log is the record.
+      - alert: AirflowTaskFailed
+        expr: |
+          increase(airflow_ti_finish{state="failed"}[15m]) > 0
+            or (airflow_ti_finish{state="failed"} unless airflow_ti_finish{state="failed"} offset 15m)
+        labels:
+          severity: warning
+          component: orchestration
+          tier: control-plane
+        annotations:
+          summary: "Airflow task {{ $labels.dag_id }}.{{ $labels.task_id }} failed"
+          description: |
+            {{ $labels.dag_id }}.{{ $labels.task_id }} ended in state failed
+            within the last 15 minutes, its retries spent. The task log has the
+            script's own output and its exit code; a lake audit failure, a
+            Spark exception and a timeout read differently there.
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      # WARNING: lake_ingest has been refused the writer lock three runs in a row.
+      #
+      # ingest.py exits 75 when another lake writer holds the flock, and the DAG
+      # maps 75 to skipped. One skip is the lock doing its job. Three in a row
+      # with no success between, at a 5-minute cadence, is something holding
+      # the lock for 10 minutes or more: a stuck lock.
+      #
+      # 15 minutes holds exactly three runs. The subtraction is exact where
+      # increase() extrapolates; `or (x * 0)` reads a series that did not exist
+      # 15 minutes ago as 0, the first-increment case above.
+      #
+      # Not while Airflow's own maintenance or rebuild is running: both take the
+      # lock for longer than three cycles on purpose, and a nightly page for it
+      # would be one nobody reads. A writer started outside Airflow (a runbook,
+      # a chaos script, `make lake-rebuild`) is not excluded, and the runbook
+      # says how to tell.
+      - alert: AirflowLakeIngestSkippedRepeatedly
+        expr: |
+          (
+            airflow_ti_finish{dag_id="lake_ingest",state="skipped"}
+              - (airflow_ti_finish{dag_id="lake_ingest",state="skipped"} offset 15m
+                  or airflow_ti_finish{dag_id="lake_ingest",state="skipped"} * 0)
+          ) >= 3
+          unless on(dag_id) (
+            airflow_ti_finish{dag_id="lake_ingest",state="success"}
+              - (airflow_ti_finish{dag_id="lake_ingest",state="success"} offset 15m
+                  or airflow_ti_finish{dag_id="lake_ingest",state="success"} * 0)
+          ) > 0
+          unless on() (
+            sum(airflow_ti_start{dag_id=~"lake_maintenance|lake_rebuild"})
+              - (sum(airflow_ti_finish{dag_id=~"lake_maintenance|lake_rebuild"}) or vector(0))
+          ) > 0
+        for: 1m
+        labels:
+          severity: warning
+          component: orchestration
+          tier: control-plane
+        annotations:
+          summary: "lake_ingest skipped {{ $value }} times in 15 minutes: the lake lock is held"
+          description: |
+            Three or more lake_ingest runs in a row exited 75: another lake
+            writer holds /tmp/k2-lake-ingest.lock in the Spark container and
+            no Airflow maintenance or rebuild is running. Nothing is being
+            written to the lake while this fires, and the Redpanda retention
+            clock is running.
+
+            Find the process that holds the lock before anything else. A
+            driver left by a killed run is the usual cause.
+          runbook: docs/runbooks/airflow-scheduling.md

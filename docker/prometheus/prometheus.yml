@@ -79,6 +79,18 @@ scrape_configs:
     metrics_path: '/metrics'
     scrape_interval: 30s
 
+  # Airflow 3 (ADR-034), through the statsd exporter. Airflow pushes statsd
+  # over UDP to airflow-statsd:9125; this scrapes what the exporter holds.
+  # docker/prometheus/rules/airflow-alerts.yml reads it.
+  - job_name: 'airflow-statsd'
+    static_configs:
+      - targets: ['airflow-statsd:9102']
+        labels:
+          service: 'airflow'
+          tier: 'control-plane'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
   # Rust capture tier — metrics-exporter-prometheus on port 8082. This is the
   # only ingestion tier: the three `feed-handler-*` jobs that scraped the Kotlin
   # handlers on the same port were removed with them (ADR-019). See
