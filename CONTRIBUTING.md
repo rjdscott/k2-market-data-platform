@@ -23,7 +23,7 @@ make ps
 ```bash
 make test                # everything CI runs: Python + Rust + ClickHouse
 make test-rust           # cargo test inside rust:1-bookworm
-make test-python         # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 pytest tests -q
+make test-python         # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 make test-clickhouse     # the gold DDL and its assertions on a throwaway 24.3 server
 make lint                # uv run --no-project --with ruff ruff check docker/lake tests
 ```

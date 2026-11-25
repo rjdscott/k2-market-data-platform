@@ -36,7 +36,9 @@ Sampling rule (the capture's, ADR-027): for every second from the first frame's
 to the last frame's within a connection, the state after the last frame whose
 recv_ts_ns < the next second boundary; a second with no frame repeats the previous
 state. Binance needs no replay — each depth20 frame is the book — so its gold rows
-are the last frame per second.
+are the last frame per second, MERGEd rather than appended: a tick holds only the
+frames it read, so the second it ends in comes round again in the next tick's batch
+(merge_binance()).
 """
 
 from __future__ import annotations
@@ -371,6 +373,55 @@ def bbo(spark, books: DataFrame, src_snapshot_id) -> DataFrame:
     )
 
 
+# The IDENTIFIER FIELDS of gold.book_top20 and gold.bbo_1s in ddl/lake.sql.
+GOLD_KEY = ("exchange", "canonical_symbol", "second")
+# binance_books()' own order for "the last frame": a matched row is replaced only by a later one.
+_LATER = "(s.recv_ts_ns > t.recv_ts_ns OR (s.recv_ts_ns = t.recv_ts_ns AND s.conn_msg_seq > t.conn_msg_seq))"
+
+
+def merge_sql(target: str, source: str, since: str, later: bool) -> str:
+    """Upsert `source` into `target` on GOLD_KEY.
+
+    `since` is a TIMESTAMP literal no later than the batch's first second: it
+    changes no match, it lets Iceberg prune the target to the days the batch
+    touches instead of scanning the table on every tick. `later` keeps the
+    later frame of two, so re-merging the same rows changes nothing.
+    """
+    on = " AND ".join(f"t.{k} = s.{k}" for k in GOLD_KEY)
+    cond = f" AND {_LATER}" if later else ""
+    return (f"MERGE INTO {target} t USING {source} s ON {on} AND t.second >= {since} "
+            f"WHEN MATCHED{cond} THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *")
+
+
+def merge_binance(spark, books: DataFrame) -> dict:
+    """Binance's top-of-second rows into gold.book_top20, then their bbo_1s rows.
+
+    binance_books() sees one tick's frames, so a second that straddles two ticks
+    has a row in each batch; appending both duplicated the identity on every
+    tick boundary. Kraken and Coinbase do not hit this: replay() never emits a
+    connection's last second, it carries it in gold.book_state to the next tick.
+    bbo_1s is recomputed from what book_top20 holds for the batch's keys, after
+    the merge, so it follows whichever frame won.
+
+    Returns rows written per table. A copy-on-write MERGE counts every row of a
+    file it rewrote as added, so this overstates the new rows on a tick boundary.
+    """
+    lo = books.agg(F.min(F.unix_timestamp("second"))).first()[0]
+    if lo is None:
+        return {GOLD_BOOK: 0, GOLD_BBO: 0}
+    # From epoch seconds, not a collected datetime: PySpark renders those in the driver's zone.
+    since = f"TIMESTAMP '{datetime.fromtimestamp(lo, tz=timezone.utc):%Y-%m-%d %H:%M:%S}'"
+    books.createOrReplaceTempView("__binance_books")
+    spark.sql(merge_sql(GOLD_BOOK, "__binance_books", since, later=True))
+    snap = _current(spark, GOLD_BOOK)
+    held = spark.table(GOLD_BOOK).where(f"exchange = 'binance' AND second >= {since}")
+    # ponytail: a later frame with an empty side has no bbo row, so the earlier frame's
+    # row stays. Add a WHEN MATCHED ... DELETE for those keys if it ever shows up.
+    bbo(spark, held.join(books.select(*GOLD_KEY), list(GOLD_KEY), "left_semi"), snap).createOrReplaceTempView("__binance_bbo")
+    spark.sql(merge_sql(GOLD_BBO, "__binance_bbo", since, later=False))
+    return {GOLD_BOOK: added_records(spark, GOLD_BOOK), GOLD_BBO: added_records(spark, GOLD_BBO)}
+
+
 # ── stages ──────────────────────────────────────────────────────────────────
 
 
@@ -415,6 +466,11 @@ def process(spark, spec: BookSpec, frames: DataFrame, src_snapshot_id, registry:
     written[spec.table] = added_records(spark, spec.table)
     print(f"stage 2e: {written[spec.table]} rows -> {spec.table} (src snapshot {src_snapshot_id})")
     gcols = [f.name for f in spark.table(GOLD_BOOK).schema.fields]
+    if spec.exchange == "binance":
+        written.update(merge_binance(spark, books.select(*gcols)))
+        print(f"stage 2e: {written[GOLD_BOOK]} rows -> {GOLD_BOOK} ({spec.exchange}, merged)")
+        typed.unpersist()
+        return written
     before = _current(spark, GOLD_BOOK)
     (
         books.select(*gcols).writeTo(GOLD_BOOK)
