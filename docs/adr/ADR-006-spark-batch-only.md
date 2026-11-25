@@ -268,7 +268,8 @@ Alternative 3 above rejected Trino as a replacement for Spark in batch ETL. That
 holds and is still applied: Spark keeps the ingest from Redpanda to gold, backfill, rebuild,
 compaction, expiry and the audits. [ADR-035](ADR-035-trino-and-dbt-for-marts.md) adds Trino
 beside it for a different job, SQL serving and set-based consumer marts built by dbt in a
-namespace of their own (`marts`), and departs from this ADR only there.
+Lakekeeper warehouse of their own (`marts`), and departs from this ADR only there. Trino's
+catalog over the lake is read-only at the connector: Spark stays the lake's only writer.
 
 The three objections, against what was measured on 2026-11-25 with Trino 484 on this lake
 ([`docker/trino/README.md`](../../docker/trino/README.md)):

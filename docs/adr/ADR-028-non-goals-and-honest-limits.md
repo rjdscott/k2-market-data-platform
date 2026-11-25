@@ -348,13 +348,15 @@ of data, and `raw.messages` is still kept forever (ADR-032).
 its own trigger: no consumer has needed the data without a database connection. It is
 lifted because the governed platform plan ([ADR-031](ADR-031-governed-self-serve-platform.md))
 needs one shared SQL engine over the lake, for dbt-built marts and for consumers who are not
-Spark jobs. Trino 484 runs always-on, reads every namespace and writes only `marts`, on
-`127.0.0.1` (`K2_TRINO_PORT`).
+Spark jobs. Trino 484 runs always-on on `127.0.0.1` (`K2_TRINO_PORT`), reads every lake
+table through a catalog that is read-only at the connector, and writes only in a second
+warehouse, `marts`.
 
 What did not change: there is still no query API. An HTTP API, with its own auth,
 pagination and deployment, stays a non-goal on § 6's trigger.
 
 **§ 8 stays in force.** Trino takes its user from the `X-Trino-User` header without
-authenticating it, so its access rules (`docker/trino/etc/rules.json`) name no user and are
-guard rails against mistakes, not a boundary; Lakekeeper is still unauthenticated. ADR-035
-records what those rules do not cover.
+authenticating it, so its access rules (`docker/trino/etc/rules.json`) name no user, and
+they and the read-only connector are guard rails against mistakes, not a boundary:
+Lakekeeper is still unauthenticated and Trino holds the MinIO root keys. ADR-035 names the
+scoped storage key that would be the next layer.
