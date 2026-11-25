@@ -50,8 +50,9 @@ hardened for production use. What is protected, and what is not, plainly:
   log. Trino's log printed the access key as well. One credential is held by every engine:
   MinIO, `lake-init`, Spark, the six Trino catalogs and each Lakekeeper warehouse's stored
   storage credential. It is being replaced, root rotated and a scoped key per engine, in the
-  follow-up design `docs/research/2026-11-26-storage-credentials-least-privilege.md`
-  (branch `docs/storage-credentials-least-privilege`). Until that is rolled out, do not edit
+  design [docs/research/2026-11-26-storage-credentials-least-privilege.md](docs/research/2026-11-26-storage-credentials-least-privilege.md),
+  which also finds that Lakekeeper signs Spark's S3 requests with its stored copy of the root
+  pair for any caller. Until that is rolled out, do not edit
   the pair in `.env` on a stack that holds data: each Lakekeeper warehouse keeps its own
   stored copy, and the lake stops writing.
 - No TLS between services or on any port.
