@@ -133,7 +133,10 @@ A data domain is a body of data that one team owns and answers for
 such as `candles`. [`contracts/domains.yaml`](../../contracts/domains.yaml) lists four domains:
 `market-capture`, `reference-data`, `fx-reference` and `market-analytics`. The lake's tables
 belong to these domains as owners and still live in `k2` ([chapter 18](18-data-mesh.md)). Every
-domain warehouse is empty until its first mart; `market_analytics` has one, `candles.ohlcv_1m`.
+domain warehouse is empty until its first mart. `market_analytics` has three, each in its
+product's schema: `candles.ohlcv_1m`, the 1-minute candles; `delayed_candles.ohlcv_delayed_20m`,
+a view of them without the newest 20 minutes; and `venue_quality.venue_quality_scorecard`, per
+venue and day, how complete the lake is ([`dbt/`](../../dbt/README.md)).
 
 One entry in `domains.yaml` gives a domain its whole fence. `make generate` runs
 [`generate.py`](../../platform/k2gen/k2gen/generate.py), which turns the id `market-analytics`
@@ -160,10 +163,12 @@ It also writes the catalog's twin for `make test-trino`, under `docker/trino/tes
 be `lake`, `system` or `k2`: those names are taken.
 
 Inside a domain catalog there is one schema per data product, for example
-`market_analytics.delayed_candles.ohlcv_1m_delayed_20m`. A product rebuild can then drop one
+`market_analytics.delayed_candles.ohlcv_delayed_20m`. A product rebuild can then drop one
 schema without touching its siblings. dbt adds one schema that is not a product, `staging`: the
 domain's views over the lake tables its marts read ([`dbt/`](../../dbt/README.md)). A mart that joins two domains belongs to the domain that
 consumes it, and lives in that domain's warehouse; nobody writes into a producer's warehouse.
+The scorecard is one: it joins market-capture's `audit.checks` with market-analytics'
+`gold.trades`, and lives in `market_analytics`, which reads both.
 Governance data, such as quality results and lineage, is meant to become a platform-owned domain
 stored the same way. That is the maintainer's direction, not yet a decision: it gets its own ADR
 with its first product, because it reverses ADR-033's line that the platform owns the road, not
@@ -230,19 +235,31 @@ SELECT exchange, count(*) AS candles FROM lake.gold.ohlcv_1m GROUP BY exchange
 To rebuild a mart, drop it and build it again. A `DROP TABLE` through Trino is a purge drop:
 Lakekeeper's `tabular_purge` task deletes the files within seconds (ADR-044).
 
+The Airflow DAG `dbt_marts` builds every mart again, whole, every hour at minute 10, each
+domain as its own writer. A build is a `CREATE OR REPLACE`, so each one adds a snapshot; once a
+day the same writer expires snapshots and removes orphan files older than 7 days. Seven days is
+the Iceberg connector's floor, and nobody may set the session properties that lower it
+(ADR-044; [the runbook](../runbooks/dbt-marts.md)).
+
 ## Views
 
 A view is a stored query, not stored data; reading it runs the query. Trino saves a view in the
 catalog as an Iceberg view whose SQL is in Trino's dialect
 ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)). That is why the delayed product, candles
-held back by 20 minutes, can be a view. A view over `lake.gold` with a 20-minute predicate is
-always current and needs no schedule:
+held back by 20 minutes, can be a view: it needs no schedule of its own. The chapter's first
+check was a view over `lake.gold`, which is as current as the lake:
 
 ```sql
 CREATE VIEW market_analytics.chapter_check.candles_delayed AS
 SELECT exchange, canonical_symbol, window_start FROM lake.gold.ohlcv_1m
 WHERE window_start < current_timestamp - INTERVAL '20' MINUTE
 ```
+
+The product that shipped, `market_analytics.delayed_candles.ohlcv_delayed_20m`, is a view over
+the domain's own 1-minute mart instead, so it is as current as that mart's last hourly build. It
+shows a candle once its whole minute ended 20 minutes before the query, so no trade in it is
+younger than 20 minutes (`window_start <= current_timestamp - INTERVAL '21' MINUTE`,
+[`dbt/`](../../dbt/README.md)). It is what a delayed-data entitlement will be limited to.
 
 Trino checks a view's base tables against the view's owner, not its reader: a definer view. Across
 domains, that needs the owner to have `all` on each base table's catalog. A read-only catalog
@@ -295,7 +312,11 @@ docker exec k2-trino trino --execute 'SHOW CATALOGS'
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM lake'
 #   "audit" "bronze" "gold" "information_schema" "raw" "silver" "system"
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM market_analytics'
-#   "candles" "information_schema" "staging" "system"   dbt's first mart and its staging view
+#   "candles" "delayed_candles" "information_schema" "staging" "system" "venue_quality"
+#                                                     one schema per mart product, and dbt's staging views
+docker exec k2-trino trino --execute \
+  "SELECT max(close_time) <= current_timestamp - INTERVAL '20' MINUTE FROM market_analytics.delayed_candles.ohlcv_delayed_20m"
+#   "true"                                            the delay holds
 docker exec k2-trino trino --execute \
   'SELECT (SELECT count(*) FROM lake.gold."ohlcv_1m$files"), (SELECT count(*) FROM lake.gold."ohlcv_1m$snapshots")'
 #   "19","196"                                        data files, snapshots
@@ -375,7 +396,7 @@ Each line below was printed by `k2-trino`, or by DuckDB 1.4.4, on 2026-11-25.
 | Connector, table procedure | the Trino plugin a catalog uses; maintenance run as `ALTER TABLE ... EXECUTE` |
 | View, definer view | a stored query; one whose base tables Trino checks against the view's owner |
 | dbt, model | a tool that builds tables from SQL; one `SELECT` in a file, which becomes one table |
-| Airflow | the scheduler; its jobs (DAGs) here are `lake_ingest`, `lake_maintenance`, `lake_rebuild` |
+| Airflow | the scheduler; its jobs (DAGs) here are `lake_ingest`, `lake_maintenance`, `lake_rebuild` and `dbt_marts` |
 | Purge drop | a `DROP TABLE` that deletes the files too, as Trino's do |
 | Entitlements phase | phase P5 of the platform plan, which brings a storage key per identity |
 

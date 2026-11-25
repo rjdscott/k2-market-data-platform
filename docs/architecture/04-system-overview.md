@@ -47,7 +47,7 @@ flowchart TB
     NB["DuckDB notebooks"]
     TR["Trino 484 · SQL over the lake, read-only<br/>dbt marts · one warehouse per domain"]
     subgraph OBS["Observability"]
-        PR["Prometheus v3.2 · 28 rules"]
+        PR["Prometheus v3.2 · 33 rules"]
         GR["Grafana 11.5 · 6 dashboards"]
     end
 

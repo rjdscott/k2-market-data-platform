@@ -169,8 +169,10 @@ read-only at the connector, and its schemas are the lake's namespaces: `lake.gol
 own for its marts, named from the domain id (`market-analytics` is `market_analytics`), whose
 tables only its writer `dbt_<domain>` creates, changes or drops with SQL statements, and which
 everyone reads; table procedures are not fenced per user
-([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). They hold nothing
-until the dbt marts land. The user is whatever `--user` says, not authenticated. The session
+([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). `market_analytics`
+holds the dbt marts, one schema per product, rebuilt by the Airflow DAG `dbt_marts` every hour
+at minute 10 ([`dbt/`](../../dbt/README.md), [runbook](../runbooks/dbt-marts.md)); the other
+three are empty. The user is whatever `--user` says, not authenticated. The session
 time zone is the client's: the CLI inside the container sends UTC, a client on the host sends
 the host's zone unless told (`--timezone UTC`).
 
@@ -194,6 +196,20 @@ docker exec k2-trino trino --execute 'SHOW CATALOGS'
 #   "fx_reference" "lake" "market_analytics" "market_capture" "reference_data" "system"
 docker exec k2-trino trino --user dbt_market_analytics --execute 'CREATE TABLE reference_data.s.t (x integer)'
 #   ... failed: Access Denied: Cannot create table reference_data.s.t
+
+# The marts. Ran against k2-trino on the live stack on 2026-11-25.
+docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM market_analytics'
+#   "candles" "delayed_candles" "information_schema" "staging" "system" "venue_quality"
+docker exec k2-trino trino --execute 'DESCRIBE market_analytics.venue_quality.venue_quality_scorecard'
+#   exchange, utc_date, trades, trades_after_gap, trade_ids_missing, trades_gap_unknown,
+#   audit_checks, audit_checks_failed, records_lost
+docker exec k2-trino trino --execute \
+  "SELECT max(close_time) <= current_timestamp - INTERVAL '20' MINUTE FROM market_analytics.delayed_candles.ohlcv_delayed_20m"
+#   "true"
+
+# Rebuild them now rather than at minute 10 (the DAG runs each domain as its writer).
+# Ran on 2026-11-25 in a throwaway container of the same image, before the DAG's rollout.
+docker exec k2-airflow-scheduler airflow dags trigger dbt_marts
 ```
 
 ## When something breaks

@@ -56,10 +56,14 @@ Every table is Iceberg format-version 2, Parquet + zstd, copy-on-write, append-o
 `raw`, `bronze`, `silver`, `gold`, `audit`
 ([`docker/lake/init-lake.sh`](../../docker/lake/init-lake.sh) line 133). The dbt marts live
 in one warehouse per data domain, the only places Trino writes, and are read through Trino
-([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). The first is
-`market_analytics.candles.ohlcv_1m`: `gold.ohlcv_1m`'s grain and columns without
-`src_snapshot_id` and `computed_at`, rebuilt whole from `gold.trades` by each `dbt build`
-([`dbt/README.md`](../../dbt/README.md)).
+([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)), rebuilt whole every
+hour at minute 10 by the Airflow DAG `dbt_marts` ([`dbt/README.md`](../../dbt/README.md)):
+
+| Mart | Built as | Grain, one row per | What it is |
+|---|---|---|---|
+| `market_analytics.candles.ohlcv_1m` | table | `(exchange, canonical_symbol, window_start)` | `gold.ohlcv_1m`'s grain and columns without `src_snapshot_id` and `computed_at`, from `gold.trades` |
+| `market_analytics.delayed_candles.ohlcv_delayed_20m` | view | the same | that mart's candles whose minute ended at least 20 minutes before the query |
+| `market_analytics.venue_quality.venue_quality_scorecard` | table | `(exchange, utc_date)` | per venue and UTC day: trades, trades after a trade-id gap and the ids missing, and that day's lake checks on the venue, failed checks and records lost |
 
 | Table | Grain — one row per … | Partition / sort | Time column (unit, zone) | Symbol columns | Identifier (dedup key) | Populated by |
 |---|---|---|---|---|---|---|

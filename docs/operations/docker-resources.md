@@ -70,7 +70,7 @@ label was wrong. Run on 2026-11-25. `python3 scripts/check-budget.py` prints the
 | `spark-iceberg` | lake batch engine | 3.0 | 1.0 | 8 GB | 2 GB |
 | `prefect-db` | orchestration (Prefect, Airflow, Lakekeeper metadata) | 1.0 | 0.5 | 1.5 GB | 512 MB |
 | `airflow-api-server` | orchestration (Airflow 3) | 1.0 | 0.25 | 1.5 GB | 512 MB |
-| `airflow-scheduler` | orchestration (Airflow 3, LocalExecutor) | 1.5 | 0.5 | 3 GB | 1 GB |
+| `airflow-scheduler` | orchestration (Airflow 3, LocalExecutor); runs `dbt_marts`' dbt commands, two at a time | 1.5 | 0.5 | 3 GB | 1 GB |
 | `airflow-dag-processor` | orchestration (Airflow 3) | 0.5 | 0.1 | 1 GB | 256 MB |
 | `airflow-statsd` | observability (Airflow) | 0.1 |, | 64 MB |, |
 | `prometheus` | observability | 1.0 | 0.5 | 2 GB | 1 GB |
