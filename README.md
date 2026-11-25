@@ -82,8 +82,8 @@ flowchart TB
   classDef ob fill:#f3f4f6,stroke:#6b7280,color:#111827
 ```
 
-18 long-running services and 5 one-shot init containers, 16.30 CPU / 30.312 GiB of declared
-limits at steady state and 18.30 CPU / 32.812 GiB at the bootstrap peak, under a 20 CPU / 36 GiB
+18 long-running services and 5 one-shot init containers, 17.30 CPU / 30.312 GiB of declared
+limits at steady state and 19.30 CPU / 32.812 GiB at the bootstrap peak, under a 20 CPU / 36 GiB
 ceiling ([ADR-034](./docs/adr/ADR-034-airflow-3-replaces-prefect.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 Prefect, which Airflow replaced, waits behind `--profile legacy` as the rollback, not running.
 
