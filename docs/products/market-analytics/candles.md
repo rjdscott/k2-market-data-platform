@@ -37,6 +37,15 @@ Known readers outside the contracts:
 - ClickHouse gold reload, docs/runbooks/clickhouse-rebuild-from-lake.md
 - scripts/parity_ohlcv.py
 
+## Marts
+
+Built by dbt on Trino as `dbt_market_analytics`, in the domain's own catalog
+([ADR-044](../../../docs/adr/ADR-044-producer-lake-and-domain-mart-warehouses.md), [`dbt/`](../../../dbt/README.md)). Read them through Trino.
+
+| Mart | Grain | Reads | Model |
+|---|---|---|---|
+| `market_analytics.candles.ohlcv_1m` | `exchange`, `canonical_symbol`, `window_start` | `gold.trades` | [`dbt/models/market_analytics/marts/candles/ohlcv_1m.sql`](../../../dbt/models/market_analytics/marts/candles/ohlcv_1m.sql) |
+
 ## gold.ohlcv_1m
 
 OHLCV 1m candles from gold.trades, one row per (exchange, canonical_symbol, bucket), replaced when a late trade lands in the bucket.

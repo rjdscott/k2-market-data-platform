@@ -17,3 +17,9 @@ outputs:
 consumers:
   - ClickHouse gold reload, docs/runbooks/clickhouse-rebuild-from-lake.md
   - scripts/parity_ohlcv.py
+# Built by dbt on Trino in catalog market_analytics (ADR-044), from
+# dbt/models/market_analytics/marts/candles/; the port of gold.candles() at 1m.
+marts:
+  - table: market_analytics.candles.ohlcv_1m
+    grain: [exchange, canonical_symbol, window_start]
+    reads: [gold.trades]

@@ -13,15 +13,17 @@
 2. Each product and contract against its place: the directory it lives in, its
    domain's owner and kind, the outputs it lists against the contracts beside it.
    And each domain's fence name, its id with underscores, against the names the
-   lake and Trino already use (`RESERVED`).
+   lake and Trino already use (`RESERVED`); and each mart's name against its
+   place, `<domain catalog>.<product schema>.<table>` (ADR-044).
 3. Each contract against docker/lake/ddl/lake.sql: the table exists, and its
    partitioning and sort order are the ones declared there. Every table outside
    `audit` has exactly one contract. A contract with inline columns is a table
    lake.sql does not create, and its partitioning and sort name its own columns.
+   A latency service level names a column of its own table.
 4. Three rules across products: a table another table reads keeps snapshots for
    at least the seven-day floor; a table is at least as restricted as anything
    it reads; and every input resolves to a declared output or a declared
-   external source.
+   external source. A mart reads only its product's inputs and outputs.
 """
 
 import argparse
@@ -117,6 +119,10 @@ def validate(root: Path = ROOT) -> list[str]:
         beside = sorted(p.name[: -len(SUFFIX)] for p in pdir.glob(f"*{SUFFIX}"))
         if sorted(product["outputs"]) != beside:
             errors.append(f"{where}: outputs {sorted(product['outputs'])}, but the contracts beside it are {beside}")
+        place = f"{fence(product['domain'])}.{fence(product['name'])}"
+        marts = [m["table"] for m in product.get("marts", [])]
+        errors += [f"{where}: mart {t} must live in {place}, its domain's catalog and its product's schema (ADR-044)" for t in marts if t.rsplit(".", 1)[0] != place]
+        errors += [f"{where}: mart {t} is declared twice" for t in sorted({t for t in marts if marts.count(t) > 1})]
 
     # 3. lake.sql.
     lake = {t: v for t, v in ddl.parse(root / LAKE_SQL).items() if not t.startswith("audit.")}
@@ -139,10 +145,13 @@ def validate(root: Path = ROOT) -> list[str]:
         if props["layer"] != table.split(".")[0]:
             errors.append(f"{where}: layer {props['layer']}, but {table} is in namespace {table.split('.')[0]}")
         inline = doc["schema"][0].get("properties")
+        names = {c["name"] for c in inline} if inline else set(lake[table].columns) if table in lake else set()
+        for sla in doc.get("slaProperties", []):
+            if sla["property"] == "latency" and sla["element"] not in {f"{table}.{c}" for c in names}:
+                errors.append(f"{where}: latency element {sla['element']} is not a column of {table}")
         if inline:  # a new table: generate writes its DDL, lake.sql never holds it
             if table in lake:
                 errors.append(f"{where}: {table} is created by {LAKE_SQL}, so the contract references it, not inline columns")
-            names = {c["name"] for c in inline}
             for key in ("partitioning", "sort"):
                 errors += [f"{where}: {key} {f} reads no column the contract declares" for f in props[key] if ddl.column_of(f) not in names]
             continue
@@ -184,6 +193,11 @@ def validate(root: Path = ROOT) -> list[str]:
                         f"{rel(home[up])}/{up}{SUFFIX}: {table} reads it, so it must keep snapshots for "
                         f"the {FLOOR_DAYS}-day floor, not {props_of[up]['retention']} (docker/lake/maintenance.py)"
                     )
+        for mart in product.get("marts", []):
+            for up in mart["reads"]:
+                read.add(up)
+                if up not in set(tables) | set(product["outputs"]) or up not in home:
+                    errors.append(f"{where}: mart {mart['table']} reads {up}, which is neither one of its outputs nor a resolved input")
         errors += [f"{where}: input {name} is read by none of its outputs" for name in sorted(set(external) | set(tables)) if name not in read]
     return errors
 
@@ -214,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "generate":
         files = generate.generate(ROOT)
         print(f"k2gen generate: {len(files)} files: {generate.RETENTION}, {generate.WAREHOUSES}, {generate.TRINO_RULES}, "
+              f"{generate.DBT_SOURCES}, {generate.DBT_SELECTORS}, "
               f"the domain catalogs in {generate.CATALOGS} and {generate.TEST_CATALOGS}, and under {', '.join(generate.OWNED)}")
         return 0
     products = len(list((ROOT / "contracts").glob("*/*/product.yaml")))

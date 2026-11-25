@@ -106,3 +106,40 @@ def test_a_contract_outside_the_standard_fails(tree):
     edit(tree / TRADES, lambda d: d.pop("apiVersion"))
     errors = cli.validate(tree)
     assert any(e.startswith(f"{TRADES}: $: 'apiVersion' is a required property") for e in errors), errors
+
+
+def set_mart(**fields):
+    def change(doc):
+        doc["marts"][0].update(fields)
+
+    return change
+
+
+@pytest.mark.parametrize("table", ["market_capture.candles.ohlcv_1m", "market_analytics.ohlcv.ohlcv_1m"])
+def test_a_mart_outside_its_domain_catalog_or_product_schema_fails(tree, table):
+    # ADR-044: a domain writes only its own catalog, and each product has its own schema.
+    edit(tree / CANDLES, set_mart(table=table))
+    assert cli.validate(tree) == [f"{CANDLES}: mart {table} must live in market_analytics.candles, its domain's catalog and its product's schema (ADR-044)"]
+
+
+def test_a_mart_reading_a_table_its_product_does_not_declare_fails(tree):
+    edit(tree / CANDLES, set_mart(reads=["gold.trades", "gold.bars"]))
+    assert cli.validate(tree) == [f"{CANDLES}: mart market_analytics.candles.ohlcv_1m reads gold.bars, which is neither one of its outputs nor a resolved input"]
+
+
+def test_a_mart_declared_twice_fails(tree):
+    edit(tree / CANDLES, lambda doc: doc["marts"].append(dict(doc["marts"][0])))
+    assert cli.validate(tree) == [f"{CANDLES}: mart market_analytics.candles.ohlcv_1m is declared twice"]
+
+
+def test_a_latency_on_a_column_the_table_lacks_fails(tree):
+    def change(doc):
+        doc["slaProperties"][0]["element"] = "gold.trades.loaded_at"
+
+    edit(tree / TRADES, change)
+    assert cli.validate(tree) == [f"{TRADES}: latency element gold.trades.loaded_at is not a column of gold.trades"]
+
+
+def test_a_latency_without_a_unit_fails_the_k2_profile(tree):
+    edit(tree / TRADES, lambda doc: doc["slaProperties"][0].pop("unit"))
+    assert [e for e in cli.validate(tree) if e.startswith(f"{TRADES}: $.slaProperties[0]") and "'unit' is a required property" in e]

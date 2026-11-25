@@ -207,3 +207,47 @@ def test_warehouses_txt_ends_with_a_newline():
     # init-lake.sh reads it with `while read`, which drops an unterminated last line.
     text = generate.render(ROOT)[generate.WAREHOUSES]
     assert text.endswith("\n") and text.splitlines()[-1] == sorted(cli.fence(d) for d in yaml.safe_load((ROOT / "contracts/domains.yaml").read_text())["domains"])[-1]
+
+
+def test_dbt_sources_carry_trino_types_the_identifier_check_and_freshness():
+    # ADR-044 and dbt/README.md: the sources a mart reads come from the contracts, not by hand.
+    files = generate.render(ROOT)
+    (gold,) = yaml.safe_load(files[generate.DBT_SOURCES])["sources"]
+    assert (gold["name"], gold["database"], gold["schema"]) == ("gold", "lake", "gold")
+    (trades,) = gold["tables"]
+    types = {c["name"]: c["data_type"] for c in trades["columns"]}
+    assert types["exchange_ts"] == "timestamp(6) with time zone" and types["price_e8"] == "bigint" and types["src_index"] == "integer"
+    assert list(types) == list(ddl.parse(ROOT / cli.LAKE_SQL)["gold.trades"].columns)
+    assert trades["config"]["loaded_at_field"] == "ingest_ts"
+    assert trades["config"]["freshness"] == {"error_after": {"count": 30, "period": "minute"}}
+    assert trades["config"]["meta"]["read_by"] == ["market_analytics.candles.ohlcv_1m"]
+    (test,) = trades["data_tests"]
+    args = test["dbt_expectations.expect_compound_columns_to_be_unique"]["arguments"]
+    assert args == {"column_list": ["exchange", "canonical_symbol", "trade_id"], "row_condition": "exchange_ts >= current_timestamp - interval '6' hour"}
+
+
+def test_one_dbt_selector_per_domain_with_marts():
+    (selector,) = yaml.safe_load(generate.render(ROOT)[generate.DBT_SELECTORS])["selectors"]
+    assert selector["name"] == "market_analytics"
+    assert selector["definition"]["union"] == [{"method": "fqn", "value": "market_analytics"}, {"method": "source", "value": "gold.trades"}]
+
+
+def test_a_removed_mart_takes_its_sources_and_selector_with_it(tree):
+    path = tree / "contracts/market-analytics/candles/product.yaml"
+    doc = yaml.safe_load(path.read_text())
+    del doc["marts"]
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+    assert cli.validate(tree) == []
+    files = generate.render(tree)
+    assert yaml.safe_load(files[generate.DBT_SOURCES])["sources"] == []
+    assert yaml.safe_load(files[generate.DBT_SELECTORS])["selectors"] == []
+
+
+def test_a_mart_reading_a_type_with_no_trino_mapping_stops_generate():
+    with pytest.raises(ValueError, match="no Trino type for MAP<STRING, BINARY>"):
+        generate._trino_type("MAP<STRING, BINARY>")
+    assert generate._trino_type("DECIMAL(38,10) NOT NULL") == "decimal(38,10)"
+
+
+def test_the_parser_reads_identifier_fields():
+    assert ddl.parse(ROOT / cli.LAKE_SQL)["gold.trades"].identifier == ("exchange", "canonical_symbol", "trade_id")

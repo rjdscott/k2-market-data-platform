@@ -82,6 +82,36 @@
           "description": "Known readers outside the contracts: scripts, notebooks, the ClickHouse reload. Products that read this one name it in their inputs instead.",
           "type": "array",
           "items": {"type": "string"}
+        },
+        "marts": {
+          "description": "Tables dbt builds on Trino for this product, in its domain's catalog (ADR-044). k2gen generates the dbt sources and selector from them (dbt/), and scripts/dbt_manifest_check.py holds the dbt project to them.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["table", "grain", "reads"],
+            "properties": {
+              "table": {
+                "description": "<catalog>.<schema>.<table>: the domain id and the product name, each with underscores, then the model's name in dbt/models/<catalog>/marts/<schema>/.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+              },
+              "grain": {
+                "description": "The columns one row is unique on. The mart's dbt model must test exactly these for uniqueness.",
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+              },
+              "reads": {
+                "description": "The lake tables the mart's models select from, each an input or an output of this product.",
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {"$ref": "#/$defs/table"}
+              }
+            }
+          }
         }
       }
     },
@@ -93,6 +123,17 @@
         "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
         "description": {"type": "object", "required": ["purpose"]},
         "team": {"type": "object", "required": ["name"]},
+        "slaProperties": {
+          "description": "Only where a check enforces a stated target. latency: how old the newest value of element, <table>.<column>, may be; k2gen makes it the dbt source freshness of a table a mart reads.",
+          "type": "array",
+          "items": {
+            "if": {"properties": {"property": {"const": "latency"}}},
+            "then": {
+              "required": ["element", "unit"],
+              "properties": {"value": {"type": "integer", "minimum": 1}, "unit": {"enum": ["min", "h", "d"]}}
+            }
+          }
+        },
         "schema": {
           "type": "array",
           "minItems": 1,

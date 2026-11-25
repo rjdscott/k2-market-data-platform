@@ -32,7 +32,7 @@ Moving to a newer snapshot is a pull request that replaces the file, updates thi
 | `table` | ODCS `schema[0].physicalName`, the Iceberg identifier without the `lake.` catalog |
 | `schema` | for a table `lake.sql` creates, ODCS `schema[0].authoritativeDefinitions`, type `implementation`, url `docker/lake/ddl/lake.sql`; for a new table, inline columns in `schema[0].properties` (`name`, `physicalType` as Spark SQL spells it, `description`, `required`), from which `k2gen generate` writes `docker/lake/ddl/generated/<table>.sql` |
 | `quality` | ODCS `schema[0].quality`, type `custom`, engine `k2-maintenance`, the audit's check name |
-| `slo` | ODCS `slaProperties`, only where an alert enforces a stated target |
+| `slo` | ODCS `slaProperties`, only where a check enforces a stated target: an alert, or `dbt source freshness` for a `latency` on a table a mart reads (its `element`, `<table>.<column>`, is the freshness column) |
 | `layer`, `format`, `partitioning`, `sort`, `classification`, `entitlement`, `retention`, `upstreams`, `schedule` | ODCS `customProperties`, validated by `k2.schema.json#/$defs/customProperties` |
 
 `retention` is a custom property and not the standard's `retention` SLA property on purpose:
