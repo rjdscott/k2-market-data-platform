@@ -372,9 +372,10 @@ covers every other path: it is a correctness setting, not a politeness one.
 
 **Recovery**
 
-VERIFY: run steps 1 and 2 on the live stack after the cutover; check that the trigger
-creates a `manual__` run whose task ends `success`, and that `details` shows
-`max_active_runs` 1 and `is_paused` `False`.
+Run on the live stack 2026-11-25: the trigger created
+`manual__2026-11-25T07:22:45.526785+00:00`, which waited for the scheduled 07:21 run (one
+active run per DAG) and ended `success`; `details` showed `max_active_runs` 1 and
+`is_paused` `False`.
 
 ```bash
 # 1. Just re-run it. Then verify the invariants rather than trusting them.

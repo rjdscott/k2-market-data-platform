@@ -310,16 +310,32 @@ run before the tables exist on a fresh clone.
 **`scripts/airflow-shadow-check.sh` stayed** to the archive: the cutover's precondition
 cites it, and after the cutover its third check fails by design.
 
+The switch ran on 2026-11-25, before the pull request merged, with the stack on the branch
+tip (`943df7a`); the alert grace period and the statsd ttl (`027980f`) were added and
+deployed afterwards. The live run surfaced two findings, the stale DAG folder mount during
+the shadow and the false `AirflowLakeIngestSkippedRepeatedly` firing after the first
+maintenance run, and both were fixed before merge.
+
 Measured at the switch, filled from the live run:
 
-- MEASURE: cutover start and end, UTC, and the stack's commit.
-- MEASURE: the first real `lake_ingest` run: run id, duration, and the `raw.messages`
-  commit age after it.
-- MEASURE: the `lake_maintenance` run the unpause started: run id and duration, and the
-  `lake_ingest` runs during it (count, each task `skipped`, none `failed`).
-- MEASURE: the last lines of `make health` and `make lake-verify` after Prefect stopped.
-- MEASURE: `AirflowLakeIngestNotRunning` loaded after the cutover's Prometheus reload
-  (step 4b), and whether it fired before the archive, with the cause.
-- MEASURE: the result of `make test`, `make parity-bars`, `make check-alerts` and
-  `make check-docs` at the cutover; the date and result of `make parity-ohlcv` and
-  `make parity-bars` after the P0 re-pin.
+- Cutover 06:01:49Z to about 06:57Z; the stack's commit during the switch was `943df7a`.
+- The first real `lake_ingest` run was `scheduled__2026-11-25T06:06:00+00:00`, 06:06:00 to
+  06:09:30, `stage 1: committing 404815 offsets`; the commit age read 204 s just after it
+  and `make health` printed `last commit 36s ago`.
+- The unpause started `lake_maintenance` `scheduled__2026-11-25T03:00:00+00:00`, 06:10:21 to
+  06:33:58 (23.6 minutes), `success`. Five `lake_ingest` runs (06:11 to 06:31) ended with
+  the task `skipped`, none `failed`; 06:36 and 06:41 were `success`.
+- After Prefect's containers were removed, `make health` ended `health: PASS` and `make
+  lake-verify` ended `✓ lake-verify passed` (snapshot and `COUNT(*)` both 166156820 rows).
+- `AirflowLakeIngestNotRunning` loaded after the Prometheus reload of step 4b. It was not
+  among the alerts that fired over the cutover window; `LakeIngestLagHigh` fired during
+  maintenance (existing behaviour: maintenance holds the lock longer than that alert's 15
+  minutes) and `AirflowLakeIngestSkippedRepeatedly` fired falsely for about a minute.
+- `make test`, `make parity-bars` (`parity: ok`, run at the current snapshot because its pin
+  was stale), `make check-alerts` (8 SUCCESS) and `make check-docs` passed. `make
+  parity-ohlcv` and a re-pinned `make parity-bars` are not yet run: they need the P0 re-pin,
+  which needs a complete UTC day.
+- A catch-up through the trigger ran after the cutover: `manual__2026-11-25T07:22:45`, task
+  07:24:23 to 07:27:20, `success`, with `driver_memory` 2g and
+  `max_offsets_per_partition` 1000000, `stage 1: committing 273039 offsets`.
+- The rollback to Prefect was not exercised (owner's decision, 2026-11-25).

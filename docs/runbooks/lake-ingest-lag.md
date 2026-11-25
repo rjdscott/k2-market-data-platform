@@ -129,8 +129,11 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py \
 
 # The same run under Airflow (ADR-034), which takes the DAG's only slot, so no scheduled
 # run starts beside it, and can raise the driver heap too (airflow-scheduling.md §4).
-# Unset params keep the script's defaults. VERIFY: not yet run against the stack; check
-# that the run's `running:` log line ends in --max-offsets-per-partition=500000.
+# Unset params keep the script's defaults. Run on the live stack 2026-11-25 with
+# '{"driver_memory": "2g", "max_offsets_per_partition": 1000000}': the run's `running:`
+# line carried --env=K2_LAKE_DRIVER_MEMORY=2g and --max-offsets-per-partition=1000000, and
+# it logged `stage 1: committing 273039 offsets` and ended success. The 500000 form below
+# was not run.
 docker exec k2-airflow-scheduler airflow dags trigger lake_ingest \
   --conf '{"max_offsets_per_partition": 500000}'
 
@@ -173,9 +176,9 @@ DAG folder stays stale ([airflow-scheduling.md §5](./airflow-scheduling.md#5-la
 **Recovery**. The lake schedules are Airflow's since the cutover (ADR-034); a scheduler
 that has stopped heartbeating is [airflow-scheduling.md §1](./airflow-scheduling.md#1-scheduler-heartbeat-lost).
 
-VERIFY: run on the live stack after the cutover; check that `dags list` shows the three
-lake DAGs with `lake_ingest` and `lake_maintenance` unpaused, that `details` shows
-`is_stale` `False`, and that the trigger creates a `manual__` run that ends `success`.
+Run on the live stack 2026-11-25 (read-only): `dags list` showed `lake_ingest`,
+`lake_maintenance` and `lake_rebuild`, all `is_paused` `False`; `details` showed `is_stale`
+`False`; and a `manual__` run from the trigger ended `success` (the catch-up above).
 
 ```bash
 # 1. Do the DAGs exist, unpaused and not stale?
@@ -223,10 +226,10 @@ restart.
 
 **Recovery, the whole procedure, run end to end on 2026-08-26** under Prefect. ✅ verified
 for the ingest steps (3 and 4); steps 1, 2 and 5 read and pause Airflow since the cutover
-and carry a `VERIFY:` line.
+(2 and 5 ran on 2026-11-25; 1 awaits a failed ingest).
 
-VERIFY: run step 1's log command on the live stack after the cutover against a failed
-`lake_ingest` run; check that it prints the `DATA LOSS` lines.
+Step 1's log command is not yet exercised under Airflow: it needs a failed ingest that
+hit `DATA LOSS`, and none has occurred since the cutover.
 
 ```bash
 # 1. Establish exactly what was lost. The ingest already did: `offsets.evicted`
@@ -245,8 +248,9 @@ docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.kraken
 #   6          62436             4729663          <- committed  152000: still safe
 ```
 
-VERIFY: run step 2 on the live stack after the cutover; check that the pause prints
-`lake_ingest` with `is_paused` `False` and that `pgrep` ends up printing nothing.
+Run on the live stack 2026-11-25: the same pause printed `lake_ingest | False` (its old
+state) at the cutover's step 2, and `make lake-verify` paused and resumed the DAG. The
+`pgrep` wait printed nothing at the end of the cutover's step 3.
 
 ```bash
 # 2. Pause the DAG. The repair must not race a cron run: the flock would refuse
@@ -296,8 +300,8 @@ s.sql(f'SELECT run_ts, job, check_name, scope, observed, detail FROM {CATALOG}.a
 #     resumed at 2784417 by run local-1787780940821
 ```
 
-VERIFY: run step 5 on the live stack after the cutover; check that a `lake_ingest` run
-starts within a scheduler loop of the unpause and its task ends `success`.
+Run on the live stack 2026-11-25: the unpause (cutover step 5) printed `lake_ingest | True`
+and the run for the 06:06 slot ended `success`.
 
 ```bash
 # 5. Resume, and confirm the next run is green. The unpause runs the latest slot at once.
@@ -466,8 +470,8 @@ FROM lake.raw.messages.files GROUP BY partition ORDER BY partition DESC LIMIT 10
 
 ```bash
 # 2. Did maintenance run last night? (Airflow since the cutover.)
-#    VERIFY: run on the live stack after the cutover; check that last night's
-#    scheduled__<date>T03:00:00+00:00 run is listed with its state.
+#    Run on the live stack 2026-11-25: it listed `scheduled__2026-11-25T03:00:00+00:00`
+#    with `success`.
 docker exec k2-airflow-scheduler airflow dags list-runs lake_maintenance | head -5
 
 # 3. Compact now rather than waiting. --days N is the compaction window, days
