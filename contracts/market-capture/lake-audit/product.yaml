@@ -6,7 +6,7 @@ purpose: >-
   the nightly maintenance (offset continuity, duplicate identifiers, parse, drift and parity
   checks), by the ingest (the records Redpanda evicted before it read them), by an operator
   or by a replay. Most checks are about this domain's tables and partitions, so it is filed
-  here until the platform-owned governance domain ADR-044 records as intent is decided.
+  here; the governance domain reads it beside every domain's dbt test results (ADR-046).
 kind: source-aligned
 lifecycle: draft
 inputs: []

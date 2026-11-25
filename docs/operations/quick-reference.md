@@ -171,8 +171,8 @@ tables only its writer `dbt_<domain>` creates, changes or drops with SQL stateme
 everyone reads; table procedures are not fenced per user
 ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). `market_analytics`
 holds the dbt marts, one schema per product, rebuilt by the Airflow DAG `dbt_marts` every hour
-at minute 10 ([`dbt/`](../../dbt/README.md), [runbook](../runbooks/dbt-marts.md)); the other
-three are empty. The user is whatever `--user` says, not authenticated. The session
+at minute 10 ([`dbt/`](../../dbt/README.md), [runbook](../runbooks/dbt-marts.md));
+`governance` holds the quality-results view, built after the others; the other three are empty. The user is whatever `--user` says, not authenticated. The session
 time zone is the client's: the CLI inside the container sends UTC, a client on the host sends
 the host's zone unless told (`--timezone UTC`).
 
@@ -208,10 +208,24 @@ docker exec k2-trino trino --execute \
   "SELECT max(close_time) <= current_timestamp - INTERVAL '20' MINUTE FROM market_analytics.delayed_candles.ohlcv_delayed_20m"
 #   "true"
 
+# Quality results (ADR-046): every dbt test a domain's runs ran, in its own catalog. What did
+# not pass, newest first. Ran against k2-trino on the live stack on 2026-11-25.
+docker exec k2-trino trino --execute "SELECT run_started_at, tested, test_name, status, message
+  FROM market_analytics.dq.dbt_test_results WHERE status <> 'pass' ORDER BY run_started_at DESC LIMIT 20"
+#   (no rows: every recorded test passed)
+# And every result in one place, the lake's audits too, through the governance view. Ran on
+# make test-dbt's throwaway Trino (dbt/README.md); the governance catalog reaches the stack
+# with its rollout.
+docker exec k2-trino trino --execute "SELECT checked_at, source_system, domain, subject, check_name, status, detail
+  FROM governance.quality_results.dq_results WHERE status <> 'pass' ORDER BY checked_at DESC LIMIT 20"
+
 # Rebuild them now rather than at minute 10 (the DAG runs each domain as its writer).
 # Ran on 2026-11-25 in a throwaway container of the same image, before the DAG's rollout.
 docker exec k2-airflow-scheduler airflow dags trigger dbt_marts
 ```
+
+<!-- VERIFY (ADR-046 rollout): run the governance.quality_results.dq_results query above on the
+live stack once catalog governance exists, and paste what it prints. -->
 
 ## When something breaks
 

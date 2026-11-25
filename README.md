@@ -112,7 +112,7 @@ works, and the practices that enforce it.
 | [027](./docs/adr/ADR-027-book-snapshot-and-sequencing.md) | Top-20 snapshots at 1 Hz; per-venue sequencing and resync | Raw keeps the deltas; the product is what research joins against |
 | [008](./docs/adr/ADR-008-eliminate-prefect-orchestration.md) | Remove Prefect: reversed | A wrong call kept on the record with its outcome |
 
-All 33 ADRs: [`docs/adr/`](./docs/adr/README.md).
+All 39 ADRs: [`docs/adr/`](./docs/adr/README.md).
 
 ## Measured
 
@@ -196,16 +196,16 @@ hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 
 | Python: 299 tests [^py] over contracts, wire format, offsets, decoders, book replay, parity | `make test-python` |
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Notebook helpers: `k2lake.trades()` / `completeness()` / `bars()` on synthetic tables, no stack | `make test-notebooks` |
-| Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, only a domain's writer changes its tables with SQL statements (table procedures are not fenced per user, ADR-044); 113 checks [^trino], no stack | `make test-trino` |
-| dbt: sqlfluff, compile, a manifest check (only staging reads a source; every mart tested unique on its contract grain), then a build on empty sources with 8 unit tests and 16 data tests [^dbt], each domain's snapshot maintenance, and a project with no marts still parsing; no stack | `make test-dbt` |
+| Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, only a domain's writer changes its tables with SQL statements (table procedures are not fenced per user, ADR-044); 134 checks [^trino], no stack | `make test-trino` |
+| dbt: sqlfluff, compile, a manifest check (only staging reads a source; every mart tested unique on its contract grain), then a build on empty sources with 10 unit tests and 22 data tests [^dbt], every test's result recorded in its domain's own catalog, a failing one included, and shown in the governance view, each domain's snapshot maintenance, and a project with no marts still parsing; no stack | `make test-dbt` |
 | Prometheus rule unit tests (25 of 36 alerts) and 10 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: per-layer parity, three-way OHLCV parity, event-bar parity, chaos | `make lake-verify`, `make parity-ohlcv`, `make parity-bars`, `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
 [^py]: `make test-python` with `--collect-only -q | tail -1`
 [^ch]: the count `scripts/clickhouse-schema-test.sh` itself asserts (`[ "$n" -eq 10 ]`)
-[^trino]: `make test-trino | grep -c '^ok '` (2026-11-26, four domains)
-[^dbt]: `dbt build`'s own summary in `make test-dbt`: `Found 6 models, 16 data tests, 3 sources, ... 8 unit tests` (2026-11-25)
+[^trino]: `make test-trino | grep -c '^ok '` (2026-11-25, five domains)
+[^dbt]: `dbt build`'s own summary in `make test-dbt`: `Found 9 models, 1 operation, 22 data tests, 3 sources, ... 10 unit tests` (2026-11-25)
 
 CI ([`ci.yml`](./.github/workflows/ci.yml)) runs rust (fmt, clippy `-D warnings`, test),
 python (Ruff, pytest), contracts (k2gen drift, tests, Ruff, mypy), clickhouse-schema, trino
@@ -223,7 +223,7 @@ docker/trino/              Trino config: catalog lake (read-only), one generated
 docker/prometheus/rules/   36 alert rules with unit tests
 schemas/avro/              raw-message, trade, book-snapshot-l2
 config/instruments.yaml    instrument registry, the single source of truth
-contracts/                 a descriptor per data product, an ODCS v3 contract per lake table, four domains
+contracts/                 a descriptor per data product, an ODCS v3 contract per lake table, five domains
 platform/k2gen/            k2gen, the contract validator
 dbt/                       dbt on Trino: the domain marts; sources and selectors generated from contracts/
 scripts/chaos/             failure injection, timed

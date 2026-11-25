@@ -13,6 +13,7 @@ sources:
         contract: contracts/market-capture/lake-audit/audit.checks.odcs.yaml
         owner: capture-team
         read_by:
+        - governance.quality_results.dq_results
         - market_analytics.venue_quality.venue_quality_scorecard
     columns:
     - name: run_ts

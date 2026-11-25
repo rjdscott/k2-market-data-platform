@@ -64,6 +64,13 @@ hour at minute 10 by the Airflow DAG `dbt_marts` ([`dbt/README.md`](../../dbt/RE
 | `market_analytics.candles.ohlcv_1m` | table | `(exchange, canonical_symbol, window_start)` | `gold.ohlcv_1m`'s grain and columns without `src_snapshot_id` and `computed_at`, from `gold.trades` |
 | `market_analytics.delayed_candles.ohlcv_delayed_20m` | view | the same | `lake.gold.ohlcv_1m`'s candles whose minute ended at least 20 minutes before the query and before the venue's newest minute in the lake |
 | `market_analytics.venue_quality.venue_quality_scorecard` | table | `(exchange, utc_date)` | per venue and UTC day: trades, trades after a trade-id gap and the ids missing; the venue's audits of that day (run the next day) and the whole-table audits run that day, with their failures; raw frames, trade and book records Redpanda evicted before the ingest read them |
+| `governance.quality_results.dq_results` | view | `(source_system, checked_at, subject, check_name)` | every quality result: the lake jobs' checks from `audit.checks` and every domain's dbt tests from its `dq.dbt_test_results`, with `domain`, `status` as `pass`, `fail`, `warn` or `error`, and `detail` ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)) |
+
+Beside the marts, every domain catalog that has run a dbt test holds
+`<catalog>.dq.dbt_test_results`: one row per data test and unit test per dbt invocation,
+written by the domain's own writer through dbt's `on-run-end` hook, failed and skipped tests
+included, append-only. It is the platform's, not a product: it has no contract, and the
+governance view is how it is meant to be read.
 
 | Table | Grain — one row per … | Partition / sort | Time column (unit, zone) | Symbol columns | Identifier (dedup key) | Populated by |
 |---|---|---|---|---|---|---|
@@ -285,6 +292,8 @@ What the archive knows about its own holes. None of these exist in ClickHouse.
 | `seq_gap` | `silver.book_binance` | `lastUpdateId` did not advance past the previous frame on this connection |
 | `audit.checks` | `lake.audit.checks` | one row per check per run. Maintenance writes the names in `AUDITS` (`docker/lake/maintenance.py`): `offset_continuity`, `duplicate_identifiers`, `bronze_unparseable`, `bronze_schema_drift`, `silver_parity`, `silver_flags` (informational), `gold_parity`, `ohlcv_parity`, `bars_parity`, `kraken_checksum`. The ingest writes `unresolvable_schema_id`, `bronze_parity`, `offset_gap` and `batch_offsets` (ADR-047, only on a mismatch); an operator `manual_purge` and `checksum_failure_acknowledged`; `scripts/replay-lake.sh` writes `replay`. `passed = false` is what makes a maintenance run exit non-zero |
 | `gold.feed_errors` | ClickHouse | the served tier's counterpart: Kafka records the decoder rejected, with their bytes |
+| `dq.dbt_test_results` | `<catalog>.dq.dbt_test_results`, each domain catalog | one row per dbt test and unit test per run, as dbt reported it (`pass`, `fail`, `warn`, `error`, `skipped`), with the relation it tests and dbt's message |
+| `dq_results` | `governance.quality_results.dq_results` | the two rows above in one shape, `status` as `pass`, `fail`, `warn` or `error`: where to look first |
 
 ## Where parity is checked
 

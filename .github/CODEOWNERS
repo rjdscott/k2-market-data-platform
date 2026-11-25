@@ -10,6 +10,7 @@
 /contracts/reference-data/    @rjdscott  # reference-data-team
 /contracts/fx-reference/      @rjdscott  # fx-reference-team (declared, first product in phase P4)
 /contracts/market-analytics/  @rjdscott  # analytics-team
+/contracts/governance/        @rjdscott  # platform-team (ADR-046)
 
 /contracts/domains.yaml       @rjdscott  # platform-team: adding a domain or changing its owner
 /contracts/schema/            @rjdscott  # platform-team

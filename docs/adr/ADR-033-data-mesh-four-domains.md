@@ -1,6 +1,6 @@
 # ADR-033: Data mesh, four domains, and a platform team that owns the paved road
 
-**Status:** Accepted
+**Status:** Accepted; "The platform owns the road, not the products" superseded for the governance domain by [ADR-046](ADR-046-governance-domain-and-quality-results.md)
 **Date:** 2026-11-25
 **Author:** Rob Scott
 **Category:** Ownership
@@ -134,3 +134,15 @@ Pending, not decided here: the maintainer's direction (2026-11-25) is a fifth,
 platform-owned governance domain for quality results, control evidence and lineage. It would
 reverse this ADR's "The platform owns the road, not the products", so it gets its own ADR when
 its first product lands.
+
+---
+
+## Outcome (2026-11-25, a fifth domain)
+
+The pending governance domain is decided in
+[ADR-046](ADR-046-governance-domain-and-quality-results.md): `governance`, consumer-aligned,
+owned by `platform-team`, registered in `contracts/domains.yaml` and `.github/CODEOWNERS` like
+the four above. The platform team now owns a domain as well as the road; that one line is what
+ADR-046 supersedes, and only for this domain. Its first product, `quality-results`, reads every
+other domain and no domain reads it, so the both-directions trigger above has not fired.
+`lake-audit` stays in `market-capture`.
