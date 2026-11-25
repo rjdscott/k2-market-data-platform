@@ -58,8 +58,10 @@ sources stays ADR-036's.
   `catalog.write_audit_rows`: `job = 'ingest'`, `check_name = 'batch_offsets'`, `scope =
   '<topic>/<partition>'`, `observed` = planned minus found, `detail` = both ranges. One row
   per failing partition, so a run's rows cannot collide on `(run_ts, scope, check_name)`.
-  An audit that raises is a row too, scope `lake.raw.messages`, `observed = -1`. No schema
-  change: the columns are the ones every other check uses.
+  An audit that raises is a row too, scope `lake.raw.messages`, `observed = -1` and a
+  detail starting `check raised`, the form the nightly audit files for a check that raised
+  (`offsets.CHECK_RAISED`), so the governance view `dq_results` reads it as `error`, not
+  `fail`. No schema change: the columns are the ones every other check uses.
 - **A clean batch files nothing.** 288 runs a day would otherwise add 288 commits a day to
   an append-only table that is never pruned, each saying only what the `raw.messages`
   commit already says. The run's log line (`stage 1: batch audit 0 failure(s) in <s>s`) is
@@ -76,11 +78,13 @@ sources stays ADR-036's.
 The audit is worth having only while the missing records can still be re-read, which is
 the retention window, and it is affordable only if it adds seconds to a run with about a
 minute to spare. Reading three narrow columns of the files one commit added meets both: the
-same aggregate over the newest live batch, run through Trino as a proxy, executed in 0.58 s
-and returned no failures (`EXPLAIN ANALYZE`, 2026-11-25; the Spark figure is the log line
-above, to be recorded after rollout). Auditing after the commit costs one property: a bad
-batch is visible to readers for the minutes before someone repairs it. Bronze, silver and
-gold are rebuildable from `raw.messages`, so that window costs a re-decode, not data.
+same aggregate over the files the newest ingest snapshot added, run through Trino as a
+proxy, executed in 0.60 to 0.92 s over seven runs on 2026-11-25 UTC (the `EXPLAIN ANALYZE`
+command and its `Execution:` line are in `docker/lake/README.md`, "What it costs per run";
+the Spark figure is the log line above, to be recorded after rollout). Auditing after the
+commit costs one property: a bad batch is visible to readers for the minutes before someone
+repairs it. Bronze, silver and gold are rebuildable from `raw.messages`, so that window
+costs a re-decode, not data.
 
 ---
 
@@ -111,16 +115,40 @@ log, not by the table. Every run pays one extra small Spark job and two metadata
 compacted offsets and no transaction markers; `offset_continuity` already relies on the
 same fact.
 
-**Risks:** the check is count, first and last, so one hole and one duplicate in the same
-partition of the same batch net to a pass (the same blind spot `offset_continuity` has). A
-finding that cannot be written to `audit.checks` is only in the task log, and the alert
-stays silent for it; the nightly audit still finds the hole.
+**Risks**, and the blind spots behind them. The backstop for every one is the nightly
+`offset_continuity` (`maintenance.audit_offset_continuity`): count, first and last offset
+per partition over the whole of `raw.messages`, so a hole fails it with a positive
+`observed` and a range written twice with a negative one, up to 24 hours later.
+
+- **Count, first and last** per partition, so one hole and one duplicate in the same
+  partition of the same batch net to a pass (the same blind spot `offset_continuity` has).
+- **A batch the audit never saw.** A driver that dies after the `raw.messages` commit and
+  before `audit_batch` finishes leaves that batch committed and unaudited, and no later
+  run audits it: each run reads only the snapshot it committed itself.
+  `scripts/chaos/lake-ingest-kill.sh` aims its SIGKILL at the commit, and a kill that
+  lands after it is in this window. Only the nightly audit covers such a batch.
+- **The batch against its own plan, not the plan against the previous commit.** A wrong
+  `starts` (one past the committed offset leaves a hole between two batches) or a range
+  committed twice is a batch that matches its plan, and it passes. An in-memory
+  `starts[t][p] == committed[t][p]` check was considered and not added, because it would
+  be a tautology: `starts` is `committed` copied through `next_starting_offsets` and
+  `bounded_offsets` in the same call of `stage_raw`, from the same single read of the
+  snapshot summary. It would re-test that copy, which
+  `test_next_start_is_the_committed_end_verbatim` in `tests/test_lake_offsets.py` already
+  pins, and a stale or doubled read of the committed offsets puts the same wrong value on
+  both sides. A check with teeth re-reads the previous ingest commit's `k2.kafka-offsets`
+  after the commit, which is I/O this decision does not add. Two writers committing the
+  same range is what the writer lock (`docker/lake/lock.py`) prevents.
+- **A finding that cannot be written** to `audit.checks` is only in the task log, and the
+  alert stays silent for it.
 
 **Revisit when:** any v3 topic gets `cleanup.policy=compact` or any producer to a v3 topic
 sets `transactional.id` (offsets become sparse and every batch fails the check); or the
-logged audit time exceeds 10 s on three consecutive runs; or Redpanda's raw retention is
-raised to 7 days or more on every raw topic, at which point a blocked archive can wait and
-write-audit-publish is worth reopening for the bus.
+logged audit time exceeds 10 s on three consecutive runs; or `offset_continuity` fails on
+a hole or duplicate that no `batch_offsets` row reported, at which point the audit gains
+the cross-commit check above; or Redpanda's raw retention is raised to 7 days or more on
+every raw topic, at which point a blocked archive can wait and write-audit-publish is
+worth reopening for the bus.
 
 ---
 

@@ -495,9 +495,26 @@ nothing; the run logs `stage 1: batch audit 0 failure(s) in <s>s`. Recovery is
 [lake-ingest-batch-audit.md](../../docs/runbooks/lake-ingest-batch-audit.md).
 
 What it costs per run: two metadata queries and one small Spark job. The same aggregate
-over the newest live batch, run through Trino as a proxy, executed in 0.58 s
-(`EXPLAIN ANALYZE` on 2026-11-25, against the files of one ingest snapshot found through
-`"messages$entries"`). The Spark figure is the log line above. <!-- VERIFY: record the first
+over the files the newest ingest snapshot added, run through Trino as a proxy, executed in
+0.60 to 0.92 s (seven runs of the command below on 2026-11-25 UTC, all against the same
+snapshot). The plan's `ScanFilter` on `raw.messages` carries the `$path` dynamic filter, so
+it read only that snapshot's files, as the Spark incremental read does:
+
+```bash
+docker exec k2-trino trino --user reviewer --execute "
+EXPLAIN ANALYZE
+SELECT topic, partition, count(*), min(\"offset\"), max(\"offset\")
+FROM lake.raw.messages
+WHERE \"\$path\" IN (
+  SELECT data_file.file_path FROM lake.raw.\"messages\$entries\"
+  WHERE status = 1 AND snapshot_id = (
+    SELECT snapshot_id FROM lake.raw.\"messages\$snapshots\"
+    WHERE element_at(summary, 'k2.job') = 'ingest' ORDER BY committed_at DESC LIMIT 1))
+GROUP BY topic, partition" | grep -o 'Execution: [0-9.]*m\?s'
+#   Execution: 601.55ms
+```
+
+The Spark figure is the log line above. <!-- VERIFY: record the first
 deployed runs' `batch audit ... in <s>s` here -->
 
 ### Measured, on the live backlog

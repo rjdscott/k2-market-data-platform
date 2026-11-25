@@ -75,8 +75,9 @@ flowchart TB
   per table. If the catalog is down the gauge freezes and the age grows: the alert you want.
 - **ClickHouse** ships its own `/metrics`; the two gold-feed rules watch
   `ClickHouseProfileEvents_KafkaMessagesFailed` and topic movement versus table growth.
-- **Rules** are three files by tier, 10 capture, 13 lake, 6 ClickHouse, each with a severity
-  and (bar one ClickHouse rule) a `for`. The 22 capture and lake rules carry a `runbook`
+- **Rules** are four files by tier, 10 capture, 14 lake, 6 ClickHouse, 6 Airflow, each with
+  a severity and, bar `ClickHouseKafkaMessagesFailed`, `AirflowTaskFailed` and
+  `LakeIngestBatchAuditFailed`, a `for`. All 36 carry a `runbook`
   annotation that gate (d) of `check-docs.sh` resolves to a file; unit tests sit in
   `docker/prometheus/tests/*.test.yml` and `rules/tests/*_test.yml`, both run by gate (c2).
   Prometheus loads rules at start or `SIGHUP`, so the docs say so.

@@ -64,8 +64,11 @@ docker exec k2-trino trino --user reviewer --execute "
 #   detail:   planned <n> at <first>..<last>, found <m> at <first>..<last>
 ```
 
-A negative `observed` is a duplicate in the system of record: exactly-once broke. Do not
-delete anything; go to [lake-audit-failed.md §1](./lake-audit-failed.md#1-offset_continuity-a-hole-in-the-archive)
+Read the scope before the sign. Scope `lake.raw.messages` with `observed = -1` and a detail
+starting `check raised` is not a finding about the data: the audit could not run, go to
+[§2](#2-the-audit-itself-could-not-run). On a `<topic>/<partition>` scope, a negative
+`observed` is a duplicate in the system of record: exactly-once broke. Do not delete
+anything; go to [lake-audit-failed.md §1](./lake-audit-failed.md#1-offset_continuity-a-hole-in-the-archive)
 and treat it as a contract failure.
 
 ```bash
@@ -113,10 +116,20 @@ docker exec k2-redpanda rpk topic describe -p "$T"
 ```
 
 ```bash
-# 5. Re-read one hole into raw.messages, with lake_ingest paused (step 2). Run once per
-#    hole from step 3, never over a range that includes offsets already present: that
-#    writes duplicates. NOT YET RUN. <!-- VERIFY: run against a scratch table first -->
+# 5. Re-read one hole into raw.messages. Run once per hole from step 3, never over a
+#    range that includes offsets already present: that writes duplicates. NOT YET RUN.
+#    <!-- VERIFY: run against a scratch table first -->
 #
+#    It must not race the other two writers of raw.messages: the ingest appends to it,
+#    and maintenance compacts it and audits it. So pause both schedules, wait out any
+#    driver already running, and then take the lake's one writer lock
+#    (docker/lake/lock.py) inside the re-read, non-blocking, as ingest.main does: if
+#    anything still holds it the re-read exits before Spark starts, and while the re-read
+#    holds it an ingest started by hand exits 75 and maintenance waits for it.
+docker exec k2-airflow-scheduler airflow dags pause lake_ingest
+docker exec k2-airflow-scheduler airflow dags pause lake_maintenance
+docker exec k2-spark-iceberg pgrep -af 'lake/(ingest|maintenance|rebuild)\.py'   # until it prints nothing
+
 #    k2.job=operator, not ingest: the ingest resumes from the newest k2.job=ingest
 #    snapshot only (offsets.latest_summary), so this append cannot move the committed
 #    offsets, and stage 2 decodes it on its next run like any other raw.messages snapshot.
@@ -125,6 +138,10 @@ docker exec -e T="$T" -e P="$P" -e FIRST=<first_missing> -e LAST=<last_missing> 
   k2-spark-iceberg python3 -c "
 import json, os, sys; sys.path.insert(0, '/home/iceberg/lake')
 from datetime import datetime, timezone
+from lock import LOCK_PATH, acquire_lock
+lock = acquire_lock(LOCK_PATH)   # held until this process exits
+if lock is None:
+    sys.exit(f'another lake writer holds {LOCK_PATH}: wait for it and run this again')
 from pyspark.sql import functions as F
 import wire
 from ingest import KAFKA_BROKERS, RAW_TABLE
@@ -156,8 +173,9 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/record_check.py \
   --detail "batch audit hole, records evicted before a re-read: committed <first_missing>, broker LOG-START <last_missing + 1>"
 ```
 
-7. Unpause (`docker exec k2-airflow-scheduler airflow dags unpause lake_ingest`), confirm
-   the next run logs `stage 1: batch audit 0 failure(s)`, and append the incident below.
+7. Unpause what steps 2 and 5 paused (`docker exec k2-airflow-scheduler airflow dags
+   unpause lake_ingest`, and the same for `lake_maintenance`), confirm the next run logs
+   `stage 1: batch audit 0 failure(s)`, and append the incident below.
 
 **Measured**, not yet: no batch has failed the audit. The audit's own cost on every run is
 the `stage 1: batch audit ... in <s>s` log line. <!-- VERIFY: record the first runs' figure
@@ -168,7 +186,9 @@ here and in docker/lake/README.md -->
 ## 2. The audit itself could not run
 
 **Symptom**, one `batch_offsets` row with scope `lake.raw.messages`, `observed = -1`, and a
-detail beginning `batch audit raised`; the same text on the task's stderr.
+detail beginning `check raised`; the same text on the task's stderr. The prefix is the one
+the nightly audit uses for a check that raised (`offsets.CHECK_RAISED`), so the governance
+view `dq_results` shows the row as `error`, not `fail`.
 
 **Detection**, `LakeIngestBatchAuditFailed`, as above.
 
