@@ -118,8 +118,18 @@ fi
 # writer holds the lock). One or two skips are the lock doing its job, and any
 # number while Airflow's lake_maintenance or lake_rebuild runs is the nightly
 # window; three in a row with neither running is a stuck lock, the case
-# AirflowLakeIngestSkippedRepeatedly pages on.
+# AirflowLakeIngestSkippedRepeatedly pages on. A holder that ended in the last
+# 15 minutes still accounts for them, the alert's grace: its skips stay the
+# newest finished runs until the first run after it has finished.
 runbook=docs/runbooks/airflow-scheduling.md
+# holder_ended_recently <dag_id> -> 0 if a run of <dag_id> ended in the last 15 min.
+holder_ended_recently() {
+  airflow_cli dags list-runs "$1" -o json | python3 -c '
+import json, sys, time
+from datetime import datetime
+sys.exit(not any(r["end_date"] and time.time() - datetime.fromisoformat(r["end_date"]).timestamp() < 900
+                 for r in json.load(sys.stdin)))' 2>/dev/null
+}
 since=$(date -u -d "@$(( $(date +%s) - LAKE_MAX_AGE ))" +%FT%T+00:00)
 runs=$(airflow_cli dags list-runs "$LAKE_DAG" -o json --start-date "$since" | python3 -c '
 import json, sys
@@ -137,7 +147,8 @@ done <<< "$runs"
 holder=""
 if [ "$skips" -gt 0 ] && [ -z "$last" ]; then
   for dag in lake_maintenance lake_rebuild; do
-    if airflow_task_in_flight "$dag"; then holder=$dag; break; fi
+    if airflow_task_in_flight "$dag"; then holder="while $dag holds the lake lock"; break; fi
+    if holder_ended_recently "$dag"; then holder="under $dag, which ended in the last 15 min"; break; fi
   done
 fi
 label="(3) last $LAKE_DAG run"
@@ -150,7 +161,7 @@ elif [ "${last%% *}" = success ]; then
 elif [ -n "$last" ]; then
   bad "$label" "FAIL (${last#* } ${last%% *}: $runbook §2)"
 elif [ -n "$holder" ]; then
-  result "$label" "PASS ($skips skipped while $holder holds the lake lock, as it should)"
+  result "$label" "PASS ($skips skipped $holder, as it should)"
 elif [ "$skips" -ge 3 ]; then
   bad "$label" "FAIL ($skips skipped in a row and no Airflow maintenance or rebuild running: the lake lock is stuck, $runbook §3)"
 else

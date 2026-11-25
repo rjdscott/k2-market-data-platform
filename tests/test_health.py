@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,8 @@ case "$*" in
   *"airflow tasks states-for-dag-run lake_ingest"*)
     echo "[{\\"dag_id\\": \\"lake_ingest\\", \\"task_id\\": \\"ingest\\", \\"state\\": \\"$TASK\\"}]" ;;
   *"airflow dags list-runs lake_maintenance --state running"*) echo "$MAINT" ;;
-  *"airflow dags list-runs lake_rebuild --state running"*) echo "[]" ;;
+  *"airflow dags list-runs lake_maintenance -o json"*) echo "${MAINT_ALL:-[]}" ;;
+  *"airflow dags list-runs lake_rebuild"*) echo "[]" ;;
   *"airflow tasks states-for-dag-run lake_maintenance"*)
     echo '[{"dag_id": "lake_maintenance", "task_id": "maintain", "state": "running"}]' ;;
 esac
@@ -53,6 +55,27 @@ MAINT_RUNNING = json.dumps([{"run_id": "scheduled__2026-11-25T03:00:00+00:00", "
     ("the scheduler did not answer", "", "success", "[]", "FAIL"),
 ])
 def test_last_lake_ingest_run(tmp_path, name, runs_json, task, maint, verdict):
+    line, rc = run_health(tmp_path, RUNS=runs_json, TASK=task, MAINT=maint)
+    assert line.split(": ", 1)[1].startswith(verdict), (name, line)
+    # Exit status follows the FAIL lines; the rest of this fake stack passes.
+    assert rc == (1 if verdict == "FAIL" else 0), line
+
+
+# Three skips, and lake_maintenance no longer running: it ended 5 minutes ago,
+# inside AirflowLakeIngestSkippedRepeatedly's 15-minute grace, so its skips are
+# still the newest runs (observed 2026-11-25, 06:34 to 06:39 UTC), or 30
+# minutes ago, when they are a stuck lock.
+@pytest.mark.parametrize("ended_min_ago, verdict", [(5, "PASS"), (30, "FAIL")])
+def test_skips_after_a_holder_ended(tmp_path, ended_min_ago, verdict):
+    end = datetime.now(timezone.utc) - timedelta(minutes=ended_min_ago)
+    maint_all = json.dumps([{"run_id": "scheduled__2026-11-25T03:00:00+00:00", "state": "success",
+                             "end_date": end.isoformat()}])
+    line, _ = run_health(tmp_path, RUNS=runs("success", "success", "success"), TASK="skipped",
+                         MAINT="[]", MAINT_ALL=maint_all)
+    assert line.split(": ", 1)[1].startswith(verdict), line
+
+
+def run_health(tmp_path, **env):
     top = tmp_path / "repo"
     (top / "scripts/chaos").mkdir(parents=True)
     shutil.copy(ROOT / "scripts/chaos/lib.sh", top / "scripts/chaos/lib.sh")
@@ -66,9 +89,7 @@ def test_last_lake_ingest_run(tmp_path, name, runs_json, task, maint, verdict):
     out = subprocess.run(
         ["bash", str(ROOT / "scripts/health.sh")], capture_output=True, text=True, timeout=60,
         env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "TOP": str(top),
-             "RUNS": runs_json, "TASK": task, "MAINT": maint, "K2_HEALTH_WAIT": "0"},
+             "K2_HEALTH_WAIT": "0", **env},
     )
     (line,) = [ln for ln in out.stdout.splitlines() if ln.startswith("(3) last lake_ingest run: ")]
-    assert line.split(": ", 1)[1].startswith(verdict), (name, line)
-    # Exit status follows the FAIL lines; the rest of this fake stack passes.
-    assert out.returncode == (1 if verdict == "FAIL" else 0), out.stdout
+    return line, out.returncode
