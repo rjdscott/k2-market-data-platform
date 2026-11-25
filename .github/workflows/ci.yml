@@ -63,7 +63,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.4.0
 
       - name: Ruff
-        run: uv run --no-project --with ruff ruff check docker/lake tests
+        run: uv run --no-project --with ruff ruff check docker/lake docker/airflow tests
 
       - name: Pytest
         run: uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
@@ -121,6 +121,15 @@ jobs:
         include:
           - name: prefect
             dockerfile: docker/prefect/Dockerfile
+          # load + tag: the step after the build runs a check inside the image.
+          - name: airflow
+            dockerfile: docker/airflow/Dockerfile
+            load: true
+            tag: k2-airflow:3.3.2
+          - name: lake-metrics
+            dockerfile: docker/lake-metrics/Dockerfile
+            load: true
+            tag: k2-lake-metrics:3.12.16
           - name: spark
             dockerfile: docker/spark/Dockerfile
           - name: capture
@@ -144,9 +153,26 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: false
+          load: ${{ matrix.load || false }}
+          tags: ${{ matrix.tag }}
           build-args: ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # `make test-airflow` without its `docker build`: this job's buildx
+      # builder has the layers, the runner's daemon has only the loaded image.
+      - name: DAG tests, in the image just built
+        if: matrix.name == 'airflow'
+        run: >-
+          docker run --rm --network none -e AIRFLOW__LOGGING__LOGGING_LEVEL=WARNING
+          -v "$PWD":/repo:ro k2-airflow:3.3.2
+          python -m unittest discover -s /repo/docker/airflow/tests
+
+      - name: Exporter self-check, in the image just built
+        if: matrix.name == 'lake-metrics'
+        run: >-
+          docker run --rm --network none -v "$PWD/docker/lake":/opt/lake:ro
+          k2-lake-metrics:3.12.16 python /opt/lake/metrics.py --self-check
 
   compose:
     name: Compose (config validation)
@@ -164,8 +190,8 @@ jobs:
         run: docker compose --env-file .env.example config -q
 
       # Prints the steady default, bootstrap default and bootstrap with
-      # --profile governance limit sums, and fails when the steady default is
-      # over the 16 CPU / 40 GB ADR-010 states. Also fails a service in either
+      # --profile governance limit sums, and fails when the bootstrap default
+      # is over the 20 CPU / 36 GiB ADR-034 states. Also fails a service in either
       # config with no CPU or memory limit (it would escape the budget and
       # nothing else would notice), an untagged or `latest` image, and an
       # unpinned FROM or pip install in a Dockerfile. Stdlib only.

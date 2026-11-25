@@ -20,10 +20,19 @@ updates:
   - package-ecosystem: "docker"
     directories:
       - "/docker/prefect"
+      - "/docker/airflow"
+      - "/docker/lake-metrics"
       - "/docker/spark"
       - "/services/capture-rust"
     schedule:
       interval: "monthly"
+    ignore:
+      # Three pins move together in docker/airflow/Dockerfile: the FROM tag,
+      # the apache-airflow pin and the constraints URL. A bump of the tag alone
+      # builds an image whose pip step reinstalls the old Airflow over the new.
+      # The version is also gated on astronomer-cosmos support outside beta
+      # (ADR-034), which no bot checks. Bump by hand.
+      - dependency-name: "apache/airflow"
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
     commit-message:
