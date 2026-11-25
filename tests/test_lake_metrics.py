@@ -146,3 +146,18 @@ def test_each_ingest_finding_sets_only_its_own_gauge(metrics, monkeypatch):
     # A pulse: 15 minutes after the failing batch, with none since, it reads 0.
     assert metrics.refresh("PREFIX", now + metrics.INGEST_SUMMARY_MAX_AGE) == 0
     assert gauges["batch_audit_failures"].value == 0.0
+
+
+def test_every_finding_key_the_exporter_reads_has_a_writer():
+    """A gauge read off a commit property nobody sets is an alert that cannot fire.
+
+    LakeUnresolvableSchemaId was one from its first day until 2026-11-25: bronze.py
+    wrote `k2.bronze-findings` and the exporter read `k2.unresolvable-schema-ids`.
+    """
+    import pathlib
+    import re
+
+    lake = pathlib.Path(__file__).resolve().parents[1] / "docker" / "lake"
+    writers = "\n".join(p.read_text() for p in lake.glob("*.py") if p.name not in ("metrics.py", "offsets.py"))
+    for name in ("UNRESOLVABLE_IDS", "OFFSET_GAPS", "BATCH_AUDIT_FAILURES", "AUDIT_FAILURES"):
+        assert re.search(rf"\bO\.{name}\b", writers), f"no lake job writes O.{name}"
