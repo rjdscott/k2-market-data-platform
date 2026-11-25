@@ -7,12 +7,15 @@ only. The ceiling is **20 CPU / 36 GiB at the bootstrap peak**
 40 GB target of [ADR-010](../adr/ADR-010-resource-budget.md)), and `scripts/check-budget.py`
 fails CI over it.
 
-**As built, steady state: 17.80 CPU / 31.812 GiB across 20 long-running services.**
-**One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 19.80 CPU / 34.312 GiB
-across 25**, the one-shots run concurrently with the steady state at `docker compose up`,
+**As built, steady state: 16.30 CPU / 30.312 GiB across 18 long-running services.**
+**One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 18.30 CPU / 32.812 GiB
+across 23**, the one-shots run concurrently with the steady state at `docker compose up`,
 so that peak, not the steady state, is what the host has to absorb at boot, and it is the
-sum the ceiling gates. Airflow runs beside Prefect until the archive pull request of plan
-phase P2, a parallel run that the Prefect pair's 1.50 CPU / 1.500 GiB pays for until then.
+sum the ceiling gates. Since the Airflow cutover, `prefect-server` and `prefect-worker`
+sit behind the compose `legacy` profile, which a plain `docker compose up -d` does not
+start. They are the rollback ([airflow-scheduling.md](../runbooks/airflow-scheduling.md#rollback-to-prefect)):
+with them the peak is 19.80 CPU / 34.312 GiB across 25, still inside the ceiling, until
+the archive pull request of plan phase P2 deletes them.
 
 Both parallel runs are over. The three Kotlin `feed-handler-*` containers are gone from
 `docker-compose.yml` ([ADR-019](../adr/ADR-019-rust-capture-tier.md); code archived at
@@ -41,9 +44,12 @@ for label, oneshot in (("steady", False), ("one-shot", True)):
     cpu = sum(float(l["cpus"]) for l in lim)
     gib = sum(int(l["memory"]) for l in lim) / 2**30
     print("%-9s %2d services  %5.2f CPU  %6.3f GiB" % (label, len(lim), cpu, gib))'
-steady    20 services  17.80 CPU  31.812 GiB
+steady    18 services  16.30 CPU  30.312 GiB
 one-shot   5 services   2.00 CPU   2.500 GiB
 ```
+
+Add `--profile legacy` after `compose` for the rollback's sums: the two Prefect services
+join the steady line.
 
 `docker compose config` normalises every `memory:` to bytes, so **GiB is what the limits
 actually are**, `2g` in the compose file is 2 × 2³⁰, not 2 × 10⁹. Older figures on this
@@ -60,8 +66,6 @@ label was wrong. Run on 2026-11-25. `python3 scripts/check-budget.py` prints the
 | `minio` | cold storage | 1.0 | 0.5 | 1 GB | 512 MB |
 | `spark-iceberg` | lake batch engine | 2.0 | 1.0 | 8 GB | 2 GB |
 | `prefect-db` | orchestration (Prefect, Airflow, Lakekeeper metadata) | 1.0 | 0.5 | 1.5 GB | 512 MB |
-| `prefect-server` | orchestration | 1.0 | 0.5 | 1 GB | 512 MB |
-| `prefect-worker` | orchestration | 0.5 | 0.25 | 512 MB | 256 MB |
 | `airflow-api-server` | orchestration (Airflow 3) | 1.0 | 0.25 | 1.5 GB | 512 MB |
 | `airflow-scheduler` | orchestration (Airflow 3, LocalExecutor) | 1.5 | 0.5 | 3 GB | 1 GB |
 | `airflow-dag-processor` | orchestration (Airflow 3) | 0.5 | 0.1 | 1 GB | 256 MB |
@@ -73,14 +77,17 @@ label was wrong. Run on 2026-11-25. `python3 scripts/check-budget.py` prints the
 | `capture-kraken` | ingestion (v3) | 0.25 | 0.1 | 256 MB | 128 MB |
 | `capture-coinbase` | ingestion (v3) | 0.25 | 0.1 | 512 MB | 128 MB |
 | `lake-metrics` | observability (v3 lake) | 0.1 |, | 128 MB |, |
-| **Steady state (20 long-running services)** | | **17.80** | **7.85** | **31.812 GiB** | **12.375 GiB** |
+| **Steady state (18 long-running services)** | | **16.30** | **7.10** | **30.312 GiB** | **11.625 GiB** |
 | `redpanda-init` | init (one-shot) | 0.25 |, | 128 MB |, |
 | `lakekeeper-migrate` | init (one-shot) | 0.5 |, | 256 MB |, |
 | `lake-init` | init (one-shot) | 0.25 |, | 128 MB |, |
 | `lake-ddl` | init (one-shot) | 0.5 |, | 1 GB |, |
 | `airflow-migrate` | init (one-shot) | 0.5 |, | 1 GB |, |
 | **One-shot subtotal (5)** | | **2.00** | **, ** | **2.500 GiB** | **, ** |
-| **Bootstrap peak (25 containers)** | | **19.80** | **7.85** | **34.312 GiB** | **12.375 GiB** |
+| **Bootstrap peak (23 containers)** | | **18.30** | **7.10** | **32.812 GiB** | **11.625 GiB** |
+| `prefect-server` | `legacy` profile, the rollback | 1.0 | 0.5 | 1 GB | 512 MB |
+| `prefect-worker` | `legacy` profile, the rollback | 0.5 | 0.25 | 512 MB | 256 MB |
+| **With `--profile legacy` (25 containers)** | | **19.80** | **7.85** | **34.312 GiB** | **12.375 GiB** |
 
 `capture-coinbase` gets twice the memory of the other two because Coinbase's `level2`
 channel is full depth, not top-20, its subscribe snapshot alone is 5.2 MB
@@ -95,9 +102,9 @@ steady state at `docker compose up`, so the bootstrap peak is the number the hos
 absorb.
 
 Headroom against the 20 CPU / 36 GiB ceiling at the bootstrap peak, where it is gated:
-**0.20 CPU and 1.688 GiB**: cAdvisor took 0.10 CPU / 128 MiB of the 0.30 / 1.812 GiB that
-ADR-034 left. The Airflow limits are the plan's estimates until ADR-034's
-measured figures replace them.
+**1.70 CPU and 3.188 GiB** (0.20 CPU and 1.688 GiB with the `legacy` profile up; cAdvisor
+took 0.10 CPU / 128 MiB of what ADR-034 left). The Airflow limits are the plan's
+estimates until ADR-034's measured figures replace them.
 
 ## Where the budget goes
 

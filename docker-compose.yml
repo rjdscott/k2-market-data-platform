@@ -491,7 +491,14 @@ services:
   # ───────────────────────────────────────────────────────────────────────
   # Prefect Server - Workflow orchestration UI/API (v3.x)
   # ───────────────────────────────────────────────────────────────────────
+  # `legacy` profile since the Airflow cutover (ADR-034): a plain
+  # `docker compose up -d` leaves this and prefect-worker down, and the
+  # rollback starts both by name,
+  #   docker compose --profile legacy up -d prefect-server prefect-worker
+  # then resumes the Prefect schedule (docs/runbooks/airflow-scheduling.md,
+  # Rollback). Nothing in the default profile depends on either.
   prefect-server:
+    profiles: ["legacy"]
     image: prefecthq/prefect:3-python3.12
     container_name: k2-prefect-server
     hostname: prefect-server
@@ -538,6 +545,7 @@ services:
   # Prefect Worker - Workflow executor (v3.x uses workers not agents)
   # ───────────────────────────────────────────────────────────────────────
   prefect-worker:
+    profiles: ["legacy"]   # the rollback, see prefect-server above
     build:
       context: .
       dockerfile: docker/prefect/Dockerfile
@@ -588,12 +596,12 @@ services:
       com.k2.version: "v2"
 
   # ───────────────────────────────────────────────────────────────────────
-  # Airflow 3 - the lake schedules, beside Prefect (ADR-034)
+  # Airflow 3 - the lake schedules (ADR-034)
   # ───────────────────────────────────────────────────────────────────────
-  # Schedule shadow: lake_ingest runs `ingest.py --probe` (writes nothing,
-  # takes no lock) on Prefect's cron while Prefect keeps writing, and
-  # lake_maintenance starts paused. docker/airflow/dags/lake.py has the DAGs;
-  # scripts/airflow-shadow-check.sh is the 2 h gate before the cutover.
+  # The only scheduler of the lake writes since the cutover: lake_ingest every
+  # 5 minutes, lake_maintenance at 03:00 UTC, lake_rebuild by hand.
+  # docker/airflow/dags/lake.py has the DAGs; docs/runbooks/airflow-scheduling.md
+  # the cutover, the rollback to Prefect and the recoveries.
   #
   # LocalExecutor, so tasks run inside airflow-scheduler, and that is the only
   # service given the Docker socket. No triggerer: nothing here defers.
@@ -1291,8 +1299,6 @@ services:
 # grafana               | 0.5       | 512M         | Visualization
 # cadvisor              | 0.1       | 128M         | Per-container CPU and memory (Prometheus job cadvisor)
 # prefect-db            | 1.0       | 1536M        | Prefect, Airflow and Lakekeeper metadata DB
-# prefect-server        | 1.0       | 1G           | Orchestration UI/API (Prefect 3.x)
-# prefect-worker        | 0.5       | 512M         | Workflow executor (Prefect 3.x)
 # airflow-api-server    | 1.0       | 1536M        | Airflow 3 UI, REST and execution API (ADR-034)
 # airflow-scheduler     | 1.5       | 3G           | Airflow 3 scheduler + LocalExecutor, 4 slots
 # airflow-dag-processor | 0.5       | 1G           | Airflow 3 DAG parsing
@@ -1308,7 +1314,7 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (20 long-running) | 17.80 CPU | 31.812 GiB | v3 capture + lake, Airflow beside Prefect
+# STEADY STATE (18 long-running) | 16.30 CPU | 30.312 GiB | v3 capture + lake, Airflow schedules
 #
 # One-shots are NOT free. They declare limits and they run concurrently with
 # the steady state at boot, so the budget that matters at `docker compose up` is
@@ -1322,16 +1328,21 @@ services:
 #   ----------------------------------------------------------------------------
 #   one-shot subtotal  2.0  | 2.5G
 #
-# Bootstrap peak: 19.80 CPU / 34.312 GiB, all 25 services, against the
-# 20 CPU / 36 GiB ceiling ADR-034 sets at the bootstrap peak (ADR-010's
-# 16 CPU / 40 GB clause is superseded). scripts/check-budget.py fails CI over
-# it. Headroom: 0.20 CPU and 1.688 GiB. cAdvisor took 0.10 CPU / 128M of the
-# 0.30 / 1.812 GiB ADR-034 left.
+# Bootstrap peak: 18.30 CPU / 32.812 GiB, all 23 default-profile services,
+# against the 20 CPU / 36 GiB ceiling ADR-034 sets at the bootstrap peak
+# (ADR-010's 16 CPU / 40 GB clause is superseded). scripts/check-budget.py
+# fails CI over it. Headroom: 1.70 CPU and 3.188 GiB. cAdvisor took 0.10 CPU /
+# 128M of what ADR-034 left.
 #
-# Airflow beside Prefect is a parallel run and is paid for as one: the Prefect
-# pair (1.5 CPU / 1.5G) leaves at the archive pull request, landing steady state
-# at 16.30 CPU / 30.312 GiB. The Airflow limits are the plan's estimates until
-# ADR-034's measured figures replace them.
+# `legacy` profile, the Prefect rollback, not started by default:
+#
+#   prefect-server     1.0  | 1G    Orchestration UI/API (Prefect 3.x)
+#   prefect-worker     0.5  | 512M  Workflow executor (Prefect 3.x)
+#
+# With it the peak is 19.80 CPU / 34.312 GiB across 25, so a rollback that
+# leaves the Airflow services running stays inside the ceiling. Both go at the
+# archive pull request. The Airflow limits are the plan's estimates
+# until ADR-034's measured figures replace them.
 #
 # History: retiring the three Kotlin feed handlers (ADR-019) gave back the
 # 1.5 CPU / 1.5 GB they declared, and deleting docker/offload/ took its metrics
@@ -1347,5 +1358,5 @@ services:
 # Target: 20 CPU / 36 GiB at the bootstrap peak (ADR-034)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-25 (cAdvisor, +1 service; before it ADR-034: Airflow 3 beside Prefect, +5 services, ceiling 20 CPU / 36 GiB)
+# Last updated: 2026-11-25 (ADR-034 cutover: Prefect behind the legacy profile, -2 services; before it cAdvisor, +1)
 #############################################################################
