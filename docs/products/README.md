@@ -44,3 +44,11 @@ Owner `analytics-team`, consumer-aligned. Cross-venue products a researcher read
 | [delayed-candles](market-analytics/delayed-candles.md) | draft | `market_analytics.delayed_candles.ohlcv_delayed_20m` |
 | [event-bars](market-analytics/event-bars.md) | draft | `gold.bars` |
 | [venue-quality](market-analytics/venue-quality.md) | draft | `market_analytics.venue_quality.venue_quality_scorecard` |
+
+## governance
+
+Owner `platform-team`, consumer-aligned. What the platform records about the other domains' data rather than the data itself: quality results first, control evidence and lineage in later phases. Its products read every other domain and no domain reads them (ADR-046).
+
+| Product | Lifecycle | Outputs and marts |
+|---|---|---|
+| [quality-results](governance/quality-results.md) | draft | `governance.quality_results.dq_results` |

@@ -20,15 +20,27 @@ packages-install-path: "{{ env_var('K2_DBT_PACKAGES', 'dbt_packages') }}"
 
 flags:
   require_certificate_validation: true  # the future default; the stack speaks plain HTTP on loopback
+  # No up-front listing of relations: each one is looked up when a node needs it. dbt's
+  # default lists every schema of the project first, so one domain's run failed with
+  # "Catalog 'governance' not found" on a Trino that had no such catalog yet (2026-11-25);
+  # cache_selected_only does not help a run that selects no model (dbt test of a source,
+  # dbt source freshness), which still lists them all. A domain's run reads its own.
+  populate_cache: false
+
+# Every test and unit test a run ran, one row each, in dq.dbt_test_results of the writer's
+# own catalog, failed ones included (macros/record_test_results.sql, ADR-046).
+on-run-end:
+  - "{{ record_test_results(results) }}"
 
 models:
   k2:
     +materialized: view
     +view_security: definer  # dbt-trino's default, stated: readers reach the lake through the owner (ADR-044)
     +on_table_exists: replace  # CREATE OR REPLACE: one Iceberg table whose history keeps every build
-    # One block per domain with marts: dbt_project.yml has no wildcard folder. A mart
+    # One block per domain with table marts: dbt_project.yml has no wildcard folder. A mart
     # that is a view (ADR-035's delayed product) says so in its own config and in its
     # contract (materialized: view); scripts/dbt_manifest_check.py holds the two equal.
+    # governance has no block: its one mart is a view.
     market_analytics:
       marts:
         +materialized: table
