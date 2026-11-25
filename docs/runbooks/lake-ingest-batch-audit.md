@@ -21,8 +21,22 @@ or the nightly `offset_continuity` audit ([lake-audit-failed.md §1](./lake-audi
 **Before trusting this alert after a deploy:** `lake-metrics` imports `metrics.py` once, so
 the gauge is absent until the exporter restarts (`docker compose up -d --force-recreate
 --no-deps lake-metrics`), and Prometheus loads rules only at start and on SIGHUP
-(`docker kill -s HUP k2-prometheus`). <!-- VERIFY: run both after merge, then confirm
-`k2_lake_batch_audit_failures_total` is served and the rule is loaded -->
+(`docker kill -s HUP k2-prometheus`). Both were run after the merge of `c0cb1bc` on
+2026-11-25. Then confirm the rule is loaded and the gauge is served:
+
+```bash
+curl -s localhost:9090/api/v1/rules | jq '[.data.groups[].rules[] | select(.type == "alerting")] | length'
+#   36
+curl -s localhost:9090/api/v1/rules | jq -r '.data.groups[].rules[] | select(.name == "LakeIngestBatchAuditFailed") | .state'
+#   inactive
+curl -s 'localhost:9090/api/v1/query?query=k2_lake_batch_audit_failures_total' | jq -r '.data.result[] | .value[1]'
+#   0
+```
+
+On 2026-11-25, after the rollout, the rules API listed 36 alerting rules with
+`LakeIngestBatchAuditFailed` inactive, and the gauge was served at 0; these three commands
+printed the same on 2026-11-26. An empty answer from the last one means the gauge is not
+served: recreate `lake-metrics` as above.
 
 ---
 
@@ -178,8 +192,9 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/record_check.py \
    `stage 1: batch audit 0 failure(s)`, and append the incident below.
 
 **Measured**, not yet: no batch has failed the audit. The audit's own cost on every run is
-the `stage 1: batch audit ... in <s>s` log line. <!-- VERIFY: record the first runs' figure
-here and in docker/lake/README.md -->
+the `stage 1: batch audit ... in <s>s` log line, which step 2 prints. The first two scheduled
+runs with the audit, logical 19:51 and 19:56 UTC on 2026-11-25, each logged `stage 1: batch
+audit 0 failure(s) in 0.5s`, in runs of 236 to 244 s.
 
 ---
 
@@ -213,4 +228,6 @@ records were re-read or recorded as gone.
 ---
 
 **Last verified:** 2026-11-25 UTC, read-only steps 1 to 4, against the live stack at
-`f7a362c` with this change not yet deployed.
+`f7a362c` with this change not yet deployed; the deploy check and the audit's cost after the
+merge of `c0cb1bc` the same day, and the deploy check again on 2026-11-26. Steps 5 and 6 are
+not yet run.
