@@ -18,7 +18,7 @@ markers are named under each image.
 
 ![K2 Pipeline Overview](../images/dashboards/01-pipeline-overview.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.* **1** every scrape target, up or down. **2** trade records each venue's capture produced per second. **3** rows the hot tier inserts from Redpanda. **4** CPU each pipeline container uses, from cAdvisor.
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.* **1** every scrape target, up or down. **2** trade records each venue's capture produced per second. **3** rows the hot tier inserts from Redpanda. **4** CPU each pipeline container uses, from cAdvisor.
 
 The page to open first. All tiles green and three moving lines say capture, the bus and the hot tier are live; the Resources row says what that costs. A line gone flat says which of the pages below to open next.
 
@@ -30,7 +30,7 @@ Open: <http://localhost:3000/d/k2-pipeline-overview>. Leads to: [failure-recover
 
 ![K2 Capture (v3)](../images/dashboards/02-capture.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 Per venue: is the process up, seconds since its last frame, and any reconnects, sequence gaps, checksum failures or resyncs in the last hour. Below, frames and bytes per second, and records produced against records the broker acknowledged: a gap between those two lines is records that never reached Redpanda.
 
@@ -42,7 +42,7 @@ Open: <http://localhost:3000/d/k2-l2-capture>. Leads to: [capture-feed-stale.md]
 
 ![Redpanda Console: topics](../images/dashboards/03-redpanda-topics.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 Every v3 topic, raw, trades and book for each venue, with its partitions and the bytes it holds. Raw is what the lake ingests; the trades and book topics feed ClickHouse. Console has no dark theme, so this one is light.
 
@@ -54,7 +54,7 @@ Open: <http://localhost:8080/topics>. Leads to: [redpanda.md](../runbooks/redpan
 
 ![K2 Lake (v3)](../images/dashboards/04-lake.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.* **1** age of the newest Kafka record in raw.messages. **2** time since the archive last committed. **3** records the last run left unread, zero when caught up. **4** Spark, MinIO, Lakekeeper and the exporter.
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.* **1** age of the newest Kafka record in raw.messages. **2** time since the archive last committed. **3** records the last run left unread, zero when caught up. **4** Spark, MinIO, Lakekeeper and the exporter.
 
 Is the lake current: ingest lag and commit age saw-tooth under the 5-minute schedule, the backlog sits at zero, audit failures at 0. In the Resources row, each ingest is a Spark CPU spike every five minutes.
 
@@ -64,7 +64,7 @@ Open: <http://localhost:3000/d/k2-lake>. Leads to: [lake-ingest-lag.md](../runbo
 
 ![Spark master](../images/dashboards/05-spark-master.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 The batch engine is up: one worker, its cores and memory. It lists no applications: the lake jobs start their own local-mode driver in this container with `docker exec`, and show up on the Airflow pages instead. Spark's UI has no dark theme.
 
@@ -74,7 +74,7 @@ Open: <http://localhost:18080>. Leads to: [lake-recovery.md](../runbooks/lake-re
 
 ![Lakekeeper: the gold namespace](../images/dashboards/06-lakekeeper-gold.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 The Iceberg REST catalog: warehouse k2, its five namespaces (raw, bronze, silver, gold, audit) and the gold tables ClickHouse reloads from. The red banner is accurate: the catalog runs without authentication, published on loopback only.
 
@@ -84,7 +84,7 @@ Open: <http://localhost:18181/ui>. Leads to: [lake-recovery.md](../runbooks/lake
 
 ![MinIO: the k2-lake bucket](../images/dashboards/07-minio-lake-bucket.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 The object store under the lake: bucket k2-lake, its size and object count. Every Iceberg data and metadata file sits under warehouse/; the archive is kept forever, so this size only grows.
 
@@ -96,7 +96,7 @@ Open: <http://localhost:9001/browser/k2-lake>. Leads to: [lake-disk-usage-high.m
 
 ![ClickHouse Overview (gold)](../images/dashboards/08-clickhouse.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 Queries and failed queries per second, resident memory, inserts and rows inserted per second, background merges. Inserts never stop while capture runs: the Kafka engine feeds gold straight from the topics.
 
@@ -106,7 +106,7 @@ Open: <http://localhost:3000/d/clickhouse-v2>. Leads to: [failure-recovery.md](.
 
 ![ClickHouse: a query on gold.trades](../images/dashboards/09-clickhouse-query.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 The served tier answering, as the read-only `quant` user: trades per venue in the last hour and the newest exchange timestamp. A stale `newest` while capture is healthy is the case ClickHouseGoldFeedStale pages on.
 
@@ -118,7 +118,7 @@ Open: <http://localhost:8123/play>. Leads to: [clickhouse-rebuild-from-lake.md](
 
 ![Airflow: DAGs](../images/dashboards/10-airflow-dags.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568-dirty`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 The three lake DAGs: lake_ingest every 5 minutes, lake_maintenance daily at 03:00, lake_rebuild on demand only. Each shows its last run and a strip of recent run states.
 
@@ -128,7 +128,7 @@ Open: <http://localhost:8090/dags>. Leads to: [airflow-scheduling.md](../runbook
 
 ![Airflow: lake_ingest](../images/dashboards/11-airflow-lake-ingest.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.* **1** the grid: one column per run, coloured by state. **2** run duration of the last ten runs. **3** failed tasks in the last 24 hours.
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.* **1** the grid: one column per run, coloured by state. **2** run duration of the last ten runs. **3** failed tasks in the last 24 hours.
 
 Each 5-minute ingest run as a column in the grid, beside the duration of the last ten. A run that finds maintenance holding the writer lock exits 75 and shows as skipped, not failed.
 
@@ -138,7 +138,7 @@ Open: <http://localhost:8090/dags/lake_ingest>. Leads to: [airflow-scheduling.md
 
 ![Airflow: one ingest run's log](../images/dashboards/12-airflow-task-log.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 The log of the latest successful ingest run: Spark's stage progress, then the topics it read with their schema ids. The first place to look when AirflowTaskFailed fires.
 
@@ -148,7 +148,7 @@ Open: <http://localhost:8090/dags/lake_ingest/runs>. Leads to: [airflow-scheduli
 
 ![K2 Airflow](../images/dashboards/13-airflow-dashboard.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 Run duration and lateness per DAG, task failures and skips, scheduler heartbeat and DAG parse time, from Airflow's statsd metrics. The three Airflow alerts read these series. Skips and failures read "No data" when there were none.
 
@@ -160,7 +160,7 @@ Open: <http://localhost:3000/d/k2-airflow>. Leads to: [airflow-scheduling.md](..
 
 ![Prometheus: alerts](../images/dashboards/14-prometheus-alerts.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 Every alert rule, grouped by file, with its state. There is no Alertmanager: this page and Grafana are where a firing alert is seen, and each rule's annotations name its runbook.
 
@@ -170,7 +170,7 @@ Open: <http://localhost:9090/alerts>. Leads to: [README.md](../runbooks/README.m
 
 ![Prometheus: targets](../images/dashboards/15-prometheus-targets.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.*
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
 Every scrape job and whether its last scrape succeeded. A target down here is the input CaptureDown, ClickHouseDown and LakeExporterDown fire on.
 
@@ -182,7 +182,7 @@ Open: <http://localhost:9090/targets>. Leads to: [failure-recovery.md](../runboo
 
 ![K2 Resources](../images/dashboards/16-resources.png)
 
-*Captured 2026-11-25 at `v3-phase-e-58-ga102568`.* **1** declared CPU limits of the running containers, against ADR-034's ceiling. **2** each container's CPU and memory against the limit read from its cgroup. **3** containers their CPU limit is holding back.
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.* **1** declared CPU limits of the running containers, against ADR-045's ceiling. **2** each container's CPU and memory against the limit read from its cgroup. **3** containers their CPU limit is holding back.
 
 What the stack uses against what it declares. Limits are read from each container's cgroup by cAdvisor, so the table follows docker-compose.yml with no edit here. Sustained throttling, or memory near its limit, is a limit to raise, inside the budget that `python3 scripts/check-budget.py` gates.
 
