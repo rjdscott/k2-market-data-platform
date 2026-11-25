@@ -161,3 +161,28 @@ def test_every_finding_key_the_exporter_reads_has_a_writer():
     writers = "\n".join(p.read_text() for p in lake.glob("*.py") if p.name not in ("metrics.py", "offsets.py"))
     for name in ("UNRESOLVABLE_IDS", "OFFSET_GAPS", "BATCH_AUDIT_FAILURES", "AUDIT_FAILURES"):
         assert re.search(rf"\bO\.{name}\b", writers), f"no lake job writes O.{name}"
+
+
+def test_a_branch_commit_does_not_set_a_gauge(metrics, monkeypatch):
+    """`main` is at 1. 2 is a newer commit on a branch, 3 one on a branch since dropped:
+    `metadata["snapshots"]` lists all three, and the newest by timestamp-ms is not
+    a snapshot any reader of the table can see."""
+    now = 1_800_000_000.0
+
+    def snap(sid, parent, ago_ms, failures):
+        return {"snapshot-id": sid, "parent-snapshot-id": parent, "timestamp-ms": int(now * 1000) - ago_ms,
+                "summary": {"operation": "append", metrics.JOB: metrics.JOB_INGEST,
+                            metrics.BATCH_AUDIT_FAILURES: failures}}
+
+    monkeypatch.setattr(metrics, "list_tables", lambda prefix: [("audit", "checks")])
+    monkeypatch.setattr(metrics, "load_metadata", lambda prefix, ns, table: {
+        "current-snapshot-id": 1,
+        "snapshots": [snap(1, None, 60_000, "2"), snap(2, 1, 30_000, "7"), snap(3, None, 10_000, "9")]})
+    monkeypatch.setattr(metrics, "_refresh_disk", lambda: None)
+    for name in ("offset_gaps", "unresolvable_schema_ids", "audit_failures"):
+        monkeypatch.setattr(metrics, name, Recorder())
+    gauge = Recorder()
+    monkeypatch.setattr(metrics, "batch_audit_failures", gauge)
+
+    assert metrics.refresh("PREFIX", now) == 0
+    assert gauge.value == 2.0

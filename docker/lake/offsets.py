@@ -275,12 +275,35 @@ def merge_committed(previous: dict, produced: dict) -> dict:
     return merged
 
 
+def main_lineage(parents: dict, head) -> list:
+    """Snapshot ids on `main`'s lineage, `head` first: `head`, its parent, and so on.
+
+    `parents` is `{snapshot_id: parent_id}` over every snapshot the table lists;
+    `head` is the id `main` points at (None for an unwritten table). The walk
+    stops at the first parent the table no longer holds, which is where
+    `expire_snapshots` cut the history.
+
+    A table's snapshot list is not main's history once the table has a branch:
+    it holds the branch's unpublished commits, and the commits of a branch since
+    dropped, and either can be the newest by commit time (spike on
+    `lake.scratch_p4.wap_bronze`, 2026-11-25). Every "newest snapshot" read
+    filters through this first.
+    """
+    out = []
+    while head in parents:
+        out.append(head)
+        head = parents[head]
+    return out
+
+
 def latest_summary(snapshots: list, job: str):
     """Newest snapshot summary written by `job`, or None.
 
     `snapshots` is `[(committed_at, summary_dict)]` — whatever ordering key the
     caller has; `<table>.snapshots` gives `committed_at`, which is monotonic per
-    table because Iceberg commits are serialised.
+    table because Iceberg commits are serialised. Pass main's lineage only
+    (`catalog.snapshot_history` does): a branch's commit is not a position the
+    table has reached.
 
     Snapshots from compaction (`rewrite_data_files`) and expiry carry no `k2.job`
     and are skipped. That is the "skip maintenance snapshots" rule, expressed as

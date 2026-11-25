@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "docker" / "lake"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bars  # noqa: E402
-from parity_ohlcv import resolve_snapshot  # noqa: E402  - same stale-pin fallback, one copy
+from parity_ohlcv import main_lineage, resolve_snapshot  # noqa: E402  - same stale-pin fallback, one copy
 
 LAKEKEEPER = os.environ.get("K2_LAKEKEEPER_HOST_URL", "http://localhost:18181/catalog")
 S3_ENDPOINT = os.environ.get("K2_S3_HOST_ENDPOINT", "localhost:9000")
@@ -138,12 +138,8 @@ def main() -> int:
                 k, _, v = line.partition("=")
                 env.setdefault(k.strip(), v.strip())
     c = duck(env["MINIO_ROOT_USER"], env["MINIO_ROOT_PASSWORD"])
-
-    def q(sql):
-        return c.execute(sql).fetchall()
-
-    bars_snapshot = resolve_snapshot(q, "lake.gold.bars", args.bars_snapshot)
-    trades_snapshot = resolve_snapshot(q, "lake.gold.trades", args.trades_snapshot)
+    bars_snapshot = resolve_snapshot(main_lineage("lake.gold.bars"), "lake.gold.bars", args.bars_snapshot)
+    trades_snapshot = resolve_snapshot(main_lineage("lake.gold.trades"), "lake.gold.trades", args.trades_snapshot)
 
     a = lake_bars(c, args.day, bars_snapshot)
     b = duck_bars(c, args.day, trades_snapshot)

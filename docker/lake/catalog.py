@@ -21,12 +21,29 @@ from spark_conf import CATALOG, KAFKA_BROKERS, SCHEMA_REGISTRY_URL
 CHECKS_TABLE = f"{CATALOG}.audit.checks"
 
 
+def main_snapshot_ids(spark, table: str) -> list:
+    """Snapshot ids on `main`'s lineage, newest first. Empty if unwritten.
+
+    `main` is read before the snapshot list, so a commit landing between the
+    two reads adds a snapshot the walk ignores instead of a head it cannot find.
+    """
+    head = current_snapshot_id(spark, table)
+    rows = spark.sql(f"SELECT snapshot_id, parent_id FROM {table}.snapshots").collect()
+    return O.main_lineage({r[0]: r[1] for r in rows}, head)
+
+
 def snapshot_history(spark, table: str) -> list:
-    """`[(committed_at, summary)]` for one table, newest last. Empty if unwritten."""
+    """`[(committed_at, summary)]` for the snapshots on `main`'s lineage. Empty if unwritten.
+
+    Not every row of `<table>.snapshots`: once a table has a branch, that lists
+    unpublished commits too, and `latest_summary` over them resumes from a
+    position `main` never reached (`offsets.main_lineage`).
+    """
+    on_main = set(main_snapshot_ids(spark, table))
     rows = spark.sql(
-        f"SELECT committed_at, summary FROM {table}.snapshots"
+        f"SELECT snapshot_id, committed_at, summary FROM {table}.snapshots"
     ).collect()
-    return [(r["committed_at"], r["summary"] or {}) for r in rows]
+    return [(r["committed_at"], r["summary"] or {}) for r in rows if r["snapshot_id"] in on_main]
 
 
 def current_snapshot_id(spark, table: str):

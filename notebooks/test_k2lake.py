@@ -8,8 +8,9 @@ parameter binding. Run with `make test-notebooks` (or `cd notebooks && uv run py
 from __future__ import annotations
 
 import duckdb
+import k2lake
 import pytest
-from k2lake import SCALE, completeness, trades
+from k2lake import SCALE, completeness, lineage, trades
 
 # One symbol, one venue, one minute. Trades at :05.500 and :06.500 on 12:00.
 TRADES = [
@@ -133,3 +134,41 @@ def test_a_symbol_with_a_quote_is_bound_not_interpolated(con):
 def test_bad_source_is_rejected(con):
     with pytest.raises(ValueError):
         trades(con, *WINDOW, source="pinned; DROP TABLE pinned.gold_trades")
+
+
+# REST loadTable metadata, the shape Lakekeeper serves. `main` is at 3; 4 is an
+# unpublished commit on branch audit_1 and 5 the commit of a branch since dropped,
+# both newer than main. On 2026-11-25 pin() took 5's shape on a scratch table and
+# served a row that was never on main.
+METADATA = {
+    "current-snapshot-id": 3,
+    "refs": {"main": {"snapshot-id": 3, "type": "branch"}, "audit_1": {"snapshot-id": 4, "type": "branch"}},
+    "snapshots": [
+        {"snapshot-id": 1, "timestamp-ms": 1},
+        {"snapshot-id": 2, "parent-snapshot-id": 1, "timestamp-ms": 2},
+        {"snapshot-id": 3, "parent-snapshot-id": 2, "timestamp-ms": 3},
+        {"snapshot-id": 4, "parent-snapshot-id": 3, "timestamp-ms": 4},
+        {"snapshot-id": 5, "parent-snapshot-id": 2, "timestamp-ms": 5},
+    ],
+}
+
+
+def test_lineage_is_mains_not_the_newest_snapshot():
+    assert lineage(METADATA) == [3, 2, 1]
+
+
+def test_an_empty_table_has_no_lineage():
+    assert lineage({"current-snapshot-id": -1, "snapshots": []}) == []
+
+
+def test_main_lineage_reads_the_table_it_names(monkeypatch):
+    """`lake.gold.trades` (the parity scripts) and `gold.trades` (pin) are one table."""
+    urls = []
+
+    def get(url):
+        urls.append(url)
+        return {"defaults": {"prefix": "PFX"}} if "/config" in url else {"metadata": METADATA}
+
+    monkeypatch.setattr(k2lake, "_get", get)
+    assert k2lake.main_lineage("lake.gold.trades") == k2lake.main_lineage("gold.trades") == [3, 2, 1]
+    assert urls[1].endswith("/v1/PFX/namespaces/gold/tables/trades")

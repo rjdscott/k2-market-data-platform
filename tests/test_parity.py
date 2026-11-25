@@ -803,8 +803,8 @@ def test_v2_only_json_carries_the_truncation_the_exit_code_reports(monkeypatch, 
 # `make parity-ohlcv` crashed on every run from 2026-08-27 to 2026-09-03 because
 # tests/parity/pinned.json held a snapshot id written on another host, and
 # `AT (VERSION => <pin>)` raised `Could not find snapshot with id ...` before the
-# gate compared anything. These four assert the two halves of the fix: the pin is
-# used when it is there, and its absence degrades to the current snapshot LOUDLY
+# gate compared anything. These assert the two halves of the fix: the pin is
+# used when it is on main, and its absence degrades to the current snapshot LOUDLY
 # rather than either crashing or quietly passing at an unpinned snapshot.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -812,25 +812,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from parity_ohlcv import resolve_snapshot  # noqa: E402
 
-# (sequence_number, snapshot_id), deliberately not in sequence order: the DuckDB
-# table function returns them unordered, so a resolver that took rows[-1] would
-# pick snapshot 111 here and pass this file's happy path anyway.
-_SNAPSHOTS = [(13, 111), (44, 999), (27, 222)]
-
-
-def _stub(rows):
-    """A `query` that answers every SQL string with `rows`."""
-    return lambda sql: rows
+# main's lineage, current first (notebooks/k2lake.py `main_lineage`). 444 is a
+# commit on a branch, newer than 999 and in the table, but never on main.
+_LINEAGE = [999, 222, 111]
+_BRANCH = 444
 
 
 def test_a_pin_the_table_still_holds_is_used_as_is(capsys):
-    assert resolve_snapshot(_stub(_SNAPSHOTS), "lake.gold.ohlcv_1m", 111) == 111
+    assert resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", 111) == 111
     assert capsys.readouterr().out == "", "an intact pin must say nothing"
 
 
-def test_a_missing_pin_falls_back_to_the_newest_snapshot():
-    # 999 has the highest sequence_number, not the last row and not the highest id.
-    assert resolve_snapshot(_stub(_SNAPSHOTS), "lake.gold.ohlcv_1m", 1622213366608023449) == 999
+def test_a_missing_pin_falls_back_to_mains_current_snapshot():
+    assert resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", 1622213366608023449) == 999
+
+
+def test_a_pin_on_a_branch_is_not_used():
+    """A branch's snapshot is in the table, so `iceberg_snapshots` lists it: the old
+    resolver accepted it as a pin, and fell back to one when a pin was stale (spike,
+    2026-11-25). Either way parity would run over rows main never published."""
+    assert resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", _BRANCH) == 999
 
 
 def test_the_fallback_names_both_ids_and_how_to_refresh_the_pin(capsys):
@@ -840,7 +841,7 @@ def test_the_fallback_names_both_ids_and_how_to_refresh_the_pin(capsys):
     the pin that was missing, the snapshot that was used instead, and the command
     that makes the next run reproducible again.
     """
-    resolve_snapshot(_stub(_SNAPSHOTS), "lake.gold.ohlcv_1m", 1622213366608023449)
+    resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", 1622213366608023449)
     out = capsys.readouterr().out
     assert "pin 1622213366608023449 not found in lake.gold.ohlcv_1m" in out
     assert "current snapshot 999" in out
@@ -850,7 +851,7 @@ def test_the_fallback_names_both_ids_and_how_to_refresh_the_pin(capsys):
 def test_a_table_with_no_snapshots_is_an_error_not_a_fallback():
     """Nothing to fall back TO. Exiting beats `max()` on an empty sequence."""
     with pytest.raises(SystemExit):
-        resolve_snapshot(_stub([]), "lake.gold.ohlcv_1m", 111)
+        resolve_snapshot([], "lake.gold.ohlcv_1m", 111)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
