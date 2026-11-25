@@ -176,11 +176,15 @@ wait_healthy() {
 # A paused DAG gets no new run and no new task started, whatever state its
 # runs are in: there is no work queue to pause beside it, and max_active_runs=1
 # means at most one run was already under way. That one is waited out below.
+# lake_maintenance is paused too, as Prefect's queue pause held the nightly
+# run: a 03:00 maintenance taking the lock mid-fault is the same race.
 
 LAKE_DAG="${K2_LAKE_DAG:-lake_ingest}"
+LAKE_PAUSE_DAGS="$LAKE_DAG lake_maintenance"
+LAKE_INFLIGHT_DAGS="$LAKE_DAG lake_maintenance lake_rebuild"
 AIRFLOW_CONTAINER="${K2_AIRFLOW_CONTAINER:-k2-airflow-scheduler}"
 SPARK_CONTAINER="${K2_SPARK_CONTAINER:-k2-spark-iceberg}"
-LAKE_DAG_PAUSED=""
+LAKE_PAUSED_DAGS=""
 
 # airflow_cli <args...> -> the Airflow CLI's last line of stdout, which with
 # `-o json` is the JSON (the CLI can print warnings above it). Empty when the
@@ -206,32 +210,45 @@ airflow_task_in_flight() {
   return 1
 }
 
-# pause_lake_ingest: never fatal. A stack where the DAG is not registered is a
+# _lake_busy -> 0 while any lake writer runs: a driver in the Spark container,
+# or an Airflow task of any lake DAG the executor holds whose driver has not
+# started yet.
+_lake_busy() {
+  local dag
+  docker exec "$SPARK_CONTAINER" pgrep -f 'lake/(ingest|maintenance|rebuild)\.py' >/dev/null 2>&1 && return 0
+  for dag in $LAKE_INFLIGHT_DAGS; do
+    airflow_task_in_flight "$dag" && return 0
+  done
+  return 1
+}
+
+# pause_lake_ingest: never fatal. A stack where a DAG is not registered is a
 # legitimate one to run chaos against; it just has nothing to pause, and saying
 # so beats dying.
 #
 # `airflow dags pause` changes a DAG only if it is unpaused, and prints it
 # (with its old state) only when it did, so its own output says whether this
-# run paused it. A DAG the maintainer had paused by hand prints "No unpaused
-# DAGs were found", is not recorded, and is not ours to unpause: a chaos run
-# must not end by starting a 5-minute ingest that was deliberately off.
+# run paused it. Each DAG is recorded on its own. A DAG the maintainer had
+# paused by hand prints "No unpaused DAGs were found", is not recorded, and is
+# not ours to unpause: a chaos run must not end by starting a 5-minute ingest
+# that was deliberately off.
 pause_lake_ingest() {
-  if airflow_cli dags pause "$LAKE_DAG" -o json | grep -qF "\"dag_id\": \"$LAKE_DAG\""; then
-    LAKE_DAG_PAUSED=1
-    echo "→ paused $LAKE_DAG for the duration of this run" >&2
-  else
-    echo "→ NOTE: $LAKE_DAG is not an unpaused DAG in $AIRFLOW_CONTAINER (paused by hand, not registered, or the scheduler is down): nothing to pause." >&2
-    echo "  If the 5-minute ingest IS running, this test may race it." >&2
-  fi
+  local dag
+  for dag in $LAKE_PAUSE_DAGS; do
+    if airflow_cli dags pause "$dag" -o json | grep -qF "\"dag_id\": \"$dag\""; then
+      LAKE_PAUSED_DAGS="$LAKE_PAUSED_DAGS $dag"
+      echo "→ paused $dag for the duration of this run" >&2
+    else
+      echo "→ NOTE: $dag is not an unpaused DAG in $AIRFLOW_CONTAINER (paused by hand, not registered, or the scheduler is down): nothing to pause." >&2
+    fi
+  done
+  [ -n "$LAKE_PAUSED_DAGS" ] || echo "  If the 5-minute ingest IS running, this test may race it." >&2
   # Pausing does not stop a run already in flight, and every lake writer takes
   # the same flock (docker/lake/lock.py): an ingest this script starts while
   # one is running exits 75 at the lock, which the first lake-corrupt-payload
-  # run misread as "blocked by the bad record" (2026-08-27). Two checks: the
-  # driver in the Spark container, and an Airflow task the executor already
-  # holds whose driver has not started yet.
+  # run misread as "blocked by the bad record" (2026-08-27).
   local start=$SECONDS said=""
-  while docker exec "$SPARK_CONTAINER" pgrep -f 'lake/(ingest|maintenance)\.py' >/dev/null 2>&1 \
-        || airflow_task_in_flight "$LAKE_DAG"; do
+  while _lake_busy; do
     [ -n "$said" ] || { echo "→ waiting for the in-flight lake job to finish" >&2; said=1; }
     sleep "${K2_LAKE_WAIT_STEP:-5}"
     if [ $((SECONDS - start)) -ge 300 ]; then die "a lake job has held the lock for 5 min, not starting another under it"; fi
@@ -242,17 +259,21 @@ pause_lake_ingest() {
   return 0
 }
 
-# resume_lake_ingest — idempotent, so it is safe in a trap that may fire twice.
-# Unpausing creates a run for the most recent slot at once (catchup=False
-# still runs the latest one), so the ingest resumes within a scheduler loop.
+# resume_lake_ingest: idempotent, so it is safe in a trap that may fire twice.
+# Unpausing creates a run for the most recent slot at once if that slot has no
+# run (catchup=False still runs the latest one): the ingest resumes within a
+# scheduler loop, and a 03:00 maintenance this run held off starts then.
 resume_lake_ingest() {
-  [ -n "$LAKE_DAG_PAUSED" ] || return 0
-  LAKE_DAG_PAUSED=""
-  if [ -z "$(airflow_cli dags unpause "$LAKE_DAG" -o json)" ]; then
-    echo "→ WARNING: could not unpause $LAKE_DAG, unpause it by hand: docker exec $AIRFLOW_CONTAINER airflow dags unpause $LAKE_DAG" >&2
-    return 0
-  fi
-  echo "→ resumed $LAKE_DAG" >&2
+  local dag paused=$LAKE_PAUSED_DAGS
+  LAKE_PAUSED_DAGS=""
+  for dag in $paused; do
+    if [ -z "$(airflow_cli dags unpause "$dag" -o json)" ]; then
+      echo "→ WARNING: could not unpause $dag, unpause it by hand: docker exec $AIRFLOW_CONTAINER airflow dags unpause $dag" >&2
+    else
+      echo "→ resumed $dag" >&2
+    fi
+  done
+  return 0
 }
 
 # ── reporting ───────────────────────────────────────────────────────────────
