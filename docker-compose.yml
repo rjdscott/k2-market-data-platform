@@ -1,7 +1,7 @@
 # K2 Market Data Platform v2 - Consolidated Architecture
 # Version: 2.0.0-consolidated
 # Last Updated: 2026-02-12
-# Target: 16 CPU cores / 40GB RAM
+# Target: 20 CPU / 36 GiB at the bootstrap peak (ADR-034; was 16 CPU / 40 GB, ADR-010)
 
 #############################################################################
 # NETWORKS
@@ -56,6 +56,32 @@ x-capture-build: &capture-build
     # commit it was started from. `make build-capture` and scripts/dev-up.sh
     # export it; unset ships `unknown`, which is honest.
     K2_GIT_SHA: ${K2_GIT_SHA:-unknown}
+
+# ── shared environment for the four airflow-* services (ADR-034) ────────────
+# One image, k2-airflow:3.3.2, built by airflow-migrate only (the same
+# one-build-per-tag rule as the capture image above). The scheduler, the
+# api-server and the dag-processor must agree on every line here: the JWT
+# secret signs the tokens the scheduler gives each task and the api-server
+# checks, and the api secret key signs the request that fetches a task's log
+# from the scheduler's log server.
+x-airflow-env: &airflow-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__PARALLELISM: "4"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@prefect-db:5432/airflow
+  # base_url is what the browser on the host uses. Tasks must not derive the
+  # execution API from it: localhost inside the scheduler is the scheduler.
+  AIRFLOW__API__BASE_URL: http://localhost:${K2_AIRFLOW_PORT:-8090}
+  AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+  AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+  AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
+  # Tags in InfluxDB form, which the statsd exporter turns into labels, and no
+  # legacy names: those embed dag_id in the metric name and would arrive twice.
+  AIRFLOW__METRICS__STATSD_ON: "True"
+  AIRFLOW__METRICS__STATSD_HOST: airflow-statsd
+  AIRFLOW__METRICS__STATSD_PORT: "9125"
+  AIRFLOW__METRICS__STATSD_INFLUXDB_ENABLED: "True"
+  AIRFLOW__METRICS__LEGACY_NAMES_ON: "False"
 
 #############################################################################
 # SERVICES - STREAMING BACKBONE
@@ -351,8 +377,16 @@ services:
 #############################################################################
 
   # ───────────────────────────────────────────────────────────────────────
-  # PostgreSQL - Prefect metadata + watermarks
+  # PostgreSQL - Prefect, Airflow and Lakekeeper metadata
   # ───────────────────────────────────────────────────────────────────────
+  # Keeps its name, its `prefect` role and the PREFECT_DB_* variables after
+  # Airflow arrives: the role is physically named `prefect` in every existing
+  # volume and the Lakekeeper URLs below carry it (ADR-034, Consequences).
+  #
+  # max_connections 200, up from the default 100, for Airflow's pools beside
+  # Prefect's and the catalog's. The `airflow` role is capped at 100 of them
+  # (docker/airflow/init-db.sh), so Airflow cannot starve the catalog. Takes
+  # effect on recreate: `docker compose up -d --force-recreate --no-deps prefect-db`.
   prefect-db:
     image: postgres:15-alpine
     container_name: k2-prefect-db
@@ -368,11 +402,12 @@ services:
       POSTGRES_USER: ${PREFECT_DB_USER}
       POSTGRES_PASSWORD: ${PREFECT_DB_PASSWORD}
       POSTGRES_DB: ${PREFECT_DB_NAME}
+    command: ["postgres", "-c", "max_connections=200"]
     deploy:
       resources:
         limits:
           cpus: '1.0'
-          memory: 1G
+          memory: 1536M   # 1G until ADR-034: the extra connections each hold a backend
         reservations:
           cpus: '0.5'
           memory: 512M
@@ -496,6 +531,202 @@ services:
       com.k2.service: "orchestration"
       com.k2.tier: "control-plane"
       com.k2.version: "v2"
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Airflow 3 - the lake schedules, beside Prefect (ADR-034)
+  # ───────────────────────────────────────────────────────────────────────
+  # Schedule shadow: lake_ingest runs `ingest.py --probe` (writes nothing,
+  # takes no lock) on Prefect's cron while Prefect keeps writing, and
+  # lake_maintenance starts paused. docker/airflow/dags/lake.py has the DAGs;
+  # scripts/airflow-shadow-check.sh is the 2 h gate before the cutover.
+  #
+  # LocalExecutor, so tasks run inside airflow-scheduler, and that is the only
+  # service given the Docker socket. No triggerer: nothing here defers.
+  #
+  # ./docker/airflow/dags is a directory bind mount held by the scheduler and
+  # the dag-processor. A write-then-rename edit needs both recreated (CLAUDE.md,
+  # bind-mount gotcha).
+
+  # One-shot: creates the `airflow` role and database on prefect-db when
+  # missing (docker/airflow/init-db.sh), then `airflow db migrate`.
+  airflow-migrate:
+    build:
+      context: .
+      dockerfile: docker/airflow/Dockerfile
+    image: k2-airflow:3.3.2
+    container_name: k2-airflow-migrate
+    networks:
+      - k2-net
+    environment:
+      <<: *airflow-env
+      PGHOST: prefect-db
+      PGUSER: ${PREFECT_DB_USER}
+      PGPASSWORD: ${PREFECT_DB_PASSWORD}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+    command: ["bash", "/opt/k2/init-db.sh"]
+    depends_on:
+      prefect-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+    restart: "no"
+    labels:
+      com.k2.service: "init"
+      com.k2.tier: "control-plane"
+      com.k2.version: "v3"
+
+  # UI and REST API, plus the execution API every task reports to. Loopback
+  # only: a trigger here runs `docker exec` in the Spark container. Host port
+  # is one variable, K2_AIRFLOW_PORT, because AIRFLOW__API__BASE_URL above is
+  # built from it too. Log in as `admin`; the password is generated on first
+  # start: docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated
+  airflow-api-server:
+    image: k2-airflow:3.3.2  # built by airflow-migrate
+    container_name: k2-airflow-api-server
+    hostname: airflow-api-server
+    networks:
+      - k2-net
+    ports:
+      - "127.0.0.1:${K2_AIRFLOW_PORT:-8090}:8080"
+    environment: *airflow-env
+    command: ["api-server"]
+    depends_on:
+      airflow-migrate:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1536M
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "orchestration"
+      com.k2.tier: "control-plane"
+      com.k2.version: "v3"
+
+  # Scheduler, and with LocalExecutor the four task slots too. The Docker
+  # socket is the same privilege prefect-worker holds today: root on the Docker
+  # engine, whatever the uid inside (ADR-034). It runs as the image's `airflow`
+  # user; group_add gives it the socket's group, which is 0 on Docker Desktop
+  # and `docker` on a Linux engine: set K2_DOCKER_GID (.env.example).
+  #
+  # stop_grace_period covers a task's on_kill, which stops the Spark driver
+  # (up to 10 s) before the container goes: without it, `docker compose stop`
+  # would leave a driver holding the lake lock.
+  airflow-scheduler:
+    image: k2-airflow:3.3.2  # built by airflow-migrate
+    container_name: k2-airflow-scheduler
+    hostname: airflow-scheduler
+    networks:
+      - k2-net
+    volumes:
+      - ./docker/airflow/dags:/opt/airflow/dags:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${K2_DOCKER_GID:-0}"
+    environment:
+      <<: *airflow-env
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "True"
+    command: ["scheduler"]
+    depends_on:
+      airflow-migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 3G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "orchestration"
+      com.k2.tier: "control-plane"
+      com.k2.version: "v3"
+
+  # Parses docker/airflow/dags into the database; in Airflow 3 the scheduler
+  # no longer does. No socket, no published port.
+  airflow-dag-processor:
+    image: k2-airflow:3.3.2  # built by airflow-migrate
+    container_name: k2-airflow-dag-processor
+    hostname: airflow-dag-processor
+    networks:
+      - k2-net
+    volumes:
+      - ./docker/airflow/dags:/opt/airflow/dags:ro
+    environment: *airflow-env
+    command: ["dag-processor"]
+    depends_on:
+      airflow-migrate:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type DagProcessorJob --local"]
+      interval: 60s
+      timeout: 30s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "orchestration"
+      com.k2.tier: "control-plane"
+      com.k2.version: "v3"
+
+  # statsd in, Prometheus out (job airflow-statsd, :9102). No mapping file:
+  # Airflow sends InfluxDB-style tags and the exporter makes them labels, so
+  # `airflow.ti.finish,dag_id=lake_ingest,task_id=ingest,state=skipped:1|c`
+  # becomes airflow_ti_finish{dag_id="lake_ingest",state="skipped",...}.
+  # Counters live in this process: a restart resets them, which the rules in
+  # docker/prometheus/rules/airflow-alerts.yml allow for.
+  airflow-statsd:
+    image: prom/statsd-exporter:v0.31.0
+    container_name: k2-airflow-statsd
+    hostname: airflow-statsd
+    networks:
+      - k2-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9102/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "observability"
+      com.k2.tier: "control-plane"
+      com.k2.version: "v3"
 
 #############################################################################
 # SERVICES - ETL LAYER
@@ -746,8 +977,9 @@ services:
   # REST API rather than from in-process counters: Prefect runs each job in a
   # subprocess that exits long before Prometheus scrapes it. A separate service,
   # not a sidecar in prefect-worker, so a worker crash still leaves the rising
-  # commit age visible. Reuses the worker image, which already carries
-  # prometheus-client, so it costs no extra build.
+  # commit age visible. Its own pinned image (docker/lake-metrics/) since
+  # ADR-034, so it outlives whichever orchestrator runs the jobs; until then it
+  # borrowed the Prefect worker image for its prometheus-client.
   #
   # NOT the Spark image, even though docker/lake/*.py otherwise runs there:
   # reading the catalog through PyIceberg needs a FileIO, and
@@ -757,24 +989,25 @@ services:
   # minio-data is mounted read-only purely so `os.statvfs` can report free space
   # on the filesystem the lake actually lands on. Nothing reads the objects.
   lake-metrics:
-    image: k2-prefect-worker:3-python3.12  # built by the prefect-worker service
+    build:
+      context: .
+      dockerfile: docker/lake-metrics/Dockerfile
+    image: k2-lake-metrics:3.12.16  # local tag after build: the Python it runs
     container_name: k2-lake-metrics
     hostname: lake-metrics
     networks:
       - k2-net
     volumes:
-      - ./docker/lake:/opt/prefect/lake:ro
+      - ./docker/lake:/opt/lake:ro
       - minio-data:/minio-data:ro
     environment:
       K2_LAKE_CATALOG_URI: http://lakekeeper:8181/catalog
       K2_LAKE_WAREHOUSE: k2
       K2_LAKE_DISK_PATH: /minio-data
-    command: ["python", "/opt/prefect/lake/metrics.py", "--serve"]
+    command: ["python", "/opt/lake/metrics.py", "--serve"]
     depends_on:
       lakekeeper:
         condition: service_healthy
-      prefect-worker:
-        condition: service_started  # only for the image build
     deploy:
       resources:
         limits:
@@ -1001,9 +1234,13 @@ services:
 # minio                 | 1.0       | 1G           | S3-compatible storage
 # prometheus            | 1.0       | 2G           | Metrics collection
 # grafana               | 0.5       | 512M         | Visualization
-# prefect-db            | 1.0       | 1G           | Prefect metadata + Lakekeeper catalog DB
+# prefect-db            | 1.0       | 1536M        | Prefect, Airflow and Lakekeeper metadata DB
 # prefect-server        | 1.0       | 1G           | Orchestration UI/API (Prefect 3.x)
 # prefect-worker        | 0.5       | 512M         | Workflow executor (Prefect 3.x)
+# airflow-api-server    | 1.0       | 1536M        | Airflow 3 UI, REST and execution API (ADR-034)
+# airflow-scheduler     | 1.5       | 3G           | Airflow 3 scheduler + LocalExecutor, 4 slots
+# airflow-dag-processor | 0.5       | 1G           | Airflow 3 DAG parsing
+# airflow-statsd        | 0.1       | 64M          | Airflow statsd to Prometheus (:9102)
 # spark-iceberg         | 2.0       | 8G           | Batch engine (lake ingest + maintenance)
 # lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018)
 # lake-metrics          | 0.1       | 128M         | v3 lake alerts exporter (:8000)
@@ -1015,40 +1252,43 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (15 long-running) | 14.60 CPU | 25.625 GiB | Full platform, v3 capture + v3 lake
+# STEADY STATE (19 long-running) | 17.70 CPU | 31.688 GiB | v3 capture + lake, Airflow beside Prefect
 #
-# One-shots — NOT free. They declare limits and they run concurrently with the
-# steady state at boot, so the budget that matters at `docker compose up` is the
-# bootstrap peak, not the steady state:
+# One-shots are NOT free. They declare limits and they run concurrently with
+# the steady state at boot, so the budget that matters at `docker compose up` is
+# the bootstrap peak, not the steady state:
 #
 #   redpanda-init      0.25 | 128M  topics + Avro subjects (docker/redpanda/init.sh)
 #   lakekeeper-migrate 0.5  | 256M  v3 catalog DB schema
 #   lake-init          0.25 | 128M  v3 bucket + warehouse + namespaces (docker/lake/init-lake.sh)
 #   lake-ddl           0.5  | 1G    v3 raw/bronze/audit table DDL (docker/lake/ddl/lake.sql)
+#   airflow-migrate    0.5  | 1G    airflow role + database, then `airflow db migrate`
 #   ----------------------------------------------------------------------------
-#   one-shot subtotal  1.5  | 1.5G
+#   one-shot subtotal  2.0  | 2.5G
 #
-# Bootstrap peak: 16.10 CPU / 27.125 GiB — all 19 services. The three capture-*
-# containers gate only on redpanda-init; the other three one-shots can overlap
-# live traffic. CPU limits are a ceiling on scheduling, not a reservation, so a
-# momentary overcommit at boot would be a burst, not a failure — and at 16.10
-# against a 16.0 target the peak is 0.10 CPU over for the length of a bootstrap.
+# Bootstrap peak: 19.70 CPU / 34.188 GiB, all 24 services, against the
+# 20 CPU / 36 GiB ceiling ADR-034 sets at the bootstrap peak (ADR-010's
+# 16 CPU / 40 GB clause is superseded). scripts/check-budget.py fails CI over
+# it. Headroom: 0.30 CPU and 1.812 GiB.
 #
-# Retiring the three Kotlin feed handlers (ADR-019) gave back exactly the
+# Airflow beside Prefect is a parallel run and is paid for as one: the Prefect
+# pair (1.5 CPU / 1.5G) leaves at the archive pull request, landing steady state
+# at 16.20 CPU / 30.188 GiB. The Airflow limits are the plan's estimates until
+# ADR-034's measured figures replace them.
+#
+# History: retiring the three Kotlin feed handlers (ADR-019) gave back the
 # 1.5 CPU / 1.5 GB they declared, and deleting docker/offload/ took its metrics
-# exporter (0.1 CPU / 128M) and its DDL one-shot (0.5 CPU / 1G) with it. Steady
-# state is 14.60 CPU / 25.625 GiB across 15 — 1.40 CPU of headroom under the
-# target, where the Phase C+D parallel runs were over it. spark-iceberg went
-# 4G -> 8G on 2026-08-26 after compaction of raw.messages needed a 2g driver
-# heap (peak 2,641 MiB) and the two batch engines now match at 8G each.
+# exporter (0.1 CPU / 128M) and its DDL one-shot (0.5 CPU / 1G) with it.
+# spark-iceberg went 4G -> 8G on 2026-08-26 after compaction of raw.messages
+# needed a 2g driver heap (peak 2,641 MiB) and the two batch engines now match
+# at 8G each.
 #
-# Recompute after any limit change (the ADR-010 Outcome addendum carries the
-# same command and its dated output):
+# Recompute after any limit change; the same sums CI gates:
 #
-#   docker compose --env-file .env.example config --format json | python3 -c '...'
+#   python3 scripts/check-budget.py
 #
-# Target: 16 CPU / 40 GB total
+# Target: 20 CPU / 36 GiB at the bootstrap peak (ADR-034)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-08-27 (v3 Phase D: v2 offload path deleted — -1 service, -1 one-shot)
+# Last updated: 2026-11-25 (ADR-034: Airflow 3 beside Prefect, +5 services, ceiling 20 CPU / 36 GiB)
 #############################################################################

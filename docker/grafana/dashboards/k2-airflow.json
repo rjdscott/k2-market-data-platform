@@ -1,0 +1,317 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "id": 1,
+      "type": "timeseries",
+      "title": "DAG run duration",
+      "description": "Mean seconds from a run's start to its end, over 30 minutes, by DAG and outcome. During the schedule shadow lake_ingest runs the probe, which reads a few seconds of each topic, so it is shorter than a real ingest.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "increase(airflow_dagrun_duration_success_sum[30m]) / increase(airflow_dagrun_duration_success_count[30m])",
+          "legendFormat": "{{dag_id}} success",
+          "refId": "A"
+        },
+        {
+          "expr": "increase(airflow_dagrun_duration_failed_sum[30m]) / increase(airflow_dagrun_duration_failed_count[30m])",
+          "legendFormat": "{{dag_id}} failed",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "id": 2,
+      "type": "timeseries",
+      "title": "Run lateness",
+      "description": "Mean seconds between a run's scheduled time and the moment it started, over 30 minutes (dagrun.schedule_delay). Airflow 3 has no SLA-miss feature; this is the panel that replaces it. A run waits here while the one before it still holds the only slot (max_active_runs=1).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "increase(airflow_dagrun_schedule_delay_sum[30m]) / increase(airflow_dagrun_schedule_delay_count[30m])",
+          "legendFormat": "{{dag_id}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "id": 3,
+      "type": "timeseries",
+      "title": "Task failures",
+      "description": "Task tries that ended failed (retries spent) or up_for_retry (a retry follows), per hour. AirflowTaskFailed fires on the first.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (dag_id, task_id) (increase(airflow_ti_finish{state=\"failed\"}[1h]))",
+          "legendFormat": "{{dag_id}}.{{task_id}} failed",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (dag_id, task_id) (increase(airflow_ti_finish{state=\"up_for_retry\"}[1h]))",
+          "legendFormat": "{{dag_id}}.{{task_id}} retried",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "id": 4,
+      "type": "timeseries",
+      "title": "Skips",
+      "description": "Task tries that ended skipped, per hour. For lake_ingest a skip is ingest.py exiting 75: another lake writer held the lock. A few around 03:00 are maintenance; three in a row otherwise is AirflowLakeIngestSkippedRepeatedly.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (dag_id, task_id) (increase(airflow_ti_finish{state=\"skipped\"}[1h]))",
+          "legendFormat": "{{dag_id}}.{{task_id}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "id": 5,
+      "type": "timeseries",
+      "title": "Scheduler heartbeat",
+      "description": "Scheduler heartbeats per second, about 0.2 when healthy (one every 5 s). Zero, or no line at all, for five minutes is AirflowSchedulerHeartbeatLost; the airflow-statsd up line says whether it is the scheduler or the exporter.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(airflow_scheduler_heartbeat[2m])",
+          "legendFormat": "heartbeats/s",
+          "refId": "A"
+        },
+        {
+          "expr": "up{job=\"airflow-statsd\"}",
+          "legendFormat": "airflow-statsd up",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "id": 6,
+      "type": "timeseries",
+      "title": "DAG parse time",
+      "description": "Seconds the dag-processor spent importing each DAG file (mean over 10 minutes), and the whole parse loop. docker/airflow/dags/lake.py imports nothing heavy, so a rise here is the file, not the lake.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "increase(airflow_dag_processing_last_duration_sum[10m]) / increase(airflow_dag_processing_last_duration_count[10m])",
+          "legendFormat": "{{file_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "airflow_dag_processing_total_parse_time",
+          "legendFormat": "total parse loop",
+          "refId": "B"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "airflow",
+    "orchestration",
+    "lake"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "K2 Airflow",
+  "uid": "k2-airflow",
+  "version": 1,
+  "weekStart": ""
+}

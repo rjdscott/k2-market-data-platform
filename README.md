@@ -77,8 +77,9 @@ flowchart TB
   classDef ob fill:#f3f4f6,stroke:#6b7280,color:#111827
 ```
 
-15 long-running services and 4 one-shot init containers, 14.60 CPU / 25.625 GiB of declared
-limits ([how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
+19 long-running services and 5 one-shot init containers, 17.70 CPU / 31.688 GiB of declared
+limits at steady state and 19.70 CPU / 34.188 GiB at the bootstrap peak, under a 20 CPU / 36 GiB
+ceiling ([ADR-034](./docs/adr/ADR-034-airflow-3-replaces-prefect.md); [how the numbers are produced](./docs/operations/docker-resources.md#how-these-numbers-are-produced)).
 
 **Read the book.** [`docs/architecture/`](./docs/architecture/README.md) is written as numbered
 chapters: what the platform is and is not, the market data and data engineering concepts it

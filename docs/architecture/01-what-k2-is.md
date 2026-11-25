@@ -10,8 +10,9 @@ K2 is a market data platform for quantitative research. It takes live trades and
 books from three crypto exchanges over public WebSocket feeds, archives every frame
 verbatim to an Iceberg lake, derives typed and canonical layers from that archive, and
 serves the canonical layer from ClickHouse for dashboards and fast queries. It runs on one
-host inside a declared budget of 16 CPU / 40 GB: as deployed, 15 long-running services at
-14.60 CPU / 25.625 GiB of limits, plus four one-shot init containers
+host inside a declared ceiling of 20 CPU / 36 GiB at the bootstrap peak
+([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)): as deployed, 19 long-running services at
+17.70 CPU / 31.688 GiB of limits, plus five one-shot init containers
 ([docker-resources.md](../operations/docker-resources.md)).
 
 Three properties define it, and the rest of the book is their consequences:

@@ -1,6 +1,6 @@
 # ADR-010: Resource Budget and Docker Compose Constraints
 
-**Status:** Accepted — Implemented (2026-02) — see Outcome
+**Status:** Accepted, Implemented (2026-02), see Outcome; the 16 CPU / 40 GB ceiling **superseded by [ADR-034](ADR-034-airflow-3-replaces-prefect.md)** (20 CPU / 36 GiB at the bootstrap peak; scoped, the rest stands)
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Infrastructure

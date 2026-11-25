@@ -2,15 +2,17 @@
 
 Every long-running service in [`docker-compose.yml`](../../docker-compose.yml) declares a
 hard `limit` and a guaranteed `reservation`; the one-shot init containers declare limits
-only. The design target was a single 16-core / 40 GB host, and the as-built stack fits
-inside it at steady state.
+only. The ceiling is **20 CPU / 36 GiB at the bootstrap peak**
+([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md), which superseded the 16-core /
+40 GB target of [ADR-010](../adr/ADR-010-resource-budget.md)), and `scripts/check-budget.py`
+fails CI over it.
 
-**As built, steady state: 14.60 CPU / 25.625 GiB across 15 long-running services.**
-**One-shots: 1.50 CPU / 1.500 GiB across 4.** **Bootstrap peak: 16.10 CPU / 27.125 GiB
-across 19**, the one-shots run concurrently with the steady state at `docker compose up`,
-so that peak, not the steady state, is what the host has to absorb at boot. CPU limits are
-a ceiling on scheduling rather than a reservation, so 16.10 on a 16-core host is a burst
-that ends when the init containers exit, not a failure.
+**As built, steady state: 17.70 CPU / 31.688 GiB across 19 long-running services.**
+**One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 19.70 CPU / 34.188 GiB
+across 24**, the one-shots run concurrently with the steady state at `docker compose up`,
+so that peak, not the steady state, is what the host has to absorb at boot, and it is the
+sum the ceiling gates. Airflow runs beside Prefect until the archive pull request of plan
+phase P2, a parallel run that the Prefect pair's 1.50 CPU / 1.500 GiB pays for until then.
 
 Both parallel runs are over. The three Kotlin `feed-handler-*` containers are gone from
 `docker-compose.yml` ([ADR-019](../adr/ADR-019-rust-capture-tier.md); code archived at
@@ -39,14 +41,14 @@ for label, oneshot in (("steady", False), ("one-shot", True)):
     cpu = sum(float(l["cpus"]) for l in lim)
     gib = sum(int(l["memory"]) for l in lim) / 2**30
     print("%-9s %2d services  %5.2f CPU  %6.3f GiB" % (label, len(lim), cpu, gib))'
-steady    15 services  14.60 CPU  25.625 GiB
-one-shot   4 services   1.50 CPU   1.500 GiB
+steady    19 services  17.70 CPU  31.688 GiB
+one-shot   5 services   2.00 CPU   2.500 GiB
 ```
 
 `docker compose config` normalises every `memory:` to bytes, so **GiB is what the limits
 actually are**, `2g` in the compose file is 2 × 2³⁰, not 2 × 10⁹. Older figures on this
 branch were written "GB" for the same quantities; the numbers did not change, the unit
-label was wrong. Run on 2026-08-27.
+label was wrong. Run on 2026-11-25. `python3 scripts/check-budget.py` prints the same sums.
 
 ## Allocation
 
@@ -57,22 +59,27 @@ label was wrong. Run on 2026-08-27.
 | `clickhouse` | warm storage | 4.0 | 2.0 | 8 GB | 4 GB |
 | `minio` | cold storage | 1.0 | 0.5 | 1 GB | 512 MB |
 | `spark-iceberg` | lake batch engine | 2.0 | 1.0 | 8 GB | 2 GB |
-| `prefect-db` | orchestration | 1.0 | 0.5 | 1 GB | 512 MB |
+| `prefect-db` | orchestration (Prefect, Airflow, Lakekeeper metadata) | 1.0 | 0.5 | 1.5 GB | 512 MB |
 | `prefect-server` | orchestration | 1.0 | 0.5 | 1 GB | 512 MB |
 | `prefect-worker` | orchestration | 0.5 | 0.25 | 512 MB | 256 MB |
+| `airflow-api-server` | orchestration (Airflow 3) | 1.0 | 0.25 | 1.5 GB | 512 MB |
+| `airflow-scheduler` | orchestration (Airflow 3, LocalExecutor) | 1.5 | 0.5 | 3 GB | 1 GB |
+| `airflow-dag-processor` | orchestration (Airflow 3) | 0.5 | 0.1 | 1 GB | 256 MB |
+| `airflow-statsd` | observability (Airflow) | 0.1 |, | 64 MB |, |
 | `prometheus` | observability | 1.0 | 0.5 | 2 GB | 1 GB |
 | `grafana` | observability | 0.5 | 0.25 | 512 MB | 256 MB |
 | `capture-binance` | ingestion (v3) | 0.25 | 0.1 | 256 MB | 128 MB |
 | `capture-kraken` | ingestion (v3) | 0.25 | 0.1 | 256 MB | 128 MB |
 | `capture-coinbase` | ingestion (v3) | 0.25 | 0.1 | 512 MB | 128 MB |
 | `lake-metrics` | observability (v3 lake) | 0.1 |, | 128 MB |, |
-| **Steady state (15 long-running services)** | | **14.60** | **7.00** | **25.625 GiB** | **10.625 GiB** |
+| **Steady state (19 long-running services)** | | **17.70** | **7.85** | **31.688 GiB** | **12.375 GiB** |
 | `redpanda-init` | init (one-shot) | 0.25 |, | 128 MB |, |
 | `lakekeeper-migrate` | init (one-shot) | 0.5 |, | 256 MB |, |
 | `lake-init` | init (one-shot) | 0.25 |, | 128 MB |, |
 | `lake-ddl` | init (one-shot) | 0.5 |, | 1 GB |, |
-| **One-shot subtotal (4)** | | **1.50** | **, ** | **1.500 GiB** | **, ** |
-| **Bootstrap peak (19 containers)** | | **16.10** | **7.00** | **27.125 GiB** | **10.625 GiB** |
+| `airflow-migrate` | init (one-shot) | 0.5 |, | 1 GB |, |
+| **One-shot subtotal (5)** | | **2.00** | **, ** | **2.500 GiB** | **, ** |
+| **Bootstrap peak (24 containers)** | | **19.70** | **7.85** | **34.188 GiB** | **12.375 GiB** |
 
 `capture-coinbase` gets twice the memory of the other two because Coinbase's `level2`
 channel is full depth, not top-20, its subscribe snapshot alone is 5.2 MB
@@ -86,9 +93,9 @@ The one-shots are **not free**. They declare limits and they run concurrently wi
 steady state at `docker compose up`, so the bootstrap peak is the number the host has to
 absorb.
 
-Headroom against the 16 CPU / 40 GB envelope at steady state: **1.40 CPU (9%) and
-14.375 GiB (36%)**. At the bootstrap peak it is −0.10 CPU for as long as the one-shots
-run, and 12.875 GiB.
+Headroom against the 20 CPU / 36 GiB ceiling at the bootstrap peak, where it is gated:
+**0.30 CPU and 1.812 GiB**. The Airflow limits are the plan's estimates until ADR-034's
+measured figures replace them.
 
 ## Where the budget goes
 

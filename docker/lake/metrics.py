@@ -3,8 +3,8 @@
 Prometheus exporter for the v3 lake. Runs as the long-lived `lake-metrics`
 service; `docker/prometheus/rules/lake-alerts.yml` reads everything it exports.
 
-    python3 /opt/prefect/lake/metrics.py --serve
-    python3 /opt/prefect/lake/metrics.py --self-check    # offline, no catalog
+    python3 /opt/lake/metrics.py --serve
+    python3 /opt/lake/metrics.py --self-check    # offline, no catalog
 
 **Everything comes from Iceberg snapshot summaries.** Not from in-process
 counters, for the same reason the deleted `docker/offload/metrics.py` did not use them:

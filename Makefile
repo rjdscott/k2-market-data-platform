@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health gates test test-python test-rust record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product
+.PHONY: chaos help up down logs ps health gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -31,7 +31,7 @@ logs:  ## Tail all service logs
 ps:  ## Show service status
 	docker compose ps
 
-test: test-python test-rust test-clickhouse test-notebooks test-k2gen  ## Run all unit tests
+test: test-python test-rust test-clickhouse test-notebooks test-k2gen test-airflow  ## Run all unit tests
 
 # One recipe line per gate, not prerequisites: recipe lines run in order and
 # stop at the first failure even under `make -j`, where prerequisites would not
@@ -47,6 +47,16 @@ gates:  ## Every gate before a merge, in order, stopping at the first failure: t
 
 test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs uv)
 	uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
+
+# Inside the Airflow image itself: it carries no pytest and the root suite has no
+# Airflow, so the DAG tests are stdlib unittest. The repo is mounted read-only
+# and the container has no network: nothing here reaches the stack. The build
+# is a cache hit after the first; CI's docker job runs the same tests in the
+# image it just built.
+test-airflow:  ## DAG structure, exit 75 to skipped, params and the kill path, inside k2-airflow:3.3.2 (no stack needed)
+	docker build -q -f docker/airflow/Dockerfile -t k2-airflow:3.3.2 . >/dev/null
+	docker run --rm --network none -e AIRFLOW__LOGGING__LOGGING_LEVEL=WARNING -v "$(CURDIR)":/repo:ro k2-airflow:3.3.2 \
+	  python -m unittest discover -s /repo/docker/airflow/tests
 
 # The WHOLE repo is mounted, not just the crate: src/record.rs compiles the wire
 # contract in with `include_str!("../../../schemas/avro/trade.avsc")` and the
@@ -107,8 +117,8 @@ check-alerts:  ## promtool: syntax-check every rule file and run the capture + l
 	  -c 'promtool test rules /p/tests/*.test.yml /p/rules/tests/*_test.yml'
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
-lint:  ## Ruff over the v3 lake and the tests; ruff and mypy (strict) over platform/k2gen
-	uv run --no-project --with ruff ruff check docker/lake tests
+lint:  ## Ruff over the v3 lake, the Airflow DAGs, scripts/ Python and the tests; ruff and mypy (strict) over platform/k2gen
+	uv run --no-project --with ruff ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py tests
 	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, every layer level with its parent, double-run adds 0

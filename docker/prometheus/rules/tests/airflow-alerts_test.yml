@@ -1,0 +1,237 @@
+# promtool unit tests for docker/prometheus/rules/airflow-alerts.yml
+#
+#   docker run --rm --entrypoint sh -v "$PWD/docker/prometheus/rules:/r" \
+#     prom/prometheus:v3.2.0 -c 'promtool test rules /r/tests/*_test.yml'
+#
+# Run by `make check-alerts` and `make check-docs` gate (c2). Series are what
+# the airflow-statsd exporter serves: counters with no `_total` suffix, labels
+# from Airflow's InfluxDB-style tags, and a series that does not exist until
+# its first increment. `_` is a missing sample; at a 1m interval the value at
+# position i is the value at minute i.
+
+rule_files:
+  - ../airflow-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ── AirflowSchedulerHeartbeatLost ────────────────────────────────────────
+  # Healthy: 12 heartbeats a minute (every 5 s). Never fires.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: AirflowSchedulerHeartbeatLost
+        exp_alerts: []
+
+  # The scheduler stops at minute 10: rate is 0 from minute 12, firing after
+  # the 3m `for`.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x10 120x30'
+    alert_rule_test:
+      - eval_time: 13m
+        alertname: AirflowSchedulerHeartbeatLost
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: AirflowSchedulerHeartbeatLost
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: orchestration
+              tier: control-plane
+            exp_annotations: &heartbeat-annotations
+              summary: "Airflow scheduler has not heartbeated for 5 minutes"
+              description: |
+                No scheduler heartbeat has reached the statsd exporter for five
+                minutes, so no DAG run is being created or started. Either the
+                airflow-scheduler container is down or wedged, or airflow-statsd
+                is, in which case every Airflow series is missing and this is the
+                only rule that says so.
+              runbook: docs/runbooks/airflow-scheduling.md
+
+  # Never heartbeated at all (scheduler never started, or the exporter is down).
+  - interval: 1m
+    input_series:
+      - series: 'up{job="airflow-statsd"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AirflowSchedulerHeartbeatLost
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: orchestration
+              tier: control-plane
+            exp_annotations: *heartbeat-annotations
+
+  # ── AirflowTaskFailed ────────────────────────────────────────────────────
+  # The first failure since the exporter started: a new series at 1, which
+  # increase() alone reads as 0. Fires, then clears after 15 minutes.
+  # up_for_retry, a try that will be retried, never fires.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_ti_finish{dag_id="lake_maintenance",task_id="maintain",state="failed"}'
+        values: '_x10 1x40'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="up_for_retry"}'
+        values: '_x10 1x40'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AirflowTaskFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: orchestration
+              tier: control-plane
+              dag_id: lake_maintenance
+              task_id: maintain
+              state: failed
+            exp_annotations:
+              summary: "Airflow task lake_maintenance.maintain failed"
+              description: |
+                lake_maintenance.maintain ended in state failed
+                within the last 15 minutes, its retries spent. The task log has the
+                script's own output and its exit code; a lake audit failure, a
+                Spark exception and a timeout read differently there.
+              runbook: docs/runbooks/airflow-scheduling.md
+      - eval_time: 35m
+        alertname: AirflowTaskFailed
+        exp_alerts: []
+
+  # A later failure on a series that already exists is an increase.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="failed"}'
+        values: '2x30 3x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AirflowTaskFailed
+        exp_alerts: []
+      - eval_time: 33m
+        alertname: AirflowTaskFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: orchestration
+              tier: control-plane
+              dag_id: lake_ingest
+              task_id: ingest
+              state: failed
+            exp_annotations:
+              summary: "Airflow task lake_ingest.ingest failed"
+              description: |
+                lake_ingest.ingest ended in state failed
+                within the last 15 minutes, its retries spent. The task log has the
+                script's own output and its exit code; a lake audit failure, a
+                Spark exception and a timeout read differently there.
+              runbook: docs/runbooks/airflow-scheduling.md
+
+  # ── AirflowLakeIngestSkippedRepeatedly ───────────────────────────────────
+  # Skips at minutes 21, 26 and 31 on a long-lived exporter, successes before.
+  # Two skips do not fire; the third does; the next run's absence of a skip
+  # clears it.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
+        values: '5x20 6x4 7x4 8x30'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '10x60'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
+      - eval_time: 34m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts:
+          - exp_labels: &skipped-labels
+              severity: warning
+              component: orchestration
+              tier: control-plane
+              dag_id: lake_ingest
+              task_id: ingest
+              state: skipped
+            exp_annotations: &skipped-annotations
+              summary: "lake_ingest skipped 3 times in 15 minutes: the lake lock is held"
+              description: |
+                Three or more lake_ingest runs in a row exited 75: another lake
+                writer holds /tmp/k2-lake-ingest.lock in the Spark container and
+                no Airflow maintenance or rebuild is running. Nothing is being
+                written to the lake while this fires, and the Redpanda retention
+                clock is running.
+
+                Find the process that holds the lock before anything else. A
+                driver left by a killed run is the usual cause.
+              runbook: docs/runbooks/airflow-scheduling.md
+      - eval_time: 40m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
+
+  # Three skips inside 15 minutes with a success among them (minute 30) are
+  # not three in a row.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
+        values: '5x20 6x4 7x7 8x30'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '10x29 11x40'
+    alert_rule_test:
+      - eval_time: 36m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
+
+  # Exporter restarted at minute 20: the skipped series is new, and the first
+  # three skips after the restart still fire.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
+        values: '_x20 1x4 2x4 3x30'
+    alert_rule_test:
+      - eval_time: 33m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts:
+          - exp_labels: *skipped-labels
+            exp_annotations: *skipped-annotations
+
+  # Maintenance holds the lock on purpose from minute 15 to 38, the first run
+  # since the exporter started (no finish series until it ends). Skips under
+  # it are expected and stay quiet; skips after it has finished fire.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
+        values: '5x20 6x4 7x4 8x4 9x4 10x30'
+      - series: 'airflow_ti_start{dag_id="lake_maintenance",task_id="maintain"}'
+        values: '_x15 1x50'
+      - series: 'airflow_ti_finish{dag_id="lake_maintenance",task_id="maintain",state="success"}'
+        values: '_x38 1x30'
+    alert_rule_test:
+      - eval_time: 34m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
+      - eval_time: 42m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts:
+          - exp_labels: *skipped-labels
+            exp_annotations: *skipped-annotations
+
+  # ── Healthy shadow: every probe run succeeds ─────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x60'
+      - series: 'airflow_ti_start{dag_id="lake_ingest",task_id="ingest"}'
+        values: '0+0.2x60'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '0+0.2x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: AirflowSchedulerHeartbeatLost
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: AirflowTaskFailed
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
