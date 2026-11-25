@@ -20,16 +20,54 @@ host's — on a UTC+10 machine every bucket lands ten hours late
 
 from __future__ import annotations
 
+import functools
+import json
 import os
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import duckdb
 
 LAKEKEEPER = os.environ.get("K2_LAKEKEEPER_HOST_URL", "http://localhost:18181/catalog")
 S3_ENDPOINT = os.environ.get("K2_S3_HOST_ENDPOINT", "localhost:9000")
+WAREHOUSE = "k2"
 SCALE = 100_000_000  # 1e-8 fixed point, the wire's and gold's representation
+
+
+def lineage(metadata: dict) -> list:
+    """Snapshot ids on `main`'s lineage, current first, from one loadTable `metadata`.
+
+    `current-snapshot-id` is the id `main` points at (the Iceberg spec makes them
+    equal); the walk follows `parent-snapshot-id` from there. Not "the newest
+    snapshot": once a table has a branch, `iceberg_snapshots` and the metadata's
+    snapshot list hold its unpublished commits and those of a dropped branch, and
+    DuckDB 1.4.4 has no column saying which is which. [] for an empty table.
+    """
+    parents = {s["snapshot-id"]: s.get("parent-snapshot-id") for s in metadata.get("snapshots", [])}
+    out, sid = [], metadata.get("current-snapshot-id")
+    while sid in parents:
+        out.append(sid)
+        sid = parents[sid]
+    return out
+
+
+def _get(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=15) as r:  # noqa: S310 - the catalog's published port
+        return json.load(r)
+
+
+@functools.cache
+def _prefix() -> str:
+    """The warehouse's REST prefix: fixed for the catalog's life, so read once per process."""
+    return _get(f"{LAKEKEEPER.rstrip('/')}/v1/config?warehouse={WAREHOUSE}")["defaults"]["prefix"]
+
+
+def main_lineage(table: str) -> list:
+    """`lineage()` of `ns.table` (or `lake.ns.table`), from Lakekeeper's REST loadTable."""
+    ns, name = table.split(".")[-2:]
+    return lineage(_get(f"{LAKEKEEPER.rstrip('/')}/v1/{_prefix()}/namespaces/{ns}/tables/{name}")["metadata"])
 
 
 def _env() -> dict:
@@ -67,8 +105,9 @@ def pin(con: duckdb.DuckDBPyConnection, namespaces=PINNED_NAMESPACES) -> dict:
 
     `pinned.gold_trades`, `pinned.silver_book_kraken`, `pinned.audit_checks` …
     each `SELECT * FROM lake.<ns>.<table> AT (VERSION => <id>)`, the id read
-    once, here. Every notebook query goes through these, never through
-    `lake.<ns>.<table>` (tests/test_notebooks_pinned.py greps for it), so a
+    once, here: the snapshot `main` points at (`main_lineage`), never the newest
+    by commit time, which can be a branch's. Every notebook query goes through
+    these, never through `lake.<ns>.<table>` (tests/test_notebooks_pinned.py greps for it), so a
     chart or a number a notebook printed names the snapshot it came from and
     re-running at that id gives the same answer while an ingest lands new rows
     beside it (ADR-029). Returns {table: snapshot_id} and prints it with the
@@ -81,13 +120,13 @@ def pin(con: duckdb.DuckDBPyConnection, namespaces=PINNED_NAMESPACES) -> dict:
     ).fetchall()
     ids = {}
     for ns, table in tables:
-        row = con.execute(f"SELECT snapshot_id FROM iceberg_snapshots(lake.{ns}.{table}) ORDER BY timestamp_ms DESC LIMIT 1").fetchone()
-        if row is None:  # an empty table has no snapshot; the view reads it unpinned, and says so
+        on_main = main_lineage(f"{ns}.{table}")
+        if not on_main:  # an empty table has no snapshot; the view reads it unpinned, and says so
             con.execute(f"CREATE OR REPLACE VIEW pinned.{ns}_{table} AS SELECT * FROM lake.{ns}.{table}")
             ids[f"{ns}.{table}"] = None
             continue
-        con.execute(f"CREATE OR REPLACE VIEW pinned.{ns}_{table} AS SELECT * FROM lake.{ns}.{table} AT (VERSION => {row[0]})")
-        ids[f"{ns}.{table}"] = row[0]
+        con.execute(f"CREATE OR REPLACE VIEW pinned.{ns}_{table} AS SELECT * FROM lake.{ns}.{table} AT (VERSION => {on_main[0]})")
+        ids[f"{ns}.{table}"] = on_main[0]
     try:
         sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=Path(__file__).parent).stdout.strip()
     except OSError:

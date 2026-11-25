@@ -4,12 +4,22 @@ Forty-one ADRs covering the design and rebuild of the K2 Market Data Platform: e
 
 Measured as-built at the v2 baseline: **15.1 CPU / 21.875 GB** across 14 long-running services (+2 one-shot), against a 16 CPU / 40 GB budget. With the capture tier swapped for v3's Rust one, Lakekeeper and the `lake-metrics` exporter added, and the v2 offload deleted, the declared steady state is 14.60 CPU / 25.625 GiB across 15 long-running services (+4 one-shot, bootstrap peak 16.10 CPU / 27.125 GiB across 19) ([ADR-010](ADR-010-resource-budget.md) Outcome addenda). With Airflow, cAdvisor and Trino it is 19.30 CPU / 35.312 GiB across 19 (+5 one-shot, bootstrap peak 21.30 CPU / 37.812 GiB across 24) under a 25 CPU / 48 GiB ceiling ([ADR-045](ADR-045-ceiling-25-cpu-48-gib.md)). End-to-end p99 trade → ClickHouse Silver: **170–197 ms** across Binance, Kraken and Coinbase. All 6 failure-mode tests pass, max MTTR 32 s. Every figure here traces to [`../benchmarks/2026-02-19-v2-baseline.md`](../benchmarks/2026-02-19-v2-baseline.md).
 
+> **New to the vocabulary?** The [glossary](glossary.md) explains every internal label and tool
+> concept these ADRs use, from "stage 2d" and "exit 75" to snapshots, selectors and definer views.
+> The five most recent decisions are also told [in plain words](#recent-decisions-in-plain-words).
+
 ## Conventions
 
 - One decision per file: `ADR-NNN-slug.md`, sequential, never reused, never renumbered.
   The slug states the decision (`ADR-015-clickhouse-lts-downgrade.md`, not `ADR-015-ch.md`).
-- Structure comes from [`template.md`](./template.md): Context · Decision · Options
-  considered · Consequences · Outcome.
+- Structure comes from [`template.md`](./template.md): In plain words · Context · Decision ·
+  Options considered · Consequences · Outcome.
+- **An ADR is understood from its own text.** Technical depth is welcome; the test is whether a
+  reader who has not opened the code can follow it and learn from it. So every ADR opens with
+  `## In plain words` and one bold decision sentence under a plain title, and explains each
+  internal label, tool concept and mechanism where it first appears or links it to the
+  [glossary](glossary.md), which gains any new term in the same pull request. Accepted ADRs
+  written before 2026-11-26 predate this rule and cannot be edited, so read them with the glossary.
 - **The test is cost of reversal**: would unwinding this six months on cost more than a
   day? If not, it is not an ADR. A corpus padded with cheap choices is one nobody reads.
 - **Consequences state what the decision costs**, not only what it buys.
@@ -83,6 +93,70 @@ Measured as-built at the v2 baseline: **15.1 CPU / 21.875 GB** across 14 long-ru
 | [047](ADR-047-ingest-batch-audit-after-publish.md) | The ingest audits each batch after publishing it, and never blocks the commit | **Accepted**; outside ADR-031's reserved block (036 stays write-audit-publish for file sources) | Stage 1 checks the batch it just committed, per topic and partition: rows equal the planned range, first and last offsets match. A mismatch is a `batch_offsets` row in `audit.checks` and `LakeIngestBatchAuditFailed`; a clean batch files nothing. Not write-audit-publish: a blocked archive stops reading Redpanda, and raw retention evicts before a person can answer |
 | [048](ADR-048-gold-step-reads-touched-data-writes-bars-once.md) | Gold step reads only touched data and writes bars once | **Proposed**; outside ADR-031's reserved block | The candle and bar step of each ingest run (stage 2d) read the whole of `gold.trades` ten times, computed the bars twice and wrote them in two commits; it will read only the touched `exchange_ts` range, compute once, replace the touched days in one commit (a `MERGE` with `NOT MATCHED BY SOURCE`, a partition overwrite or a branch fast-forward, whichever a scratch rehearsal passes) and drop two avoidable passes over the trades. No schema change; rows identical |
 | [049](ADR-049-event-bars-extended-not-recomputed.md) | Event bars are extended by new trades, not recomputed | **Proposed**; depends on ADR-048 and a measured day of it | Nearly every batch arrives after the stored trades, so the stored bars are extended (folded) instead of recomputing the day; out-of-order days are still recomputed whole. Adds `quote_volume_e16`, each bar's exact dollar value, to `gold.bars` in the lake and ClickHouse; the fold's position is the `gold.trades` snapshot on the newest bar rows |
+
+---
+
+## Recent decisions in plain words
+
+The tables above are written for someone who already knows the platform. These paragraphs are
+for someone who does not; each term links to the [glossary](glossary.md).
+
+**[ADR-035](ADR-035-trino-and-dbt-for-marts.md), Trino and dbt for marts.** Consumers needed
+one shared SQL engine and somewhere to build their own tables, and the only engine writing the
+lake, Spark, already spends most of each 5-minute slot on the ingest. One
+[Trino](glossary.md#engines) node now runs beside Spark: it serves SQL over every lake table and
+builds the [marts](glossary.md#mart) with [dbt](glossary.md#dbt-and-models), while Spark keeps
+every job that writes the lake, because those need Kafka offsets, the
+[writer lock](glossary.md#writer-lock-and-exit-75) or code per record. A mart is a `SELECT` over
+lake tables, held to [data tests](glossary.md#data-test) and [unit tests](glossary.md#unit-test)
+rather than the three-engine [parity](glossary.md#parity-three-way-and-pinned) gold has. The cost
+is one more always-on JVM, and the Outcome records the first memory limit it hit: a whole-table
+[source test](glossary.md#source-test) exceeded [Trino's per-node query memory](glossary.md#trino-per-node-query-memory)
+and was narrowed to the newest 6 hours.
+
+**[ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md), one producer lake and a
+warehouse per domain.** Once Trino can write, one stray commit to the lake, such as rolling a
+table back to an older [snapshot](glossary.md#snapshot), would make the ingest skip Kafka offsets
+for good. So the [producer lake](glossary.md#producer-lake) stays one
+[warehouse](glossary.md#warehouse-catalog-and-schema), written by Spark alone and read by Trino
+through a [read-only connector](glossary.md#read-only-connector), and every
+[data domain](glossary.md#data-domain-and-data-product) gets its own warehouse, Trino catalog and
+[writer](glossary.md#domain-writer) `dbt_<domain>`, all generated from `contracts/domains.yaml`.
+A writer can change only its own catalog, so a mart that joins two domains is owned and stored by
+the one that consumes it. Two limits are stated, not hidden: identity is an unchecked header, and
+[table procedures](glossary.md#table-procedure) inside the domain catalogs are open to every user.
+
+**[ADR-045](ADR-045-ceiling-25-cpu-48-gib.md), the ceiling is 25 CPU / 48 GiB.** Adding Trino
+pushed the declared resource limits past the previous 20 CPU / 36 GiB
+[ceiling](glossary.md#the-ceiling) at the [bootstrap peak](glossary.md#bootstrap-peak), the
+trigger ADR-031 had set for revisiting it. The ceiling is now 25 CPU / 48 GiB, enough for the
+next planned phase on its own estimate, with the platform kept as one always-on whole rather
+than opt-in profiles. The ceiling is a sum of declared limits, and actual use is far below it, so
+the real risk is measured memory: the margin left for the host is thin only if every limit were
+filled and reached at once, and a measured-use trigger watches for that.
+
+**[ADR-046](ADR-046-governance-domain-and-quality-results.md), one place for quality results.**
+Quality results lived in two places that could not see each other: the lake's audits in
+[`audit.checks`](glossary.md#auditchecks-and-the-nightly-audits), and dbt's test results, which
+were printed to a log and lost. Governance becomes a fifth domain, stored like the others; each
+domain's dbt runs record their own test results in their own catalog, as their own writer,
+through an [on-run-end hook](glossary.md#on-run-end-hook); and one
+[definer view](glossary.md#definer-view) in the governance catalog unions those tables with
+`audit.checks`. No writer ever writes outside its own catalog; the only step that crosses
+domains is a read. The catch: a test whose Airflow task never started leaves no row, so "no
+failures" in the view does not mean "everything passed".
+
+**[ADR-047](ADR-047-ingest-batch-audit-after-publish.md), the ingest audits each batch after
+committing it.** [Stage 1](glossary.md#stage-1) commits each batch together with the Kafka
+offsets it read ([exactly-once](glossary.md#exactly-once-via-snapshot-offsets)), and the next
+run starts after them, so a record the offsets claim but the commit lacks is never read again;
+the only check was nightly, by when Redpanda may have [evicted](glossary.md#raw-retention-and-eviction)
+it. Now a [batch audit](glossary.md#batch-audit) checks, right after each commit, that the commit
+holds exactly the planned range, and a mismatch is a recorded finding and a critical alert. The
+audit never blocks the commit, which is why this is not
+[write-audit-publish](glossary.md#write-audit-publish): holding a batch would hold the offsets
+while retention keeps deleting unread records. A hole is found within one run, while the
+records can still be re-read; a clean batch leaves no row.
 
 ---
 

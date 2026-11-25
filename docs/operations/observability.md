@@ -264,7 +264,8 @@ Lakekeeper REST catalog and reads their current snapshot summary, the same prope
 the ingest and maintenance jobs write their position into
 ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The gauges that name a
 job (`max_kafka_ts`, `ingest_backlog`, the two audit counts) take the **newest snapshot by
-`timestamp-ms` carrying that `k2.job`**, never the last entry of the metadata array:
+`timestamp-ms` carrying that `k2.job`** among those on `main`'s lineage (a branch's commits
+are not read), never the last entry of the metadata array:
 Lakekeeper 0.13.3 returned the same five snapshots in two different orders on two
 successive `loadTable` calls (2026-08-26), and reading by position reported a lag that had
 already been closed. Prefect runs each flow in

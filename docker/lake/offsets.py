@@ -275,12 +275,49 @@ def merge_committed(previous: dict, produced: dict) -> dict:
     return merged
 
 
+def main_lineage(parents: dict, head) -> list:
+    """Snapshot ids on `main`'s lineage, `head` first: `head`, its parent, and so on.
+
+    `parents` is `{snapshot_id: parent_id}` over every snapshot the table lists;
+    `head` is the id `main` points at (None for an unwritten table). The walk
+    stops at the first parent the table no longer holds, which is where
+    `expire_snapshots` cut the history.
+
+    A table's snapshot list is not main's history once the table has a branch:
+    it holds the branch's unpublished commits, and the commits of a branch since
+    dropped, and either can be the newest by commit time (spike on
+    `lake.scratch_p4.wap_bronze`, 2026-11-25). The lake jobs' "newest snapshot
+    with property X" reads go through this (`catalog.snapshot_history`). Two
+    readers still order by time and need not: `parity_ohlcv.py --dbt` orders
+    only the ids the candles name, and `spark_conf`'s smoke check reads a table
+    it just wrote, which has no branch.
+
+    **A branch is published to main only by fast-forward.** A cherry-pick
+    writes a new snapshot on main that carries `source-snapshot-id` but not the
+    source's `k2.*` summary properties, which resuming depends on: the walk
+    reaches the copy, `latest_summary` skips it, and the next run resumes from
+    the commit before it and reads that batch again. On wap_bronze the
+    cherry-picked 876138024979878929 kept none of its source's properties
+    (`spark.app.id` gone, `source-snapshot-id` added), while fast-forwarded
+    3805643239109797024 kept `k2.job`. This does not follow `source-snapshot-id`.
+    """
+    out = []
+    while head in parents:
+        out.append(head)
+        head = parents[head]
+    return out
+
+
 def latest_summary(snapshots: list, job: str):
     """Newest snapshot summary written by `job`, or None.
 
     `snapshots` is `[(committed_at, summary_dict)]` — whatever ordering key the
     caller has; `<table>.snapshots` gives `committed_at`, which is monotonic per
-    table because Iceberg commits are serialised.
+    table because Iceberg commits are serialised. Pass main's lineage only
+    (`catalog.snapshot_history` does): a branch's commit is not a position the
+    table has reached. Publish a branch by fast-forward only: a cherry-pick's
+    copy on main carries no `k2.*` properties, so this skips it and returns the
+    position before it (`main_lineage`).
 
     Snapshots from compaction (`rewrite_data_files`) and expiry carry no `k2.job`
     and are skipped. That is the "skip maintenance snapshots" rule, expressed as

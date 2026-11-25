@@ -425,6 +425,19 @@ jobs set, not by Iceberg's own `operation` field. After a nightly rewrite the
 newest snapshot on `raw.messages` carries no offsets, and a job that took it
 would restart from the beginning of every topic.
 
+Reading back also sees only `main`'s lineage: `catalog.snapshot_history` walks
+parent ids from the snapshot `main` points at (`offsets.main_lineage`), and
+`metrics.py` does the same over the REST metadata. `<table>.snapshots` lists a
+branch's unpublished commits and those of a dropped branch as well, and either
+can be the newest by commit time. Two readers still order by time and need not:
+`parity_ohlcv.py --dbt` orders only the snapshot ids the candles name, and the
+`spark_conf.py` smoke check reads a table it just wrote, which has no branch.
+
+**A branch is published to `main` only by fast-forward.** A cherry-pick writes a
+new snapshot on `main` that drops the source's summary properties, the `k2.*`
+ones resuming depends on included, so `latest_summary` skips it and the next run
+re-reads the batch from the commit before it.
+
 ---
 
 ## What one run may read, and why nothing is cached

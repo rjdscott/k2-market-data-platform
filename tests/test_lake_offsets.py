@@ -289,6 +289,93 @@ class TestLatestSummary:
         assert O.latest_summary([(1, None), (2, {})], O.JOB_INGEST) is None
 
 
+# (snapshot_id, parent_id, committed_at, summary). `main` points at 3. 4 is an
+# unpublished commit on a live branch, 5 the commit of a branch since dropped:
+# both are newer than main and both carry a decode position main never reached.
+# The shape the spike found on lake.scratch_p4.wap_bronze (2026-11-25).
+MAIN = 3
+SNAPSHOTS = [
+    (1, None, 1, {O.JOB: O.JOB_DECODE, O.SRC_SNAPSHOT_ID: "10"}),
+    (2, 1, 2, {O.JOB: O.JOB_DECODE, O.SRC_SNAPSHOT_ID: "20"}),
+    (3, 2, 3, {"operation": "replace"}),
+    (4, 3, 4, {O.JOB: O.JOB_DECODE, O.SRC_SNAPSHOT_ID: "40"}),
+    (5, 2, 5, {O.JOB: O.JOB_DECODE, O.SRC_SNAPSHOT_ID: "50"}),
+]
+
+
+class TestMainLineage:
+    def test_walks_from_main_and_skips_both_branches(self):
+        assert O.main_lineage({s: p for s, p, _, _ in SNAPSHOTS}, MAIN) == [3, 2, 1]
+
+    def test_stops_where_expiry_cut_the_history(self):
+        assert O.main_lineage({3: 2, 2: 1}, 3) == [3, 2]
+
+    def test_an_unwritten_table_has_no_lineage(self):
+        assert O.main_lineage({}, None) == []
+
+    def test_a_cherry_picked_head_resumes_from_the_commit_before_it(self):
+        """Pinned, not endorsed: main publishes by fast-forward only. A cherry-pick's
+        copy (7, of branch commit 6) carries `source-snapshot-id` and none of 6's
+        `k2.*` properties, so resuming skips it and re-reads 6's batch. A change
+        that follows `source-snapshot-id` updates this test."""
+        history = {
+            1: (None, {O.JOB: O.JOB_DECODE, O.SRC_SNAPSHOT_ID: "10"}),
+            6: (1, {O.JOB: O.JOB_DECODE, O.SRC_SNAPSHOT_ID: "60"}),
+            7: (1, {"operation": "append", "source-snapshot-id": "6"}),
+        }
+        on_main = O.main_lineage({s: p for s, (p, _) in history.items()}, 7)
+        assert on_main == [7, 1]
+        summary = O.latest_summary([(s, history[s][1]) for s in on_main], O.JOB_DECODE)
+        assert summary[O.SRC_SNAPSHOT_ID] == "10"
+
+
+class Row(dict):
+    """A pyspark Row: by name and by position."""
+
+    def __getitem__(self, key):
+        return list(self.values())[key] if isinstance(key, int) else super().__getitem__(key)
+
+
+class FakeSpark:
+    """Answers the two metadata reads `catalog.main_snapshots` makes, from SNAPSHOTS.
+
+    `<table>.refs` holds the live branch first, so a read that drops
+    `WHERE name = 'main'` and takes the first row walks the branch instead.
+    """
+
+    def sql(self, query):
+        if ".refs" in query:
+            refs = [("audit_1", 4), ("main", MAIN)]
+            rows = [Row(snapshot_id=sid) for name, sid in refs if "name = 'main'" not in query or name == "main"]
+        else:
+            rows = [Row(snapshot_id=s, parent_id=p, committed_at=t, summary=m) for s, p, t, m in SNAPSHOTS]
+        return type("Result", (), {"collect": lambda self: rows})()
+
+
+@pytest.fixture
+def catalog(monkeypatch):
+    """docker/lake/catalog.py, real, over a stubbed spark_conf (it imports pyspark)."""
+    import importlib
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "spark_conf", types.SimpleNamespace(
+        CATALOG="lake", KAFKA_BROKERS="redpanda:9092", SCHEMA_REGISTRY_URL="http://registry"))
+    monkeypatch.delitem(sys.modules, "catalog", raising=False)
+    yield importlib.import_module("catalog")
+    sys.modules.pop("catalog", None)
+
+
+class TestSnapshotHistoryIsMainOnly:
+    def test_resume_position_is_mains_not_a_branchs(self, catalog):
+        """Over every snapshot, the newest decode is 5's: a dropped branch's position."""
+        summary = O.latest_summary(catalog.snapshot_history(FakeSpark(), "lake.bronze.t"), O.JOB_DECODE)
+        assert summary[O.SRC_SNAPSHOT_ID] == "20"
+
+    def test_main_snapshots_are_mains_rows(self, catalog):
+        assert sorted(r["snapshot_id"] for r in catalog.main_snapshots(FakeSpark(), "lake.bronze.t")) == [1, 2, 3]
+
+
 class TestOffsetGaps:
     def test_a_contiguous_run_passes(self):
         assert O.offset_gaps([("t", 0, 101, 0, 100)]) == []

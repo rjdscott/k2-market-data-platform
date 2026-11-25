@@ -803,8 +803,8 @@ def test_v2_only_json_carries_the_truncation_the_exit_code_reports(monkeypatch, 
 # `make parity-ohlcv` crashed on every run from 2026-08-27 to 2026-09-03 because
 # tests/parity/pinned.json held a snapshot id written on another host, and
 # `AT (VERSION => <pin>)` raised `Could not find snapshot with id ...` before the
-# gate compared anything. These four assert the two halves of the fix: the pin is
-# used when it is there, and its absence degrades to the current snapshot LOUDLY
+# gate compared anything. These assert the two halves of the fix: the pin is
+# used when it is on main, and its absence degrades to the current snapshot LOUDLY
 # rather than either crashing or quietly passing at an unpinned snapshot.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -812,25 +812,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from parity_ohlcv import resolve_snapshot  # noqa: E402
 
-# (sequence_number, snapshot_id), deliberately not in sequence order: the DuckDB
-# table function returns them unordered, so a resolver that took rows[-1] would
-# pick snapshot 111 here and pass this file's happy path anyway.
-_SNAPSHOTS = [(13, 111), (44, 999), (27, 222)]
-
-
-def _stub(rows):
-    """A `query` that answers every SQL string with `rows`."""
-    return lambda sql: rows
+# main's lineage, current first (notebooks/k2lake.py `main_lineage`). 444 is a
+# commit on a branch, newer than 999 and in the table, but never on main.
+_LINEAGE = [999, 222, 111]
+_BRANCH = 444
 
 
 def test_a_pin_the_table_still_holds_is_used_as_is(capsys):
-    assert resolve_snapshot(_stub(_SNAPSHOTS), "lake.gold.ohlcv_1m", 111) == 111
+    assert resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", 111) == 111
     assert capsys.readouterr().out == "", "an intact pin must say nothing"
 
 
-def test_a_missing_pin_falls_back_to_the_newest_snapshot():
-    # 999 has the highest sequence_number, not the last row and not the highest id.
-    assert resolve_snapshot(_stub(_SNAPSHOTS), "lake.gold.ohlcv_1m", 1622213366608023449) == 999
+def test_a_missing_pin_falls_back_to_mains_current_snapshot():
+    assert resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", 1622213366608023449) == 999
+
+
+def test_a_pin_on_a_branch_is_not_used():
+    """A branch's snapshot is in the table, so `iceberg_snapshots` lists it: the old
+    resolver accepted it as a pin, and fell back to one when a pin was stale (spike,
+    2026-11-25). Either way parity would run over rows main never published."""
+    assert resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", _BRANCH) == 999
 
 
 def test_the_fallback_names_both_ids_and_how_to_refresh_the_pin(capsys):
@@ -840,7 +841,7 @@ def test_the_fallback_names_both_ids_and_how_to_refresh_the_pin(capsys):
     the pin that was missing, the snapshot that was used instead, and the command
     that makes the next run reproducible again.
     """
-    resolve_snapshot(_stub(_SNAPSHOTS), "lake.gold.ohlcv_1m", 1622213366608023449)
+    resolve_snapshot(_LINEAGE, "lake.gold.ohlcv_1m", 1622213366608023449)
     out = capsys.readouterr().out
     assert "pin 1622213366608023449 not found in lake.gold.ohlcv_1m" in out
     assert "current snapshot 999" in out
@@ -850,7 +851,71 @@ def test_the_fallback_names_both_ids_and_how_to_refresh_the_pin(capsys):
 def test_a_table_with_no_snapshots_is_an_error_not_a_fallback():
     """Nothing to fall back TO. Exiting beats `max()` on an empty sequence."""
     with pytest.raises(SystemExit):
-        resolve_snapshot(_stub([]), "lake.gold.ohlcv_1m", 111)
+        resolve_snapshot([], "lake.gold.ohlcv_1m", 111)
+
+
+# The entry points: main() of both parity scripts must resolve through main's
+# lineage, not through `iceberg_snapshots`. Lakekeeper answers every table with
+# main at 3, a live branch's commit 4 and a dropped branch's 5 (the newest); the
+# DuckDB stand-in answers `iceberg_snapshots` as DuckDB does, 5 with the highest
+# sequence number. Both pins are stale, so each side must run AT main's 3.
+_REST = {
+    "current-snapshot-id": 3,
+    "snapshots": [{"snapshot-id": 1}] + [{"snapshot-id": s, "parent-snapshot-id": p} for s, p in ((2, 1), (3, 2), (4, 3), (5, 2))],
+}
+
+
+class _Duck:
+    def __init__(self):
+        self.sql = []
+
+    def execute(self, sql):
+        self.sql.append(sql)
+        if "iceberg_snapshots" in sql:
+            rows = [(n, n) for n in range(1, 6)]  # (sequence_number, snapshot_id)
+        elif "lake.gold.ohlcv_1m AT" in sql:
+            rows = [("kraken", "BTC/USD", datetime(2026, 1, 1), 1, 1, 1, 1, 1, Decimal(1), Decimal(1))]
+        else:
+            rows = []  # every other side is empty, so main() stops after reading it
+        return type("Result", (), {"fetchall": lambda self: rows})()
+
+    def executemany(self, sql, rows):
+        self.sql.append(sql)
+
+
+@pytest.fixture
+def lake(monkeypatch):
+    """Stubbed Lakekeeper REST and DuckDB; returns the DuckDB stand-in."""
+    import k2lake  # on sys.path once parity_ohlcv is imported
+
+    k2lake._prefix.cache_clear()
+    monkeypatch.setattr(k2lake, "_get", lambda url: {"defaults": {"prefix": "P"}} if "/config" in url else {"metadata": _REST})
+    monkeypatch.setenv("MINIO_ROOT_USER", "u")
+    monkeypatch.setenv("MINIO_ROOT_PASSWORD", "p")
+    yield _Duck()
+    k2lake._prefix.cache_clear()
+
+
+def test_parity_ohlcv_main_reads_mains_snapshot(lake, monkeypatch):
+    import parity_ohlcv
+
+    monkeypatch.setattr(parity_ohlcv, "duck", lambda user, password: lake)
+    monkeypatch.setattr(sys, "argv", ["parity_ohlcv.py", "--day", "2026-01-01", "--ohlcv-snapshot", "999",
+                                      "--silver-snapshots", '{"kraken": 999}', "--skip-clickhouse"])
+    assert parity_ohlcv.main() == 1  # silver is empty in the stand-in
+    assert any("lake.gold.ohlcv_1m AT (VERSION => 3)" in q for q in lake.sql)
+    assert any("lake.silver.trades_kraken AT (VERSION => 3)" in q for q in lake.sql)
+
+
+def test_parity_bars_main_reads_mains_snapshot(lake, monkeypatch):
+    import parity_bars
+
+    monkeypatch.setattr(parity_bars, "duck", lambda user, password: lake)
+    monkeypatch.setattr(sys, "argv", ["parity_bars.py", "--day", "2026-01-01", "--bars-snapshot", "999",
+                                      "--trades-snapshot", "999", "--reference-symbols", ""])
+    assert parity_bars.main() == 1  # every side is empty in the stand-in
+    assert any("lake.gold.bars AT (VERSION => 3)" in q for q in lake.sql)
+    assert any("lake.gold.trades AT (VERSION => 3)" in q for q in lake.sql)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

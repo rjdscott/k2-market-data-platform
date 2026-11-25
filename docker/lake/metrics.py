@@ -208,6 +208,21 @@ def current_snapshot(metadata: dict) -> dict:
     return {}
 
 
+def on_main(metadata: dict) -> list:
+    """The snapshots on `main`'s lineage, current first, walked by parent id.
+
+    `metadata["snapshots"]` also lists a branch's unpublished commits and those
+    of a dropped branch, and the "newest by `timestamp-ms`" reads below would
+    take one. The same walk as docker/lake/offsets.py's `main_lineage`.
+    """
+    by_id = {s.get("snapshot-id"): s for s in metadata.get("snapshots", [])}
+    out, sid = [], metadata.get("current-snapshot-id")
+    while sid in by_id:
+        out.append(by_id[sid])
+        sid = by_id[sid].get("parent-snapshot-id")
+    return out
+
+
 # Iceberg's `operation` for a file rewrite. `rewrite_data_files` does not go
 # through `writeTo`, so it cannot carry a `k2.job` property the way the ingest
 # does — the operation field is the only marker it leaves.
@@ -327,7 +342,7 @@ def refresh(prefix: str, now: float) -> int:
             errors += 1
             continue
 
-        snapshots = metadata.get("snapshots", [])
+        snapshots = on_main(metadata)
         current = current_snapshot(metadata)
         if not current:
             rows_total.labels(table=label).set(0)

@@ -266,3 +266,10 @@ built, which holds the lake as it was at build time. A bucket computed before th
 snapshot it names equals the lake only if no trade landed in it since, and a stale lake bucket
 would show as a difference, not pass. `make parity-ohlcv` stays three-way; the fourth side is
 `--dbt`, opt in.
+
+## Outcome (2026-11-26, readers follow main)
+
+**Clause 4's "current" means `main`.** `pin()` and the parity scripts' stale-pin
+fallback took the newest snapshot by commit time, which a branch spike on 2026-11-25 showed can
+be an unpublished commit; they now resolve the snapshot `main` points at, and a pin is used only
+if it is on `main`'s lineage.
