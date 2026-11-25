@@ -67,7 +67,7 @@ they hold nothing the lake cannot rebuild, and nothing in the lake reads them
 | Built by | Spark, every 5 minutes | dbt on Trino, every hour at minute 10 (Airflow DAG `dbt_marts`) |
 | Lives in | warehouse `k2` | the owning domain's warehouse, one schema per product |
 | Rows | kept forever | rebuilt whole on every run |
-| Snapshots | expired nightly past seven days, ten kept | expired daily past seven days by the domain's own writer |
+| Snapshots | expired nightly past seven days, ten kept | expired daily past seven days by the domain's own writer (the one Trino user, `dbt_<domain>`, allowed to change that domain's tables; [chapter 19](19-lakehouse-and-domain-warehouses.md)) |
 | If lost | `raw.messages` cannot be rebuilt; every layer above it can | the next run builds it again from the lake |
 
 One table in a domain warehouse is history, not a mart: `dq.dbt_test_results`, where each

@@ -615,7 +615,8 @@ one line that is cumulative rather than steady-state. Instance and task sizing i
 
 **Added 2026-11-26, not in the totals: Trino.** At 1× it is one Fargate task at today's
 container limits, 2 vCPU / 5 GB (`docker-compose.yml`), priced at the x86 rates the
-[research note §9](../research/2026-08-29-aws-ha-dr.md) read on 2026-08-29:
+[research note §9](../research/2026-08-29-aws-ha-dr.md) read on 2026-08-29
+([fargate/pricing](https://aws.amazon.com/fargate/pricing/) · `AmazonECS v20260707160651`, per vCPU-hour and per GB-hour):
 `730 × (2 × 0.04656 + 5 × 0.00511)` = **$87/month**. 200× is not estimated: Trino is sized
 by the query workload, which this page does not model, not by the ingest rate. dbt adds no
 line of its own; it runs inside the orchestrator's tasks.
