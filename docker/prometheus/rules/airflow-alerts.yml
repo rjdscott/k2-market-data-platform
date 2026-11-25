@@ -89,9 +89,45 @@ groups:
       #
       # Not while Airflow's own maintenance or rebuild is running: both take the
       # lock for longer than three cycles on purpose, and a nightly page for it
-      # would be one nobody reads. A writer started outside Airflow (a runbook,
-      # a chaos script, `make lake-rebuild`) is not excluded, and the runbook
-      # says how to tell.
+      # would be one nobody reads (airflow:lake_lock_holder_in_flight below). A
+      # writer started outside Airflow (a runbook, a chaos script,
+      # `make lake-rebuild`) is not excluded, and the runbook says how to tell.
+      #
+      # RECORDING: 1 while an Airflow lake_maintenance or lake_rebuild try is in
+      # flight, absent otherwise. In flight is starts minus finishes above 0,
+      # AND a start within that DAG's dagrun_timeout (2h05m, 24h05m): a try
+      # killed without a ti_finish (a zombie after a scheduler kill) would
+      # otherwise hold the difference at 1 and mute both rules that read this
+      # until the exporter restarts. With a zombie on the books, the mute ends
+      # one dagrun_timeout after the latest start.
+      - record: airflow:lake_lock_holder_in_flight
+        expr: |
+          (
+            (sum(airflow_ti_start{dag_id="lake_maintenance"})
+               - (sum(airflow_ti_finish{dag_id="lake_maintenance"}) or vector(0))) > 0
+            and on() (sum(airflow_ti_start{dag_id="lake_maintenance"})
+               - (sum(airflow_ti_start{dag_id="lake_maintenance"} offset 2h5m) or vector(0))) > 0
+          ) * 0 + 1
+          or
+          (
+            (sum(airflow_ti_start{dag_id="lake_rebuild"})
+               - (sum(airflow_ti_finish{dag_id="lake_rebuild"}) or vector(0))) > 0
+            and on() (sum(airflow_ti_start{dag_id="lake_rebuild"})
+               - (sum(airflow_ti_start{dag_id="lake_rebuild"} offset 24h5m) or vector(0))) > 0
+          ) * 0 + 1
+
+      # RECORDING: 1 while a lake_ingest try is in flight, absent otherwise.
+      # Bounded the same way, by the run's dagrun_timeout of 2h05m (two tries
+      # of 3600 s, the retry delay and slack).
+      - record: airflow:lake_ingest_in_flight
+        expr: |
+          (
+            (sum(airflow_ti_start{dag_id="lake_ingest"})
+               - (sum(airflow_ti_finish{dag_id="lake_ingest"}) or vector(0))) > 0
+            and on() (sum(airflow_ti_start{dag_id="lake_ingest"})
+               - (sum(airflow_ti_start{dag_id="lake_ingest"} offset 2h5m) or vector(0))) > 0
+          ) * 0 + 1
+
       - alert: AirflowLakeIngestSkippedRepeatedly
         expr: |
           (
@@ -104,10 +140,7 @@ groups:
               - (airflow_ti_finish{dag_id="lake_ingest",state="success"} offset 15m
                   or airflow_ti_finish{dag_id="lake_ingest",state="success"} * 0)
           ) > 0
-          unless on() (
-            sum(airflow_ti_start{dag_id=~"lake_maintenance|lake_rebuild"})
-              - (sum(airflow_ti_finish{dag_id=~"lake_maintenance|lake_rebuild"}) or vector(0))
-          ) > 0
+          unless on() airflow:lake_lock_holder_in_flight
         for: 1m
         labels:
           severity: warning
@@ -124,4 +157,52 @@ groups:
 
             Find the process that holds the lock before anything else. A
             driver left by a killed run is the usual cause.
+          runbook: docs/runbooks/airflow-scheduling.md
+
+      # WARNING: no lake_ingest task has finished in 15 minutes.
+      #
+      # Observed 2026-11-25: the DAG folder's bind mount went stale, the DAGs
+      # were marked stale, and the scheduler created no run for 35 minutes
+      # while every container stayed healthy and every other Airflow series
+      # looked normal (heartbeat, dagbag size, parse age, import errors). A
+      # finished task, success or skipped or failed, is the one signal that a
+      # run happened at all. This also covers a DAG paused and forgotten and a
+      # scheduler that heartbeats but does not schedule.
+      #
+      # The first clause reads a counter that stopped moving (the exporter
+      # keeps its last value); the second a counter that has not existed for
+      # 15 minutes (never started, or the exporter restarted and nothing has
+      # finished since), once the scheduler has heartbeated for 15 minutes,
+      # so a fresh stack's first slot does not warn. A scheduler that is not
+      # heartbeating at all is AirflowSchedulerHeartbeatLost's. Not while a
+      # lake_ingest try is in flight (a long
+      # catch-up), or Airflow's maintenance or rebuild is: the recording
+      # rules above, each bounded so a zombie try cannot mute this for good.
+      - alert: AirflowLakeIngestNotRunning
+        expr: |
+          (
+            (
+              sum(airflow_ti_finish{dag_id="lake_ingest"})
+                - (sum(airflow_ti_finish{dag_id="lake_ingest"} offset 15m) or vector(0))
+            ) == 0
+            or (
+              sum(absent_over_time(airflow_ti_finish{dag_id="lake_ingest"}[15m]))
+                and on() sum(airflow_scheduler_heartbeat offset 15m)
+            )
+          )
+          unless on() airflow:lake_ingest_in_flight
+          unless on() airflow:lake_lock_holder_in_flight
+        for: 5m
+        labels:
+          severity: warning
+          component: orchestration
+          tier: control-plane
+        annotations:
+          summary: "No lake_ingest task has finished for 20 minutes"
+          description: |
+            No lake_ingest task has finished, in any state, for 15 minutes
+            held for 5, and none is running: the 5-minute schedule is not
+            creating runs. Check the DAG is not stale or paused before
+            anything else; a stale DAG folder after a checkout switch shows
+            nothing else, every container stays healthy.
           runbook: docs/runbooks/airflow-scheduling.md

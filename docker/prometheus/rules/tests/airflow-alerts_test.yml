@@ -216,7 +216,108 @@ tests:
           - exp_labels: *skipped-labels
             exp_annotations: *skipped-annotations
 
-  # ── Healthy shadow: every probe run succeeds ─────────────────────────────
+  # A maintenance try killed with the scheduler: a ti_start at minute 0 and
+  # no ti_finish ever. Skips every 5 minutes from minute 41. Inside the
+  # try's dagrun_timeout (2h05m) it still reads as in flight and the skips
+  # stay quiet; past it the mute ends and three skips fire. Before the bound
+  # the difference held at 1 and muted this until the exporter restarted.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_ti_start{dag_id="lake_maintenance",task_id="maintain"}'
+        values: '1x200'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
+        values: '0x40 1x4 2x4 3x4 4x4 5x4 6x4 7x4 8x4 9x4 10x4 11x4 12x4 13x4 14x4 15x4 16x4 17x4 18x4 19x4 20x4 21x4 22x4 23x4 24x4 25x4 26x4 27x4 28x4 29x4 30x4 31x4 32x4'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts:
+          - exp_labels: *skipped-labels
+            exp_annotations: *skipped-annotations
+
+  # ── AirflowLakeIngestNotRunning ──────────────────────────────────────────
+  # The scheduler stops creating runs after minute 20 (the stale DAG folder
+  # of 2026-11-25): the counters stay at their last value. 15 minutes with
+  # no finish is minute 35, firing 5 minutes later.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x60'
+      - series: 'airflow_ti_start{dag_id="lake_ingest",task_id="ingest"}'
+        values: '0+1x20 20x40'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '0+1x20 20x40'
+    alert_rule_test:
+      - eval_time: 38m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts: []
+      - eval_time: 42m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts:
+          - exp_labels: &not-running-labels
+              severity: warning
+              component: orchestration
+              tier: control-plane
+            exp_annotations: &not-running-annotations
+              summary: "No lake_ingest task has finished for 20 minutes"
+              description: |
+                No lake_ingest task has finished, in any state, for 15 minutes
+                held for 5, and none is running: the 5-minute schedule is not
+                creating runs. Check the DAG is not stale or paused before
+                anything else; a stale DAG folder after a checkout switch shows
+                nothing else, every container stays healthy.
+              runbook: docs/runbooks/airflow-scheduling.md
+
+  # No lake_ingest task has ever finished, with a scheduler that has been up
+  # for more than 15 minutes: the series is absent and that still fires. In
+  # the first 15 minutes of a scheduler it does not, so a fresh install's
+  # first slot is not a warning.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x60'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts:
+          - exp_labels: *not-running-labels
+            exp_annotations: *not-running-annotations
+
+  # The same silence while maintenance holds the lock from minute 15 with no
+  # finish yet, and while one lake_ingest try runs long from minute 21: quiet.
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x60'
+      - series: 'airflow_ti_start{dag_id="lake_ingest",task_id="ingest"}'
+        values: '0+1x20 20x40'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '0+1x20 20x40'
+      - series: 'airflow_ti_start{dag_id="lake_maintenance",task_id="maintain"}'
+        values: '_x15 1x45'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'airflow_scheduler_heartbeat'
+        values: '0+12x60'
+      - series: 'airflow_ti_start{dag_id="lake_ingest",task_id="ingest"}'
+        values: '0+1x21 21x40'
+      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+        values: '0+1x20 20x40'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: AirflowLakeIngestNotRunning
+        exp_alerts: []
+
+  # ── Healthy: every run succeeds ──────────────────────────────────────────
   - interval: 1m
     input_series:
       - series: 'airflow_scheduler_heartbeat'
@@ -234,4 +335,7 @@ tests:
         exp_alerts: []
       - eval_time: 50m
         alertname: AirflowLakeIngestSkippedRepeatedly
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: AirflowLakeIngestNotRunning
         exp_alerts: []
