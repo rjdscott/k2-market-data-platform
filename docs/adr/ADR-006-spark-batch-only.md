@@ -267,9 +267,10 @@ Two further deviations: offload runs every **15 minutes**, not hourly, and the S
 Alternative 3 above rejected Trino as a replacement for Spark in batch ETL. That verdict
 holds and is still applied: Spark keeps the ingest from Redpanda to gold, backfill, rebuild,
 compaction, expiry and the audits. [ADR-035](ADR-035-trino-and-dbt-for-marts.md) adds Trino
-beside it for a different job, SQL serving and set-based consumer marts built by dbt in a
-Lakekeeper warehouse of their own (`marts`), and departs from this ADR only there. Trino's
-catalog over the lake is read-only at the connector: Spark stays the lake's only writer.
+beside it for a different job, SQL serving and set-based consumer marts built by dbt, each
+in its domain's own warehouse ([ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md)),
+and departs from this ADR only there. Trino's catalog over the lake is read-only at the
+connector: Spark stays the lake's only writer.
 
 The three objections, against what was measured on 2026-11-25 with Trino 484 on this lake
 ([`docker/trino/README.md`](../../docker/trino/README.md)):

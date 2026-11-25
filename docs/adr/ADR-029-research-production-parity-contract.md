@@ -225,7 +225,7 @@ that is a protocol change the generator has to learn.
 ## Outcome (2026-11-25, marts)
 
 **Clause 3 is scoped for marts by [ADR-035](ADR-035-trino-and-dbt-for-marts.md).** A table
-dbt builds in catalog `marts` (its own Lakekeeper warehouse) is covered by dbt tests on its grain and columns, unit tests
+dbt builds in a domain's mart warehouse ([ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md)) is covered by dbt tests on its grain and columns, unit tests
 on its logic, and a reference computation where one is cheap, not by a second and a third
 engine. The worked example, dbt's `ohlcv_1m`, keeps the full check: equal to Spark's
 `gold.ohlcv_1m` at a pinned snapshot on open, high, low, close, trade count and volume

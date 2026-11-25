@@ -1,6 +1,6 @@
 # ADR-010: Resource Budget and Docker Compose Constraints
 
-**Status:** Accepted, Implemented (2026-02), see Outcome; the 16 CPU / 40 GB ceiling **superseded by [ADR-034](ADR-034-airflow-3-replaces-prefect.md)** (20 CPU / 36 GiB at the bootstrap peak), then by **[ADR-035](ADR-035-trino-and-dbt-for-marts.md)** (25 CPU / 48 GiB at the bootstrap peak); scoped, the rest stands
+**Status:** Accepted, Implemented (2026-02), see Outcome; the 16 CPU / 40 GB ceiling **superseded by [ADR-034](ADR-034-airflow-3-replaces-prefect.md)** (20 CPU / 36 GiB at the bootstrap peak), then by **[ADR-045](ADR-045-ceiling-25-cpu-48-gib.md)** (25 CPU / 48 GiB at the bootstrap peak); scoped, the rest stands
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Infrastructure
@@ -621,7 +621,7 @@ same day; `docs/development/setup.md` now says ≥ 28 GB engine memory and why.
 
 The ceiling moved twice after this ADR's: to 20 CPU / 36 GiB at the bootstrap peak
 ([ADR-034](ADR-034-airflow-3-replaces-prefect.md)), then to **25 CPU / 48 GiB**
-([ADR-035](ADR-035-trino-and-dbt-for-marts.md)), gated in CI by `scripts/check-budget.py`.
+([ADR-045](ADR-045-ceiling-25-cpu-48-gib.md)), gated in CI by `scripts/check-budget.py`.
 The allocation method above, a hard limit per service summed from the resolved compose
 file, is unchanged.
 
@@ -641,5 +641,5 @@ PASS: bootstrap default within 25 CPU / 48 GiB; limits and pins hold across 6 Do
 
 Headroom at the gated peak: 3.70 CPU and 11.188 GiB. The engine on the reference host has
 28 CPUs and 49.50 GiB (`docker info --format '{{.NCPU}} {{.MemTotal}}'`, 2026-11-25), so the
-ceiling leaves 3 cores and 1.5 GiB outside it; ADR-035 says why that is accepted. The summary comment at the end of
+ceiling leaves 3 cores and 1.5 GiB outside it; ADR-045 says why that is accepted. The summary comment at the end of
 `docker-compose.yml` carries the same sums.

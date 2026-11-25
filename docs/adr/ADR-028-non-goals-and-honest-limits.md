@@ -349,14 +349,15 @@ its own trigger: no consumer has needed the data without a database connection. 
 lifted because the governed platform plan ([ADR-031](ADR-031-governed-self-serve-platform.md))
 needs one shared SQL engine over the lake, for dbt-built marts and for consumers who are not
 Spark jobs. Trino 484 runs always-on on `127.0.0.1` (`K2_TRINO_PORT`), reads every lake
-table through a catalog that is read-only at the connector, and writes only in a second
-warehouse, `marts`.
+table through a catalog that is read-only at the connector, and writes only the marts, in one
+warehouse per domain ([ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md)).
 
 What did not change: there is still no query API. An HTTP API, with its own auth,
 pagination and deployment, stays a non-goal on § 6's trigger.
 
 **§ 8 stays in force.** Trino takes its user from the `X-Trino-User` header without
-authenticating it, so its access rules (`docker/trino/etc/rules.json`) name no user, and
-they and the read-only connector are guard rails against mistakes, not a boundary:
-Lakekeeper is still unauthenticated and Trino holds the MinIO root keys. ADR-035 names the
-scoped storage key that would be the next layer.
+authenticating it, so the writer identities its rules name (`dbt_<domain>`,
+`docker/trino/etc/rules.json`) can be asserted by anyone on the host, and the rules and the
+read-only connector are guard rails against mistakes, not a boundary: Lakekeeper is still
+unauthenticated and Trino holds the MinIO root keys. ADR-044 names the storage key per
+identity that would be the next layer.
