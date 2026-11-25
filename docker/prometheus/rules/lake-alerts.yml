@@ -286,7 +286,7 @@ groups:
           component: lake
           tier: cold
         annotations:
-          summary: "{{ $labels.topic }} has had {{ $value }} unread offsets for 30 minutes"
+          summary: "{{ $labels.topic }} has had {{ $value | humanize }} unread offsets for 30 minutes"
           description: |
             The ingest's per-run cap is below what this topic receives per cycle,
             or runs are slower than the 5-minute cadence. Check that the topic's

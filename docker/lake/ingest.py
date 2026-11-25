@@ -138,7 +138,7 @@ EXIT_LOCK_HELD = os.EX_TEMPFAIL
 # k2_lake_ingest_backlog_offsets{topic="market.crypto.v3.raw.kraken"} rose at
 # 14:32 UTC to ~1.3 M and sat there until a hand-run at 2,000,000 drained it
 # (17:12 to 17:25 UTC). Nothing was evicted, and nothing alerted. 600,000 is
-# ~3x that cycle's arrival; LakeIngestBacklogSustained now pages on the shape.
+# ~3x that cycle's arrival; LakeIngestBacklogSustained now alerts on the shape.
 #
 # Costs, measured at the 200,000 bound (docker/lake/README.md): 4,097,437
 # records in 71 s, peak driver RSS 1,213 MiB, *lower* than the same run at 50,000, which
