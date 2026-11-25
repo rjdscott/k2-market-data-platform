@@ -6,16 +6,20 @@
 
 ## The picture
 
-K2 keeps its data as files in one bucket, `k2-lake`, on MinIO. MinIO is object storage: a flat
-store of files addressed by key, with the same API as Amazon S3. Lakekeeper, the catalog
-service, records which files make up each table. It holds five warehouses, separate areas
-each with its own tables: `k2`, the producer lake, and one per data domain, a team's area of
-data, for that domain's marts. A mart is a table built for consumers out of lake tables. Three
-engines, the programs that run queries, use the catalog. Spark runs the batch jobs that write the
-lake, and Airflow, the scheduler, starts them. Trino is a SQL server: it reads every
-warehouse and writes only the domain warehouses. DuckDB is a library inside the notebooks, and it
-reads the lake. dbt, a tool that turns SQL `SELECT` files into tables, will build the marts
-through Trino from the next pull request of
+K2 keeps its data as files in one bucket, `k2-lake`. Six parts work on it:
+
+- **MinIO** is object storage: a flat store of files addressed by key, with the same API as
+  Amazon S3. It holds the bucket.
+- **Lakekeeper** is the catalog service. It records which files make up each table.
+- **Warehouses** are separate areas inside the catalog, each with its own tables. There are
+  five: `k2`, the producer lake, and one per data domain for that domain's marts. A data domain
+  is a team's area of data. A mart is a table built for consumers out of lake tables.
+- **Spark** runs the batch jobs that write the lake. **Airflow**, the scheduler, starts them.
+- **Trino** is a SQL server. It reads every warehouse and writes only the domain warehouses.
+- **DuckDB** is a library inside the notebooks. It reads the lake.
+
+Spark, Trino and DuckDB are engines: the programs that run queries. dbt, a tool that turns SQL
+`SELECT` files into tables, will build the marts through Trino from the next pull request of
 [phase P3](../plans/2026-11-24-governed-self-serve-platform/003-trino-dbt-marts.md).
 
 ```mermaid
