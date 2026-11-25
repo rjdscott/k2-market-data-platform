@@ -256,8 +256,8 @@ the generated `docker/trino/etc/catalog/governance.properties`. Until then the g
 fails with `Catalog 'governance' not found` and every other domain builds. Once, after the pull
 request that added the domain ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md))
 is merged, in the live checkout. The outputs marked "before" are the stack's on 2026-11-25,
-read-only; the steps that change the stack (1, 2, 3, 5, 7) were not run for this page, and the
-note at the end closes them.
+read-only; the rollout itself ran on 2026-11-25 from 19:29 UTC, and the outputs marked "after"
+and the two at the end are that run's.
 
 ```bash
 # 1. No dbt_marts run while Trino restarts.
@@ -296,11 +296,26 @@ When that run has ended (`airflow dags list-runs dbt_marts`, section 1):
 
 ```bash
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM governance'
-docker exec k2-trino trino --execute "SELECT source_system, status, count(*)
-  FROM governance.quality_results.dq_results GROUP BY 1, 2"
+docker exec k2-trino trino --execute "SELECT source_system, status, count(*) > 0
+  FROM governance.quality_results.dq_results GROUP BY 1, 2 ORDER BY 1, 2"
 ```
 
-<!-- VERIFY (ADR-046 rollout): both commands above on the live stack, outputs pasted. -->
+The rollout's run (`manual__2026-11-25T19:30:44`, success in 82 s) printed:
+
+```
+"dq"
+"information_schema"
+"quality_results"
+"staging"
+"system"
+
+"dbt","pass","true"
+"lake_audit","fail","true"
+"lake_audit","pass","true"
+```
+
+Trino is down while it restarts at step 5; `lake_ingest` does not use it and kept running.
+
 
 ---
 
@@ -318,4 +333,4 @@ docker exec k2-trino trino --execute "SELECT source_system, status, count(*)
 Airflow commands in a throwaway `k2-airflow:dbt-test` container; the test-results rows, the
 hook's failure and the maintenance of `dq.dbt_test_results` against branch
 `feat/governance-dq-results` on the live Trino, the governance build on `make test-dbt`'s; the
-rollout's "before" outputs read-only on the live stack, its steps that change the stack not run.
+rollout on the live stack 2026-11-25 (main at `61e25c2`), every step and output above.
