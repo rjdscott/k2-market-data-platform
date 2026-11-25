@@ -1,6 +1,6 @@
 # ADR-008: Eliminate Prefect — Replace with ClickHouse Materialized Views + Spring Scheduler
 
-**Status:** Partially rejected — Superseded by [ADR-014](ADR-014-spark-based-iceberg-offload.md), [ADR-017](ADR-017-iceberg-maintenance-pipeline.md) — see Outcome
+**Status:** Partially rejected, superseded by [ADR-014](ADR-014-spark-based-iceberg-offload.md), [ADR-017](ADR-017-iceberg-maintenance-pipeline.md), see Outcome; its orchestration clauses **superseded by [ADR-034](ADR-034-airflow-3-replaces-prefect.md)** (Airflow 3 schedules the lake in place of the Prefect it retained, 2026-11 cutover)
 **Date:** 2026-02-09
 **Decision Makers:** Platform Engineering Team
 **Category:** Orchestration

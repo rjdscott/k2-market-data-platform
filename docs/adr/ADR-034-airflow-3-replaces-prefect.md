@@ -251,3 +251,60 @@ the host, which is the trigger for a socket proxy and for an auth manager with r
 - Runbook: [airflow-scheduling.md](../runbooks/airflow-scheduling.md)
 - Code: `docker/airflow/`, `docker/lake-metrics/`, `docker/prometheus/rules/airflow-alerts.yml`,
   `scripts/airflow-shadow-check.sh`, `scripts/check-budget.py`
+
+---
+
+## Outcome (2026-11)
+
+The cutover pull request (plan phase P2, pull request 2) switched `lake_ingest` from the
+probe to the real command, unpaused `lake_maintenance` and stopped Prefect. The Decision
+holds. What landed differently from the text above and from the plan:
+
+**Prefect left the default profile at the cutover, not at the archive.** `prefect-server`
+and `prefect-worker` moved behind a compose `legacy` profile, which a plain
+`docker compose up -d` does not start, and were stopped there as the rollback
+([airflow-scheduling.md](../runbooks/airflow-scheduling.md#rollback-to-prefect)). So the
+budget table's "After the archive" row arrived at the cutover, and the archive changes no
+default sum. Declared limits after it (`python3 scripts/check-budget.py`, 2026-11-25):
+
+| | Services | CPU | GiB |
+|---|---|---|---|
+| Default, steady | 17 | 16.20 | 30.188 |
+| Default, bootstrap peak (gated) | 22 | 18.20 | 32.688 |
+| With `--profile legacy`, bootstrap peak (reported) | 24 | 19.70 | 34.188 |
+
+Headroom at the gated peak is 1.80 CPU and 3.312 GiB. The rollback with Airflow still up
+fits inside the ceiling, which is why it needs no budget change. With Prefect stopped,
+`airflow-scheduler` is the only running container that holds the Docker socket.
+
+**The gate order.** The plan runs `make gates` after the switch. The cutover ran before
+P0's parity re-pin, because that gate needs a complete UTC day and measures the data, not
+the scheduler: at the cutover `make gates` ran without `parity-ohlcv`, and both parity
+gates run after the re-pin.
+
+**Unpausing `lake_maintenance` ran a maintenance at once.** The shadow created it paused,
+and `is_paused_upon_creation` is read only for a DAG the database has never seen, so the
+cutover unpaused it by hand. With `catchup=False` the next run is the most recent past
+cron slot, which is the "runs the latest slot once" above: checked offline on 3.3.2, a
+`0 3 * * *` DAG unpaused at 05:07 UTC had its next run at 03:00 the same day. The cutover
+used that run as its lock test, where the plan had a manual trigger.
+
+**The rollback is documented, not drilled**, by the owner's decision, with a standing
+policy beside it: two scheduled `lake_ingest` runs failing in a row, or 20 minutes without
+a `raw.messages` commit outside a maintenance run, gets up to 30 minutes of diagnosis in
+place and then the rollback.
+
+**`scripts/airflow-shadow-check.sh` stayed** to the archive: the cutover's precondition
+cites it, and after the cutover its third check fails by design.
+
+Measured at the switch, filled from the live run:
+
+- MEASURE: cutover start and end, UTC, and the stack's commit.
+- MEASURE: the first real `lake_ingest` run: run id, duration, and the `raw.messages`
+  commit age after it.
+- MEASURE: the `lake_maintenance` run the unpause started: run id and duration, and the
+  `lake_ingest` runs during it (count, each task `skipped`, none `failed`).
+- MEASURE: the last lines of `make health` and `make lake-verify` after Prefect stopped.
+- MEASURE: the result of `make test`, `make parity-bars`, `make check-alerts` and
+  `make check-docs` at the cutover; the date and result of `make parity-ohlcv` and
+  `make parity-bars` after the P0 re-pin.
