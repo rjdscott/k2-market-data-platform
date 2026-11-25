@@ -63,7 +63,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.4.0
 
       - name: Ruff
-        run: uv run --no-project --with ruff ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py tests
+        run: uv run --no-project --with ruff ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots tests
 
       - name: Pytest
         run: uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q

@@ -1,4 +1,4 @@
-.PHONY: chaos help up down logs ps health gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product
+.PHONY: chaos help up down logs ps health gates test test-python test-rust test-airflow record-fixtures test-notebooks test-legacy-kotlin dev-up check-docs check-alerts build-capture lint lake-verify lake-rebuild test-clickhouse parity-ohlcv parity-bars notebooks notebooks-run test-k2gen generate new-product screenshots
 
 # Stamped into the capture binary's k2_capture_build_info gauge. `git describe`
 # and not `rev-parse`: an image built from a dirty tree must not claim to be the
@@ -118,7 +118,7 @@ check-alerts:  ## promtool: syntax-check every rule file and run the capture + l
 
 # platform/k2gen is checked with the ruff and mypy pinned in its own lock, as CI's contracts job does.
 lint:  ## Ruff over the v3 lake, the Airflow DAGs, scripts/ Python and the tests; ruff and mypy (strict) over platform/k2gen
-	uv run --no-project --with ruff ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py tests
+	uv run --no-project --with ruff ruff check docker/lake docker/airflow scripts/airflow_shadow_check.py scripts/screenshots tests
 	cd platform/k2gen && uv run --locked -q ruff check . && uv run --locked -q mypy
 
 lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, every layer level with its parent, double-run adds 0
@@ -149,6 +149,21 @@ new-product:  ## Scaffold contracts/DOMAIN/NAME/: a descriptor and one contract 
 
 notebooks-run:  ## Execute the five notebooks headless — the runnable check (needs the stack up)
 	cd notebooks && uv sync -q && for nb in 0*.ipynb; do uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.timeout=600 $$nb || exit 1; done
+
+# Read-only against the LIVE stack: logs in, opens pages, runs one SELECT as
+# ClickHouse's read-only quant user (scripts/screenshots/capture.py). Secrets
+# go from .env and the Airflow api-server into the container by NAME, never on
+# a command line. --network host so every URL is the localhost one an operator
+# opens; --user so the PNGs are not root-owned.
+screenshots:  ## Capture every dashboard and console into docs/images/dashboards/ and rewrite docs/operations/dashboards.md (LIVE stack; ONLY=04-lake redoes one)
+	docker build -q -f scripts/screenshots/Dockerfile -t k2-screenshots:1.65.2 scripts/screenshots >/dev/null
+	set -a && . ./.env && set +a && \
+	AIRFLOW_PASSWORD=$$(docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated \
+	  | python3 -c 'import json, sys; print(json.load(sys.stdin)["admin"])') && export AIRFLOW_PASSWORD && \
+	docker run --rm --network host --ipc=host --user $$(id -u):$$(id -g) -e HOME=/tmp \
+	  -e GRAFANA_PASSWORD -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD -e K2_QUANT_PASSWORD -e AIRFLOW_PASSWORD \
+	  -e K2_AIRFLOW_PORT -e K2_GIT_SHA -v "$(CURDIR)":/repo -w /repo k2-screenshots:1.65.2 \
+	  python3 scripts/screenshots/capture.py $(if $(ONLY),--only $(ONLY),)
 
 parity-ohlcv:  ## Three-way OHLCV parity (ClickHouse on-read, lake gold, DuckDB over silver) at tests/parity/pinned.json
 	scripts/parity-ohlcv.sh
