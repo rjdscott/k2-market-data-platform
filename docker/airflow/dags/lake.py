@@ -3,7 +3,7 @@ The lake schedules under Airflow 3 (ADR-034): `lake_ingest`, `lake_maintenance`
 and `lake_rebuild`. Three DAGs, written out by hand; there is no factory.
 
 Each one is a single task that runs one docker/lake script in the Spark
-container, exactly as the Prefect flows do (docker/lake/flows/lake_flows.py):
+container, exactly as the Prefect flows did (docker/lake/flows/lake_flows.py):
 
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/<script> ...
 
@@ -13,10 +13,9 @@ time through the flock in docker/lake/lock.py. What Airflow contributes is the
 schedule, one run at a time, a timeout that cannot leave the lock held, and
 metrics Prometheus can alert on.
 
-**Shadow mode.** While Prefect still writes, `lake_ingest` runs `ingest.py
---probe`, which reads the topics, writes nothing and takes no lock, on the real
-cron. `lake_maintenance` starts paused, so the nightly run stays Prefect's.
-The cutover pull request sets INGEST_PROBE to False and unpauses maintenance.
+Airflow is the only scheduler of the lake writes since the cutover (plan phase
+P2, pull request 2). Prefect is stopped behind the compose `legacy` profile as
+the documented rollback: docs/runbooks/airflow-scheduling.md.
 
 Rules every DAG here keeps, each from an incident on this stack:
 
@@ -44,9 +43,6 @@ LAKE_DIR = "/home/iceberg/lake"
 # os.EX_TEMPFAIL: ingest.py found the writer lock held. Not 2, which is also
 # what Python returns for a missing script and argparse for a bad flag.
 EXIT_LOCK_HELD = 75
-
-# Schedule shadow (plan phase P2, pull request 1). Flipped by the cutover.
-INGEST_PROBE = True
 
 # Runs inside the Spark container as `sh -c WRAPPER <pidfile> <script> <args>`.
 # The driver runs in the background so the shell can record its pid where
@@ -131,8 +127,8 @@ COMMON = dict(
 
 with DAG(
     dag_id="lake_ingest",
-    # Minutes 1, 6, 11 ... 56: the Prefect cron, so the shadow lands on the
-    # same slots (docker/lake/flows/deploy_lake.py has why it is offset).
+    # Minutes 1, 6, 11 ... 56: the cron Prefect ran, kept off the top of the
+    # minute that every other cron on a host crowds into.
     schedule="1-59/5 * * * *",
     # Two tries of 3600 s and the 60 s between them, plus slack.
     dagrun_timeout=timedelta(seconds=2 * 3600 + 60 + 240),
@@ -161,7 +157,6 @@ with DAG(
         task_id="ingest",
         script="ingest.py",
         args=[
-            *(["--probe"] if INGEST_PROBE else []),
             "{{ '--max-offsets-per-partition=%d' % params.max_offsets_per_partition"
             " if params.max_offsets_per_partition is not none else '' }}",
         ],
@@ -180,8 +175,12 @@ with DAG(
     dag_id="lake_maintenance",
     schedule="0 3 * * *",
     dagrun_timeout=timedelta(seconds=7200 + 300),
-    # Paused until the cutover: Prefect runs the nightly maintenance meanwhile.
-    is_paused_upon_creation=True,
+    # Read only for a DAG the database has never seen. A stack that ran the
+    # schedule shadow holds this one paused, and the cutover unpauses it by
+    # hand. Unpausing starts the most recent 03:00 slot at once (catchup=False
+    # still runs the latest slot), so the first maintenance follows within a
+    # scheduler loop.
+    is_paused_upon_creation=False,
     params={
         "days": Param(2, type="integer", minimum=1, description="compaction window, days back"),
         "retain_days": Param(7, type="integer", minimum=7, description="snapshot retention floor"),

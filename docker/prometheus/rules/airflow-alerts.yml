@@ -17,8 +17,8 @@
 #     go negative across one and stay quiet for that window. That is the
 #     accepted cost: one 15-minute blind spot after an exporter restart.
 #
-# NOT yet observed firing. During the schedule shadow lake_ingest runs
-# `ingest.py --probe`, which takes no lock and so can never be skipped.
+# NOT yet observed firing. Until the cutover lake_ingest ran a probe that took
+# no lock and so could never be skipped; the skip rule is live from then on.
 
 groups:
   - name: airflow
