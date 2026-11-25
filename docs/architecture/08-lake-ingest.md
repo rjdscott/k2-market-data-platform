@@ -82,6 +82,13 @@ never shares the 8 GiB container with an ingest.
 4. **The commit.** One `append` carrying `k2.job`, `k2.kafka-offsets` (merged over the
    previous map, a committed offset is never dropped), `k2.kafka-backlog` and
    `k2.max-kafka-ts`. Rows and position are the same atomic metadata swap in Lakekeeper.
+5. **The batch audit.** After the commit, never before it, `ingest.audit_batch` aggregates
+   `topic`, `partition` and `offset` over the files that one snapshot added and checks each
+   partition against step 2's range (after step 3's skip): rows equal `end - start`, the
+   first offset is `start`, the last is `end - 1`. A mismatch is a `batch_offsets` row in
+   `audit.checks` and `LakeIngestBatchAuditFailed`; a clean batch files nothing. It never
+   blocks or fails the run: holding the offsets would stop the archive reading while
+   retention evicts ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)).
 
 ### Stages 2–2e: incremental by parent snapshot
 
@@ -113,6 +120,9 @@ it is [rebuildable](03-data-engineering-concepts.md#rebuildability), so a bug in
 `maintenance.py` runs nightly and writes every assertion to `audit.checks`; any failure exits non-zero
 and `LakeAuditFailed` fires ([runbook](../runbooks/lake-audit-failed.md)). These are
 [audits as tests](03-data-engineering-concepts.md#audits-as-tests): assertions about last night's data, not about the code CI ran.
+The ingest's own findings land in the same table: `offset_gap`, `unresolvable_schema_id`,
+`bronze_parity`, and stage 1's per-batch `batch_offsets`, which sees within one run the hole
+`offset_continuity` would find at 03:00.
 
 | Audit | Asserts |
 |---|---|

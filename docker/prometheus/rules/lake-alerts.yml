@@ -91,6 +91,43 @@ groups:
             anything, because the three checks mean very different things.
           runbook: docs/runbooks/lake-audit-failed.md
 
+      # CRITICAL: the batch the ingest just committed is not the batch it planned.
+      #
+      # ADR-047. After stage 1 commits to raw.messages it aggregates the files
+      # that commit added, per topic and partition (row count, first and last
+      # offset), against the offset range it read. A mismatch is a
+      # batch_offsets row in lake.audit.checks plus a k2.batch-audit-failures
+      # count on that audit commit; a clean batch files nothing. metrics.py
+      # ages the count out after 15 minutes, as it does for the other ingest
+      # findings, so one bad batch is a ~15-minute pulse and a run of bad
+      # batches holds it firing.
+      #
+      # Critical, and with no `for`, because the commit has already moved the
+      # offsets past the batch: no later run reads a missing record again, and
+      # Redpanda keeps it only until raw retention (48 h or 2 GiB per partition,
+      # docker/redpanda/init.sh) evicts it. The input is a row filed by the
+      # ingest, not a sample, so there is nothing to debounce.
+      - alert: LakeIngestBatchAuditFailed
+        expr: |
+          k2_lake_batch_audit_failures_total > 0
+        labels:
+          severity: critical
+          component: lake
+          tier: cold
+        annotations:
+          summary: "{{ $value }} finding(s) from the last ingest's batch audit"
+          description: |
+            Stage 1 committed a batch to raw.messages whose rows do not match
+            the offset range it read: a row count, a first or a last offset
+            differs. Each partition is a batch_offsets row in lake.audit.checks
+            with the planned and the found range; scope lake.raw.messages means
+            the audit itself could not run.
+
+            The committed offsets are already past the batch, so no later run
+            reads those records again. Re-read them while Redpanda still holds
+            them: the runbook has the order.
+          runbook: docs/runbooks/lake-ingest-batch-audit.md
+
       # CRITICAL: the disk that holds the lake is nearly full.
       #
       # raw.messages is never expired by design (requirements clarification Q8),

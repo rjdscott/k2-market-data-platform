@@ -66,6 +66,7 @@ no longer exists, do not follow them against this stack.
 | [lake-recovery.md](./lake-recovery.md) | Rebuilding ClickHouse from the lake, Redpanda replay as a cold start, Lakekeeper down, MinIO down, an ingest killed mid-run, the nightly rewrite not running | `ClickHouseDown`, `LakeIngestFailed`, `LakeExporterDown`, `LakeExporterStalled`, `LakeScrapeErrors`, `LakeCompactionStale` |
 | [lake-disk-usage-high.md](./lake-disk-usage-high.md) | Host disk at 80 % or 90 %. The archive is kept forever, so this is a capacity decision with a lead time, **never** a TTL | `LakeDiskUsageHigh`, `LakeDiskUsageCritical` |
 | [lake-ingest-lag.md](./lake-ingest-lag.md) | Ingest behind cadence, scheduler stopped, `failOnDataLoss`, small files accumulating | `LakeIngestLagHigh`, `LakeCommitAgeHigh`, `LakeIngestFailed` |
+| [lake-ingest-batch-audit.md](./lake-ingest-batch-audit.md) | A batch stage 1 just committed does not match the offset range it read: re-read the missing records while Redpanda still holds them, or record them as gone. Written with the check; the read-only steps run 2026-11-25 on healthy data, the re-read and the record not yet run, no MTTR | `LakeIngestBatchAuditFailed` |
 | [lake-audit-failed.md](./lake-audit-failed.md) | The nightly audit failed: offset continuity, duplicate identifiers, or venue sequence gaps, six checks across four kinds, one of them informational | `LakeAuditFailed` |
 
 > **Two of the lake failures are investigations, not repairs**, and the runbooks say so on

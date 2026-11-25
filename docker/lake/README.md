@@ -24,7 +24,7 @@ compares them before the old path is deleted.
 | `offsets.py` | Pure offset bookkeeping. The exactly-once contract, and the only file with no Spark import |
 | `wire.py` | The Confluent framing, as a Python parser and as the Spark SQL the executors run |
 | `catalog.py` | Snapshot bookkeeping, the registry fetch by id, and how a running job files an audit row. Shared by the next three |
-| `ingest.py` | Stage 1 Kafka → `raw.messages`, stage 2 `raw.messages` → per-venue `bronze.<venue>_*`, then stages 2c to 2e: silver, gold, books, in the same run |
+| `ingest.py` | Stage 1 Kafka → `raw.messages` and the batch audit of what it committed ([ADR-047](../../docs/adr/ADR-047-ingest-batch-audit-after-publish.md)), stage 2 `raw.messages` → per-venue `bronze.<venue>_*`, then stages 2c to 2e: silver, gold, books, in the same run |
 | `bronze.py` | Stage 2b: the six per-venue tables, decoded from the venue JSON in `raw.*`, vendor field names and types as sent |
 | `silver.py` | Stage 2c: `silver.trades_<venue>`, bronze frames typed, one row per trade, canonical symbol from the registry, replay / gap / precision flags |
 | `instruments.py` | The registry (`config/instruments.yaml`) as silver needs it: native → canonical, failing loudly on an unknown symbol |
@@ -60,7 +60,7 @@ flowchart TB
   RAW -.snapshot summaries.-> MET[metrics.py<br/>lake-metrics :8000]
   BR -.-> MET
   AUD -.-> MET
-  MET --> PROM[Prometheus<br/>12 lake alerts]
+  MET --> PROM[Prometheus<br/>14 lake alerts]
 ```
 
 Stage 1 archives all nine topics. Stage 2 decodes `trades.*` and `book.*` into
@@ -454,6 +454,7 @@ answered without walking the payload:
 |---|---|---|
 | which offsets did this run consume? | `max(offset)` over the written rows, which needed the same `latest` twice, which needed the cache | `bounded_offsets` decides them up front; the read is pinned on both ends |
 | how many rows did it write? | `df.count()`, a second full evaluation | `added-records` from the commit's own snapshot summary |
+| did it write the range it planned? | nothing until the nightly `offset_continuity` | the batch audit, after the commit, over three columns of the files the commit added (below) |
 
 **And a run whose start offsets are below what the broker still holds does not
 read at all.** `offsets.evicted` compares the two before Spark opens a
@@ -469,8 +470,35 @@ procedure and the 2026-08-26 occurrence it was written from.
 
 What is left is one pass for the write and one single-column pass for
 `max(kafka_ts)`, which has to be known *before* the commit because it rides on
-it. `spark.sql.inMemoryColumnarStorage.batchSize` is pinned to 256 as a backstop
+it, and after the commit the batch audit. `spark.sql.inMemoryColumnarStorage.batchSize` is pinned to 256 as a backstop
 against the mistake being reintroduced, not because anything caches today.
+
+### The batch audit, after the commit
+
+Once the append lands, `ingest.audit_batch` checks the batch against its own plan, per
+topic and partition: rows written equal `end - start`, the first offset is `start` and the
+last is `end - 1` (`offsets.batch_audit`, pure, `tests/test_lake_batch_audit.py`). The
+plan is the one the read used, after any `--accept-data-loss` skip, so an eviction already
+filed as `offset_gap` is never reported again. It reads Iceberg, not Kafka: an incremental
+read of the one snapshot just committed, projecting `topic`, `partition` and `offset`,
+grouped and collected, so no payload is decoded and nothing is cached.
+
+**It never blocks the commit**
+([ADR-047](../../docs/adr/ADR-047-ingest-batch-audit-after-publish.md)). The commit has
+already happened, a mismatch is a finding, and an audit that raises is a finding too, not a
+failed run: holding the offsets would stop the archive reading while raw retention keeps
+evicting. A mismatch writes one `batch_offsets` row per partition into `audit.checks`
+(`job = 'ingest'`, scope `<topic>/<partition>`, `observed` = planned minus found, `detail`
+with both ranges) and `k2.batch-audit-failures` on that commit, which `metrics.py` serves as
+`k2_lake_batch_audit_failures_total` for `LakeIngestBatchAuditFailed`. A clean batch files
+nothing; the run logs `stage 1: batch audit 0 failure(s) in <s>s`. Recovery is
+[lake-ingest-batch-audit.md](../../docs/runbooks/lake-ingest-batch-audit.md).
+
+What it costs per run: two metadata queries and one small Spark job. The same aggregate
+over the newest live batch, run through Trino as a proxy, executed in 0.58 s
+(`EXPLAIN ANALYZE` on 2026-11-25, against the files of one ingest snapshot found through
+`"messages$entries"`). The Spark figure is the log line above. <!-- VERIFY: record the first
+deployed runs' `batch audit ... in <s>s` here -->
 
 ### Measured, on the live backlog
 
