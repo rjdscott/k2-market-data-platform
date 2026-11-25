@@ -69,7 +69,7 @@ flowchart TB
     RAW --> BR --> SV --> GD
   end
   N["DuckDB notebooks"]:::nb
-  T["Trino 484 · SQL over the lake<br/>writes namespace marts only"]:::nb
+  T["Trino 484 · SQL over the lake, read-only<br/>dbt marts in warehouse marts"]:::nb
   O["Prometheus · 28 rules<br/>Grafana · 6 dashboards"]:::ob
 
   E --> F --> R

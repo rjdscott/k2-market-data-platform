@@ -10,7 +10,7 @@ are listed below rather than papered over.
 make test          # everything: Python + Rust
 make test-python   # contract, parity, lake-offset and wire-format tests (needs uv)
 make test-rust     # capture unit + replay integration tests (runs in rust:1-bookworm)
-make test-trino    # Trino's etc/ starts, and rules.json holds: marts read-write, the rest read-only
+make test-trino    # Trino's etc/ starts; catalog lake refuses every commit, marts takes writes
 ```
 
 ## Inventory
@@ -74,7 +74,7 @@ tests `legacy/v2-kotlin/`.
 | **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain, runs the 68 tests |
 | **Python (lake + tests)** | `ruff check` then `pytest tests -q` under `uv`, runs the 299 tests |
 | **Docker build** | 3-way matrix: Prefect worker, Spark, capture, with GHA layer caching. Every leg builds from the repo root. Catches broken build contexts, not runtime behaviour |
-| **Trino (access rules)** | `bash scripts/trino-rules-test.sh` (`make test-trino`): the pinned `trinodb/trino` with `docker/trino/etc`, no network. Starts the real `etc/` once (a misspelt property fails the start), then swaps catalog `lake` for the memory connector and asserts `rules.json`: `marts` read-write, `CREATE SCHEMA`, `CREATE TABLE`, `CREATE VIEW`, rename into and `DROP SCHEMA` of any other schema denied |
+| **Trino (access rules)** | `bash scripts/trino-rules-test.sh` (`make test-trino`): the pinned `trinodb/trino` with `docker/trino/etc`, no network, three starts. The real `etc/` (a misspelt property fails the start; `lake` must be `read_only`). A local Iceberg catalog read-only at the connector: `optimize`, `rollback_to_snapshot`, `expire_snapshots`, `remove_orphan_files`, INSERT, DELETE and DROP denied, while its writable twin runs `optimize`. Memory catalogs named `lake` and `marts` under `rules.json`: DDL and writes denied in `lake`, allowed in `marts` |
 | **Compose (config validation)** | `docker compose --env-file .env.example config -q`, then `python3 scripts/check-budget.py`: prints the steady default, bootstrap default and bootstrap `--profile governance` and `--profile legacy` limit sums and fails when the bootstrap default is over 24 CPU / 42 GiB ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)); fails any service in any config without a CPU and memory limit (it would escape the budget and nothing else would notice), any untagged or `latest` image, and any unpinned `FROM` or `pip install` in a Dockerfile under `docker/` or `services/` |
 | **Docs** | `bash scripts/check-docs.sh`, ten failing gates: links, forbidden words, promtool check and test, runbook annotation paths and presence, capacity-model gate, no plan checkboxes, no em-dash on lines added since `origin/main` (so the job checks out with full history), fixture and sample data synthetic or listed in `NOTICE`. Mermaid width only warns |
 | **Security (Trivy)** | Filesystem scan for CRITICAL/HIGH findings, SARIF uploaded to GitHub code scanning. `legacy/` is skipped |

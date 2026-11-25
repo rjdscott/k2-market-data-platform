@@ -4,8 +4,9 @@ The working contract for this repo. K2 is a single-host crypto market data
 platform: Rust capture (`services/capture-rust/`) → Redpanda → a Spark batch
 ingest into an Iceberg lake on MinIO under Airflow 3 (ADR-034; Prefect waits,
 not running, behind `--profile legacy` as the rollback), catalogued by Lakekeeper.
-Trino 484 serves SQL over the lake and writes only namespace `marts`, for the
-dbt marts (ADR-035); Spark keeps every job from raw to gold.
+Trino 484 serves SQL over the lake through a catalog that is read-only at the
+connector, and writes only the dbt marts, in a second Lakekeeper warehouse
+`marts` (ADR-035); Spark keeps every job from raw to gold.
 The v2 ClickHouse medallion is **gone**: the Kotlin handlers that fed it retired
 in ADR-019 and the `k2.*` database was dropped at the Phase E cutover on
 2026-08-27 — `SHOW DATABASES` lists `gold` and nothing else. Its DDL is archived,
@@ -127,7 +128,7 @@ make test          # everything CI runs: python + rust + clickhouse + trino
 make test-python   # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 make test-rust     # rust:1-bookworm container; no local cargo needed
 make test-clickhouse  # the gold DDL + assertions on a throwaway 24.3 server
-make test-trino    # docker/trino/etc starts; rules.json: marts read-write, the rest read-only
+make test-trino    # docker/trino/etc starts; catalog lake refuses every commit, marts takes writes
 ```
 
 - The v2 Kotlin tier retired to `legacy/v2-kotlin/` (ADR-019). Its tests are
