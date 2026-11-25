@@ -47,7 +47,7 @@ cd k2-market-data-platform
 cp .env.example .env            # set every change-me value: openssl rand -hex 24 each;
                                 # LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 set -a && . ./.env && set +a
-make up                         # scripts/check-env.sh, then docker compose up -d;
+make up                         # scripts/check-env.py, then docker compose up -d;
                                 # first run pulls 9 images and builds 3
 make health                     # every service healthy, a message on every venue in the last 2 min, lake committing
 docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1

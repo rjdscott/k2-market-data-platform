@@ -160,7 +160,7 @@ git clone https://github.com/rjdscott/k2-market-data-platform.git && cd k2-marke
 cp .env.example .env            # set every change-me value: openssl rand -hex 24 each;
                                 # LAKEKEEPER_ENCRYPTION_KEY: openssl rand -base64 32
 set -a && . ./.env && set +a
-make up                         # refuses a placeholder secret (scripts/check-env.sh), then
+make up                         # refuses a placeholder secret (scripts/check-env.py), then
                                 # docker compose up -d; first run builds the capture, airflow,
                                 # lake-metrics and spark images
 make health                     # every service healthy, a message on every venue in the last

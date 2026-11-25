@@ -23,7 +23,7 @@ if [ ! -f docker-compose.yml ] || [ ! -f .env ]; then
 fi
 result "(a) preflight" "PASS (docker-compose.yml + .env present)"
 # Read-only, so it runs under --dry-run too. Names variables, never values.
-if ! bash scripts/check-env.sh; then
+if ! python3 scripts/check-env.py; then
   result "(a) preflight" "FAIL (.env holds a guessable credential, see check-env above)"
   exit 1
 fi
