@@ -308,25 +308,25 @@ table, or a scheduled table if one is ever declared.
 
 [Chapter 17](17-scale-out-path.md) maps MinIO to S3 and Lakekeeper to tasks on ECS with a
 Multi-AZ PostgreSQL. A warehouse is a bucket plus a key prefix, so each domain's warehouse would
-move as a prefix. Chapter 17 predates Trino and the domain warehouses and does not place them.
-One gap to know: the Trino catalog files hard-code the Lakekeeper URL, the MinIO endpoint and
-region `local-01` (`lake.properties`, `generate.py`), where `docker/lake/` reads each from the
-environment.
+move as a prefix. Chapter 17 places Trino on ECS and the domain warehouses as prefixes of the
+lake's bucket (§3, §4), and rebuilds the marts after a region loss rather than replicating
+them (§7). One gap to know, also in its §3.1: the Trino catalog files hard-code the Lakekeeper
+URL, the MinIO endpoint and region `local-01` (`lake.properties`, `generate.py`), where
+`docker/lake/` reads each from the environment.
 
 ## See it yourself
 
-Read-only, against the running stack, on 2026-11-25, before the governance domain's rollout:
-its catalog and warehouse are not in these outputs yet. Counts grow with every commit.
+Read-only, against the running stack, on 2026-11-25; the two catalog listings re-run on
+2026-11-26, after the governance domain's rollout. Counts grow with every commit.
 
 ```bash
 docker exec k2-trino trino --execute 'SHOW CATALOGS'
-#   "fx_reference" "lake" "market_analytics" "market_capture" "reference_data" "system"
+#   "fx_reference" "governance" "lake" "market_analytics" "market_capture" "reference_data" "system"
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM lake'
 #   "audit" "bronze" "gold" "information_schema" "raw" "silver" "system"
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM market_analytics'
-#   "candles" "delayed_candles" "information_schema" "staging" "system" "venue_quality"
-#                                                     one schema per mart product, and dbt's staging views
-#   (and "dq" after the first build with the test-results hook)
+#   "candles" "delayed_candles" "dq" "information_schema" "staging" "system" "venue_quality"
+#                                     one schema per mart product, dbt's staging views, the test results
 docker exec k2-trino trino --execute \
   "SELECT max(close_time) <= current_timestamp - INTERVAL '20' MINUTE FROM market_analytics.delayed_candles.ohlcv_delayed_20m"
 #   "true"                                            the delay holds
