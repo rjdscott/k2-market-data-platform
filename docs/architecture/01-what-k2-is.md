@@ -9,11 +9,11 @@
 K2 is a market data platform for quantitative research. It takes live trades and order
 books from three crypto exchanges over public WebSocket feeds, archives every frame
 verbatim to an Iceberg lake, derives typed and canonical layers from that archive, and
-serves the canonical layer from ClickHouse for dashboards and fast queries. It runs on one
-host inside a declared ceiling of 20 CPU / 36 GiB at the bootstrap peak
-([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)): as deployed, 18 long-running services at
-17.30 CPU / 30.312 GiB of limits, plus five one-shot init containers, with Prefect kept
-behind `--profile legacy` as the rollback
+serves the canonical layer from ClickHouse for dashboards and fast queries, with Trino for
+SQL over the lake. It runs on one host inside a declared ceiling of 25 CPU / 48 GiB at the
+bootstrap peak ([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)): as deployed, 19
+long-running services at 19.30 CPU / 34.312 GiB of limits, plus five one-shot init
+containers, with Prefect kept behind `--profile legacy` as the rollback
 ([docker-resources.md](../operations/docker-resources.md)).
 
 Three properties define it, and the rest of the book is their consequences:

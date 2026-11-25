@@ -4,6 +4,10 @@ The working contract for this repo. K2 is a single-host crypto market data
 platform: Rust capture (`services/capture-rust/`) → Redpanda → a Spark batch
 ingest into an Iceberg lake on MinIO under Airflow 3 (ADR-034; Prefect waits,
 not running, behind `--profile legacy` as the rollback), catalogued by Lakekeeper.
+Trino 484 serves SQL over the lake through a catalog that is read-only at the
+connector (ADR-035), and writes only the dbt marts, in one Lakekeeper warehouse
+per data domain generated from `contracts/domains.yaml` by `make generate`
+(ADR-044); Spark keeps every job from raw to gold.
 The v2 ClickHouse medallion is **gone**: the Kotlin handlers that fed it retired
 in ADR-019 and the `k2.*` database was dropped at the Phase E cutover on
 2026-08-27 — `SHOW DATABASES` lists `gold` and nothing else. Its DDL is archived,
@@ -107,8 +111,9 @@ considered before committing*.
   A lake table's partitioning or sort also lives in its contract under
   `contracts/`: `make test-k2gen` fails until both move, then `make generate`.
 - **Resource-limit changes** update the ADR-010 Outcome section *and* the
-  summary comment in `docker-compose.yml`. The 16 CPU / 40 GB single-host
-  budget is a stated constraint of the project, not an accident.
+  summary comment in `docker-compose.yml`. The 25 CPU / 48 GiB ceiling at the
+  bootstrap peak (ADR-045, gated by `scripts/check-budget.py`) is a stated
+  constraint of the project, not an accident.
 - **Bind-mount gotcha:** file-level bind mounts pin the inode. Editing
   `config/instruments.yaml` in place needs
   `docker compose up -d --force-recreate --no-deps <service>`; `docker restart`
@@ -120,10 +125,11 @@ considered before committing*.
 ## Tests
 
 ```bash
-make test          # everything CI runs: python + rust + clickhouse
+make test          # everything CI runs: python + rust + clickhouse + trino
 make test-python   # uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 make test-rust     # rust:1-bookworm container; no local cargo needed
 make test-clickhouse  # the gold DDL + assertions on a throwaway 24.3 server
+make test-trino    # docker/trino/etc starts; lake refuses every commit; only a domain's writer changes its catalog
 ```
 
 - The v2 Kotlin tier retired to `legacy/v2-kotlin/` (ADR-019). Its tests are

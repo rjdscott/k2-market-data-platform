@@ -1,0 +1,116 @@
+{
+  "catalogs": [
+    {
+      "catalog": "system",
+      "allow": "read-only"
+    },
+    {
+      "catalog": "lake|fx_reference|market_analytics|market_capture|reference_data",
+      "allow": "all"
+    }
+  ],
+  "schemas": [
+    {
+      "user": "dbt_fx_reference",
+      "catalog": "fx_reference",
+      "owner": true
+    },
+    {
+      "user": "dbt_market_analytics",
+      "catalog": "market_analytics",
+      "owner": true
+    },
+    {
+      "user": "dbt_market_capture",
+      "catalog": "market_capture",
+      "owner": true
+    },
+    {
+      "user": "dbt_reference_data",
+      "catalog": "reference_data",
+      "owner": true
+    },
+    {
+      "owner": false
+    }
+  ],
+  "tables": [
+    {
+      "user": "dbt_fx_reference",
+      "catalog": "fx_reference",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_market_analytics",
+      "catalog": "market_analytics",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_market_capture",
+      "catalog": "market_capture",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "user": "dbt_reference_data",
+      "catalog": "reference_data",
+      "privileges": [
+        "SELECT",
+        "INSERT",
+        "DELETE",
+        "UPDATE",
+        "OWNERSHIP",
+        "GRANT_SELECT"
+      ]
+    },
+    {
+      "privileges": [
+        "SELECT",
+        "GRANT_SELECT"
+      ]
+    }
+  ],
+  "catalog_session_properties": [
+    {
+      "property": "expire_snapshots_min_retention|remove_orphan_files_min_retention",
+      "allow": false
+    },
+    {
+      "allow": true
+    }
+  ],
+  "queries": [
+    {
+      "allow": [
+        "execute"
+      ]
+    }
+  ],
+  "system_information": [
+    {
+      "allow": [
+        "read"
+      ]
+    }
+  ]
+}

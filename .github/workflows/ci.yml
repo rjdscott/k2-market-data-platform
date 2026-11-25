@@ -111,6 +111,21 @@ jobs:
       # profile. Only 10-gold-tables.sql — the Kafka feeds need a broker.
       - run: bash scripts/clickhouse-schema-test.sh
 
+  trino:
+    name: Trino (access rules)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The pinned image from docker-compose.yml with docker/trino/etc, no
+      # network: the real etc/ starts with one catalog per domain in
+      # contracts/domains.yaml; on local Iceberg catalogs from the same
+      # generator, only a domain's writer changes its catalog with SQL, nothing
+      # writes `lake`, and an unnamed user writes nowhere.
+      - run: bash scripts/trino-rules-test.sh
+
   docker:
     name: Docker build (${{ matrix.name }})
     runs-on: ubuntu-latest
@@ -192,7 +207,7 @@ jobs:
       # Prints the steady default, bootstrap default and bootstrap with
       # --profile governance and with --profile legacy (the Prefect rollback)
       # limit sums, and fails when the bootstrap default is over the
-      # 20 CPU / 36 GiB ADR-034 states. Also fails a service in any
+      # 25 CPU / 48 GiB ADR-045 states. Also fails a service in any
       # config with no CPU or memory limit (it would escape the budget and
       # nothing else would notice), an untagged or `latest` image, and an
       # unpinned FROM or pip install in a Dockerfile. Stdlib only.

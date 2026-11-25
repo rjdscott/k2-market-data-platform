@@ -1,7 +1,7 @@
 # K2 Market Data Platform v2 - Consolidated Architecture
 # Version: 2.0.0-consolidated
 # Last Updated: 2026-02-12
-# Target: 20 CPU / 36 GiB at the bootstrap peak (ADR-034; was 16 CPU / 40 GB, ADR-010)
+# Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045; was 20 CPU / 36 GiB, ADR-034, and 16 CPU / 40 GB, ADR-010)
 
 #############################################################################
 # NETWORKS
@@ -1099,6 +1099,62 @@ services:
       com.k2.version: "v3"
 
 #############################################################################
+# SERVICES - SQL OVER THE LAKE (ADR-035)
+#############################################################################
+  # One Trino node, coordinator and worker in one JVM, over the Lakekeeper REST
+  # catalog with the static MinIO keys (docker/trino/README.md). Catalog `lake`
+  # (warehouse k2) is read-only at the connector; each data domain has its own
+  # writable catalog and warehouse, generated from contracts/domains.yaml, and
+  # writer `dbt_<domain>` (ADR-044). Checked by `make test-trino`. Identity is
+  # the X-Trino-User header, not authenticated, so the port is loopback only.
+  #
+  # Heap 2816M (etc/jvm.config) under the 4G limit leaves 1.25 GiB for
+  # metaspace, code cache, thread stacks and direct buffers. The 2026-11-25 spike
+  # ran every single query at 1 CPU / 2 GiB; the rest is for concurrent dbt
+  # threads (ADR-035).
+  trino:
+    image: trinodb/trino:484
+    container_name: k2-trino
+    hostname: trino
+    # Off the capture cores, like the other two engines.
+    cpuset: ${K2_HEAVY_CPUSET-0-11}
+    networks:
+      - k2-net
+    ports:
+      - "127.0.0.1:${K2_TRINO_PORT:-8088}:8080"
+    volumes:
+      - ./docker/trino/etc:/etc/trino:ro
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      lake-init:   # creates the domain warehouses
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "/usr/lib/trino/bin/health-check"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    labels:
+      com.k2.service: "query"
+      com.k2.tier: "cold"
+      com.k2.version: "v3"
+
+#############################################################################
 # SERVICES - TOPIC INITIALIZATION
 #############################################################################
 
@@ -1322,6 +1378,7 @@ services:
 # spark-iceberg         | 3.0       | 8G           | Batch engine (lake ingest + maintenance)
 # lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018)
 # lake-metrics          | 0.1       | 128M         | v3 lake alerts exporter (:8000)
+# trino                 | 2.0       | 4G           | SQL over the lake, dbt marts (ADR-035; 127.0.0.1:8088)
 # capture-binance       | 0.25      | 256M         | Rust capture, Binance (12 pairs, trades + L2)
 # capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (11 pairs, trades + L2)
 # capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (11 pairs, trades + L2)
@@ -1330,7 +1387,7 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (18 long-running) | 17.30 CPU | 30.312 GiB | v3 capture + lake, Airflow schedules
+# STEADY STATE (19 long-running) | 19.30 CPU | 34.312 GiB | v3 capture + lake, Airflow schedules, Trino
 #
 # One-shots are NOT free. They declare limits and they run concurrently with
 # the steady state at boot, so the budget that matters at `docker compose up` is
@@ -1344,21 +1401,21 @@ services:
 #   ----------------------------------------------------------------------------
 #   one-shot subtotal  2.0  | 2.5G
 #
-# Bootstrap peak: 19.30 CPU / 32.812 GiB, all 23 default-profile services,
-# against the 20 CPU / 36 GiB ceiling ADR-034 sets at the bootstrap peak
-# (ADR-010's 16 CPU / 40 GB clause is superseded). scripts/check-budget.py
-# fails CI over it. Headroom: 0.70 CPU and 3.188 GiB. cAdvisor took 0.10 CPU /
-# 128M of what ADR-034 left.
+# Bootstrap peak: 21.30 CPU / 36.812 GiB, all 24 default-profile services,
+# against the 25 CPU / 48 GiB ceiling ADR-045 sets at the bootstrap peak
+# (superseding ADR-034's 20 CPU / 36 GiB, which superseded ADR-010's 16 CPU /
+# 40 GB). scripts/check-budget.py fails CI over it. Headroom: 3.70 CPU and
+# 11.188 GiB. The host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay
+# outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
 #
 # `legacy` profile, the Prefect rollback, not started by default:
 #
 #   prefect-server     1.0  | 1G    Orchestration UI/API (Prefect 3.x)
 #   prefect-worker     0.5  | 512M  Workflow executor (Prefect 3.x)
 #
-# With it the peak is 20.80 CPU / 34.312 GiB across 25, over the CPU ceiling: the
-# profile is reported, not gated, and a rollback needs Airflow stopped, not at
-# full limits. Both go at the archive pull request. The Airflow limits are the plan's estimates
-# until ADR-034's measured figures replace them.
+# With it the peak is 22.80 CPU / 38.312 GiB across 26, inside the ceiling but
+# reported, not gated. Both go at the archive pull request. The Airflow limits
+# are the plan's estimates until ADR-034's measured figures replace them.
 #
 # History: retiring the three Kotlin feed handlers (ADR-019) gave back the
 # 1.5 CPU / 1.5 GB they declared, and deleting docker/offload/ took its metrics
@@ -1371,8 +1428,8 @@ services:
 #
 #   python3 scripts/check-budget.py
 #
-# Target: 20 CPU / 36 GiB at the bootstrap peak (ADR-034)
+# Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-25 (spark-iceberg 2.0 -> 3.0 CPU, ADR-034 Outcome; before it the ADR-034 cutover)
+# Last updated: 2026-11-25 (trino 2.0 CPU / 4G and the 25 CPU / 48 GiB ceiling, ADR-045; before it spark-iceberg 2.0 -> 3.0 CPU)
 #############################################################################

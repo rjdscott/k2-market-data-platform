@@ -45,6 +45,7 @@ flowchart TB
     ICE[("Iceberg lake · Lakekeeper v0.13.9 + MinIO<br/>raw · bronze · silver · gold · audit")]
     CH["ClickHouse 24.3 LTS · gold<br/>live via Kafka engine · reloaded from lake"]
     NB["DuckDB notebooks"]
+    TR["Trino 484 · SQL over the lake, read-only<br/>dbt marts · one warehouse per domain"]
     subgraph OBS["Observability"]
         PR["Prometheus v3.2 · 28 rules"]
         GR["Grafana 11.5 · 6 dashboards"]
@@ -59,6 +60,7 @@ flowchart TB
     MNT --> ICE
     ICE -.->|"iceberg()"| CH
     ICE --> NB
+    ICE --> TR
     CAP & CH & ING -.-> PR --> GR
 
     classDef ex fill:#e5e7eb,stroke:#4b5563,color:#1f2937
@@ -73,9 +75,15 @@ flowchart TB
     class RP rp
     class CH ch
     class ING,MNT sp
-    class ICE,NB lk
+    class ICE,NB,TR lk
     class PR,GR ob
 ```
+
+Trino ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)) reads the lake through a catalog
+that is read-only at the connector, and writes only the dbt marts, each in its data domain's own
+Lakekeeper warehouse, generated from `contracts/domains.yaml`
+([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md),
+[chapter 19](19-lakehouse-and-domain-warehouses.md)).
 
 Three invariants hold the shape together:
 
@@ -137,7 +145,7 @@ forensics. Nothing in the notebooks reads ClickHouse.
 
 ## Resource footprint
 
-18 long-running services at 17.30 CPU / 30.312 GiB of limits, plus five one-shot init containers;
+19 long-running services at 19.30 CPU / 34.312 GiB of limits, plus five one-shot init containers;
 per-service table and the command that produces it in
 [operations/docker-resources.md](../operations/docker-resources.md). Budget and reasoning per limit:
 [ADR-010](../adr/ADR-010-resource-budget.md).

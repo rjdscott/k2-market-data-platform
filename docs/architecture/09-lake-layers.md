@@ -41,6 +41,8 @@ only from the one above it and rebuilt from `raw.messages` on demand
 cached answer, never an original. The boundary between two layers is where a question gets
 answered: normalisation waits for silver, dedup waits for gold. Columns: [schema-design.md](13-schema-design.md);
 partitioning: [partitioning-strategy.md](14-partitioning-strategy.md); rows: [lake-ingest.md](08-lake-ingest.md).
+What a catalog and a warehouse are, and where marts live beside these layers, is
+[chapter 19](19-lakehouse-and-domain-warehouses.md).
 
 ## How it works
 

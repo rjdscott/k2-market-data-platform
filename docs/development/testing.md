@@ -10,6 +10,7 @@ are listed below rather than papered over.
 make test          # everything: Python + Rust
 make test-python   # contract, parity, lake-offset and wire-format tests (needs uv)
 make test-rust     # capture unit + replay integration tests (runs in rust:1-bookworm)
+make test-trino    # Trino's etc/ starts; lake refuses every commit; only a domain's writer changes its catalog
 ```
 
 ## Inventory
@@ -63,9 +64,9 @@ uv run --no-project --with ruff ruff check docker/lake tests
 
 ## CI
 
-[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs six jobs on every PR and
-on pushes to `main`: **rust**, **python**, **docker** (×3 matrix), **compose**, **docs**,
-**security**. The **kotlin** job was deleted with the handlers, nothing in CI builds or
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs nine jobs on every PR and
+on pushes to `main`: **rust**, **python**, **contracts**, **clickhouse**, **trino**,
+**docker** (a matrix), **compose**, **docs**, **security**. The **kotlin** job was deleted with the handlers, nothing in CI builds or
 tests `legacy/v2-kotlin/`.
 
 | Job | What it does |
@@ -73,7 +74,8 @@ tests `legacy/v2-kotlin/`.
 | **Rust (capture)** | `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` on a pinned 1.98.0 toolchain, runs the 68 tests |
 | **Python (lake + tests)** | `ruff check` then `pytest tests -q` under `uv`, runs the 299 tests |
 | **Docker build** | 3-way matrix: Prefect worker, Spark, capture, with GHA layer caching. Every leg builds from the repo root. Catches broken build contexts, not runtime behaviour |
-| **Compose (config validation)** | `docker compose --env-file .env.example config -q`, then `python3 scripts/check-budget.py`: prints the steady default, bootstrap default and bootstrap `--profile governance` limit sums and fails when the steady default is over 16 CPU / 40 GB; fails any service in either config without a CPU and memory limit (it would escape the ADR-010 budget and nothing else would notice), any untagged or `latest` image, and any unpinned `FROM` or `pip install` in a Dockerfile under `docker/` or `services/` |
+| **Trino (access rules)** | `bash scripts/trino-rules-test.sh` (`make test-trino`): the pinned `trinodb/trino` with `docker/trino/etc`, no network, two starts. The real `etc/`: a misspelt property fails the start, the catalogs must be `lake`, `system` and one per domain in `contracts/domains.yaml`, only `lake` is on warehouse `k2` and it is `read_only`. Then local Iceberg catalogs from the same generator: each domain's writer creates, inserts and drops in its own catalog; the next domain's writer and an unnamed user are denied every SQL write there and in `lake`; `optimize`, `rollback_to_snapshot`, `expire_snapshots`, `remove_orphan_files` and `CALL` through `lake` denied, and `CALL` through a domain catalog; nobody may set the two retention-floor session properties, so an expire at `0s` fails; a user sees only its own queries; the known table-procedure gap between domains asserted (ADR-044) |
+| **Compose (config validation)** | `docker compose --env-file .env.example config -q`, then `python3 scripts/check-budget.py`: prints the steady default, bootstrap default and bootstrap `--profile governance` and `--profile legacy` limit sums and fails when the bootstrap default is over 25 CPU / 48 GiB ([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)); fails any service in any config without a CPU and memory limit (it would escape the budget and nothing else would notice), any untagged or `latest` image, and any unpinned `FROM` or `pip install` in a Dockerfile under `docker/` or `services/` |
 | **Docs** | `bash scripts/check-docs.sh`, ten failing gates: links, forbidden words, promtool check and test, runbook annotation paths and presence, capacity-model gate, no plan checkboxes, no em-dash on lines added since `origin/main` (so the job checks out with full history), fixture and sample data synthetic or listed in `NOTICE`. Mermaid width only warns |
 | **Security (Trivy)** | Filesystem scan for CRITICAL/HIGH findings, SARIF uploaded to GitHub code scanning. `legacy/` is skipped |
 

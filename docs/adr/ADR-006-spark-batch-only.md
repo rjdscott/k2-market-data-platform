@@ -261,3 +261,23 @@ The core decision held: Spark runs batch only, on-demand, never streaming. One c
 The **two-tier** split did not survive. There is no Kotlin Iceberg writer — Spark does both the frequent offload and the daily maintenance ([ADR-014](ADR-014-spark-based-iceberg-offload.md), [ADR-017](ADR-017-iceberg-maintenance-pipeline.md)). Once a working Spark + Iceberg stack existed, writing 500+ lines of Iceberg Java SDK code to duplicate `spark.read.jdbc(...).writeTo(...)` was engineering for its own sake. The proposed host for the `@Scheduled` writer — the Spring Boot API — was never built either (ADR-005).
 
 Two further deviations: offload runs every **15 minutes**, not hourly, and the Spark catalog is a **file-based Hadoop catalog** on a bind-mounted local warehouse (MinIO provisioned, unused by the offload), not the REST catalog shown in the config sample above (see [ADR-013](ADR-013-pragmatic-iceberg-version-strategy.md)).
+
+## Outcome (2026-11-25, Trino beside Spark)
+
+Alternative 3 above rejected Trino as a replacement for Spark in batch ETL. That verdict
+holds and is still applied: Spark keeps the ingest from Redpanda to gold, backfill, rebuild,
+compaction, expiry and the audits. [ADR-035](ADR-035-trino-and-dbt-for-marts.md) adds Trino
+beside it for a different job, SQL serving and set-based consumer marts built by dbt, each
+in its domain's own warehouse ([ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md)),
+and departs from this ADR only there. Trino's catalog over the lake is read-only at the
+connector: Spark stays the lake's only writer.
+
+The three objections, against what was measured on 2026-11-25 with Trino 484 on this lake
+([`docker/trino/README.md`](../../docker/trino/README.md)):
+
+- **Always-on.** True, and now accepted: the platform layer runs as one always-on whole, and
+  Trino declares 2.0 CPU / 4 GiB, about 1.4 GiB idle.
+- **A 2 to 4 GB floor.** Close: one query over all of `gold.trades` ran at 1 CPU / 2 GiB with
+  a 1280M heap, and four at once peaked at 2.86 GiB of 4 GiB.
+- **Not designed for batch ETL.** Not tested, because Trino runs none: nothing that needs
+  Kafka offsets, the writer lock or code per record moves off Spark.

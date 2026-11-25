@@ -73,9 +73,11 @@ else
   printf '%s\n' "$changed" | grep -q '^docker/redpanda/' && services+=(redpanda-init) || true
   printf '%s\n' "$changed" | grep -q '^config/'          && services+=(capture-binance capture-kraken capture-coinbase) || true
   printf '%s\n' "$changed" | grep -q '^schemas/'         && services+=(redpanda-init) || true
+  # Trino reads etc/ (rules, catalogs, heap) only at start.
+  printf '%s\n' "$changed" | grep -q '^docker/trino/'     && services+=(trino) || true
 
   if [ "${#services[@]}" -eq 0 ]; then
-    result "(d) mount holders" "SKIP (no docker/lake, docker/redpanda, config/, or schemas/ changes in HEAD~1..HEAD)"
+    result "(d) mount holders" "SKIP (no docker/lake, docker/redpanda, docker/trino, config/, or schemas/ changes in HEAD~1..HEAD)"
   else
     mapfile -t services < <(printf '%s\n' "${services[@]}" | sort -u)
     # read-only lookup — run even under --dry-run so the preview is accurate

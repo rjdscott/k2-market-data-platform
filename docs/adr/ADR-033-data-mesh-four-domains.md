@@ -116,3 +116,21 @@ ends without an `fx-reference` product.
 - [ADR-031](ADR-031-governed-self-serve-platform.md), the umbrella that reserved this number
 - [ADR-032](ADR-032-odcs-contracts-and-k2gen.md), the contracts each domain owns
 - [ADR-026](ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md), the layers, unchanged
+
+---
+
+## Outcome (2026-11-25, domains get physical mart warehouses)
+
+What diverged now: [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md) gives each
+of the four domains as listed in `contracts/domains.yaml` a Lakekeeper warehouse of its own for
+its marts, a Trino catalog and a writer identity (`dbt_<domain>`), all generated from the
+registry by `make generate`. This ADR decided ownership only; domains now also have a physical
+fence on the consumer side. The lake's tables do not move: placement by who can answer for the
+data stands for ownership. A mart that joins two domains belongs to, and is stored in, the
+consuming domain; that is the case the "inputs cross domains in both directions" trigger
+watches, and it has not fired: today every cross-domain input points one way.
+
+Pending, not decided here: the maintainer's direction (2026-11-25) is a fifth,
+platform-owned governance domain for quality results, control evidence and lineage. It would
+reverse this ADR's "The platform owns the road, not the products", so it gets its own ADR when
+its first product lands.

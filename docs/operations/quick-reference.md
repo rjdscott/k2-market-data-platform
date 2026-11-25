@@ -34,7 +34,8 @@ the README links here rather than repeating it.
 | http://localhost:3000 | Grafana, the dashboards | `admin` / `$GRAFANA_PASSWORD` | `k2-pipeline-overview`, then `k2-lake` |
 | http://localhost:8080 | Redpanda Console: topics, groups, live messages | none | `market.crypto.v3.trades.binance` — values decode as **Avro** off the schema registry at `8081` |
 | `http://localhost:$K2_PREFECT_PORT` (`.env`, default 4200) | Prefect: the lake schedules and their run history | none | Deployments → `lake-ingest-5min`, `lake-maintenance-daily`; Runs for the last state |
-| http://localhost:18181/ui/ | Lakekeeper: browse the Iceberg catalog | none (auth is off) | Warehouses → **`k2`** → namespaces `raw`, `bronze`, `silver`, `gold`, `audit`. The warehouse is named `k2`; Spark and DuckDB address it through the *catalog* name `lake`, so a table the UI shows under `gold` is `lake.gold.trades` in a query |
+| http://localhost:18181/ui/ | Lakekeeper: browse the Iceberg catalog | none (auth is off) | Warehouses → **`k2`** → namespaces `raw`, `bronze`, `silver`, `gold`, `audit` (the other warehouses, one per data domain, hold the marts). The warehouse is named `k2`; Spark and DuckDB address it through the *catalog* name `lake`, so a table the UI shows under `gold` is `lake.gold.trades` in a query |
+| `http://localhost:$K2_TRINO_PORT` (`.env`, default 8088; loopback only) | Trino: SQL over every lake table, catalog `lake` (read-only); each domain's marts in its own catalog | any user name, not authenticated (`X-Trino-User`) | [Query the lake with Trino](#query-the-lake-with-trino) |
 | http://localhost:9001 | MinIO console: the bytes under the lake | `$MINIO_ROOT_USER` / `$MINIO_ROOT_PASSWORD` | bucket **`k2-lake`** |
 | http://localhost:9090 | Prometheus: metrics and alert state | none | Alerts, then `time() - max(k2_lake_last_commit_ts_seconds)` |
 | http://localhost:8123 (`/play` for a query box) | ClickHouse: the gold hot tier | `default` / `$CLICKHOUSE_PASSWORD`; research reads `quant` / `$K2_QUANT_PASSWORD` (read-only, `gold` only) | `SELECT count() FROM gold.trades FINAL`. Native protocol from the host is `--port 9002` |
@@ -157,6 +158,43 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/spark_conf.py --smoke
 Exactly-once bookkeeping lives in the Iceberg snapshot summary
 (`k2.kafka-offsets`), not in a watermark table , 
 [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md).
+
+## Query the lake with Trino
+
+One Trino node reads every lake table through the same Lakekeeper catalog as Spark and
+DuckDB ([`docker/trino/README.md`](../../docker/trino/README.md),
+[ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)). Catalog `lake` is warehouse `k2`,
+read-only at the connector, and its schemas are the lake's namespaces: `lake.gold.trades` is
+`gold.trades`. Each data domain in `contracts/domains.yaml` has a catalog and warehouse of its
+own for its marts, named from the domain id (`market-analytics` is `market_analytics`), whose
+tables only its writer `dbt_<domain>` creates, changes or drops with SQL statements, and which
+everyone reads; table procedures are not fenced per user
+([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)). They hold nothing
+until the dbt marts land. The user is whatever `--user` says, not authenticated. The session
+time zone is the client's: the CLI inside the container sends UTC, a client on the host sends
+the host's zone unless told (`--timezone UTC`).
+
+```bash
+# These ran against k2-trino on the live stack on 2026-11-25.
+docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM lake'
+#   "audit" "bronze" "gold" "information_schema" "raw" "silver" "system"
+docker exec -it k2-trino trino --catalog lake --schema gold          # interactive
+docker exec k2-trino trino --execute 'SELECT count(*) FROM lake.gold.ohlcv_1m'
+
+# Time travel by snapshot id, the way the parity gates pin
+docker exec k2-trino trino --execute "SELECT snapshot_id FROM lake.gold.\"ohlcv_1m\$refs\" WHERE name = 'main'"
+docker exec k2-trino trino --execute 'SELECT count(*) FROM lake.gold.ohlcv_1m FOR VERSION AS OF <snapshot id>'
+
+# Nothing through catalog lake commits, table procedures included
+docker exec k2-trino trino --execute 'EXPLAIN ALTER TABLE lake.gold.ohlcv_1m EXECUTE optimize'
+#   ... failed: Access Denied: Cannot execute table procedure OPTIMIZE on gold.ohlcv_1m
+
+# One fence per domain. Ran against k2-trino on the live stack on 2026-11-25.
+docker exec k2-trino trino --execute 'SHOW CATALOGS'
+#   "fx_reference" "lake" "market_analytics" "market_capture" "reference_data" "system"
+docker exec k2-trino trino --user dbt_market_analytics --execute 'CREATE TABLE reference_data.s.t (x integer)'
+#   ... failed: Access Denied: Cannot create table reference_data.s.t
+```
 
 ## When something breaks
 

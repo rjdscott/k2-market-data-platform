@@ -7,11 +7,12 @@ Resolves the compose file three times, plain, with `--profile governance` and
 with `--profile legacy`, prints four limit sums and exits 1 on any of:
 
 - the bootstrap default (every default-profile service, one-shots included,
-  because they run beside the rest at `docker compose up`) above 20 CPU /
-  36 GiB, the ceiling ADR-034 sets in place of ADR-010's 16 CPU / 40 GB. The
-  steady default and the two profiled bootstraps are reported only: governance
-  is outside the ceiling and needs a larger engine (plan README, Decisions),
-  and legacy is the Prefect rollback, run only in place of Airflow's writes.
+  because they run beside the rest at `docker compose up`) above 25 CPU /
+  48 GiB, the ceiling ADR-045 sets in place of ADR-034's 20 CPU / 36 GiB
+  (which replaced ADR-010's 16 CPU / 40 GB). The steady default and the two
+  profiled bootstraps are reported only: no service has the governance profile
+  today, so its line equals the default, and legacy is the Prefect rollback,
+  run only in place of Airflow's writes.
 - a service in any config that does not declare both a CPU and a memory
   limit, so a service behind a profile cannot ship without one.
 - a compose image, or a Dockerfile FROM, with no tag or the tag `latest`.
@@ -31,9 +32,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 GIB = 2**30
-CPU_CEILING = 20.0
+CPU_CEILING = 25.0
 # GiB, the unit compose limits are in (docs/operations/docker-resources.md).
-MEM_CEILING = 36 * GIB
+MEM_CEILING = 48 * GIB
 
 
 def compose_services(*profile: str) -> dict:

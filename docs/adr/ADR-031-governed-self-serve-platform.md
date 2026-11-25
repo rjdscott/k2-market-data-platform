@@ -142,3 +142,9 @@ second read path needs entitlements, which means catalog-level auth and a new de
 - Precedent for an umbrella with reserved numbers: [ADR-018](ADR-018-v3-lake-first-rust-capture.md)
 - [ADR-006](ADR-006-spark-batch-only.md), [ADR-008](ADR-008-eliminate-prefect-orchestration.md),
   [ADR-010](ADR-010-resource-budget.md), [ADR-028](ADR-028-non-goals-and-honest-limits.md)
+
+---
+
+*2026-11-25: the 20 CPU / 36 GiB ceiling this ADR committed to is superseded by
+[ADR-045](ADR-045-ceiling-25-cpu-48-gib.md) (25 CPU / 48 GiB); the revisit trigger on the
+default bootstrap total fired that day, when Trino took the peak to 21.30 CPU / 36.812 GiB.*

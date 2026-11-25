@@ -25,6 +25,10 @@ set -euo pipefail
 # script creates what those jobs connect to.
 LK=${K2_LAKEKEEPER_URL:-http://lakekeeper:8181}
 WAREHOUSE=${K2_LAKE_WAREHOUSE:-k2}
+# One warehouse per data domain for its marts (ADR-044), on the same bucket under
+# warehouse/<name>. The list is generated from contracts/domains.yaml by
+# `make generate`, which writes the matching Trino catalogs too; never edit it here.
+DOMAIN_WAREHOUSES="$(dirname "$0")/generated/warehouses.txt"
 BUCKET=${K2_LAKE_BUCKET:-k2-lake}
 S3_ENDPOINT=${K2_S3_ENDPOINT:-http://minio:9000}
 S3_REGION=${K2_S3_REGION:-local-01}
@@ -52,12 +56,12 @@ echo "  warehouse: $WAREHOUSE"
 echo "  bucket:    s3://$BUCKET"
 echo "=========================================="
 
-echo "[1/4] MinIO bucket"
+echo "[1/5] MinIO bucket"
 mc alias set k2 "$S3_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" > /dev/null
 mc mb --ignore-existing "k2/$BUCKET"
 
 # 4xx here means "already bootstrapped" — the endpoint closes after first use.
-echo "[2/4] Lakekeeper bootstrap"
+echo "[2/5] Lakekeeper bootstrap"
 post "$LK/management/v1/bootstrap" '{"accept-terms-of-use":true}' "400 401 403 409"
 
 # Ask first, then create. The old version tolerated ANY 400 on create, on the
@@ -69,19 +73,23 @@ post "$LK/management/v1/bootstrap" '{"accept-terms-of-use":true}' "400 401 403 4
 # ponytail: bash glob match, not grep/jq — this image ships mc, curl and bash and
 # NOT grep (verified: `grep: command not found` from this very line, 2026-08-26).
 # Same constraint the namespace parser below is written around.
-echo "[3/4] Warehouse '$WAREHOUSE'"
-existing=$(curl -fsS "$LK/management/v1/warehouse?project-id=$PROJECT_ID")
-if [[ $existing == *"\"name\":\"$WAREHOUSE\""* ]]; then
-  echo "  → exists, skipping create"
-else
-post "$LK/management/v1/warehouse" "$(cat <<JSON
+# ensure_warehouse <name>: bucket $BUCKET, key prefix warehouse/<name>.
+ensure_warehouse() {
+  local name=$1 existing
+  echo "  $name"
+  existing=$(curl -fsS "$LK/management/v1/warehouse?project-id=$PROJECT_ID")
+  if [[ $existing == *"\"name\":\"$name\""* ]]; then
+    echo "  → exists, skipping create"
+    return 0
+  fi
+  post "$LK/management/v1/warehouse" "$(cat <<JSON
 {
-  "warehouse-name": "$WAREHOUSE",
+  "warehouse-name": "$name",
   "project-id": "$PROJECT_ID",
   "storage-profile": {
     "type": "s3",
     "bucket": "$BUCKET",
-    "key-prefix": "warehouse/$WAREHOUSE",
+    "key-prefix": "warehouse/$name",
     "endpoint": "$S3_ENDPOINT",
     "region": "$S3_REGION",
     "path-style-access": $S3_PATH_STYLE,
@@ -97,7 +105,10 @@ post "$LK/management/v1/warehouse" "$(cat <<JSON
 }
 JSON
 )"   # no tolerated codes: 2xx or fail
-fi
+}
+
+echo "[3/5] Warehouse '$WAREHOUSE'"
+ensure_warehouse "$WAREHOUSE"
 
 # Namespaces over the REST catalog API rather than a Spark `lake-ddl` one-shot:
 # three HTTP calls against a service that is already up, versus a ~20 s JVM
@@ -112,7 +123,7 @@ fi
 # and coreutils only. `prefix` is a flat string field, so the two trims below are
 # the whole parser. If a second field is ever needed, switch images rather than
 # growing this.
-echo "[4/4] Namespaces"
+echo "[4/5] Namespaces"
 cfg=$(curl -fsS "$LK/catalog/v1/config?warehouse=$WAREHOUSE")
 prefix=${cfg#*\"prefix\":\"}
 prefix=${prefix%%\"*}
@@ -124,4 +135,17 @@ for ns in raw bronze silver gold audit; do
   post "$LK/catalog/v1/$prefix/namespaces" "{\"namespace\":[\"$ns\"]}" "409"
 done
 
-echo "✓ lake ready — catalog $LK/catalog, warehouse $WAREHOUSE, namespaces raw/bronze/silver/gold/audit"
+# Last, after the lake's namespaces exist, so a failure here cannot leave them
+# half made. It still exits 1, and lake-init failing holds back what waits for it
+# (lake-ddl, then airflow-scheduler; trino): docker/trino/README.md says what to do.
+echo "[5/5] Domain warehouses ($DOMAIN_WAREHOUSES)"
+domains=()
+# `|| [[ -n $w ]]`: a last line with no newline is still read (the generator writes one).
+while read -r w || [[ -n $w ]]; do
+  [[ -z $w || $w == \#* ]] || domains+=("$w")
+done < "$DOMAIN_WAREHOUSES"
+for w in "${domains[@]}"; do
+  ensure_warehouse "$w"
+done
+
+echo "✓ lake ready: catalog $LK/catalog, warehouse $WAREHOUSE (raw/bronze/silver/gold/audit), domain warehouses ${domains[*]}"

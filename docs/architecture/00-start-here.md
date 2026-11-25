@@ -14,16 +14,17 @@ Chapters 02–03 explain the market-data and data-engineering ideas the rest ass
 capture process, wire contracts, lake ingest, lake layers, served tier, observability.
 12–17 are the design references those chapters cite: strategy, schema, partitioning,
 capacity, failure modes, scale-out. 18 is the layer above the tables: domains, data products,
-their owners and contracts. A1 is the versions table.
+their owners and contracts. 19 is where those products are stored and who may write them. A1 is
+the versions table.
 
 **Four reading paths.**
 
 | You are | Read |
 |---|---|
-| New to the platform | 01 → 04 → 05 → 08 → 09 → 10, then 02–03 when a term bites |
+| New to the platform | 01 → 04 → 05 → 08 → 09 → 10 → 19, then 02–03 when a term bites |
 | Reviewing the engineering | 04 → 08 → 10 → 16, then the ADRs each chapter cites |
 | On call | 11 → 16 → [`../runbooks/`](../runbooks/README.md) |
-| Adding or owning a data product | 09 → 18 → [`../development/golden-path.md`](../development/golden-path.md) |
+| Adding or owning a data product | 09 → 18 → 19 → [`../development/golden-path.md`](../development/golden-path.md) |
 
 **Conventions.** Every number cites [`../benchmarks/`](../benchmarks/README.md); every
 decision cites [`../adr/`](../adr/README.md); every practice names the file, test or alert

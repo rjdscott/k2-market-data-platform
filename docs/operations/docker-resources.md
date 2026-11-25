@@ -2,19 +2,22 @@
 
 Every long-running service in [`docker-compose.yml`](../../docker-compose.yml) declares a
 hard `limit` and a guaranteed `reservation`; the one-shot init containers declare limits
-only. The ceiling is **20 CPU / 36 GiB at the bootstrap peak**
-([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md), which superseded the 16-core /
-40 GB target of [ADR-010](../adr/ADR-010-resource-budget.md)), and `scripts/check-budget.py`
-fails CI over it.
+only. The ceiling is **25 CPU / 48 GiB at the bootstrap peak**
+([ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md), which superseded the 20 CPU / 36 GiB of
+[ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md), which superseded the 16-core / 40 GB
+target of [ADR-010](../adr/ADR-010-resource-budget.md)), and `scripts/check-budget.py` fails CI
+over it. The host gives Docker 28 CPUs and 49.5 GiB; three cores and 1.5 GiB stay outside the
+ceiling for the operating system and the engine, which is enough only because measured use is
+far below the declared limits (ADR-045).
 
-**As built, steady state: 17.30 CPU / 30.312 GiB across 18 long-running services.**
-**One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 19.30 CPU / 32.812 GiB
-across 23**, the one-shots run concurrently with the steady state at `docker compose up`,
+**As built, steady state: 19.30 CPU / 34.312 GiB across 19 long-running services.**
+**One-shots: 2.00 CPU / 2.500 GiB across 5.** **Bootstrap peak: 21.30 CPU / 36.812 GiB
+across 24**, the one-shots run concurrently with the steady state at `docker compose up`,
 so that peak, not the steady state, is what the host has to absorb at boot, and it is the
 sum the ceiling gates. Since the Airflow cutover, `prefect-server` and `prefect-worker`
 sit behind the compose `legacy` profile, which a plain `docker compose up -d` does not
 start. They are the rollback ([airflow-scheduling.md](../runbooks/airflow-scheduling.md#rollback-to-prefect)):
-with them the peak is 20.80 CPU / 34.312 GiB across 25, over the 20 CPU ceiling (reported, not gated; a rollback stops Airflow rather than running it at full limits), until
+with them the peak is 22.80 CPU / 38.312 GiB across 26, inside the ceiling (reported, not gated), until
 the archive pull request of plan phase P2 deletes them.
 
 Both parallel runs are over. The three Kotlin `feed-handler-*` containers are gone from
@@ -44,7 +47,7 @@ for label, oneshot in (("steady", False), ("one-shot", True)):
     cpu = sum(float(l["cpus"]) for l in lim)
     gib = sum(int(l["memory"]) for l in lim) / 2**30
     print("%-9s %2d services  %5.2f CPU  %6.3f GiB" % (label, len(lim), cpu, gib))'
-steady    18 services  17.30 CPU  30.312 GiB
+steady    19 services  19.30 CPU  34.312 GiB
 one-shot   5 services   2.00 CPU   2.500 GiB
 ```
 
@@ -77,43 +80,44 @@ label was wrong. Run on 2026-11-25. `python3 scripts/check-budget.py` prints the
 | `capture-kraken` | ingestion (v3) | 0.25 | 0.1 | 256 MB | 128 MB |
 | `capture-coinbase` | ingestion (v3) | 0.25 | 0.1 | 512 MB | 128 MB |
 | `lake-metrics` | observability (v3 lake) | 0.1 |, | 128 MB |, |
-| **Steady state (18 long-running services)** | | **17.30** | **7.10** | **30.312 GiB** | **11.625 GiB** |
+| `trino` | SQL over the lake, dbt marts ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)) | 2.0 | 0.5 | 4 GB | 1 GB |
+| **Steady state (19 long-running services)** | | **19.30** | **7.60** | **34.312 GiB** | **12.625 GiB** |
 | `redpanda-init` | init (one-shot) | 0.25 |, | 128 MB |, |
 | `lakekeeper-migrate` | init (one-shot) | 0.5 |, | 256 MB |, |
 | `lake-init` | init (one-shot) | 0.25 |, | 128 MB |, |
 | `lake-ddl` | init (one-shot) | 0.5 |, | 1 GB |, |
 | `airflow-migrate` | init (one-shot) | 0.5 |, | 1 GB |, |
 | **One-shot subtotal (5)** | | **2.00** | **, ** | **2.500 GiB** | **, ** |
-| **Bootstrap peak (23 containers)** | | **19.30** | **7.10** | **32.812 GiB** | **11.625 GiB** |
+| **Bootstrap peak (24 containers)** | | **21.30** | **7.60** | **36.812 GiB** | **12.625 GiB** |
 | `prefect-server` | `legacy` profile, the rollback | 1.0 | 0.5 | 1 GB | 512 MB |
 | `prefect-worker` | `legacy` profile, the rollback | 0.5 | 0.25 | 512 MB | 256 MB |
-| **With `--profile legacy` (25 containers)** | | **20.80** | **7.85** | **34.312 GiB** | **12.375 GiB** |
+| **With `--profile legacy` (26 containers)** | | **22.80** | **8.35** | **38.312 GiB** | **13.375 GiB** |
 
 `capture-coinbase` gets twice the memory of the other two because Coinbase's `level2`
 channel is full depth, not top-20, its subscribe snapshot alone is 5.2 MB
 ([ADR-018](../adr/ADR-018-v3-lake-first-rust-capture.md) Appendix A, S5). All three are
-`cpuset`-pinned to cores 12–14 (`K2_CAPTURE_CPUSET`); ClickHouse, Spark and the `lake-ddl`
-one-shot are pinned to the disjoint range 0–11 (`K2_HEAVY_CPUSET`), so a compaction or a heavy
+`cpuset`-pinned to cores 12–14 (`K2_CAPTURE_CPUSET`); ClickHouse, Spark, Trino and the
+`lake-ddl` one-shot are pinned to the disjoint range 0–11 (`K2_HEAVY_CPUSET`), so a compaction or a heavy
 query cannot share a core with capture, verified by `docker inspect -f '{{.HostConfig.CpusetCpus}}'`
-and measured by the noisy-neighbour experiment in `docs/architecture/15-capacity-model.md`.
+and measured by the noisy-neighbour experiment in `docs/architecture/15-capacity-model.md`
+(Trino's pin read `0-11` on the live stack on 2026-11-25).
 
 The one-shots are **not free**. They declare limits and they run concurrently with the
 steady state at `docker compose up`, so the bootstrap peak is the number the host has to
 absorb.
 
-Headroom against the 20 CPU / 36 GiB ceiling at the bootstrap peak, where it is gated:
-**0.70 CPU and 3.188 GiB** (over the ceiling by 0.80 CPU with the `legacy` profile up, 1.688 GiB of memory spare; cAdvisor
-took 0.10 CPU / 128 MiB of what ADR-034 left). The Airflow limits are the plan's
-estimates until ADR-034's measured figures replace them.
+Headroom against the 25 CPU / 48 GiB ceiling at the bootstrap peak, where it is gated:
+**3.70 CPU and 11.188 GiB** (2.20 CPU and 9.688 GiB with the `legacy` profile up). The
+Airflow limits are the plan's estimates until ADR-034's measured figures replace them.
 
 ## Where the budget goes
 
-- **ClickHouse takes 25% of CPU and 35% of RAM.** It absorbs the work v1 spent on five
+- **ClickHouse takes 21% of CPU and 23% of RAM.** It absorbs the work v1 spent on five
   always-on Spark Streaming jobs, Kafka Engine ingest, Bronze→Silver→Gold materialized
   views and every analytical query run against the hot tier.
 - **Spark is batch-only, but the container is never empty.** Its 3.0 CPU (2.0 until 2026-11-25) / 8 GiB (4 GiB until 2026-08-26) runs a job
   only during the 5-minute lake ingest and the nightly maintenance run, so the practical
-  steady-state footprint is closer to 12.60 CPU / 17.625 GiB, but the base image's
+  steady-state footprint is closer to 16.30 CPU / 26.312 GiB, but the base image's
   always-on Master, Worker, History Server, Thrift Server and Jupyter idle at **633 MiB**
   before any driver starts (`docker stats --no-stream k2-spark-iceberg`, 2026-08-26). The
   container was first sized for **two** drivers on top of that, the 03:00 maintenance
@@ -132,7 +136,7 @@ estimates until ADR-034's measured figures replace them.
   so every limit above that was clipped, `docker stats` showed ClickHouse as
   `/ 7.648GiB` against its declared 8G. It is 39.2 GiB now; `docs/development/setup.md`
   states the requirement.
-- **The three capture containers cost 0.75 CPU / 1 GiB combined**, 5% of CPU, 5% of RAM.
+- **The three capture containers cost 0.75 CPU / 1 GiB combined**, 4% of CPU, 3% of RAM.
   That is half what the Kotlin handlers they replaced declared. RSS against these limits
   is **not yet measured** for the post-retirement stack ([ADR-010](../adr/ADR-010-resource-budget.md)
   Outcome); they are declared ceilings, not sizing from observation.
@@ -152,6 +156,13 @@ estimates until ADR-034's measured figures replace them.
   after bootstrap, 2026-08-26, this fluctuates (0.00% / 33.95 MiB observed minutes later on
   the same run), so read the 0.25 CPU / 256 MB limit as the number that matters: idle usage is
   well under 50 MiB.
+
+- **Trino costs 2.0 CPU / 4 GiB**, heap 2816M (`docker/trino/etc/jvm.config`), the rest of
+  the limit for metaspace, code cache, thread stacks and direct buffers. Measured
+  2026-11-25 on a throwaway container with this configuration: 1.42 GiB idle; the
+  `gold.candles()` aggregation over all of `gold.trades`, four at once, peaked at 2.86 GiB and
+  2.15 cores ([`docker/trino/README.md`](../../docker/trino/README.md)). One such query ran at
+  1 CPU / 2 GiB; the rest is for dbt models running in parallel.
 
 ## Sizing a new service
 

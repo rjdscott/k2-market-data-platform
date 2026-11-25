@@ -12,6 +12,8 @@
    K2's profile of it, then its custom properties.
 2. Each product and contract against its place: the directory it lives in, its
    domain's owner and kind, the outputs it lists against the contracts beside it.
+   And each domain's fence name, its id with underscores, against the names the
+   lake and Trino already use (`RESERVED`).
 3. Each contract against docker/lake/ddl/lake.sql: the table exists, and its
    partitioning and sort order are the ones declared there. Every table outside
    `audit` has exactly one contract. A contract with inline columns is a table
@@ -41,6 +43,21 @@ SUFFIX = ".odcs.yaml"
 # the parent snapshot id it last read, and expiring that snapshot breaks the next run.
 FLOOR_DAYS = 7
 RANK = {"public": 0, "internal": 1, "restricted": 2}
+# Names a domain's fence cannot take: its Trino catalog and Lakekeeper warehouse are
+# the domain id with underscores (ADR-044), and these are already somebody's.
+RESERVED = {
+    "lake": "Trino's read-only catalog over the lake",
+    "system": "Trino's own catalog",
+    "k2": "the lake's warehouse",
+    "information_schema": "the schema name every Trino catalog has",
+    # Trino reserved words: a catalog named one would need quoting in every query.
+    **{w: "a Trino reserved word" for w in ("table", "select", "schema", "catalog", "default", "user")},
+}
+
+
+def fence(domain: str) -> str:
+    """A domain's Trino catalog and Lakekeeper warehouse: `market-analytics` -> `market_analytics`."""
+    return domain.replace("-", "_")
 
 
 def _k2(schema: dict[str, Any], name: str) -> jsonschema.Draft202012Validator:
@@ -82,7 +99,10 @@ def validate(root: Path = ROOT) -> list[str]:
     if errors:
         return errors
 
-    # 2. place: directory, domain, outputs.
+    # 2. place: directory, domain, outputs; and each domain's fence name.
+    for name in domains["domains"]:
+        if fence(name) in RESERVED:
+            errors.append(f"contracts/domains.yaml: domain {name} would be catalog and warehouse {fence(name)}, which is {RESERVED[fence(name)]}")
     for pdir, product in products.items():
         where = rel(pdir / "product.yaml")
         if (pdir.parent.name, pdir.name) != (product["domain"], product["name"]):
@@ -193,7 +213,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if args.command == "generate":
         files = generate.generate(ROOT)
-        print(f"k2gen generate: {len(files)} files, {generate.RETENTION} and under {', '.join(generate.OWNED)}")
+        print(f"k2gen generate: {len(files)} files: {generate.RETENTION}, {generate.WAREHOUSES}, {generate.TRINO_RULES}, "
+              f"the domain catalogs in {generate.CATALOGS} and {generate.TEST_CATALOGS}, and under {', '.join(generate.OWNED)}")
         return 0
     products = len(list((ROOT / "contracts").glob("*/*/product.yaml")))
     contracts = len(list((ROOT / "contracts").glob(f"*/*/*{SUFFIX}")))
