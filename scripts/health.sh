@@ -108,7 +108,9 @@ fi
 
 # The last finished lake_ingest runs, through the Airflow CLI in the scheduler
 # (ADR-034): the scheduled ones of the last LAKE_MAX_AGE, newest first, so none
-# at all means the 5-min schedule has stopped firing. Queued and running runs
+# at all means the 5-min schedule has stopped firing, which is also what a
+# stale DAG folder looks like (runbook §5): healthy containers, no new runs.
+# Queued and running runs
 # are excluded on purpose: they say nothing about whether the last one worked.
 #
 # A run whose only task skipped is `success` to Airflow, so a success is read
@@ -142,7 +144,7 @@ label="(3) last $LAKE_DAG run"
 if [ -z "$runs" ]; then
   bad "$label" "FAIL (the Airflow CLI in $AIRFLOW_CONTAINER did not answer: is airflow-scheduler up? $runbook §1)"
 elif [ "$runs" = NONE ]; then
-  bad "$label" "FAIL (no $LAKE_DAG run finished in the last $((LAKE_MAX_AGE / 60)) min: the DAG is paused or the scheduler stopped, $runbook §1)"
+  bad "$label" "FAIL (no $LAKE_DAG run finished in the last $((LAKE_MAX_AGE / 60)) min: the DAG is stale or paused, or the scheduler stopped, $runbook §5 and §1)"
 elif [ "${last%% *}" = success ]; then
   result "$label" "PASS (${last#* } success$([ "$skips" -gt 0 ] && echo ", then $skips skipped: the lake lock was held"))"
 elif [ -n "$last" ]; then

@@ -112,7 +112,10 @@ considered before committing*.
 - **Bind-mount gotcha:** file-level bind mounts pin the inode. Editing
   `config/instruments.yaml` in place needs
   `docker compose up -d --force-recreate --no-deps <service>`; `docker restart`
-  does not pick it up.
+  does not pick it up. Directory mounts go stale too: switching the live
+  checkout to a commit without `docker/airflow/dags/` and back left both Airflow
+  containers an empty DAG folder and no runs for 35 minutes (2026-11-25); recreate
+  `airflow-scheduler` and `airflow-dag-processor` after any such switch.
 
 ## Tests
 

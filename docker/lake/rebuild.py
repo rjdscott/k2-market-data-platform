@@ -27,6 +27,11 @@ skipped-ingest alerts (the lake_rebuild DAG is the one writer they excuse):
     ... rebuild ...
     docker exec k2-airflow-scheduler airflow dags unpause lake_ingest
 
+A run still `running` at the pause stays so, and unpaused more than its
+dagrun_timeout (2h05m) later it may be marked failed once: disregard that one,
+it is noise against the "two failed in a row" rollback policy
+(docs/runbooks/airflow-scheduling.md).
+
 Bronze, silver and gold: the shape (pin parent, drop, recreate, decode, record)
 is the same for each.
 """

@@ -341,10 +341,10 @@ unreferenced" is not something `mc ls` can tell you.
 
 ## 5. Ingest killed mid-run
 
-**Symptom**, a Prefect run for `lake-ingest-5min` shows Crashed or Failed; the container
-was killed, OOMed, or the host restarted.
+**Symptom**, a `lake_ingest` run shows failed in Airflow (Prefect's `lake-ingest-5min`
+before the cutover, ADR-034); the container was killed, OOMed, or the host restarted.
 
-**Detection**, Prefect flow-run state; `LakeIngestLagHigh` if it repeats.
+**Detection**, `AirflowTaskFailed` once its retry is spent; `LakeIngestLagHigh` if it repeats.
 
 **Expected behaviour, re-running is safe, and this is the property Phase D exists to
 prove.** The reasoning, once, because it is the thing an operator most needs to trust at
@@ -366,23 +366,23 @@ There is no intermediate state, because there is no ordering between two stores 
 wrong. That is the whole argument for putting the offsets in the snapshot.
 
 **The one case that is not automatically safe** is two ingests running concurrently over
-the same window. `lake-ingest-5min` is deployed at **concurrency 1** for exactly this
-reason, it is a correctness setting, not a politeness one. If concurrency has been raised,
-lower it before doing anything else.
+the same window. `lake_ingest` runs at **`max_active_runs=1`** for exactly this reason
+(`docker/airflow/dags/lake.py`, enforced by its DAG tests), and the flock in `ingest.py`
+covers every other path: it is a correctness setting, not a politeness one.
 
 **Recovery**
 
+VERIFY: run steps 1 and 2 on the live stack after the cutover; check that the trigger
+creates a `manual__` run whose task ends `success`, and that `details` shows
+`max_active_runs` 1 and `is_paused` `False`.
+
 ```bash
 # 1. Just re-run it. Then verify the invariants rather than trusting them.
-#    not yet run: Phase D burn-in
-docker exec k2-prefect-server prefect deployment run 'lake-ingest/lake-ingest-5min'
+docker exec k2-airflow-scheduler airflow dags trigger lake_ingest
+docker exec k2-airflow-scheduler airflow dags list-runs lake_ingest | head -3
 
-# 2. Deployment list: confirms concurrency and that the deployment exists.
-#    not yet run: Phase D burn-in
-docker exec k2-prefect-server prefect deployment ls
-#   lake-ingest/lake-ingest-5min            cron 1-59/5 * * * *, concurrency 1
-#   lake-maintenance/lake-maintenance-daily nightly
-docker exec k2-prefect-server prefect deployment inspect 'lake-ingest/lake-ingest-5min'
+# 2. The DAG: one run at a time, and scheduled.
+docker exec k2-airflow-scheduler airflow dags details lake_ingest | grep -E 'max_active_runs|is_paused|is_stale'
 ```
 
 ```sql

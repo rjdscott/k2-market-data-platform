@@ -296,6 +296,17 @@ policy beside it: two scheduled `lake_ingest` runs failing in a row, or 20 minut
 a `raw.messages` commit outside a maintenance run, gets up to 30 minutes of diagnosis in
 place and then the rollback.
 
+**The shadow surfaced a failure no alert covered.** On 2026-11-25 a switch of the live
+checkout to a commit without `docker/airflow/dags/` and back left the DAG folder's bind
+mount stale: both Airflow containers saw it empty, the DAGs were marked stale, and no
+`lake_ingest` run was created from 05:11 to 05:46 UTC while every container stayed healthy
+and every Airflow series but the task counters looked normal. A recreate of the scheduler
+and the dag-processor fixed it within a minute, with one run for the latest slot and no
+replay. `AirflowLakeIngestNotRunning` now covers it
+([airflow-scheduling.md §5](../runbooks/airflow-scheduling.md#5-lake_ingest-not-running-a-stale-dag-folder-or-a-forgotten-pause)),
+and `airflow-scheduler` waits for `lake-ddl`, so the unpaused `lake_maintenance` cannot
+run before the tables exist on a fresh clone.
+
 **`scripts/airflow-shadow-check.sh` stayed** to the archive: the cutover's precondition
 cites it, and after the cutover its third check fails by design.
 
@@ -307,6 +318,8 @@ Measured at the switch, filled from the live run:
 - MEASURE: the `lake_maintenance` run the unpause started: run id and duration, and the
   `lake_ingest` runs during it (count, each task `skipped`, none `failed`).
 - MEASURE: the last lines of `make health` and `make lake-verify` after Prefect stopped.
+- MEASURE: `AirflowLakeIngestNotRunning` loaded after the cutover's Prometheus reload
+  (step 4b), and whether it fired before the archive, with the cause.
 - MEASURE: the result of `make test`, `make parity-bars`, `make check-alerts` and
   `make check-docs` at the cutover; the date and result of `make parity-ohlcv` and
   `make parity-bars` after the P0 re-pin.
