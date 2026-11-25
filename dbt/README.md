@@ -261,11 +261,39 @@ if absent: invocation id, run start, writer, the test's id and name, the model o
 relation it tests (`tested`, for a source test its one dependency), dbt's status (pass, fail,
 warn, error, skipped), failures, execution time, and dbt's message cut at 1000 characters. An
 invocation that ran no test (`dbt run`, `dbt source freshness`) writes nothing. dbt runs
-`on-run-end` after the nodes whatever their result, so a failed test has its row, and so has
-every test skipped behind it. `make test-dbt` proves it: two trades with one identifier fail the
-source test on `gold.trades`, the build exits non-zero, and the failed row and the skipped ones
-are read back. No writer can insert into another domain's table (`Access Denied`, also in
-`make test-dbt`).
+`on-run-end` after the nodes whatever their result, so every test the invocation ran has its
+row, a failed one included, and so has every test it skipped behind a failure inside that same
+invocation. `make test-dbt` proves it on one `dbt build --selector`: two trades with one
+identifier fail the source test on `gold.trades`, the build exits non-zero, and the failed row
+and the skipped ones are read back. No writer can insert into another domain's table (`Access
+Denied`, also in `make test-dbt`).
+
+**What is not recorded.** Under Airflow each node is its own dbt invocation (below), so a
+skipped row there is a test its own node skipped: a unit test failing before its model, the
+model's data tests then skipped. When a task fails, Airflow marks every task downstream of it
+`upstream_failed` and starts no dbt for them: their tests leave no row at all, pass or skip. An
+invocation whose hook failed loses its rows too ([runbook](../docs/runbooks/dbt-marts.md)). So the absence of a
+recent row is itself the signal: a test last recorded more than two hours ago missed at least
+one hourly run. Through the view, once catalog `governance` exists:
+
+```bash
+docker exec k2-trino trino --execute "SELECT domain, subject, check_name, max(checked_at) AS last_run
+  FROM governance.quality_results.dq_results WHERE source_system = 'dbt' GROUP BY 1, 2, 3
+  HAVING max(checked_at) < current_timestamp - INTERVAL '2' HOUR ORDER BY last_run"
+```
+
+The same over the dbt half's base table, on the stack, read-only, 2026-11-25 19:04 UTC:
+
+```bash
+docker exec k2-trino trino --user reviewer --execute "SELECT tested, test_name, max(run_started_at) AS last_run
+  FROM market_analytics.dq.dbt_test_results GROUP BY 1, 2
+  HAVING max(run_started_at) < current_timestamp - INTERVAL '2' HOUR ORDER BY last_run"
+#   (no rows: every test of the domain recorded in the last two hours)
+```
+
+A test removed from the project stays in that list for good, and a test never run once is never
+in it; what should be there is `dbt ls -q --resource-type test --resource-type unit_test
+--selector <domain>` (24 names for `market_analytics` on 2026-11-25, the 24 its build records).
 
 On the stack, after the build above (2026-11-25):
 
@@ -300,22 +328,39 @@ replay rows left out) and every domain's `dq.dbt_test_results`, in one shape:
 | `status` | `pass`; `error` for a check that raised (observed -1, "check raised"); else `fail` | `pass`, `fail`, `warn`; `error` for error and for skipped |
 | `detail` | observed and the detail | dbt's message; "skipped, ..." for a skipped test |
 
-`domain` is whose record it is, not what it is about. The staging view
-`stg_dq__dbt_test_results` finds the tables when it is built: one branch per catalog that holds
-a model of this project, so a domain with marts is in once it has recorded a test, and a domain
-with no table yet is left out rather than breaking the view; a branch keeps only its own
-writer's rows. The view is a definer view: any reader reads the base tables as its owner,
-`dbt_governance`, which `rules.json` lets read every catalog. Its unit tests cover each status
-of both halves on made-up rows, each failing when the model was changed to break it (a skipped
-test passed through as `skipped`; an `observed` of -1 alone taken for a raised check); its data
-tests: the grain `(source_system, checked_at, subject, check_name)`, not-null columns, and the
-four statuses.
+`domain` is whose record it is, not what it is about. The lake half is one row per
+`(run_ts, scope, check_name)`, the grain: `docker/lake/rebuild.py` takes one `run_ts` for a
+whole rebuild and `bronze.decode` files `bronze_parity` and `unresolvable_schema_id` once per
+venue and day, so a rebuild can file one check several times under one key. Such a group is one
+row with its worst status (error, then fail, then pass) and one of its worst rows' detail, after
+`<n> rows, the worst shown`; `lake.audit.checks` keeps every row. Left out on purpose with the
+operator, verify and replay rows: a replay filed by hand with `record_check.py --failed`, which
+says a research run of the capture binary did not complete, not that a table is wrong.
+
+The staging view `stg_dq__dbt_test_results` finds the tables when it is built: one branch per
+catalog that holds a model of this project, so a domain with marts is in once its results table
+exists (`dbt_marts` creates it before the domain's other tasks), and a domain with no table yet
+is left out rather than breaking the view; a branch keeps only its own writer's rows. The view
+is a definer view: any reader reads the base tables as its owner, `dbt_governance`, which
+`rules.json` lets read every catalog. Its unit tests cover each status of both halves and the
+fold on made-up rows, each failing when the model was changed to break it (a skipped test passed
+through as `skipped`; an `observed` of -1 alone taken for a raised check; every row of a key
+kept, which failed `dq_results_folds_one_lake_key_to_its_worst_row`); its data tests: the grain
+`(source_system, checked_at, subject, check_name)`, not-null columns, and the four statuses.
 
 The governance selector has not run on the stack: catalog `governance` exists after the rollout
-of this change. The lake half's SQL ran read-only on the live Trino over `lake.audit.checks` on
-2026-11-25 (every row one of the four statuses, unique on the grain). `make test-dbt` runs
-this on its throwaway Trino as a user who owns none of it, after the failing build and a failed
-and a raised lake check, and prints:
+of this change. Over the live `lake.audit.checks`, read-only, on 2026-11-25: some rows, no key
+filed twice yet (so the fold changes no row today), every row a pass or a fail:
+
+```bash
+docker exec k2-trino trino --user reviewer --execute "SELECT count(*) > 0, count(*) = count(DISTINCT (run_ts, scope, check_name)),
+  array_sort(array_agg(DISTINCT CASE WHEN passed THEN 'pass' WHEN observed = -1 AND detail LIKE 'check raised %' THEN 'error' ELSE 'fail' END))
+  FROM lake.audit.checks WHERE job IN ('maintenance', 'ingest') AND check_name <> 'silver_flags'"
+#   "true","true","[fail, pass]"
+```
+
+`make test-dbt` runs the view on its throwaway Trino as a user who owns none of it, after the
+failing build and a failed and a raised lake check, and prints:
 
 ```bash
 docker exec k2-dbt-test trino --user someone --execute "SELECT source_system, domain, subject, status
@@ -332,7 +377,10 @@ Airflow runs every domain every hour at minute 10 (`docker/airflow/dags/dbt_mart
 in `selectors.yml` from a `dbt ls` of this directory, cached in an Airflow Variable keyed on the
 project's files, and runs one task per node as that domain's writer: `dbt build --select <node>`
 for a model, which runs its unit tests, the model and its data tests; `dbt source freshness` and
-the source tests for a lake table a mart reads. The governance group starts once every other
+the source tests for a lake table a mart reads. Before any of them, `<domain>_test_results_table`
+runs `dbt run-operation create_test_results_table` as the writer, so the domain's
+`dq.dbt_test_results` exists before two of its tasks' hooks could both create it at once
+([ADR-046](../docs/adr/ADR-046-governance-domain-and-quality-results.md) Risks). The governance group starts once every other
 group has finished, however it ended (`domains_built`, trigger rule `all_done`), so its view is
 rebuilt and tested on this run's results. `populate_cache: false` in `dbt_project.yml` keeps a
 run from listing every schema of the project first: with dbt's default, a `market_analytics`

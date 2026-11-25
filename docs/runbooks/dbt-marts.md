@@ -6,7 +6,9 @@ The domain marts on Trino are rebuilt every hour at minute 10 by the Airflow DAG
 domain with marts, every task run as that domain's writer `dbt_<domain>`, the `governance`
 group after all the others however they ended, and once a day, in the 04:10 run, the domain's
 snapshot maintenance. Every dbt invocation that runs a test records its results in its domain's
-`dq.dbt_test_results` ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)). This covers a run that fails, a DAG that is
+`dq.dbt_test_results` ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)), a
+table each domain's first task, `<domain>_test_results_table`, creates if it is absent; a task
+Airflow never starts records nothing. This covers a run that fails, a DAG that is
 not running, and a failed maintenance. It does not cover the lake behind the marts: a stale
 source is [lake-ingest-lag.md](./lake-ingest-lag.md), Airflow itself is
 [airflow-scheduling.md](./airflow-scheduling.md).
@@ -50,7 +52,10 @@ next hour rebuilds every mart whole.
 **Expected behaviour.** Nothing recovers a cause by itself, but nothing needs undoing either:
 `max_active_runs=1`, no catch-up, and each model is a `CREATE OR REPLACE` from the lake, so the
 first run after the cause is gone puts every mart back to current. A failed node stops its
-descendants (`upstream_failed`) and nothing else.
+descendants (`upstream_failed`) and nothing else. Those descendants run no dbt, so their tests
+leave no row in `dq.dbt_test_results` or `governance.quality_results.dq_results` for that run:
+not a skip, nothing. A test with no row for two hours is how to spot it
+([dbt/README.md](../../dbt/README.md#test-results-every-domains-then-one-view) has the query).
 
 **Recovery.** Which runs failed, then which task:
 
@@ -73,6 +78,11 @@ docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler \
 #   market_analytics_maintenance_hour                    | upstream_failed
 ```
 
+That listing predates `market_analytics_test_results_table`, which now runs before every task
+of the domain: with Trino unreachable it is that task that fails, and every task of the group is
+`upstream_failed` (by the DAG's structure, `docker/airflow/tests/test_dbt_marts_dag.py`; not
+induced).
+
 Then what dbt said, from the failed task's log in the scheduler (LocalExecutor runs every task
 there; the UI shows the same log):
 
@@ -93,7 +103,7 @@ What the error says, and where to go:
 | `Access Denied: Cannot create ...` | a task ran as the wrong user: the fence works | check `K2_TRINO_USER` in the task's env against `dbt/selectors.yml`; do not loosen `docker/trino/etc/rules.json` |
 | the failed task is `<domain>.gold_trades.source`, the source freshness | the lake ingest is behind the contract's 30 minutes (`gold.trades.ingest_ts`) | [lake-ingest-lag.md](./lake-ingest-lag.md); the marts follow once it commits |
 | `Failure in test <name>` | a mart's grain, envelope or a source test failed on real data | a finding, and already a row: `SELECT * FROM <domain>.dq.dbt_test_results WHERE status <> 'pass' ORDER BY run_started_at DESC`, and in `governance.quality_results.dq_results`. Read the test in `dbt/models/**/_*__models.yml`, rerun it by hand (below) |
-| every test `PASS`, then `Exited because of keyboard interrupt` and `Encountered an error: Database Error` | the `on-run-end` hook could not record the results (`dbt/macros/record_test_results.sql`): the domain's catalog is missing, the writer may not write it, or `dq.dbt_test_results` no longer has the hook's columns. The task fails; the tests' rows of that run are lost, the marts are built | the message names the catalog or the table. A catalog missing from Trino: [the rollout](#governance-rollout); a changed column: alter every domain's table to the hook's shape, or the governance view stops building too. Do not drop a results table to clear it: it is the record |
+| every test `PASS`, then `Exited because of keyboard interrupt` and `Encountered an error: Database Error` | the `on-run-end` hook could not record the results (`dbt/macros/record_test_results.sql`): the domain's catalog is missing, the writer may not write it, `dq.dbt_test_results` no longer has the hook's columns, or two hand runs created the missing table at once (`Table already exists`; the DAG creates it first, so only outside it). The task fails; the tests' rows of that run are lost, the marts are built | the message names the catalog or the table. A catalog missing from Trino: [the rollout](#governance-rollout); a changed column: alter every domain's table to the hook's shape, or the governance view stops building too. Do not drop a results table to clear it: it is the record |
 | `Catalog 'governance' not found` | catalog `governance` is not in Trino yet: the checkout is ahead of the stack | [the rollout](#governance-rollout); the other domains still build (`populate_cache: false`) |
 | `Query exceeded per-node memory limit` | a query outgrew Trino's 844.80MB per-node memory | ADR-035's revisit trigger: measure, then raise inside ADR-045's headroom |
 | the DAG is not in the list at all, or `list-import-errors` names `dbt_marts.py` | a stale bind mount of `docker/airflow/dags` or `dbt/`; or an image older than the checkout (no `cosmos` module, no `/opt/k2/dbt-venv`, or dbt and its packages behind `dbt/uv.lock` and `dbt/package-lock.yml`) | rebuild the image, then recreate the three Airflow services (below). The tag stays `k2-airflow:3.3.2`, so only a build replaces it |
@@ -108,7 +118,7 @@ K2_TRINO_USER=dbt_market_analytics uv run --locked dbt build --selector market_a
 #   record_test_results: 24 test result(s) into market_analytics.dq.dbt_test_results
 #   Done. PASS=31 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=31
 K2_TRINO_USER=dbt_governance uv run --locked dbt build --selector governance   # after the others
-#   Done. PASS=12 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=12         (make test-dbt's Trino)
+#   Done. PASS=13 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=13         (make test-dbt's Trino)
 cd ..
 ```
 
@@ -243,9 +253,46 @@ second (15:28:19 UTC, 2026-11-25), and with the results table's three, all seven
 
 Catalog `governance` exists in Trino only once its warehouse does and Trino has restarted with
 the generated `docker/trino/etc/catalog/governance.properties`. Until then the governance group
-fails with `Catalog 'governance' not found` and every other domain builds. The steps are in the
-pull request that added the domain ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md));
-once done:
+fails with `Catalog 'governance' not found` and every other domain builds. Once, after the pull
+request that added the domain ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md))
+is merged, in the live checkout. The outputs marked "before" are the stack's on 2026-11-25,
+read-only; the steps that change the stack (1, 2, 3, 5, 7) were not run for this page, and the
+note at the end closes them.
+
+```bash
+# 1. No dbt_marts run while Trino restarts.
+docker exec k2-airflow-scheduler airflow dags pause dbt_marts
+# 2. The merged main: the warehouse list, the catalog file, rules.json, the DAG and the models.
+git checkout main && git pull --ff-only
+# 3. lake-init creates the warehouses in docker/lake/generated/warehouses.txt that are missing
+#    (it only creates, ADR-044), then exits.
+docker compose up --force-recreate --no-deps lake-init
+# 4. The warehouses.
+curl -s 'http://localhost:18181/management/v1/warehouse?project-id=00000000-0000-0000-0000-000000000000' \
+  | jq -r '.warehouses[].name' | sort
+#   before: fx_reference k2 market_analytics market_capture reference_data (one per line)
+#   after: governance among them
+# 5. Trino with the new catalog and rules.json: down while it starts.
+docker compose up -d --force-recreate --no-deps trino
+timeout 180 sh -c 'until docker exec k2-trino trino --execute "SELECT 1" >/dev/null 2>&1; do sleep 5; done'
+docker exec k2-trino trino --execute 'SHOW CATALOGS'
+#   before: "fx_reference" "lake" "market_analytics" "market_capture" "reference_data" "system"
+#   after: "governance" among them
+# 6. The DAG parses, with the governance group and a results-table task per domain. No image
+#    rebuild: the change moves no dbt pin (the image test above, against k2-airflow:3.3.2 with
+#    this branch mounted, printed OK on 2026-11-25).
+docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow dags list-import-errors 2>/dev/null
+#   before: No data found
+docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow tasks list dbt_marts 2>/dev/null \
+  | grep -E '^governance|_test_results_table$'
+#   before: nothing (the live DAG listed market_analytics.* and its two maintenance tasks only)
+#   after: governance.* and governance_test_results_table, market_analytics_test_results_table
+# 7. Back on, and a run now rather than at minute 10.
+docker exec k2-airflow-scheduler airflow dags unpause dbt_marts
+docker exec k2-airflow-scheduler airflow dags trigger dbt_marts
+```
+
+When that run has ended (`airflow dags list-runs dbt_marts`, section 1):
 
 ```bash
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM governance'
@@ -270,4 +317,5 @@ docker exec k2-trino trino --execute "SELECT source_system, status, count(*)
 **Last verified:** 2026-11-25 against branch `feat/dbt-airflow-marts` on the live Trino 484, the
 Airflow commands in a throwaway `k2-airflow:dbt-test` container; the test-results rows, the
 hook's failure and the maintenance of `dq.dbt_test_results` against branch
-`feat/governance-dq-results` on the live Trino, the governance build on `make test-dbt`'s.
+`feat/governance-dq-results` on the live Trino, the governance build on `make test-dbt`'s; the
+rollout's "before" outputs read-only on the live stack, its steps that change the stack not run.
