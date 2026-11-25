@@ -23,27 +23,36 @@ def failures(default, governance=None, dockerfiles=()):
     return budget.check(default, governance or default, list(dockerfiles))[1]
 
 
-def test_one_shots_are_reported_but_not_gated():
-    # 15 CPU steady plus a 2 CPU one-shot: bootstrap is over 16, steady is not.
-    default = {"a": svc(15.0, 20), "init": svc(2.0, 1, restart="no")}
+def test_one_shots_count_towards_the_gated_bootstrap_peak():
+    # 19 CPU steady plus a 2 CPU one-shot: steady is under 20, bootstrap is not.
+    default = {"a": svc(19.0, 20), "init": svc(2.0, 1, restart="no")}
     report, fails = budget.check(default, default, [])
+    assert "19.00 CPU" in report[0] and "21.00 CPU" in report[1]
+    assert any("bootstrap default 21.00 CPU" in f and "ceiling" in f for f in fails)
+
+
+def test_at_the_ceiling_passes_and_just_over_it_fails():
+    assert failures({"a": svc(18.0, 30), "init": svc(2.0, 6, restart="no")}) == []
+    assert any("ceiling" in f for f in failures({"a": svc(18.0, 30), "init": svc(2.01, 1, restart="no")}))
+
+
+def test_memory_over_36_gib_fails():
+    assert any("ceiling" in f for f in failures({"a": svc(4.0, 35), "init": svc(0.5, 1.001, restart="no")}))
+
+
+def test_the_governance_profile_is_reported_not_gated():
+    default = {"a": svc(10.0, 20)}
+    governance = {**default, "catalog": svc(15.0, 20)}
+    report, fails = budget.check(default, governance, [])
     assert fails == []
-    assert "15.00 CPU" in report[0] and "17.00 CPU" in report[1]
+    assert "25.00 CPU" in report[2]
 
 
-def test_steady_over_the_cpu_ceiling_fails():
-    assert any("ceiling" in f for f in failures({"a": svc(10.0, 4), "b": svc(6.5, 4)}))
-
-
-def test_steady_over_40_gb_fails_even_under_40_gib():
-    # 38 GiB is 40.8e9 bytes: under 40 GiB, over the 40 GB the budget states.
-    assert any("ceiling" in f for f in failures({"a": svc(4.0, 38)}))
-
-
-def test_a_service_with_no_restart_key_counts_as_steady():
-    default = {"a": svc(17.0, 1)}
+def test_a_service_with_no_restart_key_is_reported_as_steady():
+    default = {"a": svc(1.0, 1), "init": svc(0.5, 1, restart="no")}
     del default["a"]["restart"]
-    assert any("ceiling" in f for f in failures(default))
+    report, _ = budget.check(default, default, [])
+    assert "1 services" in report[0] and "1.00 CPU" in report[0]
 
 
 def test_untagged_or_latest_image_fails_and_a_digest_passes():

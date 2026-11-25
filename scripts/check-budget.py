@@ -6,16 +6,19 @@
 Resolves the compose file twice, plain and with `--profile governance`, prints
 three limit sums and exits 1 on any of:
 
-- the steady default (long-running services only) above 16 CPU / 40 GB, the
-  single-host ceiling ADR-010 states. The two bootstrap sums are reported only.
+- the bootstrap default (every default-profile service, one-shots included,
+  because they run beside the rest at `docker compose up`) above 20 CPU /
+  36 GiB, the ceiling ADR-034 sets in place of ADR-010's 16 CPU / 40 GB. The
+  steady default and the governance bootstrap are reported only: governance is
+  outside the ceiling and needs a larger engine (plan README, Decisions).
 - a service in either config that does not declare both a CPU and a memory
   limit, so a service behind a profile cannot ship without one.
 - a compose image, or a Dockerfile FROM, with no tag or the tag `latest`.
 - a `pip install` package in a Dockerfile with no `==` version.
 
 A one-shot is a service with `restart: "no"`, the rule
-docs/operations/docker-resources.md already uses. A service with no restart
-key counts as steady, so leaving the key off cannot move it out of the gated sum.
+docs/operations/docker-resources.md already uses; it only decides which
+reported line a service lands on, since the gated sum counts both.
 Stdlib only: `docker compose config --format json` needs no YAML parser.
 """
 
@@ -27,10 +30,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 GIB = 2**30
-CPU_CEILING = 16.0
-# 40 GB as ADR-010 writes it, read literally: 37.25 GiB. Compose limits are
-# GiB (docker-resources.md), so this is the stricter of the two readings.
-MEM_CEILING = 40 * 10**9
+CPU_CEILING = 20.0
+# GiB, the unit compose limits are in (docs/operations/docker-resources.md).
+MEM_CEILING = 36 * GIB
 
 
 def compose_services(*profile: str) -> dict:
@@ -94,11 +96,11 @@ def check(default: dict, governance: dict, dockerfiles: list[tuple[str, str]]) -
         report.append(f"{label:<21} {len(services):>3} services  {cpu:6.2f} CPU  {mem / GIB:7.3f} GiB")
 
     failures = []
-    cpu, mem = total(steady)
+    cpu, mem = total(default)
     if cpu > CPU_CEILING or mem > MEM_CEILING:
         failures.append(
-            f"steady default {cpu:.2f} CPU / {mem / GIB:.3f} GiB is over the "
-            f"{CPU_CEILING:g} CPU / 40 GB ({MEM_CEILING / GIB:.2f} GiB) ceiling"
+            f"bootstrap default {cpu:.2f} CPU / {mem / GIB:.3f} GiB is over the "
+            f"{CPU_CEILING:g} CPU / {MEM_CEILING / GIB:g} GiB ceiling"
         )
     every = {**default, **governance}
     no_limits = sorted(n for n, s in every.items() if not {"cpus", "memory"} <= limits(s).keys())
@@ -126,7 +128,7 @@ def main() -> int:
     for f in failures:
         print(f"FAIL: {f}")
     if not failures:
-        print(f"PASS: steady default within 16 CPU / 40 GB; limits and pins hold "
+        print(f"PASS: bootstrap default within {CPU_CEILING:g} CPU / {MEM_CEILING / GIB:g} GiB; limits and pins hold "
               f"across {len(dockerfiles)} Dockerfiles")
     return 1 if failures else 0
 
