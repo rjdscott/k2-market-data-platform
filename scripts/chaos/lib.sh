@@ -166,79 +166,75 @@ wait_healthy() {
 
 # ── the scheduled ingest ────────────────────────────────────────────────────
 #
-# Every lake fault below races the `1-59/5 * * * *` lake-ingest-5min deployment.
-# Two things go wrong if it lands inside the window: `docker/lake/ingest.py`'s
-# flock makes the second run exit 75, which reads as the fault having broken the
-# ingest; and the before/after row-count assertions in lake-lakekeeper-stop.sh
-# and lake-minio-stop.sh see a legitimate commit and call it a partial one.
+# Every lake fault below races the `1-59/5 * * * *` lake_ingest DAG (ADR-034,
+# docker/airflow/dags/lake.py). Two things go wrong if it lands inside the
+# window: `docker/lake/ingest.py`'s flock makes the second run exit 75, which
+# reads as the fault having broken the ingest; and the before/after row-count
+# assertions in lake-lakekeeper-stop.sh and lake-minio-stop.sh see a
+# legitimate commit and call it a partial one.
 #
-# The Prefect 3.6 CLI pauses a SCHEDULE, by id, not a deployment — `prefect
-# deployment pause` does not exist, and `--all` would take out lake-maintenance
-# as well. So: read the schedule ids, pause each, and resume them from a trap.
+# A paused DAG gets no new run and no new task started, whatever state its
+# runs are in: there is no work queue to pause beside it, and max_active_runs=1
+# means at most one run was already under way. That one is waited out below.
 
-LAKE_DEPLOYMENT="${K2_LAKE_DEPLOYMENT:-lake-ingest/lake-ingest-5min}"
-PREFECT_CONTAINER="${K2_PREFECT_CONTAINER:-k2-prefect-server}"
+LAKE_DAG="${K2_LAKE_DAG:-lake_ingest}"
+AIRFLOW_CONTAINER="${K2_AIRFLOW_CONTAINER:-k2-airflow-scheduler}"
 SPARK_CONTAINER="${K2_SPARK_CONTAINER:-k2-spark-iceberg}"
-LAKE_SCHEDULE_IDS=""
-LAKE_POOL="${K2_LAKE_POOL:-lake}"
-LAKE_QUEUE="${K2_LAKE_QUEUE:-default}"
-LAKE_QUEUE_PAUSED=""
+LAKE_DAG_PAUSED=""
 
-# _lake_schedules -> whitespace-separated ids of the ACTIVE schedules for
-# LAKE_DEPLOYMENT.
-#
-# `active` matters because the ids are also what the trap resumes. A schedule
-# the maintainer had already paused by hand is not ours to un-pause, and
-# recording it here means a chaos run ends by starting a 5-minute ingest that
-# was deliberately off. Filtering on the way in is the fix — pause_lake_ingest
-# and resume_lake_ingest then act on exactly the set this run turned off.
-_lake_schedules() {
-  docker exec "$PREFECT_CONTAINER" \
-    prefect deployment schedule ls "$LAKE_DEPLOYMENT" -o json 2>/dev/null \
-    | python3 -c 'import json,sys
-print(" ".join(s["id"] for s in json.load(sys.stdin) if s.get("active")))' \
-      2>/dev/null || true
+# airflow_cli <args...> -> the Airflow CLI's last line of stdout, which with
+# `-o json` is the JSON (the CLI can print warnings above it). Empty when the
+# scheduler container is not there, never fatal.
+airflow_cli() {
+  docker exec -e PYTHONWARNINGS=ignore "$AIRFLOW_CONTAINER" airflow "$@" 2>/dev/null | tail -n 1 || true
 }
 
-# pause_lake_ingest — never fatal. A stack where the deployment is not
-# registered is a legitimate one to run chaos against; it just has nothing to
-# pause, and saying so beats dying.
+# airflow_task_in_flight <dag_id> -> 0 if a task of a running run of <dag_id>
+# is queued or running: the executor has it, so its driver is running or about
+# to start. The task, not the run: the scheduler stops examining a paused
+# DAG's runs, so a run whose task has finished stays `running` until unpause,
+# and a task still `scheduled` or `up_for_retry` is not started while paused.
+airflow_task_in_flight() {
+  local run
+  while read -r run; do
+    [ -n "$run" ] || continue
+    airflow_cli tasks states-for-dag-run "$1" "$run" -o json \
+      | python3 -c 'import json,sys; sys.exit(not any(t["state"] in ("queued", "running") for t in json.load(sys.stdin)))' \
+          2>/dev/null && return 0
+  done < <(airflow_cli dags list-runs "$1" --state running -o json \
+             | python3 -c 'import json,sys; print("\n".join(r["run_id"] for r in json.load(sys.stdin)))' 2>/dev/null)
+  return 1
+}
+
+# pause_lake_ingest: never fatal. A stack where the DAG is not registered is a
+# legitimate one to run chaos against; it just has nothing to pause, and saying
+# so beats dying.
+#
+# `airflow dags pause` changes a DAG only if it is unpaused, and prints it
+# (with its old state) only when it did, so its own output says whether this
+# run paused it. A DAG the maintainer had paused by hand prints "No unpaused
+# DAGs were found", is not recorded, and is not ours to unpause: a chaos run
+# must not end by starting a 5-minute ingest that was deliberately off.
 pause_lake_ingest() {
-  local id
-  LAKE_SCHEDULE_IDS=$(_lake_schedules)
-  if [ -z "$LAKE_SCHEDULE_IDS" ]; then
-    echo "→ NOTE: no ACTIVE schedule for $LAKE_DEPLOYMENT — nothing to pause." >&2
+  if airflow_cli dags pause "$LAKE_DAG" -o json | grep -qF "\"dag_id\": \"$LAKE_DAG\""; then
+    LAKE_DAG_PAUSED=1
+    echo "→ paused $LAKE_DAG for the duration of this run" >&2
+  else
+    echo "→ NOTE: $LAKE_DAG is not an unpaused DAG in $AIRFLOW_CONTAINER (paused by hand, not registered, or the scheduler is down): nothing to pause." >&2
     echo "  If the 5-minute ingest IS running, this test may race it." >&2
-    return 0
   fi
-  for id in $LAKE_SCHEDULE_IDS; do
-    docker exec "$PREFECT_CONTAINER" \
-      prefect deployment schedule pause "$LAKE_DEPLOYMENT" "$id" >/dev/null 2>&1 \
-      || echo "→ WARNING: could not pause schedule $id" >&2
-  done
-  # A schedule pause deletes only FUTURE auto-scheduled runs. Past-due runs and
-  # runs waiting on the deployment's concurrency slot still dispatch, and after
-  # an outage there is a backlog of them: on 2026-11-24 two fired inside a
-  # lake-verify window. A paused work queue dispatches nothing, whatever state
-  # the run is in. Only un-pause it in the trap if this run paused it.
-  if docker exec "$PREFECT_CONTAINER" prefect work-queue inspect "$LAKE_QUEUE" --pool "$LAKE_POOL" -o json 2>/dev/null \
-       | grep -q '"is_paused": false'; then
-    if docker exec "$PREFECT_CONTAINER" prefect work-queue pause "$LAKE_QUEUE" --pool "$LAKE_POOL" >/dev/null 2>&1; then
-      LAKE_QUEUE_PAUSED=1
-    else
-      echo "→ WARNING: could not pause work queue $LAKE_POOL/$LAKE_QUEUE" >&2
-    fi
-  fi
-  echo "→ paused $LAKE_DEPLOYMENT for the duration of this run" >&2
-  # Pausing the schedule does not stop a run already in flight, and every lake
-  # writer takes the same flock (docker/lake/lock.py) — an ingest this script
-  # starts while one is running exits 75 at the lock, which the first
-  # lake-corrupt-payload run misread as "blocked by the bad record" (2026-08-27).
-  local waited=0
-  while docker exec "$SPARK_CONTAINER" pgrep -f 'lake/(ingest|maintenance)\.py' >/dev/null 2>&1; do
-    if [ "$waited" -eq 0 ]; then echo "→ waiting for the in-flight lake job to finish" >&2; fi
-    sleep "${K2_LAKE_WAIT_STEP:-5}"; waited=$((waited + 5))
-    if [ "$waited" -ge 300 ]; then die "a lake job has held the lock for 5 min, not starting another under it"; fi
+  # Pausing does not stop a run already in flight, and every lake writer takes
+  # the same flock (docker/lake/lock.py): an ingest this script starts while
+  # one is running exits 75 at the lock, which the first lake-corrupt-payload
+  # run misread as "blocked by the bad record" (2026-08-27). Two checks: the
+  # driver in the Spark container, and an Airflow task the executor already
+  # holds whose driver has not started yet.
+  local start=$SECONDS said=""
+  while docker exec "$SPARK_CONTAINER" pgrep -f 'lake/(ingest|maintenance)\.py' >/dev/null 2>&1 \
+        || airflow_task_in_flight "$LAKE_DAG"; do
+    [ -n "$said" ] || { echo "→ waiting for the in-flight lake job to finish" >&2; said=1; }
+    sleep "${K2_LAKE_WAIT_STEP:-5}"
+    if [ $((SECONDS - start)) -ge 300 ]; then die "a lake job has held the lock for 5 min, not starting another under it"; fi
   done
   # Explicit: a `while` returns its last body command's status, and with the
   # `[ ... ] && ...` form that was 1 whenever the loop had waited at all, so a
@@ -247,21 +243,16 @@ pause_lake_ingest() {
 }
 
 # resume_lake_ingest — idempotent, so it is safe in a trap that may fire twice.
+# Unpausing creates a run for the most recent slot at once (catchup=False
+# still runs the latest one), so the ingest resumes within a scheduler loop.
 resume_lake_ingest() {
-  local id
-  if [ -n "$LAKE_QUEUE_PAUSED" ]; then
-    docker exec "$PREFECT_CONTAINER" prefect work-queue resume "$LAKE_QUEUE" --pool "$LAKE_POOL" >/dev/null 2>&1 \
-      || echo "→ WARNING: could not resume work queue $LAKE_POOL/$LAKE_QUEUE, resume it by hand" >&2
-    LAKE_QUEUE_PAUSED=""
+  [ -n "$LAKE_DAG_PAUSED" ] || return 0
+  LAKE_DAG_PAUSED=""
+  if [ -z "$(airflow_cli dags unpause "$LAKE_DAG" -o json)" ]; then
+    echo "→ WARNING: could not unpause $LAKE_DAG, unpause it by hand: docker exec $AIRFLOW_CONTAINER airflow dags unpause $LAKE_DAG" >&2
+    return 0
   fi
-  [ -n "$LAKE_SCHEDULE_IDS" ] || return 0
-  for id in $LAKE_SCHEDULE_IDS; do
-    docker exec "$PREFECT_CONTAINER" \
-      prefect deployment schedule resume "$LAKE_DEPLOYMENT" "$id" >/dev/null 2>&1 \
-      || echo "→ WARNING: could not resume schedule $id — resume it by hand" >&2
-  done
-  LAKE_SCHEDULE_IDS=""
-  echo "→ resumed $LAKE_DEPLOYMENT" >&2
+  echo "→ resumed $LAKE_DAG" >&2
 }
 
 # ── reporting ───────────────────────────────────────────────────────────────

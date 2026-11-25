@@ -22,7 +22,7 @@
 # a quiet partition would otherwise drift past the window between the two runs —
 # which reads here as a false "NOT idempotent".
 #
-# The 5-minute lake-ingest-5min schedule is paused for the duration and resumed
+# The 5-minute lake_ingest Airflow DAG is paused for the duration and unpaused
 # from a trap. A scheduled run landing between the two cycles reads records this
 # script's window does not cover, and the flock in ingest.py makes an overlapping
 # one exit 75, either way the result would be a failure that says nothing about
@@ -59,8 +59,8 @@ die() { printf 'lake-verify: %s\n' "$*" >&2; exit 1; }
 docker inspect -f '{{.State.Running}}' "$SPARK" 2>/dev/null | grep -qx true \
   || die "$SPARK is not running. Bring the stack up first: make up"
 
-# Trap first: resume is a no-op until the pause records ids, and a death inside
-# the pause must not leave the schedule off.
+# Trap first: resume is a no-op until the pause records that it paused, and a
+# death inside the pause must not leave the DAG off.
 trap resume_lake_ingest EXIT
 pause_lake_ingest
 

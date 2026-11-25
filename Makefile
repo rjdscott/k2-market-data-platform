@@ -125,7 +125,7 @@ lake-verify:  ## Lake exit criteria against the LIVE stack: offsets gapless, eve
 	bash scripts/lake-verify.sh
 
 # Drops and re-decodes a whole lake layer from its parent, under the writer
-# lock, one day per venue at a time. Pause lake-ingest-5min first (see
+# lock, one day per venue at a time. Pause the lake_ingest DAG first (see
 # docker/lake/rebuild.py). EXCHANGE=kraken limits it to one venue.
 lake-rebuild:  ## Rebuild LAYER=bronze|silver|gold|books|bars from its parent over the whole archive (LIVE stack; minutes to hours)
 	docker exec k2-spark-iceberg python3 /home/iceberg/lake/rebuild.py --layer $(or $(LAYER),bronze) $(if $(EXCHANGE),--exchange $(EXCHANGE),)

@@ -23,7 +23,7 @@
 # BLAST RADIUS IS THE WHOLE STACK, NOT JUST CAPTURE. Redpanda is the single
 # broker and the single schema registry, so stopping it takes down every
 # producer and consumer at once: all three capture containers, ClickHouse's
-# Kafka-engine consumers, Redpanda Console, and Prefect. The exchange passed on
+# Kafka-engine consumers, Redpanda Console, and the lake ingest. The exchange passed on
 # the command line is only the one being *measured*. The broker is down for the alert's `for: 5m` plus the
 # wait, ~15 minutes worst case (the 900 s `wait_for_alert` is the binding cap). The run ends with an explicit
 # `rpk cluster health` rather than assuming a clean return.
@@ -51,7 +51,7 @@ ALERT=CaptureProduceErrors
 
 banner "redpanda-stop.sh --exchange $EXCHANGE cold_start=$COLD_START" \
   "$ALERT" docs/runbooks/capture-down.md \
-  "docker stop k2-redpanda — broker AND schema registry, one process, WHOLE STACK (all capture containers, ClickHouse, Console, Prefect)"
+  "docker stop k2-redpanda: broker AND schema registry, one process, WHOLE STACK (all capture containers, ClickHouse, Console, the lake ingest)"
 
 produced_before=$(prom_query "$PRODUCED"); produced_before=${produced_before:-0}
 drops_before=$(prom_query "$DROPS"); drops_before=${drops_before:-0}
