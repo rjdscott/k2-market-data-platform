@@ -9,7 +9,8 @@ declare (contracts/domains.yaml, contracts/<domain>/<product>/product.yaml). Fai
 1. Layering: a model outside staging that selects from a source. A lake table is read
    by one staging view per domain; marts and intermediate models read those.
 2. Place: a model whose catalog is not a domain's fence name (ADR-044).
-3. Marts, each model under models/<catalog>/marts/: it is a table; a contract declares
+3. Marts, each model under models/<catalog>/marts/: it is a table, or a view where its
+   product says so (ADR-035's delayed product); a contract declares
    it at its relation <catalog>.<product>.<model>; it has a uniqueness test on exactly
    the contract's grain, over the whole table (no row_condition, no where); and the lake
    tables it reads, through any number of models, are exactly the contract's `reads`.
@@ -82,8 +83,8 @@ def check(manifest: dict, fences: set[str], marts: dict[str, dict]) -> list[str]
             continue
         relation = f"{node['database']}.{node['schema']}.{node['alias']}"
         built.add(relation)
-        if node["config"]["materialized"] != "table":
-            errors.append(f"{where}: a mart is a table, not a {node['config']['materialized']} (dbt_project.yml, one block per domain)")
+        if node["config"]["materialized"] not in ("table", "view"):
+            errors.append(f"{where}: a mart is a table or a view, not {node['config']['materialized']} (dbt_project.yml, one block per domain)")
         mart = marts.get(relation)
         if mart is None:
             errors.append(f"{where}: builds {relation}, which no product.yaml declares under marts")

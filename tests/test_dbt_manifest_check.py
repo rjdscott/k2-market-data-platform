@@ -87,9 +87,11 @@ def test_a_core_unique_test_counts_for_a_one_column_grain(manifest):
     assert check(manifest, FENCES, marts) == []
 
 
-def test_a_mart_that_is_a_view_fails(manifest):
-    manifest["nodes"][MART]["config"]["materialized"] = "view"
-    assert [e for e in check(manifest, FENCES, MARTS) if "a mart is a table, not a view" in e]
+def test_a_mart_is_a_table_or_a_view_and_nothing_else(manifest):
+    manifest["nodes"][MART]["config"]["materialized"] = "view"  # ADR-035: the delayed product is one
+    assert check(manifest, FENCES, MARTS) == []
+    manifest["nodes"][MART]["config"]["materialized"] = "ephemeral"
+    assert [e for e in check(manifest, FENCES, MARTS) if "a mart is a table or a view, not ephemeral" in e]
 
 
 def test_an_undeclared_mart_and_a_declared_mart_with_no_model_both_fail(manifest):

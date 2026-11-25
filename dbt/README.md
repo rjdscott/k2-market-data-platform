@@ -65,7 +65,8 @@ folder, a three-line block in `dbt_project.yml` that makes its marts tables, and
 its contracts; `make generate` gives it a selector.
 
 `scripts/dbt_manifest_check.py` holds the project to that on the compiled manifest: only
-staging selects from a source; every model is in a domain's catalog; every mart is a table, is
+staging selects from a source; every model is in a domain's catalog; every mart is a table (or
+a view, where it says so, as ADR-035's delayed product will), is
 declared at its relation, reads exactly the tables its contract says, and has a uniqueness test
 over the whole table on exactly its contract grain.
 
