@@ -42,7 +42,10 @@ S3_PATH_STYLE = os.environ.get("K2_S3_PATH_STYLE", "true")
 SCHEMA_REGISTRY_URL = os.environ.get("K2_SCHEMA_REGISTRY_URL", "http://redpanda:8081")
 KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 
-# Driver heap, pinned rather than inherited. `spark-iceberg` is capped at 2 CPU
+# Driver heap, pinned rather than inherited. What follows down to "The trigger
+# fired" is the 2026-08 sizing, kept as the record of why 768m was chosen: the
+# container was capped at 2 CPU and 4 GiB then (3 CPU and 8 GiB now), and the
+# default is no longer 768m. `spark-iceberg` was capped at 2 CPU
 # and 4 GiB, and that budget is NOT empty before a job starts: the base image
 # runs a standalone Master, a Worker, the History Server, a Thrift Server and
 # Jupyter for the whole life of the container. Idle, with no driver at all,
@@ -88,7 +91,7 @@ KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 # re-deriving this figure. Peak RSS here is a function of the heap setting, not
 # of how much arrived.
 #
-# Revisit trigger: raise it back to `1g` if `lake-ingest-5min` fails with an
+# Revisit trigger (2026-08, fired 2026-11-25, see below): raise it back to `1g` if `lake-ingest-5min` fails with an
 # OOM-kill or `java.lang.OutOfMemoryError`. It did exactly that once, on
 # 2026-08-26, and the cause was a `persist(DISK_ONLY)` on a DataFrame carrying
 # 5.2 MB payload rows rather than an undersized heap — read
@@ -98,7 +101,30 @@ KAFKA_BROKERS = os.environ.get("K2_BROKERS", "redpanda:9092")
 # The other consumer is the `lake-ddl` one-shot, which gets its own container
 # with a 1 GiB limit — too small for 768m plus JVM overhead, so
 # docker-compose.yml sets `K2_LAKE_DRIVER_MEMORY: 512m` for that service only.
-DRIVER_MEMORY = os.environ.get("K2_LAKE_DRIVER_MEMORY", "768m")
+#
+# **The trigger fired, 2026-11-25: 768m to 1536m.** From 17:12 UTC the ingest died of
+# `java.lang.OutOfMemoryError: Java heap space` on most first attempts: 10 driver runs
+# with a failed stage among the History Server's last 40, and two DAG runs failed on
+# both tries. Each failed in the same place, the sort under the aggregate that feeds
+# the `gold.bars` append in stage 2d (`UnsafeSorterSpillReader.<init>`; the failed
+# stage is `append at DataFrameWriterV2`, `curl localhost:18080/api/v1/applications/
+# <id>/stages?status=failed` in the container). Stage 2d recomputes every touched
+# symbol-day of bars from all of that day's `gold.trades`, and the failed stages'
+# shuffle read was the size of the whole UTC day so far. So the input grows from
+# 00:00 UTC to 24:00 whatever the batch size, and is largest on a busy day's evening.
+# Nothing payload-bearing is cached; this is not the 2026-08-26 failure.
+#
+# `1g` above was written when the container was capped at 4 GiB. It is 8 GiB now and
+# the maintenance driver holds the ingest lock, so 1536m fits with room: measured on
+# the next run, by DAG param before this default moved (`airflow dags trigger
+# lake_ingest --conf '{"driver_memory": "1536m"}'`): one attempt, 253 s, no
+# OutOfMemoryError, peak driver RSS 2,259 MiB sampled every 20 s with `ps -o rss=` in
+# the container. The scheduled run before it, at 768m, failed on both tries.
+#
+# Revisit trigger: `OutOfMemoryError` in an ingest log again, or peak driver RSS above
+# 3 GiB. More heap buys time only: the bars recompute is linear in the day's trades,
+# and the fix for that is an incremental recompute, not a third raise.
+DRIVER_MEMORY = os.environ.get("K2_LAKE_DRIVER_MEMORY", "1536m")
 
 # maintenance.py gets a bigger heap: rewriting raw.messages file groups whose
 # rows are up to 5 MB each OOM'd at 768m twice on 2026-08-26 (22:16Z with five

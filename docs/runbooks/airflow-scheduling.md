@@ -504,7 +504,7 @@ maintenance run, which the rule excludes (cutover step 8 holds it for one).
 ## 4. Catch up after a long stall, with a bigger driver
 
 **When**, after an outage the 5-minute ingest reads `--max-offsets-per-partition` per
-partition per run and cannot close the gap, or dies of heap at its 768m default. A catch-up
+partition per run and cannot close the gap, or dies of heap at its 1536m default. A catch-up
 is a manual run with two params, not a shell loop: `driver_memory` sets
 `K2_LAKE_DRIVER_MEMORY` for that run and `max_offsets_per_partition` the flag (0 reads to
 latest). The Spark container is capped at 8 GiB; leave room for the 2g maintenance driver

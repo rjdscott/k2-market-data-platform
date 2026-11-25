@@ -140,7 +140,7 @@ with DAG(
             None,
             type=["null", "string"],
             pattern=r"^[1-9][0-9]*[mg]$",
-            description="K2_LAKE_DRIVER_MEMORY for this run, e.g. 2g. Default 768m "
+            description="K2_LAKE_DRIVER_MEMORY for this run, e.g. 2g. Default 1536m "
             "(docker/lake/spark_conf.py). The Spark container is capped at 8 GiB.",
         ),
         "max_offsets_per_partition": Param(
