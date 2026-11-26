@@ -95,6 +95,11 @@ make parity-ohlcv parity-bars   # live three-way parity at tests/parity/pinned.j
 Parity cannot run in GitHub's CI (no stack there), so this is the only place it gates a
 tag. A failure prints the first differing rows; the Python reference is the arbiter.
 
+A candle run that ends `PARITY: ok (1 known gap applied, see above)` passes only if the
+release report names the applied gap: its window, cause and `audit_ref`, as the run printed
+them. With a gap listed, the three-way guarantee holds for every minute of the pinned day
+except the listed one, and the report says so (`tests/parity/README.md`, "Known gaps").
+
 ## 5. Grep sweep — forbidden strings in published docs
 
 ```bash

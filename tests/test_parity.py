@@ -1085,23 +1085,28 @@ def test_pin_current_takes_a_day_then_the_rest(tmp_path):
 # ─────────────────────────────────────────────────────────────────────────────
 # Known gaps: `known_gaps` in tests/parity/pinned.json, scripts/parity_ohlcv.py
 #
-# A gap takes one listed window out of the comparisons it names, and nothing else.
-# These hold what it promises: only the named side skips the window, a minute either
-# side of it still fails, a gap that removes nothing fails, every rule on an entry
-# stops the run, and a run with a gap applied never reads as a clean PASS. Made-up
-# buckets on 2001-01-01, every side stubbed.
+# A gap takes one listed window out of ClickHouse against the lake, and nothing else.
+# These hold what it promises: the other comparisons still see the window, a minute
+# either side of it still fails, a gap with no difference left in it fails, every rule
+# on an entry stops the run, and a run with a gap applied never reads as a clean PASS.
+# Made-up buckets on 2001-01-01, every side stubbed.
 # ─────────────────────────────────────────────────────────────────────────────
 
 from parity_ohlcv import GAP_FIELDS, load_gaps, verdict  # noqa: E402
 
 _DAY = "2001-01-01"
+# An outage from 00:00:30 to 00:04:10: rounded out to whole minutes, 00:00 to 00:05.
+_REF = "lake.audit.checks job=operator check_name=capture_outage scope=stack/2001-01-01T00:00:30Z..2001-01-01T00:04:10Z"
 
 
 def _gap(**over):
-    """A valid entry: 00:01 to 00:02 on 2001-01-01, ClickHouse against the lake only."""
+    """A valid entry: 00:01 to 00:02 on 2001-01-01, inside _REF's outage."""
     return {"start": "2001-01-01T00:01Z", "end": "2001-01-01T00:02Z", "sides": ["clickhouse"],
-            "cause": "the host killed the VM", "recorded": "2001-01-02",
-            "audit_ref": "audit.checks job=operator check_name=hot_tier_divergence", **over}
+            "cause": "the host killed the VM", "recorded": "2001-01-02", "audit_ref": _REF, **over}
+
+
+def _ref(scope):
+    return f"lake.audit.checks job=operator check_name=capture_outage scope=stack/{scope}"
 
 
 def _bucket(minute, close=2):
@@ -1111,8 +1116,8 @@ def _bucket(minute, close=2):
 _CLEAN = [_bucket(m) for m in range(3)]  # minutes 00:00, 00:01, 00:02
 
 
-def _differs_at(minute):
-    return [_bucket(m, close=9 if m == minute else 2) for m in range(3)]
+def _differs_at(*minutes):
+    return [_bucket(m, close=9 if m in minutes else 2) for m in range(3)]
 
 
 class _Q:
@@ -1141,17 +1146,17 @@ def _main(monkeypatch, capsys, gaps, *, clickhouse=_CLEAN, silver=_CLEAN, dbt=_C
     return code, capsys.readouterr().out
 
 
-def test_a_difference_inside_a_known_gap_on_its_side_is_skipped(monkeypatch, capsys):
+def test_a_difference_inside_a_known_gap_is_skipped(monkeypatch, capsys):
     code, out = _main(monkeypatch, capsys, [_gap()], clickhouse=_differs_at(1))
     assert code == 0
-    assert ("known gap 2001-01-01T00:01Z to 2001-01-01T00:02Z (the host killed the VM): "
+    assert (f"known gap 2001-01-01T00:01Z to 2001-01-01T00:02Z (the host killed the VM; {_REF}): "
             "1 buckets removed, 1 of them differing") in out
     assert "clickhouse.ohlcv_live vs lake.gold.ohlcv_1m: 2 buckets, 0 differ" in out
     assert out.rstrip().endswith("PARITY: ok (1 known gap applied, see above)")
 
 
 @pytest.mark.parametrize("side", ["silver", "dbt"])
-def test_the_same_difference_on_a_side_the_gap_does_not_name_still_fails(monkeypatch, capsys, side):
+def test_the_same_difference_against_silver_or_dbt_still_fails(monkeypatch, capsys, side):
     code, out = _main(monkeypatch, capsys, [_gap()], clickhouse=_differs_at(1), **{side: _differs_at(1)})
     assert code == 1
     assert "PARITY: FAIL (1 known gap applied, see above)" in out
@@ -1159,25 +1164,28 @@ def test_the_same_difference_on_a_side_the_gap_does_not_name_still_fails(monkeyp
 
 @pytest.mark.parametrize("minute", [0, 2])  # the minute before start, and end itself: end is exclusive
 def test_a_difference_one_minute_outside_the_gap_still_fails(monkeypatch, capsys, minute):
-    code, out = _main(monkeypatch, capsys, [_gap()], clickhouse=_differs_at(minute))
+    # The gap's own minute differs too, so the gap is live and only the outside minute can fail the run.
+    code, out = _main(monkeypatch, capsys, [_gap()], clickhouse=_differs_at(1, minute))
     assert code == 1
+    assert "1 buckets removed, 1 of them differing" in out
     assert "clickhouse.ohlcv_live vs lake.gold.ohlcv_1m: 2 buckets, 1 differ" in out
 
 
 def test_a_gap_that_matches_no_bucket_fails_the_run(monkeypatch, capsys):
     # Every side agrees; the gap names a minute with no bucket on either side: a typo, or stale.
-    code, out = _main(monkeypatch, capsys, [_gap(start="2001-01-01T00:05Z", end="2001-01-01T00:06Z")])
+    code, out = _main(monkeypatch, capsys, [_gap(start="2001-01-01T00:03Z", end="2001-01-01T00:04Z")])
     assert code == 1
     assert "0 buckets removed, 0 of them differing: FAIL, it matches no bucket" in out
 
 
-def test_a_gap_whose_window_now_matches_is_a_notice_not_a_failure(monkeypatch, capsys):
+def test_a_gap_whose_window_now_matches_fails_the_run(monkeypatch, capsys):
+    # A dead exclusion must not stay in the pin: the next difference in that minute would hide behind it.
     code, out = _main(monkeypatch, capsys, [_gap()])
-    assert code == 0
-    assert "1 buckets removed, 0 of them differing: notice, the window now matches in full" in out
+    assert code == 1
+    assert "1 buckets removed, 0 of them differing: FAIL, its window now matches in full" in out
 
 
-def test_a_gap_on_a_side_not_run_is_printed_and_leaves_a_clean_pass(monkeypatch, capsys):
+def test_a_gap_not_applied_is_printed_and_leaves_a_clean_pass(monkeypatch, capsys):
     code, out = _main(monkeypatch, capsys, [_gap()], flags=("--skip-clickhouse",))
     assert code == 0
     assert "not applied: clickhouse not compared in this run" in out
@@ -1188,7 +1196,6 @@ def test_the_summary_says_pass_only_when_nothing_was_left_out():
     assert verdict(0, 0) == "PARITY: PASS"
     assert verdict(3, 0) == "PARITY: FAIL"
     assert verdict(0, 1) == "PARITY: ok (1 known gap applied, see above)"
-    assert verdict(0, 2) == "PARITY: ok (2 known gaps applied, see above)"
     assert verdict(1, 1) == "PARITY: FAIL (1 known gap applied, see above)"
 
 
@@ -1208,18 +1215,29 @@ def _without(field):
         (_gap(end="2001-01-01T01:02Z"), "longer than 60 minutes"),
         (_gap(start="2000-12-31T23:59Z"), "not inside the day compared, 2001-01-01"),
         (_gap(start="2001-01-01T23:59Z", end="2001-01-02T00:01Z"), "not inside the day compared"),
-        (_gap(start="2001-01-01T00:01"), "not a UTC time"),  # no zone
-        (_gap(start="2001-01-01T10:01+10:00"), "not a UTC time"),  # the same instant, not written in UTC
-        (_gap(start="2001-01-01T00:00:30Z"), "not a UTC time to the minute"),
-        (_gap(start="yesterday"), "not a UTC time"),
-        (_gap(sides=[]), "sides"),
-        (_gap(sides=["lake"]), "sides"),
-        (_gap(sides=["clickhouse", "clickhouse"]), "sides"),
-        (_gap(sides="clickhouse"), "sides"),
+        # Time text: exactly YYYY-MM-DDTHH:MMZ.
+        (_gap(start="2001-01-01T00:01"), "not written exactly like 2001-01-01T00:00Z"),  # no zone
+        (_gap(start="2001-01-01T10:01+10:00"), "not written exactly"),  # the same instant, not in UTC
+        (_gap(start="2001-01-01T00:00:30Z"), "not written exactly"),  # seconds
+        (_gap(start="20010101T0001Z"), "not written exactly"),  # basic format
+        (_gap(start="2001-W01-1T00:01Z"), "not written exactly"),  # week date
+        (_gap(start="2001-01-01T00Z"), "not written exactly"),  # no minutes
+        (_gap(start="2001-1-1T0:1Z"), "not written exactly"),  # unpadded
+        (_gap(start="yesterday"), "not written exactly"),
+        (_gap(recorded="20010102"), "not written exactly like 2001-01-01"),
+        # Sides: ClickHouse against the lake, and only that.
+        *[(_gap(sides=s), r"must be \['clickhouse'\]: lake against DuckDB over silver and lake against dbt")
+          for s in ([], ["silver"], ["dbt"], ["clickhouse", "silver"], ["clickhouse", "clickhouse"], "clickhouse")],
         (_gap(cause=""), "cause is not a non-empty string"),
-        (_gap(audit_ref="  "), "audit_ref is not a non-empty string"),
-        (_gap(audit_ref=None), "audit_ref is not a non-empty string"),
-        (_gap(recorded="soon"), "soon"),
+        # audit_ref: the exact form, and an outage the window sits inside.
+        (_gap(audit_ref="  "), "is not 'lake.audit.checks job=<job> check_name=<name> scope=stack/"),
+        (_gap(audit_ref=None), "is not 'lake.audit.checks"),
+        (_gap(audit_ref="audit.checks job=operator check_name=capture_outage"), "is not 'lake.audit.checks"),
+        (_gap(audit_ref=_ref("2001-01-01T00:00Z..2001-01-01T00:05Z")), "not written exactly like 2001-01-01T00:00:00Z"),
+        (_gap(audit_ref=_ref("2001-01-01T00:04:10Z..2001-01-01T00:00:30Z")), "does not end after it starts"),
+        (_gap(audit_ref=_ref("2001-01-01T00:02:10Z..2001-01-01T00:04:00Z")),
+         "not inside the audit row's scope, rounded out to whole minutes: 2001-01-01T00:02Z to 2001-01-01T00:04Z"),
+        (_gap(audit_ref=_REF + " extra"), "is not 'lake.audit.checks"),
         ("2001-01-01T00:01Z", "not an object"),
     ],
 )
@@ -1228,17 +1246,24 @@ def test_a_gap_that_breaks_a_rule_stops_the_run(gap, message):
         load_gaps([gap], _DAY)
 
 
-def test_more_than_five_gaps_or_not_a_list_stops_the_run():
-    five = [_gap(start=f"2001-01-01T0{i}:00Z", end=f"2001-01-01T0{i}:01Z") for i in range(5)]
-    assert len(load_gaps(five, _DAY)) == 5
-    with pytest.raises(SystemExit, match="more than 5"):
-        load_gaps([*five, _gap()], _DAY)
+def test_a_second_gap_or_not_a_list_stops_the_run():
+    with pytest.raises(SystemExit, match="at most 1: a second incident .* ADR-029's 2026-11-26 Outcome"):
+        load_gaps([_gap(), _gap(start="2001-01-01T00:02Z", end="2001-01-01T00:03Z")], _DAY)
     with pytest.raises(SystemExit, match="not a list"):
         load_gaps(_gap(), _DAY)
 
 
+def test_the_audit_scope_is_rounded_out_to_whole_minutes():
+    # The 2026-11-25 shape: capture went off at :43 seconds, so that whole minute is in scope; the next is not.
+    ref = _ref("2001-01-01T00:01:43Z..2001-01-01T00:01:50Z")
+    assert load_gaps([_gap(audit_ref=ref)], _DAY)[0]["hi"] == datetime(2001, 1, 1, 0, 2)
+    with pytest.raises(SystemExit, match="not inside the audit row's scope"):
+        load_gaps([_gap(end="2001-01-01T00:03Z", audit_ref=ref)], _DAY)
+
+
 def test_the_widest_gap_is_sixty_minutes_and_it_may_end_at_midnight():
-    (gap,) = load_gaps([_gap(start="2001-01-01T23:00Z", end="2001-01-02T00:00Z")], _DAY)
+    ref = _ref("2001-01-01T22:59:59Z..2001-01-02T00:00:00Z")
+    (gap,) = load_gaps([_gap(start="2001-01-01T23:00Z", end="2001-01-02T00:00Z", audit_ref=ref)], _DAY)
     assert (gap["lo"], gap["hi"]) == (datetime(2001, 1, 1, 23), datetime(2001, 1, 2))
 
 
@@ -1248,7 +1273,9 @@ def test_the_committed_pins_known_gaps_are_valid_for_its_day():
     load_gaps(pin.get("known_gaps", []), pin["day"])
 
 
-def test_the_wrapper_passes_the_pins_known_gaps(tmp_path):
+@pytest.mark.parametrize("pin_current", [False, True])
+def test_the_wrapper_passes_the_pins_known_gaps(tmp_path, pin_current):
+    # Both forms: a day with a listed gap can only be pinned if --pin-current forwards it.
     pin = {"day": _DAY, "ohlcv_1m_snapshot": 1, "silver_snapshots": {"x": 5}, "known_gaps": [_gap()]}
-    given = _wrapper(tmp_path, pin=pin)
+    given = _wrapper(tmp_path, *(["--pin-current", _DAY] if pin_current else []), pin=pin)
     assert json.loads(given[given.index("--known-gaps") + 1]) == [_gap()]

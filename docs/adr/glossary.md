@@ -623,13 +623,14 @@ Where: [ADR-029](ADR-029-research-production-parity-contract.md); `scripts/parit
 
 ### Known gap
 
-A known gap is a window of the pinned day, at most 60 minutes, that the candle parity leaves
-out of the comparisons it names, because the stores lost different data there and cannot be
-made equal without deleting some. It is allowed only for a loss already recorded as a row in
-`audit.checks` with its cause; it is printed on every run, a run with one ends `PARITY: ok`,
-not `PARITY: PASS`, and every bucket outside it is still compared at tolerance zero. It was
-built for minute 22:33 UTC of 2026-11-25, when the host killed the Docker VM, and for
-ClickHouse against the lake only.
+A known gap is one window of the pinned day, at most 60 minutes, that the candle parity leaves
+out of ClickHouse against the lake, because a capture outage left the two stores with
+different trades there and they cannot be made equal without deleting some. It is allowed only
+inside an outage already recorded as a row in `audit.checks`, which its `audit_ref` names; at
+most one may be listed, it is printed on every run, a run with it ends `PARITY: ok`, not
+`PARITY: PASS`, and a gap with no difference left in its window fails the run. Every other
+minute is still compared three ways at tolerance zero. It was built for minute 22:33 UTC of
+2026-11-25, when the host killed the Docker VM.
 Where: `known_gaps` in `tests/parity/pinned.json`, explained in
 [`tests/parity/README.md`](../../tests/parity/README.md); `load_gaps` in
 `scripts/parity_ohlcv.py`; [ADR-029](ADR-029-research-production-parity-contract.md)'s

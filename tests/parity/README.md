@@ -13,19 +13,22 @@ The `bars` block is `scripts/parity-bars.sh`'s: the UTC day, the `lake.gold.bars
 
 ## Known gaps
 
-`known_gaps` is an optional list in `pinned.json`. Each entry names a window of the pinned
-day that `scripts/parity_ohlcv.py` takes out of the comparisons the entry names, and out of
-nothing else. Everything outside the window is still compared at tolerance zero, and the
-comparisons the entry does not name still compare the window.
+`known_gaps` is an optional list in `pinned.json`, of at most one entry. The entry names one
+window of the pinned day, at most 60 minutes, that `scripts/parity_ohlcv.py` takes out of
+ClickHouse against the lake and out of nothing else. Every other bucket is still compared at
+tolerance zero, and the lake against DuckDB over silver and the lake against dbt still
+compare the window: they check the lake's own computation, which a capture outage cannot
+make differ.
 
-**When one may be listed:** only for a loss window already recorded as a row in
-`lake.audit.checks`, with its cause, where the two stores cannot be made equal without
-deleting data: a hard kill of the host or the Docker VM is the case it was built for
+**When one may be listed:** only for a capture outage already recorded as a row in
+`lake.audit.checks` (the lake's table of check results), with its cause, where the two
+stores cannot be made equal without deleting data: a hard kill of the host or the Docker VM
+is the case it was built for
 ([`failure-recovery.md` §8](../../docs/runbooks/failure-recovery.md#8-host-or-docker-vm-killed-the-hot-tier-against-the-lake)).
 Never for a difference nobody has explained, and never to get a run green: that is the
 tolerance [ADR-029](../../docs/adr/ADR-029-research-production-parity-contract.md) rejects.
-In practice that means `sides: ["clickhouse"]`: the lake, DuckDB over silver and dbt all
-read the lake, so a loss on one store shows only between ClickHouse and the lake.
+A second incident is not a second entry: it is the trigger in ADR-029's 2026-11-26 Outcome
+to read loss windows from `lake.audit.checks` instead.
 
 ```json
 "known_gaps": [
@@ -35,44 +38,52 @@ read the lake, so a loss on one store shows only between ClickHouse and the lake
     "sides": ["clickhouse"],
     "cause": "The host killed the Docker VM and the stack restarted; both stores hold different trades for this minute.",
     "recorded": "2001-01-02",
-    "audit_ref": "lake.audit.checks job=operator check_name=hot_tier_divergence run_ts=2001-01-02T03:04:05Z"
+    "audit_ref": "lake.audit.checks job=operator check_name=capture_outage scope=stack/2001-01-01T00:01:43Z..2001-01-01T00:07:26Z"
   }
 ]
 ```
 
 | Field | What it holds |
 |-------|---------------|
-| `start`, `end` | UTC, ISO 8601, to the minute; `end` is exclusive, so the example is one minute |
-| `sides` | the comparisons it applies to, each the lake against one of `clickhouse`, `silver`, `dbt` |
+| `start`, `end` | UTC, written exactly `YYYY-MM-DDTHH:MMZ`; `end` is exclusive, so the example is one minute |
+| `sides` | `["clickhouse"]`, and nothing else: it says which comparison skips the window |
 | `cause` | one sentence: what happened |
-| `recorded` | the date the entry was added, `YYYY-MM-DD` |
-| `audit_ref` | where the `lake.audit.checks` row is: job, check name, run time |
+| `recorded` | the date the entry was added, written exactly `YYYY-MM-DD` |
+| `audit_ref` | the row, written exactly `lake.audit.checks job=<job> check_name=<name> scope=stack/<start>..<end>`, each time `YYYY-MM-DDTHH:MM:SSZ`, as the row's `scope` holds it |
 
-**The run stops**, non-zero and naming the entry, on an unknown key, a missing field, an
-empty `cause` or `audit_ref`, a time that is not UTC to the minute, an `end` not after its
-`start`, a window longer than 60 minutes, a window outside the day compared, a side not in
-the list above or named twice, or more than 5 entries. It also fails when a listed gap
-removes no bucket at all from a comparison it names: stale or mistyped.
+**The run stops**, non-zero and naming the entry, on: more than one entry; an unknown key or
+a missing field; time text not in exactly the form above (no basic format, week date, missing
+minutes, other zone or unpadded number); an `end` not after its `start`; a window longer than
+60 minutes or outside the day compared; `sides` other than `["clickhouse"]`; an empty
+`cause`; an `audit_ref` not in exactly the form above, or whose scope does not end after it
+starts; and a window not inside the scope rounded out to whole minutes (an outage from
+22:33:43 to 22:39:26 allows 22:33 to 22:40). It also fails when the window has no difference
+left in it: a gap that matches no bucket is stale or mistyped, and one whose window now
+matches in full is a dead exclusion that would hide the next difference there.
 
-**Every run prints** each gap with its cause, the buckets it removed and how many of them
-differed, and each comparison's bucket count after the removal. A gap whose window now
-matches in full prints a notice to remove it; that is not a failure. A run with a gap
-applied ends `PARITY: ok (1 known gap applied, see above)`: `PARITY: PASS` is kept for a
-run that left nothing out. A gap whose sides this run skips (`--skip-clickhouse`) is printed
-as not applied.
+**Every run prints** the gap with its cause and `audit_ref`, the buckets it removed and how
+many of them differed, and the comparison's bucket count after the removal. A run with the gap
+applied ends `PARITY: ok (1 known gap applied, see above)`: `PARITY: PASS` is kept for a run
+that left nothing out. With `--skip-clickhouse` the gap is printed as not applied.
 
-**Review:** an entry lands in a pull request with the pin it applies to, and the repo owner
-reviews it. The
-reviewer checks that the row `audit_ref` names exists with the same window and cause
-(`docker exec k2-trino trino --execute "SELECT run_ts, scope, observed, detail FROM
-lake.audit.checks WHERE job = 'operator' AND check_name = 'hot_tier_divergence' ORDER BY
-run_ts"`), and that the run's output shows the gap removing only the buckets that differ
-there. `make test-python` checks the committed entries against every rule above.
+**Review:** the entry lands in a pull request with the pin it applies to, and the repo owner
+reviews it. The reviewer checks that the row `audit_ref` names exists, with the same scope
+and a cause that matches, and that the run's output shows the gap removing the differing
+buckets of that minute and nothing else differing. For 2026-11-25 the query returns the one
+row recorded at 2026-11-26 01:00:44 UTC (run read-only on 2026-11-26):
 
-**Removing one:** delete the entry, in the same pull request that pins a different day:
-a gap outside the day compared stops the run, so re-pinning with `--pin-current` to another
-day fails until it is gone. Delete it sooner if a run prints the notice that its window
-matches.
+```bash
+docker exec k2-trino trino --user reviewer --execute "SELECT run_ts, scope, passed, observed, detail
+  FROM lake.audit.checks WHERE job = 'operator' AND check_name = 'capture_outage' ORDER BY run_ts"
+# "2026-11-26 01:00:44.228723 UTC","stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z","false","343","Host kernel OOM-killed the Docker VM ..."
+```
+
+`make test-python` checks the committed entry against every rule above except the last,
+which needs the stack.
+
+**Removing it:** delete the entry in the same pull request that pins a different day: a gap
+outside the day compared stops the run, so re-pinning with `--pin-current` to another day
+fails until it is gone.
 
 The bars parity (`scripts/parity_bars.py`) has no known gaps: its three sides all read the
 lake, so a loss in ClickHouse cannot reach it.

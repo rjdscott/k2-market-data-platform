@@ -288,9 +288,9 @@ killed the Docker VM at 22:33:43 UTC on 2026-11-25 (stack back at 22:39:26 UTC).
 
 **Expected behaviour**, both ClickHouse's Kafka consumers and the lake ingest resume from
 their committed offsets, but a hard kill can leave the two stores holding different trades
-for the minutes around it, and nothing reconciles them. On 2026-11-25 that was one minute,
-three venue-minutes: ClickHouse held fewer trades than the lake for that minute, and a few
-the lake never received.
+for the minutes around it, and nothing reconciles them. On 2026-11-25 that was minute
+22:33 UTC on every venue: ClickHouse held fewer trades than the lake for that minute, and a
+few the lake never received.
 
 **Recovery**
 
@@ -324,22 +324,31 @@ diff \
    window into ClickHouse from the lake ([clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md)
    §2), which deletes every trade only ClickHouse holds. That is the owner's decision; on
    2026-11-25 it was to leave both as they are.
-5. **Left as is: record the window**, one row in `lake.audit.checks`, then list it as a known
-   gap in `tests/parity/pinned.json` when that day is pinned, for the ClickHouse comparison
-   only ([`tests/parity/README.md`](../../tests/parity/README.md)). Not yet run; the detail is
-   free text.
+5. **Left as is: record the outage**, one row in `lake.audit.checks` (the lake's table of
+   check results) whose scope is the outage to the second and whose `observed` is the
+   seconds capture was off. Then, when that day is pinned, list the differing minute as the
+   known gap in `tests/parity/pinned.json`, for ClickHouse against the lake only, with an
+   `audit_ref` naming that row ([`tests/parity/README.md`](../../tests/parity/README.md)).
+   The 2026-11-25 row was recorded at 2026-11-26 01:00:44 UTC with this command; it exists,
+   so do not record it again.
 
 ```bash
-docker exec k2-spark-iceberg python3 /home/iceberg/lake/record_check.py \
-  --job operator --check hot_tier_divergence --scope "gold.trades <start>/<end> UTC" \
-  --observed <differing venue-minutes> --failed \
-  --detail "<cause, one sentence>; per-minute counts of lake.gold.ohlcv_1m and ClickHouse gold.trades FINAL differ; both left as they are"
+docker exec -e K2_LAKE_DRIVER_MEMORY=512m k2-spark-iceberg python3 /home/iceberg/lake/record_check.py \
+  --job operator --check capture_outage --scope 'stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z' \
+  --observed 343 --failed \
+  --detail 'Host kernel OOM-killed the Docker VM at 22:33:43Z; stack restarted 22:39:26Z. Capture off 343 s: no trades or book updates for the window. Minute 22:33 UTC: hot tier and lake hold different partial sets of trades (hot tier fewer); left as captured, not repaired. Every other minute of 2026-11-25 matches lake vs hot tier.'
+
+# Read it back.
+docker exec k2-trino trino --user reviewer --execute "SELECT run_ts, scope, passed, observed
+  FROM lake.audit.checks WHERE job = 'operator' AND check_name = 'capture_outage' ORDER BY run_ts"
+# "2026-11-26 01:00:44.228723 UTC","stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z","false","343"
 ```
 
-**Measured**, no MTTR: this is investigation, not repair. Steps 1 and 2 were run read-only
-on 2026-11-26 against the stack as it stood after the 2026-11-25 kill.
+**Measured**, no MTTR: this is investigation, not repair. Steps 1 and 2 and the read-back in
+step 5 were run read-only on 2026-11-26 against the stack as it stood after the 2026-11-25
+kill; the row itself was recorded at 2026-11-26 01:00:44 UTC.
 
-**Last verified:** 2026-11-26, steps 1 and 2; step 5's `record_check.py` row not yet run.
+**Last verified:** 2026-11-26, steps 1, 2 and 5 (the row read back as above).
 
 ---
 
