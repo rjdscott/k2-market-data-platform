@@ -26,6 +26,7 @@ def tree(tmp_path):
     shutil.copytree(ROOT / "contracts", tmp_path / "contracts")
     (tmp_path / cli.LAKE_SQL).parent.mkdir(parents=True)
     shutil.copy(ROOT / cli.LAKE_SQL, tmp_path / cli.LAKE_SQL)
+    shutil.copytree(ROOT / cli.ADR_DIR, tmp_path / cli.ADR_DIR)  # a paused contract names its ADR
     return tmp_path
 
 
@@ -101,7 +102,7 @@ def test_the_product_table_has_one_row_per_product(tree):
     generate.generate(tree)
     rows = [r for r in (tree / generate.PRODUCT_TABLE).read_text().splitlines() if r.startswith("| [")]
     assert len(rows) == len(list(tree.glob("contracts/*/*/product.yaml")))
-    new = "| [fx-reference](README.md#fx-reference) | [example-rates](fx-reference/example-rates.md) | `fx-reference-team` | draft | `bronze.example_rates` |"
+    new = "| [fx-reference](README.md#fx-reference) | [example-rates](fx-reference/example-rates.md) | `fx-reference-team` | draft | running | `bronze.example_rates` |"
     assert new in rows
     (candles,) = [r for r in rows if "| [candles](" in r]
     assert "`analytics-team`" in candles and "`gold.ohlcv_1m`" in candles and "`market_analytics.candles.ohlcv_1m`" in candles
@@ -310,3 +311,39 @@ def test_the_product_page_says_how_each_mart_is_built(tree):
     doc["marts"][0]["materialized"] = "view"
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
     assert "| `market_analytics.candles.ohlcv_1m` | view |" in generate.render(tree)[f"{generate.PAGES}/market-analytics/candles.md"]
+
+
+def test_a_paused_table_shows_on_its_page_the_index_and_the_product_table(tree):
+    """ADR-050: running, paused, or `n of m tables paused`, per product; the mark per table.
+
+    Every contract unmarked first, then three marked, so the test does not depend on what
+    config/instruments.yaml says today."""
+    mark_these = {"market-capture/venue-frames/bronze.kraken_book", "market-analytics/book-snapshots/gold.book_top20",
+                  "market-analytics/book-snapshots/gold.bbo_1s"}
+    for contract in tree.glob("contracts/*/*/*.odcs.yaml"):
+        doc = yaml.safe_load(contract.read_text())
+        doc["customProperties"] = [p for p in doc["customProperties"] if p["property"] != "paused"]
+        if contract.relative_to(tree / "contracts").as_posix().removesuffix(".odcs.yaml") in mark_these:
+            doc["customProperties"].append({"property": "paused", "value": {"since": "2026-11-26", "adr": "ADR-050"}})
+        contract.write_text(yaml.safe_dump(doc, sort_keys=False))
+    assert cli.validate(tree) == []
+    files = generate.render(tree)
+
+    adr = cli.adr_file(tree, "ADR-050")
+    assert adr is not None
+    mark = f"paused since 2026-11-26, [ADR-050](../../../docs/adr/{adr.name}): the data is readable, nothing new arrives"
+    frames = files[f"{generate.PAGES}/market-capture/venue-frames.md"]
+    assert "| Status | 1 of 7 tables paused |" in frames
+    book = frames[frames.index("## bronze.kraken_book"):]
+    assert book.splitlines()[6] == f"| Status | {mark} |", book
+    trade = frames[frames.index("## bronze.kraken_trade"):]
+    assert "| Status | running |" in trade.split("## ", 2)[1]
+    assert f"| Status | {mark} |" in files[f"{generate.PAGES}/market-analytics/book-snapshots.md"].split("## ")[0]
+
+    for index in (f"{generate.PAGES}/README.md", generate.PRODUCT_TABLE):
+        rows = {line.split("|")[1 if index.endswith("README.md") else 2].strip(): line for line in files[index].splitlines() if line.startswith("| [")}
+        cell = {name: [c.strip() for c in line.split("|")] for name, line in rows.items()}
+        status = {name.split("]")[0].lstrip("["): cells[-3] for name, cells in cell.items()}
+        assert status["venue-frames"] == "1 of 7 tables paused", status
+        assert status["book-snapshots"] == "paused", status
+        assert status["venue-trades"] == "running", status

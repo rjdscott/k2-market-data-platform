@@ -25,6 +25,7 @@ def tree(tmp_path):
     shutil.copytree(ROOT / "contracts", tmp_path / "contracts")
     (tmp_path / cli.LAKE_SQL).parent.mkdir(parents=True)
     shutil.copy(ROOT / cli.LAKE_SQL, tmp_path / cli.LAKE_SQL)
+    shutil.copytree(ROOT / cli.ADR_DIR, tmp_path / cli.ADR_DIR)  # a paused contract names its ADR
     return tmp_path
 
 
@@ -191,3 +192,52 @@ def test_audit_is_a_layer_but_not_a_made_up_one(tree):
     contract = tree / AUDIT / "audit.checks.odcs.yaml"
     edit(contract, set_property("layer", "quality"))
     assert [e for e in cli.validate(tree) if "customProperties" in e and "'quality' is not one of" in e]
+
+
+# ── paused tables (ADR-050) ────────────────────────────────────────────────
+
+KRAKEN_BOOK = "contracts/market-capture/venue-frames/bronze.kraken_book.odcs.yaml"
+
+
+def pause(since="2026-11-26", adr="ADR-050"):
+    def change(doc):
+        doc["customProperties"].append({"property": "paused", "value": {"since": since, "adr": adr}})
+
+    return change
+
+
+def unpause(doc):
+    doc["customProperties"] = [p for p in doc["customProperties"] if p["property"] != "paused"]
+
+
+def test_a_paused_table_validates(tree):
+    edit(tree / KRAKEN_BOOK, unpause)
+    edit(tree / KRAKEN_BOOK, pause())
+    assert cli.validate(tree) == []
+
+
+def test_a_paused_table_names_an_adr_that_exists(tree):
+    edit(tree / KRAKEN_BOOK, unpause)
+    edit(tree / KRAKEN_BOOK, pause(adr="ADR-999"))
+    assert cli.validate(tree) == [f"{KRAKEN_BOOK}: paused by ADR-999, which has no file in docs/adr/"]
+
+
+def test_a_paused_table_names_a_real_day(tree):
+    edit(tree / KRAKEN_BOOK, unpause)
+    edit(tree / KRAKEN_BOOK, pause(since="2026-02-30"))
+    assert cli.validate(tree) == [f"{KRAKEN_BOOK}: paused since 2026-02-30, which is not a day"]
+
+
+def test_an_unquoted_day_is_a_date_to_yaml_and_fails_the_profile(tree):
+    from datetime import date
+
+    edit(tree / KRAKEN_BOOK, unpause)
+    edit(tree / KRAKEN_BOOK, pause(since=date(2026, 11, 26)))
+    errors = cli.validate(tree)
+    assert any(e.startswith(f"{KRAKEN_BOOK}: customProperties: $.paused.since") for e in errors), errors
+
+
+def test_a_paused_table_promises_no_freshness(tree):
+    # gold.trades declares a latency service level, which a mart's dbt source freshness reads.
+    edit(tree / TRADES, pause())
+    assert cli.validate(tree) == [f"{TRADES}: a paused table promises no freshness, so it declares no latency service level"]

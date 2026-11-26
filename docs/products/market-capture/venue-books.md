@@ -9,6 +9,7 @@ Book frames per venue, typed, with Kraken's checksum verified by replay, and the
 | Owner | `capture-team` |
 | Kind | source-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-capture/venue-books/product.yaml`](../../../contracts/market-capture/venue-books/product.yaml) |
 
 ## Inputs and outputs
@@ -56,6 +57,7 @@ Binance depth20 frames typed. Each frame is a complete top-20 snapshot.
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -91,6 +93,7 @@ Kraken book frames typed, each carrying the verdict of the checksum replayed aga
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -127,6 +130,7 @@ Coinbase level2 events typed, one row per event.
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -162,6 +166,7 @@ The book replay's carry-over per venue, symbol and connection: the book after th
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |

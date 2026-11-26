@@ -9,6 +9,7 @@ Trades per venue, typed and flagged for venue replay, sequence gaps and precisio
 | Owner | `capture-team` |
 | Kind | source-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-capture/venue-trades/product.yaml`](../../../contracts/market-capture/venue-trades/product.yaml) |
 
 ## Inputs and outputs
@@ -49,6 +50,7 @@ Binance trades typed from bronze.binance_trade, one row per trade.
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -95,6 +97,7 @@ Kraken trades typed from bronze.kraken_trade, one row per trade in the frame.
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -138,6 +141,7 @@ Coinbase trades typed from bronze.coinbase_market_trades, one row per trade in t
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |

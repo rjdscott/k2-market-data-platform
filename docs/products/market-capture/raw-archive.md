@@ -9,6 +9,7 @@ The system of record: every Kafka record from the nine v3 topics, byte for byte,
 | Owner | `capture-team` |
 | Kind | source-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-capture/raw-archive/product.yaml`](../../../contracts/market-capture/raw-archive/product.yaml) |
 
 ## Inputs and outputs
@@ -38,6 +39,7 @@ Every Kafka record from the v3 topics, with the Kafka value byte for byte includ
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |

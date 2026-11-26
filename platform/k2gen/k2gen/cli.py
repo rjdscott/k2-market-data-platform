@@ -20,7 +20,9 @@
    `audit` has exactly one contract, and an `audit` table may have one (a mart
    that reads it needs it). A contract with inline columns is a table
    lake.sql does not create, and its partitioning and sort name its own columns.
-   A latency service level names a column of its own table.
+   A latency service level names a column of its own table. A paused table
+   (ADR-050) names a real day and an ADR file that exists, and promises no
+   latency: nothing may promise freshness for a table nothing feeds.
 4. Three rules across products: a table another table reads keeps snapshots for
    at least the seven-day floor; a table is at least as restricted as anything
    it reads; and every input resolves to a declared output or a declared
@@ -30,6 +32,7 @@
 import argparse
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +44,7 @@ from k2gen import ddl
 ROOT = Path(__file__).resolve().parents[3]
 ODCS_SCHEMA = "odcs-json-schema-v3.2.0-20261117.json"
 LAKE_SQL = "docker/lake/ddl/lake.sql"
+ADR_DIR = "docs/adr"
 SUFFIX = ".odcs.yaml"
 # docker/lake/maintenance.py refuses --retain-days below 7: stage 2 resumes from
 # the parent snapshot id it last read, and expiring that snapshot breaks the next run.
@@ -161,6 +165,7 @@ def validate(root: Path = ROOT) -> list[str]:
         for sla in doc.get("slaProperties", []):
             if sla["property"] == "latency" and sla["element"] not in {f"{table}.{c}" for c in names}:
                 errors.append(f"{where}: latency element {sla['element']} is not a column of {table}")
+        errors += _paused_errors(root, where, doc, props.get("paused"))
         if inline:  # a new table: generate writes its DDL, lake.sql never holds it
             if table in lake:
                 errors.append(f"{where}: {table} is created by {LAKE_SQL}, so the contract references it, not inline columns")
@@ -211,6 +216,26 @@ def validate(root: Path = ROOT) -> list[str]:
                 if up not in set(tables) | set(product["outputs"]) or up not in home:
                     errors.append(f"{where}: mart {mart['table']} reads {up}, which is neither one of its outputs nor a resolved input")
         errors += [f"{where}: input {name} is read by none of its outputs" for name in sorted(set(external) | set(tables)) if name not in read]
+    return errors
+
+
+def adr_file(root: Path, adr: str) -> Path | None:
+    """`docs/adr/ADR-050-<title>.md` for `ADR-050`, or None if there is none."""
+    return next(iter(sorted((root / ADR_DIR).glob(f"{adr}-*.md"))), None)
+
+
+def _paused_errors(root: Path, where: str, doc: dict[str, Any], paused: dict[str, str] | None) -> list[str]:
+    if paused is None:
+        return []
+    errors = []
+    try:
+        date.fromisoformat(paused["since"])
+    except ValueError:
+        errors.append(f"{where}: paused since {paused['since']}, which is not a day")
+    if adr_file(root, paused["adr"]) is None:
+        errors.append(f"{where}: paused by {paused['adr']}, which has no file in {ADR_DIR}/")
+    if any(sla["property"] == "latency" for sla in doc.get("slaProperties", [])):
+        errors.append(f"{where}: a paused table promises no freshness, so it declares no latency service level")
     return errors
 
 
