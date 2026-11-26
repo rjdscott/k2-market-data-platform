@@ -1,10 +1,10 @@
 # ADR-058: Deploy sealed releases by moving a pointer, and recreate only what changed
 
 **Status:** Accepted
-**Date:** 2026-11-27
+**Date:** 2026-11-26
 **Author:** Platform
 **Category:** Release engineering / Operations
-**Decided by:** the build's orchestrator on 2026-11-27 (UTC), under the owner's standing delegation for the
+**Decided by:** the build's orchestrator on 2026-11-26 (UTC), under the owner's standing delegation for the
 platform build, as phase 001 step S19, with an independent adversarial review after it. **Flagged to the
 owner for confirmation**; the first revisit trigger is the owner reversing it
 **Builds on:** [ADR-056](ADR-056-unified-data-product-platform.md) part 6 ("deploys only from immutable
@@ -12,7 +12,7 @@ releases"), [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-te
 views a deploy must keep in step with the rules)
 **Evidence:** experiment (c) of [`2026-11-26-release-spine-spikes.md`](../research/2026-11-26-release-spine-spikes.md);
 the rehearsal `make deploy-rehearsal` ([`scripts/verify/deploy_rehearsal.py`](../../scripts/verify/deploy_rehearsal.py)),
-run on 2026-11-27 with the results below; `tests/test_deploy.py`
+run on 2026-11-26 with the results below; `tests/test_deploy.py`
 
 ---
 
@@ -169,7 +169,7 @@ flowchart TD
   seen. The same reader polled through a deploy killed after each of its 13 steps and rerun, alternately
   forward and back: 3,401 polls, none saw the value, and every rerun converged and verified. Two deploys
   started together: the second was refused at the lock. The rehearsal is 20 checks in 7 min 15 s
-  (`make deploy-rehearsal`, 2026-11-27, all passed); `tests/test_deploy.py` fails if the view steps move
+  (`make deploy-rehearsal`, 2026-11-26, all passed); `tests/test_deploy.py` fails if the view steps move
   to the wrong side of the swap (checked by moving them).
 
 ---
