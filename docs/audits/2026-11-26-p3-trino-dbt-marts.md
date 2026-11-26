@@ -123,3 +123,65 @@ in `platform/k2gen/tests/test_generate.py:228-231` is already handled in `init-l
 ## Resolutions
 
 Appended after publication; the table above is never edited.
+
+Each line was checked by reading the cited code on `origin/main` at `1feaa1a`, 2026-11-26.
+
+- **Resolved in #218 (`adbe2d7`), the exposure:** BLOCKER `docker-compose.yml:263-264`. MinIO
+  publishes `127.0.0.1:9000` and `127.0.0.1:9001` (`docker-compose.yml:290-291`), and
+  `scripts/check-budget.py` fails CI on a published port off loopback;
+  `docker/trino/etc/log.properties` sets `io.trino.bootstrap.catalog=WARN` and
+  `scripts/trino-rules-test.sh:65-69` fails if a canary key reaches the log;
+  `scripts/check-env.py`, run by `scripts/dev-up.sh:26` and `make up`, refuses a MinIO user
+  equal to its password. Rotating the root credential is not on main (below).
+- **Resolved in #220 (`791c77a`):** HIGH `tests/parity/pinned.json`, a pin on a day the lake
+  does not hold. The pin is `2026-11-25`, with `dbt_trades_snapshot` and a `bars` block on the
+  same day (`tests/parity/pinned.json:2-18`); #226 (`86504fd`) makes a pin that cannot be
+  resolved stop the run.
+- **Resolved in #228 (`410cc13`):** LOW `scripts/check-budget.py:73`, `COPY --from` unchecked.
+  `scripts/check-budget.py:123` fails an unpinned `COPY --from` image.
+
+## Deferred to the hardening sprint
+
+Owner's decision, 2026-11-26: a phase audit fixes its critical and high findings at the time,
+and the rest goes to the hardening sprint that runs after plan phase P5. These MED and LOW
+findings are open on `origin/main` at `1feaa1a` and are scheduled for that sprint:
+
+- MED `venue_quality_scorecard.sql:51-53`: ingest rows still count only `offset_gap`.
+- MED `docs/runbooks/lake-ingest-batch-audit.md:90-92`: step 2 still reads `sort | tail -1`.
+- MED `docker-compose.yml:709-711`: the scheduler still has no log volume
+  (`docker-compose.yml:748-751`).
+- MED `docs/runbooks/lake-ingest-batch-audit.md:133-135`, `:182-184`: steps 5 and 6 are still
+  `NOT YET RUN`.
+- MED `tests/test_lake_metrics.py:150-163`: still a hand list of four names, no comparison
+  with `offsets.py`.
+- MED `docker/prometheus/prometheus.yml`: no Trino scrape job and no Trino rule.
+- MED `dbt/dbt_project.yml:39`: `docs/runbooks/dbt-marts.md` has no rollback section.
+- MED `.github/workflows/ci.yml:196-202`: CI renders `dbt_marts` but executes no cosmos task.
+- MED `docker-compose.yml:936-951`: Lakekeeper `allow-all` is in neither ADR-044's limits nor
+  the P5 scope.
+- LOW `ohlcv_delayed_20m.sql:41-47`: horizon unchanged; its "Not covered" list does not name
+  the cross-symbol case.
+- LOW `docker-compose.yml:275`: MinIO `memory: 1G` unchanged, no ADR-010 Outcome.
+- LOW `docker/lake/metrics.py:47,161`: the exporter reads `k2` only, no recorded decision.
+- LOW `docker/prometheus/rules/lake-alerts.yml:477`: `lake-disk-usage-high.md` unchanged
+  since 2026-08-28.
+- LOW `docs/architecture/19-lakehouse-and-domain-warehouses.md:189`: still "the only writer".
+- LOW `README.md:200`: still "10 unit tests and 22 data tests" (now `README.md:205`).
+- LOW `docs/architecture/19-lakehouse-and-domain-warehouses.md:168-171`: still two schemas.
+- LOW `docs/adr/ADR-047-ingest-batch-audit-after-publish.md:84`: no Outcome.
+- LOW `003-trino-dbt-marts.md:26`, `:81`: the landed line does not name `LoadMode.DBT_LS`.
+
+Open BLOCKER and HIGH, which that decision does not defer:
+
+- BLOCKER `docker-compose.yml:263-264`, the remainder: rotation of the MinIO root credential
+  is a change to the live stack, is not recorded on main, and was not checked here. The P0
+  audit's BLOCKER (`2026-11-26-p0-prerequisites-guardrails.md`) covers the same credential.
+- HIGH `docker/trino/README.md:84-89`, the quality record: no ADR-046 Outcome, no test on
+  `"dbt_test_results$history"` (`git grep is_current_ancestor` finds nothing), and the README's
+  known gap (`docker/trino/README.md:92-98`) still says a mart is rebuilt by dbt.
+- HIGH `docker/lake/gold.py:426-431`, the candle mismatch: no whole-history dbt test, and
+  `stage_ohlcv` (`docker/lake/gold.py:344-365`) still takes its buckets from the batch. A
+  recompute of 2026-08-28 was not checked (no stack query).
+- HIGH `docs/adr/ADR-034-airflow-3-replaces-prefect.md:465-466`, the duration trigger: the
+  ADR-034 Outcome (#221, `f14aae6`) records it fired and ADR-048 (#215, `b057cce`) is the
+  response, not built on main; no rule reads `lake_ingest` run duration.
