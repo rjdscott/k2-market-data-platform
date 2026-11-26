@@ -149,6 +149,13 @@ applied by hand with `clickhouse-client --multiquery`; a running ClickHouse does
 scripts/parity-ohlcv.sh --pin-current <YYYY-MM-DD>
 ```
 
+On a green run this writes the new ids to `tests/parity/pinned.json`. Tag them the same day
+([`tests/parity/README.md`](../../tests/parity/README.md#keeping-the-pinned-snapshots-alive)):
+check each id is on `main`'s lineage first, as that page shows. The gate accepts a pin only
+on `main`'s lineage or named by its own `parity_<day>` tag, and stops the run on any other,
+so an untagged pin fails the next run after expiry removes it, about a week later. With
+`--dbt`, the pin also records `dbt_trades_snapshot`, tagged `parity_<day>_dbt`.
+
 Three computations of the same day's 1-minute candles, ClickHouse `gold.ohlcv_live`
 over the (feed + reload) trades, the lake's `gold.ohlcv_1m`, DuckDB over silver with the
 dedup in the query, compared at tolerance zero on open/high/low/close/count/volume at
