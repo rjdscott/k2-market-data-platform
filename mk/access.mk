@@ -22,11 +22,14 @@ ACCESS_PY := uv run --project platform/k2gen --locked -q python
 access-verify:  ## RELEASE=<release dir>: every tests/access/expectations.yaml row on a throwaway lake run from it; LIVE=1: the canary and platform rows on the running stack
 	@set -eu; \
 	if [ "$${LIVE:-}" = 1 ]; then \
-	  rel=$$(realpath "$${RELEASE:-$${K2_RELEASES:-$$HOME/k2-releases}/pointers/trino}"); \
+	  rel=$${RELEASE:-$${K2_RELEASES:-$$HOME/k2-releases}/pointers/trino}; \
+	  [ -f "$$rel/manifest.json" ] || { echo "access-verify: no release at $$rel (deploy points pointers/trino at one)" >&2; exit 2; }; \
+	  rel=$$(realpath "$$rel"); \
 	  out=$${OUT:-$$(dirname "$$rel")/verify/$$(basename "$$rel").access-live.json}; \
 	  $(ACCESS_PY) scripts/access_verify.py run --scope live --release "$$rel" --out "$$out"; \
 	else \
 	  [ -n "$${RELEASE:-}" ] || { echo "access-verify: RELEASE=<release dir>, or LIVE=1" >&2; exit 2; }; \
+	  [ -f "$$RELEASE/manifest.json" ] || { echo "access-verify: $$RELEASE is not a compiled release" >&2; exit 2; }; \
 	  rel=$$(realpath "$$RELEASE"); id=$$(basename "$$rel"); p=$${PREFIX:-access-verify}; \
 	  out=$${OUT:-$$(dirname "$$rel")/verify/$$id.access-release.json}; \
 	  trap 'bash $(ACCESS_LAKE) down "$$p" >/dev/null' EXIT; \
