@@ -39,7 +39,11 @@ served() {  # the certificate Trino shows a client that asks for `trino`, and wh
 
 The password is read inside the client's container from its file, so it is never on a command line or in the
 host shell's environment. Never connect by IP address and never pass `--insecure`: Trino shows a client that
-connects by address its internal certificate, which no client trusts (section 5).
+connects by address its internal certificate, which no client trusts (section 5). Never mount `tls/` as a
+directory, since `ca.key` is in it: mount `tls/ca.pem` or `tls/trino.pem` by name, as above.
+`tests/test_secret_mounts.py` fails a `docker-compose.yml` that mounts `tls/`, `ca.key`, `canary/` or
+`${K2_SECRETS}` itself. Trino's Web UI is off (`web-ui.enabled=false`): its form login gave a session that
+outlived a password's removal (ADR-060's Outcome); use the CLI, JDBC or dbt.
 
 | # | Task | MTTR target | Measured |
 |---|------|-------------|----------|
@@ -59,9 +63,14 @@ certificate to serve and nobody a password.
 **Detection**, manual only; `make tls-status` exits 1 and says which file is missing.
 
 **Expected behaviour**, `make tls-init` makes a CA (ECDSA P-256, 5 years, allowed to sign only `trino` and
-`localhost`) and Trino's certificate (90 days, exactly those two names) under `${K2_SECRETS}/tls/`: `ca.pem`, `ca.key`
+`localhost`: no subdomain of either and no IP address) and Trino's certificate (90 days, exactly those two names) under `${K2_SECRETS}/tls/`: `ca.pem`, `ca.key`
 (mode 600, never mounted) and `trino.pem` (key and certificate in one file, mode 600), in a directory of mode 700. A
-rerun changes nothing. `make password ... TO_FILE=1` gives a service its password file and its `password.db` line.
+rerun changes nothing. Every `make tls-init` and `make tls-rotate` puts `${K2_SECRETS}` and `tls/` back to mode 700;
+every `make password`, `api-key`, `principal-remove` and `principals-status` does the same for `${K2_SECRETS}`,
+`trino/`, `api/` and `principals/`, and `make alerts-install-webhook` for `alertmanager/`. A directory Docker made
+for a mount whose source was missing is mode 755 until that tool's next run, or `chmod 700 <it>`. Both scripts
+find a checkout by a `.git` above `K2_SECRETS`, never by asking git, which answers nothing for a checkout another
+user owns. `make password ... TO_FILE=1` gives a service its password file and its `password.db` line.
 `${K2_SECRETS}` is in no backup, so this section is also the recovery from losing it: every client then needs the
 new `ca.pem` and every principal a new password.
 
@@ -75,7 +84,7 @@ make tls-init
 make tls-status
 # CA: .../tls/ca.pem
 #   subject   CN=K2 local CA 2026-11-26T20:43:51Z
-#   may sign  DNS:trino,DNS:localhost
+#   may sign  DNS:trino,DNS:localhost (and no subdomain of them, no IP address)
 #   expires   Nov 26 20:43:51 2031 GMT (1826 days left)
 # server: .../tls/trino.pem
 #   subject   CN=trino
@@ -93,8 +102,17 @@ make -s principals-status
 
 Each person (`p.*`) then gets `make password PRINCIPAL=<id>` in a terminal
 ([`create-or-rotate-a-principal.md`](create-or-rotate-a-principal.md) section 1). Trino's internal shared secret goes
-into `.env` once, never printed: `printf 'K2_TRINO_SHARED_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env`. Then
-prove the whole path, row by row (18 rows: refusals, a login, both rotations, the CLI and dbt):
+into `.env` once, never printed: `printf 'K2_TRINO_SHARED_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env`. Its holder
+can pose as a Trino node, so `.env` is its owner's alone: `make up` and `make access-verify LIVE=1` refuse a looser one
+(`scripts/check-env.py`), and the fix is printed:
+
+```bash
+python3 scripts/check-env.py --mode-only
+# check-env: FAIL .../.env is mode 664, open to its group or others, and it holds the stack's secrets: chmod 600 .../.env
+chmod 600 .env
+```
+
+Then prove the whole path, row by row (19 rows: refusals, a login, the Web UI off, both rotations, the CLI and dbt):
 
 ```bash
 bash scripts/verify/identity.sh                          # the live Trino, from S22
@@ -106,7 +124,9 @@ bash scripts/verify/identity.sh --throwaway <prefix>     # a throwaway lake, as 
 
 **Measured**, 2026-11-26 on a fresh temporary `K2_SECRETS`: `make tls-init` 0.10 s, the files and modes as above,
 six service passwords in about 0.2 s each; the `.env` line on a scratch file, 64 hex characters, never printed.
-`identity.sh --throwaway` on a throwaway lake: 18 of 18 PASS, 80 s.
+`identity.sh --throwaway` on a throwaway lake: 18 of 18 PASS, 80 s; after the identity review, 19 of 19 PASS
+(`make test-trino`, the new row `I19.web-ui-off`; the CLI and dbt rows on the CA with the subdomain and address
+exclusions). `check-env.py --mode-only` on a scratch file of mode 664 printed the line above and exited 1.
 
 ---
 
@@ -187,7 +207,8 @@ container that mounts it; only `make tls-rotate` and `make tls-init` write it.
 place. Every container that mounts `ca.pem` sees the new CA at once, while Trino keeps serving the old certificate
 for up to a minute: in that minute every client is refused (`unable to get local issuer certificate`), then all
 connect, with no restart. A copy of `ca.pem` outside `${K2_SECRETS}` (another host, a laptop) must be replaced by
-hand. Without `FORCE=1` the command keeps the CA.
+hand. Without `FORCE=1` the command keeps the CA. A CA made before its name constraint excluded subdomains and IP
+addresses fails `make tls-status` (`FAIL: the CA's name constraint is not exactly ...`): replace it here.
 
 **Recovery**
 
@@ -257,5 +278,6 @@ None yet.
 
 ---
 
-**Last verified:** 2026-11-26 against branch `step/s13-identity` on throwaway lakes and temporary secrets; not yet
-on the live stack (step S22).
+**Last verified:** 2026-11-26 against branch `step/s13-identity` on throwaway lakes and temporary secrets; again the
+same day against `step/fix-identity-review` (section 1's rows and status, section 3's `served`, on throwaway lake
+`fxid-rb`); not yet on the live stack (step S22).

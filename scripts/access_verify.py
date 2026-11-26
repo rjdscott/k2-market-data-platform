@@ -25,17 +25,18 @@ row matching `mustNotAppear`, and at least `mustAppear.minRows` matching its `wh
 
 Where the endpoint and each principal's password come from:
 - scope release (a throwaway lake, scripts/lib/throwaway-lake.sh, run in its tools container):
-  --env names its env.json; a principal's password is <secrets>/principals/<id>.password when the
-  lake wrote one, else the lake's one run password (env.json passwordFile). Every principal of
-  the release has a line, so every row runs; a planted-view row plants its view by REST first and
-  removes it after, and the drift row runs the drift check.
+  --env names its env.json, read by scripts/lib/lake_env.py, the module the lake writes it with;
+  a principal's password is the file its `passwords` map names, else <secrets>/principals/<id>.password.
+  Every principal of the release has a line, so every row runs; a planted-view row plants its
+  view by REST first and removes it after, and the drift row runs the drift check.
 - scope live (the running stack, from the host or the tools one-shot): Trino at
   https://${K2_TRINO_HOST:-localhost}:${K2_TRINO_PORT:-8443}, its CA ${K2_TRINO_CA:-${K2_SECRETS}/tls/ca.pem},
   each password ${K2_SECRETS:-$HOME/k2-secrets}/principals/<id>.password. No row impersonates
   anyone and no verification principal exists: a principal that may become consumers would be a
   key to every consumer's rows. Live runs only the rows whose principal's password the platform
   holds, a service principal (svc.*, dbt_*, pub_*) or a grantee of the access canary only (it
-  exists to be tested), and only when every product the row names is the canary, so a loosened
+  exists to be tested; platform_held, which scripts/principal-secret.py's TO_FILE=1 obeys too),
+  and only when every product the row names is the canary, so a loosened
   rule can damage nothing real. Every other row is a SKIP naming the throwaway run at release
   time, where generated passwords stand in for the consumers'. A planted-view row is a SKIP (it
   would write the live catalog), and so is the drift row unless the catalog API answers at
@@ -72,6 +73,8 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # scripts/: verify.catalog_drift
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))  # scripts/lib/: lake_env
+import lake_env  # noqa: E402
 from verify import catalog_drift  # noqa: E402
 
 CANARY_PRODUCT = "governance.access-canary"  # contracts/governance/access-canary: exists to be tested on live
@@ -139,17 +142,13 @@ class Trino:
 def connect(env_file: Path | None) -> tuple[Trino, dict[str, Any]]:
     """The endpoint and passwords of a throwaway lake (its env.json) or of the live stack."""
     if env_file:
-        env = json.loads(env_file.read_text())
-        secrets = Path(env.get("secrets", Path(env["ca"]).parents[1]))
-        shared = Path(env["passwordFile"]) if env.get("passwordFile") else None
+        env = lake_env.read(env_file)
 
         def lake_password(u: str) -> str:
-            own = secrets / "principals" / f"{u}.password"  # per-principal, as ${K2_SECRETS} lays them out
-            if own.is_file():
-                return own.read_text().strip()
-            if shared:
-                return shared.read_text().strip()
-            raise NoPassword(f"no {own} and no passwordFile in {env_file}")
+            try:
+                return lake_env.password(env, u)
+            except KeyError as x:
+                raise NoPassword(f"{x.args[0]} ({env_file})") from None
 
         return Trino(env["trino"], env["ca"], lake_password), env
     root = Path(os.environ.get("K2_SECRETS") or Path.home() / "k2-secrets")
@@ -217,6 +216,17 @@ def unknown(e: Any, m: Any) -> str | None:
     return None
 
 
+def platform_held(m: Any) -> set[str]:
+    """The test principals: granted a role on the access canary and on no other product. Their
+    password is the platform's (principals/<id>.password, scripts/principal-secret.py TO_FILE=1),
+    so the live suite can log in as them; anyone granted on a real product holds their own."""
+    granted: dict[str, set[str]] = {}
+    for p in m.products:
+        for g in p.grants:
+            granted.setdefault(g.principal, set()).add(p.id)
+    return {who for who, products in granted.items() if products == {CANARY_PRODUCT}}
+
+
 def live_skip(e: Any, m: Any) -> str | None:
     """Why a row does not run on the live system, or None when it does."""
     from k2gen import model
@@ -226,8 +236,7 @@ def live_skip(e: Any, m: Any) -> str | None:
         return "it plants a view, which would write the live catalog; it ran on the throwaway lake at release time"
     who = e.principal
     service = re.fullmatch(r"(svc\.|dbt_|pub_).+", who)
-    granted = {p.id for p in m.products for g in p.grants if g.principal == who}
-    if not service and granted != {CANARY_PRODUCT}:
+    if not service and who not in platform_held(m):
         return f"{who}'s password is its owner's, not the platform's; its row ran on the throwaway lake at release time"
     named = set(re.findall(r"[a-z0-9_]+", json.dumps(asdict(e))))
     others = sorted(p.id for p in m.products if p.id != CANARY_PRODUCT

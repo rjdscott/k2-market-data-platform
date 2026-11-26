@@ -64,6 +64,10 @@ http-server.authentication.type=PASSWORD
 internal-communication.shared-secret=${{ENV:{SHARED_SECRET}}}
 internal-communication.https.required=true
 discovery.uri=https://127.0.0.1:{HTTPS_PORT}
+# No Web UI: its form login checks the same password file, but the session it gives lasts until
+# its own timeout (a day), so a password removed or rotated would keep the UI, and for svc.platform
+# every query's text (ADR-060's Outcome). Clients use the CLI, JDBC or dbt.
+web-ui.enabled=false
 """
 
 # Heap 2816M under the service's 5G limit leaves 2.25 GiB for metaspace, the code cache,

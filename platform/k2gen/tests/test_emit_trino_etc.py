@@ -86,6 +86,8 @@ def test_https_only_with_password_login() -> None:
     assert config["internal-communication.https.required"] == "true"
     assert config["discovery.uri"] == "https://127.0.0.1:8443"
     assert not [k for k in config if k.startswith("http-server.http.") and k != "http-server.http.enabled"]
+    # No Web UI: its session outlives a password's removal (ADR-060's Outcome, identity row I19).
+    assert config["web-ui.enabled"] == "false" and not [k for k in config if k.startswith("web-ui.") and k != "web-ui.enabled"]
 
 
 @pytest.mark.parametrize("name", SETS)

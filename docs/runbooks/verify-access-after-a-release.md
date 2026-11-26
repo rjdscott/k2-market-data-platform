@@ -68,7 +68,10 @@ lake (default `access-verify`). The target needs 6 GiB of memory free.
 
 **Measured**, 27 s on 2026-11-26, 63 of 63 rows PASS. A run near the canary's limits fails rather
 than passes: its delayed rows need a build less than 19 minutes old, and the lake is built at
-the start of the run.
+the start of the run. After the identity step changed the lake's env.json (a password file per
+user, read by `scripts/lib/lake_env.py` on both sides), a release compiled the same day from a
+scratch tag of this repository's documents gave 63 of 63 PASS in 26 s, and `make test-access`
+on it passed every proof in 1 min 49 s.
 
 ---
 
@@ -98,9 +101,15 @@ make access-verify LIVE=1
 # make: *** [mk/access.mk:23: access-verify] Error 2
 ```
 
-The canary's readers are people (`p.canary-*`). `make password TO_FILE=1` writes a password file
-for a platform service only ([create-or-rotate-a-principal.md](./create-or-rotate-a-principal.md)),
-so until that changes their live rows fail with `no password for p.canary-...`.
+The canary's readers (`p.canary-*`) are test principals: granted on the access canary and on
+no other product, so their passwords are the platform's. Give each its file once, as a service's
+([create-or-rotate-a-principal.md](./create-or-rotate-a-principal.md) section 2); without it,
+its live rows fail with `no password for p.canary-...`. A person with a grant on any other
+product is refused `TO_FILE=1`, and their rows SKIP here.
+
+```bash
+for p in p.canary-full p.canary-delayed p.canary-scoped; do make -s password PRINCIPAL=$p TO_FILE=1; done
+```
 
 **Measured**, not yet run on the stack. On a throwaway lake with `${K2_SECRETS}` laid out from
 its passwords: exit 0, the planted-view row (51) and the drift row (63) skipped and nothing else.

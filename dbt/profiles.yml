@@ -7,8 +7,12 @@
 # builder's password file and the CA is mounted at the default below
 # (docs/development/phase-001-interfaces.md); from the host, name the CA with
 # K2_TRINO_CA and connect by name (localhost), never by address: Trino shows a client
-# that connects by address a certificate no client trusts.
-#   K2_TRINO_USER=dbt_<fence> DBT_ENV_SECRET_K2_TRINO_PASSWORD=... uv run dbt build --selector <fence>
+# that connects by address a certificate no client trusts. The password is read from its
+# mode-600 file into the environment, never typed, so it reaches no shell history and no
+# process list:
+#   export K2_TRINO_USER=dbt_<fence> K2_TRINO_CA="$K2_SECRETS/tls/ca.pem"
+#   export DBT_ENV_SECRET_K2_TRINO_PASSWORD="$(cat "$K2_SECRETS/principals/dbt_<fence>.password")"
+#   uv run dbt build --selector <fence>; unset DBT_ENV_SECRET_K2_TRINO_PASSWORD
 k2:
   target: trino
   outputs:

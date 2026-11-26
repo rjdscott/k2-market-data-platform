@@ -215,3 +215,33 @@ clients into this scheme.
 - Runbooks: [`tls-and-passwords.md`](../runbooks/tls-and-passwords.md),
   [`create-or-rotate-a-principal.md`](../runbooks/create-or-rotate-a-principal.md)
 - Trino 484 documentation: password file authentication, TLS and HTTPS
+
+---
+
+## Outcome
+
+### 2026-11-26: after the independent review of the identity step
+
+**The Web UI is off.** Trino's Web UI has its own form login, at `/ui/legacy/login`, which checks the same password
+file and then hands the browser a session cookie (`Trino-UI-Token`) that Trino honours until the token's own expiry,
+a day by default, or a restart. So a password removed or rotated stopped SQL within the 5 s refresh, but not the UI:
+the review logged in to the UI, removed the line, and seven seconds later SQL was refused while the UI still answered
+with that cookie, and for `svc.platform` the UI shows every query's text. "A password removed takes effect at the next
+5 s refresh" was true of SQL only. `web-ui.enabled=false` is now compiled into `config.properties`
+(`emit/trino_etc.py`), so the form login sends to Trino's disabled page and gives no session (`identity.sh` row
+`I19.web-ui-off`); clients use the CLI, JDBC or dbt.
+
+**The name constraint signed more than this ADR said.** Point 2 of the decision says the CA "may sign only `trino` and
+`localhost`, so its key, if stolen, signs nothing else a client would accept". That was wrong as built. A name
+constraint is an extension on a CA certificate listing the names the certificates it signs may carry (permitted) or
+may not (excluded); a client checks every certificate it is shown against it. RFC 5280 reads a DNS name in it as a
+subtree, so `trino` also permitted `evil.trino`, and a constraint that lists no IP address leaves every IP address
+permitted: the review signed leaves with the CA key for `IP:10.9.8.7`, `IP:::1`, `evil.trino` and
+`attacker.localhost`, and each verified. The CA `scripts/tls.sh` makes now also excludes `.trino` and `.localhost`
+(subdomains of each) and every IPv4 and IPv6 address (`0.0.0.0/0.0.0.0`, `::/::`): `tests/test_tls.py` signs each of
+those leaves and more with the CA key, and only `trino` and `localhost` verify. What is still true after it, stated
+plainly: the leading-dot form `.trino` is how OpenSSL (and so Python, curl and dbt) reads "subdomains only", not a form
+RFC 5280 defines; Java, which the Trino CLI and JDBC run on, parses it, and the CLI logged in on such a CA
+(`identity.sh` row `I15`). A leaf carrying only an email or a URI name still verifies, which no TLS client accepts in
+place of a server name. A CA made before this change lacks the exclusions: `make tls-status` fails it, and
+`make tls-init FORCE=1` replaces it (`docs/runbooks/tls-and-passwords.md` section 4).

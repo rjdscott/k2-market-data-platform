@@ -18,9 +18,10 @@
 # forced send fails visibly), install, deliver, a repository rule's own alert
 # arrives, inhibition, rotation without a restart, a resolved message, uninstall.
 # The stand-in tokens are random and are not secrets; the run asserts they reach no
-# payload body and no log line all the same. Its files live under the checkout,
-# because Docker Desktop shares $HOME and not /tmp, in a k2-secrets/ directory git
-# ignores, and are removed at exit.
+# payload body and no log line all the same. Its files live under $HOME, which Docker
+# Desktop shares and /tmp is not, outside the checkout (install-webhook refuses a
+# K2_SECRETS inside one), and are removed at exit. K2_ALERT_TEST_PREFIX names its
+# containers (default k2-alerttest).
 set -uo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT"
@@ -36,9 +37,17 @@ bad()  { printf 'FAIL %s\n' "$*"; fail=1; }
 die()  { printf 'FAIL %s\n' "$*" >&2; exit 1; }
 
 # ── install-webhook ─────────────────────────────────────────────────────────
+# Refused under xtrace (bash -x, set -x), which would print the URL, and for a K2_SECRETS inside
+# a git checkout. Puts ${K2_SECRETS} and alertmanager/ back to mode 700 on every run, a
+# directory Docker made for the mount (mode 755) included.
 cmd_install_webhook() {
+  case $- in *x*) { set +x; } 2>/dev/null; die "xtrace is on (bash -x or set -x), which would print the URL; run it without";; esac
   local root=${K2_SECRETS:-$HOME/k2-secrets} url
   local dir=$root/alertmanager
+  [[ "$root" = /* ]] || root=$PWD/$root dir=$PWD/$dir
+  # shellcheck source=lib/outside-checkout.sh
+  . "$ROOT/scripts/lib/outside-checkout.sh"
+  outside_checkout "$root" alerts
   if [ -t 0 ]; then
     printf 'Slack incoming-webhook URL (input hidden): ' >&2
     IFS= read -rs url; echo >&2
@@ -48,7 +57,7 @@ cmd_install_webhook() {
   url=${url%$'\r'}
   case "$url" in http://*|https://*) ;; *) die "not a URL: paste the https://hooks.slack.com/services/... webhook";; esac
   case "$url" in *[[:space:]]*) die "the URL contains whitespace";; esac
-  [ -d "$root" ] || { mkdir -p "$root" && chmod 700 "$root"; } || die "cannot create $root"
+  mkdir -p "$root" && chmod 700 "$root" || die "cannot create $root"
   mkdir -p "$dir" && chmod 700 "$dir" || die "cannot create $dir"
   # Written in place, not renamed over the old file: through Docker Desktop's file
   # sharing the container kept reading the old file after a rename, and saw an
@@ -134,7 +143,7 @@ cmd_test() {
 }
 
 # ── standin ─────────────────────────────────────────────────────────────────
-P=k2-alerttest
+P=${K2_ALERT_TEST_PREFIX:-k2-alerttest}
 received() { docker exec "$P-slack" sh -c 'cat /tmp/received/* 2>/dev/null'; }
 
 # Waits up to $1 seconds for a received payload matching the Python predicate $2
@@ -161,7 +170,7 @@ if hits:
 
 cmd_standin() {
   local tmp secrets img prom_img net t1 t2 out link started
-  tmp=$(mktemp -d "$ROOT/.alert-test.XXXXXX") || die "mktemp under $ROOT"
+  tmp=$(mktemp -d "$HOME/.k2-alert-test.XXXXXX") || die "mktemp under $HOME"
   secrets=$tmp/k2-secrets
   # shellcheck disable=SC2064  # expand now: the names are fixed for this run
   trap "docker rm -f $P-am $P-prom $P-slack >/dev/null 2>&1; docker network rm ${P}_k2-net >/dev/null 2>&1; docker volume rm ${P}_alertmanager-data >/dev/null 2>&1; rm -rf '$tmp'" EXIT
