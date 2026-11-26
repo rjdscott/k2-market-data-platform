@@ -4,7 +4,7 @@ Use this once, for phase 001 step S22: moving the running stack from reading the
 running releases (Trino over HTTPS from the release pointer, Lakekeeper fenced onto its own network),
 and, if it goes wrong, moving it back to today's shape. Every later change is an ordinary
 [deploy](./deploy-a-release.md). Why: [ADR-058](../adr/ADR-058-deploy-sealed-releases-by-pointer-swap.md),
-[ADR-059](../adr/ADR-059-access-rules-compiled-per-release-default-deny.md) part 7 (the catalog fence),
+[ADR-059](../adr/ADR-059-access-rules-compiled-default-deny-over-two-catalogs-per-domain.md) part 7 (the catalog fence),
 [ADR-060](../adr/ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md) (identity).
 
 **Run every command from the live checkout with `set -a && . ./.env && set +a` loaded.**

@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import time
 import urllib.request
 from typing import Any
@@ -154,10 +153,12 @@ def rehearse(R: Any) -> int:
     (R.CLONE / "docker-compose.yml").write_text(release_shape(R))
     t0 = time.monotonic()
     rid = R.cut("v0.0.1-cutover.1", "the cutover: release-shaped compose, Trino over HTTPS from the pointer")
-    rel = R.make("release-status").stderr
     images = json.loads((R.ROOT / rid / "manifest.json").read_text())["images"]
-    R.check("make release: the services deploy never recreates keep the images they run",
-            all(images[s] for s in ("prefect-db", "minio", "lakekeeper", "capture-binance")), f"{rid} in {time.monotonic() - t0:.0f} s")
+    same = {s: R.sh("docker", "image", "inspect", "-f", "{{.Id}}", images[s]).stdout.strip()
+            == R.sh("docker", "inspect", "-f", "{{.Image}}", f"k2r-{s}").stdout.strip()
+            for s in ("prefect-db", "minio", "lakekeeper", "capture-binance")}
+    R.check("make release: the services deploy never recreates keep the images they run", all(same.values()),
+            f"{rid} in {time.monotonic() - t0:.0f} s; {same}")
     # 4. the catalog's network made, MinIO and Postgres joined to it in place, no restart
     net = f"{R.PROJECT}_k2-catalog"
     R.sh("docker", "network", "create", "--label", f"com.docker.compose.project={R.PROJECT}",
@@ -201,7 +202,6 @@ def rehearse(R: Any) -> int:
     R.check("the cutover rolled back: Trino on HTTP and Lakekeeper on its host port again", back == (200, 200),
             f"{back} in {time.monotonic() - t0:.0f} s; removed the release-only {gone}")
     R.check("and MinIO, Postgres and the capture were still never restarted", started(R, ("prefect-db", "minio", "capture-binance")) == held)
-    R.ROOT = R.BASE / "releases.rolled-back"
     return R.summary()
 
 

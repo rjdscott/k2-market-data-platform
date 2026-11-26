@@ -226,3 +226,48 @@ release gate `v3.0.0` (phase N11), whichever comes first.
 - Code: [`scripts/deploy.py`](../../scripts/deploy.py), [`docker/tools/`](../../docker/tools/Dockerfile), [`mk/release.mk`](../../mk/release.mk).
 - A proposed ADR-042 (one platform version with recorded rollouts) is on an unmerged branch; it is not
   part of this decision, and reconciling the two is the owner's.
+
+---
+
+## Outcome (2026-11-27, step S19b: integrated with identity, the rules, the access suite and the guarded view)
+
+The decision stands; integrating it with steps S12, S13 and S20 and with the fix of the review of
+S12 (the reader view now fails closed unless its base is a tagged Iceberg table, by a `WHERE EXISTS`
+over `<base>$refs` that only the new rules let the publisher read) changed five things in the
+sequence, each proven on the rehearsal (`make deploy-rehearsal`, OUTCOME_RUN).
+
+1. **Release-time suites in preflight.** Before anything moves, one throwaway lake started from the
+   release (`scripts/lib/throwaway-lake.sh`) runs S20's 63 access rows and the tested-data marker; a
+   failure refuses the deploy (exit 2). A sealed release's pass is kept by its id under
+   `<releases root>/verify/`, so each release pays once (OUTCOME_SUITE).
+2. **Each release writes its views with its own emitter**, in its own tools image, not the deploying
+   checkout's k2gen: a view shape is readable only under the rules of the release that made it. The
+   order per case: (a) columns dropped: narrowed before the rules move, in the target's shape when the
+   source's rules admit it, else (Trino answers PERMISSION_DENIED) in the source's shape; (b) the shape
+   or the publisher's grants changed with no column change: rewritten after the target's rules are
+   loaded (the widen step); (c) both: (a), then (b). Readers saw no error and no masked value across
+   the old shape to the guarded one, a `make rollback` back and a deploy forward (OUTCOME_SHAPE). The
+   one window left is stated: were a target's rules to refuse the source's shape AND the source's
+   rules the target's, the view's readers would get access errors, failing closed, from the rules
+   switch until the widen step, at most `RULES_WAIT_S` plus one refresh (25 s); no release pair here
+   does both. The preflight check that the checkout's emitter matches the release is gone with it.
+3. **A retired product's views are not synced** (a visible line): its rules are gone, so no reader
+   reaches them and its publisher holds nothing to write them with; dropping them is `make drop`'s.
+   The lake emitter still lists them in `views.json`; it should not (or should mark them retired), so
+   that the drift check and deploy agree on what a release holds.
+4. **Verification calls S20's and S13's entry points**: the drift check inside the tools one-shot on
+   the catalog's network (`catalog_drift.py --release`, exit 0 clean, 1 drift, 2 unreachable), then
+   `make access-verify LIVE=1` once the drift check finds every product published (a product not yet
+   published is a visible SKIP: its rows ran at release time), and, in `make release-verify`,
+   `scripts/verify/identity.sh` on the live Trino. Every failed step's record carries its `reason`
+   (`deploy-record.schema.json`, an additive field).
+5. **`make release` pins what deploy never recreates by what runs**: captures, Redpanda, MinIO,
+   Postgres and Lakekeeper keep the running container's image (a warning names a tag that differs),
+   so the one-time cutover needs no capture restart (`docs/runbooks/first-cutover-to-releases.md`).
+
+Found on the way, and fixed where they live: the drift and marker checks compared Trino's stored view
+SQL with the generator's by token, and Trino parenthesises every comparison, AND and EXISTS, so the
+guarded view never compared equal (`catalog_drift.tokens` now drops exactly the pairs whose removal
+cannot change a meaning); `identity.sh` read only `--etc-dir <path>`, not A1's `--etc-dir=<path>`; the
+access suite did not read people's passwords where the throwaway lake now files them (handled in
+deploy's own call path, its owner fixing the reader).

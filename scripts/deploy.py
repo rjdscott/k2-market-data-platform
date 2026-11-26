@@ -17,9 +17,10 @@ first failure:
  1 preflight     the release is sealed and every file matches its manifest; the release it moves from
                  is known (the newest good one in the log); the secret files it needs exist (only
                  their sha256 goes into the log); disk and memory floors; no dropped backup entry
-                 over data storage still holds; this checkout's lake emitter writes the release's view
-                 SQL; no stateful service changes unless ALLOW_STATEFUL names it; no other deploy
-                 holds the lock (taken before anything)
+                 over data storage still holds; no stateful service changes unless ALLOW_STATEFUL
+                 names it; no other deploy holds the lock (taken before anything); then, on a
+                 throwaway lake from the release, S20's access rows and the tested-data marker (a
+                 sealed release's pass is kept by its id)
  2 images        every image of the manifest present by its digest (registry images pulled)
  3 plan          k2gen's needs from the live release (and any attempt since it) to this one, printed;
                  PLAN=1 stops here
@@ -27,7 +28,9 @@ first failure:
                  needs.ddl compared with the catalog: missing is queued, equal is satisfied, different
                  is refused (never an alter or a drop); Spark's tables created now if Spark runs
  5 views-narrow  before any rule can change, each reader view whose contract columns or SQL change loses
-                 every column the new contract drops (k2gen.emit.lake.view_update, against the tag)
+                 every column the new contract drops (k2gen.emit.lake.view_update, against the tag), in
+                 the target's shape if the old rules admit it, else the old release's shape; each
+                 release's statements come from its own k2gen, in its tools image
  6 canary        a fresh password for this release's canary k2_release_<setSha256[:12]>, its line
                  written into trino/password.db in place under the file's lock
  7 swap          every pointer moved to the release from inside the tools container (spike c);
@@ -38,7 +41,8 @@ first failure:
    ddl-late      the queued tables whose engine had to start or load the rules first (Trino's always)
    views-widen   each view up to the new contract's columns the tag holds
    verify        every pointer (in the VM and in each container that mounts the root), the files under
-                 it, each image digest and health check, the access suite and the drift check (S20)
+                 it, each image digest and health check, the drift check in tools and the live access
+                 suite (S20); `make release-verify` adds S13's identity.sh
 10 done          the other canaries' lines removed; the release is the good one
 
 A failure at step 5 or later rolls back on its own: the same steps toward the previous release from
@@ -81,7 +85,6 @@ import yaml
 from k2gen import diff as k2diff
 from k2gen import model
 from k2gen import release as k2release
-from k2gen.emit.lake import NoCommonColumns, create_view, view_update
 from k2gen.emit.trino_etc import CATALOG_URI, S3_ENDPOINT
 from k2gen.model import Release, View
 
@@ -98,6 +101,7 @@ def _load(name: str, path: Path) -> Any:
 
 k2tools = _load("k2tools", HERE.parent / "docker" / "tools" / "k2tools.py")  # the Trino client, and its catalog types
 ps = _load("principal_secret", HERE / "principal-secret.py")  # locked(), read(), write(): in place, never renamed
+drift_lib = _load("catalog_drift", HERE / "verify" / "catalog_drift.py")  # its tokens(): one SQL comparison
 
 POINTERS = ("trino", "airflow", "spark", "prometheus", "k2-api")  # A1
 REFRESH_S = 5  # Trino rereads rules, groups and the password file this often (compiled etc, S11 and S13)
@@ -418,6 +422,11 @@ def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
                   or s.manifest.files.get(model.view_sql_path(r)) != target.manifest.files.get(model.view_sql_path(r))}
     running = {c["Config"]["Labels"].get("com.docker.compose.service") for c in containers(ctx) if c["State"]["Running"]}
     order, oneshots, skipped = [], [], []
+    retired = {model.fence(x.id.split(".")[1]) for x in target.manifest.products if x.status == "retired"}
+    for r in sorted(r for r in views if r.split(".")[1] in retired):
+        skipped.append(f"view {r}: its product is retired, so its rules are gone and no reader reaches it; "
+                       "deploy does not sync it as a publisher the rules no longer name (drop it: make drop)")
+        del views[r]
     for name in sorted(recreate):
         spec = svc.get(name)
         if spec is None:
@@ -516,9 +525,6 @@ def dropped_storage(ctx: Ctx, old: Release | None, new: Release) -> list[str]:
 
 def preflight(ctx: Ctx, p: Plan) -> None:
     floors(ctx)
-    if p.views and (other := emitter_matches(p.target)):
-        raise Refused(f"this checkout's lake emitter does not write the release's SQL for {', '.join(other)}; "
-                      "deploy from a checkout of the release's tag (its k2gen makes the view statements)")
     if missing := required_secrets(ctx, p):
         raise Refused(f"secret files missing under {ctx.secrets}: {', '.join(missing)}")
     if held := dropped_storage(ctx, p.sources[0], p.target):
@@ -694,11 +700,9 @@ def tagged(ctx: Ctx, v: View) -> dict[str, str] | None:
 
 
 def tokens(text: str) -> list[str]:
-    """SQL as Trino's formatter cannot change it: it stores a view's SQL reformatted (line breaks,
-    spacing, quoting), so stored and generated SQL are compared token by token, names case-folded,
-    string literals kept as written."""
-    found = re.findall(r"'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_$]*|\d+|[^\s\w\"]", text)
-    return [t if t.startswith("'") else t.casefold() for t in found]
+    """SQL as the drift check compares it (scripts/verify/catalog_drift.tokens): Trino stores a view's
+    SQL reformatted, so stored and generated SQL are compared token by token."""
+    return list(drift_lib.tokens(text))
 
 
 def view_body(statement: str) -> str:
@@ -713,11 +717,29 @@ def stored_view(ctx: Ctx, v: View) -> str | None:
     return rows[0][0] if rows else None
 
 
-def emitter_matches(rel: Release) -> list[str]:
-    """Each view whose compiled SQL the lake emitter imported here would not write: the statements
-    deploy runs come from that emitter at run time, so it must be the one that compiled the release."""
-    return [v.relation for v in views_of(rel).values()
-            if tokens(view_body(create_view(v))) != tokens((rel.root / model.view_sql_path(v.relation)).read_text())]
+STATEMENTS = """
+import json, sys
+from k2gen.emit.lake import NoCommonColumns, view_update
+from k2gen.model import View
+a = json.loads(sys.argv[1])
+try:
+    print(json.dumps(view_update(View(**a["view"]), a["old"], a["new"])))
+except NoCommonColumns as e:
+    print(json.dumps({"none": str(e)}))
+"""
+
+
+def statements(ctx: Ctx, rel: Release, v: View, old: dict[str, str], new: dict[str, str]) -> tuple[str | None, str]:
+    """k2gen.emit.lake.view_update's two statements as `rel`'s own k2gen writes them, run in rel's tools
+    image: each release's view shape is the one its own rules can read (the guarded view of the review
+    of S12 needs the `$refs` grant only its release's rules give)."""
+    arg = json.dumps({"view": dataclasses.asdict(v), "old": old, "new": new})
+    out = run("docker", "run", "--rm", "--network", "none", "--memory", "256m", rel.manifest.images["tools"],
+              "python3", "-c", STATEMENTS, arg).stdout.strip().splitlines()[-1]
+    doc = json.loads(out)
+    if isinstance(doc, dict):
+        raise Failed(doc["none"])
+    return doc[0], doc[1]
 
 
 def sync_views(ctx: Ctx, p: Plan, phase: str) -> list[str]:
@@ -729,20 +751,34 @@ def sync_views(ctx: Ctx, p: Plan, phase: str) -> list[str]:
     lines = []
     if phase == "narrow" and p.sources == [None]:
         return ["a first deploy: no view has been published under a release yet"]
+    source = p.sources[0]
     for v in p.views:
         live = live_view(ctx, v)
         tag = tagged(ctx, v) if live else None
         if live is None or tag is None:
             lines.append(f"{v.relation}: not published yet; the wrapper creates it at its first tag")
             continue
-        try:
-            narrow, widen = view_update(v, {c: tag[c] for c in live if c in tag}, tag)
-        except NoCommonColumns as e:
-            raise Failed(str(e)) from None
+        old = {c: tag[c] for c in live if c in tag}
+        narrow, widen = statements(ctx, p.target, v, old, tag)
         statement = str(narrow if phase == "narrow" else widen)
-        if tokens(view_body(statement)) != tokens(stored_view(ctx, v) or ""):
+        stored = stored_view(ctx, v) or ""
+        if tokens(view_body(statement)) == tokens(stored):
+            pass
+        elif phase == "widen":  # the target's rules are loaded: the target's shape
             sql(ctx, v.owner, statement)
-            lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag and (phase == 'widen' or c in live)]}")
+            lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag]} (the target's shape)")
+        else:  # the source's rules still hold: the target's shape when they admit it, else the source's
+            try:
+                sql(ctx, v.owner, statement)
+                lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag and c in live]} (the target's shape)")
+            except k2tools.TrinoError as e:
+                if e.name != "PERMISSION_DENIED" or source is None:
+                    raise
+                legacy = str(statements(ctx, source, v, old, tag)[0])
+                if tokens(view_body(legacy)) != tokens(stored):
+                    sql(ctx, v.owner, legacy)
+                lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag and c in live]} in the source's shape "
+                             f"(its rules refuse the target's: {str(e)[:90]}); the target's shape after its rules load")
         if phase == "widen" and (missing := [c for c in v.columns if c not in tag]):
             lines.append(f"{v.relation}: {', '.join(missing)} failing closed until republished: the contract has "
                          "them, the tested snapshot does not; SKIP reconcile: phase 002 builds the product pipeline")
@@ -858,31 +894,31 @@ def verify_dir(ctx: Ctx) -> Path:
 
 
 def release_suite(ctx: Ctx, rel: Release) -> list[str]:
-    """Release time, before anything moves, on throwaway lakes started from the release (S20): every
-    row of tests/access/expectations.yaml (`make access-verify RELEASE=<dir>`), then the tested-data
-    marker (scripts/verify/tested-data-marker.sh). A release is sealed, so a pass is kept by its id
-    under verify/ and not run again."""
-    out, d = [], verify_dir(ctx)
+    """Release time, before anything moves, on one throwaway lake started from the release (S20, by
+    the commands mk/access.mk's `access-verify RELEASE=<dir>` runs): the release's products staged,
+    every row of tests/access/expectations.yaml, then the tested-data marker
+    (scripts/verify/tested-data-marker.sh). A release is sealed, so a pass is kept by its id under
+    verify/ and not run again."""
+    d = verify_dir(ctx)
     access, marker = d / f"{rel.id}.access-release.json", d / f"{rel.id}.marker.json"
-    prefix = f"deploy-{rel.id[-12:]}"
-    env = compose_env(ctx)
-    if access.exists() and json.loads(access.read_text()).get("exit") == 0:
-        out.append(f"access-verify at release time passed earlier for {rel.id} ({access.name})")
-    else:
-        done = make_target(ctx, "access-verify", env, RELEASE=str(rel.root), OUT=str(access), PREFIX=prefix)
-        counts = json.loads(access.read_text()).get("counts") if access.exists() else None
-        if done.returncode:
-            raise Refused(f"the release fails its access suite at release time (make access-verify exit {done.returncode}, "
-                          f"{counts or 'no result'}): {tail(done)}")
-        out.append(f"access-verify at release time: {counts}")
-    if marker.exists() and json.loads(marker.read_text()).get("exit") == 0:
-        out.append(f"tested-data marker passed earlier for {rel.id} ({marker.name})")
-        return out
+    passed = [f.name for f in (access, marker) if f.exists() and json.loads(f.read_text()).get("exit") == 0]
+    if len(passed) == 2:
+        return [f"access-verify and the tested-data marker passed earlier for {rel.id} ({', '.join(passed)})"]
+    prefix, env = f"deploy-{rel.id[-12:]}", compose_env(ctx)
     lake = ["bash", str(ctx.home / "scripts/lib/throwaway-lake.sh")]
+    work = f"/work/releases/{rel.id}"
     try:
         run(*lake, "up", prefix, str(rel.root), env=env)
-        run(*lake, "py", prefix, "scripts/access_verify.py", "stage", "--release", f"/work/releases/{rel.id}",
-            "--env", "/work/env.json", env=env)
+        state = Path(run(*lake, "state", prefix, env=env).stdout.strip())
+        file_people(state)
+        run(*lake, "py", prefix, "scripts/access_verify.py", "stage", "--release", work, "--env", "/work/env.json", env=env)
+        rows = run(*lake, "py", prefix, "scripts/access_verify.py", "run", "--scope", "release", "--release", work,
+                   "--env", "/work/env.json", "--out", "/work/access-verify.json", env=env, check=False)
+        if (state / "access-verify.json").exists():
+            shutil.copy(state / "access-verify.json", access)
+        counts = json.loads(access.read_text()).get("counts") if access.exists() else None
+        if rows.returncode:
+            raise Refused(f"the release fails its access suite at release time (exit {rows.returncode}, {counts}): {tail(rows)}")
         done = run("bash", str(ctx.home / "scripts/verify/tested-data-marker.sh"), prefix, env=env, check=False)
     finally:
         run(*lake, "down", prefix, env=env, check=False)
@@ -890,7 +926,21 @@ def release_suite(ctx: Ctx, rel: Release) -> list[str]:
                                   "lines": done.stdout.strip().splitlines()[-40:]}, indent=2) + "\n")
     if done.returncode:
         raise Refused(f"the release fails the tested-data marker check (exit {done.returncode}): {tail(done)}")
-    return out + [f"tested-data marker: {sum(1 for x in done.stdout.splitlines() if x.startswith('PASS'))} PASS"]
+    return [f"access-verify at release time: {counts}",
+            f"tested-data marker: {sum(1 for x in done.stdout.splitlines() if x.startswith('PASS'))} PASS"]
+
+
+def file_people(state: Path) -> None:
+    """Each person's password where access_verify.py looks for it, principals/<id>.password: the lake
+    keeps people's under throwaway/ and lists them in env.json's `passwords` map, which access_verify.py
+    does not read yet (step fix-identity-review changes that; then this copies nothing new)."""
+    doc = json.loads((state / "env.json").read_text())
+    secrets_dir = Path(str(doc.get("secrets", "/work/secrets/k2")).replace("/work", str(state), 1))
+    for user, path in (doc.get("passwords") or {}).items():
+        src, dst = Path(str(path).replace("/work", str(state), 1)), secrets_dir / model.password_file(user)
+        if src.is_file() and not dst.exists():
+            with ps.locked(dst) as fd:
+                ps.write(fd, src.read_text())
 
 
 def make_target(ctx: Ctx, target: str, env: dict[str, str], **variables: str) -> subprocess.CompletedProcess[str]:

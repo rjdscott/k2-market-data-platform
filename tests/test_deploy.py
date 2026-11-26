@@ -46,6 +46,7 @@ else:
     import yaml
     from k2gen import model
     from k2gen import release as k2release
+    from k2gen.emit.lake import create_view, view_update
 
     sys.path.insert(0, str(ROOT / "platform/k2gen/tests"))
     from test_release import write_set  # the good fixture set as `k2gen docset` writes it
@@ -164,6 +165,9 @@ sys.exit(f"fake docker: no answer for {A}")
             self.s20: Any = lambda rel: (["drift clean"], [])
             monkeypatch.setattr(deploy, "release_suite", lambda ctx, rel: self.suite.append(rel.id) or ["suite passed"])
             monkeypatch.setattr(deploy, "s20_checks", lambda ctx, rel: self.s20(rel))
+            # each release's own emitter runs in its tools image; here, k2gen's in process
+            self.shaped: list[str] = []
+            monkeypatch.setattr(deploy, "statements", lambda ctx, rel, v, old, new: self.shaped.append(rel.id) or view_update(v, old, new))
             monkeypatch.setattr(deploy, "REFRESH_S", 0)
             self.ctx = deploy.Ctx(root=self.root, secrets=self.secrets, home=ROOT, project="k2", trino="https://localhost:1",
                                   operator="tester", faults=set(), tmp=tmp, say=lambda line: None)
@@ -207,7 +211,7 @@ sys.exit(f"fake docker: no answer for {A}")
             deploy.record(self.ctx, rel, None, "done", "ok", set())
             v = deploy.views_of(rel)[VIEW]
             self.views[VIEW] = [c for c in v.columns if c in self.tag]
-            self.stored = deploy.view_body(deploy.create_view(v, self.views[VIEW])).upper()  # stored reformatted
+            self.stored = deploy.view_body(create_view(v, self.views[VIEW])).upper()  # stored reformatted
 
         def admitted(self, ctx: Any, user: str) -> bool | None:
             live = deploy.k2release.read(self.root / "pointers" / "trino")
@@ -403,6 +407,30 @@ sys.exit(f"fake docker: no answer for {A}")
         assert swapped < widened and loaded, t
         assert all(e[0] != "view" or "operator_note" not in e[1] for e in t[:swapped])
 
+    def test_a_view_shape_the_source_rules_refuse_is_narrowed_in_the_source_shape(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r2 = world.release(over=dropped_note())
+        real = world.sql
+
+        def old_rules(ctx: Any, user: str, statement: str) -> dict[str, Any]:  # the target's shape needs a grant r1 lacks
+            if statement.startswith("CREATE OR REPLACE VIEW") and os.readlink(world.root / "pointers/trino") == f"../{r1.id}" \
+                    and "target-shape" in statement:
+                raise deploy.k2tools.TrinoError("PERMISSION_DENIED", "Access Denied: Cannot create view")
+            return real(ctx, user, statement)
+
+        deploy.sql = old_rules
+        shapes, asked = {r1.id: "source-shape", r2.id: "target-shape"}, []
+        deploy.statements = lambda ctx, rel, v, old, new: asked.append(rel.id) or tuple(  # type: ignore[assignment]
+            x and x.replace("SELECT ", f"SELECT /* {shapes[rel.id]} */ ", 1) for x in view_update(v, old, new))
+        assert world.deploy(r2) == 0
+        assert asked[:2] == [r2.id, r1.id], asked  # the target's shape refused before the swap: the source's asked for
+        t = world.timeline()
+        swapped = next(i for i, e in enumerate(t) if e[:2] == ["tools", "swap"])
+        narrowed = [i for i, e in enumerate(t) if e[0] == "view" and "operator_note" not in e[1]]
+        assert narrowed and narrowed[0] < swapped, t  # still before the rules change
+        assert "target-shape" in world.stored, "after the rules load, the target's shape"
+
     # --- refusals, the canary, the log --------------------------------------------------
 
     def test_a_second_deploy_is_refused_while_one_holds_the_lock(world: World) -> None:
@@ -522,6 +550,23 @@ sys.exit(f"fake docker: no answer for {A}")
         assert bool([c for c in calls if "access-verify" in c]) is live_runs and bool(bad) is wrong, (lines, bad)
         if pending:
             assert any(x.startswith("SKIP access-verify LIVE=1") and "governance.access-canary" in x for x in lines)
+
+    GUARDED = ('SELECT "id", "note" FROM "g"."a__base"."e" FOR VERSION AS OF \'audited\' WHERE EXISTS (SELECT 1 FROM '
+               '"g"."a__base"."e$refs" WHERE "name" = \'audited\' AND "type" = \'TAG\')')
+    STORED = ('SELECT\n  "id"\n, "note"\nFROM\n  "g"."a__base"."e" FOR VERSION AS OF \'audited\'\nWHERE (EXISTS (SELECT 1\n'
+              'FROM\n  "g"."a__base"."e$refs"\nWHERE (("name" = \'audited\') AND ("type" = \'TAG\'))\n))\n')  # as Trino 484 stored it
+
+    @pytest.mark.parametrize("a, b, same", [
+        (GUARDED, STORED, True),  # Trino's parentheses around each comparison, the AND and the EXISTS
+        ("SELECT 1 WHERE a = 1 AND (b = 1 OR c = 1)", "SELECT 1 WHERE (a = 1 AND b = 1) OR c = 1", False),
+        ('SELECT CAST(NULL AS varchar) AS "note"', 'SELECT "note"', False),  # a column aliased past its mask
+        ("SELECT 1 WHERE x IN (1, 2)", "SELECT 1 WHERE x IN (1, 2)", True),
+        (GUARDED.split(" WHERE EXISTS")[0], GUARDED, False),  # the old shape is not the guarded one
+        ("SELECT f((a)) FROM t", "SELECT f(a) FROM t", True),  # a redundant pair inside a call goes
+        ("SELECT f(a, b) FROM t", "SELECT f a, b FROM t", False),  # the call's own parentheses stay
+    ])
+    def test_stored_and_generated_view_sql_compare_as_trino_formats_them(a: str, b: str, same: bool) -> None:
+        assert (deploy.tokens(a) == deploy.tokens(b)) is same
 
     # --- the DDL comparison --------------------------------------------------------------
 

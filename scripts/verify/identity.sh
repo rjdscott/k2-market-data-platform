@@ -100,7 +100,7 @@ client -e UV_PROJECT_ENVIRONMENT=/tmp/venv -e K2_TRINO_URL="$URL" -e K2_SECRETS=
   -w /src "$UV_IMAGE" uv run --project /src/platform/k2gen --locked -q --with bcrypt==5.0.0 python -B scripts/verify/identity.py \
   || fails=$((fails + 1))
 
-etc=$(docker inspect -f '{{range .Args}}{{.}} {{end}}' "$C" | sed -n 's/.*--etc-dir \([^ ]*\).*/\1/p')
+etc=$(docker inspect -f '{{range .Args}}{{.}} {{end}}' "$C" | sed -n 's/.*--etc-dir[= ]\([^ ]*\).*/\1/p')
 etc=${etc:-/etc/trino}
 named=$(docker exec "$C" cat "$etc/config.properties" | grep -cxF 'internal-communication.shared-secret=${ENV:K2_TRINO_SHARED_SECRET}' || true)
 # The value never leaves the container: only the test's exit status does.

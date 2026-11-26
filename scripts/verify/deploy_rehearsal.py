@@ -76,7 +76,7 @@ VIEW = "governance.access_canary.events"
 RUN_RECORD = "governance_build.run_records.run_record"
 RESULTS: list[tuple[str, bool, str]] = []
 CODE = ("platform/k2gen/k2gen", "platform/k2gen/pyproject.toml", "platform/k2gen/uv.lock", "platform/runs",
-        "contracts", "dbt/macros", "dbt/profiles.yml", "docker/tools", "scripts/deploy.py", "scripts/principal-secret.py",
+        "contracts", "dbt", "docker/tools", "scripts/deploy.py", "scripts/principal-secret.py",
         "scripts/tls.sh", "scripts/lib", "scripts/access_verify.py", "scripts/verify", "tests/access", "mk")
 
 COMPOSE = """\
@@ -284,7 +284,7 @@ def scratch_repo(compose_text: str) -> None:
     for rel in CODE:
         src, dst = REPO / rel, CLONE / rel
         if src.is_dir():
-            shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__", ".venv", ".mypy_cache"))
+            shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__", ".venv", ".mypy_cache", "target", "logs", "dbt_packages"))
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
@@ -433,12 +433,23 @@ def result(release: str, kind: str) -> dict[str, Any]:
 # --- the deploy chain ----------------------------------------------------------------------
 
 
+# The emitters before the review of S12 made the reader view fail closed (ba78445): R1 is cut with them,
+# so the chain crosses from the old view shape to the guarded one, and back, with a reader polling.
+OLD_SHAPE = {f"platform/k2gen/k2gen/emit/{m}.py": "355fa43" for m in ("lake", "trino_rules", "api")}  # api imports rules
+
+
+def emitters(old: bool) -> None:
+    for path, ref in OLD_SHAPE.items():
+        (CLONE / path).write_text(sh("git", "-C", str(REPO), "show", f"{ref}:{path}").stdout if old else (REPO / path).read_text())
+
+
 def rehearse() -> int:
     scratch_repo(COMPOSE.replace("STANDIN_IMAGE", ALPINE_A))
+    emitters(old=True)
     dotenv()
     real_secrets()
     t0 = time.monotonic()
-    r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents")
+    r1 = cut("v0.0.1-rehearsal.1", "R1: the repository's own documents, the reader view in its old shape")
     check("make release compiles R1 at a scratch tag", (ROOT / r1 / "manifest.json").is_file(), f"{r1} in {time.monotonic() - t0:.0f} s")
     compose("up", "-d", "--wait", "prefect-db", "minio", "lakekeeper", "capture-binance")  # running already, as live
     lake_setup(r1, f"{PROJECT}_k2-catalog")
@@ -455,14 +466,16 @@ def rehearse() -> int:
     marker = result(r1, "marker")
     check("release time: the tested-data marker check", marker.get("exit") == 0,
           f"{sum(1 for x in marker.get('lines', []) if x.startswith('PASS'))} PASS")
+    first = out
     t0 = time.monotonic()
     out = make("deploy", f"RELEASE={r1}", check=False)
     check("then the first deploy converges, exit 0", code(out) == 0, f"{time.monotonic() - t0:.0f} s (release-time suites kept from the first try)")
     if code(out) != 0:
         print(out.stderr[-6000:])
         return 1
-    check("the run-record table created by deploy as svc.platform, after the rules loaded",
-          "created governance.run_records.run_record (trino)" in out.stderr)
+    check("the run-record table created by deploy as svc.platform after the rules loaded, then found equal",
+          "created governance.run_records.run_record (trino)" in first.stderr
+          and "exists and matches governance.run_records.run_record" in out.stderr)
     check("the canary is pending until published: the live suite SKIPs with its reason",
           "SKIP access-verify LIVE=1: not yet published" in out.stderr)
 
@@ -475,19 +488,23 @@ def rehearse() -> int:
           code(out) == 0 and "catalog drift check clean" in out.stderr and live.get("exit") == 0 and "identity.sh:" in out.stderr,
           f"{time.monotonic() - t0:.0f} s; live counts {live.get('counts')}; "
           + " ".join(x.strip() for x in out.stderr.splitlines() if "identity.sh" in x or "drift" in x)[:300])
-    q("pub_access_canary", "CREATE VIEW governance_build.access_canary.planted SECURITY DEFINER AS SELECT 1 AS x")
+    q("dbt_access_canary", "CREATE TABLE governance_build.access_canary__base.planted (x integer)")  # beside the base
     out = make("release-verify", check=False)
-    check("a planted view: release-verify fails and the drift check names it", code(out) == 1 and "planted" in out.stderr,
+    check("a planted table: release-verify fails and the drift check names it", code(out) == 1 and "planted" in out.stderr,
           next((x.strip()[:200] for x in out.stderr.splitlines() if "planted" in x), ""))
-    q("pub_access_canary", "DROP VIEW governance_build.access_canary.planted")
+    q("dbt_access_canary", "DROP TABLE governance_build.access_canary__base.planted")
     check("the plant removed: release-verify passes again", code(make("release-verify", check=False)) == 0)
 
     # 3. a rules-only release: the delay goes from 20 to 60 minutes (a major), its expectation with it
     edit(EVENTS, "delay: {column: event_ts, minutes: 20}", "delay: {column: event_ts, minutes: 60}")
-    edit(EXPECT, "minRowAgeMinutes: 20", "minRowAgeMinutes: 60")
+    edit(EXPECT, "minRowAgeMinutes: 20", "minRowAgeMinutes: 60")  # a tightened policy: a major, its rows with it
+    edit(EXPECT, 'mustAppear: {where: "id IN (1, 2, 4)", minRows: 3}', 'mustAppear: {where: "id IN (1, 4)", minRows: 2}')  # 2 is 21 min old
     bump("1.0.0", "2.0.0")
     prom_rules(2)
-    r2 = cut("v0.0.1-rehearsal.2", "R2: a policy change, rules only")
+    emitters(old=False)
+    r2 = cut("v0.0.1-rehearsal.2", "R2: a policy change, rules only, and the reader view in its guarded shape")
+    shape = Poller()
+    shape.start()
     before = started()
     seen: list[float] = []
     stop = threading.Event()
@@ -520,6 +537,16 @@ def rehearse() -> int:
           f"canary {m[1] if m else '?'} s after the swap; the 60-minute delay reached the polling reader "
           f"{f'{lag:.2f} s' if lag is not None else 'never'} after the swap record")
     check("R2: Prometheus's rules followed the pointer after SIGHUP", "rehearsal_release_2" in prom_group(), prom_group())
+    guarded = "EXISTS" in (q("pub_access_canary", "SELECT view_definition FROM governance_build.information_schema.views "
+                              "WHERE table_name = 'events'")["rows"] or [[""]])[0][0]
+    back = make("rollback", check=False)
+    again = make("deploy", f"RELEASE={r2}", check=False)
+    shape.stop.set()
+    shape.join()
+    check("the view's shape crosses old to guarded, back by make rollback, and forward: no error, no note, ever",
+          guarded and code(back) == 0 and code(again) == 0 and not shape.leaks and not shape.errors and shape.polls > 50,
+          f"guarded after R2: {guarded}; {shape.polls} polls, {shape.errors} errors, shapes {shape.shapes}; "
+          + "; ".join(x.strip()[:120] for x in (back.stderr + again.stderr).splitlines() if "shape" in x))
 
     # 4. the stand-in's image only
     edit("docker-compose.yml", ALPINE_A, ALPINE_B, 1)
@@ -612,8 +639,7 @@ def drop_note() -> None:
     edit(MODEL_SQL, "  cast(note as varchar) as note,\n", "")
     edit(EXPECT, "[id, region, note, event_ts]", "[id, region, event_ts]")
     edit(EXPECT, "\n    masked: [note]", "")
-    edit("docker-compose.yml", ALPINE_B, ALPINE_A, 1)
-    bump("2.0.0", "3.0.0")
+    bump("2.0.0", "3.0.0")  # the stand-in has been on A since R4, against R3's B: the kills below recreate it
 
 
 def summary() -> int:
