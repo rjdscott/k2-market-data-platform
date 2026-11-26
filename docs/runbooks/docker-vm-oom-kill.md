@@ -195,7 +195,7 @@ The two ways to satisfy the rule:
 - **Shrink the VM.** The floor is the stack's declared memory limits at the bootstrap peak,
   36.688 GiB with the paused ClickHouse running and 28.688 GiB without it (the `bootstrap
   hot-gold` and `bootstrap default` lines of `python3 scripts/check-budget.py`, computed on
-  2026-11-26 without the two services the v3 lake's retirement removes;
+  2026-11-26 after the v3 lake's retirement removed two services;
   [docker-resources.md](../operations/docker-resources.md)), plus about 1 GiB for the VM's own
   kernel, so about 38 GiB, or 30 GiB while ClickHouse stays paused: below that, Docker Desktop silently clips every container limit above the
   VM size ([setup.md](../development/setup.md)). Measured use is far lower (10.12 GiB of

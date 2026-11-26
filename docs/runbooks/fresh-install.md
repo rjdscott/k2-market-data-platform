@@ -123,8 +123,8 @@ the 17 ever report `healthy`; `spark-iceberg` has no healthcheck defined and sta
 `Up`, which is correct and not a degraded state. Read from `docker ps -a` on the live stack on
 2026-11-26, not from a fresh install, less `clickhouse`, which the ClickHouse pause removes
 (ADR-057), and less `lake-metrics` and `lake-ddl`, which the retirement of the v3 lake removes;
-it agrees with the healthchecks and `restart: "no"` in a copy of the compose file without those
-two.
+it agrees with the healthchecks and `restart: "no"` in the compose file, which no longer has
+those two.
 
 | State | Count | Containers |
 |---|---|---|

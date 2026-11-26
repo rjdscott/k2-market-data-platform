@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
-    <img alt="K2 Market Data Platform — Rust capture, Redpanda, Iceberg lakehouse, ClickHouse hot tier" src="docs/assets/banner-light.svg" width="100%">
+    <img alt="K2 Market Data Platform: Rust capture, Redpanda, Iceberg lakehouse, Trino SQL" src="docs/assets/banner-light.svg" width="100%">
   </picture>
 </p>
 
@@ -153,7 +153,7 @@ measured on that date. Detail per failure: [failure modes](./docs/architecture/1
 
 ## Quick start
 
-Requires a Docker engine with at least 30 GiB of memory so every declared limit is honoured,
+Requires a Docker engine with at least 29 GiB of memory so every declared limit is honoured,
 the 28.688 GiB bootstrap peak included ([setup](./docs/development/setup.md)); measured usage is
 far lower. On Docker Desktop the VM grows to its whole memory setting, so the host needs more
 RAM than that setting plus everything else it runs
@@ -161,8 +161,8 @@ RAM than that setting plus everything else it runs
 
 Two lines of `.env` are host-specific and are the whole first-run gotcha:
 `K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` ship empty (no CPU pinning, starts anywhere) —
-uncomment the 15-core layout in `.env.example` only on a host that has those cores, or seven
-containers fail at start with `invalid argument`. `K2_AIRFLOW_PORT` (default 8090, loopback
+uncomment the 15-core layout in `.env.example` only on a host that has those cores, or five
+containers (six with `hot-gold`) fail at start with `invalid argument`. `K2_AIRFLOW_PORT` (default 8090, loopback
 only) is Airflow's host port, and it moves the UI's own base URL with it; `K2_DOCKER_GID` is
 the group that owns the Docker socket, 0 on Docker Desktop.
 
@@ -196,13 +196,13 @@ of the host; reach a console from elsewhere through an SSH tunnel, never an open
 
 ## Tests and CI
 
-Counted 2026-11-24 by the command in each row's footnote, not by hand (on 2026-09-03 a
-hand-kept version of this table read 60 / 229 / 9 against a reality of 68 / 287 / 10). A gate
-that read the old lake tables prints `SKIP` and the phase that restores it.
+Counted 2026-11-24, the Rust row again on 2026-11-26, by the command in each row's footnote, not
+by hand (on 2026-09-03 a hand-kept version of this table read 60 / 229 / 9 against a reality
+of 68 / 287 / 10). A gate that read the old lake tables prints `SKIP` and the phase that restores it.
 
 | Suite | Run |
 |---|---|
-| Rust capture: 68 tests [^rust], 56 unit plus 12 replay over synthetic sessions; `make record-fixtures` replays real ones locally | `make test-rust` |
+| Rust capture: 79 tests [^rust], 63 unit, 4 on the book switch and 12 replay over synthetic sessions; `make record-fixtures` replays real ones locally | `make test-rust` |
 | Python: tests [^py] over contracts, wire format, offsets, decoders, the gates themselves | `make test-python` |
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, only a domain's writer changes its tables with SQL statements (table procedures are not fenced per user, ADR-044); 134 checks [^trino], no stack | `make test-trino` |
@@ -228,7 +228,7 @@ docker/airflow/            the Airflow image; no DAG until phase 002
 docker/lake/               modules the new connectors reuse: offsets, wire framing, bars, books
 docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds; the tier is paused (ADR-057)
 docker/trino/              Trino config: catalog lake (read-only), one generated catalog per domain, access rules
-docker/prometheus/rules/   12 alert rules with unit tests
+docker/prometheus/rules/   12 alert rules, 6 with unit tests
 schemas/avro/              raw-message, trade, book-snapshot-l2
 config/instruments.yaml    instrument registry, the single source of truth
 contracts/                 the domains file and the contract schemas; the old product contracts are archived

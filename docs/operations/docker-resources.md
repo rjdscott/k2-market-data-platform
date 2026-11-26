@@ -19,10 +19,10 @@ sizing rule in [docker-vm-oom-kill.md](../runbooks/docker-vm-oom-kill.md#2-size-
 **One-shots: 1.50 CPU / 1.500 GiB across 4.** **Bootstrap peak: 16.70 CPU / 28.688 GiB
 across 21**, the one-shots run concurrently with the steady state at `docker compose up`,
 so that peak, not the steady state, is what the host has to absorb at boot, and it is the
-sum the ceiling gates. These figures were computed on 2026-11-26 from a copy of the compose
-file without `lake-ddl` and `lake-metrics`, the two services the retirement of the v3 lake ingest
-pipeline removes, both by `scripts/check-budget.py`'s own summing and by the command below; with
-them, the file printed 15.30 / 27.312 across 18 and 17.30 / 29.812 across 23. The scheduler Airflow replaced, and the compose profile that kept it
+sum the ceiling gates. These figures were computed on 2026-11-26 from the compose file after the
+retirement of the v3 lake ingest pipeline removed `lake-ddl` and `lake-metrics`, both by
+`scripts/check-budget.py`'s own summing and by the command below; with those two, the file
+printed 15.30 / 27.312 across 18 and 17.30 / 29.812 across 23. The scheduler Airflow replaced, and the compose profile that kept it
 as a rollback, are gone from the compose file and archived in
 [`legacy/prefect/`](../../legacy/prefect/README.md) (ADR-034's 2026-11-26 Outcome).
 
@@ -69,9 +69,9 @@ one-shot   4 services   1.50 CPU   1.500 GiB
 `docker compose config` normalises every `memory:` to bytes, so **GiB is what the limits
 actually are**, `2g` in the compose file is 2 × 2³⁰, not 2 × 10⁹. Older figures on this
 branch were written "GB" for the same quantities; the numbers did not change, the unit
-label was wrong. Run on 2026-11-26 against a copy of the compose file without `lake-ddl` and
-`lake-metrics` (`docker compose -f <copy> --project-directory . ...`), which is what the printed
-lines are; the file as it stood printed 18 / 15.30 / 27.312 and 5 / 2.00 / 2.500.
+label was wrong. Run on 2026-11-26 against the compose file without `lake-ddl` and
+`lake-metrics`, which is what the printed lines are; with those two it printed
+18 / 15.30 / 27.312 and 5 / 2.00 / 2.500.
 `python3 scripts/check-budget.py` prints the same sums.
 
 ## Allocation

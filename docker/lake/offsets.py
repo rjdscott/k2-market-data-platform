@@ -142,8 +142,8 @@ def bounded_offsets(
 
     `(starts, ends, backlog)` — the first two `{topic: {partition: offset}}`
     ready for Spark's `startingOffsets`/`endingOffsets`, the third
-    `{topic: remaining records}` for the log line and the
-    `k2_lake_ingest_backlog_offsets` gauge.
+    `{topic: remaining records}` for the log line (and, in the retired v3
+    ingest, its `k2_lake_ingest_backlog_offsets` gauge).
 
     `earliest` and `latest` come from the broker (`catalog.broker_offsets`);
     `until` is the offset of the first record at or after `--end-timestamp`,

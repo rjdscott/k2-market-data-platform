@@ -69,7 +69,7 @@ run by `make check-alerts` and by `scripts/check-docs.sh` (c2); a unit test prov
 expression, never the recovery time.
 
 **Chaos is maintainer-run, not continuous.** The GitHub runner has ~7 GB and this stack
-budgets ~22 GB, so a nightly chaos job would fail for resource reasons more often than
+budgets 28.688 GiB at its bootstrap peak (`python3 scripts/check-budget.py`), so a nightly chaos job would fail for resource reasons more often than
 for real ones ([Q3](../research/2026-08-26-v3-requirements-clarification.md#q3--fault-injection-where-does-it-run)).
 The guarantee this page offers is "these failures were injected and measured on the
 dates recorded", not "these failures are injected nightly".

@@ -912,15 +912,16 @@ is a fraction of it, and the gap is the safety margin if every limit were reache
 measured inside the Docker VM and says nothing about the host's own memory (see
 [Docker VM and its memory setting](#docker-vm-and-its-memory-setting)). CI
 enforces it with `python3 scripts/check-budget.py`, which printed 21.30 CPU / 37.812 GiB for the
-bootstrap default on 2026-11-26, and every limit change also updates the ADR-010 Outcome and the
+bootstrap default early on 2026-11-26 and 16.70 / 28.688 after phase 000 paused ClickHouse and
+retired the v3 lake ingest the same day, and every limit change also updates the ADR-010 Outcome and the
 summary comment in `docker-compose.yml`.
 Where: [`scripts/check-budget.py`](../../scripts/check-budget.py).
 
 ### Bootstrap peak
 
 The bootstrap peak is the moment during `docker compose up` when the one-shot services run
-beside the long-running ones, so the most limits are declared at once (24 services against 19
-in the steady state). The ceiling is gated there, at its highest point. A one-shot is a service
+beside the long-running ones, so the most limits are declared at once (21 services against 17
+in the steady state, `python3 scripts/check-budget.py`). The ceiling is gated there, at its highest point. A one-shot is a service
 with `restart: "no"` that sets something up and exits, such as `redpanda-init` (topics) or
 `lake-init` (bucket, catalog, warehouses).
 Where: `scripts/check-budget.py`; [`docs/operations/docker-resources.md`](../operations/docker-resources.md).

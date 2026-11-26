@@ -5,7 +5,7 @@
 > **Before this** chapter 04.
 
 Prometheus scrapes every running tier, the rules in `docker/prometheus/rules/` carry runbooks
-and most carry `promtool` cases, the Grafana dashboards in `docker/grafana/dashboards/` ship from
+and half of them (6 of 12) carry `promtool` cases, the Grafana dashboards in `docker/grafana/dashboards/` ship from
 the repo, and the failure modes those rules watch are induced on purpose with timed recovery. No
 Alertmanager: rules are evaluated and shown, not routed. Operator detail:
 [operations/observability.md](../operations/observability.md); FMEA:

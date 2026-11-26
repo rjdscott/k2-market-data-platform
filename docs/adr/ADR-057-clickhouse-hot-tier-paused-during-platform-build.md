@@ -179,3 +179,58 @@ rebuilt as above or moved through the product lifecycle to deprecated.
 - Research: [`CLICKHOUSE-INVENTORY.md`](../research/2026-11-26-unified-platform-architecture/CLICKHOUSE-INVENTORY.md),
   [`DECISIONS-FINAL.md`](../research/2026-11-26-unified-platform-architecture/DECISIONS-FINAL.md)
 - Runbook: [rebuild ClickHouse gold from the lake](../../legacy/v3-lake-ingest/docs/runbooks/clickhouse-rebuild-from-lake.md)
+
+---
+
+## Outcome (2026-11)
+
+**The pause was carried out on 2026-11-26 UTC, and the container stopped at 14:21 UTC.** The
+`clickhouse` service runs under `profiles: ["hot-gold"]`, and its container was stopped and
+removed. The minute comes from the stack's own Prometheus, which keeps what cAdvisor (the
+per-container metrics exporter) scraped: its last sample of `k2-clickhouse` is at 14:21:26 UTC,
+and its next scrape, at 14:21:39, has none. The last `up{job="clickhouse"}` sample, `1`, is at
+14:21:17, and Prometheus loaded the configuration without that scrape job at 14:21:30
+(`prometheus_config_last_reload_success_timestamp_seconds`). Read on 2026-11-26 with:
+
+```bash
+curl -s -G http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=container_memory_working_set_bytes{name="k2-clickhouse"}[2m]' \
+  --data-urlencode 'time=2026-11-26T14:23:00Z'      # newest timestamp 1795702886.749, 14:21:26 UTC
+```
+
+The phase branch agrees: the merge that removed the ClickHouse signals landed at 14:20:38 UTC
+(`git reflog --date=iso phase/000-clear-the-ground` in the live checkout).
+
+**What was kept.** `docker volume ls --filter name=clickhouse` lists
+`k2-market-data-platform_clickhouse-data` and `k2-market-data-platform_clickhouse-logs`; the
+`image:` line and the DDL stay, and `make test-clickhouse` still applies the DDL to a throwaway
+server.
+
+**The signals were stood down in the same phase**, as decision 2 lists: the scrape job, the six
+rules and their tests, the ClickHouse dashboard and panels, the two chaos scripts and their
+`Makefile` lines, screenshots 08 and 09, and the ClickHouse half of `scripts/health.sh` step (2),
+which now prints one SKIP line naming this ADR. One part went further than written: the parity
+check whose ClickHouse leg was to print a SKIP was archived with the old lake ingest
+(`legacy/v3-lake-ingest/`, [ADR-056](ADR-056-unified-data-product-platform.md)), so
+`make parity-ohlcv` now prints one SKIP for the whole check, naming phase 004.
+
+**The two 7-day clocks run out at about 14:21 UTC on 2026-12-03.** Both consumer groups,
+`k2-gold-trades` and `k2-gold-book`, describe as `STATE Empty` with `MEMBERS 0` and keep their
+committed offsets (`docker exec k2-redpanda rpk group describe k2-gold-trades`, 2026-11-26);
+`group_offset_retention_sec` still prints `604800` and the trade topics' `retention.ms`
+`604800000`. From that time Redpanda may delete the groups' offsets, and the first trade records
+produced after the stop age out of their topics, so a start of the old copy after it leaves the
+hole this ADR describes. The lake gold it was reloaded from is gone: on 2026-11-26
+`SHOW SCHEMAS FROM lake` in Trino lists `information_schema` and `system` only.
+
+**Verified since:** the budget figures and the service list. `python3 scripts/check-budget.py`
+prints a steady state of 17 services at 15.20 CPU / 27.188 GiB and a bootstrap peak of 21
+services at 16.70 / 28.688 (22 at 20.70 / 36.688 with `hot-gold`), not the 18 at 15.30 / 27.312
+and 23 at 17.30 / 29.812 decision 3 expected: the `lake-metrics` exporter (0.10 CPU / 128 MiB) and
+the `lake-ddl` one-shot (0.50 CPU / 1 GiB) retired with the old lake ingest in the same phase
+([ADR-010](ADR-010-resource-budget.md) Outcome). `docker compose config --services | grep -cx
+clickhouse` prints `0`, and `1` with `--profile hot-gold`.
+
+**Still not verified:** that Redpanda deletes the offsets 7 days after the groups emptied (due
+from 2026-12-03 14:21 UTC; `rpk group describe -s k2-gold-trades k2-gold-book` should then print
+`STATE Dead`), and where ClickHouse 24.3 starts a group with no stored offsets.
