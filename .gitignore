@@ -254,7 +254,11 @@ docker/prefect/
 k2-secrets/
 *.password
 password.db
+keys.json
 slack-webhook-url
 *.pem
 *.key
+# Every .env file is the stack's secrets (Trino's shared secret among them) but the template.
+.env*
+!.env.example
 !scripts/lib/

@@ -95,7 +95,7 @@ client() { docker run --rm --network "$NET" --user "$(id -u):$(id -g)" --memory 
 
 echo "identity: $C on $NET, logged in as $USER_, $URL"
 client -e UV_PROJECT_ENVIRONMENT=/tmp/venv -e K2_TRINO_URL="$URL" -e K2_SECRETS=/k2s -e K2_IDENTITY_USER="$USER_" \
-  -e K2_IDENTITY_FIXTURES=/fixtures -v "$REPO:/src:ro" -v "$SECRETS/trino:/k2s/trino" \
+  -e K2_IDENTITY_FIXTURES=/fixtures -v "$REPO/scripts:/src/scripts:ro" -v "$REPO/platform:/src/platform:ro" -v "$SECRETS/trino:/k2s/trino" \
   -v "$SECRETS/tls/ca.pem:/k2s/tls/ca.pem:ro" -v "$PASSWORD_FILE:/k2s/principals/$USER_.password:ro" -v "$F:/fixtures:ro" \
   -w /src "$UV_IMAGE" uv run --project /src/platform/k2gen --locked -q --with bcrypt==5.0.0 python -B scripts/verify/identity.py \
   || fails=$((fails + 1))
@@ -116,7 +116,7 @@ row I15.cli "$([ "$cli" = "\"$USER_\"" ] && echo 1 || echo 0)" \
   "the Trino CLI logs in by name with --truststore-path ca.pem and --password (TRINO_PASSWORD): current_user is $USER_" "$cli"
 
 dbt=$(client -e UV_PROJECT_ENVIRONMENT=/tmp/dbt-venv -e DBT_SEND_ANONYMOUS_USAGE_STATS=false -e K2_TRINO_HOST=trino \
-  -e K2_TRINO_USER="$USER_" -v "$REPO:/src:ro" -w /src/dbt --entrypoint sh "$UV_IMAGE" -c \
+  -e K2_TRINO_USER="$USER_" -v "$REPO/dbt:/src/dbt:ro" -w /src/dbt --entrypoint sh "$UV_IMAGE" -c \
   "export DBT_ENV_SECRET_K2_TRINO_PASSWORD=\$(cat $MOUNT); uv run --locked -q dbt debug --connection --profiles-dir /src/dbt \
    --project-dir /src/dbt --log-path /tmp/dbt-logs" 2>&1 || true)
 row I16.dbt "$(grep -q 'All checks passed!' <<< "$dbt" && echo 1 || echo 0)" \

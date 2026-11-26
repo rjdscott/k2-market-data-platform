@@ -77,7 +77,7 @@ def test_init_makes_a_name_constrained_ca_and_a_server_certificate_for_exactly_t
     assert re.search(r"Subject Alternative Name:\s*\n\s*DNS:trino, DNS:localhost\n", x509(server, "-ext", "subjectAltName"))
     constraints = x509(ca, "-ext", "basicConstraints,nameConstraints")
     assert "critical" in constraints and "CA:TRUE, pathlen:0" in constraints
-    assert re.findall(r"DNS:(\S+)", constraints) == ["trino", "localhost"]
+    assert re.findall(r"DNS:(\S+)", constraints) == ["trino", "localhost", ".trino", ".localhost"]
     assert "CA:FALSE" in x509(server, "-ext", "basicConstraints") and "TLS Web Server Authentication" in x509(server, "-ext", "extendedKeyUsage")
     assert (lifetime_days(ca), lifetime_days(server)) == (1826, 90)
     for f in (ca, server):
@@ -147,3 +147,55 @@ def test_refused_inside_a_git_checkout_and_rotate_needs_a_ca(tmp_path: Path) -> 
     assert inside.returncode == 2 and "inside a git checkout" in inside.stderr and not (repo / "k2-secrets").exists()
     none = tls(tmp_path / "empty", "rotate")
     assert none.returncode == 2 and "make tls-init first" in none.stderr
+
+
+def forged(secrets: Path, work: Path, san: str) -> subprocess.CompletedProcess:
+    """`openssl verify` of a leaf the CA's own key signs for `san`: what a stolen ca.key could make."""
+    work.mkdir(exist_ok=True)
+    run = lambda *a: subprocess.run(a, cwd=work, capture_output=True, check=True)  # noqa: E731
+    run("openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", "f.key")
+    run("openssl", "req", "-new", "-key", "f.key", "-subj", "/CN=forged", "-out", "f.csr")
+    (work / "f.ext").write_text(f"basicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\nsubjectAltName={san}\n")
+    run("openssl", "x509", "-req", "-in", "f.csr", "-CA", str(secrets / "tls/ca.pem"), "-CAkey", str(secrets / "tls/ca.key"),
+        "-days", "1", "-set_serial", "0x0f", "-extfile", "f.ext", "-out", "f.crt")
+    return subprocess.run(["openssl", "verify", "-CAfile", str(secrets / "tls/ca.pem"), str(work / "f.crt")], capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("san, verifies", [
+    ("DNS:trino", True), ("DNS:localhost", True), ("DNS:trino,DNS:localhost", True),
+    ("IP:10.9.8.7", False), ("IP:127.0.0.1", False), ("IP:::1", False), ("DNS:trino,IP:10.9.8.7", False),
+    ("DNS:evil.trino", False), ("DNS:attacker.localhost", False), ("DNS:example.com", False), ("DNS:trino.example.com", False),
+    # Not constrained, and harmless to TLS: no client takes a server by an email name (ADR-060's Outcome).
+    ("email:someone@example.org", True),
+])
+def test_the_ca_key_signs_only_the_names_clients_use(secrets: Path, tmp_path: Path, san: str, verifies: bool) -> None:
+    out = forged(secrets, tmp_path / "forged", san)
+    assert (out.returncode == 0) is verifies, out.stdout + out.stderr
+
+
+def test_status_fails_a_ca_made_before_the_ip_and_subdomain_exclusions(secrets: Path, tmp_path: Path) -> None:
+    work = tmp_path / "old-ca"
+    work.mkdir()
+    run = lambda *a: subprocess.run(a, cwd=work, capture_output=True, check=True)  # noqa: E731
+    (work / "ca.ext").write_text("basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n"
+                                 "nameConstraints=critical,permitted;DNS:trino,permitted;DNS:localhost\n")
+    run("openssl", "req", "-new", "-key", str(secrets / "tls/ca.key"), "-subj", "/CN=old", "-out", "ca.csr")
+    run("openssl", "x509", "-req", "-in", "ca.csr", "-signkey", str(secrets / "tls/ca.key"), "-days", "30", "-extfile", "ca.ext", "-out", "ca.pem")
+    (secrets / "tls/ca.pem").write_bytes((work / "ca.pem").read_bytes())  # the same key, the constraint of before
+    out = tls(secrets, "status", MIN_DAYS="1")
+    assert out.returncode == 1 and "the CA's name constraint is not exactly" in out.stdout and "FORCE=1" in out.stdout, out.stdout
+
+
+def test_a_checkout_git_cannot_read_is_still_refused_and_modes_are_kept(tmp_path: Path) -> None:
+    fake = tmp_path / "checkout"
+    fake.mkdir()
+    (fake / ".git").write_text("gitdir: /nonexistent/worktree\n")  # git answers nothing here, as for another uid's
+    inside = tls(fake / "k2-secrets", "init")
+    assert inside.returncode == 2 and "inside a git checkout" in inside.stderr and not (fake / "k2-secrets").exists()
+    root = tmp_path / "k2-secrets"
+    assert tls(root, "init").returncode == 0
+    os.chmod(root, 0o755)
+    os.chmod(root / "tls", 0o755)
+    assert tls(root, "status").returncode == 1  # status reports a looser tls/ and changes nothing
+    assert tls(root, "rotate").returncode == 0
+    assert oct(root.stat().st_mode & 0o777) == oct((root / "tls").stat().st_mode & 0o777) == "0o700"

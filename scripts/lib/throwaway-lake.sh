@@ -19,10 +19,12 @@
 #   principals/<id>.password, a person the password printed once, kept for the test. Two lines no
 #   real path makes stand in beside them, by the same in-place write under the same lock: the
 #   release canary's (deploy's, S19, at canary/<canary>.password) and each extra user's (a stranger
-#   no document declares). Writes <state>/env.json for the tools side: Trino's URL by name, the CA,
-#   and each user's password file.
+#   no document declares). Writes <state>/env.json for the tools side by scripts/lib/lake_env.py,
+#   which its readers read it with: Trino's URL by name, the CA, and each user's password file.
 # py: runs a Python script with k2gen importable, in the tools container when the lake is up, else
-#   in a one-off container of the same image; the repository is /src (read-only), <state> is /work.
+#   in a one-off container of the same image; <state> is /work. Of the repository, only SRC (the
+#   scripts, k2gen and what it reads, the access suite) is mounted, read-only, at /src/<path>:
+#   never the checkout itself, whose .env holds the live stack's secrets.
 # down: removes every container and the network labelled with the prefix, and <state>.
 #
 # <state> is ${K2_THROWAWAY_ROOT:-$HOME/.k2-throwaway}/<prefix>: under $HOME, the one place Docker
@@ -59,6 +61,12 @@ TOOLS=$P-tools
 TOOLS_ENV=(-e HOME=/tmp -e UV_CACHE_DIR=/tmp/uv-cache -e UV_PROJECT_ENVIRONMENT=/tmp/venv
   -e UV_PYTHON_DOWNLOADS=never -e PYTHONDONTWRITEBYTECODE=1 -e UV_NO_PROGRESS=1)
 PY=(uv run --project /src/platform/k2gen --locked -q --with bcrypt==5.0.0 python -B)  # mk/principals.mk's pin, literal for the pin gate
+# What a script run here reads of the repository: scripts/, k2gen (platform/k2gen) and the run
+# record DDL it emits (platform/runs), the schemas it validates against, dbt's macros it compiles,
+# and the access suite's proofs (tests/access).
+SRC=(scripts platform contracts/schema dbt/macros tests/access)
+SRC_MOUNTS=()
+for d in "${SRC[@]}"; do SRC_MOUNTS+=(-v "$REPO/$d:/src/$d:ro"); done
 
 containers_down() {
   local ids
@@ -82,7 +90,7 @@ py() {
     docker exec -i "${TOOLS_ENV[@]}" "$TOOLS" "${PY[@]}" "$@"
   else
     docker run --rm -i --label "$LABEL" --user "$(id -u):$(id -g)" --memory 512m --cpus 1 "${TOOLS_ENV[@]}" \
-      -v "$REPO:/src:ro" -v "$STATE:/work" -w /src "$UV_IMAGE" "${PY[@]}" "$@"
+      "${SRC_MOUNTS[@]}" -v "$STATE:/work" -w /src "$UV_IMAGE" "${PY[@]}" "$@"
   fi
 }
 
@@ -135,7 +143,7 @@ up() {
     -e LAKEKEEPER__AUDIT__TRACING__ENABLED=false "$lk_image" serve >/dev/null
   for _ in $(seq 60); do docker exec "$P-minio" mc mb --ignore-existing local/lake >/dev/null 2>&1 && break; sleep 1; done
   docker run -d --label "$LABEL" --network "$NET" --memory 768m --cpus 1 --name "$TOOLS" --user "$(id -u):$(id -g)" \
-    "${TOOLS_ENV[@]}" -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD -v "$REPO:/src:ro" -v "$STATE:/work" -w /src \
+    "${TOOLS_ENV[@]}" -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD "${SRC_MOUNTS[@]}" -v "$STATE:/work" -w /src \
     --entrypoint sleep "$UV_IMAGE" infinity >/dev/null
 
   # Lakekeeper's warehouses, and every user's password, from the tools side.
@@ -145,6 +153,8 @@ from pathlib import Path
 import bcrypt
 from k2gen import docset, model
 from k2gen.emit import trino_rules
+sys.path.insert(0, "/src/scripts/lib")
+import lake_env
 
 release, extra = Path(sys.argv[1]), sys.argv[2:]
 LK = "http://lakekeeper:8181"
@@ -220,12 +230,11 @@ with contextlib.redirect_stderr(io.StringIO()):
     for u in sorted(set(extra) - known):
         passwords[u] = keep(root / "throwaway" / f"{u}.password", line(u))
 users = sorted(passwords)
-db_users = [x.split(":", 1)[0] for x in (root / ps.PASSWORD_DB).read_text().splitlines()]
+db_users = [x.split(":", 1)[0] for x in ps.lines_of((root / ps.PASSWORD_DB).read_text()) if x]
 assert sorted(db_users) == users, "one password.db line per user"
-Path("/work/env.json").write_text(json.dumps({
-    "release": f"/work/releases/{release.name}", "trino": "https://trino:8443", "lakekeeper": LK,
-    "secrets": str(root), "ca": str(root / "tls/ca.pem"), "passwords": passwords, "users": users,
-    "warehouses": sorted(warehouses)}, indent=2) + "\n")
+lake_env.write(Path("/work/env.json"), release=f"/work/releases/{release.name}", trino="https://trino:8443",
+               lakekeeper=LK, secrets=str(root), ca=str(root / "tls/ca.pem"), passwords=passwords,
+               warehouses=sorted(warehouses))
 print(f"throwaway-lake: warehouses {', '.join(sorted(warehouses))}; {len(users)} users, each its own password")
 PY
 

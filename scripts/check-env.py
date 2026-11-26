@@ -4,6 +4,12 @@ scripts/dev-up.sh run it before `docker compose up`; a bare `docker compose up -
 does not (SECURITY.md).
 
     python3 scripts/check-env.py [--env-file FILE]   # default: what compose reads, .env and the shell
+    python3 scripts/check-env.py --mode-only [--env-file FILE]   # the file's mode alone
+
+The file must be its owner's alone (mode 600 or tighter): it holds every secret of the stack,
+Trino's internal shared secret included, with which a holder can pose as a Trino node (ADR-060).
+A group- or world-readable or writable .env fails, the fix printed (`chmod 600 <file>`), here and
+in every live-touching path that runs --mode-only (`make access-verify LIVE=1`).
 
 The values are the ones compose will interpolate, read from
 `docker compose config --environment`, so `export`, quotes, an inline comment,
@@ -80,6 +86,16 @@ def check(env: dict[str, str], example: str) -> list[str]:
     return problems
 
 
+def mode_problem(path: Path) -> str | None:
+    """Why `path` is open to anyone but its owner, or None (also when it does not exist)."""
+    if not path.exists():
+        return None
+    mode = path.stat().st_mode & 0o777
+    if mode & 0o077:
+        return f"{path} is mode {mode:03o}, open to its group or others, and it holds the stack's secrets: chmod 600 {path}"
+    return None
+
+
 def compose_environment(env_file: str | None) -> dict[str, str] | None:
     args = ["docker", "compose", *(["--env-file", env_file] if env_file else []), "config", "--environment"]
     r = subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
@@ -92,8 +108,15 @@ def compose_environment(env_file: str | None) -> dict[str, str] | None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--env-file")
+    ap.add_argument("--mode-only", action="store_true", help="check the file's mode and nothing else")
     a = ap.parse_args()
     where = a.env_file or ".env"
+    if loose := mode_problem(Path(a.env_file) if a.env_file else ROOT / ".env"):
+        print(f"check-env: FAIL {loose}", file=sys.stderr)
+        return 1
+    if a.mode_only:
+        print(f"check-env: PASS {where} is its owner's alone (or absent)")
+        return 0
     env = compose_environment(a.env_file)
     if env is None:
         print(f"check-env: FAIL {where}: `docker compose config --environment` failed", file=sys.stderr)
