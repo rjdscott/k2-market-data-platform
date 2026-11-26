@@ -62,8 +62,11 @@ jobs:
 
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
-      - name: Ruff
-        run: uv run --no-project --with ruff==0.17.6 ruff check docker/lake docker/airflow scripts/screenshots scripts/check_docs.py scripts/check-budget.py scripts/check-env.py scripts/make-synthetic-fixtures.py tests
+      # `make lint` itself (the Makefile owns the path list, so CI cannot drift from
+      # it again): root Python by ruff 0.17.6, then k2gen's own ruff and mypy from
+      # its lock, which are the commands the Contracts job's last step ran before.
+      - name: Lint (make lint)
+        run: make lint
 
       - name: Pytest
         run: uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
@@ -74,16 +77,21 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      # Full history and tags: the diff step compiles the newest v3.* tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
-      # Generated files are never edited by hand. A contract changed without
-      # `make generate`, a generated file edited by hand, or one never committed
-      # shows here as a diff or an untracked file. `generate` validates first and
-      # writes nothing on an invalid contract, which fails this step too.
-      - name: Drift (make generate, then no change)
-        run: make generate && git status --porcelain && test -z "$(git status --porcelain)"
+      # Generated files are not in git (they are compiled into a release), so the
+      # old drift check is gone. The validation runner of plan 001 takes its place:
+      # k2gen docset and check on this tree, a trial compile with placeholder image
+      # digests, and k2gen diff against the release of the newest v3.* tag, to the
+      # step summary. Fails only when this tree fails check or compile; a tag that
+      # predates the compiler prints one line and passes.
+      - name: Validate (docset, check, trial compile, diff)
+        run: bash scripts/verify/ci-validate.sh "$RUNNER_TEMP/k2-ci" --diff
 
       - name: Tests
         run: make test-k2gen
@@ -111,17 +119,28 @@ jobs:
   trino:
     name: Trino (access rules)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The pinned image from docker-compose.yml with docker/trino/etc, no
-      # network: the real etc/ starts with one catalog per domain in
-      # contracts/domains.yaml; on local Iceberg catalogs from the same
-      # generator, only a domain's writer changes its catalog with SQL, nothing
-      # writes `lake`, and an unnamed user writes nowhere.
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+
+      # scripts/trino-rules-test.sh compiles a release from fixtures (a good set
+      # and a twin product) with k2gen, starts the pinned Trino 484 over a
+      # throwaway Lakekeeper, Postgres and MinIO, with TLS and a password per
+      # principal, and attacks the release's own rules.json: roles, masks, the
+      # fence matrix, a negative control. No running stack is touched.
       - run: bash scripts/trino-rules-test.sh
+
+      # The repository's own release on a throwaway lake: every row of
+      # tests/access/expectations.yaml. `make test-access` and the deploy
+      # rehearsal are not here (too slow for every pull request): `make spine-e2e`
+      # runs them at merge points.
+      - name: access-verify on this tree's release
+        run: |
+          rel=$(bash scripts/verify/ci-validate.sh "$RUNNER_TEMP/k2-ci" | tail -1)
+          make access-verify RELEASE="$rel"
 
   dbt:
     name: dbt (marts)
@@ -138,6 +157,10 @@ jobs:
       # are archived (legacy/v3-lake-ingest/dbt/) and dbt builds return in phase
       # 002; the job keeps its name because "dbt (marts)" is a required check.
       - run: bash scripts/dbt-test.sh
+
+      # The dbt trees the compiler emits (the k2gen fixture set and contracts/):
+      # dbt parse, compile and ls --selector with dbt/'s pins; offline.
+      - run: make test-dbt-tree
 
   docker:
     name: Docker build (${{ matrix.name }})
