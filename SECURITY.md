@@ -15,9 +15,10 @@ hardened for production use. What is protected, and what is not, plainly:
   reach them.
 - **Passwords from `.env`.** Copy `.env.example` and replace every `change-me-in-production`
   value with `openssl rand -hex 24` (`LAKEKEEPER_ENCRYPTION_KEY`: `openssl rand -base64 32`).
-  `make up` and `make dev-up` refuse to start while a `*_PASSWORD`, `*_SECRET` or `*_KEY`
-  is empty or still its placeholder, or while `MINIO_ROOT_USER` equals
-  `MINIO_ROOT_PASSWORD` (`scripts/check-env.py`). It compares the values compose itself
+  `make up` and `make dev-up` refuse to start while any password, secret or key compose
+  passes to a service is empty, still its placeholder, equal to the user it is paired with,
+  a known default, or shorter than 16 characters (`scripts/check-env.py`, one table of every
+  credential and its user). It compares the values compose itself
   resolves (`docker compose config --environment`: `.env` and the shell), names variables
   and never prints a value. A bare `docker compose up -d` skips that check.
 - **Trino's startup log no longer prints the S3 access key.** Trino logs every catalog
@@ -62,7 +63,9 @@ hardened for production use. What is protected, and what is not, plainly:
   `docker inspect` shows to anyone with the Docker socket. The Airflow scheduler and the
   Prefect worker hold that socket.
 - Container images are pinned but not rebuilt on a schedule; Dependabot and a Trivy scan in
-  CI surface known CVEs but nothing auto-patches.
+  CI surface known CVEs but nothing auto-patches. Trivy scans the repository's lockfiles and
+  fails CI on a CRITICAL with a fix available unless `.trivyignore.yaml` accepts it with a
+  reason and an expiry date. The third-party images compose runs are scanned by nothing yet.
 
 ## Check the binding
 

@@ -104,6 +104,102 @@ def sample_moment():
     return datetime(2026, 9, 3, 0, 0, tzinfo=timezone.utc)
 
 
+class CatalogSpark:
+    """SHOW NAMESPACES / SHOW TABLES from a dict; the JVM, which loads a table, is unreachable."""
+
+    def __init__(self, tables):
+        self.tables, self.statements = tables, []
+
+    def sql(self, statement):
+        self.statements.append(statement)
+        if statement.startswith("SHOW NAMESPACES"):
+            rows = [(ns,) for ns in self.tables]
+        else:
+            rows = [{"tableName": t} for t in self.tables[statement.rsplit(".", 1)[1]]]
+        return types.SimpleNamespace(collect=lambda: rows)
+
+    @property
+    def _jvm(self):
+        raise RuntimeError("py4j gateway closed")
+
+
+class Frame:
+    """What run_audits writes to audit.checks: the rows, and the append."""
+
+    def __init__(self, rows):
+        self.rows, self.appended = rows, False
+
+    def writeTo(self, table):
+        return self
+
+    def option(self, key, value):
+        return self
+
+    def append(self):
+        self.appended = True
+
+
+class CatalogDown:
+    """Every statement raises, as when the catalog is unreachable; the audit.checks write works."""
+
+    def sql(self, statement):
+        raise RuntimeError("catalog down")
+
+    def createDataFrame(self, rows):
+        self.frame = Frame(rows)
+        return self.frame
+
+
+def test_contract_schema_runs_first_and_a_whole_audit_failure_files_against_the_catalog(maintenance, monkeypatch, sample_moment):
+    import offsets as O
+
+    assert maintenance.AUDITS[0] == ("contract_schema", "lake", maintenance.audit_contract_schema)
+    monkeypatch.setattr(maintenance, "Row", dict)  # the module-level pyspark stub has no Row
+    spark = CatalogDown()
+    results = maintenance.run_audits(spark, sample_moment)
+    assert results[0] == {"check_name": "contract_schema", "scope": "lake", "passed": False, "observed": -1,
+                          "detail": f"{O.CHECK_RAISED} RuntimeError: catalog down"}
+    assert spark.frame.appended and spark.frame.rows[0]["check_name"] == "contract_schema"
+
+
+def test_iceberg_json_is_the_three_parsers_output_for_the_table_the_session_loads(maintenance):
+    """The happy path of the JVM read: one load by the session, catalog-qualified, three parsers."""
+    import json
+
+    loaded = []
+    table = types.SimpleNamespace(schema=lambda: "schema", spec=lambda: "spec", sortOrder=lambda: "sort")
+    as_json = {"schema": {"fields": []}, "spec": {"spec-id": 0, "fields": []}, "sort": {"order-id": 0, "fields": []}}
+    parser = types.SimpleNamespace(toJson=lambda obj: json.dumps(as_json[obj]))
+    iceberg = types.SimpleNamespace(
+        spark=types.SimpleNamespace(Spark3Util=types.SimpleNamespace(loadIcebergTable=lambda session, name: loaded.append((session, name)) or table)),
+        SchemaParser=parser, PartitionSpecParser=parser, SortOrderParser=parser,
+    )
+    spark = types.SimpleNamespace(_jsparkSession="the session", _jvm=types.SimpleNamespace(org=types.SimpleNamespace(apache=types.SimpleNamespace(iceberg=iceberg))))
+    assert maintenance._iceberg_json(spark, "gold.trades") == {
+        "schema": as_json["schema"], "partition-spec": as_json["spec"], "sort-order": as_json["sort"],
+    }
+    assert loaded == [("the session", "lake.gold.trades")]
+
+
+def test_contract_schema_never_raises_a_table_it_cannot_load_is_a_check_raised_row(maintenance):
+    """The JVM failing on one table is that table's row; a missing one and a stray one get theirs."""
+    import contract_schema
+
+    import offsets as O
+
+    spark = CatalogSpark({"gold": ["trades", "handmade"], "spike": ["tmp"], "scratch_p4": ["wap_bronze"]})
+    rows = {r["scope"]: r for r in maintenance.audit_contract_schema(spark)}
+    assert rows["lake.gold.trades"]["passed"] is False and rows["lake.gold.trades"]["observed"] == -1
+    assert rows["lake.gold.trades"]["detail"] == f"{O.CHECK_RAISED} RuntimeError: py4j gateway closed"
+    assert rows["lake.raw.messages"]["detail"].startswith("table missing")
+    assert rows["lake.gold.handmade"]["detail"].startswith("no contract")
+    assert rows["lake.spike.tmp"]["passed"] is False and "which no contract names" in rows["lake.spike.tmp"]["detail"]
+    assert "lake.scratch_p4.wap_bronze" not in rows
+    assert "SHOW TABLES IN lake.scratch_p4" not in spark.statements  # a scratch namespace is not even listed
+    assert len(rows) == len(contract_schema.load()) + 2
+    assert {r["check_name"] for r in rows.values()} == {"contract_schema"}
+
+
 # ── bronze_schema_drift on a sample with no frame of the table's stream ─────
 #
 # It filed passed = true having sampled nothing, which the venue quality

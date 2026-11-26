@@ -299,7 +299,7 @@ Trino's spelling of the lake's `exchange, months(window_start)`, so a read of on
 month prunes the same way in both. The venue scorecard, one row per venue and day, is not
 partitioned: every hourly run rebuilds it whole, as one small table. The two views store no
 files. Each domain's `dq.dbt_test_results` is not partitioned either, until a domain's table
-passes 1,000,000 rows ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md),
+passes 1,000,000 rows ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md), <!-- counts-ok: a revisit trigger on test-result rows, not venue data -->
 Revisit when).
 
 Partitioning also bounds one generated test. The uniqueness test `k2gen` writes for a source a
@@ -322,7 +322,7 @@ No table has a TTL.
 
 | Table | Engine | `PARTITION BY` | `ORDER BY` | Why |
 |---|---|---|---|---|
-| `gold.trades` | `ReplacingMergeTree(first_seen)` | `toYYYYMM(exchange_ts)` | `(exchange, canonical_symbol, exchange_ts, trade_id)` | the logical trade is the key; a venue replay or a feed/reload overlap collapses under `FINAL` to the **earliest delivery** (`first_seen` = inverted receive time). Monthly partitions keep `FINAL` a per-partition merge (the `quant` profile sets `do_not_merge_across_partitions_select_final`) and keep part counts flat at ~10 M rows/day |
+| `gold.trades` | `ReplacingMergeTree(first_seen)` | `toYYYYMM(exchange_ts)` | `(exchange, canonical_symbol, exchange_ts, trade_id)` | the logical trade is the key; a venue replay or a feed/reload overlap collapses under `FINAL` to the **earliest delivery** (`first_seen` = inverted receive time). Monthly partitions keep `FINAL` a per-partition merge (the `quant` profile sets `do_not_merge_across_partitions_select_final`) and keep part counts flat as the days accrue |
 | `gold.book_top20` | `ReplacingMergeTree(ver)` | `toYYYYMM(second)` | `(exchange, canonical_symbol, second)` | one row per venue-symbol-second; the later sample in a second wins, and a lake reload (state at the end of the second, `ver` = last nanosecond) out-ranks the feed's mid-second sample |
 | `gold.ohlcv_{1m,5m,1h,1d}` | `ReplacingMergeTree(computed_at)` | `toYYYYMM(window_start)` | `(exchange, canonical_symbol, window_start)` | loaded from the lake, never computed here; a re-pull of a recomputed bucket replaces the row. The version is the lake run's wall clock, not `src_snapshot_id`: an Iceberg snapshot id is random, so keying the merge on it keeps an arbitrary row |
 | `gold.bbo_1s` | `ReplacingMergeTree(src_snapshot_id)` | `toYYYYMM(second)` | `(exchange, canonical_symbol, second)` | loaded from the lake; the one table still versioned on the snapshot id, because `lake.gold.bbo_1s` carries no `computed_at` to use |

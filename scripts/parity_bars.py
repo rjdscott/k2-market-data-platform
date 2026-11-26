@@ -4,7 +4,7 @@ Three-way event-bar parity at pinned lake snapshots (ADR-029): the materialised
 `gold.bars`, the same window SQL run by DuckDB over `gold.trades`, and the
 pure-Python reference in docker/lake/bars.py — compared at tolerance ZERO.
 
-    uv run --no-project --with duckdb==1.4.4 --with pytz --with pyyaml \
+    uv run --no-project --with duckdb==1.4.4 --with pytz==2026.6 --with pyyaml==6.0.4 \
         python scripts/parity_bars.py --day 2026-08-26 \
         --bars-snapshot <lake.gold.bars snapshot id> --trades-snapshot <lake.gold.trades snapshot id> \
         [--reference-symbols BTC/USD,ETH/USDT]

@@ -1,0 +1,2376 @@
+{
+  "audit.checks": {
+    "columns": [
+      {
+        "name": "run_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "job",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "check_name",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "scope",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "passed",
+        "required": true,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "observed",
+        "required": false,
+        "type": "BIGINT"
+      },
+      {
+        "name": "detail",
+        "required": false,
+        "type": "STRING"
+      }
+    ],
+    "identifier": [],
+    "partitioning": [
+      "days(run_ts)"
+    ],
+    "sort": []
+  },
+  "bronze.binance_depth20": {
+    "columns": [
+      {
+        "name": "stream",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "data",
+        "required": false,
+        "type": "STRUCT<lastUpdateId: BIGINT, bids: ARRAY<ARRAY<STRING>>, asks: ARRAY<ARRAY<STRING>>>"
+      },
+      {
+        "name": "symbol",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset"
+    ],
+    "partitioning": [
+      "days(recv_ts)"
+    ],
+    "sort": [
+      "symbol",
+      "recv_ts_ns"
+    ]
+  },
+  "bronze.binance_trade": {
+    "columns": [
+      {
+        "name": "stream",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "data",
+        "required": false,
+        "type": "STRUCT<e: STRING, E: BIGINT, s: STRING, t: BIGINT, p: STRING, q: STRING, T: BIGINT, m: BOOLEAN, M: BOOLEAN>"
+      },
+      {
+        "name": "symbol",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset"
+    ],
+    "partitioning": [
+      "days(recv_ts)"
+    ],
+    "sort": [
+      "symbol",
+      "recv_ts_ns"
+    ]
+  },
+  "bronze.coinbase_level2": {
+    "columns": [
+      {
+        "name": "channel",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "timestamp",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "sequence_num",
+        "required": false,
+        "type": "BIGINT"
+      },
+      {
+        "name": "events",
+        "required": false,
+        "type": "ARRAY<STRUCT<type: STRING, product_id: STRING, updates: ARRAY<STRUCT<side: STRING, event_time: STRING, price_level: STRING, new_quantity: STRING>>>>"
+      },
+      {
+        "name": "symbol",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset"
+    ],
+    "partitioning": [
+      "days(recv_ts)"
+    ],
+    "sort": [
+      "symbol",
+      "recv_ts_ns"
+    ]
+  },
+  "bronze.coinbase_market_trades": {
+    "columns": [
+      {
+        "name": "channel",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "timestamp",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "sequence_num",
+        "required": false,
+        "type": "BIGINT"
+      },
+      {
+        "name": "events",
+        "required": false,
+        "type": "ARRAY<STRUCT<type: STRING, trades: ARRAY<STRUCT<product_id: STRING, trade_id: STRING, price: STRING, size: STRING, time: STRING, side: STRING>>>>"
+      },
+      {
+        "name": "symbol",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset"
+    ],
+    "partitioning": [
+      "days(recv_ts)"
+    ],
+    "sort": [
+      "symbol",
+      "recv_ts_ns"
+    ]
+  },
+  "bronze.kraken_book": {
+    "columns": [
+      {
+        "name": "channel",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "type",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "data",
+        "required": false,
+        "type": "ARRAY<STRUCT<symbol: STRING, bids: ARRAY<STRUCT<price: DECIMAL(28,10), qty: DECIMAL(28,10)>>, asks: ARRAY<STRUCT<price: DECIMAL(28,10), qty: DECIMAL(28,10)>>, checksum: BIGINT, timestamp: STRING>>"
+      },
+      {
+        "name": "symbol",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset"
+    ],
+    "partitioning": [
+      "days(recv_ts)"
+    ],
+    "sort": [
+      "symbol",
+      "recv_ts_ns"
+    ]
+  },
+  "bronze.kraken_instrument": {
+    "columns": [
+      {
+        "name": "channel",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "type",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "data",
+        "required": false,
+        "type": "STRUCT<assets: ARRAY<STRUCT<id: STRING, status: STRING, precision: INT, precision_display: INT, borrowable: BOOLEAN, collateral_value: DECIMAL(28,10), class: STRING, margin_rate: DECIMAL(28,10)>>, pairs: ARRAY<STRUCT<symbol: STRING, base: STRING, quote: STRING, status: STRING, qty_precision: INT, qty_increment: DECIMAL(28,10), price_precision: INT, cost_precision: INT, marginable: BOOLEAN, has_index: BOOLEAN, ws_display_price_precision: INT, cost_min: DECIMAL(28,10), margin_initial: DECIMAL(28,10), position_limit_long: BIGINT, position_limit_short: BIGINT, tick_size: DECIMAL(28,10), price_increment: DECIMAL(28,10), qty_min: DECIMAL(28,10)>>>"
+      },
+      {
+        "name": "symbol",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset"
+    ],
+    "partitioning": [
+      "days(recv_ts)"
+    ],
+    "sort": [
+      "symbol",
+      "recv_ts_ns"
+    ]
+  },
+  "bronze.kraken_trade": {
+    "columns": [
+      {
+        "name": "channel",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "type",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "data",
+        "required": false,
+        "type": "ARRAY<STRUCT<symbol: STRING, side: STRING, price: DECIMAL(28,10), qty: DECIMAL(28,10), ord_type: STRING, trade_id: BIGINT, timestamp: STRING>>"
+      },
+      {
+        "name": "symbol",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset"
+    ],
+    "partitioning": [
+      "days(recv_ts)"
+    ],
+    "sort": [
+      "symbol",
+      "recv_ts_ns"
+    ]
+  },
+  "gold.bars": {
+    "columns": [
+      {
+        "name": "exchange",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "bar_kind",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "threshold",
+        "required": true,
+        "type": "DECIMAL(38,10)"
+      },
+      {
+        "name": "day",
+        "required": true,
+        "type": "DATE"
+      },
+      {
+        "name": "bar_seq",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "open_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "high_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "low_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "close_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "volume_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "quote_volume_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "open_time",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "close_time",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "src_snapshot_id",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "computed_at",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "exchange",
+      "canonical_symbol",
+      "bar_kind",
+      "day",
+      "bar_seq"
+    ],
+    "partitioning": [
+      "exchange",
+      "months(open_time)"
+    ],
+    "sort": []
+  },
+  "gold.bbo_1s": {
+    "columns": [
+      {
+        "name": "exchange",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "second",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "bid_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "bid_qty_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "ask_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "ask_qty_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "mid",
+        "required": true,
+        "type": "DOUBLE"
+      },
+      {
+        "name": "spread_bps",
+        "required": true,
+        "type": "DOUBLE"
+      },
+      {
+        "name": "imbalance",
+        "required": true,
+        "type": "DOUBLE"
+      },
+      {
+        "name": "microprice",
+        "required": true,
+        "type": "DOUBLE"
+      },
+      {
+        "name": "checksum_ok",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "src_snapshot_id",
+        "required": true,
+        "type": "BIGINT"
+      }
+    ],
+    "identifier": [
+      "exchange",
+      "canonical_symbol",
+      "second"
+    ],
+    "partitioning": [
+      "exchange",
+      "days(second)"
+    ],
+    "sort": [
+      "canonical_symbol",
+      "second"
+    ]
+  },
+  "gold.book_state": {
+    "columns": [
+      {
+        "name": "exchange",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "bid_px_e8",
+        "required": true,
+        "type": "ARRAY<BIGINT>"
+      },
+      {
+        "name": "bid_qty_e8",
+        "required": true,
+        "type": "ARRAY<BIGINT>"
+      },
+      {
+        "name": "ask_px_e8",
+        "required": true,
+        "type": "ARRAY<BIGINT>"
+      },
+      {
+        "name": "ask_qty_e8",
+        "required": true,
+        "type": "ARRAY<BIGINT>"
+      },
+      {
+        "name": "seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "checksum_ok",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "last_conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "last_recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "last_second",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "last_src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "last_src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "last_src_index",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "updated_at",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "exchange",
+      "symbol",
+      "conn_id"
+    ],
+    "partitioning": [
+      "exchange"
+    ],
+    "sort": []
+  },
+  "gold.book_top20": {
+    "columns": [
+      {
+        "name": "exchange",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "second",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "depth",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "checksum_ok",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "bid_px_e8",
+        "required": true,
+        "type": "ARRAY<BIGINT>"
+      },
+      {
+        "name": "bid_qty_e8",
+        "required": true,
+        "type": "ARRAY<BIGINT>"
+      },
+      {
+        "name": "ask_px_e8",
+        "required": true,
+        "type": "ARRAY<BIGINT>"
+      },
+      {
+        "name": "ask_qty_e8",
+        "required": true,
+        "type": "ARRAY<BIGINT>"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_index",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "exchange",
+      "canonical_symbol",
+      "second"
+    ],
+    "partitioning": [
+      "exchange",
+      "days(second)"
+    ],
+    "sort": [
+      "canonical_symbol",
+      "second"
+    ]
+  },
+  "gold.dim_instrument": {
+    "columns": [
+      {
+        "name": "instrument_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "exchange",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "base",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "quote",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "book_depth",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "subscribed",
+        "required": true,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "tick_size",
+        "required": false,
+        "type": "DECIMAL(28,10)"
+      },
+      {
+        "name": "qty_increment",
+        "required": false,
+        "type": "DECIMAL(28,10)"
+      },
+      {
+        "name": "price_precision",
+        "required": false,
+        "type": "INT"
+      },
+      {
+        "name": "qty_precision",
+        "required": false,
+        "type": "INT"
+      },
+      {
+        "name": "venue_status",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "source",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "attr_hash",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "valid_from",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "valid_to",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "is_current",
+        "required": true,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "recorded_at",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "instrument_id",
+      "valid_from"
+    ],
+    "partitioning": [
+      "exchange"
+    ],
+    "sort": [
+      "canonical_symbol",
+      "valid_from"
+    ]
+  },
+  "gold.dim_venue": {
+    "columns": [
+      {
+        "name": "venue_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "exchange",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "book_depth",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "instruments",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "subscribed",
+        "required": true,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "source",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "attr_hash",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "valid_from",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "valid_to",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "is_current",
+        "required": true,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "recorded_at",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "venue_id",
+      "valid_from"
+    ],
+    "partitioning": [
+      "exchange"
+    ],
+    "sort": []
+  },
+  "gold.ohlcv_1d": {
+    "columns": [
+      {
+        "name": "exchange",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "open_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "high_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "low_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "close_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "DECIMAL(38,10)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "DECIMAL(38,10)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "open_time",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "close_time",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "src_snapshot_id",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "computed_at",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "exchange",
+      "canonical_symbol",
+      "window_start"
+    ],
+    "partitioning": [
+      "exchange"
+    ],
+    "sort": []
+  },
+  "gold.ohlcv_1h": {
+    "columns": [
+      {
+        "name": "exchange",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "open_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "high_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "low_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "close_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "DECIMAL(38,10)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "DECIMAL(38,10)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "open_time",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "close_time",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "src_snapshot_id",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "computed_at",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "exchange",
+      "canonical_symbol",
+      "window_start"
+    ],
+    "partitioning": [
+      "exchange",
+      "months(window_start)"
+    ],
+    "sort": []
+  },
+  "gold.ohlcv_1m": {
+    "columns": [
+      {
+        "name": "exchange",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "open_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "high_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "low_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "close_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "DECIMAL(38,10)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "DECIMAL(38,10)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "open_time",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "close_time",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "src_snapshot_id",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "computed_at",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "exchange",
+      "canonical_symbol",
+      "window_start"
+    ],
+    "partitioning": [
+      "exchange",
+      "months(window_start)"
+    ],
+    "sort": []
+  },
+  "gold.ohlcv_5m": {
+    "columns": [
+      {
+        "name": "exchange",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "window_start",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "open_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "high_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "low_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "close_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "volume",
+        "required": true,
+        "type": "DECIMAL(38,10)"
+      },
+      {
+        "name": "quote_volume",
+        "required": true,
+        "type": "DECIMAL(38,10)"
+      },
+      {
+        "name": "trade_count",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "open_time",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "close_time",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "src_snapshot_id",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "computed_at",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "exchange",
+      "canonical_symbol",
+      "window_start"
+    ],
+    "partitioning": [
+      "exchange",
+      "months(window_start)"
+    ],
+    "sort": []
+  },
+  "gold.trades": {
+    "columns": [
+      {
+        "name": "exchange",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "trade_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "price_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "qty_e8",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "exchange_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "seq_gap",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "missing_before",
+        "required": false,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_index",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "exchange",
+      "canonical_symbol",
+      "trade_id"
+    ],
+    "partitioning": [
+      "exchange",
+      "days(exchange_ts)"
+    ],
+    "sort": [
+      "canonical_symbol",
+      "exchange_ts"
+    ]
+  },
+  "raw.messages": {
+    "columns": [
+      {
+        "name": "topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "kafka_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "key",
+        "required": false,
+        "type": "BINARY"
+      },
+      {
+        "name": "schema_id",
+        "required": false,
+        "type": "INT"
+      },
+      {
+        "name": "payload",
+        "required": true,
+        "type": "BINARY"
+      },
+      {
+        "name": "headers",
+        "required": false,
+        "type": "MAP<STRING, BINARY>"
+      }
+    ],
+    "identifier": [],
+    "partitioning": [
+      "days(kafka_ts)",
+      "topic"
+    ],
+    "sort": [
+      "topic",
+      "partition",
+      "offset"
+    ]
+  },
+  "silver.book_binance": {
+    "columns": [
+      {
+        "name": "symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "last_update_id",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "bids",
+        "required": true,
+        "type": "ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>>"
+      },
+      {
+        "name": "asks",
+        "required": true,
+        "type": "ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>>"
+      },
+      {
+        "name": "depth",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "seq_gap",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_index",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset",
+      "src_index"
+    ],
+    "partitioning": [
+      "days(recv_ts)"
+    ],
+    "sort": [
+      "canonical_symbol",
+      "recv_ts_ns"
+    ]
+  },
+  "silver.book_coinbase": {
+    "columns": [
+      {
+        "name": "symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "event_type",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "updates",
+        "required": true,
+        "type": "ARRAY<STRUCT<side: STRING, side_native: STRING, px: DECIMAL(28,10), qty: DECIMAL(28,10), event_time: TIMESTAMP>>"
+      },
+      {
+        "name": "sequence_num",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "envelope_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "seq_gap",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_index",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset",
+      "src_index"
+    ],
+    "partitioning": [
+      "days(recv_ts)"
+    ],
+    "sort": [
+      "canonical_symbol",
+      "recv_ts_ns"
+    ]
+  },
+  "silver.book_kraken": {
+    "columns": [
+      {
+        "name": "symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "frame_type",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "bids",
+        "required": true,
+        "type": "ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>>"
+      },
+      {
+        "name": "asks",
+        "required": true,
+        "type": "ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>>"
+      },
+      {
+        "name": "checksum",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "checksum_ok",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "exchange_ts",
+        "required": false,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_index",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset",
+      "src_index"
+    ],
+    "partitioning": [
+      "days(recv_ts)"
+    ],
+    "sort": [
+      "canonical_symbol",
+      "recv_ts_ns"
+    ]
+  },
+  "silver.trades_binance": {
+    "columns": [
+      {
+        "name": "symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "trade_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "price",
+        "required": true,
+        "type": "DECIMAL(28,10)"
+      },
+      {
+        "name": "qty",
+        "required": true,
+        "type": "DECIMAL(28,10)"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "side_native",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "exchange_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "venue_replay",
+        "required": true,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "seq_gap",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "missing_before",
+        "required": false,
+        "type": "BIGINT"
+      },
+      {
+        "name": "precision_loss",
+        "required": true,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "event_type",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "event_time",
+        "required": false,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "buyer_is_maker",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "ignore_flag",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "stream",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_index",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset",
+      "src_index"
+    ],
+    "partitioning": [
+      "days(exchange_ts)"
+    ],
+    "sort": [
+      "canonical_symbol",
+      "exchange_ts"
+    ]
+  },
+  "silver.trades_coinbase": {
+    "columns": [
+      {
+        "name": "symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "trade_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "price",
+        "required": true,
+        "type": "DECIMAL(28,10)"
+      },
+      {
+        "name": "qty",
+        "required": true,
+        "type": "DECIMAL(28,10)"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "side_native",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "exchange_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "venue_replay",
+        "required": true,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "seq_gap",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "missing_before",
+        "required": false,
+        "type": "BIGINT"
+      },
+      {
+        "name": "precision_loss",
+        "required": true,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "envelope_ts",
+        "required": false,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "sequence_num",
+        "required": false,
+        "type": "BIGINT"
+      },
+      {
+        "name": "event_type",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_index",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset",
+      "src_index"
+    ],
+    "partitioning": [
+      "days(exchange_ts)"
+    ],
+    "sort": [
+      "canonical_symbol",
+      "exchange_ts"
+    ]
+  },
+  "silver.trades_kraken": {
+    "columns": [
+      {
+        "name": "symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "canonical_symbol",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "trade_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "trade_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "price",
+        "required": true,
+        "type": "DECIMAL(28,10)"
+      },
+      {
+        "name": "qty",
+        "required": true,
+        "type": "DECIMAL(28,10)"
+      },
+      {
+        "name": "side",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "side_native",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "exchange_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "recv_ts_ns",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "recv_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      },
+      {
+        "name": "conn_id",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "conn_msg_seq",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "venue_replay",
+        "required": true,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "seq_gap",
+        "required": false,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "missing_before",
+        "required": false,
+        "type": "BIGINT"
+      },
+      {
+        "name": "precision_loss",
+        "required": true,
+        "type": "BOOLEAN"
+      },
+      {
+        "name": "ord_type",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "frame_type",
+        "required": false,
+        "type": "STRING"
+      },
+      {
+        "name": "src_topic",
+        "required": true,
+        "type": "STRING"
+      },
+      {
+        "name": "src_partition",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "src_offset",
+        "required": true,
+        "type": "BIGINT"
+      },
+      {
+        "name": "src_index",
+        "required": true,
+        "type": "INT"
+      },
+      {
+        "name": "ingest_ts",
+        "required": true,
+        "type": "TIMESTAMP"
+      }
+    ],
+    "identifier": [
+      "src_topic",
+      "src_partition",
+      "src_offset",
+      "src_index"
+    ],
+    "partitioning": [
+      "days(exchange_ts)"
+    ],
+    "sort": [
+      "canonical_symbol",
+      "exchange_ts"
+    ]
+  }
+}

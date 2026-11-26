@@ -83,12 +83,13 @@ groups:
         annotations:
           summary: "{{ $value }} lake audit check(s) failed in the last maintenance run"
           description: |
-            docker/lake/maintenance.py exited non-zero. One of offset continuity,
-            duplicate identifiers or sequence monotonicity did not hold.
+            docker/lake/maintenance.py exited non-zero: at least one of the nightly
+            audits in its AUDITS tuple did not hold, from each live table against
+            its contract to offset continuity.
 
             The row naming the failure is in lake.audit.checks with the run
-            timestamp, the scope and a detail string — query it before touching
-            anything, because the three checks mean very different things.
+            timestamp, the scope and a detail string. Query it before touching
+            anything: the checks mean very different things.
           runbook: docs/runbooks/lake-audit-failed.md
 
       # CRITICAL: the batch the ingest just committed is not the batch it planned.

@@ -132,7 +132,7 @@ with `K2_GIT_SHA` stamped into `k2_capture_build_info`.
 There is no local Rust toolchain requirement, compile and test in a container:
 
 ```bash
-make test-rust      # cargo test --locked in rust:1-bookworm
+make test-rust      # cargo test --locked in rust:1.100.0-bookworm
 ```
 
 That target reinstalls `cmake`/`clang` on every run. For a tight loop, build the builder
@@ -169,7 +169,7 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
 docker exec k2-airflow-scheduler airflow dags trigger lake_ingest
 
 # Unit tests (pure Python: no stack needed)
-uv run --no-project --with pytest --with pyyaml --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
+uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 ```
 
 An ingest takes an exclusive `flock`, so a hand-run that collides with the 5-minute
@@ -185,7 +185,7 @@ dag-processor re-reads a changed DAG file within 30 s, with nothing to redeploy
 | Any container | `docker compose logs -f <service>` or `make logs` |
 | Capture | `docker logs -f k2-capture-binance`, `tracing` to stderr, filtered by `RUST_LOG`. No log files: nothing is bind-mounted out |
 | Lake job runs | the Airflow task logs: the UI at http://localhost:8090, or under `/opt/airflow/logs` in `k2-airflow-scheduler` |
-| Spark job detail | event logs in `/home/iceberg/spark-events` in `k2-spark-iceberg`. A running job's UI is port 4041 inside the container, not published (`docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications`); http://localhost:4040 is the always-on Thrift server's UI |
+| Spark job detail | event logs in `/home/iceberg/spark-events` in `k2-spark-iceberg`. A running job's UI is port 4041 <!-- counts-ok: a port number, not a count --> inside the container, not published (`docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications`); http://localhost:4040 is the always-on Thrift server's UI |
 | ClickHouse server | `docker logs k2-clickhouse` |
 
 ## Tearing down

@@ -43,12 +43,23 @@ another host, check the first with `python3 scripts/check-env.py` and the second
 sizing arithmetic linked below.
 
 **`make up` and `make dev-up` refuse to start this stack.** Both run `scripts/check-env.py`
-first, which refuses a default or placeholder credential, and the live MinIO root credential is
-MinIO's own default pair ([SECURITY.md](../../SECURITY.md)). Run 2026-11-26 in the live checkout:
+first, which refuses a credential that is a placeholder, equal to its user, a known default or
+under 16 characters, and the live MinIO root credential is MinIO's own default pair
+([SECURITY.md](../../SECURITY.md)). It names each variable it refuses, never a value. What it
+prints for the shipped `.env.example`, where every secret is still its placeholder (run
+2026-11-26; never point it at the live `.env` to copy its output into a document):
 
 ```console
-$ python3 scripts/check-env.py
-check-env: FAIL .env: MINIO_ROOT_USER equals MINIO_ROOT_PASSWORD; set the password to `openssl rand -hex 24`
+$ python3 scripts/check-env.py --env-file .env.example
+check-env: FAIL .env.example: CLICKHOUSE_PASSWORD is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: K2_QUANT_PASSWORD is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: PREFECT_DB_PASSWORD is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: MINIO_ROOT_PASSWORD is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: LAKEKEEPER_ENCRYPTION_KEY is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: AIRFLOW_DB_PASSWORD is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: AIRFLOW_JWT_SECRET is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: AIRFLOW_API_SECRET_KEY is unset, empty or still the .env.example placeholder
+check-env: FAIL .env.example: GRAFANA_PASSWORD is unset, empty or still the .env.example placeholder
 ```
 
 Do **not** edit the pair in `.env` to get past it: each Lakekeeper warehouse keeps its own
@@ -371,6 +382,16 @@ rule below). `-t <seconds>` gives the old container that long to stop cleanly.
 | `airflow-scheduler`, `airflow-api-server`, `airflow-dag-processor` | paused and nothing running: tasks run inside the scheduler and report to the api-server | a running task dies with them | not in this rollout; see [airflow-scheduling.md](../runbooks/airflow-scheduling.md) section 3 |
 | `airflow-statsd` | as the row above: after recreating it, restart the three Airflow services, which resolve its address only at start | every Airflow metric stops until they restart | [airflow-scheduling.md](../runbooks/airflow-scheduling.md) section 3 |
 
+**`prefect-db` will be recreated by the next `docker compose up -d` that includes it.** Since
+2026-11-26 its image is pinned by digest (`postgres@sha256:fe0737ba…`, the same 15.19 image the
+container already runs), and that changes the service's compose definition, so the first
+`docker compose up -d` naming `prefect-db`, or a bare one, or one for a service that depends on
+it without `--no-deps` (`airflow-migrate`, `lakekeeper-migrate`), replaces the container of the
+catalog database. The data is on the `postgres-data` volume and survives. Every service using
+it drops its connection: `lakekeeper`, the three Airflow services, and `prefect-server` when the
+legacy profile runs. Do it deliberately, with the pattern below (`prefect-db` as `<service>` in
+step 3), not as a side effect; until then, start or recreate other services with `--no-deps`.
+
 ### The pattern: pause, wait for idle, recreate, verify, unpause
 
 ```bash
@@ -593,6 +614,17 @@ paused ones inside one pause.
 ---
 
 ## 8. Logs
+
+**Logs are capped.** Each container keeps at most five files of 50 MB (older ones compressed),
+about 250 MB, set once for every service in `docker-compose.yml` (`x-logging`). So `docker logs`
+reaches back a bounded distance: about two days for the Airflow scheduler, about five weeks for
+Redpanda at the rates measured on 2026-11-26, longer for the quiet services. A cap
+applies only from the moment a container is recreated; a container still running from before
+2026-11-26 has no cap until its next recreate (`docker inspect -f '{{.HostConfig.LogConfig.Config}}' <name>`
+shows `map[]` when uncapped). There is no central log store yet.
+Because the logging block is part of every service's definition, a bare `docker compose up -d`
+after this change recreates every container that has not yet picked it up; recreate services one
+at a time with the pattern in section 6.
 
 | What | Where | Kept until |
 |---|---|---|

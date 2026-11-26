@@ -47,19 +47,19 @@ def test_the_repository_validates():
     assert cli.validate() == []
 
 
-def test_every_table_outside_audit_has_exactly_one_contract():
-    tables = [t for t in ddl.parse(ROOT / cli.LAKE_SQL) if not t.startswith("audit.")]
+def test_every_table_has_exactly_one_contract():
+    tables = list(ddl.parse(ROOT / cli.LAKE_SQL))
     described = [yaml.safe_load(p.read_text())["schema"][0]["physicalName"] for p in (ROOT / "contracts").glob("*/*/*.odcs.yaml")]
-    # audit.checks has one too, because marts read it (venue-quality, quality-results).
-    assert sorted(described) == sorted([*tables, "audit.checks"])
+    assert sorted(described) == sorted(tables)
 
 
-def test_an_audit_table_may_go_without_a_contract(tree):
-    # Only while no mart reads it: today venue-quality and quality-results do.
+def test_an_audit_table_without_a_contract_fails(tree):
+    # The nightly contract_schema audit fails it in the audit namespace, so CI must too.
+    # The marts that read audit.checks go with its contract, so the one error left is the table's.
     shutil.rmtree(tree / AUDIT)
     shutil.rmtree(tree / "contracts/governance/quality-results")
     edit(tree / "contracts/market-analytics/venue-quality/product.yaml", lambda d: d.update(inputs=[{"table": "gold.trades"}], marts=[{**d["marts"][0], "reads": ["gold.trades"]}]))
-    assert cli.validate(tree) == []
+    assert cli.validate(tree) == [f"{cli.LAKE_SQL}: audit.checks has no contract under contracts/"]
 
 
 def test_the_parser_finds_every_table_in_lake_sql():

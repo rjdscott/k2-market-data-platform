@@ -6,6 +6,10 @@ order, so two runs are byte-identical and a deleted contract leaves nothing:
 
     docker/lake/ddl/generated/            DDL for contracts with inline columns (owned)
     docker/lake/generated/retention.json  snapshot expiry in days, per table
+    docker/lake/generated/contract_schemas.json  per table, the columns in order with their Spark
+                                          SQL type and NOT NULL, the partitioning, the sort order
+                                          and the identifier fields: what the nightly
+                                          contract_schema audit compares the live table with
     docs/products/                        a page per product, the index, and all.md, every
                                           product in one table, which the data catalog links (owned)
 
@@ -44,6 +48,7 @@ from k2gen.cli import LAKE_SQL, SUFFIX, adr_file, fence
 
 GENERATED_DDL = "docker/lake/ddl/generated"
 RETENTION = "docker/lake/generated/retention.json"
+CONTRACT_SCHEMAS = "docker/lake/generated/contract_schemas.json"
 PAGES = "docs/products"
 PRODUCT_TABLE = f"{PAGES}/all.md"
 OWNED = (GENERATED_DDL, PAGES)
@@ -261,6 +266,23 @@ def _product_table(domains: dict[str, Any], products: list[dict[str, Any]], tabl
             *[f"| [{p['domain']}](README.md#{p['domain']}) | [{p['name']}]({p['domain']}/{p['name']}.md) | `{p['owner']}` | {p['lifecycle']} | {_status(p, tables)} | {_built(p)} |" for p in rows],
         ]
     ) + "\n"
+
+
+def _contract_schema(doc: dict[str, Any], props: dict[str, Any], lake: dict[str, ddl.Table]) -> dict[str, Any]:
+    """One table as its contract states it: inline columns, or lake.sql's for a table lake.sql creates.
+
+    Types stay as the contract spells them, Spark SQL, with NOT NULL split out as `required`.
+    docker/lake/contract_schema.py renders the live Iceberg types in that same spelling.
+    """
+    schema = doc["schema"][0]
+    if "properties" in schema:
+        columns = [{"name": c["name"], "type": c["physicalType"], "required": c.get("required", False)} for c in schema["properties"]]
+        identifier: list[str] = []  # _table_ddl writes no SET IDENTIFIER FIELDS
+    else:
+        table = lake[schema["physicalName"]]
+        columns = [{"name": c.name, "type": c.type.removesuffix(" NOT NULL"), "required": c.type.endswith(" NOT NULL")} for c in table.schema]
+        identifier = list(table.identifier)
+    return {"columns": columns, "partitioning": props["partitioning"], "sort": props["sort"], "identifier": identifier}
 
 
 def _ddl_readme(tables: list[str]) -> str:
@@ -483,6 +505,7 @@ def render(root: Path) -> dict[str, str]:
     inline = sorted(t for t, (_, doc, _) in tables.items() if "properties" in doc["schema"][0])
 
     out = {RETENTION: json.dumps({t: c[2]["retention"] for t, c in tables.items()}, indent=2, sort_keys=True) + "\n"}
+    out[CONTRACT_SCHEMAS] = json.dumps({t: _contract_schema(doc, props, lake) for t, (_, doc, props) in tables.items()}, indent=2, sort_keys=True) + "\n"
     out |= {f"{GENERATED_DDL}/{t}.sql": _table_ddl(*tables[t]) for t in inline}
     out[f"{GENERATED_DDL}/README.md"] = _ddl_readme(inline)
     out |= {f"{PAGES}/{p['domain']}/{p['name']}.md": _page(p, tables, lake, home, root) for p in products}
@@ -498,7 +521,7 @@ def render(root: Path) -> dict[str, str]:
 
 
 def generate(root: Path) -> dict[str, str]:
-    """Render, then replace the owned directories and retention.json. Returns what was written."""
+    """Render, then replace the owned directories, retention.json and contract_schemas.json. Returns what was written."""
     files = render(root)  # before deleting anything, so a render that raises leaves the tree as it was
     for owned in OWNED:
         shutil.rmtree(root / owned, ignore_errors=True)

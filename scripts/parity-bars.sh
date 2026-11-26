@@ -16,4 +16,4 @@ else
          --bars-snapshot "$(python3 -c "import json; print(json.load(open('$PIN'))['bars']['bars_snapshot'])")" \
          --trades-snapshot "$(python3 -c "import json; print(json.load(open('$PIN'))['bars']['trades_snapshot'])")" "$@"
 fi
-exec uv run --no-project --with duckdb==1.4.4 --with pytz --with pyyaml python scripts/parity_bars.py "$@"
+exec uv run --no-project --with duckdb==1.4.4 --with pytz==2026.6 --with pyyaml==6.0.4 python scripts/parity_bars.py "$@"

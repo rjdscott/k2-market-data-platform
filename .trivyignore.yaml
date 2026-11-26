@@ -1,0 +1,13 @@
+# Findings the CI `security` job's gate accepts for now: a CRITICAL with a fix
+# available fails the build unless it is listed here. Every entry carries the
+# reason it is accepted (`statement`) and the date the acceptance ends
+# (`expired_at`, at most a year out); Trivy stops honouring an entry after
+# that date, so the build fails again until it is fixed or re-decided.
+# tests/test_ci_security.py fails an entry without both.
+#
+#   vulnerabilities:
+#     - id: CVE-YYYY-NNNNN
+#       paths: ["services/capture-rust/Cargo.lock"]
+#       statement: why this is accepted, and what would fix it
+#       expired_at: YYYY-MM-DD
+vulnerabilities: []
