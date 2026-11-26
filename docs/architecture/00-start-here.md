@@ -4,7 +4,7 @@
 > **Read this if** you are new to the repo.
 > **Before this** nothing.
 
-The target the platform is being rebuilt toward is in [chapter 20](20-target-data-product-platform.md); chapters 01 to 19 describe what runs today.
+The target the platform is being rebuilt toward is in [chapter 20](20-target-data-product-platform.md); chapters 01 to 19 describe what runs today. The v3 lake ingest retired on 2026-11-26: chapters 08 and 09 are archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/), each leaving a one-paragraph stub, and the chapters that described it carry a dated status note.
 
 `docs/architecture/` is written as a book: numbered chapters in the order a new joiner
 should meet them, each one openable on its own. Every chapter starts with three lines: what you
@@ -23,10 +23,10 @@ the versions table.
 
 | You are | Read |
 |---|---|
-| New to the platform | 01 → 04 → 05 → 08 → 09 → 10 → 19, then 02–03 when a term bites |
-| Reviewing the engineering | 04 → 08 → 10 → 16, then the ADRs each chapter cites |
+| New to the platform | 01 → 04 → 05 → 19 → 20, then 02–03 when a term bites |
+| Reviewing the engineering | 04 → 16 → 20, then the ADRs each chapter cites |
 | On call | 11 → 16 → [`../runbooks/`](../runbooks/README.md) |
-| Adding or owning a data product | 09 → 18 → 19 → [`../development/golden-path.md`](../development/golden-path.md) |
+| Adding or owning a data product | 18 → 19 → 20 → [`../development/golden-path.md`](../development/golden-path.md) |
 
 **Conventions.** Every number cites [`../benchmarks/`](../benchmarks/README.md); every
 decision cites [`../adr/`](../adr/README.md); every practice names the file, test or alert

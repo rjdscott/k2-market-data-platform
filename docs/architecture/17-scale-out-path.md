@@ -14,6 +14,16 @@
 > vendor, it carries a URL and the date it was fetched, and where it is a chosen number
 > rather than a measured one, it says **design target**.
 
+**Retired, 2026-11-26.** The lake ingest, the lake tables and the dbt marts this chapter maps
+onto AWS are retired ([ADR-056](../adr/ADR-056-unified-data-product-platform.md), phase 000 of the
+[platform plan](../plans/2026-11-26-unified-product-platform/README.md)): the tables were dropped
+after a backup and the code is archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/), so the claims below
+about the lake tier's code are claims about that archived code. ClickHouse is paused
+([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). Where this chapter
+says "today", it means the single host as built in Phases B to E. The design and its arithmetic
+are kept as written; [chapter 20](20-target-data-product-platform.md) is the target that replaces
+the lake tier, and it does not yet cover a move to AWS.
+
 Single-host Docker is a **stand-in**, not the design target. This chapter answers two
 questions precisely: *if this platform had to hold a petabyte, what would change in the
 code?* and *if it had to survive an availability zone, a region, and a component dying
@@ -40,8 +50,8 @@ host*, which is a different sentence from *cannot scale*.
 
 > **Orchestration was first written for the scheduler Airflow 3 replaced**
 > ([ADR-034](../adr/ADR-034-airflow-3-replaces-prefect.md)). The rows below are ported:
-> `max_active_runs=1` on the `lake_ingest` DAG (`docker/airflow/dags/lake.py`) is the guard
-> §1.2 names, and like the one before it, it covers only the runs it launches. The
+> `max_active_runs=1` on the retired `lake_ingest` DAG (archived as `legacy/v3-lake-ingest/airflow/dags/lake.py`)
+> was the guard §1.2 names, and like the one before it, it covered only the runs it launched. The
 > orchestration price in §8 is the earlier estimate and is not re-priced for Airflow.
 
 ---
@@ -64,7 +74,7 @@ is why chapter 16 remains the authority on anything with a stopwatch attached.
 | F7 | **Airflow** | no ingest is dispatched; the lake stalls and `LakeIngestFailed` fires. Nothing is lost only while the bus still holds the unread records, and the binding limit is **the per-partition byte cap, not 48 h** (2 GiB since 2026-11-25): measured 2026-08-26 at the old 512 MiB, that cap bound at **7.01 h** on `raw.kraken` partition 0, because keyed partitioning concentrates the busiest symbol, and records were evicted unread (`docker/redpanda/init.sh`; the count is in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome) | Self-hosted Airflow on ECS across AZs with RDS Multi-AZ, or a managed Airflow | `max_active_runs=1` becomes the **only** mutual exclusion once the `flock` is gone (F5), so a control-plane bug becomes a correctness bug |
 | F8 | **S3 regional event** | not representable — MinIO is one container on one disk | nothing single-region can mitigate it. This row is why §7 exists | — |
 | F9 | **Region** | not representable | §7: S3 CRR, a catalog in the second region, re-placed capture. **Not** a warm standby — a cold rebuild with a stated RTO | Iceberg's absolute paths make this a *catalog and metadata* problem before it is a storage problem (§7.1) |
-| F10 | **Trino** | SQL over the lake and the marts stops, and `dbt_marts` fails, so the marts go stale. Nothing is lost: Trino's `lake` catalog cannot commit ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)), and the next run rebuilds every mart from the lake | Trino on ECS, one task per node across AZs; ECS replaces a failed task (§3) | the coordinator is one process, so losing it stops serving until its task is replaced. One kind of table in the mart warehouses is not rebuildable: each domain's `dq.dbt_test_results`, the dbt test history (§7.2) |
+| F10 | **Trino** | SQL over the lake and the marts stops, and the hourly dbt run (the retired `dbt_marts` DAG) fails, so the marts go stale. Nothing is lost: Trino's `lake` catalog cannot commit ([ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md)), and the next run rebuilds every mart from the lake | Trino on ECS, one task per node across AZs; ECS replaces a failed task (§3) | the coordinator is one process, so losing it stops serving until its task is replaced. One kind of table in the mart warehouses is not rebuildable: each domain's `dq.dbt_test_results`, the dbt test history (§7.2) |
 
 **The three rows that a managed service does not fix** — the ones the introduction
 promises — are F3, F5/F7 and F6. F3 is a design decision about sequence continuity (§2).
@@ -99,7 +109,7 @@ no way to detect which you got.
 
 ### 1.2 …and the one thing about it that does not survive the move
 
-`docker/lake/lock.py` is 31 lines of stdlib: an exclusive `fcntl.flock` on
+`lock.py` (archived in `legacy/v3-lake-ingest/lake/`) is 31 lines of stdlib: an exclusive `fcntl.flock` on
 `/tmp/k2-lake-ingest.lock`, taken non-blocking by `ingest.py` (exit 75 if held) and
 blocking by `maintenance.py` (held for its whole run). On one host with one Spark
 container it is exact — two writers are unrepresentable.
@@ -111,7 +121,7 @@ Iceberg's optimistic-concurrency retry re-applies the loser on the new base — 
 for an append, and fatal for an append that also carries the reader's position.
 
 So the residual risk in F5 is exact: after the move, `max_active_runs=1` on the DAG
-(`docker/airflow/dags/lake.py`) is the only guard, and it covers only
+(archived as `legacy/v3-lake-ingest/airflow/dags/lake.py`) is the only guard, and it covers only
 Airflow-launched runs, not the runbooks, the chaos scripts, `make lake-verify`, or an
 operator's hand-run during an incident, all of which dispatch directly today. The
 replacement is a DynamoDB conditional put with a lease TTL, changing `lock.py` and
@@ -136,8 +146,8 @@ Both options below were traced against the code. The full trace is in the
 
 **The hook already exists.** Every record carries a `conn_id` — a v4 UUID minted per
 connection at `services/capture-rust/src/main.rs:431`, stamped into the trade, book and
-raw records (`record.rs`), carried through silver, and used as an identifier field of
-`gold.book_state` (`lake.sql:1224`). `conn_msg_seq` counts within it. The archive already
+raw records (`record.rs`), carried through silver, and used as an identifier field of the
+retired `gold.book_state` (archived `lake.sql:1224`). `conn_msg_seq` counts within it. The archive already
 models *which connection said this*, so two live connections per venue are representable
 in the schema as it stands. The question is only what the layers above do with them.
 
@@ -145,18 +155,18 @@ in the schema as it stands. The question is only what the layers above do with t
 
 | Layer | With two live connections | Verdict |
 |---|---|---|
-| `raw.messages` | both connections' frames archived verbatim, each carrying its own `conn_id`. The **verbatim promise is untouched**: it promises the bytes are the venue's bytes, not that there is one copy of each event | safe, at 2× raw bytes |
+| raw table | both connections' frames archived verbatim, each carrying its own `conn_id`. The **verbatim promise is untouched**: it promises the bytes are the venue's bytes, not that there is one copy of each event | safe, at 2× raw bytes |
 | Bronze | identifier fields are `src_topic, src_partition, src_offset` — *Kafka* coordinates. Two producers write different offsets for the same venue event, so `duplicate_identifiers` passes | safe by construction |
-| Silver trades | `silver.score()` computes `venue_replay` over `Window.partitionBy("symbol", "trade_id")` — **`conn_id` is not in that window** (`silver.py:197`). The second connection's copy is scored `venue_replay = true` **today, with no code change** | already deduplicated, bounded by `LOOKBACK = 1 day` |
+| Silver trades | `silver.score()` computes `venue_replay` over `Window.partitionBy("symbol", "trade_id")`: **`conn_id` is not in that window** (`silver.py:197`, archived). The second connection's copy is scored `venue_replay = true` **today, with no code change** | already deduplicated, bounded by `LOOKBACK = 1 day` |
 | Gold trades | `_project_silver` filters `~venue_replay`; the identifier is `(exchange, canonical_symbol, trade_id)`, asserted nightly | safe, one row per logical trade |
-| **Books** | `books.py` repartitions by `(symbol, conn_id)` and the [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md) sampler emits one row per second **per connection**, while `gold.book_top20` and `gold.bbo_1s` are keyed `(exchange, canonical_symbol, second)` | **breaks.** Two `conn_id`s produce two rows per symbol-second and the audit fails every run |
-| Replay | `scripts/replay_export.py:frames()` refuses a set whose `conn_msg_seq` is not `1..n` unbroken — and the check is **scoped to one `conn_id`**. Two connections are two independent `1..n` sequences | **unaffected**, which is the objection one expects and it does not hold |
+| **Books** | `books.py` repartitions by `(symbol, conn_id)` and the [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md) sampler emits one row per second **per connection**, while the retired `gold.book_top20` and `gold.bbo_1s` were keyed `(exchange, canonical_symbol, second)` | **breaks.** Two `conn_id`s produce two rows per symbol-second and the audit fails every run |
+| Replay | `replay_export.py:frames()` (archived) refuses a set whose `conn_msg_seq` is not `1..n` unbroken, and the check is **scoped to one `conn_id`**. Two connections are two independent `1..n` sequences | **unaffected**, which is the objection one expects and it does not hold |
 
 So active-active is **free for trades and broken for books**. Making books work needs a
 cross-connection winner rule per `(symbol, second)` — lowest `recv_ts_ns`, or
 `checksum_ok`, or no `seq_gap`, all of them judgements — in the layer whose own docstring
 says gold is "a projection of silver, not a second deduplication with its own rules". It
-also doubles `raw.messages` forever: 12.94 GB/day at 1×, 2.59 TB/day at 200×, on the only
+also doubles the raw table forever: 12.94 GB/day at 1×, 2.59 TB/day at 200×, on the only
 line of the cost sheet that rises monotonically.
 
 ### 2.2 Option B — active-passive with health-check failover
@@ -219,7 +229,7 @@ reasons are here.
 | **Ingest + maintenance** | **EMR Serverless** | a failed job is a retry, and §1.1 makes a retry safe | billing matches the shape exactly: 288 short jobs a day plus one nightly window, no idle cluster. **Precondition: §1.2's lock replacement** | the DAG's dispatch (`docker/airflow/dags/lake.py`), and `docker/lake/lock.py`. Not `ingest.py`, `offsets.py` or `maintenance.py` |
 | **Hot tier** | **measure the rebuild first**, then ClickHouse Cloud (quote) or 2 replicas + 3-node Keeper on EC2 | replication, or none | the only tier where the honest answer is a measurement this design does not have. ADR-025 already makes it derived and rebuildable, so **if the rebuild is fast enough the correct amount of HA here is none** and the money belongs in the lake | connection strings; the `iceberg()` reload path gains an S3 URL and an IAM role. The contract is unchanged |
 | **Orchestration** | **self-hosted on ECS + RDS Multi-AZ** | scheduler, API server and DAG processor tasks, RDS Multi-AZ | after §1.2, `max_active_runs=1` is load-bearing for *correctness*. That belongs in an account you control until the distributed lock replaces it, then a managed Airflow becomes an option | the metadata database URL and the executor. Not the DAGs or the schedules |
-| **SQL serving and marts** | **Trino on ECS**: today's single node (coordinator and worker in one JVM) at 1×, workers added when the queries need them; dbt runs inside the orchestrator's tasks | ECS replaces a failed task; a failed `dbt_marts` run is rebuilt whole by the next | the fences of ADR-044 are Trino's `rules.json` and its read-only `lake` catalog, and an engine that attaches a warehouse directly reads around them ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)), so the SQL engine stays Trino. The marts are derived, so, as for the hot tier, restart in place is enough HA | the catalog files' hard-coded endpoints (§3.1); `X-Trino-User` becomes an authenticated identity; each domain writer's storage access scoped to its own prefix, `warehouse/<domain>/` (ADR-044's limits). Not the dbt models, the contracts or `rules.json` |
+| **SQL serving and marts** | **Trino on ECS**: today's single node (coordinator and worker in one JVM) at 1×, workers added when the queries need them; dbt runs inside the orchestrator's tasks | ECS replaces a failed task; a failed hourly dbt run is rebuilt whole by the next | the fences of ADR-044 are Trino's `rules.json` and its read-only `lake` catalog, and an engine that attaches a warehouse directly reads around them ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md)), so the SQL engine stays Trino. The marts are derived, so, as for the hot tier, restart in place is enough HA | the catalog files' hard-coded endpoints (§3.1); `X-Trino-User` becomes an authenticated identity; each domain writer's storage access scoped to its own prefix, `warehouse/<domain>/` (ADR-044's limits). Not the dbt models, the contracts or `rules.json` |
 | **Observability** | **AMP + AMG** | managed, regional, multi-AZ | Alertmanager finally exists, and everything the repo owns — the rules, the `runbook:` annotations, the promtool tests gated by `scripts/check-docs.sh` — is a file that moves unedited. Caution: at 200× it is **cardinality**, not sample rate, that sets the bill | scrape config becomes remote-write |
 | **Notebooks** | SageMaker or any notebook host; SQL through the Trino tier above, where the fences are | none needed | DuckDB reads Iceberg through the same REST catalog it does today (spike S10) | the `ATTACH` endpoint and credentials |
 
@@ -265,8 +275,8 @@ Stated separately because they are the design's actual load-bearing claims:
 2. **The capture binary.** `k2-capture` reads a WebSocket, stamps a receive time before
    parsing, keeps a book, samples it, and produces Avro. Nothing in it is
    single-host-shaped.
-3. **The lake-as-system-of-record contract.** `raw.messages` verbatim and never expired;
-   `bronze.*` pure functions of it; ClickHouse derived and rebuildable. Every tier above
+3. **The lake-as-system-of-record contract.** The raw table verbatim and never expired;
+   bronze pure functions of it; ClickHouse derived and rebuildable. Every tier above
    can be replaced without touching this, which is precisely why it was worth
    establishing on one host first.
 
@@ -290,7 +300,7 @@ flowchart LR
   end
   V --> CAP --> BUS --> ING --> S3
   ORC --> ING
-  ORC -->|"dbt_marts hourly"| TR
+  ORC -->|"dbt hourly"| TR
   TR -->|"reads the lake, writes the marts"| S3
   CAT --- S3
   S3 -->|"iceberg()"| CH
@@ -318,7 +328,7 @@ argument rather than shopping:
 Every number below derives from the predicted 1× rates in
 [`15-capacity-model.md`](15-capacity-model.md), which are themselves **predictions, not
 measurements**: §4c there predicts **13.6 GB/day across all the lake tables**, of which
-`raw.messages` is 6.47, the six `bronze.<venue>_<msg>` tables 3.5, the book layers 2.7
+the raw table is 6.47, the six `bronze.<venue>_<msg>` tables 3.5, the book layers 2.7
 and the remaining tables 0.86, and it flags the raw compression ratio (G3) as the row
 most likely to be wrong. Every multiplication of a prediction inherits its error. The
 working is shown so a reader can substitute measured inputs later and re-derive rather
@@ -341,7 +351,7 @@ bytes rather than 294×. That matters because it changes what scales: partition 
 topic counts scale with venues and symbols; per-connection CPU does not.
 
 At 200×: **~140,000 frames/s in** <!-- counts-ok: a 200x projection of the 1x rates, arithmetic -->, **~177,000 records/s out** <!-- counts-ok: a 200x projection of the 1x rates, arithmetic -->
-(699.8 and 883.8 /s at 1×, capacity model §2c), and **1.29 TB/day** into `raw.messages`.
+(699.8 and 883.8 /s at 1×, capacity model §2c), and **1.29 TB/day** into the raw table.
 
 ### 5.2 Files per day, and why the small-file problem inverts
 
@@ -351,7 +361,7 @@ section, as in the capacity model; the DDL's `write.target-file-size-bytes` valu
 binary equivalents (128 MiB, 256 MiB), a 5 % difference that moves no conclusion below.
 
 ```
-raw.messages, 200×:  1,294 GB/day ÷ 256 MB per file   = 5,055 files/day   counts-ok: a projection, arithmetic
+raw table, 200×:     1,294 GB/day ÷ 256 MB per file   = 5,055 files/day   counts-ok: a projection, arithmetic
 per commit:          1,294 GB ÷ 288 commits           = 4.49 GB  → ~18 files
 ```
 
@@ -375,12 +385,12 @@ because 3.5 GB/day spread over six tables cannot fill a bigger file.
 The rule this design uses: **a partition should hold at least one target-sized file, and
 a table should not accumulate partitions faster than its metadata can be planned.**
 
-| Spec | 1× (today) | 200× | Verdict |
+| Spec | 1× (as written) | 200× | Verdict |
 |---|---|---|---|
-| `raw.messages` `days(kafka_ts), topic` | 9 partitions/day, ~26 files/day, ~0.72 GB per partition | 60 partitions/day (20 venues × 3 streams), ~22 GB per partition | holds at both ends |
-| `raw.messages` `hours(kafka_ts), topic` | 216 partitions/day, **30 MB per partition**, a tenth of a target file | 1,440 <!-- counts-ok: hourly partitions at 200x, arithmetic --> partitions/day, **~0.9 GB per partition**, 3–4 target files | wrong today, **right at scale** |
+| raw table `days(kafka_ts), topic` | 9 partitions/day, ~26 files/day, ~0.72 GB per partition | 60 partitions/day (20 venues × 3 streams), ~22 GB per partition | holds at both ends |
+| raw table `hours(kafka_ts), topic` | 216 partitions/day, **30 MB per partition**, a tenth of a target file | 1,440 <!-- counts-ok: hourly partitions at 200x, arithmetic --> partitions/day, **~0.9 GB per partition**, 3–4 target files | wrong today, **right at scale** |
 | `bronze.<venue>_<msg>` `days(recv_ts)` | 6 tables, 1 partition/day each, ~583 MB each | ~40 tables (20 venues × 2 message types), ~17.5 GB each | holds at both ends |
-| `silver.trades_<venue>` `days(exchange_ts)` | 3 tables, 1 partition/day each, ~83 MB each | 20 tables, ~2.5 GB each | thin today, holds at scale |
+| `silver.trades_<venue>` (retired) `days(exchange_ts)` | 3 tables, 1 partition/day each, ~83 MB each | 20 tables, ~2.5 GB each | thin today, holds at scale |
 | `bronze.*` + `symbol` | 34 partitions/day (34 exchange–symbol pairs), ~7 MB of trades each and most holding hundreds of rows | 10,000 <!-- counts-ok: a scale-out instrument count, hypothetical --> instruments → **10,000 <!-- counts-ok: a scale-out instrument count, hypothetical --> partitions/day** | wrong at both ends, catastrophically so at scale |
 
 **The `hours()` crossover is a computable trigger, not a judgement.** A per-topic hour
@@ -434,13 +444,13 @@ that the next run resumes from (§1.1).
 
 ### 5.6 Marts: a whole rebuild every hour does not survive 200×
 
-`dbt_marts` rebuilds every mart whole every hour, and the 1-minute candles and the venue
-scorecard each aggregate all of `gold.trades` on every build
+The retired `dbt_marts` DAG rebuilt every mart whole every hour, and the 1-minute candles and
+the venue scorecard each aggregated all of the retired `gold.trades` on every build
 ([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md), Outcome). The cost of a build grows
 with the whole table, not with the hour's new rows, so at 200× every hour is a full scan of a
 table that grows 200 times faster. The change is dbt's incremental materialization, which
 dbt-trino 1.12 ships with a `merge` strategy: merge on each mart's grain, re-reading the
-buckets a late trade can re-open, as `gold.py` recomputes only the buckets a batch touched.
+buckets a late trade can re-open, as the archived `gold.py` recomputed only the buckets a batch touched.
 That changes the models, not the contracts or the fences. **Design target**, not measured.
 
 ---
@@ -448,7 +458,7 @@ That changes the models, not the contracts or the fences. **Design target**, not
 ## 6. Storage lifecycle: what actually makes "keep forever" affordable
 
 [Q8](../research/2026-08-26-v3-requirements-clarification.md#q8--raw-archive-retention-on-a-single-host)
-keeps `raw.messages` forever and names the single-host disk as the honest limit. On S3 the
+keeps the raw table forever and names the single-host disk as the honest limit. On S3 the
 limit stops being capacity and becomes storage class, which is a lifecycle policy on the
 data prefix. This is the one place where the AWS mapping changes a *promise*, not just a
 hostname, so it is written out rather than waved at.
@@ -496,7 +506,7 @@ manifest-list `manifest_path`, and data-file `file_path` (*"Full URI for the fil
 scheme"*). Relative paths arrive in format **v4**, which *"is under active development and
 has not been formally adopted"* as of Iceberg 1.11.0 (released 2026-05-19).
 
-Every table in [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) sets
+Every table in [`lake.sql`, archived](../../legacy/v3-lake-ingest/lake/ddl/lake.sql) set
 `'format-version' = '2'`, so this applies to all of them.
 
 **And the same bucket name in two regions is impossible.** AWS: *"General purpose buckets
@@ -535,7 +545,7 @@ second `rewrite_table_path` in the other direction, not a DNS flip.
 | Hot tier | rebuild from the region-B lake | strictly downstream of the lake being readable |
 | Orchestration | re-apply `deploy_lake.py` against a region-B API | configuration, not state |
 | Trino | re-place the tasks, with the region-B endpoints in its catalog files (§3.1) | configuration, not state |
-| Mart warehouses | not replicated: `dbt_marts` rebuilds every mart from the region-B lake | strictly after the lake is readable. Each domain's `dq.dbt_test_results` is history, not a mart, so its prefix needs CRR and the same `rewrite_table_path` pass as the lake |
+| Mart warehouses | not replicated: an hourly dbt run rebuilds every mart from the region-B lake | strictly after the lake is readable. Each domain's `dq.dbt_test_results` is history, not a mart, so its prefix needs CRR and the same `rewrite_table_path` pass as the lake |
 
 **Not designed: an active-active two-region lake.** Two regions committing to one Iceberg
 table is a distributed-transaction problem the catalog does not solve, and
@@ -571,7 +581,7 @@ disagree with a number by disagreeing with its reason.
 | **Lake readability** | — | **hours** | **the number that dominates**: `rewrite_table_path` over every table, a copy per the emitted file list (a near-no-op, since CRR already moved the bytes), then `register_table` per table |
 | Catalog | seconds | ~15 min | read-replica promotion, plus the `register_table` pass above |
 | Hot tier | **0** | hours | rebuild from the region-B lake, strictly after the row above |
-| Marts | **0**; the dbt test history, CRR's lag | hours, then one `dbt_marts` run | rebuilt from the region-B lake once it is readable; the test history is restored like the lake's tables |
+| Marts | **0**; the dbt test history, CRR's lag | hours, then one hourly dbt run | rebuilt from the region-B lake once it is readable; the test history is restored like the lake's tables |
 
 **Region-loss RTO is hours, and it is dominated by one step** — making the CRR'd Iceberg
 metadata point at the region-B bucket. That is a direct consequence of absolute paths,
@@ -695,4 +705,4 @@ decision.
 - [ADR-025](../adr/ADR-025-clickhouse-derived-hot-tier.md), why the hot tier's HA is a measurement away from being unnecessary
 - [ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md) and [ADR-044](../adr/ADR-044-producer-lake-and-domain-mart-warehouses.md), the SQL tier and the mart warehouses §3 places; [chapter 19](19-lakehouse-and-domain-warehouses.md), how they work on one host
 - [`docker/lake/spark_conf.py`](../../docker/lake/spark_conf.py), the env-driven configuration §3.1 describes
-- [`docker/lake/lock.py`](../../docker/lake/lock.py), the 31 lines §1.2 is about
+- [`lock.py`, archived](../../legacy/v3-lake-ingest/lake/lock.py), the 31 lines §1.2 is about

@@ -7,8 +7,17 @@
 Decided with the maintainer on 2026-08-27, after the first day of running Phase D. This page
 is the *strategy*: which data lives where, why, and what each tier is for. The mechanics are
 in [schema-design.md](13-schema-design.md) (contracts), [partitioning-strategy.md](14-partitioning-strategy.md)
-(layout) and the ADRs it cites. Phase E implemented it on 2026-08-27; the running stack is
-this shape ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)).
+(layout) and the ADRs it cites. Phase E implemented it on 2026-08-27, and the stack ran this
+shape until 2026-11-26 ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)).
+
+**Retired, 2026-11-26.** The four lake layers, the marts and the ClickHouse serving this chapter
+decides were the v3 strategy. The ingest that built the layers is retired and its tables and marts
+were dropped after a backup ([ADR-056](../adr/ADR-056-unified-data-product-platform.md); code archived
+in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)), ClickHouse is paused
+([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)), and no live crypto data
+lands in the lake until phase 004 of the [platform plan](../plans/2026-11-26-unified-product-platform/README.md).
+The strategy below is kept as the record of that decision; the target's layout, a namespace per product
+with only the layers that add a guarantee, is [chapter 20](20-target-data-product-platform.md).
 
 **Frame.** This repository is a single-host, production-quality *demonstration* of the
 design. Every mechanism is real and measured; the host is not. The same layers map onto a
@@ -20,12 +29,14 @@ from this host, with their commands.
 
 ```mermaid
 flowchart TB
-  R["RAW · what arrived<br/>raw.messages, raw.pcap (designed, not built)"]
-  B["BRONZE · vendor schema, columnar<br/>one table per venue × message"]
-  S["SILVER · typed + annotated<br/>per venue, every delivery kept"]
-  G["GOLD · canonical, cross-venue<br/>trades, book_top20, dims, ohlcv, bars, bbo"]
-  CH["ClickHouse gold · indefinite<br/>backtesting + dashboards"]
-  M["MARTS · dbt on Trino, hourly<br/>one warehouse per domain"]
+  subgraph V3["v3 layers, retired 2026-11-26"]
+    R["RAW · what arrived<br/>the raw table; raw.pcap designed, not built"]
+    B["BRONZE · vendor schema, columnar<br/>one table per venue × message"]
+    S["SILVER · typed + annotated<br/>per venue, every delivery kept"]
+    G["GOLD · canonical, cross-venue<br/>trades, book_top20, dims, ohlcv, bars, bbo"]
+    M["MARTS · dbt on Trino, hourly<br/>one warehouse per domain"]
+  end
+  CH["ClickHouse gold · indefinite<br/>backtesting + dashboards · paused"]
   R --> B --> S --> G --> CH
   G --> M
 ```
@@ -50,8 +61,8 @@ Rules that keep it explainable:
 - **Audits per layer**: raw, offset continuity nightly and every ingest batch's offsets as it
   commits ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)); bronze and silver,
   row parity with raw per venue and message type; gold, one-row-per-trade and parity with
-  silver. Every result, with the marts' dbt tests, reads in one view,
-  `governance.quality_results.dq_results` ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)).
+  silver. Every result, with the marts' dbt tests, read in one view, the governance
+  `dq_results`, until both retired ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)).
 - **Vendor fields are never dropped.** They are bronze columns; silver keeps them; gold carries
   what is common and links back.
 
@@ -64,23 +75,25 @@ they hold nothing the lake cannot rebuild, and nothing in the lake reads them
 
 | | Lake layers | Marts |
 |---|---|---|
-| Built by | Spark, every 5 minutes | dbt on Trino, every hour at minute 10 (Airflow DAG `dbt_marts`) |
+| Built by | Spark, every 5 minutes | dbt on Trino, every hour at minute 10 (the hourly Airflow dbt DAG, retired) |
 | Lives in | warehouse `k2` | the owning domain's warehouse, one schema per product |
 | Rows | kept forever | rebuilt whole on every run |
 | Snapshots | expired nightly past seven days, ten kept | expired daily past seven days by the domain's own writer (the one Trino user, `dbt_<domain>`, allowed to change that domain's tables; [chapter 19](19-lakehouse-and-domain-warehouses.md)) |
-| If lost | `raw.messages` cannot be rebuilt; every layer above it can | the next run builds it again from the lake |
+| If lost | the raw table could not be rebuilt; every layer above it could | the next run built it again from the lake |
 
-One table in a domain warehouse is history, not a mart: `dq.dbt_test_results`, where each
-domain's writer appends its dbt test results on every run. It is never rebuilt and no row is
-deleted ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)). Which marts
-exist, and who owns each: [products/all.md](../products/all.md).
+One table in a domain warehouse was history, not a mart: `dq.dbt_test_results`, where each
+domain's writer appended its dbt test results on every run. It was never rebuilt and no row was
+deleted ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)) until the retirement
+dropped it with the marts, after the backup. Which products exist, and who owns each:
+[products/all.md](../products/all.md).
 
 ## Serving: ClickHouse holds gold, indefinitely
 
 SQL over the lake and the marts is Trino's, for any client with a Trino driver; it reads the
-lake through a catalog that cannot commit, so it trails the market as the lake does, by up to
-one ingest cycle ([chapter 19](19-lakehouse-and-domain-warehouses.md)). ClickHouse stays the
-hot tier: gold within seconds of the bus. The rest of this section is about that tier.
+lake through a catalog that cannot commit, so it trailed the market as the lake did, by up to
+one ingest cycle ([chapter 19](19-lakehouse-and-domain-warehouses.md)). ClickHouse was the
+hot tier, gold within seconds of the bus, until its pause. The rest of this section is the
+decision about that tier as it stood.
 
 Decided as a hybrid, and the reasons are the trade-offs, not a preference:
 
@@ -117,12 +130,13 @@ measured ([B4](../benchmarks/2026-08-27.md#b4)), the reusable space is about 60 
 ([benchmarks § Disk](../benchmarks/2026-08-27.md#disk): 630 GB, most of it locked inside an
 unshrinkable `Docker.raw`). Decided 2026-08-27: no second volume, this host is a
 demonstration. Still open: a ClickHouse `system.parts` bytes gauge, not built. The lake side
-has `k2_lake_disk_used_ratio`, which exists but is blind on Docker Desktop
-([capacity-model.md](15-capacity-model.md)).
+had `k2_lake_disk_used_ratio`, blind on Docker Desktop, which retired with the `lake-metrics`
+exporter ([capacity-model.md](15-capacity-model.md)).
 
 **Revisit when** either gauge crosses 80 %, or the measured ClickHouse gold growth exceeds
 1 GB/day for a week, then either the box grows or the hot window gets a TTL again, and the
-ADR records which.
+ADR records which. Neither gauge runs while the lake is empty and ClickHouse is paused; the
+trigger returns with the lake metrics in phase 004.
 
 ## Raw pcap: the phase after E
 
@@ -130,7 +144,8 @@ For the regulatory/replay claim to hold *at the wire*, not only at the WebSocket
 `dumpcap` sidecar per capture container writing pcapng with kernel timestamps, hourly ring
 rotated into `raw.pcap`; the Rust capture exports its TLS key log behind an env flag, keys
 encrypted at rest; and one script that decrypts a window, extracts the WS frames and diffs
-them against `raw.messages`. The demonstration is two numbers per frame, kernel receive time
+them against the verbatim archive (the lake's raw table until it retired; in the target, the
+product's landing). The demonstration is two numbers per frame, kernel receive time
 and user-space receive time, and a zero-length diff. Designed in
 [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md), built after it.
 
@@ -143,13 +158,16 @@ regulatory replay need; latency is measured and reported, never optimised for
 
 ## The security master
 
+> **Retired, 2026-11-26.** The two dimensions below were dropped with the lake ingest; phase 004
+> of the plan builds the security master again as the `reference-data/security-master` product.
+>
 > **Two of the four rows below landed on 2026-08-29 — [ADR-030](../adr/ADR-030-scd2-security-master.md).**
-> `gold.dim_instrument` and `gold.dim_venue` are now Kimball type-2 dimensions: a stable
+> The lake's `dim_instrument` and `dim_venue` (since retired) were Kimball type-2 dimensions: a stable
 > deterministic `instrument_id` over `(exchange, canonical_symbol)`, one row per validity
 > interval (`valid_from` / `valid_to` / `is_current`, open rows at the `9999-12-31` sentinel),
 > `recorded_at` as an as-known-at stamp, `attr_hash` as the change predicate, and the
-> venue-published attributes — `tick_size`, `qty_increment`, `price_precision`,
-> `qty_precision`, `venue_status` — populated from `bronze.kraken_instrument` for Kraken and
+> venue-published attributes (`tick_size`, `qty_increment`, `price_precision`,
+> `qty_precision`, `venue_status`) populated from the Kraken instrument bronze table for Kraken and
 > left NULL for Binance and Coinbase, which publish them over REST that K2 does not capture.
 > The trigger for the surrogate row fired retroactively: the Kraken `XBT`→`BTC` rename had
 > already happened, in the file, on 2026-08-26. `dim_asset` and exposure families are still
@@ -158,16 +176,16 @@ regulatory replay need; latency is measured and reported, never optimised for
 > the table below is left as written on 2026-08-27.
 
 Decided 2026-08-27 with the maintainer. `config/instruments.yaml`, `(exchange, native)
-→ canonical BASE/QUOTE`, materialised as `gold.dim_instrument` / `gold.dim_venue`, is
-the security master v3 has, and `canonical_symbol` is the only cross-venue key silver and
-gold carry. `BTC/USDT` and `BTC/USD` stay different instruments on purpose. What a full
+→ canonical BASE/QUOTE`, materialised as `dim_instrument` / `dim_venue` until they retired, was
+the security master v3 had, and `canonical_symbol` was the only cross-venue key silver and
+gold carried. `BTC/USDT` and `BTC/USD` stay different instruments on purpose. What a full
 security master adds, and the trigger that makes each worth building:
 
 | Piece | Adds | Build when |
 |---|---|---|
 | stable surrogate `instrument_id` | identity that survives a venue rename (Kraken XBT→BTC), a delisting, symbol reuse | the first rename or delisting in the registry, or a fourth venue |
 | `dim_asset` | asset codes with venue aliases and decimals | two venues disagree on an asset code the yaml cannot express |
-| attributes with validity (SCD2, a dimension row per validity interval with valid-from/valid-to: tick, lot, precision, status, listed/delisted) | as-of joins for queue-position and fee features; `bronze.kraken_instrument` already holds Kraken's | a gold product needs tick or lot size, or derivatives arrive (symbol ≠ instrument) |
+| attributes with validity (SCD2, a dimension row per validity interval with valid-from/valid-to: tick, lot, precision, status, listed/delisted) | as-of joins for queue-position and fee features; the Kraken instrument bronze table held Kraken's until it retired | a gold product needs tick or lot size, or derivatives arrive (symbol ≠ instrument) |
 | exposure families | "BTC spot against a USD-like quote" across venues, with the stablecoin basis explicit | the first cross-venue research notebook that wants it |
 
 Rule kept from the start so none of this forces a rewrite: silver stays thin, the

@@ -11,6 +11,13 @@ check, chaos scripts and parity leg are stood down with it. The rest of this cha
 design as it ran until the pause; the tier returns as the serving copy of a product of the new
 platform, rebuilt from that platform's lake.
 
+**Retired, 2026-11-26.** The lake gold this chapter reloads from was dropped with the v3 lake ingest,
+retired by [ADR-056](../adr/ADR-056-unified-data-product-platform.md) and archived in
+[`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/) with its rebuild-from-lake runbook. Until the
+target's gold exists ([chapter 20](20-target-data-product-platform.md)), a resume of this tier has only the
+topics, within the 7 days its consumer offsets are kept (ADR-057), and `make parity-ohlcv` prints a SKIP
+naming phase 004. The `gold.*` names below are ClickHouse's own tables, kept in its volume and DDL.
+
 ## Problem
 
 The lake answers any question correctly and none quickly: a 5-minute batch ingest and
@@ -65,7 +72,7 @@ flowchart TB
   QB -->|MV| BK["gold.book_top20<br/>ReplacingMergeTree(ver)<br/>latest sample in the second wins"]
   QT & QB -.->|"undecodable"| FE["gold.feed_errors"]
   TR --> LV["ohlcv_live(bucket) · bbo_live<br/>views over FINAL"]
-  LK[("lake gold.*")] -.->|"iceberg() pull"| PR["ohlcv_* · bars · bbo_1s<br/>Replacing(computed_at)"]
+  LK[("lake gold, retired")] -.->|"iceberg() pull"| PR["ohlcv_* · bars · bbo_1s<br/>Replacing(computed_at)"]
   U["quant profile<br/>readonly · 3 GiB · 2 threads"] --- LV & PR
 ```
 
@@ -79,17 +86,18 @@ flowchart TB
   collapse to one row under `FINAL` (ClickHouse's read-time merge, which applies the
   `ReplacingMergeTree` rule before returning rows).
 - **Candles on read.** `ohlcv_live(bucket)` is a parameterised view: `argMin`/`argMax` over
-  `FINAL` with a three-component total order, so open and close are deterministic; the lake
-  spells its third component `trade_seq` and gets the same value
-  ([data-catalog.md](../operations/data-catalog.md#candle-and-bar-total-order)).
+  `FINAL` with a three-component total order, so open and close are deterministic; the retired
+  lake spelled its third component `trade_seq` and got the same value
+  ([data-catalog.md, archived](../../legacy/v3-lake-ingest/docs/operations/data-catalog.md#candle-and-bar-total-order)).
   v2's `SummingMergeTree` candles resolved open/close per insert block;
   `scripts/clickhouse-schema-test.sh` inserts one minute in two blocks and asserts the open.
 - **History by pull.** `ohlcv_*` and `bbo_1s` (per-second best bid/offer with spread,
   imbalance and microprice: [BBO and book features](02-market-data-concepts.md#bbo-and-book-features))
-  are loaded from lake gold through the `iceberg()` table function, with the
+  were loaded from lake gold through the `iceberg()` table function, with the
   [Iceberg snapshot](03-data-engineering-concepts.md#iceberg-snapshots) they were read from
-  recorded in `src_snapshot_id`; the whole lake `gold.trades` in 4.4 s
-  ([runbook](../runbooks/clickhouse-rebuild-from-lake.md)). Never computed here. A re-pull
+  recorded in `src_snapshot_id`; the whole lake gold trades table in 4.4 s
+  ([runbook, archived](../../legacy/v3-lake-ingest/docs/runbooks/clickhouse-rebuild-from-lake.md)). The
+  pull has no source until the target's gold exists. Never computed here. A re-pull
   is versioned on the lake's `computed_at`, not on that snapshot id, which is a random
   64-bit number and would keep an arbitrary row; `bbo_1s` is the exception, it has no
   `computed_at` in the lake.
@@ -109,11 +117,11 @@ flowchart TB
 |---|---|
 | Schema is a tested contract | `make test-clickhouse` (CI `clickhouse` job): 10 assertions incl. the two-block OHLCV regression |
 | Idempotent ingestion | `ReplacingMergeTree` keys on the logical trade; `FINAL` count == distinct count asserted |
-| Deterministic aggregates | total order in `ohlcv_live`; three-way parity `make parity-ohlcv` at a pinned snapshot, 0 differ; while paused it skips the ClickHouse leg |
+| Deterministic aggregates | total order in `ohlcv_live`; three-way parity `make parity-ohlcv` at a pinned snapshot, 0 differ until the lake gold it read retired; it now prints a SKIP naming phase 004 |
 | Poison records isolated | `kafka_handle_error_mode='stream'` → `feed_errors`; until the pause, `ClickHouseKafkaMessagesFailed` and chaos `clickhouse-corrupt-record.sh` (4 s), both removed with it (ADR-057) |
-| Least privilege | `quant` readonly profile in `users.xml`; notebooks and `make parity-ohlcv` use it |
+| Least privilege | `quant` readonly profile in `users.xml`; the notebooks and `make parity-ohlcv` used it until they retired with the lake ingest (archived) |
 | Memory bounded below the container | `config.xml` server cap 6.5 GiB under an 8 GiB limit |
-| Rebuildable, timed | `clickhouse-rebuild-from-lake.md` with the command and the measured time |
+| Rebuildable, timed | the rebuild-from-lake runbook, archived in `legacy/v3-lake-ingest/` with the lake gold it read, holds the command and the measured time |
 | Feed liveness alerted | until the pause, which removed both alerts and the script (ADR-057): `ClickHouseGoldFeedStale` (topics moving, tables not); `clickhouse-stop.sh`: `ClickHouseDown` at 160 s under a 150 s stop, healthy 7 s after restart |
 
 ## Trade-offs

@@ -4,10 +4,19 @@
 > **Read this if** you produce to or consume from the topics, or you are changing a schema.
 > **Before this** chapters 04 and 05.
 
+**Retired, 2026-11-26.** Both readers this chapter names are stood down: the v3 lake ingest is retired
+([ADR-056](../adr/ADR-056-unified-data-product-platform.md); its code and chapters 08 and 09 are archived in
+[`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)) and ClickHouse is paused
+([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). The captures still produce
+to every topic and the contract is unchanged; nothing consumes the topics until the target's Kafka connector
+in phase 004 of the [platform plan](../plans/2026-11-26-unified-product-platform/README.md)
+([chapter 20](20-target-data-product-platform.md)).
+
 ## Problem
 
-Rust capture writes the bytes, ClickHouse 24.3 decodes them for the hot tier, Spark reads them by bounded
-offset range into Iceberg ([batch vs streaming](03-data-engineering-concepts.md#batch-vs-streaming)). A
+Rust capture writes the bytes, ClickHouse 24.3 decoded them for the hot tier until its pause, Spark read
+them by bounded offset range into Iceberg until the v3 ingest retired
+([batch vs streaming](03-data-engineering-concepts.md#batch-vs-streaming)). A
 contract between a capture process, a serving DB and a lake owes those readers four guarantees:
 
 1. One decimal decodes to the same number everywhere, with no per-consumer parser.
@@ -44,8 +53,8 @@ header, because three runtimes have to decode the same bytes to the same value w
 integer is the only numeric type all three agree on exactly.**
 
 A single Redpanda broker with the registry built in carries nine topics and three Avro records. It is a
-buffer with retention, not storage: the lake reads it by offset range and keeps the record, ClickHouse reads
-it for freshness. The cost: a topic is no longer readable by eye, and the registry now gates every produce.
+buffer with retention, not storage: a lake consumer reads it by offset range and keeps the record (the
+retired v3 ingest did; the target's Kafka connector will), and ClickHouse read it for freshness until its pause. The cost: a topic is no longer readable by eye, and the registry now gates every produce.
 
 ## How it works
 
@@ -60,9 +69,9 @@ flowchart TB
   end
   CAP -->|"key = canonical symbol · 12 partitions"| RAW & TRD & BK
   CAP -.->|"schema id at start"| REG
-  RAW --> LK["lake ingest (offset range)"]
-  TRD & BK --> LK
-  TRD & BK --> CH["ClickHouse Kafka engines"]
+  RAW -.-> LK["lake ingest (offset range), retired"]
+  TRD & BK -.-> LK
+  TRD & BK -.-> CH["ClickHouse Kafka engines, paused"]
 ```
 
 ### Topics
@@ -74,11 +83,11 @@ flowchart TB
 - **Keyed by canonical symbol**, `BASE/QUOTE` uppercase, the venue-independent name for an instrument
   ([symbols and venues](02-market-data-concepts.md#symbols-and-venues)). One symbol's records stay ordered
   within a partition, and three venues' BTC/USD land on the same key. Twelve partitions because at most 12
-  instruments per venue and the ClickHouse feeds run 2 consumers.
+  instruments per venue and the ClickHouse feeds ran 2 consumers.
 - **Retention is a per-partition budget.** `retention.ms` 48 h and `retention.bytes` 2 GiB per partition
   on `raw.*` (raised from 512 MiB on 2026-11-25, arithmetic in `init.sh`), 7 d on the derived topics.
   Symbol-keyed partitions are uneven, so the busiest partition hits its byte cap first: measured 7 h on
-  Kraken partition 0 at the old 512 MiB cap (not yet measured at 2 GiB) and accepted, because the bus is a buffer for a 5-minute ingest, not the archive.
+  Kraken partition 0 at the old 512 MiB cap (not yet measured at 2 GiB) and accepted, because the bus was a buffer for a 5-minute ingest, not the archive.
 - **Frame cap.** `max.message.bytes` 8 MiB on `raw.*` to fit Coinbase's ~5 MB `level2`
   subscribe snapshot; the capture's own cap matches.
 
@@ -86,7 +95,7 @@ flowchart TB
 
 | Record | Carries | Notes |
 |---|---|---|
-| `RawMessage` | `exchange`, `stream`, `symbol?`, `recv_ts_ns`, `conn_id`, `conn_msg_seq`, `payload` bytes | every frame, verbatim; the lake's `raw.messages` stores the whole Kafka value including the 5-byte Confluent header |
+| `RawMessage` | `exchange`, `stream`, `symbol?`, `recv_ts_ns`, `conn_id`, `conn_msg_seq`, `payload` bytes | every frame, verbatim; the retired lake raw table stored the whole Kafka value including the 5-byte Confluent header |
 | `Trade` | venue + canonical symbol, `trade_id`, `price`, `qty`, `side`, `exchange_ts` (`timestamp-micros`), `recv_ts_ns`, `seq`, lineage | fixed-point `long` at 1e-8; no strings for numbers |
 | `BookSnapshotL2` | top-20 as parallel arrays `bid_px[]`, `bid_qty[]`, `ask_px[]`, `ask_qty[]`, `depth`, `checksum_ok`, `seq`, timestamps | 1 Hz per symbol; arrays decode natively in ClickHouse `AvroConfluent` |
 
@@ -106,7 +115,7 @@ and are compiled into the capture binary (`include_str!`), so the producer canno
 | One wire format, tested | `tests/test_wire_format.py` decodes fixtures against the `.avsc` files; CI `python` job |
 | Producer-side durability | `enable.idempotence`, `acks=all` in `sink.rs`; drops are counted, never silent |
 | Retention budgeted, then measured | `init.sh`: 20 GB slice arithmetic plus the 2026-08-26 measurement; `15-capacity-model.md` scores it |
-| Broker health alerted from both sides | `CaptureProduceErrors` (producer view), `LakeIngestLagHigh` / `ClickHouseGoldFeedStale` (consumer view) |
+| Broker health alerted from the producer side | `CaptureProduceErrors`; the consumer-side alerts (lake ingest lag, ClickHouse feed staleness) were removed with their consumers, and a consumer's alerts return in phase 004 |
 
 ## Trade-offs
 
@@ -114,8 +123,9 @@ and are compiled into the capture binary (`include_str!`), so the producer canno
   second node would double the CPU budget of the tier.
 - **`--smp 1`.** One core holds 108 partitions at the measured ~900 frames/s
   ([benchmarks](../benchmarks/2026-08-27.md#ingestion--capture-tier)); CPU-bound, not throughput.
-- **Retention as deadline.** An ingest outage past 48 h loses raw frames; the lake records the hole rather
-  than pretending ([lake-ingest.md](08-lake-ingest.md)).
+- **Retention as deadline.** An ingest outage past 48 h loses raw frames; the retired lake recorded the hole
+  rather than pretending ([lake-ingest.md](08-lake-ingest.md)). With no consumer until phase 004, the first
+  connector starts at the log start, and nothing older is recovered.
 - **A field is forever.** `BACKWARD_TRANSITIVE` means no field is ever removed or renamed.
 
 ## Key points
@@ -124,4 +134,5 @@ and are compiled into the capture binary (`include_str!`), so the producer canno
   boot (`warm_up` resolves every subject before the first frame); `redpanda-init` only warns.
 - `int64` at 1e-8 is the numeric contract; >8 decimal places is rejected and counted at capture.
 - The canonical-symbol key makes ordering a property, not a coincidence; it also makes partitions uneven.
-- Redpanda is a 48 h / 7 d buffer. The archive is Iceberg `raw.messages`, which never expires.
+- Redpanda is a 48 h / 7 d buffer, not the archive. The lake's raw table was the archive until the v3
+  ingest retired; in the target, each product's landing is.

@@ -4,24 +4,37 @@
 > **Read this if** anyone whose query is slow or whose table is growing.
 > **Before this** chapter 09, 10.
 
+**Retired, 2026-11-26.** The Iceberg tables whose layout this chapter sets out (raw, bronze, silver,
+gold, audit, and the dbt marts) were dropped after a backup when the v3 lake ingest retired
+([ADR-056](../adr/ADR-056-unified-data-product-platform.md); DDL and code archived in
+[`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)), and no live crypto data lands in the lake until phase 004 of the
+[platform plan](../plans/2026-11-26-unified-product-platform/README.md). ClickHouse is paused
+([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). The Redpanda section
+describes what runs; the Iceberg and ClickHouse sections are kept as the record of the layout and its
+arithmetic, which the target's products take their own layouts from
+([chapter 20](20-target-data-product-platform.md)).
+
 Two tiers partition data in v3, and they solve different problems. **Redpanda partitions
 buy producer and consumer parallelism, and decide what stays ordered.** **Iceberg
-partitions control file count and prune scans; they evict nothing, because nothing in the
-lake is ever evicted** ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)). The
-third tier, ClickHouse, serves the lake's gold layer; see [ClickHouse](#clickhouse) below.
+partitions control file count and prune scans; they evicted nothing, because nothing in the
+v3 lake was ever evicted** ([ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)) until
+the whole lake was retired. The third tier, ClickHouse, served the lake's gold layer until its
+pause; see [ClickHouse](#clickhouse) below.
 
-What follows is what the DDL and the topic bootstrap actually configure:
-[`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql) and
-[`docker/redpanda/init.sh`](../../docker/redpanda/init.sh).
+What follows is what the topic bootstrap configures,
+[`docker/redpanda/init.sh`](../../docker/redpanda/init.sh), and what the lake DDL configured
+until it retired, [`lake.sql`, archived](../../legacy/v3-lake-ingest/lake/ddl/lake.sql).
 
 ```mermaid
 flowchart TB
   CAP["k2-capture ×3<br/>key = canonical symbol"]
   RP[("Redpanda · 9 v3 topics<br/>12 partitions each")]
-  RAW[("raw.messages<br/>days(kafka_ts), topic")]
-  BR[("bronze.&lt;venue&gt;_&lt;msg&gt;<br/>days(recv_ts) · sorted by symbol")]
-  SV[("silver.trades_&lt;venue&gt; · silver.book_&lt;venue&gt;<br/>days(exchange_ts) · days(recv_ts)")]
-  GD[("gold.trades · ohlcv_* · book_top20 · bbo_1s<br/>exchange + days/months")]
+  subgraph V3["v3 lake, retired 2026-11-26"]
+    RAW[("raw messages<br/>days(kafka_ts), topic")]
+    BR[("bronze, one per venue × message<br/>days(recv_ts) · sorted by symbol")]
+    SV[("silver trades and books per venue<br/>days(exchange_ts) · days(recv_ts)")]
+    GD[("gold trades · ohlcv_* · book_top20 · bbo_1s<br/>exchange + days/months")]
+  end
   Q["DuckDB · Trino · ClickHouse<br/>prune: partition then sort order"]
   CAP --> RP --> RAW --> BR --> SV --> GD --> Q
 ```
@@ -108,62 +121,63 @@ partitions are not evenly loaded. It matters to partitioning because the byte ca
 
 ---
 
-## Iceberg
+## Iceberg: the v3 tables, retired 2026-11-26
 
-Twenty-six tables across five namespaces, `raw`, `bronze`, `silver`, `gold`, `audit`.
-Applied by `docker/lake/apply_ddl.py` from
-[`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql).
+Twenty-six tables across five namespaces, `raw`, `bronze`, `silver`, `gold`, `audit`, applied by
+`apply_ddl.py` from [`lake.sql`](../../legacy/v3-lake-ingest/lake/ddl/lake.sql) (both archived), and dropped after a
+backup when the v3 ingest retired. This section is the record of that layout and the reasoning
+behind it.
 
 | Table | `PARTITIONED BY` | Local sort order | Target file size | Metrics on |
 |---|---|---|---|---|
-| `raw.messages` | `days(kafka_ts), topic` | `topic, partition, offset` | 256 MB | `offset`, `kafka_ts`, `partition` |
-| `bronze.<venue>_<msg>` ×7 | `days(recv_ts)` | `symbol, recv_ts_ns` | 128 MB | `symbol`, `recv_ts`, `src_offset` |
-| `silver.trades_<venue>` ×3 | `days(exchange_ts)` | `canonical_symbol, exchange_ts` | 128 MB | `canonical_symbol`, `exchange_ts`, `recv_ts`, `trade_seq`, `src_offset` |
-| `silver.book_<venue>` ×3 | `days(recv_ts)` | `canonical_symbol, recv_ts_ns` | 128 MB | `canonical_symbol`, `recv_ts`, `src_offset` |
-| `gold.trades` | `exchange, days(exchange_ts)` | `canonical_symbol, exchange_ts` | 128 MB | `canonical_symbol`, `exchange_ts`, `trade_seq`, `src_offset` |
-| `gold.ohlcv_{1m,5m,1h}` | `exchange, months(window_start)` | none | 128 MB | `canonical_symbol`, `window_start` |
-| `gold.ohlcv_1d` | `exchange` | none | 128 MB | `canonical_symbol`, `window_start` |
-| `gold.bars` | `exchange, months(open_time)` | none | 128 MB | `canonical_symbol`, `open_time` |
-| `gold.book_top20` | `exchange, days(second)` | `canonical_symbol, second` | 128 MB | `canonical_symbol`, `second` |
-| `gold.bbo_1s` | `exchange, days(second)` | none | 128 MB | `canonical_symbol`, `second` |
-| `gold.dim_instrument` | `exchange` | `canonical_symbol, valid_from` | 128 MB | `canonical_symbol`, `valid_from`, `is_current` |
-| `gold.dim_venue` | `exchange` | none | 128 MB | `valid_from`, `is_current` |
-| `gold.book_state` | `exchange` | none | 128 MB | none |
-| `audit.checks` | `days(run_ts)` | none | 128 MB | default |
+| raw `messages` (retired) | `days(kafka_ts), topic` | `topic, partition, offset` | 256 MB | `offset`, `kafka_ts`, `partition` |
+| `bronze.<venue>_<msg>` ×7 (retired) | `days(recv_ts)` | `symbol, recv_ts_ns` | 128 MB | `symbol`, `recv_ts`, `src_offset` |
+| `silver.trades_<venue>` ×3 (retired) | `days(exchange_ts)` | `canonical_symbol, exchange_ts` | 128 MB | `canonical_symbol`, `exchange_ts`, `recv_ts`, `trade_seq`, `src_offset` |
+| `silver.book_<venue>` ×3 (retired) | `days(recv_ts)` | `canonical_symbol, recv_ts_ns` | 128 MB | `canonical_symbol`, `recv_ts`, `src_offset` |
+| `gold.trades` (retired) | `exchange, days(exchange_ts)` | `canonical_symbol, exchange_ts` | 128 MB | `canonical_symbol`, `exchange_ts`, `trade_seq`, `src_offset` |
+| `gold.ohlcv_{1m,5m,1h}` (retired) | `exchange, months(window_start)` | none | 128 MB | `canonical_symbol`, `window_start` |
+| `gold.ohlcv_1d` (retired) | `exchange` | none | 128 MB | `canonical_symbol`, `window_start` |
+| `gold.bars` (retired) | `exchange, months(open_time)` | none | 128 MB | `canonical_symbol`, `open_time` |
+| `gold.book_top20` (retired) | `exchange, days(second)` | `canonical_symbol, second` | 128 MB | `canonical_symbol`, `second` |
+| `gold.bbo_1s` (retired) | `exchange, days(second)` | none | 128 MB | `canonical_symbol`, `second` |
+| `gold.dim_instrument` (retired) | `exchange` | `canonical_symbol, valid_from` | 128 MB | `canonical_symbol`, `valid_from`, `is_current` |
+| `gold.dim_venue` (retired) | `exchange` | none | 128 MB | `valid_from`, `is_current` |
+| `gold.book_state` (retired) | `exchange` | none | 128 MB | none |
+| audit `checks` (retired) | `days(run_ts)` | none | 128 MB | default |
 
-`gold.bars` partitions on `months(open_time)` rather than on its `day` column because
+The lake's bars table partitioned on `months(open_time)` rather than on its `day` column because
 DuckDB 1.4.4's Iceberg reader returned zero rows for any predicate on a `DATE` partition
 source (`day = DATE '2026-08-26'` → 0 of 4,463 on 2026-08-28) while the same predicate on a
-`TIMESTAMP` source prunes correctly; `day` stays a plain column and filters on it work.
+`TIMESTAMP` source prunes correctly; `day` stayed a plain column and filters on it worked.
 
-The seven bronze tables are `binance_trade`, `binance_depth20`, `kraken_trade`,
+The seven bronze tables were `binance_trade`, `binance_depth20`, `kraken_trade`,
 `kraken_book`, `kraken_instrument`, `coinbase_market_trades`, `coinbase_level2`.
-`gold.ohlcv_1d` drops the time field from its spec because a whole year of daily candles
+The daily candles table dropped the time field from its spec because a whole year of daily candles
 for 34 instruments is one small file per venue; a monthly transform on it would produce
 twelve.
 
-Every table: Parquet + zstd, `format-version = 2`, `write.distribution-mode = hash`,
-copy-on-write for delete/update/merge. Every table but `audit.checks` also sets
-`write.metadata.metrics.default = none` and re-enables metrics per column, as the last
-table column above records. `audit.checks` is the exception: its DDL sets no metrics
-property at all, so it keeps Iceberg's `truncate(16)` default on every column, a table
+Every table was Parquet + zstd, `format-version = 2`, `write.distribution-mode = hash`,
+copy-on-write for delete/update/merge. Every table but the audit table also set
+`write.metadata.metrics.default = none` and re-enabled metrics per column, as the last
+table column above records. The audit table was the exception: its DDL set no metrics
+property at all, so it kept Iceberg's `truncate(16)` default on every column, a table
 of a few rows a night whose columns are all short strings pays nothing for it, and there
-is no `payload`-shaped column to make the default expensive. Every `gold` table also sets
+was no `payload`-shaped column to make the default expensive. Every `gold` table also set
 `write.metadata.compression-codec = none`, because ClickHouse 24.3's `iceberg()` cannot
-read the gzip-compressed `metadata.json` Lakekeeper writes by default, and `gold` is the
-layer ClickHouse pulls.
+read the gzip-compressed `metadata.json` Lakekeeper writes by default, and `gold` was the
+layer ClickHouse pulled.
 
 ### The dimensions: partitioned by venue, sorted by validity
 
-`gold.dim_instrument` and `gold.dim_venue` are SCD2 as of
-[ADR-030](../adr/ADR-030-scd2-security-master.md) — one row per validity interval rather
-than one row per instrument — and they keep the `exchange` partitioning they had as
+The lake's `dim_instrument` and `dim_venue` were SCD2 as of
+[ADR-030](../adr/ADR-030-scd2-security-master.md), one row per validity interval rather
+than one row per instrument, and they kept the `exchange` partitioning they had as
 snapshots. Nothing else was worth doing: 34 instruments over any plausible number of
 attribute changes is a single small file per venue, so a time transform on `valid_from`
 would produce one file per month holding a handful of rows, which is the small-file
 problem the maintenance job exists to remove.
 
-What did change is the sort order and the metrics. `dim_instrument` is locally ordered by
+What did change is the sort order and the metrics. `dim_instrument` was locally ordered by
 `(canonical_symbol, valid_from)`, which is the as-of join's key order, and metrics are on
 for `canonical_symbol`, `valid_from` and `is_current`. `is_current` earns its place because
 the overwhelmingly common query is the current slice — "what do we trade now" — and a
@@ -172,9 +186,9 @@ instead would be worse: the value flips on every version close, so an `exchange`
 `is_current` partition would rewrite two partitions per change on a table that fits in one
 file.
 
-### `raw.messages`: time first, topic second
+### The raw table: time first, topic second
 
-`days(kafka_ts)` leads because every access pattern the archive has is time-bounded, a
+`days(kafka_ts)` led because every access pattern the archive had was time-bounded, a
 backfill, a replay window, a completeness audit for a day, an incremental read between two
 snapshots. `topic` follows because a per-venue or per-stream read then prunes to a third
 or a ninth of the files without touching the time bound.
@@ -220,8 +234,8 @@ having in full.
 (exchange, symbol) pairs**, binance 12, kraken 11, coinbase 11, 23 distinct canonical
 symbols across them ([`config/instruments.yaml`](../../config/instruments.yaml)), and the
 tables are already one per venue, so adding `symbol` splits a venue-day into 11 or 12
-partitions. The three `silver.trades_<venue>` tables write **0.25 GB/day between them**
-and the three `silver.book_<venue>` tables **2.1 GB/day**
+partitions. The three silver trades tables wrote **0.25 GB/day between them**
+and the three silver book tables **2.1 GB/day**
 ([capacity model §4c](15-capacity-model.md#4c-per-lake-table-per-day)). Split evenly that
 is `0.25 ÷ 3 ÷ 11 ≈ 7.6 MB` per symbol per day on trades and `2.1 ÷ 3 ÷ 11 ≈ 64 MB` on
 books, both under the 128 MB target and trades an order of magnitude under it. And it
@@ -242,7 +256,7 @@ this reason.
 A partition filter is evaluated on metadata and is guaranteed; a sort-order skip depends
 on how tightly the writer clustered the data, and it degrades if compaction falls behind
 long enough for unsorted small files to accumulate. That failure shows up as *slow
-queries*, not as an error, which is why the daily maintenance job sort-rewrites the last
+queries*, not as an error, which is why the retired daily maintenance job sort-rewrote the last
 two days of `bronze.*` rather than only binpacking them.
 
 **And it is reversible.** Iceberg supports partition evolution: `ALTER TABLE …
@@ -252,7 +266,7 @@ statement rather than a migration.
 
 ### Why not `hours()`
 
-Considered for `raw.messages`, which is the only table with the volume to argue for it.
+Considered for the raw table, which was the only table with the volume to argue for it.
 At the predicted 6.5 GB/day across 9 topics, `hours(kafka_ts), topic` is ~216 partitions
 a day, ~79,000 a year, on a single host holding the catalog metadata for all of it. What
 it would buy is a tighter time prune, and the day partition plus the `(topic, partition,
@@ -264,7 +278,7 @@ case it is the right spec.
 
 ### File size: 256 MB for raw, 128 MB everywhere else
 
-`raw.messages` targets 256 MB because it is the high-volume table, 6.47 GB/day predicted
+The raw table targeted 256 MB because it was the high-volume table, 6.47 GB/day predicted
 of the 13.6 GB/day all lake tables write between them
 ([capacity model §4c](15-capacity-model.md#4c-per-lake-table-per-day)), so **raw is 48 %
 of predicted lake growth, 62 % measured** (3.77 GB of 6.09 GB on 2026-08-27,
@@ -273,11 +287,11 @@ snapshot and fewer object-store round trips per scan. Every other table targets 
 because at a few hundred MB/day per table a 256 MB target would never be reached and
 compaction would produce one undersized file per partition either way, with no benefit.
 
-Both are targets, not guarantees. The ingest runs every 5 minutes, so each cycle writes
+Both are targets, not guarantees. The retired ingest ran every 5 minutes, so each cycle wrote
 small files into the current day's partition, ~288 commits per day per table before
-maintenance. Nightly compaction is what converges them
+maintenance. Nightly compaction was what converged them
 ([ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md)'s compact → expire → audit
-ordering, carried into `docker/lake/maintenance.py`). Without it, small files accumulate
+ordering, carried into `maintenance.py`, archived). Without it, small files accumulate
 and both partition pruning and sort-order pruning get slower without getting wrong.
 
 ### What is not partitioned by, anywhere
@@ -292,20 +306,20 @@ and both partition pruning and sort-order pruning get slower without getting wro
 
 ### Marts: partitioned like their source, or not at all
 
-The marts live in the domain warehouses, not in the table above, and each dbt model declares
-its own layout in its `config` ([`dbt/`](../../dbt/README.md)).
-`market_analytics.candles.ohlcv_1m` is partitioned by `exchange, month(window_start)`,
+The marts, retired with the lake, lived in the domain warehouses, not in the table above, and
+each dbt model declared its own layout in its `config` ([the dbt README, archived](../../legacy/v3-lake-ingest/dbt/README.md)).
+The candles mart's `ohlcv_1m` was partitioned by `exchange, month(window_start)`,
 Trino's spelling of the lake's `exchange, months(window_start)`, so a read of one venue's
-month prunes the same way in both. The venue scorecard, one row per venue and day, is not
-partitioned: every hourly run rebuilds it whole, as one small table. The two views store no
-files. Each domain's `dq.dbt_test_results` is not partitioned either, until a domain's table
-passes 1,000,000 rows ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md), <!-- counts-ok: a revisit trigger on test-result rows, not venue data -->
+month pruned the same way in both. The venue scorecard, one row per venue and day, was not
+partitioned: every hourly run rebuilt it whole, as one small table. The two views stored no
+files. Each domain's `dq.dbt_test_results` was not partitioned either, until a domain's table
+passed 1,000,000 rows ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md), <!-- counts-ok: a revisit trigger on test-result rows, not venue data -->
 Revisit when).
 
-Partitioning also bounds one generated test. The uniqueness test `k2gen` writes for a source a
-mart reads covers only the newest 6 hours, filtered on the table's time partition column,
-because over the whole of `gold.trades` it exceeded Trino's per-node query memory
-([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md), Outcome). The whole table stays the
+Partitioning also bounded one generated test. The uniqueness test `k2gen` wrote for a source a
+mart read covered only the newest 6 hours, filtered on the table's time partition column,
+because over the whole of the lake's gold trades it exceeded Trino's per-node query memory
+([ADR-035](../adr/ADR-035-trino-and-dbt-for-marts.md), Outcome). The whole table stayed the
 nightly Spark audit's, `duplicate_identifiers`.
 
 ---
@@ -315,7 +329,7 @@ nightly Spark audit's, `duplicate_identifiers`.
 **Rewritten at the Phase E cutover, 2026-08-27.** The v2 hot tier (`k2.*`, 7-day TTL,
 `SummingMergeTree` candles) is gone, [legacy/v2-clickhouse/](../../legacy/v2-clickhouse/README.md)
 keeps its DDL, and `git log -p --follow -- docs/architecture/14-partitioning-strategy.md` this page's
-earlier description. What serves now is the `gold` database of
+earlier description. What served until the pause ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)) is the `gold` database of
 [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md):
 [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql).
 No table has a TTL.
@@ -325,7 +339,7 @@ No table has a TTL.
 | `gold.trades` | `ReplacingMergeTree(first_seen)` | `toYYYYMM(exchange_ts)` | `(exchange, canonical_symbol, exchange_ts, trade_id)` | the logical trade is the key; a venue replay or a feed/reload overlap collapses under `FINAL` to the **earliest delivery** (`first_seen` = inverted receive time). Monthly partitions keep `FINAL` a per-partition merge (the `quant` profile sets `do_not_merge_across_partitions_select_final`) and keep part counts flat as the days accrue |
 | `gold.book_top20` | `ReplacingMergeTree(ver)` | `toYYYYMM(second)` | `(exchange, canonical_symbol, second)` | one row per venue-symbol-second; the later sample in a second wins, and a lake reload (state at the end of the second, `ver` = last nanosecond) out-ranks the feed's mid-second sample |
 | `gold.ohlcv_{1m,5m,1h,1d}` | `ReplacingMergeTree(computed_at)` | `toYYYYMM(window_start)` | `(exchange, canonical_symbol, window_start)` | loaded from the lake, never computed here; a re-pull of a recomputed bucket replaces the row. The version is the lake run's wall clock, not `src_snapshot_id`: an Iceberg snapshot id is random, so keying the merge on it keeps an arbitrary row |
-| `gold.bbo_1s` | `ReplacingMergeTree(src_snapshot_id)` | `toYYYYMM(second)` | `(exchange, canonical_symbol, second)` | loaded from the lake; the one table still versioned on the snapshot id, because `lake.gold.bbo_1s` carries no `computed_at` to use |
+| `gold.bbo_1s` | `ReplacingMergeTree(src_snapshot_id)` | `toYYYYMM(second)` | `(exchange, canonical_symbol, second)` | loaded from the lake; the one table still versioned on the snapshot id, because the lake's `bbo_1s` carried no `computed_at` to use |
 | `gold.bars` | `ReplacingMergeTree(computed_at)` | `toYYYYMM(day)` | `(exchange, canonical_symbol, bar_kind, day, bar_seq)` | loaded from the lake; a touched day arrives whole with a newer `computed_at` and replaces its rows. Raising a threshold makes the day's rows fewer, which a pull cannot express: `TRUNCATE` + re-pull (runbook §3) |
 | `gold.feed_errors` | `MergeTree` | | `(topic, partition, offset)` | every record AvroConfluent could not decode, with its bytes |
 
@@ -342,7 +356,7 @@ trade id is last because it only has to make the key unique, and the venues numb
 sequentially per symbol so ties in `exchange_ts` resolve in venue order.
 
 **OHLCV on read.** `gold.ohlcv_live(bucket = <seconds>)` is a parameterised view over
-`gold.trades FINAL`; the materialised candles are the lake's and are loaded. The v2 tier
+`gold.trades FINAL`; the materialised candles were the lake's and were loaded until lake gold retired. The v2 tier
 materialised candles into a `SummingMergeTree` whose open/close were resolved per insert
 block, which is the wrong number when a minute spans two blocks; `make test-clickhouse`
 asserts the view gets that minute right on every PR.
@@ -357,51 +371,34 @@ docker exec k2-redpanda rpk topic list
 docker exec k2-redpanda rpk topic describe -p market.crypto.v3.raw.binance
 ```
 
-```sql
--- Iceberg: files, sizes and record counts per partition. Run in k2-spark-iceberg.
-SELECT partition, count(*) AS files,
-       sum(record_count) AS rows,
-       round(avg(file_size_in_bytes) / 1048576, 1) AS avg_mb
-FROM lake.raw.messages.files
-GROUP BY partition ORDER BY partition;
-```
-
-```bash
-# The same through Trino, from the host. Trino names a metadata table "<table>$files".
-docker exec k2-trino trino --user reviewer --execute '
-  SELECT partition, count(*) AS files, round(avg(file_size_in_bytes) / 1048576, 1) AS avg_mb
-  FROM lake.raw."messages$files" GROUP BY partition ORDER BY partition'
-```
-
-```sql
--- Is the sort order doing its job? Tight symbol bounds per file mean a
--- single-symbol scan prunes. Wide bounds everywhere mean compaction is behind.
-SELECT file_path, lower_bounds, upper_bounds
-FROM lake.bronze.binance_trade.files LIMIT 20;
-```
+The Iceberg checks this section held read the retired tables' file metadata (`<table>.files`
+in Spark, `"<table>$files"` in Trino): files, sizes and rows per partition, and per-file
+symbol bounds to see whether sort-order pruning worked. They have no table to read until phase
+004's first product lands; the queries are in this page's history
+(`git log -p -- docs/architecture/14-partitioning-strategy.md`).
 
 Rules of thumb used here, and what each one means if it trips:
 
 | Signal | Threshold | What it says |
 |---|---|---|
 | Average file size in a settled partition | < 10 MB | compaction is behind, or the partition spec is too fine |
-| Files per day partition, `raw.messages`, after maintenance | > ~50 | the 256 MB target is not being reached, check the compaction job ran |
+| Files per day partition of the highest-volume table, after maintenance | > ~50 | the 256 MB target is not being reached, check the compaction job ran |
 | Manifest count per snapshot | > ~100 | planning time is growing; rewrite manifests |
 | Single-symbol scan opening > 10 % of a day partition's files | | sort-order pruning is not working; `ADD PARTITION FIELD symbol` becomes the answer ([ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md)) |
 
-Scored once, 2026-08-27 ([B4](../benchmarks/2026-08-27.md#b4)): `raw.messages` **278 files
-for 3.77 GB**; per-venue bronze **2 to 12 files each**. The thresholds themselves are still
+Scored once, 2026-08-27 ([B4](../benchmarks/2026-08-27.md#b4)), on the since-retired tables: the
+raw table **278 files for 3.77 GB**; per-venue bronze **2 to 12 files each**. The thresholds themselves are still
 design expectations.
 
 ---
 
 ## Related
 
-- [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md), why `raw.messages` is never evicted, and why it prunes on coordinates only
+- [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md), why the raw table was never evicted, and why it pruned on coordinates only
 - [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md), the offset continuity the raw sort order exists to serve
 - [ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md), the unified bronze decision and the symbol-in-sort-order trade-off
 - [ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md), the ClickHouse tier serves gold, indefinitely, from the lake
 - [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md), why the book table's time axis is the sampler clock
 - [capacity-model.md](15-capacity-model.md), the bytes/day predictions every file-size argument above rests on
 - [scale-out-path.md](17-scale-out-path.md), the same partition arithmetic redone at PB scale
-- [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), the DDL this page describes, with per-column commentary
+- [`lake.sql`, archived](../../legacy/v3-lake-ingest/lake/ddl/lake.sql), the DDL the Iceberg section describes, with per-column commentary
