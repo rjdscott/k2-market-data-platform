@@ -280,7 +280,9 @@ Applies only while the compose profile `hot-gold` runs (ClickHouse is paused,
 [ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)); `ClickHouseGoldFeedStale` is removed with the pause.
 
 **Symptoms**: lag grows on `k2-gold-trades` / `k2-gold-book` while capture is delivering;
-`gold.trades` stops advancing. `ClickHouseGoldFeedStale` fires after 10 minutes of that.
+`gold.trades` stops advancing. Detection is manual while the pause lasts: the lag check in
+"Consumer Lag Inspection" above shows it, and no alert fires (`ClickHouseGoldFeedStale`, which fired
+after 10 minutes of that, is removed with the pause).
 
 **Diagnosis**:
 ```bash

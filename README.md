@@ -62,7 +62,7 @@ runs today**. Each phase of the plan updates them in the pull request that makes
 | Complete | One Rust process per venue holds a single socket carrying trades and L2 book, stamps `recv_ts_ns` before parsing, verifies Kraken's CRC32 on every update, tracks each venue's sequence numbers, and publishes every frame verbatim. The L2 book is paused on every venue while the platform is built, by a per-venue switch ([ADR-050](./docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md)). |
 | Retained | Redpanda keeps the raw topics for 48 hours or 2 GiB per partition, and trades and book for 7 days, so phase `004`'s first lake product starts at the log start; nothing older is recovered. The old lake ingest, its four layers and its dbt marts are archived in [`legacy/v3-lake-ingest/`](./legacy/v3-lake-ingest/), and their tables were dropped after a verified copy (`make drop`). |
 | Disposable serving | ClickHouse `gold` is paused behind the compose profile `hot-gold` while the platform is built, its DDL still tested by `make test-clickhouse` ([ADR-057](./docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). Dedup is a `ReplacingMergeTree` key; candles are computed on read, so a replay cannot corrupt one. |
-| Proven | 12 alert rules as code, chaos scripts with measured recovery, a fresh-clone release check before every tag. Every gate that read the old lake tables prints a `SKIP` line naming the phase that restores it. |
+| Proven | 14 alert rules as code, chaos scripts with measured recovery, a fresh-clone release check before every tag. Every gate that read the old lake tables prints a `SKIP` line naming the phase that restores it. |
 
 [![K2 Pipeline Overview on a live run: every scrape target up, trade records per venue, Redpanda throughput, and the pipeline's CPU and memory](docs/images/dashboards/01-pipeline-overview.png)](docs/operations/dashboards.md)
 
@@ -83,7 +83,7 @@ flowchart TB
     S["Airflow 3 · Spark 3.5<br/>no DAG until phase 002"]:::sp
     T["Trino 484 · SQL over the lake, read-only<br/>one warehouse per domain"]:::nb
   end
-  O["Prometheus · 12 rules<br/>Grafana · 4 dashboards"]:::ob
+  O["Prometheus · 14 rules<br/>Grafana · 4 dashboards"]:::ob
 
   E --> F --> R
   R -.->|Kafka engine, paused| C
@@ -207,7 +207,7 @@ of 68 / 287 / 10). A gate that read the old lake tables prints `SKIP` and the ph
 | ClickHouse schema: 10 assertions [^ch], including the v2 OHLCV regression | `make test-clickhouse` |
 | Trino: the real `docker/trino/etc` starts, catalog `lake` refuses every commit and table procedure, only a domain's writer changes its tables with SQL statements (table procedures are not fenced per user, ADR-044); 134 checks [^trino], no stack | `make test-trino` |
 | dbt: lint, parse and compile of a project with no marts; the marts retired with the old pipeline and dbt builds again in phase `002`; no stack | `make test-dbt` |
-| Prometheus rule unit tests (6 of 12 alerts) and 11 documentation gates | `bash scripts/check-docs.sh` |
+| Prometheus rule unit tests (8 of 14 alerts) and 11 documentation gates | `bash scripts/check-docs.sh` |
 | Live stack: chaos against the captures and Redpanda. `make lake-verify`, `make parity-ohlcv` and `make parity-bars` print `SKIP` until phase `004` | `make chaos` |
 
 [^rust]: `grep -rc '#\[test\]' services/capture-rust/src services/capture-rust/tests --include='*.rs' | awk -F: '{s+=$2} END {print s}'`
@@ -228,7 +228,7 @@ docker/airflow/            the Airflow image; no DAG until phase 002
 docker/lake/               modules the new connectors reuse: offsets, wire framing, bars, books
 docker/clickhouse/ddl/     gold contract (CI-tested) and Kafka feeds; the tier is paused (ADR-057)
 docker/trino/              Trino config: catalog lake (read-only), one generated catalog per domain, access rules
-docker/prometheus/rules/   12 alert rules, 6 with unit tests
+docker/prometheus/rules/   14 alert rules, 8 with unit tests
 schemas/avro/              raw-message, trade, book-snapshot-l2
 config/instruments.yaml    instrument registry, the single source of truth
 contracts/                 the domains file and the contract schemas; the old product contracts are archived

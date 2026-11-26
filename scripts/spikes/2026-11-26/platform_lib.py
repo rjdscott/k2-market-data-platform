@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -109,14 +110,19 @@ def remove_containers(*names: str) -> None:
 
 
 def mc(script: str, extra_env: tuple[str, ...] = (), stdin: str | None = None) -> str:
-    """Run `sh -c script` in a throwaway MinIO container with alias `root` set from the env names."""
+    """Run `sh -c script` in a throwaway MinIO container with alias `root` from MC_HOST_root.
+
+    mc reads an alias from MC_HOST_<alias> in its environment, as scripts/drop.sh uses it, so the
+    root key is never on mc's argv inside the container (`mc alias set` would put it there)."""
+    os.environ["MC_HOST_root"] = secret("http://%s:%s@minio:9000" % (
+        urllib.parse.quote(os.environ["MINIO_ROOT_USER"], safe=""),
+        urllib.parse.quote(os.environ["MINIO_ROOT_PASSWORD"], safe="")))
     env: list[str] = []
-    for name in ("MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", *extra_env):
+    for name in ("MC_HOST_root", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", *extra_env):
         env += ["-e", name]
-    prelude = 'mc alias set root http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && '
     return docker("run", "--rm", "-i", "--name", f"spike-n04plat-mc-{os.getpid()}", "--label", LABEL,
                   "--network", NET, "--memory", "128m", *env, "--entrypoint", "sh", MINIO_IMAGE,
-                  "-c", prelude + script, input=stdin)
+                  "-c", script, input=stdin)
 
 
 # ---- Trino ---------------------------------------------------------------------------------------

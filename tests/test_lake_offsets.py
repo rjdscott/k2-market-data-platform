@@ -376,6 +376,62 @@ class TestSnapshotHistoryIsMainOnly:
         assert sorted(r["snapshot_id"] for r in catalog.main_snapshots(FakeSpark(), "lake.ns.t")) == [1, 2, 3]
 
 
+class SummarySpark(FakeSpark):
+    """FakeSpark that also answers added_records' summary read, each snapshot adding 10 x its id."""
+
+    def __init__(self, written=True):
+        self.written = written
+
+    def sql(self, query):
+        if ".refs" in query and not self.written:
+            rows = []
+        elif "WHERE snapshot_id =" in query:
+            sid = int(query.rsplit("=", 1)[1])
+            rows = [Row(summary={**m, "added-records": str(10 * s)}) for s, _, _, m in SNAPSHOTS if s == sid]
+        else:
+            return super().sql(query)
+        return type("Result", (), {"collect": lambda self: rows})()
+
+
+class TestCatalogReads:
+    """The rest of docker/lake/catalog.py that runs without a stack. broker_offsets is
+    not here: it is calls into the Kafka AdminClient through the JVM gateway, nothing else."""
+
+    def test_added_records_is_mains_head_not_the_newest_snapshot(self, catalog):
+        assert catalog.current_snapshot_id(SummarySpark(), "lake.ns.t") == MAIN
+        assert catalog.added_records(SummarySpark(), "lake.ns.t") == 10 * MAIN   # 5 is newer, on a branch
+
+    def test_an_unwritten_table_has_no_head_and_added_nothing(self, catalog):
+        assert catalog.current_snapshot_id(SummarySpark(written=False), "lake.ns.t") is None
+        assert catalog.added_records(SummarySpark(written=False), "lake.ns.t") == 0
+        assert catalog.main_snapshots(SummarySpark(written=False), "lake.ns.t") == []
+
+    def test_fetch_schema_by_id_and_an_unknown_id_is_its_own_error(self, catalog, monkeypatch):
+        import http.server
+        import json
+        import threading
+
+        class Registry(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                found = self.path == "/schemas/ids/7"
+                self.send_response(200 if found else 404)
+                self.end_headers()
+                self.wfile.write(json.dumps({"schema": '{"type": "string"}'} if found else {"error_code": 40403}).encode())
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Registry)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            monkeypatch.setattr(catalog, "SCHEMA_REGISTRY_URL", f"http://127.0.0.1:{server.server_port}/")
+            assert catalog.fetch_schema(7) == '{"type": "string"}'
+            with pytest.raises(catalog.UnresolvableSchema, match="schema id 8"):
+                catalog.fetch_schema(8)
+        finally:
+            server.shutdown()
+
+
 class TestOffsetGaps:
     def test_a_contiguous_run_passes(self):
         assert O.offset_gaps([("t", 0, 101, 0, 100)]) == []

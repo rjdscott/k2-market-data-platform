@@ -1,0 +1,60 @@
+# K2 Market Data Platform - platform alert rules
+# Purpose: the disk every Docker volume lives on is filling.
+# Metrics: redpanda_storage_disk_{free,total}_bytes, Redpanda's /public_metrics
+# Scrape:  job redpanda-public
+# Tests:   docker/prometheus/rules/tests/platform-alerts_test.yml
+#
+# The lake exporter's two disk rules retired with the old ingest
+# (legacy/v3-lake-ingest/), and left no disk alert at all. Redpanda reports the
+# filesystem under its data directory, which on Docker Desktop is the VM disk
+# that MinIO's, Redpanda's and PostgreSQL's volumes all share, so one gauge from
+# a service that is already running covers the platform's storage. It is the
+# VM's disk, not the host's: Docker.raw can fill the host's `/` while this
+# reads low, and docs/runbooks/docker-desktop-disk.md section 1 is that check,
+# by hand. On bare metal or a cloud host, with no VM between, it is the disk.
+#
+# The thresholds are the retired lake rules': 80 % held 15 min, 90 % held 5 min.
+# Redpanda's own low-space alert (redpanda_storage_disk_free_space_alert) waits
+# for 5 % free, which is too late to act on.
+
+groups:
+  - name: platform
+    interval: 30s
+    rules:
+
+      # WARNING: the Docker volumes' disk is past 80 %.
+      - alert: DockerDiskUsageHigh
+        expr: |
+          1 - redpanda_storage_disk_free_bytes / redpanda_storage_disk_total_bytes > 0.80
+        for: 15m
+        labels:
+          severity: warning
+          component: storage
+          tier: infrastructure
+        annotations:
+          summary: "The Docker volumes' disk is {{ $value | humanizePercentage }} full"
+          description: |
+            The filesystem that holds every named volume (MinIO, Redpanda,
+            PostgreSQL) is past 80 %. Nothing fails yet. At 100 % MinIO refuses
+            writes and Redpanda stops accepting produce requests, and every
+            record capture cannot deliver is lost.
+
+            Find what grew with `docker system df -v` before deleting anything.
+          runbook: docs/runbooks/docker-desktop-disk.md
+
+      # CRITICAL: past 90 %, close to refused writes.
+      - alert: DockerDiskUsageCritical
+        expr: |
+          1 - redpanda_storage_disk_free_bytes / redpanda_storage_disk_total_bytes > 0.90
+        for: 5m
+        labels:
+          severity: critical
+          component: storage
+          tier: infrastructure
+        annotations:
+          summary: "The Docker volumes' disk is {{ $value | humanizePercentage }} full"
+          description: |
+            Past 90 %. MinIO and Redpanda refuse writes when it fills, and from
+            then on capture loses everything the venues send. Free space now:
+            the runbook names what is safe to remove.
+          runbook: docs/runbooks/docker-desktop-disk.md

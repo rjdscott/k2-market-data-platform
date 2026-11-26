@@ -184,11 +184,13 @@ def run_phase(trino: Trino, phase: str) -> list[str]:
         names, script = [], ""
         for c, user in zip(CATS, users):
             C = c.upper()
+            # A random secret made for this run's scratch user, not a real credential; it still
+            # reaches mc on stdin, not argv, so no process listing in the container shows it.
             os.environ[f"SPIKE_AK_{C}"], os.environ[f"SPIKE_SK_{C}"] = user, secret(secrets.token_hex(20))
             names += [f"SPIKE_AK_{C}", f"SPIKE_SK_{C}"]
             doc = json.dumps({"Version": "2012-10-17", "Statement": pols[c]})
             script += (f"printf '%s' '{doc}' > /tmp/{c}.json && mc admin policy create root {user} /tmp/{c}.json >/dev/null && "
-                       f'mc admin user add root "$SPIKE_AK_{C}" "$SPIKE_SK_{C}" >/dev/null && '
+                       f'printf "%s\\n" "$SPIKE_SK_{C}" | mc admin user add root "$SPIKE_AK_{C}" >/dev/null && '
                        f'mc admin policy attach root {user} --user "$SPIKE_AK_{C}" >/dev/null && ')
         made = mc(script + "mc admin user list root --json", extra_env=tuple(names))  # the table form truncates names
         log(f"[{phase}] scoped users created: {sum(u in made for u in users)} of {len(users)}")

@@ -80,7 +80,8 @@ Applies only while the compose profile `hot-gold` runs (ClickHouse is paused, [A
 
 **Symptom**, queries fail; Grafana ClickHouse panels go blank.
 
-**Detection**, `ClickHouseDown`.
+**Detection**, manual: the alert that watched this, `ClickHouseDown`, was removed with the pause
+(ADR-057) and returns with the tier. The `SELECT 1` in the recovery below is the check.
 
 **Expected behaviour**, Redpanda retains messages for its retention window, so capture
 keeps producing normally. The `gold.q_*` consumers resume on restart and the MVs replay
@@ -208,7 +209,8 @@ their output is what the healthy state looks like.
 
 **Symptom**, queries get slower or start failing; `gold` reads time out.
 
-**Detection**, `ClickHouseHighMemoryUsage` (RSS > 85% of `OSMemoryTotal`, 5m; on Docker
+**Detection**, manual while the pause lasts: the commands below. Until it, three alerts,
+`ClickHouseHighMemoryUsage` (RSS > 85% of `OSMemoryTotal`, 5m; on Docker
 Desktop that is the VM's memory, not the host's),
 `ClickHouseQueryFailureRateHigh` (> 0.1 failed queries/s, 3m),
 `ClickHouseMergeQueueLarge` (> 10 background merge tasks, 5m).

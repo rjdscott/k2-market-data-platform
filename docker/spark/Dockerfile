@@ -78,6 +78,23 @@ RUN set -eu; cd "$SPARK_HOME/jars"; \
 # day there before the cleaner was on (P2 audit, 2026-11-26). The History Server
 # (the CMD below) runs the cleaner: two days kept for debugging, checked hourly,
 # compressed.
+#
+# Redaction: docker/lake/spark_conf.py hands the MinIO key to the catalog as
+# `spark.sql.catalog.lake.s3.access-key-id` and `...s3.secret-access-key`, and
+# pyspark also puts every session conf on the driver's command line as `--conf`,
+# which the environment page shows as `sun.java.command`. Spark 3.5.9's default
+# regex, (?i)secret|password|token|access[.]?key, misses the hyphen in
+# `access-key-id`, so the job UI (4040), the History Server (18080) and every event
+# log served that value in clear. This one adds `credential` and every separator
+# spelling of access key. Spark blanks a property's value when the regex matches
+# its name OR its value, and applies it when the event log is written (the
+# environment, job and stage events), when the job UI serves it and when the
+# History Server serves a log, an old one included. Verified 2026-11-26 with fake
+# keys through spark_conf.py: no occurrence in either environment endpoint or the
+# decompressed event log; with the default regex, five in the event log. No
+# `spark.redaction.string.regex`: the key appears in no plan or SQL text.
+# tests/test_spark_redaction.py fails when a sensitive name in spark_conf.py
+# would slip past it.
 RUN mkdir -p "$SPARK_HOME/conf" /home/iceberg/spark-events \
  && printf '%s\n' \
       'spark.sql.extensions                   org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions' \
@@ -89,7 +106,8 @@ RUN mkdir -p "$SPARK_HOME/conf" /home/iceberg/spark-events \
       'spark.history.fs.cleaner.enabled       true' \
       'spark.history.fs.cleaner.maxAge        2d' \
       'spark.history.fs.cleaner.interval      1h' \
-      > "$SPARK_HOME/conf/spark-defaults.conf" \
+      'spark.redaction.regex                  (?i)secret|password|token|credential|access[-._]?key' \
+      >"$SPARK_HOME/conf/spark-defaults.conf" \
  && chown -R spark:spark /home/iceberg
 
 # PATH: spark-sql, spark-submit and the sbin scripts by name, as the old base had

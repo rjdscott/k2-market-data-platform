@@ -34,9 +34,11 @@ FILES = {"data/p=1/a.parquet": "rows-a", "metadata/00001-a.metadata.json": "{}",
 OBJECTS, BYTES = len(FILES), sum(len(b) for b in FILES.values())
 
 FAKE_DOCKER = r'''#!/usr/bin/env python3
-import json, os, pathlib, shutil, sys, urllib.parse as up
+import hashlib, json, os, pathlib, shutil, sys, urllib.parse as up
 
 out = lambda d: print(json.dumps(d, separators=(",", ":")))   # compact, as mc prints it
+# MinIO's etag of a single-part upload is the MD5 of its bytes; NO_ETAG drops the field.
+etag = lambda b: {} if E.get("NO_ETAG") else {"etag": hashlib.md5(b).hexdigest()}
 
 A, E = sys.argv[1:], os.environ
 with open(E["LOG"], "a") as f:
@@ -138,11 +140,12 @@ def mc(args):
         for v in w["versioned"].get(b, []):
             if v["key"].startswith(prefix):
                 out({"status": "success", "type": "file", "key": v["key"][len(prefix):], "size": len(v["body"]),
-                                  "versionId": v["id"], **({"isDeleteMarker": True} if v.get("dm") else {})})
+                     "versionId": v["id"], **({"isDeleteMarker": True} if v.get("dm") else etag(v["body"].encode()))})
     elif pos[0] == "ls":
         root = MINIO / pos[1][3:]
         for p in files(root):
-            out({"status": "success", "type": "file", "key": str(p.relative_to(root)), "size": p.stat().st_size})
+            out({"status": "success", "type": "file", "key": str(p.relative_to(root)), "size": p.stat().st_size,
+                 **etag(p.read_bytes())})
     elif pos[0] == "mirror":
         src, dst = MINIO / pos[1][3:], pathlib.Path(pos[2])
         for n, p in enumerate(files(src)):
@@ -157,6 +160,8 @@ def mc(args):
                 out({"status": "error", "error": {"message": "Overwrite not allowed"}})
         if E.get("GROW"):   # a writer commits while the copy runs
             (src / "data/p=1/late.parquet").write_text("late")
+        if E.get("OVERWRITE"):   # a writer replaces a file with one of the same size
+            (src / "data/p=1/a.parquet").write_text("rows-A")
     elif pos[0] == "cp":
         b, _, key = pos[1][3:].partition("/")
         v = next(v for v in w["versioned"][b] if v["key"] == key and v["id"] == vid)
@@ -385,6 +390,22 @@ def test_a_write_during_the_copy_stops_before_the_drop(stack):
     assert out.returncode == 1
     assert "changed while it was copied" in out.stderr
     assert deletes(stack) == [] and "t1" in namespaces(stack)["spike"]
+
+
+def test_a_same_size_overwrite_during_the_copy_stops_before_the_drop(stack):
+    out = run(stack, "k2.spike.t1", OVERWRITE="1")
+    assert out.returncode == 1
+    assert "changed while it was copied" in out.stderr
+    assert deletes(stack) == [] and "t1" in namespaces(stack)["spike"]
+    # The copy matched by count and bytes: only the etag saw the overwrite.
+    assert tree(copy_root(stack) / "k2.spike.t1") == FILES
+
+
+def test_a_listing_without_etags_fails_closed(stack):
+    out = run(stack, "k2.spike.t1", NO_ETAG="1")
+    assert out.returncode == 1
+    assert "listing has no etag" in out.stderr
+    assert deletes(stack) == [] and not any("mirror" in c for c in calls(stack))
 
 
 def test_too_little_room_stops_before_the_copy(stack):

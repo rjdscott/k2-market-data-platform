@@ -8,5 +8,6 @@ its alerts were removed and its commands read tables, DAGs and scripts that no l
 not follow it against this stack. The lake metrics and alerts return in [phase
 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
 of the unified platform plan ([ADR-056](../adr/ADR-056-unified-data-product-platform.md)); until
-then `df -h /` on the host is the check, and [docker-desktop-disk.md](./docker-desktop-disk.md)
-covers a bloated Docker disk image.
+then `DockerDiskUsageHigh` and `DockerDiskUsageCritical` watch the disk the volumes share, MinIO's
+included ([docker-desktop-disk.md](./docker-desktop-disk.md) section 2), and `df -h /` on the host
+is the check for a bloated Docker disk image (the same runbook, section 1).

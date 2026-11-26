@@ -33,8 +33,9 @@ a namespace; `TARGET=bucket:<name>` names a bucket. Each step must hold before t
 3. **Copy** with `mc mirror` to `$K2_BACKUP_DIR/drop/<UTC date>/<target>/` (one directory per
    table or view for a namespace). A versioned bucket also gets every object version, including
    the noncurrent ones `mc mirror` skips, as `<target>.versions/<key>/<version id>`.
-4. **Compare** object count and bytes, MinIO against the copy, then list MinIO again: it must
-   not have changed since the copy began. Write `<target>.<HHMMSS>Z.json` beside the copy, the
+4. **Compare** object count and bytes, MinIO against the copy, then list MinIO again: no key,
+   size or etag may have changed since the copy began (the etag is what shows an overwrite of
+   the same size; the copy on disk has none). Write `<target>.<HHMMSS>Z.json` beside the copy, the
    manifest a restore reads: each object's location, metadata file, copy, count and bytes.
 5. **Drop**: each table and view with `DELETE .../tables/<table>?purgeRequested=true` (or
    `.../views/<view>`), then the namespace; or `mc rb --force` for a bucket. Every warehouse's

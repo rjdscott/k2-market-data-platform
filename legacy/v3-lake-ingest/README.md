@@ -10,10 +10,12 @@ Nothing here is started, scheduled or run by `make test`; CI builds one archived
 runs its self-check, and nothing else ([Known residue](#known-residue)). See [`../README.md`](../README.md) for the
 archive rules.
 
-The files moved exactly as they were, in one commit of 125 pure renames. The paths they mention
-are the paths they had in the live tree (`docker/lake/`, `docker/airflow/dags/`, `notebooks/`,
-`scripts/`, `tests/`) and were not rewritten, so links inside the archived documents point at
-where things were.
+The files moved exactly as they were, in one commit of 125 pure renames (`6429a58`). A later
+commit (`538ea1e`) repointed the relative link targets inside 18 of the archived Markdown
+documents so they resolve from their new depth, and changed nothing else on those lines (each
+changed line matches a removed one once its `](target)` is blanked); it also added one archived
+dbt macro. Paths written as prose or code (`docker/lake/`, `docker/airflow/dags/`, `notebooks/`,
+`scripts/`, `tests/`) were not rewritten, so they name where things were in the live tree.
 
 ```text
 legacy/v3-lake-ingest/
@@ -167,8 +169,14 @@ per target.
 1. **Proved first.** `make gates` passed on the rebased Spark image against the live old pipeline
    (`~/k2-backup/drop/gates-new-image-2026-11-26.log`), as Wave 3 step 1 requires.
 2. **Run lists saved**, then the DAGs paused for good. `airflow dags list-runs <dag> -o json` for
-   each into `dag-runs-<dag>.json`; with no lake job running at 14:59:49 UTC, `lake_ingest`,
-   `lake_maintenance`, `lake_rebuild` and `dbt_marts` were paused. The last run of each:
+   each into `dag-runs-<dag>.json`, then `lake_ingest`, `lake_maintenance`, `lake_rebuild` and
+   `dbt_marts` paused. The saved `lake_ingest` list caught its 14:56 run still `running`, so the
+   script then waited until no Spark driver or Python process ran in `k2-spark-iceberg` and every
+   queued or running run of the four DAGs had all its tasks finished: true at 14:59:49 UTC (the
+   log's `idle at` line). That run's only task, `ingest`, had ended at 14:59:25 (`task_instance`
+   in the Airflow database dump of 14:59:55); Airflow stamped the run itself ended at 15:00:05.
+   The backup ran from 14:59:55 and the first drop began at 15:01,
+   after the dry runs. The last run of each:
 
    | DAG | Last run | State | UTC |
    |---|---|---|---|
