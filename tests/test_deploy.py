@@ -33,15 +33,20 @@ try:
     import bcrypt  # noqa: F401
     import k2gen  # noqa: F401
 except ImportError:
+    if os.environ.get("K2_DEPLOY_TESTS_INNER"):  # the rerun itself lacks them: fail, never recurse
+        raise
     def test_deploy_cases_in_the_k2gen_environment() -> None:
+        # `python -m pytest`, not the `pytest` script: under `uv run --with`, the script runs the project's
+        # own interpreter, which has no bcrypt; the overlay's python has both.
         p = subprocess.run(["uv", "run", "--project", "platform/k2gen", "--locked", "-q", "--with", "bcrypt==5.0.0",
-                            "pytest", "-q", "-p", "no:cacheprovider", str(Path(__file__).relative_to(ROOT))],
-                           cwd=ROOT, capture_output=True, text=True)
+                            "python", "-m", "pytest", "-q", "-p", "no:cacheprovider", str(Path(__file__).relative_to(ROOT))],
+                           cwd=ROOT, capture_output=True, text=True, env={**os.environ, "K2_DEPLOY_TESTS_INNER": "1"})
         assert p.returncode == 0, p.stdout[-8000:] + p.stderr[-2000:]
 else:
     import yaml
     from k2gen import model
     from k2gen import release as k2release
+    from k2gen.emit.lake import create_view, view_update
 
     sys.path.insert(0, str(ROOT / "platform/k2gen/tests"))
     from test_release import write_set  # the good fixture set as `k2gen docset` writes it
@@ -155,6 +160,15 @@ sys.exit(f"fake docker: no answer for {A}")
                         "region": "varchar", "operator_note": "varchar"}
             monkeypatch.setattr(deploy, "admitted", self.admitted)
             monkeypatch.setattr(deploy, "sql", self.sql)
+            # S20's suites run on throwaway lakes and the live Trino; here they answer as told
+            self.suite: list[str] = []
+            self.s20: Any = lambda rel: (["drift clean"], [])
+            monkeypatch.setattr(deploy, "release_suite", lambda ctx, rel: self.suite.append(rel.id) or ["suite passed"])
+            monkeypatch.setattr(deploy, "s20_checks", lambda ctx, rel: self.s20(rel))
+            monkeypatch.setattr(deploy, "secrets_health", lambda ctx: None)  # its own test below
+            # each release's own emitter runs in its tools image; here, k2gen's in process
+            self.shaped: list[str] = []
+            monkeypatch.setattr(deploy, "statements", lambda ctx, rel, v, old, new: self.shaped.append(rel.id) or view_update(v, old, new))
             monkeypatch.setattr(deploy, "REFRESH_S", 0)
             self.ctx = deploy.Ctx(root=self.root, secrets=self.secrets, home=ROOT, project="k2", trino="https://localhost:1",
                                   operator="tester", faults=set(), tmp=tmp, say=lambda line: None)
@@ -198,7 +212,7 @@ sys.exit(f"fake docker: no answer for {A}")
             deploy.record(self.ctx, rel, None, "done", "ok", set())
             v = deploy.views_of(rel)[VIEW]
             self.views[VIEW] = [c for c in v.columns if c in self.tag]
-            self.stored = deploy.view_body(deploy.create_view(v, self.views[VIEW])).upper()  # stored reformatted
+            self.stored = deploy.view_body(create_view(v, self.views[VIEW])).upper()  # stored reformatted
 
         def admitted(self, ctx: Any, user: str) -> bool | None:
             live = deploy.k2release.read(self.root / "pointers" / "trino")
@@ -394,6 +408,30 @@ sys.exit(f"fake docker: no answer for {A}")
         assert swapped < widened and loaded, t
         assert all(e[0] != "view" or "operator_note" not in e[1] for e in t[:swapped])
 
+    def test_a_view_shape_the_source_rules_refuse_is_narrowed_in_the_source_shape(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r2 = world.release(over=dropped_note())
+        real = world.sql
+
+        def old_rules(ctx: Any, user: str, statement: str) -> dict[str, Any]:  # the target's shape needs a grant r1 lacks
+            if statement.startswith("CREATE OR REPLACE VIEW") and os.readlink(world.root / "pointers/trino") == f"../{r1.id}" \
+                    and "target-shape" in statement:
+                raise deploy.k2tools.TrinoError("PERMISSION_DENIED", "Access Denied: Cannot create view")
+            return real(ctx, user, statement)
+
+        deploy.sql = old_rules
+        shapes, asked = {r1.id: "source-shape", r2.id: "target-shape"}, []
+        deploy.statements = lambda ctx, rel, v, old, new: asked.append(rel.id) or tuple(  # type: ignore[assignment]
+            x and x.replace("SELECT ", f"SELECT /* {shapes[rel.id]} */ ", 1) for x in view_update(v, old, new))
+        assert world.deploy(r2) == 0
+        assert asked[:2] == [r2.id, r1.id], asked  # the target's shape refused before the swap: the source's asked for
+        t = world.timeline()
+        swapped = next(i for i, e in enumerate(t) if e[:2] == ["tools", "swap"])
+        narrowed = [i for i, e in enumerate(t) if e[0] == "view" and "operator_note" not in e[1]]
+        assert narrowed and narrowed[0] < swapped, t  # still before the rules change
+        assert "target-shape" in world.stored, "after the rules load, the target's shape"
+
     # --- refusals, the canary, the log --------------------------------------------------
 
     def test_a_second_deploy_is_refused_while_one_holds_the_lock(world: World) -> None:
@@ -441,11 +479,12 @@ sys.exit(f"fake docker: no answer for {A}")
         deploy.canary_write(world.ctx, "k2_release_aaaaaaaaaaaa")
         deploy.canary_write(world.ctx, "k2_release_bbbbbbbbbbbb")
         deploy.canary_write(world.ctx, "k2_release_bbbbbbbbbbbb")  # a rerun replaces its own line
-        users = [x.split(":")[0] for x in db.read_text().splitlines()]
+        users = [x.split(":")[0] for x in db.read_text().splitlines() if x.strip()]  # a removed line is a blank slot
         assert users == ["svc.platform", "k2_release_aaaaaaaaaaaa", "k2_release_bbbbbbbbbbbb"] and db.stat().st_ino == inode
+        assert all(len(x) == deploy.ps.SLOT - 1 for x in db.read_text().splitlines()) and not deploy.ps.problems(db.read_text())
         assert oct((world.secrets / "canary/k2_release_bbbbbbbbbbbb.password").stat().st_mode & 0o777) == "0o600"
         assert deploy.canary_prune(world.ctx, "k2_release_bbbbbbbbbbbb") == ["k2_release_aaaaaaaaaaaa"]
-        assert [x.split(":")[0] for x in db.read_text().splitlines()] == ["svc.platform", "k2_release_bbbbbbbbbbbb"]
+        assert [x.split(":")[0] for x in db.read_text().splitlines() if x.strip()] == ["svc.platform", "k2_release_bbbbbbbbbbbb"]
         assert not (world.secrets / "canary/k2_release_aaaaaaaaaaaa.password").exists() and db.stat().st_ino == inode
 
     def test_every_record_meets_its_schema_and_holds_checksums_never_content(world: World) -> None:
@@ -457,7 +496,9 @@ sys.exit(f"fake docker: no answer for {A}")
         text = "\n".join(lines)
         assert "fixture" not in text and "$2y$" not in text
         last = json.loads(lines[-1])["secrets"]
-        assert last["trino/password.db"] == __import__("hashlib").sha256((world.secrets / "trino/password.db").read_bytes()).hexdigest()
+        db = (world.secrets / "trino/password.db").stat()
+        assert last["trino/password.db"] == {"mode": f"{db.st_mode & 0o777:04o}", "size": db.st_size}
+        assert not any(len(str(v)) == 64 for r in lines for v in json.loads(r)["secrets"].values())  # no digest
 
     def test_an_unsealed_or_altered_release_is_refused(world: World) -> None:
         r1 = world.release()
@@ -471,6 +512,78 @@ sys.exit(f"fake docker: no answer for {A}")
         target.chmod(0o444)
         with pytest.raises(deploy.Refused, match="files differ"):
             deploy.open_release(world.ctx, r1.id)
+
+    def test_the_release_suite_runs_at_preflight_and_a_drift_found_at_verify_rolls_back_with_its_reason(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r2 = world.release(over=policy(60))
+        world.s20 = lambda rel: ([], ["catalog drift check exit 1: DRIFT view governance.x: not in the release"]) \
+            if rel.id == r2.id else (["drift clean"], [])  # a view planted while r2 was live
+        assert world.deploy(r2) == 1 and world.suite == [r2.id]
+        failed = [r for r in records(world) if r["outcome"] == "failed"]
+        assert [r["step"] for r in failed] == ["verify"] and "DRIFT view governance.x" in failed[0]["reason"]
+        assert all(model.schema_errors("deploy-record", r) == [] for r in records(world))
+        assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}"
+
+    def test_a_release_failing_its_release_time_suite_is_refused_before_anything_moves(world: World,
+                                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r2 = world.release(over=policy(60))
+
+        def failing(ctx: Any, rel: Any) -> list[str]:
+            raise deploy.Refused("the release fails its access suite at release time (make access-verify exit 1)")
+
+        monkeypatch.setattr(deploy, "release_suite", failing)
+        with pytest.raises(deploy.Refused, match="access suite"):
+            world.deploy(r2)
+        assert world.ups() == [] and [e for e in world.timeline() if e[:2] == ["tools", "swap"]] == []
+        assert records(world)[-1]["step"] == "preflight" and "access suite" in records(world)[-1]["reason"]
+
+    @pytest.mark.parametrize("exit_, pending, live_runs, wrong", [
+        (0, [], True, False), (0, ["governance.access-canary"], False, False), (1, [], True, True), (2, [], True, True)])
+    def test_live_access_verify_runs_only_once_every_product_is_published(world: World, monkeypatch: pytest.MonkeyPatch,
+                                                                          exit_: int, pending: list[str], live_runs: bool,
+                                                                          wrong: bool) -> None:
+        monkeypatch.undo()  # the real s20_checks, with its two commands answered here
+        r1 = world.release()
+        calls: list[list[str]] = []
+        monkeypatch.setattr(deploy, "drift", lambda ctx, rel: {"exit": exit_, "doc": {"pending": pending}, "text": "x"})
+        monkeypatch.setattr(deploy, "run", lambda *a, **k: calls.append(list(a)) or subprocess.CompletedProcess(a, 0, "", ""))
+        lines, bad = deploy.s20_checks(world.ctx, r1)
+        assert bool([c for c in calls if "access-verify" in c]) is live_runs and bool(bad) is wrong, (lines, bad)
+        if pending:
+            assert any(x.startswith("SKIP access-verify LIVE=1") and "governance.access-canary" in x for x in lines)
+
+    GUARDED = ('SELECT "id", "note" FROM "g"."a__base"."e" FOR VERSION AS OF \'audited\' WHERE EXISTS (SELECT 1 FROM '
+               '"g"."a__base"."e$refs" WHERE "name" = \'audited\' AND "type" = \'TAG\')')
+    STORED = ('SELECT\n  "id"\n, "note"\nFROM\n  "g"."a__base"."e" FOR VERSION AS OF \'audited\'\nWHERE (EXISTS (SELECT 1\n'
+              'FROM\n  "g"."a__base"."e$refs"\nWHERE (("name" = \'audited\') AND ("type" = \'TAG\'))\n))\n')  # as Trino 484 stored it
+
+    @pytest.mark.parametrize("a, b, same", [
+        (GUARDED, STORED, True),  # Trino's parentheses around each comparison, the AND and the EXISTS
+        ("SELECT 1 WHERE a = 1 AND (b = 1 OR c = 1)", "SELECT 1 WHERE (a = 1 AND b = 1) OR c = 1", False),
+        ('SELECT CAST(NULL AS varchar) AS "note"', 'SELECT "note"', False),  # a column aliased past its mask
+        ("SELECT 1 WHERE x IN (1, 2)", "SELECT 1 WHERE x IN (1, 2)", True),
+        (GUARDED.split(" WHERE EXISTS")[0], GUARDED, False),  # the old shape is not the guarded one
+        ("SELECT f((a)) FROM t", "SELECT f(a) FROM t", True),  # a redundant pair inside a call goes
+        ("SELECT f(a, b) FROM t", "SELECT f a, b FROM t", False),  # the call's own parentheses stay
+    ])
+    def test_stored_and_generated_view_sql_compare_as_trino_formats_them(a: str, b: str, same: bool) -> None:
+        assert (deploy.tokens(a) == deploy.tokens(b)) is same
+
+    @pytest.mark.parametrize("env_rc, status_rc, refused", [(0, 0, None), (1, 0, "check-env"), (0, 1, "principals-status")])
+    def test_preflight_refuses_a_loose_env_file_or_a_bad_password_db_line(world: World, monkeypatch: pytest.MonkeyPatch,
+                                                                           env_rc: int, status_rc: int, refused: str | None) -> None:
+        monkeypatch.undo()
+        answers = {"check-env.py": env_rc, "principals-status": status_rc}
+        monkeypatch.setattr(deploy, "run", lambda *a, **k: subprocess.CompletedProcess(
+            a, next(rc for key, rc in answers.items() if any(key in str(x) for x in a)), "", "STALE p.gone"))
+        if refused is None:
+            deploy.secrets_health(world.ctx)
+        else:
+            with pytest.raises(deploy.Refused, match=refused):
+                deploy.secrets_health(world.ctx)
 
     # --- the DDL comparison --------------------------------------------------------------
 

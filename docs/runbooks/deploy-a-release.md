@@ -9,8 +9,10 @@ that failed, are [roll-back-a-release.md](./roll-back-a-release.md). Why it work
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.** The defaults:
 `K2_RELEASES=$HOME/k2-releases` (created by the first `make release`, never removed or recreated),
 `K2_SECRETS=$HOME/k2-secrets`, compose project `k2` (`K2_COMPOSE_PROJECT`), Trino at
-`https://localhost:${K2_TRINO_PORT:-8443}` by name, with `${K2_SECRETS}/tls/ca.pem`. Deploy from a checkout of
-the tag being deployed: preflight refuses a checkout whose lake emitter would write other view SQL.
+`https://localhost:${K2_TRINO_PORT:-8443}` by name, with `${K2_SECRETS}/tls/ca.pem`. View statements come
+from each release's own k2gen, in its tools image, so the checkout's version does not matter to them;
+the scripts deploy calls (S20's checks, S13's `identity.sh`) are the checkout's. Memory: a deploy of a
+new release starts a throwaway lake (about 4 GiB) beside the stack for its release-time suites.
 
 > **Target state: where these commands ran.** On 2026-11-27, against the rehearsal
 > (`make deploy-rehearsal KEEP=1`, [`scripts/verify/deploy_rehearsal.py`](../../scripts/verify/deploy_rehearsal.py)):
@@ -122,8 +124,12 @@ deploy: exit 0: done
 **Detection**, manual.
 
 **Expected behaviour**, the steps run in order, each printed with its time and recorded in
-`$K2_RELEASES/deploy-log.jsonl`: preflight, images, plan, ddl, views-narrow, canary, swap, recreate,
-rules-loaded, ddl-late, views-widen, verify, done. Only the services in the plan are recreated, one at a
+`$K2_RELEASES/deploy-log.jsonl` (a failed step with its `reason`): preflight, images, plan, ddl,
+views-narrow, canary, swap, recreate, rules-loaded, ddl-late, views-widen, verify, done. Preflight runs
+the release-time suites on a throwaway lake from the release: S20's access rows (63 today) and the
+tested-data marker; a sealed release's pass is kept under `$K2_RELEASES/verify/<id>.*.json` and not run
+again. Views lose dropped columns before the rules move (in the target's shape when the old rules admit
+it, else the old one) and take the target's shape and new columns once its rules are loaded. Only the services in the plan are recreated, one at a
 time, each waited healthy; a rules-only release recreates none. The last line is the exit code and what it
 means. `make deploy RELEASE=<tag>` compiles the tag first when no release of that id exists.
 
@@ -180,8 +186,12 @@ deploy: exit 0: done
 
 **Expected behaviour**, `release-verify` asks every part: each pointer as the VM and each container that
 mounts the root see it, the files under it against the manifest, the release's Trino canary admitted and
-the previous one refused, every container's image id against the manifest's, every health check, then the
-access suite and the catalog drift check (step S20; a visible `SKIP` until it lands). `release-status` is
+the previous one refused, every container's image id against the manifest's, every health check, the
+catalog drift check from inside the tools one-shot (`scripts/verify/catalog_drift.py --release`), the access
+suite on the live stack (`make access-verify LIVE=1`; a visible `SKIP` while the drift check reports a
+product not yet published), and S13's `scripts/verify/identity.sh` (only in `make release-verify`, not in a
+deploy's own verify step, since it writes and removes a probe line). Results land in
+`$K2_RELEASES/verify/<id>.{drift,access-live}.json`. `release-status` is
 read-only: the good release, the pointers as the host sees them, the canary lines by name, the kept
 releases and the last records.
 
@@ -232,7 +242,8 @@ message, fix the cause, run the same command again.
 | `the release changes lakekeeper, which deploy never recreates` | a capture, Redpanda, MinIO, Postgres or Lakekeeper changed | review the change; `ALLOW_STATEFUL=<service>` recreates it with the deploy |
 | `exists and differs from the release's DDL` | a table's columns or partitioning in the catalog differ from the release's | never altered by deploy: `make drop TARGET=...` after a backup ([drop-and-rebuild.md](./drop-and-rebuild.md)), then deploy |
 | `the release's backup set drops ..., which storage still holds` | a restore table or landing prefix leaves the backup set while its data is there | `make drop TARGET=...` first |
-| `this checkout's lake emitter does not write the release's SQL` | the checkout is on another commit than the tag | `git checkout <tag>` in the deploying checkout |
+| `the release fails its access suite at release time` | a row of `tests/access/expectations.yaml` fails on the throwaway lake | read `$K2_RELEASES/verify/<id>.access-release.json` ([verify-access-after-a-release.md](./verify-access-after-a-release.md)); fix the documents or the row, tag again |
+| `the release fails the tested-data marker check` | a view, its tag or its shape fails on the throwaway lake | read `$K2_RELEASES/verify/<id>.marker.json` |
 | `local build ... is not on this host` | a local image the release names was removed | compile the tag again (`make release`) |
 
 ---

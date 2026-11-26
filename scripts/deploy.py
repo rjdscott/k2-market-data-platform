@@ -17,9 +17,10 @@ first failure:
  1 preflight     the release is sealed and every file matches its manifest; the release it moves from
                  is known (the newest good one in the log); the secret files it needs exist (only
                  their sha256 goes into the log); disk and memory floors; no dropped backup entry
-                 over data storage still holds; this checkout's lake emitter writes the release's view
-                 SQL; no stateful service changes unless ALLOW_STATEFUL names it; no other deploy
-                 holds the lock (taken before anything)
+                 over data storage still holds; no stateful service changes unless ALLOW_STATEFUL
+                 names it; no other deploy holds the lock (taken before anything); then, on a
+                 throwaway lake from the release, S20's access rows and the tested-data marker (a
+                 sealed release's pass is kept by its id)
  2 images        every image of the manifest present by its digest (registry images pulled)
  3 plan          k2gen's needs from the live release (and any attempt since it) to this one, printed;
                  PLAN=1 stops here
@@ -27,7 +28,9 @@ first failure:
                  needs.ddl compared with the catalog: missing is queued, equal is satisfied, different
                  is refused (never an alter or a drop); Spark's tables created now if Spark runs
  5 views-narrow  before any rule can change, each reader view whose contract columns or SQL change loses
-                 every column the new contract drops (k2gen.emit.lake.view_update, against the tag)
+                 every column the new contract drops (k2gen.emit.lake.view_update, against the tag), in
+                 the target's shape if the old rules admit it, else the old release's shape; each
+                 release's statements come from its own k2gen, in its tools image
  6 canary        a fresh password for this release's canary k2_release_<setSha256[:12]>, its line
                  written into trino/password.db in place under the file's lock
  7 swap          every pointer moved to the release from inside the tools container (spike c);
@@ -38,7 +41,8 @@ first failure:
    ddl-late      the queued tables whose engine had to start or load the rules first (Trino's always)
    views-widen   each view up to the new contract's columns the tag holds
    verify        every pointer (in the VM and in each container that mounts the root), the files under
-                 it, each image digest and health check, the access suite and the drift check (S20)
+                 it, each image digest and health check, the drift check in tools and the live access
+                 suite (S20); `make release-verify` adds S13's identity.sh
 10 done          the other canaries' lines removed; the release is the good one
 
 A failure at step 5 or later rolls back on its own: the same steps toward the previous release from
@@ -57,7 +61,6 @@ import argparse
 import dataclasses
 import fcntl
 import getpass
-import hashlib
 import importlib.util
 import json
 import os
@@ -81,7 +84,6 @@ import yaml
 from k2gen import diff as k2diff
 from k2gen import model
 from k2gen import release as k2release
-from k2gen.emit.lake import NoCommonColumns, create_view, view_update
 from k2gen.emit.trino_etc import CATALOG_URI, S3_ENDPOINT
 from k2gen.model import Release, View
 
@@ -98,6 +100,7 @@ def _load(name: str, path: Path) -> Any:
 
 k2tools = _load("k2tools", HERE.parent / "docker" / "tools" / "k2tools.py")  # the Trino client, and its catalog types
 ps = _load("principal_secret", HERE / "principal-secret.py")  # locked(), read(), write(): in place, never renamed
+drift_lib = _load("catalog_drift", HERE / "verify" / "catalog_drift.py")  # its tokens(): one SQL comparison
 
 POINTERS = ("trino", "airflow", "spark", "prometheus", "k2-api")  # A1
 REFRESH_S = 5  # Trino rereads rules, groups and the password file this often (compiled etc, S11 and S13)
@@ -190,23 +193,27 @@ def lock(root: Path) -> Iterator[None]:
         os.close(fd)
 
 
-def secret_sums(ctx: Ctx, services: set[str]) -> dict[str, str]:
-    """sha256 of each secret file the release's services mount, and of the canary passwords; never
-    a byte of the content goes anywhere else."""
-    found: dict[str, str] = {}
+def secret_sums(ctx: Ctx, services: set[str]) -> dict[str, dict[str, Any]]:
+    """Each secret file the release's services mount, and the canary passwords, by presence, mode and
+    size: no byte of a secret, nor a digest of one, goes into the log."""
+    found: dict[str, dict[str, Any]] = {}
     for f in model.SECRET_FILES:
         if not (set(f.services) & services or f.path.startswith("canary/")):
             continue
         pattern = re.sub(r"<[a-z]+>", "*", f.path)
         for p in sorted(ctx.secrets.glob(pattern)):
             if p.is_file():
-                found[p.relative_to(ctx.secrets).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
+                st = p.stat()
+                found[p.relative_to(ctx.secrets).as_posix()] = {"mode": f"{st.st_mode & 0o777:04o}", "size": st.st_size}
     return found
 
 
-def record(ctx: Ctx, target: Release, frm: str | None, step: str, outcome: str, services: set[str]) -> None:
+def record(ctx: Ctx, target: Release, frm: str | None, step: str, outcome: str, services: set[str],
+           reason: str | None = None) -> None:
     line = {"at": now(), "release": target.id, "from": frm, "step": step, "outcome": outcome,
             "operator": ctx.operator, "secrets": secret_sums(ctx, services)}
+    if reason:
+        line["reason"] = reason[:2000]
     if errors := model.schema_errors("deploy-record", line):
         raise Failed(f"a deploy record fails its schema: {errors}")
     with open(ctx.root / model.DEPLOY_LOG, "a") as f:
@@ -415,6 +422,11 @@ def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
                   or s.manifest.files.get(model.view_sql_path(r)) != target.manifest.files.get(model.view_sql_path(r))}
     running = {c["Config"]["Labels"].get("com.docker.compose.service") for c in containers(ctx) if c["State"]["Running"]}
     order, oneshots, skipped = [], [], []
+    retired = {model.fence(x.id.split(".")[1]) for x in target.manifest.products if x.status == "retired"}
+    for r in sorted(r for r in views if r.split(".")[1] in retired):
+        skipped.append(f"view {r}: its product is retired, so its rules are gone and no reader reaches it; "
+                       "deploy does not sync it as a publisher the rules no longer name (drop it: make drop)")
+        del views[r]
     for name in sorted(recreate):
         spec = svc.get(name)
         if spec is None:
@@ -429,7 +441,9 @@ def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
             order.append(name)
     if trino_restart and "trino" in svc and "trino" not in order:
         order.append("trino")
-    order.sort(key=lambda s: s != "trino")  # the rules' reader first: verify waits on it
+    # A stateful service the operator allowed first (Trino's catalogs reach Lakekeeper on its new network
+    # at a cutover), then the rules' reader, which verify waits on, then the rest.
+    order.sort(key=lambda s: (s not in ctx.allow_stateful, s != "trino"))
     return Plan(target, sources, order, oneshots, trino_restart, sorted(ddl),
                 [views[r] for r in sorted(views)], skipped)
 
@@ -509,17 +523,30 @@ def dropped_storage(ctx: Ctx, old: Release | None, new: Release) -> list[str]:
     return held
 
 
+def secrets_health(ctx: Ctx) -> None:
+    """Before anything touches the stack: the .env file's mode (scripts/check-env.py --mode-only) and every
+    password.db line well formed and known (`make principals-status`, exit 1 on a malformed or stale one)."""
+    env = compose_env(ctx)
+    mode = run(sys.executable, str(ctx.home / "scripts/check-env.py"), "--mode-only", "--env-file", str(ctx.home / ".env"),
+               env=env, check=False)
+    if mode.returncode:
+        raise Refused(f"scripts/check-env.py --mode-only: {tail(mode, 4)}")
+    status = make_target(ctx, "principals-status", env)
+    if status.returncode:
+        raise Refused(f"make principals-status exit {status.returncode}, a malformed or stale password.db line: {tail(status, 6)}")
+
+
 def preflight(ctx: Ctx, p: Plan) -> None:
     floors(ctx)
-    if p.views and (other := emitter_matches(p.target)):
-        raise Refused(f"this checkout's lake emitter does not write the release's SQL for {', '.join(other)}; "
-                      "deploy from a checkout of the release's tag (its k2gen makes the view statements)")
+    secrets_health(ctx)
     if missing := required_secrets(ctx, p):
         raise Refused(f"secret files missing under {ctx.secrets}: {', '.join(missing)}")
     if held := dropped_storage(ctx, p.sources[0], p.target):
         raise Refused(f"the release's backup set drops {'; '.join(held)}, which storage still holds; "
                       "copy and drop it first with `make drop TARGET=...` (docs/runbooks/drop-and-rebuild.md)")
     run(*compose(ctx, p.target, "config", "-q"), env=compose_env(ctx))
+    for line in release_suite(ctx, p.target):
+        ctx.say(f"  {line}")
 
 
 def ensure_images(ctx: Ctx, rel: Release) -> None:
@@ -687,11 +714,9 @@ def tagged(ctx: Ctx, v: View) -> dict[str, str] | None:
 
 
 def tokens(text: str) -> list[str]:
-    """SQL as Trino's formatter cannot change it: it stores a view's SQL reformatted (line breaks,
-    spacing, quoting), so stored and generated SQL are compared token by token, names case-folded,
-    string literals kept as written."""
-    found = re.findall(r"'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_$]*|\d+|[^\s\w\"]", text)
-    return [t if t.startswith("'") else t.casefold() for t in found]
+    """SQL as the drift check compares it (scripts/verify/catalog_drift.tokens): Trino stores a view's
+    SQL reformatted, so stored and generated SQL are compared token by token."""
+    return list(drift_lib.tokens(text))
 
 
 def view_body(statement: str) -> str:
@@ -706,11 +731,29 @@ def stored_view(ctx: Ctx, v: View) -> str | None:
     return rows[0][0] if rows else None
 
 
-def emitter_matches(rel: Release) -> list[str]:
-    """Each view whose compiled SQL the lake emitter imported here would not write: the statements
-    deploy runs come from that emitter at run time, so it must be the one that compiled the release."""
-    return [v.relation for v in views_of(rel).values()
-            if tokens(view_body(create_view(v))) != tokens((rel.root / model.view_sql_path(v.relation)).read_text())]
+STATEMENTS = """
+import json, sys
+from k2gen.emit.lake import NoCommonColumns, view_update
+from k2gen.model import View
+a = json.loads(sys.argv[1])
+try:
+    print(json.dumps(view_update(View(**a["view"]), a["old"], a["new"])))
+except NoCommonColumns as e:
+    print(json.dumps({"none": str(e)}))
+"""
+
+
+def statements(ctx: Ctx, rel: Release, v: View, old: dict[str, str], new: dict[str, str]) -> tuple[str | None, str]:
+    """k2gen.emit.lake.view_update's two statements as `rel`'s own k2gen writes them, run in rel's tools
+    image: each release's view shape is the one its own rules can read (the guarded view of the review
+    of S12 needs the `$refs` grant only its release's rules give)."""
+    arg = json.dumps({"view": dataclasses.asdict(v), "old": old, "new": new})
+    out = run("docker", "run", "--rm", "--network", "none", "--memory", "256m", rel.manifest.images["tools"],
+              "python3", "-c", STATEMENTS, arg).stdout.strip().splitlines()[-1]
+    doc = json.loads(out)
+    if isinstance(doc, dict):
+        raise Failed(doc["none"])
+    return doc[0], doc[1]
 
 
 def sync_views(ctx: Ctx, p: Plan, phase: str) -> list[str]:
@@ -722,20 +765,34 @@ def sync_views(ctx: Ctx, p: Plan, phase: str) -> list[str]:
     lines = []
     if phase == "narrow" and p.sources == [None]:
         return ["a first deploy: no view has been published under a release yet"]
+    source = p.sources[0]
     for v in p.views:
         live = live_view(ctx, v)
         tag = tagged(ctx, v) if live else None
         if live is None or tag is None:
             lines.append(f"{v.relation}: not published yet; the wrapper creates it at its first tag")
             continue
-        try:
-            narrow, widen = view_update(v, {c: tag[c] for c in live if c in tag}, tag)
-        except NoCommonColumns as e:
-            raise Failed(str(e)) from None
+        old = {c: tag[c] for c in live if c in tag}
+        narrow, widen = statements(ctx, p.target, v, old, tag)
         statement = str(narrow if phase == "narrow" else widen)
-        if tokens(view_body(statement)) != tokens(stored_view(ctx, v) or ""):
+        stored = stored_view(ctx, v) or ""
+        if tokens(view_body(statement)) == tokens(stored):
+            pass
+        elif phase == "widen":  # the target's rules are loaded: the target's shape
             sql(ctx, v.owner, statement)
-            lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag and (phase == 'widen' or c in live)]}")
+            lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag]} (the target's shape)")
+        else:  # the source's rules still hold: the target's shape when they admit it, else the source's
+            try:
+                sql(ctx, v.owner, statement)
+                lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag and c in live]} (the target's shape)")
+            except k2tools.TrinoError as e:
+                if e.name != "PERMISSION_DENIED" or source is None:
+                    raise
+                legacy = str(statements(ctx, source, v, old, tag)[0])
+                if tokens(view_body(legacy)) != tokens(stored):
+                    sql(ctx, v.owner, legacy)
+                lines.append(f"{v.relation}: {live} -> {[c for c in v.columns if c in tag and c in live]} in the source's shape "
+                             f"(its rules refuse the target's: {str(e)[:90]}); the target's shape after its rules load")
         if phase == "widen" and (missing := [c for c in v.columns if c not in tag]):
             lines.append(f"{v.relation}: {', '.join(missing)} failing closed until republished: the contract has "
                          "them, the tested snapshot does not; SKIP reconcile: phase 002 builds the product pipeline")
@@ -745,30 +802,37 @@ def sync_views(ctx: Ctx, p: Plan, phase: str) -> list[str]:
 # --- step 6, the canary ------------------------------------------------------------------
 
 
+def password_db(ctx: Ctx, change: Any) -> list[str]:
+    """password.db rewritten to `change(users)` by principal-secret.py's own slot writer under the file's
+    lock: fixed 128-byte slots, in place, whole-file validation before and after (its write_db). Its
+    refusals (a malformed or unreadable line) are this deploy's failures, never a process exit."""
+    with ps.locked(ctx.secrets / PASSWORD_DB) as db:
+        old = ps.read(db)
+        if bad := ps.problems(old):
+            raise Failed(f"{PASSWORD_DB} has lines Trino refuses: " + "; ".join(f"line {n}: {why}" for n, _, why in bad)
+                         + " (make principals-status; docs/runbooks/create-or-rotate-a-principal.md)")
+        users = ps.entries(old)
+        want = change(dict(users))
+        try:
+            ps.write_db(db, "".join(f"{u}:{h}\n" for u, h in want.items()))
+        except SystemExit as e:
+            raise Failed(str(e)) from None
+    return sorted(set(users) - set(want))
+
+
 def canary_write(ctx: Ctx, user: str) -> None:
-    """A fresh 32-byte secret: its password file (mode 600, never mounted) first, then its bcrypt line in
-    trino/password.db, both in place under their flock, as scripts/principal-secret.py writes them."""
+    """A fresh 32-byte secret: its password file (mode 600, never mounted) first, in place under its
+    lock, then its bcrypt line in trino/password.db by the slot writer."""
     secret = secrets.token_urlsafe(32)
     with ps.locked(ctx.secrets / model.canary_password_file(user.removeprefix("k2_release_"))) as f:
         ps.write(f, secret)
-    hashed = bcrypt.hashpw(secret.encode(), bcrypt.gensalt(ps.BCRYPT_COST)).decode()
-    line = f"{user}:$2y${hashed.removeprefix('$2b$')}\n"
-    with ps.locked(ctx.secrets / PASSWORD_DB) as db:
-        lines = [x for x in ps.read(db).splitlines(keepends=True) if x.split(":", 1)[0] != user]
-        if lines and not lines[-1].endswith("\n"):
-            lines[-1] += "\n"
-        ps.write(db, "".join([*lines, line]))
+    hashed = "$2y$" + bcrypt.hashpw(secret.encode(), bcrypt.gensalt(ps.BCRYPT_COST)).decode().removeprefix("$2b$")
+    password_db(ctx, lambda users: {**{u: h for u, h in users.items() if u != user}, user: hashed})
 
 
 def canary_prune(ctx: Ctx, keep: str) -> list[str]:
     """Every other release canary's line and password file removed; the principals' lines untouched."""
-    gone = []
-    with ps.locked(ctx.secrets / PASSWORD_DB) as db:
-        lines = ps.read(db).splitlines(keepends=True)
-        kept = [x for x in lines if not (x.startswith("k2_release_") and x.split(":", 1)[0] != keep)]
-        gone = [x.split(":", 1)[0] for x in lines if x not in kept]
-        if gone:
-            ps.write(db, "".join(kept))
+    gone = password_db(ctx, lambda users: {u: h for u, h in users.items() if not (u.startswith("k2_release_") and u != keep)})
     for f in (ctx.secrets / "canary").glob("k2_release_*.password"):
         if f.name != f"{keep}.password":
             with ps.locked(f) as fd:
@@ -822,7 +886,8 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
     if previous_canary and previous_canary != canary and admitted(ctx, previous_canary):
         wrong.append(f"Trino still admits {previous_canary}: the previous release's rules are loaded")
     lines.append(f"canary {canary} admitted" + (f", {previous_canary} refused" if previous_canary and previous_canary != canary else ""))
-    lines += s20_checks(ctx, target)
+    more, bad = s20_checks(ctx, target)
+    lines, wrong = lines + more, wrong + bad
     svc = services(target)
     for c in containers(ctx):
         name = c["Config"]["Labels"].get("com.docker.compose.service")
@@ -842,23 +907,115 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
     return lines
 
 
-def s20_checks(ctx: Ctx, target: Release) -> list[str]:
-    """The access suite and the catalog drift check, step S20's, through their documented entry points."""
-    lines = []
-    mk = (ctx.home / "mk" / "access.mk").read_text() if (ctx.home / "mk" / "access.mk").exists() else ""
-    if "NOT BUILT access-verify" in mk or "access-verify:" not in mk:
-        lines.append("SKIP access-verify: built by phase 001 step S20")
+def verify_dir(ctx: Ctx) -> Path:
+    """<releases root>/verify/: the results S20's checks write beside the releases, by release id."""
+    d = ctx.root / "verify"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def release_suite(ctx: Ctx, rel: Release) -> list[str]:
+    """Release time, before anything moves, on one throwaway lake started from the release (S20, by
+    the commands mk/access.mk's `access-verify RELEASE=<dir>` runs): the release's products staged,
+    every row of tests/access/expectations.yaml, then the tested-data marker
+    (scripts/verify/tested-data-marker.sh). A release is sealed, so a pass is kept by its id under
+    verify/ and not run again."""
+    d = verify_dir(ctx)
+    access, marker = d / f"{rel.id}.access-release.json", d / f"{rel.id}.marker.json"
+    passed = [f.name for f in (access, marker) if f.exists() and json.loads(f.read_text()).get("exit") == 0]
+    if len(passed) == 2:
+        return [f"access-verify and the tested-data marker passed earlier for {rel.id} ({', '.join(passed)})"]
+    prefix, env = f"deploy-{rel.id[-12:]}", compose_env(ctx)
+    lake = ["bash", str(ctx.home / "scripts/lib/throwaway-lake.sh")]
+    work = f"/work/releases/{rel.id}"
+    try:
+        run(*lake, "up", prefix, str(rel.root), env=env)
+        state = Path(run(*lake, "state", prefix, env=env).stdout.strip())
+        run(*lake, "py", prefix, "scripts/access_verify.py", "stage", "--release", work, "--env", "/work/env.json", env=env)
+        rows = run(*lake, "py", prefix, "scripts/access_verify.py", "run", "--scope", "release", "--release", work,
+                   "--env", "/work/env.json", "--out", "/work/access-verify.json", env=env, check=False)
+        if (state / "access-verify.json").exists():
+            shutil.copy(state / "access-verify.json", access)
+        counts = json.loads(access.read_text()).get("counts") if access.exists() else None
+        if rows.returncode:
+            raise Refused(f"the release fails its access suite at release time (exit {rows.returncode}, {counts}): {tail(rows)}")
+        done = run("bash", str(ctx.home / "scripts/verify/tested-data-marker.sh"), prefix, env=env, check=False)
+    finally:
+        run(*lake, "down", prefix, env=env, check=False)
+    marker.write_text(json.dumps({"release": rel.id, "at": now(), "exit": done.returncode,
+                                  "lines": done.stdout.strip().splitlines()[-40:],
+                                  "stderr": done.stderr.strip().splitlines()[-20:]}, indent=2) + "\n")
+    if done.returncode:
+        raise Refused(f"the release fails the tested-data marker check (exit {done.returncode}): {tail(done)}")
+    return [f"access-verify at release time: {counts}",
+            f"tested-data marker: {sum(1 for x in done.stdout.splitlines() if x.startswith('PASS'))} PASS"]
+
+
+def make_target(ctx: Ctx, target: str, env: dict[str, str], **variables: str) -> subprocess.CompletedProcess[str]:
+    """`make <target> VAR=value...` in the checkout: the variables on its command line, and none of the
+    calling make's (MAKEFLAGS would carry `make deploy`'s RELEASE=<id> into it and override them)."""
+    clean = {k: v for k, v in env.items() if k not in ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES")}
+    return run("make", "-s", "-C", str(ctx.home), target, *(f"{k}={v}" for k, v in variables.items()), env=clean, check=False)
+
+
+def tail(done: subprocess.CompletedProcess[str], n: int = 6) -> str:
+    return " | ".join((done.stdout + done.stderr).strip().splitlines()[-n:])
+
+
+def drift(ctx: Ctx, target: Release) -> dict[str, Any]:
+    """S20's catalog drift check, from inside tools on the catalog's network (the catalog has no host
+    port once fenced, ADR-059 part 7): `catalog_drift.py --release <dir> --out <file>`; exit 0 clean,
+    1 drift, 2 unreachable. The script comes from this checkout, mounted read-only; k2gen from the
+    release's own tools image."""
+    script = ctx.home / "scripts" / "verify" / "catalog_drift.py"
+    result = f"{model.RELEASES_MOUNT}/verify/{target.id}.drift.json"
+    verify_dir(ctx)
+    cmd = compose(ctx, target, "run", "--rm", "--no-deps", "--pull", "never", "--user", f"{os.getuid()}:{os.getgid()}",
+                  "-v", f"{script}:/opt/k2/verify/catalog_drift.py:ro", "tools", "python3", "/opt/k2/verify/catalog_drift.py",
+                  "--release", f"{model.RELEASES_MOUNT}/{target.id}", "--out", result)
+    done = run(*cmd, env=compose_env(ctx), check=False)
+    found = ctx.root / "verify" / f"{target.id}.drift.json"
+    doc: dict[str, Any] = json.loads(found.read_text()) if found.exists() and done.returncode in (0, 1) else {}
+    return {"exit": done.returncode, "doc": doc, "text": tail(done, 12)}
+
+
+def s20_checks(ctx: Ctx, target: Release) -> tuple[list[str], list[str]]:
+    """(lines, what is wrong): the drift check, then the access suite on the live system
+    (`make access-verify LIVE=1`), its rows for every product the drift check finds published."""
+    lines, wrong = [], []
+    d = drift(ctx, target)
+    pending = [str(x) for x in d["doc"].get("pending", [])]
+    if d["exit"] == 0:
+        lines.append(f"catalog drift check clean ({len(d['doc'].get('differences', []))} differences, "
+                     f"pending {pending or 'none'}, {len(d['doc'].get('skipped', []))} skipped)")
     else:
-        run("make", "-C", str(ctx.home), "access-verify", env={**compose_env(ctx), "RELEASE": target.id})
-        lines.append("access-verify passed")
-    drift = ctx.home / "scripts" / "verify" / "catalog_drift.py"
-    if drift.exists():  # in tools: the catalog is on its own network with no host port (A8); exit 0 is clean
-        tools(ctx, target, "/opt/k2/verify/catalog_drift.py", f"{model.RELEASES_MOUNT}/{target.id}",
-              mounts=(f"{drift}:/opt/k2/verify/catalog_drift.py:ro",), entry="python3")
-        lines.append("catalog drift check clean")
+        wrong.append(f"catalog drift check exit {d['exit']}: {d['text']}")
+    if pending:
+        lines.append(f"SKIP access-verify LIVE=1: not yet published, so no live row can read it: {', '.join(pending)}; "
+                     "every row ran on a throwaway lake at release time (preflight); phase 002 publishes them")
+        return lines, wrong
+    result = verify_dir(ctx) / f"{target.id}.access-live.json"
+    env = {**compose_env(ctx), "K2_TRINO_HOST": ctx.trino.split("//")[1].rsplit(":", 1)[0], "K2_TRINO_PORT": ctx.trino.rsplit(":", 1)[1]}
+    done = make_target(ctx, "access-verify", env, LIVE="1", RELEASE=str(ctx.root / target.id), OUT=str(result))
+    counts = json.loads(result.read_text()).get("counts") if result.exists() else None
+    if done.returncode:
+        wrong.append(f"access-verify LIVE=1 exit {done.returncode} ({counts}): {tail(done)}")
     else:
-        lines.append("SKIP catalog drift check: scripts/verify/catalog_drift.py is built by phase 001 step S20")
-    return lines
+        lines.append(f"access-verify LIVE=1 passed: {counts}")
+    return lines, wrong
+
+
+def identity(ctx: Ctx) -> list[str]:
+    """S13's identity rows on the running Trino (scripts/verify/identity.sh, live): exit 0 all pass."""
+    c = container(ctx, "trino")
+    if c is None:
+        raise Failed("no trino container to check identity on")
+    network = next(iter(c["NetworkSettings"]["Networks"]))
+    env = {**compose_env(ctx), "K2_TRINO_CONTAINER": c["Name"].lstrip("/"), "K2_IDENTITY_NETWORK": network}
+    done = run("bash", str(ctx.home / "scripts/verify/identity.sh"), env=env, check=False)
+    if done.returncode:
+        raise Failed(f"identity.sh exit {done.returncode}: {tail(done, 10)}")
+    return [f"identity.sh: {sum(1 for x in done.stdout.splitlines() if x.startswith('PASS'))} PASS, exit 0"]
 
 
 # --- the sequence ------------------------------------------------------------------------
@@ -870,7 +1027,7 @@ def step(ctx: Ctx, target: Release, frm: str | None, name: str, svc: set[str], w
     try:
         out = work()
     except Exception as e:  # any failure is recorded; the caller decides refusal, failure or rollback
-        record(ctx, target, frm, name, "failed", svc)
+        record(ctx, target, frm, name, "failed", svc, f"{type(e).__name__}: {e}")
         ctx.say(f"deploy: {name} FAILED after {time.monotonic() - t0:.1f} s: {e}")
         raise
     if f"kill:{name}" in ctx.faults:
@@ -930,10 +1087,12 @@ def converge(ctx: Ctx, p: Plan, frm: str | None, prefix: str = "") -> None:
 
 def resolve(ctx: Ctx) -> tuple[Release | None, list[str]]:
     """(the live good release, the releases attempted since it)."""
-    goods, since = standing(history(ctx.root))
+    records = history(ctx.root)
+    goods, since = standing(records)
     good = goods[-1] if goods else None
-    if good is None and (ctx.root / "pointers" / "trino").is_symlink():
-        good = os.readlink(ctx.root / "pointers" / "trino").removeprefix("../")  # a root whose log was lost
+    if not records and (ctx.root / "pointers" / "trino").is_symlink():  # a root whose log was lost
+        good = os.readlink(ctx.root / "pointers" / "trino").removeprefix("../")
+    # else, with no good release, a first deploy that failed: plan again from nothing (every step converges)
     return (open_release(ctx, good) if good else None), since
 
 
@@ -1024,7 +1183,7 @@ def verify_live(ctx: Ctx) -> int:
     goods, _ = standing(history(ctx.root))
     before = next((g for g in reversed(goods) if g != good.id), None)
     previous = model.canary_user(open_release(ctx, before).manifest.set_sha256) if before else None
-    for line in verify(ctx, good, previous):
+    for line in [*verify(ctx, good, previous), *identity(ctx)]:  # identity.sh only here: it writes a probe line
         ctx.say(f"  {line}")
     ctx.say(f"release-verify: {good.id} everywhere")
     return EXIT_OK
@@ -1070,15 +1229,41 @@ def registry_ref(image: str) -> str:
     return match[0]
 
 
+def held_ref(iid: str, image: str, local: str) -> str:
+    """The ref of a running container's image: a local build as <name>:<id12>, tagged here; a registry
+    image by the digest the host recorded for its repository."""
+    if LOCAL.match(local):
+        ref = f"{local}:{iid.removeprefix('sha256:')[:12]}"
+        run("docker", "tag", iid, ref)
+        return ref
+    repo = (image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image).split("@")[0]
+    short = repo.removeprefix("docker.io/").removeprefix("library/")
+    digests = json.loads(run("docker", "image", "inspect", "--format", "{{json .RepoDigests}}", iid).stdout) or []
+    match = [d for d in digests if d.split("@")[0].removeprefix("docker.io/").removeprefix("library/") == short]
+    if not match:
+        raise Refused(f"{image}: the running image {iid[:19]} has no registry digest for {repo} on this host")
+    return match[0]
+
+
 def build_images(ctx: Ctx, tree: Path, compose_doc: dict[str, Any]) -> dict[str, str]:
     """Every service's image ref: a registry image by digest; a local build built from the tag's tree,
     without touching the tag compose gives it, and tagged <name>:<image id 12>."""
     refs: dict[str, str] = {}
     built: dict[str, str] = {}  # compose image name -> ref
     svcs = compose_doc.get("services") or {}
+    running = {c["Config"]["Labels"].get("com.docker.compose.service"): c for c in containers(ctx) if c["State"]["Running"]}
     for name, spec in sorted(svcs.items(), key=lambda kv: "build" not in kv[1]):  # builders first
         image = str(spec.get("image") or "")
         local = image.split(":")[0]
+        if not k2release.recreatable(name) and name in running:
+            # Deploy never recreates it (A1), so the release names the image it runs, not a new build
+            # or tag: a capture keeps running through a cutover, and a change to one is its own operation.
+            refs[name] = held_ref(running[name]["Image"], image, local)
+            ctx.say(f"release: {name} keeps the image it runs, {refs[name]}: deploy never recreates it")
+            if "build" not in spec and not LOCAL.match(local) and (tagged := registry_ref(image)) != refs[name]:
+                ctx.say(f"release: WARNING {name}: the tag names {tagged}, not what runs; moving it is its own "
+                        f"operation: IMAGES=<file naming it>, then ALLOW_STATEFUL={name}")
+            continue
         if "build" in spec:
             if not LOCAL.match(local):
                 raise Refused(f"{name}: a local build must be named one of {LOCAL.pattern} (manifest.schema.json)")
@@ -1133,7 +1318,10 @@ def compile_release(ctx: Ctx, tag: str, images: Path | None) -> str:
               "-e", f"K2_IMAGES={json.dumps(refs)}", refs["tools"], "sh", "-c",
               'printf %s "$K2_IMAGES" > /tmp/images.json && k2gen docset --tag "$1" --repo /repo.git --out /tmp/set && '
               'k2gen release --set /tmp/set --previous "$2" --images /tmp/images.json --out /k2/releases',
-              "sh", tag, f"{model.RELEASES_MOUNT}/{good.id}" if good else "none")
+              "sh", tag, f"{model.RELEASES_MOUNT}/{good.id}" if good else "none", check=False)
+    if out.returncode:  # the checks library's findings come first on stderr: name them, not the traceback
+        found = [x for x in out.stderr.splitlines() if x.startswith(("error ", "warning "))]
+        raise Refused(f"{tag} does not compile: " + ("; ".join(found) or tail(out, 6)))
     for line in out.stderr.strip().splitlines():
         ctx.say(f"  {line}")
     rid = out.stdout.strip().splitlines()[-1]

@@ -32,7 +32,6 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 REPO=$PWD
 UV_IMAGE=$(sed -n 's/^UV_IMAGE=//p' scripts/lib/throwaway-lake.sh)
-BCRYPT=$(grep -oE 'bcrypt==[0-9.]+' mk/principals.mk | head -1)
 USER_=${K2_IDENTITY_USER:-svc.catalog}
 URL=https://trino:8443
 
@@ -43,6 +42,8 @@ if [ "${1:-}" = --throwaway ]; then
 else
   C=${K2_TRINO_CONTAINER:-k2-trino} NET=${K2_IDENTITY_NETWORK:-k2-net} THROWAWAY=0
   SECRETS=${K2_SECRETS:-$HOME/k2-secrets}
+  # the live stack: the .env file's mode first, as every live-touching path checks it (scripts/check-env.py)
+  python3 scripts/check-env.py --mode-only || { echo "identity: .env is readable beyond its owner (scripts/check-env.py)" >&2; exit 2; }
 fi
 [[ "$USER_" == svc.* ]] || { echo "identity: K2_IDENTITY_USER must be a svc.* principal with a password file" >&2; exit 2; }
 PASSWORD_FILE=$SECRETS/principals/$USER_.password
@@ -98,10 +99,10 @@ echo "identity: $C on $NET, logged in as $USER_, $URL"
 client -e UV_PROJECT_ENVIRONMENT=/tmp/venv -e K2_TRINO_URL="$URL" -e K2_SECRETS=/k2s -e K2_IDENTITY_USER="$USER_" \
   -e K2_IDENTITY_FIXTURES=/fixtures -v "$REPO/scripts:/src/scripts:ro" -v "$REPO/platform:/src/platform:ro" -v "$SECRETS/trino:/k2s/trino" \
   -v "$SECRETS/tls/ca.pem:/k2s/tls/ca.pem:ro" -v "$PASSWORD_FILE:/k2s/principals/$USER_.password:ro" -v "$F:/fixtures:ro" \
-  -w /src "$UV_IMAGE" uv run --project /src/platform/k2gen --locked -q --with "$BCRYPT" python -B scripts/verify/identity.py \
+  -w /src "$UV_IMAGE" uv run --project /src/platform/k2gen --locked -q --with bcrypt==5.0.0 python -B scripts/verify/identity.py \
   || fails=$((fails + 1))
 
-etc=$(docker inspect -f '{{range .Args}}{{.}} {{end}}' "$C" | sed -n 's/.*--etc-dir \([^ ]*\).*/\1/p')
+etc=$(docker inspect -f '{{range .Args}}{{.}} {{end}}' "$C" | sed -n 's/.*--etc-dir[= ]\([^ ]*\).*/\1/p')
 etc=${etc:-/etc/trino}
 named=$(docker exec "$C" cat "$etc/config.properties" | grep -cxF 'internal-communication.shared-secret=${ENV:K2_TRINO_SHARED_SECRET}' || true)
 # The value never leaves the container: only the test's exit status does.

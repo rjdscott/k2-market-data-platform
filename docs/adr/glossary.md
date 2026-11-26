@@ -1327,7 +1327,7 @@ releases' files: the compose services whose definition or image differs (recreat
 Trino restart for a change of its start-up configuration, tables to create, and whether a DAG's tasks
 changed. A release that changes only what is read through a pointer needs nothing. The **deploy record**
 is one line per deploy step in `<releases root>/deploy-log.jsonl`: when, which release, from which, the
-step, its outcome, the operator, and the sha256 of each secret file it found, never the content.
+step, its outcome, the operator, and each secret file it found by mode and size, never its content nor a digest of it.
 Where: [ADR-058](ADR-058-deploy-sealed-releases-by-pointer-swap.md), `k2gen.model.NEEDS_BY_PREFIX`,
 `contracts/schema/deploy-record.schema.json`.
 

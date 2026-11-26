@@ -130,7 +130,50 @@ def tokens(sql: str) -> list[str]:
             out.append(t)
         else:
             out.append(t.lower())
+    return _flat(_canon(_nest(out))) if out.count("(") == out.count(")") else out
+
+
+# Trino stores a view's SQL with a pair of parentheses around every comparison, AND, OR and EXISTS
+# predicate (`WHERE (EXISTS (SELECT 1 ... WHERE (("name" = 'audited') AND ("type" = 'TAG'))))` for the
+# generated `WHERE EXISTS (SELECT 1 ... WHERE "name" = 'audited' AND "type" = 'TAG')`, the guarded view
+# of the review of S12). Both sides are compared after dropping, innermost first, exactly the pairs
+# whose removal cannot change a meaning: a pair that opens a group or follows WHERE, AND, OR or NOT,
+# holds no top-level comma (an IN list) and no top-level AND or OR unless it is the whole of what it
+# ends (a WHERE's predicate). A function's or a subquery's parentheses always stay.
+_OPENS_EXPRESSION = {None, "where", "and", "or", "not"}
+
+
+def _nest(toks: list[str]) -> list[Any]:
+    stack: list[list[Any]] = [[]]
+    for t in toks:
+        if t == "(":
+            stack.append([])
+        elif t == ")" and len(stack) > 1:
+            group = stack.pop()
+            stack[-1].append(group)
+        else:
+            stack[-1].append(t)
+    return stack[0]
+
+
+def _canon(items: list[Any]) -> list[Any]:
+    done = [_canon(x) if isinstance(x, list) else x for x in items]
+    out: list[Any] = []
+    for k, x in enumerate(done):
+        if isinstance(x, list):
+            prev = out[-1] if out else None
+            top = {t for t in x if isinstance(t, str)}
+            whole = k == len(done) - 1
+            if (not isinstance(prev, list) and prev in _OPENS_EXPRESSION and "," not in top
+                    and (not top & {"and", "or"} or whole)):
+                out.extend(x)
+                continue
+        out.append(x)
     return out
+
+
+def _flat(items: list[Any]) -> list[str]:
+    return [t for x in items for t in (["(", *_flat(x), ")"] if isinstance(x, list) else [x])]
 
 
 def view_state(meta: dict[str, Any]) -> dict[str, Any]:
