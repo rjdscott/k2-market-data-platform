@@ -11,7 +11,7 @@ make test          # everything: Python + Rust
 make test-python   # contract, lake-offset, wire-format, bars and the scripts' tests (needs uv)
 make test-rust     # capture unit + replay integration tests (runs in rust:1.100.0-bookworm)
 make test-trino    # Trino's etc/ starts; lake refuses every commit; only a domain's writer changes its catalog
-make test-dbt      # dbt/ on a throwaway Trino: lint, deps, parse, compile, and the project with no marts
+make test-dbt      # dbt/ with no Trino: lint, deps, parse, compile, the manifest check; the project with no marts
 make test-airflow  # inside the Airflow image: every dbt package at the version dbt/ pins
 ```
 

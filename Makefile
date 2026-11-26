@@ -99,7 +99,7 @@ test-clickhouse:  ## gold schema semantics on a throwaway clickhouse:24.3 (OHLCV
 test-trino:  ## Trino on a throwaway trinodb/trino, no stack: etc/ starts, catalog lake refuses every commit (table procedures too), only a domain's writer changes its tables with SQL statements
 	bash scripts/trino-rules-test.sh
 
-test-dbt:  ## dbt/ on a throwaway trinodb/trino, no stack: the steps scripts/dbt-test.sh lists (the old marts are archived; dbt builds return in phase 002)
+test-dbt:  ## dbt/ with no stack and no Trino: sqlfluff lint, dbt parse and compile, the manifest check (scripts/dbt-test.sh); the build on a throwaway Trino SKIPs until phase 002 brings a model
 	bash scripts/dbt-test.sh
 
 test-rust:  ## Rust capture unit tests (runs in rust:1.100.0-bookworm; no local cargo needed)
