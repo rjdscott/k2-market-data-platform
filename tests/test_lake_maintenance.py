@@ -130,3 +130,41 @@ def test_a_drift_sample_with_frames_still_passes_and_fails(maintenance):
     (bad,) = maintenance.drift_result(t, 13, {"$.data[0]": {"new_key"}})
     assert (bad["passed"], bad["observed"]) == (False, 1)
 
+
+# ── the book audits pause with the switch (ADR-050) ─────────────────────────
+
+ON = {"binance": True, "kraken": True, "coinbase": True}
+
+
+def _skipped(maintenance, switch):
+    kept, skipped = maintenance.paused_audits(maintenance.AUDITS, switch)
+    assert len(kept) + len(skipped) == len(maintenance.AUDITS)
+    return sorted((name, scope) for name, scope, _ in skipped)
+
+
+def test_every_switch_on_skips_nothing(maintenance):
+    assert _skipped(maintenance, ON) == []
+
+
+def test_one_venue_off_skips_exactly_its_book_audits_and_keeps_the_shared_gold_ones(maintenance):
+    assert _skipped(maintenance, {**ON, "kraken": False}) == sorted([
+        ("duplicate_identifiers", "lake.bronze.kraken_book"),
+        ("bronze_unparseable", "lake.bronze.kraken_book"),
+        ("bronze_schema_drift", "lake.bronze.kraken_book"),
+        ("duplicate_identifiers", "lake.silver.book_kraken"),
+        ("silver_parity", "lake.silver.book_kraken"),
+        ("kraken_checksum", "lake.silver.book_kraken"),
+    ])
+
+
+def test_every_venue_off_skips_all_eighteen_and_nothing_of_trades(maintenance):
+    skipped = _skipped(maintenance, {v: False for v in ON})
+    assert len(skipped) == 18
+    scopes = {scope for _, scope in skipped}
+    assert {"lake.gold.book_top20", "lake.gold.bbo_1s"} <= scopes
+    assert not scopes & {"lake.bronze.kraken_instrument", "lake.bronze.kraken_trade", "lake.gold.trades", "lake.raw.messages"}
+
+
+def test_two_venues_off_still_audit_the_shared_gold_tables(maintenance):
+    kept, _ = maintenance.paused_audits(maintenance.AUDITS, {**ON, "binance": False, "coinbase": False})
+    assert {"lake.gold.book_top20", "lake.gold.bbo_1s"} <= {scope for _, scope, _ in kept}

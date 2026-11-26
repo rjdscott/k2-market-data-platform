@@ -5,6 +5,7 @@ K2 v3 lake maintenance — compact, expire, audit. Runs nightly under Prefect
 
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py
     docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-only
+    docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-only --with-paused
 
 **Exit code is the product.** Any failed audit exits non-zero, which fails the
 Prefect flow run, which is what `LakeAuditFailed` alerts on. Every check also
@@ -34,6 +35,7 @@ import bars
 import books
 import bronze
 import gold
+import instruments
 import silver
 from catalog import snapshot_history
 from lock import LOCK_PATH, acquire_lock
@@ -735,9 +737,44 @@ AUDITS = (
 )
 
 
-def run_audits(spark, run_ts: datetime) -> list:
+# Each book audit's scope -> the venue whose registry `book_capture` governs it,
+# or None for the two shared gold tables, which pause only when every venue is
+# off (ADR-050). The bronze and silver book tables are exactly the ones
+# books.BOOKS reads and writes; kraken_checksum's scope is silver.book_kraken.
+BOOK_SCOPES = {
+    **{spec.source: spec.exchange for spec in books.BOOKS},
+    **{spec.table: spec.exchange for spec in books.BOOKS},
+    books.GOLD_BOOK: None,
+    books.GOLD_BBO: None,
+}
+
+
+def paused_audits(audits, switch: dict) -> tuple:
+    """`(kept, skipped)`: the audits of book tables nothing feeds while their switch is off.
+
+    Two nights after a venue stops sending books, compaction has stopped
+    rewriting its book partitions and the tables are frozen: a nightly re-run
+    proves again what it proved the night before, while filing pass rows the
+    venue quality scorecard counts. So a venue's bronze, silver and checksum book
+    audits skip while its `book_capture` is false, the shared gold ones while
+    every venue's is, and a skip files no row. `--with-paused` runs them anyway.
+    """
+    off = {venue for venue, on in switch.items() if not on}
+    kept, skipped = [], []
+    for audit in audits:
+        scope = audit[1]
+        if scope not in BOOK_SCOPES:
+            kept.append(audit)
+            continue
+        venue = BOOK_SCOPES[scope]
+        paused = venue in off if venue else off == set(switch)
+        (skipped if paused else kept).append(audit)
+    return kept, skipped
+
+
+def run_audits(spark, run_ts: datetime, audits=AUDITS) -> list:
     results = []
-    for name, scope, check in AUDITS:
+    for name, scope, check in audits:
         try:
             results += check(spark)
         except Exception as exc:  # noqa: BLE001 - a raising check is a finding
@@ -788,11 +825,23 @@ def main() -> int:
         help="remove_orphan_files horizon, hours back. Floor 24; see remove_orphans()",
     )
     parser.add_argument("--audit-only", action="store_true", help="skip compaction and expiry")
+    parser.add_argument(
+        "--with-paused",
+        action="store_true",
+        help="also run the book audits of venues whose book_capture is false (ADR-050): once after "
+        "compaction's two-night window has closed, and in the resume pre-flight",
+    )
     args = parser.parse_args()
     if args.retain_days < 7:
         parser.error("--retain-days below 7 breaks the bronze incremental read; see expire()")
     if args.orphan_hours < 24:
         parser.error("--orphan-hours below 24 is unsafe against a concurrent write; see remove_orphans()")
+
+    # The switch the Spark container's own registry copy holds, which is the one
+    # this run acts on; scripts/health.sh fails while it differs from the host's.
+    audits, skipped = (list(AUDITS), []) if args.with_paused else paused_audits(AUDITS, instruments.book_capture())
+    for name, scope, _ in skipped:
+        print(f"skipping {name} on {scope}: its venue's book_capture is false (ADR-050); --with-paused runs it")
 
     # Blocking: wait out the ingest that may be mid-commit, then keep every
     # ingest tick out of the container until this driver has exited. Held for
@@ -806,7 +855,7 @@ def main() -> int:
             compact(spark, run_ts - timedelta(days=args.days))
             expire(spark, args.retain_days)
             remove_orphans(spark, args.orphan_hours)
-        results = run_audits(spark, run_ts)
+        results = run_audits(spark, run_ts, audits)
     finally:
         spark.stop()
 
