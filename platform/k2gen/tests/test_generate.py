@@ -82,6 +82,33 @@ def test_generated_ddl_reads_back_as_the_contract_declares(tree):
     assert table.schema[0] == ddl.Column("id", "STRING NOT NULL", "Placeholder key column.")
 
 
+def test_contract_schemas_state_every_table_as_its_contract_does(tree):
+    """What the nightly contract_schema audit compares each live table with (docker/lake/contract_schema.py)."""
+    generate.scaffold(tree, "market-analytics", "example")
+    schemas = json.loads(generate.render(tree)[generate.CONTRACT_SCHEMAS])
+    contracts = {yaml.safe_load(p.read_text())["schema"][0]["physicalName"] for p in (tree / "contracts").glob(f"*/*/*{cli.SUFFIX}")}
+    assert schemas.keys() == contracts
+
+    # A table lake.sql creates: its columns in lake.sql's order, NOT NULL split out, nested types as written.
+    lake = ddl.parse(tree / cli.LAKE_SQL)
+    trades = schemas["gold.trades"]
+    assert [c["name"] for c in trades["columns"]] == list(lake["gold.trades"].columns)
+    assert trades["columns"][0] == {"name": "exchange", "type": "STRING", "required": True}
+    assert {"name": "seq_gap", "type": "BOOLEAN", "required": False} in trades["columns"]
+    assert trades["partitioning"] == ["exchange", "days(exchange_ts)"] and trades["sort"] == ["canonical_symbol", "exchange_ts"]
+    assert trades["identifier"] == ["exchange", "canonical_symbol", "trade_id"]
+    bids = next(c for c in schemas["silver.book_binance"]["columns"] if c["name"] == "bids")
+    assert bids == {"name": "bids", "type": "ARRAY<STRUCT<px: DECIMAL(28,10), qty: DECIMAL(28,10)>>", "required": True}
+
+    # A table with inline columns: its own, and no identifier fields, since its generated DDL sets none.
+    assert schemas["gold.example"] == {
+        "columns": [{"name": "id", "type": "STRING", "required": True}, {"name": "event_ts", "type": "TIMESTAMP", "required": True}],
+        "partitioning": ["days(event_ts)"],
+        "sort": ["event_ts"],
+        "identifier": [],
+    }
+
+
 def test_a_deleted_contract_removes_its_outputs(tree):
     generate.scaffold(tree, "market-analytics", "example")
     generate.generate(tree)

@@ -239,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if args.command == "generate":
         files = generate.generate(ROOT)
-        print(f"k2gen generate: {len(files)} files: {generate.RETENTION}, {generate.WAREHOUSES}, {generate.TRINO_RULES}, "
+        print(f"k2gen generate: {len(files)} files: {generate.RETENTION}, {generate.CONTRACT_SCHEMAS}, {generate.WAREHOUSES}, {generate.TRINO_RULES}, "
               f"{generate.DBT_SOURCES}, {generate.DBT_SELECTORS}, "
               f"the domain catalogs in {generate.CATALOGS} and {generate.TEST_CATALOGS}, and under {', '.join(generate.OWNED)}")
         return 0
