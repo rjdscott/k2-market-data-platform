@@ -1,0 +1,5 @@
+name: spike_runcost
+version: "0.1.0"
+profile: spike
+config-version: 2
+model-paths: ["models"]

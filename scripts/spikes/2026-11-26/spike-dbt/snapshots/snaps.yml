@@ -1,0 +1,13 @@
+snapshots:
+  - name: snap_ts
+    relation: ref('snap_src')
+    config:
+      unique_key: id
+      strategy: timestamp
+      updated_at: updated_at
+  - name: snap_check
+    relation: ref('snap_src')
+    config:
+      unique_key: id
+      strategy: check
+      check_cols: [colour]

@@ -1,0 +1,7 @@
+run=0 rc=0 wall=4.108741001 ingest_running_at_start=no Done. PASS=3 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=3
+run=1 rc=0 wall=3.664783725 ingest_running_at_start=no Done. PASS=3 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=3
+run=2 rc=0 wall=3.017914368 ingest_running_at_start=no Done. PASS=3 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=3
+run=3 rc=0 wall=4.711088985 ingest_running_at_start=no Done. PASS=3 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=3
+run=4 rc=0 wall=4.536814134 ingest_running_at_start=no Done. PASS=3 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=3
+run=5 rc=0 wall=3.341462039 ingest_running_at_start=no Done. PASS=3 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=3
+run=6 rc=0 wall=3.165432652 ingest_running_at_start=no Done. PASS=3 WARN=0 ERROR=0 SKIP=0 NO-OP=0 REUSED=0 TOTAL=3
