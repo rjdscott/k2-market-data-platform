@@ -1,0 +1,8 @@
+models:
+  - name: contracted
+    config:
+      contract: {enforced: true}
+    columns:
+      - {name: id, data_type: bigint}
+      - {name: name, data_type: varchar}
+      - {name: qty, data_type: integer}
