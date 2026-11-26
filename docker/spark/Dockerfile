@@ -31,6 +31,19 @@ RUN sed -i '/spark\.sql\.catalog\.demo/d; /spark\.sql\.defaultCatalog/d' \
       "$SPARK_HOME/conf/spark-defaults.conf" \
  && ! grep -q 'demo' "$SPARK_HOME/conf/spark-defaults.conf"
 
+# Event logs: every Spark job writes one to /home/iceberg/spark-events, in the
+# container's writable layer, and the upstream image never deletes them. The
+# five-minute ingest alone left about 13 GiB a day there (P2 audit, 2026-11-26).
+# The HistoryServer this image already runs has a cleaner; turn it on, keep two
+# days for debugging, check hourly, and compress what is kept.
+RUN printf '%s\n' \
+      'spark.eventLog.compress                true' \
+      'spark.history.fs.cleaner.enabled       true' \
+      'spark.history.fs.cleaner.maxAge        2d' \
+      'spark.history.fs.cleaner.interval      1h' \
+      >> "$SPARK_HOME/conf/spark-defaults.conf" \
+ && grep -q '^spark.history.fs.cleaner.enabled  *true$' "$SPARK_HOME/conf/spark-defaults.conf"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # JARs — baked at build time, not resolved from Maven at job runtime
 # ─────────────────────────────────────────────────────────────────────────────
