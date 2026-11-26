@@ -9,7 +9,7 @@ for illustration only ([data terms](../../README.md#what-this-is-and-data-terms)
 markers are named under each image.
 
 `make screenshots` recaptures every image and rewrites this page, with the stack up;
-`make screenshots ONLY=04-lake` redoes one. Before a release,
+`make screenshots ONLY=02-capture` redoes one. Before a release,
 `python3 scripts/screenshots/check.py --since <date>` fails on any image missing or older.
 
 ## Start here
@@ -18,9 +18,9 @@ markers are named under each image.
 
 ![K2 Pipeline Overview](../images/dashboards/01-pipeline-overview.png)
 
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.* **1** every scrape target, up or down. **2** trade records each venue's capture produced per second. **3** rows the hot tier inserts from Redpanda. **4** CPU each pipeline container uses, from cAdvisor.
+*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.* **1** every scrape target, up or down. **2** trade records each venue's capture produced per second. **3** bytes per second Redpanda accepts from the captures. **4** CPU each pipeline container uses, from cAdvisor.
 
-The page to open first. All tiles green and three moving lines say capture, the bus and the hot tier are live; the Resources row says what that costs. A line gone flat says which of the pages below to open next.
+The page to open first. All tiles green and moving lines say capture and the bus are live; the Resources row says what that costs. A line gone flat says which of the pages below to open next.
 
 Open: <http://localhost:3000/d/k2-pipeline-overview>. Leads to: [failure-recovery.md](../runbooks/failure-recovery.md).
 
@@ -48,39 +48,19 @@ Open: <http://localhost:3000/d/k2-l2-capture>. Leads to: [capture-feed-stale.md]
 
 *Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
-Every v3 topic, raw, trades and book for each venue, with its partitions and the bytes it holds. Raw is what the lake ingests. Console has no dark theme, so this one is light.
+Every v3 topic, raw, trades and book for each venue, with its partitions and the bytes it holds. Nothing consumes them while the old lake ingest is retired and ClickHouse is paused; phase 004's connector reads raw again. Console has no dark theme, so this one is light.
 
 Open: <http://localhost:8080/topics>. Leads to: [redpanda.md](../runbooks/redpanda.md).
 
-## Lake ingest and tables
-
-### K2 Lake (v3)
-
-![K2 Lake (v3)](../images/dashboards/04-lake.png)
-
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.* **1** age of the newest Kafka record in raw.messages. **2** time since the archive last committed. **3** records the last run left unread, zero when caught up. **4** Spark, MinIO, Lakekeeper and the exporter.
-
-Is the lake current: ingest lag and commit age saw-tooth under the 5-minute schedule, the backlog sits at zero, audit failures at 0. In the Resources row, each ingest is a Spark CPU spike every five minutes.
-
-Open: <http://localhost:3000/d/k2-lake>. Leads to: [lake-ingest-lag.md](../runbooks/lake-ingest-lag.md).
+## Lake
 
 ### Spark History Server
 
 *No image: the last `make screenshots` did not capture this page.*
 
-The lake's finished Spark jobs, newest first: every five-minute ingest and the nightly maintenance, each a local-mode driver started in this container by `docker exec`. Open one for its stages, which is where a failed one is read after the fact. Its event-log cleaner keeps two days. Spark's UI has no dark theme.
+The Spark container's finished jobs, newest first, each a local-mode driver started in it by `docker exec`. Open one for its stages, which is where a failed one is read after the fact. Its event-log cleaner keeps two days. No job runs while the old lake ingest is retired. Spark's UI has no dark theme.
 
-Open: <http://localhost:18080>. Leads to: [lake-recovery.md](../runbooks/lake-recovery.md).
-
-### Lakekeeper: the gold namespace
-
-![Lakekeeper: the gold namespace](../images/dashboards/06-lakekeeper-gold.png)
-
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
-
-The Iceberg REST catalog: warehouse k2, its five namespaces (raw, bronze, silver, gold, audit) and the gold tables. The red banner is accurate: the catalog runs without authentication, published on loopback only.
-
-Open: <http://localhost:18181/ui>. Leads to: [lake-recovery.md](../runbooks/lake-recovery.md).
+Open: <http://localhost:18080>. Leads to: [upgrade-a-pinned-component.md](../runbooks/upgrade-a-pinned-component.md).
 
 ### MinIO: the k2-lake bucket
 
@@ -88,41 +68,11 @@ Open: <http://localhost:18181/ui>. Leads to: [lake-recovery.md](../runbooks/lake
 
 *Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
-The object store under the lake: bucket k2-lake, its size and object count. Every Iceberg data and metadata file sits under warehouse/; the archive is kept forever, so this size only grows.
+The object store under the lake: bucket k2-lake, its size and object count. Every Iceberg data and metadata file of every warehouse sits in it. The old pipeline's tables were dropped after a verified copy (`make drop`): no live crypto data lands here until phase 004.
 
-Open: <http://localhost:9001/browser/k2-lake>. Leads to: [lake-disk-usage-high.md](../runbooks/lake-disk-usage-high.md).
+Open: <http://localhost:9001/browser/k2-lake>. Leads to: [lake-backup-and-restore.md](../runbooks/lake-backup-and-restore.md).
 
 ## Scheduling
-
-### Airflow: DAGs
-
-![Airflow: DAGs](../images/dashboards/10-airflow-dags.png)
-
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
-
-The three lake DAGs: lake_ingest every 5 minutes, lake_maintenance daily at 03:00, lake_rebuild on demand only. Each shows its last run and a strip of recent run states.
-
-Open: <http://localhost:8090/dags>. Leads to: [airflow-scheduling.md](../runbooks/airflow-scheduling.md).
-
-### Airflow: lake_ingest
-
-![Airflow: lake_ingest](../images/dashboards/11-airflow-lake-ingest.png)
-
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.* **1** the grid: one column per run, coloured by state. **2** run duration of the last ten runs. **3** failed tasks in the last 24 hours.
-
-Each 5-minute ingest run as a column in the grid, beside the duration of the last ten. A run that finds maintenance holding the writer lock exits 75 and shows as skipped, not failed.
-
-Open: <http://localhost:8090/dags/lake_ingest>. Leads to: [airflow-scheduling.md](../runbooks/airflow-scheduling.md).
-
-### Airflow: one ingest run's log
-
-![Airflow: one ingest run's log](../images/dashboards/12-airflow-task-log.png)
-
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
-
-The log of the latest successful ingest run: Spark's stage progress, then the topics it read with their schema ids. The first place to look when AirflowTaskFailed fires.
-
-Open: <http://localhost:8090/dags/lake_ingest/runs>. Leads to: [airflow-scheduling.md](../runbooks/airflow-scheduling.md).
 
 ### K2 Airflow
 
@@ -130,7 +80,7 @@ Open: <http://localhost:8090/dags/lake_ingest/runs>. Leads to: [airflow-scheduli
 
 *Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
-Run duration and lateness per DAG, task failures and skips, scheduler heartbeat and DAG parse time, from Airflow's statsd metrics. The three Airflow alerts read these series. Skips and failures read "No data" when there were none.
+Run duration and lateness per DAG, task failures and skips, scheduler heartbeat and DAG parse time, from Airflow's statsd metrics. The two Airflow alerts read these series. Until phase 002 adds the first product DAG only the heartbeat and the parse loop move; the other panels read "No data".
 
 Open: <http://localhost:3000/d/k2-airflow>. Leads to: [airflow-scheduling.md](../runbooks/airflow-scheduling.md).
 
@@ -152,7 +102,7 @@ Open: <http://localhost:9090/alerts>. Leads to: [README.md](../runbooks/README.m
 
 *Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
 
-Every scrape job and whether its last scrape succeeded. A target down here is the input CaptureDown and LakeExporterDown fire on.
+Every scrape job and whether its last scrape succeeded. A capture target down here is the input CaptureDown fires on.
 
 Open: <http://localhost:9090/targets>. Leads to: [failure-recovery.md](../runbooks/failure-recovery.md).
 

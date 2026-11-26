@@ -31,58 +31,56 @@ produced it. This skill produces the file those numbers cite:
 
 ## The measurements
 
-**Throughput per exchange**
+What runs is capture to Redpanda. The lake receives no live crypto data until phase 004
+(the old ingest is retired to `legacy/v3-lake-ingest/`) and ClickHouse is paused
+(ADR-057), so lake and ClickHouse rows read "not measured" with that reason until then.
+Every capture number comes from the capture's own metrics through Prometheus.
+
+**Throughput per exchange** (records the broker acknowledged, per second, 5 minutes)
 ```bash
-docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count()/300 AS msg_per_s, count() AS n
-   FROM k2.silver_trades WHERE timestamp > now() - INTERVAL 5 MINUTE
-   GROUP BY exchange ORDER BY exchange"
+curl -sG localhost:9090/api/v1/query --data-urlencode \
+  'query=sum by (exchange) (rate(k2_capture_records_delivered_total[5m]))' \
+  | jq -r '.data.result[] | "\(.metric.exchange)\t\(.value[1])"'
 ```
 
-**End-to-end latency p50/p95/p99, with n** — ingestion minus exchange timestamp;
-state plainly that this includes internet transit and exchange clock skew.
+**Exchange-to-receive latency p50/p95/p99, with n** (trades only; state plainly that this
+includes internet transit and exchange clock skew). Swap 0.99 for 0.50 and 0.95; n is the
+count over the same hour.
 ```bash
-docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count() AS n,
-          quantile(0.50)(dateDiff('ms', exchange_timestamp, ingestion_timestamp)) AS p50_ms,
-          quantile(0.95)(dateDiff('ms', exchange_timestamp, ingestion_timestamp)) AS p95_ms,
-          quantile(0.99)(dateDiff('ms', exchange_timestamp, ingestion_timestamp)) AS p99_ms
-   FROM k2.silver_trades WHERE timestamp > now() - INTERVAL 1 HOUR GROUP BY exchange"
+curl -sG localhost:9090/api/v1/query --data-urlencode \
+  'query=histogram_quantile(0.99, sum by (exchange, le) (rate(k2_capture_exchange_to_recv_seconds_bucket[1h])))' \
+  | jq -r '.data.result[] | "\(.metric.exchange)\t\(.value[1])"'
+curl -sG localhost:9090/api/v1/query --data-urlencode \
+  'query=sum by (exchange) (increase(k2_capture_exchange_to_recv_seconds_count[1h]))' \
+  | jq -r '.data.result[] | "\(.metric.exchange)\t\(.value[1])"'
 ```
 
-**Gaps / continuity** — sequence discontinuities and any window with zero trades
-for a normally-liquid symbol. Report the denominator, not just the count.
+**Gaps / continuity**: sequence discontinuities per venue over the window, with the
+window stated.
+```bash
+curl -sG localhost:9090/api/v1/query --data-urlencode \
+  'query=sum by (exchange) (increase(k2_capture_gaps_total[24h]))' \
+  | jq -r '.data.result[] | "\(.metric.exchange)\t\(.value[1])"'
+```
 
-**CPU / RSS per service vs compose limit** — the binding constraint of this
-project. All services, one table, with headroom against the 16 CPU / 40 GB budget.
+**CPU / RSS per service vs compose limit**: the binding constraint of this project. All
+services, one table, with headroom against the 25 CPU / 48 GiB ceiling (ADR-045) that
+`python3 scripts/check-budget.py` gates.
 ```bash
 docker stats --no-stream --format \
   "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}"
-grep -nE "cpus:|memory:" docker-compose.yml   # the limits to compare against
+python3 scripts/check-budget.py   # the declared limits to compare against
 ```
 
-**Storage per table, bytes/day and compression**
+**Storage per topic**: bytes on disk per Redpanda topic.
 ```bash
-docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT table, sum(rows) AS rows, formatReadableSize(sum(bytes_on_disk)) AS on_disk,
-          round(sum(data_uncompressed_bytes)/sum(data_compressed_bytes), 2) AS ratio
-   FROM system.parts WHERE database='k2' AND active GROUP BY table ORDER BY sum(bytes_on_disk) DESC"
+docker exec k2-redpanda rpk cluster logdirs describe --aggregate-into topic
 ```
 
-**Lake ingest lag and audit state** — the gauges the lake-metrics exporter
-derives from the Iceberg snapshot summaries, plus the latest audit rows.
-```bash
-curl -s localhost:9090/api/v1/query --data-urlencode \
-  'query=time() - k2_lake_max_kafka_ts_seconds' | jq -r '.data.result[]|"\(.metric.table) \(.value[1])"'
-docker exec k2-spark-iceberg spark-sql -e \
-  "SELECT * FROM lake.audit.checks ORDER BY checked_at DESC LIMIT 20"
-```
+**Lake and ClickHouse**: not measured until phase 004 lands a live lake product and the
+hot tier resumes; say so in the row, never carry an older file's figure forward.
 
-**Query timings** — the queries a reader would actually run (an OHLCV window,
-a symbol scan), each timed three times, median reported, and the row count.
-Run with `clickhouse-client --time`.
-
-**MTTR** — only from `docs/runbooks/failure-recovery.md`, and only
+**MTTR**: only from `docs/runbooks/failure-recovery.md`, and only
 if the failures were re-induced for this report. Otherwise cite the runbook's
 date and say it was not re-measured.
 

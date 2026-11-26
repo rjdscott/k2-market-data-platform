@@ -1,14 +1,15 @@
 # CLAUDE.md
 
 The working contract for this repo. K2 is a single-host crypto market data
-platform: Rust capture (`services/capture-rust/`) → Redpanda → a Spark batch
-ingest into an Iceberg lake on MinIO under Airflow 3 (ADR-034; the scheduler
-it replaced is archived in `legacy/prefect/`, with no rollback in the compose file),
-catalogued by Lakekeeper.
+platform: Rust capture (`services/capture-rust/`) → Redpanda. The Iceberg lake on
+MinIO, catalogued by Lakekeeper, runs with Spark and Airflow 3 beside it (ADR-034;
+the scheduler Airflow replaced is archived in `legacy/prefect/`, with no rollback in
+the compose file), but the Spark batch ingest that filled it, its DAGs and the dbt
+marts are retired to `legacy/v3-lake-ingest/` and their tables dropped: no live
+crypto data lands in the lake until phase 004, and Airflow runs no DAG until phase 002.
 Trino 484 serves SQL over the lake through a catalog that is read-only at the
-connector (ADR-035), and writes only the dbt marts, in one Lakekeeper warehouse
-per data domain generated from `contracts/domains.yaml` by `make generate`
-(ADR-044); Spark keeps every job from raw to gold.
+connector (ADR-035), and writes only in one Lakekeeper warehouse per data domain
+generated from `contracts/domains.yaml` by `make generate` (ADR-044).
 The v2 ClickHouse medallion is **gone**: the Kotlin handlers that fed it retired
 in ADR-019 and the `k2.*` database was dropped at the Phase E cutover on
 2026-08-27 — `SHOW DATABASES` lists `gold` and nothing else. Its DDL is archived,
@@ -120,14 +121,14 @@ considered before committing*.
   `/benchmark-report` enforces this.
 - **Schema changes move together or not at all**: Avro (`schemas/avro/*.avsc`)
   + ClickHouse DDL (`docker/clickhouse/ddl/10-gold-tables.sql` +
-  `20-gold-kafka.sql`) + lake DDL
-  (`docker/lake/ddl/lake.sql`) + the projections in `docker/lake/ingest.py`
+  `20-gold-kafka.sql`)
   + docs (`docs/architecture/13-schema-design.md`, `14-partitioning-strategy.md`)
   + tests, in one PR. Use `/schema-change`; a half-migrated contract fails
   silently at the ingest boundary, not at build time. `tests/test_wire_format.py`
   is that rule made executable — run it.
-  A lake table's partitioning or sort also lives in its contract under
-  `contracts/`: `make test-k2gen` fails until both move, then `make generate`.
+  A lake table's columns, partitioning and sort live in its contract under
+  `contracts/` alone (the old `lake.sql` is archived): `make test-k2gen`, then
+  `make generate`.
 - **Resource-limit changes** update the ADR-010 Outcome section *and* the
   summary comment in `docker-compose.yml`. The 25 CPU / 48 GiB ceiling at the
   bootstrap peak (ADR-045, gated by `scripts/check-budget.py`) is a stated
@@ -148,7 +149,7 @@ make test-python   # uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0
 make test-rust     # rust:1-bookworm container; no local cargo needed
 make test-clickhouse  # the gold DDL + assertions on a throwaway 24.3 server
 make test-trino    # docker/trino/etc starts; lake refuses every commit; only a domain's writer changes its catalog
-make test-dbt      # dbt/ (its own uv project): lint, compile, manifest check, build with unit tests on a throwaway Trino
+make test-dbt      # dbt/ (its own uv project): lint, parse and compile; no marts until phase 002
 ```
 
 - The v2 Kotlin tier retired to `legacy/v2-kotlin/` (ADR-019). Its tests are

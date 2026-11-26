@@ -37,46 +37,31 @@ and its logs.
 
 ## 3. Smoke queries — one per tier
 
-Allow a few minutes of trades to land first.
+Allow a few minutes of frames to land first. What runs is capture to Redpanda; the lake
+stack runs empty (the old ingest is retired to `legacy/v3-lake-ingest/`, no live crypto
+data until phase 004 of the plan) and ClickHouse is paused (ADR-057).
 
 ```bash
-# ClickHouse gold, fed straight from Redpanda: all three exchanges producing
-# (the query scripts/health.sh runs). There is no k2 database any more, only gold.
-docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange ORDER BY exchange"
-# → three rows, all non-zero
-docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count() FROM gold.book_top20 GROUP BY exchange ORDER BY exchange"
-# → a non-zero row for each venue whose book_capture is true, and no row for a venue
-#   whose switch is false (ADR-050): `grep -A3 '^book_capture:' config/instruments.yaml`.
-#   The release decision states which; `make health` step (4) checks each capture agrees.
-docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT count() FROM gold.ohlcv_live(bucket = 60) WHERE window_start > now() - INTERVAL 10 MINUTE"
-# → non-zero: candles on read over the deduplicated trades
-
-# Lake: every layer committed, through the same Spark session scripts/lake-verify.sh
-# opens. Needs the first lake-ingest-5min run to have finished (`make health` step 3).
-docker exec -i k2-spark-iceberg python3 - /home/iceberg/lake <<'PY'
-import sys
-sys.path.insert(0, sys.argv[1])
-from spark_conf import lake_session
-spark = lake_session("k2-release-check")
-try:
-    for t in ("raw.messages", "bronze.binance_trade", "bronze.kraken_trade",
-              "bronze.coinbase_market_trades", "silver.trades_binance",
-              "silver.trades_kraken", "silver.trades_coinbase", "gold.trades", "gold.ohlcv_1m"):
-        print(t, spark.sql(f"SELECT count(*) FROM lake.{t}").collect()[0][0])
-finally:
-    spark.stop()
-PY
-# → every count non-zero
-
-# Redpanda: topics and consumers
+# Capture to Redpanda: every venue delivered in the last 2 minutes, each capture healthy.
+# The lake check prints a SKIP naming phase 004, and ClickHouse's a SKIP naming ADR-057.
+make health
 docker exec k2-redpanda rpk cluster health
 docker exec k2-redpanda rpk topic list
+docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.binance --num 1
+# → one record
 
-# Airflow: the four DAGs (three lake, dbt_marts) registered, none paused
+# ClickHouse: paused behind profile hot-gold, so a plain `up` must not have started it
+docker compose ps -a --format '{{.Name}}' | grep -cx k2-clickhouse
+# → 0
+
+# Lake: the catalog answers and holds none of the old namespaces
+curl -s localhost:18181/health
+docker exec k2-trino trino --execute "SHOW SCHEMAS FROM lake"
+# → "information_schema" and "system" only
+
+# Airflow: no DAG until phase 002 adds the first product DAG
 docker exec k2-airflow-scheduler airflow dags list
+# → none listed
 
 # Prometheus: every target up
 curl -s localhost:9090/api/v1/targets \
@@ -85,22 +70,19 @@ curl -s localhost:9090/api/v1/targets \
 
 # Grafana: dashboards provisioned
 curl -su "admin:$GRAFANA_PASSWORD" localhost:3000/api/search | jq -r '.[].title'
+# → K2 Airflow, K2 Capture (v3), K2 Pipeline Overview, K2 Resources
 ```
 
 ## 4. Tests
 
 ```bash
-make test    # python (uv) + rust (docker) + clickhouse gold schema (docker) + notebook helpers (uv)
-make parity-ohlcv parity-bars   # live three-way parity at tests/parity/pinned.json (ADR-029); needs the stack from step 2
+make test    # python, rust, clickhouse gold schema, trino, dbt, k2gen, airflow (docker and uv)
+make lake-verify parity-ohlcv parity-bars   # each prints SKIP naming phase 004 and exits 0
 ```
 
-Parity cannot run in GitHub's CI (no stack there), so this is the only place it gates a
-tag. A failure prints the first differing rows; the Python reference is the arbiter.
-
-A candle run that ends `PARITY: ok (1 known gap applied, see above)` passes only if the
-release report names the applied gap: its window, cause and `audit_ref`, as the run printed
-them. With a gap listed, the three-way guarantee holds for every minute of the pinned day
-except the listed one, and the report says so (`tests/parity/README.md`, "Known gaps").
+The live parity gates read the old lake tables, so they are stood down until phase 004's
+first live product re-pins them. A SKIP is not a pass: the release report lists each
+stood-down gate and the phase that restores it.
 
 ## 5. Grep sweep — forbidden strings in published docs
 

@@ -80,9 +80,11 @@ V3_PREFIX="${K2_V3_PREFIX:-market.crypto.v3}"
 # ── v3 retention ────────────────────────────────────────────────────────────
 #
 # raw.*  48 h  = 172800000 ms. The raw topics are a replay buffer, not the
-#        archive — Spark lands them in Iceberg `raw.messages` where they are
-#        never expired (ADR-018). 48 h is "how long can the batch job be broken
-#        before data is actually lost", i.e. a weekend plus a morning.
+#        archive. The retired ingest landed them in the Iceberg raw archive
+#        (ADR-018; legacy/v3-lake-ingest/); until phase 004's connector reads
+#        them again, nothing older than this window survives. 48 h is "how long
+#        can the batch job be broken before data is actually lost", i.e. a
+#        weekend plus a morning.
 #
 # retention.bytes is PER PARTITION and is the hard floor on disk. Arithmetic:
 #
@@ -113,17 +115,18 @@ V3_PREFIX="${K2_V3_PREFIX:-market.crypto.v3}"
 #
 # 512 MiB STANDS, deliberately. The bus is a buffer sized for the 5-minute
 # ingest cadence — 7 h is ~84 cycles of slack — and it is NOT the archive: the
-# lake is (ADR-021), and raw.messages is never expired. A lake that cannot keep
+# lake was (ADR-021), and its retired raw archive was never expired. A lake that cannot keep
 # up is fixed in the lake, which is why the ingest's per-run bound is now
 # 600,000 offsets/partition (200,000, ~3.6x the 2026-08-27 arrival rate, until
 # 2026-11-25, when kraken-0 reached ~199,000 per cycle). Revisit these two
 # numbers when k2_lake_ingest_backlog_offsets for any topic exceeds one hour of
 # that topic's arrival rate for two consecutive cycles
-# (docs/runbooks/lake-ingest-lag.md §3) — and then by raising the disk slice or
-# cutting the raw partition count, never by a silently shorter retention.
+# (docs/runbooks/lake-ingest-lag.md §3; metric and runbook since retired), and
+# then by raising the disk slice or cutting the raw partition count, never by a
+# silently shorter retention.
 #
 # What it cost to learn: 1,168,954 records evicted unread from that partition on
-# 2026-08-26, recorded as an offset_gap row in lake.audit.checks.
+# 2026-08-26, recorded as an offset_gap row in the retired lake audit table.
 #
 # RAISED 2026-11-25 to 2 GiB per partition (2147483648). The "512 MiB stands"
 # reasoning above held while every stall was shorter than the window. On
@@ -131,8 +134,8 @@ V3_PREFIX="${K2_V3_PREFIX:-market.crypto.v3}"
 # of raw.kraken lost 6,351,400 records. The catch-up is bounded at 200,000
 # offsets per partition per run, so while the queued maintenance runs held the
 # writer lock for another hour the unread head sat at the log start and a
-# further 1,386,717 records were evicted. Both are offset_gap rows in
-# lake.audit.checks.
+# further 1,386,717 records were evicted. Both were offset_gap rows in the
+# retired lake audit table.
 #
 # Why 2 GiB: it is four times the window on the busiest partition, and it is
 # bounded. Measured on the data volume the same day with the 512 MiB cap in

@@ -8,13 +8,16 @@
 --
 -- Two feeds, one contract. The Avro `market.crypto.v3.trades.*` / `book.*`
 -- topics give freshness (the last minutes, via the Kafka engines); the lake's
--- gold tables give history and correctness (a pull, docs/runbooks/
--- clickhouse-rebuild-from-lake.md, when the lake gold layer lands). The lake
--- wins on conflict: a reload from it is the source of truth, the topics are
--- the head start. ReplacingMergeTree makes the overlap idempotent.
+-- gold tables gave history and correctness, by a pull. That lake side is
+-- retired with the old ingest (legacy/v3-lake-ingest/, where its runbook
+-- clickhouse-rebuild-from-lake.md is archived), and the tier is paused
+-- (ADR-057): a resume works from the topics alone, within their 7 days. The
+-- lake wins on conflict: a reload from it is the source of truth, the topics
+-- are the head start. ReplacingMergeTree makes the overlap idempotent.
 --
 -- No TTL, anywhere. Gold is served indefinitely from here (ADR-026 supersedes
--- ADR-025's 7-day clause); growth is watched by ClickHouseDiskHigh.
+-- ADR-025's 7-day clause); growth was watched by ClickHouseDiskHigh, removed
+-- with the pause (ADR-057).
 --
 -- Numbers are the wire's fixed point: `*_e8` Int64 at 1e-8 (ADR-020), exact and
 -- cheap to store; `price` / `qty` are ALIAS columns that produce the exact
@@ -23,7 +26,7 @@
 -- on purpose: a Decimal(38,20) product overflows on a SHIB-sized quantity and
 -- a quote-volume sum is not a price.
 --
--- v2's `k2` database is frozen beside this one until the cutover drops it.
+-- v2's `k2` database was dropped at the Phase E cutover, 2026-08-27.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 CREATE DATABASE IF NOT EXISTS gold;
@@ -33,11 +36,11 @@ CREATE DATABASE IF NOT EXISTS gold;
 --
 -- ORDER BY is the logical trade: (exchange, canonical_symbol, exchange_ts,
 -- trade_id). A venue replay (Coinbase re-sends recent trades on subscribe and
--- inside a live subscription — docker/lake/ddl/lake.sql) is the same key with
+-- inside a live subscription, legacy/v3-lake-ingest/lake/ddl/lake.sql) is the same key with
 -- a later recv_ts_ns, and ReplacingMergeTree collapses it. The version column
 -- `first_seen` is inverted receive time, so the row that survives a merge is
 -- the EARLIEST delivery — the one whose lineage names the frame that actually
--- carried the trade first, as the lake's gold layer will also decide.
+-- carried the trade first, as the retired lake gold layer also decided.
 -- ReplacingMergeTree keeps the max version and needs an unsigned type, hence
 -- the subtraction from UInt64 max rather than a negative Int64.
 --
@@ -115,10 +118,11 @@ SETTINGS index_granularity = 8192;
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- gold.feed_errors — every Kafka record the feeds could not decode, with its
--- bytes. The served tier's counterpart of lake.audit.checks'
--- unresolvable_schema_id: the feed skips the record (kafka_handle_error_mode =
+-- bytes. The served tier's counterpart of the retired lake audit table's
+-- unresolvable_schema_id rows: the feed skips the record (kafka_handle_error_mode =
 -- 'stream' in 20-gold-kafka.sql) and this is where "what did it skip" is
--- answered. ClickHouseKafkaRowsRejected alerts on the count.
+-- answered. ClickHouseKafkaRowsRejected alerted on the count; it was removed
+-- with the pause (ADR-057).
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS gold.feed_errors
 (
@@ -142,14 +146,15 @@ ORDER BY (topic, partition, offset);
 -- happened to survive the merge — a wrong number that looked right. A view
 -- over FINAL sees the whole minute every time. open/close are decided by
 -- (exchange_ts, recv_ts_ns, toUInt64OrZero(trade_id)) — the same total order
--- the lake's gold.py uses, where the third component is spelled `trade_seq`
+-- the retired lake's gold.py used, where the third component is spelled `trade_seq`
 -- (the trade id read as a number) and carries the same value, so the two
 -- compare at tolerance zero; the id breaks the tie for trades one frame
--- delivered at one instant. docs/operations/data-catalog.md § Candle and bar
--- total order states it once for both engines. scripts/clickhouse-schema-test.sh
+-- delivered at one instant. The archived data catalog (legacy/v3-lake-ingest/
+-- docs/operations/data-catalog.md, § Candle and bar total order) states it once
+-- for both engines. scripts/clickhouse-schema-test.sh
 -- inserts a minute in two blocks and asserts the open comes from the earlier
--- one. The materialised `gold.ohlcv_*` tables land with the lake's gold layer
--- and are loaded from it, never computed here.
+-- one. The materialised `gold.ohlcv_*` tables were loaded from the retired
+-- lake gold layer, never computed here.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE VIEW IF NOT EXISTS gold.ohlcv_live AS
 SELECT
@@ -173,13 +178,13 @@ FROM gold.trades FINAL
 GROUP BY exchange, canonical_symbol, window_start;
 
 -- ───────────────────────────────────────────────────────────────────────────
--- gold.ohlcv_{1m,5m,1h,1d} — the candles the LAKE computed (lake.gold.ohlcv_*,
--- docker/lake/gold.py), loaded by pull (docs/runbooks/clickhouse-rebuild-from-
--- lake.md). Never computed here: gold.ohlcv_live above is for the head, these
--- are the record.
+-- gold.ohlcv_{1m,5m,1h,1d}: the candles the LAKE computed (the retired
+-- lake gold.ohlcv_*, legacy/v3-lake-ingest/lake/gold.py), loaded by pull (the
+-- archived runbook clickhouse-rebuild-from-lake.md). Never computed here:
+-- gold.ohlcv_live above is for the head, these are the record.
 --
 -- The version is `computed_at`, the wall clock of the Spark run that produced
--- the row (docker/lake/gold.py stamps it on every candle), NOT
+-- the row (the archived gold.py stamped it on every candle), NOT
 -- `src_snapshot_id`: an Iceberg snapshot id is a random 64-bit number, so a
 -- ReplacingMergeTree keyed on it keeps an arbitrary one of the two rows on a
 -- re-pull rather than the newer one. `src_snapshot_id` stays as a plain
@@ -287,7 +292,7 @@ PARTITION BY toYYYYMM(window_start)
 ORDER BY (exchange, canonical_symbol, window_start);
 
 -- ───────────────────────────────────────────────────────────────────────────
--- gold.bars — the lake's event bars (lake.gold.bars, docker/lake/bars.py):
+-- gold.bars: the lake's event bars (the retired lake gold.bars, docker/lake/bars.py):
 -- tick, volume and dollar at config/bars.yaml's one canonical threshold per
 -- symbol. Loaded by pull like the candles, never computed here; a re-pull of a
 -- recomputed day replaces that day's rows, versioned on `computed_at` for the
@@ -299,7 +304,7 @@ ORDER BY (exchange, canonical_symbol, window_start);
 -- the high `bar_seq` end of every day stay, with their old `computed_at`, and
 -- nothing collapses them because no new row shares their key. After a
 -- threshold change the reload is `TRUNCATE TABLE gold.bars` then re-pull the
--- whole table, not an incremental pull (docs/runbooks/
+-- whole table, not an incremental pull (the archived runbook
 -- clickhouse-rebuild-from-lake.md §3).
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS gold.bars
@@ -333,16 +338,18 @@ PARTITION BY toYYYYMM(day)
 ORDER BY (exchange, canonical_symbol, bar_kind, day, bar_seq);
 
 -- ───────────────────────────────────────────────────────────────────────────
--- gold.bbo_1s — the lake's per-second BBO (lake.gold.bbo_1s, projected from
--- lake.gold.book_top20 which is replayed from every venue frame). Loaded by
+-- gold.bbo_1s: the lake's per-second BBO (the retired lake gold.bbo_1s,
+-- projected from its gold.book_top20, retired too, replayed from every venue
+-- frame). Loaded by
 -- pull like the candles; gold.bbo_live below is the same arithmetic on the
 -- topic-fed book_top20 for the head.
 --
 -- Still versioned on `src_snapshot_id`, unlike the candles and bars above:
--- lake.gold.bbo_1s carries no `computed_at` (docker/lake/books.py projects it
--- straight from gold.book_top20), so there is no monotone column to switch to.
--- A re-pull of a recomputed second therefore keeps an arbitrary one of the two
--- rows. Revisit when lake.gold.bbo_1s gains a computed_at.
+-- the retired lake gold.bbo_1s carried no `computed_at` (docker/lake/books.py
+-- projects it straight from gold.book_top20, retired), so there is no monotone
+-- column to switch to. A re-pull of a recomputed second therefore keeps an
+-- arbitrary one of the two rows. Revisit when the hot tier resumes from a lake
+-- product whose BBO carries a computed_at.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS gold.bbo_1s
 (
@@ -380,8 +387,8 @@ ORDER BY (exchange, canonical_symbol, second);
 -- `second + INTERVAL 1 SECOND <= exchange_ts`. Joining on `second <=
 -- exchange_ts` reads a quote from up to a second in the trade's future and
 -- overstates how many prints traded through the book
--- (notebooks/03_asof_trades_book.ipynb). docs/operations/data-catalog.md
--- § The `+1 SECOND` rule.
+-- (the archived legacy/v3-lake-ingest/notebooks/03_asof_trades_book.ipynb, and
+-- its data catalog's § The `+1 SECOND` rule).
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE VIEW IF NOT EXISTS gold.bbo_live AS
 SELECT
