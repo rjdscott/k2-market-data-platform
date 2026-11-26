@@ -3,7 +3,8 @@ CLI, and step (1)'s check that every long-running service is running. The whole
 script runs against fakes on PATH: `git` points it at a scratch checkout,
 `docker` answers the CLI the way Airflow 3.3.2 does (a run whose only task
 skipped is `success`; the task says `skipped`) and compose the way Compose v2
-does, and `curl` gives Prometheus a fresh commit."""
+does, and `curl` gives Prometheus a fresh commit. Step (4), the backup's age,
+reads a STATUS.json each test writes."""
 
 import json
 import os
@@ -98,6 +99,32 @@ def test_long_running_service_not_running(tmp_path, running, config, verdict):
     assert rc == (1 if verdict.startswith("FAIL") else 0), line
 
 
+# Step (4): SKIP where `make backup-install` never ran; once the timer is there,
+# the age of the last success in STATUS.json (scripts/backup-lake.sh) decides.
+@pytest.mark.parametrize("timer, status, verdict", [
+    (False, None, "SKIP (not set up"),
+    (True, None, "FAIL (the timer is installed and no backup"),
+    (True, {"status": "ok", "last_success_utc": 3}, "PASS"),
+    (True, {"status": "ok", "last_success_utc": 27}, "FAIL (last successful backup 27h ago"),
+    (True, {"status": "failed", "error": "disk full", "last_success_utc": 24}, "WARN (the last run failed: disk full;"),
+    (True, {"status": "failed", "error": "disk full", "last_success_utc": None}, "FAIL (the timer is installed"),
+])
+def test_backup(tmp_path, timer, status, verdict):
+    if timer:
+        (tmp_path / ".config/systemd/user").mkdir(parents=True)
+        (tmp_path / ".config/systemd/user/k2-backup.timer").write_text("")
+    if status is not None:
+        hours = status["last_success_utc"]
+        if hours is not None:
+            status["last_success_utc"] = (datetime.now(timezone.utc) - timedelta(hours=hours, minutes=5)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+        (tmp_path / "k2-backup").mkdir()
+        (tmp_path / "k2-backup/STATUS.json").write_text(json.dumps(status))
+    line, rc = run_health(tmp_path, prefix="(4) backup: ", RUNS=runs("success"), TASK="success", MAINT="[]")
+    assert line.split(": ", 1)[1].startswith(verdict), line
+    assert rc == (1 if verdict.startswith("FAIL") else 0), line
+
+
 def run_health(tmp_path, prefix="(3) last lake_ingest run: ", **env):
     top = tmp_path / "repo"
     (top / "scripts/chaos").mkdir(parents=True)
@@ -111,7 +138,9 @@ def run_health(tmp_path, prefix="(3) last lake_ingest run: ", **env):
         (bin_ / tool).chmod(0o755)
     out = subprocess.run(
         ["bash", str(ROOT / "scripts/health.sh")], capture_output=True, text=True, timeout=60,
-        env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "TOP": str(top),
+        # HOME too: the backup check reads ~/.config/systemd/user, and this host's own must not leak in.
+        env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "TOP": str(top), "HOME": str(tmp_path),
+             "K2_BACKUP_DIR": str(tmp_path / "k2-backup"),
              "K2_HEALTH_WAIT": "0", "RUNNING": "redpanda prometheus", "CONFIG": CONFIG, **env},
     )
     (line,) = [ln for ln in out.stdout.splitlines() if ln.startswith(prefix)]
