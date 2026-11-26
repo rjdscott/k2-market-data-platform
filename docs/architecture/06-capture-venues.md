@@ -57,6 +57,16 @@ research subject.
 | Trade id | venue `t` | venue `trade_id` (WS v1 published none and the Kotlin tier synthesised one; WS v2's integer id is part of why the tier moved, [ADR-019](../adr/ADR-019-rust-capture-tier.md)) | venue `trade_id`; the subscribe-time snapshot carries history, excluded from the latency histogram |
 | `native` / `canonical` | `BTCUSDT` / `BTC/USDT` | `BTC/USD` / `BTC/USD` | `BTC-USD` / `BTC/USD` |
 | Connection lifetime | venue closes at 24 h; capture reconnects at 23 h (`reason="scheduled"`) | none published (`main.rs:123-130`: only Binance gets a max age) | none published (`main.rs:123-130`: only Binance gets a max age) |
+| With `book_capture: false` ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md), all three today) | `<sym>@trade` only | `instrument`, `trade`; heartbeats still arrive | `market_trades`, `heartbeats` |
+| Watched at 60 s with books off | `pong`: the Pong answering a client Ping sent every 15 s, books on or off | `heartbeat` | `heartbeats` |
+
+With books off the continuity column narrows. Binance's only sequence was `lastUpdateId`, and
+Kraken's only check the book checksum, so neither has a capture-side gap signal left; their
+trades are still checked in silver, where trade ids are sequential per symbol (`seq_gap`,
+`missing_before`). Coinbase keeps its rule unchanged: `sequence_num` is connection-wide, so a gap
+is now a lost trade or heartbeat frame, and the reconnect may still help, because the
+`market_trades` subscribe resends recent trades. That refill is not verified; the rollout checks
+it ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md) section 1).
 
 ### Kraken
 

@@ -18,6 +18,16 @@ layouts and commands, without notice. `3.0.0` is reserved for the end of
   source, verbatim landing in `k2-landing` by conditional PUT, write-audit-publish on an
   Iceberg branch, and `bronze.source_files`; no source declared yet (ADR-036, Proposed).
 
+### Changed
+
+- Order-book capture is paused on every venue while the platform is built; trades are
+  unaffected and the nine order-book tables keep their history (#232; ADR-050).
+
+### Fixed
+
+- The ingest no longer fails when a batch holds no frame for a venue, which a paused
+  order book produces on every run.
+
 ## [3.0.0-alpha.1] - 2026-11-26
 
 First numbered version. It covers the work of phases P0 to P3 of the plan above, on top of the

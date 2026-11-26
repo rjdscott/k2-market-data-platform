@@ -15,8 +15,8 @@ Owner `capture-team`, source-aligned. What the venues sent, archived verbatim an
 |---|---|---|---|
 | [lake-audit](market-capture/lake-audit.md) | draft | running | `audit.checks` |
 | [raw-archive](market-capture/raw-archive.md) | draft | running | `raw.messages` |
-| [venue-books](market-capture/venue-books.md) | draft | running | `silver.book_binance`, `silver.book_kraken`, `silver.book_coinbase`, `gold.book_state` |
-| [venue-frames](market-capture/venue-frames.md) | draft | running | `bronze.binance_trade`, `bronze.binance_depth20`, `bronze.kraken_trade`, `bronze.kraken_book`, `bronze.kraken_instrument`, `bronze.coinbase_market_trades`, `bronze.coinbase_level2` |
+| [venue-books](market-capture/venue-books.md) | draft | paused | `silver.book_binance`, `silver.book_kraken`, `silver.book_coinbase`, `gold.book_state` |
+| [venue-frames](market-capture/venue-frames.md) | draft | 3 of 7 tables paused | `bronze.binance_trade`, `bronze.binance_depth20`, `bronze.kraken_trade`, `bronze.kraken_book`, `bronze.kraken_instrument`, `bronze.coinbase_market_trades`, `bronze.coinbase_level2` |
 | [venue-trades](market-capture/venue-trades.md) | draft | running | `silver.trades_binance`, `silver.trades_kraken`, `silver.trades_coinbase` |
 
 ## reference-data
@@ -39,7 +39,7 @@ Owner `analytics-team`, consumer-aligned. Cross-venue products a researcher read
 
 | Product | Lifecycle | Status | Outputs and marts |
 |---|---|---|---|
-| [book-snapshots](market-analytics/book-snapshots.md) | draft | running | `gold.book_top20`, `gold.bbo_1s` |
+| [book-snapshots](market-analytics/book-snapshots.md) | draft | paused | `gold.book_top20`, `gold.bbo_1s` |
 | [candles](market-analytics/candles.md) | draft | running | `gold.ohlcv_1m`, `gold.ohlcv_5m`, `gold.ohlcv_1h`, `gold.ohlcv_1d`, `market_analytics.candles.ohlcv_1m` |
 | [canonical-trades](market-analytics/canonical-trades.md) | draft | running | `gold.trades` |
 | [delayed-candles](market-analytics/delayed-candles.md) | draft | running | `market_analytics.delayed_candles.ohlcv_delayed_20m` |

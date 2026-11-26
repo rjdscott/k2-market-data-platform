@@ -54,3 +54,6 @@ customProperties:
     value: ["raw.messages"]
   - property: schedule
     value: "1-59/5 * * * *"
+  # No new data while the venue book_capture switch is off; the rows stay readable (ADR-050).
+  - property: paused
+    value: {since: "2026-11-26", adr: ADR-050}

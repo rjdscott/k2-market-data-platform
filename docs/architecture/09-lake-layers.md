@@ -48,6 +48,11 @@ warehouse, and nothing in the lake reads them back, so the four layers stay the 
 
 ## How it works
 
+The book tables of every layer (bronze and silver per venue, `gold.book_top20`, `gold.bbo_1s`,
+`gold.book_state`) receive nothing new while order-book capture is paused, and keep every row
+they had; the ingest still commits an empty snapshot to each every run, which keeps each step's
+resume point inside the 7-day expiry ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)).
+
 ```mermaid
 flowchart TB
   RAW[("raw.messages<br/>what arrived, byte for byte<br/>never expired")]

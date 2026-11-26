@@ -21,6 +21,11 @@ below because you need it to read the alert.
 
 ---
 
+While order-book capture is paused ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)), Binance and Kraken have no
+capture-side sequence left (Binance's was `lastUpdateId` on `depth20`; Kraken never had one), so
+these alerts can fire for Coinbase only, whose connection-wide `sequence_num` also numbers its
+trade and heartbeat frames. A Coinbase gap then means a lost trade or heartbeat frame.
+
 ## 1. Sequence gap
 
 **Symptom**, usually none that is visible. Data keeps flowing, dashboards look

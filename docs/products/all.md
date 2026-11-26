@@ -10,11 +10,11 @@ its inputs, classification, retention and columns; [the index](README.md) has ea
 |---|---|---|---|---|---|
 | [market-capture](README.md#market-capture) | [lake-audit](market-capture/lake-audit.md) | `capture-team` | draft | running | `audit.checks` |
 | [market-capture](README.md#market-capture) | [raw-archive](market-capture/raw-archive.md) | `capture-team` | draft | running | `raw.messages` |
-| [market-capture](README.md#market-capture) | [venue-books](market-capture/venue-books.md) | `capture-team` | draft | running | `silver.book_binance`, `silver.book_kraken`, `silver.book_coinbase`, `gold.book_state` |
-| [market-capture](README.md#market-capture) | [venue-frames](market-capture/venue-frames.md) | `capture-team` | draft | running | `bronze.binance_trade`, `bronze.binance_depth20`, `bronze.kraken_trade`, `bronze.kraken_book`, `bronze.kraken_instrument`, `bronze.coinbase_market_trades`, `bronze.coinbase_level2` |
+| [market-capture](README.md#market-capture) | [venue-books](market-capture/venue-books.md) | `capture-team` | draft | paused | `silver.book_binance`, `silver.book_kraken`, `silver.book_coinbase`, `gold.book_state` |
+| [market-capture](README.md#market-capture) | [venue-frames](market-capture/venue-frames.md) | `capture-team` | draft | 3 of 7 tables paused | `bronze.binance_trade`, `bronze.binance_depth20`, `bronze.kraken_trade`, `bronze.kraken_book`, `bronze.kraken_instrument`, `bronze.coinbase_market_trades`, `bronze.coinbase_level2` |
 | [market-capture](README.md#market-capture) | [venue-trades](market-capture/venue-trades.md) | `capture-team` | draft | running | `silver.trades_binance`, `silver.trades_kraken`, `silver.trades_coinbase` |
 | [reference-data](README.md#reference-data) | [security-master](reference-data/security-master.md) | `reference-data-team` | draft | running | `gold.dim_instrument`, `gold.dim_venue` |
-| [market-analytics](README.md#market-analytics) | [book-snapshots](market-analytics/book-snapshots.md) | `analytics-team` | draft | running | `gold.book_top20`, `gold.bbo_1s` |
+| [market-analytics](README.md#market-analytics) | [book-snapshots](market-analytics/book-snapshots.md) | `analytics-team` | draft | paused | `gold.book_top20`, `gold.bbo_1s` |
 | [market-analytics](README.md#market-analytics) | [candles](market-analytics/candles.md) | `analytics-team` | draft | running | `gold.ohlcv_1m`, `gold.ohlcv_5m`, `gold.ohlcv_1h`, `gold.ohlcv_1d`, `market_analytics.candles.ohlcv_1m` |
 | [market-analytics](README.md#market-analytics) | [canonical-trades](market-analytics/canonical-trades.md) | `analytics-team` | draft | running | `gold.trades` |
 | [market-analytics](README.md#market-analytics) | [delayed-candles](market-analytics/delayed-candles.md) | `analytics-team` | draft | running | `market_analytics.delayed_candles.ohlcv_delayed_20m` |
