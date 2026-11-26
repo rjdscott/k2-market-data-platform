@@ -15,7 +15,7 @@ that is down or failing to produce, see [capture-down.md](./capture-down.md).
 
 | # | Failure | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | One stream silent while the process stays healthy | < 3 min | recovery **8–10 s** to fresh frames after unpause, alert clear a further 18–22 s (2026-08-26, `capture-pause.sh` on coinbase and binance). Time-to-**detection** via this alert: not yet verified, the injection scores `CaptureDown` |
+| 1 | One stream silent while the process stays healthy | < 3 min | recovery **8–10 s** to fresh frames after unpause, alert clear a further 18–22 s (2026-08-26, `capture-pause.sh` on coinbase and binance). Time-to-**detection** via this alert: not yet verified by an injection, which scores `CaptureDown`; live, on 2026-11-26 it fired **3 min 34 s** after Coinbase's last frame (incident below) |
 | 2 | Exchange-to-receive p99 elevated | investigate, no restart | not yet verified, no injection exists; Phase F's noisy-neighbour experiment is the trigger |
 
 ---
@@ -93,7 +93,10 @@ not a stale feed.
 
 **Expected behaviour**, the WebSocket client sends and answers heartbeats and
 reconnects on its own backoff, so a dropped connection self-heals inside the 2-minute
-window and this alert does not fire. It fires for the case a liveness check cannot
+window and this alert does not fire. Every step of that reconnect gives up after 10 s
+(`ws::IO_TIMEOUT`), and a process in which no session has delivered a frame for 600 s
+exits so Docker restarts it (`K2_STALL_EXIT_SECONDS`); before both, a reconnect could
+stall in silence, see the 2026-11-26 incident below. It fires for the case a liveness check cannot
 see: the socket is open, the process is fine, and the **subscription** is dead, the
 exchange accepted a `subscribe` and stopped delivering, or a silent half-open TCP
 connection is holding the read side open with nothing arriving.
@@ -282,11 +285,114 @@ of this metric the platform can move on its own, and it is Phase F's.
 
 ## Failure modes / incidents
 
-_None yet. Appended with their date as they happen; never overwritten._
+Appended with their date as they happen; never overwritten.
+
+### 2026-11-26, Coinbase: a reconnect stalled inside `connect`, 80 minutes silent
+
+**Symptom.** `CaptureFeedStale` fired for `coinbase/heartbeats` at 17:01:15Z (pending
+from 16:59:15Z) and for `coinbase/market_trades` at 17:05:15Z, and stayed firing. The
+container stayed `Up` with the same PID and kept answering scrapes; Docker marked it
+`unhealthy` and restarted nothing, because `restart: unless-stopped` acts on the process
+exiting, not on its health. The healthcheck said
+`stale: heartbeats 4803.5s (limit 60s), market_trades 4803.3s (limit 300s)`. The log
+ended on a reconnect and then said nothing for 80 minutes:
+
+```text
+a continuous stream passed its silence bound, reconnecting stream="heartbeats" silent_s=60 limit_s=60
+reconnecting wait=500ms
+capture session ended error=connecting to wss://advanced-trade-ws.coinbase.com ... failed to lookup address information: Name or service not known
+reconnecting wait=1s
+capture session ended error=connecting to wss://advanced-trade-ws.coinbase.com ... failed to lookup address information: Name or service not known
+reconnecting wait=2s
+```
+
+The trigger was outside the process: Docker networks were being created and removed on
+the host by an unrelated experiment. All three captures stopped receiving at 16:57:41Z.
+Kraken and Binance logged the same DNS failures, then connected at 16:58:47Z to
+sessions that delivered nothing for another 60 s, and were clean from 16:59:48Z. Their
+watchdog could recycle those sessions because they were past `connect`; Coinbase's
+third attempt was inside it.
+
+**How to tell it from a quiet market.** A quiet market silences `market_trades` and
+nothing else: `heartbeats` (Kraken `heartbeat`) runs at 1 Hz whatever the market does,
+so a stale heartbeat is the connection, never the market. Then the log: a capture that
+is reconnecting writes a line at least once per backoff wait (30 s at most) plus the
+10 s connect bound. One whose last line is `reconnecting wait=...` with nothing after
+it for minutes is stuck between those two lines.
+
+```bash
+docker exec k2-capture-coinbase /k2-capture healthcheck; echo "exit=$?"
+docker logs --tail 5 k2-capture-coinbase 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+```
+
+**Recovery used**, at 18:17:59Z:
+
+```bash
+docker compose up -d --force-recreate --no-deps capture-coinbase
+```
+
+The new container logged `connected` at 18:18:02Z, its gauges were fresh at the next
+scrape (18:18:15Z), and the healthcheck read `ok: heartbeats is the stalest, 0.2s behind`.
+
+**Measured outage: 80 min 21 s**, no Coinbase frame from 16:57:41Z to 18:18:02Z. The
+watchdog tripped at 16:58:41Z, 60 s after the last frame; the alert fired 3 min 34 s
+after it; the remaining 77 minutes were the wait for a person. The last frame is the
+gauge's value just before the recreate, and the firing window is the alert's own series:
+
+```bash
+curl -s --get localhost:9090/api/v1/query \
+  --data-urlencode 'query=k2_capture_last_message_ts_seconds{exchange="coinbase"}' \
+  --data-urlencode 'time=2026-11-26T18:17:50Z' | jq -r '.data.result[] | "\(.metric.stream) \(.value[1] | tonumber | todate)"'
+# market_trades 2026-11-26T16:57:41Z
+# heartbeats 2026-11-26T16:57:41Z
+
+curl -s --get localhost:9090/api/v1/query_range \
+  --data-urlencode 'query=ALERTS{alertname="CaptureFeedStale",exchange="coinbase",alertstate="firing"}' \
+  --data-urlencode 'start=2026-11-26T16:55:00Z' --data-urlencode 'end=2026-11-26T18:25:00Z' --data-urlencode 'step=15s' | \
+  jq -r '.data.result[] | "\(.metric.stream) firing \(.values[0][0] | todate) to \(.values[-1][0] | todate)"'
+# heartbeats firing 2026-11-26T17:01:15Z to 2026-11-26T18:18:00Z
+# market_trades firing 2026-11-26T17:05:15Z to 2026-11-26T18:18:00Z
+```
+
+**What was lost.** Every Coinbase frame for the window: its trades and every raw frame,
+`market.crypto.v3.{raw,trades}.coinbase` (the book was not being captured,
+`book_capture: false`). The capture is the origin and the venue does not replay, so
+nothing can refill it. Lab data, before the 3.0.0 gate.
+
+**Root cause in the code.** `Feed::connect` (`services/capture-rust/src/ws.rs`)
+awaited `connect_async_with_config`, which resolves DNS, connects TCP, runs the TLS
+handshake and the HTTP upgrade, with no timeout. The session watchdog exists only
+inside `session` (`main.rs`) once `connect` has returned, and the reconnect loop logs
+only when `session` returns, so a `connect` that never returns is silent. The kernel
+does not end it: a SYN gives up after about 127 s and unacknowledged data after about
+15 minutes, but a socket whose bytes were acknowledged and never answered has nothing in
+flight and waits for ever (no keepalive is set). It was not a blocked runtime: the
+metrics exporter runs on the same single-threaded runtime and answered the healthcheck
+throughout. The test `a_peer_that_accepts_and_never_answers_is_abandoned_at_the_bound`
+(`ws.rs`) reproduces it with a listener that accepts and never answers, over `ws` and
+`wss`, and fails on the unbounded code.
+
+**What the fix changes.**
+
+- Every await between "reconnecting" and the first frame is bounded: connect, send,
+  ping and close each give up after 10 s (`ws::IO_TIMEOUT`) with
+  `capture session ended error=connecting to wss://...: timed out after 10s`, and the
+  loop backs off and tries again. This incident would have been a few bounded retries,
+  each one logged, until the path came back (Kraken and Binance were clean from
+  16:59:48Z), not 80 minutes.
+- The last resort: when no session has delivered a frame for 600 s
+  (`K2_STALL_EXIT_SECONDS`, twice the longest silence bound), the process logs
+  `no session has delivered a frame within the stall bound; exiting so the restart
+  policy starts a fresh process` and exits with code 3, and `restart: unless-stopped`
+  brings up a fresh one, about 1.5 s blind (the 1.4 s from start to `connected` above,
+  plus Docker's 100 ms restart delay). A process alive and silent for an hour can no
+  longer exist. `docker inspect k2-capture-coinbase -f 'restarts={{.RestartCount}}'`
+  counts how often it fired, and the line survives the restart in `docker logs`.
 
 ---
 
-**Last verified:** 2026-08-26 (`make chaos`). Recovery times are measured, from
+**Last verified:** 2026-08-26 (`make chaos`); the 2026-11-26 incident's commands were
+run against the live capture tier on 2026-11-26. Recovery times are measured, from
 [`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv);
 commands marked ✅ were run against the running capture tier the same day. The detection
 time for `CaptureFeedStale` itself is still unmeasured, re-stamp when a venue-side

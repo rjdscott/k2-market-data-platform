@@ -27,6 +27,25 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_with_conf
 /// without letting a runaway frame exhaust a 256 MB container.
 const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
+/// The bound on every network await in this module that the session watchdog
+/// does not already cover: the connect (DNS on tokio's blocking pool, TCP, the
+/// TLS handshake, the HTTP 101 upgrade), a send, a ping, the close handshake.
+///
+/// None of those had one, and on 2026-11-26 the Coinbase capture sat inside
+/// `connect` for 80 minutes with no log line: the watchdog only exists once a
+/// session is connected, and the reconnect loop only logs when `connect`
+/// returns. The kernel does not rescue it: a SYN gives up after ~127 s
+/// (`tcp_syn_retries=6`) and unacknowledged data after ~15 min
+/// (`tcp_retries2=15`), but a socket whose bytes were acknowledged and never
+/// answered has nothing in flight and waits for ever (no keepalive is set).
+///
+/// 10 s is ~7x the 1.3 s between `schema registry warm` and `connected` in the
+/// recreated container's log that day, and leaves room for glibc to retry a
+/// lost DNS query once (its timeout is 5 s).
+/// A healthy send completes as soon as the bytes are in the kernel buffer, so
+/// one that takes 10 s means the peer has stopped reading.
+pub const IO_TIMEOUT: Duration = Duration::from_secs(10);
+
 type Stream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// One frame, stamped on arrival.
@@ -59,9 +78,15 @@ impl Feed {
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_MESSAGE_BYTES))
             .max_frame_size(Some(MAX_MESSAGE_BYTES));
-        let (stream, _response) = connect_async_with_config(url, Some(config), false)
-            .await
-            .with_context(|| format!("connecting to {url}"))?;
+        // ponytail: a timed-out DNS lookup leaves its blocking-pool thread
+        // inside getaddrinfo until that returns; one per attempt at most, and
+        // the stall exit in main.rs ends the process long before tokio's
+        // 512-thread pool limit.
+        let (stream, _response) = bounded(
+            &format!("connecting to {url}"),
+            connect_async_with_config(url, Some(config), false),
+        )
+        .await?;
         Ok(Self {
             stream,
             last_liveness_ns: None,
@@ -104,19 +129,21 @@ impl Feed {
     }
 
     pub async fn send(&mut self, text: &str) -> Result<()> {
-        self.stream
-            .send(Message::text(text.to_string()))
-            .await
-            .context("sending a websocket frame")
+        bounded(
+            "sending a websocket frame",
+            self.stream.send(Message::text(text.to_string())),
+        )
+        .await
     }
 
     /// A WebSocket Ping, the protocol's own liveness probe: the peer must
     /// answer with a Pong (RFC 6455 5.5.2). An empty payload; no market data.
     pub async fn ping(&mut self) -> Result<()> {
-        self.stream
-            .send(Message::Ping(Default::default()))
-            .await
-            .context("sending a websocket ping")
+        bounded(
+            "sending a websocket ping",
+            self.stream.send(Message::Ping(Default::default())),
+        )
+        .await
     }
 
     /// When the newest Ping or Pong arrived, if one has since the last call.
@@ -127,7 +154,19 @@ impl Feed {
     /// Best-effort close handshake. A failure here is not worth reporting: we
     /// are on the way out and the socket is about to be dropped regardless.
     pub async fn close(mut self) {
-        let _ = self.stream.close(None).await;
+        let _ = bounded("closing", self.stream.close(None)).await;
+    }
+}
+
+/// `io`, or an error naming `what` once it has taken longer than `IO_TIMEOUT`.
+/// The error goes back up to `run`, which logs it and takes the backoff path.
+async fn bounded<T, E>(what: &str, io: impl Future<Output = Result<T, E>>) -> Result<T>
+where
+    anyhow::Error: From<E>,
+{
+    match tokio::time::timeout(IO_TIMEOUT, io).await {
+        Ok(done) => done.map_err(anyhow::Error::from).context(what.to_string()),
+        Err(_) => bail!("{what}: timed out after {}s", IO_TIMEOUT.as_secs()),
     }
 }
 
@@ -224,6 +263,56 @@ mod tests {
         assert!(!is_liveness(&Message::text("{}")));
         assert!(!is_liveness(&Message::Binary(Default::default())));
         assert!(!is_liveness(&Message::Close(None)));
+    }
+
+    /// The 2026-11-26 Coinbase hang, reproduced: a peer that accepts the TCP
+    /// connection, takes our bytes and never answers. Over `ws` that is the
+    /// HTTP upgrade, over `wss` the TLS handshake; either left `Feed::connect`
+    /// pending for ever and the reconnect loop silent. On tokio's paused
+    /// clock: without the bound the hour below elapses at once and the test
+    /// fails, with it `connect` errors at exactly `IO_TIMEOUT`.
+    #[tokio::test(start_paused = true)]
+    async fn a_peer_that_accepts_and_never_answers_is_abandoned_at_the_bound() {
+        use std::io::Read;
+        for scheme in ["ws", "wss"] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("{scheme}://{}", listener.local_addr().unwrap());
+            let (first_bytes, received) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 512];
+                let n = socket.read(&mut buf).unwrap();
+                first_bytes.send(buf[..n].to_vec()).unwrap();
+                // Silent, socket open, until the client gives up.
+                let _ = socket.read_to_end(&mut Vec::new());
+            });
+
+            let started = tokio::time::Instant::now();
+            let hour = Duration::from_secs(3600);
+            let e = match tokio::time::timeout(hour, Feed::connect(&url)).await {
+                Ok(Err(e)) => e,
+                Ok(Ok(_)) => panic!("{scheme}: a peer that never answered completed a handshake"),
+                Err(_) => panic!(
+                    "{scheme}: Feed::connect still pending after an hour, the 2026-11-26 hang"
+                ),
+            };
+            let waited = started.elapsed();
+            assert!(
+                waited >= IO_TIMEOUT && waited < IO_TIMEOUT + Duration::from_secs(1),
+                "{scheme}: gave up after {waited:?}"
+            );
+            assert!(
+                format!("{e:#}").contains("timed out after 10s"),
+                "{scheme}: {e:#}"
+            );
+
+            // The stall is the peer's answer, not our connect: it had our bytes.
+            let sent = received.recv_timeout(Duration::from_secs(5)).unwrap();
+            match scheme {
+                "ws" => assert!(sent.starts_with(b"GET / HTTP/1.1"), "{sent:?}"),
+                _ => assert_eq!(sent.first(), Some(&0x16), "a TLS handshake record"),
+            }
+        }
     }
 
     #[test]

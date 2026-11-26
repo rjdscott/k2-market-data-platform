@@ -71,6 +71,7 @@ Read the exit code before restarting anything:
 | `137` | OOM-killed | Go to [capture-checksum-failure.md §2](./capture-checksum-failure.md#2-book-depth-degraded) for the Coinbase book memory bound, then raise the limit in `docker-compose.yml` |
 | `101` | Rust panic, the message is the last log line | Do not restart into a loop; the panic will repeat |
 | `1` | Startup failure, usually config, registry or broker | Step 4 |
+| `3` | The stall rule: no session delivered a frame for `K2_STALL_EXIT_SECONDS` (600 s), and the line before the exit says so. Docker restarts it at once, so `docker inspect` shows a running container, `exit=0` and a higher `restarts=`; the line survives in `docker logs` | Nothing to restart. The `capture session ended` lines before it name what the reconnects were failing on; see [capture-feed-stale.md](./capture-feed-stale.md#failure-modes--incidents), 2026-11-26 |
 
 ```bash
 # 4. Startup dependencies, in the order the process needs them
