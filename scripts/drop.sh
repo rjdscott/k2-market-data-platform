@@ -17,7 +17,8 @@
 #   3. mc mirror them to $K2_BACKUP_DIR/drop/<UTC date>/<target>/, and copy every
 #      object version of a versioned bucket to <target>.versions/<key>/<version id>;
 #   4. compare object count and bytes, MinIO against the copy, then list MinIO
-#      again: it must not have changed since the copy began;
+#      again: no key, size or etag may have changed since the copy began (an
+#      overwrite of the same size changes only the etag);
 #   5. drop: each table and view through the catalog with purge, then the
 #      namespace; or `mc rb --force` for a bucket; then wait until the catalog no
 #      longer has it and no object is left.
@@ -174,7 +175,9 @@ def buckets(c):
         print(w["storage-profile"]["bucket"])
 
 def entries(raw, versions):
-    """mc ls --json lines -> {path in the copy: size}. Any error line fails the run."""
+    """mc ls --json lines -> {path in the copy: (size, etag)}. Any error line fails the run.
+    The etag is what tells a same-size overwrite apart; the copy on disk has none, so it
+    is compared by count and bytes, and the etag only listing against listing."""
     out = {}
     with open(raw) as f:
         for line in f:
@@ -185,7 +188,9 @@ def entries(raw, versions):
                 fail(f"listing failed: {json.dumps(d.get('error', d))[:300]}")
             if d.get("type") != "file" or (versions and d.get("isDeleteMarker")):
                 continue
-            out[f"{d['key']}/{d['versionId']}" if versions else d["key"]] = d["size"]
+            if not d.get("etag"):   # without it a same-size overwrite passes unseen: fail closed
+                fail(f"listing has no etag for {d.get('key')}")
+            out[f"{d['key']}/{d['versionId']}" if versions else d["key"]] = (d["size"], d["etag"])
     return out
 
 cmd, *a = sys.argv[1:]
@@ -195,9 +200,9 @@ elif cmd == "buckets":
     buckets(*a)
 elif cmd == "count":            # count <listing> <versions 0|1>: objects and bytes
     e = entries(a[0], a[1] == "1")
-    print(len(e), sum(e.values()))
+    print(len(e), sum(s for s, _ in e.values()))
 elif cmd == "list":             # list <listing> <versions 0|1>: the dry run's listing
-    for k, s in sorted(entries(a[0], a[1] == "1").items()):
+    for k, (s, _) in sorted(entries(a[0], a[1] == "1").items()):
         print(f"   {s:>14}  {k}")
 elif cmd == "keys":             # keys <listing>: key NUL version id NUL, one pair per object version
     for k in sorted(entries(a[0], True)):
@@ -206,8 +211,8 @@ elif cmd == "keys":             # keys <listing>: key NUL version id NUL, one pa
 elif cmd == "compare":          # compare <listing> <versions 0|1> <copy dir>: objects and bytes, each side
     e = entries(a[0], a[1] == "1")
     have = {k: os.path.getsize(os.path.join(a[2], k)) for k in e if os.path.isfile(os.path.join(a[2], k))}
-    print(len(e), sum(e.values()), len(have), sum(have.values()))
-elif cmd == "same":             # same <listing> <listing> <versions 0|1>: exit 1 if they differ
+    print(len(e), sum(s for s, _ in e.values()), len(have), sum(have.values()))
+elif cmd == "same":             # same <listing> <listing> <versions 0|1>: exit 1 if any key, size or etag differs
     sys.exit(0 if entries(a[0], a[2] == "1") == entries(a[1], a[2] == "1") else 1)
 elif cmd == "has":              # has <listing> <key>
     sys.exit(0 if a[1] in entries(a[0], False) else 1)
