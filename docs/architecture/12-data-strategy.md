@@ -85,7 +85,7 @@ One table in a domain warehouse was history, not a mart: `dq.dbt_test_results`, 
 domain's writer appended its dbt test results on every run. It was never rebuilt and no row was
 deleted ([ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md)) until the retirement
 dropped it with the marts, after the backup. Which products exist, and who owns each:
-[products/all.md](../products/all.md).
+products/all.md.
 
 ## Serving: ClickHouse holds gold, indefinitely
 

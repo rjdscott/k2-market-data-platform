@@ -669,7 +669,7 @@ lake table its marts read. `dbt build --selector market_analytics`, run as
 `dbt_market_analytics`, therefore builds and tests exactly what that writer may write, and
 Airflow rendered one task group per selector in the retired `dbt_marts` DAG. There are none
 today (`selectors: []`).
-Where: [`dbt/selectors.yml`](../../dbt/selectors.yml); [`dbt/README.md`](../../dbt/README.md).
+Where: [`dbt/selectors.yml`](../../platform/k2gen/k2gen/emit/dbt.py); [`dbt/README.md`](../../dbt/README.md).
 
 ### Data test
 

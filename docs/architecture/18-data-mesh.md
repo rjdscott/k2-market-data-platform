@@ -84,7 +84,7 @@ declares as external inputs (`config/instruments.yaml`, `config/bars.yaml`) are 
 `fx-reference` was declared with its owner and no product; its first, `ecb-fx-rates`, is phase
 002 of the platform plan. The dotted edge was not a contract input: every domain's dbt runs
 recorded their tests in their own catalog, and `quality-results` read those tables as platform
-plumbing (below). The generated [product index](../products/README.md) has a page per product,
+plumbing (below). The generated product index has a page per product,
 none today.
 
 ## The governance domain
@@ -226,7 +226,7 @@ them and `make test` includes it.
 - [ADR-032](../adr/ADR-032-odcs-contracts-and-k2gen.md), the contracts and the generator
 - [ADR-033](../adr/ADR-033-data-mesh-four-domains.md), the four domains and their owners;
   [ADR-046](../adr/ADR-046-governance-domain-and-quality-results.md), the fifth, governance
-- [Product index](../products/README.md), generated: a page per product
+- Product index, generated: a page per product
 - [Golden path](../development/golden-path.md), adding a product
 - [`contracts/schema/README.md`](../../contracts/schema/README.md), where each K2 field sits in an ODCS contract
 - [09-lake-layers.md](09-lake-layers.md), [13-schema-design.md](13-schema-design.md), [14-partitioning-strategy.md](14-partitioning-strategy.md), the tables the retired products were made of

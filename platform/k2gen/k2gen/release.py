@@ -6,8 +6,8 @@ compose file. The checks library runs first, on the set and the previous release
 made: compiling never depends on `k2gen check` having been run, and nothing skips it. Every file
 is made in memory first: documents/ (the set, as docset.write writes it: each document at its
 path and provenance.json), provenance.json, model.RELEASE_COMPOSE (the compose file, byte for
-byte) and every emitter's files through k2gen.emit.run (a stub is skipped
-with a line on stderr until S23; two emitters writing one path is an error). Every emitted file
+byte) and every emitter's files through k2gen.emit.run (a stub emitter, or two emitters writing
+one path, is an error). Every emitted file
 with a schema (model.SCHEMAS) is validated against it, then manifest.json, whose `files` hash
 every other file and whose `needs` follow model.need_of against `previous`. Only then is
 <out_root>/.<id>.tmp/ written, made read-only and renamed to <out_root>/<id>/ in one step.

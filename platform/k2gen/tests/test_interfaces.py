@@ -611,10 +611,12 @@ def _emitter(name: str, out: dict[str, str] | None) -> SimpleNamespace:
     return SimpleNamespace(__name__=f"k2gen.emit.{name}", emit=emit_)
 
 
-def test_emit_run_skips_a_stub_aloud_and_merges_the_rest(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setattr(emit, "modules", lambda: [_emitter("a", {"compiled/a.json": "1"}), _emitter("b", None), _emitter("c", {"compiled/c/x": "2"})])
+def test_emit_run_merges_every_emitter_and_refuses_a_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(emit, "modules", lambda: [_emitter("a", {"compiled/a.json": "1"}), _emitter("c", {"compiled/c/x": "2"})])
     assert emit.run(None) == {"compiled/a.json": "1", "compiled/c/x": "2"}  # type: ignore[arg-type]
-    assert "SKIP emitter b: a stub until step S99" in capsys.readouterr().err
+    monkeypatch.setattr(emit, "modules", lambda: [_emitter("a", {"compiled/a.json": "1"}), _emitter("b", None)])
+    with pytest.raises(ValueError, match=r"emitter b is a stub \(step S99\)"):
+        emit.run(None)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(("first", "second", "why"), [("compiled/x", "compiled/x", "emitted by both"), ("compiled/x", "manifest.json", "not a path under compiled/"),
@@ -625,9 +627,9 @@ def test_emit_run_refuses_a_shared_or_stray_path(monkeypatch: pytest.MonkeyPatch
         emit.run(None)  # type: ignore[arg-type]
 
 
-def test_cli_lists_the_spine_commands_and_the_old_ones() -> None:
+def test_cli_lists_the_spine_commands_only() -> None:
     sub = next(a for a in cli.parser()._actions if a.dest == "command")
-    assert sorted(sub.choices) == ["check", "diff", "docset", "generate", "new", "release", "validate"]
+    assert sorted(sub.choices) == ["check", "diff", "docset", "release"]  # validate, generate, new: deleted in S23
 
 
 def test_cli_spine_commands_reach_their_modules(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
