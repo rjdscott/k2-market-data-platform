@@ -73,6 +73,10 @@ Redpanda.
 
 ### Fixed
 
+- Spark no longer shows the storage key in its job and history pages or keeps it in its event
+  logs: the redaction pattern now covers the key names the lake catalog uses.
+- A disk alert exists again: `DockerDiskUsageHigh` and `DockerDiskUsageCritical` read the
+  volumes' disk from Redpanda, replacing the two rules that retired with the lake exporter.
 - `make test` and `make gates` no longer rebuild the image tag the running Airflow services
   start from.
 - Spark event logs are compressed and deleted after two days; they grew without bound in
