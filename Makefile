@@ -72,10 +72,12 @@ test-python:  ## Contract, parity, lake-offset and wire-format unit tests (needs
 # mounts it; the container has no network and no metadata database, so cosmos's
 # dbt ls cache, an Airflow Variable, is off. Nothing here reaches the stack. The
 # build is a cache hit after the first; CI's docker job runs the same tests in
-# the image it just built. AIRFLOW_IMAGE=k2-airflow:<other tag> tests a branch
-# without retagging the image the running stack was started from.
-AIRFLOW_IMAGE ?= k2-airflow:3.3.2
-test-airflow:  ## DAG structure, exit 75 to skipped, params, the kill path, and dbt_marts as cosmos renders it, inside k2-airflow:3.3.2 (no stack needed)
+# the image it just built. The tests build their own tag, k2-airflow:test: the
+# stack's services start from k2-airflow:3.3.2, and building that tag here (from
+# whatever branch or worktree runs the tests) silently replaced the image the
+# next recreate of an Airflow service would start from (P2 audit, 2026-11-26).
+AIRFLOW_IMAGE ?= k2-airflow:test
+test-airflow:  ## DAG structure, exit 75 to skipped, params, the kill path, and dbt_marts as cosmos renders it, inside a k2-airflow:test build (no stack needed)
 	docker build -q -f docker/airflow/Dockerfile -t $(AIRFLOW_IMAGE) . >/dev/null
 	docker run --rm --network none -e AIRFLOW__LOGGING__LOGGING_LEVEL=WARNING -e AIRFLOW__COSMOS__ENABLE_CACHE_DBT_LS=False \
 	  -v "$(CURDIR)":/repo:ro -v "$(CURDIR)/dbt":/opt/k2/dbt:ro $(AIRFLOW_IMAGE) \
