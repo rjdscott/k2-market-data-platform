@@ -577,3 +577,64 @@ code; all are adopted, three with a correction:
 - `services/capture-rust/src/main.rs` (`CONTINUOUS`, the sampler), `src/ws.rs` (ping and pong),
   `src/metrics.rs` (`zero`), `src/exchanges/` (subscriptions, Coinbase `check_sequence`);
   `docker/lake/books.py`, `bronze.py`, `gold.py`, `maintenance.py`.
+
+---
+
+## Outcome (2026-11)
+
+**The book tables were dropped with the old pipeline, after a copy.**
+[ADR-056](ADR-056-unified-data-product-platform.md), Accepted on 2026-11-26, replaces the single
+lake pipeline this ADR paused part of, and lets the stored book data go after a backup (its
+Consequences). On 2026-11-26 UTC, in Wave 3 of plan phase 000
+([`000-clear-the-ground.md`](../plans/2026-11-26-unified-product-platform/000-clear-the-ground.md)),
+`make drop` copied every table of the old pipeline out of MinIO (the object store that holds the
+lake's files) to `~/k2-backup/drop/2026-11-26/` on the host, compared each copy with MinIO by
+object count and bytes, and only then dropped the table through Lakekeeper (the catalog). The book
+tables went with the rest: the three bronze book tables, `silver.book_binance`,
+`silver.book_coinbase`, `silver.book_kraken`, and `gold.book_top20`, `gold.bbo_1s` and
+`gold.book_state`. Stage 2e, the step that wrote them, is archived with the ingest in
+`legacy/v3-lake-ingest/`, whose README holds the retirement record. Section 4 was never built:
+the archived lake DDL has no `book_capture` column, and the venue dimension it would have changed
+was dropped with the old gold layer, as ADR-056's table of amended clauses says for this ADR.
+
+**The `--with-paused` audit this ADR owed was not run, and will not be.** Section 6 owed one run
+of the book audits by hand, with `maintenance.py --with-paused`, after compaction's two-night
+window had closed, so the frozen book tables would be audited in their final form. `maintenance.py`
+was the old pipeline's nightly job (compaction, snapshot expiry, the audits); it is archived, and
+every table it would audit is dropped. No nightly maintenance ran with the switch off at all: the
+last one, `scheduled__2026-11-26T03:00:00+00:00`, finished at 03:44:30 UTC, before the first venue
+paused at 05:26:08 UTC. Not running it is acceptable for three reasons. Until the `v3.0.0` tag the
+platform is a lab whose data may be dropped after a backup (`CLAUDE.md`, "Where this is going").
+ADR-056 decided to let this data go, and the plan review struck the audit for that reason
+([`FULL-PLAN-REVIEW.md`](../research/2026-11-26-unified-platform-architecture/FULL-PLAN-REVIEW.md),
+section 2: "the owed `maintenance.py --with-paused` audit (book data is let go)"). And nothing the
+audit would have read is lost: the copy holds the book tables as they last were and the audit
+table with every row the old audits filed, so a restore
+([`drop-and-rebuild.md`](../runbooks/drop-and-rebuild.md), section 3) brings back both. The copy is
+on the same disk as the stack, so it is a copy for a lab, not a backup against disk loss.
+
+**The pause window's record now exists only in the copy.** Section 6 recorded the window with
+operator rows: rows a person writes into the audit table with `job = 'operator'` to record an event
+no check can see. On 2026-11-26 at 06:28 UTC six rows of check `book_capture_paused` were written,
+open-ended (`passed = false`, observed 0), one pair per venue: first three whose scope was
+malformed (`book/<venue> <time>/Z..`, a space where the slash belongs and the `Z` after a stray
+slash), then three correct ones (`book/<venue>/<time>Z..`) whose detail says each supersedes the
+malformed row of the same check. The windows open at 05:26:08 UTC for Binance, 05:55:37 for
+Coinbase and 06:11:45 for Kraken, the receive time of each venue's last book frame. By the owner's
+decision the malformed rows were left as they were (the audit table is append-only, and the newest
+row per venue is the record), and all six went with the audit table when it was dropped. They are
+in its copy, `~/k2-backup/drop/2026-11-26/k2.audit/checks/`, read there through the table's Iceberg
+metadata on 2026-11-26. No closing row was written, and none can be: the table is gone, so the
+windows stay open in the record.
+
+**Book capture stays paused.** `config/instruments.yaml` keeps `book_capture: false` for all three
+venues, and the switch and its gauge `k2_capture_book_capture` stay live. Neither plan resumes book
+capture. The first phase that touches the book products, phase 001 of the plan to release
+([`001-widen-crypto.md`](../plans/2026-11-26-unified-product-platform-to-release/001-widen-crypto.md),
+"widen crypto"), declares `venue-books` paused in the new product format with nothing running, and
+retires `book-snapshots`, to be re-proposed if book capture resumes; the `paused` marks of section 5
+were on the old-format contracts and are archived with them. Section 7's switch-back cannot run as
+written: its pre-flight audits kept tables, and its checks read stage 2e, both now retired. This
+ADR's "Revisit when" stands: the `3.0.0` release tag (now the release gate, phase 005 of the plan to
+release, where P7 was), the 2027-02-26 date review, and any work that needs book rows newer than the
+pause.
