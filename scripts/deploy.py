@@ -923,7 +923,8 @@ def release_suite(ctx: Ctx, rel: Release) -> list[str]:
     finally:
         run(*lake, "down", prefix, env=env, check=False)
     marker.write_text(json.dumps({"release": rel.id, "at": now(), "exit": done.returncode,
-                                  "lines": done.stdout.strip().splitlines()[-40:]}, indent=2) + "\n")
+                                  "lines": done.stdout.strip().splitlines()[-40:],
+                                  "stderr": done.stderr.strip().splitlines()[-20:]}, indent=2) + "\n")
     if done.returncode:
         raise Refused(f"the release fails the tested-data marker check (exit {done.returncode}): {tail(done)}")
     return [f"access-verify at release time: {counts}",
