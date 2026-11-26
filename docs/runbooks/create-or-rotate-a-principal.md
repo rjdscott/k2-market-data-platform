@@ -1,12 +1,12 @@
 # Runbook: Create or rotate a principal's password or API key
 
 Use this to give a declared principal a Trino password or a k2-api key, to rotate one that is
-lost, leaked or due, and to see who has which. Declaring a principal is a pull request to
+lost, leaked or due, to remove the credentials of one no longer declared (section 5), and to see
+who has which. Declaring a principal is a pull request to
 [`contracts/access/principals.yaml`](../../contracts/access/principals.yaml), and its role on a
 product a pull request to that product's `grants.yaml`; neither file ever holds a credential or
 a hash of one. Not covered: the release canary `k2_release_<setSha256[:12]>`, whose line deploy
-writes (phase 001 step S19); the TLS files (`make tls`, step S13); removing a principal's line,
-which no target does yet (`make principals-status` lists such a line as `NOT DECLARED`). The
+writes (phase 001 step S19); the TLS files (`make tls`, step S13). The
 layout of `${K2_SECRETS}` is the secrets table of
 [`docs/development/phase-001-interfaces.md`](../development/phase-001-interfaces.md).
 
@@ -30,6 +30,7 @@ host` on 2026-11-26).
 | 2 | Give a platform service its password file | <2 min | 0.18 s a run (2026-11-26) |
 | 3 | Rotate a password or key | <2 min | old password refused and new accepted 0.5 s after the rotation returned (2026-11-26, throwaway) |
 | 4 | A login fails though the hash is there | <5 min | a file renamed over `password.db` was never seen in 12 s; the next in-place write was seen at once (2026-11-26, throwaway) |
+| 5 | Remove a principal | <2 min | 0.19 s a run (2026-11-26, temporary secrets, no Trino); Trino drops the login at its next 5 s refresh (section 1) |
 
 ---
 
@@ -40,7 +41,8 @@ host` on 2026-11-26).
 | `make password PRINCIPAL=<id>` | the password | the line `<id>:<bcrypt>` in `trino/password.db` |
 | `make password PRINCIPAL=<id> TO_FILE=1` (service principals: `svc.*`, `dbt_*`, `pub_*`) | nothing | that line, and the password in `principals/<id>.password` |
 | `make api-key PRINCIPAL=<id>` | the key, `k2_` and 43 characters | `"<sha256 of the whole key>": "<id>"` in `api/keys.json` |
-| `make principals-status` | names and yes or no | nothing |
+| `make principal-remove PRINCIPAL=<id> [FORCE=1]` | the names of what it removed | `<id>`'s lines of `trino/password.db` and entries of `api/keys.json` removed, `principals/<id>.password` emptied and deleted |
+| `make principals-status` | names and yes or no, and a `STALE` line for each unknown principal still holding one | nothing |
 
 The password is 32 random bytes (43 characters); its bcrypt has cost 10 and the `$2y$` prefix
 Trino's file authenticator requires. Every file is mode 600 in a directory of mode 700, and is
@@ -195,6 +197,63 @@ principal and the new one logged in.
 
 ---
 
+## 5. Remove a principal
+
+**Symptom**, a principal was taken out of `contracts/access/principals.yaml`, or the product
+whose builder `dbt_<fence>` or publisher `pub_<fence>` it was is gone, and `make
+principals-status` prints a `STALE` line for it: its `password.db` line still logs in to Trino,
+and a stale `dbt_*` or `pub_*` line still matches the platform's pattern rules (`dbt_.*` and
+`pub_.*` in `model.PIPELINE_PRINCIPALS`), which carry writer rights. Or a declared principal's
+secret must be revoked before the pull request that undeclares it merges.
+
+**Detection**, manual only: run `make principals-status` after any pull request that removes a
+principal or a product.
+
+**Expected behaviour**, `make principal-remove` drops the principal's lines of `password.db`,
+its entries of `api/keys.json` and its `principals/<id>.password`, each rewritten in place under
+its lock as section 4 requires (the password file is emptied in place, then deleted, so a
+container's stale mount of it reads nothing). Every other line, the release canary's included,
+stays byte for byte. It prints the names of what it removed and exits 0; with nothing there it
+says so and exits 0 too, since the state asked for already holds and a rerun is harmless. It
+refuses a principal still known (declared, or a dbt or code product's builder or publisher)
+unless `FORCE=1`, and always refuses the release canary, whose line deploy owns. A refusal also
+prints make's `Error 1` line and exits 2. Trino drops the login at its next refresh, within 5
+seconds (section 1's measured refresh, not re-measured here); a principal with no line is
+answered `401` (section 1).
+
+**Recovery**
+
+```bash
+make principals-status
+# principal                    password  file  api-key
+# ...
+# STALE dbt_gone in trino/password.db, principals/dbt_gone.password: neither declared nor a dbt or code product's builder or publisher, yet Trino still logs it in and the platform's pattern rules still match it; make principal-remove PRINCIPAL=dbt_gone
+
+make principal-remove PRINCIPAL=dbt_gone
+# principal-secret: dbt_gone: removed 1 line(s) of trino/password.db, principals/dbt_gone.password under ...
+make principal-remove PRINCIPAL=dbt_gone
+# principal-secret: dbt_gone: nothing to remove under ...
+
+make principal-remove PRINCIPAL=svc.api
+# principal-secret: svc.api is still known (declared in contracts/access/principals.yaml, or a dbt or code product's builder or publisher); undeclare it first, or FORCE=1 removes its credentials anyway
+make principal-remove PRINCIPAL=svc.api FORCE=1
+# principal-secret: svc.api: removed 1 line(s) of trino/password.db, principals/svc.api.password under ...
+
+make principal-remove PRINCIPAL=k2_release_0123456789ab FORCE=1
+# principal-secret: k2_release_0123456789ab: a release canary; deploy owns its line (S19)
+```
+
+A principal removed with `FORCE=1` is still declared: `make principals-status` shows it with
+`no`, and `make password` would give it a new secret. Undeclare it in the pull request that
+follows.
+
+**Measured**, 2026-11-26, against temporary secrets and no Trino: `svc.runs` and `svc.api` given
+passwords with `TO_FILE=1`, then a `dbt_gone` line and password file planted by hand; the
+commands above printed what is shown. One run took 0.19 s (`time make principal-remove
+PRINCIPAL=dbt_gone`); `password.db` kept its inode and the other users in order.
+
+---
+
 ## Failure modes / incidents
 
 None yet.
@@ -203,3 +262,4 @@ None yet.
 
 **Last verified:** 2026-11-26 against `step/s14-principals-keys` on `phase/001-release-and-rules-spine`,
 with temporary secrets and the throwaway Trino 484 `s14-trino`; not yet against the live Trino (step S22).
+Section 5 on 2026-11-26 against `step/s00d-interface-patch`, with temporary secrets and no Trino.

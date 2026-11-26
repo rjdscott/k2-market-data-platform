@@ -5,6 +5,7 @@ expectations:
     table: sensor_net.station_readings.silver_readings
     via: [sql]
     visible: [station_id, read_at, value, region, operator_note]
+    mustAppear: {minRows: 1}
   - principal: p.analyst-delayed
     table: sensor_net.station_readings.silver_readings
     via: [sql]
@@ -12,10 +13,12 @@ expectations:
     masked: [operator_note]
     minRowAgeMinutes: 20
     mustNotAppear: "region NOT IN ('north', 'south')"
+    mustAppear: {where: "region IN ('north', 'south')", minRows: 1}
   - principal: svc.load-dashboard
     table: ops_insight.daily_load.gold_daily_load
     via: [sql]
     visible: [load_date, station_id, readings, mean_value]
+    mustAppear: {minRows: 1}
   - {principal: p.analyst-full, table: sensor_net.station_readings__base.silver_readings, denied: true}
   - {principal: svc.load-dashboard, table: ops_insight.daily_load__base.gold_daily_load, denied: true}
   - {principal: p.analyst-full, table: lake.station_readings.bronze_readings, denied: true}

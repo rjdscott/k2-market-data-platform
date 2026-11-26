@@ -127,3 +127,15 @@ def test_a_missing_row_names_what_to_add() -> None:
     found = access.check(docset(changed([{"file": "tests/access/expectations.yaml", "remove": "expectations/1"}])), None)
     assert len(found) == 1 and found[0].path == model.EXPECTATIONS
     assert "sensor_net.station_readings.silver_readings" in found[0].message and "delayed_reader" in found[0].message
+
+
+def test_a_sibling_in_input_contracts_is_followed_to_what_it_derives_from() -> None:
+    # gold lists its sibling silver, which derives from the input X: gold inherits X's policy
+    def port(cid: str, *inputs: str) -> dict[str, Any]:
+        return {"contractId": cid, "inputContracts": [{"id": i, "version": "1.0.0"} for i in inputs]}
+
+    doc = {"inputPorts": [{"contractId": "d.other.x"}], "outputPorts": [port("d.p.silver", "d.other.x"), port("d.p.gold", "d.p.silver")]}
+    product = access._Product("contracts/d/p", "d", "p", doc, {"s": {"id": "d.p.silver"}, "g": {"id": "d.p.gold"}})
+    assert access._inputs(product, {"id": "d.p.gold"}) == ["d.other.x"]
+    doc["outputPorts"][0] = port("d.p.silver", "d.p.gold")  # a cycle of siblings ends, deriving from nothing
+    assert access._inputs(product, {"id": "d.p.gold"}) == []

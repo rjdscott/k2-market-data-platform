@@ -71,9 +71,8 @@ in `TABLE(<name>)`, and after MERGE ... USING. Not followed, each pinned by a te
 - a macro defined in the file and called: its body is linted as SQL where it stands, which finds
   hand-written relations after a FROM but not ones its caller's FROM introduces;
 - `{% raw %}`: its content is linted as Jinja, so `env_var` there is flagged though not run;
-- a hook string holding a Jinja call (`post_hook="... {{ ref('x') }}"`): `model.model_config`'s
-  match ends at the first `)` before `}}`, so the config is `config-unreadable`, which fails
-  closed; a hook naming only `{{ this }}` is read;
+- a hook string holding a Jinja call (`post_hook="... {{ ref('x') }}"`) is read, since
+  `model.model_config` skips quoted strings whole, and its SQL linted like any hook's;
 - a model with no `materialized` takes the compiled project's default (S17), which must not be a
   view.
 
@@ -610,7 +609,7 @@ def _config(text: str, configs: list[tuple[str, int]], ctx: _Ctx) -> list[Findin
     block, line = configs[0]
     try:
         config = model.model_config(text)
-    except (ValueError, SyntaxError) as e:  # a Jinja operator (~, |) is a SyntaxError to the frozen parser
+    except ValueError as e:  # a Jinja operator (~, |) included: model_config raises nothing else
         return [_f(ctx, "config-unreadable", line, f"config() is not one call of literal keyword arguments ({e}); the compiler "
                                                    f"and this lint read only that form (model.model_config)")]
     if len(configs) > 1 or not _CANONICAL.fullmatch(block):

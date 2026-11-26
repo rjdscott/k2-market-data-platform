@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://k2.invalid/schema/provenance.schema.json",
   "title": "provenance.json of a document set (A2)",
-  "description": "Frozen in phase 001. Written by k2gen docset beside the documents it extracts from `git archive <tag>` of k2gen.model.DOCUMENT_ROOTS, and copied unchanged into each release compiled from that set. The registry, after 3.0, writes the same record with source registry (ADR-055 part 7).",
+  "description": "Frozen in phase 001. Written by k2gen docset beside the documents it reads from the tag's tree, each blob of k2gen.model.DOCUMENT_ROOTS as the tag holds it (git ls-tree and git cat-file, never git archive, whose output follows the checkout's eol and filter settings and can change when refs move), and copied unchanged into each release compiled from that set. The registry, after 3.0, writes the same record with source registry (ADR-055 part 7).",
   "type": "object",
   "additionalProperties": false,
   "required": ["source", "tag", "commit", "tagger", "taggedAt", "setSha256", "documents"],

@@ -20,8 +20,9 @@ declared principal falls under a platform pattern by accident: `dbt_<x>` and `pu
 `dbt_.*` and `pub_.*`, so `<x>` must be a product's fence (`access.principal-collides`).
 
 **Inheritance: "at least as strict".** For an output O, a role R that O offers, and each input I
-that O derives from (the contracts its output port lists in `inputContracts`; every input port of
-the product when it lists none), O's policy for R is at least as strict as I's when:
+that O derives from (the contracts its output port lists in `inputContracts`, a sibling table of
+the product replaced by what that sibling derives from; every input port of the product when it
+lists none), O's policy for R is at least as strict as I's when:
 
 - role: I offers R. A role I does not offer is I's strictest policy, no access at all, so O may not
   offer it either (`access.inherit-role`);
@@ -49,9 +50,11 @@ exist for (`access.expectation-missing`):
 - each table in a lake build and each role it offers that someone holds on its product: a read
   row by a holder, at the table's reader name (`model.reader_relation`); when the role has a
   policy, every such row asserts it, masked columns listed, `minRowAgeMinutes` at least the delay,
-  a `mustNotAppear` for a row scope (`access.expectation-weak`);
+  a `mustNotAppear` for a row scope, and at least one of them a `mustAppear`, the positive
+  assertion a table that built no rows fails (`access.expectation-weak`);
 - each reader view of a dbt or code output that nobody holds a role on: some row naming it;
-- each such output's base (`model.input_relation`), each bronze table that offers no role, and
+- each such output's base (`model.input_relation`), each seed's table in the base
+  (`<domain>.<fence>__base.<stem>`, model.dbt_seed), each bronze table that offers no role, and
   each connector product's landing (`landing_files`, `landing` for kafka): a denied row, by a
   principal holding a role on the product when anyone does, since a denial to a stranger proves
   only the absence of a grant;
@@ -217,10 +220,19 @@ def _grants(roles: dict[str, Any], principals: list[str], products: dict[str, _P
     return out
 
 
-def _inputs(product: _Product, contract: dict[str, Any]) -> list[str]:
+def _inputs(product: _Product, contract: dict[str, Any], seen: frozenset[str] = frozenset()) -> list[str]:
+    """The inputs `contract` derives from. A sibling its port lists (silver from its own bronze) is
+    not an input, but what the sibling derives from is, so it is followed, never dropped."""
+    siblings = {t["id"]: t for t in product.tables.values()}
     for port in product.doc.get("outputPorts", []):
         if port.get("contractId") == contract["id"] and port.get("inputContracts"):
-            return [c["id"] for c in port["inputContracts"]]
+            found: list[str] = []
+            for cid in (c["id"] for c in port["inputContracts"]):
+                if cid not in siblings:
+                    found.append(cid)
+                elif cid not in seen | {contract["id"]}:
+                    found += _inputs(product, siblings[cid], seen | {contract["id"]})
+            return list(dict.fromkeys(found))
     return [p["contractId"] for p in product.doc.get("inputPorts", [])]
 
 
@@ -336,6 +348,11 @@ def _coverage(principals: list[str], products: dict[str, _Product], rows: list[d
                                     f"columns it sees{' and asserting its policy' if role in policies else ''}"))
                 for r in reads:
                     out += _weak(r, t, role, policies.get(role))
+                if reads and policies.get(role) and not any("mustAppear" in r for r in reads):
+                    out.append(_err("expectation-weak", path,
+                                    f"no read row of {relation} by a holder of {role} has a mustAppear: every other part of a read "
+                                    f"row is negative, so a table that built no rows passes them all; add mustAppear (the rows "
+                                    f"{role} must see, {{where: <predicate>, minRows: <n>}}) to one"))
             if build in _VIEW_BUILDS:
                 if not granted and relation not in named:
                     out.append(_err("expectation-missing", path, f"the reader view {relation} has no row: nobody holds a role on it, "
@@ -343,6 +360,9 @@ def _coverage(principals: list[str], products: dict[str, _Product], rows: list[d
                 denied(model.input_relation(_table(t)), holders, "a base readers must never reach (ADR-061)")
             if _props(t)["layer"] == "bronze" and not _offered(t):
                 denied(relation, holders, "a bronze table that offers no role")
+        for seed in _props(product.doc).get("seeds", []):  # a seed is a table of the base, built beside its models
+            stem = seed["path"].removeprefix("seeds/").removesuffix(".csv")
+            denied(model.base_relation(product.domain, product.name, stem), holders, "a seed's table in the base, which readers must never reach")
         connector = _props(product.doc).get("connector")
         if connector:
             landing = model.KAFKA_LANDING if connector["kind"] == "kafka" else model.LANDING_FILES

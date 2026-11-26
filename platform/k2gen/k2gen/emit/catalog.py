@@ -5,9 +5,12 @@ has relation null and carries its serves.
 Filled by step S18.
 
 Only what the documents state: a policy in words, never the rule that enforces it; examples as
-written; lineage edges from the output ports' inputContracts, never guessed from model SQL.
-Run-time facts (the newest audited snapshot, test results) are not compiled: the site and
-k2-api read them through each output's reader relation at run time.
+written; lineage edges from the output ports' inputContracts, never guessed from model SQL;
+quality rules by name and description, never their queries. Run-time facts (the newest audited
+snapshot, test results) are not compiled: the site and k2-api read them through each output's
+reader relation at run time, at its testedRef. Files are linked by their path inside the release
+(documents/<path>, as the tag approved them); the DCAT-style fields are keywords from tags,
+issued from the set's taggedAt and periodicity from the schedule.
 """
 
 import dataclasses
@@ -17,7 +20,9 @@ from typing import Any
 from k2gen.model import (
     BASE_SUFFIX,
     CATALOG_INDEX,
+    DOCUMENTS_DIR,
     LAKE_BUILDS,
+    V2_PRODUCT_FILE,
     Model,
     Product,
     RolePolicy,
@@ -25,6 +30,7 @@ from k2gen.model import (
     catalog_path,
     dbt_docs,
     reader_relation,
+    tested_ref,
 )
 
 
@@ -71,13 +77,23 @@ def _relation(t: Table) -> str | None:
     return reader_relation(t) if t.build.kind in LAKE_BUILDS else None
 
 
+def _document(path: str) -> str:
+    """A document's path inside the release: what the tag approved, byte for byte."""
+    return f"{DOCUMENTS_DIR}/{path}"
+
+
+def _quality(t: Table) -> list[dict[str, Any]]:
+    return [{k: v for k, v in (("name", q.name), ("type", q.type), ("description", q.description), ("metric", q.metric)) if v}
+            for q in t.quality]
+
+
 def _find(tables: dict[str, Table], key: str, where: str) -> Table:
     if key not in tables:
         raise ValueError(f"{where}: names {key}, which no contract of the set declares")
     return tables[key]
 
 
-def _product(p: Product, by_id: dict[str, Table], by_path: dict[str, Table], tag: str) -> dict[str, Any]:
+def _product(p: Product, by_id: dict[str, Table], by_path: dict[str, Table], tag: str, issued: str) -> dict[str, Any]:
     ports = {port.contract_id: port for port in p.output_ports}
     outputs, join_keys = [], []
     for t in p.tables:
@@ -90,6 +106,10 @@ def _product(p: Product, by_id: dict[str, Table], by_path: dict[str, Table], tag
                 column["unit"] = c.unit
             if c.time:
                 column["time"] = c.time
+            column |= {k: v for k, v in (("logicalType", c.logical_type), ("primaryKeyPosition", c.primary_key_position),
+                                         ("classification", c.classification)) if v is not None}
+            if c.unique:
+                column["unique"] = True
             references = []
             for r in c.relationships:
                 file, _, pointer = r.to.partition("#")  # <domain>/<product>/<table>.odcs.yaml#/.../<column>
@@ -107,9 +127,15 @@ def _product(p: Product, by_id: dict[str, Table], by_path: dict[str, Table], tag
         outputs.append({
             "contractId": t.contract_id, "relation": relation,
             **({"serves": _stated(port.serves)} if port and port.serves else {}),
+            "build": t.build.kind, "testedRef": tested_ref(t) if relation else None, "contractFile": _document(t.path),
             "layer": t.layer, "version": t.version, "purpose": t.purpose, "columns": columns,
+            **({"partitioning": list(t.partitioning)} if t.partitioning else {}),
+            "retentionDays": t.retention,
+            **({"sla": [_stated(sla) for sla in t.sla]} if t.sla else {}),
+            **({"quality": _quality(t)} if t.quality else {}),
             "roles": [{"role": r.role, **({"policies": _policy(t.policies[r.role])} if r.role in t.policies else {}),
-                       "inWords": in_words(t.policies.get(r.role))} for r in t.roles],
+                       "inWords": in_words(t.policies.get(r.role)),
+                       **({"approvers": r.first_level_approvers} if r.first_level_approvers else {})} for r in t.roles],
             "readers": [{"principal": g.principal, "role": g.role} for g in p.grants if g.role in offered],
             "dbtDocs": dbt_docs(p.name, t.name) if t.build.kind == "dbt" else None,
         })
@@ -128,7 +154,13 @@ def _product(p: Product, by_id: dict[str, Table], by_path: dict[str, Table], tag
         **{k: v for k, v in (("limitations", p.limitations), ("usage", p.usage)) if v},
         **({"terms": _stated(p.terms)} if p.terms else {}),
         **({"licence": p.licence} if p.licence else {}),
-        "inputs": [{"contractId": port.contract_id,
+        **({"keywords": list(p.tags)} if p.tags else {}),
+        "issued": issued,
+        **({"periodicity": p.schedule.cron} if p.schedule else {}),
+        "productFile": _document(f"{p.path}/{V2_PRODUCT_FILE}"),
+        **({"support": [_stated(s) for s in p.support]} if p.support else {}),
+        **({"links": [_stated(link) for link in p.links]} if p.links else {}),
+        "inputs": [{"contractId": port.contract_id, "version": port.version,
                     "relation": reader_relation(_find(by_id, port.contract_id, p.path)),
                     "required": port.required, "maxLagMinutes": port.max_lag_minutes} for port in p.input_ports],
         "outputs": outputs,
@@ -150,7 +182,8 @@ def emit(model: Model) -> dict[str, str]:
     tables = [t for p in model.products for t in p.tables]
     by_id, by_path = {t.contract_id: t for t in tables}, {t.path: t for t in tables}
     tag = model.provenance.tag
-    files = {catalog_path(p.id): _text(p.id, _product(p, by_id, by_path, tag)) for p in model.products}
+    issued = model.provenance.tagged_at
+    files = {catalog_path(p.id): _text(p.id, _product(p, by_id, by_path, tag, issued)) for p in model.products}
     if len(files) != len(model.products):
         raise ValueError("two products share an id, so they would share one catalog file")
     index = {"tag": tag, "products": sorted(

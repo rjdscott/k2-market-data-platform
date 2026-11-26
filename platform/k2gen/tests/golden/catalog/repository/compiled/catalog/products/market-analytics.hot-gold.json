@@ -14,6 +14,8 @@
   "owner": "analytics-team",
   "purpose": "The hot tier: a ClickHouse copy of the gold trades of every venue, for dashboards and reads faster than the lake answers them.",
   "limitations": "Paused since 2026-11-26 (ADR-057). The clickhouse service starts only under the compose profile hot-gold; nothing feeds or reads it, and the rows its kept volume holds are stale. It has no lake table and no reader on Trino. This document declares its trades table, the copy ADR-057 describes; the book, candle, bar and BBO tables in the same volume return only if a product of this platform defines them.",
+  "issued": "2026-01-01T00:00:00Z",
+  "productFile": "documents/contracts/market-analytics/hot-gold/product.odps.yaml",
   "inputs": [],
   "outputs": [
     {
@@ -24,6 +26,9 @@
         "profile": "hot-gold",
         "status": "paused"
       },
+      "build": "serving",
+      "testedRef": null,
+      "contractFile": "documents/contracts/market-analytics/hot-gold/trades.odcs.yaml",
       "layer": "gold",
       "version": "1.0.0",
       "purpose": "One row per logical trade of every venue, deduplicated by ClickHouse's ReplacingMergeTree on the key, the first delivery winning; exact reads use FINAL.",
@@ -33,7 +38,8 @@
           "type": "varchar",
           "required": true,
           "primaryKey": true,
-          "description": "The venue, binance, kraken or coinbase (LowCardinality(String))."
+          "description": "The venue, binance, kraken or coinbase (LowCardinality(String)).",
+          "primaryKeyPosition": 1
         },
         {
           "name": "symbol",
@@ -47,14 +53,16 @@
           "type": "varchar",
           "required": true,
           "primaryKey": true,
-          "description": "BASE/QUOTE in upper case, from config/instruments.yaml (LowCardinality(String))."
+          "description": "BASE/QUOTE in upper case, from config/instruments.yaml (LowCardinality(String)).",
+          "primaryKeyPosition": 2
         },
         {
           "name": "trade_id",
           "type": "varchar",
           "required": true,
           "primaryKey": true,
-          "description": "The venue's own trade id, as a string (String)."
+          "description": "The venue's own trade id, as a string (String).",
+          "primaryKeyPosition": 4
         },
         {
           "name": "price_e8",
@@ -97,7 +105,8 @@
           "required": true,
           "primaryKey": true,
           "description": "The venue's clock, in microseconds, UTC (DateTime64(6, 'UTC')); the monthly partition source.",
-          "time": "event"
+          "time": "event",
+          "primaryKeyPosition": 3
         },
         {
           "name": "recv_ts_ns",
@@ -156,6 +165,7 @@
           "description": "The ReplacingMergeTree version, the UInt64 maximum minus recv_ts_ns, so the earliest delivery of a trade survives a merge (UInt64)."
         }
       ],
+      "retentionDays": null,
       "roles": [],
       "readers": [],
       "dbtDocs": null

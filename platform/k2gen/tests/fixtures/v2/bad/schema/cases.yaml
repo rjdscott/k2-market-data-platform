@@ -46,6 +46,9 @@ cases:
   - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/3/denied, value: false, error: "True was expected"}
   - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/7/expect, value: rows, error: "'rows' is not one of"}
   - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/11/sql, value: "SELECT 1", error: "Additional properties are not allowed ('sql' was unexpected)"}
+  - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/0/mustAppear, value: {}, error: "should be non-empty"}
+  - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/0/mustAppear/minRows, value: 0, error: "less than the minimum of 1"}
+  - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/0/mustAppear/ids, value: [1], error: "Additional properties are not allowed ('ids' was unexpected)"}
   - {kind: expectations, file: good/tests/access/expectations.yaml, set: expectations/20/session, value: {}, error: "should be non-empty"}
   # release files
   - {kind: manifest, file: release/manifest.yaml, remove: needs, error: "'needs' is a required property"}

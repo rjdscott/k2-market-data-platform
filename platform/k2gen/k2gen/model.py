@@ -17,7 +17,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Any, Literal
@@ -63,9 +63,11 @@ PRINCIPALS = "contracts/access/principals.yaml"
 EXPECTATIONS = "tests/access/expectations.yaml"
 COMPOSE = "docker-compose.yml"  # the tag's compose file: the release runs it (A1)
 V2_PRODUCT_FILE = "product.odps.yaml"  # its directory is a v2 product; the old validator skips it
-# What `git archive <tag>` extracts into a document set; a root the tag lacks (domains/ before
-# its first parser) is skipped, never an error. The expectations are in it so the coverage
-# check (S07) stays a pure function of the set.
+# The roots of a document set: docset.load lists them in the tag's tree (git ls-tree) and reads
+# each blob as the tag holds it (git cat-file), never through `git archive`, whose output follows
+# the checkout's eol and filter settings and can change when refs move. A root the tag lacks
+# (domains/ before its first parser) is skipped, never an error. The expectations are in it so
+# the coverage check (S07) stays a pure function of the set.
 DOCUMENT_ROOTS = ("contracts/", "domains/", EXPECTATIONS, COMPOSE)
 
 # --- Release layout (A1) ---------------------------------------------------------------
@@ -145,9 +147,12 @@ def need_of(path: str) -> str | None:
 # Every credential is generated on the host into ${K2_SECRETS:-$HOME/k2-secrets}, outside any
 # checkout, and never committed, compiled or hashed into a release. A container mounts only
 # the files it reads, read-only, under SECRETS_MOUNT. A file refreshed while its reader runs
-# (password.db, keys.json, the webhook URL) is mounted by its directory and replaced by a
-# rename inside it, because a file-level bind mount pins the inode (CLAUDE.md); the others
-# are read at start, mounted as files, and a rotation recreates their readers.
+# (password.db, keys.json, the webhook URL) is mounted by its directory and rewritten IN PLACE
+# under an exclusive flock on the file itself, never renamed over: through Docker Desktop's file
+# sharing a container keeps reading the old file after a rename, even under a directory mount
+# (measured by S09 and S14; scripts/principal-secret.py). Every writer of one, S19's canary line
+# in password.db included, takes that lock and writes in place. The others are read at start,
+# mounted as files, and a rotation recreates their readers.
 
 SECRETS_ENV = "K2_SECRETS"
 SECRETS_MOUNT = "/run/k2-secrets"
@@ -167,7 +172,8 @@ class SecretFile:
 SECRET_FILES: tuple[SecretFile, ...] = (
     SecretFile("trino/password.db", "Trino's file authenticator file: one `<user>:<bcrypt, cost 10>` line per principal with a password, the release canary's included",
                f"{SECRETS_MOUNT}/trino/password.db", ("trino",),
-               "S14 `scripts/principal-secret.py` (`make password`); S19 `scripts/deploy.py` adds each release's canary line"),
+               "S14 `scripts/principal-secret.py` (`make password`); S19 `scripts/deploy.py` adds each release's canary line, "
+               "in place under the same flock (never a rename)"),
     SecretFile("api/keys.json", 'k2-api\'s key map, `{"<sha256 hex of the key>": "<principal id>"}`',
                f"{SECRETS_MOUNT}/api/keys.json", ("k2-api",), "S14 `scripts/principal-secret.py` (`make api-key`)"),
     SecretFile("principals/<principal>.password", "one service principal's password, mode 600",
@@ -272,7 +278,9 @@ TEMPLATE = r"^(?:[^{}]|\{\{ds\}\})*$"
 # platform's own (A5).
 RESERVED_PRODUCT_NAMES = frozenset({"raw", "bronze", "silver", "gold", "audit", "scratch", "dq", "runs"})
 # A domain's fence is its reader catalog and warehouse, and <fence>_build its writer
-# catalog; its name is also a directory beside contracts/access/ and contracts/schema/.
+# catalog; its name is also a directory beside contracts/access/ and contracts/schema/. A Trino
+# reserved word is refused by TRINO_RESERVED, the parser's own list (S05, docs.name-reserved-word),
+# so none is repeated here: `catalog`, `default` and `user` are not reserved in Trino 484.
 RESERVED_DOMAIN_NAMES: Mapping[str, str] = {
     "lake": "Trino's read-only catalog over the lake",
     "system": "Trino's own catalog",
@@ -280,7 +288,6 @@ RESERVED_DOMAIN_NAMES: Mapping[str, str] = {
     "information_schema": "the schema every Trino catalog has",
     "access": "the directory of the shared access documents, contracts/access/",
     "schema": "the directory of the schemas, contracts/schema/",
-    **{w: "a Trino reserved word" for w in ("table", "select", "catalog", "default", "user")},
 }
 
 
@@ -383,26 +390,70 @@ def dbt_model(product: str, table: str) -> str:
     return f"{fence(product)}__{table}"
 
 
+def dbt_seed(product: str, seed: str) -> str:
+    """`<fence>__<stem>`: a seed's dbt name, for `seeds/<stem>.csv` of the product, with `alias:
+    <stem>`, so dbt builds it at build_relation(domain, product, stem), a table of the base
+    namespace like any other (S17), denied to readers like any base table (S07). Product SQL
+    names it by `ref`, as it names a model."""
+    return dbt_model(product, seed.removeprefix("seeds/").removesuffix(".csv"))
+
+
 def dbt_docs(product: str, table: str) -> str:
     """The table's page on the dbt docs site, relative to the site root (catalog `dbtDocs`)."""
     return f"dbt-docs/#!/model/model.{DBT_PROJECT}.{dbt_model(product, table)}"
 
 
-_CONFIG = re.compile(r"\{\{-?\s*config\((.*?)\)\s*-?\}\}", re.S)
+_CONFIG_START = re.compile(r"\{\{-?\s*config\(")
+_CONFIG_END = re.compile(r"\s*-?\}\}")
 _JINJA_CONSTANTS = {"true": True, "false": False, "none": None}
+
+
+def _config_calls(sql: str) -> list[str]:
+    """The argument text of each `{{ config(...) }}`, found by a scan that skips quoted strings,
+    so a `)` or `}}` inside one (a hook's `{{ ref('x') }}`) does not end the call."""
+    calls, pos = [], 0
+    while start := _CONFIG_START.search(sql, pos):
+        i, depth, quote = start.end(), 1, ""
+        while i < len(sql) and depth:
+            c = sql[i]
+            if quote:
+                if c == "\\":
+                    i += 1
+                elif c == quote:
+                    quote = ""
+            elif c in "'\"":
+                quote = c
+            elif c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+            i += 1
+        if depth:
+            raise ValueError("config( is never closed")
+        end = _CONFIG_END.match(sql, i)
+        if not end:
+            raise ValueError("config(...) is followed by more than }}: a model writes {{ config(...) }} alone")
+        calls.append(sql[start.end():i - 1])
+        pos = end.end()
+    return calls
 
 
 def model_config(sql: str) -> dict[str, Any]:
     """The keyword arguments of a product model's `{{ config(...) }}`, literals only; {} when it
     has none. The one reader of it: S05 takes `materialized` and `unique_key`, S07 refuses
-    `incremental_predicates`. A positional argument, a second config() or a non-literal value
-    (a var(), an env_var()) is a ValueError, which a check reports as a finding."""
-    calls = _CONFIG.findall(sql)
+    `incremental_predicates`. A positional argument, a second config(), a non-literal value (a
+    var(), an env_var()), a Jinja operator (`~`, `|`) or anything after the call inside its `}}`
+    is a ValueError, never another exception, which a check reports as a finding. Quoted strings
+    are skipped whole, so a hook holding `{{ ref('x') }}` is read."""
+    calls = _config_calls(sql)
     if len(calls) > 1:
         raise ValueError("a model has one config() call")
     if not calls:
         return {}
-    call = ast.parse(f"f({calls[0]})", mode="eval").body
+    try:
+        call = ast.parse(f"f({calls[0]})", mode="eval").body
+    except (SyntaxError, ValueError, RecursionError):
+        raise ValueError(f"config({calls[0]}) is not keyword arguments of literals (a Jinja operator?)") from None
     if not isinstance(call, ast.Call) or call.args or any(k.arg is None for k in call.keywords):
         raise ValueError("config() takes keyword arguments only")
 
@@ -413,7 +464,7 @@ def model_config(sql: str) -> dict[str, Any]:
             return [literal(e) for e in node.elts]
         try:
             return ast.literal_eval(node)
-        except ValueError:
+        except (ValueError, TypeError, RecursionError):
             raise ValueError(f"config() value {ast.unparse(node)} is not a literal") from None
 
     return {str(k.arg): literal(k.value) for k in call.keywords}
@@ -757,15 +808,34 @@ class TableRole:
     first_level_approvers: str | None
 
 
+# ODCS v3.2.0's threshold operators (DataQualityOperators), each a key of a quality entry.
+QUALITY_OPERATORS = ("mustBe", "mustNotBe", "mustBeGreaterThan", "mustBeGreaterOrEqualTo", "mustBeLessThan",
+                     "mustBeLessOrEqualTo", "mustBeBetween", "mustNotBeBetween")
+
+
 @dataclass(frozen=True)
 class Quality:
-    """One ODCS quality entry of the table."""
+    """One ODCS quality entry of the table. A sql rule's query reads the table as `${table}`; a
+    library rule names an ODCS metric. emit/dbt.py turns custom dbt, sql and library rules into
+    dbt tests, and S05 reports any form it cannot (docs.quality-unsupported)."""
 
     name: str | None
     type: str
     engine: str | None  # dbt or k2-connector for type custom
     description: str | None
     implementation: Any
+    query: str | None = None  # type sql
+    metric: str | None = None  # type library: nullValues, missingValues, invalidValues, duplicateValues, rowCount
+    arguments: Mapping[str, Any] | None = None  # type library: the metric's arguments
+    unit: str | None = None  # rows or percent
+    thresholds: Mapping[str, Any] = field(default_factory=dict)  # each QUALITY_OPERATORS key the entry sets
+
+
+def quality_of(entry: Mapping[str, Any]) -> Quality:
+    """One ODCS quality entry as the model holds it; ODCS's default type is library."""
+    return Quality(entry.get("name"), entry.get("type", "library"), entry.get("engine"), entry.get("description"),
+                   entry.get("implementation"), entry.get("query"), entry.get("metric"), entry.get("arguments"),
+                   entry.get("unit"), {k: entry[k] for k in QUALITY_OPERATORS if k in entry})
 
 
 @dataclass(frozen=True)
@@ -848,6 +918,26 @@ class Grant:
 
 
 @dataclass(frozen=True)
+class Support:
+    """One ODPS support channel: where to ask, and to request access."""
+
+    channel: str
+    url: str
+    tool: str | None
+    scope: str | None
+    description: str | None
+
+
+@dataclass(frozen=True)
+class Link:
+    """One ODPS authoritativeDefinitions entry (a licence, a runbook, a glossary)."""
+
+    type: str
+    url: str
+    description: str | None
+
+
+@dataclass(frozen=True)
 class Product:
     """One product directory, contracts/<domain>/<name>/."""
 
@@ -876,6 +966,8 @@ class Product:
     models: Mapping[str, str]  # path under models/ -> SQL
     unit_tests: str | None  # unit_tests.yml as written
     seeds: Mapping[str, bytes]  # path under seeds/ -> bytes, each declared by the `seeds` property
+    support: tuple[Support, ...] = ()  # ODPS support
+    links: tuple[Link, ...] = ()  # ODPS authoritativeDefinitions, the licence's included
 
 
 @dataclass(frozen=True)
@@ -898,6 +990,15 @@ class Principal:
 
 
 @dataclass(frozen=True)
+class MustAppear:
+    """A read row's positive assertion: at least `min_rows` visible rows, matching `where` when
+    set, so a table that built no rows fails the row instead of passing every negative part."""
+
+    min_rows: int
+    where: str | None
+
+
+@dataclass(frozen=True)
 class TableExpectation:
     principal: str
     table: str
@@ -906,6 +1007,7 @@ class TableExpectation:
     masked: tuple[str, ...]
     min_row_age_minutes: int | None
     must_not_appear: str | None
+    must_appear: MustAppear | None = None
 
 
 @dataclass(frozen=True)
@@ -989,6 +1091,7 @@ class Finding:
     severity: Severity
     path: str  # the document's path in the set
     message: str
+    pointer: str | None = None  # where in the document: a JSON pointer (/a/0) or a $ path ($.a[0]); `k2gen check` prints it
 
 
 @dataclass(frozen=True)
@@ -1180,8 +1283,7 @@ def _table(path: str, doc: Mapping[str, Any], errors: list[str]) -> Table:
         columns=tuple(_column(c, f"{path}#/schema/0/properties/{i}", errors) for i, c in enumerate(schema["properties"])),
         roles=tuple(TableRole(r["role"], r.get("firstLevelApprovers")) for r in doc.get("roles", ())),
         policies=policies,
-        quality=tuple(Quality(q.get("name"), q.get("type", "library"), q.get("engine"), q.get("description"), q.get("implementation"))
-                      for q in schema.get("quality", ())),  # ODCS's default type is library
+        quality=tuple(quality_of(q) for q in schema.get("quality", ())),
         sla=tuple(Sla(s["property"], s.get("value"), s.get("unit"), s.get("element")) for s in doc.get("slaProperties", ())))
 
 
@@ -1236,7 +1338,10 @@ def _product(pdir: str, parsed: Mapping[str, Any], documents: Mapping[str, bytes
         models={f.removeprefix("models/"): _text(f"{pdir}/{f}", data, errors)
                 for f, data in sorted(files.items()) if f.startswith("models/") and f.endswith(".sql")},
         unit_tests=unit_tests,
-        seeds={s: files[f"seeds/{s}"] for s in sorted(declared & present)})
+        seeds={s: files[f"seeds/{s}"] for s in sorted(declared & present)},
+        support=tuple(Support(s["channel"], s["url"], s.get("tool"), s.get("scope"), s.get("description"))
+                      for s in doc.get("support", ())),
+        links=tuple(Link(d["type"], d["url"], d.get("description")) for d in doc.get("authoritativeDefinitions", ())))
 
 
 def _expectation(row: Mapping[str, Any]) -> Expectation:
@@ -1250,8 +1355,10 @@ def _expectation(row: Mapping[str, Any]) -> Expectation:
         return StatementExpectation(row["principal"], row["sql"], row["expect"], dict(row.get("session", {})))
     if row.get("denied"):
         return DeniedExpectation(row["principal"], row["table"], via)
+    appear = row.get("mustAppear")
     return TableExpectation(row["principal"], row["table"], via, tuple(row["visible"]), tuple(row.get("masked", ())),
-                            row.get("minRowAgeMinutes"), row.get("mustNotAppear"))
+                            row.get("minRowAgeMinutes"), row.get("mustNotAppear"),
+                            MustAppear(appear.get("minRows", 1), appear.get("where")) if appear else None)
 
 
 def load(docs: DocumentSet, images: Mapping[str, str] | None = None) -> Model:

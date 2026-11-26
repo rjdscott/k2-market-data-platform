@@ -30,7 +30,6 @@ GOOD = Path(__file__).parent / "fixtures" / "v2" / "good"
 GOLDEN = Path(__file__).parent / "golden" / "dbt"
 REPOSITORY = GOLDEN / "repository"
 SHARED = ("dbt_project.yml", "selectors.yml", "models/_sources.yml")
-UNIT = "contracts/sensor-net/station-readings/unit_tests.yml"
 PROOF_PORT = 18089  # nothing may listen here: a dbt step that reached for a warehouse fails
 
 
@@ -272,20 +271,33 @@ def test_a_foreign_key_into_a_table_the_product_does_not_read_is_refused() -> No
         dbt.emit(replaced(m, "ops-insight.daily-load", input_ports=()))
 
 
-def test_a_dbt_quality_rule_becomes_a_test_and_the_rest_carry_none() -> None:
+def test_each_quality_rule_becomes_a_test_or_is_refused() -> None:
     m = loaded(good())
     station = product(m, "sensor-net.station-readings")
     rules = (model.Quality("regions", "custom", "dbt", None, {"accepted_values": {"column_name": "region", "arguments": {"values": ["north", "south"]}}}),
              model.Quality("as text", "custom", "dbt", None, "not_null:\n  column_name: operator_note\n"),
-             model.Quality("no query field", "sql", None, None, None),
-             model.Quality("audit", "custom", "k2-connector", None, "value_parses"))
+             model.Quality("words", "text", None, "Readings are what the feed sent.", None),
+             model.Quality("in range", "sql", None, None, None, query="select max(value) from ${table}", thresholds={"mustBeBetween": [-90, 60]}),
+             model.Quality("built", "library", None, None, None, metric="rowCount", thresholds={"mustBeGreaterThan": 0}),
+             model.Quality("unique share", "library", None, None, None, metric="duplicateValues", arguments={"properties": ["station_id"]},
+                           unit="percent", thresholds={"mustBeLessThan": 5}))
     tables = tuple(dataclasses.replace(t, quality=rules) if t.name == "silver_readings" else t for t in station.tables)
     tree = dbt.emit(replaced(m, station.id, tables=tables))
     (silver,) = parsed(tree, "models/sensor_net/station_readings/_models.yml")["models"]
-    assert silver["data_tests"][1:] == [rules[0].implementation, {"not_null": {"column_name": "operator_note"}}]
-    bad = (model.Quality("two tests", "custom", "dbt", None, {"unique": {}, "not_null": {}}),)
-    with pytest.raises(ValueError, match="one data test"):
-        dbt.emit(replaced(m, station.id, tables=tuple(dataclasses.replace(t, quality=bad) for t in station.tables)))
+    assert silver["data_tests"][1:] == [
+        rules[0].implementation, {"not_null": {"column_name": "operator_note"}},
+        {"k2_quality": {"arguments": {"query": "select max(value) from ${table}", "holds": "metric_value between -90 and 60"}}},
+        {"k2_quality": {"arguments": {"query": "select count(*) from ${table}", "holds": "metric_value > 0"}}},
+        {"k2_quality": {"arguments": {"query": 'select coalesce(100.0 * sum(n - 1) / sum(n), 0) from (select count(*) as n from ${table} '
+                                               'group by "station_id") as k2_groups', "holds": "metric_value < 5"}}}]
+    # never dropped: a form K2 does not run is refused (S05 reports it first, docs.quality-unsupported)
+    for bad, why in ((model.Quality("two tests", "custom", "dbt", None, {"unique": {}, "not_null": {}}), "one data test"),
+                     (model.Quality("no query", "sql", None, None, None, thresholds={"mustBe": 0}), "reads the table as"),
+                     (model.Quality("audit", "custom", "k2-connector", None, "value_parses"), "bronze audit"),
+                     (model.Quality("nulls", "library", None, None, None, metric="nullValues", thresholds={"mustBe": 0}), "column rules")):
+        tables = tuple(dataclasses.replace(t, quality=(bad,)) if t.name == "silver_readings" else t for t in station.tables)
+        with pytest.raises(ValueError, match=why):
+            dbt.emit(replaced(m, station.id, tables=tables))
 
 
 def test_the_output_is_deterministic() -> None:
@@ -325,19 +337,6 @@ def run_dbt(tmp: Path, *args: str) -> str:
     return out.stdout
 
 
-def proof_documents(name: str) -> dict[str, bytes]:
-    if name == "repository":
-        return repository()
-    documents = good()
-    # The good set's unit test of an incremental model does not say which branch it tests, which
-    # dbt refuses at parse ("Boolean override for 'is_incremental' must be provided"). The proof
-    # adds the override while the good set lacks it; delete this once the good set carries it.
-    if b"is_incremental" not in documents[UNIT]:
-        documents[UNIT] = documents[UNIT].replace(b"(k2gen.model.dbt_model)\n", b"(k2gen.model.dbt_model)\n    overrides:\n      macros:\n        is_incremental: false\n")
-        assert b"is_incremental" in documents[UNIT], "the patch's anchor line is gone from the good set's unit test"
-    return documents
-
-
 @pytest.mark.skipif(os.environ.get("K2_DBT_PROOF") != "1", reason="the dbt proof runs under make test-dbt-tree (K2_DBT_PROOF=1)")
 @pytest.mark.parametrize("name", ["good", "repository"])
 def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> None:
@@ -346,7 +345,7 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
         pytest.fail(f"something listens on 127.0.0.1:{PROOF_PORT}, and the proof must reach no warehouse")
     except subprocess.CalledProcessError:
         pass
-    m = loaded(proof_documents(name))
+    m = loaded(repository() if name == "repository" else good())
     for path, text in dbt.emit(m).items():
         (tmp_path / "tree" / path).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / "tree" / path).write_text(text)
@@ -384,6 +383,10 @@ def test_dbt_parses_compiles_and_selects_the_tree(tmp_path: Path, name: str) -> 
     foreign = [sql for s, sql in compiled[False].items() if "/k2_input_relationships_" in s]
     assert len(foreign) == (1 if name == "good" else 0)  # daily-load's station_id into its input
     assert all("FOR VERSION AS OF BIGINT '42'" in sql for sql in foreign)  # the foreign-key test reads the pinned snapshot too
+    quality = [sql for s, sql in compiled[False].items() if "/k2_quality_" in s]
+    rules = sum(1 for p, t in built for q in t.quality if q.type in ("sql", "library"))
+    assert len(quality) == rules and (rules or name == "repository"), "the good set's silver_readings has sql and library rules"
+    assert not [sql for sql in quality if "${table}" in sql or "metric_value" not in sql]  # ${table} is the model's relation
 
     for p in m.products:
         if not any(t.build.kind == "dbt" for t in p.tables) and not p.seeds:

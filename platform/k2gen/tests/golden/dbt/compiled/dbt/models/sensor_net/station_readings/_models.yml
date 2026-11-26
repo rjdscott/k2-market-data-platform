@@ -49,3 +49,16 @@ models:
         columns:
         - station_id
         - read_at
+  - k2_quality:
+      arguments:
+        query: select count(*) from ${table}
+        holds: metric_value > 0
+  - k2_quality:
+      arguments:
+        query: select coalesce(sum(n - 1), 0) from (select count(*) as n from ${table} group by "station_id", "read_at") as
+          k2_groups
+        holds: metric_value = 0
+  - k2_quality:
+      arguments:
+        query: select count(*) from ${table} where value not between -90 and 60
+        holds: metric_value <= 0

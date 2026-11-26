@@ -11,7 +11,7 @@
     "release": {"$ref": "#/$defs/releaseId"},
     "tag": {"$ref": "#/$defs/tag"},
     "commit": {"description": "The commit the tag names.", "$ref": "#/$defs/sha1"},
-    "builtAt": {"description": "When the compile ran, UTC. Not part of the id.", "$ref": "#/$defs/utc"},
+    "builtAt": {"description": "The document set's taggedAt (provenance.json), UTC: the approval time, never the compile's clock, so one set and one image set always compile to the same bytes. Not part of the id.", "$ref": "#/$defs/utc"},
     "k2gen": {"description": "The compiler's version, platform/k2gen/pyproject.toml.", "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
     "previous": {"description": "The release the needs were computed against; null for the first.", "oneOf": [{"$ref": "#/$defs/releaseId"}, {"type": "null"}]},
     "setSha256": {"description": "The document set's hash, provenance.json's setSha256: names the approved set this release compiles.", "$ref": "#/$defs/sha256"},

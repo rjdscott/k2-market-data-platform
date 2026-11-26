@@ -45,7 +45,7 @@
       ]
     },
     "tableRead": {
-      "description": "The principal reads the table and sees exactly these columns, with these masked, rows at least this old, and never a row matching the predicate.",
+      "description": "The principal reads the table and sees exactly these columns, with these masked, rows at least this old, never a row matching mustNotAppear, and the rows mustAppear names.",
       "type": "object",
       "additionalProperties": false,
       "required": ["principal", "table", "visible"],
@@ -56,7 +56,17 @@
         "visible": {"description": "Every column SELECT * returns, in any order.", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
         "masked": {"description": "Columns that must read as null in every row.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
         "minRowAgeMinutes": {"description": "The newest visible row is at least this old, by the table's delay column.", "type": "integer", "minimum": 0},
-        "mustNotAppear": {"description": "A SQL predicate on the table that must match no visible row.", "type": "string", "minLength": 1}
+        "mustNotAppear": {"description": "A SQL predicate on the table that must match no visible row.", "type": "string", "minLength": 1},
+        "mustAppear": {
+          "description": "The positive half: at least minRows visible rows (1 when absent), each matching the SQL predicate where when it is given, so a table that built no rows fails the row instead of passing every negative assertion. Known rows by id are a where such as `id IN (1, 2, 4)` with minRows their count. k2gen check requires one on some read row of every role with a policy (S07).",
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "minRows": {"description": "How many visible rows, at least.", "type": "integer", "minimum": 1},
+            "where": {"description": "A SQL predicate on the table those rows match.", "type": "string", "minLength": 1}
+          }
+        }
       }
     },
     "tableDenied": {

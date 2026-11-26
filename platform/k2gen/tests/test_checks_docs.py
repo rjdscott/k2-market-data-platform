@@ -91,3 +91,24 @@ def test_a_schema_error_stops_the_rules() -> None:
     case = [c for c in CASES["cases"] if c["code"] == "docs.lineage-column-missing"][0]
     documents = changed([*case["changes"], {"file": "contracts/ops-insight/daily-load/product.odps.yaml", "remove": "status"}])
     assert {f.code for f in run(documents)} == {"docs.schema-invalid"}
+
+
+@pytest.mark.parametrize("word", sorted(model.TRINO_RESERVED))
+def test_a_domain_named_any_reserved_word_is_refused(word: str) -> None:
+    # model.RESERVED_DOMAIN_NAMES repeats none of TRINO_RESERVED: this check refuses each one, as a
+    # domain whose fence (its catalog) is the word: current-user is the catalog current_user
+    change = {"file": "contracts/domains.yaml", "set": f"domains/{word.replace('_', '-')}",
+              "value": {"owner": "platform-team", "kind": "consumer-aligned", "description": "Named as a reserved word."}}
+    assert {f.code for f in run(changed([change]))} == {"docs.name-reserved-word"}, word
+
+
+def test_every_threshold_form_maps_to_one_condition() -> None:
+    from k2gen.emit.dbt import _holds
+
+    assert _holds({"mustBe": 0, "mustNotBe": 1.5, "mustBeGreaterThan": -1, "mustBeGreaterOrEqualTo": 1e-05, "mustBeLessThan": 9,
+                   "mustBeLessOrEqualTo": 8, "mustBeBetween": [1, 2], "mustNotBeBetween": [3, 4.5]}) == (
+        "metric_value = 0 and metric_value <> 1.5 and metric_value > -1 and metric_value >= 1E-05 and metric_value < 9 and "
+        "metric_value <= 8 and metric_value between 1 and 2 and metric_value not between 3 and 4.5")
+    for bad in ({}, {"mustBe": "many"}, {"mustBe": True}, {"mustBe": float("inf")}, {"mustBeBetween": [2, 1]}, {"mustBeBetween": [1]}):
+        with pytest.raises(ValueError):
+            _holds(bad)

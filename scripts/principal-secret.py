@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Creates or rotates one principal's Trino password or k2-api key, and writes only its hash.
+"""Creates, rotates or removes one principal's Trino password or k2-api key; writes only its hash.
 
     make password PRINCIPAL=<id> [ROTATE=1] [TO_FILE=1]
     make api-key PRINCIPAL=<id> [ROTATE=1]
+    make principal-remove PRINCIPAL=<id> [FORCE=1]
     make principals-status
 
 The procedure around it: docs/runbooks/create-or-rotate-a-principal.md. Every file is under
@@ -21,11 +22,19 @@ release:
   terminal. api/keys.json maps the sha256 hex of the whole key, `k2_` included, to the
   principal; a rotation drops the principal's old key. Only a principal k2-api may act as
   (compiled/api/principals.json, k2gen.emit.api) gets one.
-- `status`: each known principal's id and which of the three it has; never a hash or a secret.
+- `remove`: drops the principal's lines of trino/password.db, its entries of api/keys.json, and
+  principals/<id>.password (emptied in place, then unlinked, so a container's stale mount of it
+  reads nothing); every other line and entry is kept byte for byte. It prints the names of what
+  it removed, or that there was nothing, and exits 0 either way: the state asked for holds, so a
+  rerun is not an error. Refused for a principal still known unless FORCE=1, and always for the
+  release canary.
+- `status`: each known principal's id and which of the three it has, then a `STALE` line for
+  each principal holding any of the three that is not known; never a hash or a secret.
 
 A principal is known when contracts/access/principals.yaml declares it or it is the builder or
 publisher of a dbt or code product (model.builder, model.publisher): anything else is refused,
-the release canary included (deploy writes its line, S19). An existing password or key is kept
+the release canary included (deploy writes its line, S19), and `remove` refuses a known one unless
+FORCE=1 and the canary always. An existing password or key is kept
 unless ROTATE=1. No secret is ever read from argv or the environment.
 
 Files are rewritten in place, never renamed over: through Docker Desktop's file sharing a
@@ -47,11 +56,12 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import bcrypt
@@ -186,11 +196,39 @@ def api_key(root: Path, principal: str, rotate: bool) -> None:
     print_once(key, f"API key for {principal}")
 
 
+def remove(root: Path, principal: str) -> None:
+    db, keys_file, stored = root / PASSWORD_DB, root / API_KEYS, root / model.password_file(principal)
+    removed = []
+    with (locked(db) if db.exists() else nullcontext()) as f:  # held over the file, as password() holds it
+        if f is not None:
+            lines = read(f).splitlines(keepends=True)
+            kept = [line for line in lines if line.split(":", 1)[0] != principal]
+            if len(kept) < len(lines):
+                write(f, "".join(kept))
+                removed.append(f"{len(lines) - len(kept)} line(s) of {PASSWORD_DB}")
+        if stored.is_file():
+            with locked(stored) as s:
+                write(s, "")  # a container's stale mount of it then reads nothing, not the password
+                stored.unlink()
+            removed.append(model.password_file(principal))
+    if keys_file.exists():
+        with locked(keys_file) as f:
+            text = read(f).strip()
+            keys: dict[str, str] = json.loads(text) if text else {}
+            kept_keys = {h: p for h, p in keys.items() if p != principal}
+            if len(kept_keys) < len(keys):
+                write(f, json.dumps(kept_keys, indent=2, sort_keys=True) + "\n")
+                removed.append(f"{len(keys) - len(kept_keys)} key(s) of {API_KEYS}")
+    print(f"principal-secret: {principal}: "
+          + (f"removed {', '.join(removed)}" if removed else "nothing to remove") + f" under {root}", file=sys.stderr)
+
+
 def status(root: Path, ids: set[str], callers: set[str]) -> None:
     db, keys_file = root / PASSWORD_DB, root / API_KEYS
     with_password = {line.split(":", 1)[0] for line in db.read_text().splitlines() if line.strip()} if db.exists() else set()
     text = keys_file.read_text().strip() if keys_file.exists() else ""
     with_key = set(json.loads(text).values()) if text else set()
+    with_file = {p.name.removesuffix(".password") for p in root.glob(model.password_file("*"))}
     print(f"{'principal':<28} {'password':<9} {'file':<5} api-key")
     for p in sorted(ids):
         has_file = (root / model.password_file(p)).exists() if not p.startswith("p.") else None
@@ -198,25 +236,42 @@ def status(root: Path, ids: set[str], callers: set[str]) -> None:
               f"{'-' if has_file is None else 'yes' if has_file else 'no':<5} "
               f"{('yes' if p in with_key else 'no') if p in callers else '-'}")
     canaries = sorted(u for u in with_password if u.startswith("k2_release_"))
-    stray = sorted((with_password | with_key) - ids - set(canaries))
+    stale = sorted((with_password | with_key | with_file) - ids - set(canaries))
     if canaries:
         print(f"release canaries in {PASSWORD_DB} (deploy writes them): {', '.join(canaries)}")
-    if stray:
-        print(f"NOT DECLARED but still in {PASSWORD_DB} or {API_KEYS}: {', '.join(stray)}")
+    for p in stale:
+        where = [f for f, has in ((PASSWORD_DB, p in with_password), (API_KEYS, p in with_key),
+                                  (model.password_file(p), p in with_file)) if has]
+        why = "neither declared nor a dbt or code product's builder or publisher"
+        if p in with_password:
+            why += ", yet Trino still logs it in"
+            if any(re.fullmatch(r, p) for r in model.PIPELINE_PRINCIPALS):
+                why += " and the platform's pattern rules still match it"
+        print(f"STALE {p} in {', '.join(where)}: {why}; make principal-remove PRINCIPAL={p}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("action", choices=("password", "api-key", "status"))
+    parser.add_argument("action", choices=("password", "api-key", "remove", "status"))
     parser.add_argument("--principal", default="")
     parser.add_argument("--rotate", action="store_true", help="replace the principal's existing password or key")
     parser.add_argument("--to-file", action="store_true",
                         help="password of a service principal: write it to principals/<id>.password, print nothing")
+    parser.add_argument("--force", action="store_true", help="remove: the credentials of a principal still known")
     args = parser.parse_args()
     root = secrets_root()
     ids, callers = known()
     if args.action == "status":
         return status(root, ids, callers)
+    if args.action == "remove":
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", args.principal):
+            die(f"{args.principal or 'PRINCIPAL=<id>'}: not a principal id")
+        if args.principal.startswith("k2_release_"):
+            die(f"{args.principal}: a release canary; deploy owns its line (S19)")
+        if args.principal in ids and not args.force:
+            die(f"{args.principal} is still known (declared in contracts/access/principals.yaml, or a dbt or code "
+                "product's builder or publisher); undeclare it first, or FORCE=1 removes its credentials anyway")
+        return remove(root, args.principal)
     if args.principal not in ids:
         die(f"{args.principal or 'PRINCIPAL=<id>'}: not a principal contracts/access/principals.yaml declares, "
             "nor a dbt or code product's builder or publisher")

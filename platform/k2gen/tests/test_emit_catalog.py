@@ -118,7 +118,7 @@ def internal_names() -> list[re.Pattern[str]]:
     hosts = sorted(set(compose) | {s["container_name"] for s in compose.values() if "container_name" in s})
     secrets = [s.path.split("<", 1)[0] for s in model.SECRET_FILES] + [model.SECRETS_MOUNT, model.SECRETS_ENV, "password"]
     return ([re.compile(rf"(//{re.escape(h)}\b|\b{re.escape(h)}:[0-9])") for h in hosts]
-            + [re.compile(re.escape(s), re.I) for s in secrets if s]
+            + [re.compile((r"(?<![\w.-])" if s.endswith("/") else "") + re.escape(s), re.I) for s in secrets if s]  # canary/, not access-canary/
             + [re.compile(r"""(^|[\s"'(])/[A-Za-z0-9_.-]+/"""), re.compile(r"\b(s3|file)://"),
                re.compile(re.escape(model.RELEASES_MOUNT)), re.compile(re.escape(model.LANDING_BUCKET))])
 

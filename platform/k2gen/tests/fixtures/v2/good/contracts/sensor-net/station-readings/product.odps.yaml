@@ -11,6 +11,13 @@ description:
   limitations: Synthetic; no real station or measurement.
 team:
   name: sensor-team
+tags: [synthetic, weather]
+support:
+  - channel: sensor-team-requests
+    url: "mailto:sensor-team@example.org"
+    tool: email
+    scope: issues
+    description: Questions and access requests, answered by the made-up sensor team.
 authoritativeDefinitions:
   - type: licence
     url: https://data.example.org/terms
@@ -21,6 +28,9 @@ outputPorts:
   - name: silver_readings
     version: 1.0.0
     contractId: sensor-net.station-readings.silver_readings
+    inputContracts:  # a sibling, not an input port: the catalog's lineage edge bronze to silver
+      - id: sensor-net.station-readings.bronze_readings
+        version: 1.0.0
 customProperties:
   - property: connector
     value:
