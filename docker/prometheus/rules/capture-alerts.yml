@@ -138,12 +138,14 @@ groups:
       # Book-only, so it reads the switch the capture reports (ADR-050): with
       # book_capture false nothing is checksummed, the counter is not even seeded,
       # and this cannot fire for a venue that is off nor needs an edit at resume.
+      # `unless ... == 0`, not `and ... == 1`: a capture with no gauge at all (the
+      # image before ADR-050, during a rollout or a rollback) keeps its alert.
       # CaptureSequenceGaps and CaptureResyncStorm stay unconditioned on purpose:
       # Coinbase's connection-wide gaps are trade-path signals too.
       - alert: CaptureChecksumFailure
         expr: |
           (increase(k2_capture_checksum_failures_total[10m]) > 0)
-            and on (exchange) (k2_capture_book_capture == 1)
+            unless on (exchange) (k2_capture_book_capture == 0)
         for: 5m
         labels:
           severity: critical
@@ -325,11 +327,13 @@ groups:
       #
       # Conditioned on the switch the capture reports (ADR-050): a venue whose
       # book_capture is false seeds no depth gauge, and a depth series left over
-      # from before the recreate must not page for a book nobody asked for.
+      # from before the recreate must not page for a book nobody asked for. Only
+      # an explicit 0 silences it, so a capture exporting no gauge (the old image)
+      # is still watched.
       - alert: CaptureBookDepthDegraded
         expr: |
           (max_over_time(k2_capture_book_depth[10m]) < 20)
-            and on (exchange) (k2_capture_book_capture == 1)
+            unless on (exchange) (k2_capture_book_capture == 0)
         for: 10m
         labels:
           severity: warning
