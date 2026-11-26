@@ -1,0 +1,19 @@
+name: canonical-trades
+domain: market-analytics
+owner: analytics-team
+purpose: >-
+  One row per logical trade across every venue, the earliest delivery, in fixed point 1e-8
+  like the wire and ClickHouse gold.
+kind: consumer-aligned
+lifecycle: draft
+inputs:
+  - table: silver.trades_binance
+  - table: silver.trades_kraken
+  - table: silver.trades_coinbase
+outputs:
+  - gold.trades
+consumers:
+  - ClickHouse gold reload, paused (ADR-057), docs/runbooks/clickhouse-rebuild-from-lake.md
+  - notebooks/k2lake.py
+  - scripts/parity_ohlcv.py
+  - scripts/parity_bars.py

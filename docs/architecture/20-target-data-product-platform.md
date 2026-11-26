@@ -458,8 +458,8 @@ product: **Kraken's** topic feeds only **kraken-trades** and its reference API o
 and Coinbase** have the same two products each (**their trades** and **their instruments**). Every venue's listings
 and the **currency master's** codes flow into the **security master**, which gives each trades product the instrument
 id for its venue symbol as of the trade's time (section 4.11). The venue silvers feed **canonical-trades**, which
-feeds **candles** and **event-bars**. **venue-books** is paused, so no arrow reaches it. No archive is shared: today's
-single `raw.messages` gives way to one landing per product.
+feeds **candles** and **event-bars**. **venue-books** is paused, so no arrow reaches it. No archive is shared: the v3
+lake's single raw table, retired in the first phase, gives way to one landing per product.
 
 The security master has two levels, an **asset** (Bitcoin) and an **instrument** (BTC/USD, BTC/USDT and BTC/USDC are
 three instruments of one asset), each venue's spelling mapped to its instrument with history, from the venue's public
@@ -566,11 +566,11 @@ flowchart TB
   classDef paused fill:#f4f4f4,stroke:#777777,stroke-dasharray: 5 5,color:#000
   TOP["Redpanda raw topics, one per venue"]:::ext
   subgraph TODAY["Today, chapters 04 to 19"]
-    T1["Ingest: lake_ingest, one Spark job for every venue and every layer"]:::run
+    T1["Ingest: the v3 lake ingest, every venue and layer in one job, retired"]:::paused
     T2[("Storage: one raw archive, per-layer namespaces, a mart warehouse per domain")]:::store
-    T3["Transform: dbt marts read gold and write the domain warehouses"]:::run
+    T3["Transform: dbt marts from gold into the domain warehouses, retired"]:::paused
     T4["Serve: Trino, writable domain catalogs, an unchecked user name"]:::run
-    T5["Hot tier: ClickHouse running, fed from the topics"]:::run
+    T5["Hot tier: ClickHouse fed from the topics, paused"]:::paused
   end
   subgraph TARGET["Target at 3.0, this chapter"]
     G1["Ingest: one DAG per product, its own connector and landing"]:::run
@@ -587,12 +587,12 @@ flowchart TB
   G2 -->|"tested rows"| G4
 ```
 
-**Reading guide, section 4.10.** Two boxes, the same five rows. **Today**, **lake_ingest** reads every **topic** and
-writes every layer into **storage**, the archive `raw.messages` first, so one fault stops every venue ([chapter
-08](08-lake-ingest.md)); **dbt marts** read gold and write the domain warehouses; consumers query **Trino** through
-domain catalogs where any user can run a table procedure and any user name is believed ([chapter
-19](19-lakehouse-and-domain-warehouses.md)); **ClickHouse** serves from the topics ([chapter
-10](10-clickhouse-gold.md)). In the **target**, each product's **DAG** reads its own topic into **its own namespace**;
+**Reading guide, section 4.10.** Two boxes, the same five rows. **Today**, the dashed rows are what the first phase
+stood down: the v3 lake ingest, retired, read every **topic** and wrote every layer into **storage**, the raw archive
+first, so one fault stopped every venue ([chapter 08](08-lake-ingest.md)); **dbt marts**, retired with it, read gold and
+wrote the domain warehouses; **ClickHouse**, paused, served from the topics ([chapter 10](10-clickhouse-gold.md)).
+Consumers query **Trino** through domain catalogs where any user can run a table procedure and any user name is
+believed ([chapter 19](19-lakehouse-and-domain-warehouses.md)). In the **target**, each product's **DAG** reads its own topic into **its own namespace**;
 **dbt-core** builds silver, gold and marts from inputs at their markers, tests them and rolls back a failure;
 consumers start at the **catalog site** and read tested rows through read-only catalogs or REST, logged in by password
 over TLS; **ClickHouse** is paused, so no arrow reaches it. No arrow joins the boxes: the target is built fresh,
@@ -743,7 +743,7 @@ landings are kept (needed by the Kraken phase).
 
 | Layer | Today, as chapters 04 to 19 describe it | Target, in this chapter | Moves in phase |
 |---|---|---|---|
-| Sources and landing | Kafka only: one job reads every venue's topic into one shared archive, `raw.messages` ([08](08-lake-ingest.md)) | a connector and a verbatim landing per product, five kinds (4.4) | files in the run spine; Kafka and public API in the Kraken phase; FTP, SFTP, S3 in remaining connector kinds |
+| Sources and landing | Kafka only: one job read every venue's topic into one shared raw archive until it retired in the first phase ([08](08-lake-ingest.md)) | a connector and a verbatim landing per product, five kinds (4.4) | files in the run spine; Kafka and public API in the Kraken phase; FTP, SFTP, S3 in remaining connector kinds |
 | Layers and storage | Spark stage code, one run for every venue and layer; warehouse `k2` by layer ([09](09-lake-layers.md)) | bronze by its connector, silver and gold as dbt models, only the layers that add a guarantee; a namespace per product (4.1, 4.4) | run spine; Kraken phase; widen crypto |
 | Marts and tested reads | dbt marts rebuilt whole every hour from lake gold; readers see each newest snapshot ([19](19-lakehouse-and-domain-warehouses.md)) | merged, tested, rolled back on failure; every reader at the marker (4.4) | run spine |
 | Security master | a hand-kept file, `config/instruments.yaml`, as type-2 dimensions, no asset level ([12](12-data-strategy.md)) | two levels from venue reference APIs, exceptions list, held rows (4.7) | Kraken phase; widen crypto |
@@ -755,13 +755,13 @@ landings are kept (needed by the Kraken phase).
 | Lifecycle | a field in `product.yaml` and `git log` ([18](18-data-mesh.md)) | four states, holds, history from release manifests (4.5) | spine phases; holds in the Kraken phase |
 | Metadata, lineage, usage | dbt test results, lake audits, the dbt manifest; no usage ([18](18-data-mesh.md)) | governance products, OpenLineage, usage events (4.12) | catalog phase |
 | Hot tier | ClickHouse gold, fed from the topics ([10](10-clickhouse-gold.md)) | paused behind a profile, volume kept (4.10) | clear the ground |
-| Alerts | 36 rules, routed nowhere ([11](11-observability.md)) | delivered to a Slack channel through an incoming webhook kept as a local secret | controls, alerts and release engineering |
-| Backup | four fixed tables (`scripts/backup-lake.sh`) | a set generated from the contracts, restore and rebuild, an early drill (4.9); the copy stays on this host until the release gate | run spine; first drill in the Kraken phase |
+| Alerts | rules as code in `docker/prometheus/rules/`, routed nowhere ([11](11-observability.md)) | delivered to a Slack channel through an incoming webhook kept as a local secret | controls, alerts and release engineering |
+| Backup | `scripts/backup-lake.sh`, whose four fixed tables retired in the first phase; it prints a SKIP naming the run spine | a set generated from the contracts, restore and rebuild, an early drill (4.9); the copy stays on this host until the release gate | run spine; first drill in the Kraken phase |
 | Infrastructure | compose files and hand-run setup | this host declared and checkable: one command shows drift, one converges | infrastructure as code |
 
-**The cost, stated plainly.** The old pipeline (`lake_ingest`, its `raw`, `bronze`, `silver` and `gold` namespaces and
-stage code) is retired at the end of the first phase: Spark image rebased and proven, backup taken, namespaces
-dropped, code archived to `legacy/` with a README, every reader of the old tables moved or retired. Until the Kraken
+**The cost, stated plainly.** The old pipeline was retired in the first phase (`lake_ingest`, its `raw`, `bronze`,
+`silver` and `gold` namespaces and stage code): Spark image rebased and proven, backup taken, namespaces dropped, code
+archived to `legacy/v3-lake-ingest/` with a README, every reader of the old tables moved or retired. Until the Kraken
 phase lands the lake gets no live crypto data and the dashboards are stale. The platform is a lab until the release
 gate (data disposable, backed up first); from the `v3.0.0` tag production rules apply.
 

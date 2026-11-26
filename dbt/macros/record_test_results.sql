@@ -6,11 +6,12 @@
   tests) writes nothing.
 
   dbt runs on-run-end after the nodes whatever their result, so a failed, warned, errored or
-  skipped test of the invocation gets its row too (make test-dbt fails a source test on
-  purpose and reads the row back). A test outside the invocation gets none: under Airflow each
-  node is its own invocation, and a node whose upstream task failed is upstream_failed and
-  runs no dbt at all. If the hook itself fails, dbt exits non-zero although every test passed
-  (docs/runbooks/dbt-marts.md), and that invocation's rows are lost.
+  skipped test of the invocation gets its row too (the old marts' make test-dbt failed a
+  source test on purpose and read the row back; dbt builds return in phase 002). A test
+  outside the invocation gets none: under the retired dbt_marts DAG each node was its own
+  invocation, and a node whose upstream task failed was upstream_failed and ran no dbt at
+  all. If the hook itself fails, dbt exits non-zero although every test passed
+  (legacy/v3-lake-ingest/docs/runbooks/dbt-marts.md), and that invocation's rows are lost.
 
   Columns: invocation_id and run_started_at, dbt's own; writer, the profile's user, so a row
   says who asserted it (rules.json lets only dbt_<catalog> insert here); unique_id and
@@ -20,12 +21,13 @@
   reports it (pass, fail, warn, error, skipped); failures, the failing rows dbt counted
   (1 for a failed unit test); execution_time in seconds; message, dbt's, cut at 1000
   characters (a failed unit test's is the diff). Every domain's table has this shape, and
-  the governance view unions them (dbt/models/governance/), so a column changes in every
-  domain's table at once or the view stops building.
+  the old governance view unioned them (legacy/v3-lake-ingest/dbt/models/governance/), so a
+  column changes in every domain's table at once.
 
-  Append-only: Airflow's dbt_marts runs one dbt invocation per node, so a domain's table
-  gains a commit per tested node per hourly run, and its tests' count of rows 24 times a
-  day. expire_mart_snapshots compacts and expires it daily.
+  Append-only: a commit per tested node per invocation. Under the retired hourly dbt_marts
+  DAG that was 24 a day per test, and expire_mart_snapshots, archived with it in
+  legacy/v3-lake-ingest/dbt/macros/, compacted and expired the table daily; nothing expires
+  it today.
 #}
 {% macro record_test_results(results) %}
     {%- set rows = [] -%}
@@ -60,8 +62,8 @@
 
 {#
   The writer's dq.dbt_test_results and its schema, if absent; returns the table's name. The
-  hook calls it, and dbt_marts runs it as a task of its own before every other task of the
-  domain (docker/airflow/dags/dbt_marts.py): two hooks creating a missing table at once can
+  hook calls it, and the retired dbt_marts DAG ran it as a task of its own before every other
+  task of the domain: two hooks creating a missing table at once can
   fail, one of them with "Table already exists" (ADR-046 Risks), and dbt's Jinja has no way
   to catch that and go on.
 #}

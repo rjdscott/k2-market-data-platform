@@ -4,6 +4,17 @@
 > **Read this if** capacity planning, benchmark readers.
 > **Before this** chapter 04.
 
+**Retired, 2026-11-26.** The lake tier this model sizes was retired with the v3 lake ingest
+([ADR-056](../adr/ADR-056-unified-data-product-platform.md); code archived in
+[`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)): its tables were dropped after a backup, and no live crypto
+data lands in the lake until phase 004 of the [platform plan](../plans/2026-11-26-unified-product-platform/README.md).
+The lake-table rows (§4c, the MinIO lines of §4d, §7 rank 1) can no longer be measured and stand
+as the record of the prediction and its scoring; the capture and Redpanda rows still describe
+what runs. ClickHouse is paused ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)).
+The limits declared today are what `python3 scripts/check-budget.py` prints; every limit figure
+below is the declaration of its own date. As the convention below requires, no predicted value
+is edited; only table names of the retired lake are marked or spelled out.
+
 **Status: predictions only. Written 2026-08-26, in Phase C, before the first burn-in
 sample exists.** Every row below is a forecast, labelled `predicted`, naming the
 assumption it rests on and the input it was derived from. Phase F adds two columns,
@@ -31,7 +42,7 @@ guess. Section 8 says which command settles which row.
 > `0-11` (`K2_HEAVY_CPUSET`); `docker inspect -f '{{.HostConfig.CpusetCpus}}'
 > k2-spark-iceberg k2-capture-binance` → `0-11` / `12-14`. Two 10-minute windows, sampled
 > with the same PromQL, quiet baseline ending 22:15:31Z and then `maintenance.py --days 2`
-> (binpack of `raw.messages`, sort rewrites of both bronze tables, expiry, orphan scan,
+> (binpack of the raw table, sort rewrites of both bronze tables, expiry, orphan scan,
 > audits) ending 22:25:33Z, with the 5-minute ingest cron running throughout both.
 > Scope: `v3, 15 svc`, one host, the first day of the archive.
 >
@@ -64,11 +75,11 @@ guess. Section 8 says which command settles which row.
 >
 > **Verdict: no p99 regression attributable to compaction beyond the rate-driven band;
 > the pinning holds.** What the run *did* find was on the Spark side, not the capture side:
-> `rewrite_data_files` over `raw.messages` OOM'd a 768m driver on its 5 MB rows, twice
+> `rewrite_data_files` over the raw table OOM'd a 768m driver on its 5 MB rows, twice
 > (22:16Z, 22:28Z), before finishing at a 2g heap in 102 s with a peak driver RSS of
 > **2,641 MiB** (40 → 5 raw files, 631 MB rewritten), which is why `maintenance.py` now
 > holds the ingest lock and runs alone in the container
-> (`docker/lake/README.md`, "Concurrency must be 1"). One window each; the daily rate is
+> (the lake README, now archived, "Concurrency must be 1"). One window each; the daily rate is
 > Phase F's.
 
 ---
@@ -112,8 +123,8 @@ guess. Section 8 says which command settles which row.
 |---|-------|-------|----------------|
 | G1 | **Tail-symbol decay.** The spikes sampled BTC-quoted majors. Non-major instruments are assumed to run at **1/3** the major's frame rate. | ×0.333 | A round number chosen deliberately over a fitted one, so that the error is attributable to *this line* rather than to a curve. |
 | G2 | **Broker-side compression ratio on exchange JSON** in Redpanda, whole-batch | **0.40** of raw | The codec is **zstd, producer-side**, `compression.type=zstd` in `services/capture-rust/src/sink.rs`; no `compression.codec` is set on the v3 topics, so batches land on disk as the producer compressed them. The 0.40 is an lz4-era midpoint (lz4 on repetitive JSON typically lands 0.35–0.45) and is therefore **conservative**: one captured 4,803,578-byte Coinbase `level2` snapshot compressed to 383,011 bytes, 12.5:1 at `zstd -3` (`services/capture-rust/README.md`). That is one frame of one shape, not a whole-topic ratio, so the prediction is left at 0.40 and scored in Phase F rather than adjusted on a single sample. |
-| G3 | **zstd-3 ratio on `raw.messages.payload`** in Parquet | **0.20** of raw | The row [Q2 flags as most likely to miss](../research/2026-08-26-v3-requirements-clarification.md#q2--estimation-are-capacity-numbers-predicted-or-only-reported): the payload is an opaque `bytes` column, so Parquet's dictionary and RLE encodings do nothing for it and only the zstd block codec applies. |
-| G4 | **zstd-3 ratio on the derived columnar tables** (`bronze.trades` 0.10, `bronze.book_snapshots_l2` 0.15) | 0.10 / 0.15 | These *are* dictionary- and delta-encodable, repeated symbols, near-identical int64 magnitudes, so they should beat G3 by ~2×. |
+| G3 | **zstd-3 ratio on the raw table's `payload`** in Parquet | **0.20** of raw | The row [Q2 flags as most likely to miss](../research/2026-08-26-v3-requirements-clarification.md#q2--estimation-are-capacity-numbers-predicted-or-only-reported): the payload is an opaque `bytes` column, so Parquet's dictionary and RLE encodings do nothing for it and only the zstd block codec applies. |
+| G4 | **zstd-3 ratio on the derived columnar tables** (`bronze.trades` 0.10, `bronze.book_snapshots_l2` 0.15; Phase C names, the lake tier since retired) | 0.10 / 0.15 | These *are* dictionary- and delta-encodable, repeated symbols, near-identical int64 magnitudes, so they should beat G3 by ~2×. |
 | G5 | **Per-frame capture cost**, single-threaded: parse + book apply + CRC32 + Avro encode + produce-enqueue | **~20 µs/frame** | Built up component by component in §3; rounded **up** from a ~13 µs component sum to absorb cache misses and the sampler. |
 | G6 | **Rust `BTreeMap<i64,i64>` cost per live book level** | **~28 B/entry** | A `std` B-tree leaf holds ≤11 pairs in ~192 B of node; at a typical ~8/11 fill that is 24 B/entry, +~10 % for internal nodes. |
 | G7 | **tokio + rustls + metrics runtime floor**, per container | **0.02 CPU / 8 MB** | Flat overhead not attributable to any frame; a guess with no component breakdown behind it. |
@@ -291,17 +302,17 @@ anyway so that a deeper or faster book stays recoverable by replay.
 
 | Iceberg table | Parquet + zstd-3, predicted | Assumption | Derived from |
 |---|---|---|---|
-| `raw.messages` | **6.47 GB/day** | G3, opaque `bytes` column, only the block codec helps | `32.34 × 0.20` |
-| `bronze.trades` | **0.156 GB/day** | G4, dictionary on `symbol`/`exchange`/`side`, delta on timestamps, near-constant int64 magnitudes | `1.555 × 0.10` |
-| `bronze.book_snapshots_l2` | **0.264 GB/day** | G4, the four int64 arrays are tightly clustered in magnitude | `1.763 × 0.15` |
+| raw table (retired) | **6.47 GB/day** | G3, opaque `bytes` column, only the block codec helps | `32.34 × 0.20` |
+| `bronze.trades` (retired) | **0.156 GB/day** | G4, dictionary on `symbol`/`exchange`/`side`, delta on timestamps, near-constant int64 magnitudes | `1.555 × 0.10` |
+| `bronze.book_snapshots_l2` (retired) | **0.264 GB/day** | G4, the four int64 arrays are tightly clustered in magnitude | `1.763 × 0.15` |
 | `bronze.<venue>_<msgtype>` ×6 (Phase E, predicted 2026-08-27 **before** the first rebuild) | **3.5 GB/day**, sum of six | The `raw.*` topics are 91 % of raw's bytes (§4b), 5.9 GB/day on disk; re-encoded columnar the same content should land at ~0.60 of that: Binance and Coinbase keep prices as *strings* (dictionary helps little on unique values), Kraken's DECIMALs and every repeated key/symbol/side column dictionary well, and the 5-byte framing plus Avro envelope are gone. Measured per table after `make lake-rebuild LAYER=bronze`, in this table's next row | `6.47 × 0.91 × 0.60` |
-| ↳ measured 2026-08-27, after the first rebuild | **0.593 of raw.\*** (1,974,345,923 B against 3,326,927,766 B of `raw.*` frames in `raw.messages`, whole archive); by day 0.595 / 0.590 | The 0.60 held. Bytes/day cannot be scored yet: the archive's only full-ish day starts behind the `raw.kraken` eviction and the 2026-08-27 slice is 5.25 quiet hours (4.06 GB/day raw.\*, 2.40 GB/day per-venue, normalised) | [benchmarks/2026-08-27.md § Lake](../benchmarks/2026-08-27.md), B4–B5 |
-| `silver.trades_<venue>` ×3 (Phase E, predicted 2026-08-27 before the first silver rebuild) | **0.25 GB/day**, sum of three | The three bronze trade tables held 126.2 MB for ≈ 14.9 h (0.20 GB/day); silver stores the same trades exploded and typed, two DECIMAL(28,10) instead of strings, timestamps instead of text, four flag columns, a canonical symbol dictionary, call it 1.25× | `0.20 × 1.25` |
-| `gold.trades` (Phase E, predicted 2026-08-27 before the first gold rebuild) | **0.18 GB/day** | The non-replay rows of silver (≈ 97 %), fewer columns, two BIGINTs where silver has two DECIMAL(28,10)s: ~0.9× the silver trades size | `0.20 × 0.9` |
-| `gold.bars` | **< 0.01 GB/day** | 23 canonical symbols × 3 kinds × ~100 bars/day on the busiest venue, at ~120 B a row; rebuilt over 41 h of trades on 2026-08-28 in 41 s (`make lake-rebuild LAYER=bars`) | `23 × 3 × 100 × 120 B` |
-| `gold.ohlcv_*` ×4 | **< 0.01 GB/day** | 34 instruments × 1,440 <!-- counts-ok: minutes in a day, a constant --> minutes = 49 K rows/day for 1m, ~30 B each compressed; the coarser three are negligible <!-- counts-ok: arithmetic over the instrument list, not data --> | `34 × 1440 × 30 B` |
-| `silver.book_<venue>` ×3 (predicted 2026-08-27 before the first books rebuild) | **2.1 GB/day** | the three bronze book tables (kraken_book, binance_depth20, coinbase_level2) held 1.85 GB for ≈ 14.9 h (3.0 GB/day); typed decimals and structs compress a little better than the string pairs: ~0.7× | `3.0 × 0.7` |
-| `gold.book_top20` + `gold.bbo_1s` | **0.6 GB/day** | 34 instruments × 86,400 s = 2.9 M rows/day of 80 Int64 levels, so ~0.5 GB/day for the book and ~0.1 for the BBO. ClickHouse's feed-fed copy of the same shape is not yet in a benchmark file <!-- counts-ok: arithmetic over the instrument list, not data --> | `2.9 M × 165 B + 2.9 M × 40 B` |
+| ↳ measured 2026-08-27, after the first rebuild | **0.593 of raw.\*** (1,974,345,923 B against 3,326,927,766 B of `raw.*` frames in the since-retired raw table, whole archive); by day 0.595 / 0.590 | The 0.60 held. Bytes/day cannot be scored yet: the archive's only full-ish day starts behind the `raw.kraken` eviction and the 2026-08-27 slice is 5.25 quiet hours (4.06 GB/day raw.\*, 2.40 GB/day per-venue, normalised) | [benchmarks/2026-08-27.md § Lake](../benchmarks/2026-08-27.md), B4–B5 |
+| `silver.trades_<venue>` ×3 (Phase E, predicted 2026-08-27 before the first silver rebuild; retired) | **0.25 GB/day**, sum of three | The three bronze trade tables held 126.2 MB for ≈ 14.9 h (0.20 GB/day); silver stores the same trades exploded and typed, two DECIMAL(28,10) instead of strings, timestamps instead of text, four flag columns, a canonical symbol dictionary, call it 1.25× | `0.20 × 1.25` |
+| `gold.trades` (Phase E, predicted 2026-08-27 before the first gold rebuild; retired) | **0.18 GB/day** | The non-replay rows of silver (≈ 97 %), fewer columns, two BIGINTs where silver has two DECIMAL(28,10)s: ~0.9× the silver trades size | `0.20 × 0.9` |
+| `gold.bars` (retired) | **< 0.01 GB/day** | 23 canonical symbols × 3 kinds × ~100 bars/day on the busiest venue, at ~120 B a row; rebuilt over 41 h of trades on 2026-08-28 in 41 s (`make lake-rebuild LAYER=bars`) | `23 × 3 × 100 × 120 B` |
+| `gold.ohlcv_*` ×4 (retired) | **< 0.01 GB/day** | 34 instruments × 1,440 <!-- counts-ok: minutes in a day, a constant --> minutes = 49 K rows/day for 1m, ~30 B each compressed; the coarser three are negligible <!-- counts-ok: arithmetic over the instrument list, not data --> | `34 × 1440 × 30 B` |
+| `silver.book_<venue>` ×3 (predicted 2026-08-27 before the first books rebuild; retired) | **2.1 GB/day** | the three bronze book tables (kraken_book, binance_depth20, coinbase_level2) held 1.85 GB for ≈ 14.9 h (3.0 GB/day); typed decimals and structs compress a little better than the string pairs: ~0.7× | `3.0 × 0.7` |
+| `gold.book_top20` + `gold.bbo_1s` (retired) | **0.6 GB/day** | 34 instruments × 86,400 s = 2.9 M rows/day of 80 Int64 levels, so ~0.5 GB/day for the book and ~0.1 for the BBO. ClickHouse's feed-fed copy of the same shape is not yet in a benchmark file <!-- counts-ok: arithmetic over the instrument list, not data --> | `2.9 M × 165 B + 2.9 M × 40 B` |
 | **All lake tables** | **13.6 GB/day** | | sum, with bronze per venue, silver trades and books, gold; 6.89 without them |
 
 ### 4d. Retention → disk
@@ -349,7 +360,7 @@ anyway so that a deeper or faster book stays recoverable by replay.
 > `docker/redpanda/init.sh` records this measured window next to `RAW_RETENTION_BYTES`.
 > **512 MiB stands**, the bus is a buffer for the 5-minute ingest cadence, not the
 > archive; the lake is the archive (ADR-021). The trigger for revisiting it is in
-> [lake-ingest-lag.md §3](../runbooks/lake-ingest-lag.md): `k2_lake_ingest_backlog_offsets`
+> [lake-ingest-lag.md §3, archived](../../legacy/v3-lake-ingest/docs/runbooks/lake-ingest-lag.md): `k2_lake_ingest_backlog_offsets`
 > for any topic above one hour of that topic's arrival rate, two cycles running.
 >
 > It cost the records evicted on 2026-08-26 (counted in [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome) to learn this,
@@ -492,14 +503,14 @@ Each resource, and the multiple of today's 1× rate at which it binds:
 
 **The prediction, in one sentence: disk binds first, and it binds on a calendar rather
 than on a multiple, ~26 days from a cold start on the current host, because
-`raw.messages` grows 6.5 GB/day forever and nothing in the v3 design deletes it.**
+the raw table grows 6.5 GB/day forever and nothing in the v3 design deletes it.**
 
 This is the useful output of the whole document, and it is a design finding rather than
 a sizing one. Three responses exist and none is chosen here:
 
 - Compress harder at the source (the payload is already the exchange's own JSON; a
   per-topic zstd on Redpanda would help G2 but not G3).
-- Tier `raw.messages` older than N days to a cheaper store, which reopens the
+- Tier the raw table older than N days to a cheaper store, which reopens the
   system-of-record question ADR-018 just closed.
 - Buy disk. On a single-host portfolio platform this is the honest answer, and it is
   the one that keeps ADR-018's guarantee intact.
@@ -527,7 +538,7 @@ command per row, so that no number on this page is settled by inspection.
 | §4b | bytes/day per topic, uncompressed | `k2_capture_bytes_total` differenced over 24 h, per topic |
 | §4b | bytes/day per topic, on disk | `rpk topic describe -p market.crypto.v3.raw.binance` (and the other 8), sum `HIGH-WATERMARK` deltas against `rpk cluster logdirs describe` for on-disk size; scores G2 |
 | §4c | bytes/day per lake table | `mc du --depth 3 k2/k2-lake/` before and after the 24 h window, per table prefix; scores G3 and G4 |
-| §4c | rows/day per lake table | `SELECT COUNT(*) FROM k2.raw.messages` etc. via DuckDB over the pinned snapshot; cross-check against §2c |
+| §4c | rows/day per lake table | `SELECT COUNT(*)` per lake table via DuckDB over the pinned snapshot, while the tables existed (retired 2026-11-26); cross-check against §2c |
 | §4d | Redpanda steady-state disk | `rpk cluster logdirs describe` after retention saturates, i.e. **≥48 h after start**, not at the end of the burn-in if the burn-in is 24 h |
 | §4d | MinIO growth/month | `mc du k2/k2-lake/` at the start and end of the window, extrapolated ×30.44 |
 | §5 | RSS per container | `docker stats` `MemUsage` from the same 60 s sample series as §3b; take max and p50, not the last value |

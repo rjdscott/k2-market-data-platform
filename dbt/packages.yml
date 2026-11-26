@@ -4,7 +4,7 @@ packages:
   - package: metaplane/dbt_expectations
     version: 0.10.10
   # dbt_expectations' own dependency, at the version package-lock.yml already held. Named
-  # here because cosmos runs dbt without package-lock.yml (docker/airflow/dags/dbt_marts.py),
-  # and dbt then counts the installed packages against this list.
+  # here because cosmos ran dbt without package-lock.yml (the retired dbt_marts DAG), and
+  # dbt then counts the installed packages against this list; the Airflow image checks both.
   - package: godatadriven/dbt_date
     version: 0.21.0

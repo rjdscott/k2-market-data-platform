@@ -10,9 +10,15 @@ here, and a term it adds goes into this page in the same pull request
 
 Each entry says what the thing is, why it matters on this platform, and where it lives. The
 architecture book teaches the same ground at length: [chapter 03](../architecture/03-data-engineering-concepts.md)
-for the data engineering concepts, [chapter 08](../architecture/08-lake-ingest.md) for the
-ingest and [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md) for catalogs,
+for the data engineering concepts, [chapter 08](../../legacy/v3-lake-ingest/docs/architecture/08-lake-ingest.md) for the
+retired ingest and [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md) for catalogs,
 warehouses and access.
+
+The lake ingest, its layers, the marts, the nightly audits and the parity gates that the older
+ADRs describe are retired: phase 000 of the unified platform plan dropped
+their tables and archived their code in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)
+([ADR-056](ADR-056-unified-data-product-platform.md)). Their entries below describe them as they ran, and their pointers lead into the
+archive.
 
 **Areas:** [capture](#capture-connections-streams-and-the-book) ·
 [the lake ingest](#the-lake-ingest-stage-by-stage) ·
@@ -35,8 +41,8 @@ An order book is the list of resting buy orders (bids) and sell orders (asks) at
 without the individual orders (that would be L3, which K2 does not capture). Each venue publishes
 it on its own channel: Binance `depth20` (a whole top-20 book every 100 ms), Kraken `book` (a
 snapshot then deltas), Coinbase `level2` (a full-depth snapshot then deltas). K2's queryable book
-product is the top 20 levels per side at the end of every second, `gold.book_top20`, with the best
-bid and offer projected from it in `gold.bbo_1s`.
+product was the top 20 levels per side at the end of every second, `gold.book_top20`, with the best
+bid and offer projected from it in `gold.bbo_1s`, until the old lake ingest retired.
 Where: [ADR-027](ADR-027-book-snapshot-and-sequencing.md); `services/capture-rust/src/exchanges/`.
 
 ### Connection and conn_id
@@ -88,8 +94,9 @@ Where: `config/instruments.yaml`, `services/capture-rust/src/config.rs` once bui
 
 ## The lake ingest, stage by stage
 
-One ingest run is one call of `docker/lake/ingest.py`, started every 5 minutes by Airflow. It
-runs these steps in order, in one Spark session, under one lock:
+Retired in phase 000 ([ADR-056](ADR-056-unified-data-product-platform.md)); nothing below runs now. One ingest run was one call of
+`legacy/v3-lake-ingest/lake/ingest.py`, started every 5 minutes by Airflow. It ran these steps
+in order, in one Spark session, under one lock:
 
 ```mermaid
 flowchart TB
@@ -110,8 +117,8 @@ or the [per-run cap](#per-run-cap), whichever is lower. It writes the rows and t
 offsets in one Iceberg commit ([exactly-once](#exactly-once-via-snapshot-offsets)), then runs
 the [batch audit](#batch-audit). Nothing is parsed or validated on the way in, which is what
 makes `raw.messages` the record of what arrived.
-Where: `stage_raw` in [`docker/lake/ingest.py`](../../docker/lake/ingest.py);
-[chapter 08](../architecture/08-lake-ingest.md#stage-1-offsets-in-the-snapshot).
+Where: `stage_raw` in [`legacy/v3-lake-ingest/lake/ingest.py`](../../legacy/v3-lake-ingest/lake/ingest.py);
+[chapter 08](../../legacy/v3-lake-ingest/docs/architecture/08-lake-ingest.md#stage-1-offsets-in-the-snapshot).
 
 ### Batch audit
 
@@ -122,7 +129,7 @@ columns, so it adds about half a second to a run (the first scheduled runs logge
 mismatch writes a `batch_offsets` row into [`audit.checks`](#auditchecks-and-the-nightly-audits) and fires `LakeIngestBatchAuditFailed`;
 a clean batch writes nothing, and the audit never blocks, fails or undoes the commit
 ([ADR-047](ADR-047-ingest-batch-audit-after-publish.md)).
-Where: `audit_batch` in [`docker/lake/ingest.py`](../../docker/lake/ingest.py),
+Where: `audit_batch` in [`legacy/v3-lake-ingest/lake/ingest.py`](../../legacy/v3-lake-ingest/lake/ingest.py),
 `batch_audit` in `docker/lake/offsets.py`.
 
 ### Stage 2 and stage 2b
@@ -135,8 +142,8 @@ audit fails on it, so one bad frame cannot block every later run. The two names 
 `ingest.py` calls it "stage 2" in its comments, `bronze.py` prints "stage 2b". The original
 stage 2, which decoded the capture's Avro topics into unified bronze tables, was dropped at
 the Phase E cutover ([ADR-026](ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)).
-Where: [`docker/lake/bronze.py`](../../docker/lake/bronze.py);
-[`docker/lake/README.md`](../../docker/lake/README.md), "Bronze per venue".
+Where: [`legacy/v3-lake-ingest/lake/bronze.py`](../../legacy/v3-lake-ingest/lake/bronze.py);
+[`legacy/v3-lake-ingest/lake/README.md`](../../legacy/v3-lake-ingest/lake/README.md), "Bronze per venue".
 
 ### Stage 2c
 
@@ -146,8 +153,8 @@ trade, exact decimals, UTC timestamps, and the [canonical symbol](#canonical-sym
 anything: `venue_replay` (an earlier delivery of the same trade exists), `seq_gap` with
 `missing_before` (trade ids the archive never received) and `precision_loss` (more than 8
 decimals). The flags need history, so each batch is scored against the last day of silver.
-Where: [`docker/lake/silver.py`](../../docker/lake/silver.py);
-[`docker/lake/README.md`](../../docker/lake/README.md), "Silver per venue: trades".
+Where: [`legacy/v3-lake-ingest/lake/silver.py`](../../legacy/v3-lake-ingest/lake/silver.py);
+[`legacy/v3-lake-ingest/lake/README.md`](../../legacy/v3-lake-ingest/lake/README.md), "Silver per venue: trades".
 
 ### Stage 2d
 
@@ -161,7 +168,7 @@ recomputes the [event bars](#event-bars) of every touched [symbol-day](#symbol-d
 step reads the whole UTC day's trades however small the batch, so its work grows from midnight
 to midnight; that is what made the ingest run out of [driver heap](#driver-heap) on
 2026-11-25.
-Where: `stage` in [`docker/lake/gold.py`](../../docker/lake/gold.py); the heap story in
+Where: `stage` in [`legacy/v3-lake-ingest/lake/gold.py`](../../legacy/v3-lake-ingest/lake/gold.py); the heap story in
 `docker/lake/spark_conf.py`, above `DRIVER_MEMORY`.
 
 ### Stage 2e
@@ -173,7 +180,7 @@ per frame as `checksum_ok`), `gold.book_top20` (the top 20 levels per side at th
 second) and `gold.bbo_1s` (best bid and offer per second, projected from it). The book left
 after a run's last frame is saved in `gold.book_state`, so the next run resumes the replay.
 Where: [`docker/lake/books.py`](../../docker/lake/books.py), the pure core in
-`docker/lake/book.py`; [`docker/lake/README.md`](../../docker/lake/README.md), "Books".
+`docker/lake/book.py`; [`legacy/v3-lake-ingest/lake/README.md`](../../legacy/v3-lake-ingest/lake/README.md), "Books".
 
 ### Writer lock and exit 75
 
@@ -184,8 +191,8 @@ the second one's offsets overwrite the first's, which duplicates a batch. The in
 the lock without waiting and, if another writer holds it, exits with code 75 (`EX_TEMPFAIL`,
 "try again later"), which the Airflow DAG records as skipped rather than failed; maintenance
 waits for the lock instead.
-Where: [`docker/lake/lock.py`](../../docker/lake/lock.py), `EXIT_LOCK_HELD` in `ingest.py`,
-`AirflowSkipException` in `docker/airflow/dags/lake.py`.
+Where: [`legacy/v3-lake-ingest/lake/lock.py`](../../legacy/v3-lake-ingest/lake/lock.py), `EXIT_LOCK_HELD` in `ingest.py`,
+`AirflowSkipException` in `legacy/v3-lake-ingest/airflow/dags/lake.py`.
 
 ### Per-run cap
 
@@ -195,8 +202,8 @@ bounds how long a run takes and how much it writes, so a large [backlog](#backlo
 several predictable runs instead of one that cannot finish. It must stay above what the busiest
 partition receives between two runs, or that partition falls further behind every cycle; 0
 removes the cap, which is only right with a person watching.
-Where: `MAX_OFFSETS_PER_PARTITION` in [`docker/lake/ingest.py`](../../docker/lake/ingest.py);
-[`docker/lake/README.md`](../../docker/lake/README.md), "Why the default is 600,000".
+Where: `MAX_OFFSETS_PER_PARTITION` in [`legacy/v3-lake-ingest/lake/ingest.py`](../../legacy/v3-lake-ingest/lake/ingest.py);
+[`legacy/v3-lake-ingest/lake/README.md`](../../legacy/v3-lake-ingest/lake/README.md), "Why the default is 600,000".
 
 ### Backlog
 
@@ -206,7 +213,8 @@ and is exported as the gauge `k2_lake_ingest_backlog_offsets`; on a caught-up cy
 It matters because unread records are the ones [raw retention](#raw-retention-and-eviction)
 will delete first: `LakeIngestBacklogSustained` fires when a topic's backlog stays above 0 for
 30 minutes.
-Where: `bounded_offsets` in `docker/lake/offsets.py`; `docker/prometheus/rules/lake-alerts.yml`.
+Where: `bounded_offsets` in `docker/lake/offsets.py`; `docker/prometheus/rules/lake-alerts.yml`,
+removed with the ingest.
 
 ### Raw retention and eviction
 
@@ -217,7 +225,7 @@ run (`failOnDataLoss`) until a person types `--accept-data-loss`, which first re
 as an `offset_gap` row in `audit.checks` and only then skips it. This deadline is why the
 [batch audit](#batch-audit) must not hold up the commit.
 Where: `evicted` and `_accept_data_loss` in `docker/lake/offsets.py` and `ingest.py`;
-[`docs/runbooks/lake-ingest-lag.md`](../runbooks/lake-ingest-lag.md) section 3.
+[`legacy/v3-lake-ingest/docs/runbooks/lake-ingest-lag.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-ingest-lag.md) section 3.
 
 ### Incremental read
 
@@ -227,41 +235,46 @@ way: it starts from the parent snapshot id it recorded on its own last commit
 (`k2.src-snapshot-id`) and ends at the parent's current snapshot. The batch audit uses the same
 read over a single commit, its parent to itself.
 Where: `bronze.py`, `silver.py`, `gold.py`, `_batch_offsets` in `ingest.py`;
-[chapter 08](../architecture/08-lake-ingest.md#stages-22e-incremental-by-parent-snapshot).
+[chapter 08](../../legacy/v3-lake-ingest/docs/architecture/08-lake-ingest.md#stages-22e-incremental-by-parent-snapshot).
 
 ### Gold step position
 
-Proposed in [ADR-048](ADR-048-gold-step-reads-touched-data-writes-bars-once.md), not built: the
+Proposed in [ADR-048](ADR-048-gold-step-reads-touched-data-writes-bars-once.md), never built (superseded by ADR-056): the
 `gold.trades` snapshot id the gold candle and bar step (stage 2d) last finished from, recorded as
 `k2.src-snapshot-id.trades`, beside `k2.job=decode`, on the `gold.bars` commit that ends the step
 and on every bars rebuild. The next run takes its [touched minutes](#touched-minutes) from what
 `gold.trades` gained since then, and runs whenever there is any, so a run that stopped part way is
 redone in full. A missing or expired position stops only that step, with an `audit.checks` row;
-an `overwrite` or `delete` on `gold.trades` since it makes those days fully recomputed. Today the
-touched minutes come from the run's own silver batch instead.
+an `overwrite` or `delete` on `gold.trades` since it makes those days fully recomputed. Until the ingest
+retired, the touched minutes came from the run's own silver batch instead.
 Where: `latest_summary` in [`docker/lake/offsets.py`](../../docker/lake/offsets.py).
 
 ---
 
 ## Layers and what they hold
 
+Most entries here are the retired ingest's; the target platform's layers are under
+[medallion layers of a product](#medallion-layers-of-a-product).
+
 ### Raw, bronze, silver, gold
 
-These are the four layers of the lake, each built only from the one above it. **Raw**
+These were the four layers of the lake until the old ingest retired, each built only from the one above it. **Raw**
 (`raw.messages`) is every Kafka record byte for byte, never expired: the system of record, the
 one table that cannot be rebuilt. **Bronze** is per venue, in the venue's own field names;
 **silver** is per venue, typed and flagged, every delivery kept; **gold** is canonical across
 venues, one row per logical trade, plus candles, bars, books and dimensions. Because every layer
-below raw is a function of raw, a bug in bronze, silver or gold is a rebuild
-(`make lake-rebuild LAYER=...`), not a loss.
-Where: [chapter 09](../architecture/09-lake-layers.md);
+below raw is a function of raw, a bug in bronze, silver or gold was a rebuild
+(`make lake-rebuild LAYER=...`, archived with it), not a loss.
+Where: [chapter 09](../../legacy/v3-lake-ingest/docs/architecture/09-lake-layers.md);
 [ADR-026](ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md).
 
 ### Hot tier
 
 The hot tier is ClickHouse's `gold` database: gold data fed straight from Redpanda, for fast
-queries and dashboards. It originates nothing: every row can be rebuilt by pulling from the
-lake's gold tables, so losing it costs a reload, not data. The v2 `k2.*` medallion that once
+queries and dashboards, paused behind the compose profile `hot-gold` since phase 000
+([ADR-057](ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). It originates nothing;
+its reload from the lake's gold tables went with those tables, so a resume more than 7 days
+after the stop leaves a hole. The v2 `k2.*` medallion that once
 lived in ClickHouse is gone; `SHOW DATABASES` lists `gold` only.
 Where: [ADR-025](ADR-025-clickhouse-derived-hot-tier.md),
 [chapter 10](../architecture/10-clickhouse-gold.md).
@@ -270,7 +283,7 @@ Where: [ADR-025](ADR-025-clickhouse-derived-hot-tier.md),
 
 A landing zone is where a fetched source file is kept exactly as downloaded, before anything
 loads it, so every load can be re-run and audited from the same bytes. For the Redpanda feeds
-that role is played by `raw.messages`. For file sources (FX rates and the like) the P4 plan puts
+that role was played by `raw.messages` until the old ingest retired. For file sources (FX rates and the like) the P4 plan puts
 it at `landing/<domain>/<product>/<fetch date>/<sha256>.<ext>` in a versioned, locked bucket;
 that pattern is planned under ADR-036 and not built yet.
 Where: [plan P4](../plans/2026-11-24-governed-self-serve-platform/004-fx-data-product.md);
@@ -284,7 +297,7 @@ received the frame, in nanoseconds, taken before parsing), and `(conn_id, conn_m
 WebSocket connection and the frame's position on it, which is the archive-wide frame key. Below
 gold they are the only identifier that is honestly unique, because venues re-send trades.
 Where: [chapter 03](../architecture/03-data-engineering-concepts.md#lineage-and-identifiers);
-the column comments in `docker/lake/ddl/lake.sql`.
+the column comments in `legacy/v3-lake-ingest/lake/ddl/lake.sql`.
 
 ### Fixed point and _e8 columns
 
@@ -308,7 +321,7 @@ A venue sometimes sends the same trade twice, after a reconnect or within one co
 Silver keeps every delivery and flags all but the earliest as `venue_replay`; the earliest is
 the first delivery. Gold keeps first deliveries only, which is how
 `(exchange, canonical_symbol, trade_id)` becomes unique in `gold.trades` and nowhere below it.
-Where: [`docker/lake/README.md`](../../docker/lake/README.md), "Silver per venue" and "Gold".
+Where: [`legacy/v3-lake-ingest/lake/README.md`](../../legacy/v3-lake-ingest/lake/README.md), "Silver per venue" and "Gold".
 
 ### Touched minutes
 
@@ -318,7 +331,7 @@ bucket contains one (a 5-minute, 1-hour or 1-day bucket is derived from its minu
 the bars of the [symbol-days](#symbol-day) that contain one. That is what keeps the candle work
 proportional to the batch; a recompute is over every trade in the bucket, so a late trade
 replaces its candle instead of adding a second partial row.
-Where: `stage_trades` and `stage_ohlcv` in [`docker/lake/gold.py`](../../docker/lake/gold.py).
+Where: `stage_trades` and `stage_ohlcv` in [`legacy/v3-lake-ingest/lake/gold.py`](../../legacy/v3-lake-ingest/lake/gold.py).
 
 ### Symbol-day
 
@@ -326,7 +339,7 @@ A symbol-day is one `(exchange, canonical_symbol, UTC day)`. It is the unit `gol
 recomputed in: bars restart at UTC midnight, and a late trade moves every later bar boundary in
 its day, so stage 2d deletes the whole symbol-day's bars and appends them again. Its cost grows
 with how many trades that day already holds, not with the batch.
-Where: `stage_bars` in [`docker/lake/gold.py`](../../docker/lake/gold.py).
+Where: `stage_bars` in [`legacy/v3-lake-ingest/lake/gold.py`](../../legacy/v3-lake-ingest/lake/gold.py).
 
 ### Event bars
 
@@ -341,7 +354,7 @@ Where: [`docker/lake/bars.py`](../../docker/lake/bars.py);
 
 ### In-order batch, units before and fold
 
-Terms of [ADR-049](ADR-049-event-bars-extended-not-recomputed.md), proposed, not built. A
+Terms of [ADR-049](ADR-049-event-bars-extended-not-recomputed.md), withdrawn (superseded by ADR-056), never built. A
 trade's *units before* is the count, quantity or dollar value of its symbol-day's earlier trades;
 its bar is that divided by the threshold, rounded down. A run's new trades for one symbol-day are
 an *in-order batch* when the earliest has an `exchange_ts` strictly later than the latest already
@@ -357,7 +370,7 @@ SCD2 (slowly changing dimension, type 2) keeps one row per validity interval ins
 overwriting: a change closes the old row (`valid_to`) and opens a new one, so a query can ask
 what an instrument looked like at any past time. Open rows end at `9999-12-31` rather than NULL,
 because a range join with `ts < NULL` drops the current row.
-Where: [ADR-030](ADR-030-scd2-security-master.md), `docker/lake/scd2.py`.
+Where: [ADR-030](ADR-030-scd2-security-master.md), `legacy/v3-lake-ingest/lake/scd2.py`.
 
 ---
 
@@ -392,7 +405,7 @@ as `bronze.kraken_instrument` takes one most runs. Two consequences: a table's l
 (`k2_lake_last_commit_ts_seconds`) says it committed, not that it gained data; and a step must keep
 committing, because a resume point older than the 7-day [snapshot expiry](#snapshot-expiry-and-the-retention-floor)
 can no longer be read from.
-Where: `decode` in [`docker/lake/bronze.py`](../../docker/lake/bronze.py);
+Where: `decode` in [`legacy/v3-lake-ingest/lake/bronze.py`](../../legacy/v3-lake-ingest/lake/bronze.py);
 [ADR-050](ADR-050-order-book-capture-paused-during-platform-build.md).
 
 ### Snapshot summary and k2 properties
@@ -402,11 +415,11 @@ as the rows. K2's jobs add their own keys there, all prefixed `k2.`: `k2.job` (`
 `decode` or `maintenance`), `k2.kafka-offsets` (the end offset per topic and partition),
 `k2.kafka-backlog`, `k2.max-kafka-ts`, `k2.src-snapshot-id` (the parent snapshot a layer read
 up to, per venue on `gold.trades`), and finding counts such as `k2.offset-gaps` and
-`k2.batch-audit-failures` that the `lake-metrics` exporter turns into gauges. Jobs resume from
+`k2.batch-audit-failures` that the `lake-metrics` exporter turned into gauges until it retired. Jobs resume from
 "the newest snapshot on `main` whose `k2.job` is mine", so compaction and expiry snapshots,
 which carry no `k2.job`, and Trino's commits, which carry no `k2.*` key at all, are skipped.
 Where: the constants at the top of [`docker/lake/offsets.py`](../../docker/lake/offsets.py);
-[`docker/lake/README.md`](../../docker/lake/README.md), "The exactly-once contract".
+[`legacy/v3-lake-ingest/lake/README.md`](../../legacy/v3-lake-ingest/lake/README.md), "The exactly-once contract".
 
 ### Exactly-once via snapshot offsets
 
@@ -417,7 +430,7 @@ there is no crash window between them. v2 kept its position in a separate Postgr
 had exactly that window. It holds for a sequence of runs, not two at once, which is the
 [writer lock's](#writer-lock-and-exit-75) job.
 Where: [ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md);
-[chapter 08](../architecture/08-lake-ingest.md).
+[chapter 08](../../legacy/v3-lake-ingest/docs/architecture/08-lake-ingest.md).
 
 ### Branch and main
 
@@ -442,8 +455,8 @@ nothing records after expiry whether a tagged snapshot was ever on `main`, a pin
 after checking it is.
 Readers find tags in the catalog's `loadTable` answer (`refs`, `type: tag`) or in Trino's
 `"<table>$refs"`.
-Where: `tags` in [`notebooks/k2lake.py`](../../notebooks/k2lake.py);
-[`tests/parity/README.md`](../../tests/parity/README.md#keeping-the-pinned-snapshots-alive).
+Where: `tags` in [`legacy/v3-lake-ingest/notebooks/k2lake.py`](../../legacy/v3-lake-ingest/notebooks/k2lake.py);
+[`legacy/v3-lake-ingest/tests/parity/README.md`](../../legacy/v3-lake-ingest/tests/parity/README.md#keeping-the-pinned-snapshots-alive).
 
 ### Fast-forward
 
@@ -474,7 +487,7 @@ A MERGE updates rows that match a key and inserts the rest. Copy-on-write means 
 rewrites each data file that holds a changed row, rather than writing separate delete files
 that readers must apply (merge-on-read). K2 uses copy-on-write everywhere because DuckDB and
 ClickHouse's `iceberg()` reader have not been shown to handle delete files on this stack.
-Where: [`docker/lake/README.md`](../../docker/lake/README.md), "Design notes".
+Where: [`legacy/v3-lake-ingest/lake/README.md`](../../legacy/v3-lake-ingest/lake/README.md), "Design notes".
 
 ### Pruning
 
@@ -498,31 +511,31 @@ Where: [ADR-048](ADR-048-gold-step-reads-touched-data-writes-bars-once.md), chan
 ### Compaction
 
 Compaction rewrites many small data files into fewer large ones; it changes files, never rows.
-Each 5-minute commit adds small files, and query time grows with file count, so the nightly
-maintenance job binpacks `raw.messages` toward 256 MB files and sort-rewrites the recent
+Each 5-minute commit added small files, and query time grows with file count, so the old
+nightly maintenance job binpacked `raw.messages` toward 256 MB files and sort-rewrote the recent
 partitions of the derived tables toward 128 MB. A compaction is itself a commit with no
 `k2.job`, which is why jobs resume by that property and not by "newest snapshot".
-Where: `compact` in [`docker/lake/maintenance.py`](../../docker/lake/maintenance.py);
+Where: `compact` in [`legacy/v3-lake-ingest/lake/maintenance.py`](../../legacy/v3-lake-ingest/lake/maintenance.py);
 [chapter 03](../architecture/03-data-engineering-concepts.md#files-and-compaction).
 
 ### Snapshot expiry and the retention floor
 
 Snapshot expiry deletes old snapshots, and the files only they referenced; it never removes a
-row the current snapshot holds. The lake expires snapshots older than 7 days, keeping at least
-10, and refuses a shorter setting, because each layer resumes from the parent snapshot id it
-last read and expiring that id breaks its next run. Marts are expired by their own writer
+row the current snapshot holds. The old lake maintenance expired snapshots older than 7 days, keeping
+at least 10, and refused a shorter setting, because each layer resumed from the parent snapshot
+id it last read and expiring that id breaks its next run. Marts were expired by their own writer
 through Trino at the same 7 days; the retention floor is Trino's minimum, and the two session
 properties that would lower it are denied to every user in `rules.json`.
-Where: `expire` in `docker/lake/maintenance.py`; `dbt/macros/expire_mart_snapshots.sql`;
+Where: `expire` in `legacy/v3-lake-ingest/lake/maintenance.py`; `legacy/v3-lake-ingest/dbt/macros/expire_mart_snapshots.sql`;
 [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md).
 
 ### Orphan files
 
 An orphan file is a data file in storage that no snapshot references, typically left by a
 write that uploaded Parquet and died before committing. Orphans are invisible to readers and
-cost only disk; `remove_orphan_files` deletes them. The lake's nightly run uses a 24-hour floor,
-because a newer "unreferenced" file may belong to a write still in progress; marts use 7 days.
-Where: `remove_orphans` in [`docker/lake/maintenance.py`](../../docker/lake/maintenance.py).
+cost only disk; `remove_orphan_files` deletes them. The old lake's nightly run used a 24-hour floor,
+because a newer "unreferenced" file may belong to a write still in progress; marts used 7 days.
+Where: `remove_orphans` in [`legacy/v3-lake-ingest/lake/maintenance.py`](../../legacy/v3-lake-ingest/lake/maintenance.py).
 
 ---
 
@@ -541,9 +554,10 @@ Where: [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md).
 
 ### Producer lake
 
-The producer lake is warehouse `k2`: `raw` to `gold` and `audit`, written by Spark jobs only and
-read by Trino through a [read-only connector](#read-only-connector). It gets the strongest
-fence because losing it can be permanent: `raw.messages` holds the only copy once Redpanda has
+The producer lake is warehouse `k2`, written by Spark jobs only and read by Trino through a
+[read-only connector](#read-only-connector). It held `raw` to `gold` and `audit` until phase 000
+dropped them with the old ingest, and holds no namespace now. It gets the strongest
+fence because losing it can be permanent: `raw.messages` held the only copy once Redpanda had
 evicted a record. Marts live outside it, in domain warehouses, because a mart can always be
 rebuilt from the lake.
 Where: [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md).
@@ -566,14 +580,14 @@ domain's catalog; everyone reads everything. dbt runs as it by setting `K2_TRINO
 identity is the unauthenticated `X-Trino-User` header on a loopback port, so the fences stop
 mistakes, not someone who lies about who they are.
 Where: [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md);
-[`dbt/README.md`](../../dbt/README.md), "Identity and catalogs".
+[`legacy/v3-lake-ingest/dbt/README.md`](../../legacy/v3-lake-ingest/dbt/README.md), "Identity and catalogs".
 
 ### Read-only connector
 
 `iceberg.security=read_only` on Trino's `lake` catalog makes the connector itself refuse every
 statement that would commit and every [table procedure](#table-procedure), for every user.
 It is the producer lake's fence, chosen because Trino's file-based rules cannot fence table
-procedures, and a stray `rollback_to_snapshot` on `raw.messages` would make the ingest skip
+procedures, and a stray `rollback_to_snapshot` on `raw.messages` would have made the ingest skip
 offsets for good.
 Where: `docker/trino/etc/catalog/lake.properties`;
 [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md).
@@ -592,8 +606,8 @@ Where: [ADR-044](ADR-044-producer-lake-and-domain-mart-warehouses.md), "The hone
 
 A view is a stored query; reading it runs the query. A definer view checks the reader's access
 to its base tables as the view's owner, not as the reader, which is dbt-trino's default and is
-stated in `dbt/dbt_project.yml`. It lets the governance view read every domain's results table
-through its owner, `dbt_governance`, and it is why `rules.json` grants every catalog `all` and
+stated in `dbt/dbt_project.yml`. It let the governance view (`dq_results`, dropped with the marts in phase 000) read every
+domain's results table through its owner, `dbt_governance`, and it is why `rules.json` grants every catalog `all` and
 puts the fences in its schema and table rules: Trino requires a view owner to have `all` on
 each base table's catalog. Views are readable through Trino only.
 Where: [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md#views).
@@ -602,22 +616,25 @@ Where: [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md#views)
 
 ## dbt and the marts
 
+The marts, their tests and their schedule retired with the lake ingest in phase 000 and are
+archived in `legacy/v3-lake-ingest/dbt/`; dbt itself stays, with no model until phase 002.
+
 ### Mart
 
 A mart is a table (or view) built for consumers by a dbt model, stored in its owning domain's
 warehouse in its product's schema, for example `market_analytics.candles.ohlcv_1m`. It is
 always a `SELECT` over lake tables and other marts, so a damaged mart is rebuilt, not repaired.
-The `dbt_marts` DAG rebuilds every mart each hour, each domain as its own writer.
-Where: [`dbt/README.md`](../../dbt/README.md); [ADR-035](ADR-035-trino-and-dbt-for-marts.md).
+The `dbt_marts` DAG rebuilt every mart each hour, each domain as its own writer, until it retired.
+Where: [`legacy/v3-lake-ingest/dbt/README.md`](../../legacy/v3-lake-ingest/dbt/README.md); [ADR-035](ADR-035-trino-and-dbt-for-marts.md).
 
 ### Grain
 
 A mart's grain is the set of columns that identifies one row, declared with the mart in its
 `product.yaml` (the 1-minute candles: `[exchange, canonical_symbol, window_start]`). The build
 requires a uniqueness test on exactly the grain that fails on any duplicate, checked by
-`scripts/dbt_manifest_check.py`. A lake table's equivalent is its identifier fields in
-`lake.sql`, such as `(exchange, canonical_symbol, trade_id)` for `gold.trades`.
-Where: `contracts/market-analytics/candles/product.yaml`; [`dbt/README.md`](../../dbt/README.md).
+`scripts/dbt_manifest_check.py`. A lake table's equivalent was its identifier fields in
+the archived `lake.sql`, such as `(exchange, canonical_symbol, trade_id)` for `gold.trades`.
+Where: `legacy/v3-lake-ingest/contracts/market-analytics/candles/product.yaml`; [`legacy/v3-lake-ingest/dbt/README.md`](../../legacy/v3-lake-ingest/dbt/README.md).
 
 ### Selector
 
@@ -625,7 +642,8 @@ A selector is a named set of dbt nodes, defined in `dbt/selectors.yml`, which `m
 writes from the contracts: one per domain, holding its models plus the source tests of every
 lake table its marts read. `dbt build --selector market_analytics`, run as
 `dbt_market_analytics`, therefore builds and tests exactly what that writer may write, and
-Airflow renders one task group per selector.
+Airflow rendered one task group per selector in the retired `dbt_marts` DAG. There are none
+today (`selectors: []`).
 Where: [`dbt/selectors.yml`](../../dbt/selectors.yml); [`dbt/README.md`](../../dbt/README.md).
 
 ### Data test
@@ -642,9 +660,9 @@ A source test is a [data test](#data-test) on a dbt source, a lake table that ma
 generates them into `dbt/models/_sources.yml`, beside each source's freshness rule from its
 contract (checked by `dbt source freshness`): uniqueness on the table's identifier fields over
 the newest 6 hours only (`_RECENT` in `platform/k2gen/k2gen/generate.py`), because the
-whole-table version exceeded [Trino's per-node query memory](#trino-per-node-query-memory). The whole-table check stays with
-Spark's nightly `duplicate_identifiers` audit.
-Where: [ADR-035](ADR-035-trino-and-dbt-for-marts.md) Outcome; [`dbt/README.md`](../../dbt/README.md),
+whole-table version exceeded [Trino's per-node query memory](#trino-per-node-query-memory). The whole-table check stayed with
+Spark's nightly `duplicate_identifiers` audit, retired with the ingest.
+Where: [ADR-035](ADR-035-trino-and-dbt-for-marts.md) Outcome; [`legacy/v3-lake-ingest/dbt/README.md`](../../legacy/v3-lake-ingest/dbt/README.md),
 "Generated, do not edit".
 
 ### Unit test
@@ -653,7 +671,7 @@ A dbt unit test runs one model's SQL over made-up input rows written in YAML and
 result with expected rows: it tests the logic, not the data. `dbt build` runs a model's unit
 tests before building it, and a failing one skips the model. In K2 the unit test creates a
 temporary `<name>__dbt_tmp` table in the model's own schema, as the domain writer.
-Where: [`dbt/README.md`](../../dbt/README.md), "The first mart".
+Where: [`legacy/v3-lake-ingest/dbt/README.md`](../../legacy/v3-lake-ingest/dbt/README.md), "The first mart".
 
 ### On-run-end hook
 
@@ -667,19 +685,19 @@ Where: `dbt/dbt_project.yml`, `dbt/macros/record_test_results.sql`;
 
 ### dbt_marts DAG
 
-`dbt_marts` is the Airflow DAG that builds the marts, hourly at minute 10. The astronomer-cosmos
-library turns each selector into a task group: one task per model (its unit tests, the model,
-its data tests) and per lake table it reads (freshness and source tests), each run as that
-domain's writer; governance runs after all the others,
-however they ended, so its view sees this run's results. Once a day it also expires the marts'
+`dbt_marts` was the Airflow DAG that built the marts, hourly at minute 10, until it retired in
+phase 000. The astronomer-cosmos library turned each selector into a task group: one task per
+model (its unit tests, the model, its data tests) and per lake table it read (freshness and
+source tests), each run as that domain's writer; governance ran after all the others,
+however they ended, so its view saw that run's results. Once a day it also expired the marts'
 snapshots.
-Where: [`docker/airflow/dags/dbt_marts.py`](../../docker/airflow/dags/dbt_marts.py);
-[`docs/runbooks/dbt-marts.md`](../runbooks/dbt-marts.md).
+Where: [`legacy/v3-lake-ingest/airflow/dags/dbt_marts.py`](../../legacy/v3-lake-ingest/airflow/dags/dbt_marts.py);
+[`legacy/v3-lake-ingest/docs/runbooks/dbt-marts.md`](../../legacy/v3-lake-ingest/docs/runbooks/dbt-marts.md).
 
 ### k2gen, make generate and the drift gate
 
 `k2gen` is K2's contract tool. `k2gen validate` checks every product descriptor and ODCS v3
-table contract under `contracts/` against the standard and against `lake.sql`; `make generate`
+table contract under `contracts/` against the standard; `make generate`
 writes the files the contracts imply (the domain catalogs, `rules.json`, `warehouses.txt`,
 `selectors.yml`, `_sources.yml`, `contract_schemas.json`, the product pages). The drift gate is CI running
 `make generate` and failing on any difference, so a generated file cannot be edited by hand or
@@ -701,24 +719,24 @@ Where: `contracts/schema/k2.schema.json` once built.
 
 ### audit.checks and the nightly audits
 
-`lake.audit.checks` is the lake's one table of check results: one row per check per run, with
-`run_ts`, `job`, `check_name`, `scope`, `passed`, `observed` and `detail`. The nightly
-maintenance job (03:00 UTC) writes its audits there, such as
+`lake.audit.checks` was the old lake's one table of check results, dropped with it in phase 000:
+one row per check per run, with `run_ts`, `job`, `check_name`, `scope`, `passed`, `observed` and
+`detail`. The nightly maintenance job (03:00 UTC) wrote its audits there, such as
 [`contract_schema`](#contract-schema-audit), `offset_continuity` (every partition's offsets in
 `raw.messages` contiguous, except holes already recorded as `offset_gap`) and
-`duplicate_identifiers`; the ingest writes its own findings there too. A
-failed nightly audit exits non-zero and fires `LakeAuditFailed`.
-Where: `AUDITS` in [`docker/lake/maintenance.py`](../../docker/lake/maintenance.py);
-[chapter 08](../architecture/08-lake-ingest.md#proof).
+`duplicate_identifiers`; the ingest wrote its own findings there too. A
+failed nightly audit exited non-zero and fired `LakeAuditFailed`.
+Where: `AUDITS` in [`legacy/v3-lake-ingest/lake/maintenance.py`](../../legacy/v3-lake-ingest/lake/maintenance.py);
+[chapter 08](../../legacy/v3-lake-ingest/docs/architecture/08-lake-ingest.md#proof).
 
 ### Operator row
 
-An operator row is a row in `audit.checks` with `job = 'operator'`: a person's record of a
+An operator row was a row in `audit.checks` with `job = 'operator'`: a person's record of a
 decision or an event, such as an outage window (`capture_outage`) or an acknowledged run of
 checksum failures, written with `docker/lake/record_check.py --job operator`. It is a record, not
 a check: the nightly audits read only the ones they are told to net out, and the venue quality
 mart ignores them.
-Where: [`docker/lake/record_check.py`](../../docker/lake/record_check.py);
+Where: [`legacy/v3-lake-ingest/lake/record_check.py`](../../legacy/v3-lake-ingest/lake/record_check.py);
 [`docs/runbooks/failure-recovery.md`](../runbooks/failure-recovery.md).
 
 ### Kraken book checksum
@@ -727,36 +745,38 @@ Kraken attaches to every book frame a CRC32 over the top 10 levels of each side,
 quantity written at the pair's published precision. Recomputing it from our own copy of the book
 and comparing is a proof, frame by frame, that the book was applied exactly as the venue holds it;
 a mismatch means a lost or misapplied update. The capture checks it live
-(`k2_capture_checksum_failures_total`), and the lake checks it again by replay (`checksum_ok` in
-`silver.book_kraken`, the nightly `kraken_checksum` audit). Binance and Coinbase publish no
+(`k2_capture_checksum_failures_total`), and the old lake checked it again by replay (`checksum_ok` in
+`silver.book_kraken`, the nightly `kraken_checksum` audit) until it retired. Binance and Coinbase publish no
 checksum, so their `checksum_ok` is NULL, meaning "not measurable".
 Where: [ADR-027](ADR-027-book-snapshot-and-sequencing.md); `docker/lake/book.py`.
 ### Contract schema audit
 
-`contract_schema` is the nightly audit that holds each live lake table to its data contract,
+`contract_schema` was the nightly audit, retired with the ingest, that held each live lake table to its data contract,
 where `k2gen validate` holds the contract only to the DDL file. It compares the table's columns
 (names, Spark SQL types with nested fields, `NOT NULL`, order), its partition spec, sort order
 and identifier fields, as the Iceberg catalog holds them, with what `k2gen generate` wrote to
 `docker/lake/generated/contract_schemas.json`, and files one `audit.checks` row per table. A
 table with no contract fails too, in any namespace but a `scratch_` one, which is not read. It finds a drifted table up to a day after the drift; nothing refuses a bad write when
 it is made.
-Where: [`docker/lake/contract_schema.py`](../../docker/lake/contract_schema.py);
-[runbook](../runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15;
+Where: [`legacy/v3-lake-ingest/lake/contract_schema.py`](../../legacy/v3-lake-ingest/lake/contract_schema.py);
+[runbook](../../legacy/v3-lake-ingest/docs/runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15;
 [chapter 18](../architecture/18-data-mesh.md#where-a-contract-is-enforced-and-when).
 
 ### Parity, three-way and pinned
 
 Parity is computing a product again, independently, and requiring the answers to be identical
-(tolerance zero). Three-way OHLCV parity compares ClickHouse's candles computed on read, the
+(tolerance zero). The parity gates below read the old lake's tables, so they are stood down
+(`make parity-ohlcv` and `make parity-bars` print a SKIP) and their scripts are archived until
+phase 004 re-pins them. Three-way OHLCV parity compares ClickHouse's candles computed on read, the
 lake's stored `gold.ohlcv_1m`, and DuckDB's candles computed from silver; bars parity compares
 Spark, DuckDB and a Python reference. Each run reads the snapshot ids pinned in
-`tests/parity/pinned.json`, never the latest, which moves every 5 minutes, so a rerun reads the
+`legacy/v3-lake-ingest/tests/parity/pinned.json`, never the latest, which moved every 5 minutes, so a rerun reads the
 same data and a difference is a bug, not timing. A pinned id is used only if it is on `main`'s
 lineage or its own [tag](#tag), `parity_<day>`, names it; any other stops the run, with no
 fallback to the current snapshot. Marts are held to dbt tests instead of three engines
 ([ADR-035](ADR-035-trino-and-dbt-for-marts.md)).
-Where: [ADR-029](ADR-029-research-production-parity-contract.md); `scripts/parity-ohlcv.sh`,
-`scripts/parity-bars.sh`.
+Where: [ADR-029](ADR-029-research-production-parity-contract.md); `legacy/v3-lake-ingest/scripts/parity-ohlcv.sh`,
+`legacy/v3-lake-ingest/scripts/parity-bars.sh`.
 
 ### Known gap
 
@@ -769,20 +789,20 @@ most one may be listed, it is printed on every run, a run with it ends `PARITY: 
 `PARITY: PASS`, and a gap with no difference left in its window fails the run. Every other
 minute is still compared three ways at tolerance zero. It was built for minute 22:33 UTC of
 2026-11-25, when the host killed the Docker VM.
-Where: `known_gaps` in `tests/parity/pinned.json`, explained in
-[`tests/parity/README.md`](../../tests/parity/README.md); `load_gaps` in
-`scripts/parity_ohlcv.py`; [ADR-029](ADR-029-research-production-parity-contract.md)'s
+Where: `known_gaps` in `legacy/v3-lake-ingest/tests/parity/pinned.json`, explained in
+[`legacy/v3-lake-ingest/tests/parity/README.md`](../../legacy/v3-lake-ingest/tests/parity/README.md); `load_gaps` in
+`legacy/v3-lake-ingest/scripts/parity_ohlcv.py`; [ADR-029](ADR-029-research-production-parity-contract.md)'s
 2026-11-26 Outcome.
 
 ### Conservation check and shadow run
 
-Proposed in [ADR-049](ADR-049-event-bars-extended-not-recomputed.md), not built. A conservation
+Proposed in [ADR-049](ADR-049-event-bars-extended-not-recomputed.md), withdrawn with it (superseded by ADR-056), never built. A conservation
 check compares, before each write, the sums of a symbol-day's stored bars (trade count, quantity,
 exact dollar value) with the same sums over its trades in `gold.trades`: one hash aggregate, no
 sort. A shadow run computes a new method beside the current one and compares the two without
 letting the new one write; in ADR-049 it is `bars_mode=shadow`, distinct from `bars_mode=full`,
 which forces the old method and computes nothing new.
-Where: `docker/lake/gold.py` once built.
+Where: nowhere; it was never built.
 
 ---
 
@@ -797,7 +817,7 @@ on 2026-11-25 did not do for the `gold.bars` append. An eager `localCheckpoint()
 recipe once, keeps the result in the Spark process's block store (memory, then local disk) and
 returns a DataFrame that reads only that, so nothing later can recompute it. K2 never caches a
 payload-bearing DataFrame (`docker/lake/README.md`, "What one run may read").
-Where: `stage_bars` in [`docker/lake/gold.py`](../../docker/lake/gold.py).
+Where: `stage_bars` in [`legacy/v3-lake-ingest/lake/gold.py`](../../legacy/v3-lake-ingest/lake/gold.py).
 
 ### Join strategies: sort-merge and broadcast
 
@@ -806,7 +826,7 @@ default for two large inputs. A broadcast hash join copies a small input whole t
 hash table, so the large input is neither shuffled nor sorted. Spark broadcasts on its own only
 when its statistics say a side is small (10 MB by default); a DataFrame built from Python rows has
 no statistics, so it is never broadcast without a hint.
-Where: `_thresholds_view` in `docker/lake/gold.py`.
+Where: `_thresholds_view` in `legacy/v3-lake-ingest/lake/gold.py`.
 
 ### Hash and sort aggregate
 
@@ -861,7 +881,7 @@ use: it writes sorted runs to local disk and merges them back later. It keeps a 
 its memory at the cost of disk I/O, but it is not unlimited; the 2026-11-25 failure was in
 reading spilled data back (`UnsafeSorterSpillReader`). `persist(DISK_ONLY)` is not a spill: it
 builds an in-memory batch first, which is how the first cold start died.
-Where: `docker/lake/spark_conf.py`; [`docker/lake/README.md`](../../docker/lake/README.md),
+Where: `docker/lake/spark_conf.py`; [`legacy/v3-lake-ingest/lake/README.md`](../../legacy/v3-lake-ingest/lake/README.md),
 "What one run may read".
 
 ### Trino per-node query memory
@@ -892,15 +912,16 @@ is a fraction of it, and the gap is the safety margin if every limit were reache
 measured inside the Docker VM and says nothing about the host's own memory (see
 [Docker VM and its memory setting](#docker-vm-and-its-memory-setting)). CI
 enforces it with `python3 scripts/check-budget.py`, which printed 21.30 CPU / 37.812 GiB for the
-bootstrap default on 2026-11-26, and every limit change also updates the ADR-010 Outcome and the
+bootstrap default early on 2026-11-26 and 16.70 / 28.688 after phase 000 paused ClickHouse and
+retired the v3 lake ingest the same day, and every limit change also updates the ADR-010 Outcome and the
 summary comment in `docker-compose.yml`.
 Where: [`scripts/check-budget.py`](../../scripts/check-budget.py).
 
 ### Bootstrap peak
 
 The bootstrap peak is the moment during `docker compose up` when the one-shot services run
-beside the long-running ones, so the most limits are declared at once (24 services against 19
-in the steady state). The ceiling is gated there, at its highest point. A one-shot is a service
+beside the long-running ones, so the most limits are declared at once (21 services against 17
+in the steady state, `python3 scripts/check-budget.py`). The ceiling is gated there, at its highest point. A one-shot is a service
 with `restart: "no"` that sets something up and exits, such as `redpanda-init` (topics) or
 `lake-init` (bucket, catalog, warehouses).
 Where: `scripts/check-budget.py`; [`docs/operations/docker-resources.md`](../operations/docker-resources.md).
@@ -933,9 +954,10 @@ Where: [`docs/runbooks/docker-vm-oom-kill.md`](../runbooks/docker-vm-oom-kill.md
 ### Run duration p90
 
 The 90th percentile of `lake_ingest` run durations over a window: the duration that nine runs in
-ten finish within. The ingest runs every 5 minutes, so a run has a 300 s slot; ADR-034's standing
+ten finish within. The ingest ran every 5 minutes, so a run had a 300 s slot; ADR-034's standing
 trigger is a p90 above 240 s over a day, and it fired on 2026-11-25 at 253 s, as the day's gold
-candle and bar step (stage 2d) grew. ADR-048 is the response.
+candle and bar step (stage 2d) grew. ADR-048 was the proposed response; retiring `lake_ingest`
+in phase 000 resolved it instead.
 Where: [ADR-034](ADR-034-airflow-3-replaces-prefect.md)'s 2026-11-26 Outcome, which carries the
 command.
 
@@ -945,10 +967,11 @@ command.
 
 ### Engines
 
-Spark runs every job that writes the lake (`docker/lake/`), in batch only. Trino 484 is a SQL
+Spark runs every job that writes the lake, in batch only; none has run since the old ingest
+retired in phase 000. Trino 484 is a SQL
 server, one node, that reads every warehouse and writes only the domain warehouses, as each
-domain's writer. DuckDB is a library inside the notebooks and parity scripts that reads the
-lake. ClickHouse holds the [hot tier](#hot-tier).
+domain's writer. DuckDB was a library inside the notebooks and parity scripts that read the
+lake, archived with the ingest. ClickHouse holds the [hot tier](#hot-tier), paused.
 Where: [ADR-035](ADR-035-trino-and-dbt-for-marts.md) (the boundary between Spark and Trino);
 [`docs/architecture/A1-technology-stack.md`](../architecture/A1-technology-stack.md).
 
@@ -961,12 +984,12 @@ Where: [`dbt/README.md`](../../dbt/README.md).
 
 ### Airflow, DAG and cosmos
 
-Airflow 3 is the scheduler; a DAG is one scheduled job made of tasks. K2's DAGs are
-`lake_ingest` (every 5 minutes), `lake_maintenance` (nightly), `lake_rebuild` and `dbt_marts`;
-the lake DAGs run their Spark script with `docker exec`. astronomer-cosmos is the library that
-turns the dbt project into Airflow tasks. Prefect, its predecessor, is stopped behind
-`--profile legacy` as the rollback.
-Where: [ADR-034](ADR-034-airflow-3-replaces-prefect.md), `docker/airflow/dags/`.
+Airflow 3 is the scheduler; a DAG is one scheduled job made of tasks. K2's DAGs were
+`lake_ingest` (every 5 minutes), `lake_maintenance` (nightly), `lake_rebuild` and `dbt_marts`,
+all retired in phase 000; the lake DAGs ran their Spark script with `docker exec`.
+astronomer-cosmos is the library that turned the dbt project into Airflow tasks. Prefect, its
+predecessor, is archived in `legacy/prefect/`.
+Where: [ADR-034](ADR-034-airflow-3-replaces-prefect.md), `legacy/v3-lake-ingest/airflow/dags/`.
 
 ### Lakekeeper and MinIO
 
@@ -1138,8 +1161,8 @@ Where: [`README.md`](../plans/2026-11-26-unified-product-platform/README.md) and
 
 ### Scratch namespace and the P4 spike
 
-`lake.scratch_p4` is a namespace in the producer lake for spikes: tables made by hand to test an
-Iceberg or Spark behaviour, which no job reads. The P4 spike is the first task of
+`lake.scratch_p4` was a namespace in the producer lake for spikes, dropped in phase 000: tables
+made by hand to test an Iceberg or Spark behaviour, which no job read. The P4 spike is the first task of
 [plan P4](../plans/2026-11-24-governed-self-serve-platform/004-fx-data-product.md), run there on
 2026-11-25 on `lake.scratch_p4.wap_bronze`: a branch write published by fast-forward kept its
 `k2.job` property, while a cherry-pick dropped it, which is where K2's "fast-forward only" rule

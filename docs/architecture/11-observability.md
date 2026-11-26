@@ -4,11 +4,22 @@
 > **Read this if** operators, anyone adding an alert.
 > **Before this** chapter 04.
 
-Prometheus scrapes every tier, 36 rules carry runbooks and `promtool` cases, six Grafana
-dashboards ship from the repo, and the failure modes those rules watch are induced on purpose
-with timed recovery. No Alertmanager: rules are evaluated and shown, not routed. Operator
-detail: [operations/observability.md](../operations/observability.md); FMEA:
+Prometheus scrapes every running tier, the rules in `docker/prometheus/rules/` carry runbooks
+and most of them (8 of 14) carry `promtool` cases, the Grafana dashboards in `docker/grafana/dashboards/` ship from
+the repo, and the failure modes those rules watch are induced on purpose with timed recovery. No
+Alertmanager: rules are evaluated and shown, not routed. Operator detail:
+[operations/observability.md](../operations/observability.md); FMEA:
 [failure-modes.md](16-failure-modes.md).
+
+**Retired, 2026-11-26.** The lake's signals retired with the v3 lake ingest
+([ADR-056](../adr/ADR-056-unified-data-product-platform.md); code archived in
+[`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)): the `lake-metrics` exporter, the lake rules
+and their tests, the Airflow rules that watched the old DAGs, the lake dashboard and the four lake chaos
+scripts. The ClickHouse signals went with its pause
+([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). What remains watches
+capture, Redpanda, Airflow and the containers; a lake product's signals arrive with the first product in
+phase 004 of the [platform plan](../plans/2026-11-26-unified-product-platform/README.md). Where this
+chapter describes a lake or ClickHouse signal, it is the record of what ran.
 
 ## Problem
 
@@ -36,7 +47,7 @@ growing without bound whether the exporter is up, frozen, or gone.
 | Option | Why it lost | Reference |
 |---|---|---|
 | Alert on rates going to zero | Silent exactly when the fault is total: a stopped process takes its series with it, and `absent()` per stream per venue is more rules than gauges | [`rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml) |
-| Hosted APM / SaaS | Per-series billing against a three-venue book feed, egress off a single host, and a demo that expires with the trial; the 16 CPU / 40 GB budget is a stated constraint | [ADR-010](../adr/ADR-010-resource-budget.md) |
+| Hosted APM / SaaS | Per-series billing against a three-venue book feed, egress off a single host, and a demo that expires with the trial; the budget (16 CPU / 40 GB then, 25 CPU / 48 GiB since ADR-045) is a stated constraint | [ADR-010](../adr/ADR-010-resource-budget.md) |
 | Alertmanager routing now | One operator, no rotation, nowhere to page. Routing config that nobody is on the other end of is untested config | `alerting.alertmanagers[].targets: []` in [`prometheus.yml`](../../docker/prometheus/prometheus.yml) |
 | **Alert rules as code, each with a runbook and a unit test, proven by chaos** (chosen) | Every rule is reviewable in a diff, its threshold is asserted by `promtool`, and the fault it names has been injected and timed | [`rules/`](../../docker/prometheus/rules/), [`scripts/chaos/`](../../scripts/chaos/), [failure-modes.md](16-failure-modes.md) |
 
@@ -54,14 +65,13 @@ and measured on the dates in `scripts/chaos/results/`, not nightly.
 ```mermaid
 flowchart TB
   C["capture ×3 · :8082<br/>k2_capture_*"]
-  H["ClickHouse · :9363<br/>ClickHouseProfileEvents_*, parts"]
   R["Redpanda · :9644"]
-  L["lake-metrics · :8000<br/>k2_lake_* from snapshot summaries"]
+  S["airflow-statsd · :9102<br/>scheduler and task metrics"]
   A["cAdvisor · :8080<br/>CPU, memory, cgroup limits per container"]
-  P["Prometheus v3.2<br/>rules/*.yml · 36 alerts"]
-  G["Grafana 11.5<br/>6 dashboards"]
+  P["Prometheus v3.2<br/>rules/*.yml"]
+  G["Grafana 11.5<br/>dashboards from the repo"]
   X["scripts/chaos/*.sh<br/>induce · time · record"]
-  C & H & R & L & A --> P --> G
+  C & R & S & A --> P --> G
   X -.->|"proves"| P
 ```
 
@@ -69,58 +79,64 @@ flowchart TB
   `checksum_failures`, `resyncs`, `reconnects{reason}`, `produce_errors{reason}`,
   `precision_loss`), the `exchange_to_recv_seconds` histogram with buckets to 30 s, and
   `last_message_ts_seconds` per stream so staleness is `time() − gauge`, not a rate.
-- **Lake** metrics come from Iceberg snapshot summaries, read over the catalog's REST API
-  with `urllib` (`metrics.py`; PyIceberg's `PyArrowFileIO` costs 122 MB of RSS on import
-  alone, against a 128 MB container limit): last commit timestamp, `max_kafka_ts`, backlog offsets, last compaction, rows / files / bytes
-  per table. If the catalog is down the gauge freezes and the age grows: the alert you want.
-  Findings are counts stored on the commits to `audit.checks`. The ingest's are aged out
-  after 15 minutes: `k2_lake_offset_gaps_total`, `k2_lake_unresolvable_schema_ids_total` and
-  `k2_lake_batch_audit_failures_total`, the last from the check stage 1 runs on every batch
-  it commits ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)). The newest
-  maintenance run's failures are `k2_lake_audit_failures_total`.
-- **ClickHouse** ships its own `/metrics`; the two gold-feed rules watch
-  `ClickHouseProfileEvents_KafkaMessagesFailed` and topic movement versus table growth.
-- **Rules** are four files by tier, 10 capture, 14 lake, 6 ClickHouse, 6 Airflow, each with
-  a severity and, bar `ClickHouseKafkaMessagesFailed`, `AirflowTaskFailed` and
-  `LakeIngestBatchAuditFailed`, a `for`. All 36 carry a `runbook`
-  annotation that gate (d) of `check-docs.sh` resolves to a file; unit tests sit in
-  `docker/prometheus/tests/*.test.yml` and `rules/tests/*_test.yml`, both run by gate (c2).
+- **Lake** metrics, retired with the ingest, came from Iceberg snapshot summaries, read over
+  the catalog's REST API with `urllib` (`metrics.py`, archived; PyIceberg's `PyArrowFileIO` costs
+  122 MB of RSS on import alone, against a 128 MB container limit): last commit timestamp,
+  `max_kafka_ts`, backlog offsets, last compaction, rows / files / bytes per table. If the catalog
+  was down the gauge froze and the age grew: the alert you want. Findings were counts stored on
+  the commits to the lake's audit table. The ingest's were aged out after 15 minutes:
+  `k2_lake_offset_gaps_total`, `k2_lake_unresolvable_schema_ids_total` and
+  `k2_lake_batch_audit_failures_total`, the last from the check stage 1 ran on every batch it
+  committed ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)). The newest
+  maintenance run's failures were `k2_lake_audit_failures_total`.
+- **ClickHouse** shipped its own `/metrics`, and two gold-feed rules watched
+  `ClickHouseProfileEvents_KafkaMessagesFailed` and topic movement versus table growth, until
+  the pause removed the scrape job, the rules and the dashboard (ADR-057).
+- **Rules** are one file per running tier, capture and Airflow, plus `platform-alerts.yml` for the
+  disk the Docker volumes share (Redpanda's own disk gauges), each rule with a severity and,
+  bar `AirflowTaskFailed`, a `for`; the lake and ClickHouse files went with their tiers. Every
+  rule carries a `runbook` annotation that gate (d) of `check-docs.sh` resolves to a file and
+  gate (d2) requires; unit tests sit in `docker/prometheus/tests/*.test.yml` and
+  `rules/tests/*_test.yml`, both run by gate (c2).
   Prometheus loads rules at start or `SIGHUP`, so the docs say so.
 - **Containers**: cAdvisor reports each container's CPU and memory, and the limits compose gave
   its cgroup, so the K2 Resources dashboard plots use against limit with no limit typed twice.
-- **Dashboards** are JSON in `docker/grafana/dashboards/`: pipeline overview, capture, lake,
-  ClickHouse, Airflow, resources. All six query Prometheus; no ClickHouse datasource is provisioned. Notebooks
-  and `make parity-ohlcv` use the read-only `quant` user.
+- **Dashboards** are JSON in `docker/grafana/dashboards/`: pipeline overview, capture, Airflow,
+  resources; the lake and ClickHouse dashboards went with their tiers. All query Prometheus; no
+  ClickHouse datasource is provisioned. The archived notebooks and `make parity-ohlcv` used
+  ClickHouse's read-only `quant` user.
 - **Chaos** scripts in `scripts/chaos/` stop or corrupt one thing, watch the alert that should
-  fire, time recovery, and append a row to `scripts/chaos/results/`. Measured: lake ingest
-  killed 42 s, MinIO stopped 38 s, Lakekeeper stopped 37 s
-  ([benchmarks § MTTR](../benchmarks/2026-08-27.md#mttr)); ClickHouse stopped for 150 s,
-  `ClickHouseDown` at 160 s and healthy 7 s after restart, corrupt feed record isolated in
+  fire, time recovery, and append a row to `scripts/chaos/results/`; today they cover capture and
+  Redpanda. The lake scripts, archived with the ingest, measured lake ingest killed 42 s, MinIO
+  stopped 38 s, Lakekeeper stopped 37 s
+  ([benchmarks § MTTR](../benchmarks/2026-08-27.md#mttr)); the ClickHouse scripts, removed with
+  the pause, measured ClickHouse stopped for 150 s, `ClickHouseDown` at 160 s and healthy 7 s
+  after restart, and a corrupt feed record isolated in
   4 s ([`scripts/chaos/results/2026-08-27.tsv`](../../scripts/chaos/results/2026-08-27.tsv)).
 
 ## Practices
 
 | Practice | Where it is enforced |
 |---|---|
-| Alerts carry their runbook | 36 of 36, as a `runbook` annotation. Two gates, because one was not enough: `check-docs.sh` (d) checks the paths present resolve, (d2) checks every `- alert:` has one at all. Until 2026-09-03 only (d) existed and the 6 ClickHouse rules carried no annotation, passing a gate by having nothing to check, while this row claimed 22 of 28 were covered |
-| Alert thresholds unit-tested | 25 of 36 alert names asserted in `tests/*.test.yml` and `rules/tests/*_test.yml`, run by `promtool` in `check-docs.sh` and CI `docs` |
-| Staleness as timestamp, not rate | `k2_capture_last_message_ts_seconds`, `k2_lake_last_commit_ts_seconds`; `CaptureFeedStale`, `LakeCommitAgeHigh` |
+| Alerts carry their runbook | Every rule, as a `runbook` annotation. Two gates, because one was not enough: `check-docs.sh` (d) checks the paths present resolve, (d2) checks every `- alert:` has one at all. Until 2026-09-03 only (d) existed and the 6 ClickHouse rules carried no annotation, passing a gate by having nothing to check, while this row claimed 22 of 28 were covered |
+| Alert thresholds unit-tested | the alert names asserted in `tests/*.test.yml` and `rules/tests/*_test.yml`, run by `promtool` in `check-docs.sh` and CI `docs`; not every rule has one |
+| Staleness as timestamp, not rate | `k2_capture_last_message_ts_seconds`; `CaptureFeedStale` (the lake's `LakeCommitAgeHigh` on `k2_lake_last_commit_ts_seconds` retired with the ingest) |
 | Counters carry the reason | `reconnects_total{reason}`, `produce_errors_total{reason}` |
 | Build provenance exported | `k2_capture_build_info{git_sha}` |
 | Alerts proven against the fault they name | `make chaos`; each `16-failure-modes.md` row cites the script and the measured time |
 | Dashboards versioned | provisioned from JSON in the repo, not hand-edited in the UI |
-| Least-privilege reads | notebooks and `make parity-ohlcv` use the `quant` readonly profile |
+| Least-privilege reads | the archived notebooks and `make parity-ohlcv` used ClickHouse's `quant` readonly profile; Trino's lake catalog is read-only at the connector ([19](19-lakehouse-and-domain-warehouses.md)) |
 
 ## Trade-offs
 
 - **No routing.** Alerts show in Prometheus and Grafana, not paged: deliberate for one operator.
 - **No SLOs.** Thresholds are per-alert `for` windows sized from measurement, not error
   budgets; the burn-in that would justify SLOs is a Phase F item.
-- **Scrape gaps during chaos** are part of the record: a stopped ClickHouse shows as `up == 0`
+- **Scrape gaps during chaos** are part of the record: a stopped broker shows as `up == 0`
   and the FMEA rows state what was lost versus delayed.
-- **Coverage is not uniform.** 25 of the 36 alerts are named by a `promtool` case. All 36
-  carry a `runbook` annotation; the six ClickHouse rules gained theirs on 2026-09-03, when
-  gate (d2) was added.
+- **Coverage is not uniform.** Not every alert is named by a `promtool` case. Every one
+  carries a `runbook` annotation, required since gate (d2) was added on 2026-09-03, when the
+  six ClickHouse rules gained theirs.
 
 ## Key points
 

@@ -12,13 +12,15 @@ the dominant segment is transit plus the venue's clock skew, and it is published
 | 1 | Venue timestamp → frame received (`recv_ts_ns`) | transit + venue skew; **measured below** | the internet |
 | 2 | Frame → parsed records | < 1 ms, single-threaded, no allocation on the hot path | [`handle_frame`](../../services/capture-rust/README.md) |
 | 3 | Record → Redpanda acked | < 2 ms; queue is the only buffer | [`sink.rs`](../../services/capture-rust/src/sink.rs), settings below |
-| 4a | Redpanda → ClickHouse `gold.trades` visible | ≤ 5 s | `kafka_flush_interval_ms = 5000` <!-- counts-ok: a setting in milliseconds --> in [`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql) |
-| 4b | Redpanda → lake `raw.messages` committed | 5 min cron + run wall time | the Airflow DAG `lake_ingest` ([airflow-schedules.md](./airflow-schedules.md)); `time() - k2_lake_max_kafka_ts_seconds` in Prometheus |
-| 5 | Lake gold → ClickHouse `ohlcv_*` / `bbo_1s` | operator pull; the whole lake `gold.trades` in 4.4 s | [clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md) |
+| 4a | Redpanda → ClickHouse `gold.trades` visible, **paused** ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)) | ≤ 5 s while it runs | `kafka_flush_interval_ms = 5000` <!-- counts-ok: a setting in milliseconds --> in [`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql) |
+| 4b | Redpanda → lake | none: nothing reads the topics into the lake until phase 004 | the v3 lake ingest and its 5-minute DAG, retired and archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/) |
+| 5 | Lake → ClickHouse | none: the reload from the lake's gold retired with it | [pause-and-resume-a-serving-product.md](../runbooks/pause-and-resume-a-serving-product.md) |
 
-Two read paths follow: **live** (`gold.ohlcv_live`, `gold.bbo_live`, computed on read over
-`FINAL`) sees a trade after segments 1–4a; **research** (lake `gold.*`, DuckDB) after 1–4b plus
-the layer stages of the same run.
+Two read paths followed these segments, and both are stood down while the platform is rebuilt:
+**live** (ClickHouse's views computed on read over `FINAL`, after segments 1 to 4a) is paused, and
+**research** over the v3 lake is retired. The lake path returns as products in
+[phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
+of the unified platform plan, which sets its own bounds.
 
 ## Measured: segment 1, 2026-08-27
 
@@ -34,10 +36,10 @@ carries the commands):
 
 The Coinbase p99 is the venue's on-subscribe trade *snapshot*, whose `exchange_ts` values
 predate the connection; the capture now excludes those frames from the histogram
-(`Handled.history`), and the lake keeps them as trades. The per-trade distribution over the lake
-(`recv_ts_ns − exchange_ts`) is in the same benchmark section. Segments 2–5 are bounds by
-construction or configuration and have not been measured end to end; the query that would do
-it is in [data-inspection.md](./data-inspection.md#trades-goldtrades).
+(`Handled.history`), and the v3 lake kept them as trades. The per-trade distribution over that
+lake (`recv_ts_ns − exchange_ts`) is in the same benchmark section. Segments 2 to 4a are bounds by
+construction or configuration and have not been measured end to end; the query that would have
+done it is archived with [data-inspection.md](./data-inspection.md).
 
 The v2 pipeline's 7-segment budget and its 2026-02-19 measurements are a dated record in
 [benchmarks/2026-02-19-v2-baseline.md](../benchmarks/2026-02-19-v2-baseline.md).
@@ -74,23 +76,19 @@ scale:
    ticks and `CaptureProduceErrors` fires. The one level where the failure mode is loss
    rather than lag, [capture-produce-stalled.md](../runbooks/capture-produce-stalled.md).
    After the queue drains, a book stream resubscribes for a fresh snapshot.
-2. **ClickHouse ingest saturates** → the `gold.q_trades` / `gold.q_book` consumers lag.
-   Data is safe in Redpanda for the retention window (7 d on `trades.*` / `book.*`) and in
-   the lake for good. `ClickHouseGoldFeedStale` fires when the consumers go silent while
-   capture is still delivering; a lagging-but-moving consumer shows in
-   `rpk group describe k2-gold-trades`.
-3. **Merges saturate** → `ClickHouseMergeQueueLarge` fires. Queries degrade before ingest
-   does, and `FINAL` gets more expensive until the merges catch up.
-4. **Lake ingest saturates** → the 5-minute cycles fall behind the topics;
-   `LakeIngestLagHigh` fires. The served tier is unaffected; `raw.*` retention (48 h) is the
-   deadline on catching up.
+2. **ClickHouse ingest saturates**, only while the paused hot tier runs → the `gold.q_trades` /
+   `gold.q_book` consumers lag. Data is safe in Redpanda for the retention window (7 d on
+   `trades.*` / `book.*`). A lagging-but-moving consumer shows in
+   `rpk group describe k2-gold-trades`; the ClickHouse alerts were removed with the pause.
+3. **Merges saturate**, the same → queries degrade before ingest does, and `FINAL` gets more
+   expensive until the merges catch up.
 
-Nothing here drops data silently, the one level that drops (1) counts every record it
-loses; below capture the failure mode is lag, not loss
-([failure-modes.md](../architecture/16-failure-modes.md)).
+The one level that drops (1) counts every record it loses
+([failure-modes.md](../architecture/16-failure-modes.md)). Until phase 004 one more loss is
+certain and known in advance: nothing reads the topics into the lake, so Redpanda deletes what it
+holds past its retention (48 h or 2 GiB per partition on `raw.*`) unread.
 
 ## Related
 
 - [observability.md](./observability.md), the alerts that watch these thresholds
-- [data-inspection.md](./data-inspection.md), the lag queries
 - [ADR-001](../adr/ADR-001-replace-kafka-with-redpanda.md), Redpanda's p99 vs Kafka's on segment 3

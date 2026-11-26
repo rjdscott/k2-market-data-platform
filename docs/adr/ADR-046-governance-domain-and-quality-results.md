@@ -148,7 +148,7 @@ is built, so a domain's first results appear at the next governance build (the s
 ordering). The tables' shape is one macro's: a column change must reach every domain's table at
 once or the view stops building. A hook that cannot write fails a task whose tests all passed,
 and dbt reports it as `Exited because of keyboard interrupt` then `Database Error`
-([runbook](../runbooks/dbt-marts.md)). Views are Trino-only (ADR-035).
+([runbook](../../legacy/v3-lake-ingest/docs/runbooks/dbt-marts.md)). Views are Trino-only (ADR-035).
 
 **Committed to:** the `on-run-end` hook in `dbt_project.yml`; `dq` as a reserved schema in every
 domain catalog; governance built after the other domains; each domain's results table created

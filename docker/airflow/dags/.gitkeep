@@ -1,0 +1,4 @@
+Keeps docker/airflow/dags in git while it holds no DAG: docker-compose.yml bind-mounts it
+into airflow-scheduler and airflow-dag-processor, and a checkout without it left both with
+an empty DAG folder (CLAUDE.md, Bind-mount gotcha). The old DAGs retired to
+legacy/v3-lake-ingest/airflow/dags/ (ADR-056).

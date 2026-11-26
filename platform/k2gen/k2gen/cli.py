@@ -15,14 +15,11 @@
    And each domain's fence name, its id with underscores, against the names the
    lake and Trino already use (`RESERVED`); and each mart's name against its
    place, `<domain catalog>.<product schema>.<table>` (ADR-044).
-3. Each contract against docker/lake/ddl/lake.sql: the table exists, and its
-   partitioning and sort order are the ones declared there. Every table has
-   exactly one contract, `audit` tables included: the nightly contract_schema
-   audit (docker/lake/contract_schema.py) fails a table without one in any
-   namespace the contracts own. A contract with inline columns is a table
-   lake.sql does not create, and its partitioning and sort name its own columns.
-   A latency service level names a column of its own table. A paused table
-   (ADR-050) names a real day and an ADR file that exists, and promises no
+3. Each contract against its own columns, which it declares inline: its
+   partitioning and sort read them, and a latency service level names one. A
+   contract that references docker/lake/ddl/lake.sql instead fails: that DDL
+   retired with the old lake ingest (legacy/v3-lake-ingest/, ADR-056). A paused
+   table (ADR-050) names a real day and an ADR file that exists, and promises no
    latency: nothing may promise freshness for a table nothing feeds.
 4. Three rules across products: a table another table reads keeps snapshots for
    at least the seven-day floor; a table is at least as restricted as anything
@@ -44,11 +41,10 @@ from k2gen import ddl
 
 ROOT = Path(__file__).resolve().parents[3]
 ODCS_SCHEMA = "odcs-json-schema-v3.2.0-20261117.json"
-LAKE_SQL = "docker/lake/ddl/lake.sql"
 ADR_DIR = "docs/adr"
 SUFFIX = ".odcs.yaml"
-# docker/lake/maintenance.py refuses --retain-days below 7: stage 2 resumes from
-# the parent snapshot id it last read, and expiring that snapshot breaks the next run.
+# A reader resumes from the parent snapshot id it last read, so expiring that snapshot
+# breaks its next run; 7 days is also the Iceberg connector's own retention floor.
 FLOOR_DAYS = 7
 RANK = {"public": 0, "internal": 1, "restricted": 2}
 # Names a domain's fence cannot take: its Trino catalog and Lakekeeper warehouse are
@@ -141,8 +137,7 @@ def validate(root: Path = ROOT) -> list[str]:
         errors += [f"{where}: mart {t} must live in {place}, its domain's catalog and its product's schema (ADR-044)" for t in marts if t.rsplit(".", 1)[0] != place]
         errors += [f"{where}: mart {t} is declared twice" for t in sorted({t for t in marts if marts.count(t) > 1})]
 
-    # 3. lake.sql.
-    lake = ddl.parse(root / LAKE_SQL)
+    # 3. each contract against its own columns.
     home: dict[str, Path] = {}
     props_of: dict[str, dict[str, Any]] = {}  # table -> its custom properties
     for path, (doc, props) in docs.items():
@@ -162,25 +157,16 @@ def validate(root: Path = ROOT) -> list[str]:
         if props["layer"] != table.split(".")[0]:
             errors.append(f"{where}: layer {props['layer']}, but {table} is in namespace {table.split('.')[0]}")
         inline = doc["schema"][0].get("properties")
-        names = {c["name"] for c in inline} if inline else set(lake[table].columns) if table in lake else set()
+        if not inline:
+            errors.append(f"{where}: {table} declares no inline columns; docker/lake/ddl/lake.sql, which it references, retired to legacy/v3-lake-ingest/ (ADR-056)")
+            continue
+        names = {c["name"] for c in inline}
         for sla in doc.get("slaProperties", []):
             if sla["property"] == "latency" and sla["element"] not in {f"{table}.{c}" for c in names}:
                 errors.append(f"{where}: latency element {sla['element']} is not a column of {table}")
         errors += _paused_errors(root, where, doc, props.get("paused"))
-        if inline:  # a new table: generate writes its DDL, lake.sql never holds it
-            if table in lake:
-                errors.append(f"{where}: {table} is created by {LAKE_SQL}, so the contract references it, not inline columns")
-            for key in ("partitioning", "sort"):
-                errors += [f"{where}: {key} {f} reads no column the contract declares" for f in props[key] if ddl.column_of(f) not in names]
-            continue
-        if table not in lake:
-            errors.append(f"{where}: {table} is not a table in {LAKE_SQL}, and the contract declares no inline columns")
-            continue
         for key in ("partitioning", "sort"):
-            declared = list(getattr(lake[table], key))
-            if props[key] != declared:
-                errors.append(f"{where}: {key} {props[key]}, but {LAKE_SQL} declares {declared}")
-    errors += [f"{LAKE_SQL}: {t} has no contract under contracts/" for t in lake if t not in home]
+            errors += [f"{where}: {key} {f} reads no column the contract declares" for f in props[key] if ddl.column_of(f) not in names]
 
     # 4. across products.
     for pdir, product in products.items():
@@ -209,7 +195,7 @@ def validate(root: Path = ROOT) -> list[str]:
                 if up in props_of and props_of[up]["retention"] < FLOOR_DAYS:
                     errors.append(
                         f"{rel(home[up])}/{up}{SUFFIX}: {table} reads it, so it must keep snapshots for "
-                        f"the {FLOOR_DAYS}-day floor, not {props_of[up]['retention']} (docker/lake/maintenance.py)"
+                        f"the {FLOOR_DAYS}-day floor, not {props_of[up]['retention']}"
                     )
         for mart in product.get("marts", []):
             for up in mart["reads"]:
@@ -271,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     products = len(list((ROOT / "contracts").glob("*/*/product.yaml")))
     contracts = len(list((ROOT / "contracts").glob(f"*/*/*{SUFFIX}")))
-    print(f"k2gen validate: {products} products, {contracts} contracts, every lake table covered")
+    print(f"k2gen validate: {products} products, {contracts} contracts")
     return 0
 
 

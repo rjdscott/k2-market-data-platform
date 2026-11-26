@@ -5,20 +5,19 @@ gallery, docs/operations/dashboards.md.
 Runs inside k2-screenshots:1.65.2 (the Dockerfile beside this file) on the host
 network, so every URL is the localhost one an operator opens. Credentials come
 from the environment the Makefile passes by name: GRAFANA_PASSWORD,
-MINIO_ROOT_USER, MINIO_ROOT_PASSWORD, K2_QUANT_PASSWORD, AIRFLOW_PASSWORD. They
-live in this process only: nothing here prints one, writes one, or saves a
-cookie, and a page whose text contains one fails instead of being saved.
+MINIO_ROOT_USER, MINIO_ROOT_PASSWORD. They live in this process only: nothing
+here prints one, writes one, or saves a cookie, and a page whose text contains
+one fails instead of being saved.
 
-Read-only. It logs in, opens pages and runs one SELECT as ClickHouse's
-read-only `quant` user. It clicks nothing that triggers, pauses or changes a
-setting; the two UI preferences it needs (MinIO's licence notice, Airflow's grid
-width) are set in this browser's own localStorage.
+Read-only. It logs in and opens pages. It clicks nothing that triggers, pauses
+or changes a setting; the one UI preference it needs (MinIO's licence notice) is
+set in this browser's own localStorage.
 
 A page that times out, shows a spinner, reads "No data" where shots.py does not
 allow it, or shows a credential is not saved: the run carries on, then exits 1
 naming each one.
 
-    python3 scripts/screenshots/capture.py [--only 04-lake] [--out DIR] [--gallery FILE]
+    python3 scripts/screenshots/capture.py [--only 02-capture] [--out DIR] [--gallery FILE]
 """
 
 import argparse
@@ -37,16 +36,13 @@ from playwright.sync_api import sync_playwright
 WIDTH = 1600
 TIMEOUT_MS = 30_000
 GRAFANA_PARAMS = "?orgId=1&kiosk&theme=dark&from=now-6h&to=now"
-SECRETS = ("GRAFANA_PASSWORD", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "K2_QUANT_PASSWORD", "AIRFLOW_PASSWORD")
-# Visible busy indicators: Grafana's panel loading bar, Chakra's spinner (Airflow).
+SECRETS = ("GRAFANA_PASSWORD", "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD")
+# Visible busy indicators: Grafana's panel loading bar, Chakra UI's spinner.
 BUSY = "[aria-label='Panel loading bar'], .chakra-spinner"
-# Per-browser preferences, set before any page script runs: MinIO's AGPL notice
-# acknowledged in this browser (the server-side /license/ack is never called),
-# and Airflow's grid panel widened from 20% to 35% of the page.
+# A per-browser preference, set before any page script runs: MinIO's AGPL notice
+# acknowledged in this browser (the server-side /license/ack is never called).
 INIT_JS = """try {
   localStorage.setItem('agpl_minio_license_consent', 'true');
-  localStorage.setItem('react-resizable-panels:grid-ltr',
-    JSON.stringify({'details-panel,main-panel': {expandToSizes: {}, layout: [35, 65]}}));
 } catch (e) {}"""
 # Numbered markers: an outline round the target and a numbered disc at (bx, by).
 DRAW_JS = """marks => marks.forEach(m => {
@@ -76,14 +72,6 @@ def env(name):
     return value
 
 
-def airflow_base():
-    return f"http://localhost:{os.environ.get('K2_AIRFLOW_PORT', '8090')}"
-
-
-def airflow_url(url):
-    return url.replace("http://localhost:8090", airflow_base())
-
-
 # ── logins, once per app, only for the apps the selected shots need ─────────
 def login(ctx, app):
     if app == "grafana":
@@ -91,60 +79,8 @@ def login(ctx, app):
     elif app == "minio":
         r = ctx.request.post("http://localhost:9001/api/v1/login",
                              data={"accessKey": env("MINIO_ROOT_USER"), "secretKey": env("MINIO_ROOT_PASSWORD")})
-    elif app == "airflow":
-        page = ctx.new_page()
-        page.goto(airflow_base() + "/auth/login")
-        page.fill("input[name=username]", "admin")
-        page.fill("input[name=password]", env("AIRFLOW_PASSWORD"))
-        page.click("button[type=submit]")
-        page.wait_for_url(lambda u: "/auth/login" not in u, timeout=TIMEOUT_MS)
-        page.close()
-        return
     if not r.ok:
         raise RuntimeError(f"{app} login answered HTTP {r.status}")
-
-
-# ── pages that need more than a goto; each returns the URL it captured ──────
-def open_lakekeeper(page, shot):
-    whs = page.request.get("http://localhost:18181/management/v1/warehouse").json()["warehouses"]
-    wid = next(w["id"] for w in whs if w["name"] == "k2")
-    page.goto("http://localhost:18181/ui/")  # the home page selects the project
-    page.wait_for_load_state("networkidle")
-    url = f"http://localhost:18181/ui/warehouse/{wid}/namespace/gold"
-    page.goto(url)
-    return url
-
-
-def open_clickhouse(page, shot):
-    page.goto(shot["url"] + "?theme=dark")
-    page.fill("#user", "quant")
-    page.fill("#password", env("K2_QUANT_PASSWORD"))
-    page.fill("#query", "-- gold.trades, fed live from Redpanda: trades per venue in the last hour\n"
-                        "SELECT exchange, count() AS trades_last_hour, max(exchange_ts) AS newest\n"
-                        "FROM gold.trades\nWHERE exchange_ts > now() - INTERVAL 1 HOUR\n"
-                        "GROUP BY exchange\nORDER BY exchange")
-    page.click("#run")
-    return shot["url"]  # play puts the query, never the password, in its own URL
-
-
-def open_airflow_task_log(page, shot):
-    # The latest *successful* run: the newest column in the grid may still be
-    # queued, with no log yet. The UI's own session token, held in memory only.
-    token = next(c["value"] for c in page.context.cookies() if c["name"] == "_token")
-    r = page.request.get(airflow_base() + "/api/v2/dags/lake_ingest/dagRuns",
-                         params={"state": "success", "order_by": "-start_date", "limit": 1},
-                         headers={"Authorization": f"Bearer {token}"})
-    if not r.ok:
-        raise RuntimeError(f"Airflow API answered HTTP {r.status}")
-    runs = r.json()["dag_runs"]
-    if not runs:
-        raise RuntimeError("lake_ingest has no successful run")
-    url = f"{airflow_base()}/dags/lake_ingest/runs/{runs[0]['dag_run_id']}/tasks/ingest"
-    page.goto(url)
-    return url
-
-
-OPEN = {"lakekeeper": open_lakekeeper, "clickhouse": open_clickhouse, "airflow_task_log": open_airflow_task_log}
 
 
 def wait_quiet(page):
@@ -180,19 +116,13 @@ def mark(n, target, side, page):
 
 def capture(page, shot, out, secrets):
     page.set_viewport_size({"width": WIDTH, "height": shot["height"]})
-    if shot.get("open"):
-        url = OPEN[shot["open"]](page, shot)
-    else:
-        url = airflow_url(shot["url"])
-        page.goto(url + GRAFANA_PARAMS if shot["app"] == "grafana" else url)
+    url = shot["url"]
+    page.goto(url + GRAFANA_PARAMS if shot["app"] == "grafana" else url)
     try:
         page.wait_for_selector(shot["ready"], timeout=TIMEOUT_MS)
     except PlaywrightTimeout:
         raise RuntimeError(f"{shot['ready']!r} never appeared") from None
-    if not shot.get("busy_ok"):
-        wait_quiet(page)
-    else:
-        time.sleep(2)
+    wait_quiet(page)
     if shot["app"] == "grafana":
         empty = [t for t in page.evaluate(GRAFANA_EMPTY_JS) if t not in shot.get("no_data", [])]
         if empty:

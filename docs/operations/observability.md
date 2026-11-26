@@ -1,9 +1,24 @@
 # Observability
 
-Prometheus scrapes the stack, Grafana renders it, and 36 alert rules (6 ClickHouse + 10 capture + 14 lake + 6 Airflow)
+Prometheus scrapes the stack, Grafana renders it, and 14 alert rules (10 capture, 2 Airflow, 2 disk)
 cover the things that actually break: capture goes down or silent, sequence gaps and book
-checksum failures, ClickHouse struggles, and the lake ingest falls behind or its nightly
-audit fails.
+checksum failures, the scheduler stops or a task fails, and the disk the volumes share fills.
+
+**The lake is not observed while it receives no live data.** The old lake ingest retired to
+[`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/) ([ADR-056](../adr/ADR-056-unified-data-product-platform.md)),
+and with it the `lake-metrics` exporter and its scrape job, the 14 rules of `lake-alerts.yml`
+and their promtool tests, the K2 Lake dashboard, and the four Airflow rules and two recording
+rules that watched the old DAGs: with nothing committing, each would fire for ever or never.
+Lake metrics and alerts return in phase `004`, with the first live product.
+
+**ClickHouse is not observed while its hot tier is paused**
+([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): its scrape
+job, its six alert rules and their promtool tests, the ClickHouse Overview dashboard and the
+ClickHouse panels of the pipeline overview were removed, because each would read a server the
+pause stops: `ClickHouseDown` would fire for ever and the other five would never fire, having no
+series. `scripts/health.sh` step (2) prints one `SKIP` line naming the ADR in place of its
+ClickHouse query, and judges each venue from its capture instead (below). They return with the
+tier, as the serving copy of a product of the new platform, under that platform's alerts.
 
 - Prometheus, http://localhost:9090 (`/targets`, `/alerts`)
 - Grafana, http://localhost:3000, `admin` / `$GRAFANA_PASSWORD`
@@ -19,10 +34,9 @@ container start, no click-ops.
 |-----|--------|----------|--------|
 | `prometheus` | `localhost:9090` | 15s | self |
 | `redpanda` | `redpanda:9644` | 10s | Redpanda admin API |
-| `clickhouse` | `clickhouse:9363` | 15s | `<prometheus>` block in [`docker/clickhouse/config.xml`](../../docker/clickhouse/config.xml) |
 | `grafana` | `grafana:3000` | 15s | Grafana internal metrics |
 | `capture-{binance,kraken,coinbase}` | `capture-<x>:8082` | 15s | `k2-capture`, see below |
-| `lake-metrics` | `lake-metrics:8000` | 30s | [`docker/lake/metrics.py`](../../docker/lake/metrics.py), see below |
+| `airflow-statsd` | `airflow-statsd:9102` | 15s | Airflow's statsd, through the exporter |
 | `cadvisor` | `cadvisor:8080` | 15s | cAdvisor v0.61.1, per-container CPU and memory and each container's cgroup limits, see below |
 
 Port 8082 is **not published to the host**, and the capture image is distroless, no curl,
@@ -47,7 +61,7 @@ reads is seeded at zero on startup, so a counter's *first* event is detectable.
 |--------|------|--------|---------|
 | `messages_total`, `bytes_total` | counter | `exchange`, `stream` | Frames and bytes off the WebSocket, per venue subscription |
 | `records_produced_total` | counter | `exchange`, `kind=raw\|trade\|book` | Records enqueued into librdkafka's queue |
-| `records_delivered_total` | counter | `exchange` | Records the broker actually acknowledged, the one that goes flat in an outage |
+| `records_delivered_total` | counter | `exchange` | Records the broker actually acknowledged, the one that goes flat in an outage. `make health` step (2) fails a venue with none in the last 2 minutes (`increase(...[2m])`, through Prometheus). Kraken's and Coinbase's heartbeat frames are archived and so delivered, so a quiet market there still counts; Binance archives trade frames only. From 2026-11-24, the oldest sample Prometheus held, to 2026-11-26, the one 2-minute window with nothing delivered was a network outage that cut all three venues (2026-11-26, 14:00 to 14:03 UTC) |
 | `produce_errors_total` | counter | `exchange`, `reason` | Records that failed to produce. There is no spill-to-disk, so these are lost |
 | `gaps_total`, `resyncs_total` | counter | `exchange` | Sequence continuity broke; book rebuilt |
 | `checksum_failures_total` | counter | `exchange`, `symbol` | Kraken CRC32 mismatch. Kraken only, the other two publish no checksum |
@@ -55,7 +69,7 @@ reads is seeded at zero on startup, so a counter's *first* event is detectable.
 | `reconnects_total` | counter | `exchange`, `reason=scheduled\|involuntary` | `scheduled` is Binance's 23 h pre-emptive recycle |
 | `precision_loss_total` | counter | `exchange`, `reason` | A venue quoted finer than the fixed-point 1e-8 scale |
 | `unknown_frames_total` | counter | `exchange`, `stream` | Frames the adapter did not recognise (still archived verbatim) |
-| `last_message_ts_seconds` | gauge | `exchange`, `stream` | Per-stream liveness. What `CaptureFeedStale` and `healthcheck` both read |
+| `last_message_ts_seconds` | gauge | `exchange`, `stream` | Per-stream liveness. What `CaptureFeedStale` and `healthcheck` both read; `make health` step (2) runs that `healthcheck` in each capture and fails the venue on a stale stream |
 | `exchange_to_recv_seconds` | histogram | `exchange` | Venue stamp → our receive. **Trades only.** Transit + clock skew, not a platform SLO |
 | `book_depth` | gauge | `exchange`, `symbol` | Resting levels for one symbol, across **both** sides. `CaptureBookDepthDegraded`'s input |
 | `book_levels_total` | gauge | `exchange` | Resting levels summed over every book on that venue |
@@ -71,17 +85,16 @@ other service: [dashboards.md](./dashboards.md).
 
 | Dashboard | UID | What it shows |
 |-----------|-----|---------------|
-| K2 Pipeline Overview | `k2-pipeline-overview` | The one to open first. Three rows: stack health (service up/down, trade records produced per exchange), ClickHouse (insert rate, memory, merge queue), Redpanda (throughput, connections) |
-| ClickHouse Overview (v2) | `clickhouse-v2` | Query rate, memory gauge, insert rate, background merges, the warm tier in isolation |
+| K2 Pipeline Overview | `k2-pipeline-overview` | The one to open first. Three rows: stack health (service up/down, trade records produced per exchange), Redpanda (throughput, connections), and the resources of the captures and Redpanda from cAdvisor |
 | K2 Capture (v3) | `k2-l2-capture` | The Rust capture tier, now the only ingestion tier: health (up, staleness, reconnects, gaps, checksum failures, resyncs), throughput (messages/bytes/records/produce errors), exchange→recv latency p50/p95/p99, book depth/levels/precision loss. `exchange` template variable filters all panels |
-| K2 Lake (v3) | `k2-lake` | Iceberg lake tier (Phase D): ingest lag and commit age per table, rows/files/bytes and mean file size, rows added by the last commit, audit failures, disk headroom, exporter scrape errors, and a maintenance row plotting compaction age per table and the exporter's own refresh age, the two alertable gauges that had no panel. Every panel reads an Iceberg snapshot summary, nothing here is an in-process counter. Its Resources row, like the pipeline overview's, plots the tier's containers from cAdvisor |
+| K2 Airflow | `k2-airflow` | Airflow's statsd series: run duration and lateness per DAG, task failures and skips, scheduler heartbeat and DAG parse time. Until phase `002` adds the first product DAG only the heartbeat and the parse loop move |
 | K2 Resources | `k2-resources` | Every running container against its compose limit: CPU and process memory in use against the 25 CPU / 48 GiB ceiling, a table of each container's use, limit and share of it (with file cache, working set and OOM kills columns), the top five consumers, and the share of time each was CPU-throttled. Limits come from the cgroups, not from the dashboard |
 
 ![Redpanda topics](../images/redpanda-console-topics.jpg)
 
 ## Alert rules
 
-36 alert rules across four files (plus two ClickHouse recording rules and two Airflow ones). **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when `ClickHouseKafkaMessagesFailed` could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
+14 alert rules across three files, and no recording rules. **Prometheus loads rule files at start and on SIGHUP only**, after editing anything under `docker/prometheus/rules/`, `docker kill -s HUP k2-prometheus` (or a restart); the rules dir is a mount and the file changing is not enough. Found 2026-08-27 when a ClickHouse rule (since removed, ADR-057) could not fire because its group had never been loaded (`curl -s localhost:9090/api/v1/rules | grep -c <AlertName>` is the check). Every annotation carries the diagnostic commands and a
 `runbook:` annotation — enforced by `scripts/check-docs.sh` gate (d2), added
 2026-09-03 after the 6 ClickHouse rules were found carrying none while gate (d),
 which only checks that the paths present resolve, passed them. The tables below are the index. The three `FeedHandler*` rules retired with
@@ -92,22 +105,6 @@ deleted outright with the v2 offload path they watched, they described a compone
 longer exists ([ADR-019](../adr/ADR-019-rust-capture-tier.md) Outcome said they would go
 with it, and they did). Its six runbooks are archived at
 [`legacy/v2-offload/runbooks/`](../../legacy/v2-offload/runbooks/).
-
-### `clickhouse-alerts.yml`: served tier (6)
-
-| Alert | Severity | Fires when |
-|-------|----------|-----------|
-| `ClickHouseDown` | critical | `up{job="clickhouse"} == 0` for 2m, measured firing 160 s after a stop (`scripts/chaos/clickhouse-stop.sh`, 2026-08-27) |
-| `ClickHouseHighMemoryUsage` | critical | Resident memory >85% of system RAM for 5m |
-| `ClickHouseQueryFailureRateHigh` | critical | `rate(FailedQuery[5m]) > 0.1` for 3m |
-| `ClickHouseMergeQueueLarge` | warning | >10 background merge tasks queued for 5m |
-| `ClickHouseGoldFeedStale` | warning | the gold Kafka consumers read nothing for 10 min **while** capture reports fresh trades (both conditions, so a stopped capture is not a broken feed), for 5m |
-| `ClickHouseKafkaMessagesFailed` | warning | `increase(ClickHouseProfileEvents_KafkaMessagesFailed[15m]) > 0`, a record skipped into `gold.feed_errors`; measured firing on the next evaluation after the record (`scripts/chaos/clickhouse-corrupt-record.sh`, 2026-08-27) |
-
-promtool cases for the two gold rules: `docker/prometheus/rules/tests/clickhouse-gold-alerts_test.yml`.
-
-Recording rule: `clickhouse:query_duration_mean:5m`. (`clickhouse:insert_rate:5m` was archived with
-`ClickHouseBronzeInsertRateLow`, same expression, and no dashboard ever read it.)
 
 ### `capture-alerts.yml`: v3 capture tier, the live ingestion path (10)
 
@@ -130,8 +127,8 @@ fault they name**: `make chaos` ran for the first time on 2026-08-26 and `Captur
 ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)). The
 other eight are unproven against a real fault; thresholds move when a run says so, not
 before.
-`CaptureFeedStale`, `CaptureProduceStalled` and `CaptureBookDepthDegraded` additionally
-carry `promtool` unit tests in
+`CaptureFeedStale`, `CaptureProduceStalled`, `CaptureBookDepthDegraded` and
+`CaptureChecksumFailure` additionally carry `promtool` unit tests in
 [`docker/prometheus/tests/capture-alerts.test.yml`](../../docker/prometheus/tests/capture-alerts.test.yml)
 (`make check-alerts`); those pin the expression, never the recovery time.
 
@@ -142,46 +139,7 @@ and a target label of the same name would win and rename the sample's to
 Alerts on capture series get `exchange` from the binary; alerts on `up` name the venue
 through `job` (`capture-<exchange>`).
 
-### `lake-alerts.yml`: v3 lake tier, Phase D (14)
-
-Every staleness expression is `time() - <a timestamp gauge>`, never a pre-computed age.
-`docker/lake/metrics.py` only recomputes on a successful catalog read, so an age gauge
-freezes at its last small value during exactly the outage it is the backstop for.
-
-| Alert | Severity | Fires when |
-|-------|----------|-----------|
-| `LakeIngestFailed` | critical | `raw.messages` has taken no commit for 30m, sustained 5m, the data-loss clock, against Redpanda's 48 h raw retention |
-| `LakeAuditFailed` | critical | The last maintenance run stamped a non-zero failed-check count into the `audit.checks` snapshot summary |
-| `LakeIngestBatchAuditFailed` | critical | `k2_lake_batch_audit_failures_total > 0`, no `for`: a batch stage 1 just committed does not match the offset range it read, filed as `batch_offsets` rows in `audit.checks` ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)). A pulse like `LakeOffsetGap`, aged out after 15 min; the commit is never blocked. Covered by `promtool`; unproven against a live fault |
-| `LakeDiskUsageCritical` | critical | `k2_lake_disk_used_ratio > 0.90` for 5m |
-| `LakeUnresolvableSchemaId` | warning | `k2_lake_unresolvable_schema_ids_total > 0` for 15m, a record names a writer schema the registry will not serve, so stage 2 skips that id and files an `audit.checks` row with `job='ingest'`. Its own gauge, keyed on `k2.job`, so it can neither clear nor be cleared by `LakeAuditFailed` |
-| `LakeOffsetGap` | warning | `k2_lake_offset_gaps_total > 0` for 5m, an ingest ran with `--accept-data-loss` and resumed past records Redpanda had already evicted. A **pulse, not a condition**: the row is filed once by the repairing run, the gauge ages out after 15 min like the schema-id one, and the alert resolves with nothing fixed. The durable record is the `offset_gap` row in `lake.audit.checks`; the alert only exists so a permanent hole accepted at a keyboard is not visible solely in a closed terminal. **Unproven against a live fault:** the repair of 2026-08-26 wrote the gauge's source property, but `lake-metrics` had been running since before the gauge existed and so served neither it nor `k2_lake_ingest_backlog_offsets`. Both appear on the exporter's next restart; the rule itself is covered by `promtool` |
-| `LakeIngestBacklogSustained` | warning | `k2_lake_ingest_backlog_offsets > 0` for 30m on any topic, six cycles with unread offsets because the per-run cap is below the arrival rate. Added after 2026-11-25, when `raw.kraken` held a backlog for 2 h 40 m with no alert. Covered by `promtool`; unproven against a live fault |
-| `LakeIngestLagHigh` | warning | The newest Kafka record in `raw.messages` is over 15m old, sustained 10m |
-| `LakeCommitAgeHigh` | warning | A `bronze.*` table has taken no commit for 30m while the archive keeps moving, stage 2 is the failing half |
-| `LakeCompactionStale` | warning | No file-rewrite snapshot on `raw.messages` for 36 h: the nightly compaction has missed a run. Measures the job, not its side effect on file size, an alert on mean file size fires by construction for the table's first ~15 days. Can be secondary: a stalled ingest produces no small files, so the rewrite finds nothing to merge and commits no snapshot. Check `LakeIngestFailed` first |
-| `LakeExporterDown` | warning | `up{job="lake-metrics"} == 0` for 5m |
-| `LakeExporterStalled` | warning | The exporter is scraped but has completed no refresh for 5m. The fast Lakekeeper-outage signal at ~10m: the prefix lookup throws before any table is read, so `up` stays 1 and scrape errors stay 0 |
-| `LakeScrapeErrors` | warning | `k2_lake_scrape_errors_total > 0` for 5m, the catalog is up and a table is not |
-| `LakeDiskUsageHigh` | warning | `k2_lake_disk_used_ratio > 0.80` for 15m. **The rule is tested, the metric is host-dependent**, on a Docker Desktop host `os.statvfs` sees the VM's thin-provisioned disk (0.344) and not the machine's (0.79). See `docker/lake/README.md` |
-
-All fourteen carry unit tests in `docker/prometheus/rules/tests/lake-alerts_test.yml`, run
-by `make check-docs` gate (c2). They are not the only ones: three `Capture*` rules, two
-`ClickHouseGold*`/`ClickHouseKafka*` rules and the six Airflow rules below are covered too,
-**25 of the 36**:
-
-```bash
-grep -rhoE 'alertname: [A-Za-z]+' docker/prometheus/tests/*.test.yml \
-  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 25 with ADR-047's rule (24 before it, 23 on 2026-11-25, 17 on 2026-09-03)
-```
-
-Each case is either "must fire on a synthetic series" or "must not fire on healthy
-input", an alert that cannot fire and an alert that always fires are the same bug, and
-this file had one of each before it was written. `bronze.kraken_instrument` is the newest
-"must not fire" case: reference data commits hours apart, so it would page under
-`LakeCommitAgeHigh` from the day `metrics.py` started enumerating the catalog.
-
-### `airflow-alerts.yml`: the schedules (6)
+### `airflow-alerts.yml`: the scheduler (2)
 
 From Airflow's statsd metrics through `airflow-statsd` (job `airflow-statsd`), each with
 promtool cases in `docker/prometheus/rules/tests/airflow-alerts_test.yml`.
@@ -189,11 +147,36 @@ promtool cases in `docker/prometheus/rules/tests/airflow-alerts_test.yml`.
 | Alert | Severity | Fires when |
 |-------|----------|-----------|
 | `AirflowSchedulerHeartbeatLost` | warning | no scheduler heartbeat for 2m, held 3m, or none at all |
-| `AirflowTaskFailed` | warning | a task of a lake DAG ended `failed`, its retries spent, a 15-minute pulse; `dbt_marts` left out |
-| `AirflowLakeIngestSkippedRepeatedly` | warning | three `lake_ingest` runs in 15 minutes skipped on the writer lock with no success between, outside an Airflow maintenance or rebuild and the 15 minutes after it |
-| `AirflowLakeIngestNotRunning` | warning | no `lake_ingest` task finished, in any state, for 15m, held 5m |
-| `DbtMartsNotSucceeding` | warning | no `dbt_marts` run ended in success for 3 h, held 10m ([dbt-marts.md](../runbooks/dbt-marts.md)) |
-| `DbtMartsSnapshotExpiryStale` | warning | a domain's daily `<domain>_expire_mart_snapshots` has not succeeded for 26 h, held 10m: failed, skipped after a failed build, or not run ([dbt-marts.md](../runbooks/dbt-marts.md)) |
+| `AirflowTaskFailed` | warning | a task of any DAG ended `failed`, its retries spent, a 15-minute pulse |
+
+### `platform-alerts.yml`: the disk the volumes share (2)
+
+From Redpanda's `/public_metrics` (job `redpanda-public`, which keeps its two disk gauges only),
+with promtool cases in `docker/prometheus/rules/tests/platform-alerts_test.yml`. Redpanda reports
+the filesystem under its data directory; on Docker Desktop that is the VM disk every named volume
+shares, MinIO's included, so it stands in for the lake's disk gauge that retired with the
+`lake-metrics` exporter. It is the VM's disk, not the host's: a bloated `Docker.raw` fills the
+host's `/` while this reads low, and that check is by hand
+([docker-desktop-disk.md](../runbooks/docker-desktop-disk.md) section 1).
+
+| Alert | Severity | Fires when |
+|-------|----------|-----------|
+| `DockerDiskUsageHigh` | warning | `1 - redpanda_storage_disk_free_bytes / redpanda_storage_disk_total_bytes > 0.80` for 15m |
+| `DockerDiskUsageCritical` | critical | the same ratio above 0.90 for 5m |
+
+### Tested rules
+
+Eight of the fourteen carry promtool unit tests, run by `make check-alerts` and by
+`make check-docs` gate (c2): the four `Capture*` rules above, both Airflow rules and both disk
+rules.
+
+```bash
+grep -rhoE 'alertname: [A-Za-z]+' docker/prometheus/tests/*.test.yml \
+  docker/prometheus/rules/tests/*_test.yml | sort -u | wc -l   # 8 on 2026-11-26 with the disk rules; 6 after the lake and old-DAG rules retired, 24 before
+```
+
+Each case is either "must fire on a synthetic series" or "must not fire on healthy
+input": an alert that cannot fire and an alert that always fires are the same bug.
 
 ### Container metrics: cAdvisor
 
@@ -215,7 +198,7 @@ for the `k2-*` containers and drops the rest, about 200 series in all.
 | `container_spec_cpu_quota`, `container_spec_cpu_period` | gauge | The CPU limit: quota ÷ period is cores, `cpus: '2.0'` reads 200000 / 100000 |
 | `container_spec_memory_limit_bytes` | gauge | The memory limit |
 
-Every series carries `name` (the container name, `k2-clickhouse`), `image` and `id`. Labels
+Every series carries `name` (the container name, `k2-redpanda`), `image` and `id`. Labels
 and names were read from a running v0.61.1 on 2026-11-25, not from the docs. CPU against its
 limit, per container:
 
@@ -230,7 +213,7 @@ It is not privileged and has no `/dev/kmsg`, so `container_oom_events_total` is 
 (`oom_event` is enabled) but stays 0 even after a kill: the authoritative check is
 `docker inspect -f '{{.State.OOMKilled}}' <container>` or the cgroup's `memory.events`.
 Every capability is dropped and its root filesystem is read-only. It does hold the Docker
-and containerd sockets, which is how a cgroup becomes `k2-clickhouse`, and a socket is not
+and containerd sockets, which is how a cgroup becomes `k2-redpanda`, and a socket is not
 narrowed by `:ro`: that is the same engine-level privilege `airflow-scheduler` holds.
 
 ### Reading the memory panels
@@ -252,64 +235,12 @@ counts active page cache the kernel reclaims under pressure; it stays in the tab
 Worry when process memory / limit stays above 90 percent or climbs without levelling, or a
 container restarts with exit 137; ignore a large file cache.
 
-### How the lake metrics are produced
-
-Every `k2_lake_*` series comes from the **`lake-metrics`** service, which runs
-[`docker/lake/metrics.py`](../../docker/lake/metrics.py) `--serve` and is scraped on
-`lake-metrics:8000` as Prometheus job `lake-metrics`, every 30s.
-
-**Nothing here is an in-process counter.** Each refresh loads the four lake tables from the
-Lakekeeper REST catalog and reads their current snapshot summary, the same property bag
-the ingest and maintenance jobs write their position into
-([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). The gauges that name a
-job (`max_kafka_ts`, `ingest_backlog`, the two audit counts) take the **newest snapshot by
-`timestamp-ms` carrying that `k2.job`** among those on `main`'s lineage (a branch's commits
-are not read), never the last entry of the metadata array:
-Lakekeeper 0.13.3 returned the same five snapshots in two different orders on two
-successive `loadTable` calls (2026-08-26), and reading by position reported a lag that had
-already been closed. Each lake job runs as a
-short-lived process (an Airflow task, and a flow of the scheduler before it until the 2026-11-25 cutover) that
-exits long before Prometheus scrapes it, so a counter inside the job was never observable; the
-committed snapshot is the durable record of what ran.
-
-It is a separate 128 MB service rather than a sidecar of the scheduler on purpose: if the
-scheduler crashes, the exporter keeps reporting the rising ingest lag these alerts exist to
-catch.
-
-| Metric | Type | Source |
-|--------|------|--------|
-| `k2_lake_last_commit_ts_seconds{table}` | gauge | `committed_at` of the table's current snapshot |
-| `k2_lake_max_kafka_ts_seconds` | gauge | `k2.max-kafka-ts` on the newest ingest snapshot of `raw.messages` |
-| `k2_lake_ingest_backlog_offsets{topic}` | gauge | `k2.kafka-backlog` on that same snapshot, records the run left unread because `--max-offsets-per-partition` capped it. 0 on every topic is a caught-up lake |
-| `k2_lake_last_compaction_ts_seconds{table}` | gauge | newest snapshot whose Iceberg `operation` is a file rewrite |
-| `k2_lake_last_refresh_ts_seconds` | gauge | set last, and only on a refresh that completed |
-| `k2_lake_rows_total{table}` | gauge | `total-records` |
-| `k2_lake_files_total{table}` | gauge | `total-data-files` |
-| `k2_lake_bytes_total{table}` | gauge | `total-files-size-bytes` |
-| `k2_lake_avg_file_bytes{table}` | gauge | bytes ÷ files |
-| `k2_lake_added_records{table}` | gauge | `added-records` on the most recent commit |
-| `k2_lake_audit_failures_total` | gauge | `k2.audit-failures` on the newest `audit.checks` snapshot with `k2.job=maintenance` |
-| `k2_lake_unresolvable_schema_ids_total` | gauge | the same property on the newest snapshot with `k2.job=ingest` |
-| `k2_lake_batch_audit_failures_total` | gauge | `k2.batch-audit-failures` on the newest `audit.checks` snapshot with `k2.job=ingest` that carries it, 0 once 15 minutes old |
-| `k2_lake_disk_used_ratio` / `k2_lake_disk_free_bytes{path}` | gauge | `os.statvfs` on the warehouse filesystem |
-| `k2_lake_scrape_errors_total` | gauge | tables the last refresh could not read; 0 is healthy |
-
-Every staleness alert ages a **timestamp** in PromQL rather than reading a pre-computed age
-gauge, because an age is only recomputed on a successful catalog read and would freeze at
-its last small value during exactly the outage it backstops.
-
-Sanity-check the exporter's summary-parsing logic offline, with no catalog, with
-`python3 docker/lake/metrics.py --self-check`.
-
 ## SLOs
 
 | Signal | Target | SLO | Measured |
 |--------|--------|-----|----------|
 | Exchange → silver latency (p99) | <200 ms | <500 ms | 170–197 ms (2026-02-19, v2 Kotlin path, now frozen), see [latency-budgets.md](./latency-budgets.md) |
-| Lake ingest lag (newest `kafka_ts` in `raw.messages`) | <5 min | <15 min (`LakeIngestLagHigh`) | not yet measured, Phase D burn-in |
-| `raw.messages` commit freshness | <5 min | <30 min (`LakeIngestFailed`) | not yet measured, Phase D burn-in |
-| Nightly audit failed checks | 0 | 0 (`LakeAuditFailed` on any) | not yet measured, Phase D burn-in |
-| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 modes tested 2026-02-19 on the v2 stack, see [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md). **Capture tier, 2026-08-26**: recovery 0–14 s across five injected faults ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)). **Unmeasured for the lake tier**: the four `lake-*.sh` scripts ship unrun |
+| Failure-mode MTTR | <2 min | <5 min | ≤32 s across all 6 modes tested 2026-02-19 on the v2 stack, see [../runbooks/failure-recovery.md](../runbooks/failure-recovery.md). **Capture tier, 2026-08-26**: recovery 0–14 s across five injected faults ([`scripts/chaos/results/2026-08-26.tsv`](../../scripts/chaos/results/2026-08-26.tsv)). The lake tier's four chaos scripts ran on 2026-08-27 ([`scripts/chaos/results/2026-08-27.tsv`](../../scripts/chaos/results/2026-08-27.tsv)) and retired with the old ingest |
 
 ## Not wired up
 
@@ -320,9 +251,6 @@ Honest gaps, in priority order:
 2. **No exporters for MinIO, PostgreSQL or Spark.** Their health is only observable via
    `docker compose ps` and container logs; cAdvisor gives their CPU and memory, not whether
    they answer.
-3. **No query-latency percentiles for ClickHouse.** Its Prometheus endpoint exposes
-   counters only, no native histograms, so `clickhouse:query_duration_mean:5m` is a mean,
-   not a p99.
 
 ## Related
 

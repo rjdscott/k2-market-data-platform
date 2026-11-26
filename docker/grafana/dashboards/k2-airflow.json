@@ -16,7 +16,7 @@
       "id": 1,
       "type": "timeseries",
       "title": "DAG run duration",
-      "description": "Mean seconds from a run's start to its end, over 30 minutes, by DAG and outcome. Before the cutover lake_ingest ran the probe, which reads a few seconds of each topic, so durations from then are shorter than a real ingest.",
+      "description": "Mean seconds from a run's start to its end, over 30 minutes, by DAG and outcome. No DAG runs until phase 002 adds the first product DAG; the old lake DAGs are retired (legacy/v3-lake-ingest/).",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -158,7 +158,7 @@
       "id": 4,
       "type": "timeseries",
       "title": "Skips",
-      "description": "Task tries that ended skipped, per hour. For lake_ingest a skip is ingest.py exiting 75: another lake writer held the lock. A few around 03:00 are maintenance; three in a row otherwise is AirflowLakeIngestSkippedRepeatedly.",
+      "description": "Task tries that ended skipped, per hour: a task whose run decided there was nothing to do, or one skipped because a task before it failed. The task log says which.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -251,7 +251,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "DAG parse time",
-      "description": "Seconds the dag-processor spent importing each DAG file (mean over 10 minutes), and the whole parse loop. docker/airflow/dags/lake.py imports nothing heavy, so a rise here is the file, not the lake.",
+      "description": "Seconds the dag-processor spent importing each DAG file (mean over 10 minutes), and the whole parse loop. A rise here is a DAG file doing work at import, which a DAG file should not.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -298,8 +298,7 @@
   "style": "dark",
   "tags": [
     "airflow",
-    "orchestration",
-    "lake"
+    "orchestration"
   ],
   "templating": {
     "list": []

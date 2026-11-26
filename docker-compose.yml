@@ -105,8 +105,9 @@ x-airflow-env: &airflow-env
   AIRFLOW__METRICS__STATSD_PORT: "9125"
   AIRFLOW__METRICS__STATSD_INFLUXDB_ENABLED: "True"
   AIRFLOW__METRICS__LEGACY_NAMES_ON: "False"
-  # dbt_marts (docker/airflow/dags/dbt_marts.py): astronomer-cosmos sends usage
-  # telemetry and dbt anonymous usage stats unless told not to, and both are off.
+  # astronomer-cosmos, in the image since ADR-034's dbt DAG (retired; no DAG
+  # uses cosmos today), sends usage telemetry and dbt anonymous usage stats
+  # unless told not to, and both are off.
   # Cosmos keys its dbt ls cache on a hash of the project's files; a host
   # checkout's dbt/.venv is no part of the project.
   AIRFLOW__COSMOS__ENABLE_TELEMETRY: "False"
@@ -130,7 +131,7 @@ services:
       - k2-net
     ports:
       - "127.0.0.1:9092:9092"     # Kafka API
-      - "127.0.0.1:19092:19092"   # Kafka API, external listener advertised as localhost:19092 (host tooling: scripts/parity)
+      - "127.0.0.1:19092:19092"   # Kafka API, external listener advertised as localhost:19092 (host tooling)
       - "127.0.0.1:9644:9644"     # Admin API
       - "127.0.0.1:8081:8081"     # Schema Registry
     volumes:
@@ -220,7 +221,15 @@ services:
   # ───────────────────────────────────────────────────────────────────────
   # ClickHouse - OLAP database for real-time analytics
   # ───────────────────────────────────────────────────────────────────────
+  # Paused for the platform build (ADR-057): behind the profile `hot-gold`, so
+  # `docker compose up` and `make up` leave it stopped; its volumes are kept.
+  # `docker compose --profile hot-gold up -d clickhouse` starts it; after 7
+  # days stopped its consumer-group offsets are due to expire, and a start
+  # then leaves a hole (ADR-057, Decision 4).
+  # The image line stays: scripts/clickhouse-schema-test.sh reads its tag.
+  # No default-profile service depends on it.
   clickhouse:
+    profiles: ["hot-gold"]
     logging: *k2-logging
     image: clickhouse/clickhouse-server:24.3-alpine
     container_name: k2-clickhouse
@@ -532,19 +541,17 @@ services:
   # ───────────────────────────────────────────────────────────────────────
   # Airflow 3 - the lake schedules (ADR-034)
   # ───────────────────────────────────────────────────────────────────────
-  # The only scheduler of the lake writes since the cutover: lake_ingest every
-  # 5 minutes, lake_maintenance at 03:00 UTC, lake_rebuild by hand.
-  # docker/airflow/dags/lake.py has the DAGs; docs/runbooks/airflow-scheduling.md
-  # the recoveries.
+  # The scheduler of the lake writes. Its old DAGs (the 5-minute ingest, the
+  # nightly maintenance, the rebuild and the hourly dbt marts) are retired to
+  # legacy/v3-lake-ingest/airflow/ (ADR-056), so docker/airflow/dags holds no
+  # DAG until phase 002 adds one per product. docs/runbooks/airflow-scheduling.md
+  # has the recoveries.
   #
   # LocalExecutor, so tasks run inside airflow-scheduler, and that is the only
   # service given the Docker socket. No triggerer: nothing here defers.
   #
-  # dbt_marts builds the dbt marts on Trino every hour at minute 10
-  # (docker/airflow/dags/dbt_marts.py, docs/runbooks/dbt-marts.md).
-  #
   # ./docker/airflow/dags and ./dbt are directory bind mounts held by the
-  # scheduler and the dag-processor, read-only: cosmos runs each dbt command in
+  # scheduler and the dag-processor, read-only: cosmos ran each dbt command in
   # a temporary copy of symlinks, where dbt writes target/ and logs/. A checkout
   # switch or a write-then-rename edit needs both recreated (CLAUDE.md,
   # bind-mount gotcha).
@@ -646,17 +653,8 @@ services:
       <<: *airflow-env
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "True"
     command: ["scheduler"]
-    # lake-ddl too: lake_maintenance starts unpaused and runs its latest 03:00
-    # slot as soon as it is parsed, and on a fresh clone that must not reach
-    # the Spark container before the tables exist (retries=0: a failed run and
-    # an alert on every fresh install). The cost: a DDL that fails at boot leaves the scheduler down until
-    # `docker compose up -d` runs again, which AirflowSchedulerHeartbeatLost
-    # reports within 5 minutes. A later `up` of this service re-runs the
-    # idempotent one-shots it depends on; `--no-deps` does not.
     depends_on:
       airflow-migrate:
-        condition: service_completed_successfully
-      lake-ddl:
         condition: service_completed_successfully
     stop_grace_period: 45s
     deploy:
@@ -718,8 +716,8 @@ services:
 
   # statsd in, Prometheus out (job airflow-statsd, :9102). Default names:
   # Airflow sends InfluxDB-style tags and the exporter makes them labels, so
-  # `airflow.ti.finish,dag_id=lake_ingest,task_id=ingest,state=skipped:1|c`
-  # becomes airflow_ti_finish{dag_id="lake_ingest",state="skipped",...}. The
+  # `airflow.ti.finish,dag_id=<dag>,task_id=<task>,state=skipped:1|c`
+  # becomes airflow_ti_finish{dag_id="<dag>",state="skipped",...}. The
   # mapping file has one rule, a ttl on the ti.running gauge, and says why.
   # It is a file bind mount: after editing it, recreate this service
   # (`docker compose up -d --force-recreate --no-deps airflow-statsd`).
@@ -757,14 +755,15 @@ services:
 #############################################################################
 
   # ───────────────────────────────────────────────────────────────────────
-  # Spark + Iceberg - batch engine for the v3 lake ingest and maintenance
+  # Spark + Iceberg - the lake's batch engine (the old ingest and maintenance
+  # jobs it ran are retired to legacy/v3-lake-ingest/, ADR-056)
   # ───────────────────────────────────────────────────────────────────────
   spark-iceberg:
     logging: *k2-logging
     build:
       context: .
       dockerfile: docker/spark/Dockerfile
-    image: k2-spark-iceberg:3.5.5_1.8.1  # local tag after build
+    image: k2-spark-iceberg:3.5.9_1.8.1  # local tag after build
     container_name: k2-spark-iceberg
     # Pinned off the capture cores (12-14) so a compaction or a heavy query
     # cannot steal a capture container's cycles; the Phase D noisy-neighbour
@@ -773,19 +772,20 @@ services:
     hostname: spark-iceberg
     networks:
       - k2-net
+    # The image runs as `spark` (uid 185) and, between jobs, only the Spark History
+    # Server under tini (docker/spark/Dockerfile): it runs the event-log cleaner,
+    # so the container's running state is the cleaner's. The lake jobs are
+    # local-mode drivers started by `docker exec`, as the same user.
     ports:
-      - "127.0.0.1:18080:8080"    # Spark Master UI (mapped to 18080 to avoid conflict)
-      - "127.0.0.1:4040:4040"     # Spark Application UI
-      # The Spark image also starts its own sample-notebook server on 8888:
-      # unauthenticated, root, and it holds the MinIO keys. Nothing in K2 uses
-      # it, so it is not published. K2's notebooks are `make notebooks`, 8889.
+      - "127.0.0.1:18080:18080"   # Spark History Server: finished lake jobs, newest first
+      - "127.0.0.1:4040:4040"     # the UI of the lake job running now, while it runs
     volumes:
-      - ./docker/lake:/home/iceberg/lake          # ingest, maintenance, DDL, session builder
-      # Silver derives canonical_symbol from the registry, not from the Avro
-      # topics. File-level bind mount: edit in place needs --force-recreate
-      # (CLAUDE.md, bind-mount gotcha).
+      - ./docker/lake:/home/iceberg/lake          # the kept modules (offsets, wire, bars, books) and the session builder
+      # The registry and the bar thresholds the kept modules read
+      # (docker/lake/instruments.py, bars.py). File-level bind mounts: an edit in
+      # place needs --force-recreate (CLAUDE.md, bind-mount gotcha).
       - ./config/instruments.yaml:/home/iceberg/config/instruments.yaml:ro
-      - ./config/bars.yaml:/home/iceberg/config/bars.yaml:ro                # gold.bars thresholds (docker/lake/bars.py)
+      - ./config/bars.yaml:/home/iceberg/config/bars.yaml:ro
     environment:
       # MinIO / S3 credentials (Iceberg cold storage)
       - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
@@ -796,10 +796,8 @@ services:
       # them to the `lake` catalog's S3FileIO explicitly, not via the AWS chain.
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-    # ClickHouse and PostgreSQL credentials went with docker/offload/: the lake
-    # ingest reads Redpanda and writes Iceberg, and carries its exactly-once
-    # state in the snapshot summary (ADR-022). Phase E's ClickHouse reload pulls
-    # from the lake rather than being pushed into, so nothing here needs them.
+    # ClickHouse and PostgreSQL credentials went with docker/offload/ in Phase D,
+    # and nothing that runs here needs them.
     depends_on:
       minio:
         condition: service_healthy
@@ -867,8 +865,9 @@ services:
   # Lakekeeper - Iceberg REST catalog
   # ───────────────────────────────────────────────────────────────────────
   # Port published on loopback only: the catalog runs unauthenticated on a
-  # single host, and the only host-side consumers are the Phase E DuckDB /
-  # PyIceberg notebooks. Same reasoning as prefect-db's 127.0.0.1:15432.
+  # single host, and the only host-side consumers were the DuckDB / PyIceberg
+  # notebooks, archived with the old lake ingest. Same reasoning as
+  # prefect-db's 127.0.0.1:15432.
   # 18181 rather than 8181 because Redpanda already owns host 8081/8082.
   #
   # The image is distroless (no shell), so the healthcheck is the binary's own
@@ -922,7 +921,7 @@ services:
       com.k2.version: "v3"
 
   # ───────────────────────────────────────────────────────────────────────
-  # Lake Init - One-shot: MinIO bucket, catalog bootstrap, warehouse, namespaces
+  # Lake Init - One-shot: MinIO bucket, catalog bootstrap, warehouses
   # ───────────────────────────────────────────────────────────────────────
   # Reuses the minio/minio image because it is the only image already in this
   # stack carrying BOTH `mc` (bucket create) and `curl` (Lakekeeper REST) —
@@ -953,102 +952,6 @@ services:
     restart: "no"
     labels:
       com.k2.service: "init"
-      com.k2.tier: "cold"
-      com.k2.version: "v3"
-
-  # ───────────────────────────────────────────────────────────────────────
-  # Lake DDL - One-shot: the four Iceberg tables (docker/lake/ddl/lake.sql)
-  # ───────────────────────────────────────────────────────────────────────
-  # Runs in the Spark image because the DDL uses Iceberg's Spark extensions —
-  # `SET IDENTIFIER FIELDS`, `WRITE DISTRIBUTED BY PARTITION LOCALLY ORDERED BY`
-  # — which the REST API does not expose. That is why table DDL costs a JVM
-  # start here where docker/lake/init-lake.sh could create namespaces with curl.
-  #
-  # Idempotent (CREATE TABLE IF NOT EXISTS + converging ALTERs); verified as a
-  # no-op on re-run against a live warehouse.
-  lake-ddl:
-    logging: *k2-logging
-    image: k2-spark-iceberg:3.5.5_1.8.1  # built by the spark-iceberg service
-    container_name: k2-lake-ddl
-    # Pinned off the capture cores (12-14) so a compaction or a heavy query
-    # cannot steal a capture container's cycles; the Phase D noisy-neighbour
-    # experiment (capacity-model.md) is what makes this claim measurable.
-    cpuset: ${K2_HEAVY_CPUSET-0-11}
-    networks:
-      - k2-net
-    volumes:
-      - ./docker/lake:/home/iceberg/lake:ro
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      # This container is capped at 1 GiB, not the 4 GiB spark-iceberg gets, so
-      # spark_conf.py's 1536m default plus its JVM overhead would not fit.
-      # The DDL is nine catalog round-trips and no data, so the heap is not the
-      # constraint here — see the sizing comment in docker/lake/spark_conf.py.
-      K2_LAKE_DRIVER_MEMORY: 512m
-    entrypoint: ["python3", "/home/iceberg/lake/apply_ddl.py"]
-    depends_on:
-      lake-init:
-        condition: service_completed_successfully
-      spark-iceberg:
-        condition: service_started  # only for the image build
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
-    restart: "no"
-    labels:
-      com.k2.service: "init"
-      com.k2.tier: "cold"
-      com.k2.version: "v3"
-
-  # ───────────────────────────────────────────────────────────────────────
-  # Lake metrics exporter — Prometheus job 'lake-metrics'
-  # ───────────────────────────────────────────────────────────────────────
-  # Derives every metric from Iceberg snapshot summaries over the Lakekeeper
-  # REST API rather than from in-process counters: each job runs in a
-  # subprocess that exits long before Prometheus scrapes it. A separate service,
-  # not a sidecar in the scheduler, so a scheduler crash still leaves the rising
-  # commit age visible. Its own pinned image (docker/lake-metrics/) since
-  # ADR-034, so it outlives whichever orchestrator runs the jobs.
-  #
-  # NOT the Spark image, even though docker/lake/*.py otherwise runs there:
-  # reading the catalog through PyIceberg needs a FileIO, and
-  # `import pyiceberg.io.pyarrow` alone measures 122 MB RSS against this 128 MB
-  # limit. urllib against the REST API costs 27 MB doing the whole refresh.
-  #
-  # minio-data is mounted read-only purely so `os.statvfs` can report free space
-  # on the filesystem the lake actually lands on. Nothing reads the objects.
-  lake-metrics:
-    logging: *k2-logging
-    build:
-      context: .
-      dockerfile: docker/lake-metrics/Dockerfile
-    image: k2-lake-metrics:3.15.1  # local tag after build: the Python it runs
-    container_name: k2-lake-metrics
-    hostname: lake-metrics
-    networks:
-      - k2-net
-    volumes:
-      - ./docker/lake:/opt/lake:ro
-      - minio-data:/minio-data:ro
-    environment:
-      K2_LAKE_CATALOG_URI: http://lakekeeper:8181/catalog
-      K2_LAKE_WAREHOUSE: k2
-      K2_LAKE_DISK_PATH: /minio-data
-    command: ["python", "/opt/lake/metrics.py", "--serve"]
-    depends_on:
-      lakekeeper:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          cpus: '0.1'
-          memory: 128M
-    restart: unless-stopped
-    labels:
-      com.k2.service: "observability"
       com.k2.tier: "cold"
       com.k2.version: "v3"
 
@@ -1325,20 +1228,19 @@ services:
 # ----------------------|-----------|--------------|---------------------------
 # redpanda              | 2.0       | 2G           | Streaming backbone
 # redpanda-console      | 0.5       | 256M         | Streaming UI
-# clickhouse            | 4.0       | 8G           | Warm storage OLAP
+# clickhouse            | 4.0       | 8G           | Gold hot tier; profile hot-gold, paused (ADR-057), not in the sums
 # minio                 | 1.0       | 1G           | S3-compatible storage
 # prometheus            | 1.0       | 2G           | Metrics collection
 # grafana               | 0.5       | 512M         | Visualization
 # cadvisor              | 0.1       | 128M         | Per-container CPU and memory (Prometheus job cadvisor)
 # prefect-db            | 1.0       | 1536M        | Airflow and Lakekeeper metadata DB
 # airflow-api-server    | 1.0       | 1536M        | Airflow 3 UI, REST and execution API (ADR-034)
-# airflow-scheduler     | 1.5       | 3G           | Airflow 3 scheduler + LocalExecutor, 4 slots; dbt_marts' dbt
+# airflow-scheduler     | 1.5       | 3G           | Airflow 3 scheduler + LocalExecutor, 4 slots
 # airflow-dag-processor | 0.5       | 1G           | Airflow 3 DAG parsing
 # airflow-statsd        | 0.1       | 64M          | Airflow statsd to Prometheus (:9102)
-# spark-iceberg         | 3.0       | 8G           | Batch engine (lake ingest + maintenance)
+# spark-iceberg         | 3.0       | 8G           | Lake batch engine (its old ingest jobs retired, ADR-056)
 # lakekeeper            | 0.25      | 256M         | Iceberg REST catalog (v3, ADR-018)
-# lake-metrics          | 0.1       | 128M         | v3 lake alerts exporter (:8000)
-# trino                 | 2.0       | 5G           | SQL over the lake, dbt marts (ADR-035; 127.0.0.1:8088)
+# trino                 | 2.0       | 5G           | SQL over the lake, dbt's engine (ADR-035; 127.0.0.1:8088)
 # capture-binance       | 0.25      | 256M         | Rust capture, Binance (12 pairs, trades + L2)
 # capture-kraken        | 0.25      | 256M         | Rust capture, Kraken (11 pairs, trades + L2)
 # capture-coinbase      | 0.25      | 512M         | Rust capture, Coinbase (11 pairs, trades + L2)
@@ -1347,7 +1249,7 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (19 long-running) | 19.30 CPU | 35.312 GiB | v3 capture + lake, Airflow schedules, Trino
+# STEADY STATE (17 long-running) | 15.20 CPU | 27.188 GiB | v3 capture, lake catalog and engines, Airflow, Trino
 #
 # One-shots are NOT free. They declare limits and they run concurrently with
 # the steady state at boot, so the budget that matters at `docker compose up` is
@@ -1355,25 +1257,28 @@ services:
 #
 #   redpanda-init      0.25 | 128M  topics + Avro subjects (docker/redpanda/init.sh)
 #   lakekeeper-migrate 0.5  | 256M  v3 catalog DB schema
-#   lake-init          0.25 | 128M  v3 bucket + warehouse + namespaces (docker/lake/init-lake.sh)
-#   lake-ddl           0.5  | 1G    v3 raw/bronze/audit table DDL (docker/lake/ddl/lake.sql)
+#   lake-init          0.25 | 128M  v3 bucket + catalog + warehouses (docker/lake/init-lake.sh)
 #   airflow-migrate    0.5  | 1G    airflow role + database, then `airflow db migrate`
 #   ----------------------------------------------------------------------------
-#   one-shot subtotal  2.0  | 2.5G
+#   one-shot subtotal  1.5  | 1.5G
 #
-# Bootstrap peak: 21.30 CPU / 37.812 GiB, all 24 default-profile services,
+# Bootstrap peak: 16.70 CPU / 28.688 GiB, all 21 default-profile services,
 # against the 25 CPU / 48 GiB ceiling ADR-045 sets at the bootstrap peak
 # (superseding ADR-034's 20 CPU / 36 GiB, which superseded ADR-010's 16 CPU /
-# 40 GB). scripts/check-budget.py fails CI over it. Headroom: 3.70 CPU and
-# 10.188 GiB. The host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay
-# outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
+# 40 GB). scripts/check-budget.py fails CI over it. Headroom: 8.30 CPU and
+# 19.312 GiB. With `--profile hot-gold` (clickhouse, paused by ADR-057) the
+# peak is 20.70 CPU / 36.688 GiB over 22 services; the script reports that line
+# and gates only the default. The host gives Docker 28 CPU / 49.5 GiB; 3 cores
+# and 1.5 GiB stay outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
 #
 # History: retiring the three Kotlin feed handlers (ADR-019) gave back the
 # 1.5 CPU / 1.5 GB they declared, and deleting docker/offload/ took its metrics
 # exporter (0.1 CPU / 128M) and its DDL one-shot (0.5 CPU / 1G) with it.
-# spark-iceberg went 4G -> 8G on 2026-08-26 after compaction of raw.messages
-# needed a 2g driver heap (peak 2,641 MiB) and the two batch engines now match
-# at 8G each.
+# Retiring the old lake ingest (ADR-056, legacy/v3-lake-ingest/) did the same:
+# lake-metrics retired (0.1 CPU / 128M), and the lake-ddl one-shot retired
+# (0.5 CPU / 1G). spark-iceberg went 4G -> 8G on 2026-08-26 after compaction
+# of the old raw archive (since retired) needed a 2g driver heap (peak 2,641
+# MiB), and the two batch engines now match at 8G each.
 #
 # Recompute after any limit change; the same sums CI gates:
 #
@@ -1382,5 +1287,5 @@ services:
 # Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-26 (the old scheduler archived to legacy/prefect/, the legacy profile deleted; before it trino 4G -> 5G, ADR-010 and ADR-035 Outcomes)
+# Last updated: 2026-11-26 (lake-ddl and lake-metrics retired with the old lake ingest, ADR-056 and the ADR-010 Outcome; before it clickhouse behind the profile hot-gold, ADR-057)
 #############################################################################

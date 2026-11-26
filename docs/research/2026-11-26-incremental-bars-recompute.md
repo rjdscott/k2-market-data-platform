@@ -111,7 +111,7 @@ given in bytes. The commands are in the [appendix](#appendix-commands).
 
 ## 2. How stage 2d runs today
 
-`gold.stage()` ([`docker/lake/gold.py`](../../docker/lake/gold.py)) appends the new
+`gold.stage()` ([`docker/lake/gold.py`](../../legacy/v3-lake-ingest/lake/gold.py)) appends the new
 silver rows to `gold.trades` per venue and returns `minutes`, a lazy DataFrame of distinct
 `(exchange, canonical_symbol, minute)` over those batches. Then:
 

@@ -3,98 +3,56 @@
     {
       "file": "01-pipeline-overview.png",
       "url": "http://localhost:3000/d/k2-pipeline-overview",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:29Z"
+      "git_sha": "v3.0.0-alpha.1-58-g3d8495b",
+      "captured_at": "2026-11-26T15:55:18Z"
     },
     {
       "file": "02-capture.png",
       "url": "http://localhost:3000/d/k2-l2-capture",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:32Z"
+      "git_sha": "v3.0.0-alpha.1-58-g3d8495b-dirty",
+      "captured_at": "2026-11-26T15:56:31Z"
     },
     {
       "file": "03-redpanda-topics.png",
       "url": "http://localhost:8080/topics",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:35Z"
+      "git_sha": "v3.0.0-alpha.1-58-g3d8495b",
+      "captured_at": "2026-11-26T15:55:24Z"
     },
     {
-      "file": "04-lake.png",
-      "url": "http://localhost:3000/d/k2-lake",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:37Z"
-    },
-    {
-      "file": "05-spark-master.png",
+      "file": "05-spark-history.png",
       "url": "http://localhost:18080",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:40Z"
-    },
-    {
-      "file": "06-lakekeeper-gold.png",
-      "url": "http://localhost:18181/ui/warehouse/81d3215a-a2bc-11f1-9478-ffbc9544e0ba/namespace/gold",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:44Z"
+      "git_sha": "v3.0.0-alpha.1-58-g3d8495b",
+      "captured_at": "2026-11-26T15:55:26Z"
     },
     {
       "file": "07-minio-lake-bucket.png",
       "url": "http://localhost:9001/browser/k2-lake",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:46Z"
-    },
-    {
-      "file": "08-clickhouse.png",
-      "url": "http://localhost:3000/d/clickhouse-v2",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:49Z"
-    },
-    {
-      "file": "09-clickhouse-query.png",
-      "url": "http://localhost:8123/play",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:51Z"
-    },
-    {
-      "file": "10-airflow-dags.png",
-      "url": "http://localhost:8090/dags",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:55Z"
-    },
-    {
-      "file": "11-airflow-lake-ingest.png",
-      "url": "http://localhost:8090/dags/lake_ingest",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:58Z"
-    },
-    {
-      "file": "12-airflow-task-log.png",
-      "url": "http://localhost:8090/dags/lake_ingest/runs/scheduled__2026-11-25T20:26:00+00:00/tasks/ingest",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:35:01Z"
+      "git_sha": "v3.0.0-alpha.1-58-g3d8495b-dirty",
+      "captured_at": "2026-11-26T15:56:36Z"
     },
     {
       "file": "13-airflow-dashboard.png",
       "url": "http://localhost:3000/d/k2-airflow",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:35:04Z"
+      "git_sha": "v3.0.0-alpha.1-58-g3d8495b",
+      "captured_at": "2026-11-26T15:55:59Z"
     },
     {
       "file": "14-prometheus-alerts.png",
       "url": "http://localhost:9090/alerts",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:35:06Z"
+      "git_sha": "v3.0.0-alpha.1-58-g3d8495b",
+      "captured_at": "2026-11-26T15:56:02Z"
     },
     {
       "file": "15-prometheus-targets.png",
       "url": "http://localhost:9090/targets",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:35:09Z"
+      "git_sha": "v3.0.0-alpha.1-58-g3d8495b",
+      "captured_at": "2026-11-26T15:56:04Z"
     },
     {
       "file": "16-resources.png",
       "url": "http://localhost:3000/d/k2-resources",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:35:12Z"
+      "git_sha": "v3.0.0-alpha.1-58-g3d8495b",
+      "captured_at": "2026-11-26T15:56:07Z"
     }
   ]
 }

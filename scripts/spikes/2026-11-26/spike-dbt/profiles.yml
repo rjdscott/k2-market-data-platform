@@ -1,0 +1,14 @@
+spike:
+  target: trino
+  outputs:
+    trino:
+      type: trino
+      method: none
+      http_scheme: http
+      host: localhost
+      port: 8088
+      user: dbt_reference_data
+      database: reference_data
+      schema: spike_dbt_20261126
+      timezone: UTC
+      threads: 1

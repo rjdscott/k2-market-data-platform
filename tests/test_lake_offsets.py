@@ -270,8 +270,8 @@ class TestLatestSummary:
 
     def test_a_later_compaction_does_not_hide_the_ingest(self):
         # The whole reason the job is stamped as a property. After a nightly
-        # rewrite the newest snapshot on raw.messages carries no offsets, and
-        # taking it would restart the next ingest from the beginning of time.
+        # rewrite the newest snapshot on the ingested table carries no offsets,
+        # and taking it would restart the next ingest from the beginning of time.
         snapshots = [(1, self.INGEST_B), (2, self.COMPACTION)]
         assert O.latest_summary(snapshots, O.JOB_INGEST) is self.INGEST_B
 
@@ -369,11 +369,67 @@ def catalog(monkeypatch):
 class TestSnapshotHistoryIsMainOnly:
     def test_resume_position_is_mains_not_a_branchs(self, catalog):
         """Over every snapshot, the newest decode is 5's: a dropped branch's position."""
-        summary = O.latest_summary(catalog.snapshot_history(FakeSpark(), "lake.bronze.t"), O.JOB_DECODE)
+        summary = O.latest_summary(catalog.snapshot_history(FakeSpark(), "lake.ns.t"), O.JOB_DECODE)
         assert summary[O.SRC_SNAPSHOT_ID] == "20"
 
     def test_main_snapshots_are_mains_rows(self, catalog):
-        assert sorted(r["snapshot_id"] for r in catalog.main_snapshots(FakeSpark(), "lake.bronze.t")) == [1, 2, 3]
+        assert sorted(r["snapshot_id"] for r in catalog.main_snapshots(FakeSpark(), "lake.ns.t")) == [1, 2, 3]
+
+
+class SummarySpark(FakeSpark):
+    """FakeSpark that also answers added_records' summary read, each snapshot adding 10 x its id."""
+
+    def __init__(self, written=True):
+        self.written = written
+
+    def sql(self, query):
+        if ".refs" in query and not self.written:
+            rows = []
+        elif "WHERE snapshot_id =" in query:
+            sid = int(query.rsplit("=", 1)[1])
+            rows = [Row(summary={**m, "added-records": str(10 * s)}) for s, _, _, m in SNAPSHOTS if s == sid]
+        else:
+            return super().sql(query)
+        return type("Result", (), {"collect": lambda self: rows})()
+
+
+class TestCatalogReads:
+    """The rest of docker/lake/catalog.py that runs without a stack. broker_offsets is
+    not here: it is calls into the Kafka AdminClient through the JVM gateway, nothing else."""
+
+    def test_added_records_is_mains_head_not_the_newest_snapshot(self, catalog):
+        assert catalog.current_snapshot_id(SummarySpark(), "lake.ns.t") == MAIN
+        assert catalog.added_records(SummarySpark(), "lake.ns.t") == 10 * MAIN   # 5 is newer, on a branch
+
+    def test_an_unwritten_table_has_no_head_and_added_nothing(self, catalog):
+        assert catalog.current_snapshot_id(SummarySpark(written=False), "lake.ns.t") is None
+        assert catalog.added_records(SummarySpark(written=False), "lake.ns.t") == 0
+        assert catalog.main_snapshots(SummarySpark(written=False), "lake.ns.t") == []
+
+    def test_fetch_schema_by_id_and_an_unknown_id_is_its_own_error(self, catalog, monkeypatch):
+        import http.server
+        import json
+        import threading
+
+        class Registry(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                found = self.path == "/schemas/ids/7"
+                self.send_response(200 if found else 404)
+                self.end_headers()
+                self.wfile.write(json.dumps({"schema": '{"type": "string"}'} if found else {"error_code": 40403}).encode())
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Registry)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            monkeypatch.setattr(catalog, "SCHEMA_REGISTRY_URL", f"http://127.0.0.1:{server.server_port}/")
+            assert catalog.fetch_schema(7) == '{"type": "string"}'
+            with pytest.raises(catalog.UnresolvableSchema, match="schema id 8"):
+                catalog.fetch_schema(8)
+        finally:
+            server.shutdown()
 
 
 class TestOffsetGaps:
@@ -433,7 +489,7 @@ class TestRecordedGaps:
         assert O.recorded_gaps([("t/0", "operator: we lost some records"), ("t/0", None)]) == []
 
     def test_a_scope_without_a_partition_is_skipped(self):
-        assert O.recorded_gaps([("lake.raw.messages", KRAKEN_GAP_ROW[1])]) == []
+        assert O.recorded_gaps([("lake.ns.table", KRAKEN_GAP_ROW[1])]) == []
 
 
 class TestUncoveredHoles:
@@ -463,7 +519,7 @@ class TestUncoveredHoles:
 
     def test_two_abutting_records_cover_one_merged_hole(self):
         # Two evictions with no successful ingest between them leave one hole
-        # in the data and two rows in audit.checks. Neither row contains it.
+        # in the data and two recorded gap rows. Neither row contains it.
         gaps = [("t", 0, 100, 200), ("t", 0, 201, 300)]
         assert O.uncovered_holes([("t", 0, 100, 300)], gaps) == []
         assert O.uncovered_holes([("t", 0, 100, 301)], gaps) == [("t", 0, 100, 301)]

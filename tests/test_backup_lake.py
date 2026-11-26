@@ -6,7 +6,11 @@ pins): a missing file is copied, a differing one is refused with a JSON error
 line and exit 0, and only `--overwrite` or `--remove` would replace or delete.
 So the fake honours those two flags, and the additive tests fail if the script
 ever passes them. `curl` is the catalog, with a credential in the table's
-config block, as a catalog may return, which the script must never print."""
+config block, as a catalog may return, which the script must never print.
+
+The script ships with no table to copy until phase 002 (the old lake ingest's
+tables were dropped): the fixture's copy of it is given four synthetic tables, so
+the copy path keeps its tests, and test_shipped_with_no_tables runs it as shipped."""
 
 import json
 import os
@@ -19,7 +23,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 USER = "dummy-access-key-7f3a9c"
 PASSWORD = "dummy-secret-value-0b8e4d2a6c"
-TABLES = ["raw.messages", "audit.checks", "gold.dim_instrument", "gold.dim_venue"]
+TABLES = ["landing.events", "landing.checks", "ref.dim_one", "ref.dim_two"]
 
 FAKE_DOCKER = r"""#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$LOG"
@@ -80,7 +84,9 @@ esac
 def stack(tmp_path):
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
-    shutil.copy(ROOT / "scripts/backup-lake.sh", repo / "scripts/backup-lake.sh")
+    shipped = (ROOT / "scripts/backup-lake.sh").read_text()
+    assert shipped.count('\nTABLES=""\n') == 1
+    (repo / "scripts/backup-lake.sh").write_text(shipped.replace('\nTABLES=""\n', f'\nTABLES="{" ".join(TABLES)}"\n'))
     (repo / ".env").write_text(f"MINIO_ROOT_USER={USER}\nMINIO_ROOT_PASSWORD={PASSWORD}\nOTHER_PASSWORD=x\n")
     bucket = tmp_path / "bucket"
     for t in TABLES:
@@ -141,7 +147,7 @@ def test_refuses_below_the_free_space_floor(stack):
 
 
 def differing_copy(stack):
-    f = stack / "k2-backup/lake/raw.messages/data/p=1/a.parquet"
+    f = stack / "k2-backup/lake/landing.events/data/p=1/a.parquet"
     f.parent.mkdir(parents=True)
     f.write_text("other bytes")
 
@@ -168,7 +174,7 @@ def test_never_prints_the_credential(stack, name, env, setup, rc):
 
 def test_additive_only(stack):
     assert run(stack).returncode == 0
-    table = stack / "bucket/k2-lake/warehouse/k2/u-raw-messages"
+    table = stack / "bucket/k2-lake/warehouse/k2/u-landing-events"
     (table / "metadata/snap-1.avro").unlink()               # expired upstream: the copy keeps it
     (table / "data/p=1/a.parquet").write_text("rewritten")  # a key whose bytes changed: refused
     (table / "data/p=1/new.parquet").write_text("new")      # new: copied
@@ -177,7 +183,7 @@ def test_additive_only(stack):
     out = run(stack)
     assert out.returncode == 1
     assert "differ from the copy" in out.stderr
-    copy = stack / "k2-backup/lake/raw.messages"
+    copy = stack / "k2-backup/lake/landing.events"
     assert (copy / "metadata/snap-1.avro").read_text() == "m"
     assert (copy / "data/p=1/a.parquet").read_text() == "rows-a"
     assert (copy / "data/p=1/new.parquet").read_text() == "new"
@@ -239,7 +245,23 @@ def test_rerun_is_idempotent(stack):
 def test_dry_run_lists_and_writes_nothing(stack):
     out = run(stack, "--dry-run")
     assert out.returncode == 0, out.stderr
-    assert "< k2/k2-lake/warehouse/k2/u-raw-messages/data/p=1/a.parquet" in out.stdout
+    assert "< k2/k2-lake/warehouse/k2/u-landing-events/data/p=1/a.parquet" in out.stdout
     assert not (stack / "k2-backup/STATUS.json").exists()
     assert set(files(stack / "k2-backup")) <= {".lock"}
     assert "exec k2-prefect-db" not in docker_calls(stack)
+
+
+def test_shipped_with_no_tables(stack):
+    # As shipped: a visible SKIP for the table copy, both dumps still taken, and
+    # neither MinIO nor the catalog asked, so an outage of either costs no dump.
+    shutil.copy(ROOT / "scripts/backup-lake.sh", stack / "repo/scripts/backup-lake.sh")
+    out = run(stack, CATALOG_DOWN="1", MC_DOWN="1")
+    assert out.returncode == 0, out.stderr
+    assert "SKIP the lake table copy" in out.stdout and "phase 002" in out.stdout
+    calls = docker_calls(stack)
+    assert "inspect" not in calls and "run --rm" not in calls
+    point = status(stack)["restore_point"]
+    assert point["tables"] == {} and point["objects_total"] == 0
+    assert sorted(point["dumps"]) == ["airflow", "lakekeeper"]
+    dry = run(stack, "--dry-run")
+    assert dry.returncode == 0 and "SKIP the lake table copy" in dry.stdout, dry.stderr

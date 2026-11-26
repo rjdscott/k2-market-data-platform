@@ -110,7 +110,7 @@ flowchart TB
 | Pure parsing, replayable | `handle_frame` has no I/O; `tests/replay*.rs` run fixtures through it |
 | No floats for money | `decimal.rs` `parse_fixed` + tests; `precision_loss_total` counter and `CapturePrecisionLoss` alert |
 | Bounded memory, explicit loss | single librdkafka queue; `produce_errors_total{reason}`; `CaptureProduceErrors`, `CaptureProduceStalled` |
-| Every frame kept | `RawMessage` produced before decode; lake `offset_continuity` audit proves the archive tiles the broker offsets |
+| Every frame kept | `RawMessage` produced before decode; the lake's `offset_continuity` audit proved the archive tiled the broker offsets until the v3 ingest retired on 2026-11-26 (archived in `legacy/v3-lake-ingest/`) |
 | Config is data | `config/instruments.yaml` single source of native/canonical symbols; `config.rs` tests |
 | Minimal, non-root image | `Dockerfile` distroless final stage; Trivy in CI |
 | Lint as a gate | CI `rust` job: `cargo fmt --check`, `clippy -D warnings`, `cargo test` |
@@ -118,8 +118,8 @@ flowchart TB
 ## Trade-offs
 
 - **Drop, don't block.** Blocking the frame loop when the broker stalls would stop reading the
-  socket and the venue would disconnect, losing more. Loss is counted and the lake's audit
-  records the hole.
+  socket and the venue would disconnect, losing more. Loss is counted, and until the v3 lake
+  ingest retired the lake's audit recorded the hole.
 - **One connection per venue.** Simplest possible failure domain; the cost is that a venue
   disconnect takes trades and book together, and the resubscribe path is exercised in `make chaos`.
 - **No local persistence.** A spill-to-disk buffer would add a second store to reconcile;
@@ -134,7 +134,7 @@ flowchart TB
 - **Raw is the system of record.** Trades and book snapshots derive from a verbatim copy of every
   frame, failed parses included, so a parser bug is a reprocessing job rather than a lost day.
 - **Loss is counted, never silent.** Drop-on-full plus a resync once the queue drains beats
-  blocking the socket; `produce_errors_total` and the lake's parity audit both see the hole.
+  blocking the socket; `produce_errors_total` sees the hole, as the retired lake's parity audit did.
 - **Rust for determinism, not speed.** Transit over the public internet dominates the process ([latency](02-market-data-concepts.md#latency-and-what-it-means));
   the language buys `i64` fixed point with no `f64` on the record path, ordered book iteration, and a
   39.5 MB image ([capture README](../../services/capture-rust/README.md), measured 2026-08-26).

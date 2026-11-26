@@ -150,7 +150,7 @@
             "required": ["name", "physicalName", "physicalType"],
             "oneOf": [
               {
-                "description": "A table lake.sql creates: referenced, columns not restated.",
+                "description": "A table the old docker/lake/ddl/lake.sql created, referenced, columns not restated. k2gen refuses it: that DDL retired to legacy/v3-lake-ingest/ (ADR-056).",
                 "required": ["authoritativeDefinitions"],
                 "not": {"required": ["properties"]}
               },
@@ -203,12 +203,12 @@
         "layer": {"description": "The lake namespace the table is in: one of the four layers, or audit, the checks the lake jobs file about every layer.", "enum": ["raw", "bronze", "silver", "gold", "audit"]},
         "format": {"const": "iceberg"},
         "partitioning": {
-          "description": "Iceberg partition fields in order, as lake.sql spells them: days(recv_ts), exchange.",
+          "description": "Iceberg partition fields in order, as Iceberg DDL spells them: days(recv_ts), exchange.",
           "type": "array",
           "items": {"type": "string"}
         },
         "sort": {
-          "description": "The declared write sort order in lake.sql, in order. Empty when the table declares none.",
+          "description": "The declared write sort order, in order. Empty when the table declares none.",
           "type": "array",
           "items": {"type": "string"}
         },

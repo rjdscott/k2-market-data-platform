@@ -216,13 +216,13 @@ from that page's command.
    The 48 h prediction divided by twelve and the traffic does not. It cost the records it evicted
    (counted in [ADR-021](adr/ADR-021-raw-first-archive-and-lineage.md)'s Outcome), once, before the ingest bound was raised above the arrival rate and the loss was filed as
    an `offset_gap` row the continuity audit nets out
-   ([capacity-model.md](architecture/15-capacity-model.md), [lake-ingest-lag.md §3](runbooks/lake-ingest-lag.md)).
+   ([capacity-model.md](architecture/15-capacity-model.md), [lake-ingest-lag.md §3](../legacy/v3-lake-ingest/docs/runbooks/lake-ingest-lag.md)).
 
 2. **Row size breaks JVMs, not row count.** Coinbase `level2` snapshots are ~5 MB each. They
    OOM'd the ingest on a cold start (payloads cached) and compaction twice (five file groups
    at once, then one) at a 768m heap, while 53× the batch size moved the ingest's peak RSS
    by *less than nothing*. Maintenance now runs at 2g and holds the ingest lock so the two
-   drivers never share the container ([docker/lake/README.md](../docker/lake/README.md),
+   drivers never share the container ([docker/lake/README.md](../legacy/v3-lake-ingest/lake/README.md),
    [ADR-010 Outcome](adr/ADR-010-resource-budget.md)).
 
 3. **The venue disproved the schema twice.** `bronze.trades` was declared unique on
@@ -231,7 +231,7 @@ from that page's command.
    one connection* (counted in [ADR-024](adr/ADR-024-unified-bronze-tables-in-the-lake.md)), 15 s apart, in two distinct frames. The only uniqueness an archive of
    frames can promise is lineage, which record produced this row, so that is the identifier
    now, and venue replay is a count the audit reports rather than a constraint it enforces
-   ([ADR-024](adr/ADR-024-unified-bronze-tables-in-the-lake.md), [lake-audit-failed.md §2](runbooks/lake-audit-failed.md)).
+   ([ADR-024](adr/ADR-024-unified-bronze-tables-in-the-lake.md), [lake-audit-failed.md §2](../legacy/v3-lake-ingest/docs/runbooks/lake-audit-failed.md)).
 
 4. **An audit that cannot be reconciled is an alarm people learn to ignore.** The first real
    loss would have latched `LakeAuditFailed` forever, hiding every later one behind it.

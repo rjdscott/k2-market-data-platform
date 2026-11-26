@@ -9,11 +9,12 @@
 --
 -- The MVs are the only writers on this path. They carry the Kafka lineage
 -- (`_topic`, `_partition`, `_offset`) into src_* so a gold row can be traced
--- to the frame in raw.messages by the same three values the lake uses.
+-- to its frame by the same three values the retired lake raw archive used.
 --
 -- A new consumer group starts wherever librdkafka's auto.offset.reset puts
--- it; on the first boot that is the topic's retention (7 days) — the head
--- start. Everything older comes from the lake.
+-- it; on the first boot that is the topic's retention (7 days), the head
+-- start. Everything older came from the lake, whose old ingest is retired
+-- (legacy/v3-lake-ingest/): a resume gets the 7 days and nothing older.
 --
 -- kafka_handle_error_mode = 'stream': a record the decoder cannot read is not
 -- retried forever, it is delivered with `_error` set and `_raw_message`
@@ -25,9 +26,9 @@
 -- kafka_skip_broken_messages set, a second chaos record (partition 10, offset
 -- 1895, schema id 0) still stalled — the failure is a registry 404 while
 -- fetching the schema, which is not a "broken message" to that setting.
--- 'stream' catches both. The archive holds the bytes and the lake's audit
--- counts them; the served tier's job is to keep serving, and to say what it
--- skipped.
+-- 'stream' catches both. The raw topics hold the bytes (the lake archive and
+-- its audit that counted them are retired); the served tier's job is to keep
+-- serving, and to say what it skipped.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS gold.q_trades

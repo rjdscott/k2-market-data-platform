@@ -305,7 +305,7 @@ over the same window against the live topics, capture binary
 `git_sha=v3-phase-b-33-gf808d87`. The `v2` / `v3` / `Δ` columns count **unique
 exchange `trade_id`s, not records**: venues re-send trades and both tiers carry
 the re-send identically, so repeats are reported in `dup-v2` / `dup-v3` and are
-never folded into Δ ([`../../scripts/parity/README.md`](../../scripts/parity/README.md)).
+never folded into Δ ([`../../scripts/parity/README.md`](../../legacy/v3-lake-ingest/scripts/parity/README.md)).
 
 **How to read the verdict column.** PASS/FAIL is the script's, per symbol, not a
 judgement written here: `|Δ| ≤ tolerance`, where **tolerance = `max(2, 0.1% of
@@ -396,7 +396,7 @@ divergence explained rather than tolerated"*, so each one is named here:
    dropped its Coinbase socket at `15:02:13.728Z` and was back at `15:02:20.174Z`
    — **6.4 s blind**. **415 of the 451** carry an exchange timestamp inside minute
    `15:02`. `docker logs k2-feed-handler-coinbase`; the reconnect table for both
-   tiers is in [`../../scripts/parity/README.md`](../../scripts/parity/README.md).
+   tiers is in [`../../scripts/parity/README.md`](../../legacy/v3-lake-ingest/scripts/parity/README.md).
 2. **The 83 Kraken `only-v3` cluster at v2's three reconnects** — `14:54:12.117Z`
    (6.9 s), `15:43:59.701Z` (6.5 s), `16:11:07.403Z` (6.5 s). v2's fixed 5 s
    backoff is why its gaps are ~3× v3's.

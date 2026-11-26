@@ -63,6 +63,6 @@ matching-engine time. Results in these areas quoted off this archive should say
 ## Outcome
 
 Cited from [ADR-029](../adr/ADR-029-research-production-parity-contract.md) and the
-[notebooks README](../../notebooks/README.md) so the limits arrive with the data.
+[notebooks README](../../legacy/v3-lake-ingest/notebooks/README.md) so the limits arrive with the data.
 Revisit when an L3 feed is subscribed on any venue, or when a venue timestamp is added
 to a stream that lacks one today.

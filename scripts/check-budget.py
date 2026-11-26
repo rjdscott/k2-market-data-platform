@@ -13,8 +13,9 @@ default plus that profile's services) and exits 1 on any of:
   limits times its `deploy.replicas`, which compose also sets from `scale`) above 25 CPU /
   48 GiB, the ceiling ADR-045 sets in place of ADR-034's 20 CPU / 36 GiB
   (which replaced ADR-010's 16 CPU / 40 GB). The steady default and the
-  profiled bootstraps are reported only. No service names a profile today, so
-  only the two default lines print.
+  profiled bootstraps are reported only. One profile is named today:
+  `hot-gold`, the paused ClickHouse tier (ADR-057), so three lines print, the
+  last being the default plus clickhouse.
 - a service under any profile that does not declare both a CPU and a memory
   limit, so a service behind a profile cannot ship without one.
 - an image that is not pinned (see `unpinned`): a compose image in any
@@ -251,8 +252,9 @@ def exposure_problems(services: dict) -> list[str]:
     return problems
 
 
-# Archived or immutable: legacy/ is built by nothing, docs/research/ holds the
-# spikes as they ran.
+# Archived or immutable: legacy/ is built by no service (CI builds the archived
+# lake-metrics Dockerfile only to keep its required check), docs/research/ holds
+# the spikes as they ran.
 NOT_BUILT = ("legacy/", "docs/research/")
 
 

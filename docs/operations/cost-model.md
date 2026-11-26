@@ -8,12 +8,12 @@ What this platform costs to run, and what the architecture decisions bought.
 
 ## What it costs today
 
-The stack is one Docker Compose deployment: **14.60 CPU / 25.625 GiB across 15
-long-running services**, rising to 16.10 CPU / 27.125 GiB across all 19 while the four
-one-shot init containers overlap at bootstrap (see
-[docker-resources.md](./docker-resources.md) and the Outcome addenda to
-[ADR-010](../adr/ADR-010-resource-budget.md)). It runs on a single developer workstation,
-so the marginal cost is electricity.
+The stack is one Docker Compose deployment: **15.20 CPU / 27.188 GiB across 17
+long-running services**, rising to 16.70 CPU / 28.688 GiB across all 21 while the four
+one-shot init containers overlap at bootstrap, with the ClickHouse hot tier paused and outside
+both (see [docker-resources.md](./docker-resources.md), which says how the figures were
+computed, and the Outcome addenda to [ADR-010](../adr/ADR-010-resource-budget.md)). It runs on
+a single developer workstation, so the marginal cost is electricity.
 
 That is the headline result, not an aside. v1 needed 35–40 CPU and 45–50 GB, more than
 2× a 16-core budget, because five always-on Spark Structured Streaming jobs consumed
@@ -46,10 +46,10 @@ Replacing each component with its managed counterpart, for comparison:
 | Component | Self-hosted here | Managed alternative | Estimate / month |
 |-----------|-----------------|--------------------|-----------------|
 | Streaming | Redpanda (2 CPU / 2 GB) | MSK / Redpanda Cloud, smallest production tier | $250–400 |
-| Warm OLAP | ClickHouse (4 CPU / 8 GB) | ClickHouse Cloud, smallest always-on service | $200–400 |
+| Warm OLAP | ClickHouse (4 CPU / 8 GB), paused ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)) | ClickHouse Cloud, smallest always-on service | $200–400 |
 | Object storage | MinIO (1 CPU / 1 GB) | S3, ~50 GB compressed | <$5 |
 | Orchestration | Airflow api-server, scheduler, dag-processor and statsd exporter beside the shared database (3.1 CPU / 5.56 GiB of limits, `docker-compose.yml`) | a managed Airflow, not priced here | not priced |
-| Batch compute | Spark, idle 22h/day | EMR Serverless, ~2h/day of actual work | $30–80 |
+| Batch compute | Spark, idle until phase 002 schedules a job; the v3 lake it ran about 2 h/day for is retired | EMR Serverless, ~2h/day of actual work | $30–80 |
 | Observability | Prometheus + Grafana (1.5 CPU / 2.5 GB) | Grafana Cloud free tier | $0–50 |
 | **Total** | | | **≈$500–1,000**, orchestration not included |
 
@@ -61,15 +61,14 @@ about team size, not throughput.
 
 Scaling levers, in the order they would bite:
 
-1. **Retention, not throughput.** ClickHouse TTLs are 7 days on bronze, 30 on silver,
-   1 year on gold; everything older lives in Iceberg. Zstd level 3 compresses the cold
-   tier ~12:1, so a year of trades is tens of gigabytes, not terabytes. Storage is the
-   cheapest axis and deliberately so.
+1. **Retention, not throughput.** Redpanda keeps 48 h of raw frames and 7 days of trades
+   and books; the lake keeps each product for the retention its contract states, from the
+   first product in phase 002. Storage is the cheapest axis and deliberately so.
 2. **More exchanges.** Each one is a `k2-capture` container at 0.25 CPU / 256 MB (512 MB
    for a full-depth venue like Coinbase) plus three more Redpanda topics, near-zero
    marginal cost. See [adding-new-exchanges.md](./adding-new-exchanges.md).
-3. **Query concurrency.** ClickHouse is the first thing to need a bigger box. It already
-   holds 27% of CPU and 37% of RAM.
+3. **Query concurrency.** ClickHouse, when it returns, is the first thing to need a bigger
+   box: it held 21% of the declared CPU and 23% of the RAM while it ran.
 4. **Throughput.** Last, not first. The capture tier's saturation point has not been
    measured, the v2 handlers were never the bottleneck at ~150 msg/s
    ([2026-02-19 baseline](../benchmarks/2026-02-19-v2-baseline.md)) and the Rust tier
@@ -80,14 +79,14 @@ Scaling levers, in the order they would bite:
 
 | | v1 | today | Saving |
 |---|----|----|--------|
-| CPU (limits) | 35–40 | 14.60 | ~60% |
-| RAM (limits) | 45–50 GB | 25.625 GiB | ~55% |
-| Services | 18–20 | 15 (+4 one-shot) | ~20% |
+| CPU (limits) | 35–40 | 15.20 | ~60% |
+| RAM (limits) | 45–50 GB | 27.188 GiB | ~40% |
+| Services | 18–20 | 17 (+4 one-shot) | ~10% |
 | Always-on Spark | 14 CPU / 20 GB | 0 (batch only) | 100% |
 
 Almost all of that saving is v1 → v2 and belongs to ADR-004; the v3 changes since are
 close to a wash, Lakekeeper added 0.25 CPU / 256 MB and the lake tier's exporter
-0.1 CPU / 128 MB, swapping the three Kotlin feed handlers for three Rust capture
+0.1 CPU / 128 MB (retired with the v3 lake on 2026-11-26), swapping the three Kotlin feed handlers for three Rust capture
 containers gave back 0.75 CPU / 0.5 GiB, and deleting the v2 offload took its own exporter
 (0.1 CPU / 128 MB) with it
 ([ADR-010](../adr/ADR-010-resource-budget.md) Outcome addenda).

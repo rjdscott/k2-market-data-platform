@@ -577,3 +577,50 @@ the first maintenance held the writer lock (an ingest that finds the lock held e
 the DAG maps to skipped). The first nightly `lake_maintenance` that Airflow started on its own
 schedule, `scheduled__2026-11-26T03:00:00+00:00`, ran 03:00:00 to 03:44:30 UTC and ended
 `success` with every audit passing (10 check kinds in `lake.audit.checks`).
+
+---
+
+## Outcome (2026-11-26, `lake_ingest` retired)
+
+**The trigger closed by retirement, not by tuning.** The Outcome "2026-11-26, the duration
+trigger fired" above records that this ADR's one standing trigger, the p90 (the duration nine runs
+in ten finish within) of scheduled `lake_ingest` runs above 240 s over a UTC day, fired on
+2026-11-25: 253 s against the 300 s slot between five-minute runs, measured in the phase P3 audit,
+`docs/audits/2026-11-26-p3-trino-dbt-marts.md`. Its planned response was
+[ADR-048](ADR-048-gold-step-reads-touched-data-writes-bars-once.md), a change to the gold step so
+that it reads only the trades added since its last run. ADR-048 was never built.
+[ADR-056](ADR-056-unified-data-product-platform.md), Accepted on 2026-11-26, records the job still
+over the line that day (a p90 of 253 s over the 24 hours to 11:08 UTC, in its Context) and decides
+to replace the single pipeline, one job writing every layer for every venue, with one pipeline per
+data product. The plan review behind it struck the response to this trigger, and the building of
+ADR-048, because the old pipeline retires in the plan's first phase
+([`FULL-PLAN-REVIEW.md`](../research/2026-11-26-unified-platform-architecture/FULL-PLAN-REVIEW.md),
+section 2: "record an Outcome that says 'resolved by retiring `lake_ingest`'").
+
+**What was retired.** On 2026-11-26 UTC, in Wave 3 of plan phase 000
+([`000-clear-the-ground.md`](../plans/2026-11-26-unified-product-platform/000-clear-the-ground.md)),
+the four DAGs that ran the old pipeline, `lake_ingest`, `lake_maintenance`, `lake_rebuild` and
+`dbt_marts`, were paused for good after their run lists were saved, and the lake tables they wrote
+were copied to the host and then dropped. The last `lake_ingest` run,
+`scheduled__2026-11-26T14:56:00+00:00`, ended `success` at 15:00:05 UTC (`airflow dags list-runs
+lake_ingest -o json`, read after the drop). The DAG files, the ingest code and the retirement
+record are in `legacy/v3-lake-ingest/` and its README.
+
+**So no measurement cleared the trigger**: the job it measured no longer runs. The "Revisit when"
+of the Outcome above, a whole UTC day after ADR-048's change, can never be met, and is withdrawn.
+The concern it watched, a scheduled job outgrowing its slot, moves to the new design's own lines:
+ADR-056 is revisited when one product's chain of runs has a p90 above 200 s, which phase 004's
+48-hour soak of five-minute runs measures
+([`004-kraken-trades-instruments-security-master.md`](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)),
+and phase 002 of the plan to release adds a duration alert, the alert this ADR never had
+([`002-controls-alerts-release-engineering.md`](../plans/2026-11-26-unified-product-platform-to-release/002-controls-alerts-release-engineering.md)).
+
+**Airflow stays.** This ADR's Decision is not touched by the retirement. The scheduler, the
+dag-processor (the process that parses DAG files), the API server and the statsd exporter keep
+running. The DAG folder, `docker/airflow/dags/`, holds no DAG until phase 002 of the plan generates
+one DAG per product from a release
+([`002-run-spine-through-ecb-fx.md`](../plans/2026-11-26-unified-product-platform/002-run-spine-through-ecb-fx.md),
+"One DAG per product"), which is the amendment ADR-056 lists for this ADR: hand-written DAGs give
+way to a generated DAG and one `dbt build` per product. The scheduling rules this ADR set for the
+lake (one run at a time, no catch-up, a timeout that stops the Spark driver) are kept, as written,
+in the archived `legacy/v3-lake-ingest/airflow/dags/lake.py`.

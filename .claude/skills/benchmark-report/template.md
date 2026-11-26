@@ -10,11 +10,11 @@ should worry a reader.
 
 | Metric | Binance | Kraken | Coinbase | Command |
 |--------|---------|--------|----------|---------|
-| Trades/s | | | | [T1](#t1) |
-| Trades in window (n) | | | | [T1](#t1) |
+| Records delivered/s | | | | [T1](#t1) |
+| Records in window (n) | | | | [T1](#t1) |
 | Gaps in window | | | | [T2](#t2) |
 
-## Latency — exchange timestamp → ClickHouse Silver
+## Latency: exchange timestamp to capture receive (trades)
 
 Includes internet transit and exchange clock skew. Not a trading-path latency.
 
@@ -29,17 +29,17 @@ Includes internet transit and exchange clock skew. Not a trading-path latency.
 | | | | | | [T4](#t4) |
 | **Total** | | | | | |
 
-Budget: 16 CPU / 40 GB. Headroom: … .
+Ceiling: 25 CPU / 48 GiB (ADR-045). Headroom: … .
 
 ## Storage
 
-| Table | Rows | On disk | Compression | Bytes/day | Command |
-|-------|------|---------|-------------|-----------|---------|
+| Topic | On disk | Bytes/day | Command |
+|-------|---------|-----------|---------|
 
-## Cold tier
+## Lake and ClickHouse
 
-| Table | Ingest lag | Rows added | Files | Command |
-|-------|------------|------------|-------|---------|
+Not measured until phase 004 lands a live lake product and the hot tier resumes, or the
+rows, each with its command.
 
 ## Query timings
 

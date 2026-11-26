@@ -666,3 +666,43 @@ PASS: bootstrap default within 25 CPU / 48 GiB; limits and pins hold across 6 Do
 
 Headroom at the gated peak: 3.70 CPU and 10.188 GiB. The summary comment at the end of
 `docker-compose.yml` carries the same sums.
+
+### Outcome addendum (2026-11-26, ClickHouse behind the profile hot-gold)
+
+`clickhouse` (4.0 CPU / 8G) moves behind the compose profile `hot-gold`, paused for the platform
+build by [ADR-057](ADR-057-clickhouse-hot-tier-paused-during-platform-build.md). Its limits are
+unchanged; it leaves the default profile, so the gated bootstrap peak no longer counts it and
+`check-budget.py` reports it on the `hot-gold` line instead. No default-profile service depends
+on it (`docker compose config --services | grep -cx clickhouse` prints 0, and 1 with
+`--profile hot-gold`).
+
+```
+$ python3 scripts/check-budget.py
+steady default         18 services   15.30 CPU   27.312 GiB
+bootstrap default      23 services   17.30 CPU   29.812 GiB
+bootstrap hot-gold     24 services   21.30 CPU   37.812 GiB
+PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports hold across 5 Dockerfiles and 40 scripts and workflows
+```
+
+Headroom at the gated peak: 7.70 CPU and 18.188 GiB. The summary comment at the end of
+`docker-compose.yml` carries the same sums.
+
+### Outcome addendum (2026-11-26, the old lake ingest retired)
+
+`lake-metrics` (0.1 CPU / 128M, long-running) and the `lake-ddl` one-shot (0.5 CPU / 1G) leave
+the compose file with the old lake ingest they served, archived to `legacy/v3-lake-ingest/`
+([ADR-056](ADR-056-unified-data-product-platform.md)). No other limit changes. The scheduler no
+longer waits on `lake-ddl`, and nothing else named either
+(`docker compose config --services | grep -cxE 'lake-(ddl|metrics)'` prints 0).
+
+```
+$ python3 scripts/check-budget.py
+steady default         17 services   15.20 CPU   27.188 GiB
+bootstrap default      21 services   16.70 CPU   28.688 GiB
+bootstrap hot-gold     22 services   20.70 CPU   36.688 GiB
+PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports hold across 4 Dockerfiles and 27 scripts and workflows
+```
+
+Headroom at the gated peak: 8.30 CPU and 19.312 GiB. The summary comment at the end of
+`docker-compose.yml` carries the same sums. The phase 000 plan named 17.30 CPU / 29.812 GiB as
+its exit figure; that was the peak with these two services still in it.

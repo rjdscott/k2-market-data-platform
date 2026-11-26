@@ -108,11 +108,12 @@ a gap, rather than a plausible-looking lie.
 
 **A dropped raw book frame is a resync too, for the archive's sake.** When the producer
 queue is full, `sink.send` drops the record and returns `false`; the capture's own book is
-unharmed (it saw the frame), but `raw.messages` now has a hole, and the lake replays every
-book from `raw.messages`. Measured on 2026-08-26: after the `capture-queue-full` and
-`redpanda-stop` chaos runs, Kraken frames failed the lake's replayed checksum, every
-one downstream of a drop, and the failures ran to the end of each connection because
-nothing ever took a fresh snapshot (`docker/lake/README.md` § Books). `resync.rs` remembers
+unharmed (it saw the frame), but the raw archive now has a hole, and a replay rebuilds every
+book from that archive (the retired lake raw archive did). Measured on 2026-08-26: after the
+`capture-queue-full` and `redpanda-stop` chaos runs, Kraken frames failed the lake's replayed
+checksum, every one downstream of a drop, and the failures ran to the end of each connection
+because nothing ever took a fresh snapshot (the archived `legacy/v3-lake-ingest/lake/README.md`
+§ Books). `resync.rs` remembers
 the symbol of every dropped `book` / `l2_data` raw frame and, at the first 1 Hz tick after
 a tick with **no** drop, the queue has demonstrably drained, sends
 `resubscribe_messages` for each, counted in `resyncs_total`. Not on the drop itself: the
@@ -164,8 +165,8 @@ k2-capture replay --exchange kraken --fixture f.jsonl > records.jsonl   # same a
 ```
 
 `replay` is Phase G's `k2-replay` ([ADR-029](../../docs/adr/ADR-029-research-production-parity-contract.md)):
-a fixture or a lake export (`scripts/replay_export.py`, one archived connection out
-of `raw.messages` at a pinned snapshot) through the *same* `handle_frame` the socket
+a fixture or a lake export (the archived `scripts/replay_export.py`, one connection out
+of the retired lake raw archive at a pinned snapshot; it returns in phase 004) through the *same* `handle_frame` the socket
 loop calls, with the 1 Hz sampler ticking off the recorded `recv_ts_ns`. No socket,
 no producer, no exporter. Records go to stdout as JSONL, one per line, raw frame
 before what was derived from it; the SHA-256 of those bytes is logged at the end,
@@ -175,15 +176,15 @@ identical). `--depth N` and `--interval-ms M` are the "deeper and faster by repl
 [ADR-027](../../docs/adr/ADR-027-book-snapshot-and-sequencing.md) promised, bounded
 by what the venue sent: Binance 20, Kraken the subscribed 25, Coinbase full depth.
 `--conn-id` stamps the archived connection id back on so the records join to the
-archive. There is no Kafka sink on purpose: the raw topic is what the lake ingests,
+archive. There is no Kafka sink on purpose: the raw topic is the lake archive's source,
 and a replayed frame produced there would be archived a second time.
 
 Measured 2026-08-28, one whole archived Kraken connection (`c8a130a5…`, 2026-08-26
-12:38–13:42Z, `scripts/replay-lake.sh`): replayed in 16 s end to
-end including the export and the `audit.checks` row, digest `56ad1df1…`. The earlier
+12:38–13:42Z, `scripts/replay-lake.sh`, now archived): replayed in 16 s end to
+end including the export and its row in the retired lake audit table, digest `56ad1df1…`. The earlier
 figure on this page (`1dfb9139…`) was over a connection
 the export now refuses: its `conn_msg_seq` is not contiguous, a counter artefact of the
-pre-burn-in Phase C build rather than loss (see `scripts/replay_export.py`). `--depth 25
+pre-burn-in Phase C build rather than loss (see the archived `scripts/replay_export.py`). `--depth 25
 --interval-ms 100` on that same input gave its snapshots at depth 25.
 
 `healthcheck` reads our own `/metrics` over loopback and looks at

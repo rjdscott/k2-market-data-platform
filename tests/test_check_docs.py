@@ -327,19 +327,33 @@ def gate_h(repo, **env):
     base = {k: v for k, v in os.environ.items() if k in ("HOME", "PATH")}
     run = subprocess.run(["bash", "scripts/check-docs.sh"], cwd=repo, capture_output=True, text=True,
                          env={**base, "PATH": f"{stub}:{base['PATH']}", **env})
-    return next(x for x in run.stdout.splitlines() if "(h)" in x)
+    lines = run.stdout.splitlines()
+    i = next(i for i, x in enumerate(lines) if "(h)" in x)
+    flagged = []
+    for x in lines[i + 1:]:
+        if not x.startswith("  "):
+            break
+        flagged.append(x.strip())
+    return "\n".join([lines[i], *flagged])
 
 
-def test_gate_h_reads_a_commit_pushed_straight_to_main(tmp_path):
+def scratch_repo(tmp_path, files=None):
+    """A git repo holding check-docs.sh and its helper, plus `files`, committed once."""
     repo = tmp_path / "r"
     (repo / "scripts").mkdir(parents=True)
     for f in ("check-docs.sh", "check_docs.py"):
         shutil.copy(ROOT / "scripts" / f, repo / "scripts" / f)
     (repo / ".gitignore").write_text(".bin/\n")
+    for name, text in (files or {}).items():
+        (repo / name).write_text(text)
     git(repo, "init", "-q", "-b", "main")
     git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "add", ".")
     git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
-    before = git(repo, "rev-parse", "HEAD")
+    return repo, git(repo, "rev-parse", "HEAD")
+
+
+def test_gate_h_reads_a_commit_pushed_straight_to_main(tmp_path):
+    repo, before = scratch_repo(tmp_path)
     (repo / "doc.md").write_text(f"a dash {chr(0x2014)} here\n")  # built, so this file holds none
     git(repo, "add", "doc.md")
     git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "pushed to main")
@@ -347,3 +361,23 @@ def test_gate_h_reads_a_commit_pushed_straight_to_main(tmp_path):
     assert gate_h(repo).startswith("PASS")  # the bypass: the merge base is HEAD, nothing to read
     assert gate_h(repo, K2_DIFF_BASE=before).startswith("FAIL: (h) em-dash")
     assert gate_h(repo, K2_DIFF_BASE="0" * 40).startswith("FAIL: (h) K2_DIFF_BASE")
+
+
+def test_gate_h_lets_an_old_dash_through_once_and_never_a_new_one(tmp_path):
+    d = chr(0x2014)   # built, so this file holds none
+    repo, before = scratch_repo(tmp_path, {
+        "moved.md": f"an old {d} dash, see [the page](old/page.md)\n",
+        "twice.md": f"kept {d} once, see [it](old/it.md)\n",
+        "target.md": "a plain line, see [this](old/this.md)\n",
+        "both.md": f"prose {d} here, see [that](old/that.md)\n",
+    })
+    (repo / "moved.md").write_text(f"an old {d} dash, see [the page](archive/page.md)\n")      # target only: passes
+    (repo / "twice.md").write_text(f"kept {d} once, see [it](new/it.md)\n" * 2)               # one removal, two adds
+    (repo / "target.md").write_text(f"a plain line, see [this](old/th{d}is.md)\n")           # dash inside a target
+    (repo / "both.md").write_text(f"prose {d} here, see [that](n{d}ew/that.md)\n")            # old dash, new one in the target
+    (repo / "new.md").write_text(f"a brand new {d} line\n")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "change")
+    verdict, *flagged = gate_h(repo, K2_DIFF_BASE=before).splitlines()
+    assert verdict.startswith("FAIL: (h) em-dash")
+    assert sorted(x.split(": ")[0] for x in flagged) == ["both.md:1", "new.md:1", "target.md:1", "twice.md:2"]

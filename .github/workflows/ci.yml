@@ -68,9 +68,6 @@ jobs:
       - name: Pytest
         run: uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 
-      - name: Notebook helpers (k2lake)
-        run: make test-notebooks
-
   contracts:
     name: Contracts (k2gen)
     runs-on: ubuntu-latest
@@ -136,11 +133,10 @@ jobs:
 
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
-      # make test-dbt: sqlfluff, then the pinned Trino image over the local catalogs
-      # job trino uses, with every lake table dbt/models/_sources.yml lists created
-      # empty; dbt deps, parse and compile --target trino against it; the manifest
-      # check (only staging reads a source, every mart tested unique on the grain its
-      # contract declares); and dbt build per domain, which runs the unit tests.
+      # make test-dbt: the steps scripts/dbt-test.sh lists in its header (lint,
+      # deps, parse, compile, the manifest check), with no Trino. The old marts
+      # are archived (legacy/v3-lake-ingest/dbt/) and dbt builds return in phase
+      # 002; the job keeps its name because "dbt (marts)" is a required check.
       - run: bash scripts/dbt-test.sh
 
   docker:
@@ -156,12 +152,18 @@ jobs:
             dockerfile: docker/airflow/Dockerfile
             load: true
             tag: k2-airflow:3.3.2
+          # Archived with the old lake ingest (legacy/v3-lake-ingest/): no service
+          # runs it, but "Docker build (lake-metrics)" is a required check on main,
+          # and building it keeps the archive verifiable. The owner may drop both
+          # the leg and the required check together.
           - name: lake-metrics
-            dockerfile: docker/lake-metrics/Dockerfile
+            dockerfile: legacy/v3-lake-ingest/lake-metrics/Dockerfile
             load: true
             tag: k2-lake-metrics:3.15.1
           - name: spark
             dockerfile: docker/spark/Dockerfile
+            load: true
+            tag: k2-spark-iceberg:3.5.9_1.8.1
           - name: capture
             dockerfile: services/capture-rust/Dockerfile
             # Only this image declares the ARG; passing it to the others would
@@ -195,15 +197,23 @@ jobs:
         if: matrix.name == 'airflow'
         run: >-
           docker run --rm --network none -e AIRFLOW__LOGGING__LOGGING_LEVEL=WARNING
-          -e AIRFLOW__COSMOS__ENABLE_CACHE_DBT_LS=False
           -v "$PWD":/repo:ro -v "$PWD/dbt":/opt/k2/dbt:ro k2-airflow:3.3.2
           python -m unittest discover -s /repo/docker/airflow/tests
 
-      - name: Exporter self-check, in the image just built
+      - name: Exporter self-check, in the image just built (archived exporter)
         if: matrix.name == 'lake-metrics'
         run: >-
-          docker run --rm --network none -v "$PWD/docker/lake":/opt/lake:ro
+          docker run --rm --network none -v "$PWD/legacy/v3-lake-ingest/lake":/opt/lake:ro
           k2-lake-metrics:3.15.1 python /opt/lake/metrics.py --self-check
+
+      # Why the Spark base moved (plan 000, N0-6): the old one shipped Python and
+      # OpenSSL past their end of life. A base bump that brings either back fails here.
+      - name: Python and OpenSSL versions, in the image just built
+        if: matrix.name == 'spark'
+        run: >-
+          docker run --rm --network none k2-spark-iceberg:3.5.9_1.8.1
+          python3 -c "import sys, ssl; print(sys.version, ssl.OPENSSL_VERSION);
+          assert sys.version_info[:2] == (3, 10) and ssl.OPENSSL_VERSION_INFO[0] == 3"
 
   compose:
     name: Compose (config validation)
@@ -221,7 +231,7 @@ jobs:
         run: docker compose --env-file .env.example config -q
 
       # Prints the steady default, the bootstrap default and, for each profile a
-      # service names (none today), the default plus that profile: limit sums,
+      # service names (hot-gold today, ADR-057), the default plus that profile: limit sums,
       # each service's limits times its replicas, and fails when the
       # bootstrap default is over the 25 CPU / 48 GiB ADR-045 states. Also fails
       # a service under any profile with no CPU or memory limit (it would escape the budget and
@@ -265,9 +275,10 @@ jobs:
         with:
           scan-type: fs
           scan-ref: .
-          # legacy/ is archived, unbuilt and shipped by nothing — a CVE in v1's
-          # lockfile or the retired Kotlin tier has no runtime to reach, so it
-          # would be an unfixable finding on every PR forever.
+          # legacy/ is archived and shipped by nothing (the docker job builds
+          # one archived Dockerfile only to keep a required check): a CVE in
+          # v1's lockfile or the retired Kotlin tier has no runtime to reach, so
+          # it would be an unfixable finding on every PR forever.
           skip-dirs: legacy
           severity: CRITICAL,HIGH
           format: sarif

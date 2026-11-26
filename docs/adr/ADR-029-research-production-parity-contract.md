@@ -31,7 +31,7 @@ that carry the snapshot they were computed from ([ADR-026](ADR-026-four-layer-la
 and one measured surprise: the first three-way OHLCV parity run found 3,829 of 28,590
 buckets whose open or close depended on which engine broke a tie, which is how the
 total order `(exchange_ts, recv_ts_ns, trade_seq)` came to be written down
-([`docker/lake/gold.py`](../../docker/lake/gold.py)).
+([`docker/lake/gold.py`](../../legacy/v3-lake-ingest/lake/gold.py)).
 
 ---
 
@@ -60,11 +60,11 @@ Scope: the capture crate, the lake's gold products (`ohlcv_*`, `bars`, `book_top
    no wall-clock read after the frame stamp, single-threaded replay.
 3. **Parity at tolerance zero, pinned.** Every materialised product has a second and a
    third computation: candles by ClickHouse on read, the lake's `gold.py`, and DuckDB
-   over silver ([`scripts/parity_ohlcv.py`](../../scripts/parity_ohlcv.py)); event bars by
+   over silver ([`scripts/parity_ohlcv.py`](../../legacy/v3-lake-ingest/scripts/parity_ohlcv.py)); event bars by
    the lake, the same window SQL in DuckDB, and a pure-Python reference that is the
-   arbiter ([`scripts/parity_bars.py`](../../scripts/parity_bars.py)). Every comparison
+   arbiter ([`scripts/parity_bars.py`](../../legacy/v3-lake-ingest/scripts/parity_bars.py)). Every comparison
    is exact on every integer column and runs at the snapshot ids in
-   [`tests/parity/pinned.json`](../../tests/parity/pinned.json), never at `latest`.
+   [`tests/parity/pinned.json`](../../legacy/v3-lake-ingest/tests/parity/pinned.json), never at `latest`.
 4. **Notebooks pin.** `k2lake.pin()` freezes every gold, silver and audit table at its
    current snapshot id into `pinned.*` views and prints the ids with the commit; a
    notebook reads nothing else, and `tests/test_notebooks_pinned.py` fails CI if one
@@ -133,7 +133,7 @@ parity contract is never mistaken for a claim about the market.
 | **Parity at a tolerance** (1e-6 on price, 1 trade on count) | Passes the v2 candle bug. Every product here is integer-exact, so a tolerance only hides an engine's rounding, which is the thing worth finding. |
 | **Parity in CI against a live stack** (the plan's wording) | GitHub's runners cannot reach the lake. CI holds what does not need a stack — the golden-hash tests, the Python reference tests, the pinned-notebook grep — and the live three-way runs are `make parity-ohlcv` / `make parity-bars`, required by `/release-check` before a tag. Recorded here rather than pretended. |
 | **A Kafka sink on replay**, so replayed records flow through the live topics | The raw topic is what the lake ingests: a replayed frame produced there is archived a second time and the exactly-once argument ([ADR-022](ADR-022-exactly-once-via-snapshot-offsets.md)) breaks. Replay writes JSONL; loading it anywhere is a deliberate second step. |
-| **A Parquet/Iceberg reader inside the Rust binary** for the lake source | Forty more crates for a job a forty-line Python export does ([`scripts/replay_export.py`](../../scripts/replay_export.py)). One fixture shape for tests and lake exports is the better property. |
+| **A Parquet/Iceberg reader inside the Rust binary** for the lake source | Forty more crates for a job a forty-line Python export does ([`scripts/replay_export.py`](../../legacy/v3-lake-ingest/scripts/replay_export.py)). One fixture shape for tests and lake exports is the better property. |
 | **Reset-after-crossing event bars** (the textbook definition) | Stateful; three engines spell a running reset three ways. The cumulative bucket is one window expression everywhere and agrees at zero. Documented in `config/bars.yaml`. |
 
 ---
@@ -180,7 +180,7 @@ protocol version any adapter speaks.
 - [`docs/research/2026-08-26-v3-requirements-clarification.md`](../research/2026-08-26-v3-requirements-clarification.md) Q1 — the decision this contract enforces
 - [`docs/research/2026-08-28-replay-fidelity-limits.md`](../research/2026-08-28-replay-fidelity-limits.md) — what this archive can and cannot honestly simulate
 - [`services/capture-rust/README.md`](../../services/capture-rust/README.md) § Subcommands, § Fixtures and replay
-- [`scripts/replay-lake.sh`](../../scripts/replay-lake.sh), [`scripts/parity-ohlcv.sh`](../../scripts/parity-ohlcv.sh), [`scripts/parity-bars.sh`](../../scripts/parity-bars.sh)
+- [`scripts/replay-lake.sh`](../../legacy/v3-lake-ingest/scripts/replay-lake.sh), [`scripts/parity-ohlcv.sh`](../../legacy/v3-lake-ingest/scripts/parity-ohlcv.sh), [`scripts/parity-bars.sh`](../../legacy/v3-lake-ingest/scripts/parity-bars.sh)
 - [ADR-027](ADR-027-book-snapshot-and-sequencing.md) Outcome — deeper and faster books by replay, which `--depth` / `--interval-ms` deliver
 
 ---
@@ -242,7 +242,7 @@ produce the same decimal; tolerance zero is not relaxed for it.
 ## Outcome (2026-11-25, the first mart)
 
 **Marts are covered as scoped, and the worked example has the full check.** dbt's
-`market_analytics.candles.ohlcv_1m` ([`dbt/`](../../dbt/README.md)) has dbt unit tests on its
+`market_analytics.candles.ohlcv_1m` ([`dbt/`](../../legacy/v3-lake-ingest/dbt/README.md)) has dbt unit tests on its
 logic, on made-up rows (the minute bucket; ties on `exchange_ts` broken by `recv_ts_ns`, then
 `trade_seq`), tests on its grain and envelope, and, because a reference is cheap here, the
 comparison with Spark's `gold.ohlcv_1m`: `scripts/parity_ohlcv.py --dbt` runs the model's
@@ -250,7 +250,7 @@ compiled SQL through Trino over `gold.trades` `FOR VERSION AS OF` the newest sna
 candles for the day name, so both sides read the same trades and the side needs no new pin. For
 2026-11-24, at the snapshots current on 2026-11-25, every bucket of the day matched on open,
 high, low, close and trade count, and on volume and `quote_volume` digit for digit (the command
-and its output are in [`dbt/README.md`](../../dbt/README.md), "Parity"). Other marts get the
+and its output are in [`dbt/README.md`](../../legacy/v3-lake-ingest/dbt/README.md), "Parity"). Other marts get the
 first two, and the third where it is as cheap.
 
 **`quote_volume` joined, and the lake's is not exact.** Both engines type it `decimal(38,10)`,
@@ -258,7 +258,7 @@ but the lake holds 6 decimals where `lake.sql` calls the column exact: no 2026-1
 a digit past the sixth. Spark's decimal rules type `gold.py`'s `DECIMAL(38,10)` product
 `decimal(38,6)` (Spark 3.5.5, 2026-11-25: `spark-sql -e "select typeof(cast(1 as decimal(38,10)) * cast(1 as decimal(38,10)))"` in `k2-spark-iceberg` prints `decimal(38,6)`), which explains it. The
 port rounds half up at 6 decimals on purpose and matched every bucket; rounding at 10 decimals
-does not match (both queries in [`dbt/README.md`](../../dbt/README.md)). Tolerance zero held;
+does not match (both queries in [`dbt/README.md`](../../legacy/v3-lake-ingest/dbt/README.md)). Tolerance zero held;
 the comment is wrong.
 
 **What the check does not prove.** It runs the SQL dbt builds with, not the table dbt last
@@ -277,7 +277,7 @@ if it is on `main`'s lineage.
 ## Outcome (2026-11-26, a known gap in the pinned day)
 
 **The candle parity gate can now leave out one listed minute of a recorded outage, and only
-that.** The gate is `make parity-ohlcv` ([`scripts/parity_ohlcv.py`](../../scripts/parity_ohlcv.py)):
+that.** The gate is `make parity-ohlcv` ([`scripts/parity_ohlcv.py`](../../legacy/v3-lake-ingest/scripts/parity_ohlcv.py)):
 for one UTC day it computes every 1-minute candle three ways, in ClickHouse on read over the
 topic-fed `gold.trades`, in the lake's stored `gold.ohlcv_1m`, and in DuckDB over silver,
 optionally a fourth way through dbt's SQL on Trino, and requires each of them to equal the
@@ -320,7 +320,7 @@ outside the outage its audit row records, or stay in the pin once it hides nothi
 the run refusing it; and no run with a gap reads as a clean pass. It does not guarantee
 ClickHouse inside the window, which is the point of listing it. The first revisit trigger
 above still holds: a gap is a recorded loss, never a tolerance for a difference nobody has
-explained ([`tests/parity/README.md`](../../tests/parity/README.md) says when one may be
+explained ([`tests/parity/README.md`](../../legacy/v3-lake-ingest/tests/parity/README.md) says when one may be
 listed).
 
 **Revisit when:** a second incident needs an exclusion. The gate should then read the loss

@@ -8,10 +8,12 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 budget = importlib.import_module("check-budget")
 
+COMPOSE = Path(__file__).parent.parent / "docker-compose.yml"
 GIB = 2**30
 SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 
@@ -273,3 +275,23 @@ def test_main_reports_the_default_plus_each_profile_a_service_names(monkeypatch,
     assert [line.split("  ")[0] for line in out[:4]] == [
         "steady default", "bootstrap default", "bootstrap legacy", "bootstrap research"]
     assert "3.00 CPU" in out[2] and "5.00 CPU" in out[3]
+
+
+def test_clickhouse_is_paused_behind_hot_gold_and_nothing_default_needs_it():
+    # ADR-057: a stop alone does not hold, `make up` starts a service with no
+    # profile again. The image line stays: make test-clickhouse reads its tag.
+    services = yaml.safe_load(COMPOSE.read_text())["services"]
+    assert services["clickhouse"]["profiles"] == ["hot-gold"]
+    assert services["clickhouse"]["image"].startswith("clickhouse/clickhouse-server:")
+    needs = [n for n, s in services.items() if not s.get("profiles") and "clickhouse" in (s.get("depends_on") or {})]
+    assert needs == []
+
+
+def test_the_old_lake_ingest_services_are_gone_and_nothing_waits_on_them():
+    # ADR-056: lake-ddl ran a DDL file and lake-metrics an exporter that are both
+    # archived in legacy/v3-lake-ingest/; brought back, either would start a
+    # script that is not there, and the scheduler would wait on it at boot.
+    services = yaml.safe_load(COMPOSE.read_text())["services"]
+    old = {"lake-ddl", "lake-metrics"}
+    assert old.isdisjoint(services)
+    assert [n for n, s in services.items() if old & set(s.get("depends_on") or {})] == []

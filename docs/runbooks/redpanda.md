@@ -1,7 +1,7 @@
 # Runbook: Redpanda Operations
 
 **Severity**: High (message broker, impacts all 3 exchanges if down)
-**Last Updated**: 2026-08-27
+**Last Updated**: 2026-11-26 (ClickHouse paused, ADR-057)
 **Replaces**: `kafka-runbook.md` (Kafka replaced by Redpanda in v2, ADR-001)
 
 Every `rpk` command below was run against the live single-broker cluster on
@@ -23,9 +23,16 @@ Redpanda is the Kafka-compatible message broker. It runs as a single-broker clus
 
 | Topic | Partitions | Payload | Consumers |
 |-------|-----------:|---------|-----------|
-| `market.crypto.v3.raw.<ex>` | 12 | Avro `RawMessage`, every frame verbatim | lake ingest, by offset range (no consumer group) |
-| `market.crypto.v3.trades.<ex>` | 12 | Avro `Trade` | lake ingest; ClickHouse `gold.q_trades`, group `k2-gold-trades` |
-| `market.crypto.v3.book.<ex>` | 12 | Avro `BookSnapshotL2`, top-20 at 1 Hz | lake ingest; ClickHouse `gold.q_book`, group `k2-gold-book` |
+| `market.crypto.v3.raw.<ex>` | 12 | Avro `RawMessage`, every frame verbatim | none until phase 004 |
+| `market.crypto.v3.trades.<ex>` | 12 | Avro `Trade` | ClickHouse `gold.q_trades`, group `k2-gold-trades` (paused, ADR-057) |
+| `market.crypto.v3.book.<ex>` | 12 | Avro `BookSnapshotL2`, top-20 at 1 Hz | ClickHouse `gold.q_book`, group `k2-gold-book` (paused, ADR-057) |
+
+The v3 lake ingest, which read all nine by offset range, retired on 2026-11-26 with its pipeline
+([`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/),
+[ADR-056](../adr/ADR-056-unified-data-product-platform.md)). Until the Kafka connector of
+[phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
+reads them, the topics are the only copy of what the captures record, kept for their retention
+and no longer.
 
 `<ex>` ∈ {`binance`, `kraken`, `coinbase`}, 9 topics, 108 partitions, produced by the
 three `k2-capture-*` containers. Keys are plain UTF-8: `trades.*` and `book.*` key on the
@@ -140,11 +147,19 @@ BROKER  GROUP           STATE
 | `k2-gold-book` | `gold.q_book` → `gold.book_top20` | `market.crypto.v3.book.{binance,kraken,coinbase}` |
 
 Both are declared in [`docker/clickhouse/ddl/20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql).
-The lake ingest reads every v3 topic by offset range and keeps its position in the Iceberg
-snapshot summary, so it never appears here ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)).
+The retired v3 lake ingest kept its position in the Iceberg snapshot summary, not in a group
+([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)), so it never appeared here.
 
-**Expected state**: both groups `Stable` with lag near zero while capture is producing.
-Lag that grows while capture is delivering is `ClickHouseGoldFeedStale`'s territory
+**ClickHouse is paused** behind the compose profile `hot-gold`
+([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): while it is, both groups have no members and keep their committed offsets
+for 7 days from the stop, and the topics keep 7 days of records. The checks before and after a
+resume, and what a resume after those 7 days loses, are in
+[pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md).
+
+**Expected state**, while the `hot-gold` profile runs: both groups `Stable` with lag near zero
+while capture is producing.
+Lag that grows while capture is delivering is `ClickHouseGoldFeedStale`'s territory (the alert is
+removed while ClickHouse is paused)
 ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md#alerts)); a group in
 state `Empty` means the Kafka-engine table is detached or ClickHouse is down. Until
 2026-08-27 this list showed the three v2 groups (`clickhouse_bronze_offload_test`,
@@ -208,6 +223,7 @@ topic, so run it before restarting ClickHouse.
 Use when an offset is corrupted or you need to replay data from a specific point.
 
 ```bash
+# Needs the hot-gold profile running (ClickHouse paused, ADR-057).
 # Detach the consumer first: a seek on a group with live members is refused
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q "DETACH TABLE gold.q_trades"
 
@@ -228,8 +244,9 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q
 > trade, so re-delivered rows collapse under `FINAL` and the earliest delivery wins. Counts
 > *without* `FINAL` will double until the merge runs. The v2 warning that used to live here
 >, bronze was plain `MergeTree` and a replay duplicated every row, went with the `k2`
-> database. For anything older than the topic's 7-day retention, reload from the lake
-> instead: [clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md).
+> database. Anything older than the topic's 7-day retention cannot be replayed: the reload
+> from the lake's gold retired with the v3 lake
+> ([pause-and-resume-a-serving-product.md §4](./pause-and-resume-a-serving-product.md#4-the-reload-from-the-lake-no-longer-applies)).
 
 ---
 
@@ -247,8 +264,9 @@ docker exec k2-redpanda df -h /var/lib/redpanda/data
 1. Check retention settings, the v3 `raw.*` topics cap at 2 GiB per partition
    (`retention.bytes`) as well as 48 h, so they are bounded by design. Confirm with
    `rpk topic describe market.crypto.v3.raw.binance`.
-2. `trades.*` / `book.*` are 7 d, time-only; they are rebuildable from the lake, so a
-   shorter `retention.ms` on them is the cheap lever if 1 is not enough.
+2. `trades.*` / `book.*` are 7 d, time-only. Nothing else holds them while the lake receives
+   nothing and the hot tier is paused, so a shorter `retention.ms` on them shortens what a
+   resume of ClickHouse can read; it is the cheap lever only if that is acceptable.
 3. If persistent, expand the Docker volume or add disk.
 
 *Step 1 is read-only and verified; 2 and 3 are not yet run.* (The six v2 topics, 160
@@ -258,8 +276,13 @@ partitions of retained trade JSON, were the first thing reclaimed, deleted 2026-
 
 ### ClickHouse Consumer Not Consuming
 
+Applies only while the compose profile `hot-gold` runs (ClickHouse is paused,
+[ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)); `ClickHouseGoldFeedStale` is removed with the pause.
+
 **Symptoms**: lag grows on `k2-gold-trades` / `k2-gold-book` while capture is delivering;
-`gold.trades` stops advancing. `ClickHouseGoldFeedStale` fires after 10 minutes of that.
+`gold.trades` stops advancing. Detection is manual while the pause lasts: the lag check in
+"Consumer Lag Inspection" above shows it, and no alert fires (`ClickHouseGoldFeedStale`, which fired
+after 10 minutes of that, is removed with the pause).
 
 **Diagnosis**:
 ```bash

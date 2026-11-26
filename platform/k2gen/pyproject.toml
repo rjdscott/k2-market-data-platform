@@ -1,7 +1,7 @@
 [project]
 name = "k2gen"
 version = "0.1.0"
-description = "Data product contracts for the K2 lake: validated against ODCS v3 and lake.sql (ADR-032)"
+description = "Data product contracts for the K2 lake: validated against ODCS v3 and the K2 profile (ADR-032)"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "jsonschema==4.26.0",

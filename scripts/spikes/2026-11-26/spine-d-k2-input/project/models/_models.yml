@@ -1,0 +1,17 @@
+models:
+  - name: silver
+    columns:
+      - name: id
+        data_tests: [not_null, unique]
+unit_tests:
+  - name: silver_doubles_amount
+    model: silver
+    given:
+      - input: source('up', 'events')
+        rows:
+          - {id: 1, amount: 10}
+          - {id: 2, amount: 15}
+    expect:
+      rows:
+        - {id: 1, amount: 10, doubled: 20}
+        - {id: 2, amount: 15, doubled: 30}

@@ -42,9 +42,9 @@ means the process is failing to start or crash-looping, the restart is not worki
 so restarting it again is unlikely to be the fix on its own.
 
 **What is lost:** everything the exchange sent during the outage. Public WebSocket
-feeds do not replay, so that window is permanently absent from `raw.messages` and
-from every table derived from it. This is a completeness gap, and it belongs in the
-audit record, see step 5.
+feeds do not replay, so that window is permanently absent from the Redpanda topics and
+from every product later read from them. This is a completeness gap, and it belongs in the
+record, see "Record the gap" below.
 
 **Recovery**
 
@@ -97,9 +97,11 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.trades.kraken \
 > the compose network above is the working equivalent; Prometheus is the other
 > (`curl -s 'localhost:9090/api/v1/query?query=k2_capture_records_produced_total'`).
 
-**Record the gap.** Before closing: note the outage window and append it to the
-completeness audit for the day, so a later query over that period reads a documented
-hole rather than an unexplained one.
+**Record the gap.** Before closing: note the outage window, so a later query over that
+period reads a documented hole rather than an unexplained one. The lake's audit table retired with the v3 lake ingest pipeline (archived in
+`legacy/v3-lake-ingest/`), and an operator's record of lost data returns with the "accept data
+loss" runbook in [phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md);
+until then, write the venue, the window in UTC and the cause in the incident's issue.
 
 **Measured 2026-08-26**, `scripts/chaos/capture-kill.sh --exchange kraken --hold 150`
 SIGKILLed the container, held it down, and measured recovery as the time until it was

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# A second copy of what nothing can rebuild, outside Docker, on the host:
-# each table in TABLES as its own Iceberg files (its data/ and metadata/
-# objects, mirrored from MinIO), plus a pg_dump of the catalog database and of
-# Airflow's, into $K2_BACKUP_DIR (default ~/k2-backup).
+# A second copy of what nothing can rebuild, outside Docker, on the host: a
+# pg_dump of the catalog database and of Airflow's, plus each table in TABLES
+# as its own Iceberg files (its data/ and metadata/ objects, mirrored from
+# MinIO), into $K2_BACKUP_DIR (default ~/k2-backup). TABLES is empty until
+# phase 002, and the table copy prints a SKIP line meanwhile.
 #
 #   scripts/backup-lake.sh             # `make backup`; the k2-backup.timer user unit runs it daily
 #   scripts/backup-lake.sh --dry-run   # list what it would copy; writes only empty directories
@@ -22,12 +23,13 @@ set -euo pipefail
 set +x   # never trace: the MinIO credential is in this script's environment
 umask 077
 
-# The tables nothing can rebuild, <namespace>.<table> in warehouse k2: the raw
-# archive (ADR-021, the system of record), the audit history, and the two SCD2
-# dimensions whose history has no source (docker/lake/ddl/lake.sql). Every other
-# lake table is a function of raw.messages and is rebuilt, not restored.
-# ponytail: warehouse k2 only; the per-domain dq.dbt_test_results are not copied.
-TABLES="raw.messages audit.checks gold.dim_instrument gold.dim_venue"
+# The tables nothing can rebuild, <namespace>.<table> in warehouse k2. None
+# today: the four this copied (the old raw archive, its audit history and two
+# SCD2 dimensions) were dropped with the old lake ingest, retired to
+# legacy/v3-lake-ingest/ (ADR-056). Phase 002 replaces this list with the backup
+# set compiled from the contracts.
+# ponytail: warehouse k2 only; the per-domain warehouses are not copied.
+TABLES=""
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
 CATALOG=http://127.0.0.1:18181/catalog/v1
@@ -142,12 +144,10 @@ free=$(df -B1 --output=avail "$DIR" | tail -n 1)
 [ "$free" -ge $((FLOOR_GIB * 1024 ** 3)) ] ||
   die "$DIR has $((free / 1024 ** 3)) GiB free, under the floor of $FLOOR_GIB GiB (K2_BACKUP_MIN_FREE_GIB)"
 
-# mc <args>, in a throwaway container on k2-minio's network, as this user so the
-# files are ours, with $DIR/lake at /backup. The credential reaches it as one
-# environment variable (MC_HOST_k2), never as an argument.
-net=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio 2>/dev/null) ||
-  die "k2-minio is not running"
-net=${net%% *}
+# mc <args>, in a throwaway container on k2-minio's network ($net, found in
+# (1)), as this user so the files are ours, with $DIR/lake at /backup. The
+# credential reaches it as one environment variable (MC_HOST_k2), never as an
+# argument.
 mc_run() {
   docker run --rm --network "$net" --user "$(id -u):$(id -g)" --cpus 1 --memory 512m \
     -e MC_CONFIG_DIR=/tmp/.mc -e MC_HOST_k2 -v "$DIR/lake:/backup" \
@@ -156,10 +156,19 @@ mc_run() {
 
 # (1) Each table's location and current metadata file, from the catalog: read
 # first, so every file that metadata names already exists when the copy starts.
-prefix=$(curl -fsS "$CATALOG/config?warehouse=k2" 2>/dev/null |
-  python3 -c 'import json, sys; print(json.load(sys.stdin)["defaults"]["prefix"])' 2>/dev/null) ||
-  die "the catalog did not answer on 127.0.0.1:18181 (is k2-lakekeeper up?)"
+# With no table to copy, neither MinIO nor the catalog is asked anything: an
+# outage of either must not cost the night's database dumps.
 declare -A LOC META
+if [ -z "$TABLES" ]; then
+  echo "backup-lake: SKIP the lake table copy: the old lake ingest's tables were dropped (legacy/v3-lake-ingest/, ADR-056); returns in phase 002"
+else
+  net=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' k2-minio 2>/dev/null) ||
+    die "k2-minio is not running"
+  net=${net%% *}
+  prefix=$(curl -fsS "$CATALOG/config?warehouse=k2" 2>/dev/null |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["defaults"]["prefix"])' 2>/dev/null) ||
+    die "the catalog did not answer on 127.0.0.1:18181 (is k2-lakekeeper up?)"
+fi
 for t in $TABLES; do
   # The response is never printed: its config block can carry storage settings.
   read -r loc meta < <(curl -fsS "$CATALOG/$prefix/namespaces/${t%%.*}/tables/${t#*.}" 2>/dev/null |

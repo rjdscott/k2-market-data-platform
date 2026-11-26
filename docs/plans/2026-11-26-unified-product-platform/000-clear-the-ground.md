@@ -146,3 +146,12 @@ The image check prints Python 3.10 and OpenSSL 3; Ubuntu 22.04's standard suppor
 2027, a dated trigger the hardening phase carries. The `make gates` run on the new image before
 the drop, and the `make drop` log naming each mirror with its matching object count and bytes,
 are linked from the pull requests that did them.
+
+_Phase 000 landed 2026-11-26, tag `v3.0.0-alpha.2`. Where it differs from the text above: the
+budget at the bootstrap peak is 16.70 CPU / 28.688 GiB, because `lake-ddl` and `lake-metrics`
+retired with the pipeline they served; the scratch bucket `scratch-p4-landing` was copied but is
+under object lock until 2026-11-27 06:00 UTC and is dropped after that, so the
+`make drop TARGET=k2.scratch_p4 DRY_RUN=1` check has no target left; `SHOW SCHEMAS FROM lake`
+prints `system` beside `information_schema`; `health.sh` prints a SKIP line for ClickHouse
+rather than no line; the parity and lake-verify scripts were archived with the pipeline and
+return in phase 004; the spikes added an experiment (g), the tested-data marker._

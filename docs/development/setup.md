@@ -8,7 +8,7 @@ rolling out a change) is the [operator guide](../operations/README.md).
 
 | Tool | Needed for | Notes |
 |------|-----------|-------|
-| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 38 GiB memory so every `deploy.resources.limits` can be honoured, the 37.812 GiB bootstrap peak included (`docker info --format '{{.MemTotal}}'`, **Docker Desktop defaults far lower and silently clips every limit above the VM size**; Settings → Resources → Memory); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine and ClickHouse's 8 GB cap is not real. Steady state declares 19.30 CPU / 35.312 GiB of limits across 19 long-running services and peaks at 21.30 CPU / 37.812 GiB across 24 while the five one-shot init containers run, under the 25 CPU / 48 GiB ceiling of [ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md) (v2 alone: 15.1 CPU / 21.875 GB). The engine requirement follows the declared sum, not the ceiling: 38 GiB today, 48 GiB if a later phase fills the ceiling. On Docker Desktop the host has a requirement of its own: the VM grows to its whole memory setting, so host RAM must exceed that setting plus everything else the host runs ([sizing](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)) |
+| Docker Engine + Compose v2 | everything | A Docker engine with ≥ 29 GiB memory so every `deploy.resources.limits` can be honoured, the 28.688 GiB bootstrap peak included, or ≥ 37 GiB to run the paused ClickHouse as well (`docker info --format '{{.MemTotal}}'`, **Docker Desktop defaults far lower and silently clips every limit above the VM size**; Settings → Resources → Memory); measured steady-state usage is far lower (see [../operations/docker-resources.md](../operations/docker-resources.md)), so the stack runs on less, but limits then exceed the engine. Steady state declares 15.20 CPU / 27.188 GiB of limits across 17 long-running services and peaks at 16.70 CPU / 28.688 GiB across 21 while the four one-shot init containers run; with the `hot-gold` profile, 19.20 / 35.188 across 18 and 20.70 / 36.688 across 22. All are under the 25 CPU / 48 GiB ceiling of [ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md) (v2 alone: 15.1 CPU / 21.875 GB), and were computed on 2026-11-26 from the compose file after the retirement of the v3 lake ingest pipeline removed two services (`python3 scripts/check-budget.py`). The engine requirement follows the declared sum, not the ceiling: 29 GiB today (37 with ClickHouse), 48 GiB if a later phase fills the ceiling. On Docker Desktop the host has a requirement of its own: the VM grows to its whole memory setting, so host RAM must exceed that setting plus everything else the host runs ([sizing](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory)) |
 | [`uv`](https://docs.astral.sh/uv/) | the Python unit tests and ruff | Nothing else uses Python locally |
 | `jq`, `psql` | the diagnostic one-liners in the ops docs | optional |
 
@@ -25,15 +25,14 @@ Two values in `.env` are host-specific, not secrets:
 - `K2_CAPTURE_CPUSET` / `K2_HEAVY_CPUSET` ship **empty**, which means no CPU pinning and
   starts anywhere. Uncomment the 15-core layout in `.env.example` only on a host that has
   those cores — a cpuset naming a core the host does not have fails the container at start
-  with `invalid argument`, seven of them at once (the three captures, ClickHouse, Spark,
-  Trino and the `lake-ddl` one-shot).
+  with `invalid argument`, five of them at once (the three captures, Spark and Trino; six with
+  the paused ClickHouse under `hot-gold`).
 - `K2_AIRFLOW_PORT` (default `8090`) and `K2_TRINO_PORT` (default `8088`) are the Airflow
   and Trino host ports. `K2_AIRFLOW_PORT` also feeds Airflow's own base URL, so moving it
   moves the links its UI builds; set either if something else on the host owns the port.
 
-`make up` builds four images on the first run: the Rust `k2-capture` binary, `k2-airflow`,
-`k2-lake-metrics`, and the Spark image (which bakes the Kafka and Avro jars, each pinned by
-sha256). Allow **several minutes**; subsequent starts are seconds. Services come up healthy in
+`make up` builds three images on the first run: the Rust `k2-capture` binary, `k2-airflow`
+and the Spark image (which bakes the Kafka and Avro jars, each pinned by sha256). Allow **several minutes**; subsequent starts are seconds. Services come up healthy in
 dependency order: Redpanda, then `redpanda-init` creates the topics, registers the nine v3 Avro
 subjects and exits (9 topics of 12 partitions, 108 in all, `market.crypto.v3.{raw,trades,book}.<ex>`;
 the six v2 topics were deleted at the Phase E cutover on 2026-08-27 and are not recreated),
@@ -63,7 +62,9 @@ service under the pause.
 
 ### Applying the ClickHouse schema
 
-The `gold` database auto-applies on a fresh volume via `/docker-entrypoint-initdb.d`:
+ClickHouse is paused behind the compose profile `hot-gold`
+([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)). When the profile
+starts it on a fresh volume, the `gold` database auto-applies via `/docker-entrypoint-initdb.d`:
 [`docker/clickhouse/ddl/10-gold-tables.sql`](../../docker/clickhouse/ddl/10-gold-tables.sql)
 (the tables and views, the contract CI tests) then
 [`20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql) (the Kafka-engine feeds).
@@ -88,10 +89,12 @@ curl -sG localhost:9090/api/v1/query \
   --data-urlencode 'query=sum by (exchange, kind) (rate(k2_capture_records_produced_total[5m]))' | jq
 ```
 
-ClickHouse serves `gold`; the v2 `k2` database was dropped on 2026-08-27, so any `k2.*`
-query is an error, not an empty result. See
-[../architecture/README.md](../architecture/README.md). More query recipes:
-[../operations/data-inspection.md](../operations/data-inspection.md).
+Nothing reads the topics further until phase 004: the v3 lake ingest pipeline is retired and
+archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/), and ClickHouse, which
+serves `gold` while the `hot-gold` profile runs, is paused (the v2 `k2` database was dropped on
+2026-08-27, so any `k2.*` query is an error, not an empty result). See
+[../architecture/README.md](../architecture/README.md); the per-component commands are in
+[../operations/quick-reference.md](../operations/quick-reference.md).
 
 ## Instrument registry
 
@@ -145,35 +148,22 @@ second one, or both will produce to the same topics.
 
 Tests: `make test-rust`, see [testing.md](./testing.md).
 
-## Python lake inner loop
+## Python inner loop
 
-The lake scripts are bind-mounted into the Spark container (`docker/lake` at
-`/home/iceberg/lake`), so edits take effect at the next run without a rebuild.
+`docker/lake` keeps the modules the new platform's connectors reuse (`offsets.py`, the framing
+half of `wire.py`, `bars.py`, `books.py` and the four modules `books.py` imports). They are
+bind-mounted into the Spark container (`docker/lake` at `/home/iceberg/lake`), but nothing runs
+them on the stack until
+[phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md).
+The v3 ingest's own loop (`ingest.py` by stage, its probe, the ingest DAG) is archived with it in
+[`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/). The unit tests need no stack:
 
 ```bash
-# Run one ingest directly, with logs in the foreground. No arguments needed:
-# the topic list comes from K2_EXCHANGES and the read range from the offsets in
-# the last commit's Iceberg snapshot summary.
-docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py
-
-# One stage at a time while iterating on the decode
-docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --stage raw
-docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --stage bronze
-
-# Report what framing each topic is actually carrying, writing nothing
-docker exec k2-spark-iceberg python3 /home/iceberg/lake/ingest.py --probe
-
-# Trigger the scheduled DAG through Airflow instead
-docker exec k2-airflow-scheduler airflow dags trigger lake_ingest
-
-# Unit tests (pure Python: no stack needed)
 uv run --no-project --with pytest==9.2.0 --with pyyaml==6.0.4 --with fastavro==1.12.2 --with duckdb==1.4.4 pytest tests -q
 ```
 
-An ingest takes an exclusive `flock`, so a hand-run that collides with the 5-minute
-schedule exits 75 rather than duplicating its work, and the scheduled run that hit the lock
-is marked skipped. A schedule or parameter lives in `docker/airflow/dags/lake.py`; the
-dag-processor re-reads a changed DAG file within 30 s, with nothing to redeploy
+A DAG lives in `docker/airflow/dags/`, empty until phase 002; the dag-processor re-reads a
+changed DAG file within 30 s, with nothing to redeploy
 ([operator guide, section 7](../operations/README.md#7-roll-out-a-merged-change)).
 
 ## Logs
@@ -182,9 +172,9 @@ dag-processor re-reads a changed DAG file within 30 s, with nothing to redeploy
 |--------|-------|
 | Any container | `docker compose logs -f <service>` or `make logs` |
 | Capture | `docker logs -f k2-capture-binance`, `tracing` to stderr, filtered by `RUST_LOG`. No log files: nothing is bind-mounted out |
-| Lake job runs | the Airflow task logs: the UI at http://localhost:8090, or under `/opt/airflow/logs` in `k2-airflow-scheduler` |
-| Spark job detail | event logs in `/home/iceberg/spark-events` in `k2-spark-iceberg`. A running job's UI is port 4041 <!-- counts-ok: a port number, not a count --> inside the container, not published (`docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications`); http://localhost:4040 is the always-on Thrift server's UI |
-| ClickHouse server | `docker logs k2-clickhouse` |
+| DAG task runs, none until phase 002 | the Airflow task logs: the UI at http://localhost:8090, or under `/opt/airflow/logs` in `k2-airflow-scheduler` |
+| Spark job detail | event logs in `/home/iceberg/spark-events` in `k2-spark-iceberg`, two days of them, browsable in the History Server at http://localhost:18080. A running job's UI is http://localhost:4040; a second driver running at the same time gets port 4041 <!-- counts-ok: a port number, not a count --> inside the container, not published (`docker exec k2-spark-iceberg curl -s localhost:4041/api/v1/applications`) |
+| ClickHouse server, while `hot-gold` runs | `docker logs k2-clickhouse` |
 
 ## Tearing down
 

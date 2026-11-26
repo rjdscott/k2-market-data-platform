@@ -6,11 +6,19 @@ All notable changes to this platform are recorded here, in the
 A version names one tested set of everything in this repository: capture, the lake,
 Trino, dbt, Airflow, the contracts and the gates, under one
 [SemVer](https://semver.org/) number. An alpha may change anything, including table
-layouts and commands, without notice. `3.0.0` is reserved for the end of
-[the governed self-serve platform plan](docs/plans/2026-11-24-governed-self-serve-platform/README.md)
-(phase P7).
+layouts and commands, without notice. `3.0.0` is reserved for the release gate that ends
+[the plan to release](docs/plans/2026-11-26-unified-product-platform-to-release/README.md);
+`3.0.0-beta.1` marks the demo point of
+[the unified product platform plan](docs/plans/2026-11-26-unified-product-platform/README.md).
 
 ## [Unreleased]
+
+## [3.0.0-alpha.2] - 2026-11-26
+
+Phase 000 of the unified product platform plan, "clear the ground": the old pipeline is
+retired so the new platform is built once, on an empty lake. From this version until the
+Kraken phase lands, no live crypto data reaches the lake; the captures keep writing to
+Redpanda.
 
 ### Decided
 
@@ -21,13 +29,54 @@ layouts and commands, without notice. `3.0.0` is reserved for the end of
   architecture chapter 20 (#247) and the reasoning is kept in the research note (#244).
   Nothing in the running system changes with these documents.
 
+- The ClickHouse hot tier is paused while the platform is built (ADR-057).
+- ADR-048 and ADR-049, never built, are superseded by ADR-056.
+
+### Added
+
+- `make drop`: copies a lake table, namespace or bucket to the host, compares object count
+  and bytes, and only then drops it; it refuses a bucket under object lock before copying
+  (runbook `drop-and-rebuild.md`).
+- Runbooks: pause and resume a serving product; upgrade a pinned component; drop and rebuild.
+- The measured experiments the release spine depends on, as runnable scripts under
+  `scripts/spikes/`, with their findings (`docs/research/2026-11-26-release-spine-spikes.md`)
+  and the cost of one product run (`docs/benchmarks/2026-11-26-product-run-cost.md`).
+
 ### Changed
 
 - Order-book capture is paused on every venue while the platform is built; trades are
   unaffected and the nine order-book tables keep their history (#232; ADR-050).
 
+- The Spark image is built on the official Apache Spark 3.5.9 image, pinned by digest, and
+  runs as a non-root user; the old base carried a Python and an OpenSSL past their end of
+  life. Between jobs the container runs only the Spark History Server, on port 18080.
+- ClickHouse starts only under the compose profile `hot-gold`; its volumes are kept.
+- `make health` fails, where it used to warn, when a venue's capture is unhealthy or
+  delivers nothing to Redpanda for two minutes.
+- The declared budget at the bootstrap peak is 16.70 CPU / 28.688 GiB over 21 services
+  (was 21.30 CPU / 37.812 GiB over 24).
+- Gates that read the old tables print a SKIP line naming the phase that restores them:
+  `lake-verify`, `parity-ohlcv`, `parity-bars`, `test-notebooks`, the lake chaos faults, the
+  lake step of `make health`, the table copy of `make backup`, the dbt build of `make test-dbt`.
+
+### Removed
+
+- The v3 lake ingest: its Spark stages, the DAGs `lake_ingest`, `lake_maintenance`,
+  `lake_rebuild` and `dbt_marts`, the dbt marts, the thirteen old-format product contracts,
+  the notebooks, the lake exporter and its alerts and dashboard, and the services `lake-ddl`
+  and `lake-metrics`. All of it is archived, unchanged, in `legacy/v3-lake-ingest/`, with a
+  README that records the retirement.
+- The data of the old pipeline: the `raw`, `bronze`, `silver`, `gold` and `audit` namespaces,
+  the marts and the scratch namespaces, each dropped after a verified copy on the host. One
+  scratch bucket under object lock is dropped when its lock expires.
+- ClickHouse's alerts, scrape job, dashboard, chaos scripts and screenshots.
+
 ### Fixed
 
+- Spark no longer shows the storage key in its job and history pages or keeps it in its event
+  logs: the redaction pattern now covers the key names the lake catalog uses.
+- A disk alert exists again: `DockerDiskUsageHigh` and `DockerDiskUsageCritical` read the
+  volumes' disk from Redpanda, replacing the two rules that retired with the lake exporter.
 - `make test` and `make gates` no longer rebuild the image tag the running Airflow services
   start from.
 - Spark event logs are compressed and deleted after two days; they grew without bound in
@@ -100,5 +149,6 @@ v3 lake-first stack (tag `v3-phase-e`).
 - The plan's later phases (P4 to P7) are not done, so the contracts, marts and gates
   may still change.
 
-[Unreleased]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.1...HEAD
+[Unreleased]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.2...HEAD
+[3.0.0-alpha.2]: https://github.com/rjdscott/k2-market-data-platform/compare/v3.0.0-alpha.1...v3.0.0-alpha.2
 [3.0.0-alpha.1]: https://github.com/rjdscott/k2-market-data-platform/releases/tag/v3.0.0-alpha.1

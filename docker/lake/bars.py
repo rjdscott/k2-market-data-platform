@@ -1,6 +1,9 @@
 """
-Event bars — gold.bars: tick, volume and dollar bars over gold.trades at the
-one canonical threshold per symbol in config/bars.yaml (ADR-029).
+Event bars: tick, volume and dollar bars over canonical trades at the one
+canonical threshold per symbol in config/bars.yaml (ADR-029). The old
+pipeline's lake bars table, built with this, is retired and its jobs are
+archived in legacy/v3-lake-ingest/ (ADR-056); these pure functions stay in
+place for reuse.
 
 The bar is a *cumulative bucket*: for kind K with threshold T, a trade belongs
 to bar k of its UTC day when k*T <= (cumulative K-total of the day's earlier
@@ -91,7 +94,7 @@ DIALECT = {
 def bars_sql(trades: str, thresholds: str, dialect: str) -> str:
     """One row per (exchange, canonical_symbol, bar_kind, day, bar_seq).
 
-    `trades` is a relation with gold.trades' columns (exchange, canonical_symbol,
+    `trades` is a relation with the canonical trade columns (exchange, canonical_symbol,
     exchange_ts, recv_ts_ns, trade_seq, price_e8, qty_e8); `thresholds` one with
     (canonical_symbol, bar_kind, threshold). Both may be table names or
     parenthesised subqueries. The caller adds the provenance columns.
@@ -136,7 +139,8 @@ def bars_sql(trades: str, thresholds: str, dialect: str) -> str:
     """
 
 
-# The columns compared at tolerance zero by `maintenance.audit_bars_parity`.
+# The columns compared at tolerance zero by the archived nightly audit
+# (`maintenance.audit_bars_parity`, legacy/v3-lake-ingest/lake/maintenance.py).
 # Not threshold/open_time/close_time: threshold is config, not a derived fact,
 # and the times are redundant with bar_seq once the other columns agree.
 COMPARE_COLUMNS = (
@@ -148,9 +152,10 @@ KEY_COLUMNS = ("exchange", "canonical_symbol", "bar_kind", "bar_seq")
 def bars_mismatches(fresh_rows: list, stored_rows: list) -> tuple:
     """`(mismatch_count, first_keys)` comparing recomputed bars to the stored ones.
 
-    Pure — no pyspark — so the nightly `bars_parity` audit's comparison logic is
-    testable without a Spark session; `maintenance.audit_bars_parity` does the
-    recompute and hands both row sets here. Rows are dicts (or anything
+    Pure, with no pyspark, so the comparison logic of the archived nightly
+    `bars_parity` audit is testable without a Spark session; that audit
+    (`maintenance.audit_bars_parity`) did the recompute and handed both row
+    sets here. Rows are dicts (or anything
     subscriptable by column name, e.g. a collected `pyspark.sql.Row`) keyed by
     `KEY_COLUMNS`; a key on only one side, or a difference on any of
     `COMPARE_COLUMNS`, is a mismatch. Tolerance zero — every compared column is
@@ -174,7 +179,7 @@ def reference(trades: list, kind: str, threshold) -> list:
 
     `trades` are dicts with exchange, canonical_symbol, exchange_ts (a datetime,
     UTC), recv_ts_ns, trade_seq, price_e8, qty_e8. Returns rows keyed like
-    gold.bars, with volume/quote_volume as exact integers in 1e-8 / 1e-16 units
+    `bars_sql`'s, with volume/quote_volume as exact integers in 1e-8 / 1e-16 units
     so a comparison needs no decimal parsing.
     """
     if kind == "tick":

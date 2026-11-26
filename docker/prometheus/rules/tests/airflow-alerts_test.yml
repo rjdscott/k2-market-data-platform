@@ -6,11 +6,9 @@
 # Run by `make check-alerts` and `make check-docs` gate (c2). Series are what
 # the airflow-statsd exporter serves: counters with no `_total` suffix, labels
 # from Airflow's InfluxDB-style tags, and a series that does not exist until
-# its first increment; and the scheduler's ti_running gauge, absent until a
-# task is first seen running, 0 after it stops, and absent again 2 minutes
-# after its last send (the exporter's ttl). `_` is a missing sample,
-# `stale` an exporter restart; at a 1m interval the value at position i is
-# the value at minute i.
+# its first increment. `_` is a missing sample; at a 1m interval the value
+# at position i is the value at minute i. The DAG and task ids are made up:
+# no DAG runs until phase 002.
 
 rule_files:
   - ../airflow-alerts.yml
@@ -77,9 +75,9 @@ tests:
   # up_for_retry, a try that will be retried, never fires.
   - interval: 1m
     input_series:
-      - series: 'airflow_ti_finish{dag_id="lake_maintenance",task_id="maintain",state="failed"}'
+      - series: 'airflow_ti_finish{dag_id="example_dag",task_id="build",state="failed"}'
         values: '_x10 1x40'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="up_for_retry"}'
+      - series: 'airflow_ti_finish{dag_id="example_dag",task_id="fetch",state="up_for_retry"}'
         values: '_x10 1x40'
     alert_rule_test:
       - eval_time: 12m
@@ -89,15 +87,15 @@ tests:
               severity: warning
               component: orchestration
               tier: control-plane
-              dag_id: lake_maintenance
-              task_id: maintain
+              dag_id: example_dag
+              task_id: build
               state: failed
             exp_annotations:
-              summary: "Airflow task lake_maintenance.maintain failed"
+              summary: "Airflow task example_dag.build failed"
               description: |
-                lake_maintenance.maintain ended in state failed
+                example_dag.build ended in state failed
                 within the last 15 minutes, its retries spent. The task log has the
-                script's own output and its exit code; a lake audit failure, a
+                script's own output and its exit code; a failed check, a
                 Spark exception and a timeout read differently there.
               runbook: docs/runbooks/airflow-scheduling.md
       - eval_time: 35m
@@ -107,7 +105,7 @@ tests:
   # A later failure on a series that already exists is an increase.
   - interval: 1m
     input_series:
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="failed"}'
+      - series: 'airflow_ti_finish{dag_id="example_dag",task_id="fetch",state="failed"}'
         values: '2x30 3x30'
     alert_rule_test:
       - eval_time: 25m
@@ -120,356 +118,24 @@ tests:
               severity: warning
               component: orchestration
               tier: control-plane
-              dag_id: lake_ingest
-              task_id: ingest
+              dag_id: example_dag
+              task_id: fetch
               state: failed
             exp_annotations:
-              summary: "Airflow task lake_ingest.ingest failed"
+              summary: "Airflow task example_dag.fetch failed"
               description: |
-                lake_ingest.ingest ended in state failed
+                example_dag.fetch ended in state failed
                 within the last 15 minutes, its retries spent. The task log has the
-                script's own output and its exit code; a lake audit failure, a
+                script's own output and its exit code; a failed check, a
                 Spark exception and a timeout read differently there.
               runbook: docs/runbooks/airflow-scheduling.md
-
-  # ── AirflowLakeIngestSkippedRepeatedly ───────────────────────────────────
-  # Skips at minutes 21, 26 and 31 on a long-lived exporter, successes before.
-  # Two skips do not fire; the third does; the next run's absence of a skip
-  # clears it.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
-        values: '5x20 6x4 7x4 8x30'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
-        values: '10x60'
-    alert_rule_test:
-      - eval_time: 29m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts: []
-      - eval_time: 34m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts:
-          - exp_labels: &skipped-labels
-              severity: warning
-              component: orchestration
-              tier: control-plane
-              dag_id: lake_ingest
-              task_id: ingest
-              state: skipped
-            exp_annotations: &skipped-annotations
-              summary: "lake_ingest skipped 3 times in 15 minutes: the lake lock is held"
-              description: |
-                Three or more lake_ingest runs in a row exited 75: another lake
-                writer holds /tmp/k2-lake-ingest.lock in the Spark container and
-                no Airflow maintenance or rebuild is running. Nothing is being
-                written to the lake while this fires, and the Redpanda retention
-                clock is running.
-
-                Find the process that holds the lock before anything else. A
-                driver left by a killed run is the usual cause.
-              runbook: docs/runbooks/airflow-scheduling.md
-      - eval_time: 40m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts: []
-
-  # Three skips inside 15 minutes with a success among them (minute 30) are
-  # not three in a row.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
-        values: '5x20 6x4 7x7 8x30'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
-        values: '10x29 11x40'
-    alert_rule_test:
-      - eval_time: 36m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts: []
-
-  # A skipped series first seen at minute 21 (no earlier sample of it at all,
-  # the first-increment case): the first three skips still fire.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
-        values: '_x20 1x4 2x4 3x30'
-    alert_rule_test:
-      - eval_time: 33m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts:
-          - exp_labels: *skipped-labels
-            exp_annotations: *skipped-annotations
-
-  # Maintenance holds the lock on purpose from minute 15 to 38 (the gauge,
-  # first seen at 1), skips every 5 minutes from minute 21. Under it, quiet.
-  # At minute 45 the window holds 31, 36 and 41, two of them taken under the
-  # holder: quiet in the grace, where it used to fire. Once the grace lapses
-  # (53:30) the three skips since the holder ended fire.
-  - name: skips under and after maintenance, the grace between
-    interval: 1m
-    input_series:
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
-        values: '5x20 6x4 7x4 8x4 9x4 10x4 11x4 12x4 13x30'
-      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
-        values: '_x15 1x23 0x40'
-    alert_rule_test:
-      - eval_time: 34m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts: []
-      - eval_time: 45m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts: []
-      - eval_time: 56m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts:
-          - exp_labels: *skipped-labels
-            exp_annotations: *skipped-annotations
-
-  # Observed 2026-11-25, minute 0 = 06:00 UTC: the first lake_maintenance
-  # under Airflow ran 06:10:21 to 06:33:58 (the gauge 1 from 11 to 34), the
-  # skipped series was born at the 06:11 skip, the 06:11 to 06:31 slots
-  # skipped, and the 06:36 run succeeded 3.5 minutes later (minute 40).
-  # Without the grace this went pending at 35 and fired at 36 for about a
-  # minute, as it did that day. Both alerts stay quiet throughout.
-  - name: observed 2026-11-25, maintenance then the first success
-    interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x80'
-      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
-        values: '_x11 1x23 0x45'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
-        values: '_x12 1x4 2x4 3x4 4x4 5x50'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
-        values: '10x2 11x4 12x31 13x2 14x4 15x30'
-    alert_rule_test:
-      - eval_time: 30m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts: []
-      - eval_time: 36m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts: []
-      - eval_time: 39m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts: []
-      - eval_time: 50m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts: []
-      - eval_time: 36m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts: []
-      - eval_time: 50m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts: []
-
-  # A maintenance that ended 30 minutes before the skips (the gauge sent as
-  # 0 from minute 11) mutes nothing: three skips at 41, 46 and 51 fire. A
-  # zombie try looks the same once the scheduler fails it and sends 0.
-  - name: holder ended 30 minutes ago, skips fire
-    interval: 1m
-    input_series:
-      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
-        values: '1x10 0x70'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
-        values: '5x40 6x4 7x4 8x30'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
-        values: '10x80'
-    alert_rule_test:
-      - eval_time: 53m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts:
-          - exp_labels: *skipped-labels
-            exp_annotations: *skipped-annotations
-
-  # The exporter restarts at minute 15 with the lock stuck across it: skips
-  # at 6 and 11 before (the series at 7), then 1, 2, 3 at 17, 22 and 27.
-  # Three skips since the restart at 28, but the offset reads the old 7:
-  # quiet, as the rule's comment says. Once the window has passed the
-  # restart they count, and it fires at 31.
-  - name: exporter restart, skips err quiet then fire
-    interval: 1m
-    input_series:
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
-        values: '5x5 6x4 7x3 stale _ 1x4 2x4 3x4 4x4 5x30'
-    alert_rule_test:
-      - eval_time: 28m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts: []
-      - eval_time: 33m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts:
-          - exp_labels: *skipped-labels
-            exp_annotations: *skipped-annotations
-
-  # ── AirflowLakeIngestNotRunning ──────────────────────────────────────────
-  # The scheduler stops creating runs after minute 20 (the stale DAG folder
-  # of 2026-11-25): the counters stay at their last value. 15 minutes with
-  # no finish is minute 35, firing 5 minutes later.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x60'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
-        values: '0+1x20 20x40'
-    alert_rule_test:
-      - eval_time: 38m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts: []
-      - eval_time: 42m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts:
-          - exp_labels: &not-running-labels
-              severity: warning
-              component: orchestration
-              tier: control-plane
-            exp_annotations: &not-running-annotations
-              summary: "No lake_ingest task has finished for 20 minutes"
-              description: |
-                No lake_ingest task has finished, in any state, for 15 minutes
-                held for 5, and none is running: the 5-minute schedule is not
-                creating runs. Check the DAG is not stale or paused before
-                anything else; a stale DAG folder after a checkout switch shows
-                nothing else, every container stays healthy.
-              runbook: docs/runbooks/airflow-scheduling.md
-
-  # No lake_ingest task has ever finished, with a scheduler that has been up
-  # for more than 15 minutes: the series is absent and that still fires. In
-  # the first 15 minutes of a scheduler it does not, so a fresh install's
-  # first slot is not a warning.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x60'
-    alert_rule_test:
-      - eval_time: 18m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts: []
-      - eval_time: 22m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts:
-          - exp_labels: *not-running-labels
-            exp_annotations: *not-running-annotations
-
-  # The same silence while maintenance holds the lock from minute 15, and
-  # while one lake_ingest try runs long from minute 21: quiet.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x60'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
-        values: '0+1x20 20x40'
-      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
-        values: '_x15 1x45'
-    alert_rule_test:
-      - eval_time: 50m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts: []
-  - interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x60'
-      - series: 'airflow_ti_running{dag_id="lake_ingest",task_id="ingest",queue="default"}'
-        values: '_x21 1x40'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
-        values: '0+1x20 20x40'
-    alert_rule_test:
-      - eval_time: 50m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts: []
-
-  # The silence of the first case, with a maintenance that ended at minute
-  # 5 (its gauge sent as 0 since): no holder, so it fires as before.
-  - name: silence with no holder running fires
-    interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x60'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
-        values: '0+1x20 20x40'
-      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
-        values: '1x5 0x55'
-    alert_rule_test:
-      - eval_time: 42m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts:
-          - exp_labels: *not-running-labels
-            exp_annotations: *not-running-annotations
-
-  # lake_ingest paused under a rebuild from minute 21 to 60 (runbook §3),
-  # unpaused as it ends; the first run after it finishes at 69. Without the
-  # grace this fired at 66, between the holder ending and that first finish.
-  - name: ingest paused under a rebuild, quiet in the grace
-    interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x90'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
-        values: '0+1x20 20x47 21+1x20'
-      - series: 'airflow_ti_running{dag_id="lake_rebuild",task_id="rebuild",queue="default"}'
-        values: '_x21 1x39 0x30'
-    alert_rule_test:
-      - eval_time: 67m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts: []
-      - eval_time: 80m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts: []
-
-  # A fresh exporter counts finishes at 2, 7 and 12 and restarts at 15; the
-  # new one counts 17, 22, 27 and 32, then nothing. Until minute 30 the
-  # offset reads the old count, which equals the new one: 0, "no finish".
-  # Quiet there, as the rule's comment says (without the resets() line it
-  # fired at 22). The real silence after 32 still fires, at 52.
-  - name: exporter restart, quiet 15 minutes, then a real silence fires
-    interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x14 stale 12+12x60'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
-        values: '_x2 1x4 2x4 3x2 stale _ 1x4 2x4 3x4 4x40'
-    alert_rule_test:
-      - eval_time: 25m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts: []
-      - eval_time: 53m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts:
-          - exp_labels: *not-running-labels
-            exp_annotations: *not-running-annotations
-
-  # ── Both lake rules: a holder gauge the scheduler stopped refreshing ─────
-  # Maintenance ends at minute 10 and the scheduler restarts before its next
-  # send, so the 0 never comes: the gauge stays 1 until the exporter's 2m ttl
-  # drops it, absent from 13. Absent is not running: three skips from another
-  # writer at 31, 36 and 41 fire, and when the finishes stop after 41, so
-  # does the silence alert. Without the ttl the 1 muted both for good.
-  - name: holder gauge stuck at 1 then absent, nothing muted
-    interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x80'
-      - series: 'airflow_ti_running{dag_id="lake_maintenance",task_id="maintain",queue="default"}'
-        values: '1x12 stale'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="skipped"}'
-        values: '5x30 6x4 7x4 8x40'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
-        values: '10x80'
-    alert_rule_test:
-      - eval_time: 43m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts:
-          - exp_labels: *skipped-labels
-            exp_annotations: *skipped-annotations
-      - eval_time: 62m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts:
-          - exp_labels: *not-running-labels
-            exp_annotations: *not-running-annotations
 
   # ── Healthy: every run succeeds ──────────────────────────────────────────
   - interval: 1m
     input_series:
       - series: 'airflow_scheduler_heartbeat'
         values: '0+12x60'
-      - series: 'airflow_ti_finish{dag_id="lake_ingest",task_id="ingest",state="success"}'
+      - series: 'airflow_ti_finish{dag_id="example_dag",task_id="fetch",state="success"}'
         values: '0+0.2x60'
     alert_rule_test:
       - eval_time: 50m
@@ -478,206 +144,3 @@ tests:
       - eval_time: 50m
         alertname: AirflowTaskFailed
         exp_alerts: []
-      - eval_time: 50m
-        alertname: AirflowLakeIngestSkippedRepeatedly
-        exp_alerts: []
-      - eval_time: 50m
-        alertname: AirflowLakeIngestNotRunning
-        exp_alerts: []
-
-  # ── AirflowTaskFailed and dbt_marts ──────────────────────────────────────
-  # A failed dbt_marts task is DbtMartsNotSucceeding's to judge, not a pulse.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_ti_finish{dag_id="dbt_marts",task_id="market_analytics.ohlcv_1m_model_build",state="failed"}'
-        values: '_x10 1x40'
-    alert_rule_test:
-      - eval_time: 12m
-        alertname: AirflowTaskFailed
-        exp_alerts: []
-
-  # ── DbtMartsNotSucceeding ────────────────────────────────────────────────
-  # Healthy: one success an hour for six hours. Never fires.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x400'
-      - series: 'airflow_dagrun_duration_success_count{dag_id="dbt_marts",run_type="scheduled"}'
-        values: '1x59 2x59 3x59 4x59 5x59 6x59 7x40'
-    alert_rule_test:
-      - eval_time: 300m
-        alertname: DbtMartsNotSucceeding
-        exp_alerts: []
-
-  # The last success is at minute 120. Three hours later the window holds none:
-  # pending from minute 300, firing after the 10 minutes hold.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x400'
-      - series: 'airflow_dagrun_duration_success_count{dag_id="dbt_marts",run_type="scheduled"}'
-        values: '1x59 2x59 3x280'
-    alert_rule_test:
-      - eval_time: 299m
-        alertname: DbtMartsNotSucceeding
-        exp_alerts: []
-      - eval_time: 309m
-        alertname: DbtMartsNotSucceeding
-        exp_alerts: []
-      - eval_time: 311m
-        alertname: DbtMartsNotSucceeding
-        exp_alerts:
-          - exp_labels: &dbt-labels
-              severity: warning
-              component: orchestration
-              tier: control-plane
-            exp_annotations: &dbt-annotations
-              summary: "No dbt_marts run has succeeded for 3 hours"
-              description: |
-                The hourly dbt_marts DAG has not finished a run in success for 3
-                hours, held 10 minutes: every table mart on Trino is at least that
-                old (a view reads its sources when queried). The failed task's log has
-                dbt's own output; a stale lake (source freshness), a failed test,
-                a Trino that refuses or is down, and a paused DAG read differently
-                there.
-              runbook: docs/runbooks/dbt-marts.md
-
-  # A manual success counts as much as a scheduled one.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x400'
-      - series: 'airflow_dagrun_duration_success_count{dag_id="dbt_marts",run_type="scheduled"}'
-        values: '1x59 2x59 3x280'
-      - series: 'airflow_dagrun_duration_success_count{dag_id="dbt_marts",run_type="manual"}'
-        values: '_x250 1x150'
-    alert_rule_test:
-      - eval_time: 320m
-        alertname: DbtMartsNotSucceeding
-        exp_alerts: []
-
-  # Never succeeded on a scheduler up for more than 3 hours: the series never
-  # existed. Quiet inside the first 3 hours, firing 3 hours and 10 minutes in.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x300'
-    alert_rule_test:
-      - eval_time: 175m
-        alertname: DbtMartsNotSucceeding
-        exp_alerts: []
-      - eval_time: 195m
-        alertname: DbtMartsNotSucceeding
-        exp_alerts:
-          - exp_labels: *dbt-labels
-            exp_annotations: *dbt-annotations
-
-  # An exporter restart at minute 100, with runs succeeding before and after.
-  # At minute 200 the new process's count (2) equals the old one's 3 hours
-  # earlier (2), which reads as no success; the restart guard keeps it quiet
-  # until the window no longer spans the restart.
-  - interval: 1m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+12x99 stale 0+12x250'
-      - series: 'airflow_dagrun_duration_success_count{dag_id="dbt_marts",run_type="scheduled"}'
-        values: '2x99 stale _x9 1x59 2x59 3x59 4x59 5x59'
-    alert_rule_test:
-      - eval_time: 220m
-        alertname: DbtMartsNotSucceeding
-        exp_alerts: []
-      - eval_time: 330m
-        alertname: DbtMartsNotSucceeding
-        exp_alerts: []
-
-  # ── DbtMartsSnapshotExpiryStale ──────────────────────────────────────────
-  # The case it exists for, at a 2-minute step (under the 5-minute lookback, so
-  # every evaluation sees a sample): the hourly runs keep succeeding, so
-  # DbtMartsNotSucceeding stays quiet, but the day-2 expiry fails. One success at
-  # t = 0 (day 1); a failure at t = 24h (day 2). 26 hours after the success the
-  # window holds none: pending from 26h, firing after the 10 minutes hold.
-  - interval: 2m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+24x900'
-      - series: 'airflow_dagrun_duration_success_count{dag_id="dbt_marts",run_type="scheduled"}'
-        values: '0+0.0333x900'
-      - series: 'airflow_ti_finish{dag_id="dbt_marts",task_id="market_analytics_expire_mart_snapshots",state="success"}'
-        values: '1x900'
-      - series: 'airflow_ti_finish{dag_id="dbt_marts",task_id="market_analytics_expire_mart_snapshots",state="failed"}'
-        values: '_x720 1x180'
-    alert_rule_test:
-      - eval_time: 25h50m
-        alertname: DbtMartsSnapshotExpiryStale
-        exp_alerts: []
-      - eval_time: 26h20m
-        alertname: DbtMartsSnapshotExpiryStale
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              component: orchestration
-              tier: control-plane
-              dag_id: dbt_marts
-              task_id: market_analytics_expire_mart_snapshots
-              state: success
-            exp_annotations:
-              summary: "No dbt_marts snapshot expiry has succeeded for 26 hours"
-              description: |
-                No success of the daily snapshot expiry for 26 hours, held 10
-                minutes (market_analytics_expire_mart_snapshots): the 04:10
-                expire_snapshots and remove_orphan_files failed, were skipped
-                because a build before them failed, or did not run. Each hourly
-                rebuild still adds a snapshot, so the marts keep more than 7 days of
-                history until it succeeds; their rows are not affected.
-              runbook: docs/runbooks/dbt-marts.md
-      - eval_time: 26h20m
-        alertname: DbtMartsNotSucceeding
-        exp_alerts: []
-      - eval_time: 26h20m
-        alertname: AirflowTaskFailed
-        exp_alerts: []
-
-  # Healthy: one expiry success a day for three days. Never fires.
-  - interval: 2m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+24x2250'
-      - series: 'airflow_ti_finish{dag_id="dbt_marts",task_id="market_analytics_expire_mart_snapshots",state="success"}'
-        values: '1x719 2x719 3x810'
-    alert_rule_test:
-      - eval_time: 50h
-        alertname: DbtMartsSnapshotExpiryStale
-        exp_alerts: []
-      - eval_time: 74h
-        alertname: DbtMartsSnapshotExpiryStale
-        exp_alerts: []
-
-  # No expiry has ever succeeded, on a scheduler up for more than 26 hours.
-  - interval: 2m
-    input_series:
-      - series: 'airflow_scheduler_heartbeat'
-        values: '0+24x900'
-    alert_rule_test:
-      - eval_time: 25h
-        alertname: DbtMartsSnapshotExpiryStale
-        exp_alerts: []
-      - eval_time: 26h20m
-        alertname: DbtMartsSnapshotExpiryStale
-        exp_alerts:
-          # absent_over_time keeps the selector's equality labels, not task_id.
-          - exp_labels:
-              severity: warning
-              component: orchestration
-              tier: control-plane
-              dag_id: dbt_marts
-              state: success
-            exp_annotations:
-              summary: "No dbt_marts snapshot expiry has succeeded for 26 hours"
-              description: |
-                No success of the daily snapshot expiry for 26 hours, held 10
-                minutes (any domain): the 04:10
-                expire_snapshots and remove_orphan_files failed, were skipped
-                because a build before them failed, or did not run. Each hourly
-                rebuild still adds a snapshot, so the marts keep more than 7 days of
-                history until it succeeds; their rows are not affected.
-              runbook: docs/runbooks/dbt-marts.md
