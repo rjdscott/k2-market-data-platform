@@ -102,3 +102,43 @@ def sample_moment():
     from datetime import datetime, timezone
 
     return datetime(2026, 9, 3, 0, 0, tzinfo=timezone.utc)
+
+
+class CatalogSpark:
+    """SHOW NAMESPACES / SHOW TABLES from a dict; the JVM, which loads a table, is unreachable."""
+
+    def __init__(self, tables):
+        self.tables = tables
+
+    def sql(self, statement):
+        if statement.startswith("SHOW NAMESPACES"):
+            rows = [(ns,) for ns in self.tables]
+        else:
+            rows = [{"tableName": t} for t in self.tables[statement.rsplit(".", 1)[1]]]
+        return types.SimpleNamespace(collect=lambda: rows)
+
+    @property
+    def _jvm(self):
+        raise RuntimeError("py4j gateway closed")
+
+
+def test_contract_schema_runs_first_and_a_whole_audit_failure_files_against_the_catalog(maintenance):
+    name, scope, check = maintenance.AUDITS[0]
+    assert (name, scope, check) == ("contract_schema", "lake", maintenance.audit_contract_schema)
+
+
+def test_contract_schema_never_raises_a_table_it_cannot_load_is_a_check_raised_row(maintenance):
+    """The JVM failing on one table is that table's row; a missing one and a stray one get theirs."""
+    import contract_schema
+
+    import offsets as O
+
+    spark = CatalogSpark({"gold": ["trades", "handmade"], "scratch_p4": ["wap_bronze"]})
+    rows = {r["scope"]: r for r in maintenance.audit_contract_schema(spark)}
+    assert rows["lake.gold.trades"]["passed"] is False and rows["lake.gold.trades"]["observed"] == -1
+    assert rows["lake.gold.trades"]["detail"] == f"{O.CHECK_RAISED} RuntimeError: py4j gateway closed"
+    assert rows["lake.raw.messages"]["detail"].startswith("table missing")
+    assert rows["lake.gold.handmade"]["detail"].startswith("no contract")
+    assert "lake.scratch_p4.wap_bronze" not in rows
+    assert len(rows) == len(contract_schema.load()) + 1
+    assert {r["check_name"] for r in rows.values()} == {"contract_schema"}

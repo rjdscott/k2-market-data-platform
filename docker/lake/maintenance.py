@@ -26,13 +26,16 @@ accumulating a snapshot per five minutes forever.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import bars
 import books
 import bronze
+import contract_schema
 import gold
 import silver
 from catalog import snapshot_history
@@ -665,6 +668,45 @@ def audit_kraken_checksum(spark) -> list:
                     f"{row['unknown']} unverifiable (no precision or before the connection's snapshot)")]
 
 
+def _iceberg_json(spark, table: str) -> dict:
+    """The live table's schema, default partition spec and default sort order, as Iceberg's JSON.
+
+    Read off the Iceberg table object the session's catalog loads: metadata only, no data file
+    is opened, and the tables an earlier step of this run loaded come from the catalog's cache.
+    The three parsers write what the REST catalog serves for the same table, which is what
+    lets the comparison be run offline against `GET .../tables/<table>`
+    (docs/runbooks/lake-audit-failed.md section 15).
+    """
+    iceberg = spark._jvm.org.apache.iceberg
+    t = iceberg.spark.Spark3Util.loadIcebergTable(spark._jsparkSession, f"{CATALOG}.{table}")
+    return {
+        "schema": json.loads(iceberg.SchemaParser.toJson(t.schema())),
+        "partition-spec": json.loads(iceberg.PartitionSpecParser.toJson(t.spec())),
+        "sort-order": json.loads(iceberg.SortOrderParser.toJson(t.sortOrder())),
+    }
+
+
+def audit_contract_schema(spark) -> list:
+    """Every contracted table's live schema, partitioning, sort order and identifier fields == its contract.
+
+    One row per contracted table, and one per table with no contract in a namespace the
+    contracts own; the comparison and its rules are docker/lake/contract_schema.py. The
+    contracts arrive as generated/contract_schemas.json (`make generate`), since contracts/
+    is not mounted here.
+    """
+    started = time.monotonic()
+    contracts = contract_schema.load()
+    namespaces = {r[0] for r in spark.sql(f"SHOW NAMESPACES IN {CATALOG}").collect()}
+    listed = {
+        f"{ns}.{r['tableName']}"
+        for ns in sorted(contract_schema.owned(contracts) & namespaces)
+        for r in spark.sql(f"SHOW TABLES IN {CATALOG}.{ns}").collect()
+    }
+    rows = contract_schema.check(contracts, listed, lambda t: _iceberg_json(spark, t))
+    print(f"  {contract_schema.CHECK}: {len(contracts)} contracts against the catalog in {time.monotonic() - started:.1f} s")
+    return [_result(contract_schema.CHECK, f"{CATALOG}.{t}", ok, n, detail) for t, ok, n, detail in rows]
+
+
 def _result(check: str, scope: str, passed: bool, observed: int, detail: str) -> dict:
     return {
         "check_name": check,
@@ -683,6 +725,8 @@ INFORMATIONAL = {"silver_flags"}
 # (check name, scope, callable). The scope is here rather than only inside the
 # check so that a check which RAISES still has somewhere to file its failure.
 AUDITS = (
+    # First: metadata only, and a table that has drifted from its contract explains a later check failing on it.
+    (contract_schema.CHECK, CATALOG, audit_contract_schema),
     ("offset_continuity", RAW_TABLE, audit_offset_continuity),
 ) + tuple(
     row
