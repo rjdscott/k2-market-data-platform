@@ -47,6 +47,9 @@ Work top to bottom; do not skip a row because "nothing reads it yet".
    field is actually written, and `tests/test_wire_format.py`, which parses
    `lake.sql` and asserts the two agree. A moved partition spec or sort order also
    moves in the table's contract under `contracts/`: `make test-k2gen` fails until it does, then `make generate`.
+   Any lake.sql column change needs `make generate` too: it rewrites
+   `docker/lake/generated/contract_schemas.json`, which the nightly `contract_schema`
+   audit holds the live table to, so DDL merged but never applied fails that audit.
 4. **ClickHouse DDL** — the served `gold` tier, two files, both idempotent
    (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE … ADD COLUMN IF NOT EXISTS`);
    they are mounted at `/docker-entrypoint-initdb.d` and run on a fresh
@@ -81,6 +84,7 @@ Work top to bottom; do not skip a row because "nothing reads it yet".
    docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
      "DESCRIBE gold.trades"
    make lake-verify       # raw count == bronze count, double-run adds 0
+   python3 docker/lake/contract_schema.py   # every live lake table == its contract, read-only; exit 0
    make test-clickhouse   # the gold DDL on a throwaway server, assertions and all
    ```
 

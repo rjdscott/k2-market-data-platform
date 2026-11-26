@@ -1,20 +1,20 @@
 # Runbook: A lake audit failed
 
-The nightly maintenance run ends in **24 checks of six kinds** over the lake, and any
-failure exits non-zero, fails the Prefect run and raises an alert.
-`docker/lake/maintenance.py`'s `AUDITS` tuple is the list: `offset_continuity` on
-`raw.messages`; `duplicate_identifiers` on each of `bronze.trades`,
-`bronze.book_snapshots_l2` and the six per-venue bronze tables; `venue_replay` on
-`bronze.trades`; `sequence_gaps` on each unified bronze table; and, per venue table,
-`bronze_unparseable` and `bronze_schema_drift` (§6, §7). They ask different questions,
-have different causes, and some are **findings to record** rather than faults to repair , 
-telling them apart is what this runbook is for.
+The nightly maintenance run ends in the checks `docker/lake/maintenance.py`'s `AUDITS` tuple
+lists, **eleven kinds** over the lake, and any failure exits non-zero, fails the run and raises
+an alert: `contract_schema` on every lake table (§15); `offset_continuity` on `raw.messages`
+(§1); `duplicate_identifiers` on each table with identifier fields (§2); per bronze table,
+`bronze_unparseable` and `bronze_schema_drift` (§6, §7); per silver table, `silver_parity` (§9)
+and, on the trades tables, `silver_flags` (§10); on gold, `gold_parity`, `ohlcv_parity` and
+`bars_parity` (§11, §12, §14); and `kraken_checksum` (§13). They ask different questions, have
+different causes, and some are **findings to record** rather than faults to repair; telling
+them apart is what this runbook is for.
 
-`venue_replay` is the odd one out and it is here so that it cannot be mistaken for a
-failure: it is **informational**, has no pass/fail semantics, and is excluded from the
-`N audits passed` summary line (`INFORMATIONAL` in `maintenance.py`). It publishes the
-Coinbase replay rate that §2 would otherwise be blamed for, see §4. Stage 2 of the ingest
-also files rows into the same table under `job='ingest'`, see §5.
+`silver_flags` is the odd one out: it is **informational**, has no pass/fail semantics, and is
+excluded from the `N audits passed` summary line (`INFORMATIONAL` in `maintenance.py`). §3 and
+§4 describe `sequence_gaps` and `venue_replay`, checks of the unified Phase D bronze tables that
+the Phase E cutover dropped; they stay for their history. Stage 2 of the ingest also files rows
+into the same table under `job='ingest'`, see §5 and §8.
 
 It does **not** cover ingest being behind ([lake-ingest-lag.md](./lake-ingest-lag.md)) or
 the tier being down ([lake-recovery.md](./lake-recovery.md)).
@@ -42,6 +42,7 @@ the tier being down ([lake-recovery.md](./lake-recovery.md)).
 | 12 | `ohlcv_parity`, a stored 1m candle ≠ recomputed from gold.trades | < 60 min (rebuild gold) | not yet verified, Phase E |
 | 13 | `kraken_checksum`, a replayed Kraken book failed the venue's CRC32 | **investigation**, a missed or misapplied frame | **failed as designed** 2026-08-27: 386,962 of 40.2 M frames, all inside the 2026-08-26 chaos window; every other hour zero. See `docker/lake/README.md` § Books |
 | 14 | `bars_parity`, a stored bar ≠ recomputed from gold.trades | < 60 min (rebuild bars) | not yet verified |
+| 15 | `contract_schema`, a live table is not what its contract states, or a lake table has no contract | < 1 day (a schema change, or the table put back) | pass verified 2026-11-26 read-only over REST, 26 of 26 tables (`python3 docker/lake/contract_schema.py`); a nightly row not yet observed |
 
 ---
 
@@ -626,6 +627,96 @@ function.
 
 **Measured**, not yet verified.
 
+## 15. `contract_schema`: a live table is not what its contract states
+
+**Symptom**, `check_name = 'contract_schema'`, `scope` a lake table (`lake.<namespace>.<table>`),
+`observed` the number of differences, `detail` each one, `; ` between them, in a fixed form:
+
+| `detail` | Means |
+|---|---|
+| `missing column <c>` | the contract has it, the live table does not |
+| `extra column <c> <type>` | the live table has it, no contract does. A failure: the contract is the interface |
+| `type differs on <c>: contract <type>, live <type>` | both in Spark SQL's spelling; a nested field's type and `NOT NULL` are part of its column's type, and a zoned `TIMESTAMP` is not a `TIMESTAMP_NTZ` |
+| `nullability differs on <c>: contract NOT NULL, live nullable` | or the reverse |
+| `position differs on <c>: column <i> in the contract, column <j> live` | the columns both sides have are in another order. A failure: Spark's `INSERT INTO ... VALUES`, as the operator rows above are filed, binds by position |
+| `partitioning differs: contract [...], live [...]` | the table's default partition spec |
+| `sort differs: contract [...], live [...]` | its default sort order, the one compaction sorts by |
+| `identifier fields differ: contract [...], live [...]` | its `SET IDENTIFIER FIELDS` |
+| `table missing: ...` | a contract names a table the catalog does not hold |
+| `no contract: ...` | a table with no contract in a namespace the contracts own (`raw`, `bronze`, `silver`, `gold`, `audit`). Other namespaces, such as a spike's `scratch_p4`, are not read |
+
+`observed = -1` with a `check raised` detail is a table the audit could not read; the
+governance view `dq_results` shows it as `error`. If the whole audit raises, one row has
+`scope = 'lake'`.
+
+**What it means**, `k2gen validate` holds every contract to `lake.sql`, the file, in CI; this
+holds it to the live catalog, nightly. The contracts reach the Spark container as
+`docker/lake/generated/contract_schemas.json` (`make generate`); the live side is each table's
+schema, partition spec and sort order as Iceberg's own JSON, metadata only. A difference is one
+of four things: an `ALTER` run on the live table by hand; DDL applied only in part (a `WRITE
+ORDERED BY` or `SET IDENTIFIER FIELDS` that never ran: `gold.bbo_1s` once shipped without its
+sort order, see `maintenance._rewrite`); a contract and `lake.sql` change merged but never
+applied to this stack; or a table created by hand in a namespace the lake owns.
+
+**See the differences**, the rows first, then the live table itself:
+
+```sql
+-- Through Trino.   ✅ verified 2026-11-26 (0 rows: the audit had not run yet)
+SELECT run_ts, scope, observed, detail FROM lake.audit.checks
+WHERE check_name = 'contract_schema' AND NOT passed ORDER BY run_ts DESC, scope;
+```
+
+```bash
+# The same comparison now, read-only over the REST catalog: no Spark, no writer lock.
+python3 docker/lake/contract_schema.py      # ✅ 2026-11-26: "26 of 26 match", exit 0; exit 1 on any difference
+
+# One table's live columns, partition spec and sort order, as Spark reads them.   ✅ verified 2026-11-26
+P=$(curl -s "localhost:18181/catalog/v1/config?warehouse=k2" | jq -r .defaults.prefix)
+curl -s "localhost:18181/catalog/v1/$P/namespaces/gold/tables/bbo_1s" | jq -c '.metadata as $m
+  | ($m.schemas[] | select(."schema-id" == $m."current-schema-id") | .fields[] | {name, type, required}),
+    ($m."partition-specs"[] | select(."spec-id" == $m."default-spec-id") | .fields),
+    ($m."sort-orders"[] | select(."order-id" == $m."default-sort-order-id") | .fields)'
+```
+
+Trino's `DESCRIBE lake.<ns>.<table>` is a cross-check only: it spells types its own way
+(`timestamp(6) with time zone` for `TIMESTAMP`, `varchar` for `STRING`).
+
+**Decide which side is right.** The contract, with `lake.sql`, is right by default: it is
+reviewed and versioned, and the jobs' projections, the dbt sources and the product pages are
+built from it. Read the history before touching anything:
+
+```bash
+git log --oneline -- docker/lake/ddl/lake.sql contracts/   # did the declared shape move?
+```
+
+| What the history says | Who is wrong | Response |
+|---|---|---|
+| nothing changed for this table | the live table: a hand-run `ALTER` or a half-applied DDL | put the live table back to the declared shape (below) |
+| `lake.sql` or the contract changed, the live table has the old shape | the stack: the change was never applied here | apply it (below) |
+| the live change was deliberate and nobody wrote it down | the contract | the contract and `lake.sql` catch up through `/schema-change`, in one pull request. Never edit only the contract to clear the row |
+| `no contract` on a table nobody owns | the table | a person decides: give it a product and a contract (`make new-product`, [golden path](../development/golden-path.md)), or move it to a scratch namespace. Do not create tables in the lake's namespaces by hand |
+
+**Recovery**, the schema-change procedure is the only way to move either side
+(`.claude/skills/schema-change/SKILL.md`): `lake.sql`, the contract, `make generate`, tests and
+docs in one pull request, then the DDL applied to the stack:
+
+```bash
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/apply_ddl.py   # idempotent; takes no writer lock, so not during maintenance
+python3 docker/lake/contract_schema.py                                 # until it exits 0
+```
+
+`apply_ddl.py` creates a missing table and re-applies every `ALTER` that converges (sort order,
+identifier fields). It cannot undo a column added, dropped, retyped or moved by hand, because
+`CREATE TABLE IF NOT EXISTS` leaves an existing table alone: that repair is an `ALTER TABLE` of
+its own, written into the pull request, and for a type Iceberg cannot change in place, a rebuild
+of the table from its parent (`make lake-rebuild LAYER=<layer>`). The next nightly row passing is
+the record that it was fixed; the failed rows stay.
+
+**Measured**, pass verified 2026-11-26 read-only over the REST catalog: 26 of 26 contracted
+tables match, the two `scratch_p4` tables are not read. Failure verified only offline: the same
+26 live schemas against contracts edited in memory produced a type, a sort, an extra-column and
+a no-contract row; and in `tests/test_lake_contract_schema.py`. A nightly row not yet observed.
+
 ## After any failure: do not silence the audit
 
 The audit fails the maintenance run on purpose, that is
@@ -658,7 +749,8 @@ found by §1 or §3 is recorded here**, with its window and its evidence._
 - [ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md), offset continuity, and why compaction snapshots must be skipped when reading the offset history
 - [ADR-024](../adr/ADR-024-unified-bronze-tables-in-the-lake.md), the identifier fields the duplicate check uses, and why the book table's differ from the trade table's
 - [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), the `SET IDENTIFIER FIELDS` clauses §2 asserts, with the 956/287,184 and 484/47,331 measurements that put `conn_id` and `snapshot_ts_ns` in them
-- [`docker/lake/maintenance.py`](../../docker/lake/maintenance.py), the `AUDITS` tuple: the six checks, their scopes, and `INFORMATIONAL`
+- [`docker/lake/maintenance.py`](../../docker/lake/maintenance.py), the `AUDITS` tuple: the checks, their scopes, and `INFORMATIONAL`
+- [`docker/lake/contract_schema.py`](../../docker/lake/contract_schema.py), §15's comparison and its rules; [ADR-032](../adr/ADR-032-odcs-contracts-and-k2gen.md), the contracts it holds the live tables to
 - [ADR-027](../adr/ADR-027-book-snapshot-and-sequencing.md), three sequencing mechanisms, and the `seq = 0` sentinel
 - [ADR-017](../adr/ADR-017-iceberg-maintenance-pipeline.md), the compact → expire → audit ordering and the fail-fast-on-audit policy the lake inherits
 - [ADR-021](../adr/ADR-021-raw-first-archive-and-lineage.md), the lineage columns that make §2 a one-query diagnosis
