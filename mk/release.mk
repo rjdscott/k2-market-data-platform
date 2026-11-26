@@ -1,13 +1,38 @@
-# Owned by phase 001 step S19: deploy, verify and roll back releases, ADR-058 (scripts/deploy.py, docker/tools/).
-# Only that step edits this file (docs/development/phase-001-interfaces.md).
-# Targets it will hold: deploy, release-verify. Until S19 lands each is a
-# stub that says so on stderr and exits 2, so nothing mistakes it for a pass; no file
-# under mk/ redefines a target of the root Makefile (tests/test_mk_split.py).
+# Owned by phase 001 step S19: compile, deploy, verify and roll back releases, ADR-058 (scripts/deploy.py, docker/tools/).
+# Only that step edits this file (docs/development/phase-001-interfaces.md); no file under mk/
+# redefines a target of the root Makefile (tests/test_mk_split.py).
+# The procedures: docs/runbooks/deploy-a-release.md, docs/runbooks/roll-back-a-release.md.
+# TAG, RELEASE, FROM, IMAGES, PLAN and ALLOW_STATEFUL, given on make's command line, reach the
+# recipe as environment variables ($$RELEASE), never spliced into it. The script runs in
+# platform/k2gen's locked environment: it imports k2gen's own needs and view rule, and bcrypt
+# (the pin mk/principals.mk uses) for the release canary's password line.
+
+DEPLOY = uv run --project platform/k2gen --locked -q --with bcrypt==5.0.0 python scripts/deploy.py
+
+.PHONY: release
+release:  ## TAG=<annotated tag> [IMAGES=<images.json>]: compile the tag into a sealed release under ${K2_RELEASES}, its images built or pinned by digest; prints the release id
+	@$(DEPLOY) release --tag "$$TAG" $${IMAGES:+--images "$$IMAGES"}
 
 .PHONY: deploy
-deploy:  ## NOT BUILT until step S19: RELEASE=<tag>: compile, preflight, move the pointers, verify; on a mismatch back to R-1, exit 1
-	@echo "NOT BUILT deploy: phase 001 step S19 builds it" >&2; exit 2
+deploy:  ## RELEASE=<release id or tag> [PLAN=1] [ALLOW_STATEFUL=<svc>,...]: preflight, images, plan, DDL, views, canary, pointer swap, recreate only what changed, verify; on a failure back to the previous release, exit 1
+	@$(DEPLOY) deploy "$$RELEASE" $$(test "$$PLAN" = 1 && echo --plan) $${ALLOW_STATEFUL:+--allow-stateful "$$ALLOW_STATEFUL"}
 
 .PHONY: release-verify
-release-verify:  ## NOT BUILT until step S19: ask every part which release it runs, then the catalog drift check
-	@echo "NOT BUILT release-verify: phase 001 step S19 builds it" >&2; exit 2
+release-verify:  ## Ask every part which release it runs: pointers in the VM and each container, files, the canary, image digests, health, then the access suite and the catalog drift check (S20)
+	@$(DEPLOY) verify
+
+.PHONY: rollback
+rollback:  ## Back to the previous good release (or to the good one, after an unfinished deploy), images included, then verify
+	@$(DEPLOY) rollback
+
+.PHONY: release-status
+release-status:  ## The good release, the pointers, the canary lines (names only), the releases kept and the last deploy records
+	@$(DEPLOY) status
+
+.PHONY: release-diff
+release-diff:  ## RELEASE=<id> [FROM=<id>]: k2gen diff from FROM (default: the good release) to RELEASE, as Markdown
+	@$(DEPLOY) diff "$$RELEASE" $${FROM:+--from "$$FROM"}
+
+.PHONY: deploy-rehearsal
+deploy-rehearsal:  ## [KEEP=1] Every deploy claim on a throwaway compose project k2-rehearsal under your home directory, never the live stack: first deploy, rules-only, one image, forced mismatch, rollback, a dropped masked column polled, a kill after each step, two at once (about 25 min)
+	@uv run --project platform/k2gen --locked -q --with bcrypt==5.0.0 python scripts/verify/deploy_rehearsal.py

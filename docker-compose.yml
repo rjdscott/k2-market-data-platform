@@ -1306,11 +1306,18 @@ services:
   # fill them in place (docs/development/phase-001-interfaces.md A13). Each is
   # a stub on alpine that prints SKIP and exits: its owning step replaces the
   # image and command. The default profile and its sums are unchanged.
+  # The tools one-shot (ADR-058): `make deploy` runs it to move the release pointers on the VM
+  # side of Docker Desktop's file sharing, and `make release` to compile a tag with that tag's
+  # k2gen. `make release` builds it from the tag and tags it tools:<image id 12>, which the release
+  # pins; deploy runs that image, never this tag. Its command is the deploy's (k2tools ...).
   tools:
     profiles: ["tools"]
     logging: *k2-logging
-    image: alpine:3.20  # stub: step S19 builds docker/tools/ (a shell, Python, the trino client)
-    command: ["echo", "SKIP tools: built in phase 001 step S19"]
+    build:
+      context: .
+      dockerfile: docker/tools/Dockerfile
+    image: tools:local
+    command: ["k2tools"]
     networks:
       - k2-net
       - k2-catalog
