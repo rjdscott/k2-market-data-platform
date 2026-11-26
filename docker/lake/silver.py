@@ -173,7 +173,9 @@ def project(spark, frames: DataFrame, spec: TradeSpec, registry: dict, run_ts: d
     exploded = spark.sql(spec.explode)
     natives = {r[0] for r in exploded.selectExpr(spec.venue_columns[0]).distinct().collect()}
     mapping = {n: instruments.canonical(registry, spec.exchange, n) for n in natives}  # raises on unknown
-    canon = F.create_map(*[F.lit(x) for kv in mapping.items() for x in kv])
+    # The cast gives an empty mapping a type: a batch with no frame for this venue (a paused
+    # book, ADR-050) builds map(), which Spark types map<void,void> and refuses to index by a string.
+    canon = F.create_map(*[F.lit(x) for kv in mapping.items() for x in kv]).cast("map<string,string>")
     out = exploded.withColumn("ingest_ts", F.lit(run_ts)).selectExpr(*spec.venue_columns, *_TAIL)
     return out.withColumn("canonical_symbol", canon[F.col("symbol")]).withColumn(
         "precision_loss",
