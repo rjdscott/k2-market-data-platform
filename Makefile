@@ -31,7 +31,7 @@ backup-install:  ## Schedule `make backup` daily at 04:30 UTC: a systemd user ti
 	cp scripts/systemd/k2-backup.timer $(HOME)/.config/systemd/user/k2-backup.timer
 	systemctl --user daemon-reload
 	systemctl --user enable --now k2-backup.timer
-	@echo "Scheduled daily at 04:30 UTC. Run 'make backup' now for the first copy: make health FAILs (4) until one succeeds."
+	@echo "Scheduled daily at 04:30 UTC. Run 'make backup' now for the first copy: make health FAILs (5) until one succeeds."
 
 check-docs: ## Doc gates (links, forbidden words, promtool, runbook paths, capacity-model gate, no em-dash on added lines, synthetic fixtures)
 	bash scripts/check-docs.sh

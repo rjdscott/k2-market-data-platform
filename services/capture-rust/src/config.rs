@@ -64,6 +64,12 @@ pub struct Instrument {
 struct InstrumentsFile {
     version: u32,
     instruments: BTreeMap<String, Vec<Instrument>>,
+    /// Order-book (L2) capture per venue (ADR-050). Required, with no serde
+    /// default: a default would turn a missing line into a silent "on". `bool`,
+    /// so `on`/`off`/`yes`, which serde_yaml reads as strings and PyYAML as
+    /// booleans, fail here instead of meaning one thing to the capture and
+    /// another to the lake.
+    book_capture: BTreeMap<String, bool>,
 }
 
 /// The instruments one exchange subscribes to, in file order.
@@ -75,6 +81,7 @@ struct InstrumentsFile {
 pub struct Instruments {
     instruments: Vec<Instrument>,
     by_native: BTreeMap<String, String>,
+    book_capture: bool,
 }
 
 impl Instruments {
@@ -85,8 +92,10 @@ impl Instruments {
     }
 
     pub fn parse(yaml: &str, exchange: Exchange) -> Result<Self> {
-        let file: InstrumentsFile =
-            serde_yaml::from_str(yaml).context("parsing the instrument registry")?;
+        let file: InstrumentsFile = serde_yaml::from_str(yaml).context(
+            "parsing the instrument registry (book_capture is required, a true or false \
+             for every venue: ADR-050)",
+        )?;
         if file.version != 2 {
             bail!(
                 "instrument registry is version {}, this build reads version 2 \
@@ -94,6 +103,7 @@ impl Instruments {
                 file.version
             );
         }
+        let book_capture = book_capture(&file.book_capture, exchange)?;
         let instruments = file
             .instruments
             .get(exchange.as_str())
@@ -102,10 +112,10 @@ impl Instruments {
         if instruments.is_empty() {
             bail!("registry lists no instruments for {exchange}");
         }
-        Self::from_list(instruments)
+        Self::from_list(instruments, book_capture)
     }
 
-    fn from_list(instruments: Vec<Instrument>) -> Result<Self> {
+    fn from_list(instruments: Vec<Instrument>, book_capture: bool) -> Result<Self> {
         let mut by_native = BTreeMap::new();
         for i in &instruments {
             if by_native
@@ -118,7 +128,15 @@ impl Instruments {
         Ok(Self {
             instruments,
             by_native,
+            book_capture,
         })
+    }
+
+    /// Whether this venue subscribes to its order book (ADR-050). Read by the
+    /// subscription builders and the run loop only: decoding and replay never
+    /// ask, so archived book frames replay the same whatever it says.
+    pub fn book_capture(&self) -> bool {
+        self.book_capture
     }
 
     /// Keep only the listed native symbols - the fixture recorder trims a
@@ -158,6 +176,28 @@ impl Instruments {
     }
 }
 
+/// `book_capture` must name every venue this binary knows, and nothing else,
+/// so a typo is a start error rather than a venue silently left on.
+fn book_capture(section: &BTreeMap<String, bool>, exchange: Exchange) -> Result<bool> {
+    use clap::ValueEnum;
+    let venues: Vec<&str> = Exchange::value_variants()
+        .iter()
+        .map(|e| e.as_str())
+        .collect();
+    if let Some(unknown) = section.keys().find(|k| !venues.contains(&k.as_str())) {
+        bail!(
+            "registry book_capture names `{unknown}`, which is not a venue ({})",
+            venues.join(", ")
+        );
+    }
+    if let Some(missing) = venues.iter().find(|v| !section.contains_key(**v)) {
+        bail!(
+            "registry book_capture has no `{missing}` entry; every venue needs a true or false (ADR-050)"
+        );
+    }
+    Ok(section[exchange.as_str()])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,7 +210,56 @@ instruments:
     - { native: XDG/USD, canonical: DOGE/USD }
   binance:
     - { native: BTCUSDT, canonical: BTC/USDT }
+book_capture: { binance: true, kraken: false, coinbase: true }
 "#;
+
+    /// Required, complete, known venues only, YAML 1.2 booleans only: each way a
+    /// registry can be wrong about the switch is a start error, never a default.
+    #[test]
+    fn book_capture_is_required_and_read_per_venue() {
+        assert!(
+            Instruments::parse(YAML, Exchange::Binance)
+                .unwrap()
+                .book_capture()
+        );
+        assert!(
+            !Instruments::parse(YAML, Exchange::Kraken)
+                .unwrap()
+                .book_capture()
+        );
+
+        let base = YAML.split("book_capture").next().unwrap();
+        for (switch, want) in [
+            ("", "missing field `book_capture`"),
+            (
+                "book_capture: { binance: true, kraken: true }\n",
+                "no `coinbase` entry",
+            ),
+            (
+                "book_capture: { binance: true, kraken: true, coinbase: true, okx: false }\n",
+                "names `okx`",
+            ),
+            // YAML 1.1 spellings: a boolean to PyYAML, a string to serde_yaml.
+            (
+                "book_capture: { binance: on, kraken: true, coinbase: true }\n",
+                "expected a boolean",
+            ),
+            (
+                "book_capture: { binance: yes, kraken: true, coinbase: true }\n",
+                "expected a boolean",
+            ),
+            (
+                "book_capture: { binance: 1, kraken: true, coinbase: true }\n",
+                "expected a boolean",
+            ),
+        ] {
+            let err = Instruments::parse(&format!("{base}{switch}"), Exchange::Kraken)
+                .err()
+                .unwrap_or_else(|| panic!("{switch:?} was accepted"));
+            let chain = format!("{err:?}");
+            assert!(chain.contains(want), "{switch:?}: {chain}");
+        }
+    }
 
     #[test]
     fn maps_native_to_canonical_without_guessing() {
@@ -184,7 +273,7 @@ instruments:
 
     #[test]
     fn rejects_a_v1_shaped_file() {
-        let v1 = "version: 1\ninstruments:\n  kraken: []\n";
+        let v1 = "version: 1\ninstruments:\n  kraken: []\nbook_capture: { binance: true, kraken: true, coinbase: true }\n";
         let err = Instruments::parse(v1, Exchange::Kraken)
             .unwrap_err()
             .to_string();
@@ -201,7 +290,7 @@ instruments:
 
     #[test]
     fn rejects_a_duplicate_native() {
-        let dup = "version: 2\ninstruments:\n  kraken:\n    - { native: XBT/USD, canonical: BTC/USD }\n    - { native: XBT/USD, canonical: XBT/USD }\n";
+        let dup = "version: 2\ninstruments:\n  kraken:\n    - { native: XBT/USD, canonical: BTC/USD }\n    - { native: XBT/USD, canonical: XBT/USD }\nbook_capture: { binance: true, kraken: true, coinbase: true }\n";
         let err = Instruments::parse(dup, Exchange::Kraken)
             .unwrap_err()
             .to_string();

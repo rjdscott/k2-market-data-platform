@@ -9,6 +9,7 @@ How complete the lake is for each venue, per venue and UTC day: its trades, the 
 | Owner | `analytics-team` |
 | Kind | consumer-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-analytics/venue-quality/product.yaml`](../../../contracts/market-analytics/venue-quality/product.yaml) |
 
 ## Inputs and outputs

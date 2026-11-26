@@ -9,6 +9,7 @@ What the lake jobs found when they checked the lake: one row per check per run, 
 | Owner | `capture-team` |
 | Kind | source-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-capture/lake-audit/product.yaml`](../../../contracts/market-capture/lake-audit/product.yaml) |
 
 ## Inputs and outputs
@@ -33,6 +34,7 @@ One row per check per run of a lake job, append-only: a failed check is never ed
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | none |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |

@@ -9,6 +9,7 @@ The instrument and venue dimensions, Kimball type-2, so an attribute can be read
 | Owner | `reference-data-team` |
 | Kind | source-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/reference-data/security-master/product.yaml`](../../../contracts/reference-data/security-master/product.yaml) |
 
 ## Inputs and outputs
@@ -41,6 +42,7 @@ Security master, type-2: one row per validity interval per instrument, joined as
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | none |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -79,6 +81,7 @@ Venue dimension, type-2: one row per validity interval per venue.
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | none |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |

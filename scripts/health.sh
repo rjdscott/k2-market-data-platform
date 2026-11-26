@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # "Is it up?" in one command: every container healthy, a message on every venue
-# in the last 2 minutes, a lake that is still committing, and, on a host where
-# the nightly backup is scheduled, a copy under 26 hours old.
+# in the last 2 minutes, a lake that is still committing, every capture doing
+# what the registry says about its order book, and, on a host where the nightly
+# backup is scheduled, a copy under 26 hours old.
 #
 # `make health` runs this, and scripts/dev-up.sh calls it for its steps (e) and
 # (f) — one implementation, so a check added here is a check the bring-up does.
@@ -99,6 +100,7 @@ else
   done <<< "$ch_out"
 fi
 
+declare -A cap_metrics=()
 for svc in capture-binance capture-kraken capture-coinbase; do
   cid=$(docker compose ps -q "$svc" 2>/dev/null || true)
   [ -z "$cid" ] && continue || true
@@ -107,6 +109,7 @@ for svc in capture-binance capture-kraken capture-coinbase; do
   net=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$cid" 2>/dev/null || true)
   [ -z "$net" ] && continue || true
   metrics=$(docker run --rm --network "$net" curlimages/curl:8.14.1 -s "http://${svc}:8082/metrics" 2>/dev/null || true)
+  cap_metrics[$svc]=$metrics
   lastts=$(printf '%s\n' "$metrics" | grep '^k2_capture_last_message_ts_seconds' || true)
   if [ -n "$lastts" ]; then
     result "(2) $svc metrics" "PASS ($lastts)"
@@ -190,14 +193,66 @@ else
   result "$label" "WARN ($skips skipped in a row: another lake writer holds the lock; FAIL at 3, $runbook §3)"
 fi
 
-# ── (4) the nightly host copy ────────────────────────────────────────────────
+# ── (4) the order-book switch: process, host file and Spark's copy agree ─────
+# ADR-050. Each capture reads config/instruments.yaml once, at start, and exports
+# what it read as k2_capture_book_capture; the lake's book-audit skip reads the
+# Spark container's mounted copy. A capture not recreated after a change, or a
+# stale mount, leaves the three disagreeing, and nothing else would show it.
+step "(4) order-book switch (ADR-050)"
+# book_capture's venue/value pairs from a registry on stdin. Python's re, not
+# PyYAML: the host need not have it, and the section is a flat map.
+book_switch() {
+  python3 -c '
+import re, sys
+m = re.search(r"^book_capture:[ \t]*\n((?:[ \t]+.*\n?)*)", sys.stdin.read(), re.M)
+for venue, value in re.findall(r"^[ \t]+([a-z]+):[ \t]*([^\s#]+)", m.group(1) if m else "", re.M):
+    print(venue, value)' 2>/dev/null
+}
+host_sw=$(book_switch 2>/dev/null < config/instruments.yaml)
+spark_sw=$(docker exec k2-spark-iceberg cat /home/iceberg/config/instruments.yaml 2>/dev/null | book_switch)
+# on/off from a registry value, "?" for anything that is not a YAML boolean.
+as_state() { case "$1" in true|True|TRUE) echo on ;; false|False|FALSE) echo off ;; "") echo missing ;; *) echo "?$1" ;; esac; }
+for venue in binance kraken coinbase; do
+  label="(4) $venue book_capture"
+  metrics=${cap_metrics[capture-$venue]:-}
+  if [ -z "$metrics" ]; then
+    result "$label" "WARN (no metrics from capture-$venue: not running or warming up, switch not compared)"
+    continue
+  fi
+  gauge=$(printf '%s\n' "$metrics" | awk -v v="$venue" '$1 == "k2_capture_book_capture{exchange=\"" v "\"}" { print $2 }')
+  case "$gauge" in 1|1.0) proc=on ;; 0|0.0) proc=off ;; "") proc=missing ;; *) proc="?$gauge" ;; esac
+  host=$(as_state "$(printf '%s\n' "$host_sw" | awk -v v="$venue" '$1 == v { print $2 }')")
+  spark=$(as_state "$(printf '%s\n' "$spark_sw" | awk -v v="$venue" '$1 == v { print $2 }')")
+  states="process $proc, host file $host, spark-iceberg's copy $spark"
+  if [ "$proc" = missing ]; then
+    bad "$label" "FAIL (capture-$venue exports no k2_capture_book_capture: an image older than ADR-050 subscribes to books whatever the file says; $states)"
+    continue
+  elif [ "$host" != on ] && [ "$host" != off ]; then
+    bad "$label" "FAIL (config/instruments.yaml book_capture.$venue is $host, not true or false; $states)"
+    continue
+  fi
+  problems=""
+  if [ "$proc" != "$host" ]; then
+    problems="capture-$venue was not recreated since the registry changed: docker compose up -d --force-recreate --no-deps capture-$venue"
+  fi
+  if [ "$spark" != "$host" ]; then
+    problems="${problems:+$problems; }spark-iceberg's mounted copy is stale, and the audit skip reads it: when no ingest runs, docker compose up -d --force-recreate --no-deps spark-iceberg"
+  fi
+  if [ -n "$problems" ]; then
+    bad "$label" "FAIL ($states. $problems)"
+  else
+    result "$label" "PASS (books $proc: $states)"
+  fi
+done
+
+# ── (5) the nightly host copy ────────────────────────────────────────────────
 # Only on a host that opted in with `make backup-install`; every other host gets a
 # SKIP, not a FAIL. 26 h is a daily run plus two hours of slack.
-step "(4) backup"
+step "(5) backup"
 backup_dir=${K2_BACKUP_DIR:-$HOME/k2-backup}
 backup_runbook=docs/runbooks/lake-backup-and-restore.md
 if [ ! -f "$HOME/.config/systemd/user/k2-backup.timer" ]; then
-  result "(4) backup" "SKIP (not set up on this host: make backup-install schedules it, $backup_runbook)"
+  result "(5) backup" "SKIP (not set up on this host: make backup-install schedules it, $backup_runbook)"
 else
   # "<age of the last success, s or NONE> <status of the last run> <error>"
   backup=$(python3 -c '
@@ -212,13 +267,13 @@ age = int(time.time() - datetime.fromisoformat(ok.replace("Z", "+00:00")).timest
 print(age, s.get("status"), s.get("error") or "")' "$backup_dir/STATUS.json" 2>/dev/null || echo "NONE none")
   read -r backup_age backup_status backup_error <<< "$backup"
   if [ "$backup_age" = NONE ]; then
-    bad "(4) backup" "FAIL (the timer is installed and no backup has succeeded into $backup_dir: run make backup, $backup_runbook)"
+    bad "(5) backup" "FAIL (the timer is installed and no backup has succeeded into $backup_dir: run make backup, $backup_runbook)"
   elif [ "$backup_age" -gt $((26 * 3600)) ]; then
-    bad "(4) backup" "FAIL (last successful backup $((backup_age / 3600))h ago, over 26h: journalctl --user -u k2-backup, $backup_runbook)"
+    bad "(5) backup" "FAIL (last successful backup $((backup_age / 3600))h ago, over 26h: journalctl --user -u k2-backup, $backup_runbook)"
   elif [ "$backup_status" != ok ]; then
-    result "(4) backup" "WARN (the last run failed: ${backup_error:-no error recorded}; last success $((backup_age / 3600))h ago, FAIL at 26h)"
+    result "(5) backup" "WARN (the last run failed: ${backup_error:-no error recorded}; last success $((backup_age / 3600))h ago, FAIL at 26h)"
   else
-    result "(4) backup" "PASS (last successful backup $((backup_age / 3600))h ago, $backup_dir)"
+    result "(5) backup" "PASS (last successful backup $((backup_age / 3600))h ago, $backup_dir)"
   fi
 fi
 

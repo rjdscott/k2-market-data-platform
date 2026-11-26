@@ -123,6 +123,16 @@ impl Adapter {
         }
     }
 
+    /// Whether this venue subscribes to its order book (ADR-050): the
+    /// registry's `book_capture`. `handle_frame` never reads it.
+    pub fn book_capture(&self) -> bool {
+        match self {
+            Adapter::Kraken(a) => a.book_capture(),
+            Adapter::Binance(a) => a.book_capture(),
+            Adapter::Coinbase(a) => a.book_capture(),
+        }
+    }
+
     /// The frames to send immediately after the socket opens, in order.
     pub fn subscribe_messages(&self) -> Vec<String> {
         match self {

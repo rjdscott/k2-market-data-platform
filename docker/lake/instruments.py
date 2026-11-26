@@ -38,6 +38,38 @@ def load(path: Path = INSTRUMENTS_PATH) -> dict:
     return out
 
 
+# The spellings YAML 1.2 reads as a boolean, which is what the capture's
+# serde_yaml accepts. PyYAML is YAML 1.1 and also reads `on`, `off`, `yes`, `no`
+# as booleans, which the capture refuses: so they are refused here too, and the
+# lake and the capture cannot read one file two ways.
+_YAML12_BOOLEANS = {"true", "True", "TRUE", "false", "False", "FALSE"}
+
+
+def book_capture(path: Path = INSTRUMENTS_PATH) -> dict:
+    """`{venue: bool}`, the registry's order-book switch (ADR-050).
+
+    The capture's rules (services/capture-rust/src/config.rs): the section is
+    required, names every venue the registry lists and no other, and each value
+    is a YAML 1.2 boolean. Anything else raises: a default would turn a missing
+    line into a silent "on".
+    """
+    text = path.read_text()
+    doc = yaml.safe_load(text)
+    section = doc.get("book_capture")
+    if not isinstance(section, dict):
+        raise ValueError(f"{path}: book_capture is required, a true or false for every venue (ADR-050)")
+    venues = set(doc["instruments"])
+    if set(section) != venues:
+        raise ValueError(
+            f"{path}: book_capture names {sorted(section)}, the registry's venues are {sorted(venues)}"
+        )
+    (node,) = [v for k, v in yaml.compose(text).value if k.value == "book_capture"]
+    for key, value in node.value:
+        if not isinstance(section[key.value], bool) or value.value not in _YAML12_BOOLEANS:
+            raise ValueError(f"{path}: book_capture.{key.value} is {value.value!r}, not true or false")
+    return section
+
+
 def canonical(registry: dict, exchange: str, native: str) -> str:
     try:
         return registry[exchange][native]

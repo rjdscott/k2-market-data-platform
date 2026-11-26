@@ -9,6 +9,7 @@ The lake's 1-minute candles without the newest 20 minutes: a candle is shown onc
 | Owner | `analytics-team` |
 | Kind | consumer-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-analytics/delayed-candles/product.yaml`](../../../contracts/market-analytics/delayed-candles/product.yaml) |
 
 ## Inputs and outputs

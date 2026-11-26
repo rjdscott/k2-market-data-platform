@@ -31,9 +31,11 @@ Into `$K2_BACKUP_DIR` (default `~/k2-backup`):
 The copy is additive: an Iceberg file is written once under a unique key, so a file already in
 the copy is never replaced or deleted. An object in MinIO whose bytes differ from its copy stops
 the run instead of overwriting it. Files the nightly compaction replaced and snapshot expiry then
-deleted from MinIO stay in the copy, so the copy only grows: the first one held 25 GiB for
-`raw.messages`, more than the table's current snapshot, because MinIO still held the files of
-older snapshots. Nothing prunes it yet; the 20 GiB free-space floor (`K2_BACKUP_MIN_FREE_GIB`)
+deleted from MinIO stay in the copy, so the copy only grows. The first copy was larger than
+the live table: 25.3 GiB for `raw.messages` against 13.7 GiB of data files in its current
+snapshot (Trino, `SELECT sum(file_size_in_bytes) FROM lake.raw."messages$files"`, 2026-11-26
+04:41 UTC), because object storage still holds the files of snapshots not yet expired, and
+the copy takes every object under the table's location. Nothing prunes it yet; the 20 GiB free-space floor (`K2_BACKUP_MIN_FREE_GIB`)
 stops a run before it fills the disk.
 
 **Not copied**, on purpose:
@@ -89,7 +91,7 @@ bash scripts/backup-lake.sh --dry-run
 make backup-install
 systemctl --user list-timers k2-backup.timer      # NEXT is the next 04:30 UTC
 
-# Check it. `make health` step (4) is PASS, WARN (the last run failed, the last success is
+# Check it. `make health` step (5) is PASS, WARN (the last run failed, the last success is
 # under 26 h old) or FAIL (no success for 26 h), and SKIP on a host where the timer is not installed.
 make health
 python3 -m json.tool ~/k2-backup/STATUS.json | head -20
@@ -101,14 +103,14 @@ journalctl --user -u k2-backup --since yesterday   # a timer run's output
   Docker Desktop shares with its VM, your home directory by default; elsewhere `docker run`
   fails with `mounts denied`.
 - **A user timer runs only while you are logged in.** `Persistent=true` runs a missed copy at
-  the next login. Docker Desktop must be running too, or the run fails and step (4) shows it.
+  the next login. Docker Desktop must be running too, or the run fails and step (5) shows it.
 - **Remove it:** `systemctl --user disable --now k2-backup.timer && rm ~/.config/systemd/user/k2-backup.{service,timer}`.
 
 ---
 
 ## 2. The nightly copy failed or is stale
 
-**Symptom**, `make health` step (4) prints `WARN (the last run failed: ...)` or
+**Symptom**, `make health` step (5) prints `WARN (the last run failed: ...)` or
 `FAIL (last successful backup <n>h ago, over 26h ...)`.
 
 **Detection**, manual only: `make health`. No Prometheus alert covers this, and none routes
@@ -136,7 +138,7 @@ journalctl --user -u k2-backup -n 30
 | `object(s) differ from the copy` | An object key's bytes changed, which Iceberg never does, or a file in the copy is damaged. Do not overwrite: the script printed each key. Compare the two sizes (`ls -l` on the copy, `mc stat` in MinIO); a copy truncated by a killed run can be deleted from the copy and copied again, anything else is an incident to investigate first |
 
 ```bash
-# 2. Run it again by hand, and check step (4) is PASS.
+# 2. Run it again by hand, and check step (5) is PASS.
 make backup && make health
 ```
 
