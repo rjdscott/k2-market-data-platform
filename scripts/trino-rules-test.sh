@@ -8,8 +8,10 @@
 #
 # 1. Compile the test's document set (the good fixture set plus a same-domain twin product whose
 #    names extend the other's, scripts/trino_rules_test.py) with k2gen into a release.
-# 2. Start the throwaway lake from that release; every known principal and four strangers get a
-#    password line.
+# 2. Start the throwaway lake from that release on the real identity path (ADR-060): a CA and
+#    Trino's certificate by scripts/tls.sh, and every known principal its own password by
+#    scripts/principal-secret.py's code; the release canary and four strangers a line each.
+#    Every statement below logs in over HTTPS, by name, verified against that CA.
 # 3. The suite, as a table of named rows, non-zero on any FAIL: each role sees exactly its policy's
 #    rows and masks, never the untested row; the gate's h1 fence matrix (every base path, both
 #    catalogs, every reader and stranger); views, listings, builders and publishers (h1.02, h1.12,
@@ -19,6 +21,7 @@
 # 4. The negative control: one reader rule widened in place in the running copy; the rows it breaks
 #    must FAIL, so the suite can fail. Then restored.
 # 5. Experiment (e)'s control, a builder on its own table (destructive, so last).
+# 6. Identity, row by row (scripts/verify/identity.sh): refusals, rotations and the clients.
 #
 # Needs Docker, openssl and 6 GiB available; pulls the stack's image pins and the pinned uv image.
 set -euo pipefail
@@ -37,5 +40,6 @@ fail=0
 bash "$L" py "$P" scripts/trino_rules_test.py suite || fail=1
 bash "$L" py "$P" scripts/trino_rules_test.py negative || fail=1
 bash "$L" py "$P" scripts/trino_rules_test.py control || fail=1
+bash scripts/verify/identity.sh --throwaway "$P" || fail=1
 [ "$fail" = 0 ] || { echo "trino-rules-test: FAIL ($id)"; exit 1; }
 echo "trino-rules-test: PASS ($id)"

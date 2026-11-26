@@ -1262,6 +1262,44 @@ exits non-zero and names the object. The check detects a forgery; the fence keep
 from making one.
 Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) point 6.
 
+### TLS, certificate and certificate authority
+
+TLS is the encryption under HTTPS. The server shows a **certificate**: its public key and the names it
+answers to (its subject alternative names), signed by a **certificate authority** (CA) the client trusts;
+the client refuses it if the signature is not that CA's, the dates have passed, or the name it asked for is
+not on it. A client says which name it wants in the handshake (**SNI**), and a server holding several
+certificates picks one by it. The platform's CA is local, made by `make tls-init`, and may sign only
+`trino` and `localhost` (a **name constraint**); Trino's certificate lives 90 days and is reissued by
+`make tls-rotate` under the same CA.
+Where: [ADR-060](ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md) point 2; `scripts/tls.sh`.
+
+### Password file and bcrypt
+
+Trino's file password authenticator reads one `<user>:<hash>` line per principal from
+`${K2_SECRETS}/trino/password.db` and rereads it every 5 s, so a password made, rotated or removed takes
+effect with no restart. The hash is **bcrypt**, a deliberately slow, salted one-way function: Trino can
+check a password against it, nobody can read the password back from it. Cost 10 (2^10 rounds), spelt
+`$2y$` as Trino requires. No line, and no hash, is ever in git or a release.
+Where: [ADR-060](ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md) point 1; `scripts/principal-secret.py`.
+
+### Local secrets and in-place writes
+
+Every credential lives in files under `${K2_SECRETS:-$HOME/k2-secrets}`, outside every checkout, laid out
+by `k2gen.model.SECRET_FILES`, and a container mounts only the files it reads, read-only. A file a running
+container rereads is rewritten **in place** (same file, new content, under an exclusive lock), never
+replaced by a rename: through Docker Desktop's file sharing a container keeps reading the old file after a
+rename, which is what an editor's save or `mv` does.
+Where: [ADR-060](ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md) point 3;
+[`docs/development/phase-001-interfaces.md`](../development/phase-001-interfaces.md#local-secrets).
+
+### Internal shared secret
+
+With plain HTTP off, a Trino node reaches itself over HTTPS and signs those requests with a secret every
+node shares, `internal-communication.shared-secret`; Trino also makes its internal certificate from it. It is
+read from the environment (`K2_TRINO_SHARED_SECRET` in `.env`, 32 random bytes) and never written into a
+release, since whoever holds it can pose as the node.
+Where: [ADR-060](ADR-060-trino-logins-by-password-over-tls-under-a-local-ca.md) point 3.
+
 ---
 
 ## Plan and phase labels

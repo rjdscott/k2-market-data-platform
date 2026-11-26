@@ -6,8 +6,9 @@
     control         experiment (e)'s control, a builder on its own table; destructive, so last
 
 Runs inside the throwaway lake's tools container (scripts/lib/throwaway-lake.sh py), which reaches
-Trino as https://trino:8443 by name and Lakekeeper as http://lakekeeper:8181, and reads the run's
-password and CA from /work/env.json. The document set is the good fixture set
+Trino as https://trino:8443 by name, verified against the run's CA, and Lakekeeper as
+http://lakekeeper:8181; each user logs in with its own password (ADR-060), every path read from
+/work/env.json. The document set is the good fixture set
 (platform/k2gen/tests/fixtures/v2/good/) plus one test-only product, sensor-net's
 station-readings-twin: in the same domain, so the same `_build` catalog, as station-readings; its
 fence a prefix-extension of station-readings' (so of its builder, publisher and groups too), so an
@@ -145,13 +146,18 @@ def compile_release(out: Path) -> str:
 
 ENV = json.loads(Path("/work/env.json").read_text()) if Path("/work/env.json").exists() else {}
 CTX = ssl.create_default_context(cafile=ENV["ca"]) if ENV else None
-SECRET = Path(ENV["passwordFile"]).read_text().strip() if ENV else ""
+
+
+def basic(user: str) -> str:
+    """The Authorization header of `user`, with its own password (throwaway-lake.sh wrote each)."""
+    secret = Path(ENV["passwords"][user]).read_text().strip()
+    return "Basic " + base64.b64encode(f"{user}:{secret}".encode()).decode()
 
 
 def tq(user: str, sql: str, session: dict[str, str] | None = None, as_user: str | None = None) -> tuple[list, str | None, dict]:
     """One statement over Trino's client protocol, logged in as `user` and run as `as_user` (an
     impersonation) or `user`: (rows, error or None, the final stats)."""
-    auth = "Basic " + base64.b64encode(f"{user}:{SECRET}".encode()).decode()
+    auth = basic(user)
     headers = {"Authorization": auth, "X-Trino-User": as_user or user}
     if session:
         headers["X-Trino-Session"] = ",".join(f"{k}={urllib.parse.quote(v, safe='')}" for k, v in session.items())
@@ -619,7 +625,7 @@ def system_and_queries(m: model.Model, fixtures: list[Fixture]) -> None:
     builder = model.builder(fixtures[0].p.name)
     ok(builder, f"SELECT count(*) FROM {quote_relation(fixtures[0].build)} WHERE {quote_ident(fixtures[0].key)} = 'zz-history-marker'")
     req = urllib.request.Request(f"{ENV['trino']}/v1/query", headers={
-        "Authorization": "Basic " + base64.b64encode(f"{reader}:{SECRET}".encode()).decode(), "X-Trino-User": reader})
+        "Authorization": basic(reader), "X-Trino-User": reader})
     with urllib.request.urlopen(req, context=CTX, timeout=30) as r:
         foreign = [q for q in json.load(r) if q["session"]["user"] != reader]
     seen = ok(OPERATOR, "SELECT count(*) FROM system.runtime.queries WHERE query LIKE '%zz-history-marker%' AND \"user\" <> 'svc.platform'")

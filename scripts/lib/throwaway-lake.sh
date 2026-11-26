@@ -10,12 +10,17 @@
 #
 # up: the release (a sealed <root>/<id> from `k2gen release`) is copied to <state>/releases/<id>
 #   and mounted read-only at /k2/releases, `pointers/trino -> ../<id>`, and Trino runs
-#   `launcher run --etc-dir /k2/releases/pointers/trino/compiled/trino/etc`, as A1 starts it. Until
-#   step S13 emits it, a release without etc/password-authenticator.properties gets S13's three
-#   lines in the copy, and the run says so. Lakekeeper gets warehouse k2 and every warehouse a
-#   compiled catalog names, all on one MinIO bucket. Every known principal of the release
-#   (emit/trino_rules.known_principals), and each extra user, gets a password.db line, bcrypt cost
-#   10, all with one password made for this run. Writes <state>/env.json for the tools side.
+#   `launcher run --etc-dir /k2/releases/pointers/trino/compiled/trino/etc`, as A1 starts it.
+#   Lakekeeper gets warehouse k2 and every warehouse a compiled catalog names, all on one MinIO
+#   bucket. Identity is the real path (ADR-060), on this run's own ${K2_SECRETS}, <state>/secrets/k2,
+#   laid out as model.SECRET_FILES says: scripts/tls.sh makes the CA and Trino's certificate, and
+#   scripts/principal-secret.py's own code gives every known principal of the release
+#   (emit/trino_rules.known_principals) its own password and password.db line: a service its
+#   principals/<id>.password, a person the password printed once, kept for the test. Two lines no
+#   real path makes stand in beside them, by the same in-place write under the same lock: the
+#   release canary's (deploy's, S19, at canary/<canary>.password) and each extra user's (a stranger
+#   no document declares). Writes <state>/env.json for the tools side: Trino's URL by name, the CA,
+#   and each user's password file.
 # py: runs a Python script with k2gen importable, in the tools container when the lake is up, else
 #   in a one-off container of the same image; the repository is /src (read-only), <state> is /work.
 # down: removes every container and the network labelled with the prefix, and <state>.
@@ -25,9 +30,10 @@
 # every container and the network are named <prefix>-* and labelled k2.throwaway=<prefix>, and a
 # prefix that could collide with the stack's names (k2, k2-*) is refused. Images are the stack's
 # pins, read from docker-compose.yml. Every secret is random per run, reaches a container by
-# variable name or as a file under <state>/secrets, and is never printed. The two files Trino
-# reads (its key and password.db) are mode 644 so the image's uid 1000 can read them on any host;
-# the run's secrets die with <state>.
+# variable name or as a file under <state>/secrets, and is never printed. Trino mounts only its
+# key file and the password.db directory, read-only at their /run/k2-secrets paths; both stay mode
+# 600, as on the live host, so Trino runs as the invoking user (its data directory a tmpfs), which
+# reads them on any host, a CI runner's uid included. The run's secrets die with <state>.
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 UV_IMAGE=ghcr.io/astral-sh/uv:0.9.25-python3.12-bookworm-slim@sha256:e47cbc1a37bc146191f85069663f98dff4644667873a0a3051b8d7effe69ea82
@@ -97,17 +103,11 @@ up() {
   containers_down
   chmod -R u+w "$STATE/releases" 2>/dev/null || true
   rm -rf "$STATE/releases" "$STATE/secrets" "$STATE/env.json"
-  mkdir -p "$STATE/releases/pointers" "$STATE/secrets/tls" "$STATE/secrets/trino"
-  chmod 700 "$STATE/secrets"
+  mkdir -p "$STATE/releases/pointers"
+  (umask 077; mkdir -p "$STATE/secrets")
   cp -a "$release" "$STATE/releases/$id"
-  local etc=$STATE/releases/$id/compiled/trino/etc
-  if [ ! -f "$etc/password-authenticator.properties" ]; then
-    chmod u+w "$etc"
-    printf 'password-authenticator.name=file\nfile.password-file=/run/k2-secrets/trino/password.db\nfile.refresh-period=5s\n' \
-      > "$etc/password-authenticator.properties"
-    chmod a-w "$etc" "$etc/password-authenticator.properties"
-    say "NOTE: $id has no etc/password-authenticator.properties (step S13's); the copy has S13's three lines"
-  fi
+  [ -f "$STATE/releases/$id/compiled/trino/etc/password-authenticator.properties" ] \
+    || die "$id has no compiled/trino/etc/password-authenticator.properties (emit/trino_identity.py)"
   ln -s "../$id" "$STATE/releases/pointers/trino"
 
   # Secrets for this run only.
@@ -119,16 +119,8 @@ up() {
   LAKEKEEPER__PG_DATABASE_URL_READ="postgres://lk:$POSTGRES_PASSWORD@postgres:5432/lakekeeper"
   LAKEKEEPER__PG_DATABASE_URL_WRITE=$LAKEKEEPER__PG_DATABASE_URL_READ; LAKEKEEPER__PG_ENCRYPTION_KEY=$(openssl rand -hex 16)
   MC_HOST_local="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@localhost:9000"
-  (umask 077; openssl rand -hex 24 > "$s/password")
-  # A CA and Trino's certificate for the names clients use (Trino picks its certificate by SNI,
-  # so a client connects by name, never by address: step S11's finding).
-  openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$P throwaway CA" -keyout "$s/ca.key" -out "$s/tls/ca.pem" 2>/dev/null
-  openssl req -newkey rsa:2048 -nodes -subj /CN=trino -keyout "$s/tls/trino.key" -out "$s/tls/trino.csr" 2>/dev/null
-  openssl x509 -req -days 1 -in "$s/tls/trino.csr" -CA "$s/tls/ca.pem" -CAkey "$s/ca.key" -CAcreateserial -out "$s/tls/trino.crt" \
-    -extfile <(printf 'subjectAltName=DNS:trino,DNS:localhost\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n') 2>/dev/null
-  cat "$s/tls/trino.key" "$s/tls/trino.crt" > "$s/tls/trino.pem"
-  rm -f "$s/tls/trino.key" "$s/tls/trino.csr" "$s/tls/ca.srl" "$s/ca.srl"
-  chmod 755 "$s/tls" "$s/trino"; chmod 600 "$s/ca.key"; chmod 644 "$s/tls/trino.pem" "$s/tls/ca.pem"
+  # This run's ${K2_SECRETS}: the CA and Trino's certificate by the operator's own command.
+  K2_SECRETS=$s/k2 bash "$REPO/scripts/tls.sh" init >/dev/null
 
   say "network $NET; Postgres, MinIO, Lakekeeper"
   docker network create --label "$LABEL" "$NET" >/dev/null
@@ -147,9 +139,9 @@ up() {
     "${TOOLS_ENV[@]}" -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD -v "$REPO:/src:ro" -v "$STATE:/work" -w /src \
     --entrypoint sleep "$UV_IMAGE" infinity >/dev/null
 
-  # Lakekeeper's warehouses, and password.db, from the tools side.
+  # Lakekeeper's warehouses, and every user's password, from the tools side.
   docker exec -i "${TOOLS_ENV[@]}" -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD "$TOOLS" "${PY[@]}" - "/work/releases/$id" "$@" <<'PY'
-import json, os, re, sys, time, urllib.error, urllib.request
+import contextlib, importlib.util, io, json, os, re, secrets, sys, time, urllib.error, urllib.request
 from pathlib import Path
 import bcrypt
 from k2gen import docset, model
@@ -186,29 +178,72 @@ for w in sorted(warehouses):
                                    "aws-secret-access-key": os.environ["MINIO_ROOT_PASSWORD"]}}
     status = call("POST", f"{LK}/management/v1/warehouse", body)
     assert status in (200, 201), f"warehouse {w}: HTTP {status}"
-users = sorted(set(trino_rules.known_principals(model.load(docset.read(release / "documents")))) | set(extra))
-secret = Path("/work/secrets/password").read_text().strip().encode()
-# Cost 10, spelt $2y$ as Trino reads it, as scripts/principal-secret.py writes it.
-lines = "".join(f"{u}:$2y${bcrypt.hashpw(secret, bcrypt.gensalt(10)).decode().removeprefix('$2b$')}\n" for u in users)
-Path("/work/secrets/trino/password.db").write_text(lines)
+# Passwords by scripts/principal-secret.py's own functions (its CLI reads the working tree's
+# principals; these are the release's): a service's to principals/<id>.password, a person's
+# printed once and kept here for the test, each a bcrypt line of password.db in place under its lock.
+spec = importlib.util.spec_from_file_location("principal_secret", "/src/scripts/principal-secret.py")
+ps = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ps)
+root = Path("/work/secrets/k2")
+m = model.load(docset.read(release / "documents"))
+canary = model.canary_user(m.provenance.set_sha256)
+known = set(trino_rules.known_principals(m))
+passwords = {}
+
+
+def keep(path, secret):  # a password file, mode 600, written as principal-secret writes one
+    with ps.locked(path) as fd:
+        ps.write(fd, secret)
+    return str(path)
+
+
+def line(user):  # a line no real path here makes: deploy's canary line (S19), a stranger's
+    secret = secrets.token_urlsafe(32)
+    hashed = bcrypt.hashpw(secret.encode(), bcrypt.gensalt(ps.BCRYPT_COST)).decode()
+    with ps.locked(root / ps.PASSWORD_DB) as db:
+        ps.write(db, ps.read(db) + f"{user}:$2y${hashed.removeprefix('$2b$')}\n")
+    return secret
+
+
+with contextlib.redirect_stderr(io.StringIO()):
+    for u in sorted(known - {canary}):
+        try:
+            model.password_mount(u)
+        except ValueError:  # a person
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                ps.password(root, u, False, False)
+            passwords[u] = keep(root / "throwaway" / f"{u}.password", out.getvalue().strip())
+        else:
+            ps.password(root, u, False, True)
+            passwords[u] = str(root / model.password_file(u))
+    passwords[canary] = keep(root / model.canary_password_file(m.provenance.set_sha256), line(canary))
+    for u in sorted(set(extra) - known):
+        passwords[u] = keep(root / "throwaway" / f"{u}.password", line(u))
+users = sorted(passwords)
+db_users = [x.split(":", 1)[0] for x in (root / ps.PASSWORD_DB).read_text().splitlines()]
+assert sorted(db_users) == users, "one password.db line per user"
 Path("/work/env.json").write_text(json.dumps({
     "release": f"/work/releases/{release.name}", "trino": "https://trino:8443", "lakekeeper": LK,
-    "ca": "/work/secrets/tls/ca.pem", "passwordFile": "/work/secrets/password", "users": users,
+    "secrets": str(root), "ca": str(root / "tls/ca.pem"), "passwords": passwords, "users": users,
     "warehouses": sorted(warehouses)}, indent=2) + "\n")
-print(f"throwaway-lake: warehouses {', '.join(sorted(warehouses))}; {len(users)} password lines")
+print(f"throwaway-lake: warehouses {', '.join(sorted(warehouses))}; {len(users)} users, each its own password")
 PY
-  chmod 644 "$s/trino/password.db"
 
   say "Trino from $POINTER_ETC ($id)"
   # --no-healthcheck: the image's check reads /etc/trino/config.properties, not --etc-dir's (S11).
+  # The key file alone, never tls/ (ca.key is there), and password.db by its directory, which
+  # principal-secret.py rewrites in place (model.SECRET_FILES).
   docker run -d --label "$LABEL" --network "$NET" --network-alias trino --name "$P-trino" --cpus 2 --memory 3584m --no-healthcheck \
-    -v "$STATE/releases:/k2/releases:ro" -v "$s/tls:/run/k2-secrets/tls:ro" -v "$s/trino:/run/k2-secrets/trino:ro" \
+    --user "$(id -u):$(id -g)" --tmpfs /data/trino:mode=1777 \
+    -v "$STATE/releases:/k2/releases:ro" -v "$s/k2/tls/trino.pem:/run/k2-secrets/tls/trino.pem:ro" \
+    -v "$s/k2/trino:/run/k2-secrets/trino:ro" \
     -e K2_TRINO_SHARED_SECRET -e K2_TRINO_S3_ACCESS_KEY -e K2_TRINO_S3_SECRET_KEY \
     "$trino_image" /usr/lib/trino/bin/launcher run --etc-dir "$POINTER_ETC" >/dev/null
   local t0=$SECONDS
   until docker exec "${TOOLS_ENV[@]}" "$TOOLS" python3 -c "
 import json, ssl, urllib.request
-ctx = ssl.create_default_context(cafile='/work/secrets/tls/ca.pem')
+ctx = ssl.create_default_context(cafile='/work/secrets/k2/tls/ca.pem')
 assert not json.load(urllib.request.urlopen('https://trino:8443/v1/info', context=ctx, timeout=3))['starting']" 2>/dev/null; do
     if [ "$(docker inspect -f '{{.State.Running}}' "$P-trino")" != true ] || [ $((SECONDS - t0)) -gt 300 ]; then
       docker logs --tail 40 "$P-trino" 2>&1 | grep -vF -e "$MINIO_ROOT_PASSWORD" -e "$K2_TRINO_SHARED_SECRET" >&2 || true
