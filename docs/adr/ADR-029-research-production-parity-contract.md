@@ -273,3 +273,41 @@ would show as a difference, not pass. `make parity-ohlcv` stays three-way; the f
 fallback took the newest snapshot by commit time, which a branch spike on 2026-11-25 showed can
 be an unpublished commit; they now resolve the snapshot `main` points at, and a pin is used only
 if it is on `main`'s lineage.
+
+## Outcome (2026-11-26, a known gap in the pinned day)
+
+**The candle parity gate can now leave out a listed loss window, and only that.** The gate
+is `make parity-ohlcv` ([`scripts/parity_ohlcv.py`](../../scripts/parity_ohlcv.py)): for one
+UTC day it computes every 1-minute candle three ways, in ClickHouse on read over the
+topic-fed `gold.trades`, in the lake's stored `gold.ohlcv_1m`, and in DuckDB over silver,
+optionally a fourth way through dbt's SQL on Trino, and requires each of them to equal the
+lake's on every bucket (one exchange, symbol and minute) at tolerance zero, at the snapshot
+ids pinned in `tests/parity/pinned.json`. It is the release gate clause 3 names.
+
+What happened: at 22:33:43 UTC on 2026-11-25 the host's out-of-memory killer killed the
+Docker VM, and the stack came back at 22:39:26 UTC. For UTC day 2026-11-25 the lake equals
+DuckDB over silver and dbt on every bucket, and ClickHouse equals the lake on every bucket
+except those of minute 22:33: one minute, three venue-minutes. For that minute ClickHouse
+holds fewer trades than the lake, and a few the lake never received. Reloading the window
+into ClickHouse from the lake would make them equal by deleting those trades, so the owner
+left both stores as they are and closed the phase on that day.
+
+What the gate does now: the pin may list `known_gaps`, each a window of at most 60 minutes
+inside the pinned day, the comparisons it applies to, its cause, the date it was recorded
+and a reference to its row in `audit.checks`; at most five. An entry that breaks any of
+those rules stops the run. The run takes each listed window out of the comparisons it names
+and no other, prints each gap with its cause and the buckets it removed, fails if a gap
+removed none (stale or mistyped), notes one whose window now matches so it can be removed,
+and ends `PARITY: ok (1 known gap applied, see above)` instead of `PARITY: PASS`. Bars parity
+needs nothing: all three of its sides read the lake.
+
+What it still guarantees: every bucket outside a listed window, and every comparison a gap
+does not name, is compared at tolerance zero exactly as before; a gap cannot be wide, many,
+undated, unexplained, or for another day without the run refusing it; and no run with a gap
+reads as a clean pass. It does not guarantee anything inside the window, which is the point
+of listing it. The first revisit trigger above still holds: a gap is a recorded loss, never
+a tolerance for a difference nobody has explained ([`tests/parity/README.md`](../../tests/parity/README.md)
+says when one may be listed).
+
+**Revisit when:** a second incident needs an exclusion. The gate should then read the loss
+windows from `audit.checks` itself, rather than a copy kept by hand in the pin.

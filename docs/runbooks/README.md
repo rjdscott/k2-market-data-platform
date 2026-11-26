@@ -31,7 +31,7 @@ Load secrets before running any command here: `set -a && . ./.env && set +a`
 
 | Runbook | When to use | Triggering alert |
 |---------|-------------|------------------|
-| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, capture crash, batch-job failure, MinIO down, network partition. Plus §7, ClickHouse resource pressure — diagnosed, **not induced**, no MTTR | `ClickHouseDown`, `CaptureDown`, `CaptureProduceErrors`, `ClickHouseHighMemoryUsage`, `ClickHouseQueryFailureRateHigh`, `ClickHouseMergeQueueLarge` |
+| [failure-recovery.md](./failure-recovery.md) | Any of the six tested infrastructure failures: broker restart, ClickHouse restart, capture crash, batch-job failure, MinIO down, network partition. Plus §7, ClickHouse resource pressure: diagnosed, **not induced**, no MTTR. Plus §8, a host or Docker VM killed: check the hot tier against the lake, record a loss window | `ClickHouseDown`, `CaptureDown`, `CaptureProduceErrors`, `ClickHouseHighMemoryUsage`, `ClickHouseQueryFailureRateHigh`, `ClickHouseMergeQueueLarge` |
 | [redpanda.md](./redpanda.md) | Topic, partition, consumer-group or schema-registry problems; broker health | `CaptureProduceErrors` |
 
 The six runbooks for the v2 ClickHouse→Iceberg offload were archived with the code they

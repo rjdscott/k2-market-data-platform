@@ -621,6 +621,20 @@ engines ([ADR-035](ADR-035-trino-and-dbt-for-marts.md)).
 Where: [ADR-029](ADR-029-research-production-parity-contract.md); `scripts/parity-ohlcv.sh`,
 `scripts/parity-bars.sh`.
 
+### Known gap
+
+A known gap is a window of the pinned day, at most 60 minutes, that the candle parity leaves
+out of the comparisons it names, because the stores lost different data there and cannot be
+made equal without deleting some. It is allowed only for a loss already recorded as a row in
+`audit.checks` with its cause; it is printed on every run, a run with one ends `PARITY: ok`,
+not `PARITY: PASS`, and every bucket outside it is still compared at tolerance zero. It was
+built for minute 22:33 UTC of 2026-11-25, when the host killed the Docker VM, and for
+ClickHouse against the lake only.
+Where: `known_gaps` in `tests/parity/pinned.json`, explained in
+[`tests/parity/README.md`](../../tests/parity/README.md); `load_gaps` in
+`scripts/parity_ohlcv.py`; [ADR-029](ADR-029-research-production-parity-contract.md)'s
+2026-11-26 Outcome.
+
 ### Conservation check and shadow run
 
 Proposed in [ADR-049](ADR-049-event-bars-extended-not-recomputed.md), not built. A conservation

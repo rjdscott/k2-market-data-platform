@@ -276,6 +276,73 @@ nothing more.
 
 ---
 
+## 8. Host or Docker VM killed: the hot tier against the lake
+
+**Not one of the six**, and not induced: written after the host's out-of-memory killer
+killed the Docker VM at 22:33:43 UTC on 2026-11-25 (stack back at 22:39:26 UTC).
+
+**Symptom**, every container restarted at once, or the whole stack was down and came back.
+
+**Detection**, manual: no alert compares the two stores. The check below does, and so does
+`make parity-ohlcv` for a pinned day, failing on ClickHouse against the lake only.
+
+**Expected behaviour**, both ClickHouse's Kafka consumers and the lake ingest resume from
+their committed offsets, but a hard kill can leave the two stores holding different trades
+for the minutes around it, and nothing reconciles them. On 2026-11-25 that was one minute,
+three venue-minutes: ClickHouse held fewer trades than the lake for that minute, and a few
+the lake never received.
+
+**Recovery**
+
+```bash
+# 1. When was the VM killed? The kernel log of the current boot (after a host reboot, add -b -1).
+journalctl -k --utc -o short-iso --since '2026-11-25 22:00 UTC' --until '2026-11-25 23:00 UTC' \
+  -g 'Out of memory' --no-pager
+# 2026-11-25: one line at 22:33:43, "Out of memory: Killed process <pid> (qemu-system-x86)".
+
+# 2. Trades per venue-minute, lake.gold.ohlcv_1m (Trino) against ClickHouse gold.trades FINAL,
+#    for the hour around the kill. diff prints only the venue-minutes that differ.
+from='2026-11-25 22:00:00'; to='2026-11-25 23:00:00'
+diff \
+  <(docker exec k2-trino trino --output-format TSV --execute "
+      SELECT exchange, format_datetime(window_start, 'yyyy-MM-dd HH:mm'), sum(trade_count)
+      FROM lake.gold.ohlcv_1m
+      WHERE window_start >= TIMESTAMP '$from UTC' AND window_start < TIMESTAMP '$to UTC'
+      GROUP BY 1, 2 ORDER BY 1, 2") \
+  <(docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --format TabSeparated -q "
+      SELECT exchange, formatDateTime(toStartOfMinute(exchange_ts), '%Y-%m-%d %H:%i'), count()
+      FROM gold.trades FINAL
+      WHERE exchange_ts >= '$from' AND exchange_ts < '$to'
+      GROUP BY 1, 2 ORDER BY 1, 2")
+# 2026-11-26, for 2026-11-25: three "<" lines (lake) and three ">" lines (ClickHouse),
+# one per venue, all at 22:33. No output means the stores agree on counts for the hour.
+```
+
+3. **No output: done.** Equal counts are not equal trades, so run `make parity-ohlcv` on
+   that day before the next tag; it compares every candle column.
+4. **Lines printed: do not repair by default.** Making the stores equal means reloading the
+   window into ClickHouse from the lake ([clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md)
+   §2), which deletes every trade only ClickHouse holds. That is the owner's decision; on
+   2026-11-25 it was to leave both as they are.
+5. **Left as is: record the window**, one row in `lake.audit.checks`, then list it as a known
+   gap in `tests/parity/pinned.json` when that day is pinned, for the ClickHouse comparison
+   only ([`tests/parity/README.md`](../../tests/parity/README.md)). Not yet run; the detail is
+   free text.
+
+```bash
+docker exec k2-spark-iceberg python3 /home/iceberg/lake/record_check.py \
+  --job operator --check hot_tier_divergence --scope "gold.trades <start>/<end> UTC" \
+  --observed <differing venue-minutes> --failed \
+  --detail "<cause, one sentence>; per-minute counts of lake.gold.ohlcv_1m and ClickHouse gold.trades FINAL differ; both left as they are"
+```
+
+**Measured**, no MTTR: this is investigation, not repair. Steps 1 and 2 were run read-only
+on 2026-11-26 against the stack as it stood after the 2026-11-25 kill.
+
+**Last verified:** 2026-11-26, steps 1 and 2; step 5's `record_check.py` row not yet run.
+
+---
+
 ## Re-running these tests
 
 Each mode is induced with a single command, `docker compose restart <svc>`,
