@@ -219,8 +219,10 @@ mode, which no user can lift early, and the last lock expires at 2026-11-27T06:0
 bucket still exists at this writing and is to be dropped after that time; until then it is both in
 MinIO and in the copy.
 
-Also not dropped: the four DAGs are paused, not deleted, at this writing, so Airflow's database
-keeps their run history (and the 15:00 dump holds it too); the Redpanda topics, which the captures
+Also not dropped: the Airflow records of the four DAGs were deleted later the same day
+(`airflow dags delete`), once the DAG files were archived; their run history survives in the saved
+run lists and in the Airflow database dump of 14:59:55 UTC, both copied into
+`~/k2-backup/drop/2026-11-26/` so the nightly backup's pruning of old dumps cannot remove them; the Redpanda topics, which the captures
 still write; the empty warehouses.
 
 ## Running or verifying it today

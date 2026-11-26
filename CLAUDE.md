@@ -103,6 +103,9 @@ considered before committing*.
   (`Superseded by ADR-NNN`), and an appended `## Outcome` section when reality
   diverged from the design. The original reasoning stays as written — a
   recorded wrong prediction is the most valuable thing in `docs/adr/`.
+- When a file an ADR links to is archived or removed, the link's target may be
+  repointed or unlinked; its text and the ADR's prose never change
+  (`docs/adr/README.md`).
 - Audits and benchmarks are dated snapshots. Append `Resolved in <commit>`
   lines; never rewrite a published finding or number.
 

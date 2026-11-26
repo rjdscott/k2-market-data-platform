@@ -764,8 +764,9 @@ run once from this checkout, schedules it daily at 04:30 UTC as a systemd user t
 never set up, as on this host on 2026-11-26). The copy is on the same disk and any process
 running as you can delete it: [lake-backup-and-restore.md](../runbooks/lake-backup-and-restore.md).
 
-**Disk:** `~/k2-backup` is never pruned: the first copy was 25.3 GiB on 2026-11-26, and a run
-refuses to start with under 20 GiB free on that disk (`df -h ~`).
+**Disk:** `make backup` keeps the newest 14 database dumps of each kind and deletes older ones;
+it never deletes a table copy, nor anything under `~/k2-backup/drop/` (the copies `make drop` takes:
+61 GiB on 2026-11-26). A run refuses to start with under 20 GiB free on that disk (`df -h ~`).
 
 ---
 
