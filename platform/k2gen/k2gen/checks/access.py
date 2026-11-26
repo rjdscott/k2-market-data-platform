@@ -75,8 +75,9 @@ exist for (`access.expectation-missing`):
   table has, denied (the foreign definer view, h1.31); `CREATE OR REPLACE VIEW` on a view's build
   name denied to the product's builder (h1.12) and to `svc.platform` (h1.33).
 
-A row's principal must be declared (`access.expectation-unknown-principal`): a denial to a user
-that does not exist passes without proving anything. The gate's other rows (the publisher's write
+A row's principal must be declared (`access.expectation-unknown-principal`), unless the row expects
+a denial: "an unknown user is refused" is a row worth writing. A row that expects success as an
+undeclared principal proves nothing and fails. The gate's other rows (the publisher's write
 floor, owner transfer, `table_changes`, time travel on a view, probes, drift) are the owner's to
 write and S20's to run; this check does not require them.
 """
@@ -368,9 +369,9 @@ def _inherit(path: str, o: dict[str, Any], columns: dict[str, dict[str, Any]], r
 def _coverage(principals: list[str], products: dict[str, _Product], rows: list[dict[str, Any]]) -> list[Finding]:
     path = model.EXPECTATIONS
     out = [_err("expectation-unknown-principal", path,
-                f"a row runs as {r['principal']}, which {model.PRINCIPALS} does not declare: a denial to a user that does not exist "
-                f"proves nothing")
-           for r in rows if "principal" in r and r["principal"] not in principals]
+                f"a row runs as {r['principal']}, which {model.PRINCIPALS} does not declare: only a row expecting a denial may")
+           for r in rows if "principal" in r and r["principal"] not in principals
+           and not (r.get("denied") or r.get("expect") == "denied")]
     named = {r["table"] for r in rows if "table" in r}
 
     def denied(relation: str, holders: dict[str, str], what: str) -> None:

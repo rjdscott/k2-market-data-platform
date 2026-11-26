@@ -40,6 +40,11 @@ def test_an_error_row_is_not_supported_and_nothing_else(error, passes):
     assert av.unsupported(av.Answer(error=error, message="x"))[0] is passes
 
 
+def test_an_ok_row_is_a_statement_that_completes():
+    assert av.succeeded(av.Answer(rows=[["1"]]))[0]
+    assert not av.succeeded(av.Answer(error="PERMISSION_DENIED", message="x"))[0]
+
+
 def test_no_bounds_fails_on_a_bound_a_row_count_an_error_or_nothing():
     clean = [["id", None, 0, 0, None, None, None], [None, None, None, None, None, None, None]]
     assert av.no_bounds(av.Answer(rows=clean))[0]

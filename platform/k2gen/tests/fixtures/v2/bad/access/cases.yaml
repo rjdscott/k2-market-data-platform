@@ -208,10 +208,10 @@ cases:
     code: access.expectation-weak
     changes:
       - {file: tests/access/expectations.yaml, remove: expectations/1/mustNotAppear}
-  - name: a denial to a principal that does not exist
+  - name: a statement that must succeed, run as a principal that does not exist
     code: access.expectation-unknown-principal
     changes:
-      - {file: tests/access/expectations.yaml, append: expectations, value: {principal: p.ghost, table: sensor_net.station_readings__base.silver_readings, denied: true}}
+      - {file: tests/access/expectations.yaml, append: expectations, value: {principal: p.ghost, sql: "SELECT 1", expect: ok}}
   - name: a seed's table in the base, denied by no row
     code: access.expectation-missing
     changes:

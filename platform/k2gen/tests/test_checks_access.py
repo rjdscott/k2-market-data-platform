@@ -74,6 +74,14 @@ def test_each_failing_fixture_yields_exactly_its_code(case: dict[str, Any]) -> N
     assert all(f.severity == "error" and f.message for f in found)
 
 
+@pytest.mark.parametrize("row", [
+    {"principal": "p.ghost", "table": "sensor_net.station_readings__base.silver_readings", "denied": True},
+    {"principal": "p.ghost", "sql": "SELECT 1", "expect": "denied"}], ids=["table", "statement"])
+def test_an_undeclared_principal_may_be_denied(row: dict[str, Any]) -> None:
+    assert "access.expectation-unknown-principal" not in codes(changed(
+        [{"file": "tests/access/expectations.yaml", "append": "expectations", "value": row}]))
+
+
 def test_every_code_has_a_failing_fixture() -> None:
     assert {c["code"] for c in CASES} == {f"access.{c}" for c in CODES}
 

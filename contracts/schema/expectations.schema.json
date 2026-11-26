@@ -96,7 +96,7 @@
           "propertyNames": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$"},
           "additionalProperties": {"type": "string", "minLength": 1}
         },
-        "expect": {"description": "denied: an access denial; error: any other query error (a numeric version on a view); noBounds: SHOW STATS returns no low or high value.", "enum": ["denied", "error", "noBounds"]}
+        "expect": {"description": "denied: an access denial; error: any other query error (a numeric version on a view); noBounds: SHOW STATS returns no low or high value; ok: the statement completes without error.", "enum": ["denied", "error", "noBounds", "ok"]}
       }
     },
     "probe": {

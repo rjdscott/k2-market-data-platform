@@ -1023,7 +1023,7 @@ class DeniedExpectation:
 class StatementExpectation:
     principal: str
     sql: str
-    expect: Literal["denied", "error", "noBounds"]
+    expect: Literal["denied", "error", "noBounds", "ok"]
     session: Mapping[str, str]  # sent as X-Trino-Session headers with the statement; empty for none
 
 

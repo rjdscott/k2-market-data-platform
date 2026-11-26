@@ -260,6 +260,12 @@ def unsupported(a: Answer) -> tuple[bool, str]:
     return False, f"expected {UNSUPPORTED}, got {a.says()}"
 
 
+def succeeded(a: Answer) -> tuple[bool, str]:
+    if a.error:
+        return False, f"expected the statement to complete, got {a.says()}"
+    return True, "completed without error"
+
+
 def no_bounds(a: Answer) -> tuple[bool, str]:
     if a.error:
         return False, f"expected SHOW STATS with no bound, got {a.says()}"
@@ -373,7 +379,7 @@ def verdict(trino: Trino, env: dict[str, Any], m: Any, release: Path, scope: str
             why += " (view planted by REST for this row, then removed)" if undo else ""
         else:
             a = trino.run(e.principal, e.sql, session=dict(e.session) or None)
-            passed, why = {"denied": denial, "error": unsupported, "noBounds": no_bounds}[e.expect](a)
+            passed, why = {"denied": denial, "error": unsupported, "noBounds": no_bounds, "ok": succeeded}[e.expect](a)
     except NoPassword as x:
         return "FAIL", f"no password for {e.principal}: {x}"
     return ("PASS" if passed else "FAIL"), why

@@ -24,7 +24,7 @@ the run time: a row naming a principal or relation the running release does not 
 |---|---|---|
 | read | `{principal, table, visible, masked?, minRowAgeMinutes?, mustNotAppear?, mustAppear?}` | the principal reads the table and gets exactly the `visible` columns; every `masked` column is null in every row; no row is younger than `minRowAgeMinutes` by the table's delay column; no row matches `mustNotAppear`; at least `mustAppear.minRows` rows match `mustAppear.where` |
 | denial | `{principal, table, denied: true}` | Trino refuses the read with an access denial (`PERMISSION_DENIED`) |
-| statement | `{principal, sql, session?, expect}` | the statement ends as `expect` says: `denied` is an access denial; `error` is `NOT_SUPPORTED` (a version on a view); `noBounds` is `SHOW STATS` with no low value, high value or row count |
+| statement | `{principal, sql, session?, expect}` | the statement ends as `expect` says: `denied` is an access denial; `error` is `NOT_SUPPORTED` (a version on a view); `noBounds` is `SHOW STATS` with no low value, high value or row count; `ok` is a statement that completes without error |
 | probe | `{probe: {from, target}, expect}` | the network connection is refused or open; step S22's `scripts/verify/catalog-fence.sh` runs these |
 | drift | `{drift: catalog, expect: clean}` | the catalog holds exactly what the release generates (`scripts/verify/catalog_drift.py`) |
 
