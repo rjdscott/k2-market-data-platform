@@ -1,1 +1,1 @@
-SELECT "id", "region", "note", "event_ts" FROM "governance"."access_canary__base"."events" FOR VERSION AS OF 'audited'
+SELECT "id", "region", "note", "event_ts" FROM "governance"."access_canary__base"."events" FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM "governance"."access_canary__base"."events$refs" WHERE "name" = 'audited' AND "type" = 'TAG')

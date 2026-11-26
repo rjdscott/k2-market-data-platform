@@ -10,8 +10,10 @@ For every table in model.LAKE_BUILDS (a serving table has no lake table and is s
   model.RUN_RECORD_SQL byte for byte, when the domain whose build catalog it names is declared.
   dbt and code outputs get none: their build creates them (model.ddl_path).
 - model.view_sql_path per dbt or code output (model.tested_ref is `audited`): the view's SQL and
-  nothing else, `SELECT <contract columns> FROM <base> FOR VERSION AS OF 'audited'` (ADR-061
-  part 1), and model.VIEWS. A policy is a Trino rule on the view's name, never view SQL, so a
+  nothing else, `SELECT <contract columns> FROM <base> FOR VERSION AS OF 'audited' WHERE EXISTS
+  (SELECT 1 FROM <base>$refs WHERE "name" = 'audited' AND "type" = 'TAG')` (ADR-061 part 1 and its
+  Outcome of 2026-11-26: the guard fails a read when the base is not a tagged table), and
+  model.VIEWS. A policy is a Trino rule on the view's name, never view SQL, so a
   masked or filtered column is projected like any other. `create_view` and `view_update` render
   the publisher's statements from the same function, for the wrapper and the drift check. A view
   never shares its name with a table, and no product's namespace is the platform's or another
@@ -91,8 +93,15 @@ def view_sql(view: View, columns: Sequence[str] | None = None) -> str:
     keep = tuple(c for c in view.columns if c in wanted)
     if not keep:
         raise ValueError(f"{view.relation}: a view selects at least one column")
-    return (f"SELECT {', '.join(quote_ident(c) for c in keep)} FROM {quote_relation(view.base)} "
-            f"FOR VERSION AS OF {sql_literal(k2.AUDITED_TAG)}")
+    # The guard (ADR-061's Outcome of 2026-11-26): Trino 484 ignores a string version on a view, and
+    # the builder owns every name in <fence>__base, so it could swap the base for a view of its own.
+    # `<base>$refs` exists only while the base is an Iceberg table (Trino never resolves it as a
+    # view, even one created under that name), so a base that is not a table fails the reader's
+    # query, and a table without the tag fails the version clause.
+    tag = sql_literal(k2.AUDITED_TAG)
+    return (f"SELECT {', '.join(quote_ident(c) for c in keep)} FROM {quote_relation(view.base)} FOR VERSION AS OF {tag} "
+            f"WHERE EXISTS (SELECT 1 FROM {quote_relation(view.base + '$refs')} "
+            f"WHERE {quote_ident('name')} = {tag} AND {quote_ident('type')} = {sql_literal('TAG')})")
 
 
 def create_view(view: View, columns: Sequence[str] | None = None) -> str:

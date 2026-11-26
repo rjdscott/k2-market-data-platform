@@ -3,8 +3,9 @@
 # no other; every changed document stays schema-valid, so a case tests this check, not a schema.
 # A change names a `file` under good/ and one of: `set` a slash path (keys and list indexes) to
 # `value`, `append` `value` to the list at a path, `remove` what a path names.
-# Indexes used below: silver_readings customProperties/6 is `policies`; gold_daily_load's
-# columns are load_date, station_id, readings, mean_value; expectations/1 is the delayed
+# Indexes used below: silver_readings customProperties/6 is `policies`, /4 `partitioning`;
+# gold_daily_load's columns are load_date, station_id, readings, mean_value, and a gold delay on
+# load_date makes it a timestamp(6) with time zone first (access.delay-type); expectations/1 is the delayed
 # reader's row, /3 the silver base denial, /5 bronze, /6 landing_files, /9 SET SESSION,
 # /10 the builder's view replace, /16 svc.platform's, /19 the foreign view, /20 the session header.
 cases:
@@ -33,6 +34,26 @@ cases:
     code: access.role-requirement-unmet
     changes:
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, remove: customProperties/6/value/delayed_reader/delay}
+  - name: a delay on a timestamp without a time zone, which the reader's session zone moves
+    code: access.delay-type
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/properties/1/physicalType, value: timestamp(6)}
+  - name: a delay on a date
+    code: access.delay-type
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/properties/1/physicalType, value: date}
+  - name: a row scope on a column that is not an identity partition field
+    code: access.row-scope-unpartitioned
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/4/value, value: [day(read_at)]}
+  - name: a row scope on a column only bucketed
+    code: access.row-scope-unpartitioned
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/4/value, value: [day(read_at), "bucket(region, 4)"]}
+  - name: a connector (bronze) table offering a role
+    code: access.connector-role
+    changes:
+      - {file: contracts/sensor-net/station-readings/bronze_readings.odcs.yaml, set: roles, value: [{role: public_reader, access: read}]}
   # grants
   - name: a grant to an undeclared principal
     code: access.grant-unknown-principal
@@ -65,6 +86,7 @@ cases:
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value/delayed_reader, value: {delay: {column: read_at, minutes: 20}}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: roles, value: {role: delayed_reader, access: read}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: policies, value: {delayed_reader: {delay: {column: load_date, minutes: 10}}}}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.read_at]}
   - name: a delay on a column declared to derive from another input column
     code: access.inherit-delay
@@ -72,6 +94,7 @@ cases:
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value/delayed_reader, value: {delay: {column: read_at, minutes: 20}}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: roles, value: {role: delayed_reader, access: read}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: policies, value: {delayed_reader: {delay: {column: load_date, minutes: 20}}}}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.region]}
   - name: a delay on a column whose derivation is not declared
     code: access.inherit-undeclared
@@ -79,12 +102,14 @@ cases:
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value/delayed_reader, value: {delay: {column: read_at, minutes: 20}}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: roles, value: {role: delayed_reader, access: read}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: policies, value: {delayed_reader: {delay: {column: load_date, minutes: 20}}}}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
   - name: a column derived from a masked input column, shown
     code: access.inherit-mask
     changes:
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value/delayed_reader, value: {delay: {column: read_at, minutes: 20}, mask: [operator_note]}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: roles, value: {role: delayed_reader, access: read}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: policies, value: {delayed_reader: {delay: {column: load_date, minutes: 20}}}}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.read_at]}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.station_id]}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/2/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.operator_note]}
@@ -95,6 +120,7 @@ cases:
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value/delayed_reader, value: {delay: {column: read_at, minutes: 20}, mask: [operator_note]}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: roles, value: {role: delayed_reader, access: read}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: policies, value: {delayed_reader: {delay: {column: load_date, minutes: 20}}}}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.read_at]}
   - name: no row scope where the input scopes the role
     code: access.inherit-row-scope
@@ -102,6 +128,7 @@ cases:
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value/delayed_reader, value: {delay: {column: read_at, minutes: 20}, rowScope: {column: region, values: [north, south]}}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: roles, value: {role: delayed_reader, access: read}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: policies, value: {delayed_reader: {delay: {column: load_date, minutes: 20}}}}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.read_at]}
   - name: a row scope wider than the input's
     code: access.inherit-row-scope
@@ -109,6 +136,8 @@ cases:
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value/delayed_reader, value: {delay: {column: read_at, minutes: 20}, rowScope: {column: region, values: [north, south]}}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: roles, value: {role: delayed_reader, access: read}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: policies, value: {delayed_reader: {delay: {column: load_date, minutes: 20}, rowScope: {column: station_id, values: [north, south, east]}}}}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: partitioning, value: [station_id]}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.read_at]}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.region]}
   - name: a row scope on a column not derived from the input's scope column
@@ -117,6 +146,8 @@ cases:
       - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value/delayed_reader, value: {delay: {column: read_at, minutes: 20}, rowScope: {column: region, values: [north, south]}}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: roles, value: {role: delayed_reader, access: read}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: policies, value: {delayed_reader: {delay: {column: load_date, minutes: 20}, rowScope: {column: station_id, values: [north]}}}}}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/physicalType, value: timestamp(6) with time zone}
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, append: customProperties, value: {property: partitioning, value: [station_id]}}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/0/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.read_at]}
       - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/transformSourceObjects, value: [sensor-net.station-readings.silver_readings.station_id]}
   # coverage: tests/access/expectations.yaml

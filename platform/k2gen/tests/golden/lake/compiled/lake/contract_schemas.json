@@ -80,7 +80,7 @@
       },
       {
         "name": "region",
-        "required": false,
+        "required": true,
         "type": "varchar"
       },
       {
@@ -90,7 +90,8 @@
       }
     ],
     "partitioning": [
-      "day(read_at)"
+      "day(read_at)",
+      "region"
     ],
     "sort": [
       "station_id"

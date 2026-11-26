@@ -1,7 +1,6 @@
 {
   "principals": [
     "p.analyst-delayed",
-    "p.analyst-full",
-    "svc.load-dashboard"
+    "p.analyst-full"
   ]
 }
