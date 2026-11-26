@@ -100,6 +100,8 @@ if A[0] == "pull":
 if A[0] == "kill":
     log("kill", A[2]); sys.exit(0)
 if A[0] == "exec":
+    if A[2] == "sh":  # the landing listing: the answer the state holds, as the MinIO shell gives it
+        print(S.get("mc_out", "")); sys.exit(S.get("mc_rc", 0))
     if A[2] == "readlink":
         print("\n".join(os.readlink(p.replace("/k2/releases", E["FAKE_ROOT"])) for p in A[3:])); sys.exit(0)
     log("exec", *A[2:4]); sys.exit(0)
@@ -279,6 +281,22 @@ sys.exit(f"fake docker: no answer for {A}")
         assert deploy.standing(r) == (["a", "a"], ["c", "a"])
         assert deploy.standing(r[:4]) == (["a", "a"], [])
         assert deploy.standing([]) == ([], [])
+        planned = r[:4] + [{"release": "c", "from": "a", "step": s, "outcome": "ok"} for s in ("preflight", "images", "plan")]
+        assert deploy.standing(planned) == (["a", "a"], [])  # PLAN=1 moved nothing: no unfinished attempt
+
+    def test_make_rollback_resumes_an_interrupted_rollback_and_undoes_an_interrupted_deploy(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r2 = world.release(over=policy(60))
+        assert world.deploy(r2) == 0
+        deploy.record(world.ctx, r1, r2.id, "rollback-swap", "ok", set())  # a make rollback to r1, interrupted
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}"
+        deploy.record(world.ctx, r2, r1.id, "swap", "ok", set())  # a deploy of r2, interrupted
+        with deploy.lock(world.root):
+            assert deploy.rollback(world.ctx) == 0
+        assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}"
 
     def test_a_rules_only_release_recreates_nothing(world: World) -> None:
         r1 = world.release()
@@ -402,6 +420,20 @@ sys.exit(f"fake docker: no answer for {A}")
         monkeypatch.setattr(deploy, "required_secrets", lambda ctx, p: [])
         with pytest.raises(deploy.Refused, match="make drop TARGET"):
             deploy.preflight(world.ctx, deploy.make_plan(world.ctx, world.release(), [r1]))
+
+    @pytest.mark.parametrize("rc, out, held", [(0, "", False), (0, "held", True), (3, "", True), (1, "", True)])
+    def test_a_dropped_landing_prefix_is_allowed_only_when_minio_lists_it_empty(
+            world: World, monkeypatch: pytest.MonkeyPatch, rc: int, out: str, held: bool) -> None:
+        r1 = world.release()
+        s = world.read()
+        s["containers"].append({"id": "c-minio", "service": "minio", "created": "0", "image": "x", "status": "running"})
+        s |= {"mc_rc": rc, "mc_out": out}
+        world.write(s)
+        real = deploy.backup_entries
+        monkeypatch.setattr(deploy, "backup_entries", lambda rel: real(rel) if rel is r1 else
+                            {e for e in real(r1) if e[0] != "landing"})
+        found = deploy.dropped_storage(world.ctx, r1, world.release())
+        assert bool(found) is held and all(f.startswith("landing s3://k2-landing/") for f in found), found
 
     def test_the_canary_line_is_written_in_place_and_the_others_pruned(world: World) -> None:
         db = world.secrets / "trino/password.db"

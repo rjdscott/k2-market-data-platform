@@ -1224,6 +1224,37 @@ exits non-zero and names the object. The check detects a forgery; the fence keep
 from making one.
 Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) point 6.
 
+### Release pointer and the tools swap
+
+A pointer is a symbolic link `<releases root>/pointers/<service>` to `../<release id>`, one each for
+`trino`, `airflow`, `spark`, `prometheus` and `k2-api`; a service reads its configuration through it, so
+moving the link changes what the service reads without restarting it. On Docker Desktop a link renamed on
+the host is never seen by the containers, so a deploy moves the links from inside the **tools** one-shot,
+the only container that mounts the releases root read-write, as a fresh temporary link renamed over the
+old one.
+Where: [ADR-058](ADR-058-deploy-sealed-releases-by-pointer-swap.md);
+experiment (c) of [`2026-11-26-release-spine-spikes.md`](../research/2026-11-26-release-spine-spikes.md).
+
+### Release canary
+
+A Trino user named after the release's document set, `k2_release_<setSha256[:12]>`, that only that
+release's access rules admit, to run `SELECT 1`. Deploy writes its password line before the swap; once
+Trino admits it and refuses the previous release's canary, Trino is known to have loaded the new rules,
+and only then do views gain new columns. Not a declared principal; its line is removed when the next
+release is verified.
+Where: [ADR-058](ADR-058-deploy-sealed-releases-by-pointer-swap.md), `k2gen.model.canary_user`.
+
+### Deploy needs and the deploy record
+
+**Needs** are what deploying a release over another requires, worked out by the compiler from the two
+releases' files: the compose services whose definition or image differs (recreated, one at a time), a
+Trino restart for a change of its start-up configuration, tables to create, and whether a DAG's tasks
+changed. A release that changes only what is read through a pointer needs nothing. The **deploy record**
+is one line per deploy step in `<releases root>/deploy-log.jsonl`: when, which release, from which, the
+step, its outcome, the operator, and the sha256 of each secret file it found, never the content.
+Where: [ADR-058](ADR-058-deploy-sealed-releases-by-pointer-swap.md), `k2gen.model.NEEDS_BY_PREFIX`,
+`contracts/schema/deploy-record.schema.json`.
+
 ---
 
 ## Plan and phase labels

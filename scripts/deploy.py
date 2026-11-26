@@ -106,6 +106,7 @@ HEALTH_WAIT_S = 300  # a recreated service's start, Trino's included
 DISK_FLOOR_GIB = 2.0  # free at the releases root; a release is a few MiB, a pulled image is not
 MEM_FLOOR_GIB = 2.0  # MemAvailable on the host: a recreate starts a container before the old one's memory returns
 DONE = ("done", "rollback-done")
+UNCHANGING = ("preflight", "images", "plan")  # steps that change nothing the platform runs
 PASSWORD_DB = "trino/password.db"
 CA = "tls/ca.pem"
 CANARY_SQL = "SELECT 1"  # the canary's one statement (S12's rules)
@@ -226,6 +227,8 @@ def standing(records: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
     last = max((i for i, r in enumerate(records) if r["step"] in DONE and r["outcome"] == "ok"), default=-1)
     since: list[str] = []
     for r in records[last + 1:]:
+        if r["step"] in UNCHANGING:  # a refusal or PLAN=1 moved nothing
+            continue
         for rid in (r["release"], r["from"]):
             if rid and rid not in since:
                 since.append(rid)
@@ -495,11 +498,14 @@ def dropped_storage(ctx: Ctx, old: Release | None, new: Release) -> list[str]:
             if c is None:
                 held.append(f"landing s3://{entry[1]}/{entry[2]} (MinIO not running, so not proven empty)")
                 continue
+            # Fails closed: only an empty listing, or a bucket that does not exist, proves it empty; any
+            # other answer from mc (a refused key, no answer) counts as data still held.
             ls = run("docker", "exec", c["Id"], "sh", "-c",
-                     'MC_HOST_l="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@localhost:9000" mc ls --recursive "l/$1" | head -n 1',
+                     'out=$(MC_HOST_l="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@localhost:9000" mc ls --recursive "l/$1" 2>&1)\n'
+                     'rc=$?\ncase "$rc:$out" in 0:) exit 0 ;; 0:*) echo held ;; *"The specified bucket does not exist"*) exit 0 ;; *) exit 3 ;; esac',
                      "sh", f"{entry[1]}/{entry[2]}", check=False)
-            if ls.stdout.strip() or ls.returncode:
-                held.append(f"landing s3://{entry[1]}/{entry[2]}")
+            if ls.returncode or ls.stdout.strip():
+                held.append(f"landing s3://{entry[1]}/{entry[2]}" + ("" if ls.stdout.strip() else " (MinIO did not list it, so not proven empty)"))
     return held
 
 
@@ -998,8 +1004,10 @@ def rollback(ctx: Ctx) -> int:
     goods, since = standing(history(ctx.root))
     if not goods:
         raise Refused("no good release in the deploy log to roll back to")
-    if since:  # an unfinished attempt: the good release is the one to restore
-        target, sources = goods[-1], since
+    if since:  # an unfinished attempt: an interrupted rollback is resumed, an interrupted deploy undone
+        newest = [r for r in history(ctx.root) if r["step"] not in UNCHANGING][-1]
+        target = newest["release"] if newest["step"].startswith("rollback-") else goods[-1]
+        sources = since
     else:
         target = next((g for g in reversed(goods) if g != goods[-1]), "")
         sources = [goods[-1]]

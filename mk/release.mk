@@ -34,5 +34,5 @@ release-diff:  ## RELEASE=<id> [FROM=<id>]: k2gen diff from FROM (default: the g
 	@$(DEPLOY) diff "$$RELEASE" $${FROM:+--from "$$FROM"}
 
 .PHONY: deploy-rehearsal
-deploy-rehearsal:  ## [KEEP=1] Every deploy claim on a throwaway compose project k2-rehearsal under your home directory, never the live stack: first deploy, rules-only, one image, forced mismatch, rollback, a dropped masked column polled, a kill after each step, two at once (about 25 min)
+deploy-rehearsal:  ## [KEEP=1] Every deploy claim on a throwaway compose project k2-rehearsal under your home directory, never the live stack: first deploy, rules-only, one image, forced mismatch, rollback, a dropped masked column polled, a kill after each step, two at once (about 8 min)
 	@uv run --project platform/k2gen --locked -q --with bcrypt==5.0.0 python scripts/verify/deploy_rehearsal.py
