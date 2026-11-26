@@ -1,0 +1,243 @@
+# Failing fixtures of k2gen.checks.docs (S05). Each case is the good set (fixtures/v2/good/) with
+# its changes applied in order; the check must return findings of exactly the case's code, plus
+# `also` where one rule implies another, every one an error. `valid` change sets must return no
+# finding: the edges a rule must not fire on. tests/test_checks_docs.py runs them all and fails
+# when a code of k2gen.checks.docs.CODES has no case.
+#
+# A change names `file`, a path in the set, and one of:
+#   set: <keys and list indexes, slash-separated>, value: <v>   (an index one past the end appends)
+#   remove: <keys and list indexes>
+#   text: <the file's whole content>
+#   delete: true
+#   copy: <a path or a directory in the set>, copied to `file`
+cases:
+  # read and schemas first: a set that fails them stops there
+  - code: docs.unreadable
+    changes:
+      - file: contracts/sensor-net/station-readings/grants.yaml
+        text: "grants:\n  - principal: p.analyst-full\n    role: full_reader\n    role: delayed_reader\n"
+  - code: docs.schema-invalid
+    changes:
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, remove: status}
+  # places
+  - code: docs.property-repeated
+    changes:
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: customProperties/3, value: {property: backup, value: restore}}
+  - code: docs.orphan-document
+    changes:
+      - {file: contracts/sensor-net/stray/grants.yaml, text: "grants: []\n"}
+  - code: docs.product-misplaced
+    changes:
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: id, value: ops-insight.daily-loads}
+  - code: docs.contract-misplaced
+    changes:
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: id, value: ops-insight.daily-load.gold_load}
+  - code: docs.physical-name-mismatch
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: schema/0/physicalName, value: station_readings.silver_values}
+  - code: docs.domain-undeclared
+    changes:
+      - {file: contracts/domains.yaml, remove: domains/ops-insight}
+  - code: docs.team-mismatch
+    changes:
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: team/name, value: sensor-team}
+  # names
+  - code: docs.domain-name-invalid
+    changes:
+      - {file: contracts/domains.yaml, set: domains/lake, value: {owner: platform-team, kind: consumer-aligned, description: Named as Trino's lake catalog.}}
+  - code: docs.name-reserved-word
+    changes:
+      - {file: contracts/domains.yaml, set: domains/order, value: {owner: platform-team, kind: consumer-aligned, description: Named as a Trino reserved word.}}
+  - code: docs.name-reserved-word
+    changes:
+      - {file: contracts/ops-insight/order, copy: contracts/ops-insight/daily-load}
+      - {file: contracts/ops-insight/order/product.odps.yaml, set: id, value: ops-insight.order}
+      - {file: contracts/ops-insight/order/product.odps.yaml, set: name, value: order}
+      - {file: contracts/ops-insight/order/product.odps.yaml, set: outputPorts/0/contractId, value: ops-insight.order.gold_daily_load}
+      - {file: contracts/ops-insight/order/gold_daily_load.odcs.yaml, set: id, value: ops-insight.order.gold_daily_load}
+      - {file: contracts/ops-insight/order/gold_daily_load.odcs.yaml, set: schema/0/physicalName, value: order.gold_daily_load}
+  - code: docs.product-name-invalid
+    changes:
+      - {file: contracts/ops-insight/gold, copy: contracts/ops-insight/daily-load}
+      - {file: contracts/ops-insight/gold/product.odps.yaml, set: id, value: ops-insight.gold}
+      - {file: contracts/ops-insight/gold/product.odps.yaml, set: name, value: gold}
+      - {file: contracts/ops-insight/gold/product.odps.yaml, set: outputPorts/0/contractId, value: ops-insight.gold.gold_daily_load}
+      - {file: contracts/ops-insight/gold/gold_daily_load.odcs.yaml, set: id, value: ops-insight.gold.gold_daily_load}
+      - {file: contracts/ops-insight/gold/gold_daily_load.odcs.yaml, set: schema/0/physicalName, value: gold.gold_daily_load}
+  # a second daily-load, in sensor-net, whose table is a platform table: no dbt model to collide
+  - code: docs.product-name-taken
+    changes:
+      - {file: contracts/sensor-net/daily-load/product.odps.yaml, copy: contracts/ops-insight/daily-load/product.odps.yaml}
+      - {file: contracts/sensor-net/daily-load/product.odps.yaml, set: id, value: sensor-net.daily-load}
+      - {file: contracts/sensor-net/daily-load/product.odps.yaml, set: domain, value: sensor-net}
+      - {file: contracts/sensor-net/daily-load/product.odps.yaml, set: team/name, value: sensor-team}
+      - {file: contracts/sensor-net/daily-load/product.odps.yaml, set: outputPorts/0/contractId, value: sensor-net.daily-load.gold_daily_load}
+      - {file: contracts/sensor-net/daily-load/gold_daily_load.odcs.yaml, copy: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml}
+      - {file: contracts/sensor-net/daily-load/gold_daily_load.odcs.yaml, set: id, value: sensor-net.daily-load.gold_daily_load}
+      - {file: contracts/sensor-net/daily-load/gold_daily_load.odcs.yaml, set: domain, value: sensor-net}
+      - {file: contracts/sensor-net/daily-load/gold_daily_load.odcs.yaml, set: team/name, value: sensor-team}
+      - {file: contracts/sensor-net/daily-load/gold_daily_load.odcs.yaml, set: customProperties/1/value, value: platform}
+  # The same, built by dbt: two models daily_load__gold_daily_load. Only a repeated product name
+  # can repeat a dbt name, since a fence and a table name hold no __ (model.dbt_model), so this
+  # rule, which INTERFACES.md asks for all the same, always comes with docs.product-name-taken.
+  - code: docs.dbt-model-name-taken
+    also: [docs.product-name-taken]
+    changes:
+      - {file: contracts/sensor-net/daily-load/product.odps.yaml, copy: contracts/ops-insight/daily-load/product.odps.yaml}
+      - {file: contracts/sensor-net/daily-load/product.odps.yaml, set: id, value: sensor-net.daily-load}
+      - {file: contracts/sensor-net/daily-load/product.odps.yaml, set: domain, value: sensor-net}
+      - {file: contracts/sensor-net/daily-load/product.odps.yaml, set: team/name, value: sensor-team}
+      - {file: contracts/sensor-net/daily-load/product.odps.yaml, set: outputPorts/0/contractId, value: sensor-net.daily-load.gold_daily_load}
+      - {file: contracts/sensor-net/daily-load/gold_daily_load.odcs.yaml, copy: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml}
+      - {file: contracts/sensor-net/daily-load/gold_daily_load.odcs.yaml, set: id, value: sensor-net.daily-load.gold_daily_load}
+      - {file: contracts/sensor-net/daily-load/gold_daily_load.odcs.yaml, set: domain, value: sensor-net}
+      - {file: contracts/sensor-net/daily-load/gold_daily_load.odcs.yaml, set: team/name, value: sensor-team}
+      - {file: contracts/sensor-net/daily-load/models/gold_daily_load.sql, copy: contracts/ops-insight/daily-load/models/gold_daily_load.sql}
+  - code: docs.table-name-reserved
+    changes:
+      - {file: contracts/ops-insight/daily-load/landing.odcs.yaml, copy: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml}
+      - {file: contracts/ops-insight/daily-load/landing.odcs.yaml, set: id, value: ops-insight.daily-load.landing}
+      - {file: contracts/ops-insight/daily-load/landing.odcs.yaml, set: name, value: landing}
+      - {file: contracts/ops-insight/daily-load/landing.odcs.yaml, set: schema/0/id, value: landing}
+      - {file: contracts/ops-insight/daily-load/landing.odcs.yaml, set: schema/0/name, value: landing}
+      - {file: contracts/ops-insight/daily-load/landing.odcs.yaml, set: schema/0/physicalName, value: daily_load.landing}
+      - {file: contracts/ops-insight/daily-load/landing.odcs.yaml, set: customProperties/1/value, value: platform}
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: outputPorts/1, value: {name: landing, version: 1.0.0, contractId: ops-insight.daily-load.landing}}
+  # one producer per table
+  - code: docs.output-port-foreign
+    changes:
+      - {file: contracts/sensor-net/station-readings/product.odps.yaml, set: outputPorts/2, value: {name: gold_daily_load, version: 1.0.0, contractId: ops-insight.daily-load.gold_daily_load}}
+  - code: docs.output-port-repeated
+    changes:
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: outputPorts/1, value: {name: gold_daily_load, version: 1.0.0, contractId: ops-insight.daily-load.gold_daily_load}}
+  - code: docs.table-unpublished
+    changes:
+      - {file: contracts/sensor-net/station-readings/product.odps.yaml, remove: outputPorts/0}
+  - code: docs.reference-unresolved
+    changes:  # the input port, and so the output's inputContracts entry
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: inputPorts/0/contractId, value: sensor-net.station-readings.silver_values}
+  - code: docs.reference-unresolved
+    changes:
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/1/relationships/0/to, value: "sensor-net/station-readings/silver_readings.odcs.yaml#/schema/silver_readings/properties/station_code"}
+  - code: docs.connector-mismatch
+    changes:  # a connector table, no connector
+      - {file: contracts/sensor-net/station-readings/product.odps.yaml, remove: customProperties/0}
+  - code: docs.connector-mismatch
+    changes:  # a connector, no connector table
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, set: customProperties/2, value: {property: connector, value: {kind: https-file, url: "https://data.example.org/x.csv", allowHosts: [data.example.org], format: csv, parser: station_csv}}}
+  - code: docs.model-missing
+    changes:
+      - {file: contracts/ops-insight/daily-load/models/gold_daily_load.sql, delete: true}
+  - code: docs.model-without-dbt-table
+    changes:  # a second producer for the connector's table
+      - {file: contracts/sensor-net/station-readings/models/bronze_readings.sql, text: "select 1 as station_id\n"}
+  - code: docs.model-config-unreadable
+    changes:
+      - {file: contracts/ops-insight/daily-load/models/gold_daily_load.sql, text: "{{ config(materialized=var('m')) }}\nselect 1 as load_date\n"}
+  - code: docs.unit-test-model-unknown
+    changes:  # the bare table name, which two products may share
+      - {file: contracts/sensor-net/station-readings/unit_tests.yml, set: unit_tests/0/model, value: silver_readings}
+  # serving: hot-load, the valid paused serving-only product of `valid` below, each with one thing undone
+  - code: docs.serving-without-serves
+    changes:
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, copy: contracts/ops-insight/daily-load/product.odps.yaml}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: id, value: ops-insight.hot-load}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: name, value: hot-load}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: status, value: paused}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, remove: inputPorts}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, remove: outputPorts/0/inputContracts}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: outputPorts/0/contractId, value: ops-insight.hot-load.gold_daily_load}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: customProperties, value: [{property: lifecycleChange, value: {since: "2026-11-26", reason: Paused with the hot tier., decision: ADR-057}}]}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, copy: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: id, value: ops-insight.hot-load.gold_daily_load}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: customProperties/1/value, value: serving}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: schema/0/physicalName, value: gold.gold_daily_load}
+  - code: docs.serving-only-not-paused
+    changes:
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, copy: contracts/ops-insight/daily-load/product.odps.yaml}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: id, value: ops-insight.hot-load}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: name, value: hot-load}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, remove: inputPorts}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, remove: outputPorts/0/inputContracts}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: outputPorts/0/contractId, value: ops-insight.hot-load.gold_daily_load}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: outputPorts/0/customProperties, value: [{property: serves, value: {engine: clickhouse, profile: hot-gold, status: paused}}]}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, copy: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: id, value: ops-insight.hot-load.gold_daily_load}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: customProperties/1/value, value: serving}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: schema/0/physicalName, value: gold.gold_daily_load}
+  # columns
+  - code: docs.column-undescribed
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, remove: schema/0/properties/3/description}
+  - code: docs.physical-type-invalid
+    changes:  # the grammar admits it; the scale exceeds the precision
+      - {file: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml, set: schema/0/properties/3/physicalType, value: "decimal(3,5)"}
+  - code: docs.column-unknown
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/5/value, value: [station_name]}
+  - code: docs.column-unknown
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/6/value/delayed_reader/mask, value: [operator_notes]}
+  - code: docs.column-unknown
+    changes:
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: slaProperties/0/element, value: silver_readings.read_time}
+  # layers
+  - code: docs.layer-build-mismatch
+    changes:  # a dbt table claiming bronze, the connector's layer
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/0/value, value: bronze}
+  - code: docs.bronze-name
+    changes:
+      - {file: contracts/sensor-net/station-readings/raw_readings.odcs.yaml, copy: contracts/sensor-net/station-readings/bronze_readings.odcs.yaml}
+      - {file: contracts/sensor-net/station-readings/raw_readings.odcs.yaml, set: id, value: sensor-net.station-readings.raw_readings}
+      - {file: contracts/sensor-net/station-readings/raw_readings.odcs.yaml, set: name, value: raw_readings}
+      - {file: contracts/sensor-net/station-readings/raw_readings.odcs.yaml, set: schema/0/id, value: raw_readings}
+      - {file: contracts/sensor-net/station-readings/raw_readings.odcs.yaml, set: schema/0/name, value: raw_readings}
+      - {file: contracts/sensor-net/station-readings/raw_readings.odcs.yaml, set: schema/0/physicalName, value: station_readings.raw_readings}
+      - {file: contracts/sensor-net/station-readings/product.odps.yaml, set: outputPorts/2, value: {name: raw_readings, version: 1.0.0, contractId: sensor-net.station-readings.raw_readings}}
+  - code: docs.bronze-key-missing
+    changes:
+      - {file: contracts/sensor-net/station-readings/bronze_readings.odcs.yaml, set: schema/0/properties/0/primaryKey, value: false}
+      - {file: contracts/sensor-net/station-readings/bronze_readings.odcs.yaml, set: schema/0/properties/1/primaryKey, value: false}
+      - {file: contracts/sensor-net/station-readings/bronze_readings.odcs.yaml, set: schema/0/properties/5/primaryKey, value: false}
+  - code: docs.lineage-column-missing
+    changes:
+      - {file: contracts/sensor-net/station-readings/bronze_readings.odcs.yaml, remove: schema/0/properties/5}
+  # terms, retention, the unique-key rule
+  - code: docs.terms-missing
+    changes:  # station-readings grants to insight-team's analysts
+      - {file: contracts/sensor-net/station-readings/product.odps.yaml, remove: customProperties/2}
+  - code: docs.retention-below-floor
+    changes:  # daily-load reads silver_readings
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/3/value, value: 3}
+  - code: docs.incremental-key-misses-partition
+    changes:  # partitioned on day(read_at), keyed on station_id alone
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, remove: schema/0/properties/1/primaryKey}
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, remove: schema/0/properties/1/primaryKeyPosition}
+  - code: docs.incremental-key-misses-partition
+    changes:  # the model's own unique_key, which dbt prefers to the compiled one, drops read_at
+      - file: contracts/sensor-net/station-readings/models/silver_readings.sql
+        text: "{{ config(materialized='incremental', incremental_strategy='merge', unique_key=['station_id']) }}\nselect station_id, read_at from {{ source('station_readings', 'bronze_readings') }}\n"
+valid:
+  - why: a paused serving-only product whose port names its serving copy (ADR-057)
+    changes:
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, copy: contracts/ops-insight/daily-load/product.odps.yaml}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: id, value: ops-insight.hot-load}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: name, value: hot-load}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: status, value: paused}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, remove: inputPorts}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, remove: outputPorts/0/inputContracts}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: outputPorts/0/contractId, value: ops-insight.hot-load.gold_daily_load}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: outputPorts/0/customProperties, value: [{property: serves, value: {engine: clickhouse, profile: hot-gold, status: paused}}]}
+      - {file: contracts/ops-insight/hot-load/product.odps.yaml, set: customProperties, value: [{property: lifecycleChange, value: {since: "2026-11-26", reason: Paused with the hot tier., decision: ADR-057}}]}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, copy: contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: id, value: ops-insight.hot-load.gold_daily_load}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: customProperties/1/value, value: serving}
+      - {file: contracts/ops-insight/hot-load/gold_daily_load.odcs.yaml, set: schema/0/physicalName, value: gold.gold_daily_load}
+  - why: a grant within the owning team needs no terms
+    changes:
+      - {file: contracts/ops-insight/daily-load/product.odps.yaml, remove: customProperties/1}
+  - why: a model's own unique_key that holds the partition column, and a bucket transform of a key column
+    changes:
+      - file: contracts/sensor-net/station-readings/models/silver_readings.sql
+        text: "{{ config(materialized='incremental', incremental_strategy='merge', unique_key=['station_id', 'read_at']) }}\nselect station_id, read_at from {{ source('station_readings', 'bronze_readings') }}\n"
+      - {file: contracts/sensor-net/station-readings/silver_readings.odcs.yaml, set: customProperties/4/value, value: ["day(read_at)", "bucket(station_id, 4)"]}
