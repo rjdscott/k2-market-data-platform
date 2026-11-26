@@ -12,9 +12,11 @@ exists to tell you what "normal recovery" looks like so you can spot when it isn
 > whose MTTR is not yet measured.
 >
 > **§4 and §5 no longer describe what was measured in February either.** The batch job they
-> were induced against was the v2 ClickHouse→Iceberg offload, which is deleted; both now
-> point at the v3 lake path that replaced it, and that path's numbers come from the Phase D
-> burn-in rather than from 2026-02-19. The remaining three infrastructure failures are
+> were induced against was the v2 ClickHouse→Iceberg offload, which is deleted. Its v3
+> replacement, the lake ingest, retired in turn with the v3 lake ingest pipeline on 2026-11-26
+> ([`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/),
+> [ADR-056](../adr/ADR-056-unified-data-product-platform.md)), so §4 is retired and §5 covers a
+> MinIO that holds no live data until phase 004. The remaining three infrastructure failures are
 > unchanged and still measured.
 >
 > **The ClickHouse tables the February measurements read were dropped on 2026-08-27** at
@@ -37,21 +39,21 @@ exists to tell you what "normal recovery" looks like so you can spot when it isn
 | 1 | Redpanda restart | <2 min | ~10 s |
 | 2 | ClickHouse restart (only with `hot-gold` running) | <3 min | ~32 s |
 | 3 | Capture container crash | <1 min | ~30 s (Kotlin, 2026-02-19; not re-measured on Rust) |
-| 4 | Spark batch-job failure (the lake ingest) | <15 min | next scheduled run |
-| 5 | MinIO unavailable | <5 min | ~5 s |
+| 4 | Spark batch-job failure (the lake ingest) | retired with the v3 lake ingest | |
+| 5 | MinIO unavailable | <5 min | ~5 s (v2) |
 | 6 | Network partition | <5 min | ~20–30 s |
 
 ---
 
 ## 1. Redpanda restart
 
-**Symptom**, capture logs show produce failures; ClickHouse insert rate drops to zero.
+**Symptom**, capture logs show produce failures; the records Redpanda acknowledges drop to zero.
 
 **Detection**, `CaptureProduceErrors`, `CaptureProduceStalled`.
 
 **Expected behaviour**, capture reconnects on its own; in-flight messages sit in the
-librdkafka queue; the ClickHouse `gold.q_trades` / `gold.q_book` consumers resume from
-their last committed offset.
+librdkafka queue; while `hot-gold` runs, the ClickHouse `gold.q_trades` / `gold.q_book`
+consumers resume from their last committed offset.
 
 **Recovery**
 
@@ -60,9 +62,10 @@ docker compose restart redpanda
 docker exec k2-redpanda rpk cluster health          # wait for healthy
 docker exec k2-redpanda rpk topic list              # topics intact?
 
-# Confirm ingestion resumed (needs the hot-gold profile running, ADR-057)
-docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange"
+# Confirm capture delivers again: records each venue had acknowledged in the last 2 minutes
+curl -s --get localhost:9090/api/v1/query \
+  --data-urlencode 'query=sum by (exchange) (increase(k2_capture_records_delivered_total[2m]))' | \
+  jq -r '.data.result[] | "\(.metric.exchange) \(.value[1])"'
 ```
 
 **Measured**, 10 s, 2026-02-19, on the v2 tier: 12 new rows ingested post-restart; all three
@@ -94,9 +97,9 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
   "SELECT table, num_messages_read, exceptions.text FROM system.kafka_consumers WHERE database='gold' FORMAT Vertical"
 
-# Prometheus listener back up (it starts with the server)
-curl -s localhost:9090/api/v1/targets | jq '.data.activeTargets[] | select(.labels.job=="clickhouse") | .health'
 ```
+
+Prometheus no longer scrapes ClickHouse: its scrape job was removed with the pause (ADR-057).
 
 **Measured**, 32 s, the slowest of the six (2026-02-19, v2: `k2.silver_trades` resumed
 cleanly and the Prometheus listener on 9363 came back with it). Check for row-count continuity across the
@@ -134,45 +137,25 @@ and until it runs this is an inherited number, not a measurement of what is depl
 
 ## 4. Spark batch-job failure (the lake ingest)
 
-**Symptom**, a `lake_ingest` run is marked failed in Airflow; lake row counts stop advancing.
-
-**Detection**, `LakeIngestFailed`, then `LakeIngestLagHigh` from
-[`docker/prometheus/rules/lake-alerts.yml`](../../docker/prometheus/rules/lake-alerts.yml)
-(see [observability.md](../operations/observability.md#alert-rules)), and
-`AirflowTaskFailed` once the run's retry has failed too; also visible in the Airflow UI.
-
-**Expected behaviour**, the consumed Kafka offsets are written into the Iceberg snapshot
-summary by the same commit that writes the rows ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)),
-so a run that never committed left the offsets where they were and the next scheduled run
-re-reads the same range. Idempotent by construction: no duplicates, no gap.
-
-**Recovery**, usually none. Wait for the next 5-minute run.
-
-```bash
-# Force a run rather than waiting (airflow-scheduling.md section 2 reads the failed one)
-docker exec k2-airflow-scheduler airflow dags trigger lake_ingest
-```
-
-**Measured**, not yet verified for the lake path; the Phase D burn-in
-(`scripts/chaos/lake-ingest-kill.sh`) is what fills this in. The full procedure, including
-the three invariant checks that prove a re-run was safe, is
-[lake-recovery.md §5](./lake-recovery.md#5-ingest-killed-mid-run), this section is the
-triage entry point, not a second copy of it.
+**Retired** with the v3 lake ingest pipeline on 2026-11-26: no Spark job runs on this stack until
+[phase 002](../plans/2026-11-26-unified-product-platform/002-run-spine-through-ecb-fx.md) of the
+unified platform plan, whose connector-failure runbook covers a failed product run. The section
+as it stood is in git history, and the lake recovery it pointed to is archived at
+[`legacy/v3-lake-ingest/docs/runbooks/lake-recovery.md`](../../legacy/v3-lake-ingest/docs/runbooks/lake-recovery.md).
 
 ---
 
 ## 5. MinIO unavailable
 
-**Symptom**, lake ingest and maintenance runs fail; the hot tier is completely unaffected.
+**Symptom**, `make health` step (1) lists `minio` unhealthy; Trino and Lakekeeper calls that touch
+storage fail, and so do `make backup` and `make drop`. Capture and Redpanda are unaffected. No
+job writes the lake until phase 002, so nothing is lost.
 
-**Detection**, `LakeIngestFailed` and failed `lake_ingest` runs in Airflow. There is no MinIO
-exporter, and `LakeExporterDown` does not fire: `docker/lake/metrics.py` reads the catalog,
-never MinIO.
+**Detection**, manual: `make health` step (1). There is no MinIO exporter, and the lake alerts
+that would have followed retired with the v3 lake.
 
-**Expected behaviour**, the ingest fails cleanly with no committed Iceberg snapshot;
-ClickHouse ingest continues while `hot-gold` runs; the lake defers until MinIO is back. Uncommitted Parquet files
-are orphans no reader sees, reclaimed by the nightly maintenance pass, see
-[lake-recovery.md §4](./lake-recovery.md#4-minio-down).
+**Expected behaviour**, `restart: unless-stopped` brings a crashed MinIO back; a stopped one stays
+down until started.
 
 **Recovery**
 
@@ -183,8 +166,8 @@ curl -fsS localhost:9000/minio/health/live && echo OK
 
 **Measured**, ~5 s to restore, against the v2 offload. The hot tier gained 2 rows during a
 30-second outage, confirming ingest was never in the blast radius; that isolation is a
-property of the topology and did not change with the lake, but the lake-side recovery time
-is Phase D's to measure.
+property of the topology. The lake-side recovery time is phase 004's to measure, with its first
+restore drill.
 
 ---
 
@@ -192,8 +175,8 @@ is Phase D's to measure.
 
 **Symptom**, one container's consumers stall while everything else keeps running.
 
-**Detection**, `CaptureDown`, or `ClickHouseDown` while the `hot-gold` profile runs, depending
-on which container is isolated.
+**Detection**, `CaptureDown` for a capture; for any other container, `make health` step (1)
+once its healthcheck fails (the ClickHouse alerts were removed with the pause).
 
 **Expected behaviour**, the isolated container reconnects when the partition heals and
 consumers resume from their last committed offset. No corruption.
@@ -201,10 +184,9 @@ consumers resume from their last committed offset. No corruption.
 **Recovery**
 
 ```bash
-docker network connect k2-net k2-clickhouse    # or whichever container was cut off
-# The consumer check needs the hot-gold profile running (ClickHouse paused, ADR-057).
-docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT table, num_messages_read, exceptions.text FROM system.kafka_consumers WHERE database='gold' FORMAT Vertical"
+docker network connect k2-net k2-capture-binance    # or whichever container was cut off
+docker exec k2-capture-binance /k2-capture healthcheck
+# With the hot-gold profile running, for ClickHouse: the consumer check of §2.
 ```
 
 **Measured**, 20–30 s from reconnect (2026-02-19, v2). All three Kafka Engine consumers
@@ -231,10 +213,11 @@ Desktop that is the VM's memory, not the host's),
 `ClickHouseQueryFailureRateHigh` (> 0.1 failed queries/s, 3m),
 `ClickHouseMergeQueueLarge` (> 10 background merge tasks, 5m).
 
-**Expected behaviour**, none of the three loses data. ClickHouse `gold` is derived
-(ADR-026): the lake holds every row and the Kafka-engine consumers resume from their
-committed offsets, so the worst case is a stale served tier and a rebuild
-([clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md)).
+**Expected behaviour**, none of the three loses data while Redpanda still holds it: the
+Kafka-engine consumers resume from their committed offsets. ClickHouse `gold` was derived from
+the lake too (ADR-026), but the v3 lake's gold retired, so a lost row older than the topics' 7
+days stays lost ([pause-and-resume-a-serving-product.md](./pause-and-resume-a-serving-product.md)
+section 3).
 
 **Diagnose** — load `set -a && . ./.env && set +a`, then:
 
@@ -273,8 +256,7 @@ ch -q "SELECT table, partition, count() AS parts FROM system.parts
   (`docker compose restart clickhouse`, §2) is the last resort and costs ~32 s.
 - **Query failures.** Read the exception before acting. A `TIMEOUT_EXCEEDED` on a
   300 s read is a query problem; `MEMORY_LIMIT_EXCEEDED` is the row above;
-  a Kafka decode error belongs to `ClickHouseKafkaMessagesFailed` and
-  [clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md), not here.
+  a Kafka decode error is a row in `gold.feed_errors`, not this section.
 - **Merge queue.** Merges are throttled, not lost — a queue that is draining needs
   nothing. A queue that is flat while inserts continue means the insert rate has
   outrun merge throughput: the fix is fewer, bigger inserts
@@ -287,24 +269,23 @@ nothing more.
 
 ---
 
-## 8. Host or Docker VM killed: the hot tier against the lake
-
-The comparison in step 2 needs the hot tier, so it applies only while the compose profile `hot-gold` runs (ClickHouse is paused, [ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)); paused, there is
-no second store to compare, and steps 1 and 5 stand alone.
+## 8. Host or Docker VM killed: what the outage cost
 
 **Not one of the six**, and not induced: written after the host's out-of-memory killer
 killed the Docker VM at 22:33:43 UTC on 2026-11-25 (stack back at 22:39:26 UTC).
 
 **Symptom**, every container restarted at once, or the whole stack was down and came back.
 
-**Detection**, manual: no alert compares the two stores. The check below does, and so does
-`make parity-ohlcv` for a pinned day, failing on ClickHouse against the lake only.
+**Detection**, manual: no alert covers it ([docker-vm-oom-kill.md](./docker-vm-oom-kill.md)).
 
-**Expected behaviour**, both ClickHouse's Kafka consumers and the lake ingest resume from
-their committed offsets, but a hard kill can leave the two stores holding different trades
-for the minutes around it, and nothing reconciles them. On 2026-11-25 that was minute
-22:33 UTC on every venue: ClickHouse held fewer trades than the lake for that minute, and a
-few the lake never received.
+**Expected behaviour**, the captures reconnect and Redpanda keeps what it acknowledged and wrote
+to disk; what the venues sent while the VM was down is gone for good. On 2026-11-25 this section
+went on to compare the hot tier with the v3 lake minute by minute and to file the outage as a row
+of the lake's audit table. Both stores are stood down now (ClickHouse paused, ADR-057; the v3 lake
+retired and archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)), so there is
+no second store to compare; that comparison and its 2026-11-25 result are in git history, and
+the audit row survives only in the host copies under `~/k2-backup/` (the nightly copy's `lake/`
+and the copy `make drop` took of the dropped namespaces).
 
 **Recovery**
 
@@ -313,66 +294,30 @@ few the lake never received.
 journalctl -k --utc -o short-iso --since '2026-11-25 22:00 UTC' --until '2026-11-25 23:00 UTC' \
   -g 'Out of memory' --no-pager
 # 2026-11-25: one line at 22:33:43, "Out of memory: Killed process <pid> (qemu-system-x86)".
-
-# 2. Trades per venue-minute, lake.gold.ohlcv_1m (Trino) against ClickHouse gold.trades FINAL,
-#    for the hour around the kill. diff prints only the venue-minutes that differ.
-from='2026-11-25 22:00:00'; to='2026-11-25 23:00:00'
-diff \
-  <(docker exec k2-trino trino --output-format TSV --execute "
-      SELECT exchange, format_datetime(window_start, 'yyyy-MM-dd HH:mm'), sum(trade_count)
-      FROM lake.gold.ohlcv_1m
-      WHERE window_start >= TIMESTAMP '$from UTC' AND window_start < TIMESTAMP '$to UTC'
-      GROUP BY 1, 2 ORDER BY 1, 2") \
-  <(docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" --format TabSeparated -q "
-      SELECT exchange, formatDateTime(toStartOfMinute(exchange_ts), '%Y-%m-%d %H:%i'), count()
-      FROM gold.trades FINAL
-      WHERE exchange_ts >= '$from' AND exchange_ts < '$to'
-      GROUP BY 1, 2 ORDER BY 1, 2")
-# 2026-11-26, for 2026-11-25: three "<" lines (lake) and three ">" lines (ClickHouse),
-# one per venue, all at 22:33. No output means the stores agree on counts for the hour.
 ```
 
-3. **No output: done.** Equal counts are not equal trades, so run `make parity-ohlcv` on
-   that day before the next tag; it compares every candle column.
-4. **Lines printed: do not repair by default.** Making the stores equal means reloading the
-   window into ClickHouse from the lake ([clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md)
-   §2), which deletes every trade only ClickHouse holds. That is the owner's decision; on
-   2026-11-25 it was to leave both as they are.
-5. **Left as is: record the outage**, one row in `lake.audit.checks` (the lake's table of
-   check results) whose scope is the outage to the second and whose `observed` is the
-   seconds capture was off. Then, when that day is pinned, list the differing minute as the
-   known gap in `tests/parity/pinned.json`, for ClickHouse against the lake only, with an
-   `audit_ref` naming that row ([`tests/parity/README.md`](../../tests/parity/README.md)).
-   The 2026-11-25 row was recorded at 2026-11-26 01:00:44 UTC with this command; it exists,
-   so do not record it again.
+2. **When was capture back?** The first fresh `k2_capture_last_message_ts_seconds` per venue
+   after the restart, from Prometheus; the window is the kill to that time.
+3. **Record the outage**: the venue (`stack` when all of them), the window to the second in UTC
+   and the cause. The lake's audit table that held these records retired with the v3 lake, and
+   an operator's record of lost data returns with the "accept data loss" runbook in
+   [phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md);
+   until then, write it in the incident's issue.
 
-```bash
-docker exec -e K2_LAKE_DRIVER_MEMORY=512m k2-spark-iceberg python3 /home/iceberg/lake/record_check.py \
-  --job operator --check capture_outage --scope 'stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z' \
-  --observed 343 --failed \
-  --detail 'Host kernel OOM-killed the Docker VM at 22:33:43Z; stack restarted 22:39:26Z. Capture off 343 s: no trades or book updates for the window. Minute 22:33 UTC: hot tier and lake hold different partial sets of trades (hot tier fewer); left as captured, not repaired. Every other minute of 2026-11-25 matches lake vs hot tier.'
+**Measured**, no MTTR: this is investigation, not repair. Step 1 was run read-only on
+2026-11-26 against the host's journal.
 
-# Read it back.
-docker exec k2-trino trino --user reviewer --execute "SELECT run_ts, scope, passed, observed
-  FROM lake.audit.checks WHERE job = 'operator' AND check_name = 'capture_outage' ORDER BY run_ts"
-# "2026-11-26 01:00:44.228723 UTC","stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z","false","343"
-```
-
-**Measured**, no MTTR: this is investigation, not repair. Steps 1 and 2 and the read-back in
-step 5 were run read-only on 2026-11-26 against the stack as it stood after the 2026-11-25
-kill; the row itself was recorded at 2026-11-26 01:00:44 UTC.
-
-**Last verified:** 2026-11-26, steps 1, 2 and 5 (the row read back as above).
+**Last verified:** 2026-11-26, step 1.
 
 ---
 
 ## Re-running these tests
 
 Each mode is induced with a single command, `docker compose restart <svc>`,
-`docker compose stop <svc>`, or `docker network disconnect k2-net <container>`. Take a row
-count before and after, and confirm continuity across the outage window rather than just
-"it came back up". Detailed lake-specific procedures live in the sibling `lake-*.md`
-runbooks, and `make chaos` scripts the lake and capture inductions.
+`docker compose stop <svc>`, or `docker network disconnect k2-net <container>`. Check that
+capture delivers before and after (§1's query), and confirm continuity across the outage window
+rather than just "it came back up". `make chaos` scripts the capture inductions; the lake
+inductions retired with the v3 lake.
 
 ## Related
 

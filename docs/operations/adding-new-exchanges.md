@@ -7,8 +7,11 @@ A step-by-step checklist for adding a fourth venue to the v3 Rust capture tier.
 **Architecture**: Exchange WebSocket → one `k2-capture` container → three Avro topics
 (`market.crypto.v3.{raw,trades,book}.<exchange>`).
 
-Downstream of the topics, the ClickHouse `gold` feeds (step 8) and the lake's per-venue
-decoders (post-integration) are the two places a fourth venue has to be named.
+Downstream of the topics, the ClickHouse `gold` feeds (step 8; the hot tier is paused,
+[ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)) are the one place
+a fourth venue has to be named today. The v3 lake's per-venue decoders retired with its ingest
+pipeline ([`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)); on the new platform a venue
+reaches the lake as products named in their contracts (post-integration, below).
 
 The Kotlin handlers this checklist used to describe are archived at
 [`legacy/v2-kotlin/README.md`](../../legacy/v2-kotlin/README.md)
@@ -234,7 +237,9 @@ on their own.
 
 ### 8. ClickHouse gold feeds
 
-**File**: [`docker/clickhouse/ddl/20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql)
+**File**: [`docker/clickhouse/ddl/20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql).
+The file change is made whether or not the hot tier runs (`make test-clickhouse` applies it to a
+throwaway server); the re-attach applies only while the `hot-gold` profile runs.
 
 - [ ] Add `market.crypto.v3.trades.{exchange}` to `gold.q_trades`'s `kafka_topic_list` and
       `market.crypto.v3.book.{exchange}` to `gold.q_book`'s. The list is literal, a topic
@@ -293,6 +298,8 @@ matters as much as zero: every one of them is seeded at startup precisely so its
 event is detectable, and an absent series means the seeding was missed.
 
 ### 5. Verify the served tier
+
+Only while the `hot-gold` profile runs (ClickHouse is paused, ADR-057).
 
 ```bash
 docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
@@ -388,10 +395,15 @@ table that used to bridge the two went with the Kotlin handlers.
 
 ## Post-Integration Checklist
 
-- [ ] **The lake's raw archive needs nothing.** [`docker/lake/ingest.py`](../../docker/lake/ingest.py) builds its topic list as `K2_EXCHANGES × {raw, trades, book}`, so the new topics are archived into `lake.raw.messages` by the next 5-minute cycle; a topic absent from the previous commit's `k2.kafka-offsets` has no stored position, so the ingest starts it at the beginning ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)). If `K2_EXCHANGES` has been set explicitly anywhere, add the exchange there too, it defaults to `binance,kraken,coinbase`
-- [ ] **The lake's decoded layers are per venue** ([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)): a `bronze.{exchange}_<msgtype>` entry in `VENUE_TABLES` in [`docker/lake/bronze.py`](../../docker/lake/bronze.py), a `silver.trades_{exchange}` entry in `TRADES` in [`docker/lake/silver.py`](../../docker/lake/silver.py) (and the book replay in `books.py` if the venue publishes L2), plus the matching DDL in [`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql). Until those land, the venue is archived but not decoded, `raw.messages` keeps every frame, so the decode is a replay, not a loss
-- [ ] **`gold.*` is unified but not free**: `_VENUE_DEPTH` in [`docker/lake/gold.py`](../../docker/lake/gold.py) needs the venue's book depth (`0` = the venue sends the whole book). It has no default on purpose — depth is per-venue knowledge nothing can guess — so a missing entry raises out of the dimension build naming this file, and `tests/test_lake_instruments.py` fails the moment `config/instruments.yaml` and `_VENUE_DEPTH` disagree. Everything else in `gold.*` is projected from silver and needs nothing
-- [ ] **Lake freshness metrics and alerts need nothing.** [`docker/lake/metrics.py`](../../docker/lake/metrics.py) enumerates the catalog per refresh, so every new table gets its `k2_lake_*` series the refresh after `lake-ddl` creates it. One caveat: `LakeCommitAgeHigh` selects `bronze.*`, so a *reference-data* bronze table that commits hours apart needs an exclusion in [`lake-alerts.yml`](../../docker/prometheus/rules/lake-alerts.yml) or it pages within the hour (`bronze.kraken_instrument` is the worked example)
+- [ ] **The lake needs nothing yet.** The v3 lake's ingest, its per-venue decoders and its
+      freshness alerts retired and are archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)
+      ([ADR-056](../adr/ADR-056-unified-data-product-platform.md)). On the new platform a venue
+      reaches the lake as products whose contracts name its topics: Kraken first, in
+      [phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
+      of the unified platform plan, then the other venues in
+      [widen crypto](../plans/2026-11-26-unified-product-platform-to-release/001-widen-crypto.md).
+      Until then the new venue's topics are kept only for Redpanda's retention (48 h or 2 GiB per
+      partition on `raw.*`)
 - [ ] Update the instrument and exchange counts in `config/instruments.yaml`'s header and
       the root `README.md`
 - [ ] Update [docker-resources.md](./docker-resources.md), the `docker-compose.yml`

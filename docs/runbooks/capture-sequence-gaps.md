@@ -59,7 +59,7 @@ A gap on Coinbase therefore does not tell you which stream lost a message.
 **Expected behaviour**, the reconnect and rebuild are automatic and complete in
 seconds; by the time the alert fires the book is already correct again. **Nothing you
 do restores the lost messages**, public feeds do not replay, so the frames are gone
-from `raw.messages` permanently. This alert exists so the loss is recorded rather than
+from the Redpanda topics permanently. This alert exists so the loss is recorded rather than
 recovered.
 
 That makes this an investigation, not a repair. Gaps = 0 is a Phase C exit criterion
@@ -106,9 +106,11 @@ Then classify, because the response differs:
   having happened.
 
 **Record the gap, this is the actual deliverable of this runbook.** Note the
-exchange, the window, the count, and whether a reconnect explains it, in the day's
-completeness audit. A query over that period must read a documented hole rather than
-an unexplained one; that traceability is the whole reason the archive exists.
+exchange, the window, the count, and whether a reconnect explains it. A query over that
+period must read a documented hole rather than an unexplained one. The lake's audit table retired with the v3 lake ingest pipeline (archived in
+`legacy/v3-lake-ingest/`), and an operator's record of lost data returns with the "accept data
+loss" runbook in [phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md);
+until then, write the venue, the window in UTC and the cause in the incident's issue.
 
 ```bash
 # Bound the affected window from the data: the conn_id in force at the time locates

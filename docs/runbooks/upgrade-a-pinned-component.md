@@ -129,7 +129,7 @@ tag or digest and a `pip install` without `==`; it does not compare places with 
 | Iceberg, Kafka and Avro jars, with sha256 | `docker/spark/Dockerfile`, the jar loop |
 | PyYAML | `docker/spark/Dockerfile`, `pip install` |
 | py4j zip name (moves with Spark) | `docker/spark/Dockerfile`, `PYTHONPATH` |
-| Local tag the stack runs | `docker-compose.yml`, `image:` of `spark-iceberg` and `lake-ddl` |
+| Local tag the stack runs | `docker-compose.yml`, `image:` of `spark-iceberg` (and of `lake-ddl` until the v3 lake ingest retired) |
 | Local tag CI builds and checks | `.github/workflows/ci.yml`, the `spark` leg's `tag:` and its version step |
 
 **Recovery**
@@ -190,16 +190,20 @@ docker run -d --name k2-spark-candidate --network k2-market-data-platform_k2-net
   -v "$PWD/config/bars.yaml":/home/iceberg/config/bars.yaml:ro \
   k2-spark-iceberg:3.5.9_1.8.1
 
-# 5. The Kafka jars: the ingest's own read-only probe, one record per topic, writes nothing.
-docker exec -e K2_LAKE_DRIVER_MEMORY=1g k2-spark-candidate python3 /home/iceberg/lake/ingest.py --probe
-# last 120s: one "schema id N, N byte record" line per topic carrying traffic; exit 0
+# 5. The Kafka jars. Not runnable until phase 004: the probe used on 2026-11-26 was the v3
+#    lake ingest's own (`ingest.py --probe`, one record per topic, writing nothing), archived
+#    in legacy/v3-lake-ingest/ with that pipeline; phase 004's Kafka connector brings the next.
+#    On 2026-11-26 it printed one "schema id N, N byte record" line per topic carrying traffic
+#    and exited 0.
 
 # 6. The catalog and S3 jars: one row of an existing table through Lakekeeper and MinIO.
+#    Not runnable until phase 002 puts a table in the lake: on 2026-11-26 the table read was
+#    one of the v3 lake's, since dropped. Name an existing table in place of <namespace>.<table>.
 docker exec -i k2-spark-candidate python3 - <<'PY'
 import sys; sys.path.insert(0, "/home/iceberg/lake")
 from spark_conf import lake_session
 spark = lake_session("k2-spark-candidate", "768m")
-print("rows read:", len(spark.table("lake.gold.trades").limit(1).collect()))
+print("rows read:", len(spark.table("lake.<namespace>.<table>").limit(1).collect()))
 spark.stop()
 PY
 # rows read: 1
@@ -213,12 +217,12 @@ docker exec k2-spark-candidate sh -c 'ps -eo stat= | grep -c "^Z"'
 docker rm -f k2-spark-candidate
 ```
 
-Then the change goes live: move both `image:` lines to the new tag and recreate
-`spark-iceberg` between ingest runs, with the
-[operator guide's pause pattern](../operations/README.md#the-pattern-pause-wait-for-idle-recreate-verify-unpause),
-and run `make gates` on it. Build the new tag first, before the pause: with the `image:`
-lines moved, `docker compose build spark-iceberg` writes only the new tag and leaves the old
-one, the rollback, alone.
+Then the change goes live: move the `image:` line to the new tag and recreate
+`spark-iceberg` when idle, with the
+[operator guide's pattern](../operations/README.md#the-pattern-wait-for-idle-recreate-verify),
+and run `make gates` on it. Build the new tag first: with the `image:` line moved,
+`docker compose build spark-iceberg` writes only the new tag and leaves the old one, the
+rollback, alone.
 
 **Measured**, 2026-11-26: the build took 14 s with the base image already pulled; steps 4
 to 8 took 28 s together, with a scheduled ingest running in `k2-spark-iceberg` beside them.
@@ -227,10 +231,10 @@ to 8 took 28 s together, with a scheduled ingest running in `k2-spark-iceberg` b
 
 ## 5. Roll back
 
-**Symptom**, a lake job fails on the new image after it went live.
+**Symptom**, a Spark job fails on the new image after it went live.
 
-**Detection**, `LakeIngestFailed` from `docker/prometheus/rules/lake-alerts.yml`, or
-`AirflowTaskFailed`.
+**Detection**, `AirflowTaskFailed` once phase 002 schedules a job; until then, the job's own
+output (the lake alerts that also caught this retired with the v3 lake).
 
 **Expected behaviour**, the previous image is still on the host under its old tag, as long
 as nothing rebuilt that tag (section 4's warning).
@@ -242,8 +246,8 @@ as nothing rebuilt that tag (section 4's warning).
 docker image ls k2-spark-iceberg --format '{{.Tag}} {{.ID}} {{.CreatedSince}}'
 ```
 
-Revert the commit that moved the two `image:` lines, then recreate `spark-iceberg` with the
-[operator guide's pause pattern](../operations/README.md#the-pattern-pause-wait-for-idle-recreate-verify-unpause).
+Revert the commit that moved the `image:` line, then recreate `spark-iceberg` with the
+[operator guide's pattern](../operations/README.md#the-pattern-wait-for-idle-recreate-verify).
 If the old tag is gone, check out the commit before the Dockerfile change and build it under
 the old tag by hand, as in section 4 step 2.
 

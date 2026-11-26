@@ -26,9 +26,10 @@ docker compose restart <service>
 # check it came back
 docker exec k2-<service> <health command>
 
-# confirm data is moving again
-docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q \
-  "SELECT exchange, count() FROM gold.trades FINAL WHERE exchange_ts > now() - INTERVAL 2 MINUTE GROUP BY exchange"
+# confirm data is moving again: records each venue had acknowledged by Redpanda in 2 minutes
+curl -s --get localhost:9090/api/v1/query \
+  --data-urlencode 'query=sum by (exchange) (increase(k2_capture_records_delivered_total[2m]))' | \
+  jq -r '.data.result[] | "\(.metric.exchange) \(.value[1])"'
 ```
 
 **Measured**, <duration>, <date>. What was observed: row counts, consumer

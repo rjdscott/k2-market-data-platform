@@ -162,12 +162,14 @@ docker exec k2-redpanda rpk topic consume market.crypto.v3.book.coinbase \
 ```
 
 **Exchange unreachable** → nothing to fix here. Check the venue's status page, record
-the outage window for the completeness audit, and let the reconnect backoff do its
+the outage window (below), and let the reconnect backoff do its
 job. Do not restart-loop against a down exchange.
 
 **Record the gap.** Frames not received are not recoverable, public feeds do not
-replay. The silent window is permanently absent from `raw.messages`; note it in the
-day's completeness audit.
+replay. The silent window is permanently absent from the Redpanda topics. The lake's audit table retired with the v3 lake ingest pipeline (archived in
+`legacy/v3-lake-ingest/`), and an operator's record of lost data returns with the "accept data
+loss" runbook in [phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md);
+until then, write the venue, the window in UTC and the cause in the incident's issue.
 
 **Measured 2026-08-26**, `scripts/chaos/capture-pause.sh` `docker pause`s a capture
 container to stall the read side without closing the socket, waits for **`CaptureDown`**,
@@ -257,7 +259,7 @@ docker stats --no-stream k2-capture-binance k2-capture-kraken k2-capture-coinbas
 ```
 
 - **Host clock** → fix NTP. Every historical `recv_ts_ns` taken while it was wrong is
-  wrong, and that is worth an entry in the audit record because it is not visible in
+  wrong, and that is worth recording ("Record the gap" above) because it is not visible in
   the data afterwards.
 - **Transit / venue** → nothing to fix. Note it, and confirm completeness is
   unaffected (`k2_capture_gaps_total` flat, `CaptureFeedStale` not firing). Late data

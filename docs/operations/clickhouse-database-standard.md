@@ -2,6 +2,12 @@
 
 **All served K2 tables live in the `gold` database.** Nothing belongs in `default`.
 
+> **ClickHouse is paused** behind the compose profile `hot-gold`
+> ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): its container is
+> removed and its volumes kept, so this standard governs the DDL in `docker/clickhouse/ddl/`, which
+> `make test-clickhouse` applies to a throwaway server, and the tier when it runs again. Every
+> command on this page needs the profile running.
+
 > The `k2` database this page standardised on from 2026-02-12 was **dropped at the v3
 > Phase E cutover on 2026-08-27**. Its DDL is kept, unexecuted, in
 > [`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md); the current tier is
@@ -21,13 +27,13 @@ the served layer's name, and the `quant` user is granted `gold` and nothing else
 | Layer | Objects | Fed by |
 |-------|---------|--------|
 | Feeds (Kafka engine) | `gold.q_trades`, `gold.q_book` | `market.crypto.v3.trades.<ex>`, `market.crypto.v3.book.<ex>` (AvroConfluent) |
-| Served | `gold.trades`, `gold.book_top20` (`ReplacingMergeTree`) | `gold.q_trades_mv`, `gold.q_book_mv`; reloadable from the lake |
+| Served | `gold.trades`, `gold.book_top20` (`ReplacingMergeTree`) | `gold.q_trades_mv`, `gold.q_book_mv`; reloadable from Redpanda only, within its 7 days |
 | Rejects | `gold.feed_errors` | `gold.q_trades_errors_mv`, `gold.q_book_errors_mv` |
-| Lake-loaded | `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bbo_1s` | a pull from the lake's `gold.*`, [clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md) |
+| Lake-loaded | `gold.ohlcv_{1m,5m,1h,1d}`, `gold.bbo_1s` | nothing now: they were pulled from the v3 lake's gold tables, which retired with it ([clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md), archived) |
 | Views | `gold.ohlcv_live(bucket = <seconds>)`, `gold.bbo_live` | computed on read over `FINAL` |
 
-`SHOW TABLES FROM gold` is the authority. Column-level detail is in
-[data-catalog.md](./data-catalog.md), one section per table.
+`SHOW TABLES FROM gold` is the authority, while the tier runs; otherwise `10-gold-tables.sql`.
+Column-level detail was in [data-catalog.md](./data-catalog.md), archived with the v3 lake.
 
 ## Rules
 
@@ -83,4 +89,3 @@ the same day (`DROP TABLE default.offload_watermarks`); the leak check is clean.
 - [ADR-026, four-layer lake, gold served from ClickHouse](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)
 - [ADR-025, ClickHouse derived and rebuildable](../adr/ADR-025-clickhouse-derived-hot-tier.md)
 - [ADR-015, ClickHouse 24.3 LTS downgrade](../adr/ADR-015-clickhouse-lts-downgrade.md)
-- [data-inspection.md](./data-inspection.md), queries against these tables

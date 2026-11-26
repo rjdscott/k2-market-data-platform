@@ -5,8 +5,9 @@ MinIO bucket on this stack: it copies the target's objects to the host, compares
 MinIO, and only then drops. This page says what it refuses, how to run it, what to do when it
 stops, and how to put a dropped table back from its copy. It does not cover the nightly copy of
 the irreplaceable tables, which is [lake-backup-and-restore.md](./lake-backup-and-restore.md),
-nor rebuilding a derived layer in place, which is `make lake-rebuild` and
-[lake-recovery.md](./lake-recovery.md).
+nor rebuilding a product in place, which returns as `make rebuild` in
+[phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
+(the v3 lake's rebuild retired with it, archived in `legacy/v3-lake-ingest/`).
 
 **Run every command from the repo root with `set -a && . ./.env && set +a` loaded.**
 
@@ -54,11 +55,14 @@ not in storage; a lake object in a versioned bucket; a namespace with nested nam
 **What it does not do**
 
 - **Stop the writers.** A write during the copy stops the run at step 4, but a write between
-  that check and the drop is lost. Pause what writes to the target first: for the lake, the
-  DAGs, exactly as the [operator guide](../operations/README.md) section 6 steps 0 to 2.
-- **Keep the target gone.** `lake-ddl` runs on every `docker compose up` and creates a missing
-  table of `docker/lake/ddl/` again, empty ([lake-backup-and-restore.md](./lake-backup-and-restore.md)
-  section 3). A namespace dropped while its DDL is still there comes back on the next `up`.
+  that check and the drop is lost. Stop what writes to the target first. Until phase 002 no DAG
+  writes the lake; check that nothing runs, as the [operator guide](../operations/README.md)
+  section 6 step 1 does.
+- **Keep the target gone.** Nothing in the stack creates a lake table or namespace at start
+  since the v3 lake retired: its `lake-ddl` one-shot is gone, and `lake-init` creates only the
+  bucket and the warehouses (`docker/lake/init-lake.sh`, the list in
+  `docker/lake/generated/warehouses.txt`). A dropped warehouse would come back on the next `up`;
+  `make drop` refuses one anyway.
 - **Prune the copies.** Nothing deletes `$K2_BACKUP_DIR/drop/`. Delete a day's directory by hand
   once nothing needs it.
 
@@ -72,6 +76,7 @@ by default: `/tmp` is not, and the run stops at the helper container's start.
 
 ```bash
 # What would be copied and dropped, object by object. Read-only; writes nothing.   ✅ verified
+# The output is from 2026-11-26, for k2.scratch_p4, dropped since: name a namespace that exists.
 make drop TARGET=k2.scratch_p4 DRY_RUN=1
 #   drop: k2.scratch_p4.wap_bronze: s3://k2-lake/warehouse/k2/<uuid>: <n> objects, <bytes> bytes
 #                1209  data/00000-29-<uuid>-0-00001.parquet
@@ -138,7 +143,7 @@ again. Only a stop during step 5 leaves the target half dropped.
 | `holds a lake warehouse` | Drop the warehouse's namespaces, one by one |
 | `not inside the warehouse's prefix`, `is shared with` | Do not drop. The catalog points at storage outside its warehouse, or that another table or view uses: find out why first |
 | `current metadata file is not at` | The catalog and MinIO disagree about the table; investigate before dropping anything |
-| `under the floor` | Free space on that disk ([lake-disk-usage-high.md](./lake-disk-usage-high.md)), or set `K2_BACKUP_DIR` to a disk with room |
+| `under the floor` | Free space on that disk (`df -h ~`; a bloated Docker disk image is [docker-desktop-disk.md](./docker-desktop-disk.md)), or set `K2_BACKUP_DIR` to a disk with room |
 | `could not start the helper container` | `K2_BACKUP_DIR` is not shared with Docker Desktop (`/tmp` is not); choose a directory under your home directory |
 | `... in the copy ...; nothing was dropped` | The copy is short: run again. Twice in a row is a disk problem on the host |
 | `object(s) not copied: mc does not replace a file already in <dir>` | The same target was copied earlier the same day, and its objects in MinIO have changed since (a restored table's files are newer than their copy). The earlier copy is kept as it was. Move it aside, `mv <dir> <dir>.earlier`, and run again |

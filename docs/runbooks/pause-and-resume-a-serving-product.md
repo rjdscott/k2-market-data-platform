@@ -6,8 +6,8 @@ trade and book topics. It is paused for the platform build behind the compose pr
 ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md); the ADR says why).
 A *compose profile* is a label that keeps a service out of `docker compose up` unless that
 profile is named. This page covers the pause, a resume, the two 7-day clocks that bound a resume
-and what a resume after them loses, the consumer-group checks after one, and when the
-reload-from-lake runbook stops applying. It does not cover the planned return, which is a
+and what a resume after them loses, the consumer-group checks after one, and why the
+reload from the lake no longer applies. It does not cover the planned return, which is a
 rebuild of the hot tier as the serving copy of a product of the new platform (ADR-057,
 decision 4), not a resume.
 
@@ -15,7 +15,7 @@ decision 4), not a resume.
 
 | # | Operation | MTTR target | Measured |
 |---|---------|-------------|----------|
-| 1 | Pause the hot tier | a planned operation, no target | not yet performed: phase 000's operator runs it |
+| 1 | Pause the hot tier | a planned operation, no target | performed in phase 000: read on 2026-11-26 (section 0), no container, both volumes kept, both groups `Empty` |
 | 2 | Resume within 7 days of the stop | < 5 min to `Stable` groups | not yet performed |
 | 3 | Resume after 7 days | not a repair: it leaves a hole | not yet performed |
 
@@ -33,11 +33,11 @@ docker volume ls --filter name=clickhouse                                   # bo
 docker exec k2-redpanda rpk group list                                      # k2-gold-trades, k2-gold-book
 ```
 
-Run 2026-11-26 on the live checkout, before the `profiles:` line reached it: the first printed
-`clickhouse`, the second `1`, the third `k2-clickhouse Up 14 hours (healthy)`, the fourth
-`k2-market-data-platform_clickhouse-data` and `k2-market-data-platform_clickhouse-logs`, the fifth
-both groups `Stable`. That the second prints `0` once the line is in was run on a scratch compose
-project with one service under a profile: `config --services` listed it only with `--profile`.
+Run 2026-11-26 on the live checkout, after the pause: the first printed `clickhouse`, the
+second `0`, the third nothing, the fourth `k2-market-data-platform_clickhouse-data` and
+`k2-market-data-platform_clickhouse-logs`, the fifth both groups `Empty`. Before the `profiles:`
+line reached it, the same day, they printed `clickhouse`, `1`, `k2-clickhouse Up 14 hours
+(healthy)`, the two volumes, and both groups `Stable`.
 
 ---
 
@@ -54,8 +54,8 @@ none fires for a resumed one.
 
 - **Kept:** the volumes `clickhouse-data` and `clickhouse-logs`; the `image:` line and the DDL in
   `docker/clickhouse/ddl/`, which `make test-clickhouse` and CI apply to a throwaway server.
-- **Unaffected:** capture, Redpanda and the lake ingest. The ingest reads the topics by offset
-  range and has no consumer group ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)).
+- **Unaffected:** capture and Redpanda. Nothing else reads the topics until phase 004: the v3
+  lake ingest that did retired in phase 000 ([`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/)).
 - **Stood down with it** (ADR-057, decision 2), each in its own change of phase 000: `make gates`
   runs the parity check with `--skip-clickhouse` and prints a SKIP line naming ADR-057; the six
   rules in `docker/prometheus/rules/clickhouse-alerts.yml` and their tests, and the `clickhouse`
@@ -233,9 +233,8 @@ or check 2 prints `behind log start` lines.
 - the topics hold only the last 7 days, so every trade from the stop to 7 days before the resume
   is in neither the broker nor the kept volume: the volume ends at the stop, the feed starts 7 days
   back from the resume, and the gap between is the hole;
-- the only source that could fill it is the lake's old `gold`, through
-  [clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md), and only until section 4
-  applies. After that nothing fills it until the new platform's trades products have a gold layer
+- the one source that could have filled it, the lake's old `gold`, was dropped with the v3 lake
+  (section 4), so nothing fills it until the new platform's trades products have a gold layer
   (phase 004, Kraken trades first).
 
 **Recovery**: do not resume by habit. If the hot tier is needed after 7 days, the supported path is
@@ -247,29 +246,31 @@ time less 7 days), so the next reader knows the gap is known.
 
 ---
 
-## 4. When the reload-from-lake runbook no longer applies
+## 4. The reload from the lake no longer applies
 
-[clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md) reloads the hot tier from the
-lake's `gold` tables through `iceberg()`. Phase 000 drops the old lake namespaces, `gold` among
-them, at its end
-([phase 000](../plans/2026-11-26-unified-product-platform/000-clear-the-ground.md), wave 3). From
-that drop the runbook has no source, and a hot tier that lost rows, by a resume after the clocks
-or a lost volume, stays without them until the new platform's gold exists.
+[clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md) reloaded the hot tier from
+the lake's `gold` tables through `iceberg()`. Phase 000 dropped the old lake namespaces, `gold`
+among them, and archived that runbook with the v3 lake
+([phase 000](../plans/2026-11-26-unified-product-platform/000-clear-the-ground.md), wave 3). So
+a hot tier that lost rows, by a resume after the clocks or a lost volume, stays without them
+until the new platform's gold exists.
 
 ```bash
-# The old runbook applies only while this lists gold.
+# No old namespace is left.
 docker exec k2-trino trino --execute "SHOW SCHEMAS FROM lake"
 ```
 
-Run 2026-11-26, before the drop: `"audit"`, `"bronze"`, `"gold"`, `"information_schema"`, `"raw"`,
-`"scratch_p4"`, `"scratch_p4_pr1"`, `"silver"`, `"system"`. Phase 000's exit expects
-`information_schema` alone.
+Phase 000's exit expects `"information_schema"` and `"system"`, which every catalog has, and
+nothing else. Run 2026-11-26 during the drop, it still listed `"audit"`, `"bronze"`, `"gold"`,
+`"raw"` and `"silver"` beside them; earlier the same day, `"scratch_p4"` and `"scratch_p4_pr1"`
+too.
 
 ---
 
 ## Failure modes / incidents
 
-None yet: the first pause is phase 000's.
+None yet. The first pause was phase 000's, on 2026-11-26; its stop time belongs in ADR-057's
+Outcome (section 1, step 1).
 
 ---
 
@@ -280,4 +281,5 @@ volume ls`, `docker ps -a`, `docker compose --profile hot-gold config --services
 `system.kafka_consumers` read and `SHOW SCHEMAS FROM lake`. Run on a scratch compose project: a
 profiled service's absence from `config --services` without the profile, its start by name with
 `up -d`, and `down` leaving it running. Not run: the stop, the remove and the start of
-`k2-clickhouse`, and every check after them.
+`k2-clickhouse`, and every check after them. Run again read-only after the pause, 2026-11-26:
+section 0's five commands and section 4's `SHOW SCHEMAS FROM lake`.
