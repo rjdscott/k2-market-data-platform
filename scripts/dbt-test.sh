@@ -11,6 +11,14 @@
 #      reach a warehouse would fail rather than touch the stack.
 #   3. dbt build --selector <domain> with its unit tests, on a throwaway Trino: SKIP,
 #      with a line saying so, until phase 002 brings a model to build.
+#   4. k2_input's render cases (dbt/macros/k2_input.sql, interface A7), in its own
+#      project dbt/tests/k2_input/ (a symlink to the macro, so the one shipped is the
+#      one tested): pinned (FOR VERSION AS OF BIGINT '<id>'), unpinned (no var), a
+#      unit test with the var set (the fixture's CTE, no clause), and a var without
+#      the key (a compiler error at parse). No warehouse: a unit test's SQL is only
+#      rendered when dbt sends it, so it is read from dbt's log of the one statement
+#      it tried before the refused connection; the step refuses to run at all if
+#      anything listens on the profile's port.
 #
 #   make test-dbt              # locally
 #   CI job "dbt (marts)" runs the same script.
@@ -29,4 +37,31 @@ uv run --locked python ../scripts/dbt_manifest_check.py target/manifest.json
 echo "ok parse: dbt deps, parse and compile, and the manifest check"
 
 echo "SKIP dbt build with unit tests: no model to build until phase 002 lands the first (ADR-056)"
+
+if (exec 3<>"/dev/tcp/$K2_TRINO_HOST/$K2_TRINO_PORT") 2>/dev/null; then
+  echo "FAIL k2_input: something listens on $K2_TRINO_HOST:$K2_TRINO_PORT, and this step must reach no warehouse"; exit 1
+fi
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+k2i() {  # k2i <out dir> <dbt command> [args]: the test project, a fresh target and log each time
+  local out=$1; shift
+  uv run --locked dbt "$@" --project-dir tests/k2_input --profiles-dir . --no-partial-parse \
+    --target-path "$tmp/$out" --log-path "$tmp/$out"
+}
+fail() { echo "FAIL k2_input $1"; exit 1; }
+pin='{"k2_inputs": {"up/events": {"snapshot": 42}}}'
+model=compiled/k2_input_test/models/reads_input.sql
+k2i pinned compile -q --vars "$pin"
+grep -qxF "from \"fixture\".\"up__base\".\"events\" FOR VERSION AS OF BIGINT '42'" "$tmp/pinned/$model" \
+  || fail "pinned: $(tail -1 "$tmp/pinned/$model")"
+k2i unpinned compile -q
+grep -qxF 'from "fixture"."up__base"."events"' "$tmp/unpinned/$model" || fail "unpinned: $(tail -1 "$tmp/unpinned/$model")"
+k2i unit test -q --select test_type:unit --vars "$pin" >/dev/null 2>&1 || true  # refused connection: exits 1
+grep -q 'Connection refused' "$tmp/unit/dbt.log" || fail "unit test: did not stop at the refused connection"
+grep -qx 'from __dbt__cte__up__events' "$tmp/unit/dbt.log" \
+  || fail "unit test: $(grep -m1 'from __dbt__cte__up__events' "$tmp/unit/dbt.log")"
+if out=$(k2i missing parse --vars '{"k2_inputs": {"other/table": {"snapshot": 1}}}' 2>&1); then
+  fail "missing key: parse passed"
+fi
+grep -qF 'k2_input: k2_inputs is set but has no entry up/events' <<< "$out" || fail "missing key: $out"
+echo "ok k2_input: pinned, unpinned, a unit test with the var set, and a var without the key (dbt/tests/k2_input/)"
 echo "dbt-test: PASS"

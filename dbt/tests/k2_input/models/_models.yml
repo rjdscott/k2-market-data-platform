@@ -1,0 +1,25 @@
+sources:
+  - name: up  # the upstream product's fence
+    database: fixture
+    schema: up__base
+    tables:
+      - name: events
+        columns:
+          - {name: id, data_type: bigint}
+          - {name: amount, data_type: bigint}
+models:
+  - name: reads_input
+    columns:
+      - {name: id, data_type: bigint}
+      - {name: amount, data_type: bigint}
+      - {name: doubled, data_type: bigint}
+unit_tests:
+  - name: reads_input_doubles_amount
+    model: reads_input
+    given:
+      - input: source('up', 'events')
+        format: sql  # no column types to look up, so the first statement dbt sends is the test's own SQL
+        rows: select cast(1 as bigint) as id, cast(10 as bigint) as amount
+    expect:
+      rows:
+        - {id: 1, amount: 10, doubled: 20}

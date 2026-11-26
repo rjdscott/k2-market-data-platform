@@ -706,3 +706,28 @@ PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports 
 Headroom at the gated peak: 8.30 CPU and 19.312 GiB. The summary comment at the end of
 `docker-compose.yml` carries the same sums. The phase 000 plan named 17.30 CPU / 29.812 GiB as
 its exit figure; that was the peak with these two services still in it.
+
+### Outcome addendum (2026-11-26, the phase 001 stubs behind profiles)
+
+Four stubs join the compose file behind profiles that nothing starts by default, so the budget gate
+counts and pin-checks them before their steps build them
+([phase 001 interfaces](../development/phase-001-interfaces.md), A13): `tools` (profile `tools`,
+0.25 CPU / 256M), `fetch` (`fetch`, 0.5 / 512M), `dbt-runner` (`build`, 0.5 / 768M, two
+replicas) and `k2-api` (`api`, 0.5 / 512M). No default-profile limit changes, and no
+default-profile service definition changes (`docker compose config --hash '*'` prints the same
+21 hashes before and after).
+
+```
+$ python3 scripts/check-budget.py
+steady default         17 services   15.20 CPU   27.188 GiB
+bootstrap default      21 services   16.70 CPU   28.688 GiB
+bootstrap api          22 services   17.20 CPU   29.188 GiB
+bootstrap build        22 services   17.70 CPU   30.188 GiB
+bootstrap fetch        22 services   17.20 CPU   29.188 GiB
+bootstrap hot-gold     22 services   20.70 CPU   36.688 GiB
+bootstrap tools        22 services   16.95 CPU   28.938 GiB
+PASS: bootstrap default within 25 CPU / 48 GiB; limits, pins and loopback ports hold across 4 Dockerfiles and 51 scripts and workflows
+```
+
+Headroom at the gated peak is unchanged: 8.30 CPU and 19.312 GiB. The summary comment at the end
+of `docker-compose.yml` carries the same sums.

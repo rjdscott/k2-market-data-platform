@@ -8,7 +8,7 @@ export K2_GIT_SHA
 .DEFAULT_GOAL := help
 
 help:  ## Show available targets
-	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /\t/'
+	@grep -h -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /\t/'
 
 up:  ## Start the full stack (builds images on first run); refuses a .env with placeholder or guessable secrets
 	python3 scripts/check-env.py
@@ -213,3 +213,8 @@ chaos:  ## Inject each capture failure, wait for its alert, measure recovery (LO
 .PHONY: drop
 drop:  ## Copy, compare, then drop TARGET=<warehouse>.<namespace>[.<table>] or TARGET=bucket:<name>; DRY_RUN=1 lists only (docs/runbooks/drop-and-rebuild.md)
 	bash scripts/drop.sh
+
+# One file per owning step of phase 001, so parallel steps never edit this file
+# (docs/development/phase-001-interfaces.md). A target already defined above is
+# never redefined there. `help` greps every included file (-h: no file names).
+include mk/*.mk
