@@ -179,7 +179,7 @@ def edit_grants(m: Model, product: str, grants: tuple[Grant, ...]) -> Model:
         t, policies={"delayed_reader": RolePolicy(model.Delay("no_such", 5), (), None)}) if t.name == "silver_readings" else t), "delay column"),
     (lambda m: edit_table(m, "station-readings", lambda t: dataclasses.replace(
         t, policies={"delayed_reader": RolePolicy(None, (), model.RowScope("no_such", ("a",)))}) if t.name == "silver_readings" else t), "rowScope column"),
-    (lambda m: dataclasses.replace(m, products=tuple(p for p in m.products if p.name != "station-readings")), "no product's lake table"),
+    (lambda m: dataclasses.replace(m, products=tuple(p for p in m.products if p.name != "station-readings")), "no live product's lake table"),
 ])
 def test_what_the_documents_leave_inconsistent_fails_closed(change: Any, message: str) -> None:
     with pytest.raises(ValueError, match=message):
@@ -207,18 +207,23 @@ def slug(rng: random.Random) -> str:
 
 
 def rename(p: Product, name: str, domain: str) -> Product:
-    """The product under another name and domain: ids, contract ids and grants follow."""
+    """The product under another name and domain: ids, contract ids and grants follow; its input
+    ports stay, so the copy reads what the original reads."""
     def table(t: Table) -> Table:
         return dataclasses.replace(t, contract_id=f"{domain}.{name}.{t.name}", physical_name=f"{model.fence(name)}.{t.name}",
                                    path=f"contracts/{domain}/{name}/{t.name}.odcs.yaml")
     return dataclasses.replace(p, name=name, id=f"{domain}.{name}", domain=domain, path=f"contracts/{domain}/{name}",
-                               tables=tuple(table(t) for t in p.tables), input_ports=())
+                               tables=tuple(table(t) for t in p.tables))
+
+
+STATUSES = ("active", "paused", "deprecated", "retired")
 
 
 def mutations(n: int = 150) -> Iterator[Model]:
     """Valid models from the good set: products copied under random names, among them names that
     extend another product's (`station-readings` and `station-readings-x`), into random domains,
-    with random policies and random grants to random people."""
+    with random policies (a delay only on a trino_rules.DELAY_TYPE column), random grants to
+    random people, and a random status each (never retired while a live product reads it)."""
     base = loaded("good")
     for seed in range(n):
         rng = random.Random(seed)
@@ -237,18 +242,20 @@ def mutations(n: int = 150) -> Iterator[Model]:
             for t in p.tables:
                 roles = tuple(r for r in t.roles if rng.random() < 0.8) or t.roles
                 cols = [c.name for c in t.columns]
-                times = [c.name for c in t.columns if c.time] or cols[:1]
+                times = [c.name for c in t.columns if c.physical_type == trino_rules.DELAY_TYPE]
                 policies = {}
                 for r in roles:
                     if rng.random() < 0.6:
                         policies[r.role] = RolePolicy(
-                            model.Delay(rng.choice(times), rng.randint(1, 600)) if rng.random() < 0.5 else None,
+                            model.Delay(rng.choice(times), rng.randint(1, 600)) if times and rng.random() < 0.5 else None,
                             tuple(rng.sample(cols, rng.randint(0, 2))),
                             model.RowScope(rng.choice(cols), tuple(rng.sample(["north", "south", "east", 3], 2))) if rng.random() < 0.5 else None)
                 tables.append(dataclasses.replace(t, roles=roles, policies=policies))
             offered = sorted({r.role for t in tables for r in t.roles})
             grants = tuple(Grant(u, rng.choice(offered)) for u in people if rng.random() < 0.5)
-            out.append(dataclasses.replace(p, tables=tuple(tables), grants=grants))
+            out.append(dataclasses.replace(p, tables=tuple(tables), grants=grants, status=rng.choice(STATUSES)))
+        read = {port.contract_id.rsplit(".", 1)[0] for p in out if p.status != "retired" for port in p.input_ports}
+        out = [dataclasses.replace(p, status="deprecated") if p.status == "retired" and p.id in read else p for p in out]
         principals = tuple(base.principals) + tuple(Principal(u, "person", "team", None) for u in people
                                                     if u not in {x.id for x in base.principals})
         yield dataclasses.replace(base, products=tuple(out), principals=principals,
@@ -311,7 +318,7 @@ def test_properties_hold_over_random_valid_sets(m: Model) -> None:
     names = universe(m)
     readers = [r for r in rules["tables"] if "group" in r and r["catalog"] != "system"]
     offered = {(model.group(p.name, r.role), model.reader_relation(t)): (p, t, r.role)
-               for p in m.products for t in p.tables if t.build.kind in model.LAKE_BUILDS for r in t.roles}
+               for p in m.products if p.status != "retired" for t in p.tables if t.build.kind in model.LAKE_BUILDS for r in t.roles}
 
     # Every regex is an alternation of exact, escaped names and matches exactly those names.
     for section, _rule, field, pattern in name_rules(rules):
@@ -351,12 +358,13 @@ def test_properties_hold_over_random_valid_sets(m: Model) -> None:
             (pub,) = unescape(r["user"])
             (p,) = [p for p in m.products if model.publisher(p.name) == pub]
             assert "group" not in r and r["catalog"] == model.reader_catalog(p.domain) and r["schema"] == model.base_namespace(p.name)
-            assert set(unescape(r["table"])) == {t.name for t in p.tables if t.build.kind in ("dbt", "code")}
+            names = {t.name for t in p.tables if t.build.kind in ("dbt", "code")}
+            assert set(unescape(r["table"])) == names | {f"{n}$refs" for n in names}  # each view's guard reads $refs
     # Catalog access `all` on a reader catalog: that domain's publishers alone.
     for r in rules["catalogs"]:
         if r.get("allow") == "all" and not r["catalog"].endswith("_build") and r["catalog"] not in ("system", "lake"):
-            assert set(unescape(r["user"])) == {model.publisher(p.name) for p in m.products
-                                                if p.domain in {d.name for d in m.domains if model.reader_catalog(d.name) == r["catalog"]}
+            assert set(unescape(r["user"])) == {model.publisher(p.name) for p in m.products if p.status != "retired"
+                                                and p.domain in {d.name for d in m.domains if model.reader_catalog(d.name) == r["catalog"]}
                                                 and any(t.build.kind in ("dbt", "code") for t in p.tables)}, r
         if r.get("catalog", "").endswith("_build"):
             assert "group" not in r and r["allow"] == "all", r  # never a reader
@@ -371,3 +379,98 @@ def test_properties_hold_over_random_valid_sets(m: Model) -> None:
         for r in rules["tables"]:
             if r.get("user") == dbt and r["catalog"].endswith("_build"):
                 assert r["catalog"] == model.build_catalog(p.domain) and r["schema"] == model.base_namespace(p.name), r
+
+    # Status (ADR-055 part 4): a retired product is named by no rule and no group; a paused one
+    # keeps its readers and publisher and has no builder; the others have both.
+    every = [(sec, r) for sec, rs in rules.items() for r in rs]
+    for p in m.products:
+        built = any(t.build.kind in ("dbt", "code") for t in p.tables)
+        mine = {model.builder(p.name), model.publisher(p.name), model.base_namespace(p.name), model.reader_namespace(p.name),
+                *(model.group(p.name, r) for r in ("full_reader", "delayed_reader", "public_reader"))}
+        named = {n for _, r in every for f in NAME_FIELDS if f in r for n in unescape(r[f])}
+        if p.status == "retired":
+            assert not named & mine and not {g for g in groups if g in mine}, (p.id, named & mine)
+            continue
+        assert (model.builder(p.name) in trino_rules.known_principals(m)) == (built and p.status != "paused"), p.id
+        assert (model.publisher(p.name) in trino_rules.known_principals(m)) == built, p.id
+        for t in p.tables:
+            if t.build.kind in model.LAKE_BUILDS and t.roles:
+                assert any(r.get("group") == re.escape(model.group(p.name, t.roles[0].role)) for _, r in every), (p.id, t.name)
+
+
+@pytest.mark.parametrize("m", list(mutations(60)), ids=lambda m: f"{len(m.products)}p")
+def test_each_view_reads_a_guard_its_owner_alone_may_pass_on(m: Model) -> None:
+    """A base swapped for a view (C1), as far as the emitters can say: every view the lake emitter
+    lists guards on its own base's `$refs`, which its publisher, and no other principal of a
+    product, may pass on; the publisher holds GRANT_SELECT on exactly the base and `$refs`."""
+    from k2gen.emit import lake
+    rules, _ = emitted(m)
+    out = lake.emit(m)
+    live = {p.name for p in m.products if p.status != "retired"}
+    for v in json.loads(out[model.VIEWS])["views"]:
+        sql = out[model.view_sql_path(v["relation"])]
+        guard = model.quote_relation(v["base"] + "$refs")
+        assert f"FROM {model.quote_relation(v['base'])} FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM {guard} " in sql
+        if v["owner"].removeprefix("pub_") not in {model.fence(n) for n in live}:
+            continue
+        catalog, schema, table = v["base"].split(".")
+        on = [r for r in rules["tables"] if r["catalog"] == catalog and re.fullmatch(r.get("schema", ".*"), schema)
+              and re.fullmatch(r.get("table", ".*"), table + "$refs")]
+        holders = {u for r in on for u in unescape(r.get("user", r.get("group", "")))}
+        assert holders <= {v["owner"], *model.REFS_READERS}, holders
+        (own,) = [r for r in on if r.get("user") == re.escape(v["owner"])]
+        assert own["privileges"] == ["SELECT", "GRANT_SELECT"] and re.fullmatch(own["table"], table)
+
+
+def bronze_and_delays(n: int = 80) -> Iterator[tuple[Model, str]]:
+    """Invalid sets from the valid ones: a connector table offered a role, or a delay put on a
+    column of any other type than trino_rules.DELAY_TYPE (timestamp(6), date, varchar...)."""
+    for seed, m in enumerate(mutations(n)):
+        rng = random.Random(1000 + seed)
+        p = rng.choice([p for p in m.products if p.status != "retired"])
+        if rng.random() < 0.5 and (bronze := [t for t in p.tables if t.build.kind == "connector"]):
+            target, change, message = bronze[0], lambda t: dataclasses.replace(t, roles=(model.TableRole("full_reader", None),)), "connector table"
+        else:
+            tables = [t for t in p.tables if t.build.kind in model.LAKE_BUILDS and t.roles and t.build.kind != "connector"
+                      and [c for c in t.columns if c.physical_type != trino_rules.DELAY_TYPE]]
+            if not tables:
+                continue
+            target = rng.choice(tables)
+            column = rng.choice([c for c in target.columns if c.physical_type != trino_rules.DELAY_TYPE])
+            role = target.roles[0].role
+            change = lambda t, c=column.name, r=role: dataclasses.replace(t, policies={**t.policies, r: RolePolicy(model.Delay(c, 5), (), None)})  # noqa: E731
+            message = "delay column"
+        products = tuple(dataclasses.replace(x, tables=tuple(change(t) if t is target else t for t in x.tables)) if x is p else x
+                         for x in m.products)
+        yield dataclasses.replace(m, products=products), message
+
+
+@pytest.mark.parametrize(("m", "message"), list(bronze_and_delays()), ids=lambda x: x if isinstance(x, str) else f"{len(x.products)}p")
+def test_a_bronze_role_or_a_zone_dependent_delay_fails_closed(m: Model, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        trino_rules.emit(m)
+
+
+def test_a_status_changes_exactly_its_own_products_rules() -> None:
+    """station-readings by each status, the rest unchanged: active and deprecated rules are equal;
+    paused drops only the builder's rules; retired drops every rule of the product, so daily-load,
+    which reads it, fails closed."""
+    def at(status: str) -> Model:
+        m = loaded("good")
+        return dataclasses.replace(m, products=tuple(dataclasses.replace(p, status=status) if p.name == "station-readings" else p
+                                                     for p in m.products))
+    active, _ = emitted(at("active"))
+    assert emitted(at("deprecated"))[0] == active
+    paused, groups = emitted(at("paused"))
+    gone = [r for s in active for r in active[s] if r not in paused[s]]
+    assert gone and all("dbt_station_readings" in json.dumps(r) for r in gone), gone
+    assert "dbt_station_readings" not in json.dumps(paused) and "pub_station_readings" in json.dumps(paused)
+    assert set(groups) == {"daily_load__full_reader", "station_readings__delayed_reader", "station_readings__full_reader"}
+    with pytest.raises(ValueError, match="no live product's lake table"):
+        trino_rules.emit(at("retired"))
+    m = at("retired")
+    m = dataclasses.replace(m, products=tuple(p for p in m.products if p.name != "daily-load") + tuple(
+        dataclasses.replace(p, status="retired") for p in m.products if p.name == "daily-load"))
+    rules, groups = emitted(m)
+    assert not groups and not [r for r in rules["tables"] if "group" in r and r["catalog"] != "system"]
+    assert not re.search(r"station_readings|daily_load", json.dumps(rules)), json.dumps(rules)[:400]

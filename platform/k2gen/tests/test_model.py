@@ -82,7 +82,7 @@ def test_the_good_set_loads_into_the_model() -> None:
     assert {c.name: c.pattern for c in bronze.columns if c.pattern} == {"station_id": "^s-[0-9]+$"}
     assert bronze.quality == (model.Quality("value_parses", "custom", "k2-connector", "Every value_text parses as a decimal.", "value_parses"),)
     assert (silver.physical_name, silver.build, silver.partitioning, silver.sort) == (
-        "station_readings.silver_readings", model.Build("dbt", None), ("day(read_at)",), ("station_id",))
+        "station_readings.silver_readings", model.Build("dbt", None), ("day(read_at)", "region"), ("station_id",))
     assert silver.policies == {"delayed_reader": model.RolePolicy(model.Delay("read_at", 20), ("operator_note",),
                                                                   model.RowScope("region", ("north", "south")))}
     assert silver.roles == (model.TableRole("full_reader", None), model.TableRole("delayed_reader", "sensor-team"))
@@ -160,7 +160,7 @@ def _seed_declared() -> dict[str, bytes]:
 BAD: dict[str, tuple[Callable[[], dict[str, bytes]], str]] = {
     "a duplicate YAML key": (
         lambda: _with(SILVER, good()[SILVER].replace(b"        mask: [operator_note]\n", b"        mask: [operator_note]\n        mask: []\n")),
-        f"{SILVER}: line 93: key 'mask' appears twice"),
+        f"{SILVER}: line 96: key 'mask' appears twice"),
     "YAML that does not parse": (lambda: _with(PRODUCT, b"apiVersion: [v1.1.0\n"), f"{PRODUCT}: while parsing a flow sequence"),
     "a reserved word as a column, by the profile": (
         lambda: edited(SILVER, _set("schema", 0, "properties", 3, "name", value="current_user")),

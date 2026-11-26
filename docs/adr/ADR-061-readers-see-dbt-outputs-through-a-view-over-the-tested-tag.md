@@ -172,3 +172,81 @@ chain a consumer sees two outputs of one product one publish apart.
 - [Phase 001](../plans/2026-11-26-unified-product-platform/001-release-and-rules-spine.md); the gate script
   [`run.sh`](../../scripts/spikes/2026-11-26/spine-h-tested-data-view/run.sh);
   [ADR-056](ADR-056-unified-data-product-platform.md) parts 4 and 5
+
+---
+
+## Outcome (2026-11-26, the view guards on its base's refs; what hidden rows give away)
+
+**The view shape changed.** Part 1's "exactly `SELECT <contract columns> FROM <base> FOR VERSION AS OF
+'audited'`, with no predicate" did not hold readers to tested data. The builder `dbt_<fence>` owns every
+name in `<fence>__base`, so it may drop its base table and create a view at the same name, and Trino 484
+ignores `FOR VERSION AS OF '<string>'` when the relation is a view (Consequences, h1.10): readers were
+served whatever that view returned, untested. An independent review of step S12 found it; the rows
+`c1.base-invoker-view` and `c1.base-definer-view` of
+[`scripts/trino_rules_c1_test.py`](../../scripts/trino_rules_c1_test.py) reproduce it on the code before
+this change (the reader got the builder's constant `zz-forged` row). File rules cannot tell a table from a
+view: one `OWNERSHIP` privilege on a name is the right to create either. The view SQL is now exactly
+
+```sql
+SELECT <contract columns> FROM <domain>.<fence>__base.<table> FOR VERSION AS OF 'audited'
+WHERE EXISTS (SELECT 1 FROM <domain>.<fence>__base."<table>$refs" WHERE "name" = 'audited' AND "type" = 'TAG')
+```
+
+on one line, every name quoted, and nothing else; still no policy (part 3). `<table>$refs` is the Iceberg
+metadata table that lists a table's branches and tags. It exists only while the base is an Iceberg table:
+with a view, or nothing, at the base's name, the reader's query fails at analysis
+(`Table '...silver_readings$refs' does not exist`); with an untagged table there, the version clause
+fails (`Cannot find snapshot with reference name: audited`). Trino resolves `<table>$refs` as the metadata
+table of `<table>` and never as a view, even one the builder created under that name while the base was
+absent (`c1.refs-forgery`). The `"type" = 'TAG'` term matters only if a branch named `audited` ever exists:
+Trino 484 refuses branch DDL to every principal, but by an internal error rather than a rule
+(`c1.branch-ddl`), so an upgrade could lift it, and the guard then gives readers no rows rather than the
+branch's. Every variant fails with an error and serves no row (`c1.base-*`). An input read pinned by
+snapshot id, `k2_input`'s form, fails over a view anyway (`Views do not support versioning`,
+`c1.pin-by-id`).
+
+What it costs: the publisher holds `SELECT` and `GRANT_SELECT` on exactly `<table>$refs` of its own bases,
+since Trino's definer-view owner check asks `GRANT_SELECT` of every relation a view reads (ADR-059's
+Outcome); a reader's query reads that table too, Trino's elapsed time for one small read going from a
+median of 28 ms to 38 ms in one run (n=15 each, row `c1.guard-cost`). Unchanged, with the guard: a reader
+polling through dbt's `CREATE OR REPLACE TABLE` saw only the tagged rows, then only the new ones after the
+tag commit (`c1.rebuild-publish`); part 5's two statements served old rows, new rows, then new columns,
+with no error (`c1.schema-change`); and the rules suite's 58 rows, masks, filters and the base-path fence
+among them, passed on the new views (55 PASS, 0 FAIL, 3 INFO, `make test-trino`; every one of the
+`h1.matrix` base paths refused). The drift check (step S20) compares the stored SQL with this emitter's,
+so it holds the guard too; it also names a view at a base's name, but a reconcile interval later, where
+the guard refuses the read at once.
+
+Rejected: pinning each view by snapshot id, which also fails closed over a view, but makes every publish
+one view replace per output after the one tag commit, so a product's outputs would change one by one
+rather than together, and the drift check would need each output's last tested id; a third catalog per
+domain with Trino's view endpoints switched off (`iceberg.rest-catalog.view-endpoints-enabled=false`
+exists in 484) for reading bases, one more catalog per domain than ADR-059 decided; and a guard that only
+names `$refs` without reading it, which Trino plans away and which checks no tag type.
+
+**What hidden rows give away: values, not only counts.** Consequences said the full and delayed readers
+saw processed-row counts that count policy-hidden rows. The review showed more: Trino skips a data file
+whose column minimum and maximum cannot match a query's predicate ([pruning](glossary.md#pruning)), and
+the client protocol's processed-row count (and, the review found, `EXPLAIN ANALYZE`) shows how many rows
+the files it did not skip hold. A delayed or scoped reader can therefore binary-search a predicate on any column it can see
+and learn each file's minimum and maximum of that column over the rows the policy hides from it, and
+whether a given key value exists among them. What it cannot learn: a masked column's values (masks apply
+before the reader's predicate), any untested row (the view reads the tag), or any row of a product it
+holds no role on. A row scope's column must now be an identity partition field of its table
+(`access.row-scope-unpartitioned` in `k2gen check`): the files of out-of-scope rows are then skipped by
+the scope alone, whatever the reader asks. Measured: unpartitioned, a scoped reader's probes moved the
+count between 3 and 8 rows and found a hidden row's value and key; partitioned by the scope column, every
+probe counted 3, the guard's own rows (`h2.row-scope-partition`). A delay has no such fix: a row inside
+its delay shares files with older visible rows, so a delayed reader still learns the bounds of the newest
+rows' visible columns.
+
+**A delay's column must be `timestamp(6) with time zone`** (`access.delay-type`; the rules emitter refuses
+the rest). Over `timestamp(6)` or `date` the filter compares in the reader's own session time zone, which
+a reader sets (`SET TIME ZONE`, or the client's time zone header), so a reader in `Pacific/Kiritimati`
+read the row still inside its delay; over `time(6)` every read fails (`h1.delay-zone`).
+
+So the `delay` and `rowScope` policies suit readers the owner trusts not to probe; they are a convenience
+and a guard against accidents, not a barrier against a determined reader. **Revisit when** a product is
+licensed to a principal outside the owner's team: that product's delayed or scoped data must then be
+physically separate (a table or tag per policy, written by the pipeline), since no rule closes the leak.
+This tightens revisit trigger 4 above from counts to values.

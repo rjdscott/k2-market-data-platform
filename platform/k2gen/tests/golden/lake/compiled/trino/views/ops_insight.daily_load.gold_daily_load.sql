@@ -1,1 +1,1 @@
-SELECT "load_date", "station_id", "readings", "mean_value" FROM "ops_insight"."daily_load__base"."gold_daily_load" FOR VERSION AS OF 'audited'
+SELECT "load_date", "station_id", "readings", "mean_value" FROM "ops_insight"."daily_load__base"."gold_daily_load" FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM "ops_insight"."daily_load__base"."gold_daily_load$refs" WHERE "name" = 'audited' AND "type" = 'TAG')

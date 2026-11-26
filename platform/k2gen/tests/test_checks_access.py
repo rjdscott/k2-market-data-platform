@@ -17,7 +17,8 @@ CASES = model.parse("cases.yaml", (FIXTURES / "bad" / "access" / "cases.yaml").r
 CODES = {"principal-duplicate", "principal-collides", "role-undeclared", "policy-role-not-offered", "policy-column-unknown",
          "role-requirement-unmet", "grant-unknown-principal", "grant-unknown-role", "grant-role-not-offered", "grant-two-roles",
          "grant-to-platform", "inherit-role", "inherit-delay", "inherit-mask", "inherit-row-scope", "inherit-undeclared",
-         "expectation-missing", "expectation-weak", "expectation-unknown-principal"}
+         "expectation-missing", "expectation-weak", "expectation-unknown-principal", "delay-type", "row-scope-unpartitioned",
+         "connector-role"}
 SILVER = "contracts/sensor-net/station-readings/silver_readings.odcs.yaml"
 GOLD = "contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml"
 
@@ -77,6 +78,27 @@ def test_every_code_has_a_failing_fixture() -> None:
     assert {c["code"] for c in CASES} == {f"access.{c}" for c in CODES}
 
 
+def test_a_deprecated_product_takes_no_new_grant() -> None:
+    """ADR-055 part 4 against the previous release: a grant the previous release held stays; a new
+    principal, or a held principal under another role, is refused; an active product takes both."""
+    product, grants = "contracts/sensor-net/station-readings/product.odps.yaml", "contracts/sensor-net/station-readings/grants.yaml"
+    previous = docset(good())
+    deprecated = changed([
+        {"file": product, "set": "status", "value": "deprecated"},
+        {"file": product, "append": "customProperties", "value": {"property": "lifecycleChange", "value": {
+            "since": "2026-11-01", "reason": "Replaced by a made-up successor.", "decision": "ADR-055",
+            "sunset": "2027-01-01", "successor": "sensor-net.station-readings-next"}}}])
+    assert access.check(docset(deprecated), previous) == []  # every grant held before
+    for new in ({"principal": "p.twin", "role": "full_reader"}, {"principal": "p.analyst-delayed", "role": "full_reader"}):
+        docs = dict(deprecated)
+        g = model.parse(grants, docs[grants])
+        g["grants"] = [x for x in g["grants"] if x["principal"] != new["principal"]] + [new]
+        docs[grants] = yaml.safe_dump(g, sort_keys=False).encode()
+        found = [f for f in access.check(docset(docs), previous) if f.code == "access.grant-new-on-deprecated"]
+        assert [f.path for f in found] == [grants] and new["principal"] in found[0].message, found
+    assert not [f for f in access.check(docset(good()), docset(deprecated)) if f.code == "access.grant-new-on-deprecated"]
+
+
 def _derived(column: int, *sources: str) -> dict[str, Any]:
     return {"file": GOLD, "set": f"schema/0/properties/{column}/transformSourceObjects",
             "value": [f"sensor-net.station-readings.silver_readings.{s}" for s in sources]}
@@ -92,6 +114,8 @@ def test_an_output_at_least_as_strict_on_every_dimension_passes() -> None:
         {"file": GOLD, "append": "roles", "value": {"role": "delayed_reader", "access": "read"}},
         {"file": GOLD, "append": "customProperties", "value": {"property": "policies", "value": {"delayed_reader": {
             "delay": {"column": "load_date", "minutes": 30}, "rowScope": {"column": "station_id", "values": ["north"]}}}}},
+        {"file": GOLD, "set": "schema/0/properties/0/physicalType", "value": "timestamp(6) with time zone"},
+        {"file": GOLD, "append": "customProperties", "value": {"property": "partitioning", "value": ["station_id"]}},
         _derived(0, "read_at"), _derived(1, "station_id", "region"), _derived(2, "station_id"), _derived(3, "value"),
     ]
     assert codes(changed(steps)) == set()
@@ -104,6 +128,7 @@ def test_a_masked_input_column_may_reach_the_output_masked() -> None:
         {"file": GOLD, "append": "roles", "value": {"role": "delayed_reader", "access": "read"}},
         {"file": GOLD, "append": "customProperties", "value": {"property": "policies", "value": {"delayed_reader": {
             "delay": {"column": "load_date", "minutes": 20}, "mask": ["readings"]}}}},
+        {"file": GOLD, "set": "schema/0/properties/0/physicalType", "value": "timestamp(6) with time zone"},
         _derived(0, "read_at"), _derived(1, "station_id"), _derived(2, "operator_note"), _derived(3, "value"),
     ]
     assert codes(changed(steps)) == set()

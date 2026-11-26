@@ -6,11 +6,12 @@ models:
   config:
     alias: silver_readings
     properties:
-      partitioning: ARRAY['day(read_at)']
+      partitioning: ARRAY['day(read_at)', 'region']
       sorted_by: ARRAY['station_id']
     unique_key:
     - station_id
     - read_at
+    - region
     meta:
       k2:
         contract: sensor-net.station-readings.silver_readings
@@ -40,6 +41,10 @@ models:
   - name: region
     description: The station's region.
     data_type: varchar
+    constraints:
+    - type: not_null
+    data_tests:
+    - not_null
   - name: operator_note
     description: Free text the made-up operator attached.
     data_type: varchar
@@ -49,6 +54,7 @@ models:
         columns:
         - station_id
         - read_at
+        - region
   - k2_quality:
       arguments:
         query: select count(*) from ${table}

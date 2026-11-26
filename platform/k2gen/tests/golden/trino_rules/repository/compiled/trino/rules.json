@@ -169,7 +169,7 @@
       "user": "pub_access_canary",
       "catalog": "governance",
       "schema": "access_canary__base",
-      "table": "events",
+      "table": "events|events\\$refs",
       "privileges": [
         "SELECT",
         "GRANT_SELECT"
@@ -276,7 +276,7 @@
       ]
     },
     {
-      "user": "dbt_access_canary|k2_release_dd26c5797703|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|svc\\.api|svc\\.catalog|svc\\.runs",
+      "user": "dbt_access_canary|k2_release_e4efb5535427|p\\.canary\\-delayed|p\\.canary\\-full|p\\.canary\\-scoped|pub_access_canary|svc\\.api|svc\\.catalog|svc\\.runs",
       "allow": [
         "execute"
       ]

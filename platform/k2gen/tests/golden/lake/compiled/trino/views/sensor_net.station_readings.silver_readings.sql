@@ -1,1 +1,1 @@
-SELECT "station_id", "read_at", "value", "region", "operator_note" FROM "sensor_net"."station_readings__base"."silver_readings" FOR VERSION AS OF 'audited'
+SELECT "station_id", "read_at", "value", "region", "operator_note" FROM "sensor_net"."station_readings__base"."silver_readings" FOR VERSION AS OF 'audited' WHERE EXISTS (SELECT 1 FROM "sensor_net"."station_readings__base"."silver_readings$refs" WHERE "name" = 'audited' AND "type" = 'TAG')
