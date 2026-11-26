@@ -57,31 +57,33 @@ exact. The v2 `k2` database was dropped at the Phase E cutover on 2026-08-27
 ([`legacy/v2-clickhouse/`](../../legacy/v2-clickhouse/README.md)).
 
 ```bash
-CH="docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD"
+# A function, not a variable: zsh does not split "$CH" into words, so `CH="docker exec ..."; $CH`
+# fails there with "command not found".
+ch() { docker exec -i k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" "$@"; }
 
-$CH -q "SHOW TABLES FROM gold"
-$CH -q "SELECT count() FROM gold.trades FINAL"
+ch -q "SHOW TABLES FROM gold"
+ch -q "SELECT count() FROM gold.trades FINAL"
 
 # Trades in the last 5 minutes, by exchange
-$CH -q "SELECT exchange, count() FROM gold.trades FINAL
+ch -q "SELECT exchange, count() FROM gold.trades FINAL
         WHERE exchange_ts > now() - INTERVAL 5 MINUTE GROUP BY exchange"
 
 # Latest 1m candles, computed on read over the deduplicated trades
-$CH -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close, volume, trade_count
+ch -q "SELECT exchange, canonical_symbol, window_start, open, high, low, close, volume, trade_count
         FROM gold.ohlcv_live(bucket = 60) WHERE canonical_symbol = 'BTC/USDT'
         ORDER BY window_start DESC LIMIT 10 FORMAT Pretty"
 
 # Best bid/offer, last few seconds
-$CH -q "SELECT exchange, canonical_symbol, second, bid, ask, spread_bps
+ch -q "SELECT exchange, canonical_symbol, second, bid, ask, spread_bps
         FROM gold.bbo_live WHERE canonical_symbol = 'BTC/USDT' ORDER BY second DESC LIMIT 10 FORMAT Pretty"
 
 # Kafka Engine consumer health (q_trades, q_book); a record the feed could not decode is in gold.feed_errors
-$CH -q "SELECT table, num_messages_read, num_commits, last_poll_time, exceptions.text
+ch -q "SELECT table, num_messages_read, num_commits, last_poll_time, exceptions.text
         FROM system.kafka_consumers WHERE database = 'gold' FORMAT Vertical"
-$CH -q "SELECT count() FROM gold.feed_errors"
+ch -q "SELECT count() FROM gold.feed_errors"
 
 # Table sizes
-$CH -q "SELECT table, formatReadableSize(sum(bytes)) AS size, sum(rows) AS rows
+ch -q "SELECT table, formatReadableSize(sum(bytes)) AS size, sum(rows) AS rows
         FROM system.parts WHERE database = 'gold' AND active
         GROUP BY table ORDER BY sum(bytes) DESC FORMAT Pretty"
 ```
@@ -125,7 +127,7 @@ docker exec k2-spark-iceberg python3 /home/iceberg/lake/maintenance.py --audit-o
 curl -s localhost:18181/health | jq .
 PREFIX=$(curl -fsS 'localhost:18181/catalog/v1/config?warehouse=k2' | jq -r '.defaults.prefix')
 curl -fsS "localhost:18181/catalog/v1/$PREFIX/namespaces" | jq -c .
-#   {"namespaces":[["raw"],["bronze"],["silver"],["gold"],["audit"]]}
+#   {"namespaces":[["raw"],["bronze"],["silver"],["gold"],["audit"],["scratch_p4"]]}   (2026-11-26; scratch_p4 is the P4 spike's scratch namespace)
 
 # Ingest lag and per-table commit age (timestamps, aged in PromQL)
 curl -s --get localhost:9090/api/v1/query \
@@ -159,7 +161,7 @@ the host's zone unless told (`--timezone UTC`).
 ```bash
 # These ran against k2-trino on the live stack on 2026-11-25.
 docker exec k2-trino trino --execute 'SHOW SCHEMAS FROM lake'
-#   "audit" "bronze" "gold" "information_schema" "raw" "silver" "system"
+#   "audit" "bronze" "gold" "information_schema" "raw" "silver" "system"   (2026-11-26: "scratch_p4" too)
 docker exec -it k2-trino trino --catalog lake --schema gold          # interactive
 docker exec k2-trino trino --execute 'SELECT count(*) FROM lake.gold.ohlcv_1m'
 

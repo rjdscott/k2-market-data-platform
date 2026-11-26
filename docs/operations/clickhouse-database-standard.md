@@ -54,22 +54,24 @@ a running server is in [`docker/clickhouse/README.md`](../../docker/clickhouse/R
 Run on 2026-08-27 against the post-cutover stack.
 
 ```bash
-CH="docker exec k2-clickhouse clickhouse-client --password $CLICKHOUSE_PASSWORD"
+# A function, not a variable: zsh does not split "$CH" into words, so `CH="docker exec ..."; $CH`
+# fails there with "command not found".
+ch() { docker exec -i k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" "$@"; }
 
-$CH -q "SHOW DATABASES"                 # INFORMATION_SCHEMA default gold information_schema system
-$CH -q "SHOW TABLES FROM gold"
+ch -q "SHOW DATABASES"                 # INFORMATION_SCHEMA default gold information_schema system
+ch -q "SHOW TABLES FROM gold"
 
 # Nothing should have leaked into `default`
-$CH -q "SELECT table, total_rows FROM system.tables
+ch -q "SELECT table, total_rows FROM system.tables
         WHERE database = 'default' AND total_rows > 0"
 
 # Row counts per table
-$CH -q "SELECT table, total_rows FROM system.tables
+ch -q "SELECT table, total_rows FROM system.tables
         WHERE database = 'gold' AND engine NOT LIKE '%View' AND total_rows > 0
         ORDER BY table"
 
 # Trades, deduplicated
-$CH -q "SELECT count() FROM gold.trades FINAL"
+ch -q "SELECT count() FROM gold.trades FINAL"
 ```
 
 `default.offload_watermarks`, the v2 offload's watermark table, orphaned when `docker/offload/`

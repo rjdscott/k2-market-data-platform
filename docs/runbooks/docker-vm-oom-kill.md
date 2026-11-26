@@ -72,7 +72,8 @@ journalctl --user -u docker-desktop --utc --no-pager | grep -E "Failed with resu
 #   After a host reboot the kernel lines are in the previous boot: add -b -1 to the first journalctl.
 
 # 2. Make room first, or the VM is killed again as it refills: close what was using the
-#    host's memory, then check that swap is no longer full.
+#    host's memory (the largest first; RSS in kB), then check that swap is no longer full.
+ps -eo rss=,comm= --sort=-rss | head -10
 free -h
 ```
 

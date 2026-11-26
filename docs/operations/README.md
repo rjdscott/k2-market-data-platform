@@ -29,7 +29,10 @@ can reach.
 
 ## Read this first: the state of this host
 
-Two conditions on the reference host, as of 2026-11-26, change the commands below.
+Two conditions on the *reference host*, the maintainer's machine where the live stack runs and
+where every command on this page was checked, change the commands below as of 2026-11-26. On
+another host, check the first with `python3 scripts/check-env.py` and the second with the
+sizing arithmetic linked below.
 
 **`make up` and `make dev-up` refuse to start this stack.** Both run `scripts/check-env.py`
 first, which refuses a default or placeholder credential, and the live MinIO root credential is
@@ -101,7 +104,7 @@ check-env printed `check-env: PASS ... (MinIO user and password differ; no place
 `make up` and `make health` on a fresh clone were last timed on 2026-08-28, about 15 minutes
 from nothing to data in every lake layer, most of it building the Spark image
 ([fresh-install.md](../runbooks/fresh-install.md), which also covers the build race and the
-benign start-up noise). Three `.env` values are host-specific, not secrets:
+benign start-up noise). These `.env` values are host-specific, not secrets:
 
 - `K2_CAPTURE_CPUSET` and `K2_HEAVY_CPUSET` ship empty: no CPU pinning, starts on any host.
   Set the 15-core layout from `.env.example` only on a host that has those cores, or six
@@ -143,11 +146,12 @@ docker compose up -d     # the same compose command make up runs, without the cr
 
 That bare `docker compose up -d` is the one sanctioned use of it on this host, and only to bring
 back a stack that already ran with this `.env`: it skips `check-env.py`, which is the guard a
-new stack needs. <!-- VERIFY: not run on this stack since the loopback change; expect every container healthy within about 5 minutes -->
+new stack needs. <!-- VERIFY: a whole-stack docker compose up -d after a stop or make down not run on this stack since the loopback change -->
 
 **Then, either way:** unpause any DAG you paused before stopping (section 6, step 5; a pause is
 kept in Airflow's database across restarts), run `make health` (section 3), and if capture was
-down, record the window as the runbook's step 8 does.
+down, record the window in `lake.audit.checks` as step 8 of
+[docker-vm-oom-kill.md](../runbooks/docker-vm-oom-kill.md) does.
 
 ---
 
@@ -188,7 +192,7 @@ Line by line (`scripts/health.sh`):
 | `(1)`, its blind spot | A container that has **exited** is not in the list `(1)` reads, so it passes with, for example, Prometheus down | run the `comm` check in section 2 | section 2 |
 | `(2) <venue>` | Trades of that venue in ClickHouse `gold.trades` with an exchange timestamp in the last 2 minutes. Never FAIL | `WARN (0 trades/2min)`, or **a venue missing from the list** (only venues with rows print): nothing reached the hot tier from it. `WARN (no rows ...)` for all: ClickHouse unreachable, or nothing is flowing | [capture-feed-stale.md](../runbooks/capture-feed-stale.md); everything silent: [failure-recovery.md](../runbooks/failure-recovery.md) sections 1 and 2 |
 | `(2) capture-<venue> metrics` | Reads each capture's `/metrics` (port 8082 inside the compose network, through a throwaway `curlimages/curl` container) and prints the last-message time per stream, in Unix seconds. It does not judge staleness | `WARN (no k2_capture_last_message_ts_seconds yet ...)`: the capture is not serving metrics | [capture-down.md](../runbooks/capture-down.md); staleness per stream: `docker exec k2-capture-<venue> /k2-capture healthcheck` |
-| `(3) lake commit age` | Seconds since the newest commit to any lake table, from Prometheus (`time() - max(k2_lake_last_commit_ts_seconds)`), at most 1800 (`K2_HEALTH_LAKE_MAX_AGE`) | `FAIL (Prometheus has no k2_lake_last_commit_ts_seconds ...)`: Prometheus is down (`curl -s localhost:9090/-/healthy`), the `lake-metrics` exporter is down, or the lake never committed. `FAIL (last commit <n>s ago ...)`: the lake is stale | Prometheus down: section 6; exporter: [lake-recovery.md](../runbooks/lake-recovery.md); stale: [lake-ingest-lag.md](../runbooks/lake-ingest-lag.md) section 2 |
+| `(3) lake commit age` | Seconds since the newest commit to any lake table, from Prometheus (`time() - max(k2_lake_last_commit_ts_seconds)`), at most 1800 (`K2_HEALTH_LAKE_MAX_AGE`) | `FAIL (Prometheus has no k2_lake_last_commit_ts_seconds ...)`: Prometheus is down (`curl -s localhost:9090/-/healthy`), the `lake-metrics` exporter is down, or the lake never committed. `FAIL (last commit <n>s ago ...)`: the lake is stale | Prometheus down: `docker compose up -d --no-deps prometheus` (safe at any time, section 6); exporter: [lake-recovery.md](../runbooks/lake-recovery.md); stale: [lake-ingest-lag.md](../runbooks/lake-ingest-lag.md) section 2 |
 | `(3) last lake_ingest run` | The newest finished scheduled `lake_ingest` run of the last 30 minutes, from the Airflow CLI in `k2-airflow-scheduler`. `PASS` on `success`, and on skips while `lake_maintenance` or `lake_rebuild` holds the lake's writer lock (a run that finds the lock taken exits 75 and is marked skipped) | `FAIL (the Airflow CLI ... did not answer)`: the scheduler is down. `FAIL (no lake_ingest run finished ...)`: the DAG is paused or stale, or the scheduler stopped (a deliberate pause shows this too). `FAIL (<run> failed ...)`. `WARN (1 or 2 skipped ...)`, then `FAIL` at 3 skipped with nothing holding the lock | [airflow-scheduling.md](../runbooks/airflow-scheduling.md): section 1, sections 5 and 1, section 2, section 3 |
 
 Beyond `make health`, three reads worth a glance once a day:
@@ -222,7 +226,7 @@ URL answered on 2026-11-26 (`curl -s -o /dev/null -w '%{http_code}'`: 200 unless
 
 | Service | URL | What it is for | Login |
 |---|---|---|---|
-| Grafana | http://localhost:3000 | The dashboards: start at `k2-pipeline-overview`, then `k2-lake` and `k2-resources` ([dashboards.md](./dashboards.md)) | user `admin`, password `GRAFANA_PASSWORD` |
+| Grafana | http://localhost:3000 | The dashboards: start at **K2 Pipeline Overview**, then **K2 Lake (v3)** and **K2 Resources** (Dashboards, in the left menu; [dashboards.md](./dashboards.md)) | user `admin`, password `GRAFANA_PASSWORD` |
 | Airflow | http://localhost:8090 (`K2_AIRFLOW_PORT`) | The four DAGs, their runs, task logs, pause and unpause | user `admin`; password generated by Airflow on first start: `docker exec k2-airflow-api-server cat /opt/airflow/simple_auth_manager_passwords.json.generated` |
 | Redpanda Console | http://localhost:8080 | Topics, consumer groups, live messages, decoded as Avro through the schema registry | none |
 | Trino | http://localhost:8088/ui/ (`K2_TRINO_PORT`) | SQL over every lake table (catalog `lake`, read-only) and the dbt marts; the UI shows running and recent queries | any user name; not authenticated |
@@ -295,8 +299,8 @@ which are the lake, the hot tier, Redpanda, and the catalog's metadata.
 2026-11-25, when the host killed the Docker VM: capture was off 343 s; for the minute of the kill
 the hot tier and the lake hold different partial sets of trades, because Redpanda runs without
 fsync (`--unsafe-bypass-fsync=true`) and acknowledged records still in the VM's memory died
-with it; the lake run in flight committed nothing and Airflow retried it; Prometheus did not
-restart by itself. The procedure is [docker-vm-oom-kill.md](../runbooks/docker-vm-oom-kill.md).
+with it; the lake run the kill interrupted was retried by Airflow and succeeded (a lake commit
+is all or nothing); Prometheus did not restart by itself. The procedure is [docker-vm-oom-kill.md](../runbooks/docker-vm-oom-kill.md).
 A stop longer than about 48 hours has one more risk: Redpanda keeps raw records for 48 h or 2 GiB
 per partition, so records the lake had not read before the stop can be deleted at restart before
 the ingest reaches them. Step 1 is what rules that out.
@@ -329,8 +333,10 @@ rule below). `-t <seconds>` gives the old container that long to stop cleanly.
 docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow dags list -o json 2>/dev/null | tail -n 1 \
   | python3 -c 'import json,sys; [print(d["dag_id"], "paused" if d["is_paused"] else "unpaused") for d in json.load(sys.stdin)]'
 
-# 1. Pause the scheduled DAGs (as run on 2026-11-25 before the rollout). lake_rebuild runs
-#    only by hand and needs no pause; step 2 still waits for it.
+# 1. Pause the scheduled DAGs (as run on 2026-11-25 before the rollout). Each prints the DAG
+#    with its old state (`lake_ingest | False`) when it paused it, and "No unpaused DAGs
+#    were found" when it was paused already. lake_rebuild runs only by hand and needs no
+#    pause; step 2 still waits for it.
 docker exec k2-airflow-scheduler airflow dags pause lake_ingest
 docker exec k2-airflow-scheduler airflow dags pause lake_maintenance
 docker exec k2-airflow-scheduler airflow dags pause dbt_marts
@@ -383,8 +389,9 @@ wait_idle && docker compose up -d --no-deps <service>                      # def
 wait_idle && docker compose up -d --force-recreate --no-deps <service>     # re-read mounts or config
 #    with -t 60 for clickhouse and -t 30 for redpanda, as run on 2026-11-25
 
-# 4. Verify: the container is healthy (spark-iceberg and lake-metrics have no healthcheck,
-#    so read .State.Status for them: running), then the whole stack.
+# 4. Verify: repeat the first line until it prints healthy (it prints starting meanwhile;
+#    spark-iceberg and lake-metrics have no healthcheck, so read .State.Status for them:
+#    running), then the whole stack.
 docker inspect -f '{{.State.Health.Status}}' k2-<service>
 make health
 
@@ -445,27 +452,29 @@ git diff --name-only HEAD origin/main      # which paths: find each in the table
 git pull --ff-only
 ```
 
-Then, for each path that changed:
+Then, for each path that changed. *Under the pause* means section 6's steps 0 to 2 before the
+command and step 5 after it.
 
 | Changed | Read by | After the pull |
 |---|---|---|
 | `docker/lake/*.py` | each lake job, fresh per run | nothing: the next run uses it. `metrics.py` is also the long-running `lake-metrics`: `docker compose up -d --force-recreate --no-deps lake-metrics` |
-| `docker/lake/ddl/` (lake table DDL) | the `lake-ddl` one-shot | pause, wait, then `docker compose up -d --force-recreate --no-deps lake-ddl` |
+| `docker/lake/ddl/` (`lake.sql` and the generated table DDL) | the `lake-ddl` one-shot | under the pause: `docker compose up -d --force-recreate --no-deps lake-ddl` |
 | `dbt/` models, macros, YAML | the next `dbt_marts` run | nothing |
-| `dbt/uv.lock`, `dbt/package-lock.yml`, `docker/airflow/Dockerfile` | baked into the image `k2-airflow:3.3.2` | `docker compose build airflow-migrate` (the only service that builds it), then pause, wait, `docker compose up -d --force-recreate --no-deps airflow-api-server airflow-scheduler airflow-dag-processor` |
+| `dbt/uv.lock`, `dbt/package-lock.yml`, `docker/airflow/Dockerfile` | baked into the image `k2-airflow:3.3.2` | `docker compose build airflow-migrate` (the only service that builds it), then under the pause `docker compose up -d --force-recreate --no-deps airflow-api-server airflow-scheduler airflow-dag-processor` |
 | `docker/airflow/dags/` | the dag-processor | nothing; confirm with `docker exec k2-airflow-scheduler airflow dags list-import-errors` (`No data found`) |
 | `docker/airflow/statsd-mapping.yml` | file mount | section 6, the `airflow-statsd` row |
 | `docker/prometheus/rules/` | read at start and on SIGHUP | `docker kill -s HUP k2-prometheus`, then check `/rules` lists the change |
 | `docker/prometheus/prometheus.yml` | file mount | `docker compose up -d --force-recreate --no-deps prometheus` |
 | `docker/grafana/dashboards/` | polled every 30 s | nothing |
 | `docker/grafana/provisioning/` | read at start | `docker compose up -d --force-recreate --no-deps grafana` |
-| `docker/trino/etc/` (including the catalogs `make generate` writes) | read at start | pause `dbt_marts`, wait, `docker compose up -d --force-recreate --no-deps trino` |
+| `docker/trino/etc/` (including the catalogs `make generate` writes) | read at start | under the pause (section 6, the `trino` row): `docker compose up -d --force-recreate --no-deps trino` |
+| `docker/lake/generated/warehouses.txt` (a new data domain from `make generate`) | the `lake-init` one-shot creates its warehouse | `docker compose up -d --force-recreate --no-deps lake-init`, then the `docker/trino/etc/` row; [`docker/trino/README.md`](../../docker/trino/README.md) has the order |
 | `docker/clickhouse/config.xml`, `users.xml` | file mounts | `docker compose up -d --force-recreate --no-deps -t 60 clickhouse` |
 | `docker/clickhouse/ddl/` | only an empty volume | apply by hand: [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md#applying-it-to-a-running-server) |
 | `config/instruments.yaml` | the captures at start; file mount in `spark-iceberg` | recreate the three `capture-*` one at a time (each loses its venue's data while down), and `spark-iceberg` under the pause |
 | `docker/redpanda/`, `schemas/avro/` | the `redpanda-init` one-shot | `docker compose up -d --force-recreate --no-deps redpanda-init`: every step is create-if-missing or converge |
 | `services/capture-rust/` | the image `k2-capture:v3` | `make build-capture`, then recreate the three captures one at a time |
-| `docker/spark/Dockerfile` | the image `k2-spark-iceberg` | `docker compose build spark-iceberg`, then pause, wait, recreate `spark-iceberg` |
+| `docker/spark/Dockerfile` | the image `k2-spark-iceberg` | `docker compose build spark-iceberg`, then under the pause `docker compose up -d --force-recreate --no-deps spark-iceberg` |
 | `docker/lake-metrics/Dockerfile` | the image `k2-lake-metrics` | `docker compose build lake-metrics`, then recreate `lake-metrics` |
 | `docker-compose.yml` | compose | `docker compose up -d --no-deps <each changed service>`, under the pause where section 6 asks for one |
 
