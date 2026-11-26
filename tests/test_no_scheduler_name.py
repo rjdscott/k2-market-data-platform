@@ -18,7 +18,7 @@ NAME = "pre" + "fect"
 # Immutable records and the archive: dated, never rewritten.
 IMMUTABLE = (
     "legacy/", "docs/adr/", "docs/audits/", "docs/benchmarks/", "docs/research/",
-    "docs/plans/", "docs/MIGRATION-JOURNEY.md",
+    "docs/plans/", "docs/MIGRATION-JOURNEY.md", "CHANGELOG.md",
 )
 
 # Files that name the retained database role in prose, because the role is

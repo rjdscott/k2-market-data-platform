@@ -22,7 +22,7 @@ v3 lake-first stack (tag `v3-phase-e`).
 - Product descriptors and ODCS contracts for every lake table, with `k2gen validate`,
   `make generate` and a CI drift job (#183, #184; ADR-032, ADR-033).
 - Airflow 3 runs the lake schedules, with the lake DAGs cut over from Prefect
-  (#189, #195; ADR-034). Prefect stays behind `--profile legacy`.
+  (#189, #195; ADR-034).
 - Trino 484 over the lake through a read-only catalog, and one mart warehouse per data
   domain (#200; ADR-035, ADR-044).
 - A dbt project and its first mart, `market_analytics.candles.ohlcv_1m`, with a
@@ -56,7 +56,9 @@ v3 lake-first stack (tag `v3-phase-e`).
 
 ### Removed
 
-- Nothing user-facing. Order-book capture is not removed; see Added.
+- The Prefect scheduler: its two services and the `legacy` compose profile are gone, and
+  its code is archived in `legacy/prefect/` (#235; ADR-034 Outcome). There is no
+  rollback to it in the compose file.
 
 ### Security
 
