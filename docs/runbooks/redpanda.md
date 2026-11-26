@@ -23,9 +23,16 @@ Redpanda is the Kafka-compatible message broker. It runs as a single-broker clus
 
 | Topic | Partitions | Payload | Consumers |
 |-------|-----------:|---------|-----------|
-| `market.crypto.v3.raw.<ex>` | 12 | Avro `RawMessage`, every frame verbatim | lake ingest, by offset range (no consumer group) |
-| `market.crypto.v3.trades.<ex>` | 12 | Avro `Trade` | lake ingest; ClickHouse `gold.q_trades`, group `k2-gold-trades` (paused, ADR-057) |
-| `market.crypto.v3.book.<ex>` | 12 | Avro `BookSnapshotL2`, top-20 at 1 Hz | lake ingest; ClickHouse `gold.q_book`, group `k2-gold-book` (paused, ADR-057) |
+| `market.crypto.v3.raw.<ex>` | 12 | Avro `RawMessage`, every frame verbatim | none until phase 004 |
+| `market.crypto.v3.trades.<ex>` | 12 | Avro `Trade` | ClickHouse `gold.q_trades`, group `k2-gold-trades` (paused, ADR-057) |
+| `market.crypto.v3.book.<ex>` | 12 | Avro `BookSnapshotL2`, top-20 at 1 Hz | ClickHouse `gold.q_book`, group `k2-gold-book` (paused, ADR-057) |
+
+The v3 lake ingest, which read all nine by offset range, retired on 2026-11-26 with its pipeline
+([`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/),
+[ADR-056](../adr/ADR-056-unified-data-product-platform.md)). Until the Kafka connector of
+[phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md)
+reads them, the topics are the only copy of what the captures record, kept for their retention
+and no longer.
 
 `<ex>` ∈ {`binance`, `kraken`, `coinbase`}, 9 topics, 108 partitions, produced by the
 three `k2-capture-*` containers. Keys are plain UTF-8: `trades.*` and `book.*` key on the
@@ -140,8 +147,8 @@ BROKER  GROUP           STATE
 | `k2-gold-book` | `gold.q_book` → `gold.book_top20` | `market.crypto.v3.book.{binance,kraken,coinbase}` |
 
 Both are declared in [`docker/clickhouse/ddl/20-gold-kafka.sql`](../../docker/clickhouse/ddl/20-gold-kafka.sql).
-The lake ingest reads every v3 topic by offset range and keeps its position in the Iceberg
-snapshot summary, so it never appears here ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)).
+The retired v3 lake ingest kept its position in the Iceberg snapshot summary, not in a group
+([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)), so it never appeared here.
 
 **ClickHouse is paused** behind the compose profile `hot-gold`
 ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)): while it is, both groups have no members and keep their committed offsets
@@ -237,9 +244,9 @@ docker exec k2-clickhouse clickhouse-client --password "$CLICKHOUSE_PASSWORD" -q
 > trade, so re-delivered rows collapse under `FINAL` and the earliest delivery wins. Counts
 > *without* `FINAL` will double until the merge runs. The v2 warning that used to live here
 >, bronze was plain `MergeTree` and a replay duplicated every row, went with the `k2`
-> database. For anything older than the topic's 7-day retention, reload from the lake
-> instead: [clickhouse-rebuild-from-lake.md](./clickhouse-rebuild-from-lake.md), while the old
-> lake `gold` exists ([pause-and-resume-a-serving-product.md §4](./pause-and-resume-a-serving-product.md#4-when-the-reload-from-lake-runbook-no-longer-applies)).
+> database. Anything older than the topic's 7-day retention cannot be replayed: the reload
+> from the lake's gold retired with the v3 lake
+> ([pause-and-resume-a-serving-product.md §4](./pause-and-resume-a-serving-product.md#4-the-reload-from-the-lake-no-longer-applies)).
 
 ---
 
@@ -257,8 +264,9 @@ docker exec k2-redpanda df -h /var/lib/redpanda/data
 1. Check retention settings, the v3 `raw.*` topics cap at 2 GiB per partition
    (`retention.bytes`) as well as 48 h, so they are bounded by design. Confirm with
    `rpk topic describe market.crypto.v3.raw.binance`.
-2. `trades.*` / `book.*` are 7 d, time-only; they are rebuildable from the lake, so a
-   shorter `retention.ms` on them is the cheap lever if 1 is not enough.
+2. `trades.*` / `book.*` are 7 d, time-only. Nothing else holds them while the lake receives
+   nothing and the hot tier is paused, so a shorter `retention.ms` on them shortens what a
+   resume of ClickHouse can read; it is the cheap lever only if that is acceptable.
 3. If persistent, expand the Docker volume or add disk.
 
 *Step 1 is read-only and verified; 2 and 3 are not yet run.* (The six v2 topics, 160

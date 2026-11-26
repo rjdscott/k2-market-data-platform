@@ -45,15 +45,16 @@ failed and does not restart it. Once Docker Desktop is started again:
   `unless-stopped`, and had to be started by hand (step 4). Expect that again and check;
 - capture reconnects to each venue and resumes, but **the market data of the outage is not
   recoverable**: the venues' public feeds do not replay, so the window between the kill and
-  the capture's reconnect is a permanent hole in both the hot tier and the lake;
-- the lake ingest resumes from the Kafka offsets in its last committed Iceberg snapshot
-  ([ADR-022](../adr/ADR-022-exactly-once-via-snapshot-offsets.md)), so the run the kill
-  interrupted committed nothing or everything, and Airflow retries it once;
+  the capture's reconnect is a permanent hole in Redpanda's topics and in every product later
+  read from them;
+- no lake job runs until phase 002, so there is no interrupted run to check; on 2026-11-25 the
+  v3 lake ingest's interrupted run was retried by Airflow and succeeded (that pipeline is retired
+  and archived in [`legacy/v3-lake-ingest/`](../../legacy/v3-lake-ingest/));
 - Redpanda runs with `--unsafe-bypass-fsync=true` and `write_caching_default` `true`
   (`--mode dev-container` in `docker-compose.yml`): it acknowledges a record before it is on
-  disk. Records still in the VM's memory when the VM died are gone, and ClickHouse and the
-  lake may each have read a different part of the last seconds. That is why step 7 compares
-  them.
+  disk. Records still in the VM's memory when the VM died are gone. On 2026-11-25 that left the
+  hot tier and the v3 lake each holding a different part of the last seconds; with both stood
+  down, nothing downstream has read them.
 
 **Recovery**
 
@@ -91,7 +92,7 @@ docker info --format '{{.ServerVersion}}'
 #    on 2026-11-25 it did not, and passed with Prometheus exited.
 #    Run 2026-11-26 on the healthy stack: no output. On 2026-11-25 it would have listed
 #    prometheus (Exited (255)).
-comm -23 <(docker compose config --services | grep -v -x -E 'airflow-migrate|lakekeeper-migrate|lake-init|lake-ddl|redpanda-init' | sort) \
+comm -23 <(docker compose config --services | grep -v -x -E 'airflow-migrate|lakekeeper-migrate|lake-init|redpanda-init' | sort) \
          <(docker compose ps --services --status running | sort)
 
 # Start each one it lists, by name. As run on 2026-11-25 for Prometheus. `make up` is not
@@ -102,75 +103,35 @@ docker compose up -d --no-deps prometheus
 
 ```bash
 # 5. The whole stack. As run on 2026-11-25: health: PASS at 22:43:56 UTC. Run 2026-11-26
-#    (counts replaced; they are market-derived):
+#    (counts replaced; they are market-derived; steps (3) and (4) are as the operator guide's
+#    section 3 describes them since the v3 lake retired):
 make health
 #   (1) health: PASS (all services healthy or have no healthcheck)
-#   (2) coinbase: PASS (<n> trades/2min)   ... one line per venue, then one per capture's metrics
-#   (3) lake commit age: PASS (last commit 173s ago)
-#   (3) last lake_ingest run: PASS (scheduled__2026-11-26T01:16:00+00:00 success)
+#   (1) long-running services: PASS (every one is running)
+#   (2) binance: PASS (<n> records delivered to Redpanda in 2 min; healthcheck ok: ...)   ... one line per venue
 #   health: PASS
 ```
 
-```bash
-# 6. The lake run the kill interrupted was retried and succeeded. Read the runs around the
-#    kill; the one whose end is long after its start is the interrupted one, and its task
-#    directory holds two attempts. Run 2026-11-26 for the 2026-11-25 kill:
-docker exec -e PYTHONWARNINGS=ignore k2-airflow-scheduler airflow dags list-runs lake_ingest -o plain \
-  --start-date 2026-11-25T22:20:00+00:00 --end-date 2026-11-25T22:50:00+00:00
-#   dag_id       run_id                                state    run_after  ...  start_date                        end_date
-#   lake_ingest  scheduled__2026-11-25T22:41:00+00:00  success  ...             2026-11-25T22:43:36.506452+00:00  2026-11-25T22:47:26.144228+00:00
-#   lake_ingest  scheduled__2026-11-25T22:31:00+00:00  success  ...             2026-11-25T22:31:00.679656+00:00  2026-11-25T22:43:35.399218+00:00
-#   lake_ingest  scheduled__2026-11-25T22:26:00+00:00  success  ...             2026-11-25T22:26:00.301355+00:00  2026-11-25T22:30:05.662560+00:00
-#   The 22:31 run ended 12.5 min after it started. There is no 22:36 run: the scheduler was
-#   down for that slot, and the 22:41 run read on from the committed offsets.
-docker exec k2-airflow-scheduler ls '/opt/airflow/logs/dag_id=lake_ingest/run_id=scheduled__2026-11-25T22:31:00+00:00/task_id=ingest/'
-#   attempt=1.log  attempt=2.log
-```
+**6 and 7, retired.** Step 6 checked that the v3 lake ingest's interrupted run was retried, and
+step 7 compared the hot tier with that lake minute by minute. No lake job runs until phase 002
+and both stores are stood down (ClickHouse paused, ADR-057; the v3 lake archived), so there is
+nothing to check or compare. On 2026-11-25 the comparison showed one differing minute, 22:33
+UTC, left as captured by the owner's decision; both steps are in git history.
 
-**7. Compare the hot tier with the lake, minute by minute, around the kill**, only while the
-compose profile `hot-gold` runs; with ClickHouse paused (ADR-057) there is no hot tier to compare,
-so skip to step 8. The procedure
-is [failure-recovery.md section 8, "Host or Docker VM killed: the hot tier against the
-lake"](./failure-recovery.md#8-host-or-docker-vm-killed-the-hot-tier-against-the-lake); follow
-it rather than a copy here. On 2026-11-25 it showed one differing minute, 22:33 UTC, where the
-hot tier and the lake hold different partial sets of trades, and no divergence in any other
-minute of the day. The owner's decision: leave both as captured, do not repair.
-
-**8. Record the outage** as one row in `lake.audit.checks`, the lake's append-only table of
-check results, with `docker/lake/record_check.py`. The row is the permanent record that the
-window is missing on purpose, not a bug for the next reader to chase, and the parity gate
-(`make parity-ohlcv`, which compares candles across ClickHouse, the lake and DuckDB;
-[glossary](../adr/glossary.md#parity-three-way-and-pinned)) may skip that minute only as a
-[known gap](../adr/glossary.md#known-gap) that names this row (`tests/parity/README.md`). The flags:
-
-- `--job operator` marks a row a person filed by hand (the other jobs are the nightly audit,
-  the ingest and the replay tool);
-- `--check capture_outage` is the check name, the same for every outage like this one;
-- `--scope 'stack/<kill>..<capture back>'`, both in UTC to the second, names the window;
-- `--observed` is the seconds capture was off, and `--failed` stores `passed = false`;
-- `--detail` says the cause and what was left unrepaired, in one or two sentences.
-
-`record_check.py` starts a small Spark session in `k2-spark-iceberg` (the 512m driver below),
-beside whatever ingest is running. The 2026-11-25 row exists, recorded at 2026-11-26 01:00:44
-UTC by the command in failure-recovery.md section 8 step 5: do not record it again. For the
-next outage:
-
-```bash
-docker exec -e K2_LAKE_DRIVER_MEMORY=512m k2-spark-iceberg python3 /home/iceberg/lake/record_check.py \
-  --job operator --check capture_outage --scope 'stack/<kill>Z..<capture back>Z' \
-  --observed <seconds> --failed --detail '<cause>; <what differs and was left as captured>'
-
-# Read it back (run 2026-11-26):
-docker exec k2-trino trino --user reviewer --output-format TSV_HEADER --execute \
-  "SELECT run_ts, job, check_name, scope, passed, observed FROM lake.audit.checks WHERE job = 'operator' ORDER BY run_ts DESC LIMIT 5"
-#   run_ts                          job       check_name      scope                                            passed  observed
-#   2026-11-26 01:00:44.228723 UTC  operator  capture_outage  stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z  false   343
-```
+**8. Record the outage**: the venue (`stack` when all of them), the window in UTC to the second
+from the kill to capture producing again, the seconds capture was off, the cause, and what was
+left unrepaired. It is the permanent record that the window is missing on purpose, not a bug
+for the next reader to chase. The lake's audit table that held these records retired with the
+v3 lake; the 2026-11-25 row (`operator`, `capture_outage`, recorded 2026-11-26 01:00:44 UTC)
+survives only in the host copies under `~/k2-backup/`. An operator's record of lost data
+returns with the "accept data loss" runbook in
+[phase 004](../plans/2026-11-26-unified-product-platform/004-kraken-trades-instruments-security-master.md);
+until then, write it in the incident's issue.
 
 **Measured**, one occurrence, 2026-11-25, not induced: the kill at 22:33:43 UTC (kernel log),
 Docker Desktop started at 22:39:18 (its unit's journal), capture producing again at 22:39:26
-(capture off **343 s**), the interrupted ingest's second attempt from 22:39:31 to 22:43:35
-(Airflow), `make health` PASS at 22:43:56 (the operator's log). That is 10 min 13 s from the
+(capture off **343 s**), the interrupted v3 ingest's second attempt from 22:39:31 to 22:43:35
+(Airflow; that pipeline is since retired), `make health` PASS at 22:43:56 (the operator's log). That is 10 min 13 s from the
 kill to PASS, 5 min 35 s of it before anyone started Docker Desktop: no alert can fire
 (Detection above).
 
@@ -232,8 +193,11 @@ The two ways to satisfy the rule:
   warning that comes before the kill. This is the owner's decision of 2026-11-26: keep the VM
   at 51,712 MiB, keep the desktop light, add no swap.
 - **Shrink the VM.** The floor is the stack's declared memory limits at the bootstrap peak,
-  37.812 GiB (`python3 scripts/check-budget.py`), plus about 1 GiB for the VM's own kernel,
-  so about 39 GiB: below that, Docker Desktop silently clips every container limit above the
+  36.688 GiB with the paused ClickHouse running and 28.688 GiB without it (the `bootstrap
+  hot-gold` and `bootstrap default` lines of `python3 scripts/check-budget.py`, computed on
+  2026-11-26 without the two services the v3 lake's retirement removes;
+  [docker-resources.md](../operations/docker-resources.md)), plus about 1 GiB for the VM's own
+  kernel, so about 38 GiB, or 30 GiB while ClickHouse stays paused: below that, Docker Desktop silently clips every container limit above the
   VM size ([setup.md](../development/setup.md)). Measured use is far lower (10.12 GiB of
   process memory at the 6-hour peak in [ADR-045](../adr/ADR-045-ceiling-25-cpu-48-gib.md)),
   so a smaller VM runs, but the limits are then not real. Shrinking memory does not touch
@@ -252,11 +216,11 @@ The reasoning behind the original sizing, and why it was wrong, is
   Recovered with `systemctl --user reset-failed docker-desktop; systemctl --user start
   docker-desktop` at 22:39:18. Every container restarted by itself except Prometheus, which
   stayed `Exited (255)` and was started with `docker compose up -d --no-deps prometheus`. The
-  interrupted `lake_ingest` run was retried by Airflow and succeeded; `make health` PASS at
-  22:43:56 UTC. Capture was off 343 s (22:33:43 to 22:39:26); that market data is not
-  recoverable. Minute 22:33: the hot tier and the lake hold different partial sets of trades,
-  left as captured and recorded as `lake.audit.checks` job `operator`, check
-  `capture_outage`. Cause: desktop use plus the VM's full 51,712 MiB exceeded host RAM and
+  interrupted run of the v3 lake ingest (since retired) was retried by Airflow and succeeded;
+  `make health` PASS at 22:43:56 UTC. Capture was off 343 s (22:33:43 to 22:39:26); that market
+  data is not recoverable. Minute 22:33: the hot tier and the v3 lake held different partial sets
+  of trades, left as captured and recorded as an operator row of that lake's audit table (since
+  archived), check `capture_outage`. Cause: desktop use plus the VM's full 51,712 MiB exceeded host RAM and
   swap; this page and the ADR-045 Outcome record the corrected sizing rule.
 
 **Revisit when** the VM is killed a second time (then the owner's "keep the desktop light"
@@ -265,7 +229,7 @@ changes (re-do the table above).
 
 ---
 
-**Last verified:** 2026-11-26 against `791c77a` on the live stack, read-only: steps 1, 4, 5,
-6 and the read-back in 8 were run; step 3, the Prometheus start in 4 and the 2026-11-25 row in
-8 were run by the operator on 2026-11-25/26 as recorded above; step 7 is failure-recovery.md
-section 8's, verified there.
+**Last verified:** 2026-11-26 on the live stack, read-only: steps 1, 2 and 5 were run, and
+step 4's check with the service list read from a copy of the compose file without the two
+services the v3 lake's retirement removes (it printed nothing). Step 3 and the Prometheus start
+in 4 were run by the operator on 2026-11-25 as recorded above. Steps 6 and 7 are retired.
