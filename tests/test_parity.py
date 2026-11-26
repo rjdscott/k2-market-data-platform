@@ -798,7 +798,7 @@ def test_v2_only_json_carries_the_truncation_the_exit_code_reports(monkeypatch, 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Pin resolution — scripts/parity_ohlcv.py resolve_snapshot
+# Pin resolution: scripts/parity_ohlcv.py resolve_snapshot
 #
 # A pin is read only if it is on main's lineage (the walk from main's head along
 # parent links) or a tag names it; anything else stops the run. From 2026-08-27 to
