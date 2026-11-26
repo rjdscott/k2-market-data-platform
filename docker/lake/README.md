@@ -16,12 +16,13 @@ compares them before the old path is deleted.
 | File | What it does |
 |---|---|
 | `ddl/lake.sql` | Every table: `raw.messages`, the six per-venue `bronze.<venue>_<msgtype>` plus `bronze.kraken_instrument`, silver, gold, and `audit.checks`. The Phase D unified `bronze.*` pair was dropped at the Phase E cutover (comment above `bronze.binance_trade`) |
-| `ddl/generated/` | Written by `k2gen generate`, never by hand: DDL for data product contracts with inline columns ([ADR-032](../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)). None today |
+| `ddl/generated/` | Written by `k2gen generate`, never by hand: DDL for data product contracts with inline columns ([ADR-032](../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)): `bronze.source_files` today |
 | `generated/retention.json` | Written by `k2gen generate`: snapshot expiry in days per table, from the contracts. Nothing reads it until phase P5 |
+| `generated/file_sources.json` | Written by `k2gen generate`: per file source, its URL, parser, audits, key, value columns, which of them are numbers, and patterns, from its contract's `fileSource` property and columns. `{}` today |
 | `generated/contract_schemas.json` | Written by `k2gen generate`: per lake table, what its contract states (columns in order with their Spark SQL type and `NOT NULL`, partitioning, sort order, identifier fields). The nightly `contract_schema` audit reads it, since `contracts/` is not mounted here |
 | `apply_ddl.py` | Applies `ddl/lake.sql`, then `ddl/generated/*.sql` in name order. The `lake-ddl` one-shot runs it; idempotent, so a re-run is a no-op |
 | `spark_conf.py` | The one Spark session builder. Every catalog and S3 setting lives here, env-driven |
-| `init-lake.sh` | The `lake-init` one-shot: MinIO bucket, Lakekeeper bootstrap, warehouse, namespaces |
+| `init-lake.sh` | The `lake-init` one-shot: MinIO buckets (`k2-lake`, and `k2-landing`, versioned, for file sources), Lakekeeper bootstrap, warehouse, namespaces |
 | `offsets.py` | Pure offset bookkeeping. The exactly-once contract, and the only file with no Spark import |
 | `wire.py` | The Confluent framing, as a Python parser and as the Spark SQL the executors run |
 | `catalog.py` | Snapshot bookkeeping, the registry fetch by id, and how a running job files an audit row. Shared by the next three |
@@ -38,6 +39,8 @@ compares them before the old path is deleted.
 | `maintenance.py` | Nightly compaction, snapshot expiry, and the audits. Non-zero exit on a failure |
 | `contract_schema.py` | Pure: the live table against its contract, from Iceberg's own JSON for its schema, partition spec and sort order. `maintenance.py` files one `contract_schema` row per lake table with it, and one per table with no contract outside a `scratch_` namespace; run from the host, it does the same comparison read-only over the REST catalog (`python3 docker/lake/contract_schema.py`). [Runbook](../../docs/runbooks/lake-audit-failed.md#15-contract_schema-a-live-table-is-not-what-its-contract-states) section 15 |
 | `metrics.py` | The `lake-metrics` exporter. Reads snapshot summaries over the catalog's REST API |
+| `file_source.py` | A file source ([ADR-036](../../docs/adr/ADR-036-file-sources-land-unchanged-then-publish-after-audit.md)): `fetch` lands the file in `k2-landing` by conditional PUT, `load` stages the rows `main` lacks on branch `wap_<sha256 prefix>` and records the file in `bronze.source_files`, `audit` files the generic and product checks in `audit.checks`, `publish` fast-forwards `main` only after they passed. One subcommand per task of the DAG `docker/airflow/dags/factory.py` builds. [Runbook](../../docs/runbooks/file-source-audit-failed.md) |
+| `sources/` | One parser per file source, `parse(bytes) -> rows`, plus its product audits; standard library only, after the expat version check in `sources/__init__.py`. `synthetic_rates.py` is the test source's |
 
 ---
 
@@ -171,13 +174,22 @@ python3 docker/lake/contract_schema.py
 # tables, idempotently
 docker exec k2-spark-iceberg python3 /home/iceberg/lake/apply_ddl.py
 
+# a file source, one step at a time, as its DAG runs them (none is declared yet);
+# fetch prints the landed key last. Rehearse on scratch tables with
+# --config <a file_sources.json> --namespace-map bronze=scratch_x,audit=scratch_x
+K=$(docker exec k2-spark-iceberg python3 /home/iceberg/lake/file_source.py fetch --table bronze.<name> | tail -1)
+for step in load audit publish; do
+  docker exec -e K2_LAKE_DRIVER_MEMORY=512m k2-spark-iceberg \
+    python3 /home/iceberg/lake/file_source.py $step --table bronze.<name> --object "$K" || break
+done
+
 # the exit criteria, end to end, against the live stack
 make lake-verify
 ```
 
 Under Airflow the same commands run on a schedule, `lake_ingest` every five
-minutes with one run at a time, `lake_maintenance` at 03:00 UTC. The DAGs add no
-logic; see `docker/airflow/dags/lake.py` for why.
+minutes with one run at a time, `lake_maintenance` at 03:00 UTC, and each file source
+on its contract's cron. The DAGs add no logic; see `docker/airflow/dags/lake.py` for why.
 
 ---
 

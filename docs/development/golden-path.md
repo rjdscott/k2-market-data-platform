@@ -87,12 +87,31 @@ Commit the contracts and everything `make generate` wrote. CI's `contracts` job 
 `make generate` again and fails on any diff or untracked file, so a generated file edited by
 hand, or one left out of the commit, does not merge.
 
+## If the product is a file source
+
+A product loaded from a file a publisher serves (ADR-036) is a bronze contract with inline
+columns and one more custom property. The synthetic contract the tests use is the worked
+example: [`platform/k2gen/tests/synthetic/`](../../platform/k2gen/tests/synthetic/fx-reference/synthetic-rates/bronze.synthetic_rates.odcs.yaml).
+
+- `fileSource`: `url` (https), `format` (`xml`), `calendar` (`none`), `parser` (the module
+  `docker/lake/sources/<parser>.py`, with `parse(bytes)` returning the table's rows) and
+  `audits` (functions of that module, run after the six generic checks).
+- `primaryKey: true` on the key columns, `logicalType: number` on each value compared as a
+  decimal, and `logicalTypeOptions.pattern` for a column's allowed values.
+- A required `source_file_sha256 STRING` column, a five-field `schedule`, and the `url` among
+  `upstreams` and the product's inputs (`external`, with a classification).
+
+`make generate` then writes the source into `docker/lake/generated/file_sources.json` and
+`docker/airflow/dags/file_sources.json`, and the factory builds DAG `<table>_ingest` from the
+second. Write the parser and a test of it with invented bytes in the same pull request; no
+test may fetch the URL.
+
 ## Not on the path yet
 
 | Step | What it needs | Phase |
 |---|---|---|
-| Create the table in the lake | `docker/lake/apply_ddl.py` applies `ddl/generated/*.sql` after `lake.sql` (`tests/test_lake_apply_ddl.py`). Not yet run against a stack on this path | P1 code, P7 proof |
-| Ingest | a generated Airflow DAG and the file-source pattern | P4 |
+| Create the table in the lake | `docker/lake/apply_ddl.py` applies `ddl/generated/*.sql` after `lake.sql` (`tests/test_lake_apply_ddl.py`). First run against the stack on 2026-11-26, in a scratch namespace (ADR-036's pull request): it found that Spark SQL has no `''` escape, so `k2gen validate` now refuses a single quote in a generated comment | P1 code, P7 proof |
+| Ingest | a file source: built, above (ADR-036), its first real product in P4's second pull request. Any other kind of source: no generated path | P4 |
 | Process | dbt models and tests: the sources and selectors are generated from a product's `marts` ([`dbt/README.md`](../../dbt/README.md)); a scaffold for a new mart is not | P3, P4 |
 | Trace, serve, catalogue | lineage, access rules, catalog payloads | P5 |
 | Publish | the readiness scorecard that gates `lifecycle: published` | P6 |

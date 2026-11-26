@@ -12,6 +12,12 @@ layouts and commands, without notice. `3.0.0` is reserved for the end of
 
 ## [Unreleased]
 
+### Added
+
+- The file-source pattern: a `fileSource` contract property, a generated four-task DAG per
+  source, verbatim landing in `k2-landing` by conditional PUT, write-audit-publish on an
+  Iceberg branch, and `bronze.source_files`; no source declared yet (ADR-036, Proposed).
+
 ## [3.0.0-alpha.1] - 2026-11-26
 
 First numbered version. It covers the work of phases P0 to P3 of the plan above, on top of the

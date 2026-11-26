@@ -183,9 +183,10 @@ not stop two concurrent appends: the loser retries on top of the winner and both
 the second one's offsets overwrite the first's, which duplicates a batch. The ingest asks for
 the lock without waiting and, if another writer holds it, exits with code 75 (`EX_TEMPFAIL`,
 "try again later"), which the Airflow DAG records as skipped rather than failed; maintenance
-waits for the lock instead.
+waits for the lock instead, and a [file source's](#file-source) load, audit and publish wait at
+most 600 seconds, then exit 75 for their task's retry.
 Where: [`docker/lake/lock.py`](../../docker/lake/lock.py), `EXIT_LOCK_HELD` in `ingest.py`,
-`AirflowSkipException` in `docker/airflow/dags/lake.py`.
+`AirflowSkipException` in `docker/airflow/dags/lake_script.py`.
 
 ### Per-run cap
 
@@ -270,11 +271,39 @@ Where: [ADR-025](ADR-025-clickhouse-derived-hot-tier.md),
 
 A landing zone is where a fetched source file is kept exactly as downloaded, before anything
 loads it, so every load can be re-run and audited from the same bytes. For the Redpanda feeds
-that role is played by `raw.messages`. For file sources (FX rates and the like) the P4 plan puts
-it at `landing/<domain>/<product>/<fetch date>/<sha256>.<ext>` in a versioned, locked bucket;
-that pattern is planned under ADR-036 and not built yet.
-Where: [plan P4](../plans/2026-11-24-governed-self-serve-platform/004-fx-data-product.md);
-the reserved row 036 in [ADR-031](ADR-031-governed-self-serve-platform.md).
+that role is played by `raw.messages`. For [file sources](#file-source) it is the MinIO bucket
+`k2-landing`, at `<domain>/<product>/<fetch date>/<sha256>.<ext>`: the name holds the sha256 of
+the bytes (a 64-character fingerprint that changes if any byte does), and a file lands by a
+[conditional PUT](#conditional-put), so the same bytes on the same day write nothing and nothing
+written that way replaces a landed file. The load step refuses an object whose bytes no longer
+hash to its name. The plan's "versioned and locked, so a landed file cannot be altered" was
+tested and is wrong: versioning and object lock keep old versions but accept the overwrite.
+Where: [ADR-036](ADR-036-file-sources-land-unchanged-then-publish-after-audit.md);
+`fetch` in [`docker/lake/file_source.py`](../../docker/lake/file_source.py).
+
+### File source
+
+A file source is a lake table loaded from a file a publisher serves at a URL, such as the ECB's
+reference rates, rather than from Redpanda. Its contract declares it in the `fileSource` custom
+property (URL, format, calendar, parser, the product's own audits), its key with `primaryKey`,
+its numbers with `logicalType: number` and its allowed values with a pattern; every row carries
+`source_file_sha256`. One generated Airflow DAG per source runs four tasks: fetch (land the
+file), load (stage it on a [branch](#branch-and-main)), audit, publish
+([write-audit-publish](#write-audit-publish)). `bronze.source_files` holds one row per landed file.
+Where: [ADR-036](ADR-036-file-sources-land-unchanged-then-publish-after-audit.md);
+[`docker/airflow/dags/factory.py`](../../docker/airflow/dags/factory.py),
+[`docker/lake/sources/`](../../docker/lake/sources/__init__.py).
+
+### Conditional PUT
+
+A conditional PUT is an S3 write carrying the header `If-None-Match: *`: the store writes the
+object only if no object of that name exists, and otherwise answers 412 Precondition Failed and
+changes nothing. With a name made from the content's fingerprint, an existing name means the same
+bytes are already there, so the 412 is a safe no-op. It refuses only writers that send the
+header: a plain PUT by anyone holding the credentials still overwrites, which is why the
+[landing zone](#landing-zone) bucket is also versioned and the load re-checks the fingerprint.
+Tested on this MinIO on 2026-11-26 ([ADR-036](ADR-036-file-sources-land-unchanged-then-publish-after-audit.md)).
+Where: `Landing.put_if_absent` in [`docker/lake/file_source.py`](../../docker/lake/file_source.py).
 
 ### Lineage columns
 
@@ -462,9 +491,11 @@ readers cannot see it (a branch), audit it there, and publish it (fast-forward `
 the audit passes. It fits a source that keeps its data, such as a downloaded file, because a
 failed audit can simply wait. It does not fit the Redpanda ingest, where holding a batch holds
 the offsets while retention keeps deleting unread records; that is why stage 1 audits after
-publishing ([ADR-047](ADR-047-ingest-batch-audit-after-publish.md)), and WAP is reserved for
-file sources (ADR-036).
-Where: [plan P4](../plans/2026-11-24-governed-self-serve-platform/004-fx-data-product.md).
+publishing ([ADR-047](ADR-047-ingest-batch-audit-after-publish.md)), and WAP is for
+[file sources](#file-source): load onto branch `wap_<sha256 prefix>`, audit it, fast-forward `main`
+only if every check passed; a failed audit leaves the branch and `main` where they were.
+Where: [ADR-036](ADR-036-file-sources-land-unchanged-then-publish-after-audit.md);
+[`docker/lake/file_source.py`](../../docker/lake/file_source.py).
 
 ### Copy-on-write MERGE
 

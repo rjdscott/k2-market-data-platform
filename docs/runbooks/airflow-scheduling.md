@@ -86,7 +86,9 @@ lock.
 retried ends `up_for_retry` and does not fire; only the final failure does. It fires for
 15 minutes and clears by itself; the run's log is the record. It leaves out `dbt_marts`, whose
 failures are [dbt-marts.md](./dbt-marts.md)'s (`DbtMartsNotSucceeding` after 3 hours,
-`DbtMartsSnapshotExpiryStale` after 26 for the daily expiry).
+`DbtMartsSnapshotExpiryStale` after 26 for the daily expiry). A file source's DAG,
+`<table>_ingest`, fires it too; for its `load`, `audit` or `publish` task go to
+[file-source-audit-failed.md](./file-source-audit-failed.md) instead.
 
 **Expected behaviour**, `lake_ingest` retries once after 60 s, and the next slot runs five
 minutes later whatever happened: the ingest resumes from the offsets in its last snapshot

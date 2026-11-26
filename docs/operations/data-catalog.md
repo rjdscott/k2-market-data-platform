@@ -100,7 +100,8 @@ governance view is how it is meant to be read.
 | `gold.book_state` | (exchange, symbol, conn_id) — replay carry-over, operational, not a product | `exchange` | `last_second`, `updated_at` | `symbol` native only | `(exchange, symbol, conn_id)` | `books.py`, overwritten each run |
 | `gold.dim_instrument` | **validity interval** of one instrument, SCD2 (ADR-030) | `exchange` / `canonical_symbol, valid_from` | `valid_from` inclusive, `valid_to` exclusive, open rows `9999-12-31 23:59:59` never NULL; `is_current` | `canonical_symbol` is the natural key half; `symbol` (native) is a **tracked attribute** — a rename opens a version | `(instrument_id, valid_from)` | `gold.py` via `scd2.plan`, from `config/instruments.yaml` + `bronze.kraken_instrument` |
 | `gold.dim_venue` | validity interval of one venue, SCD2 | `exchange` | as above | n/a | `(venue_id, valid_from)` | `gold.py` via `scd2.plan` |
-| `audit.checks` | check per run — append-only history | `days(run_ts)` | `run_ts` UTC | `scope` holds a table name or `topic/partition` | none; a failed check is never edited out | `maintenance.py`, `ingest.py`, `record_check.py` |
+| `bronze.source_files` | file a [file source](../adr/glossary.md#file-source) landed, append-only; another day's landing of the same bytes is another row | none | `fetched_at` UTC | n/a | `landing_path` | `file_source.py` load, before it parses ([ADR-036](../adr/ADR-036-file-sources-land-unchanged-then-publish-after-audit.md)) |
+| `audit.checks` | check per run, append-only history | `days(run_ts)` | `run_ts` UTC | `scope` holds a table name, `topic/partition`, or for a file source `<table> <sha256> <branch snapshot id>` | none; a failed check is never edited out | `maintenance.py`, `ingest.py`, `record_check.py`, `file_source.py` |
 
 `gold.dim_instrument` and `gold.dim_venue` are the only gold tables `rebuild.py` will not
 recreate: nothing is a source for lost dimension history

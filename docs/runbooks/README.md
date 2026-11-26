@@ -70,6 +70,7 @@ no longer exists, do not follow them against this stack.
 | [lake-ingest-lag.md](./lake-ingest-lag.md) | Ingest behind cadence, scheduler stopped, `failOnDataLoss`, small files accumulating | `LakeIngestLagHigh`, `LakeCommitAgeHigh`, `LakeIngestFailed` |
 | [lake-ingest-batch-audit.md](./lake-ingest-batch-audit.md) | A batch stage 1 just committed does not match the offset range it read: re-read the missing records while Redpanda still holds them, or record them as gone. Written with the check; the read-only steps run 2026-11-25 on healthy data, the re-read and the record not yet run, no MTTR | `LakeIngestBatchAuditFailed` |
 | [lake-audit-failed.md](./lake-audit-failed.md) | The nightly audit failed: offset continuity, duplicate identifiers, or venue sequence gaps, six checks across four kinds, one of them informational | `LakeAuditFailed` |
+| [file-source-audit-failed.md](./file-source-audit-failed.md) | A file source's load or audit failed (ADR-036): find the failed check and the landed file, compare its branch with `main`, then reject the file, fix the check and re-run, or restore a landed file that changed. Every command run on scratch tables 2026-11-26; no file source is declared yet | `AirflowTaskFailed` (dag `<table>_ingest`) |
 
 > **Two of the lake failures are investigations, not repairs**, and the runbooks say so on
 > the row: a real offset gap and a venue sequence gap are unrecoverable, public feeds do

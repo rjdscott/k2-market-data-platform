@@ -110,9 +110,10 @@ partitions are not evenly loaded. It matters to partitioning because the byte ca
 
 ## Iceberg
 
-Twenty-six tables across five namespaces, `raw`, `bronze`, `silver`, `gold`, `audit`.
+Twenty-seven tables across five namespaces, `raw`, `bronze`, `silver`, `gold`, `audit`.
 Applied by `docker/lake/apply_ddl.py` from
-[`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql).
+[`docker/lake/ddl/lake.sql`](../../docker/lake/ddl/lake.sql), and `bronze.source_files` from
+the DDL `make generate` writes for its contract into `docker/lake/ddl/generated/`.
 
 | Table | `PARTITIONED BY` | Local sort order | Target file size | Metrics on |
 |---|---|---|---|---|
@@ -130,6 +131,7 @@ Applied by `docker/lake/apply_ddl.py` from
 | `gold.dim_venue` | `exchange` | none | 128 MB | `valid_from`, `is_current` |
 | `gold.book_state` | `exchange` | none | 128 MB | none |
 | `audit.checks` | `days(run_ts)` | none | 128 MB | default |
+| `bronze.source_files` | none | none | Iceberg's default | default |
 
 `gold.bars` partitions on `months(open_time)` rather than on its `day` column because
 DuckDB 1.4.4's Iceberg reader returned zero rows for any predicate on a `DATE` partition

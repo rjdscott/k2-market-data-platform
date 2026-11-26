@@ -78,6 +78,32 @@ derived row back to the archived record that produced it
 where "one logical trade" is *made* true, and the `duplicate_identifiers` audit on `gold.trades` is what proves it
 ([audits as tests](03-data-engineering-concepts.md#audits-as-tests)).
 
+### File sources: landed, then published after an audit
+
+Not every source is a venue stream. A publisher's file (reference rates, a currency list)
+arrives by download, and its landing zone is a bucket rather than `raw.messages`: the bucket
+`k2-landing` keeps each file verbatim at `<domain>/<product>/<fetch date>/<sha256>.<ext>`,
+written by a conditional PUT that the store refuses for a name that exists. Its bronze table is
+loaded onto an Iceberg branch, audited there, and published by moving `main` to the branch, so
+a reader never sees a file that failed its checks
+([ADR-036](../adr/ADR-036-file-sources-land-unchanged-then-publish-after-audit.md),
+[write-audit-publish](../adr/glossary.md#write-audit-publish)).
+
+```mermaid
+flowchart LR
+  URL["publisher URL"] -->|"fetch: sha256,<br/>If-None-Match: *"| LZ[("k2-landing<br/>verbatim, kept")]
+  LZ -->|"load: rows main<br/>lacks, by key and value"| BR["branch wap_&lt;sha&gt;<br/>invisible to readers"]
+  BR -->|"audit: generic +<br/>product checks"| AU[("audit.checks")]
+  BR -->|"publish: fast-forward,<br/>only if it passed"| MAIN[("bronze table, main")]
+  LZ -.->|"one row per file"| SF[("bronze.source_files")]
+```
+
+Every row carries `source_file_sha256`, so a value leads to its `bronze.source_files` row and
+from there to the bytes. The stream cannot work this way: holding a batch back holds the
+offsets while the bus deletes unread records, so the ingest audits after publishing
+([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)). No file source is declared yet;
+plan P4's second pull request adds the first two.
+
 ### Storage choices
 
 - **Partitions.** `raw` by `days(kafka_ts), topic`, time first so a replay lands in one
@@ -110,6 +136,7 @@ where "one logical trade" is *made* true, and the `duplicate_identifiers` audit 
 
 | Practice | Where it is enforced |
 |---|---|
+| A file source publishes only what it audited | `docker/lake/file_source.py`: a branch per landed file, six generic checks and the product's own into `audit.checks`, `main` fast-forwarded only after they pass ([ADR-036](../adr/ADR-036-file-sources-land-unchanged-then-publish-after-audit.md)) |
 | Immutable record at the bottom | `raw.messages` never expired; `offset_continuity` audit nightly; `batch_offsets` on every ingest batch, alerted by `LakeIngestBatchAuditFailed` ([ADR-047](../adr/ADR-047-ingest-batch-audit-after-publish.md)); `LakeOffsetGap` alert |
 | Schema per venue, drift detected | `bronze_schema_drift` audit fails on undeclared keys; `spark.sql.caseSensitive = true` |
 | Every delivery kept with a reason | silver flags computed against a 1-day lookback; `silver_flags` reported nightly |

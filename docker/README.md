@@ -15,16 +15,18 @@ docker/
 │   └── schema/           # Historical schema migration trail (not run)
 ├── lake/                 # v3 Iceberg lake on Lakekeeper + MinIO (ADR-018)
 │   ├── ddl/lake.sql      # raw.messages, bronze.*, audit.checks
-│   ├── ddl/generated/    # DDL written by k2gen generate for new products (none today)
+│   ├── ddl/generated/    # DDL written by k2gen generate for new products (bronze.source_files)
 │   ├── apply_ddl.py      # Applies lake.sql, then ddl/generated/ (the lake-ddl one-shot)
-│   ├── init-lake.sh      # One-shot bootstrap: bucket, catalog, warehouse, namespaces
+│   ├── init-lake.sh      # One-shot bootstrap: buckets (lake, landing), catalog, warehouse, namespaces
 │   ├── ingest.py         # Redpanda -> raw.messages -> bronze.* (Spark, every 5 min)
 │   ├── maintenance.py    # Compaction, snapshot expiry, orphan removal, nightly audit
+│   ├── file_source.py    # A file source: fetch, load, audit, publish by fast-forward (ADR-036)
+│   ├── sources/          # One parser per file source: bytes to rows, standard library only
 │   ├── offsets.py        # Consumed offsets in the Iceberg snapshot summary (ADR-022)
 │   ├── wire.py           # Confluent framing + schema-registry lookup
 │   ├── metrics.py        # Prometheus exporter (the lake-metrics service)
 │   └── spark_conf.py     # lake_session(), the only `lake` catalog config; --smoke self-check
-├── airflow/              # Airflow 3 image, the three lake DAGs (dags/lake.py) and their tests (ADR-034)
+├── airflow/              # Airflow 3 image, the three lake DAGs (dags/lake.py), the file-source DAG factory (dags/factory.py) and their tests (ADR-034, ADR-036)
 ├── lake-metrics/         # The lake-metrics exporter's own image (runs lake/metrics.py)
 ├── redpanda/             # Topic + Avro subject bootstrap (init.sh, run by redpanda-init)
 ├── spark/                # Spark image (Iceberg 1.8.1, Kafka + Avro jars, pinned by sha256)
@@ -92,6 +94,9 @@ dispatched by `k2-airflow-scheduler` into `k2-spark-iceberg`:
 - `lake_maintenance`, runs `lake/maintenance.py`
   (compact / expire / remove orphans / audit), nightly at 03:00 UTC
 - `lake_rebuild`, runs `lake/rebuild.py`, manual only
+- one `<table>_ingest` DAG per file source, built by `airflow/dags/factory.py` from
+  `airflow/dags/file_sources.json` (generated; none today): `lake/file_source.py` fetch,
+  load, audit and publish ([ADR-036](../docs/adr/ADR-036-file-sources-land-unchanged-then-publish-after-audit.md))
 
 There is no watermark table: the
 offsets each run consumed are written into the Iceberg snapshot summary of the commit that

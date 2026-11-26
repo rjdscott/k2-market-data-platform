@@ -11,6 +11,16 @@ slot, one run of each at a time. Times are UTC.
 | `lake_rebuild` | by hand | `docker/lake/rebuild.py` for one layer; a dry run unless told otherwise | 24 h | [airflow-scheduling.md](../runbooks/airflow-scheduling.md) |
 | `dbt_marts` | `10 * * * *` | the dbt marts on Trino, one task group per domain run as `dbt_<domain>` (`dbt/selectors.yml`), with source freshness and tests; in the 04:10 run, each domain's snapshot expiry at 7 days | run 50 min, task 20 min, no retry, at most 2 tasks at once | [dbt-marts.md](../runbooks/dbt-marts.md) |
 
+**File sources** get one generated DAG each, `<table>_ingest`, built by
+`docker/airflow/dags/factory.py` from `docker/airflow/dags/file_sources.json`, which
+`make generate` writes from each contract's `fileSource` property
+([ADR-036](../adr/ADR-036-file-sources-land-unchanged-then-publish-after-audit.md)). None is
+declared yet, so the file is `{}` and the factory builds no DAG. Each would be four tasks in a
+line, at its contract's cron: `fetch` (5 min, two retries), `load`, `audit` and `publish` (20 min
+each, which covers up to 600 s waiting for the writer lock; one retry, none for `audit`), each
+one subcommand of `docker/lake/file_source.py`. A failed audit stops the run before `publish`;
+runbook [file-source-audit-failed.md](../runbooks/file-source-audit-failed.md).
+
 `dbt_marts` runs at minute 10, off the ingest's minutes 1, 6, 11 and the rest, and its two-task
 cap leaves two of the scheduler's four LocalExecutor slots (`AIRFLOW__CORE__PARALLELISM`) to the
 lake. Its maintenance hour, 04:00, comes after `lake_maintenance`'s 03:00 start.
