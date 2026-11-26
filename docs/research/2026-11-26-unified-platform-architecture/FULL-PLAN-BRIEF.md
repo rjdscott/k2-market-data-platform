@@ -1,7 +1,9 @@
 # The full plan: what is being reviewed (owner's decisions, 2026-11-26)
 
+*A tidied record of requirements given on 2026-11-26: quotations of the owner's chat messages are restated as plain statements with the same meaning.*
+
 The owner accepted `ARCHITECTURE-V2.md` as the basis and decided to build its FULL plan (section 6),
-nothing cut, each thing built once and properly. An earlier cut-down "plan to the demo" was
+nothing cut, each thing built once and properly. An earlier cut-down plan to the demo was
 withdrawn because simple-now, proper-later pairs are a rework trap; do not propose one.
 
 ## Fixed

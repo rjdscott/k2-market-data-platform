@@ -1,13 +1,15 @@
 # Requirements for the revised architecture (v2), 2026-11-26 evening
 
+*A tidied record of requirements given on 2026-11-26: quotations of the owner's chat messages are restated as plain statements with the same meaning.*
+
 This file overrides `BRIEF.md`, the addenda, and `VERDICT.md` wherever they differ. It records what
 the owner decided AFTER the verdict and the adversarial review (`REVIEW.md`). Everything in the
 brief and addenda 1 to 5 that is not contradicted here still stands.
 
 ## A. What the owner said about the verdict's diagrams
-The owner reviewed the six diagrams and is not comfortable with them: "there are some odd
-connections or flows", and when asked which, chose every candidate offered and added "just all of
-it". The named problems:
+The owner reviewed the six diagrams and is not comfortable with them: some connections and flows
+are odd. Asked which, the owner named every candidate offered and said the objection covers all of
+them. The named problems:
 1. **One raw archive feeding every venue.** A single `raw_archive` product between the topics and
    all venue products couples the venues and has no clear owner. Decision: there is NO shared raw
    archive product. Each product owns its connector and its own verbatim landing. A venue's trades
@@ -103,7 +105,7 @@ stakeholder who will use the platform. Do not patch the old ones.
 ## D. What the platform is for (owner, confirmed 2026-11-26)
 - The platform is **domain-agnostic**. Market data is its first tenant, not its definition. The
   owner will onboard many kinds of data: economic data, financial reference data, static data and
-  others, "to run a successful data business".
+  others, in order to run a successful data business.
 - **The business value is in joining products**: a product from one domain enriched with products
   from others. So the design must make cross-domain joins a first-class, governed thing, not an
   accident of two tables sharing a column name:

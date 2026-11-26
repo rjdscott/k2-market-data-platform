@@ -44,6 +44,12 @@ one Airflow pipeline per product; Iceberg on Lakekeeper; Trino as the one SQL en
 read-only REST API querying Trino as the caller; vertical slices; ClickHouse paused first; crypto
 rebuilt clean and proved against independent references.
 
+**The story continues.** This page and sections 1 to 10 record the tournament as it ended on the
+morning of 26 November. Later that day the owner rejected the verdict's diagrams, an architect
+revised the architecture, three spikes measured the risky claims, a plan was reviewed, and the owner
+decided every open item. The last section, "What happened next", tells that part; where it differs
+from the sections above, the last section wins.
+
 **Awaiting the owner: everything.** The reviewer asked the judge to rewrite five verdict sections and
 phases N0 to N3 before the owner signs; not yet done. Eleven decisions are in section 8.
 
@@ -508,6 +514,8 @@ Each phase ends with an audit and a tag `v3.0.0-alpha.N`. **Days are judgements,
 
 ## 8. Decisions awaiting the owner
 
+These decisions were made later the same day and are recorded in the final section, "What happened next".
+
 The judge's seven decisions (D1 to D7) merged with those the review raises. The owner decides.
 
 | # | Decision | Options, and what each costs or risks | Judge | Reviewer |
@@ -547,3 +555,113 @@ whose README says who wrote each file and in what order to read it: the brief, f
 the criteria (a later addendum overrides an earlier one); the three entries; [`VERDICT.md`](2026-11-26-unified-platform-architecture/VERDICT.md)
 (section 6 the plan, 7 the scorecard and fact checks, 8 the decisions); [`REVIEW.md`](2026-11-26-unified-platform-architecture/REVIEW.md)
 (2 the findings, 3 the fact re-check, 6 the dbt case); and two inputs to the judge.
+
+## 11. What happened next (26 November, after the review)
+
+### 11.1 The owner rejected the diagrams
+
+The owner read the six diagrams in the verdict, was not comfortable with them, and named every
+candidate problem offered. Four were named:
+
+1. **One raw archive fed every venue.** It coupled the venues and had no clear owner. Decision: no
+   shared raw archive; each product owns its connector and its own verbatim landing.
+2. **Generator arrows to everything.** Configuration, deployment and running could not be told
+   apart. Diagrams must show three moments apart: defining, deploying, running.
+3. **The catalog was off to the side.** It is where users start, so it moves to the centre:
+   ingestion, storage and query register into it.
+4. **The REST and permissions path was unclear.** A reader must see what a person or service talks
+   to, that permission is enforced in one place, and that SQL and REST agree for the same caller.
+
+Every diagram was redrawn from scratch. The ten critical and high findings of the review were
+accepted as design inputs, and dbt-core on Trino replaced the judge's own transform language.
+
+### 11.2 The requirements that followed
+
+- **Definitions are documents, and where they are stored is a seam.** For 3.0 git is the store.
+  The compile step must not care where documents come from, and the CI checks must be able to run
+  inside an API later. After 3.0 a registry (database, then API, then UI) becomes the source of
+  truth, with approvals and history; what changes is the store and the approval step, not the
+  document format, the compiler or the runtime.
+- **The security master.** Each venue has a trades and an instruments product. The master has two
+  levels, asset and instrument, with venue symbols mapped by rule plus a reviewed exceptions list;
+  a symbol that matches nothing fails an audit and is never guessed.
+- **Domain-agnostic, with joins across domains.** Market data is the first tenant. Value comes
+  from governed joins: conformed reference products, keys that declare what they refer to, and
+  enriched products with declared inputs, permissions never weaker than their inputs', and explicit
+  time alignment.
+- **Metadata, open standards, readiness for AI.** Metadata is a first-class output of every step;
+  open standards are used wherever a mature one exists; nothing in 3.0 may block a later AI
+  interface that acts as the calling identity through the one enforcement point.
+
+### 11.3 The revision
+
+One architect rewrote the architecture (`ARCHITECTURE-V2.md`, 13 Mermaid diagrams). Three diagram
+checkers and two adversaries raised 96 findings: 3 critical, 24 high, 45 medium, 24 low. All were
+acted on, some fixed another way for a stated reason; none was rejected. `V2-CHANGELOG.md` gives
+each one. The most important changes:
+
+| Finding | Change |
+|---|---|
+| Derived products read their inputs' current, untested snapshots (critical) | Each output has an audited snapshot recorded per run; derived products read inputs at that snapshot; a build killed midway is reconciled and rolled back |
+| Notebooks, Lakekeeper and MinIO bypassed the SQL endpoint (critical) | Those ports are unpublished, notebooks move to the SQL endpoint, the storage root key is rotated, and negative probes check it |
+| Undeclared reads were invisible to dependency declarations (critical) | Writers can select only their declared inputs; a lint rejects hidden three-part names and environment reads |
+| dbt `env_var` could publish scheduler secrets (high) | A one-shot runner with an allow-listed environment and no Docker socket |
+| Rollback lost when the engine or the build dies (high) | A durable pre-run record, reconciliation on restart, and a chaos exit that stops Trino mid-build |
+
+### 11.4 The three spikes
+
+Run on the live stack, synthetic data, scratch schemas dropped afterwards.
+
+| Spike | Measured |
+|---|---|
+| dbt-core 1.12.7 on Trino 484 through Lakekeeper (`SPIKE-DBT.md`) | Incremental merge, new columns and type-2 snapshots work. An enforced contract fails before the table changes, but a contracted table is rebuilt in two commits and was empty for about 0.1 s. A failing test followed by a rollback to the previous snapshot restores the rows; bad rows were visible for 2.6 s. One build with two tests took 3.0 to 3.9 s |
+| Masks and row filters on Iceberg (`SPIKE-ACCESS.md`) | Masks, filters and a delay rule hold under joins and `SELECT *`. Definer views skip the reader's rules. Iceberg metadata tables leak bounds of hidden and masked columns. A plain reader could run table procedures, including a rollback, on a writable catalog; a read-only catalog refuses them. A changed rules file needs a refresh period to take effect |
+| Fixed cost of one product run (`SPIKE-RUNCOST.md`) | A run on a small table took 6.5 s; with 200 snapshots and 200k rows, 10.5 s, of which the uniqueness audit grew from 0.5 s to 4.4 s. Session start plus the first append is about 65 percent of a small run. Arithmetic, not measured: about 46 small runs fit in five minutes on one Spark slot |
+
+The risks they found (definer views, metadata tables, table procedures) became checks in the plan.
+
+### 11.5 The plan that was written and withdrawn
+
+A trimmed plan to a demo was drafted: simple versions now, proper versions later. The owner
+withdrew it. A simple-now, proper-later pair builds the same thing twice, and the second build has
+to undo the first. The decision was the full plan, nothing cut, each thing built once and properly.
+
+### 11.6 The review of the full plan
+
+An independent reviewer read the full plan against the repository, the spikes and the live stack
+and returned "go, with changes": 2 critical, 8 high, 12 medium, 3 low. The two critical ones:
+
+- **The old pipeline stayed live through the first phase, which rewrites everything it depends
+  on.** The phase would have had to carry 13 old-format products and the old writers through the
+  new compiler, or run two deploy models. Fix: retire it at the end of the first phase. The cost
+  is no live crypto data in the lake and stale dashboards until the Kraken phase, which is cheap
+  in a lab.
+- **Parallel workers started with no frozen interfaces, five hot-spot files, and a host that
+  takes one heavy Docker job at a time.** Fix: merge one interfaces pull request before any
+  parallel building, and queue heavy jobs.
+
+The high findings included splitting the first phase in three, recreating only what a deploy
+changes, pinning image digests early, and a proving command for everything a phase builds.
+
+### 11.7 The final decisions
+
+`DECISIONS-FINAL.md` records them. In short:
+
+| Subject | Decision |
+|---|---|
+| Architecture, scope | `ARCHITECTURE-V2.md`, amended by these decisions, accepted; the full plan, nothing cut; if late, the date moves, not quality or order; every critical and high finding of the plan review accepted |
+| Order | Clear the ground; release and rules spine; run spine through ECB FX; serving and teaching; Kraken trades and security master; enriched product; catalog, metadata, lineage; REST API and demo readiness; the demo tag `v3.0.0-beta.1`; then remaining connector kinds, wider crypto, controls and release engineering, infrastructure as code, hardening, release gate and `v3.0.0`; after that the definition registry, then the AI interface |
+| Roles, catalog | At most one role per principal per product; a generated, read-only static catalog site at the demo and at 3.0, no off-the-shelf tool |
+| Identity | Passwords over TLS for SQL, keys for REST; built in the first spine phase; no single sign-on in 3.0 |
+| Test window | Readers see only tested data, through a marker that moves after a build's tests pass |
+| Alerts, backup, infrastructure as code | Alerts to a Slack incoming webhook kept as a local secret; backup stays on this host until the release gate; infrastructure as code for this host only, cloud a separate plan after 3.0 |
+| REST in the first slice | Yes, a minimal data route |
+| Old pipeline | Retired at the end of the first phase, with its readers |
+| Still open | FX content (needed by the enriched-product phase); landing retention (needed by the Kraken phase) |
+
+### 11.8 Where the decision and the plan now live
+
+- Decision: `../adr/ADR-056-unified-data-product-platform.md`
+- Architecture chapter, labelled as the target: `../architecture/20-target-data-product-platform.md`
+- Plan to the demo tag: `../plans/2026-11-26-unified-product-platform/README.md`
+- Plan from the demo tag to `v3.0.0`: `../plans/2026-11-26-unified-product-platform-to-release/README.md`
