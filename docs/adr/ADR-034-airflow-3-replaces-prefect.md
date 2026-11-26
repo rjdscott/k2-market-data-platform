@@ -525,7 +525,7 @@ clears this trigger (at or under 240 s) or keeps it open.
 ## Outcome (2026-11-26, Prefect archived)
 
 **Prefect is out of the compose file, and the rollback to it no longer exists.** The third
-pull request of plan phase P2 (#NNN) deleted the two Prefect services, `prefect-server` (its
+pull request of plan phase P2 (#235) deleted the two Prefect services, `prefect-server` (its
 API and web UI) and `prefect-worker` (the process that ran each scheduled job), together with
 the compose `legacy` profile that had kept them defined but stopped since the cutover. A
 compose profile is a label on a service: `docker compose up` starts a labelled service only
