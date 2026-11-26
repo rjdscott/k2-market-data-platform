@@ -220,7 +220,15 @@ services:
   # ───────────────────────────────────────────────────────────────────────
   # ClickHouse - OLAP database for real-time analytics
   # ───────────────────────────────────────────────────────────────────────
+  # Paused for the platform build (ADR-057): behind the profile `hot-gold`, so
+  # `docker compose up` and `make up` leave it stopped; its volumes are kept.
+  # `docker compose --profile hot-gold up -d clickhouse` starts it; after 7
+  # days stopped its consumer-group offsets are due to expire, and a start
+  # then leaves a hole (ADR-057, Decision 4).
+  # The image line stays: scripts/clickhouse-schema-test.sh reads its tag.
+  # No default-profile service depends on it.
   clickhouse:
+    profiles: ["hot-gold"]
     logging: *k2-logging
     image: clickhouse/clickhouse-server:24.3-alpine
     container_name: k2-clickhouse
@@ -1325,7 +1333,7 @@ services:
 # ----------------------|-----------|--------------|---------------------------
 # redpanda              | 2.0       | 2G           | Streaming backbone
 # redpanda-console      | 0.5       | 256M         | Streaming UI
-# clickhouse            | 4.0       | 8G           | Warm storage OLAP
+# clickhouse            | 4.0       | 8G           | Gold hot tier; profile hot-gold, paused (ADR-057), not in the sums
 # minio                 | 1.0       | 1G           | S3-compatible storage
 # prometheus            | 1.0       | 2G           | Metrics collection
 # grafana               | 0.5       | 512M         | Visualization
@@ -1347,7 +1355,7 @@ services:
 # (`${K2_CAPTURE_CPUSET-12-14}`, .env.example). A cpuset is placement, not quota:
 # it does not change the limit sums below. See the ADR-010 Outcome addendum.
 # ----------------------|-----------|--------------|---------------------------
-# STEADY STATE (19 long-running) | 19.30 CPU | 35.312 GiB | v3 capture + lake, Airflow schedules, Trino
+# STEADY STATE (18 long-running) | 15.30 CPU | 27.312 GiB | v3 capture + lake, Airflow schedules, Trino
 #
 # One-shots are NOT free. They declare limits and they run concurrently with
 # the steady state at boot, so the budget that matters at `docker compose up` is
@@ -1361,12 +1369,14 @@ services:
 #   ----------------------------------------------------------------------------
 #   one-shot subtotal  2.0  | 2.5G
 #
-# Bootstrap peak: 21.30 CPU / 37.812 GiB, all 24 default-profile services,
+# Bootstrap peak: 17.30 CPU / 29.812 GiB, all 23 default-profile services,
 # against the 25 CPU / 48 GiB ceiling ADR-045 sets at the bootstrap peak
 # (superseding ADR-034's 20 CPU / 36 GiB, which superseded ADR-010's 16 CPU /
-# 40 GB). scripts/check-budget.py fails CI over it. Headroom: 3.70 CPU and
-# 10.188 GiB. The host gives Docker 28 CPU / 49.5 GiB; 3 cores and 1.5 GiB stay
-# outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
+# 40 GB). scripts/check-budget.py fails CI over it. Headroom: 7.70 CPU and
+# 18.188 GiB. With `--profile hot-gold` (clickhouse, paused by ADR-057) the
+# peak is 21.30 CPU / 37.812 GiB over 24 services; the script reports that line
+# and gates only the default. The host gives Docker 28 CPU / 49.5 GiB; 3 cores
+# and 1.5 GiB stay outside the ceiling for the OS and the engine (ADR-045 says why that is enough).
 #
 # History: retiring the three Kotlin feed handlers (ADR-019) gave back the
 # 1.5 CPU / 1.5 GB they declared, and deleting docker/offload/ took its metrics
@@ -1382,5 +1392,5 @@ services:
 # Target: 25 CPU / 48 GiB at the bootstrap peak (ADR-045)
 #
 # Instrument config: see config/instruments.yaml (single source of truth)
-# Last updated: 2026-11-26 (the old scheduler archived to legacy/prefect/, the legacy profile deleted; before it trino 4G -> 5G, ADR-010 and ADR-035 Outcomes)
+# Last updated: 2026-11-26 (clickhouse behind the profile hot-gold, ADR-057 and the ADR-010 Outcome; before it the old scheduler archived to legacy/prefect/, the legacy profile deleted)
 #############################################################################
