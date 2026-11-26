@@ -18,7 +18,8 @@ def test_every_service_caps_its_log():
     uncapped = [
         name
         for name, svc in services.items()
-        if (svc.get("logging") or {}).get("options", {}).get("max-size") != "50m"
-        or (svc.get("logging") or {}).get("options", {}).get("max-file") != "5"
+        if (svc.get("logging") or {}).get("driver") != "json-file"
+        or (svc.get("logging") or {}).get("options", {})
+        != {"max-size": "50m", "max-file": "5", "compress": "true"}
     ]
     assert not uncapped, f"services without the log cap: {uncapped}"
