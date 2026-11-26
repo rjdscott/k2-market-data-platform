@@ -6,10 +6,14 @@ Its files are invented here, inline. The Spark half, the branch write and the fa
 is proven on the live stack in a scratch namespace (docs/runbooks/file-source-audit-failed.md).
 """
 
+import email.message
 import hashlib
 import io
 import json
+import socket
 import urllib.error
+import urllib.request
+import urllib.response
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -65,7 +69,89 @@ def serving(data):
     return opener
 
 
+# What each test host resolves to; a source's host must resolve to global addresses only.
+HOSTS = {"example.invalid": ["93.184.215.14"], "mirror.invalid": ["1.1.1.1"], "minio": ["172.18.0.5"],
+         "localhost": ["127.0.0.1"], "metadata.invalid": ["169.254.169.254"], "split.invalid": ["1.1.1.1", "10.0.0.7"]}
+
+
+@pytest.fixture(autouse=True)
+def dns(monkeypatch):
+    """No network: every host resolves from HOSTS."""
+    def resolve(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (a, port)) for a in HOSTS[host]]
+
+    monkeypatch.setattr(F.socket, "getaddrinfo", resolve)
+
+
+def web(monkeypatch, pages):
+    """Answer the default opener's http and https requests from `pages`, url -> (status,
+    body for a 200 or Location for a redirect), with no network; the urls asked, in order."""
+    asked = []
+
+    def answer(handler, request):
+        asked.append(request.full_url)
+        status, value = pages[request.full_url]
+        headers = email.message.Message()
+        if status != 200:
+            headers["Location"] = value
+        response = urllib.response.addinfourl(io.BytesIO(value if status == 200 else b""), headers,
+                                              request.full_url, status)
+        response.msg = "test"
+        return response
+
+    monkeypatch.setattr(urllib.request.HTTPSHandler, "https_open", answer)
+    monkeypatch.setattr(urllib.request.HTTPHandler, "http_open", answer)
+    return asked
+
+
 # ── fetch ─────────────────────────────────────────────────────────────────
+
+
+def test_a_redirect_to_https_on_a_global_address_is_followed(monkeypatch):
+    moved = "https://mirror.invalid/rates.xml"
+    asked = web(monkeypatch, {SPEC["url"]: (302, moved), moved: (200, GOOD)})
+    store = Store()
+    key = F.fetch(SPEC, store, NOON)
+    assert asked == [SPEC["url"], moved] and store.objects[key][0] == GOOD
+
+
+@pytest.mark.parametrize("target, why", [
+    ("http://mirror.invalid/rates.xml", "redirect to http://mirror.invalid: not https"),
+    ("https://minio/k2-landing/x?X-Amz-Signature=secret", "redirect to https://minio: it resolves to non-global 172.18.0.5"),
+    ("https://user:secret@localhost:8443/x?token=secret", "redirect to https://localhost: it resolves to non-global 127.0.0.1"),
+    ("https://metadata.invalid/latest", "redirect to https://metadata.invalid: it resolves to non-global 169.254.169.254"),
+])
+def test_a_redirect_to_plain_http_or_a_non_global_address_is_refused(monkeypatch, target, why):
+    asked = web(monkeypatch, {SPEC["url"]: (302, target), target: (200, GOOD)})
+    store = Store()
+    with pytest.raises(SystemExit) as refused:
+        F.fetch(SPEC, store, NOON)
+    assert str(refused.value) == f"fetch refused {why}"  # scheme and host only: no credentials, no query
+    assert asked == [SPEC["url"]] and store.objects == {}
+
+
+def test_a_redirect_loop_stops_at_the_cap(monkeypatch):
+    a, b = SPEC["url"], "https://mirror.invalid/rates.xml"
+    asked = web(monkeypatch, {a: (302, b), b: (302, a)})
+    store = Store()
+    with pytest.raises(SystemExit, match=f"refused redirect {F.MAX_REDIRECTS + 1} to https://example.invalid: more than 5"):
+        F.fetch(SPEC, store, NOON)
+    assert len(asked) == 1 + F.MAX_REDIRECTS and store.objects == {}
+
+
+@pytest.mark.parametrize("url, why", [
+    ("http://example.invalid/rates.xml", "http://example.invalid: not https"),
+    ("https://minio/k2-landing/x", "https://minio: it resolves to non-global 172.18.0.5"),
+    ("https://split.invalid/rates.xml", "https://split.invalid: it resolves to non-global 10.0.0.7"),
+])
+def test_a_source_url_on_plain_http_or_a_non_global_address_is_refused(monkeypatch, url, why):
+    asked = web(monkeypatch, {url: (200, GOOD)})
+    store = Store()
+    with pytest.raises(SystemExit) as refused:
+        F.fetch({**SPEC, "url": url}, store, NOON)
+    assert str(refused.value) == f"fetch refused source URL {why}"
+    assert asked == [] and store.objects == {}
+
 
 
 def test_fetch_lands_the_bytes_under_domain_product_day_and_sha256():

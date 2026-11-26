@@ -31,7 +31,7 @@ failed branch stays until someone drops it (step 4a).
 | 1 | `audit` failed a check: the file is wrong, the check is wrong, or the publisher revised a value | < 30 min to a decision | steps 1 to 4a ran in 7 s on scratch tables (2026-11-26); the decision is a person's, not measured |
 | 2 | `load` failed: the file does not parse | < 30 min to a decision | induced on scratch tables (2026-11-26); steps 1 and 2 of section 1 |
 | 3 | `load` refused a landed file that no longer hashes to its key | < 15 min | induced and restored on scratch (2026-11-26), the restore under a minute |
-| 4 | `fetch` failed: publisher unreachable, or the file over 64 MiB | next scheduled run | not induced |
+| 4 | `fetch` failed: publisher unreachable, the file over 64 MiB, or a refused URL or redirect | next scheduled run; a refused redirect < 1 day to a decision | not induced; the refusals are unit-tested |
 
 ---
 
@@ -198,13 +198,45 @@ of version 1 made it hash to its key again, and `load` then ran clean, nothing n
 
 **Expected behaviour**, nothing landed, nothing changed. The next scheduled run fetches again.
 The task log has the error: an HTTP status or a network error from the publisher, or
-`larger than 67108864 bytes, refused and not landed`.
+`larger than 67108864 bytes, refused and not landed`, or a refusal that names only the
+target's scheme and host, never its path, query string or credentials:
+
+- `fetch refused source URL <scheme>://<host>: not https`, or `...: it resolves to non-global <address>`:
+  the contract's own URL is plain http, or its host resolves to a loopback, private,
+  link-local or reserved address. Nothing was requested.
+- `fetch refused redirect to <scheme>://<host>: not https`, or `...: it resolves to non-global <address>`:
+  the publisher answered with a redirect to plain http, or to an address inside a network,
+  such as the object store or the catalog on the compose network. Nothing past the redirect
+  was requested and nothing landed.
+- `fetch refused redirect 6 to <scheme>://<host>: more than 5 redirects`: a redirect loop, or a
+  chain longer than `MAX_REDIRECTS`.
 
 **Recovery**, none for an unreachable publisher but waiting for the next run. A file over the
 cap is a change to `MAX_BYTES` in `docker/lake/file_source.py`, in a pull request, after
 checking the publisher meant it.
 
-**Measured**, not induced.
+A refused redirect is not retried away and is not worked around: do not download the file by
+hand into `k2-landing`, and do not loosen `require_public_https`. A redirect to plain http
+lets anyone on the path serve rows that pass the audits; one to an internal address makes the
+Spark container read an internal service and land its answer. Find out where the publisher's
+URL goes, without following it, from a host outside the compose network:
+
+```bash
+curl -sS -o /dev/null -D - '<the contract fileSource url>' | grep -i '^location'
+```
+
+Without `-L`, curl prints the redirect and does not follow it (run on 2026-11-26 against a
+public URL that redirects: it printed one `location:` line).
+
+If the publisher moved the file to another https URL on a public host, change `fileSource.url`
+in the table's contract to the new URL, `make generate`, and land it in a pull request; the next
+run then fetches it with no redirect. If the redirect goes to plain http or to a private
+address, the publisher is misconfigured or something on the path is rewriting answers: leave
+the source failing and report it to the publisher. A source whose contract URL is refused is
+fixed the same way, in its contract.
+
+**Measured**, not induced on the stack; `tests/test_lake_file_source.py` drives each refusal
+through the default opener with no network.
 
 ---
 

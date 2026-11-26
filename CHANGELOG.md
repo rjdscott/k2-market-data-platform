@@ -15,7 +15,8 @@ layouts and commands, without notice. `3.0.0` is reserved for the end of
 ### Added
 
 - The file-source pattern: a `fileSource` contract property, a generated four-task DAG per
-  source, verbatim landing in `k2-landing` by conditional PUT, write-audit-publish on an
+  source, a fetch over https to global addresses only (every redirect checked, at most five),
+  verbatim landing in `k2-landing` by conditional PUT, write-audit-publish on an
   Iceberg branch, and `bronze.source_files`; no source declared yet (ADR-036, Proposed).
 
 ### Changed

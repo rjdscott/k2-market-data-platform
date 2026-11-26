@@ -11,7 +11,8 @@ subcommand per task of the DAG docker/airflow/dags/factory.py builds for it.
 The sources are generated/file_sources.json, which `make generate` writes from
 each contract's `fileSource` custom property and its columns.
 
-fetch    downloads the URL with the standard library, takes its sha256, and lands
+fetch    downloads the URL with the standard library, over https to global addresses only,
+         every redirect included (require_public_https), takes its sha256, and lands
          it in bucket k2-landing at <domain>/<product>/<fetch date>/<sha256>.<ext>
          with a conditional PUT (`If-None-Match: *`): the store refuses a write
          to a key that exists, so the same bytes on the same day write nothing,
@@ -42,9 +43,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -73,6 +76,7 @@ SHA_PROPERTY = "k2.source-file-sha256"
 # platform/k2gen/k2gen/cli.py refuses a product audit with one of these names.
 GENERIC = ("parses", "non_empty", "keys_unique", "in_domain", "values_unchanged", "staged")
 MAX_BYTES = 64 * 2**20  # a download larger than this is refused, not landed
+MAX_REDIRECTS = 5  # redirects fetch follows; one more fails the task
 LOCK_WAIT_S = 600  # two ingest cycles; maintenance holds the lock longer, and the DAG retries
 EXIT_LOCK_HELD = 75  # os.EX_TEMPFAIL, as ingest.py
 DETAIL_ITEMS = 5  # problems quoted in a check's detail; the rest are counted
@@ -139,9 +143,50 @@ class Landing:
             return response.read(), meta
 
 
-def fetch(spec: dict, landing, now: datetime | None = None, opener=urllib.request.urlopen) -> str:
+def _where(url: str) -> str:
+    """The scheme and host of a URL, for a refusal: never its credentials, path or query."""
+    parts = urllib.parse.urlsplit(url)
+    return f"{parts.scheme}://{parts.hostname}"
+
+
+def require_public_https(url: str, what: str) -> None:
+    """SystemExit unless `url` is https to a host whose every address is global: not
+    loopback, private, link-local or reserved, so not the object store or the catalog."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "https":
+        raise SystemExit(f"fetch refused {what} {_where(url)}: not https")
+    # ponytail: resolved here and again when urllib connects, so a host that answers a public
+    # address now and a private one a moment later passes; pin the address in the connection
+    # if a source's host is not trusted to that degree.
+    found = {info[4][0] for info in socket.getaddrinfo(parts.hostname, parts.port or 443, proto=socket.IPPROTO_TCP)}
+    inside = sorted(a for a in found if not ipaddress.ip_address(a).is_global)
+    if inside:
+        raise SystemExit(f"fetch refused {what} {_where(url)}: it resolves to non-global {', '.join(inside)}")
+
+
+class Redirects(urllib.request.HTTPRedirectHandler):
+    """Follows at most MAX_REDIRECTS redirects, each to https on a global address."""
+
+    max_repeats = max_redirections = MAX_REDIRECTS  # urllib's own loop limits, never below the cap
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        hops = getattr(req, "k2_hops", 0) + 1
+        if hops > MAX_REDIRECTS:
+            raise SystemExit(f"fetch refused redirect {hops} to {_where(newurl)}: more than {MAX_REDIRECTS} redirects")
+        require_public_https(newurl, "redirect to")
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None:
+            new.k2_hops = hops
+        return new
+
+
+OPENER = urllib.request.build_opener(Redirects)  # urlopen's handlers, TLS verification included, but this redirect handler
+
+
+def fetch(spec: dict, landing, now: datetime | None = None, opener=OPENER.open) -> str:
     """Download the source and land it; the landed key."""
     now = now or datetime.now(timezone.utc)
+    require_public_https(spec["url"], "source URL")
     request = urllib.request.Request(spec["url"], headers={"User-Agent": "k2-file-source/1"})
     with opener(request, timeout=60) as response:
         data = response.read(MAX_BYTES + 1)
