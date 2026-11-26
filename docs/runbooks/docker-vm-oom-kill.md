@@ -93,7 +93,7 @@ comm -23 <(docker compose config --services | grep -v -x -E 'airflow-migrate|lak
 
 # Start each one it lists, by name. As run on 2026-11-25 for Prometheus. `make up` is not
 # the tool here: on this host it refuses until the MinIO credential is replaced
-# (docs/operations/README.md, "Read this first").
+# (docs/operations/README.md, "Read this first: the state of this host").
 docker compose up -d --no-deps prometheus
 ```
 
@@ -125,25 +125,33 @@ docker exec k2-airflow-scheduler ls '/opt/airflow/logs/dag_id=lake_ingest/run_id
 ```
 
 **7. Compare the hot tier with the lake, minute by minute, around the kill.** The procedure
-is [failure-recovery.md](./failure-recovery.md), section "8. Host or Docker VM killed: the hot
-tier against the lake", which lands with pull request #220; follow it rather than a copy here.
-On 2026-11-25 the per-minute comparison of lake candles with ClickHouse trades showed one
-differing minute, 22:33 UTC, where the hot tier and the lake hold different partial sets of
-trades, and no divergence in any other minute of the day. The owner's decision: leave both as
-captured, do not repair.
+is [failure-recovery.md section 8, "Host or Docker VM killed: the hot tier against the
+lake"](./failure-recovery.md#8-host-or-docker-vm-killed-the-hot-tier-against-the-lake); follow
+it rather than a copy here. On 2026-11-25 it showed one differing minute, 22:33 UTC, where the
+hot tier and the lake hold different partial sets of trades, and no divergence in any other
+minute of the day. The owner's decision: leave both as captured, do not repair.
 
 **8. Record the outage** as one row in `lake.audit.checks`, the lake's append-only table of
-check results (`docker/lake/record_check.py`; `--job operator` marks a row a person filed
-by hand). The row is the permanent record that the window is missing on purpose, not a bug
-for the next reader to chase. `--observed` is the outage in seconds, `--failed` stores
-`passed = false`, and the scope names the window. As run on 2026-11-26 at 01:00:44 UTC; the
-command below is the one whose values the row holds:
+check results, with `docker/lake/record_check.py`. The row is the permanent record that the
+window is missing on purpose, not a bug for the next reader to chase, and the parity gate's
+known gap for that minute must name it (`tests/parity/README.md`). The flags:
+
+- `--job operator` marks a row a person filed by hand (the other jobs are the nightly audit,
+  the ingest and the replay tool);
+- `--check capture_outage` is the check name, the same for every outage like this one;
+- `--scope 'stack/<kill>..<capture back>'`, both in UTC to the second, names the window;
+- `--observed` is the seconds capture was off, and `--failed` stores `passed = false`;
+- `--detail` says the cause and what was left unrepaired, in one or two sentences.
+
+`record_check.py` starts a small Spark session in `k2-spark-iceberg` (the 512m driver below),
+beside whatever ingest is running. The 2026-11-25 row exists, recorded at 2026-11-26 01:00:44
+UTC by the command in failure-recovery.md section 8 step 5: do not record it again. For the
+next outage:
 
 ```bash
-docker exec k2-spark-iceberg python3 /home/iceberg/lake/record_check.py \
-  --job operator --check capture_outage \
-  --scope 'stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z' --observed 343 --failed \
-  --detail 'Host kernel OOM-killed the Docker VM at 22:33:43Z; stack restarted 22:39:26Z. Capture off 343 s: no trades or book updates for the window. Minute 22:33 UTC: hot tier and lake hold different partial sets of trades (hot tier fewer); left as captured, not repaired. Every other minute of 2026-11-25 matches lake vs hot tier.'
+docker exec -e K2_LAKE_DRIVER_MEMORY=512m k2-spark-iceberg python3 /home/iceberg/lake/record_check.py \
+  --job operator --check capture_outage --scope 'stack/<kill>Z..<capture back>Z' \
+  --observed <seconds> --failed --detail '<cause>; <what differs and was left as captured>'
 
 # Read it back (run 2026-11-26):
 docker exec k2-trino trino --user reviewer --output-format TSV_HEADER --execute \
@@ -151,10 +159,6 @@ docker exec k2-trino trino --user reviewer --output-format TSV_HEADER --execute 
 #   run_ts                          job       check_name      scope                                            passed  observed
 #   2026-11-26 01:00:44.228723 UTC  operator  capture_outage  stack/2026-11-25T22:33:43Z..2026-11-25T22:39:26Z  false   343
 ```
-
-The `record_check.py` call starts a Spark session in `k2-spark-iceberg`. Run it between
-ingest runs or with the lake DAGs paused, the same pattern as recreating a service
-([operations README](../operations/README.md#6-restart-or-recreate-one-service)).
 
 **Measured**, one occurrence, 2026-11-25, not induced: the kill at 22:33:43 UTC, Docker
 Desktop started at 22:39:18, capture producing again at 22:39:26 (capture off **343 s**), the
@@ -236,7 +240,7 @@ changes (re-do the table above).
 
 ---
 
-**Last verified:** 2026-11-26 against `26fc22a` on the live stack, read-only: steps 1, 4, 5,
-6 and the read-back in 8 were run; steps 3 and 8's `record_check.py` call and the Prometheus
-start in 4 were run by the operator on 2026-11-25/26 as recorded above; step 7 is pull
-request #220's.
+**Last verified:** 2026-11-26 against `791c77a` on the live stack, read-only: steps 1, 4, 5,
+6 and the read-back in 8 were run; step 3, the Prometheus start in 4 and the 2026-11-25 row in
+8 were run by the operator on 2026-11-25/26 as recorded above; step 7 is failure-recovery.md
+section 8's, verified there.
