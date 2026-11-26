@@ -30,6 +30,8 @@ WAREHOUSE=${K2_LAKE_WAREHOUSE:-k2}
 # `make generate`, which writes the matching Trino catalogs too; never edit it here.
 DOMAIN_WAREHOUSES="$(dirname "$0")/generated/warehouses.txt"
 BUCKET=${K2_LAKE_BUCKET:-k2-lake}
+# Where file sources land their downloads verbatim (ADR-036, docker/lake/file_source.py).
+LANDING_BUCKET=${K2_LANDING_BUCKET:-k2-landing}
 S3_ENDPOINT=${K2_S3_ENDPOINT:-http://minio:9000}
 S3_REGION=${K2_S3_REGION:-local-01}
 S3_PATH_STYLE=${K2_S3_PATH_STYLE:-true}
@@ -54,11 +56,17 @@ echo "K2 lake bootstrap"
 echo "  catalog:   $LK"
 echo "  warehouse: $WAREHOUSE"
 echo "  bucket:    s3://$BUCKET"
+echo "  landing:   s3://$LANDING_BUCKET"
 echo "=========================================="
 
-echo "[1/5] MinIO bucket"
+echo "[1/5] MinIO buckets"
 mc alias set k2 "$S3_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" > /dev/null
 mc mb --ignore-existing "k2/$BUCKET"
+# The landing bucket: a file lands by a conditional PUT that refuses an existing key, and
+# versioning keeps the first bytes if anything overwrites one outside that path. No object
+# lock: it would not refuse the overwrite either (ADR-036, "What was tested").
+mc mb --ignore-existing "k2/$LANDING_BUCKET"
+mc version enable "k2/$LANDING_BUCKET"
 
 # 4xx here means "already bootstrapped" — the endpoint closes after first use.
 echo "[2/5] Lakekeeper bootstrap"
