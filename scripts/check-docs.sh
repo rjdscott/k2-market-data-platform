@@ -200,7 +200,8 @@ rm -f "$out"
 # shorter file) shows only the lines that differ from its source. A line whose
 # only change is the target of a Markdown link, the one edit an Accepted ADR's
 # conventions allow when the file it links to is archived, matches a removed line
-# of the same hunk once each `](target)` is blanked.
+# of the same hunk once each `](target)` is blanked. Each removed line excuses one
+# added line, never two, and an em-dash inside a target is new, so it still fails.
 #
 # On a push to main the merge base is HEAD itself, so the diff was empty and a
 # commit pushed straight to main was never read. CI's push run sets
@@ -216,12 +217,15 @@ elif base=${K2_DIFF_BASE:-$(git merge-base origin/main HEAD 2>/dev/null)}; [ -n 
   {
     git diff -C --unified=0 --no-color --no-ext-diff "$base" -- "${exts[@]}" | awk -v d="$emdash" '
       function blank(s) { gsub(/[]][(][^)]*[)]/, "]()", s); return s }
+      function dashes(s) { return gsub(d, "", s) }
       /^diff --git / { head = 1; next }
       head && /^\+\+\+ / { f = substr($0, 7); next }
       /^@@/      { head = 0; split("", gone); split($3, a, ","); n = substr(a[1], 2) + 0; next }
       head       { next }
-      /^-/       { gone[blank(substr($0, 2))] = 1; next }
-      /^\+/      { s = substr($0, 2); if (index(s, d) && !(blank(s) in gone)) print f ":" n ": " s; n++ }'
+      /^-/       { gone[blank(substr($0, 2))]++; next }
+      /^\+/      { s = substr($0, 2); k = blank(s)
+                   if (index(s, d)) { if (dashes(k) == dashes(s) && gone[k] > 0) gone[k]--; else print f ":" n ": " s }
+                   n++ }'
     git ls-files --others --exclude-standard -z -- "${exts[@]}" \
       | xargs -0 -r grep -nHF "$emdash" || true
   } > "$out"
