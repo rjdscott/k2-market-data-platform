@@ -55,9 +55,10 @@ const KRAKEN_STREAMS: &[&str] = &[
     "status",
     "control",
 ];
-/// `pong` is not a venue frame: it is the answer to the WebSocket Ping the
-/// Binance capture sends every `PING_EVERY` (see there), watched like a stream
-/// but never archived and never counted as a message.
+/// `pong` is not a venue frame: it is a WebSocket control frame from the venue,
+/// the Pong answering the Ping the Binance capture sends every `PING_EVERY`, or
+/// the venue's own Ping (`ws::is_liveness`), watched like a stream but never
+/// archived and never counted as a message.
 const BINANCE_STREAMS: &[&str] = &["trade", "depth20", "pong"];
 const COINBASE_STREAMS: &[&str] = &["l2_data", "market_trades", "heartbeats", "subscriptions"];
 /// Each venue's order-book stream, the one a capture neither subscribes to,
@@ -91,8 +92,8 @@ const CONTINUOUS: &[(&str, Duration)] = &[
     ("l2_data", Duration::from_secs(60)),
     ("heartbeat", Duration::from_secs(60)),
     ("heartbeats", Duration::from_secs(60)),
-    // Binance's answer to our Ping (`PING_EVERY`): four pings fit in the bound,
-    // so one lost pong is not a reconnect, four in a row are.
+    // Binance's answer to our Ping (`PING_EVERY`), or its own Ping, about every
+    // 20 s: several fit in the bound, so one lost is not a reconnect.
     ("pong", Duration::from_secs(60)),
     ("trade", Duration::from_secs(300)),
     ("market_trades", Duration::from_secs(300)),
@@ -152,6 +153,7 @@ fn silent_stream<'a>(
 /// five minutes of trades before the watchdog noticed. The protocol's own Ping
 /// is the probe: the venue must answer with a Pong, which `ws.rs` reports as a
 /// liveness event and `session` stamps as the `pong` stream, judged at 60 s.
+/// The venue's own Ping counts too, so liveness does not rest on it answering.
 /// Sent with books on or off. Kraken and Coinbase get none: their 60 s
 /// heartbeats already are the probe.
 const PING_EVERY: Duration = Duration::from_secs(15);
@@ -601,9 +603,10 @@ async fn session(
                         .set(adapter.total_levels() as f64);
                 }
 
-                // A Pong is the venue's answer to our Ping: a liveness event,
-                // not a frame, so it is stamped here and nowhere else.
-                if let Some(pong_ns) = feed.take_pong()
+                // A Pong answering our Ping, or the venue's own Ping: a
+                // liveness event, not a frame, so it is stamped here and
+                // nowhere else.
+                if let Some(pong_ns) = feed.take_liveness()
                     && let Some(slot) = last_frame_ns.get_mut("pong")
                 {
                     *slot = pong_ns;
@@ -1099,6 +1102,42 @@ k2_capture_messages_total{exchange=\"kraken\",stream=\"book\"} 12
         // Last pong at 30.1 s; 60 s later is 90.1 s, so the tick at 91 s ends
         // it. The ping at 45 s alone going unanswered did nothing.
         assert_eq!(ended, Some((91, "pong", 30 * s + s / 10)));
+    }
+
+    /// A venue that pings us about every 20 s and never answers our pings:
+    /// its pings are liveness (`ws::is_liveness`), so the session stays up.
+    #[test]
+    fn server_pings_alone_keep_the_session_up() {
+        use k2_capture::ws::is_liveness;
+        use tokio_tungstenite::tungstenite::Message;
+        let s = 1_000_000_000i64;
+        let mut last_frame: std::collections::HashMap<&str, i64> =
+            continuous_streams_for(Exchange::Binance, false)
+                .into_iter()
+                .map(|stream| (stream, 0))
+                .collect();
+        let mut last_ping = 0;
+        for tick in 1..=3600 {
+            let now = tick * s;
+            last_frame.insert("trade", now);
+            if ping_due(Exchange::Binance, last_ping, now) {
+                last_ping = now; // sent, never answered
+            }
+            if tick % 20 == 0 && is_liveness(&Message::Ping(Default::default())) {
+                last_frame.insert("pong", now);
+            }
+            assert_eq!(
+                silent_stream(&last_frame, now),
+                None,
+                "reconnected at {tick} s"
+            );
+        }
+        // The same hour with the venue's pings filtered out ends on pong at 61 s.
+        last_frame.insert("pong", 0);
+        assert_eq!(
+            silent_stream(&last_frame, 61 * s).map(|(st, _)| st),
+            Some("pong")
+        );
     }
 
     #[test]

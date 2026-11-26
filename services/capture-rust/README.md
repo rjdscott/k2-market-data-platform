@@ -281,13 +281,14 @@ hash, which is what keeps the paused book code tested.
 
 **Binance's ping.** Binance has no heartbeat channel, so with `depth20` off its only
 watched stream would be `trade` at 300 s. `session` sends a WebSocket Ping every
-15 s (`PING_EVERY`, from the 1 Hz ticker) on Binance only, books on or off;
-`ws.rs` keeps the Pong as a liveness event (never archived, never a
-`conn_msg_seq`), stamped as the `pong` stream with a 60 s bound. One lost pong is
-not a reconnect; 60 s with none ends the session as involuntary on the next tick,
-and if pongs never come back `CaptureFeedStale` fires on `stream="pong"` and the
-reconnect counter climbs once a minute. Kraken and Coinbase get no ping: their
-heartbeats are the probe.
+15 s (`PING_EVERY`, from the 1 Hz ticker) on Binance only, books on or off. `ws.rs`
+keeps the venue's Pong, and the venue's own Ping (Binance pings every client about
+every 20 s), as a liveness event (never archived, never a `conn_msg_seq`), stamped
+as the `pong` stream with a 60 s bound. One lost control frame is not a reconnect;
+60 s with neither ends the session as involuntary on the next tick, and if they
+never come back `CaptureFeedStale` fires on `stream="pong"` and the reconnect
+counter climbs once a minute. Kraken and Coinbase get no ping: their heartbeats
+are the probe.
 
 ---
 

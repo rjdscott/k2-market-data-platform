@@ -50,8 +50,8 @@ pub fn now_ns() -> i64 {
 
 pub struct Feed {
     stream: Stream,
-    /// Receipt time of the newest Pong not yet taken by `take_pong`.
-    last_pong_ns: Option<i64>,
+    /// Receipt time of the newest Ping or Pong not yet taken by `take_liveness`.
+    last_liveness_ns: Option<i64>,
 }
 
 impl Feed {
@@ -64,17 +64,18 @@ impl Feed {
             .with_context(|| format!("connecting to {url}"))?;
         Ok(Self {
             stream,
-            last_pong_ns: None,
+            last_liveness_ns: None,
         })
     }
 
     /// Next data frame, or `None` when the peer closed.
     ///
-    /// Control frames are not frames to the archive: tungstenite answers the
-    /// venue's pings itself, and a Pong, the venue's answer to [`Feed::ping`],
-    /// is kept only as a liveness event for [`Feed::take_pong`]. A pong is not
-    /// something the exchange sent us about the market, so it is never archived
-    /// and must not advance `conn_msg_seq`.
+    /// Control frames are not frames to the archive. A Ping from the venue
+    /// (tungstenite answers it itself) and a Pong, the venue's answer to
+    /// [`Feed::ping`], are kept only as a liveness event for
+    /// [`Feed::take_liveness`] ([`is_liveness`]). Neither is something the
+    /// exchange sent us about the market, so neither is archived or advances
+    /// `conn_msg_seq`.
     pub async fn next_frame(&mut self) -> Result<Option<Frame>> {
         loop {
             let message = self.stream.next().await;
@@ -92,11 +93,11 @@ impl Feed {
                     payload: bytes.to_vec(),
                 })),
                 Some(Ok(Message::Close(_))) | None => Ok(None),
-                Some(Ok(Message::Pong(_))) => {
-                    self.last_pong_ns = Some(recv_ts_ns);
+                Some(Ok(m)) if is_liveness(&m) => {
+                    self.last_liveness_ns = Some(recv_ts_ns);
                     continue;
                 }
-                Some(Ok(_)) => continue, // ping, raw frame
+                Some(Ok(_)) => continue, // a raw frame
                 Some(Err(e)) => Err(e).context("reading a websocket frame"),
             };
         }
@@ -118,9 +119,9 @@ impl Feed {
             .context("sending a websocket ping")
     }
 
-    /// When the newest Pong arrived, if one has since the last call.
-    pub fn take_pong(&mut self) -> Option<i64> {
-        self.last_pong_ns.take()
+    /// When the newest Ping or Pong arrived, if one has since the last call.
+    pub fn take_liveness(&mut self) -> Option<i64> {
+        self.last_liveness_ns.take()
     }
 
     /// Best-effort close handshake. A failure here is not worth reporting: we
@@ -128,6 +129,14 @@ impl Feed {
     pub async fn close(mut self) {
         let _ = self.stream.close(None).await;
     }
+}
+
+/// A control frame that proves the peer is alive: its answer to our Ping, or
+/// its own Ping. Binance pings every client about every 20 s and expects the
+/// Pong within a minute, so counting its pings keeps a venue that pings us but
+/// does not answer ours from being reconnected every 61 s (ADR-050).
+pub fn is_liveness(message: &Message) -> bool {
+    matches!(message, Message::Ping(_) | Message::Pong(_))
 }
 
 /// Exponential backoff between reconnect attempts, capped.
@@ -206,6 +215,15 @@ mod tests {
         assert_eq!(b.next_delay(), Backoff::CAP);
         b.reset();
         assert_eq!(b.next_delay(), Duration::from_millis(500));
+    }
+
+    #[test]
+    fn the_venues_ping_and_its_pong_are_liveness_and_nothing_else_is() {
+        assert!(is_liveness(&Message::Ping(Default::default())));
+        assert!(is_liveness(&Message::Pong(Default::default())));
+        assert!(!is_liveness(&Message::text("{}")));
+        assert!(!is_liveness(&Message::Binary(Default::default())));
+        assert!(!is_liveness(&Message::Close(None)));
     }
 
     #[test]
