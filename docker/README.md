@@ -9,10 +9,9 @@ day-to-day operations see [../docs/operations/README.md](../docs/operations/READ
 
 ```
 docker/
-├── clickhouse/           # ClickHouse server config + DDL bootstrap + schema history
+├── clickhouse/           # ClickHouse gold hot tier, paused behind profile hot-gold (ADR-057)
 │   ├── config.xml        # Server config (Kafka Engine, compression, Prometheus exporter)
-│   ├── ddl/              # ClickHouse medallion bootstrap (01-k2-schema.sql), auto-run on init
-│   └── schema/           # Historical schema migration trail (not run)
+│   └── ddl/              # gold tables (10-gold-tables.sql, tested by make test-clickhouse) + Kafka feeds (20-gold-kafka.sql)
 ├── lake/                 # v3 Iceberg lake on Lakekeeper + MinIO (ADR-018)
 │   ├── ddl/lake.sql      # raw.messages, bronze.*, audit.checks
 │   ├── ddl/generated/    # DDL written by k2gen generate for new products (none today)
@@ -31,10 +30,10 @@ docker/
 ├── trino/                # Trino 484: catalog `lake` (read-only), generated domain catalogs and rules (ADR-035, ADR-044)
 ├── grafana/
 │   ├── provisioning/     # Auto-provisioned datasource (Prometheus) + dashboard loader
-│   └── dashboards/       # Dashboard JSON, 6: pipeline overview, ClickHouse, k2-l2-capture, k2-lake, k2-airflow, k2-resources
+│   └── dashboards/       # Dashboard JSON, 5: pipeline overview, k2-l2-capture, k2-lake, k2-airflow, k2-resources
 ├── prometheus/
 │   ├── prometheus.yml    # Scrape configs
-│   └── rules/            # Alerting rules (ClickHouse, capture, lake, Airflow)
+│   └── rules/            # Alerting rules (capture, lake, Airflow)
 └── postgres/
     └── ddl/              # Lakekeeper catalog DB, created on the shared PostgreSQL (Airflow's: airflow/init-db.sh)
 ```
@@ -44,7 +43,7 @@ docker/
 | Service | Kind | What it does |
 |---------|------|--------------|
 | `redpanda`, `redpanda-console` | long-running | Streaming backbone + web UI |
-| `clickhouse` | long-running | Warm tier: Kafka Engine ingest, bronze/silver/gold MVs |
+| `clickhouse` | profile `hot-gold`, paused | Gold hot tier: Kafka engine feeds into `gold`, reloaded from the lake; not started by `docker compose up` while the platform is built ([ADR-057](../docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)) |
 | `minio` | long-running | S3 object storage, holds the v3 `k2-lake` bucket |
 | `lakekeeper` | long-running | **v3** Iceberg REST catalog ([ADR-018](../docs/adr/ADR-018-v3-lake-first-rust-capture.md)); `127.0.0.1:18181` |
 | `spark-iceberg` | long-running | Batch engine for the v3 lake ingest and maintenance |
@@ -115,9 +114,9 @@ Starting, stopping, recreating one service and rolling out a change on the live 
 
 ## Troubleshooting
 
-**ClickHouse won't start**
-- Check logs: `docker logs k2-clickhouse`
-- Verify config syntax: `xmllint --noout docker/clickhouse/config.xml`
+**ClickHouse is not running**
+- Expected: it is paused behind the compose profile `hot-gold` ([ADR-057](../docs/adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)), so `make up` does not start it
+- Before any restart, check the XML parses: `python3 -c "import xml.etree.ElementTree as E; E.parse('docker/clickhouse/config.xml'); E.parse('docker/clickhouse/users.xml')"` (silent on success)
 
 **Redpanda health check failing**
 - Check cluster: `docker exec k2-redpanda rpk cluster health`

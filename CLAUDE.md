@@ -12,8 +12,9 @@ per data domain generated from `contracts/domains.yaml` by `make generate`
 The v2 ClickHouse medallion is **gone**: the Kotlin handlers that fed it retired
 in ADR-019 and the `k2.*` database was dropped at the Phase E cutover on
 2026-08-27 — `SHOW DATABASES` lists `gold` and nothing else. Its DDL is archived,
-unexecuted, in `legacy/v2-clickhouse/`. ClickHouse now serves the `gold` hot tier
-only, fed straight from Redpanda. The v2 ClickHouse→Iceberg offload that wrote
+unexecuted, in `legacy/v2-clickhouse/`. ClickHouse's `gold` hot tier, fed straight
+from Redpanda, is paused behind compose profile `hot-gold` (ADR-057); its DDL is
+kept and tested by `make test-clickhouse`. The v2 ClickHouse→Iceberg offload that wrote
 `cold.*` is deleted (Phase D).
 v2 is at the repo root; v1 is archived in `legacy/v1/` with its source unchanged
 since archiving (only dependency pins and READMEs have moved), the v2 Kotlin tier

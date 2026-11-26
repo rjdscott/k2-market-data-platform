@@ -15,5 +15,5 @@ outputs:
   - gold.book_top20
   - gold.bbo_1s
 consumers:
-  - ClickHouse gold reload, docs/runbooks/clickhouse-rebuild-from-lake.md
+  - ClickHouse gold reload, paused (ADR-057), docs/runbooks/clickhouse-rebuild-from-lake.md
   - notebooks/k2lake.py
