@@ -1,0 +1,8 @@
+# One canary principal per role; step S14 declares each in contracts/access/principals.yaml.
+grants:
+  - principal: p.canary-full
+    role: full_reader
+  - principal: p.canary-delayed
+    role: delayed_reader
+  - principal: p.canary-scoped
+    role: public_reader

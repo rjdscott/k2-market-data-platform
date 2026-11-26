@@ -1,0 +1,70 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: governance.access-canary.events
+name: events
+version: 1.0.0
+domain: governance
+description:
+  purpose: >-
+    One synthetic canary row per seed row, built so that each reader policy visibly changes what
+    its canary principal reads: some rows younger than the delay, two regions, a note to mask.
+team:
+  name: platform-team
+schema:
+  - id: events
+    name: events
+    physicalName: access_canary.events
+    physicalType: table
+    properties:
+      - name: id
+        physicalType: bigint
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The seed row's number, 1 to 5; a reader shown any other id was shown an untested row.
+      - name: region
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: >-
+          north or south; public_reader keeps north only. The partition source, so it is in the
+          key, as an incremental build's unique key must hold every partition source column.
+      - name: note
+        physicalType: varchar
+        required: true
+        description: A marker a leak can be searched for, canary-note-<id>; delayed_reader reads it as null.
+      - name: event_ts
+        physicalType: timestamp(6) with time zone
+        required: true
+        description: >-
+          The build's clock minus the seed row's age_minutes; delayed_reader sees a row only once
+          this is 20 minutes old.
+        customProperties:
+          - property: time
+            value: event
+roles:
+  - role: full_reader
+    access: read
+  - role: delayed_reader
+    access: read
+  - role: public_reader
+    access: read
+customProperties:
+  - property: layer
+    value: mart
+  - property: build
+    value: dbt
+  - property: backup
+    value: rebuild
+  - property: retention
+    value: 1  # days of snapshots; it rebuilds every 10 minutes and no table reads it
+  - property: partitioning
+    value: [region]
+  - property: policies
+    value:
+      delayed_reader:
+        delay: {column: event_ts, minutes: 20}
+        mask: [note]
+      public_reader:
+        rowScope: {column: region, values: [north]}

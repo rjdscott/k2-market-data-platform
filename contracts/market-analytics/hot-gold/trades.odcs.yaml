@@ -1,0 +1,113 @@
+# The paused copy's gold.trades, as docker/clickhouse/ddl/10-gold-tables.sql creates it. Types are
+# in Trino's spelling (the schema's one grammar), each the type that holds every value of the
+# ClickHouse type named in its description. build: serving, so no lake emitter or rule reads it.
+apiVersion: v3.2.0
+kind: DataContract
+id: market-analytics.hot-gold.trades
+name: trades
+version: 1.0.0
+domain: market-analytics
+description:
+  purpose: >-
+    One row per logical trade of every venue, deduplicated by ClickHouse's ReplacingMergeTree on
+    the key, the first delivery winning; exact reads use FINAL.
+team:
+  name: analytics-team
+schema:
+  - id: trades
+    name: trades
+    physicalName: gold.trades
+    physicalType: table
+    properties:
+      - name: exchange
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The venue, binance, kraken or coinbase (LowCardinality(String)).
+      - name: symbol
+        physicalType: varchar
+        required: true
+        description: The venue's own symbol, as sent (String).
+      - name: canonical_symbol
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: BASE/QUOTE in upper case, from config/instruments.yaml (LowCardinality(String)).
+      - name: trade_id
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 4
+        description: The venue's own trade id, as a string (String).
+      - name: price_e8
+        physicalType: bigint
+        required: true
+        description: The price in fixed point at 1e-8, the wire value (Int64).
+      - name: qty_e8
+        physicalType: bigint
+        required: true
+        description: The base quantity in fixed point at 1e-8 (Int64).
+      - name: price
+        physicalType: decimal(38,10)
+        required: true
+        description: price_e8 as an exact decimal, computed on read (an ALIAS column, Decimal(38, 10)).
+      - name: qty
+        physicalType: decimal(38,10)
+        required: true
+        description: qty_e8 as an exact decimal, computed on read (an ALIAS column, Decimal(38, 10)).
+      - name: side
+        physicalType: varchar
+        required: true
+        description: The taker's side, buy or sell (Enum8).
+      - name: exchange_ts
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The venue's clock, in microseconds, UTC (DateTime64(6, 'UTC')); the monthly partition source.
+        customProperties:
+          - property: time
+            value: event
+      - name: recv_ts_ns
+        physicalType: bigint
+        required: true
+        description: The capture's receive clock, in nanoseconds since the epoch (Int64).
+      - name: seq
+        physicalType: bigint
+        required: true
+        description: The venue's sequence number; 0 where the stream has none (Int64).
+      - name: conn_id
+        physicalType: varchar
+        required: true
+        description: The capture's WebSocket connection episode (String).
+      - name: conn_msg_seq
+        physicalType: bigint
+        required: true
+        description: The capture's frame counter on conn_id (Int64).
+      - name: src_topic
+        physicalType: varchar
+        required: true
+        description: Lineage, the Kafka topic the row was read from (LowCardinality(String)).
+      - name: src_partition
+        physicalType: decimal(20,0)
+        required: true
+        description: Lineage, the topic partition (UInt64).
+      - name: src_offset
+        physicalType: decimal(20,0)
+        required: true
+        description: Lineage, the record's offset in that partition (UInt64).
+      - name: first_seen
+        physicalType: decimal(20,0)
+        required: true
+        description: >-
+          The ReplacingMergeTree version, the UInt64 maximum minus recv_ts_ns, so the earliest
+          delivery of a trade survives a merge (UInt64).
+customProperties:
+  - property: layer
+    value: gold
+  - property: build
+    value: serving
+  - property: backup
+    value: rebuild  # rebuilt from the lake gold of the product it returns with (ADR-057); the kept volume is not its source

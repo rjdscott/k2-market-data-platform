@@ -1,0 +1,55 @@
+# Hand-written access expectations (A9), reviewed by the owner and never generated from the rules
+# they test. make access-verify (step S20) runs every row. These are the access canary's
+# (contracts/governance/access-canary/): at build its seed rows 1 (north) and 4 (south) are a day
+# old, 2 (north) 21 minutes, 3 (north) and 5 (south) 1 minute. Any other id is not from the seed,
+# so it was never tested. The delayed rows need a canary build that passed in the last 19
+# minutes (its 10-minute schedule); a stale canary fails them, it never passes them.
+expectations:
+  # Readers see the tagged rows only, each with its role's policy.
+  - principal: p.canary-full
+    table: governance.access_canary.events
+    via: [sql]
+    visible: [id, region, note, event_ts]
+    mustNotAppear: "id NOT IN (1, 2, 3, 4, 5)"
+  - principal: p.canary-delayed
+    table: governance.access_canary.events
+    via: [sql]
+    visible: [id, region, note, event_ts]
+    masked: [note]
+    minRowAgeMinutes: 20
+    mustNotAppear: "id NOT IN (1, 2, 4)"
+  - principal: p.canary-scoped
+    table: governance.access_canary.events
+    via: [sql]
+    visible: [id, region, note, event_ts]
+    mustNotAppear: "id NOT IN (1, 2, 3)"
+  # Every base path is refused to every reader: the table and its metadata tables (gate h1.08).
+  - {principal: p.canary-full, table: governance.access_canary__base.events, denied: true}
+  - {principal: p.canary-delayed, table: governance.access_canary__base.events, denied: true}
+  - {principal: p.canary-scoped, table: governance.access_canary__base.events, denied: true}
+  - {principal: p.canary-delayed, table: "governance.access_canary__base.events$snapshots", denied: true}
+  - {principal: p.canary-delayed, table: "governance.access_canary__base.events$files", denied: true}
+  - {principal: p.canary-delayed, table: "governance.access_canary__base.events$history", denied: true}
+  - {principal: p.canary-delayed, table: "governance.access_canary__base.events$partitions", denied: true}
+  - {principal: p.canary-delayed, table: "governance.access_canary__base.events$refs", denied: true}
+  - {principal: p.canary-delayed, table: "governance.access_canary__base.events$manifests", denied: true}
+  - {principal: p.canary-delayed, table: "governance.access_canary__base.events$all_manifests", denied: true}
+  - {principal: p.canary-delayed, table: "governance.access_canary__base.events$properties", denied: true}
+  - {principal: p.canary-delayed, table: "governance.access_canary__base.events$metadata_log_entries", denied: true}
+  - {principal: p.canary-delayed, table: "governance.access_canary__base.events$entries", denied: true}
+  - {principal: p.canary-delayed, table: "governance.access_canary__base.events$all_entries", denied: true}
+  - {principal: p.canary-full, sql: "SELECT * FROM TABLE(governance.system.table_changes('access_canary__base', 'events', 0, 1))", expect: denied}
+  # No time travel on the view (h1.09) and no statistics for readers (h1.20, h1.23, h1.24).
+  - {principal: p.canary-full, sql: "SELECT * FROM governance.access_canary.events FOR VERSION AS OF 1", expect: error}
+  - {principal: p.canary-full, sql: "SHOW STATS FOR governance.access_canary.events", expect: noBounds}
+  - {principal: p.canary-delayed, sql: "SET SESSION governance.statistics_enabled = true", expect: denied}
+  - {principal: p.canary-delayed, sql: "SELECT count(*) FROM governance.access_canary.events", session: {governance.statistics_enabled: "true"}, expect: denied}
+  # Only the publisher changes the view; it still writes nothing through the reader catalog
+  # (h1.02, h1.12, h1.19, h1.33).
+  - {principal: dbt_access_canary, sql: "CREATE OR REPLACE VIEW governance_build.access_canary.events AS SELECT 1 x", expect: denied}
+  - {principal: svc.platform, sql: "CREATE OR REPLACE VIEW governance_build.access_canary.events AS SELECT 1 x", expect: denied}
+  - {principal: pub_access_canary, sql: "ALTER VIEW governance_build.access_canary.events SET AUTHORIZATION USER \"svc.platform\"", expect: denied}
+  - {principal: pub_access_canary, sql: "INSERT INTO governance.access_canary__base.events SELECT * FROM governance.access_canary__base.events", expect: denied}
+  - {principal: pub_access_canary, sql: "CALL governance.system.rollback_to_snapshot('access_canary__base', 'events', 1)", expect: denied}
+  # A builder's definer view, planted by the test under a name no rule grants, is denied (h1.31).
+  - {principal: p.canary-full, table: governance.access_canary.foreign_view, denied: true}

@@ -1,0 +1,45 @@
+# The paused ClickHouse hot tier (ADR-057), declared as what it is: a serving copy with no lake
+# table, paused. It returns only as the serving copy of a product of this platform.
+apiVersion: v1.1.0
+kind: DataProduct
+id: market-analytics.hot-gold
+name: hot-gold
+version: 1.0.0
+status: paused
+domain: market-analytics
+type: consumerAligned
+description:
+  purpose: >-
+    The hot tier: a ClickHouse copy of the gold trades of every venue, for dashboards and reads
+    faster than the lake answers them.
+  limitations: >-
+    Paused since 2026-11-26 (ADR-057). The clickhouse service starts only under the compose
+    profile hot-gold; nothing feeds or reads it, and the rows its kept volume holds are stale.
+    It has no lake table and no reader on Trino. This document declares its trades table, the
+    copy ADR-057 describes; the book, candle, bar and BBO tables in the same volume return only
+    if a product of this platform defines them.
+team:
+  name: analytics-team
+outputPorts:
+  - name: trades
+    version: 1.0.0
+    contractId: market-analytics.hot-gold.trades
+    customProperties:
+      - property: serves
+        value:
+          engine: clickhouse
+          profile: hot-gold
+          status: paused
+customProperties:
+  - property: lifecycleChange
+    value:
+      since: "2026-11-26"
+      reason: >-
+        Nothing the platform build works on reads the hot tier, its share of the resource budget
+        is better left free, and the lake gold it was reloaded from was retired.
+      decision: ADR-057
+      resume: >-
+        Not where it stopped: it is rebuilt from the tested lake gold of a product of this platform,
+        as that product's serving copy, and the kept rows are not its source. Starting the old copy
+        is an emergency path, whole only until the 7-day offset and topic clocks run out, about
+        2026-12-03 14:21 UTC.
