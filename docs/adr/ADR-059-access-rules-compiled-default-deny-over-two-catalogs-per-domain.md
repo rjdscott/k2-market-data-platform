@@ -202,3 +202,52 @@ retires the network fence's role as the only control; (3) the rules file passes 
 is measured over 1 s, the point to group rules by catalog or move to OPA; (4) a consumer service needs REST, or a
 consumer needs a session property, which reopens the impersonation and session rules; (5) Trino gains per-table
 procedure privileges in file rules, which would let builders hold `SELECT` through writable catalogs again.
+
+---
+
+## Outcome (2026-11-26, after the independent review of step S12)
+
+An adversarial review of the compiled rules found that a builder could swap its base table for a view
+that readers were then served (critical), and three high findings. What changed in the rules, each
+tested in `make test-k2gen` and, where Trino decides, by a row of
+[`scripts/trino_rules_c1_test.py`](../../scripts/trino_rules_c1_test.py) on a throwaway lake:
+
+- **The publisher reads its bases' refs.** Each reader view now guards on `<table>$refs`, the Iceberg
+  metadata table of a base's branches and tags, so it fails when the base is not a tagged Iceberg table
+  ([ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md)'s Outcome of this
+  date). Trino's definer-view owner check asks `GRANT_SELECT` of every relation a view reads, so
+  `pub_<fence>`'s rule on its bases through the reader catalog names `<table>` and `<table>$refs`, by exact
+  name, with `SELECT` and `GRANT_SELECT`; with `SELECT` alone every read failed (`View owner does not have
+  sufficient privileges`). It learns nothing it does not write: it moves the tag itself.
+- **A delay's column is `timestamp(6) with time zone`.** On any other time type the delay moved with the
+  reader's session time zone (`h1.delay-zone`); the emitter raises, and `access.delay-type` reports it first.
+- **A connector (bronze) table offers no role.** `SELECT` on an Iceberg table reads every ref and snapshot
+  of it, the write-audit-publish branch's unaudited rows included, and the interfaces define no reader view
+  over bronze (a connector table's reader relation is `lake.<fence>.<table>` itself), so readers reach
+  bronze through a dbt output; the emitter raises, and `access.connector-role` reports it. A consequence
+  not yet met: a product that reads another product's bronze as an input port can then offer no role
+  (`access.inherit-role` reads no role as no access).
+- **Product status is honoured** (ADR-055 part 4, least privilege). `active` and `deprecated` get every
+  rule; `deprecated`'s "no new reader" is `access.grant-new-on-deprecated`, against the previous release.
+  `paused` keeps its readers and its publisher, whose rights keep the definer views readable and let a
+  release re-sync them, and loses every builder rule, the right to run a query included. `retired` gets no
+  rule at all, and an input port on one fails closed; the platform reads its rows through Spark.
+- **Risk 3 closed.** `compiled/api/principals.json` now lists exactly whom the rules let `svc.api` become
+  (the declared `p.*` people, one function for both emitters), so k2-api serves no key Trino would refuse.
+
+Risks to add: a publisher can alias a column past its mask (`"note" AS "note_2"`), which Trino leaves
+unmasked; the drift check compares view SQL token for token (step S20). A builder can create a view named
+`<table>$refs` in its base namespace while the base is absent, which Trino never reads as refs and cannot
+drop (`c1.refs-litter`); the drift check's REST listing names it. Trino 484 refuses branch DDL to every
+principal through an internal error in the file access control, not through a rule (`c1.branch-ddl`).
+
+The policies leak more than counts: a delayed or scoped reader can binary-search the processed-row count
+for the bounds of hidden rows' visible columns, though never a masked value or an untested row; a row
+scope on an identity partition field closes it for the scope (`access.row-scope-unpartitioned`), and
+nothing closes it for a delay (ADR-061's Outcome). The rules therefore suit readers the owner trusts not
+to probe.
+
+**Revisit when**, besides the triggers above: (6) Trino is upgraded, which may make branch DDL reachable
+(rerun `c1.branch-ddl`); (7) a product is licensed to a principal outside the owner's team, whose delayed or
+scoped data must then be physically separate; (8) a product needs another product's bronze as an input
+and must offer a role.
