@@ -96,7 +96,7 @@ client() { docker run --rm --network "$NET" --user "$(id -u):$(id -g)" --memory 
 
 echo "identity: $C on $NET, logged in as $USER_, $URL"
 client -e UV_PROJECT_ENVIRONMENT=/tmp/venv -e K2_TRINO_URL="$URL" -e K2_SECRETS=/k2s -e K2_IDENTITY_USER="$USER_" \
-  -e K2_IDENTITY_FIXTURES=/fixtures -v "$REPO/scripts:/src/scripts:ro" -v "$REPO/platform/k2gen:/src/platform/k2gen:ro" -v "$SECRETS/trino:/k2s/trino" \
+  -e K2_IDENTITY_FIXTURES=/fixtures -v "$REPO/scripts:/src/scripts:ro" -v "$REPO/platform:/src/platform:ro" -v "$SECRETS/trino:/k2s/trino" \
   -v "$SECRETS/tls/ca.pem:/k2s/tls/ca.pem:ro" -v "$PASSWORD_FILE:/k2s/principals/$USER_.password:ro" -v "$F:/fixtures:ro" \
   -w /src "$UV_IMAGE" uv run --project /src/platform/k2gen --locked -q --with "$BCRYPT" python -B scripts/verify/identity.py \
   || fails=$((fails + 1))
