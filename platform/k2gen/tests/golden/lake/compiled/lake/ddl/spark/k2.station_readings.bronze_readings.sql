@@ -2,7 +2,7 @@ SET spark.sql.ansi.enabled=true;
 SET spark.sql.ansi.doubleQuotedIdentifiers=true;
 CREATE TABLE "lake"."station_readings"."bronze_readings" (
     "station_id" STRING NOT NULL,
-    "read_at" TIMESTAMP NOT NULL,
+    "read_at" TIMESTAMP_LTZ NOT NULL,
     "value_text" STRING NOT NULL,
     "region" STRING,
     "operator_note" STRING,

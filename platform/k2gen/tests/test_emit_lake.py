@@ -40,7 +40,7 @@ TOKEN = re.compile(r"""\s+|"(?:[^"]|"")*"|'(?:[^']|'')*'|[0-9]+|[A-Za-z_][A-Za-z
 # never bare, so a name the quoting missed shows up as a word outside these.
 VIEW_WORDS = {"SELECT", "FROM", "FOR", "VERSION", "AS", "OF"}
 SPARK_WORDS = {"CREATE", "TABLE", "NOT", "NULL", "USING", "iceberg", "PARTITIONED", "BY", "TBLPROPERTIES",
-               "BOOLEAN", "INT", "BIGINT", "FLOAT", "DOUBLE", "DECIMAL", "STRING", "BINARY", "DATE", "TIMESTAMP",
+               "BOOLEAN", "INT", "BIGINT", "FLOAT", "DOUBLE", "DECIMAL", "STRING", "BINARY", "DATE", "TIMESTAMP_LTZ",
                "TIMESTAMP_NTZ", "ARRAY", "MAP", "years", "months", "days", "hours", "bucket", "truncate"}
 
 
@@ -62,6 +62,12 @@ def edited(documents: dict[str, bytes], path: str, change: Any) -> dict[str, byt
 
 def columns_of(doc: Any) -> list[dict[str, Any]]:
     return list(doc["schema"][0]["properties"])
+
+
+def prop(doc: Any, name: str) -> Any:
+    """The contract's customProperties entry `name`, by name, never by position."""
+    (found,) = [p for p in doc["customProperties"] if p["property"] == name]
+    return found
 
 
 def repository_set(root: Path = model.REPO) -> dict[str, bytes]:
@@ -111,7 +117,8 @@ def held_to_their_shape(out: dict[str, str], m: Model) -> None:
             t = tables[path.removeprefix("compiled/trino/views/").removesuffix(".sql")]
             assert text.endswith("\n") and text.count("\n") == 1, path
             cols, base = view_parts(text.removesuffix("\n"))
-            assert cols == [c.name for c in t.columns] and base == model.input_relation(t), path
+            domain, product, table = t.contract_id.split(".")  # spelt out here, not through the emitter's helpers
+            assert cols == [c.name for c in t.columns] and base == f"{domain.replace('-', '_')}.{product.replace('-', '_')}__base.{table}", path
             sql, words, literals = text, VIEW_WORDS, {"'audited'"}
         elif path.startswith("compiled/lake/ddl/spark/"):
             head = "\n".join(lake.SPARK_SESSION) + "\n"
@@ -146,6 +153,9 @@ def test_the_good_set_compiles_to_its_golden_files() -> None:
     m = load(good())
     out = lake.emit(m)
     held_to_their_shape(out, m)
+    assert [(v["relation"], v["base"], v["owner"]) for v in json.loads(out[model.VIEWS])["views"]] == [
+        ("ops_insight.daily_load.gold_daily_load", "ops_insight.daily_load__base.gold_daily_load", "pub_daily_load"),
+        ("sensor_net.station_readings.silver_readings", "sensor_net.station_readings__base.silver_readings", "pub_station_readings")]
     compare_with_golden(out, GOLDEN)
 
 
@@ -171,7 +181,7 @@ def test_a_policy_bearing_column_is_projected_and_no_policy_reaches_any_lake_fil
     cols, _ = view_parts(lake.emit(m)[model.view_sql_path(model.reader_relation(silver))].removesuffix("\n"))
     assert {policy.delay.column, *policy.mask, policy.row_scope.column} <= set(cols)
     # a policy is a rule on the view's name (S12): dropping every policy changes no lake file
-    unpolicied = edited(good(), SILVER, lambda d: d["customProperties"].pop(6))
+    unpolicied = edited(good(), SILVER, lambda d: d["customProperties"].remove(prop(d, "policies")))
     assert lake.emit(load(unpolicied)) == lake.emit(m)
 
 
@@ -181,7 +191,7 @@ def test_a_column_removed_from_the_contract_leaves_the_view_and_never_leaves_a_t
 
     before = lake.emit(load(good()))
     after_docs = edited(edited(good(), SILVER, drop_note), BRONZE, drop_note)
-    after_docs = edited(after_docs, SILVER, lambda d: d["customProperties"][6]["value"]["delayed_reader"].pop("mask"))
+    after_docs = edited(after_docs, SILVER, lambda d: prop(d, "policies")["value"]["delayed_reader"].pop("mask"))
     after = lake.emit(load(after_docs))
     view = model.view_sql_path("sensor_net.station_readings.silver_readings")
     assert '"operator_note"' in before[view] and '"operator_note"' not in after[view]
@@ -198,34 +208,121 @@ def test_a_column_removed_from_the_contract_leaves_the_view_and_never_leaves_a_t
     assert not [p for p in after if "__base" in p]
 
 
+V = model.View("sensor_net.station_readings.silver_readings", "sensor_net.station_readings__base.silver_readings",
+               ("station_id", "read_at", "value"), "pub_station_readings")
+HEAD = 'CREATE OR REPLACE VIEW "sensor_net_build"."station_readings"."silver_readings" SECURITY DEFINER AS '
+
+
+def cols(statement: str | None, v: model.View = V) -> list[str]:
+    """The columns of one of the publisher's statements; AssertionError unless it is the one shape."""
+    assert statement
+    m = CREATE.fullmatch(statement)
+    catalog, namespace, table = v.relation.split(".")
+    assert m and [unquote(p) for p in m.groups()[:3]] == [f"{catalog}_build", namespace, table]  # spelt out, not build_catalog
+    names, base = view_parts(m[4])
+    assert base == v.base
+    return names
+
+
 def test_view_update_follows_the_rule_around_the_tag_commit() -> None:
-    v = model.View("sensor_net.station_readings.silver_readings", "sensor_net.station_readings__base.silver_readings",
-                   ("station_id", "read_at", "value"), "pub_station_readings")
-    head = 'CREATE OR REPLACE VIEW "sensor_net_build"."station_readings"."silver_readings" SECURITY DEFINER AS '
-
-    def cols(statement: str | None) -> list[str]:
-        assert statement and statement.startswith(head)
-        m = CREATE.fullmatch(statement)
-        assert m and [unquote(p) for p in m.groups()[:3]] == ["sensor_net_build", "station_readings", "silver_readings"]
-        names, base = view_parts(m[4])
-        assert base == v.base
-        return names
-
+    assert lake.create_view(V).startswith(HEAD)
+    i, ts = "integer", "timestamp(6) with time zone"
     # a column added: the view gains it only after the tag moves
-    before, after = lake.view_update(v, old=["station_id", "read_at"], new=["station_id", "read_at", "value"])
+    before, after = lake.view_update(V, old={"station_id": i, "read_at": ts}, new={"station_id": i, "read_at": ts, "value": i})
     assert cols(before) == ["station_id", "read_at"] and cols(after) == ["station_id", "read_at", "value"]
-    # a column dropped: the view loses it before the tag moves
-    before, after = lake.view_update(v, old=["station_id", "read_at", "value", "gone"], new=["read_at", "value", "station_id"])
-    assert cols(before) == cols(after) == ["station_id", "read_at", "value"]  # C's order, never the table's
+    # a column dropped: the view loses it before the tag moves; C's order, never the table's
+    before, after = lake.view_update(V, old={"station_id": i, "read_at": ts, "value": i, "gone": i},
+                                     new={"read_at": ts, "value": i, "station_id": i})
+    assert cols(before) == cols(after) == ["station_id", "read_at", "value"]
     # a column the table has and the contract does not is never served
-    _, after = lake.view_update(v, old=None, new=["station_id", "extra", "read_at", "value"])
+    _, after = lake.view_update(V, old=None, new={"station_id": i, "extra": i, "read_at": ts, "value": i})
     assert cols(after) == ["station_id", "read_at", "value"]
-    # a first publish: nothing before the tag; and nothing common: nothing before either
-    assert lake.view_update(v, old=None, new=list(v.columns))[0] is None
-    assert lake.view_update(v, old=["other"], new=list(v.columns))[0] is None
-    assert cols(lake.create_view(v)) == list(v.columns) and lake.create_view(v).endswith(" AS " + lake.view_sql(v))
+    # a type change is a drop and an add: out before the commit, back after it
+    for wider in ("bigint", "varchar"):
+        before, after = lake.view_update(V, old={"station_id": i, "read_at": ts, "value": i}, new={"station_id": i, "read_at": ts, "value": wider})
+        assert cols(before) == ["station_id", "read_at"] and cols(after) == ["station_id", "read_at", "value"]
+    assert cols(lake.create_view(V)) == list(V.columns) and lake.create_view(V).endswith(" AS " + lake.view_sql(V))
     with pytest.raises(ValueError, match="at least one column"):
-        lake.view_update(v, old=None, new=["extra"])
+        lake.view_update(V, old=None, new={"extra": i})
+
+
+def test_a_published_view_with_nothing_in_common_is_its_own_outcome_never_a_first_publish() -> None:
+    i = "integer"
+    assert lake.view_update(V, old=None, new={c: i for c in V.columns})[0] is None  # the first publish
+    for old, new in (({"other": i}, {c: i for c in V.columns}),  # every column renamed
+                     ({c: i for c in V.columns}, {c: "bigint" for c in V.columns})):  # every column retyped
+        with pytest.raises(lake.NoCommonColumns, match="no column of the contract"):
+            lake.view_update(V, old=old, new=new)
+
+
+class ToyTrino:
+    """A definer view over the `audited` tag as Trino 484 keeps it (the review's demonstrations):
+    CREATE resolves every column at the tagged snapshot and stores its type, and a read fails
+    unless every stored column is still there with that type."""
+
+    def __init__(self, snapshots: dict[str, dict[str, str]], tag: str | None) -> None:
+        self.snapshots, self.tag = snapshots, tag
+        self.view: dict[str, str] | None = None if tag is None else dict(snapshots[tag])  # release N's view, every column
+
+    def tagged(self) -> dict[str, str] | None:
+        return None if self.tag is None else self.snapshots[self.tag]
+
+    def run(self, statement: str, v: model.View) -> None:
+        tagged = self.tagged()
+        assert tagged is not None and set(cols(statement, v)) <= set(tagged), "CREATE fails: a column cannot be resolved"
+        self.view = {c: tagged[c] for c in cols(statement, v)}
+
+    def readable(self) -> bool:
+        tagged = self.tagged()
+        return self.view is None or (tagged is not None and all(tagged.get(c) == t for c, t in self.view.items()))
+
+
+def publish(trino: ToyTrino, v: model.View, crash_after: int | None = None) -> None:
+    """The wrapper's publish (ADR-061 part 5), stopping after step `crash_after` as a crash would."""
+    before, after = lake.view_update(v, trino.tagged(), trino.snapshots["new"])
+    steps = [lambda: trino.run(before, v) if before else None, lambda: setattr(trino, "tag", "new"), lambda: trino.run(after, v)]
+    for n, step in enumerate(steps):
+        step()
+        assert trino.readable(), f"readers fail after step {n}"
+        assert trino.view is None or set(trino.view) <= set(v.columns)
+        if n == crash_after:
+            return
+
+
+INT, BIG, STR = "integer", "bigint", "varchar"
+CHANGES = {
+    "widen": (("a", "b"), {"a": INT, "b": INT}, {"a": INT, "b": BIG}),
+    "retype": (("a", "b"), {"a": INT, "b": INT}, {"a": INT, "b": STR}),
+    "rename": (("a", "c"), {"a": INT, "b": INT}, {"a": INT, "c": INT}),
+    "add": (("a", "b"), {"a": INT}, {"a": INT, "b": INT}),
+    "drop": (("a",), {"a": INT, "b": INT}, {"a": INT}),
+    "no change": (("a", "b"), {"a": INT, "b": INT}, {"a": INT, "b": INT}),
+    "first creation": (("a", "b"), None, {"a": INT, "b": INT}),
+}
+
+
+@pytest.mark.parametrize("crash_after", [None, 0, 1, 2])
+@pytest.mark.parametrize("change", sorted(CHANGES))
+def test_readers_never_fail_across_the_commit_and_a_rerun_after_any_crash_converges(change: str, crash_after: int | None) -> None:
+    contract, old, new = CHANGES[change]
+    v = model.View("d.p.t", "d.p__base.t", contract, "pub_p")
+    trino = ToyTrino({"old": old or {}, "new": new}, None if old is None else "old")
+    publish(trino, v, crash_after)
+    publish(trino, v)  # the reconcile reruns the whole publish from what the tag holds now
+    assert trino.tag == "new" and trino.view == {c: new[c] for c in contract if c in new}
+
+
+@pytest.mark.parametrize("crash_after", [None, 0, 1, 2])
+def test_a_column_dropped_then_added_back_with_another_type_never_breaks_a_read(crash_after: int | None) -> None:
+    trino = ToyTrino({"old": {"a": INT, "b": INT}, "new": {"a": INT}}, "old")
+    dropped = model.View("d.p.t", "d.p__base.t", ("a",), "pub_p")  # release N drops b
+    publish(trino, dropped, crash_after)
+    publish(trino, dropped)
+    trino.snapshots, trino.tag = {"old": trino.snapshots["new"], "new": {"a": INT, "b": STR}}, "old"
+    back = model.View("d.p.t", "d.p__base.t", ("a", "b"), "pub_p")  # release N+1 adds b back, a varchar
+    publish(trino, back, crash_after)
+    publish(trino, back)
+    assert trino.view == {"a": INT, "b": STR}
 
 
 # --- hostile names --------------------------------------------------------------------------
@@ -249,11 +346,15 @@ def renamed(documents: dict[str, bytes], words: dict[str, str]) -> dict[str, byt
     return {swap(p): swap(d.decode()).encode() for p, d in documents.items()}
 
 
+def name_taken(name: str, problem: Any) -> bool:
+    return bool(problem(name)) or model.fence(name) in model.TRINO_RESERVED
+
+
 def hostile_set(seed: int) -> tuple[dict[str, bytes], str, list[str]]:
     rng = random.Random(seed)
-    # the model's own name rules refuse some of these (select as a domain); the next test has those
-    domain = rng.choice([n for n in HOSTILE_SLUGS if not model.domain_name_problem(n)])
-    product = rng.choice([n for n in HOSTILE_SLUGS if not model.product_name_problem(n) and n != domain])
+    # the model's own name rules refuse some of these (select as a domain); the next tests have those
+    domain = rng.choice([n for n in HOSTILE_SLUGS if not name_taken(n, model.domain_name_problem)])
+    product = rng.choice([n for n in HOSTILE_SLUGS if not name_taken(n, model.product_name_problem) and n != domain])
     table = rng.choice(HOSTILE_TABLES)
     extra = rng.sample(HOSTILE_COLUMNS, 4)
     docs = renamed(good(), {"sensor-net": domain, "sensor_net": model.fence(domain),
@@ -276,18 +377,91 @@ def test_hostile_names_that_pass_the_schema_stay_one_quoted_token(seed: int) -> 
     assert view_parts(out[view].removesuffix("\n"))[0][-4:] == extra
 
 
-def test_names_past_the_schema_are_still_one_token_each() -> None:
-    # quote_ident is the second line: a name the schema would refuse, put straight into the
-    # model, still reads back as exactly that name.
-    m = load(good())
-    names = ['a"b', 'x" FROM y --', "MixedCase", "unicode_üñï", "c'd", "a, b"]
+# Names past the schema, put straight into the model, one generator per class. Every class but
+# the reserved words is refused wherever it stands; a reserved word as a table or column is
+# emitted as one quoted token, and as a domain or product (a catalog or namespace) refused.
+CONFUSABLE = {"a": "а", "e": "е", "o": "о", "i": "і", "c": "с"}  # Cyrillic lookalikes
+
+
+def hostile(kind: str, rng: random.Random, base: str) -> list[str]:
+    at = rng.randrange(1, len(base))
+    if kind == "quote":
+        return [rng.choice([base[:at] + '"' + base[at:], base + '" FROM "x', base + '""'])]
+    if kind == "backslash":
+        return [rng.choice([base + "\\", base[:at] + "\\" + base[at:], base + '\\"'])]
+    if kind == "case":
+        return [base[:at] + base[at:].upper() if rng.random() < 0.5 else base.upper()]
+    if kind == "confusable":
+        spots = [n for n, ch in enumerate(base) if ch in CONFUSABLE]
+        n = rng.choice(spots)
+        return [base[:n] + CONFUSABLE[base[n]] + base[n + 1:]]
+    if kind == "folded twin":
+        return [base, rng.choice([base.upper(), base.capitalize(), base.replace("s", "ſ")])]  # U+017F folds to s
+    assert kind == "reserved"
+    return [rng.choice(sorted(model.TRINO_RESERVED))]
+
+
+def with_names(m: Model, where: str, names: list[str]) -> Model:
+    """The good model with `names` at one place, past the schema and the checks: the first column
+    of a dbt (view) or connector (Spark) table, that table's name (a twin is a copy beside it),
+    or the product's or domain's name, every contract id following."""
     (station,) = [p for p in m.products if p.name == "station-readings"]
-    silver = next(t for t in station.tables if t.name == "silver_readings")
-    hostile = dataclasses.replace(silver, columns=tuple(dataclasses.replace(silver.columns[0], name=n) for n in names))
-    m = dataclasses.replace(m, products=tuple(
-        dataclasses.replace(p, tables=tuple(hostile if t is silver else t for t in p.tables)) if p is station else p for p in m.products))
-    sql = lake.emit(m)[model.view_sql_path(model.reader_relation(hostile))].removesuffix("\n")
-    assert view_parts(sql)[0] == names
+    kind, part = where.split(" ")
+    table_name = {"view": "silver_readings", "spark": "bronze_readings"}.get(kind)
+
+    def renamed_table(t: model.Table, name: str) -> model.Table:
+        return dataclasses.replace(t, name=name, contract_id=model.contract_id(station.domain, station.name, name))
+
+    def tables(t: model.Table) -> list[model.Table]:
+        if t.name != table_name:
+            return [t]
+        if part == "column":
+            return [dataclasses.replace(t, columns=(*(dataclasses.replace(c, name=n) for c, n in zip(t.columns, names, strict=False)), *t.columns[len(names):]))]
+        return [renamed_table(t, n) for n in names]
+
+    if part in ("column", "table"):
+        p = dataclasses.replace(station, tables=tuple(x for t in station.tables for x in tables(t)))
+        return dataclasses.replace(m, products=tuple(p if q is station else q for q in m.products))
+    (name,) = names
+    domain, product = (name, station.name) if kind == "domain" else (station.domain, name)
+    p = dataclasses.replace(station, name=product, domain=domain, tables=tuple(
+        dataclasses.replace(t, contract_id=model.contract_id(domain, product, t.name)) for t in station.tables))
+    domains = tuple(dataclasses.replace(d, name=domain) if d.name == station.domain else d for d in m.domains)
+    return dataclasses.replace(m, domains=domains, products=tuple(p if q is station else q for q in m.products))
+
+
+PLACES = ["view column", "view table", "spark column", "spark table", "product name", "domain name"]
+
+
+KINDS = ["quote", "backslash", "case", "confusable", "folded twin", "reserved"]
+
+
+# a folded twin of a product or domain is two products or domains of one name: the identity tests
+@pytest.mark.parametrize("seed", range(3))
+@pytest.mark.parametrize(("kind", "where"), [(k, w) for k in KINDS for w in PLACES if not (k == "folded twin" and w.endswith("name"))])
+def test_names_past_the_schema_are_refused_or_one_quoted_token(kind: str, where: str, seed: int) -> None:
+    m = load(good())
+    base = {"view column": "station_id", "view table": "silver_readings", "spark column": "station_id",
+            "spark table": "bronze_readings", "product name": "station-readings", "domain name": "sensor-net"}[where]
+    names = hostile(kind, random.Random(f"{kind}/{where}/{seed}"), base)
+    m = with_names(m, where, names)
+    if kind != "reserved" or where.endswith("name"):
+        refusal = {"view": "a view can carry|appears twice", "spark": "Spark DDL can quote safely"}.get(where.split(" ")[0], "must be lower-case|reserved word")
+        with pytest.raises(ValueError, match=refusal):
+            lake.emit(m)
+        return
+    out = lake.emit(m)
+    held_to_their_shape(out, m)  # every name one quoted token, and the view's columns read back
+    assert any(model.quote_ident(names[0]) in text for path, text in out.items() if path.endswith(".sql"))
+
+
+def test_two_columns_that_differ_only_in_case_are_refused_in_the_view_sql() -> None:
+    # Trino 484 keeps `SELECT "a", "A"` as a view of two columns both named a
+    for twins in (("station_id", "STATION_ID"), ("station_id", "station_id")):
+        with pytest.raises(ValueError, match="appears twice"):
+            lake.view_sql(dataclasses.replace(V, columns=twins))
+    with pytest.raises(ValueError, match="model.IDENTIFIER"):
+        lake.view_sql(dataclasses.replace(V, columns=("MixedCase",)))
 
 
 def test_a_spark_name_with_a_backslash_is_refused_even_past_the_schema() -> None:
@@ -321,14 +495,74 @@ def test_names_the_model_refuses_are_refused_even_past_the_checks(where: str, na
         lake.emit(load(docs))
 
 
+def run_records_product() -> dict[str, bytes]:
+    """The review's f1: product run-records in domain governance, whose view would sit on the
+    platform's run-record table and whose publisher would own the platform's namespace."""
+    return renamed(good(), {"gold_daily_load": "run_record", "ops-insight": "governance", "ops_insight": "governance",
+                            "daily-load": "run-records", "daily_load": "run_records"})
+
+
+@pytest.mark.parametrize(("guards_off", "why"), [
+    ((), "run_records is reserved"),  # model.RESERVED_PRODUCT_NAMES
+    (("reserved name",), "governance.run_records: one namespace, two owners: platform and governance.run-records"),
+    (("reserved name", "owner"), "governance.run_records.run_record: a view and a table at one name"),
+])
+def test_no_product_takes_the_run_record_namespace_each_guard_alone(monkeypatch: pytest.MonkeyPatch, guards_off: tuple[str, ...], why: str) -> None:
+    if "reserved name" in guards_off:
+        monkeypatch.setattr(model, "RESERVED_PRODUCT_NAMES", model.RESERVED_PRODUCT_NAMES - {"run_records"})
+    if "owner" in guards_off:  # the platform's namespace made the product's, so only the view rule is left
+        monkeypatch.setattr(lake, "PLATFORM_OWNER", "governance.run-records")
+    with pytest.raises(ValueError, match=re.escape(why)):
+        lake.emit(load(run_records_product()))
+
+
+def test_the_run_record_namespace_is_the_platforms_before_its_domain_is_declared(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(model, "RESERVED_PRODUCT_NAMES", model.RESERVED_PRODUCT_NAMES - {"run_records"})
+    m = load(run_records_product())
+    m = dataclasses.replace(m, domains=tuple(d for d in m.domains if d.name != "governance"))
+    with pytest.raises(ValueError, match="two owners: platform"):
+        lake.emit(m)
+
+
+def test_a_contract_whose_id_names_another_product_is_refused() -> None:
+    # the review's f2 (a): S05 reports only docs.contract-misplaced, which k2gen release does not run
+    docs = edited(good(), SILVER, lambda d: d.update(id="ops-insight.daily-load.silver_readings"))
+    with pytest.raises(ValueError, match="names another table than its own, sensor-net.station-readings.silver_readings"):
+        lake.emit(load(docs))
+
+
+def test_two_products_of_one_name_in_two_domains_are_refused() -> None:
+    # the review's f2 (b): both would be pub_daily_load and dbt_daily_load
+    g = good()
+    twin = {p.replace("contracts/ops-insight/", "contracts/sensor-net/"): d.decode().replace("ops-insight", "sensor-net").replace("ops_insight", "sensor_net").encode()
+            for p, d in g.items() if p.startswith("contracts/ops-insight/daily-load/")}
+    with pytest.raises(ValueError, match="daily-load: two products share the name, and so its principals pub_daily_load and dbt_daily_load"):
+        lake.emit(load({**g, **twin}))
+
+
+def with_retention(m: Model, days: Any) -> Model:
+    return dataclasses.replace(m, products=tuple(dataclasses.replace(p, tables=tuple(
+        dataclasses.replace(t, retention=days) if t.name == "silver_readings" else t for t in p.tables)) for p in m.products))
+
+
+@pytest.mark.parametrize("days", [0, -5, True, False, 1.5, 7.0, "7"])
+def test_retention_is_a_whole_number_of_days_of_at_least_one_even_past_the_schema(days: Any) -> None:
+    with pytest.raises(ValueError, match="not a whole number of days, at least 1"):
+        lake.emit(with_retention(load(good()), days))
+
+
+def test_one_day_of_retention_is_emitted() -> None:
+    assert yaml.safe_load(lake.emit(with_retention(load(good()), 1))[model.RETENTION])["sensor_net.station_readings__base.silver_readings"] == 1
+
+
 # --- Spark DDL ------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(("trino", "spark"), [
     ("boolean", "BOOLEAN"), ("integer", "INT"), ("bigint", "BIGINT"), ("real", "FLOAT"), ("double", "DOUBLE"),
     ("decimal(38,0)", "DECIMAL(38,0)"), ("varchar", "STRING"), ("varbinary", "BINARY"), ("date", "DATE"),
-    ("timestamp(6)", "TIMESTAMP_NTZ"), ("timestamp(6) with time zone", "TIMESTAMP"),
-    ("array(decimal(12,3))", "ARRAY<DECIMAL(12,3)>"), ("map(varchar, timestamp(6) with time zone)", "MAP<STRING, TIMESTAMP>"),
+    ("timestamp(6)", "TIMESTAMP_NTZ"), ("timestamp(6) with time zone", "TIMESTAMP_LTZ"),
+    ("array(decimal(12,3))", "ARRAY<DECIMAL(12,3)>"), ("map(varchar, timestamp(6) with time zone)", "MAP<STRING, TIMESTAMP_LTZ>"),
 ])
 def test_spark_types_follow_the_type_grammar(trino: str, spark: str) -> None:
     assert lake._spark_type(trino, "t") == spark
@@ -425,11 +659,7 @@ def test_the_storage_plan_lists_every_domain_and_both_namespaces_of_each_built_p
 
 
 def test_retention_is_the_contracts_else_the_floor() -> None:
-    def thirty(doc: Any) -> None:
-        (prop,) = [p for p in doc["customProperties"] if p["property"] == "retention"]
-        prop["value"] = 30
-
-    docs = edited(good(), SILVER, thirty)
+    docs = edited(good(), SILVER, lambda d: prop(d, "retention").update(value=30))
     retention = yaml.safe_load(lake.emit(load(docs))[model.RETENTION])
     assert retention["sensor_net.station_readings__base.silver_readings"] == 30
     assert retention["ops_insight.daily_load__base.gold_daily_load"] == 7  # its contract states none

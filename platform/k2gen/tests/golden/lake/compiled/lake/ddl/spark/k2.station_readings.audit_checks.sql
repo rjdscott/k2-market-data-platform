@@ -7,7 +7,7 @@ CREATE TABLE "lake"."station_readings"."audit_checks" (
     "check_name" STRING,
     "passed" BOOLEAN,
     "detail" STRING,
-    "checked_at" TIMESTAMP,
+    "checked_at" TIMESTAMP_LTZ,
     "run_id" STRING,
     "release_id" STRING
 )
