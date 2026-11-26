@@ -234,7 +234,7 @@ dbt/                       dbt on Trino: the domain marts; sources and selectors
 scripts/chaos/             failure injection, timed
 notebooks/                 DuckDB research notebooks
 docs/                      the architecture book, ADRs, runbooks, benchmarks, plans
-legacy/                    v1, v2 Kotlin handlers, v2 ClickHouse DDL, v2 offload: archived, unmodified
+legacy/                    v1, v2 Kotlin handlers, v2 ClickHouse DDL, v2 offload: archived (v1 has had dependency pins bumped since; see legacy/v1/README.md)
 ```
 
 ## Not built

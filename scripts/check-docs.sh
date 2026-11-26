@@ -13,7 +13,7 @@ cd "$(git rev-parse --show-toplevel)"
 # legacy/v2-kotlin/README.md, which is the retired tier's entry point and was
 # written after the archive, not with it.
 #
-# legacy/v1 is deliberately NOT scanned: it is archived unmodified (CLAUDE.md)
+# legacy/v1 is deliberately NOT scanned: its source is archived unchanged (CLAUDE.md)
 # and its READMEs already point at v1-era paths that no longer exist. Gating it
 # would only be satisfiable by editing the archive.
 published_docs() {
