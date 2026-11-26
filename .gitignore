@@ -257,3 +257,4 @@ password.db
 slack-webhook-url
 *.pem
 *.key
+!scripts/lib/
