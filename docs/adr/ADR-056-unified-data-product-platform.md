@@ -441,3 +441,27 @@ this host needs access (single sign-on becomes its own decision).
   are in [`2026-11-26-unified-platform-architecture`](../research/2026-11-26-unified-platform-architecture/), the owner's decisions in its
   [`DECISIONS-FINAL.md`](../research/2026-11-26-unified-platform-architecture/DECISIONS-FINAL.md)
 - Target architecture, all twelve diagrams: [`20-target-data-product-platform.md`](../architecture/20-target-data-product-platform.md)
+
+---
+
+## Outcome (2026-11-26, definer views narrowed by ADR-061)
+
+Part 5's rule that outputs "are tables, never [definer views](glossary.md#definer-view)" is narrowed by
+[ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) to exactly one generated
+view shape. Each dbt output is read only through `<domain>.<fence>.<table>`, a view whose SQL is
+`SELECT <contract columns> FROM <domain>.<fence>__base.<table> FOR VERSION AS OF 'audited'` and nothing
+else, owned by a publisher `pub_<fence>` that alone may pass on `SELECT` on its product's base, with every
+reader policy a rule on the view's exact name. Every other definer view stays forbidden.
+
+Why: part 4's tested-data marker cannot hold for interactive SQL readers any other way. Trino 484 writes
+only a table's `main`, so a build's untested rows sit there until its tests pass, and a reader allowed
+the table reads them; an invoker view over the marker needs the reader allowed the table too. The reason
+for the rule, a base table's policies skipped through the owner's rights, does not hold when no reader
+rule names the base and the policies sit on the view itself: the gate
+[`2026-11-26-tested-data-view-gate.md`](../research/2026-11-26-tested-data-view-gate.md) refused every
+base path to every reader (228 of 228) and returned only the tagged rows, policies applied, in a run of
+54 PASS and 0 FAIL. What the narrowing costs (no SQL time travel for readers, countable policy-hidden
+rows, the catalog fenced by network until it has authentication) is in ADR-061's Consequences. Part 4's
+"other products read at the marker" holds through `k2_input` and a lint, not through Trino. The
+narrowing was decided by the build's orchestrator under the owner's standing delegation and is flagged
+to the owner for confirmation.

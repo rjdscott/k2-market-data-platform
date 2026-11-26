@@ -623,6 +623,17 @@ puts the fences in its schema and table rules: Trino requires a view owner to ha
 each base table's catalog. Views are readable through Trino only.
 Where: [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md#views).
 
+### Invoker view
+
+A view whose base tables are checked as the reader, not as the owner: the reader needs `SELECT` on
+each base, and the base's own row filters and masks apply. An invoker view over a table's tested
+[tag](#tag) does not keep untested rows from a reader, because a reader allowed the base can read its
+`main` directly; with the base denied, the reader is refused at the base. That is why
+[ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) uses a
+[definer view](#definer-view) instead.
+Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md), spike (g) of
+[`2026-11-26-release-spine-spikes.md`](../research/2026-11-26-release-spine-spikes.md).
+
 ---
 
 ## dbt and the marts
@@ -1169,6 +1180,49 @@ when the fact happened; knowledge time takes the row that could have been known 
 using a rate published after the fact. Both use [ADR-030](ADR-030-scd2-security-master.md)'s
 half-open intervals and `9999-12-31` sentinel.
 Where: [ADR-056](ADR-056-unified-data-product-platform.md) part 8.
+
+### Tested-data view, base namespace and publisher
+
+The target's way of holding SQL readers to tested data. dbt writes each output into the product's
+**base namespace**, `<fence>__base`, which no reader rule names. Readers query a
+[definer view](#definer-view) of the same name in the product's namespace, `<domain>.<fence>.<table>`,
+whose generated SQL selects the contract's columns from the base at its `audited`
+[tag](#tested-data-marker). The view is owned by the **publisher** `pub_<fence>`, the only identity that
+may pass on `SELECT` on that base (`GRANT_SELECT`), and every reader policy is an
+[access rule](#access-rules-and-the-file-group-provider) on the view's exact name.
+Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md).
+
+### Compare-and-set commit
+
+A write that names the value it expects to replace and is applied only if that is still the value.
+The publish of a product's tested data is one such commit to Lakekeeper's REST API covering every
+output: each requires `main` at the tested snapshot and `audited` at the previous one, and if any
+requirement is stale the catalog answers 409 and moves no tag, so a publisher working from stale
+values cannot overwrite another's move.
+Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) point 4.
+
+### Access rules and the file group provider
+
+Trino's file-based access control reads one JSON rules file: ordered lists of rules for catalogs,
+schemas, tables, session properties and queries, where the first rule matching the user or group
+decides. A table rule grants privileges (`SELECT`, `OWNERSHIP`, `GRANT_SELECT` and so on) and may add a
+row filter and column masks, which is how [named access policies](#named-access-policy) are enforced.
+The file group provider reads group membership from a second file; the target names groups
+`<fence>__<role>`, so a grant is a membership. Trino reloads both within its 5 s refresh period.
+Where: `docker/trino/etc/rules.json` today;
+[ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) for the target.
+
+### Catalog fence and drift check
+
+Lakekeeper has no authentication and stores a view's owner as a property, `trino.run-as-owner`, that
+any client of its REST API can set, so a client that reaches it can forge a view or graft a snapshot.
+The **catalog fence** puts Lakekeeper on its own Docker network with only the platform's services and
+no host port. The **drift check** compares the catalog with the release at `release-verify` and at
+every reconcile: reader namespaces hold exactly the generated views, each with its generated SQL and
+its publisher as owner, and every `audited` tag is at the snapshot the publish recorded; anything else
+exits non-zero and names the object. The check detects a forgery; the fence keeps other clients
+from making one.
+Where: [ADR-061](ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md) point 6.
 
 ---
 
