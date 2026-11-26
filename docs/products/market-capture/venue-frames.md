@@ -9,7 +9,7 @@ Each venue frame decoded from raw.messages into the venue's own field names, typ
 | Owner | `capture-team` |
 | Kind | source-aligned |
 | Lifecycle | draft |
-| Status | running |
+| Status | 3 of 7 tables paused |
 | Descriptor | [`contracts/market-capture/venue-frames/product.yaml`](../../../contracts/market-capture/venue-frames/product.yaml) |
 
 ## Inputs and outputs
@@ -78,7 +78,7 @@ Binance top-20 partial-book frames, one row per frame, levels as the two-string 
 
 | | |
 |---|---|
-| Status | running |
+| Status | paused since 2026-11-26, [ADR-050](../../../docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md): the data is readable, nothing new arrives |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -141,7 +141,7 @@ Kraken v2 book channel frames, snapshot and update, one row per frame. The check
 
 | | |
 |---|---|
-| Status | running |
+| Status | paused since 2026-11-26, [ADR-050](../../../docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md): the data is readable, nothing new arrives |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -238,7 +238,7 @@ Coinbase Advanced Trade level2 channel frames, snapshot and update, one row per 
 
 | | |
 |---|---|
-| Status | running |
+| Status | paused since 2026-11-26, [ADR-050](../../../docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md): the data is readable, nothing new arrives |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |

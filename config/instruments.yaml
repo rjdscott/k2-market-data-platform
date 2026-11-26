@@ -91,15 +91,17 @@
 # Instrument count: 34 (12 binance, 11 kraken, 11 coinbase) — asserted by
 # tests/test_contracts.py, which also rejects a duplicate canonical per exchange.
 #
-# Last updated: 2026-08-26 (Kraken natives moved to the WS v2 spellings)
+# Last updated: 2026-11-26 (book_capture false on every venue, ADR-050)
 
 version: 2
 
 # Order-book (L2) capture per venue, required. false: trades only (ADR-050).
+# Paused on every venue while the platform is built; contracts/ marks the nine
+# book tables paused to match (tests/test_contracts.py holds the two together).
 book_capture:
-  binance: true
-  kraken: true
-  coinbase: true
+  binance: false
+  kraken: false
+  coinbase: false
 
 instruments:
   binance:
