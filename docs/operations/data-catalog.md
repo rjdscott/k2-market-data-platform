@@ -62,6 +62,17 @@ is [products/all.md](../products/all.md). `make generate` writes it from `contra
 is never kept by hand, and CI fails when it is stale. Look a table up there to find its
 owner; come back here to query it.
 
+**The book tables are paused** ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)): order-book capture is off on every
+venue, so `bronze.binance_depth20`, `bronze.kraken_book`, `bronze.coinbase_level2`, the three
+`silver.book_*`, `gold.book_state`, `gold.book_top20` and `gold.bbo_1s` in the lake, and
+`gold.book_top20`, `gold.bbo_1s` and the view `gold.bbo_live` in ClickHouse, hold everything up
+to the pause and nothing after it; [products/all.md](../products/all.md) marks them paused. Two
+consequences for a query. **A last commit is not freshness**: the ingest commits an empty
+snapshot to each lake book table every run, so `k2_lake_last_commit_ts_seconds` stays fresh
+while no row arrives; read the newest `recv_ts` or `second` instead. **`gold.bbo_live`'s newest
+second is the last one before the pause**, however old, and an as-of join of trades to the book
+pairs a trade in the pause with that quote.
+
 ## Lake — Iceberg via Lakekeeper on MinIO
 
 Every table is Iceberg format-version 2, Parquet + zstd, copy-on-write, append-only

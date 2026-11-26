@@ -40,7 +40,7 @@ at the moment of capture, are for illustration only, and are not a data set
 
 | Property | How |
 |---|---|
-| Complete | One Rust process per venue holds a single socket carrying trades and L2 book, stamps `recv_ts_ns` before parsing, verifies Kraken's CRC32 on every update, tracks each venue's sequence numbers, and publishes every frame verbatim. |
+| Complete | One Rust process per venue holds a single socket carrying trades and L2 book, stamps `recv_ts_ns` before parsing, verifies Kraken's CRC32 on every update, tracks each venue's sequence numbers, and publishes every frame verbatim. The L2 book is paused on every venue while the platform is built, by a per-venue switch; its tables stay readable up to the pause ([ADR-050](./docs/adr/ADR-050-order-book-capture-paused-during-platform-build.md)). |
 | Reproducible | Every 5 minutes Spark reads Redpanda by offset range into Iceberg: `raw` (never expired) to `bronze` (per venue, vendor schema) to `silver` (typed, flagged) to `gold` (one row per trade, OHLCV, BBO). Consumed offsets are committed in the same snapshot as the rows; any layer rebuilds from the one above. |
 | Disposable serving | ClickHouse `gold` is fed live from the topics and reloaded from the lake. Dedup is a `ReplacingMergeTree` key; candles are computed on read, so a replay cannot corrupt one. |
 | Proven | Nightly audits per layer, three-way OHLCV parity at a pinned snapshot, 36 alert rules as code, chaos scripts with measured recovery, a fresh-clone release check before every tag. |
@@ -56,7 +56,7 @@ the runbook it leads to: [dashboards and consoles](docs/operations/dashboards.md
 ```mermaid
 flowchart TB
   E["Exchanges · Binance · Kraken · Coinbase<br/>public WebSocket · 34 instruments"]:::ex
-  F["k2-capture ×3 · Rust<br/>trades + L2 book on one socket<br/>recv_ts · seq · CRC32"]:::rs
+  F["k2-capture ×3 · Rust<br/>trades + L2 book on one socket<br/>L2 paused: ADR-050"]:::rs
   R[("Redpanda 25.3 · Avro + schema registry<br/>raw · trades · book per venue")]:::rp
   C["ClickHouse 24.3 · gold<br/>ReplacingMergeTree · no TTL<br/>ohlcv_live · bbo_live on read"]:::ch
   S["Airflow 3 → Spark 3.5 · every 5 min<br/>offset range · offsets in the snapshot"]:::sp

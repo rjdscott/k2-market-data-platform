@@ -26,6 +26,10 @@ Open: <http://localhost:3000/d/k2-pipeline-overview>. Leads to: [failure-recover
 
 ## Capture
 
+While order-book capture is paused ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)), the Book row of the capture
+dashboard shows no depth or level data for a venue that is off; its "Book Capture" panel says
+which venues those are.
+
 ### K2 Capture (v3)
 
 ![K2 Capture (v3)](../images/dashboards/02-capture.png)

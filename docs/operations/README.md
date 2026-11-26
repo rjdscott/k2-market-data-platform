@@ -84,6 +84,14 @@ it. Keep the desktop light, watch `free -h` for swap filling, and do not start a
 an extra heavy container on this host. The arithmetic for any host is in
 [docker-vm-oom-kill.md](../runbooks/docker-vm-oom-kill.md#2-size-the-vm-so-the-host-keeps-enough-memory).
 
+**Order-book capture is off on every venue** while the platform is built
+([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)): `book_capture` in
+`config/instruments.yaml` is `false` for all three, so the captures take trades only and the
+book tables keep the rows they had, readable, with nothing new arriving. `make health` step (4)
+shows what each capture is actually doing; [section 6](#pause-or-resume-one-venues-order-book)
+pauses and resumes one venue. **This ends** at P7's release tag or on 2027-02-26, whichever
+comes first (the ADR's "Revisit when").
+
 ---
 
 ## 1. Start from a fresh clone
@@ -237,6 +245,9 @@ $ make health
 == summary ==
 health: PASS
 ```
+
+That run predates step (4), the order-book switch: its lines are tested against a fake
+`docker` (`tests/test_health.py`) and not yet recorded from the live stack.
 
 Line by line (`scripts/health.sh`):
 
@@ -641,6 +652,27 @@ change is a pull request carrying the venue's switch and its contracts' `paused`
 (`tests/test_contracts.py` fails otherwise), the registry goes in with step 1's in-place write,
 and `book_capture=` in step 4's log line and the gauge show the new value. ADR-050 sections 7
 and 8 have the order to pause and to resume in, and the operator row that records the window.
+
+**Pausing a venue's book** (pull request 3 of ADR-050 did all three) adds two checks to step 4's.
+The gate spans three scheduled ingest runs; on the first venue paused, read the task log for
+`stage 2e: 0 rows -> lake.silver.book_<venue>`, because the ingest's empty book path has not run
+on this stack before. Then **record the window** in `lake.audit.checks`, as the 2026-11-25
+outage was ([failure-recovery.md](../runbooks/failure-recovery.md)): one operator row per venue at
+the pause, open-ended, from the receive time of its last book frame (`max(recv_ts)` of
+`lake.bronze.binance_depth20`, `kraken_book` or `coinbase_level2` once two ingest runs have
+passed the recreate), and a second at the resume with the whole window. `record_check.py` is a
+lake job: run it when no ingest runs.
+
+```bash
+docker exec -e K2_LAKE_DRIVER_MEMORY=512m k2-spark-iceberg python3 /home/iceberg/lake/record_check.py \
+  --job operator --check book_capture_paused --scope "book/$v/<last book frame, UTC>Z.." \
+  --observed 0 --failed \
+  --detail "L2 not subscribed by decision (ADR-050) from <last book frame>Z; no book data until the closing row"
+```
+
+To resume, ADR-050 section 7 has the order (Kraken first, its checksum is the strongest proof
+that a venue's format has not drifted) and the pre-flight that comes before it. Roll back a
+pause the same way it was made: the switch back to `true`, in place, recreate.
 
 ### The bind-mount rule
 
