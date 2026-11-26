@@ -137,3 +137,13 @@ demonstrated was dropped.
 ## Resolutions
 
 Appended after publication; the table above is never edited.
+
+- Medium, backup pruning and the retired DAGs' run history: resolved in `a989438`. The two
+  sentences are corrected, and the Airflow and catalog dumps of 14:59:55 UTC are copied into
+  `~/k2-backup/drop/2026-11-26/`, which the nightly backup never prunes.
+- Medium, the README's first screenshot: resolved in `b07adc0`. Every image was recaptured on
+  the stack after the retirement, so no list of images awaiting recapture is needed.
+- Medium, the immutability rule in `CLAUDE.md` against the link rule in `docs/adr/README.md`:
+  resolved in `a989438`. `CLAUDE.md` states the link rule.
+- Medium, the locked bucket: open. `make drop TARGET=bucket:scratch-p4-landing` is run after
+  2026-11-27 06:00:18 UTC by the phase's operator; the result is appended here.
