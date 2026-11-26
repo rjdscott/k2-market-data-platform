@@ -18,7 +18,7 @@ markers are named under each image.
 
 ![K2 Pipeline Overview](../images/dashboards/01-pipeline-overview.png)
 
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.* **1** every scrape target, up or down. **2** trade records each venue's capture produced per second. **3** bytes per second Redpanda accepts from the captures. **4** CPU each pipeline container uses, from cAdvisor.
+*Captured 2026-11-26 at `v3.0.0-alpha.1-58-g3d8495b`.* **1** every scrape target, up or down. **2** trade records each venue's capture produced per second. **3** bytes per second Redpanda accepts from the captures. **4** CPU each pipeline container uses, from cAdvisor.
 
 The page to open first. All tiles green and moving lines say capture and the bus are live; the Resources row says what that costs. A line gone flat says which of the pages below to open next.
 
@@ -34,7 +34,7 @@ which venues those are.
 
 ![K2 Capture (v3)](../images/dashboards/02-capture.png)
 
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
+*Captured 2026-11-26 at `v3.0.0-alpha.1-58-g3d8495b-dirty`.*
 
 Per venue: is the process up, seconds since its last frame, and any reconnects, sequence gaps, checksum failures or resyncs in the last hour. Below, frames and bytes per second, and records produced against records the broker acknowledged: a gap between those two lines is records that never reached Redpanda.
 
@@ -46,7 +46,7 @@ Open: <http://localhost:3000/d/k2-l2-capture>. Leads to: [capture-feed-stale.md]
 
 ![Redpanda Console: topics](../images/dashboards/03-redpanda-topics.png)
 
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
+*Captured 2026-11-26 at `v3.0.0-alpha.1-58-g3d8495b`.*
 
 Every v3 topic, raw, trades and book for each venue, with its partitions and the bytes it holds. Nothing consumes them while the old lake ingest is retired and ClickHouse is paused; phase 004's connector reads raw again. Console has no dark theme, so this one is light.
 
@@ -56,7 +56,9 @@ Open: <http://localhost:8080/topics>. Leads to: [redpanda.md](../runbooks/redpan
 
 ### Spark History Server
 
-*No image: the last `make screenshots` did not capture this page.*
+![Spark History Server](../images/dashboards/05-spark-history.png)
+
+*Captured 2026-11-26 at `v3.0.0-alpha.1-58-g3d8495b`.*
 
 The Spark container's finished jobs, newest first, each a local-mode driver started in it by `docker exec`. Open one for its stages, which is where a failed one is read after the fact. Its event-log cleaner keeps two days. No job runs while the old lake ingest is retired. Spark's UI has no dark theme.
 
@@ -66,7 +68,7 @@ Open: <http://localhost:18080>. Leads to: [upgrade-a-pinned-component.md](../run
 
 ![MinIO: the k2-lake bucket](../images/dashboards/07-minio-lake-bucket.png)
 
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
+*Captured 2026-11-26 at `v3.0.0-alpha.1-58-g3d8495b-dirty`.*
 
 The object store under the lake: bucket k2-lake, its size and object count. Every Iceberg data and metadata file of every warehouse sits in it. The old pipeline's tables were dropped after a verified copy (`make drop`): no live crypto data lands here until phase 004.
 
@@ -78,7 +80,7 @@ Open: <http://localhost:9001/browser/k2-lake>. Leads to: [lake-backup-and-restor
 
 ![K2 Airflow](../images/dashboards/13-airflow-dashboard.png)
 
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
+*Captured 2026-11-26 at `v3.0.0-alpha.1-58-g3d8495b`.*
 
 Run duration and lateness per DAG, task failures and skips, scheduler heartbeat and DAG parse time, from Airflow's statsd metrics. The two Airflow alerts read these series. Until phase 002 adds the first product DAG only the heartbeat and the parse loop move; the other panels read "No data".
 
@@ -90,7 +92,7 @@ Open: <http://localhost:3000/d/k2-airflow>. Leads to: [airflow-scheduling.md](..
 
 ![Prometheus: alerts](../images/dashboards/14-prometheus-alerts.png)
 
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
+*Captured 2026-11-26 at `v3.0.0-alpha.1-58-g3d8495b`.*
 
 Every alert rule, grouped by file, with its state. There is no Alertmanager: this page and Grafana are where a firing alert is seen, and each rule's annotations name its runbook.
 
@@ -100,7 +102,7 @@ Open: <http://localhost:9090/alerts>. Leads to: [README.md](../runbooks/README.m
 
 ![Prometheus: targets](../images/dashboards/15-prometheus-targets.png)
 
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.*
+*Captured 2026-11-26 at `v3.0.0-alpha.1-58-g3d8495b`.*
 
 Every scrape job and whether its last scrape succeeded. A capture target down here is the input CaptureDown fires on.
 
@@ -112,7 +114,7 @@ Open: <http://localhost:9090/targets>. Leads to: [failure-recovery.md](../runboo
 
 ![K2 Resources](../images/dashboards/16-resources.png)
 
-*Captured 2026-11-25 at `v3-phase-e-69-g27eb1c5`.* **1** declared CPU limits of the running containers, against ADR-045's ceiling. **2** each container's CPU and memory against the limit read from its cgroup. **3** containers their CPU limit is holding back.
+*Captured 2026-11-26 at `v3.0.0-alpha.1-58-g3d8495b`.* **1** declared CPU limits of the running containers, against ADR-045's ceiling. **2** each container's CPU and memory against the limit read from its cgroup. **3** containers their CPU limit is holding back.
 
 What the stack uses against what it declares. Limits are read from each container's cgroup by cAdvisor, so the table follows docker-compose.yml with no edit here. Sustained throttling, or memory near its limit, is a limit to raise, inside the budget that `python3 scripts/check-budget.py` gates.
 

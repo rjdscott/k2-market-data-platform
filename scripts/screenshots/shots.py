@@ -59,6 +59,8 @@ SHOTS = [
         file="02-capture.png", section="Capture", title="K2 Capture (v3)",
         url="http://localhost:3000/d/k2-l2-capture", app="grafana", height=1060,
         ready=panel("Capture Process Up"),
+        # Books are paused (ADR-050): no checksum is computed, so the counter has no series.
+        no_data=["Checksum Failures (1h)"],
         read="Per venue: is the process up, seconds since its last frame, and any reconnects, sequence "
              "gaps, checksum failures or resyncs in the last hour. Below, frames and bytes per second, "
              "and records produced against records the broker acknowledged: a gap between those two "
@@ -90,7 +92,7 @@ SHOTS = [
     dict(
         file="07-minio-lake-bucket.png", section="Lake", title="MinIO: the k2-lake bucket",
         url="http://localhost:9001/browser/k2-lake", app="minio", height=800,
-        ready="text=warehouse",
+        ready="text=k2-lake",   # the bucket is empty until phase 002 writes the first table
         read="The object store under the lake: bucket k2-lake, its size and object count. Every Iceberg "
              "data and metadata file of every warehouse sits in it. The old pipeline's tables were "
              "dropped after a verified copy (`make drop`): no live crypto data lands here until "
