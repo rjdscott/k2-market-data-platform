@@ -7,6 +7,7 @@ under [`DECISIONS-FINAL.md`](../../docs/research/2026-11-26-unified-platform-arc
 [ADR-055](../../docs/adr/ADR-055-products-defined-once-in-odps-and-odcs-documents.md),
 [ADR-056](../../docs/adr/ADR-056-unified-data-product-platform.md) and
 [ADR-061](../../docs/adr/ADR-061-readers-see-dbt-outputs-through-a-view-over-the-tested-tag.md).
+S00d patched them additively once the building steps had reported their gaps (the last section).
 The design inputs are kept, dated, in
 [`docs/research/2026-11-26-phase-001-interfaces/`](../../docs/research/2026-11-26-phase-001-interfaces.md).
 The shared files outside k2gen, the run-time contracts of phase 002 and the collision list are in
@@ -32,14 +33,22 @@ adding one with the right signature, leaves it green; a drifted signature fails 
   `compiled/`, is an error; an emitter still raising `NotImplementedError` is skipped with a
   `SKIP emitter <name>` line on stderr, until step S23 makes that an error.
 - **Check**, a module in `k2gen/checks/`: `check(docs: DocumentSet, previous: DocumentSet | None)
-  -> list[Finding]`, `Finding.code` spelt `<check module>.<kebab-case>`. `checks.run` runs `docs`
+  -> list[Finding]`, `Finding.code` spelt `<check module>.<kebab-case>`; `Finding.pointer`, optional
+  (default None), is where in the document (a JSON pointer or a `$` path), and `k2gen check`
+  prints it after the path. `checks.run` runs `docs`
   first and stops there on an error. `k2gen check --previous` takes a document set (a release's
   `documents/` is one); `k2gen release --previous` takes a release directory.
 - Every v2 document is parsed by **`model.parse(path, bytes)`**, never `yaml.safe_load`: one
   document, and no duplicate key (safe_load keeps the last, so a second `mask:` would win
   silently), anchor, alias or merge key. A product model's `{{ config(...) }}` is read by
   **`model.model_config(sql)`** alone (S05 takes `materialized` and `unique_key`, S07 refuses
-  `incremental_predicates`).
+  `incremental_predicates`): a scan that skips quoted strings whole, so a hook holding
+  `{{ ref('x') }}` is read, and any refusal (a Jinja operator such as `~` included) is a
+  `ValueError`, never another exception.
+- An ODCS quality rule becomes a dbt test, or is refused, through **`k2gen.emit.dbt.quality_test`**
+  alone: S17 emits by it and S05 reports what it refuses (`docs.quality-unsupported`), so no rule is
+  dropped. `model.quality_of` reads an entry; `model.QUALITY_OPERATORS` are ODCS v3.2.0's `must*`
+  thresholds, every one supported with numbers.
 
 ## Where each interface is frozen
 
@@ -53,9 +62,9 @@ adding one with the right signature, leaves it green; a drifted signature fails 
 | A6 run records | `run-record.schema.json` (one row, `dbt_invocation_id` and `openlineage_run_id` included); the DDL `platform/runs/run_record.sql` (`model.RUN_RECORD_SQL`), equal column for column (`tests/test_frozen_interfaces.py`) |
 | A7 `k2_input` and the wrapper | `pipeline.schema.json` `build`; `model.View`, `model.VIEWS`; `dbt/macros/k2_input.sql`; the wrapper's contract in the phase page |
 | A8 names | `model.py`: `fence`, the catalog, namespace, builder, publisher, group, DAG, dbt and relation helpers, the principal lists below, `canary_user` |
-| A9 access expectations | `expectations.schema.json` (a statement row may carry `session`, the header form); `model.py`: the five expectation types |
+| A9 access expectations | `expectations.schema.json` (a statement row may carry `session`, the header form; a read row `mustAppear`, the positive assertion); `model.py`: the five expectation types, `MustAppear` |
 | A10 roles, principals, grants, policies | `k2-v2.schema.json#/$defs/{roles,principals,grants,policies,rolePolicy}`; `model.py`: `RoleDef`, `Principal`, `Grant`, `RolePolicy`, the secrets table below |
-| A11 catalog JSON | `catalog-product.schema.json`, its `$defs/index` for `index.json` |
+| A11 catalog JSON | `catalog-product.schema.json`, its `$defs/index` for `index.json`; `model.Product.support`, `.links` (ODPS support and authoritativeDefinitions) |
 | A12 REST | `services/k2-api/openapi.yaml` |
 | A13 one-shots | compose stubs; `oneshots.schema.json` |
 | backup set, storage plan | `backup-set.schema.json`, `storage-plan.schema.json` |
@@ -97,7 +106,10 @@ pointer. A path no entry covers is a `KeyError`, so a new kind of file is classi
 `model.dbt_model(product, table)` = `<fence>__<table>` with `alias: <table>`; product SQL
 (`ref`) and `unit_tests.yml` (`model:`) name it so, while its file stays `models/<table>.sql`.
 Unique because a fence holds no `__` and a table name holds none either; S05 checks it all the
-same. The docs link is `model.dbt_docs` = `dbt-docs/#!/model/model.k2.<fence>__<table>`.
+same. A seed is `model.dbt_seed(product, seed)` = `<fence>__<stem>` with `alias: <stem>`, a table
+of the base namespace like a model's: S05 holds model and seed names unique together, and S07
+requires a denied row for `<domain>.<fence>__base.<stem>` as for any base table. The docs link is
+`model.dbt_docs` = `dbt-docs/#!/model/model.k2.<fence>__<table>`.
 
 **Quoting and grammar.** Every emitter writes SQL through `quote_ident`, `quote_relation` and
 `sql_literal`. The schema refuses first: an identifier is at most 63 characters
@@ -125,11 +137,15 @@ principal.
 The one table, `model.SECRET_FILES`, repeated in the phase page. Every credential lives under
 `${K2_SECRETS:-$HOME/k2-secrets}`, outside any checkout, generated on the host and never
 committed, compiled or hashed into a release; `manifest.json` has no place for one. A container
-mounts only what it reads, read-only, under `/run/k2-secrets/`.
+mounts only what it reads, read-only, under `/run/k2-secrets/`. A file refreshed while its
+reader runs (`password.db`, `keys.json`, the webhook URL) is mounted by its directory and
+rewritten in place under an exclusive `flock` on the file, never renamed over: through Docker
+Desktop's file sharing a container keeps reading the old file after a rename. S19's canary line
+takes the same lock and writes in place.
 
 | Under `${K2_SECRETS}` | Read-only in a container at | Mounted by | Written by |
 |---|---|---|---|
-| `trino/password.db` | `/run/k2-secrets/trino/password.db` (the directory) | trino | S14 `scripts/principal-secret.py`; S19 adds each release's canary line |
+| `trino/password.db` | `/run/k2-secrets/trino/password.db` (the directory) | trino | S14 `scripts/principal-secret.py`; S19 adds each release's canary line, in place under the same `flock` |
 | `api/keys.json` | `/run/k2-secrets/api/keys.json` (the directory) | k2-api | S14 |
 | `principals/<principal>.password` | `/run/k2-secrets/<role>.password` (`model.password_mount`) | dbt-runner, k2-api, tools | S14 |
 | `tls/ca.pem` | `/run/k2-secrets/tls/ca.pem` | tools, dbt-runner, k2-api | S13 `scripts/tls.sh` |
@@ -176,5 +192,26 @@ mounts only what it reads, read-only, under `/run/k2-secrets/`.
   `maintain` has no `retainDays`.
 - A serving-only output (the paused hot tier) is `build: serving` with a `serves` port; its
   catalog entry has `relation: null`.
-- Golden files are `tests/golden/<emitter>/<release path>`; Trino's `groups.txt` is kept as
+- Golden files are `tests/golden/<emitter>/<release path>`, and the repository's own products'
+  under `tests/golden/<emitter>/repository/`; Trino's `groups.txt` is kept as
   `tests/golden/trino_rules/groups.yaml`, the parsed map.
+- An output port's `inputContracts` may name a sibling table (bronze feeding silver): it is the
+  catalog's lineage edge, not an input. The access check follows a sibling to what it derives from.
+- A Trino reserved word is refused by `model.TRINO_RESERVED` alone; `RESERVED_DOMAIN_NAMES` holds
+  only the platform's own names (`catalog`, `default` and `user` are not reserved in Trino 484).
+
+## Patched by S00d, additively
+
+No field was renamed or removed and no signature changed; each addition has a default, so a merged
+module keeps working. `git diff` of `contracts/schema/` adds properties and changes descriptions only.
+
+| Gap the building steps reported | The addition | Read by |
+|---|---|---|
+| ODCS quality rules beyond custom dbt | `Quality.query`, `.metric`, `.arguments`, `.unit`, `.thresholds`; `quality_of`; `QUALITY_OPERATORS`; `emit/dbt.py` `quality_test`, the `k2_quality` generic test; `docs.quality-unsupported` | S05, S17, S18 |
+| A unit test of an incremental model states its branch | the good set's override; `docs.unit-test-branch-unstated` | S05, S17 |
+| A foreign key into a table the product does not read | `docs.foreign-key-not-read`, before dbt sees it | S05 |
+| Seed names and their denial | `dbt_seed`; S07's seed denial; the canary's rows | S07, S17, S20 |
+| A canary that built no rows passes every read row | `mustAppear`, `MustAppear`; S07 requires one per role with a policy | S07, S20 |
+| A finding's location | `Finding.pointer` | every check, `k2gen check` |
+| The catalog page and REST | per product `keywords`, `issued`, `periodicity`, `productFile`, `support`, `links`, `inputs[].version`; per output `build`, `testedRef`, `contractFile`, `partitioning`, `retentionDays`, `sla`, `quality`; per role `approvers`; per column `logicalType`, `primaryKeyPosition`, `unique`, `classification` | S18, phase 003 |
+| `config()` with `~`, or a hook holding Jinja | `model_config`'s quote-aware scan, `ValueError` only | S05, S07, S17 |

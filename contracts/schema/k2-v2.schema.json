@@ -171,14 +171,14 @@
               "version": {"description": "The table contract's version.", "$ref": "#/$defs/semver"},
               "contractId": {"description": "The table's contract id, <domain>.<product>.<table> of this product.", "$ref": "#/$defs/contractId"},
               "inputContracts": {
-                "description": "The input ports that feed this table: product-level lineage.",
+                "description": "The tables that feed this table: product-level lineage, the catalog's lineage edges. Each is an input port's contract, or a sibling table of this product (bronze feeding silver), which is not an input.",
                 "type": "array",
                 "items": {
                   "type": "object",
                   "required": ["id", "version"],
                   "properties": {
-                    "id": {"description": "An input port's contract id.", "$ref": "#/$defs/contractId"},
-                    "version": {"description": "That input's contract version.", "$ref": "#/$defs/semver"}
+                    "id": {"description": "An input port's contract id, or a sibling table's.", "$ref": "#/$defs/contractId"},
+                    "version": {"description": "That table's contract version.", "$ref": "#/$defs/semver"}
                   }
                 }
               },
@@ -528,7 +528,7 @@
         "physicalType": {"description": "A table: an Iceberg table, which readers see through a generated view for a dbt or code output (ADR-061); for build serving, a table of the serving engine.", "const": "table"},
         "properties": {"description": "The columns, in order.", "type": "array", "minItems": 1, "items": {"$ref": "#/$defs/column"}},
         "quality": {
-          "description": "Checks beyond the generated key and nullability tests.",
+          "description": "Checks beyond the generated key and nullability tests, each run or refused, never dropped: custom with engine dbt is one dbt data test; custom with engine k2-connector is a bronze audit (a parser function); sql is a query reading the table as ${table}, and library the metric rowCount or duplicateValues (arguments.properties), each compared by ODCS's must* thresholds in a dbt test of a dbt-built table; text is words only. k2gen check reports any other form (docs.quality-unsupported).",
           "type": "array",
           "items": {
             "if": {"required": ["type"], "properties": {"type": {"const": "custom"}}},

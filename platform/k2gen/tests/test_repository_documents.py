@@ -39,8 +39,16 @@ def test_each_canary_policy_has_an_expectation_that_agrees_with_it() -> None:
         assert set(row.masked) == set(policy.mask)
         assert row.min_row_age_minutes == (policy.delay.minutes if policy.delay else None)
         assert row.must_not_appear  # every reader is held to the seed's ids
+        assert row.must_appear and row.must_appear.min_rows >= 1  # and a canary that built no rows fails
     assert {e.table for e in m.expectations if isinstance(e, model.DeniedExpectation)} >= {
-        model.input_relation(events)}  # the base, behind the view
+        model.input_relation(events),  # the base, behind the view
+        *(model.base_relation(canary.domain, canary.name, s.removesuffix(".csv")) for s in canary.seeds)}  # the seed's table
+
+
+def test_the_repository_set_passes_every_check() -> None:
+    from k2gen import checks
+
+    assert [f"{f.code} {f.path}: {f.message}" for f in checks.run(repository_set(), None)] == []
 
 
 def test_the_hot_tier_is_a_paused_serving_copy_with_no_lake_table() -> None:

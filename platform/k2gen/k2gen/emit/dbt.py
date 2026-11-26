@@ -14,7 +14,7 @@ of the release that dbt builds. A product's documents become:
                             schema-name rule; two generic tests
 
 A table's model is model.dbt_model, `<fence>__<table>`, with `alias: <table>`, so dbt builds it
-at model.build_relation; a seed likewise, `<fence>__<stem>` with `alias: <stem>`. The model
+at model.build_relation; a seed likewise, model.dbt_seed, `<fence>__<stem>` with `alias: <stem>`. The model
 contract is enforced and its columns are the ODCS columns, name for name and type for type, so
 dbt's contract is the table contract. Readers never see these tables: S15 emits the views over
 the `audited` tag and the wrapper applies them (ADR-061). Build serving has no lake table and so
@@ -26,10 +26,11 @@ and no env_var: the wrapper's profile names the builder (dbt/profiles.yml, S13).
 
 from __future__ import annotations
 
+import math
 import re
 import shutil
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +38,7 @@ import yaml
 
 from k2gen import model as k2
 from k2gen.checks.sql import ALLOWED_CONFIG
-from k2gen.model import Model, Product, Table
+from k2gen.model import Model, Product, Quality, Table
 
 ROOT = "compiled/dbt"
 # The frozen macros (A7), shipped as the repository has them: the one tested is the one compiled.
@@ -87,7 +88,12 @@ TESTS_MACRO = """\
 
     k2_input_relationships(model, column_name, product_fence, table, field): dbt's relationships
     test against another product's table read through k2_input, so the test reads the snapshot
-    the build read, never that table's untested main. -#}
+    the build read, never that table's untested main.
+
+    k2_quality(model, query, holds): an ODCS sql or library quality rule. The query, with
+    ${table} as the model, returns one column, the measured value; the test returns each value
+    for which `holds`, the rule's thresholds as a condition on metric_value, is not true, so a
+    null value fails too. k2gen writes both arguments (emit/dbt.py quality_test). -#}
 {% test k2_unique_key(model, columns) -%}
   {%- set key = [] -%}
   {%- for c in columns -%}{%- do key.append(adapter.quote(c)) -%}{%- endfor -%}
@@ -99,6 +105,12 @@ having count(*) > 1
 
 {% test k2_input_relationships(model, column_name, product_fence, table, field) -%}
   {{ default__test_relationships(model, column_name, k2_input(product_fence, table), field) }}
+{%- endtest %}
+
+{% test k2_quality(model, query, holds) -%}
+select metric_value
+from ({{ query | replace('${table}', model) }}) as k2_quality (metric_value)
+where not coalesce({{ holds }}, false)
 {%- endtest %}
 """
 
@@ -131,17 +143,103 @@ def _key(t: Table) -> list[str]:
     return [c.name for c in sorted((c for c in t.columns if c.primary_key), key=lambda c: c.primary_key_position or 0)]
 
 
-def _quality_tests(t: Table) -> Iterator[Any]:
-    """Each ODCS quality rule the model can hold as a dbt test: type custom, engine dbt, whose
-    implementation is one dbt data test entry (a mapping, or its YAML text). A k2-connector rule is
-    the bronze audit's; text, library and sql rules carry no test the model holds."""
-    for q in t.quality:
-        if q.type != "custom" or q.engine != "dbt":
+# ODCS's comparison operators as SQL on the measured value; between and not between apart.
+QUALITY_TABLE = "${table}"
+_COMPARE = {"mustBe": "=", "mustNotBe": "<>", "mustBeGreaterThan": ">", "mustBeGreaterOrEqualTo": ">=",
+            "mustBeLessThan": "<", "mustBeLessOrEqualTo": "<="}
+_BETWEEN = {"mustBeBetween": "between", "mustNotBeBetween": "not between"}
+assert set(_COMPARE) | set(_BETWEEN) == set(k2.QUALITY_OPERATORS)
+# ODCS's library metrics a table-level rule takes; nullValues, missingValues and invalidValues
+# are column rules in ODCS, and K2 reads quality on the table only (model.load).
+LIBRARY_METRICS = ("rowCount", "duplicateValues")
+
+
+def _number(value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"a threshold is a finite number here, not {value!r}")
+    return repr(value).upper() if isinstance(value, float) else str(value)
+
+
+def _holds(thresholds: Mapping[str, Any]) -> str:
+    """Every threshold the rule states, as one condition on metric_value."""
+    if not thresholds:
+        raise ValueError(f"it states no threshold: one of {', '.join(k2.QUALITY_OPERATORS)}")
+    parts = []
+    for op, value in thresholds.items():
+        if op in _COMPARE:
+            parts.append(f"metric_value {_COMPARE[op]} {_number(value)}")
             continue
-        entry = k2.parse(t.path, q.implementation.encode()) if isinstance(q.implementation, str) else q.implementation
-        if not isinstance(entry, dict) or len(entry) != 1:
-            raise ValueError(f"{t.path}: quality {q.name or q.description}: a dbt implementation is one data test, {{<test>: {{...}}}}")
-        yield entry
+        if not isinstance(value, list) or len(value) != 2:
+            raise ValueError(f"{op} takes two numbers, the smallest first")
+        low, high = _number(value[0]), _number(value[1])
+        if not value[0] < value[1]:
+            raise ValueError(f"{op} takes two numbers, the smallest first, not {value}")
+        parts.append(f"metric_value {_BETWEEN[op]} {low} and {high}")
+    return " and ".join(parts)
+
+
+def _query(q: Quality, columns: Sequence[str]) -> str:
+    """The rule's query, reading the table as ${table}: a sql rule's own, or a library metric's."""
+    if q.type == "sql":
+        if not isinstance(q.query, str) or QUALITY_TABLE not in q.query:
+            raise ValueError(f"a sql rule's query reads the table as {QUALITY_TABLE}")
+        if re.search(r"\{[{%#]|;", q.query) or q.query.replace(QUALITY_TABLE, "").count("${"):
+            raise ValueError(f"a sql rule's query is one SELECT with no Jinja and no placeholder but {QUALITY_TABLE}, since dbt renders a test's arguments")
+        return q.query
+    if q.metric not in LIBRARY_METRICS:
+        raise ValueError(f"library metric {q.metric}: a table's rule takes {' or '.join(LIBRARY_METRICS)}; "
+                         "nullValues, missingValues and invalidValues are column rules, which K2 states as a column's "
+                         "required, or a custom dbt rule (accepted_values)")
+    unit = q.unit or "rows"
+    if q.metric == "rowCount":
+        if q.arguments or unit != "rows":
+            raise ValueError("rowCount takes no arguments and counts rows")
+        return f"select count(*) from {QUALITY_TABLE}"
+    key = (q.arguments or {}).get("properties")
+    if set(q.arguments or {}) != {"properties"} or not isinstance(key, list) or not key or not set(key) <= set(columns):
+        raise ValueError(f"duplicateValues takes arguments.properties, a list of the table's columns ({', '.join(columns)})")
+    if unit not in ("rows", "percent"):
+        raise ValueError(f"duplicateValues counts rows or a percent of them, not {unit}")
+    groups = f"(select count(*) as n from {QUALITY_TABLE} group by {', '.join(k2.quote_ident(c) for c in key)})"
+    measure = "coalesce(sum(n - 1), 0)" if unit == "rows" else "coalesce(100.0 * sum(n - 1) / sum(n), 0)"
+    return f"select {measure} from {groups} as k2_groups"
+
+
+def quality_test(q: Quality, build: str, columns: Sequence[str]) -> dict[str, Any] | None:
+    """One ODCS quality rule of a table with this build and these columns, as the dbt data test
+    its model holds; None for a rule no dbt test carries (text: words; custom k2-connector on a
+    connector table: the bronze audit's, pipeline.json `audits`). Any form K2 does not run is a
+    ValueError, so no rule is ever dropped: S05 reports it first (docs.quality-unsupported).
+
+    custom, engine dbt: its implementation, one dbt data test (a mapping, or its YAML text).
+    sql: k2_quality over its query. library: k2_quality over the metric's query, rowCount (rows)
+    or duplicateValues (arguments.properties; rows or percent). Every must* threshold of ODCS v3.2.0
+    is supported, with numbers; a string or other value is not."""
+    if q.type == "text":
+        return None
+    if q.type == "custom" and q.engine == "k2-connector":
+        if build == "connector":
+            return None
+        raise ValueError(f"a k2-connector rule is a bronze audit, and a {build} table has none")
+    if build != "dbt":
+        raise ValueError(f"a {q.type} rule runs as a dbt test, and dbt does not build a {build} table")
+    if q.type == "custom":
+        entry = k2.parse("implementation", q.implementation.encode()) if isinstance(q.implementation, str) else q.implementation
+        if q.engine != "dbt" or not isinstance(entry, dict) or len(entry) != 1:
+            raise ValueError("a dbt implementation is one data test, {<test>: {...}}")
+        return dict(entry)
+    return {"k2_quality": {"arguments": {"query": _query(q, columns), "holds": _holds(q.thresholds)}}}
+
+
+def _quality_tests(t: Table) -> Iterator[Any]:
+    """Each ODCS quality rule of a dbt table that a dbt test carries (quality_test)."""
+    for q in t.quality:
+        try:
+            test = quality_test(q, t.build.kind, [c.name for c in t.columns])
+        except (ValueError, k2.DocumentError) as e:
+            raise ValueError(f"{t.path}: quality {q.name or q.description}: {e}") from None
+        if test is not None:
+            yield test
 
 
 def _relationship(m: Model, p: Product, t: Table, column: str, to: str) -> dict[str, Any]:
@@ -218,7 +316,7 @@ def _properties(m: Model, p: Product) -> str:
     if _dbt_tables(p):
         doc["models"] = [_model(m, p, t) for t in _dbt_tables(p)]
     if p.seeds:
-        doc["seeds"] = [{"name": k2.dbt_model(p.name, _stem(s)), "description": f"The synthetic seed {p.path}/seeds/{s}.",
+        doc["seeds"] = [{"name": k2.dbt_seed(p.name, s), "description": f"The synthetic seed {p.path}/seeds/{s}.",
                          "config": {"alias": _stem(s)}} for s in p.seeds]
     return _yaml(doc)
 
@@ -305,7 +403,7 @@ def emit(model: Model) -> dict[str, str]:
         out |= {f"{ROOT}/models/{folder}/{k2.dbt_model(p.name, t.name)}.sql": p.models[f"{t.name}.sql"] for t in _dbt_tables(p)}
         if p.unit_tests is not None:
             out[f"{ROOT}/models/{folder}/_unit_tests.yml"] = p.unit_tests
-        out |= {f"{ROOT}/seeds/{folder}/{k2.dbt_model(p.name, _stem(s))}.csv": data.decode("utf-8") for s, data in p.seeds.items()}
+        out |= {f"{ROOT}/seeds/{folder}/{k2.dbt_seed(p.name, s)}.csv": data.decode("utf-8") for s, data in p.seeds.items()}
     leaked = [path for path, text in out.items() if "env_var" in text]
     if leaked:  # S07 refuses it in a model; the tree as a whole is held to it here
         raise ValueError(f"env_var in {', '.join(leaked)}: the compiled dbt tree reads no environment")

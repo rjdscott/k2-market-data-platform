@@ -13,11 +13,36 @@
     "attribution": "Source: a synthetic feed"
   },
   "licence": "https://data.example.org/terms",
+  "keywords": [
+    "synthetic",
+    "weather"
+  ],
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "15 * * * *",
+  "productFile": "documents/contracts/sensor-net/station-readings/product.odps.yaml",
+  "support": [
+    {
+      "channel": "sensor-team-requests",
+      "url": "mailto:sensor-team@example.org",
+      "tool": "email",
+      "scope": "issues",
+      "description": "Questions and access requests, answered by the made-up sensor team."
+    }
+  ],
+  "links": [
+    {
+      "type": "licence",
+      "url": "https://data.example.org/terms"
+    }
+  ],
   "inputs": [],
   "outputs": [
     {
       "contractId": "sensor-net.station-readings.bronze_readings",
       "relation": "lake.station_readings.bronze_readings",
+      "build": "connector",
+      "testedRef": "main",
+      "contractFile": "documents/contracts/sensor-net/station-readings/bronze_readings.odcs.yaml",
       "layer": "bronze",
       "version": "1.0.0",
       "purpose": "One row per line of a landed file, typed as the synthetic feed wrote it.",
@@ -27,7 +52,9 @@
           "type": "varchar",
           "required": true,
           "primaryKey": true,
-          "description": "The made-up station's code."
+          "description": "The made-up station's code.",
+          "logicalType": "string",
+          "primaryKeyPosition": 1
         },
         {
           "name": "read_at",
@@ -35,7 +62,8 @@
           "required": true,
           "primaryKey": true,
           "description": "When the station took the reading.",
-          "time": "event"
+          "time": "event",
+          "primaryKeyPosition": 2
         },
         {
           "name": "value_text",
@@ -63,7 +91,16 @@
           "type": "varchar",
           "required": true,
           "primaryKey": true,
-          "description": "The landed file's sha256."
+          "description": "The landed file's sha256.",
+          "primaryKeyPosition": 3
+        }
+      ],
+      "retentionDays": 7,
+      "quality": [
+        {
+          "name": "value_parses",
+          "type": "custom",
+          "description": "Every value_text parses as a decimal."
         }
       ],
       "roles": [],
@@ -73,6 +110,9 @@
     {
       "contractId": "sensor-net.station-readings.silver_readings",
       "relation": "sensor_net.station_readings.silver_readings",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/sensor-net/station-readings/silver_readings.odcs.yaml",
       "layer": "silver",
       "version": "1.0.0",
       "purpose": "One row per station and reading time, the value as a decimal.",
@@ -82,7 +122,8 @@
           "type": "varchar",
           "required": true,
           "primaryKey": true,
-          "description": "The made-up station's code."
+          "description": "The made-up station's code.",
+          "primaryKeyPosition": 1
         },
         {
           "name": "read_at",
@@ -90,7 +131,8 @@
           "required": true,
           "primaryKey": true,
           "description": "When the station took the reading.",
-          "time": "event"
+          "time": "event",
+          "primaryKeyPosition": 2
         },
         {
           "name": "value",
@@ -113,6 +155,37 @@
           "required": false,
           "primaryKey": false,
           "description": "Free text the made-up operator attached."
+        }
+      ],
+      "partitioning": [
+        "day(read_at)"
+      ],
+      "retentionDays": 7,
+      "sla": [
+        {
+          "property": "latency",
+          "value": 90,
+          "unit": "min",
+          "element": "silver_readings.read_at"
+        }
+      ],
+      "quality": [
+        {
+          "name": "readings_built",
+          "type": "library",
+          "description": "A build holds at least one reading.",
+          "metric": "rowCount"
+        },
+        {
+          "name": "one_reading_per_key",
+          "type": "library",
+          "description": "No two rows share a station and a reading time.",
+          "metric": "duplicateValues"
+        },
+        {
+          "name": "values_in_range",
+          "type": "sql",
+          "description": "Every made-up reading lies between -90 and 60 degrees Celsius."
         }
       ],
       "roles": [
@@ -138,7 +211,8 @@
               ]
             }
           },
-          "inWords": "only rows whose region is north or south and whose read_at is at least 20 minutes old; operator_note read as null"
+          "inWords": "only rows whose region is north or south and whose read_at is at least 20 minutes old; operator_note read as null",
+          "approvers": "sensor-team"
         }
       ],
       "readers": [
@@ -174,7 +248,12 @@
         "relation": "sensor_net.station_readings.silver_readings"
       }
     ],
-    "edges": []
+    "edges": [
+      {
+        "from": "sensor-net.station-readings.bronze_readings",
+        "to": "sensor-net.station-readings.silver_readings"
+      }
+    ]
   },
   "tag": "v3.0.0-alpha.3-rc.1"
 }

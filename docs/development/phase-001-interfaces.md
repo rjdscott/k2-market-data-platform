@@ -9,8 +9,9 @@ and the fixtures (their page is [`platform/k2gen/INTERFACES.md`](../../platform/
 independent review of the two and the gate
 [`2026-11-26-tested-data-view-gate.md`](../research/2026-11-26-tested-data-view-gate.md), whose two
 amendments ADR-061 records. The design inputs, dated, are in
-[`2026-11-26-phase-001-interfaces.md`](../research/2026-11-26-phase-001-interfaces.md). The
-interfaces A1 to A13 are those of
+[`2026-11-26-phase-001-interfaces.md`](../research/2026-11-26-phase-001-interfaces.md).
+**S00d** later patched both additively, once the building steps had reported their gaps (the
+last section of the k2gen page). The interfaces A1 to A13 are those of
 [IMPLEMENTATION-N0-N1.md](../research/2026-11-26-unified-platform-architecture/IMPLEMENTATION-N0-N1.md)
 section A, as revised for phase 001.
 
@@ -77,14 +78,17 @@ or release file has a field for a secret or a checksum of one. Deploy records th
 secret file it found in its own deploy record (`deploy-record.schema.json`, one line per step of
 `<releases root>/deploy-log.jsonl`), never the content. A container mounts only the files it
 reads, read-only, under `/run/k2-secrets/`. A file refreshed while its reader runs is mounted by
-its directory and replaced by a rename inside it, because a file-level bind mount pins the inode
-(CLAUDE.md); the others are read at start, mounted as files, and a rotation recreates their
-readers. The table is `model.SECRET_FILES` in code; `platform/k2gen/INTERFACES.md` repeats it,
+its directory and rewritten in place under an exclusive `flock` on the file itself, never renamed
+over: through Docker Desktop's file sharing a container keeps reading the old file after a
+rename, even under a directory mount (measured by S09 and S14, `scripts/principal-secret.py`).
+Every writer of such a file takes that lock and writes in place, S19's canary line in
+`password.db` included. The others are read at start, mounted as files, and a rotation
+recreates their readers. The table is `model.SECRET_FILES` in code; `platform/k2gen/INTERFACES.md` repeats it,
 and `tests/test_interfaces.py` holds both pages to the code.
 
 | Under `${K2_SECRETS}` | What | Read-only in a container at | Mounted by | Written by |
 |---|---|---|---|---|
-| `trino/password.db` | Trino's file authenticator file: one `<user>:<bcrypt, cost 10>` line per principal with a password, the canary's included | `/run/k2-secrets/trino/password.db` (the directory; Trino rereads it every 5 s) | trino | S14 `scripts/principal-secret.py` (`make password`); S19 `scripts/deploy.py` adds each release's canary line |
+| `trino/password.db` | Trino's file authenticator file: one `<user>:<bcrypt, cost 10>` line per principal with a password, the canary's included | `/run/k2-secrets/trino/password.db` (the directory; Trino rereads it every 5 s) | trino | S14 `scripts/principal-secret.py` (`make password`, `make principal-remove`); S19 `scripts/deploy.py` adds each release's canary line, in place under the same `flock`, never by a rename |
 | `api/keys.json` | k2-api's key map, `{"<sha256 hex of the key>": "<principal id>"}` | `/run/k2-secrets/api/keys.json` (the directory) | k2-api | S14 `scripts/principal-secret.py` (`make api-key`) |
 | `principals/<principal>.password` | one service principal's password, mode 600 | `/run/k2-secrets/<role>.password`: `builder` for `dbt_<fence>`, `publisher` for `pub_<fence>`, `<name>` for `svc.<name>` (`model.password_mount`) | dbt-runner (builder, publisher, runs, for one run), k2-api (api), tools | S14 `scripts/principal-secret.py` (`make password`) |
 | `tls/ca.pem` | the local CA's certificate | `/run/k2-secrets/tls/ca.pem` | tools, dbt-runner, k2-api; the Trino CLI on the host reads it in place | S13 `scripts/tls.sh` (`make tls`) |

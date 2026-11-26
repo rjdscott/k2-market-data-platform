@@ -17,7 +17,13 @@ schema-valid documents. Then, each rule a code in CODES:
   paused (ADR-057);
 - columns: every column described, physical types as model.physical_type_problem allows, every
   column a partitioning, sort, policy or latency element names exists, every port and relationship
-  resolves;
+  resolves; a dbt table's foreign key names a table its product builds or reads through an input
+  port, since its dbt test reads that table as the build does;
+- quality: every rule is one K2 runs (k2gen.emit.dbt.quality_test, the one mapping), so none is
+  dropped: a custom dbt, sql or library rule on a dbt table, a k2-connector rule on a connector
+  table, or text;
+- unit tests: a unit test of an incremental model states which branch it tests,
+  `overrides: {macros: {is_incremental: <bool>}}`, which dbt refuses to parse without;
 - layers: bronze is written only by connectors and a connector writes only bronze (ADR-056 part 2);
   a bronze table is named bronze_<name> and keyed (pipeline.schema.json), and a fetch kind's carries
   model.LINEAGE_COLUMN;
@@ -39,6 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from k2gen import model
+from k2gen.emit.dbt import quality_test
 from k2gen.model import DocumentSet, Finding
 
 CODES = (
@@ -66,6 +73,9 @@ CODES = (
     "docs.model-without-dbt-table",
     "docs.model-config-unreadable",
     "docs.unit-test-model-unknown",
+    "docs.unit-test-branch-unstated",
+    "docs.foreign-key-not-read",
+    "docs.quality-unsupported",
     "docs.serving-without-serves",
     "docs.serving-only-not-paused",
     "docs.column-undescribed",
@@ -202,8 +212,10 @@ def _rules(shared: dict[str, Any], dirs: dict[tuple[str, str], _Dir]) -> Iterato
     yield from _taken("docs.product-name-taken", [(d.name, d.at(model.V2_PRODUCT_FILE)) for d in products],
                       "$.name: {} is also the name of {}; a product's name is unique on the platform, since its fence names its lake namespace, principals and DAG")
     dbt = [(model.dbt_model(d.name, t), d.at(f"{t}.odcs.yaml")) for d in products for t, c in d.contracts.items() if _build(c) == "dbt"]
+    dbt += [(model.dbt_seed(d.name, s["path"]), d.at(model.V2_PRODUCT_FILE)) for d in products for s in _props(d.product).get("seeds", [])]
     yield from _taken("docs.dbt-model-name-taken", dbt,
-                      "$.name: dbt model {} is also built from {}; model.dbt_model names are unique in the one compiled dbt project")
+                      "$.name: dbt model or seed {} is also built from {}; model.dbt_model and model.dbt_seed names are unique in the "
+                      "one compiled dbt project, and each is a table of the product's base namespace")
 
 
 def _taken(code: str, names: list[tuple[str, str]], message: str) -> Iterator[Finding]:
@@ -262,8 +274,8 @@ def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, str], tables: d
             yield _finding("docs.reference-unresolved", path, f"$.inputPorts[{i}].contractId: no contract in the set has id {cid}; name an existing table, contracts/<domain>/<product>/<table>.odcs.yaml")
     for i, port in enumerate(p["outputPorts"]):
         for j, ref in enumerate(port.get("inputContracts", [])):
-            if ref["id"] not in inputs:
-                yield _finding("docs.reference-unresolved", path, f"$.outputPorts[{i}].inputContracts[{j}].id: {ref['id']} is not one of this product's input ports; declare it under inputPorts first")
+            if ref["id"] not in inputs and ref["id"] not in own - {port["contractId"]}:
+                yield _finding("docs.reference-unresolved", path, f"$.outputPorts[{i}].inputContracts[{j}].id: {ref['id']} is neither one of this product's input ports nor another table of it; declare it under inputPorts first")
 
     builds = {t: _build(c) for t, c in d.contracts.items()}
     if "connector" in builds.values() and "connector" not in props:
@@ -285,10 +297,20 @@ def _product(d: _Dir, domains: dict[str, Any], owners: dict[str, str], tables: d
             yield _finding("docs.model-without-dbt-table", model_path, f"$: no build dbt table of this product is named by this file; a product's models are models/<table>.sql, one per dbt table ({', '.join(sorted(models)) or 'none'}), so a table has one producer")
     if d.unit_tests is not None:
         names = {model.dbt_model(d.name, t) for t, b in builds.items() if b == "dbt"}
+        incremental = {model.dbt_model(d.name, t) for t, b in builds.items() if b == "dbt" and _incremental(d.models.get(d.at(f"models/{t}.sql")))}
         for i, test in enumerate(d.unit_tests.get("unit_tests", []) if isinstance(d.unit_tests, dict) else []):
             name = test.get("model") if isinstance(test, dict) else None
             if name not in names:
                 yield _finding("docs.unit-test-model-unknown", d.at("unit_tests.yml"), f"$.unit_tests[{i}].model: {name} is not a dbt model of this product; name it <fence>__<table> (model.dbt_model): {', '.join(sorted(names)) or 'none'}")
+            elif name in incremental and not isinstance(((test.get("overrides") or {}).get("macros") or {}).get("is_incremental"), bool):
+                yield _finding("docs.unit-test-branch-unstated", d.at("unit_tests.yml"), f"$.unit_tests[{i}].overrides.macros.is_incremental: {name} is incremental, so its unit test states which branch it tests, true or false; dbt refuses to parse a unit test of an incremental model without it")
+
+
+def _incremental(sql: str | None) -> bool:
+    try:
+        return sql is not None and model.model_config(sql).get("materialized") == "incremental"
+    except ValueError:  # docs.model-config-unreadable reports it
+        return False
 
 
 def _table(d: _Dir, table: str, c: Any, tables: dict[str, Any], read: set[str]) -> Iterator[Finding]:
@@ -319,6 +341,14 @@ def _table(d: _Dir, table: str, c: Any, tables: dict[str, Any], read: set[str]) 
             target = tables.get(model.contract_id(to[1], to[2], to[3])) if to else None
             if not to or target is None or target["schema"][0]["id"] != to[4] or to[5] not in _columns(target):
                 yield _finding("docs.reference-unresolved", path, f"$.schema[0].properties[{i}].relationships[{j}].to: {rel['to']} names no column of a contract in the set")
+            elif build == "dbt" and not _readable(d, target):
+                yield _finding("docs.foreign-key-not-read", path, f"$.schema[0].properties[{i}].relationships[{j}].to: {target['id']} is neither a dbt or connector table of {model.product_id(d.domain, d.name)} nor one of its input ports, and the foreign key's dbt test reads the target as the build does; add it as an input port, or drop the relationship")
+
+    for i, entry in enumerate(spec.get("quality", [])):
+        try:
+            quality_test(model.quality_of(entry), build, names)
+        except (ValueError, model.DocumentError) as e:
+            yield _finding("docs.quality-unsupported", path, f"$.schema[0].quality[{i}]: quality rule {entry.get('name') or entry.get('description') or i}: {str(e).removeprefix('implementation: ')}; K2 would run nothing for it")
 
     named = [(_prop_at(c, "partitioning"), _source(f)) for f in props.get("partitioning", [])]
     named += [(_prop_at(c, "sort"), s.split()[0]) for s in props.get("sort", [])]
@@ -353,6 +383,14 @@ def _table(d: _Dir, table: str, c: Any, tables: dict[str, Any], read: set[str]) 
         yield from _dbt(d, table, c, names)
 
 
+def _readable(d: _Dir, target: Any) -> bool:
+    """Whether a dbt table of `d` can test a key into `target`: its own dbt or connector table, or
+    an input port's (k2gen.emit.dbt's relationships test reads it through ref, source or k2_input)."""
+    if target["id"] in {port["contractId"] for port in d.product.get("inputPorts", [])}:
+        return True
+    return target["id"] in {d.contract_id(t) for t in d.contracts} and _build(target) in ("dbt", "connector")
+
+
 def _source(partition_field: str) -> str:
     """The column a partition field reads: day(read_at) -> read_at, bucket(id, 16) -> id."""
     match = _PARTITION_SOURCE.fullmatch(partition_field)
@@ -366,7 +404,7 @@ def _dbt(d: _Dir, table: str, c: Any, names: list[str]) -> Iterator[Finding]:
         return
     try:
         config = model.model_config(d.models[model_path])
-    except (ValueError, SyntaxError) as e:
+    except ValueError as e:
         yield _finding("docs.model-config-unreadable", model_path, f"$: {e}; config() takes literal keyword arguments only, once (model.model_config)")
         return
     if config.get("materialized") != "incremental":

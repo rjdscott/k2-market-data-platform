@@ -12,11 +12,17 @@
   "terms": {
     "redistribution": "allowed"
   },
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "*/10 * * * *",
+  "productFile": "documents/contracts/governance/access-canary/product.odps.yaml",
   "inputs": [],
   "outputs": [
     {
       "contractId": "governance.access-canary.events",
       "relation": "governance.access_canary.events",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/governance/access-canary/events.odcs.yaml",
       "layer": "mart",
       "version": "1.0.0",
       "purpose": "One synthetic canary row per seed row, built so that each reader policy visibly changes what its canary principal reads: some rows younger than the delay, two regions, a note to mask.",
@@ -26,14 +32,16 @@
           "type": "bigint",
           "required": true,
           "primaryKey": true,
-          "description": "The seed row's number, 1 to 5; a reader shown any other id was shown an untested row."
+          "description": "The seed row's number, 1 to 5; a reader shown any other id was shown an untested row.",
+          "primaryKeyPosition": 1
         },
         {
           "name": "region",
           "type": "varchar",
           "required": true,
           "primaryKey": true,
-          "description": "north or south; public_reader keeps north only. The partition source, so it is in the key, as an incremental build's unique key must hold every partition source column."
+          "description": "north or south; public_reader keeps north only. The partition source, so it is in the key, as an incremental build's unique key must hold every partition source column.",
+          "primaryKeyPosition": 2
         },
         {
           "name": "note",
@@ -51,6 +59,10 @@
           "time": "event"
         }
       ],
+      "partitioning": [
+        "region"
+      ],
+      "retentionDays": 1,
       "roles": [
         {
           "role": "full_reader",

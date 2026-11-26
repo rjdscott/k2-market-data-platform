@@ -3,7 +3,8 @@
 # (contracts/governance/access-canary/): at build its seed rows 1 (north) and 4 (south) are a day
 # old, 2 (north) 21 minutes, 3 (north) and 5 (south) 1 minute. Any other id is not from the seed,
 # so it was never tested. The delayed rows need a canary build that passed in the last 19
-# minutes (its 10-minute schedule); a stale canary fails them, it never passes them.
+# minutes (its 10-minute schedule); a stale canary fails them, it never passes them. Each read
+# row's mustAppear names the rows its reader must see, so a canary that built no rows fails.
 expectations:
   # Readers see the tagged rows only, each with its role's policy.
   - principal: p.canary-full
@@ -11,6 +12,7 @@ expectations:
     via: [sql]
     visible: [id, region, note, event_ts]
     mustNotAppear: "id NOT IN (1, 2, 3, 4, 5)"
+    mustAppear: {where: "id IN (1, 2, 3, 4, 5)", minRows: 5}
   - principal: p.canary-delayed
     table: governance.access_canary.events
     via: [sql]
@@ -18,15 +20,21 @@ expectations:
     masked: [note]
     minRowAgeMinutes: 20
     mustNotAppear: "id NOT IN (1, 2, 4)"
+    mustAppear: {where: "id IN (1, 2, 4)", minRows: 3}
   - principal: p.canary-scoped
     table: governance.access_canary.events
     via: [sql]
     visible: [id, region, note, event_ts]
     mustNotAppear: "id NOT IN (1, 2, 3)"
+    mustAppear: {where: "id IN (1, 2, 3)", minRows: 3}
   # Every base path is refused to every reader: the table and its metadata tables (gate h1.08).
   - {principal: p.canary-full, table: governance.access_canary__base.events, denied: true}
   - {principal: p.canary-delayed, table: governance.access_canary__base.events, denied: true}
   - {principal: p.canary-scoped, table: governance.access_canary__base.events, denied: true}
+  # The seed's own table sits in the base beside events (model.dbt_seed): refused like it.
+  - {principal: p.canary-full, table: governance.access_canary__base.event_offsets, denied: true}
+  - {principal: p.canary-delayed, table: governance.access_canary__base.event_offsets, denied: true}
+  - {principal: p.canary-scoped, table: governance.access_canary__base.event_offsets, denied: true}
   - {principal: p.canary-delayed, table: "governance.access_canary__base.events$snapshots", denied: true}
   - {principal: p.canary-delayed, table: "governance.access_canary__base.events$files", denied: true}
   - {principal: p.canary-delayed, table: "governance.access_canary__base.events$history", denied: true}

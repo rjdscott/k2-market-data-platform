@@ -42,11 +42,31 @@ schema:
       - name: operator_note
         physicalType: varchar
         description: Free text the made-up operator attached.
+    quality:
+      - name: readings_built
+        type: library
+        metric: rowCount
+        mustBeGreaterThan: 0
+        description: A build holds at least one reading.
+      - name: one_reading_per_key
+        type: library
+        metric: duplicateValues
+        arguments:
+          properties: [station_id, read_at]
+        unit: rows
+        mustBe: 0
+        description: No two rows share a station and a reading time.
+      - name: values_in_range
+        type: sql
+        query: "select count(*) from ${table} where value not between -90 and 60"
+        mustBeLessOrEqualTo: 0
+        description: Every made-up reading lies between -90 and 60 degrees Celsius.
 roles:
   - role: full_reader
     access: read
   - role: delayed_reader
     access: read
+    firstLevelApprovers: sensor-team
 slaProperties:
   - property: latency
     value: 90

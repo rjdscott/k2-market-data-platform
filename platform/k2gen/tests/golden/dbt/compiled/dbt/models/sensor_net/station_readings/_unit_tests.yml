@@ -1,6 +1,9 @@
 unit_tests:
   - name: silver_readings_types_the_value
     model: station_readings__silver_readings  # the dbt name, <fence>__<table> (k2gen.model.dbt_model)
+    overrides:
+      macros:
+        is_incremental: false  # the model is incremental: a unit test states the branch it tests (docs.unit-test-branch-unstated)
     given:
       - input: source('station_readings', 'bronze_readings')
         rows:

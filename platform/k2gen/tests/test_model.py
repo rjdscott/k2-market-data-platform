@@ -85,7 +85,7 @@ def test_the_good_set_loads_into_the_model() -> None:
         "station_readings.silver_readings", model.Build("dbt", None), ("day(read_at)",), ("station_id",))
     assert silver.policies == {"delayed_reader": model.RolePolicy(model.Delay("read_at", 20), ("operator_note",),
                                                                   model.RowScope("region", ("north", "south")))}
-    assert silver.roles == (model.TableRole("full_reader", None), model.TableRole("delayed_reader", None))
+    assert silver.roles == (model.TableRole("full_reader", None), model.TableRole("delayed_reader", "sensor-team"))
     assert silver.sla == (model.Sla("latency", 90, "min", "silver_readings.read_at"),)
     read_at, value = silver.columns[1], silver.columns[2]
     assert (read_at.primary_key, read_at.primary_key_position, read_at.required, read_at.time) == (True, 2, True, "event")
@@ -103,7 +103,8 @@ def test_the_expectations_load_as_their_five_shapes() -> None:
                                                          "ProbeExpectation": 2, "DriftExpectation": 1}
     assert rows[1] == model.TableExpectation("p.analyst-delayed", "sensor_net.station_readings.silver_readings", ("sql",),
                                              ("station_id", "read_at", "value", "region", "operator_note"), ("operator_note",), 20,
-                                             "region NOT IN ('north', 'south')")
+                                             "region NOT IN ('north', 'south')", model.MustAppear(1, "region IN ('north', 'south')"))
+    assert rows[0].must_appear == model.MustAppear(1, None)  # type: ignore[union-attr]
     assert rows[3] == model.DeniedExpectation("p.analyst-full", "sensor_net.station_readings__base.silver_readings", ("sql",))
     assert rows[11] == model.ProbeExpectation("k2-net", "lakekeeper:8181", "refused") and rows[13] == model.DriftExpectation("catalog", "clean")
     assert rows[-1].session == {"sensor_net.statistics_enabled": "true"} and rows[7].session == {}  # type: ignore[union-attr]
@@ -159,7 +160,7 @@ def _seed_declared() -> dict[str, bytes]:
 BAD: dict[str, tuple[Callable[[], dict[str, bytes]], str]] = {
     "a duplicate YAML key": (
         lambda: _with(SILVER, good()[SILVER].replace(b"        mask: [operator_note]\n", b"        mask: [operator_note]\n        mask: []\n")),
-        f"{SILVER}: line 73: key 'mask' appears twice"),
+        f"{SILVER}: line 93: key 'mask' appears twice"),
     "YAML that does not parse": (lambda: _with(PRODUCT, b"apiVersion: [v1.1.0\n"), f"{PRODUCT}: while parsing a flow sequence"),
     "a reserved word as a column, by the profile": (
         lambda: edited(SILVER, _set("schema", 0, "properties", 3, "name", value="current_user")),

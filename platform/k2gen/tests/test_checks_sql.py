@@ -109,6 +109,7 @@ CAUGHT = {
         "select * from {{ target.database }}.station_readings__base.silver_readings",
         "select * from station_readings__base.silver_readings",
         "{{ config(materialized='table', post_hook=\"insert into {{ this }} select * from sensor_net.station_readings__base.silver_readings\") }}",
+        "{{ config(materialized='table', post_hook=\"insert into {{ this }} select * from {{ source('station_readings', 'silver_readings') }}\") }}",
     ],
     "sql.definer-view": [
         "{{ config(materialized='view', view_security='definer') }}",
@@ -122,10 +123,7 @@ CAUGHT = {
         "{# {{ config(materialized='table') }} #}{{ config (materialized='view') }}",
         "{{ config(materialized='table') ~ '' }}",
         "{% set c = config(materialized='view') %}",
-        # model.model_config's match ends at the first `)` and `}}`, so a hook holding a Jinja call
-        # is unreadable to it: refused, which fails closed
-        "{{ config(materialized='table', post_hook=\"{{ var('ddl') }}\") }}",
-        "{{ config(materialized='table', post_hook=\"insert into {{ this }} select * from {{ source('station_readings', 'silver_readings') }}\") }}",
+        "{{ config(materialized='table', post_hook='x'",
     ],
     "sql.hook": [
         "{{ config(materialized='table', post_hook=['select 1', 'CREATE OR REPLACE VIEW ops_insight_build.daily_load.gold_daily_load AS SELECT 1 x']) }}",
@@ -135,6 +133,8 @@ CAUGHT = {
         "{{ config(materialized='table', post_hook=\"call ops_insight.system.rollback_to_snapshot('daily_load__base', 'gold_daily_load', 1)\") }}",
         "{{ config(materialized='table', post_hook='set session ops_insight.statistics_enabled = true') }}",
         "{{ config(materialized='table', post_hook='alter view ops_insight_build.daily_load.gold_daily_load set authorization user \"dbt_daily_load\"') }}",
+        # model.model_config skips quoted strings, so a hook holding a Jinja call is read and linted
+        "{{ config(materialized='table', post_hook=\"{{ var('ddl') }}\") }}",
     ],
     "sql.statement-ddl": [
         "{% set q = 'drop table x' %}{% do run_query(q) %}",

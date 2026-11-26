@@ -10,9 +10,13 @@
   "terms": {
     "redistribution": "forbidden"
   },
+  "issued": "2026-01-01T00:00:00Z",
+  "periodicity": "30 1 * * *",
+  "productFile": "documents/contracts/ops-insight/daily-load/product.odps.yaml",
   "inputs": [
     {
       "contractId": "sensor-net.station-readings.silver_readings",
+      "version": "1.0.0",
       "relation": "sensor_net.station_readings.silver_readings",
       "required": true,
       "maxLagMinutes": 120
@@ -22,6 +26,9 @@
     {
       "contractId": "ops-insight.daily-load.gold_daily_load",
       "relation": "ops_insight.daily_load.gold_daily_load",
+      "build": "dbt",
+      "testedRef": "audited",
+      "contractFile": "documents/contracts/ops-insight/daily-load/gold_daily_load.odcs.yaml",
       "layer": "gold",
       "version": "1.0.0",
       "purpose": "One row per day and station, the count and mean of its readings.",
@@ -32,7 +39,8 @@
           "required": true,
           "primaryKey": true,
           "description": "The UTC day of the readings.",
-          "time": "event"
+          "time": "event",
+          "primaryKeyPosition": 1
         },
         {
           "name": "station_id",
@@ -40,6 +48,7 @@
           "required": true,
           "primaryKey": true,
           "description": "The made-up station's code.",
+          "primaryKeyPosition": 2,
           "references": [
             {
               "relation": "sensor_net.station_readings.silver_readings",
@@ -63,6 +72,7 @@
           "unit": "degree Celsius"
         }
       ],
+      "retentionDays": null,
       "roles": [
         {
           "role": "full_reader",

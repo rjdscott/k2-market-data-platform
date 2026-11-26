@@ -10,6 +10,11 @@ data file (`scripts/check_docs.py`, `GOLDEN_MARK`); binary files and images stil
   (`platform/k2gen/INTERFACES.md`), holding each file at its release-relative path:
   `golden/lake/compiled/lake/storage-plan.json` is what `emit/lake.py` returns for
   `compiled/lake/storage-plan.json`.
+- An emitter's test may also keep goldens for the repository's own products, under
+  `<emitter>/repository/<release path>` (`golden/dbt/repository/compiled/dbt/...`): what the
+  emitter compiles from the synthetic products under `contracts/` (the access canary, the paused
+  hot tier), compared while each product exists. A file shared by every product (dbt's
+  `dbt_project.yml`, the catalog's `index.json`) is compared entry by entry, not byte for byte.
 - A file is compared byte for byte, except one whose emitted form is a list of records to a
   reader, Trino's `groups.txt`: its golden is `trino_rules/groups.yaml`, the group-to-members map
   the test parses the emitted file into.

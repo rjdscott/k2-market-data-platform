@@ -224,6 +224,43 @@ def test_model_config_is_one_parser_for_every_check() -> None:
             model.model_config(bad)
 
 
+# S07's cases (tests/test_checks_sql.py): a Jinja operator is a ValueError, never a SyntaxError, and
+# a hook string holding a Jinja call is read whole, since the scan skips quoted strings.
+@pytest.mark.parametrize("text", [
+    "{{ config(materialized='ta' ~ 'ble') }}",  # was a SyntaxError
+    "{{ config(materialized='table') ~ '' }}",
+    "{{ config(materialized='table' | upper) }}",
+    "{{ config(materialized='table', post_hook='x') ",  # never closed
+    "{{ config(materialized='table', post_hook='x'",
+    "{{ config(a={[1]: 2}) }}",  # literal_eval's TypeError
+])
+def test_model_config_refuses_with_a_value_error(text: str) -> None:
+    with pytest.raises(ValueError):
+        model.model_config(text)
+
+
+@pytest.mark.parametrize(("text", "hook"), [
+    ("{{ config(materialized='table', post_hook=\"{{ var('ddl') }}\") }}", "{{ var('ddl') }}"),
+    ("{{ config(materialized='table', post_hook=\"insert into {{ this }} select * from {{ source('a', 'b') }}\") }}",
+     "insert into {{ this }} select * from {{ source('a', 'b') }}"),
+    ("{{- config(materialized='table', post_hook='select max(x)) }} from y') -}}\nselect 1", "select max(x)) }} from y"),
+    ("{{config(materialized='table', post_hook='it\\'s (')}}", "it's ("),
+])
+def test_model_config_reads_a_hook_holding_jinja_or_brackets(text: str, hook: str) -> None:
+    assert model.model_config(text) == {"materialized": "table", "post_hook": hook}
+
+
+def test_dbt_seed_names_a_seed_as_dbt_model_names_a_table() -> None:
+    assert model.dbt_seed("access-canary", "event_offsets.csv") == "access_canary__event_offsets" == model.dbt_seed(
+        "access-canary", "seeds/event_offsets.csv") == model.dbt_model("access-canary", "event_offsets")
+
+
+def test_the_reserved_domain_names_repeat_no_reserved_word() -> None:
+    # TRINO_RESERVED is the parser's own list; RESERVED_DOMAIN_NAMES holds only the platform's names
+    assert not model.RESERVED_DOMAIN_NAMES.keys() & model.TRINO_RESERVED
+    assert not any("reserved word" in why for why in model.RESERVED_DOMAIN_NAMES.values())
+
+
 def _table(contract_id: str, kind: model.BuildKind) -> model.Table:
     return model.Table(path="x", contract_id=contract_id, name=contract_id.rsplit(".", 1)[1], version="1.0.0",
                        physical_name="p.t", purpose="p", owner="o", layer="silver", build=model.Build(kind, None),
@@ -534,8 +571,18 @@ def test_every_emitter_module_is_found_with_its_frozen_signature() -> None:
         assert typing.get_type_hints(module.emit) == {"model": Model, "return": dict[str, str]}, module
 
 
-def _finding(severity: str) -> Finding:
-    return Finding(code="x.y", severity=severity, path="p", message="m")  # type: ignore[arg-type]
+def _finding(severity: str, pointer: str | None = None) -> Finding:
+    return Finding(code="x.y", severity=severity, path="p", message="m", pointer=pointer)  # type: ignore[arg-type]
+
+
+def test_a_finding_s_pointer_is_optional_and_printed_by_check(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from k2gen import docset
+
+    assert Finding("x.y", "error", "p", "m").pointer is None
+    monkeypatch.setattr(docset, "read", lambda path: None)
+    monkeypatch.setattr(checks, "run", lambda docs, previous: [_finding("error", "/schema/0/quality/1"), _finding("warning")])
+    assert cli.main(["check", "--set", "set", "--previous", "none"]) == 1
+    assert capsys.readouterr().err.splitlines() == ["error x.y p /schema/0/quality/1: m", "warning x.y p: m"]
 
 
 def test_checks_run_stops_after_docs_reports_an_error(monkeypatch: pytest.MonkeyPatch) -> None:

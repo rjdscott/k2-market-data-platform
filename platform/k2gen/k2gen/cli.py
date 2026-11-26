@@ -277,7 +277,8 @@ def _spine(args: argparse.Namespace) -> int:
         previous = docset.read(args.previous) if args.previous else None
         findings = checks.run(docset.read(args.set_dir), previous)
         for f in findings:
-            print(f"{f.severity} {f.code} {f.path}: {f.message}", file=sys.stderr)
+            where = f"{f.path} {f.pointer}" if f.pointer else f.path
+            print(f"{f.severity} {f.code} {where}: {f.message}", file=sys.stderr)
         return 1 if any(f.severity == "error" for f in findings) else 0
     if args.command == "release":
         compose = args.compose or args.set_dir / "docker-compose.yml"  # k2gen.model.COMPOSE
