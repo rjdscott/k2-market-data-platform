@@ -19,6 +19,7 @@ warehouses and access.
 [layers and what they hold](#layers-and-what-they-hold) ·
 [Iceberg versions and housekeeping](#iceberg-versions-commits-and-housekeeping) ·
 [catalogs and access](#catalogs-warehouses-and-who-may-write) ·
+[keys, deletes and copies](#keys-deletes-and-copies) ·
 [dbt and the marts](#dbt-and-the-marts) · [quality and parity](#quality-and-parity) ·
 [Spark query mechanics](#spark-query-mechanics) ·
 [resources](#resources-memory-cpu-and-the-ceiling) · [tools](#tools) ·
@@ -595,6 +596,107 @@ through its owner, `dbt_governance`, and it is why `rules.json` grants every cat
 puts the fences in its schema and table rules: Trino requires a view owner to have `all` on
 each base table's catalog. Views are readable through Trino only.
 Where: [chapter 19](../architecture/19-lakehouse-and-domain-warehouses.md#views).
+
+---
+
+## Keys, deletes and copies
+
+### MinIO users, policies and the root credential
+
+MinIO's root credential is the one identity that can do everything: read, write and delete any
+object, erase old versions, and change bucket settings, users and policies. A MinIO user is a
+second access key and secret that root creates; a policy attached to it is a JSON list of S3
+actions (`s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, ...) on named bucket paths, and
+everything it does not list is refused, whoever asks. Until
+[ADR-054](ADR-054-scoped-storage-credentials.md) every engine holds root, and it was MinIO's
+factory-default pair.
+Where: `docker/lake/init-lake.sh`; the probed policy shapes in
+[the research note](../research/2026-11-26-storage-credentials-least-privilege.md) section 3.
+
+### Storage credential and remote signing
+
+Each Lakekeeper warehouse stores a storage credential, a MinIO key kept encrypted in its
+database with `LAKEKEEPER_ENCRYPTION_KEY`, which Lakekeeper uses to write each table's
+`metadata.json`, to validate the warehouse and to delete a dropped table's files. With remote
+signing on, an engine asks Lakekeeper to sign each of its S3 requests with that stored key
+instead of using its own, and Lakekeeper signs for any caller; with it off, each engine reaches
+MinIO with the key it was configured with. K2 has it on until [ADR-054](ADR-054-scoped-storage-credentials.md).
+Where: each warehouse's storage profile, `GET /management/v1/warehouse?project-id=...`.
+
+### Bucket versioning, delete markers and noncurrent versions
+
+With versioning on, MinIO keeps every version of every object. A plain delete only adds a
+delete marker, which hides the object from listings, and the data becomes a noncurrent version,
+still on disk and restorable (`mc undo`); a write over an existing name keeps the old version the
+same way. Only `s3:DeleteObjectVersion` erases one. A lifecycle rule, run by MinIO itself, erases
+noncurrent versions a set number of days after they became noncurrent. The cost is whatever is
+deleted, kept for those days.
+Where: [ADR-053](ADR-053-recoverable-deletes-and-guards.md) part 4.
+
+### Object lock
+
+Object lock (WORM, write once, read many) forbids erasing an object version before a
+retain-until date. In compliance mode nobody, root included, can shorten it; in governance mode
+an identity with a bypass permission can. It suits files that are written once and never
+replaced, such as a [landing zone](#landing-zone); it does not suit a compacted Iceberg table,
+which must delete the files it replaced.
+Where: [ADR-053](ADR-053-recoverable-deletes-and-guards.md) part 4.
+
+### Soft deletion, undrop, protection and force
+
+Three Lakekeeper settings that guard against a mistaken drop. With a warehouse's delete profile
+set to soft, a dropped table is hidden but kept for an expiration period, listed by
+`GET .../deleted-tabulars` and restored by `POST .../deleted-tabulars/undrop`; after the period a
+task removes it and deletes its files. A protected table, namespace or warehouse refuses a
+delete. `force=true` on a drop bypasses protection, and a forced recursive namespace drop deletes
+at once even under soft deletion. With `allow-all` authorization anyone may send `force`, so
+these stop mistakes, not a deliberate caller.
+Where: Lakekeeper's management API; [ADR-053](ADR-053-recoverable-deletes-and-guards.md) part 6.
+
+### Registering a table and the metadata chain
+
+An Iceberg table on storage is a chain of files: the `metadata.json` that lists every snapshot,
+each snapshot's manifest list, the manifests those name, and the data files the manifests list.
+Every path in them is absolute. Registering a table (`POST /catalog/v1/{prefix}/namespaces/{ns}/register`
+with a name and a `metadata.json` location) creates a catalog entry that points at an existing
+chain, so a table whose catalog entry was lost comes back with its rows, its history and its
+[snapshot summaries](#snapshot-summary-and-k2-properties), as long as the files are where its
+paths say. The catalog's pointer is the table: whoever moves it changes the table for every
+reader, and a table is recovered by pointing it back at a `metadata.json` that still exists.
+Where: [ADR-052](ADR-052-backup-and-restore-of-irreplaceable-tables.md) section 7 and
+[ADR-053](ADR-053-recoverable-deletes-and-guards.md) part 5;
+[chapter 17](../architecture/17-scale-out-path.md) section 7.
+
+### Irreplaceable tables
+
+The tables whose rows cannot be rebuilt from anything else: `raw.messages` (the
+[system of record](#raw-bronze-silver-gold)), `audit.checks` (the history of findings), the
+[SCD2](#scd2-security-master) dimensions `gold.dim_instrument` and `gold.dim_venue`, and each
+domain's `dq.dbt_test_results`. Every other table is rebuilt from them. They are what the host
+copy holds, what maintenance guards and what Lakekeeper's own key may not delete.
+Where: `docker/lake/irreplaceable.txt` once built; [ADR-052](ADR-052-backup-and-restore-of-irreplaceable-tables.md),
+[ADR-053](ADR-053-recoverable-deletes-and-guards.md), [ADR-054](ADR-054-scoped-storage-credentials.md).
+
+### Pinned table identity
+
+The pins are an append-only file on the host with one line per irreplaceable table: warehouse,
+name, table UUID and location, written once from the catalog by `make pin-irreplaceable` and
+changed only by the owner by hand. Jobs and init steps compare the catalog's answer with them and
+refuse on a difference, because the catalog is unauthenticated: deriving the identities from it
+on every start would let a rename move every protection onto an empty table of the same name.
+Where: `docker/lake/pins/irreplaceable.lock` once built; [ADR-053](ADR-053-recoverable-deletes-and-guards.md) part 1.
+
+### Host copy and restore point
+
+The host copy is a six-hourly copy of the [irreplaceable tables](#irreplaceable-tables), taken by
+a dedicated system account on the host, outside the Docker VM, plus an hourly dump of the catalog
+database. A restore point is one run's record of one table in it: the `metadata.json` to register,
+its snapshot id and commit time, the table's UUID and location, the record count summed from its
+manifests, and every object with its size and SHA-256. A restore goes back to that snapshot, not to
+a wall-clock moment. The recovery point is how old the newest restore point can be when the lake is
+lost; the lossless restore window is how long after it a restore may finish while Redpanda still
+holds every record since.
+Where: [ADR-052](ADR-052-backup-and-restore-of-irreplaceable-tables.md) sections 1 and 2.
 
 ---
 
