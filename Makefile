@@ -218,3 +218,7 @@ drop:  ## Copy, compare, then drop TARGET=<warehouse>.<namespace>[.<table>] or T
 # (docs/development/phase-001-interfaces.md). A target already defined above is
 # never redefined there. `help` greps every included file (-h: no file names).
 include mk/*.mk
+
+.PHONY: catalog-fence
+catalog-fence:  ## Dial every probe row of tests/access/expectations.yaml from its network: the catalog fence, refused or open as expected (ADR-059 part 7; FILE=<other expectations.yaml>)
+	bash scripts/verify/catalog-fence.sh $(FILE)
