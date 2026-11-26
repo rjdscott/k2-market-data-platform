@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://k2.invalid/schema/expectations.schema.json",
+  "title": "tests/access/expectations.yaml: the hand-written access expectations (A9)",
+  "description": "Frozen in phase 001. Written by hand and reviewed by the owner, never generated from the rules they test (ARCHITECTURE-V2 4.6). make access-verify runs every row; k2gen check refuses a policy, a base table or a denied layer that no row covers (S07). Part of the document set (k2gen.model.DOCUMENT_ROOTS), so the coverage check reads it. Each row is one of five shapes, told apart by its keys: a table read, a table denial, a statement, a network probe, a drift check.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["expectations"],
+  "properties": {
+    "expectations": {"description": "The rows, in any order.", "type": "array", "minItems": 1, "items": {"$ref": "#/$defs/row"}}
+  },
+  "$defs": {
+    "principal": {
+      "description": "The principal the row runs as.",
+      "type": "string",
+      "pattern": "^((p|svc)\\.[a-z0-9]+(-[a-z0-9]+)*|(dbt|pub)_[a-z][a-z0-9]*(_[a-z0-9]+)*)$"
+    },
+    "relation": {
+      "description": "<catalog>.<namespace>.<table>, optionally a $ metadata table such as t$files.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*(\\$[a-z_]+)?$"
+    },
+    "column": {"description": "A column name.", "type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "via": {
+      "description": "The endpoints the row runs through; REST joins in phase 003.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"enum": ["sql", "rest"]}
+    },
+    "row": {
+      "type": "object",
+      "anyOf": [
+        {"required": ["probe"]},
+        {"required": ["drift"]},
+        {"required": ["sql"]},
+        {"required": ["table"]}
+      ],
+      "allOf": [
+        {"if": {"required": ["probe"]}, "then": {"$ref": "#/$defs/probe"}},
+        {"if": {"required": ["drift"]}, "then": {"$ref": "#/$defs/drift"}},
+        {"if": {"required": ["sql"]}, "then": {"$ref": "#/$defs/statement"}},
+        {"if": {"required": ["table", "denied"]}, "then": {"$ref": "#/$defs/tableDenied"}},
+        {"if": {"required": ["table"], "not": {"required": ["denied"]}}, "then": {"$ref": "#/$defs/tableRead"}}
+      ]
+    },
+    "tableRead": {
+      "description": "The principal reads the table and sees exactly these columns, with these masked, rows at least this old, and never a row matching the predicate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal", "table", "visible"],
+      "properties": {
+        "principal": {"$ref": "#/$defs/principal"},
+        "table": {"description": "A reader name; never a base.", "$ref": "#/$defs/relation"},
+        "via": {"$ref": "#/$defs/via"},
+        "visible": {"description": "Every column SELECT * returns, in any order.", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
+        "masked": {"description": "Columns that must read as null in every row.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
+        "minRowAgeMinutes": {"description": "The newest visible row is at least this old, by the table's delay column.", "type": "integer", "minimum": 0},
+        "mustNotAppear": {"description": "A SQL predicate on the table that must match no visible row.", "type": "string", "minLength": 1}
+      }
+    },
+    "tableDenied": {
+      "description": "Every read of the table by the principal is refused.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal", "table", "denied"],
+      "properties": {
+        "principal": {"$ref": "#/$defs/principal"},
+        "table": {"description": "Any relation: a base, a bronze table, a foreign view, a $ table.", "$ref": "#/$defs/relation"},
+        "via": {"$ref": "#/$defs/via"},
+        "denied": {"description": "Always true: a denial row.", "const": true}
+      }
+    },
+    "statement": {
+      "description": "One SQL statement run as the principal, and how it must end.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal", "sql", "expect"],
+      "properties": {
+        "principal": {"$ref": "#/$defs/principal"},
+        "sql": {"description": "The statement, exactly as sent.", "type": "string", "minLength": 1},
+        "expect": {"description": "denied: an access denial; error: any other query error (a numeric version on a view); noBounds: SHOW STATS returns no low or high value.", "enum": ["denied", "error", "noBounds"]}
+      }
+    },
+    "probe": {
+      "description": "A network connection that must be refused, or open.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["probe", "expect"],
+      "properties": {
+        "probe": {
+          "description": "Where the connection starts and what it dials.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from", "target"],
+          "properties": {
+            "from": {"description": "The host, a container on a network (k2-net, k2-catalog), or a one-shot container (fetch, tools).", "enum": ["host", "k2-net", "k2-catalog", "fetch", "tools"]},
+            "target": {"description": "host:port.", "type": "string", "pattern": "^[a-z0-9.-]+:[0-9]+$"}
+          }
+        },
+        "expect": {"description": "refused: no TCP connection; open: one is made.", "enum": ["refused", "open"]}
+      }
+    },
+    "drift": {
+      "description": "The catalog drift check (ADR-061 condition 5): reader-namespace listings, view SQL and trino.run-as-owner equal the release.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["drift", "expect"],
+      "properties": {
+        "drift": {"description": "What is compared with the release.", "enum": ["catalog"]},
+        "expect": {"description": "No difference.", "const": "clean"}
+      }
+    }
+  }
+}

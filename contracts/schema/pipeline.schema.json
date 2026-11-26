@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://k2.invalid/schema/pipeline.schema.json",
+  "title": "compiled/products/<product id>/pipeline.json: what one product's DAG runs (A4)",
+  "description": "Frozen in phase 001, emitted by k2gen.emit.pipeline (S16), read by the DAG factory, the fetch container, the Spark loader and the dbt wrapper (phase 002). Names follow k2gen.model's naming helpers. The DAG's lock is its max_active_runs=1; there is no global lock. The first task hands {\"release\": \"<id>\", \"releasePath\": \"/k2/releases/<id>\"} to the rest by XCom.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["product", "fence", "domain", "status", "dagId", "schedule", "inputs", "maintain"],
+  "properties": {
+    "product": {"description": "<domain>.<product>.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
+    "fence": {"description": "The product's name with hyphens as underscores.", "$ref": "#/$defs/fence"},
+    "domain": {"description": "The product's domain.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
+    "status": {"description": "Its lifecycle state: only an active product's DAG is scheduled (ARCHITECTURE-V2 4.5).", "enum": ["active", "paused", "deprecated", "retired"]},
+    "dagId": {"description": "The DAG id: the fence.", "$ref": "#/$defs/fence"},
+    "schedule": {"$ref": "k2-v2.schema.json#/$defs/schedule"},
+    "connector": {"description": "The product's connector property, as its product file declares it; absent for a product built only from others.", "$ref": "k2-v2.schema.json#/$defs/connector"},
+    "landing": {
+      "description": "Where the connector lands what arrives: objects and their log for a fetch kind, a table for kafka (A5). Present exactly when connector is.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bucket", "prefix", "log"],
+          "properties": {
+            "bucket": {"description": "The landing bucket.", "const": "k2-landing"},
+            "prefix": {"description": "<domain>/<product>/; each object is <prefix><YYYY-MM-DD>/<sha256>.<ext>, written by conditional PUT.", "type": "string", "pattern": "^[a-z][a-z0-9-]*/[a-z][a-z0-9-]*/$"},
+            "log": {"description": "lake.<fence>.landing_files: one row per landed object.", "type": "string", "pattern": "^lake\\.[a-z][a-z0-9_]*\\.landing_files$"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["table"],
+          "properties": {"table": {"description": "lake.<fence>.landing: the records as read, offsets in the same commit.", "type": "string", "pattern": "^lake\\.[a-z][a-z0-9_]*\\.landing$"}}
+        }
+      ]
+    },
+    "bronze": {
+      "description": "The bronze tables the connector publishes by Spark write-audit-publish.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["table", "key", "values", "audits", "lineage", "branch", "checks"],
+        "properties": {
+          "table": {"description": "lake.<fence>.bronze_<name>.", "type": "string", "pattern": "^lake\\.[a-z][a-z0-9_]*\\.bronze_[a-z0-9_]+$"},
+          "key": {"description": "The columns a row is unique on: the contract's primaryKey, in position order.", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
+          "values": {"description": "The columns that carry the source's values: a changed value under an existing key fails the audit.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
+          "decimal": {"description": "Columns parsed as exact decimals.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
+          "patterns": {"description": "Column to the regular expression every value must match.", "type": "object", "propertyNames": {"$ref": "#/$defs/column"}, "additionalProperties": {"type": "string", "minLength": 1}},
+          "audits": {"description": "The parser's audit functions to run, by name: the contract's k2-connector quality checks.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
+          "lineage": {"description": "The column holding the landed object's sha256.", "$ref": "#/$defs/column"},
+          "branch": {"description": "The one fixed audit branch.", "const": "audit"},
+          "checks": {"description": "lake.<fence>.audit_checks: the audit's results, which the publish guard reads.", "type": "string", "pattern": "^lake\\.[a-z][a-z0-9_]*\\.audit_checks$"}
+        }
+      }
+    },
+    "build": {
+      "description": "The dbt build of the product's silver, gold and mart tables (A7).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "selector", "writer", "publisher", "outputs"],
+      "properties": {
+        "engine": {"description": "Only dbt so far; a code transform joins with its first product.", "const": "dbt"},
+        "selector": {"description": "The product's dbt selector: the fence.", "$ref": "#/$defs/fence"},
+        "writer": {"description": "The builder, dbt_<fence>.", "type": "string", "pattern": "^dbt_[a-z][a-z0-9_]*$"},
+        "publisher": {"description": "The publisher, pub_<fence>, who owns the reader views and moves the audited tags (ADR-061 condition 1). Provisional until the S01 gate reports.", "type": "string", "pattern": "^pub_[a-z][a-z0-9_]*$"},
+        "outputs": {"description": "The tables dbt writes, <domain>_build.<fence>__base.<table>.", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*_build\\.[a-z][a-z0-9_]*__base\\.[a-z][a-z0-9_]*$"}}
+      }
+    },
+    "inputs": {
+      "description": "The product's input ports, resolved to the bases its builder reads through the reader catalogs.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["contractId", "relation", "required", "maxLagMinutes"],
+        "properties": {
+          "contractId": {"description": "The input's contract id.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9_]*$"},
+          "relation": {"description": "<domain>.<fence>__base.<table> through the input's reader catalog, read at its audited snapshot; lake.<fence>.<table> for a connector table.", "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"},
+          "required": {"description": "A required input never audited stops the build, wrapper exit 4.", "type": "boolean"},
+          "maxLagMinutes": {"description": "The input port's maxLagMinutes; null for no bound.", "type": ["integer", "null"], "minimum": 0}
+        }
+      }
+    },
+    "maintain": {
+      "description": "The product's daily maintenance task, staggered by the compiler.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cron", "retainDays"],
+      "properties": {
+        "cron": {"description": "When it runs, UTC.", "type": "string", "pattern": "^\\S+( \\S+){4}$"},
+        "retainDays": {"description": "Snapshots older than this expire, never fewer than the 7-day floor for a table another product reads.", "type": "integer", "minimum": 1}
+      }
+    }
+  },
+  "dependentRequired": {"connector": ["landing"], "landing": ["connector"]},
+  "$defs": {
+    "fence": {"description": "A name with hyphens as underscores.", "type": "string", "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$"},
+    "column": {"description": "A column or function name.", "type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+  }
+}

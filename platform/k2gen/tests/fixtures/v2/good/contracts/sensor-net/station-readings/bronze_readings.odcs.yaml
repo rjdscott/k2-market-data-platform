@@ -1,0 +1,62 @@
+apiVersion: v3.2.0
+kind: DataContract
+id: sensor-net.station-readings.bronze_readings
+name: bronze_readings
+version: 1.0.0
+domain: sensor-net
+description:
+  purpose: One row per line of a landed file, typed as the synthetic feed wrote it.
+team:
+  name: sensor-team
+schema:
+  - id: bronze_readings
+    name: bronze_readings
+    physicalName: station_readings.bronze_readings
+    physicalType: table
+    properties:
+      - name: station_id
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 1
+        description: The made-up station's code.
+      - name: read_at
+        physicalType: timestamp(6) with time zone
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 2
+        description: When the station took the reading.
+        customProperties:
+          - property: time
+            value: event
+      - name: value_text
+        physicalType: varchar
+        required: true
+        description: The reading as the file wrote it.
+      - name: region
+        physicalType: varchar
+        description: The station's region.
+      - name: operator_note
+        physicalType: varchar
+        description: Free text the made-up operator attached.
+      - name: source_file_sha256
+        physicalType: varchar
+        required: true
+        primaryKey: true
+        primaryKeyPosition: 3
+        description: The landed file's sha256.
+    quality:
+      - name: value_parses
+        type: custom
+        engine: k2-connector
+        implementation: value_parses
+        description: Every value_text parses as a decimal.
+customProperties:
+  - property: layer
+    value: bronze
+  - property: build
+    value: connector
+  - property: backup
+    value: rebuild
+  - property: retention
+    value: 7

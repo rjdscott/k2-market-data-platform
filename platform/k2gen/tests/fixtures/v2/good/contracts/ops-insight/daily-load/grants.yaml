@@ -1,0 +1,3 @@
+grants:
+  - principal: svc.load-dashboard
+    role: full_reader

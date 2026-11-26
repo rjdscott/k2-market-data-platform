@@ -1,0 +1,4 @@
+# A hand-written example of k2gen release's --images input (manifest.schema.json#/$defs/images).
+trino: trinodb/trino@sha256:b612467da0474aef0a681e4fa9481311414fa2344b7ff7a4f1f23440fde7535f
+airflow-scheduler: k2-airflow:e7d3799ecc09
+fetch: fetch:4008294739ab
