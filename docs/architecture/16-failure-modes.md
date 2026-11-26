@@ -4,8 +4,8 @@
 > **Read this if** operators, reviewers of reliability claims.
 > **Before this** chapter 11.
 
-**Scope: the capture tier, Redpanda as capture and the lake see it, the lake tier, and
-the served ClickHouse tier.**
+**Scope: the capture tier, Redpanda as capture and the lake see it, and the lake tier.
+The served ClickHouse tier is paused ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)).**
 
 Every row names one `component × failure`, the exact signal that detects it, what that
 failure costs in data, the step that recovers it, and the artefact that proves the
@@ -47,12 +47,10 @@ and measured 102 s, because the binding cap was `message.timeout.ms`, not the 32
 queue. That is recorded in the row rather than quietly corrected, because the point of
 the proof column is to catch exactly this.
 
-**Thresholds are designed, and four have been made to fire:** `CaptureDown` (119 to
-165 s), `CaptureProduceErrors` (256 s), `ClickHouseDown` (160 s),
-`ClickHouseKafkaMessagesFailed` (4 s). Every `for:` and every bound quoted below comes
-from [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml),
-[`lake-alerts.yml`](../../docker/prometheus/rules/lake-alerts.yml) and
-[`clickhouse-alerts.yml`](../../docker/prometheus/rules/clickhouse-alerts.yml); the rest
+**Thresholds are designed, and two have been made to fire:** `CaptureDown` (119 to
+165 s), `CaptureProduceErrors` (256 s). Every `for:` and every bound quoted below comes
+from [`docker/prometheus/rules/capture-alerts.yml`](../../docker/prometheus/rules/capture-alerts.yml)
+and [`lake-alerts.yml`](../../docker/prometheus/rules/lake-alerts.yml); the rest
 are still evaluated against live series without having been made to fire. Three of them:
 `CaptureFeedStale`, `CaptureProduceStalled`, `CaptureBookDepthDegraded`, also
 carry `promtool` unit tests in
@@ -161,14 +159,7 @@ capture ones and both are worth reading before the table:
 
 ## ClickHouse tier
 
-Same columns, same rules. The tier is derived and rebuildable
-([ADR-026](../adr/ADR-026-four-layer-lake-and-gold-served-from-clickhouse.md)), which is
-why both rows below lose nothing.
-
-| component | failure | detection signal (metric/alert name + PromQL) | blast radius (lost vs delayed vs unaffected, name the data) | recovery (step + runbook link) | proof (chaos script or test path) |
-|---|---|---|---|---|---|
-| ClickHouse (served tier) | **Container down**, stopped, OOM-killed, host reboot | `ClickHouseDown`, `for: 2m`, `up{job="clickhouse"} == 0`. Grafana's ClickHouse panels go blank at the same moment; nothing else notices, because nothing else depends on the served tier | **Lost: nothing.** Gold is derived (ADR-026): the Kafka feeds resume from the consumer groups' committed offsets on return and consume the outage window from the topics (bounded by their 7-day retention), and anything older is a pull from the lake. **Delayed:** every query on `gold` for the duration. **Unaffected:** capture, Redpanda, the lake, every audit | `docker compose up -d clickhouse`; the feeds re-assign themselves. If the volume is gone, [clickhouse-rebuild-from-lake.md](../runbooks/clickhouse-rebuild-from-lake.md), the whole lake `gold.trades` in 4.4 s | `scripts/chaos/clickhouse-stop.sh`, **run 2026-08-27T08:21Z** (`--hold 150`): `ClickHouseDown` fired **160 s** after the stop; after `up -d` the server was healthy in **6 s** and all 4 feed consumers re-assigned in **7 s**; `gold.trades` row count equal before and after ([`results/2026-08-27.tsv`](../../scripts/chaos/results/2026-08-27.tsv)) |
-| ClickHouse (served tier) | **Undecodable record on a feed topic**, a foreign producer, a schema the queue table does not know, a chaos frame | `ClickHouseKafkaMessagesFailed`, `increase(ClickHouseProfileEvents_KafkaMessagesFailed[15m]) > 0`, no `for`; the row itself in `gold.feed_errors` with the bytes. `ClickHouseGoldFeedStale` is the backstop if a feed ever stalls anyway | **Lost: nothing.** `kafka_handle_error_mode = 'stream'` delivers the record with `_error` set; the MV routes it to `gold.feed_errors` and the partition keeps moving. Before that setting the same record stalled a partition permanently, twice, measured live on 2026-08-27 ([`docker/clickhouse/README.md`](../../docker/clickhouse/README.md)). **Unaffected:** the lake, which archives the same bytes with `schema_id NULL` and counts them | Read `gold.feed_errors`; if it is a schema evolution, `/schema-change` on the queue table; if it is a foreign producer, find it. Nothing to repair in ClickHouse | `scripts/chaos/clickhouse-corrupt-record.sh`, **run 2026-08-27T08:22Z:** JSON record on `trades.kraken` in `gold.feed_errors` after **4 s** with its error text, partition lag back to 0 after **4 s**, alert firing. The first run the same morning showed the alert *not* firing: Prometheus had never loaded the gold rule group (rules dir is a mount; a rule change needs `docker kill -s HUP k2-prometheus`), recorded in [observability.md](../operations/observability.md) |
+Its two scenarios, container down and an undecodable record on a feed topic, retired with the pause and return with the tier ([ADR-057](../adr/ADR-057-clickhouse-hot-tier-paused-during-platform-build.md)); their last runs are in [`results/2026-08-27.tsv`](../../scripts/chaos/results/2026-08-27.tsv).
 
 ---
 
@@ -181,16 +172,15 @@ number is what the pipeline would have produced, which is the failure
 | component | failure | detection signal (metric/alert name + PromQL) | blast radius (lost vs delayed vs unaffected, name the data) | recovery (step + runbook link) | proof (chaos script or test path) |
 |---|---|---|---|---|---|
 | replay / parser | **Parser drift**, a change to an adapter, the book state machine, decimal conversion or the record shape changes what a recorded frame produces | **CI, not Prometheus:** `cargo test` replays the synthetic fixtures in `services/capture-rust/tests/fixtures/` through `replay::run` and compares the JSONL bytes to the committed `.sha256`; a mismatch fails the `rust` job with the first differing digest. Live, a re-run of `scripts/replay-lake.sh` at the same snapshot id and conn_id prints a different sha256 from the `audit.checks` row that recorded the last one | **Nothing lost, nothing delayed:** the archive is untouched. What is lost is silent agreement: every notebook and parity result computed by the old parser is now a different function of the same bytes. **Unaffected:** capture, lake, ClickHouse | Intended change: land it with a new hash and a PR line saying what moved. Unintended: the diff of the first differing record is in the test output; fix the code, not the hash. No runbook, the test is the runbook | `services/capture-rust/tests/replay*.rs` (`replay_is_deterministic` ×3, `tests/replay_cli.rs`), run in CI on every PR; `scripts/replay-lake.sh` re-run 2026-08-28 twice at one id, same digest `1e5262c2…` |
-| parity gate | **Parity not run**, or skipped, before a tag: `make parity-ohlcv` / `make parity-bars` need the live stack and cannot run in GitHub's CI, so the guard is a human step | None automatic, deliberately stated: `tests/parity/pinned.json` carries the day and ids of the last passing run, and a tag whose date is later than every pinned day is a tag the gate did not cover. `/release-check` lists both targets | **Lost:** the guarantee that ClickHouse, the lake and DuckDB agree on the tagged numbers. **Unaffected:** the data itself; a disagreement found later is found, not fixed, by running the gate. With a known gap listed in the pin, the three-way guarantee holds for every minute of the pinned day except the listed one ([`tests/parity/README.md`](../../tests/parity/README.md#known-gaps)) | Run both targets; on failure the scripts print the first differing rows and the reference is the arbiter. Re-pin with `--pin-current` only on a green run, then tag the new snapshots: the gate accepts a pin only on `main`'s lineage or named by its own `parity_<day>` tag and stops on any other, so an untagged pin fails about a week later, when expiry removes it. A run ending `PARITY: ok (1 known gap applied, see above)` is green only if the release report names the applied gap with its `audit_ref` | Last runs: `scripts/parity-ohlcv.sh` 2026-08-27 (`pinned.json` top-level); `scripts/parity-bars.sh --pin-current 2026-08-26` on 2026-08-28, equal row counts against the lake and against the reference, 0 differ |
+| parity gate | **Parity not run**, or skipped, before a tag: `make parity-ohlcv` / `make parity-bars` need the live stack and cannot run in GitHub's CI, so the guard is a human step | None automatic, deliberately stated: `tests/parity/pinned.json` carries the day and ids of the last passing run, and a tag whose date is later than every pinned day is a tag the gate did not cover. `/release-check` lists both targets | **Lost:** the guarantee that the lake, DuckDB and dbt agree on the tagged numbers (ClickHouse is skipped while paused, ADR-057). **Unaffected:** the data itself; a disagreement found later is found, not fixed, by running the gate. With a known gap listed in the pin, the three-way guarantee holds for every minute of the pinned day except the listed one ([`tests/parity/README.md`](../../tests/parity/README.md#known-gaps)) | Run both targets; on failure the scripts print the first differing rows and the reference is the arbiter. Re-pin with `--pin-current` only on a green run, then tag the new snapshots: the gate accepts a pin only on `main`'s lineage or named by its own `parity_<day>` tag and stops on any other, so an untagged pin fails about a week later, when expiry removes it. A run ending `PARITY: ok (1 known gap applied, see above)` is green only if the release report names the applied gap with its `audit_ref` | Last runs: `scripts/parity-ohlcv.sh` 2026-08-27 (`pinned.json` top-level); `scripts/parity-bars.sh --pin-current 2026-08-26` on 2026-08-28, equal row counts against the lake and against the reference, 0 differ |
 
 ## What this page does not cover
 
-- **The served tier's internal failures** (a merge that never completes, a disk-full
-  ClickHouse): not injected; the two ClickHouse rows above cover loss of the container
-  and of a feed.
+- **The served ClickHouse tier**, paused (ADR-057): its two rows retired with the pause,
+  and its internal failures (a merge that never completes, a full disk) were never injected.
 - **Correlated failure**, with one exception. Every row but the engine-restart one is a
-  single component failing alone. On a single host with one broker, one ClickHouse and
-  one MinIO, a machine reboot fires most of this page at once, the engine-restart row
+  single component failing alone. On a single host with one broker and one MinIO, a
+  machine reboot fires most of this page at once, the engine-restart row
   records what that actually looked like on 2026-08-26 (~60 s, no manual ordering),
   which is evidence that the correlated case is survivable, not that it is documented.
   The recovery *order*, for the case where it is not survivable, is still a runbook this

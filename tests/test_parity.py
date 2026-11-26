@@ -1177,6 +1177,25 @@ def test_pin_current_takes_a_day_then_the_rest(tmp_path):
     assert _wrapper(tmp_path / "again", "--pin-current", "2001-01-02", "--dbt")[-2:] == ["--write-pin", "--dbt"]
 
 
+def test_the_gate_stands_clickhouse_down_visibly_while_it_is_paused():
+    """ADR-057: `make gates` reaches parity-ohlcv, which prints a SKIP line naming the ADR and
+    passes --skip-clickhouse, with dbt as the third side. A dry run: nothing is executed."""
+    import os
+    import subprocess
+
+    env = {k: v for k, v in os.environ.items() if k not in ("MAKEFLAGS", "MFLAGS", "MAKELEVEL")}
+
+    def dry(*args):
+        return subprocess.run(["make", "-n", "-s", *args], cwd=Path(__file__).parent.parent, env=env,
+                              capture_output=True, text=True, check=True, timeout=30).stdout.splitlines()
+
+    assert ": parity-ohlcv" in dry("MAKE=:", "gates")
+    assert dry("parity-ohlcv") == [
+        'echo "SKIP parity-ohlcv side A, ClickHouse: the hot tier is paused (ADR-057)"',
+        "scripts/parity-ohlcv.sh --skip-clickhouse --dbt",
+    ]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Known gaps: `known_gaps` in tests/parity/pinned.json, scripts/parity_ohlcv.py
 #

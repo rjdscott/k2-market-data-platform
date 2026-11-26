@@ -43,18 +43,6 @@
       "captured_at": "2026-11-25T20:34:46Z"
     },
     {
-      "file": "08-clickhouse.png",
-      "url": "http://localhost:3000/d/clickhouse-v2",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:49Z"
-    },
-    {
-      "file": "09-clickhouse-query.png",
-      "url": "http://localhost:8123/play",
-      "git_sha": "v3-phase-e-69-g27eb1c5",
-      "captured_at": "2026-11-25T20:34:51Z"
-    },
-    {
       "file": "10-airflow-dags.png",
       "url": "http://localhost:8090/dags",
       "git_sha": "v3-phase-e-69-g27eb1c5",
