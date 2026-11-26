@@ -44,7 +44,7 @@ from typing import Any
 import yaml
 
 from k2gen import ddl
-from k2gen.cli import LAKE_SQL, SUFFIX, fence
+from k2gen.cli import LAKE_SQL, SUFFIX, adr_file, fence
 
 GENERATED_DDL = "docker/lake/ddl/generated"
 RETENTION = "docker/lake/generated/retention.json"
@@ -120,9 +120,29 @@ def _columns(doc: dict[str, Any], lake: dict[str, ddl.Table]) -> list[str]:
     return ["| Column | Type | Description |", "|---|---|---|", *[f"| `{n}` | `{t}` | {_cell(d)} |" for n, t, d in rows]]
 
 
-def _page(product: dict[str, Any], tables: dict[str, Contract], lake: dict[str, ddl.Table], home: dict[str, str]) -> str:
+def _status(product: dict[str, Any], tables: dict[str, Contract]) -> str:
+    """running, paused, or `3 of 7 tables paused`: the product's outputs by their `paused` mark (ADR-050)."""
+    paused = [t for t in product["outputs"] if "paused" in tables[t][2]]
+    if not paused:
+        return "running"
+    return "paused" if len(paused) == len(product["outputs"]) else f"{len(paused)} of {len(product['outputs'])} tables paused"
+
+
+def _table_status(props: dict[str, Any], root: Path, up: str) -> str:
+    mark = props.get("paused")
+    if mark is None:
+        return "running"
+    adr = adr_file(root, mark["adr"])
+    link = f"[{mark['adr']}]({up}/{adr.relative_to(root).as_posix()})" if adr else mark["adr"]
+    return f"paused since {mark['since']}, {link}: the data is readable, nothing new arrives"
+
+
+def _page(product: dict[str, Any], tables: dict[str, Contract], lake: dict[str, ddl.Table], home: dict[str, str], root: Path) -> str:
     key = f"{product['domain']}/{product['name']}"
     up = "../../.."  # docs/products/<domain>/ to the repository root
+    status = _status(product, tables)
+    if status == "paused":  # every table carries a mark; the first one speaks for the product
+        status = _table_status(tables[product["outputs"][0]][2], root, up)
     lines = [
         f"<!-- {HEADER} -->",
         f"# {product['name']}",
@@ -135,6 +155,7 @@ def _page(product: dict[str, Any], tables: dict[str, Contract], lake: dict[str, 
         f"| Owner | `{product['owner']}` |",
         f"| Kind | {product['kind']} |",
         f"| Lifecycle | {product['lifecycle']} |",
+        f"| Status | {status} |",
         f"| Descriptor | [`contracts/{key}/product.yaml`]({up}/contracts/{key}/product.yaml) |",
         "",
         "## Inputs and outputs",
@@ -185,6 +206,7 @@ def _page(product: dict[str, Any], tables: dict[str, Contract], lake: dict[str, 
             "",
             "| | |",
             "|---|---|",
+            f"| Status | {_table_status(props, root, up)} |",
             f"| Classification | {props['classification']} |",
             f"| Entitlement | {props['entitlement']} |",
             f"| Retention | snapshots expire after {props['retention']} days; no row is deleted ([ADR-032]({up}/{ADR})) |",
@@ -200,7 +222,7 @@ def _page(product: dict[str, Any], tables: dict[str, Contract], lake: dict[str, 
     return "\n".join(lines) + "\n"
 
 
-def _index(domains: dict[str, Any], products: list[dict[str, Any]]) -> str:
+def _index(domains: dict[str, Any], products: list[dict[str, Any]], tables: dict[str, Contract]) -> str:
     lines = [
         f"<!-- {HEADER} -->",
         "# Data products",
@@ -217,8 +239,8 @@ def _index(domains: dict[str, Any], products: list[dict[str, Any]]) -> str:
         if not mine:
             lines.append("No product yet.")
             continue
-        lines += ["| Product | Lifecycle | Outputs and marts |", "|---|---|---|"]
-        lines += [f"| [{p['name']}]({name}/{p['name']}.md) | {p['lifecycle']} | {_built(p)} |" for p in mine]
+        lines += ["| Product | Lifecycle | Status | Outputs and marts |", "|---|---|---|---|"]
+        lines += [f"| [{p['name']}]({name}/{p['name']}.md) | {p['lifecycle']} | {_status(p, tables)} | {_built(p)} |" for p in mine]
     return "\n".join(lines) + "\n"
 
 
@@ -226,7 +248,7 @@ def _built(product: dict[str, Any]) -> str:
     return _code(product["outputs"] + [m["table"] for m in product.get("marts", [])])
 
 
-def _product_table(domains: dict[str, Any], products: list[dict[str, Any]]) -> str:
+def _product_table(domains: dict[str, Any], products: list[dict[str, Any]], tables: dict[str, Contract]) -> str:
     """Every product in one table, in domains.yaml order: what docs/operations/data-catalog.md links."""
     rows = [p for name in domains for p in products if p["domain"] == name]
     return "\n".join(
@@ -239,9 +261,9 @@ def _product_table(domains: dict[str, Any], products: list[dict[str, Any]]) -> s
             "a mart is `<catalog>.<schema>.<table>`, in its domain's own catalog. Each product's page has",
             "its inputs, classification, retention and columns; [the index](README.md) has each domain.",
             "",
-            "| Domain | Product | Owner | Lifecycle | Tables and marts |",
-            "|---|---|---|---|---|",
-            *[f"| [{p['domain']}](README.md#{p['domain']}) | [{p['name']}]({p['domain']}/{p['name']}.md) | `{p['owner']}` | {p['lifecycle']} | {_built(p)} |" for p in rows],
+            "| Domain | Product | Owner | Lifecycle | Status | Tables and marts |",
+            "|---|---|---|---|---|---|",
+            *[f"| [{p['domain']}](README.md#{p['domain']}) | [{p['name']}]({p['domain']}/{p['name']}.md) | `{p['owner']}` | {p['lifecycle']} | {_status(p, tables)} | {_built(p)} |" for p in rows],
         ]
     ) + "\n"
 
@@ -486,9 +508,9 @@ def render(root: Path) -> dict[str, str]:
     out[CONTRACT_SCHEMAS] = json.dumps({t: _contract_schema(doc, props, lake) for t, (_, doc, props) in tables.items()}, indent=2, sort_keys=True) + "\n"
     out |= {f"{GENERATED_DDL}/{t}.sql": _table_ddl(*tables[t]) for t in inline}
     out[f"{GENERATED_DDL}/README.md"] = _ddl_readme(inline)
-    out |= {f"{PAGES}/{p['domain']}/{p['name']}.md": _page(p, tables, lake, home) for p in products}
-    out[f"{PAGES}/README.md"] = _index(domains, products)
-    out[PRODUCT_TABLE] = _product_table(domains, products)
+    out |= {f"{PAGES}/{p['domain']}/{p['name']}.md": _page(p, tables, lake, home, root) for p in products}
+    out[f"{PAGES}/README.md"] = _index(domains, products, tables)
+    out[PRODUCT_TABLE] = _product_table(domains, products, tables)
     out[WAREHOUSES] = _warehouses(domains)
     out[TRINO_RULES] = _rules(domains)
     out |= {f"{CATALOGS}/{fence(d)}.properties": _catalog(d, spec, local=False) for d, spec in domains.items()}

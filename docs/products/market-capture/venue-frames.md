@@ -9,6 +9,7 @@ Each venue frame decoded from raw.messages into the venue's own field names, typ
 | Owner | `capture-team` |
 | Kind | source-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/market-capture/venue-frames/product.yaml`](../../../contracts/market-capture/venue-frames/product.yaml) |
 
 ## Inputs and outputs
@@ -46,6 +47,7 @@ Binance combined-stream trade frames, one row per frame, field names as sent.
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -76,6 +78,7 @@ Binance top-20 partial-book frames, one row per frame, levels as the two-string 
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -106,6 +109,7 @@ Kraken v2 trade channel frames, snapshot and update, one row per frame.
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -137,6 +141,7 @@ Kraken v2 book channel frames, snapshot and update, one row per frame. The check
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -168,6 +173,7 @@ Kraken instrument channel frames: the pair precisions the book checksum is defin
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -199,6 +205,7 @@ Coinbase Advanced Trade market_trades channel frames, snapshot and update, one r
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |
@@ -231,6 +238,7 @@ Coinbase Advanced Trade level2 channel frames, snapshot and update, one row per 
 
 | | |
 |---|---|
+| Status | running |
 | Classification | internal |
 | Entitlement | realtime |
 | Retention | snapshots expire after 7 days; no row is deleted ([ADR-032](../../../docs/adr/ADR-032-odcs-contracts-and-k2gen.md)) |

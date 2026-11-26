@@ -9,6 +9,7 @@ Every quality result the platform records, in one shape: the lake jobs' checks f
 | Owner | `platform-team` |
 | Kind | consumer-aligned |
 | Lifecycle | draft |
+| Status | running |
 | Descriptor | [`contracts/governance/quality-results/product.yaml`](../../../contracts/governance/quality-results/product.yaml) |
 
 ## Inputs and outputs

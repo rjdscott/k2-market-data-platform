@@ -106,7 +106,8 @@ declared shape lands with lineage and NULL venue columns rather than blocking th
 snapshot range for every run after it; the nightly `bronze_unparseable` audit fails
 on any such row, and `bronze_schema_drift` samples 0.1 % of the last day's raw
 frames to catch the one thing a PERMISSIVE parse loses silently, a key the venue
-added that has no column. Both in `docs/runbooks/lake-audit-failed.md` §6–§7.
+added that has no column. A sample that holds no frame of the table's stream files
+no row, never a pass over nothing. Both in `docs/runbooks/lake-audit-failed.md` §6–§7.
 
 **Why `spark.sql.caseSensitive=true`.** Binance's trade payload carries both `e`
 and `E`. The session builder sets it for every lake job; every other column is

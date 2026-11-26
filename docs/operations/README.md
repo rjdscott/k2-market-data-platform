@@ -247,6 +247,7 @@ Line by line (`scripts/health.sh`):
 | `(2) <venue>` | Trades of that venue in ClickHouse `gold.trades` with an exchange timestamp in the last 2 minutes. Never FAIL | `WARN (0 trades/2min)`, or **a venue missing from the list** (only venues with rows print): nothing reached the hot tier from it. `WARN (no rows ...)` for all: ClickHouse unreachable, or nothing is flowing | [capture-feed-stale.md](../runbooks/capture-feed-stale.md); everything silent: [failure-recovery.md](../runbooks/failure-recovery.md) sections 1 and 2 |
 | `(2) capture-<venue> metrics` | Reads each capture's `/metrics` (port 8082 inside the compose network, through a throwaway `curlimages/curl` container) and prints the last-message time per stream, in Unix seconds. It does not judge staleness | `WARN (no k2_capture_last_message_ts_seconds yet ...)`: the capture is not serving metrics | [capture-down.md](../runbooks/capture-down.md); staleness per stream: `docker exec k2-capture-<venue> /k2-capture healthcheck` |
 | `(3) lake commit age` | Seconds since the newest commit to any lake table, from Prometheus (`time() - max(k2_lake_last_commit_ts_seconds)`), at most 1800 (`K2_HEALTH_LAKE_MAX_AGE`) | `FAIL (Prometheus has no k2_lake_last_commit_ts_seconds ...)`: Prometheus is down (`curl -s localhost:9090/-/healthy`), the `lake-metrics` exporter is down, or the lake never committed. `FAIL (last commit <n>s ago ...)`: the lake is stale | Prometheus down: `docker compose up -d --no-deps prometheus` (safe at any time, section 6); exporter: [lake-recovery.md](../runbooks/lake-recovery.md); stale: [lake-ingest-lag.md](../runbooks/lake-ingest-lag.md) section 2 |
+| `(4) <venue> book_capture` | Each capture's `k2_capture_book_capture` (what it read at start, from its `/metrics`) against `book_capture` in the host's `config/instruments.yaml` and in the copy `spark-iceberg` mounts, which the nightly book-audit skip reads ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)). Tested against a fake `docker` (`tests/test_health.py`); not yet recorded from the live stack | `FAIL (... capture-<venue> was not recreated ...)`: the file changed and the process did not; the line names the recreate. `FAIL (... spark-iceberg's mounted copy is stale ...)`. `FAIL (... exports no k2_capture_book_capture ...)`: an image older than the switch. **During the switch's rollout, or a rollback to the old image, this FAILs for every capture not yet recreated: expected.** `WARN (no metrics ...)`: the capture is down or starting | [Pause or resume one venue's order book](#pause-or-resume-one-venues-order-book), below |
 | `(3) last lake_ingest run` | The newest finished scheduled `lake_ingest` run of the last 30 minutes, from the Airflow CLI in `k2-airflow-scheduler`. `PASS` on `success`, and on skips while `lake_maintenance` or `lake_rebuild` holds the lake's writer lock (a run that finds the lock taken exits 75 and is marked skipped) | `FAIL (the Airflow CLI ... did not answer)`: the scheduler is down. `FAIL (no lake_ingest run finished ...)`: the DAG is paused or stale, or the scheduler stopped (a deliberate pause shows this too). `FAIL (<run> failed ...)`. `WARN (1 or 2 skipped ...)`, then `FAIL` at 3 skipped with nothing holding the lock | [airflow-scheduling.md](../runbooks/airflow-scheduling.md): section 1, sections 5 and 1, section 2, section 3 |
 
 Beyond `make health`, three reads worth a glance once a day:
@@ -536,6 +537,111 @@ three lake script paths, and its `airflow_task_in_flight` reads an Airflow CLI t
 answer as "nothing in flight" and counts only `queued` and `running` tasks, so it can report
 idle when it cannot tell. Not changed in this pass.
 
+### Pause or resume one venue's order book
+
+The switch is `book_capture` in `config/instruments.yaml`: one YAML `true` or `false` per
+venue, required ([ADR-050](../adr/ADR-050-order-book-capture-paused-during-platform-build.md)). `false` means that venue's capture does not subscribe to its
+book channel; trades carry on unchanged. A capture reads the file once, at start, and **refuses
+to start** if the key is missing or not a boolean, so the order below is not optional. Three
+copies of the switch must agree, each one read:
+
+```bash
+grep -A3 '^book_capture:' config/instruments.yaml                                     # the file
+docker exec k2-spark-iceberg grep -A3 '^book_capture:' /home/iceberg/config/instruments.yaml   # the lake's copy
+curl -sG localhost:9090/api/v1/query --data-urlencode 'query=k2_capture_book_capture' \
+  | jq -r '.data.result[] | "\(.metric.exchange) \(.value[1])"'                        # each capture: 1 on, 0 off
+make health                                                                           # step (4) compares all three
+```
+
+**Why the order matters.** `spark-iceberg` mounts `config/instruments.yaml` as one file, pinned
+by its inode, and the captures mount `config/` as a directory, held by all three at once. A
+`git pull` replaces the file by renaming a new one over it, and a container recreated while
+another still holds the old inode reads the **old** file ([docker/README.md](../../docker/README.md),
+"A bind-mounted script runs its old contents"): a new capture binary would then find no
+`book_capture` and crash-loop. Writing the new content into the same inode is what every holder
+sees at once.
+
+**First rollout of the image that has the switch** (pull request 1 of ADR-050, every venue
+`true`), in this order:
+
+```bash
+# 1. After the merge: the new registry into the SAME inode, then the pull, then the inode check.
+ino=$(stat -c %i config/instruments.yaml)
+git fetch origin && git show origin/main:config/instruments.yaml > config/instruments.yaml \
+  && git add config/instruments.yaml && git pull --ff-only
+[ "$(stat -c %i config/instruments.yaml)" = "$ino" ] && echo "inode kept" || echo "INODE CHANGED: stop"
+
+# 2. What the lake sees: both counts at least 1. Otherwise recreate spark-iceberg and
+#    lake-metrics between ingest runs and before 03:00 UTC (the pause pattern above).
+docker exec k2-spark-iceberg grep -c book_capture /home/iceberg/config/instruments.yaml /home/iceberg/lake/instruments.py
+
+# 3. Keep the running image for the rollback, then build. No bare `docker compose up -d`
+#    until step 4 is done: it would recreate all three captures at once.
+docker tag k2-capture:v3 k2-capture:pre-adr050
+make build-capture
+```
+
+Step 4 recreates **binance, then coinbase, then kraken**, one at a time, each passing all of
+this before the next. A recreate loses that venue's trades for the seconds no connection is
+open, which is why never two at once:
+
+```bash
+# 4. One venue.
+v=binance
+docker compose up -d --force-recreate --no-deps capture-$v
+sleep 10; docker logs k2-capture-$v 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -m1 -E 'book_capture=|missing field'
+#    book_capture=true, or: "missing field `book_capture`" means the container read the old file.
+#    Then at once: docker tag k2-capture:pre-adr050 k2-capture:v3 and recreate it again (rollback).
+wait_up capture-$v                                     # the function in step 4 above: healthy
+curl -sG localhost:9090/api/v1/query --data-urlencode "query=k2_capture_book_capture{exchange=\"$v\"}" \
+  | jq -r '.data.result[].value[1]'                    # 1
+curl -sG localhost:9090/api/v1/query --data-urlencode 'query=time() - k2_capture_last_message_ts_seconds{exchange="binance",stream="pong"}' \
+  | jq -r '.data.result[].value[1]'                    # binance only: under 20 (seconds)
+```
+
+**The 15-minute gap gate**, before the next venue: for that venue no sequence gap and no
+reconnect in 15 minutes, and nothing firing. Fifteen minutes is longer than
+`CaptureSequenceGaps`'s 10-minute window plus its 5-minute `for`, so a gap the change caused has
+had time to alert. A recreate starts both counters at zero, so any increase is this connection's:
+
+```bash
+curl -sG localhost:9090/api/v1/query --data-urlencode "query=sum by (exchange) (increase(k2_capture_gaps_total{exchange=\"$v\"}[15m])) + on (exchange) sum by (exchange) (increase(k2_capture_reconnects_total{exchange=\"$v\"}[15m]))" \
+  | jq -r '.data.result[] | "\(.metric.exchange) \(.value[1])"'      # 0
+curl -s localhost:9090/api/v1/alerts | jq -r '.data.alerts[] | "\(.labels.alertname)\t\(.state)"'   # nothing
+```
+
+**`make health` step (4) FAILs for every capture not yet recreated during this rollout** (no
+gauge yet): that is expected, and the FAIL lines are the list of what is left. The gate is also
+where Binance's new liveness is proven: a WebSocket Ping every 15 s, its Pong (or Binance's own
+Ping) watched as the `pong` stream at 60 s. A `pong` past 60 s reconnects the session; if that
+repeats, roll back.
+
+```bash
+# 5. Once all three run the new image: load the alert rules, and check they read the gauge.
+docker kill -s HUP k2-prometheus
+curl -s localhost:9090/api/v1/rules | jq -r '.data.groups[].rules[]
+  | select(.name=="CaptureBookDepthDegraded" or .name=="CaptureChecksumFailure") | "\(.name): \(.query)"'
+#    each query ends: unless on (exchange) (k2_capture_book_capture == 0)
+make health                                            # step (4): PASS for all three
+```
+
+The rules query above was run read-only on 2026-11-26 before this change: it printed both rules
+without the gauge, as expected then.
+
+**Rollback**, per venue, any time: `docker tag k2-capture:pre-adr050 k2-capture:v3`, then
+`docker compose up -d --force-recreate --no-deps capture-<venue>`, one venue at a time. The old
+binary ignores `book_capture` and subscribes to books whatever the file says; the two book
+alerts still watch it, because only a gauge reading 0 silences them; `make health` step (4)
+FAILs for it ("exports no k2_capture_book_capture") for as long as the rollback lasts. The
+registry needs no rollback: maintenance reads the switch without ever stopping on it, and files a
+failed `book_capture_switch` row in `lake.audit.checks` when it cannot.
+
+**Later, changing one venue's switch** is the same steps 1, 2 and 4 with no image build: the
+change is a pull request carrying the venue's switch and its contracts' `paused` marks together
+(`tests/test_contracts.py` fails otherwise), the registry goes in with step 1's in-place write,
+and `book_capture=` in step 4's log line and the gauge show the new value. ADR-050 sections 7
+and 8 have the order to pause and to resume in, and the operator row that records the window.
+
 ### The bind-mount rule
 
 A bind mount makes a container read this checkout's copy of a file or directory, and Docker
@@ -601,9 +707,9 @@ command and step 5 after it.
 | `docker/lake/generated/warehouses.txt` (a new data domain from `make generate`) | the `lake-init` one-shot creates its warehouse | `docker compose up -d --force-recreate --no-deps lake-init`, then the `docker/trino/etc/` row; [`docker/trino/README.md`](../../docker/trino/README.md) has the order |
 | `docker/clickhouse/config.xml`, `users.xml` | file mounts | `docker compose up -d --force-recreate --no-deps -t 60 clickhouse` |
 | `docker/clickhouse/ddl/` | only an empty volume | apply by hand: [`docker/clickhouse/README.md`](../../docker/clickhouse/README.md#applying-it-to-a-running-server) |
-| `config/instruments.yaml` | the captures at start; file mount in `spark-iceberg` | recreate the three `capture-*` one at a time (each loses its venue's data while down), and `spark-iceberg` under the pause |
+| `config/instruments.yaml` | the captures at start; file mount in `spark-iceberg` | recreate the three `capture-*` one at a time (each loses its venue's data while down), and `spark-iceberg` under the pause. A `book_capture` change goes in **before** the pull, into the same inode: [Pause or resume one venue's order book](#pause-or-resume-one-venues-order-book) |
 | `docker/redpanda/`, `schemas/avro/` | the `redpanda-init` one-shot | `docker compose up -d --force-recreate --no-deps redpanda-init`: every step is create-if-missing or converge |
-| `services/capture-rust/` | the image `k2-capture:v3` | `make build-capture`, then recreate the three captures one at a time |
+| `services/capture-rust/` | the image `k2-capture:v3` | `make build-capture`, then recreate the three captures one at a time. The first image with `book_capture` (ADR-050) has its own order: [Pause or resume one venue's order book](#pause-or-resume-one-venues-order-book) |
 | `docker/spark/Dockerfile` | the image `k2-spark-iceberg` | `docker compose build spark-iceberg`, then under the pause `docker compose up -d --force-recreate --no-deps spark-iceberg` |
 | `docker/lake-metrics/Dockerfile` | the image `k2-lake-metrics` | `docker compose build lake-metrics`, then recreate `lake-metrics` |
 | `docker-compose.yml` | compose | `docker compose up -d --no-deps <each changed service>`, under the pause where section 6 asks for one |

@@ -32,7 +32,8 @@ const RECV_LAG_BUCKETS: &[f64] = &[
 ];
 
 /// Install the exporter and register every metric this binary emits.
-/// `symbols` is every instrument this process subscribes to; `checksummed_symbols`
+/// `book_symbols` is every instrument whose book this process keeps, and empty
+/// while the venue's `book_capture` is false (ADR-050); `checksummed_symbols`
 /// is the subset for a venue that publishes a book checksum, and empty for one
 /// that does not. Binance and Coinbase publish none, so seeding 23
 /// permanently-zero `k2_capture_checksum_failures_total` series for them
@@ -41,8 +42,9 @@ pub fn install(
     port: u16,
     exchange: &'static str,
     streams: &[&'static str],
-    symbols: &[String],
+    book_symbols: &[String],
     checksummed_symbols: &[String],
+    book_capture: bool,
 ) -> Result<()> {
     let addr: SocketAddr = ([0, 0, 0, 0], port).into();
     PrometheusBuilder::new()
@@ -56,7 +58,13 @@ pub fn install(
         .with_context(|| format!("binding the metrics listener on {addr}"))?;
 
     describe();
-    zero(exchange, streams, symbols, checksummed_symbols);
+    seed(
+        exchange,
+        streams,
+        book_symbols,
+        checksummed_symbols,
+        book_capture,
+    );
     gauge!("k2_capture_build_info", "version" => env!("CARGO_PKG_VERSION"), "git_sha" => GIT_SHA)
         .set(1.0);
     Ok(())
@@ -145,9 +153,30 @@ fn describe() {
          the healthcheck subcommand both read this."
     );
     describe_gauge!(
+        "k2_capture_book_capture",
+        "1 if this process subscribed to the venue's order book, 0 if not: the registry's \
+         book_capture as read at start (ADR-050). What the process does, as opposed to what \
+         the file says now; scripts/health.sh compares the two."
+    );
+    describe_gauge!(
         "k2_capture_build_info",
         "Always 1. Carries the binary version and git sha as labels."
     );
+}
+
+/// Every series `install` creates before the first frame: the zeroed ones, and
+/// `k2_capture_book_capture` set to what the registry said. Public so a test can
+/// render exactly what `run` seeds under a local recorder.
+pub fn seed(
+    exchange: &'static str,
+    streams: &[&'static str],
+    book_symbols: &[String],
+    checksummed_symbols: &[String],
+    book_capture: bool,
+) {
+    zero(exchange, streams, book_symbols, checksummed_symbols);
+    gauge!("k2_capture_book_capture", "exchange" => exchange)
+        .set(f64::from(u8::from(book_capture)));
 }
 
 /// Create the series that alerts fire on, at zero, before anything happens.

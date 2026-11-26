@@ -358,3 +358,36 @@ def test_cross_venue_instruments_share_one_canonical(instruments):
     shared = by_exchange["kraken"] & by_exchange["coinbase"]
     assert len(shared) == 11, "Kraken and Coinbase should cover the same 11 USD pairs"
     assert "BTC/USD" in shared and "DOGE/USD" in shared
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The order-book switch and the contracts agree (ADR-050 section 5)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The book tables, by the switch that governs them: a venue's bronze and silver
+# book tables follow its own switch; the shared gold ones pause only when every
+# venue is off. bronze.kraken_instrument is not here: it stays live.
+BOOK_TABLES = {
+    "binance": ("bronze.binance_depth20", "silver.book_binance"),
+    "kraken": ("bronze.kraken_book", "silver.book_kraken"),
+    "coinbase": ("bronze.coinbase_level2", "silver.book_coinbase"),
+    "all": ("gold.book_state", "gold.book_top20", "gold.bbo_1s"),
+}
+
+
+def test_book_contracts_are_paused_exactly_when_their_switch_is_off(instruments):
+    switch = instruments["book_capture"]
+    assert set(switch) == set(EXPECTED_COUNTS)
+    paused = {}
+    for path in (PROJECT_ROOT / "contracts").glob("*/*/*.odcs.yaml"):
+        doc = yaml.safe_load(path.read_text())
+        props = {p["property"]: p["value"] for p in doc["customProperties"]}
+        paused[doc["schema"][0]["physicalName"]] = props.get("paused")
+    for venue, tables in BOOK_TABLES.items():
+        off = not any(switch.values()) if venue == "all" else not switch[venue]
+        for table in tables:
+            assert bool(paused[table]) == off, f"{table}: book_capture says {'off' if off else 'on'}"
+            if off:
+                assert paused[table]["adr"] == "ADR-050", table
+    book = {t for tables in BOOK_TABLES.values() for t in tables}
+    assert not {t for t, mark in paused.items() if mark} - book, "only a book table is paused by the switch"

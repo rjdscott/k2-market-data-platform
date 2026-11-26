@@ -1,5 +1,6 @@
 """scripts/health.sh step (3), the last lake_ingest run, read through the Airflow
-CLI, and step (1)'s check that every long-running service is running. The whole
+CLI, step (1)'s check that every long-running service is running, and step (4)'s
+order-book switch, the capture's gauge against both copies of the registry. The whole
 script runs against fakes on PATH: `git` points it at a scratch checkout,
 `docker` answers the CLI the way Airflow 3.3.2 does (a run whose only task
 skipped is `success`; the task says `skipped`) and compose the way Compose v2
@@ -29,6 +30,13 @@ case "$*" in
   *"airflow dags list-runs lake_rebuild"*) echo "[]" ;;
   *"airflow tasks states-for-dag-run lake_maintenance"*)
     echo '[{"dag_id": "lake_maintenance", "task_id": "maintain", "state": "running"}]' ;;
+  "compose ps -q capture-"*) case " ${CAPTURES:-} " in *" ${4#capture-} "*) echo "cid-${4#capture-}" ;; esac ;;
+  "inspect -f {{.State.Running}}"*) echo true ;;
+  "inspect -f {{range"*) echo k2net ;;
+  "run --rm --network k2net"*)
+    url=${@: -1}; venue=${url#http://capture-}; venue=${venue%%:*}; var="METRICS_$venue"
+    printf '%s\n' "${!var:-}" ;;
+  "exec k2-spark-iceberg cat /home/iceberg/config/instruments.yaml") printf '%s' "${SPARK_REGISTRY:-}" ;;
 esac
 exit 0
 """
@@ -98,9 +106,12 @@ def test_long_running_service_not_running(tmp_path, running, config, verdict):
     assert rc == (1 if verdict.startswith("FAIL") else 0), line
 
 
-def run_health(tmp_path, prefix="(3) last lake_ingest run: ", **env):
+def run_health(tmp_path, prefix="(3) last lake_ingest run: ", host_registry=None, **env):
     top = tmp_path / "repo"
     (top / "scripts/chaos").mkdir(parents=True)
+    if host_registry is not None:
+        (top / "config").mkdir()
+        (top / "config/instruments.yaml").write_text(host_registry)
     shutil.copy(ROOT / "scripts/chaos/lib.sh", top / "scripts/chaos/lib.sh")
     (top / "docker-compose.yml").write_text("")
     (top / ".env").write_text("")
@@ -116,3 +127,54 @@ def run_health(tmp_path, prefix="(3) last lake_ingest run: ", **env):
     )
     (line,) = [ln for ln in out.stdout.splitlines() if ln.startswith(prefix)]
     return line, out.returncode
+
+
+def registry(binance):
+    return f"""version: 2
+
+# Order-book (L2) capture per venue, required. false: trades only (ADR-050).
+book_capture:
+  binance: {binance}   # a comment the parse must skip
+  kraken: false
+  coinbase: false
+
+instruments:
+  binance: []
+"""
+
+
+def capture(book):
+    gauge = "" if book is None else f'k2_capture_book_capture{{exchange="binance"}} {book}\n'
+    return gauge + 'k2_capture_last_message_ts_seconds{exchange="binance",stream="trade"} 1\n'
+
+
+# Binance's capture against the host file and Spark's copy, the other two not
+# running (WARN). A capture not recreated, the reverse, a stale Spark mount, an
+# image older than the gauge and a value PyYAML would read as a boolean each FAIL.
+@pytest.mark.parametrize("name, book, host, spark, verdict", [
+    ("all three agree, books off", 0, "false", "false", "PASS (books off"),
+    ("all three agree, books on", 1, "true", "true", "PASS (books on"),
+    ("the registry says off, the capture was never recreated", 1, "false", "false", "FAIL (process on"),
+    ("the registry says on, the capture still runs off", 0, "true", "true", "FAIL (process off"),
+    ("spark-iceberg reads a stale copy", 0, "false", "true", "FAIL (process off, host file off, spark-iceberg's copy on"),
+    ("no gauge: the image predates ADR-050", None, "true", "true", "FAIL (capture-binance exports no"),
+    ("a YAML 1.1 spelling", 1, "on", "on", "FAIL (config/instruments.yaml book_capture.binance is ?on"),
+])
+def test_order_book_switch(tmp_path, name, book, host, spark, verdict):
+    line, rc = run_health(tmp_path, prefix="(4) binance book_capture: ", host_registry=registry(host),
+                          CAPTURES="binance", METRICS_binance=capture(book), SPARK_REGISTRY=registry(spark),
+                          RUNS=runs("success"), TASK="success", MAINT="[]")
+    assert line.split(": ", 1)[1].startswith(verdict), (name, line)
+    assert rc == (1 if verdict.startswith("FAIL") else 0), (name, line)
+    if "stale copy" in name:
+        assert "--no-deps spark-iceberg" in line and "--no-deps capture-binance" not in line, line
+    if "never recreated" in name:
+        assert "--no-deps capture-binance" in line, line
+
+
+def test_a_capture_that_is_not_running_is_not_compared(tmp_path):
+    line, rc = run_health(tmp_path, prefix="(4) kraken book_capture: ", host_registry=registry("false"),
+                          CAPTURES="binance", METRICS_binance=capture(0), SPARK_REGISTRY=registry("false"),
+                          RUNS=runs("success"), TASK="success", MAINT="[]")
+    assert line.split(": ", 1)[1].startswith("WARN (no metrics from capture-kraken"), line
+    assert rc == 0, line

@@ -129,7 +129,10 @@ impl KrakenAdapter {
     }
 
     /// Subscribe frames, in the order they must be sent: `instrument` first so
-    /// precision is known before the first book frame lands.
+    /// precision is known before the first book frame lands. With the
+    /// registry's `book_capture` false for Kraken (ADR-050) the `book` frames
+    /// are left out and nothing else changes: `instrument` stays, because the
+    /// security master reads it, and heartbeats arrive unasked.
     pub fn subscribe_messages(&self) -> Vec<String> {
         let mut msgs = vec![
             serde_json::json!({
@@ -140,13 +143,16 @@ impl KrakenAdapter {
         ];
 
         // Group by depth so a per-instrument `book_depth` override in the
-        // registry is honoured rather than silently ignored.
+        // registry is honoured rather than silently ignored. Empty, so no
+        // `book` frame at all, while the switch is off.
         let mut by_depth: BTreeMap<u32, Vec<String>> = BTreeMap::new();
-        for i in self.instruments.iter() {
-            by_depth
-                .entry(i.book_depth.unwrap_or(DEFAULT_BOOK_DEPTH))
-                .or_default()
-                .push(i.native.clone());
+        if self.instruments.book_capture() {
+            for i in self.instruments.iter() {
+                by_depth
+                    .entry(i.book_depth.unwrap_or(DEFAULT_BOOK_DEPTH))
+                    .or_default()
+                    .push(i.native.clone());
+            }
         }
         for (depth, symbols) in by_depth {
             msgs.push(
@@ -166,6 +172,10 @@ impl KrakenAdapter {
             .to_string(),
         );
         msgs
+    }
+
+    pub fn book_capture(&self) -> bool {
+        self.instruments.book_capture()
     }
 
     /// The `depth` this symbol is subscribed at - the number of levels per side
@@ -744,8 +754,7 @@ mod tests {
     }
 
     fn adapter() -> KrakenAdapter {
-        let yaml =
-            "version: 2\ninstruments:\n  kraken:\n    - { native: BTC/USD, canonical: BTC/USD }\n";
+        let yaml = "version: 2\ninstruments:\n  kraken:\n    - { native: BTC/USD, canonical: BTC/USD }\nbook_capture: { binance: true, kraken: true, coinbase: true }\n";
         let mut a = KrakenAdapter::new(Instruments::parse(yaml, Exchange::Kraken).unwrap());
         a.begin_connection("test-conn");
         a
@@ -955,7 +964,7 @@ mod tests {
     /// registry typo shows up as a venue error rather than as silent aliasing.
     #[test]
     fn registry_natives_reach_the_wire_untranslated() {
-        let yaml = "version: 2\ninstruments:\n  kraken:\n                        - { native: BTC/USD, canonical: BTC/USD }\n                        - { native: DOGE/USD, canonical: DOGE/USD }\n                        - { native: ETH/USD, canonical: ETH/USD }\n";
+        let yaml = "version: 2\ninstruments:\n  kraken:\n                        - { native: BTC/USD, canonical: BTC/USD }\n                        - { native: DOGE/USD, canonical: DOGE/USD }\n                        - { native: ETH/USD, canonical: ETH/USD }\nbook_capture: { binance: true, kraken: true, coinbase: true }\n";
         let mut a = KrakenAdapter::new(Instruments::parse(yaml, Exchange::Kraken).unwrap());
         a.begin_connection("test-conn");
 
@@ -977,7 +986,7 @@ mod tests {
     /// never surfaced.
     #[test]
     fn a_v1_spelling_is_not_aliased_and_matches_nothing() {
-        let yaml = "version: 2\ninstruments:\n  kraken:\n                        - { native: XBT/USD, canonical: BTC/USD }\n";
+        let yaml = "version: 2\ninstruments:\n  kraken:\n                        - { native: XBT/USD, canonical: BTC/USD }\nbook_capture: { binance: true, kraken: true, coinbase: true }\n";
         let mut a = KrakenAdapter::new(Instruments::parse(yaml, Exchange::Kraken).unwrap());
         a.begin_connection("test-conn");
 
