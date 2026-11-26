@@ -33,10 +33,14 @@ try:
     import bcrypt  # noqa: F401
     import k2gen  # noqa: F401
 except ImportError:
+    if os.environ.get("K2_DEPLOY_TESTS_INNER"):  # the rerun itself lacks them: fail, never recurse
+        raise
     def test_deploy_cases_in_the_k2gen_environment() -> None:
+        # `python -m pytest`, not the `pytest` script: under `uv run --with`, the script runs the project's
+        # own interpreter, which has no bcrypt; the overlay's python has both.
         p = subprocess.run(["uv", "run", "--project", "platform/k2gen", "--locked", "-q", "--with", "bcrypt==5.0.0",
-                            "pytest", "-q", "-p", "no:cacheprovider", str(Path(__file__).relative_to(ROOT))],
-                           cwd=ROOT, capture_output=True, text=True)
+                            "python", "-m", "pytest", "-q", "-p", "no:cacheprovider", str(Path(__file__).relative_to(ROOT))],
+                           cwd=ROOT, capture_output=True, text=True, env={**os.environ, "K2_DEPLOY_TESTS_INNER": "1"})
         assert p.returncode == 0, p.stdout[-8000:] + p.stderr[-2000:]
 else:
     import yaml
@@ -155,6 +159,11 @@ sys.exit(f"fake docker: no answer for {A}")
                         "region": "varchar", "operator_note": "varchar"}
             monkeypatch.setattr(deploy, "admitted", self.admitted)
             monkeypatch.setattr(deploy, "sql", self.sql)
+            # S20's suites run on throwaway lakes and the live Trino; here they answer as told
+            self.suite: list[str] = []
+            self.s20: Any = lambda rel: (["drift clean"], [])
+            monkeypatch.setattr(deploy, "release_suite", lambda ctx, rel: self.suite.append(rel.id) or ["suite passed"])
+            monkeypatch.setattr(deploy, "s20_checks", lambda ctx, rel: self.s20(rel))
             monkeypatch.setattr(deploy, "REFRESH_S", 0)
             self.ctx = deploy.Ctx(root=self.root, secrets=self.secrets, home=ROOT, project="k2", trino="https://localhost:1",
                                   operator="tester", faults=set(), tmp=tmp, say=lambda line: None)
@@ -471,6 +480,48 @@ sys.exit(f"fake docker: no answer for {A}")
         target.chmod(0o444)
         with pytest.raises(deploy.Refused, match="files differ"):
             deploy.open_release(world.ctx, r1.id)
+
+    def test_the_release_suite_runs_at_preflight_and_a_drift_found_at_verify_rolls_back_with_its_reason(world: World) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r2 = world.release(over=policy(60))
+        world.s20 = lambda rel: ([], ["catalog drift check exit 1: DRIFT view governance.x: not in the release"]) \
+            if rel.id == r2.id else (["drift clean"], [])  # a view planted while r2 was live
+        assert world.deploy(r2) == 1 and world.suite == [r2.id]
+        failed = [r for r in records(world) if r["outcome"] == "failed"]
+        assert [r["step"] for r in failed] == ["verify"] and "DRIFT view governance.x" in failed[0]["reason"]
+        assert all(model.schema_errors("deploy-record", r) == [] for r in records(world))
+        assert os.readlink(world.root / "pointers/trino") == f"../{r1.id}"
+
+    def test_a_release_failing_its_release_time_suite_is_refused_before_anything_moves(world: World,
+                                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+        r1 = world.release()
+        world.live(r1)
+        r2 = world.release(over=policy(60))
+
+        def failing(ctx: Any, rel: Any) -> list[str]:
+            raise deploy.Refused("the release fails its access suite at release time (make access-verify exit 1)")
+
+        monkeypatch.setattr(deploy, "release_suite", failing)
+        with pytest.raises(deploy.Refused, match="access suite"):
+            world.deploy(r2)
+        assert world.ups() == [] and [e for e in world.timeline() if e[:2] == ["tools", "swap"]] == []
+        assert records(world)[-1]["step"] == "preflight" and "access suite" in records(world)[-1]["reason"]
+
+    @pytest.mark.parametrize("exit_, pending, live_runs, wrong", [
+        (0, [], True, False), (0, ["governance.access-canary"], False, False), (1, [], True, True), (2, [], True, True)])
+    def test_live_access_verify_runs_only_once_every_product_is_published(world: World, monkeypatch: pytest.MonkeyPatch,
+                                                                          exit_: int, pending: list[str], live_runs: bool,
+                                                                          wrong: bool) -> None:
+        monkeypatch.undo()  # the real s20_checks, with its two commands answered here
+        r1 = world.release()
+        calls: list[list[str]] = []
+        monkeypatch.setattr(deploy, "drift", lambda ctx, rel: {"exit": exit_, "doc": {"pending": pending}, "text": "x"})
+        monkeypatch.setattr(deploy, "run", lambda *a, **k: calls.append(list(a)) or subprocess.CompletedProcess(a, 0, "", ""))
+        lines, bad = deploy.s20_checks(world.ctx, r1)
+        assert bool([c for c in calls if "access-verify" in c]) is live_runs and bool(bad) is wrong, (lines, bad)
+        if pending:
+            assert any(x.startswith("SKIP access-verify LIVE=1") and "governance.access-canary" in x for x in lines)
 
     # --- the DDL comparison --------------------------------------------------------------
 

@@ -32,7 +32,6 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 REPO=$PWD
 UV_IMAGE=$(sed -n 's/^UV_IMAGE=//p' scripts/lib/throwaway-lake.sh)
-BCRYPT=$(grep -oE 'bcrypt==[0-9.]+' mk/principals.mk | head -1)
 USER_=${K2_IDENTITY_USER:-svc.catalog}
 URL=https://trino:8443
 
@@ -98,7 +97,7 @@ echo "identity: $C on $NET, logged in as $USER_, $URL"
 client -e UV_PROJECT_ENVIRONMENT=/tmp/venv -e K2_TRINO_URL="$URL" -e K2_SECRETS=/k2s -e K2_IDENTITY_USER="$USER_" \
   -e K2_IDENTITY_FIXTURES=/fixtures -v "$REPO:/src:ro" -v "$SECRETS/trino:/k2s/trino" \
   -v "$SECRETS/tls/ca.pem:/k2s/tls/ca.pem:ro" -v "$PASSWORD_FILE:/k2s/principals/$USER_.password:ro" -v "$F:/fixtures:ro" \
-  -w /src "$UV_IMAGE" uv run --project /src/platform/k2gen --locked -q --with "$BCRYPT" python -B scripts/verify/identity.py \
+  -w /src "$UV_IMAGE" uv run --project /src/platform/k2gen --locked -q --with bcrypt==5.0.0 python -B scripts/verify/identity.py \
   || fails=$((fails + 1))
 
 etc=$(docker inspect -f '{{range .Args}}{{.}} {{end}}' "$C" | sed -n 's/.*--etc-dir \([^ ]*\).*/\1/p')

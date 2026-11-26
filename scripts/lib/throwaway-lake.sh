@@ -37,7 +37,6 @@
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 UV_IMAGE=ghcr.io/astral-sh/uv:0.9.25-python3.12-bookworm-slim@sha256:e47cbc1a37bc146191f85069663f98dff4644667873a0a3051b8d7effe69ea82
-BCRYPT=bcrypt==5.0.0  # the pin of mk/principals.mk
 MIN_GIB=6
 POINTER_ETC=/k2/releases/pointers/trino/compiled/trino/etc
 
@@ -59,7 +58,7 @@ TOOLS=$P-tools
 # The container side of `py`: uv's environment off the read-only repository, as the host's user.
 TOOLS_ENV=(-e HOME=/tmp -e UV_CACHE_DIR=/tmp/uv-cache -e UV_PROJECT_ENVIRONMENT=/tmp/venv
   -e UV_PYTHON_DOWNLOADS=never -e PYTHONDONTWRITEBYTECODE=1 -e UV_NO_PROGRESS=1)
-PY=(uv run --project /src/platform/k2gen --locked -q --with "$BCRYPT" python -B)
+PY=(uv run --project /src/platform/k2gen --locked -q --with bcrypt==5.0.0 python -B)  # mk/principals.mk's pin, literal for the pin gate
 
 containers_down() {
   local ids
@@ -234,7 +233,7 @@ PY
   # --no-healthcheck: the image's check reads /etc/trino/config.properties, not --etc-dir's (S11).
   # The key file alone, never tls/ (ca.key is there), and password.db by its directory, which
   # principal-secret.py rewrites in place (model.SECRET_FILES).
-  docker run -d --label "$LABEL" --network "$NET" --network-alias trino --name "$P-trino" --cpus 2 --memory 3584m --no-healthcheck \
+  docker run -d --label "$LABEL" --network "$NET" --network-alias=trino --name "$P-trino" --cpus 2 --memory 3584m --no-healthcheck \
     --user "$(id -u):$(id -g)" --tmpfs /data/trino:mode=1777 \
     -v "$STATE/releases:/k2/releases:ro" -v "$s/k2/tls/trino.pem:/run/k2-secrets/tls/trino.pem:ro" \
     -v "$s/k2/trino:/run/k2-secrets/trino:ro" \

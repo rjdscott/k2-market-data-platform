@@ -13,6 +13,7 @@
     "step": {"description": "The deploy step, in kebab case (S19 names them).", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},
     "outcome": {"description": "How the step ended; a failed step after the swap is followed by a rollback record.", "enum": ["ok", "failed"]},
     "operator": {"description": "Who ran the deploy, as the host user name.", "type": "string", "minLength": 1},
+    "reason": {"description": "Optional, on a failed step: why it failed, as deploy printed it, at most 2000 characters; never a secret (added by step S19b, additively).", "type": "string", "maxLength": 2000},
     "secrets": {
       "description": "Each secret file the release's services mount, as deploy found it at the step: its path under ${K2_SECRETS} to the sha256 of its bytes. Never the content. A missing file is absent from the map.",
       "type": "object",

@@ -204,9 +204,12 @@ def secret_sums(ctx: Ctx, services: set[str]) -> dict[str, str]:
     return found
 
 
-def record(ctx: Ctx, target: Release, frm: str | None, step: str, outcome: str, services: set[str]) -> None:
+def record(ctx: Ctx, target: Release, frm: str | None, step: str, outcome: str, services: set[str],
+           reason: str | None = None) -> None:
     line = {"at": now(), "release": target.id, "from": frm, "step": step, "outcome": outcome,
             "operator": ctx.operator, "secrets": secret_sums(ctx, services)}
+    if reason:
+        line["reason"] = reason[:2000]
     if errors := model.schema_errors("deploy-record", line):
         raise Failed(f"a deploy record fails its schema: {errors}")
     with open(ctx.root / model.DEPLOY_LOG, "a") as f:
@@ -429,7 +432,9 @@ def make_plan(ctx: Ctx, target: Release, sources: list[Release | None]) -> Plan:
             order.append(name)
     if trino_restart and "trino" in svc and "trino" not in order:
         order.append("trino")
-    order.sort(key=lambda s: s != "trino")  # the rules' reader first: verify waits on it
+    # A stateful service the operator allowed first (Trino's catalogs reach Lakekeeper on its new network
+    # at a cutover), then the rules' reader, which verify waits on, then the rest.
+    order.sort(key=lambda s: (s not in ctx.allow_stateful, s != "trino"))
     return Plan(target, sources, order, oneshots, trino_restart, sorted(ddl),
                 [views[r] for r in sorted(views)], skipped)
 
@@ -520,6 +525,8 @@ def preflight(ctx: Ctx, p: Plan) -> None:
         raise Refused(f"the release's backup set drops {'; '.join(held)}, which storage still holds; "
                       "copy and drop it first with `make drop TARGET=...` (docs/runbooks/drop-and-rebuild.md)")
     run(*compose(ctx, p.target, "config", "-q"), env=compose_env(ctx))
+    for line in release_suite(ctx, p.target):
+        ctx.say(f"  {line}")
 
 
 def ensure_images(ctx: Ctx, rel: Release) -> None:
@@ -822,7 +829,8 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
     if previous_canary and previous_canary != canary and admitted(ctx, previous_canary):
         wrong.append(f"Trino still admits {previous_canary}: the previous release's rules are loaded")
     lines.append(f"canary {canary} admitted" + (f", {previous_canary} refused" if previous_canary and previous_canary != canary else ""))
-    lines += s20_checks(ctx, target)
+    more, bad = s20_checks(ctx, target)
+    lines, wrong = lines + more, wrong + bad
     svc = services(target)
     for c in containers(ctx):
         name = c["Config"]["Labels"].get("com.docker.compose.service")
@@ -842,23 +850,114 @@ def verify(ctx: Ctx, target: Release, previous_canary: str | None) -> list[str]:
     return lines
 
 
-def s20_checks(ctx: Ctx, target: Release) -> list[str]:
-    """The access suite and the catalog drift check, step S20's, through their documented entry points."""
-    lines = []
-    mk = (ctx.home / "mk" / "access.mk").read_text() if (ctx.home / "mk" / "access.mk").exists() else ""
-    if "NOT BUILT access-verify" in mk or "access-verify:" not in mk:
-        lines.append("SKIP access-verify: built by phase 001 step S20")
+def verify_dir(ctx: Ctx) -> Path:
+    """<releases root>/verify/: the results S20's checks write beside the releases, by release id."""
+    d = ctx.root / "verify"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def release_suite(ctx: Ctx, rel: Release) -> list[str]:
+    """Release time, before anything moves, on throwaway lakes started from the release (S20): every
+    row of tests/access/expectations.yaml (`make access-verify RELEASE=<dir>`), then the tested-data
+    marker (scripts/verify/tested-data-marker.sh). A release is sealed, so a pass is kept by its id
+    under verify/ and not run again."""
+    out, d = [], verify_dir(ctx)
+    access, marker = d / f"{rel.id}.access-release.json", d / f"{rel.id}.marker.json"
+    prefix = f"deploy-{rel.id[-12:]}"
+    env = compose_env(ctx)
+    if access.exists() and json.loads(access.read_text()).get("exit") == 0:
+        out.append(f"access-verify at release time passed earlier for {rel.id} ({access.name})")
     else:
-        run("make", "-C", str(ctx.home), "access-verify", env={**compose_env(ctx), "RELEASE": target.id})
-        lines.append("access-verify passed")
-    drift = ctx.home / "scripts" / "verify" / "catalog_drift.py"
-    if drift.exists():  # in tools: the catalog is on its own network with no host port (A8); exit 0 is clean
-        tools(ctx, target, "/opt/k2/verify/catalog_drift.py", f"{model.RELEASES_MOUNT}/{target.id}",
-              mounts=(f"{drift}:/opt/k2/verify/catalog_drift.py:ro",), entry="python3")
-        lines.append("catalog drift check clean")
+        done = make_target(ctx, "access-verify", env, RELEASE=str(rel.root), OUT=str(access), PREFIX=prefix)
+        counts = json.loads(access.read_text()).get("counts") if access.exists() else None
+        if done.returncode:
+            raise Refused(f"the release fails its access suite at release time (make access-verify exit {done.returncode}, "
+                          f"{counts or 'no result'}): {tail(done)}")
+        out.append(f"access-verify at release time: {counts}")
+    if marker.exists() and json.loads(marker.read_text()).get("exit") == 0:
+        out.append(f"tested-data marker passed earlier for {rel.id} ({marker.name})")
+        return out
+    lake = ["bash", str(ctx.home / "scripts/lib/throwaway-lake.sh")]
+    try:
+        run(*lake, "up", prefix, str(rel.root), env=env)
+        run(*lake, "py", prefix, "scripts/access_verify.py", "stage", "--release", f"/work/releases/{rel.id}",
+            "--env", "/work/env.json", env=env)
+        done = run("bash", str(ctx.home / "scripts/verify/tested-data-marker.sh"), prefix, env=env, check=False)
+    finally:
+        run(*lake, "down", prefix, env=env, check=False)
+    marker.write_text(json.dumps({"release": rel.id, "at": now(), "exit": done.returncode,
+                                  "lines": done.stdout.strip().splitlines()[-40:]}, indent=2) + "\n")
+    if done.returncode:
+        raise Refused(f"the release fails the tested-data marker check (exit {done.returncode}): {tail(done)}")
+    return out + [f"tested-data marker: {sum(1 for x in done.stdout.splitlines() if x.startswith('PASS'))} PASS"]
+
+
+def make_target(ctx: Ctx, target: str, env: dict[str, str], **variables: str) -> subprocess.CompletedProcess[str]:
+    """`make <target> VAR=value...` in the checkout: the variables on its command line, and none of the
+    calling make's (MAKEFLAGS would carry `make deploy`'s RELEASE=<id> into it and override them)."""
+    clean = {k: v for k, v in env.items() if k not in ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES")}
+    return run("make", "-s", "-C", str(ctx.home), target, *(f"{k}={v}" for k, v in variables.items()), env=clean, check=False)
+
+
+def tail(done: subprocess.CompletedProcess[str], n: int = 6) -> str:
+    return " | ".join((done.stdout + done.stderr).strip().splitlines()[-n:])
+
+
+def drift(ctx: Ctx, target: Release) -> dict[str, Any]:
+    """S20's catalog drift check, from inside tools on the catalog's network (the catalog has no host
+    port once fenced, ADR-059 part 7): `catalog_drift.py --release <dir> --out <file>`; exit 0 clean,
+    1 drift, 2 unreachable. The script comes from this checkout, mounted read-only; k2gen from the
+    release's own tools image."""
+    script = ctx.home / "scripts" / "verify" / "catalog_drift.py"
+    result = f"{model.RELEASES_MOUNT}/verify/{target.id}.drift.json"
+    verify_dir(ctx)
+    cmd = compose(ctx, target, "run", "--rm", "--no-deps", "--pull", "never", "--user", f"{os.getuid()}:{os.getgid()}",
+                  "-v", f"{script}:/opt/k2/verify/catalog_drift.py:ro", "tools", "python3", "/opt/k2/verify/catalog_drift.py",
+                  "--release", f"{model.RELEASES_MOUNT}/{target.id}", "--out", result)
+    done = run(*cmd, env=compose_env(ctx), check=False)
+    found = ctx.root / "verify" / f"{target.id}.drift.json"
+    doc: dict[str, Any] = json.loads(found.read_text()) if found.exists() and done.returncode in (0, 1) else {}
+    return {"exit": done.returncode, "doc": doc, "text": tail(done, 12)}
+
+
+def s20_checks(ctx: Ctx, target: Release) -> tuple[list[str], list[str]]:
+    """(lines, what is wrong): the drift check, then the access suite on the live system
+    (`make access-verify LIVE=1`), its rows for every product the drift check finds published."""
+    lines, wrong = [], []
+    d = drift(ctx, target)
+    pending = [str(x) for x in d["doc"].get("pending", [])]
+    if d["exit"] == 0:
+        lines.append(f"catalog drift check clean ({len(d['doc'].get('differences', []))} differences, "
+                     f"pending {pending or 'none'}, {len(d['doc'].get('skipped', []))} skipped)")
     else:
-        lines.append("SKIP catalog drift check: scripts/verify/catalog_drift.py is built by phase 001 step S20")
-    return lines
+        wrong.append(f"catalog drift check exit {d['exit']}: {d['text']}")
+    if pending:
+        lines.append(f"SKIP access-verify LIVE=1: not yet published, so no live row can read it: {', '.join(pending)}; "
+                     "every row ran on a throwaway lake at release time (preflight); phase 002 publishes them")
+        return lines, wrong
+    result = verify_dir(ctx) / f"{target.id}.access-live.json"
+    env = {**compose_env(ctx), "K2_TRINO_HOST": ctx.trino.split("//")[1].rsplit(":", 1)[0], "K2_TRINO_PORT": ctx.trino.rsplit(":", 1)[1]}
+    done = make_target(ctx, "access-verify", env, LIVE="1", RELEASE=str(ctx.root / target.id), OUT=str(result))
+    counts = json.loads(result.read_text()).get("counts") if result.exists() else None
+    if done.returncode:
+        wrong.append(f"access-verify LIVE=1 exit {done.returncode} ({counts}): {tail(done)}")
+    else:
+        lines.append(f"access-verify LIVE=1 passed: {counts}")
+    return lines, wrong
+
+
+def identity(ctx: Ctx) -> list[str]:
+    """S13's identity rows on the running Trino (scripts/verify/identity.sh, live): exit 0 all pass."""
+    c = container(ctx, "trino")
+    if c is None:
+        raise Failed("no trino container to check identity on")
+    network = next(iter(c["NetworkSettings"]["Networks"]))
+    env = {**compose_env(ctx), "K2_TRINO_CONTAINER": c["Name"].lstrip("/"), "K2_IDENTITY_NETWORK": network}
+    done = run("bash", str(ctx.home / "scripts/verify/identity.sh"), env=env, check=False)
+    if done.returncode:
+        raise Failed(f"identity.sh exit {done.returncode}: {tail(done, 10)}")
+    return [f"identity.sh: {sum(1 for x in done.stdout.splitlines() if x.startswith('PASS'))} PASS, exit 0"]
 
 
 # --- the sequence ------------------------------------------------------------------------
@@ -870,7 +969,7 @@ def step(ctx: Ctx, target: Release, frm: str | None, name: str, svc: set[str], w
     try:
         out = work()
     except Exception as e:  # any failure is recorded; the caller decides refusal, failure or rollback
-        record(ctx, target, frm, name, "failed", svc)
+        record(ctx, target, frm, name, "failed", svc, f"{type(e).__name__}: {e}")
         ctx.say(f"deploy: {name} FAILED after {time.monotonic() - t0:.1f} s: {e}")
         raise
     if f"kill:{name}" in ctx.faults:
@@ -930,10 +1029,12 @@ def converge(ctx: Ctx, p: Plan, frm: str | None, prefix: str = "") -> None:
 
 def resolve(ctx: Ctx) -> tuple[Release | None, list[str]]:
     """(the live good release, the releases attempted since it)."""
-    goods, since = standing(history(ctx.root))
+    records = history(ctx.root)
+    goods, since = standing(records)
     good = goods[-1] if goods else None
-    if good is None and (ctx.root / "pointers" / "trino").is_symlink():
-        good = os.readlink(ctx.root / "pointers" / "trino").removeprefix("../")  # a root whose log was lost
+    if not records and (ctx.root / "pointers" / "trino").is_symlink():  # a root whose log was lost
+        good = os.readlink(ctx.root / "pointers" / "trino").removeprefix("../")
+    # else, with no good release, a first deploy that failed: plan again from nothing (every step converges)
     return (open_release(ctx, good) if good else None), since
 
 
@@ -1024,7 +1125,7 @@ def verify_live(ctx: Ctx) -> int:
     goods, _ = standing(history(ctx.root))
     before = next((g for g in reversed(goods) if g != good.id), None)
     previous = model.canary_user(open_release(ctx, before).manifest.set_sha256) if before else None
-    for line in verify(ctx, good, previous):
+    for line in [*verify(ctx, good, previous), *identity(ctx)]:  # identity.sh only here: it writes a probe line
         ctx.say(f"  {line}")
     ctx.say(f"release-verify: {good.id} everywhere")
     return EXIT_OK
@@ -1070,15 +1171,41 @@ def registry_ref(image: str) -> str:
     return match[0]
 
 
+def held_ref(iid: str, image: str, local: str) -> str:
+    """The ref of a running container's image: a local build as <name>:<id12>, tagged here; a registry
+    image by the digest the host recorded for its repository."""
+    if LOCAL.match(local):
+        ref = f"{local}:{iid.removeprefix('sha256:')[:12]}"
+        run("docker", "tag", iid, ref)
+        return ref
+    repo = (image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image).split("@")[0]
+    short = repo.removeprefix("docker.io/").removeprefix("library/")
+    digests = json.loads(run("docker", "image", "inspect", "--format", "{{json .RepoDigests}}", iid).stdout) or []
+    match = [d for d in digests if d.split("@")[0].removeprefix("docker.io/").removeprefix("library/") == short]
+    if not match:
+        raise Refused(f"{image}: the running image {iid[:19]} has no registry digest for {repo} on this host")
+    return match[0]
+
+
 def build_images(ctx: Ctx, tree: Path, compose_doc: dict[str, Any]) -> dict[str, str]:
     """Every service's image ref: a registry image by digest; a local build built from the tag's tree,
     without touching the tag compose gives it, and tagged <name>:<image id 12>."""
     refs: dict[str, str] = {}
     built: dict[str, str] = {}  # compose image name -> ref
     svcs = compose_doc.get("services") or {}
+    running = {c["Config"]["Labels"].get("com.docker.compose.service"): c for c in containers(ctx) if c["State"]["Running"]}
     for name, spec in sorted(svcs.items(), key=lambda kv: "build" not in kv[1]):  # builders first
         image = str(spec.get("image") or "")
         local = image.split(":")[0]
+        if not k2release.recreatable(name) and name in running:
+            # Deploy never recreates it (A1), so the release names the image it runs, not a new build
+            # or tag: a capture keeps running through a cutover, and a change to one is its own operation.
+            refs[name] = held_ref(running[name]["Image"], image, local)
+            ctx.say(f"release: {name} keeps the image it runs, {refs[name]}: deploy never recreates it")
+            if "build" not in spec and not LOCAL.match(local) and (tagged := registry_ref(image)) != refs[name]:
+                ctx.say(f"release: WARNING {name}: the tag names {tagged}, not what runs; moving it is its own "
+                        f"operation: IMAGES=<file naming it>, then ALLOW_STATEFUL={name}")
+            continue
         if "build" in spec:
             if not LOCAL.match(local):
                 raise Refused(f"{name}: a local build must be named one of {LOCAL.pattern} (manifest.schema.json)")
