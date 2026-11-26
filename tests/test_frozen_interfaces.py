@@ -55,10 +55,22 @@ def test_as_of_is_declared_only_to_be_refused():
     doc = yaml.safe_load(OPENAPI.read_text())
     data = doc["paths"]["/v1/data/{domain}/{product}/{table}"]["get"]
     assert "as_of" in {p["name"] for p in data["parameters"]}
-    assert data["responses"]["422"] == {"$ref": "#/components/responses/AsOfUnavailable"}
-    answer = doc["components"]["responses"]["AsOfUnavailable"]["content"]["application/json"]["schema"]
-    assert answer["allOf"][1]["properties"]["error"] == {"const": "as_of_unavailable"}
+    assert data["responses"]["422"] == {"$ref": "#/components/responses/Unprocessable"}
+    answer = doc["components"]["responses"]["Unprocessable"]["content"]["application/json"]["schema"]
+    assert answer["allOf"][1]["properties"]["error"] == {"enum": ["as_of_unavailable", "result_too_large"]}
     assert "__base" not in OPENAPI.read_text()  # readers' names only (A11)
+
+
+def test_filters_cannot_collide_and_a_page_never_hides_truncation():
+    doc = yaml.safe_load(OPENAPI.read_text())
+    data = doc["paths"]["/v1/data/{domain}/{product}/{table}"]["get"]
+    names = {p["name"] for p in data["parameters"]}
+    # filters are filter.<column>=, so a column named fields, limit, cursor or as_of filters too
+    assert names == {"fields", "limit", "cursor", "as_of"} and "filter.<column>" in data["description"]
+    page = doc["components"]["schemas"]["DataPage"]["properties"]
+    assert page["snapshot"]["type"] == "string"  # an int64 id loses precision as a JavaScript number
+    assert "result_too_large" in data["description"] and "never null" in page["next"]["description"]
+    assert "k2gen/schemas/" not in OPENAPI.read_text() and "provisional" not in OPENAPI.read_text()
 
 
 # Prints the parsed table as JSON. Run with -I under the pinned sqlglot.
@@ -85,8 +97,11 @@ A6 = [
     ("event", "varchar"), ("table_name", "varchar"), ("snapshot_before", "bigint"), ("snapshot_after", "bigint"),
     ("inputs", "varchar"), ("rows_written", "bigint"), ("bytes_written", "bigint"),
     ("started_at", "timestamp(6) with time zone"), ("recorded_at", "timestamp(6) with time zone"),
-    ("duration_s", "double"), ("detail", "varchar"),
+    ("duration_s", "double"), ("detail", "varchar"), ("dbt_invocation_id", "varchar"), ("openlineage_run_id", "varchar"),
 ]
+RUN_RECORD_SCHEMA = ROOT / "contracts/schema/run-record.schema.json"
+# The JSON type of each DDL type in one row; `inputs` is JSON text in its varchar column.
+JSON_TYPE = {"varchar": "string", "bigint": "integer", "double": "number", "timestamp(6) with time zone": "string"}
 
 
 def parse_run_record(path: Path) -> dict:
@@ -109,3 +124,19 @@ def test_a_column_without_a_description_fails(tmp_path):
     (tmp_path / "r.sql").write_text(sql)
     t = parse_run_record(tmp_path / "r.sql")
     assert [n for n, _, comment in t["columns"] if not comment] == ["duration_s"]
+
+
+def test_the_run_record_ddl_and_its_json_schema_are_one_row():
+    # The two are each frozen; this holds them to each other, column for column and type for type.
+    t = parse_run_record(RUN_RECORD)
+    schema = json.loads(RUN_RECORD_SCHEMA.read_text())
+    assert [n for n, _, _ in t["columns"]] == list(schema["properties"]) == schema["required"]
+    for name, ddl_type, _ in t["columns"]:
+        prop = schema["properties"][name]
+        json_types = prop.get("type") or ("string" if all(isinstance(v, str) for v in prop["enum"]) else "?")  # an enum of strings
+        json_types = {json_types} if isinstance(json_types, str) else set(json_types)
+        expected = "array" if name == "inputs" else JSON_TYPE[ddl_type]
+        assert expected in json_types, (name, ddl_type, json_types)
+        assert json_types <= {expected, "null"}, (name, json_types)
+    # recorded_at is the partition source: never null
+    assert schema["properties"]["recorded_at"]["type"] == "string"

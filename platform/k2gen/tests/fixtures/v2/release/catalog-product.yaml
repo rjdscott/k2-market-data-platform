@@ -36,7 +36,7 @@ outputs:
       - {role: full_reader, inWords: every row and column}
     readers:
       - {principal: svc.load-dashboard, role: full_reader}
-    dbtDocs: dbt-docs/#!/model/model.k2.gold_daily_load
+    dbtDocs: dbt-docs/#!/model/model.k2.daily_load__gold_daily_load
 joinKeys:
   - from: {relation: ops_insight.daily_load.gold_daily_load, column: station_id}
     to: {relation: sensor_net.station_readings.silver_readings, column: station_id}

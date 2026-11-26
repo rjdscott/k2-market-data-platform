@@ -115,6 +115,23 @@ under the Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0). The
 MIT licence above does not cover it. Source commit and sha256 are in
 contracts/schema/README.md.
 
+contracts/schema/odps-json-schema-v1.1.0.json is the JSON Schema of the Open
+Data Product Standard v1.1.0, copyright The Bitol Contributors, from
+https://github.com/bitol-io/open-data-product-standard, vendored unmodified
+under the Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0). The
+MIT licence above does not cover it. Source commit and sha256 are in
+contracts/schema/README.md.
+
+Generated test expectations
+===========================
+
+platform/k2gen/tests/golden/ holds what the compiler emits from the synthetic
+fixture set, for its tests to compare against; nothing in it is source data.
+Gate (i) reads its text files as such only while its README.md opens with the
+marker line scripts/check_docs.py names (GOLDEN_MARK). A product's seed,
+contracts/<domain>/<product>/seeds/<name>.csv, passes gate (i) only when its
+product file declares it synthetic; real reference data is listed here instead.
+
 Third-party reference values in code
 ====================================
 

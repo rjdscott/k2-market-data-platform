@@ -1,17 +1,18 @@
 """The v2 document model, its schemas, and the names every step shares (phase 001).
 
-Frozen by the interfaces step S00a: a type, constant or helper here, or a schema in
-contracts/schema/, changes only through the orchestrator (platform/k2gen/INTERFACES.md).
-Step S04 fills `load`. The naming helpers, `set_sha256`, `release_id` and `schema_errors`
-have real bodies now, because every emitter, check and script names things through them.
+Frozen by the interfaces steps S00a and S00c: a type, constant or helper here, or a schema
+in contracts/schema/, changes only through the orchestrator (platform/k2gen/INTERFACES.md).
+Step S04 fills `load`. Everything else has its real body now, because every emitter, check
+and script names, quotes, parses and dispatches through it.
 
-Places marked `provisional until S01` follow the tested-data design of ADR-061 (a
-definer view over the `audited` tag, owned by a publisher) and are finalised when the
-gate `spine-h-tested-data-view` reports.
+The tested-data design is ADR-061's, as its gate (docs/research/2026-11-26-tested-data-view-gate.md)
+amended it: a definer view over the `audited` tag, owned by a publisher that has catalog
+access `all` on the reader catalog; `svc.platform` holds no privilege in a reader namespace.
 """
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -22,9 +23,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 import jsonschema
+import yaml
 from referencing import Registry, Resource
 
-SCHEMA_DIR = Path(__file__).resolve().parents[3] / "contracts" / "schema"
+REPO = Path(__file__).resolve().parents[3]  # the compiler's own tree, not the document set's
+SCHEMA_DIR = REPO / "contracts" / "schema"
 ODPS_SCHEMA = "odps-json-schema-v1.1.0.json"
 ODCS_SCHEMA = "odcs-json-schema-v3.2.0-20261117.json"
 
@@ -46,6 +49,10 @@ SCHEMAS: Mapping[str, tuple[str, ...]] = {
     "catalog-index": ("catalog-product.schema.json#/$defs/index",),
     "backup-set": ("backup-set.schema.json",),
     "run-record": ("run-record.schema.json",),
+    "storage-plan": ("storage-plan.schema.json",),
+    "dags": ("dags.schema.json",),
+    "oneshots": ("oneshots.schema.json",),
+    "deploy-record": ("deploy-record.schema.json",),
 }
 
 # --- Where documents live (A2) ---------------------------------------------------------
@@ -54,16 +61,148 @@ DOMAINS = "contracts/domains.yaml"
 ROLES = "contracts/access/roles.yaml"
 PRINCIPALS = "contracts/access/principals.yaml"
 EXPECTATIONS = "tests/access/expectations.yaml"
-# What `git archive <tag>` extracts into a document set. The expectations are in it so the
-# coverage check (S07) stays a pure function of the set.
-DOCUMENT_ROOTS = ("contracts/", "domains/", EXPECTATIONS)
+COMPOSE = "docker-compose.yml"  # the tag's compose file: the release runs it (A1)
+V2_PRODUCT_FILE = "product.odps.yaml"  # its directory is a v2 product; the old validator skips it
+# What `git archive <tag>` extracts into a document set; a root the tag lacks (domains/ before
+# its first parser) is skipped, never an error. The expectations are in it so the coverage
+# check (S07) stays a pure function of the set.
+DOCUMENT_ROOTS = ("contracts/", "domains/", EXPECTATIONS, COMPOSE)
 
 # --- Release layout (A1) ---------------------------------------------------------------
 
+RELEASES_MOUNT = "/k2/releases"  # the releases root in every container, read-only but in tools
+DEPLOY_LOG = "deploy-log.jsonl"  # at the releases root: one deploy-record per line (S19)
 MANIFEST = "manifest.json"
 PROVENANCE = "provenance.json"
 DOCUMENTS_DIR = "documents"  # the document set, unchanged, as `k2gen docset` writes it
-VIEWS = "compiled/trino/views.json"  # {"views": [View fields]}; provisional until S01
+RELEASE_COMPOSE = "compose/docker-compose.yml"  # the set's COMPOSE, copied by the compiler (S08)
+VIEWS = "compiled/trino/views.json"  # {"views": [View fields]} (S15)
+STORAGE_PLAN = "compiled/lake/storage-plan.json"  # storage-plan.schema.json (S15)
+RETENTION = "compiled/lake/retention.json"  # {"<warehouse>.<namespace>.<table>": days}: the one retention source (S15)
+CONTRACT_SCHEMAS = "compiled/lake/contract_schemas.json"  # the contract's columns per table (S15)
+BACKUP_SET = "compiled/lake/backup-set.json"  # backup-set.schema.json (S15)
+DAGS = "compiled/airflow/dags.json"  # dags.schema.json (S16)
+ONESHOTS = "compiled/oneshots.json"  # oneshots.schema.json (S16)
+API_PRINCIPALS = "compiled/api/principals.json"  # {"principals": [id]}: whom k2-api may act as (S14)
+CATALOG_INDEX = "compiled/catalog/index.json"  # catalog-product.schema.json#/$defs/index (S18)
+DdlEngine = Literal["spark", "trino"]
+
+
+def pipeline_path(product_id: str) -> str:
+    """`compiled/products/<product id>/pipeline.json` (pipeline.schema.json, S16)."""
+    return f"compiled/products/{product_id}/pipeline.json"
+
+
+def catalog_path(product_id: str) -> str:
+    """`compiled/catalog/products/<product id>.json` (catalog-product.schema.json, S18)."""
+    return f"compiled/catalog/products/{product_id}.json"
+
+
+def view_sql_path(relation: str) -> str:
+    """`compiled/trino/views/<domain>.<fence>.<table>.sql`: a view's SQL, nothing else (S15)."""
+    return f"compiled/trino/views/{relation}.sql"
+
+
+def ddl_path(engine: DdlEngine, warehouse: str, namespace: str, table: str) -> str:
+    """`compiled/lake/ddl/<engine>/<warehouse>.<namespace>.<table>.sql`: one CREATE TABLE, emitted
+    by S15 and applied by deploy (S19) when `needs.ddl` names `<warehouse>.<namespace>.<table>`.
+    spark: tables in warehouse k2 (landing_files, audit_checks, landing, bronze_*), whose
+    Trino catalog is read-only; trino: platform tables, through `<domain>_build` (the run
+    records, copied from RUN_RECORD_SQL). dbt builds its own tables; views are VIEWS."""
+    return f"compiled/lake/ddl/{engine}/{warehouse}.{namespace}.{table}.sql"
+
+
+# What a change to a release file needs at deploy (manifest `needs`); the longest prefix wins,
+# and a path no prefix covers is a compile error, so a new kind of file is classified first.
+#   recreate: the compose services whose definition differs (S08 compares them one by one)
+#   trinoRestart: Trino reads etc/ at start
+#   dagShapeChange: only when a DAG's task list differs (S08 compares the two files' tasks)
+#   ddl: the table each added or changed file names (ddl_path)
+#   None: read through the pointer at use (rules and groups every 5 s, DAGs every 30 s,
+#   pipelines, dbt, views, catalog, one-shots at their next run)
+NEEDS_BY_PREFIX: Mapping[str, str | None] = {
+    RELEASE_COMPOSE: "recreate",
+    "compiled/trino/etc/": "trinoRestart",
+    DAGS: "dagShapeChange",
+    "compiled/lake/ddl/": "ddl",
+    "compiled/": None,
+    f"{DOCUMENTS_DIR}/": None,
+    PROVENANCE: None,
+}
+
+
+def need_of(path: str) -> str | None:
+    """The `needs` field a change to the release file at `path` can set, or None; KeyError
+    for a path NEEDS_BY_PREFIX does not cover."""
+    found = [p for p in NEEDS_BY_PREFIX if path == p or (p.endswith("/") and path.startswith(p))]
+    if not found:
+        raise KeyError(f"{path}: no entry of model.NEEDS_BY_PREFIX covers it")
+    return NEEDS_BY_PREFIX[max(found, key=len)]
+
+
+# --- Local secrets (A10; the orchestrator's ruling on Q4) --------------------------------
+#
+# Every credential is generated on the host into ${K2_SECRETS:-$HOME/k2-secrets}, outside any
+# checkout, and never committed, compiled or hashed into a release. A container mounts only
+# the files it reads, read-only, under SECRETS_MOUNT. A file refreshed while its reader runs
+# (password.db, keys.json, the webhook URL) is mounted by its directory and replaced by a
+# rename inside it, because a file-level bind mount pins the inode (CLAUDE.md); the others
+# are read at start, mounted as files, and a rotation recreates their readers.
+
+SECRETS_ENV = "K2_SECRETS"
+SECRETS_MOUNT = "/run/k2-secrets"
+
+
+@dataclass(frozen=True)
+class SecretFile:
+    """One file under ${K2_SECRETS}. `<principal>` and `<canary>` in a path are placeholders."""
+
+    path: str  # relative to ${K2_SECRETS}
+    content: str
+    mount: str | None  # the read-only path in each container that mounts it; None: never mounted
+    services: tuple[str, ...]  # the compose services that mount it
+    writer: str  # the step, and the command, that writes it
+
+
+SECRET_FILES: tuple[SecretFile, ...] = (
+    SecretFile("trino/password.db", "Trino's file authenticator file: one `<user>:<bcrypt, cost 10>` line per principal with a password, the release canary's included",
+               f"{SECRETS_MOUNT}/trino/password.db", ("trino",),
+               "S14 `scripts/principal-secret.py` (`make password`); S19 `scripts/deploy.py` adds each release's canary line"),
+    SecretFile("api/keys.json", 'k2-api\'s key map, `{"<sha256 hex of the key>": "<principal id>"}`',
+               f"{SECRETS_MOUNT}/api/keys.json", ("k2-api",), "S14 `scripts/principal-secret.py` (`make api-key`)"),
+    SecretFile("principals/<principal>.password", "one service principal's password, mode 600",
+               f"{SECRETS_MOUNT}/<role>.password", ("dbt-runner", "k2-api", "tools"),
+               "S14 `scripts/principal-secret.py` (`make password`)"),
+    SecretFile("tls/ca.pem", "the local CA's certificate", f"{SECRETS_MOUNT}/tls/ca.pem",
+               ("tools", "dbt-runner", "k2-api"), "S13 `scripts/tls.sh` (`make tls`)"),
+    SecretFile("tls/ca.key", "the local CA's private key", None, (), "S13 `scripts/tls.sh` (`make tls`)"),
+    SecretFile("tls/trino.pem", "Trino's server key and certificate in one PEM file (`http-server.https.keystore.path`)",
+               f"{SECRETS_MOUNT}/tls/trino.pem", ("trino",), "S13 `scripts/tls.sh` (`make tls`)"),
+    SecretFile("alertmanager/slack-webhook-url", "the Slack webhook URL, Alertmanager's `api_url_file`",
+               f"{SECRETS_MOUNT}/slack-webhook-url", ("alertmanager",), "S09 `make alerts-install-webhook`"),
+    SecretFile("canary/<canary>.password", "the release canary's password, read by release-verify on the host", None, (),
+               "S19 `scripts/deploy.py`, with its password.db line"),
+)
+
+
+def password_file(principal: str) -> str:
+    """`principals/<id>.password` under ${K2_SECRETS}."""
+    return f"principals/{principal}.password"
+
+
+def password_mount(principal: str) -> str:
+    """Where a container finds that file: `builder` for dbt_*, `publisher` for pub_*, `<name>`
+    for svc.<name>; dbt-runner gets builder, publisher and runs for one run (A7)."""
+    if principal.startswith("dbt_"):
+        role = "builder"
+    elif principal.startswith("pub_"):
+        role = "publisher"
+    elif principal.startswith("svc."):
+        role = principal.removeprefix("svc.")
+    else:
+        raise ValueError(f"{principal}: only service principals have a password file")
+    return f"{SECRETS_MOUNT}/{role}.password"
+
 
 # --- Names (A5, A8) --------------------------------------------------------------------
 
@@ -74,20 +213,61 @@ LANDING_FILES = "landing_files"  # lake.<fence>.landing_files: one row per lande
 AUDIT_CHECKS = "audit_checks"  # lake.<fence>.audit_checks: the bronze audit's results
 KAFKA_LANDING = "landing"  # lake.<fence>.landing: a kafka connector's records
 RESERVED_TABLE_NAMES = frozenset({LANDING_FILES, AUDIT_CHECKS, KAFKA_LANDING})
+LINEAGE_COLUMN = "source_file_sha256"  # every fetch-kind bronze table's landed-object sha256 (S05)
 AUDIT_BRANCH = "audit"  # bronze write-audit-publish branch (Spark)
-AUDITED_TAG = "audited"  # the tested-data marker on dbt outputs; provisional until S01
-BASE_SUFFIX = "__base"  # <fence>__base: the namespace dbt builds into; provisional until S01
+AUDITED_TAG = "audited"  # the tested-data marker on dbt and code outputs (ADR-061)
+BASE_SUFFIX = "__base"  # <fence>__base: the namespace a build writes into (ADR-061)
 SNAPSHOT_SUMMARY_KEYS = ("k2.run-id", "k2.release", "k2.batch-id", "k2.source-sha256")
+DBT_PROJECT = "k2"  # the compiled dbt project's name (S17), so node ids are model.k2.<name>
+RUN_RECORD_SQL = REPO / "platform" / "runs" / "run_record.sql"  # S15 emits it as ddl_path("trino", ...)
 
-# Principals matched by pattern in Trino's rules and resource groups. Pipeline principals
-# run in resource group `pipeline` and alone may set statistics_enabled; build-catalog
-# principals alone reach a <domain>_build catalog; $refs readers alone read `t$refs`.
-# provisional until S01
+# Principals matched by pattern in Trino's rules and resource groups (A8, ADR-061, the gate):
+# - pipeline principals run in resource group `pipeline` and alone may set STATISTICS_PROPERTY,
+#   by statement or by session header;
+# - build-catalog principals alone reach a <domain>_build catalog;
+# - READER_CATALOG_ALL get catalog access `all` on every reader catalog, which Trino's
+#   definer-view owner check demands; the read-only connector still refuses them every write;
+# - READER_NAMESPACE_OWNERS alone hold a privilege in a dbt or code product's reader namespace,
+#   through <domain>_build: svc.platform holds none (gate h1.33);
+# - RETENTION_PROPERTY_PRINCIPALS alone may set RETENTION_PROPERTIES;
+# - REFS_READERS alone read `t$refs`; svc.api reads it and no other metadata of a base.
 PIPELINE_PRINCIPALS = (r"dbt_.*", r"pub_.*", r"svc\.runs", r"svc\.platform", r"svc\.catalog")
 BUILD_CATALOG_PRINCIPALS = (r"dbt_.*", r"pub_.*", r"svc\.runs", r"svc\.platform")
-REFS_READERS = ("svc.runs", "svc.catalog", "svc.platform")
+READER_CATALOG_ALL = (r"pub_.*",)
+READER_NAMESPACE_OWNERS = (r"pub_.*",)
+STATISTICS_PROPERTY = "statistics_enabled"
+RETENTION_PROPERTIES = ("expire_snapshots_min_retention", "remove_orphan_files_min_retention")
+RETENTION_PROPERTY_PRINCIPALS = (r"svc\.platform",)
+REFS_READERS = ("svc.runs", "svc.catalog", "svc.platform", "svc.api")
 
+MAX_SLUG = 40  # so <fence>__base, dbt_<fence>, pub_<fence> and <domain>_build stay within MAX_IDENTIFIER
+MAX_IDENTIFIER = 63  # Postgres's identifier limit, which Lakekeeper's catalog stores names under
 SLUG = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
+IDENTIFIER = re.compile(r"[a-z][a-z0-9_]*")
+# A table name holds no `__`: it is the separator of <fence>__base, <fence>__<role> and dbt_model.
+TABLE_NAME = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")
+# Trino 484's reserved words, lower case: the output of
+# `java -cp '/usr/lib/trino/lib/*' io.trino.sql.ReservedIdentifiers` in trinodb/trino:484.
+# No name may be one (k2-v2.schema.json#/$defs/identifier); unquoted, `current_user` is a function.
+TRINO_RESERVED = frozenset("""
+    alter and as auto between by case cast constraint create cross cube current_catalog current_date
+    current_path current_role current_schema current_time current_timestamp current_user deallocate
+    delete describe distinct drop else end escape except exists extract false for from full group
+    grouping having in inner insert intersect into is join json_array json_exists json_object
+    json_query json_serialize json_table json_value left like listagg localtime localtimestamp
+    natural normalize not null on or order outer overlaps prepare recursive right rollup select skip
+    table then trim true uescape union unnest using values when where with""".split())
+# A column's physicalType: Trino's own spelling (typeof) of an Iceberg-backed type. One level of
+# array or map; decimal precision 1 to 38; timestamps and times at microseconds, Iceberg's.
+_SCALAR = (r"boolean|integer|bigint|real|double|decimal\((?:[1-9]|[12][0-9]|3[0-8]),(?:[0-9]|[12][0-9]|3[0-8])\)"
+           r"|varchar|varbinary|date|time\(6\)|timestamp\(6\)|timestamp\(6\) with time zone|uuid")
+PHYSICAL_TYPE = rf"^(?:{_SCALAR}|array\((?:{_SCALAR})\)|map\((?:{_SCALAR}), (?:{_SCALAR})\))$"
+# A rowScope value is data in a SQL filter: quoted by sql_literal, and held to this as well.
+ROW_SCOPE_VALUE = r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]*$"
+# A connector's url, path, key and params may hold only the run's date, {{ds}}: Airflow renders
+# what it is given, so any other macro (a variable, a connection) could read a secret.
+TEMPLATE = r"^(?:[^{}]|\{\{ds\}\})*$"
+
 # A product's fence names lake namespaces; these are the old layer namespaces and the
 # platform's own (A5).
 RESERVED_PRODUCT_NAMES = frozenset({"raw", "bronze", "silver", "gold", "audit", "scratch", "dq", "runs"})
@@ -111,8 +291,8 @@ def fence(name: str) -> str:
 
 def product_name_problem(name: str) -> str | None:
     """Why `name` cannot name a product, or None. Names are unique platform-wide (S05)."""
-    if not SLUG.fullmatch(name):
-        return "must be lower-case words joined by single hyphens, so its fence holds no __"
+    if not SLUG.fullmatch(name) or len(name) > MAX_SLUG:
+        return f"must be lower-case words joined by single hyphens, at most {MAX_SLUG} characters, so its fence holds no __"
     if fence(name) in RESERVED_PRODUCT_NAMES:
         return f"{fence(name)} is reserved: a lake namespace of the old layout or of the platform"
     return None
@@ -120,12 +300,23 @@ def product_name_problem(name: str) -> str | None:
 
 def domain_name_problem(name: str) -> str | None:
     """Why `name` cannot name a domain, or None."""
-    if not SLUG.fullmatch(name):
-        return "must be lower-case words joined by single hyphens, so its fence holds no __"
+    if not SLUG.fullmatch(name) or len(name) > MAX_SLUG:
+        return f"must be lower-case words joined by single hyphens, at most {MAX_SLUG} characters, so its fence holds no __"
     if fence(name).endswith("_build"):
         return f"{fence(name)} would be the writer catalog of domain {name[: -len('-build')]}"
     if fence(name) in RESERVED_DOMAIN_NAMES:
         return f"{fence(name)} is {RESERVED_DOMAIN_NAMES[fence(name)]}"
+    return None
+
+
+def physical_type_problem(physical_type: str) -> str | None:
+    """Why a column's physicalType is not one K2 takes, or None: PHYSICAL_TYPE, and a decimal's
+    scale at most its precision. The schema holds the grammar; this adds the scale."""
+    if not re.fullmatch(PHYSICAL_TYPE, physical_type):
+        return f"{physical_type!r} is not a Trino type K2 takes, spelt as Trino's typeof spells it"
+    for precision, scale in re.findall(r"decimal\(([0-9]+),([0-9]+)\)", physical_type):
+        if int(scale) > int(precision):
+            return f"{physical_type!r}: a decimal's scale exceeds its precision"
     return None
 
 
@@ -155,12 +346,12 @@ def warehouse(domain: str) -> str:
 
 
 def reader_namespace(product: str) -> str:
-    """`<fence>`: the product's reader views, or a platform product's tables. provisional until S01"""
+    """`<fence>`: the product's reader views, or a platform product's tables."""
     return fence(product)
 
 
 def base_namespace(product: str) -> str:
-    """`<fence>__base`: the tables dbt builds; never named by a reader rule. provisional until S01"""
+    """`<fence>__base`: the tables dbt or code builds; never named by a reader rule."""
     return fence(product) + BASE_SUFFIX
 
 
@@ -170,7 +361,8 @@ def builder(product: str) -> str:
 
 
 def publisher(product: str) -> str:
-    """`pub_<fence>`: owns the reader namespace in `_build`, moves the tag. provisional until S01"""
+    """`pub_<fence>`: owns the reader namespace in `_build`, holds SELECT and GRANT_SELECT on its
+    base through the reader catalog, moves the tag (ADR-061 part 2)."""
     return f"pub_{fence(product)}"
 
 
@@ -184,24 +376,68 @@ def dag_id(product: str) -> str:
     return fence(product)
 
 
+def dbt_model(product: str, table: str) -> str:
+    """`<fence>__<table>`: the table's dbt model name, unique in the one compiled project, with
+    `alias: <table>`. Product SQL (`ref`) and unit_tests.yml (`model:`) name models by it; the
+    model's file stays models/<table>.sql. Unique because a fence holds no `__` (S05 checks)."""
+    return f"{fence(product)}__{table}"
+
+
+def dbt_docs(product: str, table: str) -> str:
+    """The table's page on the dbt docs site, relative to the site root (catalog `dbtDocs`)."""
+    return f"dbt-docs/#!/model/model.{DBT_PROJECT}.{dbt_model(product, table)}"
+
+
+_CONFIG = re.compile(r"\{\{-?\s*config\((.*?)\)\s*-?\}\}", re.S)
+_JINJA_CONSTANTS = {"true": True, "false": False, "none": None}
+
+
+def model_config(sql: str) -> dict[str, Any]:
+    """The keyword arguments of a product model's `{{ config(...) }}`, literals only; {} when it
+    has none. The one reader of it: S05 takes `materialized` and `unique_key`, S07 refuses
+    `incremental_predicates`. A positional argument, a second config() or a non-literal value
+    (a var(), an env_var()) is a ValueError, which a check reports as a finding."""
+    calls = _CONFIG.findall(sql)
+    if len(calls) > 1:
+        raise ValueError("a model has one config() call")
+    if not calls:
+        return {}
+    call = ast.parse(f"f({calls[0]})", mode="eval").body
+    if not isinstance(call, ast.Call) or call.args or any(k.arg is None for k in call.keywords):
+        raise ValueError("config() takes keyword arguments only")
+
+    def literal(node: ast.expr) -> Any:
+        if isinstance(node, ast.Name) and node.id.lower() in _JINJA_CONSTANTS:
+            return _JINJA_CONSTANTS[node.id.lower()]
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return [literal(e) for e in node.elts]
+        try:
+            return ast.literal_eval(node)
+        except ValueError:
+            raise ValueError(f"config() value {ast.unparse(node)} is not a literal") from None
+
+    return {str(k.arg): literal(k.value) for k in call.keywords}
+
+
 def view_relation(domain: str, product: str, table: str) -> str:
-    """What readers query: `<domain>.<fence>.<table>`, a view for a dbt or code output. provisional until S01"""
+    """What readers query: `<domain>.<fence>.<table>`, a view for a dbt or code output, the table
+    itself for a platform output."""
     return f"{reader_catalog(domain)}.{reader_namespace(product)}.{table}"
 
 
 def view_build_relation(domain: str, product: str, table: str) -> str:
-    """Where the publisher creates that view: `<domain>_build.<fence>.<table>`. provisional until S01"""
+    """Where the publisher creates that view: `<domain>_build.<fence>.<table>` (gate h1.01)."""
     return f"{build_catalog(domain)}.{reader_namespace(product)}.{table}"
 
 
 def base_relation(domain: str, product: str, table: str) -> str:
     """A built table through the reader catalog, `<domain>.<fence>__base.<table>`: what the view
-    and other products' inputs read at the tag. provisional until S01"""
+    and other products' inputs read at the tag."""
     return f"{reader_catalog(domain)}.{base_namespace(product)}.{table}"
 
 
 def build_relation(domain: str, product: str, table: str) -> str:
-    """Where dbt writes: `<domain>_build.<fence>__base.<table>`. provisional until S01"""
+    """Where dbt writes: `<domain>_build.<fence>__base.<table>`."""
     return f"{build_catalog(domain)}.{base_namespace(product)}.{table}"
 
 
@@ -236,9 +472,90 @@ def release_id(tag: str, files: Mapping[str, str], images: Mapping[str, str]) ->
 
 
 def canary_user(set_sha: str) -> str:
-    """`k2_release_<sha12>`: the user only a release's rules admit, which release-verify logs
-    in as. Its sha12 is the document set's, since the release id hashes rules.json itself."""
+    """`k2_release_<setSha256[:12]>`: the user only a release's rules admit, which release-verify
+    logs in as; the one spelling. Its sha12 is the document set's, since the release id hashes
+    rules.json itself. Not a declared principal: S12's rules and S19's password.db line make it."""
     return f"k2_release_{set_sha[:12]}"
+
+
+def canary_password_file(set_sha: str) -> str:
+    """`canary/<canary user>.password` under ${K2_SECRETS} (S19)."""
+    return f"canary/{canary_user(set_sha)}.password"
+
+
+# --- Quoting: every emitter writes SQL names and values through these -------------------
+
+
+def quote_ident(name: str) -> str:
+    """A Trino identifier, always double-quoted, so no name is ever read as a keyword or a
+    function (`current_user`). Names are schema-checked first; this is the second line."""
+    if not name or any(c < " " for c in name):
+        raise ValueError(f"{name!r} cannot be an identifier")
+    return '"' + name.replace('"', '""') + '"'
+
+
+def quote_relation(relation: str) -> str:
+    """`a.b.c` from the naming helpers as `"a"."b"."c"`."""
+    return ".".join(quote_ident(part) for part in relation.split("."))
+
+
+def sql_literal(value: str | int) -> str:
+    """A SQL literal for a policy value: an integer as digits, a string single-quoted with every
+    quote doubled, so a value is always one token."""
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ValueError(f"{value!r}: only strings and integers are policy values")
+    if isinstance(value, int):
+        return str(value)
+    if any(c < " " for c in value):
+        raise ValueError(f"{value!r}: a control character in a SQL literal")
+    return "'" + value.replace("'", "''") + "'"
+
+
+# --- Parsing: the one YAML loader of every v2 document ----------------------------------
+
+
+class DocumentError(ValueError):
+    """A document k2gen refuses to read: `<path>: line <n>: <why>`."""
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that refuses what makes one text read two ways: a duplicate key (safe_load
+    keeps the last, so a second `mask:` silently wins), an anchor or alias, a merge key."""
+
+    def compose_node(self, parent: yaml.Node | None, index: int) -> yaml.Node | None:
+        event = self.peek_event()  # type: ignore[no-untyped-call]
+        if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None):
+            raise DocumentError(f"line {event.start_mark.line + 1}: an anchor or alias; write the value out")
+        return super().compose_node(parent, index)
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        seen: set[Any] = set()
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                raise DocumentError(f"line {key_node.start_mark.line + 1}: a merge key (<<); write the keys out")
+            key = self.construct_object(key_node, deep=True)
+            try:
+                duplicate = key in seen
+            except TypeError:  # an unhashable key: SafeLoader's own error follows
+                continue
+            if duplicate:
+                raise DocumentError(f"line {key_node.start_mark.line + 1}: key {key!r} appears twice")
+            seen.add(key)
+        return super().construct_mapping(node, deep)
+
+
+def parse(path: str, data: bytes) -> Any:
+    """Every v2 document (S04, S05, S07 and any later reader) is parsed by this, never by
+    yaml.safe_load: one YAML document, no duplicate key, anchor, alias or merge key."""
+    loader = _StrictLoader(data)
+    try:
+        return loader.get_single_data()
+    except DocumentError as e:
+        raise DocumentError(f"{path}: {e}") from None
+    except yaml.YAMLError as e:
+        raise DocumentError(f"{path}: {e}") from None
+    finally:
+        loader.dispose()
 
 
 # --- Schemas ---------------------------------------------------------------------------
@@ -246,13 +563,13 @@ def canary_user(set_sha: str) -> str:
 
 def document_kind(path: str) -> str | None:
     """The kind (a key of SCHEMAS) of a document-set path; None for a file no schema
-    covers: models, unit tests, seeds, fixtures, parsers, the schemas themselves."""
+    covers: models, unit tests, seeds, fixtures, parsers, the compose file, the schemas."""
     if path in (DOMAINS, ROLES, PRINCIPALS, EXPECTATIONS):
         return {DOMAINS: "domains", ROLES: "roles", PRINCIPALS: "principals", EXPECTATIONS: "expectations"}[path]
     parts = path.split("/")
     if len(parts) != 4 or parts[0] != "contracts" or parts[1] in RESERVED_DOMAIN_NAMES:
         return None
-    if parts[3] == "product.odps.yaml":
+    if parts[3] == V2_PRODUCT_FILE:
         return "product"
     if parts[3] == "grants.yaml":
         return "grants"
@@ -293,7 +610,10 @@ def schema_errors(kind: str, doc: Any) -> list[str]:
 Status = Literal["active", "paused", "deprecated", "retired"]
 ProductType = Literal["sourceAligned", "aggregate", "consumerAligned"]
 Layer = Literal["bronze", "silver", "gold", "mart"]
-BuildKind = Literal["connector", "dbt", "platform", "code"]
+# serving: a table only a serving engine holds (an output port's `serves`), no lake table;
+# every lake emitter, the rules and the relation helpers skip it (LAKE_BUILDS).
+BuildKind = Literal["connector", "dbt", "platform", "code", "serving"]
+LAKE_BUILDS: frozenset[str] = frozenset({"connector", "dbt", "platform", "code"})
 Backup = Literal["restore", "rebuild"]
 TimeMeaning = Literal["event", "publication", "valid", "known"]
 AsOf = Literal["valid", "known"]
@@ -301,6 +621,7 @@ ConnectorKind = Literal["kafka", "public-api", "https-file", "s3-file", "sftp", 
 PrincipalKind = Literal["person", "service"]
 PolicyKind = Literal["delay", "mask", "rowScope"]
 Severity = Literal["error", "warning"]
+Ref = Literal["main", "audited"]
 
 
 @dataclass(frozen=True)
@@ -393,8 +714,9 @@ class Relationship:
 @dataclass(frozen=True)
 class Column:
     name: str
-    physical_type: str  # Trino's spelling
+    physical_type: str  # Trino's spelling, PHYSICAL_TYPE
     logical_type: str | None
+    pattern: str | None  # ODCS logicalTypeOptions.pattern: every value matches it (bronze audit, A4)
     description: str | None  # None fails S05's every-column-described check
     required: bool
     primary_key: bool
@@ -470,13 +792,13 @@ class Table:
     contract_id: str
     name: str
     version: str
-    physical_name: str  # <fence>.<table>
+    physical_name: str  # <fence>.<table>; for build serving, the serving engine's <database>.<table>
     purpose: str
     owner: str
     layer: Layer
     build: Build
     backup: Backup
-    retention: int | None  # days; None takes the 7-day floor
+    retention: int | None  # days; None takes the 7-day floor; emitted once, in RETENTION
     partitioning: tuple[str, ...]
     sort: tuple[str, ...]
     columns: tuple[Column, ...]
@@ -484,6 +806,39 @@ class Table:
     policies: Mapping[str, RolePolicy]  # role -> policy; a role absent here sees everything
     quality: tuple[Quality, ...]
     sla: tuple[Sla, ...]
+
+
+def _lake(t: Table) -> tuple[str, str, str, BuildKind]:
+    if t.build.kind not in LAKE_BUILDS:
+        raise ValueError(f"{t.contract_id}: build {t.build.kind} has no lake table; skip it (model.LAKE_BUILDS)")
+    domain, product, table = t.contract_id.split(".")
+    return domain, product, table, t.build.kind
+
+
+def reader_relation(t: Table) -> str:
+    """What a reader queries, by build kind: connector `lake.<fence>.<table>`; dbt and code the
+    view `<domain>.<fence>.<table>`; platform the table `<domain>.<fence>.<table>`. The catalog,
+    the rules, the expectations and the REST data route name tables by it."""
+    domain, product, table, kind = _lake(t)
+    return lake_relation(product, table) if kind == "connector" else view_relation(domain, product, table)
+
+
+def input_relation(t: Table) -> str:
+    """What another product's builder reads when `t` is its input (pipeline and run-record
+    `inputs[].relation`): connector `lake.<fence>.<table>`; dbt and code the base
+    `<domain>.<fence>__base.<table>` through the reader catalog; platform the table itself.
+    Always read at tested_ref(t), pinned by k2_input."""
+    domain, product, table, kind = _lake(t)
+    if kind == "connector":
+        return lake_relation(product, table)
+    return base_relation(domain, product, table) if kind in ("dbt", "code") else view_relation(domain, product, table)
+
+
+def tested_ref(t: Table) -> Ref:
+    """The ref whose snapshot is the tested one: `audited` for dbt and code outputs (the tag the
+    publisher moves), `main` for connector tables (bronze moves only after its audit) and
+    platform tables. The wrapper, k2-api and the catalog read it from `t$refs` (A6)."""
+    return "audited" if _lake(t)[3] in ("dbt", "code") else "main"
 
 
 @dataclass(frozen=True)
@@ -520,7 +875,7 @@ class Product:
     grants: tuple[Grant, ...]
     models: Mapping[str, str]  # path under models/ -> SQL
     unit_tests: str | None  # unit_tests.yml as written
-    seeds: Mapping[str, bytes]  # path under seeds/ -> bytes
+    seeds: Mapping[str, bytes]  # path under seeds/ -> bytes, each declared by the `seeds` property
 
 
 @dataclass(frozen=True)
@@ -565,6 +920,7 @@ class StatementExpectation:
     principal: str
     sql: str
     expect: Literal["denied", "error", "noBounds"]
+    session: Mapping[str, str]  # sent as X-Trino-Session headers with the statement; empty for none
 
 
 @dataclass(frozen=True)
@@ -653,7 +1009,8 @@ class Needs:
 
 @dataclass(frozen=True)
 class Manifest:
-    """manifest.json (A1, contracts/schema/manifest.schema.json)."""
+    """manifest.json (A1, contracts/schema/manifest.schema.json). No secret and no checksum of
+    one: deploy records those in its own deploy record (DEPLOY_LOG)."""
 
     release: str
     tag: str
@@ -666,7 +1023,6 @@ class Manifest:
     files: Mapping[str, str]
     images: Mapping[str, str]
     needs: Needs
-    secrets: Mapping[str, str]
 
 
 @dataclass(frozen=True)
@@ -682,14 +1038,71 @@ class Release:
 class View:
     """One reader view, as VIEWS lists it: S15 writes it, the drift check (S20) and the dbt
     wrapper (phase 002) read it. Its SQL is exactly `SELECT <columns> FROM <base> FOR
-    VERSION AS OF 'audited'` (ADR-061 condition 2). provisional until S01"""
+    VERSION AS OF 'audited'`, every name through quote_ident (ADR-061 part 1)."""
 
     relation: str  # view_relation(): the reader name
     base: str  # base_relation(): read through the reader catalog
-    columns: tuple[str, ...]  # the contract's columns in order: C of ADR-061 condition 4
+    columns: tuple[str, ...]  # the contract's columns in order: C of ADR-061 part 5
     owner: str  # publisher()
 
 
+# --- The platform's own tables in a connector product's lake namespace (A5) --------------
+#
+# S15 emits each one's DDL, ddl_path("spark", "k2", <fence>, <name>), from these; phase 002
+# writes them. Types in Trino's spelling (PHYSICAL_TYPE), as the contracts' are.
+
+
+@dataclass(frozen=True)
+class PlatformColumn:
+    name: str
+    type: str
+    comment: str
+
+
+@dataclass(frozen=True)
+class PlatformTable:
+    name: str
+    columns: tuple[PlatformColumn, ...]
+    partitioning: tuple[str, ...]
+
+
+_RUN = (PlatformColumn("run_id", "varchar", "The Airflow run, <dag_id>/<run_id>"),
+        PlatformColumn("release_id", "varchar", "The release the run resolved at its start (A1)"))
+PLATFORM_TABLES: Mapping[str, PlatformTable] = {
+    LANDING_FILES: PlatformTable(LANDING_FILES, (
+        PlatformColumn("object_key", "varchar", "The landed object, s3://k2-landing/<domain>/<product>/<YYYY-MM-DD>/<sha256>.<ext>"),
+        PlatformColumn("sha256", "varchar", "The bytes' sha256, as fetch.json recorded it and the Spark task recomputed it"),
+        PlatformColumn("bytes", "bigint", "The object's size in bytes"),
+        PlatformColumn("url", "varchar", "The URL fetched, {{ds}} resolved; never a credential"),
+        PlatformColumn("final_url", "varchar", "The URL after redirects"),
+        PlatformColumn("http_status", "integer", "The final response's HTTP status"),
+        PlatformColumn("fetched_at", "timestamp(6) with time zone", "When the fetch received the bytes, UTC"),
+        PlatformColumn("landed_at", "timestamp(6) with time zone", "When the conditional write returned, UTC; the partition source"),
+        PlatformColumn("parsed", "boolean", "False: the parser failed; the bytes stay and the batch fails at bronze"),
+        PlatformColumn("batch_id", "varchar", "The batch, the snapshot summary key k2.batch-id"),
+        *_RUN), ("day(landed_at)",)),
+    AUDIT_CHECKS: PlatformTable(AUDIT_CHECKS, (
+        PlatformColumn("table_name", "varchar", "The bronze table audited, lake.<fence>.bronze_<name>"),
+        PlatformColumn("batch_id", "varchar", "The batch audited"),
+        PlatformColumn("snapshot_id", "bigint", "The audit branch's snapshot the check ran at; the publish guard requires the branch's current one"),
+        PlatformColumn("check_name", "varchar", "A generic check or one of the parser's audit functions"),
+        PlatformColumn("passed", "boolean", "Whether the check passed"),
+        PlatformColumn("detail", "varchar", "What failed, at most 1000 characters; never a secret"),
+        PlatformColumn("checked_at", "timestamp(6) with time zone", "When the check ran, UTC; the partition source"),
+        *_RUN), ("day(checked_at)",)),
+    KAFKA_LANDING: PlatformTable(KAFKA_LANDING, (
+        PlatformColumn("kafka_partition", "integer", "The topic partition"),
+        PlatformColumn("kafka_offset", "bigint", "The record's offset; end offsets also go in the snapshot summary (ADR-022)"),
+        PlatformColumn("kafka_timestamp", "timestamp(6) with time zone", "The record's timestamp"),
+        PlatformColumn("record_key", "varbinary", "The key's bytes as read"),
+        PlatformColumn("record_value", "varbinary", "The value's bytes as read"),
+        PlatformColumn("batch_id", "varchar", "The batch, the snapshot summary key k2.batch-id"),
+        PlatformColumn("landed_at", "timestamp(6) with time zone", "When the batch committed, UTC; the partition source"),
+        *_RUN), ("day(landed_at)",)),
+}
+
+
 def load(docs: DocumentSet, images: Mapping[str, str] | None = None) -> Model:
-    """Parse a document set into the model, refusing any document `schema_errors` rejects."""
+    """Parse a document set into the model, every document through `parse`, refusing any
+    document `schema_errors` rejects."""
     raise NotImplementedError("S04")

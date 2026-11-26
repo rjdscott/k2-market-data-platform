@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://k2.invalid/schema/catalog-product.schema.json",
   "title": "The catalog JSON: compiled/catalog/products/<product id>.json, and $defs/index for compiled/catalog/index.json (A11)",
-  "description": "Frozen in phase 001, emitted by k2gen.emit.catalog (S18), rendered by the static catalog site and the body of GET /v1/products/{domain}/{product} (phase 003). Reader names only: a __base name never appears. Run-time facts (the newest audited publish, test results, freshness) are never in a release; k2-api reads them from governance as svc.catalog. A release id cannot appear either, since the id hashes these files: the document set's tag does.",
+  "description": "Frozen in phase 001, emitted by k2gen.emit.catalog (S18), rendered by the static catalog site and the body of GET /v1/products/{domain}/{product} (phase 003). Reader names only: a __base name never appears. Run-time facts (the newest audited publish, test results, freshness) are never in a release; k2-api reads them through Trino as svc.api, its one identity, which may read `t$refs` and no other metadata of a base (k2gen.model.REFS_READERS). A release id cannot appear either, since the id hashes these files: the document set's tag does.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "name", "domain", "version", "status", "type", "owner", "purpose", "inputs", "outputs", "lineage", "tag"],
@@ -45,7 +45,8 @@
         "required": ["contractId", "relation", "layer", "version", "purpose", "columns", "roles", "readers", "dbtDocs"],
         "properties": {
           "contractId": {"description": "The table's contract id.", "$ref": "#/$defs/contractId"},
-          "relation": {"$ref": "#/$defs/relation"},
+          "relation": {"description": "k2gen.model.reader_relation; null for a build serving output, which only its serving copy holds.", "oneOf": [{"$ref": "#/$defs/relation"}, {"type": "null"}]},
+          "serves": {"description": "The output port's serving copy, when it has one.", "$ref": "k2-v2.schema.json#/$defs/serves"},
           "layer": {"description": "The table's layer.", "enum": ["bronze", "silver", "gold", "mart"]},
           "version": {"description": "The table contract's version.", "$ref": "#/$defs/semver"},
           "purpose": {"description": "The contract's description.purpose.", "type": "string", "minLength": 1},
@@ -109,7 +110,7 @@
               }
             }
           },
-          "dbtDocs": {"description": "The table's page on the dbt docs site, relative to the site root; null for a table dbt does not build.", "type": ["string", "null"], "pattern": "^dbt-docs/"}
+          "dbtDocs": {"description": "The table's page on the dbt docs site, relative to the site root (k2gen.model.dbt_docs): dbt-docs/#!/model/model.k2.<fence>__<table>; null for a table dbt does not build.", "oneOf": [{"type": "string", "pattern": "^dbt-docs/#!/model/model\\.k2\\.[a-z][a-z0-9]*(_[a-z0-9]+)*__[a-z][a-z0-9]*(_[a-z0-9]+)*$"}, {"type": "null"}]}
         }
       }
     },
@@ -143,7 +144,7 @@
             "properties": {
               "id": {"description": "The table's contract id.", "$ref": "#/$defs/contractId"},
               "product": {"description": "Its product.", "$ref": "#/$defs/productId"},
-              "relation": {"$ref": "#/$defs/relation"}
+              "relation": {"description": "Its reader name; null for a build serving table.", "oneOf": [{"$ref": "#/$defs/relation"}, {"type": "null"}]}
             }
           }
         },

@@ -1,7 +1,8 @@
 # Contract schemas
 
 Two sets. The old format's two files are read by `k2gen validate` until step S23 of phase 001
-deletes `k2.schema.json` and that validator. The v2 files are frozen by the interfaces step and
+deletes `k2.schema.json` and that validator, which skips any product directory holding a v2
+`product.odps.yaml`. The v2 files are frozen by the interfaces steps (S00a, S00c) and
 read by `k2gen.model.schema_errors` (`platform/k2gen/k2gen/model.py`, whose `SCHEMAS` names the
 schemas of each kind); they change only through the orchestrator
 ([`platform/k2gen/INTERFACES.md`](../../platform/k2gen/INTERFACES.md)).
@@ -19,6 +20,10 @@ schemas of each kind); they change only through the orchestrator
 | `catalog-product.schema.json` | v2: `compiled/catalog/products/<id>.json` and `index.json` (A11) |
 | `backup-set.schema.json` | v2: `compiled/lake/backup-set.json` |
 | `run-record.schema.json` | v2: one row of the run-record table (A6) |
+| `storage-plan.schema.json` | v2: `compiled/lake/storage-plan.json`, the warehouses, namespaces and landing prefixes |
+| `dags.schema.json` | v2: `compiled/airflow/dags.json`, the DAGs and their tasks |
+| `oneshots.schema.json` | v2: `compiled/oneshots.json`, how each one-shot kind runs |
+| `deploy-record.schema.json` | v2: one line of the releases root's `deploy-log.jsonl`, the only place a secret file's checksum is recorded |
 
 The K2 files share `$id`s under `https://k2.invalid/schema/`, a name and not a location (the
 `.invalid` top-level domain never resolves); their `$ref`s between files are relative file names.
@@ -32,7 +37,7 @@ The K2 files share `$id`s under `https://k2.invalid/schema/`, a name and not a l
   <https://raw.githubusercontent.com/bitol-io/open-data-product-standard/04995037fc003ead1da27f65a40a09eb0664b591/schema/odps-json-schema-v1.1.0.json>.
   The repository's `odps-json-schema-latest.json` is the same blob at that commit.
 - sha256: `b7eae1af15b3c6b18e5dffaa2119212acb38ec73286933c76d16c8712e0d90d1`.
-- Licence: Apache License 2.0, copyright The Bitol Contributors. Vendored unmodified.
+- Licence: Apache License 2.0, copyright The Bitol Contributors. Vendored unmodified (`NOTICE`).
 - K2's one deviation, declared in `k2-v2.schema.json`: `status` takes `paused`, which the
   standard's examples do not list; the standard types `status` as any string, so its own schema
   accepts it.
@@ -53,7 +58,8 @@ Moving to a newer version is a pull request that adds the new file, points `ODPS
 - Licence: Apache License 2.0, copyright The Bitol Contributors. Vendored unmodified (`NOTICE`).
 
 Moving to a newer snapshot is a pull request that replaces the file, updates this section and
-`ODCS_SCHEMA` in `platform/k2gen/k2gen/cli.py`, and passes `k2gen validate`.
+`ODCS_SCHEMA` in both `platform/k2gen/k2gen/model.py` (the v2 path) and
+`platform/k2gen/k2gen/cli.py` (the old validator, until S23), and passes `make test-k2gen`.
 
 ## Where each K2 field lives
 
@@ -81,7 +87,7 @@ serving copy, input requirement, build kind, access policy, backup mode, unit or
 
 | Property | Where | `$defs` |
 |---|---|---|
-| `connector`, `schedule`, `terms`, `lifecycleChange`, `examples` | product file `customProperties` | `productProperty` |
+| `connector`, `schedule`, `terms`, `lifecycleChange`, `examples`, `seeds` | product file `customProperties` | `productProperty` |
 | `required`, `maxLagMinutes` | product file `inputPorts[].customProperties` | `inputPortProperty` |
 | `serves` | product file `outputPorts[].customProperties` | `outputPortProperty` |
 | `layer`, `build`, `backup`, `retention`, `partitioning`, `sort`, `policies` | table contract `customProperties`; `layer`, `build` and `backup` required | `contractProperty` |
@@ -89,5 +95,7 @@ serving copy, input requirement, build kind, access policy, backup mode, unit or
 | `asOf` | a column relationship's `customProperties` | `relationshipProperty` |
 
 The old contract's `format`, `classification`, `entitlement`, `upstreams` and `schedule` are
-gone from the v2 table contract: every table is Iceberg; access is `policies` with grants;
-lineage is the product's ports; the schedule is the product's.
+gone from the v2 table contract: every table is Iceberg (or, for `build: serving`, the serving
+engine's); access is `policies` with grants; lineage is the product's ports; the schedule is the
+product's. A string pattern a bronze audit checks is the standard's own
+`logicalTypeOptions.pattern`, not a K2 property.

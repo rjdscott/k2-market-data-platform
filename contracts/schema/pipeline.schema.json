@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://k2.invalid/schema/pipeline.schema.json",
   "title": "compiled/products/<product id>/pipeline.json: what one product's DAG runs (A4)",
-  "description": "Frozen in phase 001, emitted by k2gen.emit.pipeline (S16), read by the DAG factory, the fetch container, the Spark loader and the dbt wrapper (phase 002). Names follow k2gen.model's naming helpers. The DAG's lock is its max_active_runs=1; there is no global lock. The first task hands {\"release\": \"<id>\", \"releasePath\": \"/k2/releases/<id>\"} to the rest by XCom.",
+  "description": "Frozen in phase 001, emitted by k2gen.emit.pipeline (S16), read by the DAG factory, the fetch container, the Spark loader and the dbt wrapper (phase 002). Names follow k2gen.model's naming helpers. Written for every product with a schedule. The DAG's lock is its max_active_runs=1; there is no global lock. The run-time contracts (the first task's XCom, the fetch exits, the spool, the wrapper) are in docs/development/phase-001-interfaces.md. Retention is not here: the maintenance task reads compiled/lake/retention.json, its one source.",
   "type": "object",
   "additionalProperties": false,
   "required": ["product", "fence", "domain", "status", "dagId", "schedule", "inputs", "maintain"],
@@ -41,15 +41,14 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["table", "key", "values", "audits", "lineage", "branch", "checks"],
+        "required": ["table", "key", "values", "audits", "branch", "checks"],
         "properties": {
           "table": {"description": "lake.<fence>.bronze_<name>.", "type": "string", "pattern": "^lake\\.[a-z][a-z0-9_]*\\.bronze_[a-z0-9_]+$"},
           "key": {"description": "The columns a row is unique on: the contract's primaryKey, in position order.", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
-          "values": {"description": "The columns that carry the source's values: a changed value under an existing key fails the audit.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
+          "values": {"description": "The columns that carry the source's values: a changed value under an existing key fails the audit. Never k2gen.model.LINEAGE_COLUMN, source_file_sha256, which every fetch-kind bronze table carries.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
           "decimal": {"description": "Columns parsed as exact decimals.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
-          "patterns": {"description": "Column to the regular expression every value must match.", "type": "object", "propertyNames": {"$ref": "#/$defs/column"}, "additionalProperties": {"type": "string", "minLength": 1}},
+          "patterns": {"description": "Column to the regular expression every value must match: the contract's logicalTypeOptions.pattern (k2gen.model.Column.pattern).", "type": "object", "propertyNames": {"$ref": "#/$defs/column"}, "additionalProperties": {"type": "string", "minLength": 1}},
           "audits": {"description": "The parser's audit functions to run, by name: the contract's k2-connector quality checks.", "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/column"}},
-          "lineage": {"description": "The column holding the landed object's sha256.", "$ref": "#/$defs/column"},
           "branch": {"description": "The one fixed audit branch.", "const": "audit"},
           "checks": {"description": "lake.<fence>.audit_checks: the audit's results, which the publish guard reads.", "type": "string", "pattern": "^lake\\.[a-z][a-z0-9_]*\\.audit_checks$"}
         }
@@ -64,7 +63,7 @@
         "engine": {"description": "Only dbt so far; a code transform joins with its first product.", "const": "dbt"},
         "selector": {"description": "The product's dbt selector: the fence.", "$ref": "#/$defs/fence"},
         "writer": {"description": "The builder, dbt_<fence>.", "type": "string", "pattern": "^dbt_[a-z][a-z0-9_]*$"},
-        "publisher": {"description": "The publisher, pub_<fence>, who owns the reader views and moves the audited tags (ADR-061 condition 1). Provisional until the S01 gate reports.", "type": "string", "pattern": "^pub_[a-z][a-z0-9_]*$"},
+        "publisher": {"description": "The publisher, pub_<fence>, who owns the reader views and moves the audited tags (ADR-061 part 2).", "type": "string", "pattern": "^pub_[a-z][a-z0-9_]*$"},
         "outputs": {"description": "The tables dbt writes, <domain>_build.<fence>__base.<table>.", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*_build\\.[a-z][a-z0-9_]*__base\\.[a-z][a-z0-9_]*$"}}
       }
     },
@@ -77,20 +76,19 @@
         "required": ["contractId", "relation", "required", "maxLagMinutes"],
         "properties": {
           "contractId": {"description": "The input's contract id.", "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9]*(-[a-z0-9]+)*\\.[a-z][a-z0-9_]*$"},
-          "relation": {"description": "<domain>.<fence>__base.<table> through the input's reader catalog, read at its audited snapshot; lake.<fence>.<table> for a connector table.", "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"},
+          "relation": {"description": "k2gen.model.input_relation: <domain>.<fence>__base.<table> through the input's reader catalog for a dbt or code output, lake.<fence>.<table> for a connector table, <domain>.<fence>.<table> for a platform table; read at k2gen.model.tested_ref.", "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"},
           "required": {"description": "A required input never audited stops the build, wrapper exit 4.", "type": "boolean"},
           "maxLagMinutes": {"description": "The input port's maxLagMinutes; null for no bound.", "type": ["integer", "null"], "minimum": 0}
         }
       }
     },
     "maintain": {
-      "description": "The product's daily maintenance task, staggered by the compiler.",
+      "description": "The product's daily maintenance task, staggered by the compiler; it expires each table's snapshots by compiled/lake/retention.json.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["cron", "retainDays"],
+      "required": ["cron"],
       "properties": {
-        "cron": {"description": "When it runs, UTC.", "type": "string", "pattern": "^\\S+( \\S+){4}$"},
-        "retainDays": {"description": "Snapshots older than this expire, never fewer than the 7-day floor for a table another product reads.", "type": "integer", "minimum": 1}
+        "cron": {"description": "When it runs, UTC.", "type": "string", "pattern": "^\\S+( \\S+){4}$"}
       }
     }
   },

@@ -14,8 +14,9 @@
 #   4. k2_input's render cases (dbt/macros/k2_input.sql, interface A7), in its own
 #      project dbt/tests/k2_input/ (a symlink to the macro, so the one shipped is the
 #      one tested): pinned (FOR VERSION AS OF BIGINT '<id>'), unpinned (no var), a
-#      unit test with the var set (the fixture's CTE, no clause), and a var without
-#      the key (a compiler error at parse). No warehouse: a unit test's SQL is only
+#      unit test with the var set (the fixture's CTE, no clause), a var without the
+#      key, and a snapshot that is null, a string, a float or a boolean (each a
+#      compiler error at parse, never a guessed id). No warehouse: a unit test's SQL is only
 #      rendered when dbt sends it, so it is read from dbt's log of the one statement
 #      it tried before the refused connection; the step refuses to run at all if
 #      anything listens on the profile's port.
@@ -63,5 +64,13 @@ if out=$(k2i missing parse --vars '{"k2_inputs": {"other/table": {"snapshot": 1}
   fail "missing key: parse passed"
 fi
 grep -qF 'k2_input: k2_inputs is set but has no entry up/events' <<< "$out" || fail "missing key: $out"
-echo "ok k2_input: pinned, unpinned, a unit test with the var set, and a var without the key (dbt/tests/k2_input/)"
+n=0
+for entry in '{"snapshot": null}' '{}' '{"snapshot": "42"}' '{"snapshot": 4.2}' '{"snapshot": true}'; do
+  n=$((n + 1))
+  if out=$(k2i "bad$n" parse --vars "{\"k2_inputs\": {\"up/events\": $entry}}" 2>&1); then
+    fail "snapshot $entry: parse passed"
+  fi
+  grep -qF 'k2_input: k2_inputs entry up/events has no integer snapshot' <<< "$out" || fail "snapshot $entry: $out"
+done
+echo "ok k2_input: pinned, unpinned, a unit test with the var set, a var without the key, and $n snapshots that are not integers (dbt/tests/k2_input/)"
 echo "dbt-test: PASS"
